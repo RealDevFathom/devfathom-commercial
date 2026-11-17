@@ -32,7 +32,7 @@ describe('shelf-label allocation under stock locks', () => {
       const db = dbWithLots();
       await expect(
         allocateForSale(db as never, scope, { ...input, expectedInventoryLotId })
-      ).rejects.toThrow('BLOCKED_STOCK');
+      ).rejects.toThrow('LABEL_LOT_MISMATCH');
       expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
       expect(db.pharmacyAllocationOverride.create).not.toHaveBeenCalled();
     }
@@ -46,7 +46,7 @@ describe('shelf-label allocation under stock locks', () => {
         requiredUnits: 20,
         expectedInventoryLotId: 'early',
       })
-    ).rejects.toThrow('BLOCKED_STOCK');
+    ).rejects.toThrow('LABEL_LOT_MISMATCH');
     expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
   });
 

@@ -211,6 +211,21 @@ describe('DEV-90 shelf-label source', () => {
     );
   });
 
+  it('only admits saleable medicines from a medicine list', async () => {
+    const db = fakeDb();
+    await readShelfLabelSheet(
+      db as never,
+      scope,
+      { kind: 'MEDICINES', medicineIds: ['med-a'] },
+      at
+    );
+    expect(db.medicine.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ organizationId: 'org-a', saleable: true }),
+      })
+    );
+  });
+
   it('formats a Pakistan calendar expiry from the stored exclusive boundary', () => {
     expect(printedExpiryLabel(expiryInstant(new Date('2027-01-31T00:00:00Z'), 'DAY'), 'DAY')).toBe(
       '2027-01-31'

@@ -3358,7 +3358,9 @@ function ScopedPharmacyCounterConsole({
                     onChange={(next) => {
                       // An explicit batch choice replaces the scanned sticker's lot pin;
                       // otherwise the server refuses the chosen batch as a mismatch.
+                      // Merely opening the picker (lotOverride still null) keeps the pin.
                       setActiveRow((current) =>
+                        lotOverride !== null &&
                         current?.labelLot &&
                         next?.inventoryLotId !== current.labelLot.inventoryLotId
                           ? { ...current, labelLot: null }

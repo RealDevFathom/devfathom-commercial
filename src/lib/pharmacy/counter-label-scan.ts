@@ -44,6 +44,6 @@ export function counterLabelScanDecision(
   return {
     kind: 'OVERRIDE',
     inventoryLotId: lot.inventoryLotId,
-    message: `Shelf label batch ${lot.batchNumber} is not the batch FEFO sells first. Enter a reason to sell it, or choose the FEFO batch.`,
+    message: `Shelf label batch ${lot.batchNumber} is not the batch FEFO sells first. Enter a reason to sell it, or choose a different batch.`,
   };
 }

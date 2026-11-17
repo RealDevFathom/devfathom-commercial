@@ -426,6 +426,7 @@ export async function searchCounterCatalog(
     let best: { lot: LotRow; locationId: string } | null = null;
     let labelLot: CounterLabelLot | null = null;
     let labelLotRow: LotRow | null = null;
+    let labelLotLocationId: string | null = null;
     const sellableLots = new Map<string, LotRow>();
 
     for (const lot of medicineLots) {
@@ -450,7 +451,10 @@ export async function searchCounterCatalog(
           if (reason !== 'EMPTY') blocked.add(reason);
           continue;
         }
-        if (labelLot?.inventoryLotId === lot.id) labelLot.sellableUnits += balance.onHandUnits;
+        if (labelLot?.inventoryLotId === lot.id) {
+          labelLot.sellableUnits += balance.onHandUnits;
+          labelLotLocationId ??= balance.stockLocationId;
+        }
         onHandUnits += balance.onHandUnits;
         sellableLots.set(lot.id, lot);
         const better =
@@ -533,7 +537,12 @@ export async function searchCounterCatalog(
         })
       : [];
 
-    const location = best ? locationById.get(best.locationId) : undefined;
+    // A sellable scanned lot is shown as itself: its batch, expiry and shelf.
+    const shown: { lot: LotRow; locationId: string | null } | null =
+      labelLotRow && labelLot?.blockedBy === null
+        ? { lot: labelLotRow, locationId: labelLotLocationId }
+        : best;
+    const location = shown?.locationId ? locationById.get(shown.locationId) : undefined;
     rows.push({
       medicineId: medicine.id,
       displayName: medicine.productName,
@@ -550,8 +559,8 @@ export async function searchCounterCatalog(
       unitsPerPack: priced?.unitsPerPack ?? null,
       printedMrpMinor: priced?.printedMrpMinor ?? null,
       roundingIncrementMinor,
-      batchNumber: best?.lot.batch.batchNumber ?? null,
-      nearestSafeExpiry: best?.lot.batch.expiresAt.toISOString() ?? null,
+      batchNumber: shown?.lot.batch.batchNumber ?? null,
+      nearestSafeExpiry: shown?.lot.batch.expiresAt.toISOString() ?? null,
       onHandUnits: availableUnits,
       saleableUnits,
       saleUnits,

@@ -145,6 +145,9 @@ describe('DEV-90 shelf sticker scan at the counter', () => {
       medicineId: 'med-a',
       matchedOn: 'BARCODE',
       recommendedLotId: 'early',
+      // The row names the scanned lot, not the FEFO lot it did not sell.
+      batchNumber: 'B-late',
+      nearestSafeExpiry: '2028-01-01T00:00:00.000Z',
       labelLot: {
         inventoryLotId: 'late',
         batchNumber: 'B-late',

@@ -306,7 +306,11 @@ export async function readShelfLabelSheet(
   if (source.kind === 'RECEIPT') return receiptSheet(db, scope, source.goodsReceiptId, at);
   if (source.kind === 'MEDICINES') {
     const medicines = await db.medicine.findMany({
-      where: { organizationId: scope.organizationId, id: { in: source.medicineIds } },
+      where: {
+        organizationId: scope.organizationId,
+        saleable: true,
+        id: { in: source.medicineIds },
+      },
       select: { id: true },
     });
     const known = new Set(medicines.map((medicine) => medicine.id));

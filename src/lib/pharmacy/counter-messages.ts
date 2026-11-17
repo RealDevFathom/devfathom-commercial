@@ -59,6 +59,8 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   INVALID_ARRANGEMENT:
     'This quantity does not match how the batch sits on the shelf. Sell the open loose units first, or break a pack in Inventory before selling strips or loose units.',
   INSUFFICIENT_STOCK: 'There is not enough safe stock on hand for this quantity.',
+  LABEL_LOT_MISMATCH:
+    "This shelf label's batch can no longer cover this line. Rescan the label or choose another batch.",
   BLOCKED_STOCK:
     'This batch cannot be dispensed — it is expired, quarantined or recalled. Choose another batch.',
   // #659: a batch on the bill changed after its line was added; payment is refused.

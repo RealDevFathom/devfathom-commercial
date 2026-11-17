@@ -542,7 +542,7 @@ export async function allocateForSale(
     input.expectedInventoryLotId &&
     plan.allocations.some((part) => part.inventoryLotId !== input.expectedInventoryLotId)
   )
-    throw new PharmacyInventoryError('BLOCKED_STOCK');
+    throw new PharmacyInventoryError('LABEL_LOT_MISMATCH');
 
   let overrideId: string | null = null;
   if (plan.override) {

@@ -24,6 +24,7 @@ export class PharmacyInventoryError extends Error {
       | 'INVALID_ARRANGEMENT'
       | 'INSUFFICIENT_STOCK'
       | 'BLOCKED_STOCK'
+      | 'LABEL_LOT_MISMATCH'
       | 'OVERRIDE_EVIDENCE_MISSING'
       | 'NOT_FOUND'
       | 'CROSS_TENANT_REFERENCE'
