@@ -76,6 +76,7 @@ import {
 } from '@/lib/pharmacy/day-close';
 import { listOpenBills } from '@/lib/pharmacy/open-bills';
 import { readPharmacyCashCloseCheck } from '@/lib/pharmacy/cash-close-check-operations';
+import { readPharmacyShiftHandover } from '@/lib/pharmacy/shift-handover-operations';
 import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
 import { prescriptionIsCurrent } from '@/lib/pharmacy/prescription-calendar';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
@@ -1043,6 +1044,27 @@ export function canClosePharmacyDay(ctx: TRPCContext): Promise<boolean> {
   return closeAccessDecision(ctx);
 }
 
+// Both reads expose the existing owner-only financial findings.
+async function requireOwnerFinancialReports(ctx: TRPCContext) {
+  // `adminProcedure` only checks the grantable `admin:access` capability; this
+  // check is owner-only, so a delegated EMPLOYEE is refused before any read.
+  if (ctx.session?.user.role !== 'ADMIN')
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access required.' });
+  // Refund/void analytics and staff findings are financial reporting: an owner
+  // explicitly denied `reports:financial` is refused before any evidence read,
+  // as the anomaly report and the Ask Fathom tool already do.
+  if (
+    !(await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+    }))
+  )
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Financial reports permission required.',
+    });
+}
+
 async function requireCloseAccess(ctx: TRPCContext, branch: string) {
   if (!(await closeAccessDecision(ctx, branch)))
     throw new TRPCError({
@@ -1424,27 +1446,26 @@ export const pharmacySalesRouter = router({
   closeAnomalyCheck: adminProcedure
     .input(z.object({ branchId, businessDate: closeDate }).strict())
     .query(async ({ ctx, input }) => {
-      // `adminProcedure` only checks the grantable `admin:access` capability; this
-      // check is owner-only, so a delegated EMPLOYEE is refused before any read.
-      if (ctx.session?.user.role !== 'ADMIN')
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access required.' });
-      // Refund/void analytics and staff findings are financial reporting: an owner
-      // explicitly denied `reports:financial` is refused before any evidence read,
-      // as the anomaly report and the Ask Fathom tool already do.
-      if (
-        !(await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
-          db: ctx.db,
-          source: 'TRPC',
-        }))
-      )
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Financial reports permission required.',
-        });
+      await requireOwnerFinancialReports(ctx);
       try {
         const scope = await scopeFor(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) =>
           readPharmacyCashCloseCheck(txDb(tx), scope, input.businessDate)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  // A read-only draft after drawer close, with the same access as DEV-84.
+  shiftHandoverNote: adminProcedure
+    .input(z.object({ branchId, drawerSessionId: z.string().min(1).max(128) }).strict())
+    .query(async ({ ctx, input }) => {
+      await requireOwnerFinancialReports(ctx);
+      try {
+        const scope = await scopeFor(ctx, input.branchId);
+        return await ctx.db.$transaction(
+          async (tx) => readPharmacyShiftHandover(txDb(tx), scope, input.drawerSessionId),
+          { isolationLevel: 'RepeatableRead' }
         );
       } catch (error) {
         fail(error);
@@ -2641,7 +2662,7 @@ export const pharmacySalesRouter = router({
           lotId: z.string().min(1).optional(),
           canonicalUnits: z.number().int().positive(),
           quarantineLocationId: z.string().min(1).optional(),
-          disposition: z.enum(['RESTOCK', 'QUARANTINE']).default('QUARANTINE'),
+          disposition: z.enum(['RESTOCK', 'QUARANTINE']),
           reason: z.string().trim().min(1),
           integrityDecision: z.string().trim().min(1),
           idempotencyKey: z.string().trim().min(1),
@@ -2709,7 +2730,7 @@ export const pharmacySalesRouter = router({
           lotId: z.string().min(1).optional(),
           canonicalUnits: z.number().int().positive(),
           quarantineLocationId: z.string().min(1).optional(),
-          disposition: z.enum(['RESTOCK', 'QUARANTINE']).default('QUARANTINE'),
+          disposition: z.enum(['RESTOCK', 'QUARANTINE']),
           reason: z.string().trim().min(1),
           integrityDecision: z.string().trim().min(1),
           idempotencyKey: z.string().trim().min(1).max(120),
