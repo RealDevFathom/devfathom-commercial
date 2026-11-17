@@ -765,6 +765,13 @@ function ScopedPharmacyCounterConsole({
   // DEV-575: a scanner types a code in a burst and ends it with Enter, so a code
   // being typed never fires a search per digit; Enter submits it.
   const scannerQuery = looksLikeScannedCode(trimmedQuery);
+  // A completed name search follows a branch change, so it never waits on the old branch.
+  const [searchBranchId, setSearchBranchId] = useState(branchId);
+  if (searchBranchId !== branchId) {
+    setSearchBranchId(branchId);
+    if (trimmedQuery.length >= 2 && !scannerQuery && submittedSearch.text === trimmedQuery)
+      setSubmittedSearch({ text: trimmedQuery, query: trimmedQuery, branchId });
+  }
   const searchCurrent =
     branchAuthorized &&
     trimmedQuery.length >= 2 &&

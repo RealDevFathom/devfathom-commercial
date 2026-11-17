@@ -3737,6 +3737,24 @@ describe('PharmacyCounterConsole search latency (DEV-575)', () => {
     expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
   });
 
+  it('re-runs a completed name search on the newly selected branch', () => {
+    vi.useFakeTimers();
+    mocks.queries.counterBranches = query({
+      branches: [
+        { id: 'branch-a', name: 'A' },
+        { id: 'branch-b', name: 'B' },
+      ],
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Scan or search'), { target: { value: 'para' } });
+    act(() => vi.advanceTimersByTime(150));
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch-b' } });
+    const last = mocks.queryInputs.mock.calls.filter(([name]) => name === 'counterSearch').at(-1);
+    expect(last?.[1]).toEqual({ branchId: 'branch-b', query: 'para' });
+    expect(lastSearchOptions()).toMatchObject({ enabled: true });
+    expect(mocks.searchProps.mock.lastCall![0]).not.toMatchObject({ state: 'loading' });
+  });
+
   it('returns results to idle when the field is edited below two characters', () => {
     vi.useFakeTimers();
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
