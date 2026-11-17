@@ -4,7 +4,9 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { readPharmacyCashCloseCheck } from './cash-close-check-operations';
 import { readPharmacyShiftHandover } from './shift-handover-operations';
 vi.mock('./cash-close-check-operations', () => ({ readPharmacyCashCloseCheck: vi.fn() }));
-const scope = { organizationId: 'org-a', branchId: 'branch-a' };
+// Same shape the router's scopeFor supplies, including the non-drawer actorId.
+const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' };
+const drawerScope = { organizationId: 'org-a', branchId: 'branch-a' };
 const businessDate = new Date('2026-11-16T00:00:00Z');
 const findings = [
   {
@@ -100,7 +102,7 @@ describe('drawer handover snapshot', () => {
       message: 'Closed drawer not found.',
     });
     expect(f.db.pharmacyDrawerSession.findFirst).toHaveBeenCalledWith({
-      where: { ...scope, id: 'drawer-a', status: 'CLOSED' },
+      where: { ...drawerScope, id: 'drawer-a', status: 'CLOSED' },
       select: { businessDate: true },
     });
     expect(f.db.$queryRaw).not.toHaveBeenCalled();

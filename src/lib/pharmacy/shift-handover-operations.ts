@@ -12,8 +12,15 @@ export async function readPharmacyShiftHandover(
   scope: { organizationId: string; branchId: string },
   drawerSessionId: string
 ) {
+  // The router's scope also carries `actorId`, which is not a drawer column; only
+  // tenant and branch may reach the Prisma filter.
   const drawer = await db.pharmacyDrawerSession.findFirst({
-    where: { ...scope, id: drawerSessionId, status: 'CLOSED' },
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      id: drawerSessionId,
+      status: 'CLOSED',
+    },
     select: { businessDate: true },
   });
   if (!drawer) throw new TRPCError({ code: 'NOT_FOUND', message: 'Closed drawer not found.' });

@@ -33,18 +33,16 @@ function fixture(role: 'ADMIN' | 'EMPLOYEE' = 'ADMIN') {
     $transaction: vi.fn(async (callback: (tx: unknown) => unknown): Promise<unknown> =>
       callback(db)
     ),
-    $queryRaw: vi
-      .fn()
-      .mockResolvedValue([
-        {
-          pendingRx: 2,
-          openOrders: 1,
-          restockPromises: 0,
-          expectedMinor: 500000,
-          countedMinor: 300000,
-          varianceMinor: -200000,
-        },
-      ]),
+    $queryRaw: vi.fn().mockResolvedValue([
+      {
+        pendingRx: 2,
+        openOrders: 1,
+        restockPromises: 0,
+        expectedMinor: 500000,
+        countedMinor: 300000,
+        varianceMinor: -200000,
+      },
+    ]),
     $executeRaw: vi.fn(),
     pharmacyBranch: {
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
