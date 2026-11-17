@@ -52,6 +52,7 @@ const mocks = vi.hoisted(() => ({
   khataApprovers: vi.fn(),
   discardApprovers: vi.fn(),
   discardAttempt: vi.fn(),
+  scannedPackApprovers: vi.fn(),
   signIn: vi.fn(),
   signOut: vi.fn(),
   receiptRefetch: vi.fn(),
@@ -136,6 +137,7 @@ vi.mock('@/lib/trpc', async () => {
         khataOverLimitApprovers: { query: mocks.khataApprovers },
         tenderDiscardApprovers: { query: mocks.discardApprovers },
         discardTenderAttempt: { mutate: mocks.discardAttempt },
+        scannedPackFefoApprovers: { query: mocks.scannedPackApprovers },
       },
     },
     pharmacySales: {
@@ -576,6 +578,7 @@ beforeEach(() => {
     { id: 'family-a', displayName: 'Family A', balanceMinor: 0, creditLimitMinor: 100000 },
   ]);
   mocks.khataApprovers.mockResolvedValue([]);
+  mocks.scannedPackApprovers.mockReset().mockResolvedValue([]);
   mocks.signIn.mockResolvedValue({ ok: true });
   mocks.cartRead.mockReset().mockResolvedValue(cart());
   window.localStorage.clear();
@@ -3206,6 +3209,138 @@ describe('PharmacyCounterConsole barcode safety', () => {
     }
   );
 
+  describe('DEV-889 scanned-pack first-expiry approval', () => {
+    const payload = `${gs1}(21)SERIAL-889`;
+    function preparePack() {
+      const row = barcodeRow();
+      mocks.searchQuery.mockResolvedValue({
+        rows: [{ ...row, saleUnits: [{ ...row.saleUnits[0]!, kind: 'PACK' }] }],
+        truncated: false,
+      });
+      mocks.mutations.authenticatePack!.mockResolvedValue({
+        status: 'VERIFIED',
+        explanation: 'Pack verified.',
+        parsed: { gtin: '01234567890128', serial: 'SERIAL-889' },
+      });
+      mocks.scannedPackApprovers.mockResolvedValue([
+        { id: 'staff-manager', name: 'Manager', self: false },
+      ]);
+      mocks.mutations.addLine!.mockRejectedValueOnce(new Error('SERIAL_FEFO_APPROVAL_REQUIRED'));
+    }
+
+    it.each([false, true])(
+      'retries exactly the refused pack with a fresh PIN (self: %s)',
+      async (self) => {
+        preparePack();
+        mocks.scannedPackApprovers.mockResolvedValue([
+          { id: 'staff-manager', name: self ? 'Owner' : 'Manager', self },
+        ]);
+        render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+        scan(payload);
+        const dialog = await screen.findByRole('dialog', { name: 'Approve this scanned pack?' });
+        expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
+        expect(mocks.scannedPackApprovers).toHaveBeenCalledWith({ branchId: 'branch-a' });
+        const confirm = within(dialog).getByRole('button', { name: 'Approve pack' });
+        expect(confirm).toBeDisabled();
+        await within(dialog).findByRole('option', { name: self ? 'Owner (you)' : 'Manager' });
+        fireEvent.change(within(dialog).getByLabelText('Approving manager or owner'), {
+          target: { value: 'staff-manager' },
+        });
+        fireEvent.change(within(dialog).getByLabelText('Approver PIN'), {
+          target: { value: '12' },
+        });
+        expect(confirm).toBeDisabled();
+        fireEvent.change(within(dialog).getByLabelText('Approver PIN'), {
+          target: { value: '975310' },
+        });
+        fireEvent.click(confirm);
+        await screen.findByText('1 × Paracetamol added.');
+        const [first, second] = mocks.mutations.addLine!.mock.calls.map(([input]) => input);
+        expect(second).toEqual({
+          ...first,
+          scannedPack: { payload, approval: { staffProfileId: 'staff-manager', pin: '975310' } },
+        });
+        expect(second).toMatchObject({ saleId: 'sale-a', saleUnit: 'PACK', quantity: 1 });
+        expect(mocks.mutations.addLine).toHaveBeenCalledTimes(2);
+        for (const value of Object.values(window.localStorage))
+          expect(value).not.toContain('975310');
+      }
+    );
+
+    it('cancels without retrying the refused sale', async () => {
+      preparePack();
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      scan(payload);
+      const dialog = await screen.findByRole('dialog', { name: 'Approve this scanned pack?' });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText('1 × Paracetamol added.')).not.toBeInTheDocument();
+      expect(screen.getByLabelText('Scan or search')).toBeEnabled();
+    });
+
+    it('discards a refused PIN and requires a fresh PIN on the next scan', async () => {
+      preparePack();
+      // The server refuses a wrong PIN deliberately (FORBIDDEN), so its words are shown (DEV-860).
+      mocks.mutations.addLine!.mockRejectedValueOnce(
+        Object.assign(new Error('PIN refused.'), { data: { code: 'FORBIDDEN' } })
+      );
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      scan(payload);
+      const dialog = await screen.findByRole('dialog', { name: 'Approve this scanned pack?' });
+      await within(dialog).findByRole('option', { name: 'Manager' });
+      fireEvent.change(within(dialog).getByLabelText('Approving manager or owner'), {
+        target: { value: 'staff-manager' },
+      });
+      fireEvent.change(within(dialog).getByLabelText('Approver PIN'), {
+        target: { value: '975310' },
+      });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Approve pack' }));
+      await screen.findByText('PIN refused.');
+      expect(mocks.mutations.addLine).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText('1 × Paracetamol added.')).not.toBeInTheDocument();
+      mocks.mutations.addLine!.mockRejectedValueOnce(new Error('SERIAL_FEFO_APPROVAL_REQUIRED'));
+      scan(payload);
+      const next = await screen.findByRole('dialog', { name: 'Approve this scanned pack?' });
+      expect(within(next).getByLabelText('Approver PIN')).toHaveValue('');
+      expect(within(next).getByRole('button', { name: 'Approve pack' })).toBeDisabled();
+      expect(mocks.mutations.addLine).toHaveBeenLastCalledWith(
+        expect.objectContaining({ scannedPack: { payload } })
+      );
+    });
+
+    it('shows approver failures, allows a retry, and blocks approval with no eligible PIN', async () => {
+      preparePack();
+      mocks.scannedPackApprovers
+        .mockRejectedValueOnce(new Error('Unavailable'))
+        .mockResolvedValueOnce([]);
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      scan(payload);
+      const dialog = await screen.findByRole('dialog', { name: 'Approve this scanned pack?' });
+      await within(dialog).findByText('Approvers could not be loaded.');
+      expect(within(dialog).getByRole('button', { name: 'Approve pack' })).toBeDisabled();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Retry' }));
+      await within(dialog).findByText(/No manager or owner has an active staff PIN/);
+      expect(within(dialog).getByRole('button', { name: 'Approve pack' })).toBeDisabled();
+      expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps earliest-expiry packs on the normal scan path', async () => {
+      preparePack();
+      mocks.mutations.addLine!.mockReset().mockResolvedValue({});
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      scan(payload);
+      await screen.findByText('1 × Paracetamol added.');
+      expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          scannedPack: { payload },
+        })
+      );
+      expect(mocks.scannedPackApprovers).not.toHaveBeenCalled();
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+  });
+
   it('keeps a recalled GS1 pack blocked even if another lot of that medicine is saleable', async () => {
     mocks.mutations.authenticatePack!.mockResolvedValue({
       status: 'BLOCKED_RECALL',
@@ -4160,9 +4295,7 @@ describe('PharmacyCounterConsole search latency (DEV-575)', () => {
     await screen.findByText('1 × Paracetamol added.');
     expect(search).toHaveValue('para');
     await waitFor(() => {
-      const last = mocks.queryInputs.mock.calls
-        .filter(([name]) => name === 'counterSearch')
-        .at(-1);
+      const last = mocks.queryInputs.mock.calls.filter(([name]) => name === 'counterSearch').at(-1);
       expect(last?.[1]).toEqual({ branchId: 'branch-a', query: 'para' });
       expect(lastSearchOptions()).toMatchObject({ enabled: true });
     });
