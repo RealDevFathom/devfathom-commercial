@@ -43,7 +43,11 @@ describe('PosOfflineRuntime', () => {
         review: { reason: 'COMPOSER_UNVERIFIED' },
         commands: legacy.commands,
       });
-      await reloaded.resolveReview(legacy.draftId, 'REPLAY');
+      await reloaded.resolveReview(
+        legacy.draftId,
+        'REPLAY',
+        reloaded.snapshot().queue!.drafts[0].review
+      );
       expect(reloaded.snapshot().queue!.drafts[0].status).toBe('QUARANTINED');
       let sent = 0;
       await reloaded.replay('staff-1', async (request) => {
@@ -53,7 +57,11 @@ describe('PosOfflineRuntime', () => {
       });
       expect(sent).toBe(2); // Only the signed draft's open/add commands.
       expect(reloaded.snapshot().queue!.drafts[1].status).toBe('COMPLETED');
-      await reloaded.resolveReview(legacy.draftId, 'DISCARD');
+      await reloaded.resolveReview(
+        legacy.draftId,
+        'DISCARD',
+        reloaded.snapshot().queue!.drafts[0].review
+      );
       const again = new PosOfflineRuntime(scope, driver);
       await again.hydrate();
       expect(again.snapshot().queue!.drafts.map((draft) => draft.draftId)).not.toContain(
@@ -280,6 +288,107 @@ describe('PosOfflineRuntime across tabs of one terminal', () => {
       )
     );
   }
+
+  it.each(['reason', 'command ID'] as const)(
+    'keeps a newer review when a stale tab approves a different %s, then accepts the displayed review',
+    async (changedField) => {
+      const driver = createMemoryDriver();
+      const tabA = new PosOfflineRuntime(scope, driver);
+      let pauseWrite = false;
+      let releaseWrite!: () => void;
+      let writerEntered!: () => void;
+      const writeGate = new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+      const writerReady = new Promise<void>((resolve) => {
+        writerEntered = resolve;
+      });
+      const tabB = new PosOfflineRuntime(scope, driver, (name, run) =>
+        withTerminalScopeLock(name, async () => {
+          if (pauseWrite) {
+            pauseWrite = false;
+            writerEntered();
+            await writeGate;
+          }
+          return run();
+        })
+      );
+      await tabA.hydrate();
+      await tabB.hydrate();
+      await tabA.enqueue({ ...input, lines: [...input.lines, ...draftB.lines] });
+      const catalog = (price1: string, available1: boolean, price2: string) => ({
+        ...catalogPayload,
+        publicationId: input.open.publicationId,
+        channel: input.open.channel,
+        sections: [
+          {
+            id: 'section-1',
+            name: 'Menu',
+            sortOrder: 1,
+            items: [
+              {
+                id: 'menu-item-1',
+                displayName: 'First item',
+                price: price1,
+                available: available1,
+              },
+              { id: 'menu-item-2', displayName: 'Second item', price: price2, available: true },
+            ].map((item) => ({
+              ...item,
+              productId: item.id,
+              product: { name: item.displayName },
+              sortOrder: 1,
+              priceSource: 'BASE_LIST',
+              modifierGroups: [],
+            })),
+          },
+        ],
+      });
+      await tabA.cacheCatalog(catalog('5.00', true, '6.00'), '2026-11-17T00:00:00.000Z');
+      const displayed = tabA.snapshot().queue!.drafts[0];
+      expect(displayed.review?.reason).toBe('PRICE_CHANGED');
+
+      pauseWrite = true;
+      const updating = tabB.cacheCatalog(
+        changedField === 'reason' ? catalog('5.00', false, '6.00') : catalog('4.00', true, '7.00'),
+        '2026-11-17T00:01:00.000Z'
+      );
+      await writerReady;
+      // The click arrives while B holds the lock: compare only after B commits.
+      const approving = tabA.resolveReview(displayed.draftId, 'REPLAY', displayed.review);
+      releaseWrite();
+      await updating;
+      const current = tabB.snapshot().queue!.drafts[0];
+      expect(current.review).not.toEqual(displayed.review);
+      if (changedField === 'reason') {
+        expect(current.review?.atCommandId).toBe(displayed.review?.atCommandId);
+        expect(current.review?.reason).toBe('ITEM_UNAVAILABLE');
+      } else {
+        expect(current.review?.reason).toBe(displayed.review?.reason);
+        expect(current.review?.atCommandId).not.toBe(displayed.review?.atCommandId);
+      }
+
+      await approving;
+      expect(tabA.snapshot().queue!.drafts[0]).toEqual(current);
+      expect(await persistedDrafts(driver)).toEqual([current]);
+      const send = vi.fn(async () => ({ status: 201, serverRef: 'server-ref' }));
+      expect((await tabA.replay('staff-1', send)).state).toBe('IDLE');
+      expect(send).not.toHaveBeenCalled();
+
+      const reloaded = new PosOfflineRuntime(scope, driver);
+      await reloaded.hydrate();
+      expect(reloaded.snapshot().queue!.drafts[0]).toEqual(current);
+      // A fresh click on the now-displayed conflict is still allowed to send.
+      await tabA.resolveReview(current.draftId, 'REPLAY', { ...current.review! });
+      expect(tabA.snapshot().queue!.drafts[0].status).toBe('QUEUED');
+      await tabA.replay('staff-1', send);
+      expect(send).toHaveBeenCalledTimes(3);
+      expect((await persistedDrafts(driver))[0].status).toBe('COMPLETED');
+      tabA.close();
+      tabB.close();
+      reloaded.close();
+    }
+  );
 
   it('keeps both drafts when two hydrated tabs save one after the other', async () => {
     const driver = createMemoryDriver();

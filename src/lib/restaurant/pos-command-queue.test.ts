@@ -843,6 +843,7 @@ describe('review before a stale submission (criterion 5)', () => {
         flagged,
         flagged.drafts[0].draftId,
         'REPLAY',
+        flagged.drafts[0].review,
         current.version,
         current
       );
@@ -873,6 +874,7 @@ describe('review before a stale submission (criterion 5)', () => {
         flagged,
         flagged.drafts[0].draftId,
         'REPLAY',
+        flagged.drafts[0].review,
         takeaway.version,
         takeaway
       );
@@ -905,12 +907,26 @@ describe('review before a stale submission (criterion 5)', () => {
 
       // Accepting the base-price change shown for the first line surfaces the
       // modifier change on the second line; nothing replays yet.
-      const first = resolveReviewedDraft(flagged, draftId, 'REPLAY', current.version, current);
+      const first = resolveReviewedDraft(
+        flagged,
+        draftId,
+        'REPLAY',
+        flagged.drafts[0].review,
+        current.version,
+        current
+      );
       expect(first.drafts[0].status).toBe('NEEDS_REVIEW');
       expect(first.drafts[0].review).toMatchObject({ reason: 'PRICE_CHANGED', atCommandId: 'c3' });
       expect(nextReplayCommand(first, DEVICE, OPERATOR).status).toBe('IDLE');
 
-      const second = resolveReviewedDraft(first, draftId, 'REPLAY', current.version, current);
+      const second = resolveReviewedDraft(
+        first,
+        draftId,
+        'REPLAY',
+        first.drafts[0].review,
+        current.version,
+        current
+      );
       expect(second.drafts[0].status).toBe('QUEUED');
       expect(markDraftsForCatalogReview(second, current).flagged).toBe(0);
     });
@@ -925,6 +941,7 @@ describe('review before a stale submission (criterion 5)', () => {
         flagged,
         flagged.drafts[0].draftId,
         'REPLAY',
+        flagged.drafts[0].review,
         closed.version,
         closed
       );
@@ -1063,6 +1080,7 @@ describe('review before a stale submission (criterion 5)', () => {
       snapshot,
       snapshot.drafts[0].draftId,
       'REPLAY',
+      snapshot.drafts[0].review,
       'v1:bbbb'
     );
     expect(accepted.drafts[0].status).toBe('QUEUED');
@@ -1073,8 +1091,33 @@ describe('review before a stale submission (criterion 5)', () => {
       snapshot,
       snapshot.drafts[1].draftId,
       'DISCARD',
+      snapshot.drafts[1].review,
       'v1:bbbb'
     );
     expect(dropped.drafts).toHaveLength(1);
   });
+
+  it.each(['atCommandId', 'reason', 'message', 'missing'] as const)(
+    'does not approve a review with a stale or missing %s',
+    (field) => {
+      const snapshot = markDraftsForCatalogReview(
+        seeded([draftInput()]),
+        catalog({ channelOpen: false })
+      ).snapshot;
+      const draft = snapshot.drafts[0];
+      const displayed =
+        field === 'missing'
+          ? null
+          : {
+              ...draft.review!,
+              ...(field === 'atCommandId' ? { atCommandId: 'previous-command' } : {}),
+              ...(field === 'reason' ? { reason: 'CATALOG_CONFLICT' as const } : {}),
+              ...(field === 'message' ? { message: 'A different conflict was displayed.' } : {}),
+            };
+      // Even without a matching catalog, stale approval cannot release the review.
+      const result = resolveReviewedDraft(snapshot, draft.draftId, 'REPLAY', displayed, 'v2');
+      expect(result).toEqual(snapshot);
+      expect(nextReplayCommand(result, DEVICE, OPERATOR).status).toBe('IDLE');
+    }
+  );
 });

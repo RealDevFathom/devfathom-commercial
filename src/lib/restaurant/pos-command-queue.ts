@@ -820,6 +820,7 @@ export function resolveReviewedDraft(
   snapshot: PosQueueSnapshot,
   draftId: string,
   decision: 'REPLAY' | 'DISCARD',
+  displayedReview: PosDraftReview | null,
   catalogVersion: string,
   /** The catalog the operator reviewed against; its prices become the accepted quote. */
   catalog: PosCatalogSnapshot | null = null
@@ -834,6 +835,16 @@ export function resolveReviewedDraft(
   )
     return snapshot;
   return mapDraft(snapshot, draftId, (draft) => {
+    // A different tab may have replaced the conflict since this card rendered.
+    // Approve only the review the operator saw, never the freshly loaded one.
+    if (
+      !displayedReview ||
+      !draft.review ||
+      draft.review.atCommandId !== displayedReview.atCommandId ||
+      draft.review.reason !== displayedReview.reason ||
+      draft.review.message !== displayedReview.message
+    )
+      return draft;
     // Without a catalog of this draft's own menu nothing can be re-checked or
     // re-baselined: send it as composed, and the server prices every line.
     if (!catalog || !draftMatchesCatalog(draft, catalog)) {

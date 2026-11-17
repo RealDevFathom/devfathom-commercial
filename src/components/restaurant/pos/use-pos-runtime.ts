@@ -48,6 +48,7 @@ import {
 import {
   composerProofNeedsRenewal,
   countQueuedCommands,
+  type PosDraftReview,
   type PosQueueSnapshot,
   type PosQuotedModifier,
 } from '@/lib/restaurant/pos-command-queue';
@@ -924,15 +925,15 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
         // attempt so the stable idempotency key is actually retried.
         return replayQueue(runtime);
       })) satisfies MouseEventHandler<HTMLButtonElement>,
-    sendReviewedOrder: (draft: (typeof reviewDrafts)[number]) =>
+    sendReviewedOrder: (draftId: string, displayedReview: PosDraftReview | null) =>
       (async () => {
-        await offlineRuntime.current?.resolveReview(draft.draftId, 'REPLAY');
+        await offlineRuntime.current?.resolveReview(draftId, 'REPLAY', displayedReview);
         syncQueue();
         await replayQueue(runtime);
       }) satisfies MouseEventHandler<HTMLButtonElement>,
     discardReviewedOrder: (draft: (typeof reviewDrafts)[number]) =>
       (async () => {
-        await offlineRuntime.current?.resolveReview(draft.draftId, 'DISCARD');
+        await offlineRuntime.current?.resolveReview(draft.draftId, 'DISCARD', draft.review);
         syncQueue();
       }) satisfies MouseEventHandler<HTMLButtonElement>,
     openOrder: openOrder,

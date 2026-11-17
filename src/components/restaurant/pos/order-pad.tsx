@@ -222,7 +222,7 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
                       disabled={
                         !pos.online || pos.busy || draft.review?.reason === 'COMPOSER_UNVERIFIED'
                       }
-                      onClick={workspace.sendReviewedOrder(draft)}
+                      onClick={workspace.sendReviewedOrder(draft.draftId, draft.review)}
                     >
                       Send deliberately
                     </Button>

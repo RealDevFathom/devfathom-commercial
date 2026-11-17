@@ -25,6 +25,7 @@ import {
   resolveReviewedDraft,
   resumeAfterReauth,
   type PosDraftInput,
+  type PosDraftReview,
   type PosQueueSnapshot,
   type PosReplayRequest,
 } from './pos-command-queue';
@@ -151,7 +152,11 @@ export class PosOfflineRuntime {
     }
   }
 
-  async resolveReview(draftId: string, decision: 'REPLAY' | 'DISCARD'): Promise<void> {
+  async resolveReview(
+    draftId: string,
+    decision: 'REPLAY' | 'DISCARD',
+    displayedReview: PosDraftReview | null
+  ): Promise<void> {
     await this.commit(() => {
       this.state = {
         ...this.state,
@@ -159,6 +164,7 @@ export class PosOfflineRuntime {
           this.queue(),
           draftId,
           decision,
+          displayedReview,
           this.state.catalog?.version ?? '',
           this.state.catalog ?? null
         ),
