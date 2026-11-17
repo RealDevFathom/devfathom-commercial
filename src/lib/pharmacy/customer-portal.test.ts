@@ -104,7 +104,9 @@ describe('DEV-15 customer PWA sign-in', () => {
   });
 
   it('does not reset the failed-guess counter when a code is resent', async () => {
-    const update = vi.fn(async () => ({}));
+    const update = vi.fn<(args: { where: unknown; data: Record<string, unknown> }) => Promise<unknown>>(
+      async () => ({}),
+    );
     const db = asDb({
       pharmacyCustomer: { findFirst: async () => customerRow },
       pharmacyCustomerPortalLink: {
@@ -113,8 +115,7 @@ describe('DEV-15 customer PWA sign-in', () => {
       },
     });
     await startPortalSignIn(db, ORG, TOKEN, async () => {});
-    const call = update.mock.calls[0] as unknown as [{ data: Record<string, unknown> }];
-    expect(call[0].data).not.toHaveProperty('otpFailedAttempts');
+    expect(update.mock.calls[0][0].data).not.toHaveProperty('otpFailedAttempts');
   });
 
   it('refuses a link from another tenant, revoked or expired', async () => {
