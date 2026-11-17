@@ -903,7 +903,9 @@ describe('day-close console', () => {
     const callbacks = mocks.reopenMutate.mock.calls[0]![1] as { onSettled: () => void };
     act(() => callbacks.onSettled());
     expect(pin).toHaveValue('');
-    expect(within(form).getByLabelText('Reason for reopening')).toHaveValue('Closed early by mistake');
+    expect(within(form).getByLabelText('Reason for reopening')).toHaveValue(
+      'Closed early by mistake'
+    );
   });
   it('offers the reopen to a manager who closes the day (DEV-631)', () => {
     mocks.role = 'EMPLOYEE';
