@@ -570,3 +570,12 @@ it('#727: shows the issued promotion name and saving under its line', () => {
   render(<CounterReceiptView {...input} />);
   expect(screen.getByText('Promotion: Winter week (-0.10)')).toBeTruthy();
 });
+
+it('previews the issue time and cashier in the on-screen header (DEF-15)', () => {
+  const input = props();
+  input.receipt = { ...input.receipt!, cashierName: 'Ayesha Khan' };
+  render(<CounterReceiptView {...input} />);
+  const header = screen.getByRole('heading', { level: 4 }).closest('header')!;
+  expect(within(header).getByText(/Date:.*15:00/)).toBeTruthy();
+  expect(within(header).getByText('Cashier: Ayesha Khan')).toBeTruthy();
+});

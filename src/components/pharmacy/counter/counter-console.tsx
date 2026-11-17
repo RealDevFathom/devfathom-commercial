@@ -120,6 +120,7 @@ import {
   counterUnitNoun,
   plural,
   looseSaleUnitOption,
+  onHandInSaleUnitLabel,
   preferredSaleUnitOption,
   previewSaleLine,
   type SaleUnitKind,
@@ -616,6 +617,8 @@ function ScopedPharmacyCounterConsole({
   const searchRef = useRef<HTMLInputElement>(null);
   const quantityRef = useRef<HTMLInputElement>(null);
   const focusQuantityOnStage = useRef(false);
+  // The default quantity of 1 is a proposal until the cashier has looked at it (DEV-633).
+  const quantityReviewed = useRef(false);
   const restoreSearchAfterAdd = useRef(false);
   const rxPanelRef = useRef<HTMLDivElement>(null);
   const tenderRef = useRef<HTMLDivElement>(null);
@@ -1571,10 +1574,16 @@ function ScopedPharmacyCounterConsole({
 
   const stageRow = useCallback((row: CounterSearchRow, focusQuantity = true) => {
     focusQuantityOnStage.current = focusQuantity;
+    quantityReviewed.current = false;
     setActiveRow(row);
-    setQuantityText('');
+    setQuantityText('1');
     setSaleUnit(preferredSaleUnitOption(row.saleUnits, row.dosageForm)?.kind ?? null);
     setLotOverride(null);
+  }, []);
+
+  const changeQuantity = useCallback((text: string) => {
+    quantityReviewed.current = true;
+    setQuantityText(text);
   }, []);
 
   useEffect(() => {
@@ -1652,7 +1661,7 @@ function ScopedPharmacyCounterConsole({
       if (!selectionPreview.sufficient) {
         setNotice({
           tone: 'warning',
-          message: `Only ${selectionPreview.availableUnits} safe units are on hand. Reduce the quantity or record the shortage.`,
+          message: `Only ${onHandInSaleUnitLabel(selectionPreview)} on hand. Reduce the quantity or record the shortage.`,
         });
         return;
       }
@@ -2056,7 +2065,10 @@ function ScopedPharmacyCounterConsole({
           setActiveSale(null);
         }
         await refreshCart();
-        setNotice({ tone: 'success', message: `Bill ${action === 'void' ? 'voided' : action}.` });
+        setNotice({
+          tone: 'success',
+          message: `Bill ${action === 'void' ? 'voided' : action === 'hold' ? 'held' : action}.`,
+        });
         focusSearch();
       } catch (error) {
         setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
@@ -3529,8 +3541,10 @@ function ScopedPharmacyCounterConsole({
                             return;
                           }
                           if (activeRow) {
-                            if (quantity === null) quantityRef.current?.focus();
-                            else void addToCart();
+                            if (quantity === null || !quantityReviewed.current) {
+                              quantityReviewed.current = true;
+                              quantityRef.current?.focus();
+                            } else void addToCart();
                             return;
                           }
                           const first =
@@ -3631,7 +3645,7 @@ function ScopedPharmacyCounterConsole({
                       preview={preview}
                       disabled={busy}
                       onSelect={setSaleUnit}
-                      onQuantityChange={setQuantityText}
+                      onQuantityChange={changeQuantity}
                       quantityRef={quantityRef}
                       onSubmit={() => void addToCart()}
                       chordFor={chordFor}
@@ -3650,7 +3664,7 @@ function ScopedPharmacyCounterConsole({
                           className="h-11 w-32"
                           value={quantityText}
                           disabled={busy}
-                          onChange={(event) => setQuantityText(event.target.value)}
+                          onChange={(event) => changeQuantity(event.target.value)}
                         />
                       </div>
                     ) : null}
@@ -3786,7 +3800,11 @@ function ScopedPharmacyCounterConsole({
           <SectionCard
             className="rounded-xl p-4"
             eyebrow="Bill total"
-            actions={<span className="text-xs text-text-muted">{lineCount} lines</span>}
+            actions={
+              <span className="text-xs text-text-muted">
+                {lineCount} {lineCount === 1 ? 'line' : 'lines'}
+              </span>
+            }
           >
             <dl className="space-y-2 text-sm">
               {(
@@ -3991,7 +4009,8 @@ function ScopedPharmacyCounterConsole({
         finalFocus={searchRef}
       >
         <p className="text-xs text-text-muted">
-          {lineCount} lines · Tendered {currentBill ? formatMinor(cart.totals.tenderedMinor) : '—'}
+          {lineCount} {lineCount === 1 ? 'line' : 'lines'} · Tendered{' '}
+          {currentBill ? formatMinor(cart.totals.tenderedMinor) : '—'}
         </p>
         <div className="mb-4 space-y-1">
           <Label htmlFor="counter-auto-print" className="flex min-h-11 items-center gap-3">
@@ -4460,7 +4479,7 @@ function CounterOverlay({
           </div>
           {summary ? <div className="shrink-0 px-5 pt-5 empty:hidden">{summary}</div> : null}
           <DialogDescription className="sr-only">
-            {drawer ? 'Saved receipt for this branch.' : `${title} for the current counter bill.`}
+            {`${title} for the current counter bill.`}
           </DialogDescription>
           <div className="grid min-h-0 gap-4 overflow-y-auto p-5">{children}</div>
         </DialogPrimitive.Popup>
