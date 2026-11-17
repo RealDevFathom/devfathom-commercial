@@ -17,8 +17,8 @@ import {
   clearLockout,
   isLockedOut,
   registerFailedAttempt,
-  verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
+import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { hasModule } from '@/lib/entitlements';
 import { can, subjectFromSession } from '@/lib/abac';
@@ -496,7 +496,17 @@ export const pharmacyReportsRouter = router({
           const now = new Date();
           if (!credential || isLockedOut(credential, now))
             return { blocked: 'Owner PIN reauthentication is required.' };
-          if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
+          if (
+            !(await verifyApprovalSecret(db, {
+              organizationId,
+              approverUserId: actorId,
+              credentialHash: credential.credentialHash,
+              secret: input.pin,
+              action: 'pharmacyReports.transitionPharmacovigilanceReport',
+              requestedById: actorId,
+              now,
+            }))
+          ) {
             await db.restaurantOperatorCredential.update({
               where: { id: credential.id },
               data: registerFailedAttempt(credential, now),

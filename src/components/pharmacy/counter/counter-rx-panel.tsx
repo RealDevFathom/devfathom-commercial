@@ -445,7 +445,7 @@ function CounterRxPhotoCapture({
               />
             </div>
             {usedSuggestion ? (
-              <label className="flex items-start gap-2 text-sm text-text-body">
+              <label className="flex min-h-11 items-start gap-2 text-sm text-text-body">
                 <input
                   type="checkbox"
                   required
@@ -594,7 +594,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
         className="min-w-0 space-y-5 rounded-lg focus-visible:outline-2 focus-visible:outline-ring"
       >
         <section aria-label="Safety blocks" className="space-y-3">
-          <h4 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
+          <h4 className="font-mono text-xs tracking-wide text-text-muted uppercase">
             Safety blocks
           </h4>
           {blocks.length === 0 ? (
@@ -627,7 +627,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
             aria-label="Counselling and notices"
             className="space-y-3 border-t border-border-subtle pt-5"
           >
-            <h4 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
+            <h4 className="font-mono text-xs tracking-wide text-text-muted uppercase">
               Counselling and notices
             </h4>
             {advice.length > 0 ? (
@@ -680,9 +680,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
           aria-label="Patient and prescriptions"
           className="space-y-3 border-t border-border-subtle pt-5"
         >
-          <h4 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
-            Patient
-          </h4>
+          <h4 className="font-mono text-xs tracking-wide text-text-muted uppercase">Patient</h4>
 
           {state === 'denied' ? (
             <p className="text-sm text-text-muted" role="status">
@@ -890,7 +888,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                     href={`/pharmacy/prescriptions#${PRESCRIPTION_DIRECTORY_ID}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-primary underline underline-offset-4 focus-visible:ring-3 focus-visible:ring-ring"
+                    className="inline-flex min-h-11 min-w-11 items-center text-primary underline underline-offset-4 focus-visible:ring-3 focus-visible:ring-ring"
                   >
                     Add the patient or prescriber in Prescriptions (opens in a new tab)
                   </Link>
