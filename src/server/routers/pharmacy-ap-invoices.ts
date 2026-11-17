@@ -10,6 +10,12 @@
 import { TRPCError } from '@trpc/server';
 import { readApAging } from '@/lib/pharmacy/accounts/ap-aging';
 import {
+  buildPaymentDraft,
+  buildSetOffDraft,
+  computeDueBillReminders,
+} from '@/lib/pharmacy/accounts/ap-payables-drafts';
+import { z } from 'zod';
+import {
   listApInvoices,
   payApInvoice,
   PharmacyApInvoiceError,
@@ -138,6 +144,71 @@ export const pharmacyApInvoicesRouter = router({
       fail(error);
     }
   }),
+
+  /** DEV-694: read-only reminders plus payment and credit set-off DRAFTS. */
+  payablesDrafts: adminProcedure
+    .input(
+      apAgingSchema
+        .extend({
+          payee: z
+            .object({
+              name: z.string().trim().min(1).max(200),
+              currency: z.string().trim().min(3).max(3),
+              budgetMinor: z.number().int().min(0).max(2_000_000_000),
+            })
+            .strict()
+            .optional(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      try {
+        const view = await readApAging(ctx.db, scope, input.asOf);
+        const credits = await ctx.db.pharmacySupplierCredit.findMany({
+          where: { organizationId: scope.organizationId, branchId: scope.branchId },
+          select: {
+            id: true,
+            reference: true,
+            amountMinor: true,
+            receivedAt: true,
+            supplier: { select: { name: true } },
+            allocations: { select: { amountMinor: true } },
+          },
+          orderBy: [{ receivedAt: 'asc' }, { id: 'asc' }],
+          take: 1000,
+        });
+        const currency = input.payee?.currency ?? view.totals[0]?.currency ?? 'PKR';
+        return {
+          scope: { organizationId: scope.organizationId, branchId: scope.branchId },
+          draftOnly: true as const,
+          reminders: computeDueBillReminders(view),
+          paymentDraft: input.payee
+            ? buildPaymentDraft(view, {
+                payeeName: input.payee.name,
+                currency,
+                budgetMinor: input.payee.budgetMinor,
+              })
+            : null,
+          setOffDraft: buildSetOffDraft(
+            view,
+            credits.map((c) => ({
+              creditId: c.id,
+              reference: c.reference,
+              supplierName: c.supplier.name,
+              receivedAt: c.receivedAt,
+              amountMinor: c.amountMinor,
+              allocatedMinor: c.allocations.reduce((s, a) => s + a.amountMinor, 0),
+            })),
+            currency
+          ),
+          viewComplete: view.complete,
+          retrievedAt: new Date(),
+        };
+      } catch (error) {
+        fail(error);
+      }
+    }),
 
   record: adminProcedure.input(recordApInvoiceSchema).mutation(async ({ ctx, input }) => {
     const scope = await authorizeGeneralJournal(ctx, input.branchId);
