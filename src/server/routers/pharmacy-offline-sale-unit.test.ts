@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto';
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { OfflineSnapshotEnvelope } from '@/lib/pharmacy/offline-snapshot-envelope';
 
@@ -192,18 +193,19 @@ describe('DEV-874 offline add-line lock ordering', () => {
     const body = command(10);
     body.lines.push({ ...body.lines[0]! });
     await expect(replay(target, body)).rejects.toThrow('REACHED_LINE');
-    const calls = vi.mocked(target.$queryRaw).mock.calls as unknown as unknown[][];
-    const keys = calls.flatMap((call, index) =>
-      typeof call[1] === 'string' && call[1].startsWith('org_a:sale-line:')
-        ? [{ key: call[1], index }]
+    // Typed by ScopedDb: tagged-template locks pass (strings, ...values), stock reads one Prisma.Sql.
+    const calls = vi.mocked(target.$queryRaw).mock.calls;
+    const keys = calls.flatMap(([, value], index) =>
+      typeof value === 'string' && value.startsWith('org_a:sale-line:')
+        ? [{ key: value, index }]
         : []
     );
     expect(keys.map(({ key }) => key)).toEqual([
       'org_a:sale-line:idem_1:0',
       'org_a:sale-line:idem_1:1',
     ]);
-    const stock = calls.findIndex(([query]) =>
-      Boolean((query as { sql?: string }).sql?.includes('AS "batchId"'))
+    const stock = calls.findIndex(
+      ([query]) => query instanceof Prisma.Sql && query.sql.includes('AS "batchId"')
     );
     expect(stock).toBeGreaterThanOrEqual(0);
     for (const key of keys) expect(key.index).toBeLessThan(stock);

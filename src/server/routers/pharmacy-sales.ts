@@ -2131,7 +2131,32 @@ export const pharmacySalesRouter = router({
           // DEV-874: a retry replays only after the independent pharmacist PIN passes again,
           // so a missing or wrong PIN never returns the saved controlled line.
           const replay = await replaySaleLine(db, scope, lineInput);
-          if (replay) return replay;
+          if (replay) {
+            // The counter key omits the patient and dispensing authority, so a retry must
+            // carry the ones the register recorded for this line.
+            const recorded = await db.pharmacyControlledRegisterEntry.findMany({
+              where: {
+                organizationId: scope.organizationId,
+                stockMovementId: { in: replay.allocation.movementIds },
+              },
+              select: { patientId: true, prescriptionLineId: true, emergency: true },
+            });
+            const emergency = Boolean(authorization.emergency);
+            const prescriptionLineId = emergency
+              ? null
+              : (authorization.prescriptionLineId ?? null);
+            if (
+              recorded.length === 0 ||
+              recorded.some(
+                (entry) =>
+                  entry.patientId !== authorization.patientId ||
+                  entry.emergency !== emergency ||
+                  entry.prescriptionLineId !== prescriptionLineId
+              )
+            )
+              throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+            return replay;
+          }
           for (const { kind, approval } of approvals)
             await confirmCounterApproval(db, scope, kind, approval);
           const refEntry = await earlierRegisterEntry(db, scope, authorization.refSerial);

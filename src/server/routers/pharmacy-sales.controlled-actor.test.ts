@@ -120,7 +120,12 @@ function callerFor(
       }),
     },
     restaurantOperatorCredential: { findFirst: credential },
-    pharmacyControlledRegisterEntry: { create: register, findFirst: vi.fn(), aggregate: vi.fn() },
+    pharmacyControlledRegisterEntry: {
+      create: register,
+      findFirst: vi.fn(),
+      aggregate: vi.fn(),
+      findMany: vi.fn<(args: unknown) => Promise<unknown[]>>(async () => []),
+    },
   };
   const context = {
     db,
@@ -549,7 +554,14 @@ describe('[DEF-10] counter add-line replay (DEV-874)', () => {
           controlled: false,
           manufacturer: 'Maker',
         });
-      else withValidWitness(f);
+      else {
+        withValidWitness(f);
+        f.db.pharmacyControlledRegisterEntry.findMany.mockResolvedValue([
+          path === 'controlled emergency'
+            ? { patientId: 'patient-1', prescriptionLineId: null, emergency: true }
+            : { patientId: 'patient-1', prescriptionLineId: 'rx-line-1', emergency: false },
+        ]);
+      }
       const stored = {
         ...plain,
         id: 'saved-line',
@@ -585,6 +597,10 @@ describe('[DEF-10] counter add-line replay (DEV-874)', () => {
       if (controlled) {
         expect(f.credential).toHaveBeenCalledOnce();
         expect(verifyOperatorCredential).toHaveBeenCalledExactlyOnceWith('PIN', '1234', 'hash');
+        expect(f.db.pharmacyControlledRegisterEntry.findMany).toHaveBeenCalledExactlyOnceWith({
+          where: { organizationId: 'org-1', stockMovementId: { in: ['movement-1'] } },
+          select: { patientId: true, prescriptionLineId: true, emergency: true },
+        });
       } else expect(f.credential).not.toHaveBeenCalled();
       expect(f.register).not.toHaveBeenCalled();
       expect(f.db.pharmacySaleLine.findFirst).toHaveBeenCalledExactlyOnceWith({
@@ -630,6 +646,60 @@ describe('[DEF-10] counter add-line replay (DEV-874)', () => {
         })
       ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'IDEMPOTENCY_CONFLICT' });
       expect(addSaleLine).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    [
+      'names a different patient',
+      { patientId: 'patient-2', prescriptionLineId: null, emergency: true },
+      {},
+    ],
+    [
+      'turns an emergency supply into a prescription fill',
+      { patientId: 'patient-1', prescriptionLineId: null, emergency: true },
+      { emergency: false, prescriptionLineId: 'rx-line-1' },
+    ],
+    [
+      'names a different prescription line',
+      { patientId: 'patient-1', prescriptionLineId: 'rx-line-1', emergency: false },
+      { emergency: false, prescriptionLineId: 'rx-line-2' },
+    ],
+    ['has no register evidence for the saved line', null, {}],
+  ])(
+    'refuses a controlled retry that %s instead of replaying it',
+    async (_change, recorded, authorizationChange) => {
+      const f = callerFor([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]);
+      withValidWitness(f);
+      f.db.pharmacyControlledRegisterEntry.findMany.mockResolvedValue(recorded ? [recorded] : []);
+      const { controlledAuthorization, ...plain } = line;
+      f.db.pharmacySaleLine.findFirst.mockResolvedValue({
+        ...plain,
+        id: 'saved-line',
+        organizationId: 'org-1',
+        voucherId: null,
+        promotionId: null,
+        discountKind: null,
+        discountMinor: 0,
+        prescriptionLineId: null,
+        prescriptionPatientId: null,
+        allocations: [
+          {
+            inventoryLotId: 'lot-1',
+            stockLocationId: 'shelf-1',
+            canonicalUnits: 2,
+            stockMovementId: 'movement-1',
+          },
+        ],
+      });
+      await expect(
+        f.caller.addLine({
+          ...line,
+          controlledAuthorization: { ...controlledAuthorization, ...authorizationChange },
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'IDEMPOTENCY_CONFLICT' });
+      expect(addSaleLine).not.toHaveBeenCalled();
+      expect(f.register).not.toHaveBeenCalled();
     }
   );
 
