@@ -1,5 +1,5 @@
 import { cleanup, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
   ExpiryBoard,
@@ -257,20 +257,32 @@ describe('DEV-728 distributor grouping and return claims', () => {
     );
   });
 
-  it('caps one claim at the server limit, soonest expiry first', () => {
-    const many = Array.from({ length: EXPIRY_CLAIM_MAX_POSITIONS + 5 }, (_, index) => ({
-      ...row,
-      key: `lot_${index}:location_1`,
-      inventoryLotId: `lot_${index}`,
-    }));
-    render(<ExpiryBoard {...props} rows={many} />);
-    const form = screen.getByRole('button', { name: 'Draft return claim' }).closest('form')!;
-    const positions = new FormData(form).getAll('position');
-    expect(positions).toHaveLength(EXPIRY_CLAIM_MAX_POSITIONS);
-    expect(positions[0]).toBe('lot_0|location_1');
-    expect(screen.getByRole('region', { name: 'Branch distributor' })).toHaveTextContent(
-      'draft again for the other 5'
-    );
+  describe('caps one claim at the server limit, soonest expiry first', () => {
+    // The board is rendered once for both checks: it holds more lots than the
+    // server limit, which is the expensive part under a loaded machine.
+    let positions: FormDataEntryValue[] = [];
+    let regionText = '';
+    beforeAll(() => {
+      const many = Array.from({ length: EXPIRY_CLAIM_MAX_POSITIONS + 5 }, (_, index) => ({
+        ...row,
+        key: `lot_${index}:location_1`,
+        inventoryLotId: `lot_${index}`,
+      }));
+      render(<ExpiryBoard {...props} rows={many} />);
+      const form = screen.getByRole('button', { name: 'Draft return claim' }).closest('form')!;
+      positions = new FormData(form).getAll('position');
+      regionText = screen.getByRole('region', { name: 'Branch distributor' }).textContent ?? '';
+      cleanup();
+    });
+
+    it('puts no more than the server limit on one claim, soonest first', () => {
+      expect(positions).toHaveLength(EXPIRY_CLAIM_MAX_POSITIONS);
+      expect(positions[0]).toBe('lot_0|location_1');
+    });
+
+    it('tells the user to draft again for the lots left over', () => {
+      expect(regionText).toContain('draft again for the other 5');
+    });
   });
 
   it('offers no group claim once every lot is already on a return, and links to it', () => {
