@@ -355,6 +355,35 @@ async function marginScopeFor(
   return scope;
 }
 
+/**
+ * DEV-876: a counter read (stock, lots, substitutes, upsells, pack scans, the
+ * drawer and the customer's loyalty and credit) stays inside the caller's active
+ * branch assignment, as the counter's writes already do. A branch outside the
+ * workspace keeps `scopeFor`'s refusal; only a session ADMIN of this organization
+ * may read an active branch they are not assigned to.
+ */
+async function assignedBranchScope(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  const scope = await scopeFor(ctx, branch);
+  const user = ctx.session!.user;
+  if (user.organizationId !== scope.organizationId)
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  if (user.role === 'ADMIN') return scope;
+  const assignment = await ctx.db.pharmacyBranchAssignment.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      userId: user.id,
+      branchId: branch,
+      active: true,
+      branch: { organizationId: scope.organizationId, active: true },
+    },
+    select: { branchId: true },
+  });
+  if (!assignment.some((row) => row.branchId === branch)) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+  return scope;
+}
+
 type SaleLineInput = Parameters<typeof addSaleLine>[2];
 /** #727: the online counter prices each line against the branch's live promotions. */
 const COUNTER_LINE_PRICING = { applyCounterPromotions: true } as const;
@@ -1485,7 +1514,7 @@ export const pharmacySalesRouter = router({
       try {
         return await readCustomerSnapshot(
           ctx.db,
-          await scopeFor(ctx, input.branchId),
+          await assignedBranchScope(ctx, input.branchId),
           input.customerId,
           input.page
         );
@@ -1550,7 +1579,7 @@ export const pharmacySalesRouter = router({
   drawerStatus: protectedProcedure
     .input(z.object({ branchId, deviceId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await assignedBranchScope(ctx, input.branchId);
       const openDrawer = await readOpenPharmacyDrawer(ctx.db, scope, input.deviceId);
       if (!openDrawer) return { openDrawer, operatingCashier: null };
       // DEV-821: who runs this till, so the counter can say so before a cash payment.
@@ -1737,7 +1766,7 @@ export const pharmacySalesRouter = router({
         : // DEV-713: a card outcome needs the same counter access as the card write.
           isManualTender(input.type) || input.type === 'CARD'
           ? await requireCounterReceiptAccess(ctx, input.branchId, true)
-          : await scopeFor(ctx, input.branchId);
+          : await assignedBranchScope(ctx, input.branchId);
     return readPharmacyTenderOutcome(ctx.db, scope, ledgerTender(input));
   }),
   tender: protectedProcedure.input(tenderInput).mutation(async ({ ctx, input }) => {
@@ -2980,7 +3009,11 @@ export const pharmacySalesRouter = router({
     )
     .query(async ({ ctx, input }) => {
       try {
-        return await findSubstituteProposals(ctx.db, await scopeFor(ctx, input.branchId), input);
+        return await findSubstituteProposals(
+          ctx.db,
+          await assignedBranchScope(ctx, input.branchId),
+          input
+        );
       } catch (error) {
         if (error instanceof PharmacySubstituteError) {
           throw new TRPCError({ code: 'NOT_FOUND', message: error.code });
@@ -3159,7 +3192,7 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) =>
-      findUpsellSuggestions(ctx.db, await scopeFor(ctx, input.branchId), {
+      findUpsellSuggestions(ctx.db, await assignedBranchScope(ctx, input.branchId), {
         medicineIds: input.medicineIds,
         limit: input.limit,
       })
@@ -3472,7 +3505,7 @@ export const pharmacySalesRouter = router({
     )
     .query(async ({ ctx, input }) => {
       try {
-        return await searchCounterCatalog(ctx.db, await scopeFor(ctx, input.branchId), {
+        return await searchCounterCatalog(ctx.db, await assignedBranchScope(ctx, input.branchId), {
           query: input.query,
           limit: input.limit,
         });
@@ -3485,7 +3518,7 @@ export const pharmacySalesRouter = router({
   authenticatePack: auditedProtectedProcedure
     .input(z.object({ branchId, payload: z.string().max(512) }).strict())
     .mutation(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await assignedBranchScope(ctx, input.branchId);
       ctx.audit.detail = { category: 'PHARMACY_SAFETY', action: 'dispensing_pack_scan' };
       return authenticatePharmacyPack(ctx.db, {
         ...scope,
@@ -3503,7 +3536,7 @@ export const pharmacySalesRouter = router({
   counterLotOptions: protectedProcedure
     .input(z.object({ branchId, medicineId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await assignedBranchScope(ctx, input.branchId);
       // `onHand` returns balance buckets already in FEFO order (expiry, then
       // receipt), so first appearance is the order the allocator would use.
       const buckets = await onHand(ctx.db, scope, input.medicineId, new Date());

@@ -72,6 +72,8 @@ function fixture(raw: unknown = input) {
     branchId: parsed.branchId,
   });
   const keyRead = vi.fn().mockResolvedValue(prior);
+  // DEV-876: the branches the actor holds an active assignment to.
+  const assigned = ['branch-1'];
   const tenderRead = vi.fn().mockResolvedValue({
     id: 'tender-1',
     organizationId: 'org-1',
@@ -112,7 +114,7 @@ function fixture(raw: unknown = input) {
       })),
     }),
     pharmacyBranchAssignment: only({
-      findMany: vi.fn(async () => [{ branchId: 'branch-1' }]),
+      findMany: vi.fn(async () => assigned.map((branchId) => ({ branchId }))),
     }),
     pharmacySale: only({ findFirst: saleRead }),
     pharmacyMoneyIdempotencyKey: only({ findUnique: keyRead }),
@@ -148,6 +150,7 @@ function fixture(raw: unknown = input) {
     saleRead,
     keyRead,
     tenderRead,
+    assigned,
     execute,
     transaction,
     unexpected,
@@ -242,6 +245,8 @@ describe('pharmacySales.tenderOutcome', () => {
     'does not look up keys for a foreign reference: %j',
     async (change) => {
       const f = fixture();
+      // DEV-876: an actor assigned to the branch, so the sale lookup itself is tested.
+      if (change.branchId) f.assigned.push(change.branchId);
       f.saleRead.mockResolvedValue(null);
       expect(await f.caller().tenderOutcome({ ...input, ...change })).toEqual({
         status: 'UNKNOWN',
@@ -264,6 +269,11 @@ describe('pharmacySales.tenderOutcome', () => {
       await f
         .caller({
           entitlements: { ...f.context.entitlements, organizationId: 'org-2' },
+          // DEV-876: a member of that tenant; the read is still scoped by the entitlement.
+          session: {
+            ...f.context.session!,
+            user: { ...f.context.session!.user, organizationId: 'org-2' },
+          },
         })
         .tenderOutcome(input)
     ).toEqual({ status: 'UNKNOWN', replayUnsafe: true });
