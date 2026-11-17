@@ -201,6 +201,41 @@ describe('pharmacy report catalog filters', () => {
     expect(summary.compareDocumentPosition(demand) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it('DEV-61 exports CSV that records every active report filter', async () => {
+    let blob: Blob | undefined;
+    Object.assign(URL, {
+      createObjectURL: (value: Blob) => {
+        blob = value;
+        return 'blob:csv';
+      },
+      revokeObjectURL: () => {},
+    });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    try {
+      render(
+        await PharmacyReportsPage({
+          searchParams: Promise.resolve({
+            branch: 'b1',
+            from: '2026-11-01',
+            to: '2026-11-07',
+            supplier: 's-x',
+            ingredient: 'ing-9',
+            batch: 'batch-3',
+          }),
+        }),
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
+      const csv = await blob!.text();
+      expect(csv).toContain('"Supplier","s-x"');
+      expect(csv).toContain('"Ingredient ID","ing-9"');
+      expect(csv).toContain('"Batch ID","batch-3"');
+      expect(csv).toContain('"From","2026-11-01"');
+      expect(click).toHaveBeenCalledOnce();
+    } finally {
+      click.mockRestore();
+    }
+  });
+
   it('DEV-61 defaults the only authorized branch and the recent workspace week', async () => {
     reportBranches.mockResolvedValueOnce({ branches: [{ id: 'b1', name: 'Main' }] });
     vi.useFakeTimers();

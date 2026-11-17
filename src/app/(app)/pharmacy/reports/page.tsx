@@ -468,8 +468,19 @@ export default async function PharmacyReportsPage({
             {result ? (
               <ReportCsvButton
                 rows={cards.map((card) => ({ label: card.label, figure: String(card.figure) }))}
-                context={{ Branch: branch ?? 'All available branches', From: from, To: to }}
-                filename={`pharmacy-report-${from}-to-${to}.csv`}
+                context={{
+                  Branch: branch ?? 'All available branches',
+                  From: from,
+                  To: to,
+                  Supplier: supplier
+                    ? (suppliers?.find((item) => item.id === supplier)?.name ?? supplier)
+                    : 'All suppliers',
+                  'Ingredient ID': ingredient ?? 'All ingredients',
+                  'Batch ID': batch ?? 'All batches',
+                }}
+                filename={`pharmacy-report-${from}-to-${to}${
+                  supplier || ingredient || batch ? '-filtered' : ''
+                }.csv`}
               />
             ) : null}
             <Link
