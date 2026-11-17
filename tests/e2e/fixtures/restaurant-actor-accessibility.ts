@@ -1,5 +1,6 @@
 import { expect, type Page } from '@playwright/test';
 import pg from 'pg';
+import { signInPlatformActor } from './restaurant-platform-auth';
 
 export type ActorKey = 'superAdmin' | 'agency' | 'restaurantAdmin' | 'restaurantOperator';
 
@@ -160,7 +161,7 @@ export async function signInAs(page: Page, key: ActorKey) {
   await page.getByLabel(/email/i).fill(actor.email);
   await page.locator('input[name="password"]').fill(actor.password);
   if (actor.loginPath === '/platform/login') {
-    await page.getByRole('button', { name: 'Continue to control desk' }).click();
+    await signInPlatformActor(page, actor.email);
   } else {
     const password = page.locator('input[name="password"]');
     await expect(password).toHaveAttribute('type', 'password');

@@ -1112,11 +1112,20 @@ test.describe('Restaurant recipe costing arithmetic', () => {
     // The console retries a non-authorization failure three times with backoff
     // before it surrenders, so the visible error legitimately lands seconds after
     // the first response; this is a bounded wait on a real state, not a sleep.
-    const alert = page
-      .getByRole('alert')
-      .filter({ hasText: 'Recipe cost could not be calculated.' });
+    const alert = page.getByRole('alert').filter({ hasText: 'Recipe cycle detected.' });
     await expect(alert).toBeVisible({ timeout: 30_000 });
-    await expect(alert.getByRole('button', { name: 'Try again', exact: true })).toBeVisible();
+    const recalculate = alert.getByRole('button', { name: 'Recalculate', exact: true });
+    await expect(recalculate).toBeVisible();
+    const recalculated = page.waitForResponse((response) =>
+      response.url().includes('restaurantCatalog.getRecipeCost')
+    );
+    await recalculate.click();
+    const retry = await recipeCostVerdict(await recalculated);
+    expect(retry.result).toBeUndefined();
+    expect(retry.error?.json?.data?.code).toBe('BAD_REQUEST');
+    expect(retry.error?.json?.data?.httpStatus).toBe(400);
+    expect(retry.error?.json?.message).toBe('Recipe cycle detected.');
+    await expect(alert).toBeVisible({ timeout: 30_000 });
     await expect(
       page.getByText('Missing cost', { exact: true }),
       'a refused cost is not a missing-ingredient warning'

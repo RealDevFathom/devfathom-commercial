@@ -793,7 +793,7 @@ export default async function PharmacyReceivingPage({
                 <div className="mt-3 overflow-x-auto">
                   <table className="w-full min-w-[32rem] text-sm">
                     <thead>
-                      <tr className="border-b border-border-subtle text-left font-mono text-[11px] uppercase tracking-wide text-text-muted">
+                      <tr className="border-b border-border-subtle text-left font-mono text-xs uppercase tracking-wide text-text-muted">
                         <th className="py-2 pr-3 font-medium">Item</th>
                         <th className="py-2 pr-3 font-medium">Reason</th>
                         <th className="py-2 pr-3 text-right font-medium">Packs</th>

@@ -18,7 +18,7 @@ function daysBefore(day: string, count: number) {
 }
 
 const head =
-  'px-3 py-2 font-mono text-[0.65rem] font-semibold tracking-wide text-text-muted uppercase';
+  'px-3 py-2 font-mono text-xs font-semibold tracking-wide text-text-muted uppercase';
 const cell = 'px-3 py-2 text-sm text-text-body';
 
 export function SopReportsView({
