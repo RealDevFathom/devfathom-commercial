@@ -20,7 +20,7 @@
  * error aborts its whole transaction, so a case that provokes a trigger and
  * then reads back must do the read from a new one (`expectRejection`).
  */
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomInt } from 'node:crypto';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -1158,6 +1158,127 @@ describeIfDatabase('PUR-04 — exceptions remain visible until resolved', () => 
 });
 
 describeIfDatabase('PUR-04 — reversal creates linked movements and never edits', () => {
+  it('keeps the controlled register equal to sellable stock after receiving and reversing (DEV-892)', async () => {
+    const f = await fixture(ORG_A, BRANCH_A, 'controlled-reverse');
+    const { hashOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
+    const pin = String(randomInt(100_000, 1_000_000));
+    const credentialHash = await hashOperatorCredential('PIN', pin);
+    // Commit the people and credential before reversal: its fresh witness PIN
+    // is verified in an independent tenant transaction.
+    const { actor, witness, staff, receipt } = await inOrg(ORG_A, async (db) => {
+      const department = await db.organizationDepartment.create({
+        data: { organizationId: ORG_A, key: tag('controlled'), name: tag('Pharmacy') },
+      });
+      async function member(capability: string) {
+        const label = tag('pharmacist');
+        return db.user.create({
+          data: {
+            organizationId: ORG_A,
+            name: label,
+            email: `${label}@example.test`,
+            department: department.key,
+            title: 'Pharmacist',
+            permissionOverrides: {
+              create: {
+                organizationId: ORG_A,
+                capability,
+                effect: 'ALLOW',
+                reason: 'Test fixture',
+              },
+            },
+          },
+        });
+      }
+      const actor = await member('pharmacy:safety');
+      const witness = await member('pharmacy:dispense');
+      await db.pharmacyBranchAssignment.create({
+        data: { organizationId: ORG_A, branchId: BRANCH_A, userId: actor.id },
+      });
+      const staff = await db.restaurantStaffProfile.create({
+        data: {
+          organizationId: ORG_A,
+          userId: witness.id,
+          displayName: witness.name,
+          credentials: { create: { organizationId: ORG_A, type: 'PIN', credentialHash } },
+        },
+      });
+      await db.medicine.update({ where: { id: f.medicineId }, data: { controlled: true } });
+      const receipt = await draftReceipt(db, f, 'controlled-reverse', {
+        line: { receivedPacks: 10, bonusPacks: 2, rejectedCanonicalUnits: 30 },
+      });
+      await db.pharmacyGoodsReceipt.update({
+        where: { id: receipt.id },
+        data: { qualifiedPersonUserId: witness.id },
+      });
+      return { actor, witness, staff, receipt };
+    });
+    const scope = { ...scopeOf(f), actorId: actor.id };
+    const posted = await inOrg(ORG_A, (db) =>
+      deps.receipts.postGoodsReceipt(db, scope, {
+        goodsReceiptId: receipt.id,
+        at: RECEIVED_AT,
+        staffProfileId: staff.id,
+        pin,
+      })
+    );
+    const lotId = posted.lines[0]!.inventoryLotId;
+    async function snapshot() {
+      return inOrg(ORG_A, async (db) => ({
+        entries: await db.pharmacyControlledRegisterEntry.findMany({
+          where: { organizationId: ORG_A, branchId: BRANCH_A, inventoryLotId: lotId },
+          orderBy: { serial: 'asc' },
+        }),
+        balances: await balancesFor(db, ORG_A, lotId),
+        sellable: await db.pharmacyStockBalance.aggregate({
+          where: {
+            organizationId: ORG_A,
+            branchId: BRANCH_A,
+            inventoryLotId: lotId,
+            disposition: 'AVAILABLE',
+          },
+          _sum: { onHandUnits: true },
+        }),
+      }));
+    }
+    const received = await snapshot();
+    expect(received.balances).toEqual({ AVAILABLE: 90, QUARANTINE: 30 });
+    expect(received.entries).toHaveLength(1);
+    expect(received.entries[0]).toMatchObject({
+      entryKind: 'PURCHASE',
+      stockMovementId: posted.lines[0]!.acceptedMovementId,
+      quantityCanonicalUnits: 90,
+      balanceDelta: 90,
+      runningBalance: 90,
+      recordedByUserId: actor.id,
+      witnessedByUserId: witness.id,
+    });
+    expect(received.entries[0]!.runningBalance).toBe(received.sellable._sum.onHandUnits);
+
+    const reversal = await inOrg(ORG_A, (db) =>
+      deps.receipts.reverseGoodsReceipt(db, scope, {
+        goodsReceiptId: receipt.id,
+        reason: 'Wrong controlled consignment; returned to supplier.',
+        at: RECEIVED_AT,
+        controlledWitness: { staffProfileId: staff.id, pin },
+      })
+    );
+    const reversed = await snapshot();
+    expect(reversed.balances).toEqual({ AVAILABLE: 0, QUARANTINE: 0 });
+    expect(reversed.entries).toHaveLength(2);
+    expect(reversed.entries[0]).toEqual(received.entries[0]);
+    expect(reversed.entries[1]).toMatchObject({
+      entryKind: 'CORRECTION',
+      correctsEntryId: received.entries[0]!.id,
+      quantityCanonicalUnits: 0,
+      balanceDelta: -90,
+      runningBalance: 0,
+      recordedByUserId: actor.id,
+      witnessedByUserId: witness.id,
+    });
+    expect(reversal.reversalMovementIds).toContain(reversed.entries[1]!.restorationMovementId);
+    expect(reversed.entries[1]!.runningBalance).toBe(reversed.sellable._sum.onHandUnits);
+  }, 30_000);
+
   it('adds a negating ADJUSTMENT per posting, linked to what it cancels', async () => {
     const f = await fixture(ORG_A, BRANCH_A, 'reverse');
     const result = await inOrg(ORG_A, async (db) => {
