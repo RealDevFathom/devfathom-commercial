@@ -16,6 +16,18 @@ const mocks = vi.hoisted(() => ({
   operatorHasCapability: vi.fn(),
 }));
 
+// DEV-879: these fixtures model an approver with no approval authenticator, so the PIN is
+// checked exactly as before. approval-authenticator.test.ts covers the authenticator path.
+vi.mock('@/lib/approval-authenticator', async () => {
+  const { verifyOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
+  return {
+    verifyApprovalSecret: async (
+      _db: unknown,
+      input: { secret: string; credentialHash: string }
+    ) =>
+      (await verifyOperatorCredential('PIN', input.secret, input.credentialHash)) ? 'PIN' : null,
+  };
+});
 vi.mock('@/lib/restaurant/terminal-auth', () => ({
   authenticateOperator: mocks.authenticateOperator,
 }));
@@ -685,6 +697,10 @@ describe('waive', () => {
         type: 'PIN',
         secret: '4821',
         now: expect.any(Date),
+        approval: {
+          action: 'restaurant.backOfficeApproval.sop:verify',
+          requestedByStaffProfileId: 'staff_a',
+        },
       });
       expect(db.restaurantCoAuthorization.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1189,6 +1205,10 @@ describe('authenticated SOP identity boundary', () => {
       type: 'PIN',
       secret: '4821',
       now: expect.any(Date),
+      approval: {
+        action: 'restaurant.backOfficeApproval.sop:verify',
+        requestedByStaffProfileId: 'staff_a',
+      },
     });
     expect(db.restaurantCoAuthorization.create).toHaveBeenCalledWith(
       expect.objectContaining({

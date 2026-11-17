@@ -91,6 +91,27 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
           .sort((left, right) => right.version - left.version)[0] ?? null,
     },
     pharmacyMessageLog: {
+      findFirst: async ({
+        where,
+      }: {
+        where: {
+          organizationId: string;
+          direction: string;
+          kind: string;
+          dedupeKey: { in: string[] };
+          createdAt: { gte: Date; lt: Date };
+        };
+      }) =>
+        store.logs.find(
+          (log) =>
+            log.organizationId === where.organizationId &&
+            log.direction === where.direction &&
+            log.kind === where.kind &&
+            where.dedupeKey.in.includes(log.dedupeKey) &&
+            log.createdAt instanceof Date &&
+            log.createdAt >= where.createdAt.gte &&
+            log.createdAt < where.createdAt.lt
+        ) ?? null,
       // All fixture logs fall inside the 24-hour window.
       count: async ({
         where,

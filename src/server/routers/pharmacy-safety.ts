@@ -22,8 +22,8 @@ import {
   clearLockout,
   isLockedOut,
   registerFailedAttempt,
-  verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
+import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import { protectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
 
 async function organizationBranch(ctx: TRPCContext, branchId: string) {
@@ -223,7 +223,17 @@ export const pharmacySafetyRouter = router({
           if (!eligible || !credential || !pharmacist) {
             return { blocked: 'A different qualified person must enter their PIN.' };
           }
-          if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
+          if (
+            !(await verifyApprovalSecret(db, {
+              organizationId,
+              approverUserId: pharmacist.id,
+              credentialHash: credential.credentialHash,
+              secret: input.pin,
+              action: 'pharmacySafety.recordCorrection',
+              requestedById: actorId,
+              now,
+            }))
+          ) {
             await db.restaurantOperatorCredential.update({
               where: { id: credential.id },
               data: registerFailedAttempt(credential, now),

@@ -28,7 +28,12 @@ export const ACTIVE_STATUSES = new Set(['ACTIVE', 'ON_LEAVE']);
 
 /** Why a session is no longer usable. Never a `UserStatus` value. */
 export type SessionInvalidReason =
-  'REVOKED' | 'DELETED' | 'ORGANIZATION_SUSPENDED' | 'REVALIDATION_FAILED' | 'DEMO_ACCESS_EXPIRED';
+  | 'REVOKED'
+  | 'DELETED'
+  | 'ORGANIZATION_SUSPENDED'
+  | 'REVALIDATION_FAILED'
+  | 'DEMO_ACCESS_EXPIRED'
+  | 'EXPIRED';
 
 export const SESSION_ENDED_MESSAGE = 'Your session has ended. Please sign in again.';
 export const ACCOUNT_INACTIVE_MESSAGE =
