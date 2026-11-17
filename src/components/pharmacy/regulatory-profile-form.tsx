@@ -53,7 +53,7 @@ type Jurisdiction = Regulatory['jurisdictions'][number];
 type Version = Regulatory['versions'][number];
 
 const labelClass =
-  'block font-mono text-[0.6875rem] font-semibold uppercase tracking-wide text-text-muted';
+  'block font-mono text-xs font-semibold uppercase tracking-wide text-text-muted';
 const controlClass =
   'mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm text-text-body focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none';
 
@@ -258,6 +258,8 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const schedules = jurisdiction?.permittedSchedules ?? [];
   const current = data.versions.find((version) => version.effective);
   const inForce = data.versions.find((version) => version.inForce);
+  const newerConfirmedRules =
+    data.selectedBranchId === branchId ? current?.newerConfirmedRuleSet : undefined;
   const pendingProvince =
     data.selectedBranchId === branchId && current
       ? current.pendingLegalReview
@@ -396,6 +398,17 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
             role="status"
           >
             {provinceNotice}
+          </p>
+        ) : null}
+        {newerConfirmedRules ? (
+          <p
+            role="status"
+            className="mt-4 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-text-body"
+          >
+            A newer confirmed rule set is available: {current?.provinceName}, version{' '}
+            {newerConfirmedRules.version}, effective {day(newerConfirmedRules.effectiveFrom)}. Your
+            recorded profile still uses its original rule version. The owner must record a new
+            profile version below to adopt these rules and meet the requirements to come into force.
           </p>
         ) : null}
         {pendingProvince ? (
@@ -941,7 +954,7 @@ function VersionHistory({ versions }: { versions: readonly Version[] }) {
                 {['Version', 'From', 'To', 'Province', 'Licence', 'Qualified person', ''].map(
                   (heading, index) => (
                     <th
-                      className="py-2 pr-4 font-mono text-[0.6875rem] font-semibold tracking-wide text-text-muted uppercase"
+                      className="py-2 pr-4 font-mono text-xs font-semibold tracking-wide text-text-muted uppercase"
                       key={heading || `status-${index}`}
                       scope="col"
                     >

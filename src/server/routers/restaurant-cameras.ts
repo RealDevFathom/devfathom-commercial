@@ -164,6 +164,10 @@ export const restaurantCamerasRouter = router({
         type: input.approvingType,
         secret: input.approvingSecret,
         now: new Date(),
+        approval: {
+          action: 'restaurantCameras.revokeGateway',
+          requestedByStaffProfileId: input.actingStaffProfileId,
+        },
       });
       if (!auth.ok)
         throw new TRPCError({

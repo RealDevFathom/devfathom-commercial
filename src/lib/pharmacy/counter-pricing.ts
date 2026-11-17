@@ -14,7 +14,7 @@
  * raises rather than rounding.
  */
 
-import { PharmacyMedicineError, priceFromLot } from './medicine';
+import { PharmacyMedicineError, priceFromLot, parseDefaultPackSize } from './medicine';
 
 /** The three units a pharmacy counter sells in (POS-03). */
 export type SaleUnitKind = 'PACK' | 'STRIP' | 'UNIT';
@@ -287,6 +287,76 @@ export function packLevelCanonicalUnits(input: {
   return [...counts];
 }
 
+/** A legacy box may describe its strips without storing child pack levels.
+ * Derive only a two-factor tablet/capsule box, never mutate receiving conversions.
+ * Shared with the server's multiplier validation; client requests cannot supply wording.
+ */
+export function legacyStripOption(input: {
+  packLevels: readonly PackLevelNode[];
+  packLevelId: string;
+  presentation?: string;
+  dosageForm: string | null;
+}): SaleUnitOption | null {
+  const pack = input.packLevels.find((level) => level.id === input.packLevelId);
+  if (
+    !pack ||
+    pack.parentPackLevelId !== null ||
+    pack.level !== 'BOX' ||
+    input.packLevels.some((level) => level.parentPackLevelId === pack.id) ||
+    !['tablet', 'capsule'].includes(counterUnitNoun(input.dosageForm))
+  )
+    return null;
+  const wording = input.presentation ?? '';
+  const parsed = parseDefaultPackSize(wording);
+  // Require exactly two integer factors; reject measurements, extra factors and labels
+  // describing containers rather than tablets. The importer already reviews this wording.
+  const factors = wording.match(
+    /^(?:box|blister)?\s*(\d+)\s*[x×*]\s*(\d+)(?:['’]s|\s*(?:tablets?|capsules?))?\s*$/i
+  );
+  if (
+    !factors ||
+    !parsed ||
+    parsed.level !== 'BOX' ||
+    parsed.unitsPerParent !== pack.unitsPerParent ||
+    Number(factors[1]) <= 1 ||
+    Number(factors[2]) <= 1
+  )
+    return null;
+  return {
+    kind: 'STRIP',
+    packLevelId: pack.id,
+    levelLabel: 'STRIP',
+    canonicalUnitsPerSaleUnit: Number(factors[2]),
+  };
+}
+
+/** The unit a manually staged line starts on: one loose tablet or capsule (else its
+ * strip), otherwise the largest unit. The operator can still pick any offered unit. */
+export function preferredSaleUnitOption<T extends SaleUnitOption>(
+  options: readonly T[],
+  dosageForm: string | null
+): T | null {
+  return (
+    (['tablet', 'capsule'].includes(counterUnitNoun(dosageForm))
+      ? (looseSaleUnitOption(options) ?? options.find((option) => option.levelLabel === 'STRIP'))
+      : null) ??
+    options[0] ??
+    null
+  );
+}
+
+/** Compact shop labels for the priced unit selector. */
+export function saleUnitLabel(option: SaleUnitOption, dosageForm: string | null): string {
+  const noun =
+    option.canonicalUnitsPerSaleUnit === 1
+      ? counterUnitNoun(dosageForm)
+      : packWord(option.levelLabel);
+  const title = noun.charAt(0).toUpperCase() + noun.slice(1);
+  return option.canonicalUnitsPerSaleUnit === 1
+    ? title
+    : `${title} of ${option.canonicalUnitsPerSaleUnit}`;
+}
+
 /**
  * The counter's sale units for one lot (DEV-724).
  *
@@ -309,17 +379,26 @@ export function resolveCounterSaleUnits(input: {
   /** Pack sizes of the other sellable lots FEFO may also allocate this line from. */
   otherLotUnitsPerPack?: readonly number[];
   dosageForm: string | null;
+  presentation?: string;
   at: Date;
 }): { saleUnits: SaleUnitOption[]; packMismatch: CounterPackMismatch | null } {
   try {
-    return {
-      saleUnits: saleUnitOptions({
-        packLevels: input.packLevels,
-        rootPackLevelId: input.lotPackLevelId,
-        unitsPerPack: input.lotUnitsPerPack,
-      }),
-      packMismatch: null,
-    };
+    const saleUnits = saleUnitOptions({
+      packLevels: input.packLevels,
+      rootPackLevelId: input.lotPackLevelId,
+      unitsPerPack: input.lotUnitsPerPack,
+    });
+    const strip = legacyStripOption({ ...input, packLevelId: input.lotPackLevelId });
+    if (
+      strip &&
+      !saleUnits.some((option) => option.kind === 'STRIP') &&
+      (input.otherLotUnitsPerPack ?? []).every(
+        (size) => size % strip.canonicalUnitsPerSaleUnit === 0
+      )
+    ) {
+      saleUnits.splice(1, 0, strip);
+    }
+    return { saleUnits, packMismatch: null };
   } catch {
     // Fall through to the medicine's own setup below.
   }

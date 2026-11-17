@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 const m = vi.hoisted(() => ({ signIn: vi.fn(), replace: vi.fn() }));
 vi.mock('next-auth/react', () => ({ signIn: m.signIn }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ replace: m.replace }) }));
@@ -132,7 +132,9 @@ it('focuses and clears only the authentication-code error through MFA retries', 
 
   // The input is already mounted: autoFocus cannot handle this retry.
   submit.focus();
-  fireEvent.submit(submit);
+  await act(async () => {
+    fireEvent.submit(submit);
+  });
   expect(await screen.findByRole('alert')).toHaveTextContent('That code is incorrect or expired');
   expect(code).toHaveFocus();
   expect(code).toHaveValue('000000');

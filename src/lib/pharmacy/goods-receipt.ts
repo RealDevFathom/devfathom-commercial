@@ -36,8 +36,8 @@ import {
   clearLockout,
   isLockedOut,
   registerFailedAttempt,
-  verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
+import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 
 import { PharmacyInventoryError } from './inventory';
 import {
@@ -115,7 +115,17 @@ const WITNESS_PIN_INCORRECT =
 export async function verifyControlledPurchaseWitness(
   db: ScopedDb,
   scope: ReceivingScope,
-  input: { goodsReceiptId: string; staffProfileId?: string; pin?: string }
+  input: {
+    goodsReceiptId: string;
+    staffProfileId?: string;
+    pin?: string;
+    /**
+     * DEV-879: the witness the request already proved, in its own transaction, with this
+     * same secret. Posting re-checks every eligibility rule against it but does not verify
+     * the secret again: an authenticator code is single use, so a second check would fail.
+     */
+    verifiedPharmacistId?: string | null;
+  }
 ): Promise<{ blocked: string } | { pharmacistId: string | null }> {
   const receipt = await db.pharmacyGoodsReceipt.findFirst({
     where: { id: input.goodsReceiptId, organizationId: scope.organizationId },
@@ -139,7 +149,12 @@ export async function verifyControlledPurchaseWitness(
     (line) => controlledIds.has(line.medicineId) && line.acceptedCanonicalUnits > 0
   );
   if (!needsRegister) return { pharmacistId: null };
-  if (!input.staffProfileId || !input.pin || !receipt.qualifiedPersonUserId) {
+  const preverified = input.verifiedPharmacistId !== undefined;
+  if (
+    !input.staffProfileId ||
+    (preverified ? !input.verifiedPharmacistId : !input.pin) ||
+    !receipt.qualifiedPersonUserId
+  ) {
     return { blocked: WITNESS_BLOCKED };
   }
   await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${input.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
@@ -166,7 +181,23 @@ export async function verifyControlledPurchaseWitness(
     !isLockedOut(credential, now) &&
     (await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }));
   if (!eligible || !credential || !pharmacist) return { blocked: WITNESS_BLOCKED };
-  if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
+  if (preverified) {
+    return pharmacist.id === input.verifiedPharmacistId
+      ? { pharmacistId: pharmacist.id }
+      : { blocked: WITNESS_BLOCKED };
+  }
+  if (!input.pin) return { blocked: WITNESS_BLOCKED };
+  if (
+    !(await verifyApprovalSecret(db, {
+      organizationId: scope.organizationId,
+      approverUserId: pharmacist.id,
+      credentialHash: credential.credentialHash,
+      secret: input.pin,
+      action: 'pharmacy.goodsReceiptControlledWitness',
+      requestedById: scope.actorId,
+      now,
+    }))
+  ) {
     await db.restaurantOperatorCredential.update({
       where: { id: credential.id },
       data: registerFailedAttempt(credential, now),
@@ -312,7 +343,14 @@ export async function orderReceiptCostTerms(
 export async function postGoodsReceipt(
   db: ScopedDb,
   scope: ReceivingScope,
-  input: { goodsReceiptId: string; at: Date; staffProfileId?: string; pin?: string }
+  input: {
+    goodsReceiptId: string;
+    at: Date;
+    staffProfileId?: string;
+    pin?: string;
+    /** DEV-879: see `verifyControlledPurchaseWitness`. */
+    verifiedPharmacistId?: string | null;
+  }
 ): Promise<PostGoodsReceiptResult> {
   // Serialize posting with every other receipt transition before reading its
   // state. The linked order is locked below, before any inventory write.

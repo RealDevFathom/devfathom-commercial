@@ -83,7 +83,13 @@ class TwoFactorInvalidError extends CredentialsSignin {
 }
 
 // How long a JWT's cached role/status is trusted before being re-read from the DB.
+// Revocation (tokenVersion) is checked on every read regardless (#1252).
 const REVALIDATE_AFTER_MS = 60_000;
+
+// #1252: the cookie's expiry slides on every re-issue, so a session kept busy
+// (a shared counter PC, or a copied cookie replayed periodically) would never
+// end. This caps a session at this age from sign-in, however active it is.
+const SESSION_MAX_AGE_SECONDS = 60 * 60 * 8; // 8 hours
 
 /**
  * IMP-AUTH-02: second factor. Enforced AFTER the password is proven correct (so
@@ -691,6 +697,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         token.sessionInvalidReason = null;
         // Never infer password entry from session refresh or non-password sign-in.
         token.passwordAuthenticatedAt = user.passwordAuthenticatedAt;
+        token.signedInAt = Date.now();
         token.lastValidatedAt = Date.now();
         return token;
       }
@@ -717,9 +724,52 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         return token;
       }
 
+      // #1252: absolute lifetime. Tokens issued before this claim existed start
+      // their clock at the first read (or their password sign-in, if recorded),
+      // so they too end within SESSION_MAX_AGE_SECONDS. Permanent: it returns
+      // before the revalidation below could clear the claim.
+      if (!(typeof token.signedInAt === 'number' && Number.isFinite(token.signedInAt))) {
+        token.signedInAt =
+          typeof token.passwordAuthenticatedAt === 'number' &&
+          Number.isFinite(token.passwordAuthenticatedAt)
+            ? token.passwordAuthenticatedAt
+            : Date.now();
+      }
+      if (Date.now() - token.signedInAt >= SESSION_MAX_AGE_SECONDS * 1000) {
+        token.sessionRevoked = true;
+        token.sessionInvalidReason = 'EXPIRED';
+        return token;
+      }
+
       const lastValidated = typeof token.lastValidatedAt === 'number' ? token.lastValidatedAt : 0;
       const stale = Date.now() - lastValidated > REVALIDATE_AFTER_MS;
-      if (token.id && token.organizationId && stale) {
+      if (token.id && token.organizationId && !stale && !token.sessionRevoked) {
+        // #1252: between full revalidations, still check the revocation counter
+        // on every read, so a token copied before sign-out (or "sign out
+        // everywhere", a password change, a lay-off) stops working at once
+        // rather than up to REVALIDATE_AFTER_MS later. Claims are left untouched
+        // on success, so the session cookie is not re-issued for this check.
+        try {
+          const current = await withTenantDb(token.organizationId as string, (tenantDb) =>
+            tenantDb.user.findUnique({
+              where: { id: token.id as string },
+              select: { tokenVersion: true },
+            })
+          );
+          if (!current) {
+            token.sessionRevoked = true;
+            token.sessionInvalidReason = 'DELETED';
+          } else if (current.tokenVersion !== ((token.tokenVersion as number) ?? 0)) {
+            token.sessionRevoked = true;
+            token.sessionInvalidReason = 'REVOKED';
+          }
+        } catch {
+          // Fail closed, as below. lastValidatedAt is left alone so the next
+          // full revalidation can clear a transient failure.
+          token.sessionRevoked = true;
+          token.sessionInvalidReason = 'REVALIDATION_FAILED';
+        }
+      } else if (token.id && token.organizationId && stale) {
         try {
           const fresh = await withTenantDb(token.organizationId as string, (tenantDb) =>
             tenantDb.user.findUnique({
@@ -821,8 +871,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           role: typeof token.role === 'string' ? token.role : null,
         });
         // #1252: clearing the cookie alone leaves a copied token valid. Bump the
-        // revocation counter so the next revalidation (REVALIDATE_AFTER_MS)
-        // rejects every token issued before this sign-out. Guarded on the
+        // revocation counter so the next read rejects every token issued
+        // before this sign-out. Guarded on the
         // token's own snapshot so an already-revoked token cannot end a newer
         // session. Auth.js still clears the cookie if this write throws.
         if (typeof token.organizationId === 'string') {
@@ -843,9 +893,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   },
   session: {
     strategy: 'jwt',
-    // Shorter lifetime bounds how long a stolen token is useful; combined with
-    // the per-request revalidation above, effective revocation is ~1 minute.
-    maxAge: 60 * 60 * 8, // 8 hours
+    // Shorter lifetime bounds how long a stolen token is useful. Revocation is
+    // checked on every read, and SESSION_MAX_AGE_SECONDS caps the session from
+    // sign-in even though this expiry slides.
+    maxAge: SESSION_MAX_AGE_SECONDS,
     // Auth.js ignores this for JWT sessions; the session route enforces it via
     // withoutRedundantSessionCookie so unchanged cookies are not re-issued.
     updateAge: SESSION_UPDATE_AGE_SECONDS,
