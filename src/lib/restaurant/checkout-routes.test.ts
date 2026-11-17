@@ -441,6 +441,8 @@ describe('manual card refund reference validation', () => {
       '4111111111111111',
       '4111-1111-1111-1111',
       '4111/1111/1111/1111',
+      '4111.1111.1111.1111',
+      '\u0664\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661',
       'REF 42',
     ]) {
       expect(refundBody.safeParse({ ...body, cardMachineRefundReference: bad }).success).toBe(

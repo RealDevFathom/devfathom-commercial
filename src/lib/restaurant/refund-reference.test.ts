@@ -30,4 +30,22 @@ describe('refundReferenceProblem', () => {
       expect(refundReferenceProblem(bad), bad).toMatch(/card number/);
     }
   });
+  it('normalises other separators and Unicode digits before the card-number check', () => {
+    const arabicIndic = [...'4111111111111111']
+      .map((d) => String.fromCodePoint(0x0660 + Number(d)))
+      .join('');
+    const fullwidth = [...'4111111111111111']
+      .map((d) => String.fromCodePoint(0xff10 + Number(d)))
+      .join('');
+    for (const bad of [
+      '4111.1111.1111.1111',
+      '4111_1111_1111_1111',
+      '4111 1111 1111 1111',
+      arabicIndic,
+      fullwidth,
+      `REF-${arabicIndic}`,
+    ]) {
+      expect(refundReferenceProblem(bad), bad).toMatch(/card number/);
+    }
+  });
 });
