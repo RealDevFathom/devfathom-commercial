@@ -52,7 +52,7 @@ function downloadableHtml(card: MedicationCardData): string {
 function CardField({ label, value }: { label: string; value: string | number }) {
   return (
     <div>
-      <dt className="font-mono text-[0.65rem] tracking-wide text-text-muted uppercase">{label}</dt>
+      <dt className="font-mono text-xs tracking-wide text-text-muted uppercase">{label}</dt>
       <dd className="mt-1 font-medium text-text-strong">{value}</dd>
     </div>
   );

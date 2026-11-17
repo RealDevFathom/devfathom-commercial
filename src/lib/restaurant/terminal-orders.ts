@@ -265,6 +265,7 @@ export async function authenticateApprover(
     type: approving.type,
     secret: approving.secret,
     now,
+    approval: { action: 'restaurant.terminal.orderApproval' },
   });
   if (!auth.ok) {
     if (auth.reason === 'LOCKED') {

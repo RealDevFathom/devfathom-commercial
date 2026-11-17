@@ -91,7 +91,7 @@ function fixture({ rules, overrides = [], role = 'EMPLOYEE', assigned }: Access)
       }),
     },
     pharmacyMessageLog: {
-      findMany: vi.fn(async () => [{ dedupeKey: 'back-in-stock:notice-a', createdAt: SENT_AT }]),
+      findMany: vi.fn(async () => [{ dedupeKey: 'back-in-stock:notice-a', updatedAt: SENT_AT }]),
     },
     pharmacySaleLine: {
       findMany: vi.fn(async () => [line]),

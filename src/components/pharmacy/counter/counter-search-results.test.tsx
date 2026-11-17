@@ -525,4 +525,58 @@ describe('DEV-41 shared and standalone search explanations', () => {
       }
     }
   );
+
+  it('shows the salt and strength under the product name when recorded (DEV-862)', () => {
+    render(
+      <CounterSearchResults
+        rows={[{ ...row, brandName: 'Panadol', composition: 'paracetamol 500 mg' }]}
+        state="ready"
+        query="para"
+        activeMedicineId={null}
+        onSelect={vi.fn()}
+        onCaptureDemand={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('paracetamol 500 mg')).toBeVisible();
+  });
+
+  it('shows no composition line when none is recorded (DEV-862)', () => {
+    render(
+      <CounterSearchResults
+        rows={[{ ...row, composition: null }]}
+        state="ready"
+        query="para"
+        activeMedicineId={null}
+        onSelect={vi.fn()}
+        onCaptureDemand={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByText(/paracetamol 500/)).not.toBeInTheDocument();
+  });
+});
+
+it('separates strength, form and stock into labeled lines below the medicine identity', () => {
+  render(
+    <CounterSearchResults
+      rows={[{ ...row, brandName: 'Panadol' }]}
+      state="ready"
+      query="panadol"
+      activeMedicineId={null}
+      onSelect={vi.fn()}
+      onCaptureDemand={vi.fn()}
+      onRetry={vi.fn()}
+    />
+  );
+  const result = screen.getByRole('button', { name: /Panadol.*Paracetamol/ });
+  for (const label of ['Strength:', 'Form:', 'Stock:']) {
+    const field = within(result).getByText(label).parentElement;
+    expect(field).toHaveClass('block');
+  }
+  expect(within(result).getByText('Strength:').parentElement).toHaveTextContent('500 mg');
+  expect(within(result).getByText('Form:').parentElement).toHaveTextContent('Tablet');
+  expect(within(result).getByText('Stock:').parentElement).toHaveTextContent('240 tabs');
 });

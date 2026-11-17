@@ -72,6 +72,8 @@ function fixture(raw: unknown = input) {
     branchId: parsed.branchId,
   });
   const keyRead = vi.fn().mockResolvedValue(prior);
+  // DEV-876: the branches the actor holds an active assignment to.
+  const assigned = ['branch-1'];
   const tenderRead = vi.fn().mockResolvedValue({
     id: 'tender-1',
     organizationId: 'org-1',
@@ -112,7 +114,7 @@ function fixture(raw: unknown = input) {
       })),
     }),
     pharmacyBranchAssignment: only({
-      findMany: vi.fn(async () => [{ branchId: 'branch-1' }]),
+      findMany: vi.fn(async () => assigned.map((branchId) => ({ branchId }))),
     }),
     pharmacySale: only({ findFirst: saleRead }),
     pharmacyMoneyIdempotencyKey: only({ findUnique: keyRead }),
@@ -148,6 +150,7 @@ function fixture(raw: unknown = input) {
     saleRead,
     keyRead,
     tenderRead,
+    assigned,
     execute,
     transaction,
     unexpected,
@@ -242,6 +245,8 @@ describe('pharmacySales.tenderOutcome', () => {
     'does not look up keys for a foreign reference: %j',
     async (change) => {
       const f = fixture();
+      // DEV-876: an actor assigned to the branch, so the sale lookup itself is tested.
+      if (change.branchId) f.assigned.push(change.branchId);
       f.saleRead.mockResolvedValue(null);
       expect(await f.caller().tenderOutcome({ ...input, ...change })).toEqual({
         status: 'UNKNOWN',
@@ -264,6 +269,11 @@ describe('pharmacySales.tenderOutcome', () => {
       await f
         .caller({
           entitlements: { ...f.context.entitlements, organizationId: 'org-2' },
+          // DEV-876: a member of that tenant; the read is still scoped by the entitlement.
+          session: {
+            ...f.context.session!,
+            user: { ...f.context.session!.user, organizationId: 'org-2' },
+          },
         })
         .tenderOutcome(input)
     ).toEqual({ status: 'UNKNOWN', replayUnsafe: true });
@@ -401,5 +411,66 @@ describe('pharmacySales.tenderOutcome', () => {
     expect(digest(originalTenderSchema.parse(input))).not.toBe(
       digest(originalTenderSchema.parse(withoutCash))
     );
+  });
+});
+
+describe('DEV-875 bank transfer reference recovery', () => {
+  it('accepts bank statement references through the router and verifies the saved evidence', async () => {
+    const legacy = { ...input, type: 'BANK_TRANSFER' as const, cashReceivedMinor: undefined };
+    const f = fixture(legacy);
+    const transfer = { ...f.parsed, providerRef: 'BANK/2026-001' };
+    f.keyRead.mockResolvedValue({ ...f.prior, payloadHash: digest(transfer) });
+    f.tenderRead.mockResolvedValue({
+      ...(await f.tenderRead()),
+      providerRef: 'BANK/2026-001',
+      confirmedById: 'actor-1',
+    });
+    expect(await f.caller().tenderOutcome(transfer)).toMatchObject({ status: 'ACCEPTED' });
+    f.tenderRead.mockResolvedValue({ ...(await f.tenderRead()), providerRef: 'OTHER-TRANSFER' });
+    expect(await f.caller().tenderOutcome(transfer)).toMatchObject({ status: 'UNKNOWN' });
+    f.noWrites();
+  });
+  it('preserves recovery and idempotent retry of an old transfer without a reference', async () => {
+    const f = fixture({ ...input, type: 'BANK_TRANSFER', cashReceivedMinor: undefined });
+    expect(await f.caller().tenderOutcome(f.parsed)).toMatchObject({ status: 'ACCEPTED' });
+    expect(await f.caller().tender(f.parsed)).toMatchObject({ ...stored, replayed: true });
+  });
+  it.each(['', '   ', 'x'.repeat(121)])(
+    'rejects an invalid bank reference at the API boundary %j',
+    async (providerRef) => {
+      const f = fixture();
+      await expect(
+        f.caller().tender({ ...input, type: 'BANK_TRANSFER', providerRef })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(f.transaction).not.toHaveBeenCalled();
+    }
+  );
+  it.each([
+    '4242424242424242',
+    '4242 4242 4242 4242',
+    '4242-4242-4242-4242',
+    '1234567890123',
+    'TRF 4111111111111111',
+    '4111.1111.1111.1111',
+    '4111/1111/1111/1111',
+    '4111_1111_1111_1111',
+    '4111,1111,1111,1111',
+    '٤١١١٤١١١٤١١١٤١١١',
+    '4242\u200b4242\u200b4242\u200b4242',
+  ])('refuses a card number typed into a bank transfer reference %j', async (providerRef) => {
+    const f = fixture();
+    await expect(
+      f.caller().tender({ ...input, type: 'BANK_TRANSFER', providerRef })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(f.transaction).not.toHaveBeenCalled();
+  });
+  it('keeps full card numbers blocked at the API boundary', async () => {
+    const f = fixture();
+    await expect(
+      f
+        .caller()
+        .tender({ ...input, type: 'CARD', providerRef: '4242424242424242', approvalCode: 'A1B2' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(f.transaction).not.toHaveBeenCalled();
   });
 });

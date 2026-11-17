@@ -421,3 +421,27 @@ it('keeps the effective profile warning when newer published rules and the draft
     'Recording a profile does not approve them for production use'
   );
 });
+
+it('tells the owner to record a new profile when confirmed successor rules exist (DEV-99)', () => {
+  const version = {
+    id: 'test_profile',
+    version: 1,
+    effective: true,
+    inForce: false,
+    provinceCode: 'TEST_ONLY',
+    provinceName: 'TEST_ONLY',
+    effectiveFrom: new Date('2026-01-01'),
+    pendingLegalReview: true,
+    licenceValidFrom: new Date('2026-01-01'),
+    licenceValidTo: new Date('2030-01-01'),
+    qualifiedPersonValidFrom: new Date('2026-01-01'),
+    qualifiedPersonValidTo: new Date('2030-01-01'),
+    newerConfirmedRuleSet: { version: 2, effectiveFrom: new Date('2026-06-01') },
+  } as VersionRow;
+  render(<PharmacyRegulatoryProfileForm initial={{ ...initial, versions: [version] }} />);
+  const notice = screen.getByText(/A newer confirmed rule set is available/);
+  expect(notice).toHaveTextContent('TEST_ONLY, version 2');
+  expect(notice).toHaveTextContent('The owner must record a new profile version');
+  expect(mocks.mutate).not.toHaveBeenCalled();
+  expect(screen.getByText('Pending legal review')).toBeInTheDocument();
+});

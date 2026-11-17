@@ -77,7 +77,9 @@ async function profileMissingFieldsFixture(db: ScopedDb, label: string) {
     fileName: 'excel-missing-fields.csv',
     bytes,
   });
-  const result = profileTable(excelCsvProfiler, parseDelimitedText(bytes.toString('utf8')));
+  const result = profileTable(excelCsvProfiler, parseDelimitedText(bytes.toString('utf8')), {
+    quantityUnit: 'UNITS',
+  });
   const persisted = await deps.workbench.persistProfile(db, {
     sourceId: source.id,
     label,
@@ -474,7 +476,7 @@ describeIfDatabase('PH-MIG workbench — #721 Tally XML and Marg Batch Stock pre
   it('records a TALLY_XML source and persists the sample with zero exceptions', async () => {
     const bytes = readFileSync(join(FIXTURE_DIR, 'tally-masters-sample.xml'));
     const flattened = flattenTallyXml(decodeTallyXmlBytes(bytes));
-    const result = profileTable(tallyXmlProfiler, flattened.table);
+    const result = profileTable(tallyXmlProfiler, flattened.table, { quantityUnit: 'UNITS' });
     expect(unmappedTallyRequiredFields(result.columnMap)).toEqual([]);
 
     const { source, persisted, batch, rows } = await inOrgA(async (db) => {
@@ -520,7 +522,8 @@ describeIfDatabase('PH-MIG workbench — #721 Tally XML and Marg Batch Stock pre
     const bytes = readFileSync(join(FIXTURE_DIR, 'marg-batch-stock-synthetic.csv'));
     const result = profileTable(
       margBatchStockProfiler,
-      parseMargBatchStockText(bytes.toString('utf8')).table
+      parseMargBatchStockText(bytes.toString('utf8')).table,
+      { quantityUnit: 'PACKS' }
     );
 
     const { source, persisted, rows } = await inOrgA(async (db) => {

@@ -135,10 +135,11 @@ describe('shared pharmacy sale operations enforce the persisted regulatory gate'
     idempotencyKey: 'line-a',
   } as Parameters<typeof addSaleLine>[2];
   const lineDb = () => ({
+    $queryRaw: vi.fn(async () => []),
     pharmacySale: { findFirst: vi.fn(), updateMany: vi.fn() },
     medicine: { findFirst: vi.fn() },
     pharmacyInventoryLot: { findMany: vi.fn() },
-    pharmacySaleLine: { create: vi.fn() },
+    pharmacySaleLine: { findFirst: vi.fn(async () => null), create: vi.fn() },
     pharmacySaleLineAllocation: { create: vi.fn() },
     pharmacySaleEvent: { create: vi.fn() },
   });

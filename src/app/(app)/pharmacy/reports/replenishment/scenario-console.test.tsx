@@ -349,3 +349,9 @@ it('shows the planning basis in plain words once a report is returned', async ()
   expect(text).toContain('Based on: Your settings');
   expect(text).not.toContain('USER_SUPPLIED_ASSUMPTIONS');
 });
+
+it('explains why financial planning is unavailable while keeping operational evidence accessible', () => {
+  render(<ScenarioConsole {...props} financial={false} />);
+  expect(screen.getByText(/Planning requires financial report access/)).toBeVisible();
+  expect(screen.getByText(/monetary results are withheld/)).toBeVisible();
+});

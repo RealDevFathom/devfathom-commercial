@@ -177,7 +177,7 @@ export function CounterReturnPanel(props: Omit<Props, 'refundAuthorized'>) {
         {title}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl">
+        <DialogContent className="pharmacy-workspace [&_[data-slot=dialog-close]]:min-h-11 [&_[data-slot=dialog-close]]:min-w-11 max-h-[85dvh] overflow-y-auto sm:max-w-2xl">
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
             {refundAuthorized
@@ -239,6 +239,7 @@ export function ReturnForm({
   );
   const [number, setNumber] = useState('');
   const [searched, setSearched] = useState<{ value: number | null } | null>(null);
+  const [editedSinceSearch, setEditedSinceSearch] = useState(false);
   const [chosenSaleId, setSaleId] = useState(recovery.attempt?.saleId ?? '');
   const [chosenLineId, setLineId] = useState('');
   const [lotId, setLotId] = useState('');
@@ -276,6 +277,7 @@ export function ReturnForm({
   );
   // A reference with no receipt sequence (for example QA-0000) cannot match any receipt.
   const unparsed = !!searched && searched.value === null;
+  const showInvalid = unparsed && !editedSinceSearch;
   // DEV-501: a scan or search with exactly one match in this branch opens that receipt.
   const onlyMatch =
     !unparsed && !!searched?.value && lookup.data?.length === 1 ? lookup.data[0] : undefined;
@@ -585,7 +587,12 @@ export function ReturnForm({
       ) : pharmacists.isError ? (
         <p role="alert">
           {counterErrorMessage(pharmacists.error)}{' '}
-          <Button type="button" variant="outline" onClick={() => void pharmacists.refetch()}>
+          <Button
+            size="touch"
+            type="button"
+            variant="outline"
+            onClick={() => void pharmacists.refetch()}
+          >
             Reload pharmacists
           </Button>
         </p>
@@ -626,7 +633,8 @@ export function ReturnForm({
         onChange={(event) => setManagerPin(event.target.value.replace(/\D/g, ''))}
       />
       <p id="refund-manager-pin-hint" className="text-sm text-text-muted">
-        Required for every return and refund. The PIN is never saved on this device.
+        Required for every return and refund. If you set up an authenticator for approvals, enter
+        its 6-digit code instead. Neither is ever saved on this device.
       </p>
     </div>
   );
@@ -714,6 +722,7 @@ export function ReturnForm({
         onSubmit={(event) => {
           event.preventDefault();
           setSearched({ value: parseReceiptNumber(number) });
+          setEditedSinceSearch(false);
           setSaleId('');
           resetReturn();
           setTenderId('');
@@ -729,10 +738,17 @@ export function ReturnForm({
             enterKeyHint="search"
             maxLength={40}
             required
-            aria-describedby="return-receipt-hint"
+            aria-invalid={showInvalid}
+            aria-describedby={
+              showInvalid ? 'return-receipt-error return-receipt-hint' : 'return-receipt-hint'
+            }
             value={number}
             disabled={locked}
-            onChange={(event) => setNumber(event.target.value)}
+            onChange={(event) => {
+              setNumber(event.target.value);
+              // The explanation describes the submitted text; results stay hidden until a new search.
+              setEditedSinceSearch(true);
+            }}
             className="h-11"
           />
         </div>
@@ -747,17 +763,23 @@ export function ReturnForm({
         <p id="return-receipt-hint" className="w-full text-sm text-text-muted">
           Scan the receipt or type the number printed on it, for example 1042 or QA-1042.
         </p>
+        {showInvalid && (
+          <p id="return-receipt-error" className="w-full text-sm text-destructive">
+            Enter a receipt number made of digits, for example 1042 or QA-1042. Negative numbers and
+            zero are not receipt numbers.
+          </p>
+        )}
       </form>
       {lookup.isFetching && !!searched?.value && <p role="status">Looking up receipt…</p>}
       {!unparsed && lookup.isError && (
         <p role="alert">
           {counterErrorMessage(lookup.error)}{' '}
-          <Button variant="outline" onClick={() => void lookup.refetch()}>
+          <Button size="touch" variant="outline" onClick={() => void lookup.refetch()}>
             Retry lookup
           </Button>
         </p>
       )}
-      {(unparsed || (!!searched?.value && lookup.isSuccess && lookup.data.length === 0)) && (
+      {(showInvalid || (!!searched?.value && lookup.isSuccess && lookup.data.length === 0)) && (
         <p role="status">Receipt not found</p>
       )}
       {!unparsed && !!lookup.data?.length && (
@@ -789,7 +811,7 @@ export function ReturnForm({
       {saleId && history.isError && (
         <p role="alert">
           {counterErrorMessage(history.error)}{' '}
-          <Button variant="outline" onClick={() => void history.refetch()}>
+          <Button size="touch" variant="outline" onClick={() => void history.refetch()}>
             Reload history
           </Button>
         </p>
@@ -1036,7 +1058,12 @@ export function ReturnForm({
                             : 'Enter the quantity to price the refund.'}
                     </p>
                     {quote.isError && (
-                      <Button type="button" variant="outline" onClick={() => void quote.refetch()}>
+                      <Button
+                        size="touch"
+                        type="button"
+                        variant="outline"
+                        onClick={() => void quote.refetch()}
+                      >
                         Reprice refund
                       </Button>
                     )}
@@ -1221,7 +1248,7 @@ export function ReturnForm({
               Reprint receipt with refunds
             </Button>
             {receipt.isError && (
-              <Button variant="outline" onClick={() => void receipt.refetch()}>
+              <Button size="touch" variant="outline" onClick={() => void receipt.refetch()}>
                 Reload receipt
               </Button>
             )}

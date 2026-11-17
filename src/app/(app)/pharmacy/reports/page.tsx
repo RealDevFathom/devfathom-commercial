@@ -29,6 +29,8 @@ import { MarketingSummary } from './marketing-summary';
 import { ObservedDemand } from './observed-demand';
 import { plainReportPermission, plainReportSource } from '@/lib/pharmacy/report-labels';
 import { StaffingSuggestions } from './staffing-suggestions';
+import { ReportCsvButton } from './report-csv-button';
+import { ReportPrintButton } from './report-print-button';
 import { DEFAULT_STAFFING_CONFIG } from '@/lib/pharmacy/staffing-suggestions';
 
 export const metadata: Metadata = { title: 'Pharmacy reports' };
@@ -174,7 +176,11 @@ export default async function PharmacyReportsPage({
   const from = value(query.from) ?? fromDate.toISOString().slice(0, 10);
   const to = value(query.to) ?? today;
   const invalidRange = !validDate(from) || !validDate(to) || from > to;
-  const branch = value(query.branch);
+  const branch =
+    value(query.branch) ??
+    (query.branch === undefined && branchResult.branches.length === 1
+      ? branchResult.branches[0]?.id
+      : undefined);
   const section = value(query.section);
   const supplier = value(query.supplier);
   let suppliers: Awaited<ReturnType<typeof caller.suppliers>> | null = null;
@@ -449,7 +455,7 @@ export default async function PharmacyReportsPage({
       ]
     : [];
   return (
-    <div className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6" data-report-print>
       <PageHeader
         eyebrow="Pharmacy operations"
         heading="Reports"
@@ -458,6 +464,27 @@ export default async function PharmacyReportsPage({
           // The sub-reports are the page's secondary actions, so they sit in the
           // header's action slot as Studio controls rather than as bare links.
           <nav aria-label="Sub-reports" className="flex flex-wrap gap-2">
+            {result ? <ReportPrintButton /> : null}
+            {result ? (
+              <ReportCsvButton
+                rows={cards.map((card) => ({ label: card.label, figure: String(card.figure) }))}
+                context={{
+                  Branch: branch
+                    ? (branchResult.branches.find((item) => item.id === branch)?.name ?? branch)
+                    : 'All available branches',
+                  From: from,
+                  To: to,
+                  Supplier: supplier
+                    ? (suppliers?.find((item) => item.id === supplier)?.name ?? supplier)
+                    : 'All suppliers',
+                  'Ingredient ID': ingredient ?? 'All ingredients',
+                  'Batch ID': batch ?? 'All batches',
+                }}
+                filename={`pharmacy-report-${from}-to-${to}${
+                  supplier || ingredient || batch ? '-filtered' : ''
+                }.csv`}
+              />
+            ) : null}
             <Link
               href={`/pharmacy/reports/replenishment${branch ? `?${new URLSearchParams({ branch })}` : ''}`}
               className={buttonVariants({ variant: 'outline', size: 'lg' })}
@@ -491,7 +518,7 @@ export default async function PharmacyReportsPage({
         }
       />
       <SectionCard eyebrow="Reports" title="Report filters" titleLevel={2}>
-        <form className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" method="get">
+        <form data-report-filters className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" method="get">
           <label className="text-sm text-text-body">
             Branch
             <select
@@ -571,6 +598,79 @@ export default async function PharmacyReportsPage({
           </Button>
         </form>
       </SectionCard>
+      {result ? (
+        <SectionCard
+          eyebrow="Owner command centre"
+          title="Selected period at a glance"
+          titleLevel={2}
+        >
+          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+            {cards.map(({ label, figure, flag, note }) => (
+              <Stat
+                key={label}
+                label={label}
+                value={figure}
+                className="min-w-0"
+                valueClassName={flag ? 'break-words text-warning' : 'break-words'}
+                data-flagged={flag ? 'true' : undefined}
+                sub={
+                  <span className="flex flex-col gap-1">
+                    {flag ? (
+                      <>
+                        <StatusPill status="Review" tone="warning" />
+                        <span className="text-warning">{flag.detail}</span>
+                      </>
+                    ) : null}
+                    <span>
+                      {note ??
+                        (branch
+                          ? 'Selected branch · ledger source'
+                          : 'All available branches · ledger source')}
+                    </span>
+                  </span>
+                }
+              />
+            ))}
+          </div>
+          <div className="mt-6">
+            <Stat
+              label="Organization-wide safety queue"
+              value={metrics?.safetyQueue ?? '—'}
+              sub="Current snapshot · organization-wide"
+            />
+            <p className="mt-2 text-sm text-text-muted">
+              The selected branch does not apply to this queue. Date, supplier, ingredient and batch
+              filters do not apply either. Unsigned pharmacist review items plus open
+              controlled-register incidents, from pharmacist review and controlled-register records
+              at read time.
+            </p>
+          </div>
+          <p className="mt-6 text-sm text-text-muted">
+            Report period: {from} to {to} (inclusive business dates). Branch scope:{' '}
+            {branch
+              ? (branchResult.branches.find((item) => item.id === branch)?.name ?? branch)
+              : 'All available branches'}
+            .{' '}
+            {currency
+              ? `Currency basis: current organization setting (${currency}); historical transaction currency is not verified.`
+              : 'Currency unknown: an authoritative currency for this organization is unavailable; historical transaction currency is not verified.'}{' '}
+            Amounts use the pharmacy minor-unit scale, shown to two decimal places. — means
+            unavailable, not zero. Sales, gross margin, cash, cash variance and refunds cover the
+            selected period. Stock signals, recommended orders and expiry exposure are current
+            snapshots; expiry exposure is not realized loss. Gross margin is not cash flow. Gross
+            margin uses the same exact posted journal as Finance, including returns and reversals,
+            on postings from the start of the first selected date to the start of the day after the
+            last, in {workspaceZoneLabel(timeZone)}. Finance&apos;s margin comparison still splits
+            days at midnight UTC, so its totals can differ for the same dates. It may differ from
+            sales grouped by business date. Missing journal evidence is unavailable; posted totals
+            do not establish complete source or cost coverage. Supplier, ingredient and batch
+            filters narrow sales, gross margin, stock signals, recommended orders and expiry
+            exposure to the matching stock lots and products. Cash, cash variance and refunds cannot
+            be traced to a supplier, ingredient or batch, so they show — while one is selected. The
+            daily work pack and observed demand use branch/date scope only.
+          </p>
+        </SectionCard>
+      ) : null}
       <MarketingSummary
         report={marketing}
         money={money}
@@ -664,77 +764,6 @@ export default async function PharmacyReportsPage({
               </Link>
             </SectionCard>
           ) : null}
-          <SectionCard
-            eyebrow="Owner command centre"
-            title="Selected period at a glance"
-            titleLevel={2}
-          >
-            <p className="mb-4 text-sm text-text-muted">
-              Report period: {from} to {to} (inclusive business dates). Branch scope:{' '}
-              {branch
-                ? (branchResult.branches.find((item) => item.id === branch)?.name ?? branch)
-                : 'All available branches'}
-              .{' '}
-              {currency
-                ? `Currency basis: current organization setting (${currency}); historical transaction currency is not verified.`
-                : 'Currency unknown: an authoritative currency for this organization is unavailable; historical transaction currency is not verified.'}{' '}
-              Amounts use the pharmacy minor-unit scale, shown to two decimal places. — means
-              unavailable, not zero. Sales, gross margin, cash, cash variance and refunds cover the
-              selected period. Stock signals, recommended orders and expiry exposure are current
-              snapshots; expiry exposure is not realized loss. Gross margin is not cash flow. Gross
-              margin uses the same exact posted journal as Finance, including returns and reversals,
-              on postings from the start of the first selected date to the start of the day after
-              the last, in {workspaceZoneLabel(timeZone)}. Finance&apos;s margin comparison still
-              splits days at midnight UTC, so its totals can differ for the same dates. It may
-              differ from sales grouped by business date. Missing journal evidence is unavailable;
-              posted totals do not establish complete source or cost coverage. Supplier, ingredient
-              and batch filters narrow sales, gross margin, stock signals, recommended orders and
-              expiry exposure to the matching stock lots and products. Cash, cash variance and
-              refunds cannot be traced to a supplier, ingredient or batch, so they show — while one
-              is selected. The daily work pack and observed demand use branch/date scope only.
-            </p>
-            <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-              {cards.map(({ label, figure, flag, note }) => (
-                <Stat
-                  key={label}
-                  label={label}
-                  value={figure}
-                  className="min-w-0"
-                  valueClassName={flag ? 'break-words text-warning' : 'break-words'}
-                  data-flagged={flag ? 'true' : undefined}
-                  sub={
-                    <span className="flex flex-col gap-1">
-                      {flag ? (
-                        <>
-                          <StatusPill status="Review" tone="warning" />
-                          <span className="text-warning">{flag.detail}</span>
-                        </>
-                      ) : null}
-                      <span>
-                        {note ??
-                          (branch
-                            ? 'Selected branch · ledger source'
-                            : 'All available branches · ledger source')}
-                      </span>
-                    </span>
-                  }
-                />
-              ))}
-            </div>
-            <div className="mt-6">
-              <Stat
-                label="Organization-wide safety queue"
-                value={metrics?.safetyQueue ?? '—'}
-                sub="Current snapshot · organization-wide"
-              />
-              <p className="mt-2 text-sm text-text-muted">
-                The selected branch does not apply to this queue. Date, supplier, ingredient and
-                batch filters do not apply either. Unsigned pharmacist review items plus open
-                controlled-register incidents, from pharmacist review and controlled-register
-                records at read time.
-              </p>
-            </div>
-          </SectionCard>
           {expiryAdvice ? (
             <SectionCard
               eyebrow="Advisory only"
@@ -782,7 +811,7 @@ export default async function PharmacyReportsPage({
                           <p className="mt-2 text-sm leading-6 text-text-body">
                             {item.explanation}
                           </p>
-                          <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-2 font-mono text-[11px] text-text-muted tabular-nums">
+                          <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-2 font-mono text-xs text-text-muted tabular-nums">
                             <div>
                               <dt className="inline font-semibold text-text-body">Batch: </dt>
                               <dd className="inline">{item.batchNumber}</dd>
@@ -887,7 +916,7 @@ export default async function PharmacyReportsPage({
                               <h3 className="font-semibold text-text-strong">
                                 {signal.kind.replaceAll('_', ' ').toLowerCase()}
                               </h3>
-                              <p className="mt-1 font-mono text-[11px] text-text-muted">
+                              <p className="mt-1 font-mono text-xs text-text-muted">
                                 Scope ·{' '}
                                 {Object.entries(scope)
                                   .map(([key, item]) => `${key}: ${item}`)
@@ -908,7 +937,7 @@ export default async function PharmacyReportsPage({
                           <p className="mt-3 max-w-4xl text-sm leading-6 text-text-body">
                             {signal.explanation}
                           </p>
-                          <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-2 font-mono text-[11px] text-text-muted tabular-nums">
+                          <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-2 font-mono text-xs text-text-muted tabular-nums">
                             {Object.entries(exactNumbers).map(([key, item]) => (
                               <div key={key}>
                                 <dt className="inline font-semibold text-text-body">{key}: </dt>
@@ -1075,7 +1104,7 @@ export default async function PharmacyReportsPage({
                           <h3 className="font-semibold text-text-strong">
                             {flag.source.toLowerCase()} scan
                           </h3>
-                          <p className="mt-1 font-mono text-[11px] text-text-muted">
+                          <p className="mt-1 font-mono text-xs text-text-muted">
                             GTIN {flag.gtin ?? 'not available'} · batch{' '}
                             {flag.batchNumber ?? 'not available'} · serial{' '}
                             {flag.serial ?? 'not available'}
@@ -1156,7 +1185,7 @@ export default async function PharmacyReportsPage({
                           <p className="mt-1 text-xs leading-5 text-text-muted">
                             {contract.definition}
                           </p>
-                          <dl className="mt-2 grid gap-1 font-mono text-[11px] text-text-body">
+                          <dl className="mt-2 grid gap-1 font-mono text-xs text-text-body">
                             <div>
                               <dt className="inline font-semibold">Source: </dt>
                               <dd className="inline">
