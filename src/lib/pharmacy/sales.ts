@@ -4,6 +4,8 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { packLevelCanonicalUnits } from './counter-pricing';
 import { mrpRoundingIncrementForLot, priceFromLot } from './medicine';
+import { minimumPriceForMargin } from './smart-discount';
+import { readDiscountPolicy } from './smart-discount-service';
 import {
   branchUnknownLossProbability,
   estimateLossMinor,
@@ -206,6 +208,8 @@ export function validateDiscount(input: {
   costMinor: number;
   approvedByUserId?: string;
   approvalPolicy?: string;
+  /** DEV-66: the branch's configured minimum margin on a discounted line, in bps. */
+  minMarginBps?: number;
 }) {
   if (input.discountMinor < 0 || input.discountMinor > input.grossMinor)
     throw new PharmacySaleError('MARGIN_GUARDRAIL');
@@ -214,6 +218,12 @@ export function validateDiscount(input: {
   if (input.discountMinor > 0 && (!input.approvedByUserId || !input.approvalPolicy))
     throw new PharmacySaleError('APPROVAL_REQUIRED');
   if (input.grossMinor - input.discountMinor < input.costMinor)
+    throw new PharmacySaleError('MARGIN_GUARDRAIL');
+  if (
+    input.discountMinor > 0 &&
+    input.grossMinor - input.discountMinor <
+      minimumPriceForMargin(input.costMinor, input.minMarginBps ?? 0)
+  )
     throw new PharmacySaleError('MARGIN_GUARDRAIL');
 }
 
@@ -682,7 +692,11 @@ async function addSaleLineWithAllocation(
     : promotion
       ? promotionApprovalPolicy(promotion.promotion.id)
       : input.approvalPolicy;
+  // DEV-66: every discounted line (manual, promotion or voucher) must keep the
+  // branch's configured minimum margin.
+  const minMarginBps = discountMinor > 0 ? (await readDiscountPolicy(db, scope)).minMarginBps : 0;
   validateDiscount({
+    minMarginBps,
     regulated,
     discountMinor,
     grossMinor,

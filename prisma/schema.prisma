@@ -208,6 +208,10 @@ model PharmacyBranch {
   khataReminderCadenceDays        Int                          @default(7)
   khataReminderMinBalanceMinor    Int                          @default(10000)
   khataReminderRevision           Int                          @default(0)
+  /// DEV-66: owner-configured smart-discount policy (minimum margin, maximum
+  /// suggested depth, evidence windows). Null means the safe defaults.
+  discountPolicy                  Json?
+  discountPolicyRevision          Int                          @default(0)
   id                              String                       @id @default(cuid())
   organizationId                  String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   code                            String
@@ -262,6 +266,7 @@ model PharmacyBranch {
   sopEvidenceCaptures                      PharmacySopEvidenceCapture[]
   sopSiteSettings                          PharmacySopSiteSetting[]
   sopReworkNotes                           PharmacySopReworkNote[]
+  competitorPriceObservations              PharmacyCompetitorPriceObservation[]
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
@@ -16843,4 +16848,29 @@ model UploadedFileLegacyBinding {
   @@unique([organizationId, name, ownerType, ownerId], map: "uploaded_file_legacy_bindings_owner_key")
   @@index([organizationId, name], map: "uploaded_file_legacy_bindings_name_idx")
   @@map("uploaded_file_legacy_bindings")
+}
+
+/// DEV-66: APPEND-ONLY competitor discount log. A manager records the price a
+/// nearby competitor was seen charging for a medicine; the newest unexpired
+/// observations for the same pack level feed discount suggestions. `medicineId`
+/// and `packLevelId` reference pharmacy_medicines and pharmacy_pack_levels
+/// through SQL-only tenant-composite foreign keys.
+model PharmacyCompetitorPriceObservation {
+  id                 String   @id @default(cuid())
+  organizationId     String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  medicineId         String
+  /// The sealed pack the observed price is for; prices compare only like for like.
+  packLevelId        String
+  competitorLabel    String
+  observedPriceMinor Int
+  observedAt         DateTime
+  recordedByUserId   String
+  createdAt          DateTime @default(now())
+
+  branch PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_competitor_price_observations_org_id_key")
+  @@index([organizationId, branchId, medicineId, packLevelId, observedAt], map: "pharmacy_competitor_price_obs_medicine_idx")
+  @@map("pharmacy_competitor_price_observations")
 }
