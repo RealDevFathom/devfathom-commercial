@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { PurchasingActionForm } from './action-form';
+import { TextField } from './form-controls';
 
 const router = vi.hoisted(() => ({ refresh: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
@@ -275,4 +276,40 @@ it('keeps confirmed writes locked when requesting the refresh throws', async () 
   expect(action).toHaveBeenCalledOnce();
   expect(router.refresh).toHaveBeenCalledOnce();
   expect(replace).not.toHaveBeenCalled();
+});
+
+describe('required-field validation (DEV-520)', () => {
+  it('explains an empty required field inline, blocks the write and clears on correction', async () => {
+    const action = vi
+      .fn()
+      .mockResolvedValue('/pharmacy/purchasing/suppliers?kind=success&outcome=committed');
+    vi.stubGlobal('window', {
+      document,
+      location: { origin: 'https://workspace.test', replace: vi.fn() },
+    });
+    render(
+      <PurchasingActionForm action={action}>
+        <TextField label="Trading name" name="name" notice={null} required hint="Team name." />
+        <button type="submit">Add supplier</button>
+      </PurchasingActionForm>
+    );
+    const field = screen.getByLabelText('Trading name');
+    expect(field).toHaveAttribute('aria-invalid', 'false');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Add supplier' }));
+    });
+    expect(action).not.toHaveBeenCalled();
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(field).toHaveAccessibleDescription(/Trading name is required\./);
+    expect(screen.getByRole('alert')).toHaveTextContent('Trading name is required.');
+    expect(field).toHaveFocus();
+    fireEvent.change(field, { target: { value: 'Acme Distributors' } });
+    expect(field).toHaveAttribute('aria-invalid', 'false');
+    expect(screen.queryByRole('alert')).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Add supplier' }));
+    });
+    expect(action).toHaveBeenCalledOnce();
+    expect(action.mock.calls[0][0].get('name')).toBe('Acme Distributors');
+  });
 });

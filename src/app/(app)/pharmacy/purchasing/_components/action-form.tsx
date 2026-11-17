@@ -61,7 +61,14 @@ function ActionAttempt({
   const formRef = useRef<HTMLFormElement>(null);
   const errorRef = useRef<HTMLParagraphElement>(null);
   const errorId = useId();
-  const notice = attempt?.phase === 'rejected' ? attempt : null;
+  const clientInvalidSeen = useRef(false);
+  const [clientInvalid, setClientInvalid] = useState<{ field: string; message: string } | null>(
+    null
+  );
+  const rejected = attempt?.phase === 'rejected' ? attempt : null;
+  // A native constraint failure is shown inline just like a server rejection, so the
+  // field is marked invalid and linked to its message instead of relying on a tooltip.
+  const notice = rejected ?? clientInvalid;
 
   useEffect(() => {
     if (!notice) return;
@@ -90,15 +97,44 @@ function ActionAttempt({
     <form
       ref={formRef}
       aria-busy={attempt?.phase === 'pending'}
-      onChange={
-        financialOperation
-          ? (event) => {
-              setSelection(allocationOperation(new FormData(event.currentTarget)));
-            }
-          : undefined
-      }
+      onInvalidCapture={(event) => {
+        const control = event.target;
+        if (
+          !(
+            control instanceof HTMLInputElement ||
+            control instanceof HTMLTextAreaElement ||
+            control instanceof HTMLSelectElement
+          )
+        ) {
+          return;
+        }
+        // Take over the native bubble: keep the first failing control, focus it and
+        // explain the fix in the page. Submission is already blocked by the browser.
+        event.preventDefault();
+        if (clientInvalidSeen.current) return;
+        clientInvalidSeen.current = true;
+        // One validation pass fires an invalid event per failing control.
+        queueMicrotask(() => {
+          clientInvalidSeen.current = false;
+        });
+        const label = control.labels?.[0]?.textContent?.trim() || 'This field';
+        setClientInvalid({
+          field: control.name,
+          message: control.validity.valueMissing
+            ? `${label} is required.`
+            : control.validationMessage || `${label} is not valid.`,
+        });
+        control.focus();
+      }}
+      onChange={(event) => {
+        setClientInvalid(null);
+        if (financialOperation) {
+          setSelection(allocationOperation(new FormData(event.currentTarget)));
+        }
+      }}
       onSubmit={(event) => {
         event.preventDefault();
+        setClientInvalid(null);
         if (!financialOperation && blocked) return;
         // Capture before disabling controls; include named submit buttons (decisions).
         const form = new FormData(
