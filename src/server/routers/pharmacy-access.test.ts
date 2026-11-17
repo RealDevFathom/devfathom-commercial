@@ -75,7 +75,12 @@ describe('#979 pharmacy rail capability read', () => {
   it('gives a cashier none of the gated rail capabilities', async () => {
     const result = await caller().navigation();
 
-    expect(result).toEqual({ userId: 'cashier', organizationId: 'org_a', capabilities: [] });
+    expect(result).toEqual({
+      userId: 'cashier',
+      organizationId: 'org_a',
+      reportsGranted: false,
+      capabilities: [],
+    });
     expect(mocks.counterAccess).toHaveBeenCalledWith(expect.objectContaining({ db }));
     expect(mocks.closeAccess).toHaveBeenCalledWith(expect.objectContaining({ db }));
     for (const capability of PHARMACY_NAVIGATION_CAPABILITIES) {
@@ -147,11 +152,18 @@ describe('#979 pharmacy rail capability read', () => {
     mocks.can.mockImplementation(
       async (_subject: unknown, action: string) => action === 'pharmacy:procurement'
     );
-    expect((await manager.navigation()).capabilities).toEqual([
+    const scoped = await manager.navigation();
+    expect(scoped.capabilities).toEqual([
       'pharmacy:procurement',
       'reports:operational',
       'pharmacy:close',
     ]);
+    // Branch scope is not the grant the Reports page and assistant tool require.
+    expect(scoped.reportsGranted).toBe(false);
+    mocks.can.mockImplementation(
+      async (_subject: unknown, action: string) => action === 'reports:operational'
+    );
+    expect((await manager.navigation()).reportsGranted).toBe(true);
   });
 });
 
