@@ -525,4 +525,36 @@ describe('DEV-41 shared and standalone search explanations', () => {
       }
     }
   );
+
+  it('shows the salt and strength under the product name when recorded (DEV-862)', () => {
+    render(
+      <CounterSearchResults
+        rows={[{ ...row, brandName: 'Panadol', composition: 'paracetamol 500 mg' }]}
+        state="ready"
+        query="para"
+        activeMedicineId={null}
+        onSelect={vi.fn()}
+        onCaptureDemand={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('paracetamol 500 mg')).toBeVisible();
+  });
+
+  it('shows no composition line when none is recorded (DEV-862)', () => {
+    render(
+      <CounterSearchResults
+        rows={[{ ...row, composition: null }]}
+        state="ready"
+        query="para"
+        activeMedicineId={null}
+        onSelect={vi.fn()}
+        onCaptureDemand={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByText(/paracetamol 500/)).not.toBeInTheDocument();
+  });
 });

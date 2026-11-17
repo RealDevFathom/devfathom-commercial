@@ -51,6 +51,8 @@ export type CounterSearchRow = {
   manufacturer: string | null;
   /** Rendered strength components, for example `500 mg + 30 mg`. */
   strength: string | null;
+  /** DEV-862: salt and strength, e.g. `paracetamol 500 mg`; null when none recorded. */
+  composition?: string | null;
   presentationId: string;
   presentation: string;
   dosageForm: string | null;
@@ -486,6 +488,7 @@ export async function searchCounterCatalog(
       brandName: medicine.brandName,
       manufacturer: medicine.manufacturer,
       strength: renderStrength(medicine.strengths),
+      composition: renderStockComposition(medicine.strengths),
       presentationId,
       presentation: presentation.presentation,
       dosageForm: presentation.dosageForm,

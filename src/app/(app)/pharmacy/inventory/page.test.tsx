@@ -176,6 +176,75 @@ describe('DEV-862 salt and strength under the product name', () => {
     expect(screen.getByText('paracetamol 500 mg')).toBeInTheDocument();
   });
 
+  const withParacetamol = () => ({
+    ...lot,
+    batch: {
+      ...lot.batch,
+      medicine: {
+        productName: 'Medicine A',
+        brandName: null,
+        strengths: [{ value: '500.000000', unit: 'mg', ingredient: { name: 'paracetamol' } }],
+      },
+    },
+  });
+
+  it('names the salt and strength in the lot pickers of other stock forms', async () => {
+    lots.mockResolvedValue([withParacetamol()]);
+    await show();
+    expect(
+      screen.getAllByRole('option', { name: /Medicine A \(paracetamol 500 mg\) · /i }).length
+    ).toBeGreaterThan(0);
+  });
+
+  it('shows the salt and strength on the daily cycle count row', async () => {
+    lots.mockResolvedValue([withParacetamol()]);
+    mocks.cycleList.mockResolvedValue([
+      {
+        inventoryLotId: 'lot-a',
+        stockLocationId: location.id,
+        medicineName: 'Medicine A',
+        batchNumber: 'B-100',
+        unitsPerPack: 10,
+        locationName: 'Rack',
+        soldUnits: 40,
+        stockValueMinor: 100_000,
+        basis: ['FAST_MOVER'],
+      },
+    ]);
+    await show();
+    const card = within(
+      screen
+        .getByRole('heading', { name: 'Daily cycle count' })
+        .closest('[data-slot="section-card"]')! as HTMLElement
+    );
+    expect(card.getByText('paracetamol 500 mg')).toBeInTheDocument();
+  });
+
+  it('shows the salt and strength on a stock signal', async () => {
+    ctx.db.pharmacyStockSignal.findMany.mockResolvedValue([
+      {
+        id: 'sig-1',
+        kind: 'LOW_STOCK',
+        dueAt: new Date('2099-01-01'),
+        dataWindowStart: new Date('2098-12-01'),
+        dataWindowEnd: new Date('2098-12-31'),
+        sourceObservedAt: new Date('2098-12-31'),
+        confidence: 'HIGH',
+        explanation: 'Running low',
+        status: 'OPEN',
+        medicineId: 'medicine',
+        neededUnits: 10,
+        medicine: {
+          productName: 'Medicine A',
+          strengths: [{ value: '500', unit: 'mg', ingredient: { name: 'paracetamol' } }],
+        },
+        location: null,
+      },
+    ]);
+    await show();
+    expect(screen.getByText('paracetamol 500 mg')).toBeInTheDocument();
+  });
+
   it('shows nothing extra when no strength is recorded', async () => {
     await show();
     expect(screen.queryByText(/paracetamol/)).not.toBeInTheDocument();

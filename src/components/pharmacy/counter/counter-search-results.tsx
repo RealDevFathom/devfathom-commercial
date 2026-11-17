@@ -220,6 +220,11 @@ export function CounterSearchResults({
                       <bdi dir="auto">{row.strength}</bdi>
                     </span>
                   ) : null}
+                  {row.composition ? (
+                    <span dir="auto" className="block text-xs font-normal text-text-body">
+                      {row.composition}
+                    </span>
+                  ) : null}
                   {counterMedicineGenericName(row) ? (
                     <span dir="auto" className="block text-xs font-normal text-text-muted">
                       {counterMedicineGenericName(row)}

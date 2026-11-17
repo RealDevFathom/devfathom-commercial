@@ -47,6 +47,7 @@ export const metadata: Metadata = { title: 'Pharmacy inventory' };
 const route = '/pharmacy/inventory';
 const inputClass =
   'mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50';
+type StockStrengths = Parameters<typeof renderStockComposition>[0];
 const field = (data: FormData, key: string) => String(data.get(key) ?? '').trim();
 const number = (data: FormData, key: string) => Number.parseInt(field(data, key), 10);
 const label = (value: string) =>
@@ -93,6 +94,16 @@ async function hasInventoryAccess(context: Awaited<ReturnType<typeof tenantConte
 
 function url(branchId: string, notice: string, kind: 'success' | 'error' = 'success') {
   return `${route}?${new URLSearchParams({ branch: branchId, notice, kind })}`;
+}
+
+/** DEV-862: product name plus the recorded salt and strength, e.g. `Panadol (paracetamol 500 mg)`. */
+function lotProductLabel(lot: {
+  batch: { medicine: { productName: string; strengths: StockStrengths } };
+}) {
+  const composition = renderStockComposition(lot.batch.medicine.strengths);
+  return composition
+    ? `${lot.batch.medicine.productName} (${composition})`
+    : lot.batch.medicine.productName;
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
@@ -308,7 +319,15 @@ export default async function PharmacyInventoryPage({
       orderBy: [{ dueAt: 'asc' }, { createdAt: 'asc' }],
       take: 50,
       include: {
-        medicine: { select: { productName: true } },
+        medicine: {
+          select: {
+            productName: true,
+            strengths: {
+              orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+              select: { value: true, unit: true, ingredient: { select: { name: true } } },
+            },
+          },
+        },
         location: { select: { name: true } },
       },
     }),
@@ -364,6 +383,9 @@ export default async function PharmacyInventoryPage({
   const totalUnits = available.reduce((sum, row) => sum + row.balance.onHandUnits, 0);
   const draftLotByMedicine = new Map(
     available.map(({ lot }) => [lot.batch.medicineId, lot] as const)
+  );
+  const compositionByLotId = new Map(
+    lots.map((lot) => [lot.id, renderStockComposition(lot.batch.medicine.strengths)] as const)
   );
   const heldUnits = lots
     .flatMap((lot) => lot.balances)
@@ -894,7 +916,7 @@ export default async function PharmacyInventoryPage({
                       key={`${lot.id}:${balance.stockLocationId}`}
                       value={`${lot.id}:${balance.stockLocationId}`}
                     >
-                      {lot.batch.medicine.productName} · batch {lot.batch.batchNumber} ·{' '}
+                      {lotProductLabel(lot)} · batch {lot.batch.batchNumber} ·{' '}
                       {balance.location.name}
                     </option>
                   ))}
@@ -1031,6 +1053,11 @@ export default async function PharmacyInventoryPage({
                             value={`${item.inventoryLotId}:${item.stockLocationId}`}
                           />
                           {item.medicineName}
+                          {compositionByLotId.get(item.inventoryLotId) ? (
+                            <span dir="auto" className="block text-xs text-text-body">
+                              {compositionByLotId.get(item.inventoryLotId)}
+                            </span>
+                          ) : null}
                           <span className="block text-xs text-text-muted">
                             batch {item.batchNumber} · {item.unitsPerPack} per pack
                           </span>
@@ -1110,8 +1137,8 @@ export default async function PharmacyInventoryPage({
                     key={`${lot.id}:${balance.stockLocationId}:${balance.disposition}`}
                     value={`${lot.id}:${balance.stockLocationId}:${balance.disposition}`}
                   >
-                    {lot.batch.medicine.productName} · {lot.batch.batchNumber} ·{' '}
-                    {balance.location.name} · {label(balance.disposition)}
+                    {lotProductLabel(lot)} · {lot.batch.batchNumber} · {balance.location.name} ·{' '}
+                    {label(balance.disposition)}
                   </option>
                 ))}
               </select>
@@ -1188,8 +1215,7 @@ export default async function PharmacyInventoryPage({
                     key={`${lot.id}:${balance.stockLocationId}`}
                     value={`${lot.id}:${balance.stockLocationId}`}
                   >
-                    {lot.batch.medicine.productName} · {lot.batch.batchNumber} ·{' '}
-                    {balance.location.name}
+                    {lotProductLabel(lot)} · {lot.batch.batchNumber} · {balance.location.name}
                   </option>
                 ))}
               </select>
@@ -1228,8 +1254,7 @@ export default async function PharmacyInventoryPage({
                     key={`${lot.id}:${balance.stockLocationId}`}
                     value={`${lot.id}:${balance.stockLocationId}`}
                   >
-                    {lot.batch.medicine.productName} · {lot.batch.batchNumber} ·{' '}
-                    {balance.location.name}
+                    {lotProductLabel(lot)} · {lot.batch.batchNumber} · {balance.location.name}
                   </option>
                 ))}
               </select>
@@ -1333,7 +1358,7 @@ export default async function PharmacyInventoryPage({
                 <select className={inputClass} name="batchId">
                   {lots.map((lot) => (
                     <option key={lot.batch.id} value={lot.batch.id}>
-                      {lot.batch.medicine.productName} · batch {lot.batch.batchNumber}
+                      {lotProductLabel(lot)} · batch {lot.batch.batchNumber}
                     </option>
                   ))}
                 </select>
@@ -1474,6 +1499,11 @@ export default async function PharmacyInventoryPage({
                       {signal.medicine.productName}
                       {signal.location ? ` · ${signal.location.name}` : ''}
                     </h3>
+                    {renderStockComposition(signal.medicine.strengths) ? (
+                      <p dir="auto" className="text-xs text-text-body">
+                        {renderStockComposition(signal.medicine.strengths)}
+                      </p>
+                    ) : null}
                     <p className="mt-2 max-w-3xl text-sm text-text-body">{signal.explanation}</p>
                     <p className="mt-2 text-xs text-text-muted">
                       Data {when(signal.dataWindowStart)}–{when(signal.dataWindowEnd)} · observed{' '}
