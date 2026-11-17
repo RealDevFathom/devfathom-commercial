@@ -105,7 +105,7 @@ describe('medicine pack setup', () => {
       presentationId: 'presentation-secret',
       level: 'STRIP',
       unitsPerParent: 10,
-      effectiveFrom: new Date('2026-09-06T00:00:00Z'),
+      effectiveFrom: new Date('2026-09-06T00:00:00+05:00'),
       versionGroupId: expect.any(String),
     });
     expect(screen.queryByText(/presentation-secret|medicine-secret/)).not.toBeInTheDocument();
@@ -334,7 +334,7 @@ describe('medicine pack setup', () => {
       presentationId: 'presentation-secret',
       level: 'STRIP',
       unitsPerParent: 10,
-      effectiveFrom: new Date('2026-09-06T00:00:00Z'),
+      effectiveFrom: new Date('2026-09-06T00:00:00+05:00'),
       versionGroupId: expect.any(String),
     });
   });

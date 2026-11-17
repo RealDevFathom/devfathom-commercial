@@ -2,7 +2,7 @@ import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { packLevelCanonicalUnits } from './counter-pricing';
+import { legacyStripOption, packLevelCanonicalUnits } from './counter-pricing';
 import { mrpRoundingIncrementForLot, priceFromLot } from './medicine';
 import {
   branchUnknownLossProbability,
@@ -417,6 +417,7 @@ export async function assertSaleUnitConversion(
       effectiveFrom: true,
       effectiveTo: true,
       versionGroupId: true,
+      presentation: { select: { presentation: true, dosageForm: true } },
     },
   });
   if (!packLevels.some((level) => level.id === input.packLevelId))
@@ -429,6 +430,19 @@ export async function assertSaleUnitConversion(
     packLevelCanonicalUnits({ packLevels, packLevelId: input.packLevelId, at }).includes(
       input.canonicalUnitsPerSaleUnit
     )
+  )
+    return;
+  // Legacy strips are accepted only at the multiplier derived from this tenant's
+  // stored, reviewed box wording. PACK and UNIT retain their existing checks.
+  const pack = packLevels.find((level) => level.id === input.packLevelId)!;
+  if (
+    input.saleUnit === 'STRIP' &&
+    legacyStripOption({
+      packLevels,
+      packLevelId: input.packLevelId,
+      presentation: pack.presentation?.presentation,
+      dosageForm: pack.presentation?.dosageForm ?? null,
+    })?.canonicalUnitsPerSaleUnit === input.canonicalUnitsPerSaleUnit
   )
     return;
   const received = await db.pharmacyInventoryLot.findFirst({
@@ -1035,7 +1049,7 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
         include: {
           medicine: { select: { productName: true, controlled: true } },
           // DEV-638: the pack level actually sold, so a standalone strip is not called a box.
-          packLevel: { select: { level: true } },
+          packLevel: { select: { level: true, parentPackLevelId: true } },
           returnLines: true,
           unidentifiedReturnHolds: true,
           allocations: { include: { lot: { include: { batch: true } } } },
@@ -1087,7 +1101,12 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
       // Controlled restorations need a fresh independent pharmacist witness PIN.
       controlled: line.medicine.controlled,
       saleUnit: line.saleUnit,
-      levelLabel: line.packLevel?.level ?? null,
+      // DEV-705: a strip cut from a standalone legacy box is stored on the box level;
+      // a hierarchy strip never sits on a top level, so name the strip, not the box.
+      levelLabel:
+        line.saleUnit === 'STRIP' && line.packLevel?.parentPackLevelId === null
+          ? 'STRIP'
+          : (line.packLevel?.level ?? null),
       quantity: line.quantity,
       canonicalUnitsPerSaleUnit: line.canonicalUnitsPerSaleUnit,
       canonicalUnits: line.canonicalUnits,
@@ -1976,7 +1995,10 @@ export async function recoverRestockInterest(
       branchId: scope.branchId,
       status: { in: ['OPEN', 'NOTIFIED'] },
     },
-    include: { demandEvent: true },
+    include: {
+      demandEvent: true,
+      notifications: { where: { status: 'CAPTURED' }, select: { id: true } },
+    },
   });
   if (interest?.orderLineId || isRefillCycleCampaignKey(interest?.campaignKey))
     throw new PharmacySaleError('INVALID_STATE');
@@ -1992,6 +2014,25 @@ export async function recoverRestockInterest(
     line.sale.receiptNumber === null
   )
     throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+  // Recovery credit starts only when the back-in-stock notice was actually
+  // sent (provider accepted it); a sale completed before that is not credited.
+  // The log's updatedAt is the PENDING->SENT write; createdAt is only the claim.
+  const noticeKeys = interest.notifications.map((notice) => `back-in-stock:${notice.id}`);
+  const sentLogs = noticeKeys.length
+    ? await db.pharmacyMessageLog.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          kind: 'BACK_IN_STOCK',
+          status: 'SENT',
+          dedupeKey: { in: noticeKeys },
+        },
+        select: { updatedAt: true },
+      })
+    : [];
+  const firstSentAt = sentLogs.map((log) => log.updatedAt.getTime()).sort((x, y) => x - y)[0];
+  const soldAt = line.sale.completedAt;
+  if (firstSentAt === undefined || !soldAt || soldAt.getTime() <= firstSentAt)
+    throw new PharmacySaleError('INVALID_STATE');
   const recoveredAt = new Date();
   await db.unfulfilledDemandEvent.update({
     where: {
@@ -2077,10 +2118,10 @@ export async function linkRestockRecoveries(
           status: 'SENT',
           dedupeKey: { in: noticeKeys },
         },
-        select: { dedupeKey: true, createdAt: true },
+        select: { dedupeKey: true, updatedAt: true },
       })
     : [];
-  const sentAt = new Map(sent.map((log) => [log.dedupeKey, log.createdAt]));
+  const sentAt = new Map(sent.map((log) => [log.dedupeKey, log.updatedAt]));
   const pending = interests
     .map((interest) => ({
       id: interest.id,

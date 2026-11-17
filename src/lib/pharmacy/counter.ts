@@ -51,6 +51,8 @@ export type CounterCatalogRow = {
   manufacturer: string | null;
   /** Rendered strength components, for example `500 mg + 30 mg`. */
   strength: string | null;
+  /** DEV-862: salt and strength, e.g. `paracetamol 500 mg`; null when none recorded. */
+  composition?: string | null;
   presentationId: string;
   presentation: string;
   dosageForm: string | null;
@@ -151,6 +153,20 @@ function renderStrength(components: readonly { value: unknown; unit: string }[])
   if (components.length === 0) return null;
   return components
     .map((component) => `${renderStrengthValue(component.value)} ${component.unit}`)
+    .join(' + ');
+}
+
+/**
+ * DEV-862: the salt and strength a stock list shows under the product name,
+ * for example `paracetamol 500 mg` or `paracetamol 500 mg + caffeine 30 mg`.
+ * Returns null when nothing is recorded, so the caller renders nothing extra.
+ */
+export function renderStockComposition(
+  components: readonly { value: unknown; unit: string; ingredient: { name: string } }[]
+): string | null {
+  if (components.length === 0) return null;
+  return components
+    .map((c) => `${c.ingredient.name.trim()} ${renderStrengthValue(c.value)} ${c.unit}`.trim())
     .join(' + ');
 }
 
@@ -661,6 +677,7 @@ async function hydrateCounterRows(
           .filter((lot) => lot.id !== best!.lot.id)
           .map((lot) => lot.unitsPerPack),
         dosageForm: presentation.dosageForm,
+        presentation: presentation.presentation,
         at,
       }));
     }
@@ -702,6 +719,7 @@ async function hydrateCounterRows(
       brandName: medicine.brandName,
       manufacturer: medicine.manufacturer,
       strength: renderStrength(medicine.strengths),
+      composition: renderStockComposition(medicine.strengths),
       presentationId,
       presentation: presentation.presentation,
       dosageForm: presentation.dosageForm,
@@ -752,6 +770,7 @@ export type CounterCartLine = {
   medicineName: string;
   strength: string | null;
   presentation: string;
+  dosageForm?: string | null;
   saleUnit: SaleUnitKind;
   quantity: number;
   canonicalUnits: number;
@@ -889,6 +908,7 @@ export async function readCounterCart(
       medicineName: line.medicine.productName,
       strength: renderStrength(line.medicine.strengths),
       presentation: line.presentation.presentation,
+      dosageForm: line.presentation.dosageForm,
       saleUnit: line.saleUnit as SaleUnitKind,
       quantity: line.quantity,
       canonicalUnits: line.canonicalUnits,

@@ -254,6 +254,7 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   // open the pharmacy SOP surface, and a pharmacy package does not sell it.
   pharmacySop: 'pharmacy-safety',
   pharmacySales: 'pharmacy-counter',
+  pharmacyPrinting: 'pharmacy-counter',
   pharmacyBranchAssignments: 'pharmacy-core',
   // #979: the rail's capability read belongs to every pharmacy workspace.
   pharmacyAccess: 'pharmacy-core',

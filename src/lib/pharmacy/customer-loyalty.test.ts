@@ -182,6 +182,28 @@ describe('CRM-L01 pharmacy loyalty', () => {
     });
   });
 
+  it('earns nothing while the member is deactivated (DEV-764)', async () => {
+    const create = vi.fn();
+    const fixture = earningFixture();
+    fixture.pharmacyCustomer.findFirst.mockResolvedValue({
+      patientId: 'patient-a',
+      loyaltyActive: false,
+    });
+    const db = {
+      ...fixture,
+      pharmacyLoyaltyPointsEntry: { findUnique: vi.fn().mockResolvedValue(null), create },
+      pharmacySale: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'sale-a',
+          customerId: 'customer-a',
+          tenders: [{ type: 'CASH', amountMinor: 10_000 }],
+        }),
+      },
+    };
+    await expect(accrueSalePoints(db as never, scope, 'sale-a')).resolves.toBeNull();
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('replays an existing earn without appending another ledger row', async () => {
     const prior = { id: 'earn-a', points: 12, idempotencyKey: 'loyalty:earn:sale-a' };
     const create = vi.fn();
@@ -245,6 +267,8 @@ describe('CRM-L01 pharmacy loyalty', () => {
 
   it('returns counter history, points and khata visibility without patient fields', async () => {
     const db = {
+      // No branch bound: the points balance reads every branch of the tenant.
+      $queryRaw: vi.fn(async () => [{ branchId: null }]),
       pharmacyCustomer: {
         findFirst: vi.fn().mockResolvedValue({
           id: 'customer-a',
@@ -302,6 +326,12 @@ describe('CRM-L01 pharmacy loyalty', () => {
         where: expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
       })
     );
+    // DEV-764: purchases stay this branch's; points are one balance across branches.
+    expect(db.pharmacyLoyaltyPointsEntry.aggregate).toHaveBeenCalledWith({
+      where: { organizationId: 'org-a', customerId: 'customer-a' },
+      _sum: { points: true },
+    });
+    expect(snapshot.loyaltyActive).toBe(true);
   });
 });
 
