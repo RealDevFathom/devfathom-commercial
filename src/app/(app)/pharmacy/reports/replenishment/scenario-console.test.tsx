@@ -289,4 +289,5 @@ it('uses plain wording instead of statistics jargon', () => {
   expect(text).not.toContain('Weekly seasonal naive');
   expect(text).not.toContain('forecast origin');
   expect(text).not.toContain('USER_SUPPLIED_ASSUMPTIONS');
+  expect(text).not.toContain('Basis:');
 });
