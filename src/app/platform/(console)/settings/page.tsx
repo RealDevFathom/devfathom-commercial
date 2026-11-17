@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { Plus } from 'lucide-react';
 import { PlatformCommandForm } from '@/components/platform/platform-command-form';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
@@ -41,7 +42,17 @@ export default async function PlatformSettingsPage() {
         title="Platform settings"
         description="Versioned operational defaults live in PostgreSQL. Secrets remain in the deployment environment and are never rendered here."
       />
-      {actor.role === 'SUPER_ADMIN' ? <AiSettingsConsole /> : null}
+      {actor.role === 'SUPER_ADMIN' ? (
+        <div className="space-y-6">
+          <Link
+            className="inline-flex min-h-11 items-center rounded-sm text-sm font-semibold underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-ring"
+            href="/platform/settings/rule-sets"
+          >
+            Review jurisdiction rule sets
+          </Link>
+          <AiSettingsConsole />
+        </div>
+      ) : null}
       <div className="mt-7 grid gap-7 xl:grid-cols-[1fr_400px]">
         <div className="space-y-7">
           {aiUsage !== undefined ? <AIUsagePanel usage={aiUsage} /> : null}

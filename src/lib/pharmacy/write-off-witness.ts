@@ -3,8 +3,8 @@ import {
   clearLockout,
   isLockedOut,
   registerFailedAttempt,
-  verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
+import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import {
@@ -116,7 +116,17 @@ async function verifyWitnessPin(
   });
   const now = new Date();
   if (!credential || isLockedOut(credential, now)) return false;
-  if (!(await verifyOperatorCredential('PIN', input.witnessPin, credential.credentialHash))) {
+  if (
+    !(await verifyApprovalSecret(db, {
+      organizationId: scope.organizationId,
+      approverUserId: input.witnessId,
+      credentialHash: credential.credentialHash,
+      secret: input.witnessPin,
+      action: 'pharmacy.writeOffWitness',
+      requestedById: scope.actorId,
+      now,
+    }))
+  ) {
     await db.restaurantOperatorCredential.update({
       where: { id: credential.id },
       data: registerFailedAttempt(credential, now),

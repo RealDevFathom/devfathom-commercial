@@ -2116,7 +2116,9 @@ const purchasingRouter = router({
             goodsReceiptId: input.goodsReceiptId,
             at: new Date(),
             staffProfileId: input.staffProfileId,
-            pin: input.pin,
+            // DEV-879: the witness proven above. The secret is not checked twice, so a
+            // single-use authenticator code still posts; every eligibility rule re-runs.
+            verifiedPharmacistId: attempt.pharmacistId,
           })
         );
       } catch (error) {

@@ -4,8 +4,8 @@ import {
   clearLockout,
   isLockedOut,
   registerFailedAttempt,
-  verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
+import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 
 /**
@@ -60,7 +60,17 @@ export async function verifyOwnerExportPin(
       });
       if (!credential) return 'NO_PIN';
       if (isLockedOut(credential, now)) return 'LOCKED';
-      if (!(await verifyOperatorCredential('PIN', pin, credential.credentialHash))) {
+      if (
+        !(await verifyApprovalSecret(tx, {
+          organizationId,
+          approverUserId: userId,
+          credentialHash: credential.credentialHash,
+          secret: pin,
+          action: 'pharmacy.ownerDataExport',
+          requestedById: userId,
+          now,
+        }))
+      ) {
         const next = registerFailedAttempt(credential, now);
         await tx.restaurantOperatorCredential.update({
           where: { id: credential.id },

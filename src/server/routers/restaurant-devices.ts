@@ -564,6 +564,10 @@ export const restaurantDevicesRouter = router({
         type: input.approvingType,
         secret: input.approvingSecret,
         now,
+        approval: {
+          action: 'restaurantDevices.revoke',
+          requestedByStaffProfileId: actingStaffProfileId,
+        },
       });
       if (!auth.ok) {
         if (auth.reason === 'LOCKED') {
@@ -673,6 +677,10 @@ export const restaurantDevicesRouter = router({
         type: input.approvingType,
         secret: input.approvingSecret,
         now: new Date(),
+        approval: {
+          action: 'restaurantDevices.rotate',
+          requestedByStaffProfileId: actingStaffProfileId,
+        },
       });
       if (!auth.ok) {
         if (auth.reason === 'LOCKED') {
