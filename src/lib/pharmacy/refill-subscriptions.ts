@@ -21,6 +21,7 @@ import {
   refillCycleCampaignKey,
 } from './refill-subscription-rules';
 
+import { requirePharmacyTodayOpenForTrading } from './settlement';
 import { assertRxSaleAllowed } from './rx-sale-gate';
 import { addReservedSaleLine, createSale } from './sales';
 import type { LedgerScope } from './stock-ledger';
@@ -644,6 +645,8 @@ export async function startRefillCycleCheckout(db: ScopedDb, scope: LedgerScope,
   if (held.reduce((total, row) => total + row.reservedUnits, 0) !== cycle.canonicalUnits) {
     throw new RefillSubscriptionError('INVALID_STATE');
   }
+  // DEV-631: no bill is opened and no held stock is consumed while today is closed.
+  await requirePharmacyTodayOpenForTrading(db, scope);
   await settleCycleReservations(db, scope, cycle.id, 'CONSUMED');
   const sale = await createSale(db, scope);
   await db.pharmacySale.update({
