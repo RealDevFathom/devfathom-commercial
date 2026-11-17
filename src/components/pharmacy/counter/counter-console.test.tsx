@@ -1,8 +1,14 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { COUNTER_CASH_DRAWER_CLOSED_MESSAGE } from '@/lib/pharmacy/counter-messages';
+import {
+  COUNTER_CASH_DRAWER_CLOSED_MESSAGE,
+  COUNTER_UNKNOWN_ERROR_MESSAGE,
+} from '@/lib/pharmacy/counter-messages';
 import type { ComponentProps } from 'react';
+import { COUNTER_SETUP_GUIDANCE } from '@/lib/pharmacy/counter-setup';
+import { CounterApprovalDenied } from '@/lib/pharmacy/counter-line-approval';
+import { PharmacyRxReferenceError } from '@/lib/pharmacy/rx-prescription-reference';
 
 import type { CounterCart, CounterSearchRow } from '@/lib/pharmacy/counter';
 import type { CounterReceipt } from '@/lib/pharmacy/counter-receipt';
@@ -180,6 +186,7 @@ vi.mock('@/lib/trpc', async () => {
         'substituteProposals',
         'refundAccess',
         'openBills',
+        'saleReadiness',
         // DEV-821: the till's cashier list and handover.
         'drawerCashiers',
         'handoverDrawer',
@@ -494,6 +501,7 @@ beforeEach(() => {
     'refundAccess',
     'navigation',
     'openBills',
+    'saleReadiness',
     'drawerCashiers',
   ])
     mocks.queries[name] = query();
@@ -2337,6 +2345,205 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     ).toBeInTheDocument();
     await waitFor(() => expect(mocks.drawerStatusInvalidate).toHaveBeenCalled());
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+
+  describe('DEV-860: says why a sale cannot start', () => {
+    const PROFILE_MISSING_TEXT =
+      'This branch has no regulatory profile in force, so it cannot sell yet.';
+    const readiness = (canFixSetup: boolean, blockers: string[] = []) =>
+      query({ ready: blockers.length === 0, blockers, warnings: [], canFixSetup });
+
+    async function scanRefusedBill() {
+      openTheDrawer();
+      mocks.searchQuery.mockResolvedValue({ rows: [barcodeRow()], truncated: false });
+      mocks.mutations.create!.mockRejectedValue(refused('FORBIDDEN', 'PROFILE_MISSING'));
+      render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+      const search = screen.getByLabelText('Scan or search');
+      fireEvent.change(search, { target: { value: '123456' } });
+      fireEvent.keyDown(search, { key: 'Enter' });
+      return screen.findByText(PROFILE_MISSING_TEXT);
+    }
+
+    it('names the missing setup instead of the generic counter error', async () => {
+      mocks.queries.saleReadiness = readiness(false);
+      const message = await scanRefusedBill();
+      const notice = message.closest('[role="alert"]') as HTMLElement;
+      expect(notice).not.toHaveTextContent(COUNTER_UNKNOWN_ERROR_MESSAGE);
+      expect(notice).toHaveTextContent('Ask your owner or manager to set this up.');
+      expect(within(notice).queryByRole('link')).not.toBeInTheDocument();
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    });
+
+    it.each(['create', 'addLine'] as const)(
+      'hides unknown %s errors, including internal ids and stack traces',
+      async (operation) => {
+        openTheDrawer();
+        mocks.queries.saleReadiness = readiness(false);
+        mocks.searchQuery.mockResolvedValue({ rows: [barcodeRow()], truncated: false });
+        mocks.mutations.create!.mockResolvedValue({ id: 'sale-a' });
+        mocks.mutations[operation]!.mockRejectedValue(
+          new Error('Tenant org-secret failed at /server/private.ts:42: internal-id-123')
+        );
+        render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+        const search = screen.getByLabelText('Scan or search');
+        fireEvent.change(search, { target: { value: '123456' } });
+        fireEvent.keyDown(search, { key: 'Enter' });
+        expect(await screen.findByText(COUNTER_UNKNOWN_ERROR_MESSAGE)).toBeInTheDocument();
+        expect(screen.queryByText(/org-secret|private.ts|internal-id-123/)).not.toBeInTheDocument();
+      }
+    );
+
+    it.each([
+      'ORGANIZATION_NOT_ACTIVE',
+      'PROFILE_MISSING',
+      'BRANCH_INACTIVE',
+      'PROFILE_PREMISES_MISMATCH',
+      'RULE_SET_UNCONFIRMED',
+      'LICENCE_INVALID',
+      'QUALIFIED_PERSON_COVERAGE_MISSING',
+      'SCHEDULE_NOT_PERMITTED',
+      'PHARMACIST_NOT_PRESENT',
+    ] as const)('explains an add-line refusal for %s', async (reason) => {
+      openTheDrawer();
+      mocks.queries.saleReadiness = readiness(false);
+      mocks.searchQuery.mockResolvedValue({ rows: [barcodeRow()], truncated: false });
+      mocks.mutations.create!.mockResolvedValue({ id: 'sale-a' });
+      mocks.mutations.addLine!.mockRejectedValue(refused('FORBIDDEN', reason));
+      render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+      const search = screen.getByLabelText('Scan or search');
+      fireEvent.change(search, { target: { value: '123456' } });
+      fireEvent.keyDown(search, { key: 'Enter' });
+      const message = await screen.findByText(COUNTER_SETUP_GUIDANCE[reason].message);
+      expect(message.closest('[role="alert"]')).toHaveTextContent('Ask your owner or manager');
+    });
+
+    it('links an owner or administrator to the setup step', async () => {
+      mocks.queries.saleReadiness = readiness(true);
+      const message = await scanRefusedBill();
+      const notice = message.closest('[role="alert"]') as HTMLElement;
+      expect(
+        within(notice).getByRole('link', { name: 'Add the branch regulatory profile' })
+      ).toHaveAttribute('href', '/pharmacy/regulatory?branch=branch-a');
+      expect(notice).not.toHaveTextContent('Ask your owner or manager');
+    });
+
+    // Review finding: readiness still loading (or failed) must not demote an administrator.
+    it('links an administrator to the setup step before readiness has answered', async () => {
+      mocks.queries.saleReadiness = { ...query(), isSuccess: false, isLoading: true };
+      mocks.queries.counterBranches = query({
+        branches: [{ id: 'branch-a', name: 'Synthetic branch', code: 'MT1' }],
+        setupReason: null,
+        canFixSetup: true,
+      });
+      const message = await scanRefusedBill();
+      const notice = message.closest('[role="alert"]') as HTMLElement;
+      expect(
+        within(notice).getByRole('link', { name: 'Add the branch regulatory profile' })
+      ).toHaveAttribute('href', '/pharmacy/regulatory?branch=branch-a');
+      expect(notice).not.toHaveTextContent('Ask your owner or manager');
+    });
+
+    it('names a missing branch assignment from the reason the refusal declares', async () => {
+      mocks.queries.saleReadiness = readiness(false);
+      openTheDrawer();
+      mocks.searchQuery.mockResolvedValue({ rows: [barcodeRow()], truncated: false });
+      mocks.mutations.create!.mockRejectedValue(
+        Object.assign(new Error('Branch is outside your scope.'), {
+          data: { code: 'FORBIDDEN', reason: 'BRANCH_NOT_ASSIGNED' },
+        })
+      );
+      render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+      const search = screen.getByLabelText('Scan or search');
+      fireEvent.change(search, { target: { value: '123456' } });
+      fireEvent.keyDown(search, { key: 'Enter' });
+      const message = await screen.findByText(
+        'You are not assigned to this branch, so you cannot sell here.'
+      );
+      expect(message.closest('[role="alert"]')).toHaveTextContent(
+        'Ask your owner or manager to set this up.'
+      );
+    });
+
+    it('lists missing setup before the first scan, for this branch and counter device', () => {
+      mocks.queries.saleReadiness = readiness(false, ['LICENCE_INVALID']);
+      render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+      const panel = screen.getByRole('region', { name: 'This counter cannot sell yet' });
+      expect(panel).toHaveTextContent('This branch has no valid licence on file');
+      expect(panel).toHaveTextContent('Ask your owner or manager to set this up.');
+      expect(mocks.queryInputs).toHaveBeenCalledWith(
+        'saleReadiness',
+        expect.objectContaining({ branchId: 'branch-a' }),
+        expect.objectContaining({ enabled: true })
+      );
+    });
+
+    // Review finding: an add-line refusal the server words for the operator keeps its words.
+    it.each([
+      ['FORBIDDEN', () => new CounterApprovalDenied('FEFO_OVERRIDE').message],
+      ['BAD_REQUEST', () => new PharmacyRxReferenceError('PRESCRIPTION_PATIENT_MISMATCH').message],
+      ['BAD_REQUEST', () => new PharmacyRxReferenceError('PRESCRIPTION_REQUIRED').message],
+    ] as const)('keeps a deliberate %s add-line refusal in its own words', async (code, text) => {
+      openTheDrawer();
+      mocks.queries.saleReadiness = readiness(false);
+      mocks.searchQuery.mockResolvedValue({ rows: [barcodeRow()], truncated: false });
+      mocks.mutations.create!.mockResolvedValue({ id: 'sale-a' });
+      mocks.mutations.addLine!.mockRejectedValue(refused(code, text()));
+      render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+      const search = screen.getByLabelText('Scan or search');
+      fireEvent.change(search, { target: { value: '123456' } });
+      fireEvent.keyDown(search, { key: 'Enter' });
+      expect(await screen.findByText(text())).toBeInTheDocument();
+      expect(screen.queryByText(COUNTER_UNKNOWN_ERROR_MESSAGE)).not.toBeInTheDocument();
+    });
+
+    // Review finding: `counterBranches` lists no branch for an unassigned member, so the
+    // counter never reaches the ready-to-sell check; the first screen must say why.
+    it('tells an unassigned employee to ask their owner, with no setup links', () => {
+      mocks.session.data.user.role = 'EMPLOYEE';
+      mocks.queries.counterBranches = query({
+        branches: [],
+        currency: 'PKR',
+        timezone: 'UTC',
+        paymentSandboxAvailable: false,
+        setupReason: 'BRANCH_NOT_ASSIGNED',
+        canFixSetup: false,
+      });
+      render(<PharmacyCounterConsole />);
+      const alert = screen.getByRole('alert');
+      expect(alert).toHaveTextContent(
+        'You are not assigned to an active branch, so this counter cannot sell.'
+      );
+      expect(alert).toHaveTextContent('Ask your owner or manager to set this up.');
+      expect(screen.queryByText('No active branch is configured yet.')).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('link', { name: 'Organization administration' })
+      ).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Scan or search')).not.toBeInTheDocument();
+      expect(mocks.mutations.create).not.toHaveBeenCalled();
+    });
+
+    it('keeps the branch setup checklist for an administrator with no branch', () => {
+      mocks.session.data.user.role = 'ADMIN';
+      mocks.queries.counterBranches = query({
+        branches: [],
+        setupReason: null,
+        canFixSetup: true,
+      });
+      render(<PharmacyCounterConsole />);
+      expect(screen.getByText('No active branch is configured yet.')).toBeInTheDocument();
+      expect(
+        screen.getAllByRole('link', { name: 'Organization administration' }).length
+      ).toBeGreaterThan(0);
+      expect(screen.queryByText(/not assigned to an active branch/)).not.toBeInTheDocument();
+    });
+
+    it('does not list setup over an open bill', () => {
+      mocks.queries.saleReadiness = readiness(false, ['LICENCE_INVALID']);
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      expect(
+        screen.queryByRole('region', { name: 'This counter cannot sell yet' })
+      ).not.toBeInTheDocument();
+    });
   });
 
   it('adds no line to an open bill once the drawer is closed elsewhere (DEV-725)', async () => {

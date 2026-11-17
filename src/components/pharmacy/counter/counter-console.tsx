@@ -35,6 +35,7 @@ import { CounterCartPanel, CounterLotOverride, type CounterLotOverrideValue } fr
 import { CounterChangeDue } from './counter-change-due';
 import { CounterKeymapLegend } from './counter-keymap-legend';
 import { CounterOpenDrawerStep } from './counter-open-drawer-step';
+import { CounterSaleReadiness, CounterSetupNextStep } from './counter-sale-readiness';
 import { CounterDrawerOperator } from './counter-drawer-operator';
 import { CounterOpenBills, type CounterOpenBill } from './counter-open-bills';
 import { CounterVoidDialog } from './counter-void-dialog';
@@ -101,7 +102,16 @@ import {
   counterErrorMessage,
   counterErrorTone,
   counterPaymentErrorMessage,
+  counterSaleErrorMessage,
 } from '@/lib/pharmacy/counter-messages';
+import {
+  ASK_OWNER_OR_MANAGER,
+  BRANCH_NOT_ASSIGNED,
+  COUNTER_NO_ASSIGNED_BRANCH_MESSAGE,
+  counterSetupAdvice,
+  counterSetupReason,
+  type CounterSetupAdvice,
+} from '@/lib/pharmacy/counter-setup';
 import { CounterSignOut } from './counter-sign-out';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
 import {
@@ -134,6 +144,8 @@ type Notice = {
   tone: 'success' | 'info' | 'warning' | 'danger' | 'neutral';
   message: string;
   inventoryBranchId?: string;
+  /** DEV-860: a sale refused for a setup gap carries its fix link or whom to ask. */
+  setup?: CounterSetupAdvice;
 };
 
 type ReceiptIntent = {
@@ -799,6 +811,27 @@ function ScopedPharmacyCounterConsole({
   const drawerOpen = Boolean(openDrawerSession) && !drawerQuery.isError;
   // DEV-97: someone who takes no payment opens no drawer, and still builds bills.
   const drawerRequired = branchAuthorized && !settlementDenied && !drawerOpen;
+  // DEV-860: the ready-to-sell check lists missing setup before the first scan. The
+  // server answers with reason codes and whether this account may fix them.
+  const saleReadiness = trpc.pharmacySales.saleReadiness.useQuery(
+    { branchId, ...(deviceId ? { deviceId } : {}) },
+    { enabled: Boolean(branchAuthorized && branchId), staleTime: 30_000, retry: false }
+  );
+  // Both answers come from the same administrator rule on the server. The branch list
+  // loads before any scan, so a refusal while readiness is loading or failed still
+  // offers an administrator the setup link.
+  const canFixSetup =
+    saleReadiness.data?.canFixSetup === true || branchesQuery.data?.canFixSetup === true;
+  const refetchSaleReadiness = saleReadiness.refetch;
+  const setupNotice = useCallback(
+    (error: unknown): { setup?: CounterSetupAdvice } => {
+      const reason = counterSetupReason(error);
+      // The drawer has its own step on the counter; nobody else is asked to open it.
+      if (!reason || reason === 'DRAWER_NOT_OPEN') return {};
+      return { setup: counterSetupAdvice(reason, { canFixSetup, branchId }) };
+    },
+    [branchId, canFixSetup]
+  );
   // Read at call time: a scan or shortcut can finish after the drawer closed.
   const drawerRequiredRef = useRef(drawerRequired);
   useEffect(() => {
@@ -1720,14 +1753,16 @@ function ScopedPharmacyCounterConsole({
         restoreSearchAfterAdd.current = true;
         focusSearch();
       } catch (error) {
-        const message = messageFrom(error);
+        const message = counterSaleErrorMessage(error);
         setNotice({
           tone: counterErrorTone(error),
           message,
           ...(message === COUNTER_ERROR_MESSAGES.INVALID_ARRANGEMENT
             ? { inventoryBranchId: branchId }
             : {}),
+          ...setupNotice(error),
         });
+        if (counterSetupReason(error)) void refetchSaleReadiness();
       } finally {
         setControlledAuth((value) => ({ ...value, pin: '' }));
         setPending(null);
@@ -1752,10 +1787,12 @@ function ScopedPharmacyCounterConsole({
       preview,
       quantity,
       quantityText,
+      refetchSaleReadiness,
       refreshCart,
       saleId,
       selectedOption,
       setActiveSale,
+      setupNotice,
       utils,
     ]
   );
@@ -1814,12 +1851,28 @@ function ScopedPharmacyCounterConsole({
         }
       } catch (error) {
         if (revision === scannerRevision.current)
-          setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
+          setNotice({
+            tone: counterErrorTone(error),
+            message: messageFrom(error),
+            ...setupNotice(error),
+          });
       } finally {
         if (scannerInFlight.current === scan) scannerInFlight.current = null;
       }
     },
-    [activeRow, addToCart, branchId, busy, preview, query, runSearch, saleUnit, stageRow, utils]
+    [
+      activeRow,
+      addToCart,
+      branchId,
+      busy,
+      preview,
+      query,
+      runSearch,
+      saleUnit,
+      setupNotice,
+      stageRow,
+      utils,
+    ]
   );
 
   const runTransition = useCallback(
@@ -2754,6 +2807,48 @@ function ScopedPharmacyCounterConsole({
     );
   }
 
+  // DEV-860: a member assigned to no active branch is told so, and whom to ask. No
+  // setup link: branch assignments are the owner's or an administrator's to change.
+  if (
+    branches.length === 0 &&
+    branchesQuery.data?.setupReason === BRANCH_NOT_ASSIGNED &&
+    branchesQuery.data.canFixSetup !== true
+  ) {
+    return (
+      <div className="space-y-6">
+        <PageHeader
+          eyebrow="Pharmacy"
+          heading="Counter"
+          description="You are not assigned to a branch yet."
+        />
+        <SectionCard title="Before this counter can sell">
+          <div className="space-y-3" role="alert">
+            <p className="text-sm text-text-body">{COUNTER_NO_ASSIGNED_BRANCH_MESSAGE}</p>
+            <div className="text-sm">
+              <CounterSetupNextStep
+                advice={{
+                  reason: BRANCH_NOT_ASSIGNED,
+                  message: COUNTER_NO_ASSIGNED_BRANCH_MESSAGE,
+                  nextStep: ASK_OWNER_OR_MANAGER,
+                  link: null,
+                }}
+              />
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11"
+              onClick={() => void branchesQuery.refetch()}
+            >
+              Check again
+            </Button>
+          </div>
+        </SectionCard>
+        <SectionCard title="Shortcuts">{keymapLegend}</SectionCard>
+      </div>
+    );
+  }
+
   if (branches.length === 0) {
     return (
       <div className="space-y-6">
@@ -3042,6 +3137,14 @@ function ScopedPharmacyCounterConsole({
           ) : null}
         </div>
       )}
+      {branchAuthorized && !saleId && saleReadiness.data ? (
+        <CounterSaleReadiness
+          readiness={saleReadiness.data}
+          branchId={branchId}
+          checking={saleReadiness.isFetching}
+          onCheckAgain={() => void refetchSaleReadiness()}
+        />
+      ) : null}
       <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="min-w-0 space-y-3">
           <SectionCard
@@ -3069,6 +3172,7 @@ function ScopedPharmacyCounterConsole({
                   <StatusPill status={notice.tone} tone={notice.tone} />
                   <div className="min-w-0 space-y-2 text-sm">
                     <p className="text-text-body">{notice.message}</p>
+                    {notice.setup ? <CounterSetupNextStep advice={notice.setup} /> : null}
                     {notice.inventoryBranchId ? (
                       <Link
                         href={`/pharmacy/inventory?branch=${encodeURIComponent(notice.inventoryBranchId)}`}
