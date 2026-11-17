@@ -425,7 +425,9 @@ describe('DEV-881 manager ceiling applies to the day total per customer', () => 
   const now = new Date('2026-11-17T05:00:00.000Z');
 
   /** Ledger whose aggregate reads back the entries this test has written. */
-  function ledger(seed: { points: number; occurredAt: Date; customerId?: string }[] = []) {
+  function ledger(
+    seed: { points: number; occurredAt: Date; customerId?: string; branchId?: string }[] = []
+  ) {
     const { db, created } = fixture(10_000);
     created.push(
       ...seed.map((row, index) => ({
