@@ -374,6 +374,32 @@ const returnAndRefund = {
   },
 };
 
+describe('DEV-732 return input requires explicit choices', () => {
+  it.each(['returnLine', 'returnAndRefund'] as const)(
+    '%s rejects missing, blank or invalid choices before PIN, stock or money work',
+    async (endpoint) => {
+      const f = fixture(ROLES.manager!);
+      for (const [field, value] of [
+        ['reason', undefined],
+        ['reason', '   '],
+        ['disposition', undefined],
+        ['disposition', ''],
+        ['disposition', 'AVAILABLE'],
+      ] as const) {
+        const input = { ...returnAndRefund, managerPin: PIN, [field]: value };
+        if (endpoint === 'returnLine') delete (input as { refund?: unknown }).refund;
+        await expect(f.caller[endpoint](input as never)).rejects.toMatchObject({
+          code: 'BAD_REQUEST',
+        });
+        expect(f.db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+        expect(f.db.$transaction).not.toHaveBeenCalled();
+        expect(returnSaleLine).not.toHaveBeenCalled();
+        expect(refundPharmacyTender).not.toHaveBeenCalled();
+      }
+    }
+  );
+});
+
 describe('DEV-501 one confirm records the return and refunds it', () => {
   beforeEach(() => {
     vi.mocked(returnSaleLine).mockResolvedValue({ returnId: 'return-1', replayed: false } as never);

@@ -34,7 +34,7 @@ import type { AppRouter } from '@/server/routers/_app';
 type Overview = inferRouterOutputs<AppRouter>['pharmacyOnboarding']['overview'];
 
 const labelClass =
-  'block font-mono text-[0.6875rem] font-semibold uppercase tracking-wide text-text-muted';
+  'block font-mono text-xs font-semibold uppercase tracking-wide text-text-muted';
 
 export function PharmacyOnboardingConsole({ initial }: { initial: Overview }) {
   const [overview, setOverview] = useState<Overview>(initial);

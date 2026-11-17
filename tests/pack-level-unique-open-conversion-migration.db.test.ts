@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const sql = readFileSync(
-  'prisma/migrations/20261117100000_pack_level_unique_open_conversion/migration.sql',
+  'prisma/migrations/20261117200451_pack_level_unique_open_conversion/migration.sql',
   'utf8'
 );
 

@@ -154,13 +154,14 @@ async function matchMedicineIds(
   scope: CounterScope,
   query: string,
   limit: number
-): Promise<Map<string, CounterMatchKind>> {
+): Promise<Map<string, { kind: CounterMatchKind; rank: number }>> {
   const trimmed = query.trim();
   if (trimmed.length < 2) throw new PharmacyCounterError('INVALID_QUERY');
   const normalized = normalizeMedicineText(trimmed);
-  const matches = new Map<string, CounterMatchKind>();
-  const remember = (medicineId: string, kind: CounterMatchKind) => {
-    if (!matches.has(medicineId)) matches.set(medicineId, kind);
+  const matches = new Map<string, { kind: CounterMatchKind; rank: number }>();
+  const remember = (medicineId: string, kind: CounterMatchKind, rank: number) => {
+    const existing = matches.get(medicineId);
+    if (!existing || rank < existing.rank) matches.set(medicineId, { kind, rank });
   };
 
   const barcode = normalized
@@ -177,13 +178,66 @@ async function matchMedicineIds(
     // DEV-575: a scanned code that resolves exactly is the answer. Skipping the
     // fuzzy lookups keeps scan-to-cart to one indexed read, and a lone row lets
     // the scanner path add it without a pick list.
-    remember(barcode.presentation.medicineId, 'BARCODE');
+    remember(barcode.presentation.medicineId, 'BARCODE', 0);
     return matches;
   }
 
-  // The fuzzy lookups are independent, so they run together; matches are still
-  // remembered in alias, name, ingredient, presentation order.
-  const [aliases, byName, byIngredient, byPresentation] = await Promise.all([
+  // Read prefixes before substrings so a limited alphabetical substring read
+  // cannot discard the relevant medicine. Each stage remains bounded and its
+  // independent reads run together (DEV-575).
+  const textMatches = async (operator: 'startsWith' | 'contains') => {
+    const text = { [operator]: trimmed, mode: 'insensitive' as const };
+    return Promise.all([
+      db.medicine.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          saleable: true,
+          OR: [{ productName: text }, { brandName: text }],
+        },
+        select: { id: true },
+        orderBy: [{ productName: 'asc' }, { id: 'asc' }],
+        take: limit + 1,
+      }),
+      db.medicineStrengthComponent.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          medicine: { saleable: true },
+          OR: [{ ingredient: { name: text } }, { unit: text }],
+        },
+        select: { medicineId: true },
+        orderBy: [{ medicineId: 'asc' }, { id: 'asc' }],
+        take: limit + 1,
+      }),
+      db.presentation.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          medicine: { saleable: true },
+          OR: [{ presentation: text }, { dosageForm: text }, { route: text }],
+        },
+        select: { medicineId: true },
+        orderBy: [{ medicineId: 'asc' }, { id: 'asc' }],
+        take: limit + 1,
+      }),
+    ]);
+  };
+  // Manufacturer and registration number are weaker signals than a name, brand
+  // or alias. They are read in the later stage, so they can never displace a
+  // brand alias from the bounded first-stage candidates.
+  const producerMatches = (operator: 'startsWith' | 'contains') =>
+    db.medicine.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        saleable: true,
+        OR: [
+          { manufacturer: { [operator]: trimmed, mode: 'insensitive' as const } },
+          { drapRegistrationNumber: { [operator]: trimmed, mode: 'insensitive' as const } },
+        ],
+      },
+      select: { id: true },
+      orderBy: [{ productName: 'asc' }, { id: 'asc' }],
+      take: limit + 1,
+    });
+  const [aliases, prefixes] = await Promise.all([
     normalized
       ? db.medicineAlias.findMany({
           where: {
@@ -192,55 +246,33 @@ async function matchMedicineIds(
             medicine: { saleable: true },
           },
           select: { medicineId: true },
-          orderBy: { normalizedValue: 'asc' },
-          take: limit,
+          orderBy: [{ normalizedValue: 'asc' }, { medicineId: 'asc' }],
+          take: limit + 1,
         })
       : Promise.resolve([] as { medicineId: string }[]),
-    db.medicine.findMany({
-      where: {
-        organizationId: scope.organizationId,
-        saleable: true,
-        OR: [
-          { productName: { contains: trimmed, mode: 'insensitive' } },
-          { brandName: { contains: trimmed, mode: 'insensitive' } },
-          { manufacturer: { contains: trimmed, mode: 'insensitive' } },
-          { drapRegistrationNumber: { contains: trimmed, mode: 'insensitive' } },
-        ],
-      },
-      select: { id: true },
-      orderBy: { productName: 'asc' },
-      take: limit,
-    }),
-    db.medicineStrengthComponent.findMany({
-      where: {
-        organizationId: scope.organizationId,
-        medicine: { saleable: true },
-        OR: [
-          { ingredient: { name: { contains: trimmed, mode: 'insensitive' } } },
-          { unit: { contains: trimmed, mode: 'insensitive' } },
-        ],
-      },
-      select: { medicineId: true },
-      take: limit,
-    }),
-    db.presentation.findMany({
-      where: {
-        organizationId: scope.organizationId,
-        medicine: { saleable: true },
-        OR: [
-          { presentation: { contains: trimmed, mode: 'insensitive' } },
-          { dosageForm: { contains: trimmed, mode: 'insensitive' } },
-          { route: { contains: trimmed, mode: 'insensitive' } },
-        ],
-      },
-      select: { medicineId: true },
-      take: limit,
-    }),
+    textMatches('startsWith'),
   ]);
-  for (const alias of aliases) remember(alias.medicineId, 'ALIAS');
-  for (const medicine of byName) remember(medicine.id, 'NAME');
-  for (const component of byIngredient) remember(component.medicineId, 'INGREDIENT');
-  for (const presentation of byPresentation) remember(presentation.medicineId, 'PRESENTATION');
+  for (const alias of aliases) remember(alias.medicineId, 'ALIAS', 2);
+  const rememberText = (
+    [byName, byIngredient, byPresentation]: Awaited<ReturnType<typeof textMatches>>,
+    ranks: readonly [number, number, number]
+  ) => {
+    for (const medicine of byName) remember(medicine.id, 'NAME', ranks[0]);
+    for (const component of byIngredient) remember(component.medicineId, 'INGREDIENT', ranks[1]);
+    for (const presentation of byPresentation)
+      remember(presentation.medicineId, 'PRESENTATION', ranks[2]);
+  };
+  rememberText(prefixes, [1, 3, 4]);
+  if (matches.size <= limit) {
+    const [producerPrefixes, producerContains, contains] = await Promise.all([
+      producerMatches('startsWith'),
+      producerMatches('contains'),
+      textMatches('contains'),
+    ]);
+    for (const medicine of producerPrefixes) remember(medicine.id, 'NAME', 2.5);
+    rememberText(contains, [5, 6, 7]);
+    for (const medicine of producerContains) remember(medicine.id, 'NAME', 5.5);
+  }
 
   return matches;
 }
@@ -275,7 +307,13 @@ export async function searchCounterCatalog(
   const limit = Math.min(Math.max(input.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
   const at = input.at ?? new Date();
   const matches = await matchMedicineIds(db, scope, input.query, limit);
-  const medicineIds = [...matches.keys()].slice(0, limit);
+  const medicineIds = [...matches.keys()];
+  if (medicineIds.length > limit) {
+    // Relevance must decide admission too, before hydration. Keep the original
+    // read order when all candidates fit; it has no bearing on displayed rank.
+    medicineIds.sort((left, right) => matches.get(left)!.rank - matches.get(right)!.rank);
+    medicineIds.length = limit;
+  }
   if (medicineIds.length === 0) return { rows: [], truncated: false };
 
   const [medicines, lots, packLevels, mrps] = await Promise.all([
@@ -476,7 +514,7 @@ export async function searchCounterCatalog(
       presentation: presentation.presentation,
       dosageForm: presentation.dosageForm,
       route: presentation.route,
-      matchedOn: matches.get(medicine.id) ?? 'NAME',
+      matchedOn: matches.get(medicine.id)?.kind ?? 'NAME',
       recommendedLotId: best?.lot.id ?? null,
       packLevelId: best?.lot.packLevelId ?? null,
       unitsPerPack: best?.lot.unitsPerPack ?? null,
@@ -508,8 +546,10 @@ export async function searchCounterCatalog(
 
   rows.sort(
     (left, right) =>
+      (matches.get(left.medicineId)?.rank ?? 8) - (matches.get(right.medicineId)?.rank ?? 8) ||
       Number(right.onHandUnits > 0) - Number(left.onHandUnits > 0) ||
-      left.displayName.localeCompare(right.displayName)
+      left.displayName.localeCompare(right.displayName) ||
+      left.medicineId.localeCompare(right.medicineId)
   );
   return { rows, truncated: matches.size > medicineIds.length };
 }
