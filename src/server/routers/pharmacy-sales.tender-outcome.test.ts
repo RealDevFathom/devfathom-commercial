@@ -170,9 +170,9 @@ describe('pharmacySales.tenderOutcome', () => {
     f.prior.payloadHash = digest(named);
     await expect(f.caller().tenderOutcome(named)).resolves.toMatchObject({ status: 'ACCEPTED' });
     expect(f.context.audit?.detail.skipInput).toBe(true);
-    await expect(f.caller().tenderOutcome({ ...named, buyerName: 'Different Buyer' })).resolves.toEqual({
-      status: 'UNKNOWN', replayUnsafe: true,
-    });
+    await expect(
+      f.caller().tenderOutcome({ ...named, buyerName: 'Different Buyer' })
+    ).resolves.toEqual({ status: 'UNKNOWN', replayUnsafe: true });
     expect(f.transaction).not.toHaveBeenCalled();
     expect(f.unexpected).not.toHaveBeenCalled();
   });
