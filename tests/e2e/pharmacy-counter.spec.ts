@@ -472,6 +472,14 @@ test('bill 3 — Urdu transliteration alias resolves the same medicine and sells
   // POS-02: the alias path (MED-03 transliteration) reaches the same medicine
   // the barcode did.
   await search(page, otc.alias);
+  const aliasResult = page
+    .getByRole('list', { name: 'Search results' })
+    .getByRole('button')
+    .first();
+  await expect(aliasResult).toContainText(otc.brandName);
+  await expect(aliasResult).toContainText(`Strength: ${otc.strength}`);
+  await expect(aliasResult).toContainText('Form:');
+  await expect(aliasResult).toContainText('Stock:');
   await stageFirstResult(page, otc.name);
 
   await page.keyboard.press('F3');
