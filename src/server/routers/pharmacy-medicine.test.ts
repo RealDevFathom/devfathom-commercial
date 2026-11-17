@@ -38,7 +38,30 @@ function makeDb() {
       findUnique: vi.fn().mockResolvedValue({ organizationRole: null, permissionOverrides: [] }),
     },
     ingredient: model(),
-    medicine: model(),
+    medicine: {
+      ...model(),
+      count: vi.fn().mockResolvedValue(1),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      findFirst: vi.fn().mockResolvedValue({ id: 'medicine_a', saleable: false }),
+    },
+    auditLog: model(),
+    pharmacyCatalogueEdit: {
+      ...model(),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      count: vi.fn().mockResolvedValue(0),
+      create: vi.fn(async ({ data }: { data: object }) => ({
+        id: 'edit',
+        status: 'PENDING',
+        ...data,
+      })),
+    },
+    medicineProvenance: {
+      ...model(),
+      findMany: vi.fn(),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+    },
+    medicineReviewDecision: model(),
+    $queryRaw: vi.fn().mockResolvedValue([]),
     presentation: model(),
     packLevel: model(),
     medicinePackMrp: model(),
@@ -51,7 +74,7 @@ function makeDb() {
 }
 
 let db = makeDb();
-function caller(enabledModules = ['pharmacy-core'], role = 'ADMIN') {
+function caller(enabledModules = ['pharmacy-core'], role = 'ADMIN', actorId = 'user_a') {
   return pharmacyMedicineRouter.createCaller({
     db,
     entitlements: {
@@ -62,7 +85,10 @@ function caller(enabledModules = ['pharmacy-core'], role = 'ADMIN') {
       modules: [],
       limits: {},
     },
-    session: { expires: 'later', user: { id: 'user_a', role, status: 'ACTIVE' } },
+    session: {
+      expires: 'later',
+      user: { id: actorId, role, status: 'ACTIVE' },
+    },
     organization: null,
     support: null,
     requestMeta: { ip: null, userAgent: null },
@@ -76,6 +102,12 @@ beforeEach(() => {
 });
 
 const catalogueEdits = [
+  [
+    'proposeCatalogueEdit',
+    { medicineId: 'medicine_a', changes: { productName: 'Changed' } },
+    'pharmacyCatalogueEdit',
+  ],
+  ['decideCatalogueEdit', { editId: 'edit', decision: 'APPROVE' }, 'pharmacyCatalogueEdit'],
   ['createIngredient', { name: 'Paracetamol' }, 'ingredient'],
   ['createMedicine', { productName: 'Medicine', productFamily: 'PHARMACEUTICAL' }, 'medicine'],
   [
@@ -148,10 +180,32 @@ describe('catalogue edits require catalogue administration (DEV-19)', () => {
     expect(db.medicineAlias.create).not.toHaveBeenCalled();
   });
 
-  it('lets a catalogue administrator add an alias', async () => {
+  it('queues a draft alias, refuses its editor, then lets another administrator approve the normalized write', async () => {
+    db.medicine.findFirst.mockResolvedValue({
+      id: 'medicine_a',
+      saleable: false,
+      updatedAt: new Date('2026-01-01'),
+    });
+    const proposal = await caller().addAlias({
+      medicineId: 'medicine_a',
+      type: 'BRAND',
+      value: 'Panadol',
+    });
+    expect(proposal).toMatchObject({ status: 'PENDING' });
+    expect(db.medicineAlias.create).not.toHaveBeenCalled();
+    db.pharmacyCatalogueEdit.findFirst.mockResolvedValue(proposal);
     await expect(
-      caller().addAlias({ medicineId: 'medicine_a', type: 'BRAND', value: 'Panadol' })
-    ).resolves.toMatchObject({ id: 'new', normalizedValue: expect.any(String) });
+      caller().decideCatalogueEdit({ editId: proposal.id, decision: 'APPROVE' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await caller(['pharmacy-core'], 'ADMIN', 'user_b').decideCatalogueEdit({
+      editId: proposal.id,
+      decision: 'APPROVE',
+    });
+    await expect(db.medicineAlias.create.mock.results[0]!.value).resolves.toMatchObject({
+      id: 'new',
+      normalizedValue: 'panadol',
+    });
+    expect(db.medicineAlias.create).toHaveBeenCalledOnce();
   });
 
   it.each(['ACCEPTED', 'CORRECTED', 'REJECTED'])(
@@ -474,7 +528,10 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
   });
 
   it('refuses a non-admin printed MRP rounding rule, since it lowers posted prices', async () => {
-    db.packLevel.findFirst.mockResolvedValue({ id: 'pack_a' });
+    db.packLevel.findFirst.mockResolvedValue({
+      id: 'pack_a',
+      presentation: { medicineId: 'medicine_a' },
+    });
     await expect(
       caller(['pharmacy-core'], 'EMPLOYEE').recordPrintedMrp({
         packLevelId: 'pack_a',
@@ -486,16 +543,33 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
     expect(db.medicinePackMrp.create).not.toHaveBeenCalled();
   });
 
-  it('lets an admin record a printed MRP rounding rule', async () => {
-    db.packLevel.findFirst.mockResolvedValue({ id: 'pack_a' });
-    await expect(
-      caller().recordPrintedMrp({
-        packLevelId: 'pack_a',
-        batchReference: 'B-1',
-        printedMrpMinor: 1000,
-        roundingIncrementMinor: 5,
-      })
-    ).resolves.toMatchObject({ packLevelId: 'pack_a', roundingIncrementMinor: 5 });
+  it('holds a draft printed MRP rounding rule until another administrator approves it', async () => {
+    db.packLevel.findFirst.mockResolvedValue({
+      id: 'pack_a',
+      presentation: { medicineId: 'medicine_a' },
+    });
+    db.medicine.findFirst.mockResolvedValue({
+      id: 'medicine_a',
+      saleable: false,
+      updatedAt: new Date('2026-01-01'),
+    });
+    const proposal = await caller().recordPrintedMrp({
+      packLevelId: 'pack_a',
+      batchReference: 'B-1',
+      printedMrpMinor: 1000,
+      roundingIncrementMinor: 5,
+    });
+    expect(proposal).toMatchObject({ status: 'PENDING' });
+    expect(db.medicinePackMrp.create).not.toHaveBeenCalled();
+    db.pharmacyCatalogueEdit.findFirst.mockResolvedValue(proposal);
+    await caller(['pharmacy-core'], 'ADMIN', 'user_b').decideCatalogueEdit({
+      editId: proposal.id,
+      decision: 'APPROVE',
+    });
+    await expect(db.medicinePackMrp.create.mock.results[0]!.value).resolves.toMatchObject({
+      packLevelId: 'pack_a',
+      roundingIncrementMinor: 5,
+    });
   });
 
   it('maps the public router prefix to the pharmacy-core entitlement', () => {
@@ -554,12 +628,14 @@ describe('non-drug retail catalogue fields (#718)', () => {
       retailPriceMinor: 12_000,
       retailCategory: 'FMCG',
     });
-    expect(db.medicine.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: 'soap' },
-        data: { retailPriceMinor: 12_000, retailCategory: 'FMCG' },
-      })
-    );
+    expect(db.pharmacyCatalogueEdit.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        medicineId: 'soap',
+        editorId: 'user_a',
+        changes: { retailPriceMinor: 12_000, retailCategory: 'FMCG' },
+      }),
+    });
+    expect(db.medicine.update).not.toHaveBeenCalled();
 
     db.medicine.findFirst.mockResolvedValueOnce({ id: 'syrup', productFamily: 'PHARMACEUTICAL' });
     await expect(
@@ -569,6 +645,187 @@ describe('non-drug retail catalogue fields (#718)', () => {
         retailCategory: null,
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    expect(db.medicine.update).toHaveBeenCalledTimes(1);
+    expect(db.pharmacyCatalogueEdit.create).toHaveBeenCalledTimes(1);
+    expect(db.medicine.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-766 catalogue review separation and immutable evidence', () => {
+  const original = {
+    id: 'assertion',
+    medicineId: 'medicine_a',
+    editorId: 'user_b',
+    supersededBy: [],
+    field: 'productName',
+    source: 'Owner file',
+    sourceType: 'IMPORT',
+    retrievedAt: new Date('2026-01-01'),
+    status: 'UNREVIEWED',
+    confidence: null,
+    assertedValue: {
+      value: 'Original',
+      connectorId: 'manual-file',
+      sourceLabel: 'Fixture',
+      batchId: 'batch',
+      rowSourceKey: 'row',
+      rights: {
+        acquisition: 'Fixture',
+        cache: 'Fixture',
+        redistribution: 'None',
+        deletion: 'Fixture',
+      },
+      blockingIssues: [],
+    },
+  };
+  const reviewInput = {
+    duplicateKey: 'fixture',
+    medicineIds: ['medicine_a'],
+    payload: { assertionIds: ['assertion'] },
+  };
+  it.each(['ACCEPT', 'CORRECT'] as const)(
+    'refuses an editor approving their own %s without solo-owner PIN evidence',
+    async (action) => {
+      db.medicineProvenance.findMany.mockResolvedValue([{ ...original, editorId: 'user_a' }]);
+      await expect(
+        caller().recordReviewDecision(
+          action === 'CORRECT'
+            ? {
+                ...reviewInput,
+                action,
+                payload: {
+                  ...reviewInput.payload,
+                  corrections: [{ assertionId: 'assertion', value: 'Changed' }],
+                },
+              }
+            : { ...reviewInput, action }
+        )
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.medicineProvenance.create).not.toHaveBeenCalled();
+      expect(db.medicineReviewDecision.create).not.toHaveBeenCalled();
+    }
+  );
+  it('appends acceptance by a different reviewer, retaining the source assertion', async () => {
+    db.medicineProvenance.findMany.mockResolvedValue([original]);
+    await caller().recordReviewDecision({ ...reviewInput, action: 'ACCEPT' });
+    expect(db.medicineProvenance.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        supersedesId: 'assertion',
+        status: 'ACCEPTED',
+        editorId: 'user_b',
+        reviewer: 'user_a',
+        assertedValue: original.assertedValue,
+      }),
+    });
+    expect(db.medicineProvenance.updateMany).not.toHaveBeenCalled();
+    expect(db.medicineReviewDecision.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ payload: { assertionIds: ['new'] } }),
+    });
+  });
+  it('holds a reviewer correction as a new edit instead of letting the reviewer approve it', async () => {
+    db.medicineProvenance.findMany.mockResolvedValue([original]);
+    await caller().recordReviewDecision({
+      ...reviewInput,
+      action: 'CORRECT',
+      payload: {
+        assertionIds: ['assertion'],
+        corrections: [{ assertionId: 'assertion', value: 'Changed' }],
+      },
+    });
+    expect(db.medicineProvenance.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        supersedesId: 'assertion',
+        status: 'UNREVIEWED',
+        editorId: 'user_a',
+        reviewer: null,
+        sourceType: 'USER',
+        assertedValue: expect.objectContaining({ value: 'Changed' }),
+      }),
+    });
+    expect(db.medicineProvenance.updateMany).not.toHaveBeenCalled();
+  });
+  it('refuses acceptance when historical editor evidence is unavailable', async () => {
+    db.medicineProvenance.findMany.mockResolvedValue([{ ...original, editorId: null }]);
+    await expect(
+      caller().recordReviewDecision({ ...reviewInput, action: 'ACCEPT' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.medicineProvenance.create).not.toHaveBeenCalled();
+  });
+  it('refuses to review a source assertion already superseded by review evidence', async () => {
+    db.medicineProvenance.findMany.mockResolvedValue([
+      { ...original, supersededBy: [{ id: 'reviewed' }] },
+    ]);
+    await expect(
+      caller().recordReviewDecision({ ...reviewInput, action: 'ACCEPT' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.medicineProvenance.create).not.toHaveBeenCalled();
+  });
+  it.each([
+    [
+      'addAlias',
+      { medicineId: 'medicine_a', type: 'BRAND', value: 'Proposed alias' },
+      'medicineAlias',
+    ],
+    [
+      'createPackLevel',
+      {
+        presentationId: 'presentation_a',
+        versionGroupId: 'group',
+        level: 'BOX',
+        unitsPerParent: 10,
+        effectiveFrom: new Date('2026-01-01'),
+      },
+      'packLevel',
+    ],
+    [
+      'revisePackLevel',
+      {
+        id: 'pack_a',
+        unitsPerParent: 20,
+        effectiveFrom: new Date('2026-01-01'),
+      },
+      'packLevel',
+    ],
+    [
+      'addBarcode',
+      { presentationId: 'presentation_a', type: 'GTIN', code: '123' },
+      'medicineBarcode',
+    ],
+    ['setPackBarcode', { packLevelId: 'pack_a', code: '123' }, 'medicineBarcode'],
+    [
+      'recordPrintedMrp',
+      {
+        packLevelId: 'pack_a',
+        batchReference: 'Fixture',
+        printedMrpMinor: 1000,
+      },
+      'medicinePackMrp',
+    ],
+  ] as const)('holds published %s changes for approval', async (name, input, model) => {
+    db.medicine.findFirst.mockResolvedValue({
+      id: 'medicine_a',
+      saleable: true,
+      updatedAt: new Date('2026-01-01'),
+    });
+    db.presentation.findFirst.mockResolvedValue({
+      id: 'presentation_a',
+      medicineId: 'medicine_a',
+    });
+    db.packLevel.findFirst.mockResolvedValue({
+      id: 'pack_a',
+      presentationId: 'presentation_a',
+      presentation: { medicineId: 'medicine_a' },
+      barcodes: [],
+      effectiveFrom: new Date('2020-01-01'),
+      effectiveTo: null,
+    });
+    const procedure = caller()[name] as (value: typeof input) => Promise<unknown>;
+    await expect(procedure(input)).resolves.toMatchObject({
+      status: 'PENDING',
+    });
+    expect(db.pharmacyCatalogueEdit.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ editorId: 'user_a', operation: name }),
+    });
+    expect(db[model].create).not.toHaveBeenCalled();
+    expect(db.packLevel.update).not.toHaveBeenCalled();
   });
 });
