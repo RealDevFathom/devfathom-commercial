@@ -106,6 +106,39 @@ describe('pure rollup calculations', () => {
     expect(total.deliveryFeeRefunds.toString()).toBe('12');
   });
 
+  it('nets a fully refunded remainder-cent fractional bill back to zero sales and tax (DEV-773)', () => {
+    // 6.66 floor share + 0.67 tax + 0.01 largest-remainder cent, fully refunded.
+    const total = computeReconciledFinancials({
+      bills: [
+        {
+          status: 'SETTLED',
+          subtotal: D('6.66'),
+          deliveryFeeTotal: D('0'),
+          taxTotal: D('0.67'),
+          serviceChargeTotal: D('0'),
+          compTotal: D('0'),
+          discountTotal: D('0'),
+          grandTotal: D('7.34'),
+        },
+      ],
+      tenders: [],
+      refunds: [
+        {
+          amount: D('7.34'),
+          taxRefundAmount: D('0.67'),
+          serviceChargeRefundAmount: D('0'),
+          deliveryFeeRefundAmount: D('0'),
+          roundingRefundAmount: D('0.01'),
+        },
+      ],
+      drawers: [],
+    });
+
+    expect(total.netSales.toFixed(2)).toBe('0.00');
+    expect(total.taxTotal.toFixed(2)).toBe('0.00');
+    expect(total.refundTotal.toFixed(2)).toBe('7.34');
+  });
+
   it('projects deterministic product item mix from snapshot prices and non-voided inputs', () => {
     const result = computeItemMix([
       {

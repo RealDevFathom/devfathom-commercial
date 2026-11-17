@@ -99,6 +99,10 @@ export async function verifyBackOfficeApprover(
       type: request.type,
       secret: request.secret,
       now,
+      approval: {
+        action: `restaurant.backOfficeApproval.${request.capability}`,
+        requestedByStaffProfileId: request.actingStaffProfileId,
+      },
     });
   });
   if (!auth.ok || auth.staffProfileId !== approvingStaffProfileId) return { ok: false };

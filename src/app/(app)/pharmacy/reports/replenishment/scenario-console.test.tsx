@@ -290,3 +290,9 @@ it('uses plain wording instead of statistics jargon', () => {
   expect(text).not.toContain('forecast origin');
   expect(text).not.toContain('USER_SUPPLIED_ASSUMPTIONS');
 });
+
+it('explains why financial planning is unavailable while keeping operational evidence accessible', () => {
+  render(<ScenarioConsole {...props} financial={false} />);
+  expect(screen.getByText(/Planning requires financial report access/)).toBeVisible();
+  expect(screen.getByText(/monetary results are withheld/)).toBeVisible();
+});

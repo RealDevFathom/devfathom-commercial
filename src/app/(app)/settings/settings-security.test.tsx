@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { authenticatorQrPath } from '@/components/ui/authenticator-qr';
 
 type MutationOptions = {
   onSuccess?: (data: never) => void;
@@ -175,6 +176,13 @@ describe('DEV-48 settings security', () => {
     expect(screen.queryByText(/scan the URI/)).not.toBeInTheDocument();
     expect(screen.getByText('SYNTHETICKEY')).toBeVisible();
     expect(screen.getByText('Advanced setup link')).toBeVisible();
+    // DEV-898: the setup link is also offered as a QR code to scan.
+    const qr = screen.getByRole('img', { name: 'QR code to scan with your authenticator app' });
+    expect(qr.querySelector('path')).toHaveAttribute(
+      'd',
+      authenticatorQrPath('otpauth://totp/test').path
+    );
+    expect(steps).toHaveTextContent('scanning the QR code');
     fireEvent.change(screen.getByLabelText('6-digit code from your app'), {
       target: { value: '123456' },
     });

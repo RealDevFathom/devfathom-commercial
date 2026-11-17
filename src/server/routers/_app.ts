@@ -25,6 +25,7 @@ import { resignationsRouter } from './resignations';
 import { passwordResetRouter } from './password-reset';
 import { reviewsRouter } from './reviews';
 import { twoFactorRouter } from './two-factor';
+import { approvalAuthenticatorRouter } from './approval-authenticator';
 import { webhooksRouter } from './webhooks';
 import { emailRouter } from './email';
 import { organizationAdminRouter } from './organization-admin';
@@ -67,6 +68,7 @@ import { pharmacySupplierComplianceRouter } from './pharmacy-supplier-compliance
 import { pharmacyDispensingRouter } from './pharmacy-dispensing';
 import { pharmacySafetyRouter } from './pharmacy-safety';
 import { pharmacySopRouter } from './pharmacy-sop';
+import { pharmacyPrintingRouter } from './pharmacy-printing';
 import { pharmacySalesRouter } from './pharmacy-sales';
 import { pharmacyBranchAssignmentsRouter } from './pharmacy-branch-assignments';
 import { pharmacyReportsRouter } from './pharmacy-reports';
@@ -106,6 +108,7 @@ export const appRouter = router({
   passwordReset: passwordResetRouter,
   reviews: reviewsRouter,
   twoFactor: twoFactorRouter,
+  approvalAuthenticator: approvalAuthenticatorRouter,
   webhooks: webhooksRouter,
   email: emailRouter,
   organizationAdmin: organizationAdminRouter,
@@ -149,6 +152,7 @@ export const appRouter = router({
   pharmacySafety: pharmacySafetyRouter,
   pharmacySop: pharmacySopRouter,
   pharmacySales: pharmacySalesRouter,
+  pharmacyPrinting: pharmacyPrintingRouter,
   pharmacyBranchAssignments: pharmacyBranchAssignmentsRouter,
   pharmacyReports: pharmacyReportsRouter,
   pharmacyCameras: pharmacyCamerasRouter,
