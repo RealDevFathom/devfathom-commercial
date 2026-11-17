@@ -41,14 +41,21 @@ function uiFiles(dir: string): string[] {
   return out;
 }
 
-function userFacingText(file: string, content: string): { line: number; text: string }[] {
-  const source = ts.createSourceFile(
-    file,
-    content,
-    ts.ScriptTarget.Latest,
-    true,
-    file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
-  );
+function parsedSource(
+  file: string,
+  content: string | ts.SourceFile,
+  kind = file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+): ts.SourceFile {
+  return typeof content === 'string'
+    ? ts.createSourceFile(file, content, ts.ScriptTarget.Latest, true, kind)
+    : content;
+}
+
+function userFacingText(
+  file: string,
+  content: string | ts.SourceFile
+): { line: number; text: string }[] {
+  const source = parsedSource(file, content);
   const found: { line: number; text: string }[] = [];
   const visit = (node: ts.Node) => {
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) return;
@@ -78,14 +85,8 @@ const files = [
  * `.toISOString()` rendered as visible JSX content (a child expression, not an
  * attribute such as `dateTime`, `value` or `href`) shows owners a raw ISO stamp.
  */
-function rawIsoInJsx(file: string, content: string): number[] {
-  const source = ts.createSourceFile(
-    file,
-    content,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TSX
-  );
+function rawIsoInJsx(file: string, content: string | ts.SourceFile): number[] {
+  const source = parsedSource(file, content, ts.ScriptKind.TSX);
   const lines: number[] = [];
   // A date-only slice (`.toISOString().slice(0, 10)`) is a calendar date, not a timestamp.
   // Nested JSX is checked on its own visit, so it is not descended into here.
@@ -140,14 +141,8 @@ const sourceCarriesTables = (file: string) =>
  * (`eyebrow="reports:financial"`), or a `.source` / `.permission` field rendered
  * straight from data (`{contract.permission}`) instead of through a plain-words helper.
  */
-function rawKeysInJsx(file: string, content: string): string[] {
-  const source = ts.createSourceFile(
-    file,
-    content,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TSX
-  );
+function rawKeysInJsx(file: string, content: string | ts.SourceFile): string[] {
+  const source = parsedSource(file, content, ts.ScriptKind.TSX);
   const found: string[] = [];
   const at = (node: ts.Node) =>
     source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
@@ -193,9 +188,21 @@ function rawKeysInJsx(file: string, content: string): string[] {
   return found;
 }
 
+// Each file is an immutable fixture for this suite. Share one syntax tree across
+// all three collectors, then retain only their results for the existing checks.
+const analyzedFiles = files.map((file) => {
+  const source = parsedSource(file, readFileSync(file, 'utf8'));
+  return {
+    file,
+    texts: userFacingText(file, source),
+    isoLines: file.endsWith('.tsx') ? rawIsoInJsx(file, source) : [],
+    rawKeys: file.endsWith('.tsx') ? rawKeysInJsx(file, source) : [],
+  };
+});
+
 function offenders(patterns: RegExp[], skip: (text: string) => boolean = () => false): string[] {
-  return files.flatMap((file) =>
-    userFacingText(file, readFileSync(file, 'utf8'))
+  return analyzedFiles.flatMap(({ file, texts }) =>
+    texts
       .filter(({ text }) => !skip(text) && patterns.some((pattern) => pattern.test(text)))
       .map(({ line, text }) => `${path.relative(ROOT, file)}:${line} ${JSON.stringify(text)}`)
   );
@@ -220,23 +227,19 @@ describe('owner UI copy guard', () => {
   });
 
   it('never renders a raw ISO timestamp as visible JSX content', () => {
-    const found = files
-      .filter((file) => file.endsWith('.tsx'))
-      .flatMap((file) =>
-        rawIsoInJsx(file, readFileSync(file, 'utf8')).map(
-          (line) => `${path.relative(ROOT, file)}:${line}`
-        )
+    const found = analyzedFiles
+      .filter(({ file }) => file.endsWith('.tsx'))
+      .flatMap(({ file, isoLines }) =>
+        isoLines.map((line) => `${path.relative(ROOT, file)}:${line}`)
       );
     expect(found).toEqual([]);
   });
 
   it('renders no raw permission key, table name or data source field as a label', () => {
-    const found = files
-      .filter((file) => file.endsWith('.tsx'))
-      .flatMap((file) =>
-        rawKeysInJsx(file, readFileSync(file, 'utf8')).map(
-          (hit) => `${path.relative(ROOT, file)}:${hit}`
-        )
+    const found = analyzedFiles
+      .filter(({ file }) => file.endsWith('.tsx'))
+      .flatMap(({ file, rawKeys }) =>
+        rawKeys.map((hit) => `${path.relative(ROOT, file)}:${hit}`)
       );
     expect(found).toEqual([]);
   });

@@ -99,3 +99,31 @@ describe('#730 counter upsell suggestions', () => {
     expect(onRetry).toHaveBeenCalledOnce();
   });
 });
+
+describe('DEV-41 remaining disabled explanations for branch suggestions', () => {
+  it('explains the branch gate and clears the reason once available', () => {
+    const onChoose = vi.fn();
+    const props = {
+      suggestions: [suggestion],
+      state: 'ready' as const,
+      onChoose,
+      onRetry: vi.fn(),
+    };
+    const view = render(
+      <CounterUpsellList
+        {...props}
+        disabled
+        disabledReason="Select a branch you can access before continuing."
+      />
+    );
+    const button = screen.getByRole('button', { name: 'Find item' });
+    expect(button).toHaveAccessibleDescription('Select a branch you can access before continuing.');
+    fireEvent.click(button);
+    expect(onChoose).not.toHaveBeenCalled();
+    view.rerender(<CounterUpsellList {...props} disabled={false} />);
+    expect(button).toBeEnabled();
+    expect(button).not.toHaveAccessibleDescription();
+    fireEvent.click(button);
+    expect(onChoose).toHaveBeenCalledExactlyOnceWith(suggestion);
+  });
+});
