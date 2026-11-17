@@ -16,7 +16,7 @@ import {
 export type CounterApprovalPin = { staffProfileId: string; pin: string };
 
 export type CounterApprovalKind =
-  'DISCOUNT' | 'FEFO_OVERRIDE' | 'KHATA_OVER_LIMIT' | 'TENDER_DISCARD';
+  'DISCOUNT' | 'FEFO_OVERRIDE' | 'KHATA_OVER_LIMIT' | 'SCANNED_PACK_FEFO' | 'TENDER_DISCARD';
 
 /** Server-derived approval evidence persisted on the sale line / allocation override. */
 export type CounterApproval = {
@@ -39,6 +39,9 @@ export type CounterApproval = {
  * - KHATA_OVER_LIMIT (DEV-290): charging a family Khata past its credit limit is approved at
  *   the cashier's till by a manager or owner (`pharmacy:manage`) with their own PIN, under the
  *   same different-person and solo rules as a discount.
+ * - SCANNED_PACK_FEFO (DEV-843): selling a scanned serialized pack that is not from the
+ *   earliest-expiry lot needs a manager or owner (`pharmacy:manage`) PIN. There is no
+ *   on-duty default; the same different-person and solo rules as a discount apply.
  * - TENDER_DISCARD (DEV-712): discarding a counter payment attempt whose outcome is unknown
  *   is a manager's or owner's decision (`pharmacy:manage`), under the same rules.
  */
@@ -46,6 +49,7 @@ export const COUNTER_APPROVAL_CAPABILITY: Record<CounterApprovalKind, Action> = 
   DISCOUNT: 'pharmacy:manage',
   FEFO_OVERRIDE: 'pharmacy:dispense',
   KHATA_OVER_LIMIT: 'pharmacy:manage',
+  SCANNED_PACK_FEFO: 'pharmacy:manage',
   TENDER_DISCARD: 'pharmacy:manage',
 };
 
@@ -74,6 +78,8 @@ const DENIED_MESSAGE: Record<CounterApprovalKind, string> = {
   FEFO_OVERRIDE: 'A non-FEFO batch needs a pharmacist to approve it with their PIN.',
   KHATA_OVER_LIMIT:
     'Charging over the Khata credit limit needs a manager or owner to approve it with their PIN.',
+  SCANNED_PACK_FEFO:
+    'A scanned pack that is not from the earliest-expiry batch needs a manager or owner to approve it with their PIN.',
   TENDER_DISCARD:
     'Discarding a payment attempt needs a manager or owner to approve it with their PIN.',
 };
