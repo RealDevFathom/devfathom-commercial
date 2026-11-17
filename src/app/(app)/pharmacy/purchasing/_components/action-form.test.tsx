@@ -312,4 +312,34 @@ describe('required-field validation (DEV-520)', () => {
     expect(action).toHaveBeenCalledOnce();
     expect(action.mock.calls[0][0].get('name')).toBe('Acme Distributors');
   });
+
+  it('shows a new required-field error ahead of a retained server rejection', async () => {
+    const action = vi
+      .fn()
+      .mockResolvedValue(
+        '/pharmacy/purchasing/orders?kind=error&outcome=rejected&notice=Duplicate+reference&field=other'
+      );
+    vi.stubGlobal('window', {
+      document,
+      location: { origin: 'https://workspace.test', replace: vi.fn() },
+    });
+    render(
+      <PurchasingActionForm action={action}>
+        <TextField label="Reference" name="reference" notice={null} required />
+        <TextField label="Other" name="other" notice={null} />
+        <button type="submit">Save</button>
+      </PurchasingActionForm>
+    );
+    fireEvent.change(screen.getByLabelText('Reference'), { target: { value: 'PO-1' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('Duplicate reference');
+    fireEvent.change(screen.getByLabelText('Reference'), { target: { value: '' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('Reference is required.');
+    expect(screen.getByLabelText('Reference')).toHaveAttribute('aria-invalid', 'true');
+  });
 });

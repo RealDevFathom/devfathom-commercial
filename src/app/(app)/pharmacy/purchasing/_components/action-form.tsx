@@ -68,7 +68,8 @@ function ActionAttempt({
   const rejected = attempt?.phase === 'rejected' ? attempt : null;
   // A native constraint failure is shown inline just like a server rejection, so the
   // field is marked invalid and linked to its message instead of relying on a tooltip.
-  const notice = rejected ?? clientInvalid;
+  // The newest feedback wins: a retained rejection must not mask a fresh client error.
+  const notice = clientInvalid ?? rejected;
 
   useEffect(() => {
     if (!notice) return;
