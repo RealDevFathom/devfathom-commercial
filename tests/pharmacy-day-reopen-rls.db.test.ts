@@ -71,6 +71,9 @@ describeIfDatabase('pharmacy day reopen PostgreSQL RLS and append-only record', 
       [orgA, orgB]
     );
     for (const org of [orgA, orgB]) {
+      // The close table's forced policy holds for a non-superuser owner too: seed each
+      // tenant's rows under that tenant.
+      await client.query(`SELECT set_config('app.current_organization_id',$1,true)`, [org]);
       for (const key of ['main', 'second']) {
         await client.query(
           `INSERT INTO pharmacy_branches (id,"organizationId",code,name,"addressLine",city,"provinceCode","updatedAt")
