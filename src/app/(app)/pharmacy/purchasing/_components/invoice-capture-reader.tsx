@@ -394,7 +394,7 @@ function ProposalReview({ proposal }: { proposal: InvoiceCaptureProposal }) {
           <table className="w-full min-w-[44rem] text-sm">
             <caption className="sr-only">Lines read from the invoice</caption>
             <thead>
-              <tr className="border-b border-border-subtle text-left font-mono text-[11px] tracking-wide text-text-muted uppercase">
+              <tr className="border-b border-border-subtle text-left font-mono text-xs tracking-wide text-text-muted uppercase">
                 <th className="px-3 py-2 font-medium" scope="col">
                   Line
                 </th>

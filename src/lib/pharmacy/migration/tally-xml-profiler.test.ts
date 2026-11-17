@@ -35,7 +35,7 @@ function envelope(messages: string): string {
 }
 
 function profile(xml: string): ProfileResult {
-  return profileTable(tallyXmlProfiler, flattenTallyXml(xml).table);
+  return profileTable(tallyXmlProfiler, flattenTallyXml(xml).table, { quantityUnit: 'UNITS' });
 }
 
 function bucketsOf(result: ProfileResult): string[] {
@@ -111,13 +111,11 @@ describe('Tally sample XML — acceptance', () => {
   it('maps ledgers to suppliers and customers with positive amounts owed', () => {
     const parties = profile(SAMPLE).rows.slice(3);
 
-    expect(parties.map((row) => [row.supplierName, row.customerName, row.balanceMinor])).toEqual(
-      [
-        ['Muller & Phipps', null, BigInt(1250000)],
-        ['IBL Healthcare', null, BigInt(430050)],
-        [null, 'Al-Shifa Clinic', BigInt(275000)],
-      ]
-    );
+    expect(parties.map((row) => [row.supplierName, row.customerName, row.balanceMinor])).toEqual([
+      ['Muller & Phipps', null, BigInt(1250000)],
+      ['IBL Healthcare', null, BigInt(430050)],
+      [null, 'Al-Shifa Clinic', BigInt(275000)],
+    ]);
     for (const row of parties) {
       expect(row.targetModelKey).toBe(MIGRATION_TARGET_KEYS.PARTY_BALANCE);
     }
@@ -245,7 +243,7 @@ describe('Tally flattening never guesses', () => {
          <OPENINGBALANCE>about 10</OPENINGBALANCE></LEDGER></TALLYMESSAGE>`
     );
     const flattened = flattenTallyXml(xml);
-    const result = profileTable(tallyXmlProfiler, flattened.table);
+    const result = profileTable(tallyXmlProfiler, flattened.table, { quantityUnit: 'UNITS' });
 
     // A supplier in debit is an advance: a negative amount owed to them.
     expect(result.rows[0]!.balanceMinor).toBe(BigInt(-50000));

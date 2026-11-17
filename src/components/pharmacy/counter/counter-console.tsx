@@ -35,6 +35,7 @@ import { CounterCartPanel, CounterLotOverride, type CounterLotOverrideValue } fr
 import { CounterChangeDue } from './counter-change-due';
 import { CounterKeymapLegend } from './counter-keymap-legend';
 import { CounterOpenDrawerStep } from './counter-open-drawer-step';
+import { CounterSaleReadiness, CounterSetupNextStep } from './counter-sale-readiness';
 import { CounterDrawerOperator } from './counter-drawer-operator';
 import { CounterOpenBills, type CounterOpenBill } from './counter-open-bills';
 import { CounterVoidDialog } from './counter-void-dialog';
@@ -101,7 +102,16 @@ import {
   counterErrorMessage,
   counterErrorTone,
   counterPaymentErrorMessage,
+  counterSaleErrorMessage,
 } from '@/lib/pharmacy/counter-messages';
+import {
+  ASK_OWNER_OR_MANAGER,
+  BRANCH_NOT_ASSIGNED,
+  COUNTER_NO_ASSIGNED_BRANCH_MESSAGE,
+  counterSetupAdvice,
+  counterSetupReason,
+  type CounterSetupAdvice,
+} from '@/lib/pharmacy/counter-setup';
 import { CounterSignOut } from './counter-sign-out';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
 import {
@@ -134,6 +144,8 @@ type Notice = {
   tone: 'success' | 'info' | 'warning' | 'danger' | 'neutral';
   message: string;
   inventoryBranchId?: string;
+  /** DEV-860: a sale refused for a setup gap carries its fix link or whom to ask. */
+  setup?: CounterSetupAdvice;
 };
 
 type ReceiptIntent = {
@@ -337,7 +349,7 @@ function counterSelectionPreview(
 }
 
 const LINK_CLASS =
-  'font-semibold text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
+  'inline-flex min-h-11 min-w-11 items-center font-semibold text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
 
 /**
  * DEV-724: why a staged medicine offers no sale unit, in shop words. "No stock
@@ -799,6 +811,27 @@ function ScopedPharmacyCounterConsole({
   const drawerOpen = Boolean(openDrawerSession) && !drawerQuery.isError;
   // DEV-97: someone who takes no payment opens no drawer, and still builds bills.
   const drawerRequired = branchAuthorized && !settlementDenied && !drawerOpen;
+  // DEV-860: the ready-to-sell check lists missing setup before the first scan. The
+  // server answers with reason codes and whether this account may fix them.
+  const saleReadiness = trpc.pharmacySales.saleReadiness.useQuery(
+    { branchId, ...(deviceId ? { deviceId } : {}) },
+    { enabled: Boolean(branchAuthorized && branchId), staleTime: 30_000, retry: false }
+  );
+  // Both answers come from the same administrator rule on the server. The branch list
+  // loads before any scan, so a refusal while readiness is loading or failed still
+  // offers an administrator the setup link.
+  const canFixSetup =
+    saleReadiness.data?.canFixSetup === true || branchesQuery.data?.canFixSetup === true;
+  const refetchSaleReadiness = saleReadiness.refetch;
+  const setupNotice = useCallback(
+    (error: unknown): { setup?: CounterSetupAdvice } => {
+      const reason = counterSetupReason(error);
+      // The drawer has its own step on the counter; nobody else is asked to open it.
+      if (!reason || reason === 'DRAWER_NOT_OPEN') return {};
+      return { setup: counterSetupAdvice(reason, { canFixSetup, branchId }) };
+    },
+    [branchId, canFixSetup]
+  );
   // Read at call time: a scan or shortcut can finish after the drawer closed.
   const drawerRequiredRef = useRef(drawerRequired);
   useEffect(() => {
@@ -1073,26 +1106,28 @@ function ScopedPharmacyCounterConsole({
                   : cart.status === 'OPEN' && balanceMinor !== null && balanceMinor > 0
                     ? 'ready'
                     : 'unavailable';
-  const busy =
+  // #1254: opening the drawer moves no money for this bill, so the bill re-read a
+  // refused payment demands must not lock "Open drawer", the usual fix for that refusal.
+  const drawerBusy =
     pending !== null ||
-    tenderReadRequired ||
     unknownTender ||
     refreshingTenderBill ||
     !recoveryReady ||
     attempt !== null ||
     checkingOutcome;
+  const busy = drawerBusy || tenderReadRequired;
   const lineCount = cart?.lines.length ?? 0;
-  const counterBusyReason = !busy
-    ? null
-    : unknownTender || attempt !== null || checkingOutcome
+  const describeBusy = (billReadRequired: boolean) =>
+    unknownTender || attempt !== null || checkingOutcome
       ? 'Check the payment outcome before changing this bill or branch.'
       : storageError
         ? 'Browser recovery is unavailable. Review payment status before continuing.'
-        : tenderReadRequired
+        : billReadRequired
           ? 'Refresh this bill to verify payment before continuing.'
           : !recoveryReady
             ? 'Checking saved payment details. Please wait.'
             : 'Wait for the current counter action to finish.';
+  const counterBusyReason = busy ? describeBusy(tenderReadRequired) : null;
   const branchControlReason = !branchAuthorized
     ? 'Select a branch you can access before continuing.'
     : counterBusyReason;
@@ -1119,7 +1154,11 @@ function ScopedPharmacyCounterConsole({
     ? settlementAccess.isError
       ? "Couldn't check payment access. Retry payment access before opening the drawer."
       : 'Checking payment access before opening the drawer.'
-    : (counterBusyReason ?? (!drawerStatusKnown ? 'Checking the cash drawer. Please wait.' : null));
+    : drawerBusy
+      ? describeBusy(false)
+      : !drawerStatusKnown
+        ? 'Checking the cash drawer. Please wait.'
+        : null;
 
   // DEV-623: the bill open on this device survives a reload. It is restored once
   // payment recovery has run (an in-flight payment takes precedence), and only
@@ -1714,14 +1753,16 @@ function ScopedPharmacyCounterConsole({
         restoreSearchAfterAdd.current = true;
         focusSearch();
       } catch (error) {
-        const message = messageFrom(error);
+        const message = counterSaleErrorMessage(error);
         setNotice({
           tone: counterErrorTone(error),
           message,
           ...(message === COUNTER_ERROR_MESSAGES.INVALID_ARRANGEMENT
             ? { inventoryBranchId: branchId }
             : {}),
+          ...setupNotice(error),
         });
+        if (counterSetupReason(error)) void refetchSaleReadiness();
       } finally {
         setControlledAuth((value) => ({ ...value, pin: '' }));
         setPending(null);
@@ -1746,10 +1787,12 @@ function ScopedPharmacyCounterConsole({
       preview,
       quantity,
       quantityText,
+      refetchSaleReadiness,
       refreshCart,
       saleId,
       selectedOption,
       setActiveSale,
+      setupNotice,
       utils,
     ]
   );
@@ -1808,12 +1851,28 @@ function ScopedPharmacyCounterConsole({
         }
       } catch (error) {
         if (revision === scannerRevision.current)
-          setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
+          setNotice({
+            tone: counterErrorTone(error),
+            message: messageFrom(error),
+            ...setupNotice(error),
+          });
       } finally {
         if (scannerInFlight.current === scan) scannerInFlight.current = null;
       }
     },
-    [activeRow, addToCart, branchId, busy, preview, query, runSearch, saleUnit, stageRow, utils]
+    [
+      activeRow,
+      addToCart,
+      branchId,
+      busy,
+      preview,
+      query,
+      runSearch,
+      saleUnit,
+      setupNotice,
+      stageRow,
+      utils,
+    ]
   );
 
   const runTransition = useCallback(
@@ -2171,6 +2230,10 @@ function ScopedPharmacyCounterConsole({
           setStorageError(true);
         }
       }
+      // #1254: a refused cash payment may mean this counter's drawer is not open
+      // after all (closed elsewhere); re-read it so the opening-cash step returns.
+      if (outcome.status === 'rejected' && dispatched && input.type === 'CASH')
+        void utils.pharmacySales.drawerStatus.invalidate();
       // An acknowledged write stays accepted even if the follow-up read fails.
       // Unknown writes are never replayed or inferred from aggregate balances.
       if (outcome.status === 'accepted') await refreshTenderBill('accepted');
@@ -2191,6 +2254,7 @@ function ScopedPharmacyCounterConsole({
       saleId,
       tender,
       todayBusinessDate,
+      utils,
     ]
   );
 
@@ -2743,6 +2807,48 @@ function ScopedPharmacyCounterConsole({
     );
   }
 
+  // DEV-860: a member assigned to no active branch is told so, and whom to ask. No
+  // setup link: branch assignments are the owner's or an administrator's to change.
+  if (
+    branches.length === 0 &&
+    branchesQuery.data?.setupReason === BRANCH_NOT_ASSIGNED &&
+    branchesQuery.data.canFixSetup !== true
+  ) {
+    return (
+      <div className="space-y-6">
+        <PageHeader
+          eyebrow="Pharmacy"
+          heading="Counter"
+          description="You are not assigned to a branch yet."
+        />
+        <SectionCard title="Before this counter can sell">
+          <div className="space-y-3" role="alert">
+            <p className="text-sm text-text-body">{COUNTER_NO_ASSIGNED_BRANCH_MESSAGE}</p>
+            <div className="text-sm">
+              <CounterSetupNextStep
+                advice={{
+                  reason: BRANCH_NOT_ASSIGNED,
+                  message: COUNTER_NO_ASSIGNED_BRANCH_MESSAGE,
+                  nextStep: ASK_OWNER_OR_MANAGER,
+                  link: null,
+                }}
+              />
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11"
+              onClick={() => void branchesQuery.refetch()}
+            >
+              Check again
+            </Button>
+          </div>
+        </SectionCard>
+        <SectionCard title="Shortcuts">{keymapLegend}</SectionCard>
+      </div>
+    );
+  }
+
   if (branches.length === 0) {
     return (
       <div className="space-y-6">
@@ -2772,7 +2878,7 @@ function ScopedPharmacyCounterConsole({
                 <span>An active pharmacy branch for this organization.</span>
                 <Link
                   href="/organization"
-                  className="font-semibold text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                  className="inline-flex min-h-11 min-w-11 items-center font-semibold text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                 >
                   Organization administration
                 </Link>
@@ -2784,7 +2890,7 @@ function ScopedPharmacyCounterConsole({
                 <span>A stock location on that branch holding dispensable batches.</span>
                 <Link
                   href="/organization"
-                  className="font-semibold text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                  className="inline-flex min-h-11 min-w-11 items-center font-semibold text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                 >
                   Organization administration
                 </Link>
@@ -2818,6 +2924,29 @@ function ScopedPharmacyCounterConsole({
 
   const scrollableCounter = (
     <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-28 xl:pb-4" data-counter-console="">
+      <nav
+        aria-label="Counter shortcuts"
+        className="sr-only focus-within:not-sr-only focus-within:mb-3"
+      >
+        <a
+          href="#counter-scan-search"
+          onClick={(event) => {
+            if (searchRef.current && !searchRef.current.disabled) {
+              event.preventDefault();
+              searchRef.current.focus();
+            }
+          }}
+          className="inline-flex min-h-11 items-center rounded-md px-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          Skip to scan or search
+        </a>
+        <a
+          href="#counter-bill-total"
+          className="inline-flex min-h-11 items-center rounded-md px-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          Skip to bill total
+        </a>
+      </nav>
       <header className="mb-3 space-y-3">
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight text-text-strong">Counter</h1>
@@ -2874,7 +3003,7 @@ function ScopedPharmacyCounterConsole({
               <StatusPill
                 status={saleId ? 'open' : 'idle'}
                 tone={cart?.receiptNumber ? 'success' : 'neutral'}
-                className="font-mono text-[10px] uppercase"
+                className="font-mono text-xs uppercase"
                 label={
                   cart?.receiptNumber
                     ? `Receipt ${cart.receiptNumber}`
@@ -3008,9 +3137,22 @@ function ScopedPharmacyCounterConsole({
           ) : null}
         </div>
       )}
+      {branchAuthorized && !saleId && saleReadiness.data ? (
+        <CounterSaleReadiness
+          readiness={saleReadiness.data}
+          branchId={branchId}
+          checking={saleReadiness.isFetching}
+          onCheckAgain={() => void refetchSaleReadiness()}
+        />
+      ) : null}
       <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="min-w-0 space-y-3">
-          <SectionCard className="overflow-hidden rounded-xl p-0" aria-label="Counter bill">
+          <SectionCard
+            id="counter-scan-search"
+            tabIndex={-1}
+            className="overflow-hidden rounded-xl p-0 focus-visible:outline-2 focus-visible:outline-ring"
+            aria-label="Counter bill"
+          >
             <div className="border-b border-border-subtle p-4">
               <h2 className="mb-2 text-sm font-semibold text-text-strong">Scan or search</h2>
               {notice ? (
@@ -3030,6 +3172,7 @@ function ScopedPharmacyCounterConsole({
                   <StatusPill status={notice.tone} tone={notice.tone} />
                   <div className="min-w-0 space-y-2 text-sm">
                     <p className="text-text-body">{notice.message}</p>
+                    {notice.setup ? <CounterSetupNextStep advice={notice.setup} /> : null}
                     {notice.inventoryBranchId ? (
                       <Link
                         href={`/pharmacy/inventory?branch=${encodeURIComponent(notice.inventoryBranchId)}`}
@@ -3058,7 +3201,7 @@ function ScopedPharmacyCounterConsole({
 
               {drawerRequired ? (
                 <CounterOpenDrawerStep
-                  disabled={busy || !drawerStatusKnown || !canSettlePayments}
+                  disabled={drawerBusy || !drawerStatusKnown || !canSettlePayments}
                   disabledReason={drawerDisabledReason}
                   statusError={drawerQuery.isError}
                   deviceUnavailable={deviceUnavailable}
@@ -3082,6 +3225,8 @@ function ScopedPharmacyCounterConsole({
                     }),
                   }}
                   onOpen={(openingFloatMinor, operatingCashierId) => {
+                    // #1254: a refused payment left this bill needing a re-read.
+                    const rereadBill = tenderReadRequired;
                     setPending('drawer');
                     setNotice(null);
                     openDrawer
@@ -3092,12 +3237,15 @@ function ScopedPharmacyCounterConsole({
                         openingFloatMinor,
                         ...(operatingCashierId ? { operatingCashierId } : {}),
                       })
-                      .then(() =>
+                      .then(() => {
                         setNotice({
                           tone: 'success',
                           message: 'Cash drawer opened for this counter.',
-                        })
-                      )
+                        });
+                        // #1254: re-read the bill, as "Refresh bill" does, so the counter
+                        // is ready to take the refused payment again.
+                        if (rereadBill) void refreshTenderBill();
+                      })
                       .catch((error: unknown) =>
                         setNotice({ tone: 'warning', message: counterPaymentErrorMessage(error) })
                       )
@@ -3262,7 +3410,7 @@ function ScopedPharmacyCounterConsole({
               >
                 <div className="grid items-center gap-4 lg:grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)_auto]">
                   <div className="min-w-0">
-                    <h2 className="font-mono text-[10px] uppercase tracking-widest text-text-muted">
+                    <h2 className="font-mono text-xs uppercase tracking-widest text-text-muted">
                       Next line
                     </h2>
                     <p className="mt-1 text-sm font-semibold text-text-strong">
@@ -3446,6 +3594,7 @@ function ScopedPharmacyCounterConsole({
         </div>
         <aside
           id="counter-bill-total"
+          tabIndex={-1}
           aria-label="Bill total"
           className="min-w-0 xl:sticky xl:top-0 [&_button]:rounded-[var(--radius-sm)]"
         >
@@ -3563,7 +3712,7 @@ function ScopedPharmacyCounterConsole({
                 onClick={() => void runTransition('hold')}
               >
                 Hold{' '}
-                <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-[10px]">
+                <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs">
                   {formatBinding(keymap.bindings.holdSale)}
                 </kbd>
               </Button>
@@ -3575,7 +3724,7 @@ function ScopedPharmacyCounterConsole({
                 onClick={() => void runTransition('resume')}
               >
                 Resume{' '}
-                <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-[10px]">
+                <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs">
                   {formatBinding(keymap.bindings.resumeSale)}
                 </kbd>
               </Button>
@@ -3627,7 +3776,7 @@ function ScopedPharmacyCounterConsole({
         </div>
         <Button
           variant="outline"
-          className="h-13 rounded-[var(--radius-sm)]"
+          className="h-13 min-w-11 rounded-[var(--radius-sm)]"
           onClick={() =>
             document.getElementById('counter-bill-total')?.scrollIntoView({ block: 'start' })
           }
@@ -3831,7 +3980,7 @@ function ScopedPharmacyCounterConsole({
             <Button
               type="button"
               variant="outline"
-              className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+              className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
               disabled={busy || !patient || !saleId}
               onClick={() => void attachCustomer()}
             >
@@ -3873,11 +4022,11 @@ function ScopedPharmacyCounterConsole({
                   disabled={busy || balanceMinor === null || balanceMinor <= 0}
                   onChange={(event) => setRedeemPoints(Number(event.target.value))}
                   placeholder="Points"
-                  className="h-8"
+                  className="h-11"
                 />
                 <Button
                   type="button"
-                  className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                  className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
                   disabled={busy || redeemPoints <= 0 || balanceMinor === null || balanceMinor <= 0}
                   onClick={() => void redeemCustomerPoints()}
                 >
@@ -4111,7 +4260,7 @@ function CounterOverlay({
           initialFocus={initialFocus}
           finalFocus={finalFocus}
           onKeyDown={onKeyDown}
-          className={`pos-calm fixed z-50 flex flex-col overflow-hidden border border-border-subtle bg-surface-card text-text-strong outline-none [&_:is([data-slot=button],[data-slot=dialog-close]):not(.rounded-full)]:rounded-[var(--radius-sm)] ${drawer ? 'inset-y-0 right-0 w-full lg:max-w-[30rem]' : 'top-1/2 left-1/2 max-h-[90dvh] w-[calc(100%-2rem)] max-w-[38.75rem] -translate-x-1/2 -translate-y-1/2 rounded-xl'}`}
+          className={`pharmacy-workspace pos-calm fixed z-50 flex flex-col overflow-hidden border border-border-subtle bg-surface-card text-text-strong outline-none [&_:is([data-slot=button],[data-slot=dialog-close]):not(.rounded-full)]:rounded-[var(--radius-sm)] ${drawer ? 'inset-y-0 right-0 w-full lg:max-w-[30rem]' : 'top-1/2 left-1/2 max-h-[90dvh] w-[calc(100%-2rem)] max-w-[38.75rem] -translate-x-1/2 -translate-y-1/2 rounded-xl'}`}
         >
           <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle p-5">
             <DialogTitle className="text-lg font-semibold">{title}</DialogTitle>

@@ -313,10 +313,78 @@ type AddSaleLineInput = {
   approvedByUserId?: string;
   approvalPolicy?: string;
   override?: { inventoryLotId: string; reason: string; approvalPolicy: string };
-  /** DEV-92: the GS1 DataMatrix scanned off the one serialized pack this line sells. */
-  scannedPack?: { payload: string };
+  /**
+   * DEV-92: the GS1 DataMatrix scanned off the one serialized pack this line sells.
+   * DEV-843: `fefoApprovalPolicy` is set only by the server from a verified manager or owner
+   * PIN; without it a pack whose lot is not the earliest-expiry one is refused.
+   */
+  scannedPack?: { payload: string; fefoApprovalPolicy?: string };
   idempotencyKey: string;
 };
+
+/** Take the organization-wide request lock before any prescription, register or stock lock.
+ * Multi-line offline commands hold all their line keys before preparing stock. */
+export async function lockSaleLineKey(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId'>,
+  idempotencyKey: string
+) {
+  await db.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(
+    hashtextextended(${scope.organizationId + ':sale-line:' + idempotencyKey}, 0))`;
+}
+
+/** Read committed line evidence without dispensing or consuming a voucher again. */
+export async function replaySaleLine(db: ScopedDb, scope: LedgerScope, input: AddSaleLineInput) {
+  await lockSaleLineKey(db, scope, input.idempotencyKey);
+  const previous = await db.pharmacySaleLine.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      idempotencyKey: input.idempotencyKey,
+    },
+    include: { allocations: { orderBy: { stockMovementId: 'asc' } } },
+  });
+  if (!previous) return null;
+  // Saved lines are never re-priced, so an omitted manual discount means none. Only a
+  // voucher or automatic promotion priced the line itself, and either needs no manual discount.
+  const manualDiscountRequested = Boolean(input.discountKind || input.discountMinor);
+  const discountChanged = previous.voucherId
+    ? false
+    : previous.promotionId
+      ? manualDiscountRequested
+      : previous.discountKind !== (input.discountKind ?? null) ||
+        previous.discountMinor !== (input.discountMinor ?? 0);
+  // Never return another branch's line or let a key silently change its target or quantity.
+  if (
+    previous.branchId !== scope.branchId ||
+    previous.saleId !== input.saleId ||
+    previous.medicineId !== input.medicineId ||
+    previous.presentationId !== input.presentationId ||
+    previous.packLevelId !== input.packLevelId ||
+    previous.saleUnit !== input.saleUnit ||
+    previous.quantity !== input.quantity ||
+    previous.canonicalUnitsPerSaleUnit !== input.canonicalUnitsPerSaleUnit ||
+    previous.voucherId !== (input.voucherId ?? null) ||
+    discountChanged
+  )
+    throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+  const { allocations, ...line } = previous;
+  return {
+    line,
+    allocation: {
+      allocations: allocations.map((part) => ({
+        inventoryLotId: part.inventoryLotId,
+        stockLocationId: part.stockLocationId,
+        units: part.canonicalUnits,
+      })),
+      movementIds: allocations.map((part) => part.stockMovementId),
+      recommendedLotId: null,
+      blocked: [],
+      overrideId: null,
+      discrepancyId: null,
+    },
+    replayed: true,
+  };
+}
 
 /**
  * DEV-830 (F05): the canonical units in one sale unit come from the stored medicine,
@@ -520,6 +588,8 @@ async function addSaleLineWithAllocation(
   await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
     name: 'pharmacy.sale.dispense',
   });
+  const replay = !reservation ? await replaySaleLine(db, scope, input) : null;
+  if (replay) return replay;
   const sale = await saleInScope(db, scope, input.saleId);
   if (sale.status !== 'OPEN') throw new PharmacySaleError('INVALID_STATE');
   // Lock the sale row before allocating stock. At PostgreSQL READ COMMITTED,
@@ -573,10 +643,15 @@ async function addSaleLineWithAllocation(
     });
     if (override && override.inventoryLotId !== pack.inventoryLotId)
       throw new PharmacySerializedPackError('SERIAL_LOT_UNAVAILABLE');
-    override ??= {
+    // The pack's own evidence is always what is recorded: its serial, and the manager or owner
+    // approval that let it leave FEFO order. A batch override's approval does not stand in.
+    const packApproval = input.scannedPack.fefoApprovalPolicy;
+    override = {
       inventoryLotId: pack.inventoryLotId,
       reason: serializedPackOverrideReason(pack.serialNumber),
-      approvalPolicy: SERIALIZED_PACK_APPROVAL_POLICY,
+      approvalPolicy: packApproval
+        ? `${SERIALIZED_PACK_APPROVAL_POLICY}:${packApproval}`
+        : SERIALIZED_PACK_APPROVAL_POLICY,
     };
   }
   // DEV-27: a voucher is a stored record. Its eligible-category allowlist is
@@ -613,6 +688,11 @@ async function addSaleLineWithAllocation(
       )
     )
       throw new PharmacySerializedPackError('SERIAL_LOT_UNAVAILABLE');
+    // DEV-843: a scanned pack is not an approval. When its lot is not FEFO's choice the
+    // allocation records an override, and that needs a verified manager or owner PIN.
+    // The sale transaction rolls back everything allocated above.
+    if (allocation.overrideId && !input.scannedPack?.fefoApprovalPolicy)
+      throw new PharmacySerializedPackError('SERIAL_FEFO_APPROVAL_REQUIRED');
   }
   // MED-08: price each lot with the rounding increment of its own
   // (pack level, batch) MRP rule, exactly as the counter quoted it.
@@ -757,7 +837,7 @@ async function addSaleLineWithAllocation(
         }
       : {}),
   });
-  return { line, allocation };
+  return { line, allocation, replayed: false };
 }
 
 /**

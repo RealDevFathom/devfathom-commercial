@@ -132,7 +132,7 @@ export function CounterUnitToggle({
                   ) : null}
                 </span>
                 <span
-                  className={`font-mono text-[0.625rem] tracking-wide ${active ? 'text-primary-foreground' : 'text-text-muted'}`}
+                  className={`font-mono text-xs tracking-wide ${active ? 'text-primary-foreground' : 'text-text-muted'}`}
                 >
                   {option.canonicalUnitsPerSaleUnit} units{chord ? ` · ${chord}` : ''}
                 </span>
@@ -219,13 +219,13 @@ export function CounterUnitToggle({
           }
         >
           <div>
-            <dt className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
+            <dt className="font-mono text-xs tracking-wide text-text-muted uppercase">
               Units
             </dt>
             <dd className="font-mono tabular-nums text-text-strong">{preview.canonicalUnits}</dd>
           </div>
           <div>
-            <dt className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
+            <dt className="font-mono text-xs tracking-wide text-text-muted uppercase">
               Unit price
             </dt>
             <dd className="font-mono tabular-nums text-text-strong">
@@ -233,7 +233,7 @@ export function CounterUnitToggle({
             </dd>
           </div>
           <div className={inline ? 'sr-only' : undefined}>
-            <dt className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
+            <dt className="font-mono text-xs tracking-wide text-text-muted uppercase">
               Pro-rata ceiling
             </dt>
             <dd className="font-mono tabular-nums text-text-muted">
@@ -241,7 +241,7 @@ export function CounterUnitToggle({
             </dd>
           </div>
           <div>
-            <dt className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
+            <dt className="font-mono text-xs tracking-wide text-text-muted uppercase">
               Line total
             </dt>
             <dd className="font-mono tabular-nums text-text-strong">

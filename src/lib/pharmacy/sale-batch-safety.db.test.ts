@@ -162,6 +162,7 @@ async function cart(label: string) {
     // The sale holds this test's lot and nothing else.
     expect(line.allocations.map((allocation) => allocation.inventoryLotId)).toEqual([lot.id]);
     return {
+      line,
       batchId: batch.id,
       lotId: lot.id,
       saleId: sale.id,
@@ -399,3 +400,55 @@ async function waitForLockWaiter() {
   }
   throw new Error('The tender never waited on the recalled batch row.');
 }
+
+describeDatabase('[DEF-10] add-line idempotency on PostgreSQL (DEV-874)', () => {
+  const retryInput = (line: Awaited<ReturnType<typeof cart>>['line']) => ({
+    saleId: line.saleId,
+    medicineId: line.medicineId,
+    presentationId: line.presentationId,
+    packLevelId: line.packLevelId,
+    saleUnit: line.saleUnit,
+    quantity: line.quantity,
+    canonicalUnitsPerSaleUnit: line.canonicalUnitsPerSaleUnit,
+    idempotencyKey: line.idempotencyKey,
+  });
+
+  it('replays a dropped response without another line, movement or event', async () => {
+    const f = await cart('replay');
+    const before = await moneyAndStock(f.saleId, f.lotId);
+    const result = await tenant((db) => sales.addSaleLine(db, scope, retryInput(f.line)));
+    expect(result).toMatchObject({
+      line: { id: f.line.id },
+      replayed: true,
+      allocation: { movementIds: f.line.allocations.map((part) => part.stockMovementId) },
+    });
+    expect(await moneyAndStock(f.saleId, f.lotId)).toEqual(before);
+    await tenant(async (db) => {
+      expect(await db.pharmacySaleLine.count({ where: { saleId: f.saleId } })).toBe(1);
+      expect(
+        await db.pharmacySaleEvent.count({ where: { saleId: f.saleId, kind: 'LINE_ADDED' } })
+      ).toBe(1);
+    });
+  });
+
+  it('serializes two first requests with the same key and allocates once', async () => {
+    const f = await cart('concurrent-replay');
+    const input = { ...retryInput(f.line), idempotencyKey: randomUUID() };
+    const before = await moneyAndStock(f.saleId, f.lotId);
+    const results = await Promise.all([
+      tenant((db) => sales.addSaleLine(db, scope, input)),
+      tenant((db) => sales.addSaleLine(db, scope, input)),
+    ]);
+    expect(results[0].line.id).toBe(results[1].line.id);
+    expect(results.map((result) => result.replayed).sort()).toEqual([false, true]);
+    const after = await moneyAndStock(f.saleId, f.lotId);
+    expect(after.movements).toBe(before.movements + 1);
+    expect(after.balances[0]!.onHandUnits).toBe(before.balances[0]!.onHandUnits - 10);
+    await tenant(async (db) => {
+      expect(await db.pharmacySaleLine.count({ where: { saleId: f.saleId } })).toBe(2);
+      expect(
+        await db.pharmacySaleEvent.count({ where: { saleId: f.saleId, kind: 'LINE_ADDED' } })
+      ).toBe(2);
+    });
+  });
+});
