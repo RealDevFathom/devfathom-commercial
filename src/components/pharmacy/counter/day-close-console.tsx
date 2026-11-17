@@ -15,6 +15,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { CashCloseCheckPanel } from './cash-close-check-panel';
+import { ShiftHandoverPanel } from './shift-handover-panel';
 import { formatMinor, type CounterReceiptLocale } from '@/lib/pharmacy/counter-receipt';
 import { printCounterBrowserZReport } from '@/lib/pharmacy/counter-browser-print';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
@@ -630,6 +631,21 @@ function DayCloseForm({
           </form>
         )}
       </SectionCard>
+      {ownerView && (report || data.drawers.some((drawer) => drawer.status === 'CLOSED')) && (
+        <ShiftHandoverPanel
+          branchId={branchId}
+          drawers={data.drawers.flatMap((drawer, index) =>
+            report || drawer.status === 'CLOSED'
+              ? [
+                  {
+                    id: drawer.id,
+                    label: `Drawer ${index + 1} · ${drawerOpenedLabel(drawer, data.timezone)}`,
+                  },
+                ]
+              : []
+          )}
+        />
+      )}
       {/* #728: once the day is closed, the owner sees the read-only anomaly check. */}
       {report && ownerView && <CashCloseCheckPanel branchId={branchId} date={date} />}
     </div>
