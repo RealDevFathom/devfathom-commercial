@@ -84,7 +84,7 @@ const rule = <T extends z.ZodType>(values: T) =>
           message: 'A confirmed field cannot record outstanding review. Keep it provisional.',
         });
       }
-      if (!hasValues(field.values)) {
+      if (!hasValues((field as RuleFieldShape).values)) {
         context.addIssue({
           code: 'custom',
           path: ['values'],
