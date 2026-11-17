@@ -4,6 +4,13 @@ import { readDiscountSuggestions, recordCompetitorPrice } from './smart-discount
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'manager-a' };
 const NOW = new Date('2026-11-15T00:00:00Z');
 
+type Lot = {
+  packLevelId: string;
+  printedMrpMinor: number;
+  unitCostMinor: number;
+  unitsPerPack: number;
+};
+
 function suggestionDb() {
   return {
     pharmacyBranch: { findFirst: vi.fn(async () => ({ discountPolicy: { minMarginBps: 2_000 } })) },
@@ -19,16 +26,24 @@ function suggestionDb() {
       ]),
     },
     pharmacyInventoryLot: {
-      findMany: vi.fn(async () => [
-        { packLevelId: 'pack-box', printedMrpMinor: 1_200, unitCostMinor: 80, unitsPerPack: 10 },
-        // A different pack size: never mixed into the box's cap or floor.
-        { packLevelId: 'pack-strip', printedMrpMinor: 100, unitCostMinor: 999, unitsPerPack: 1 },
-      ]),
+      findMany: vi.fn<(args: { where: Record<string, unknown>; take?: number }) => Promise<Lot[]>>(
+        async () => [
+          { packLevelId: 'pack-box', printedMrpMinor: 1_200, unitCostMinor: 80, unitsPerPack: 10 },
+          // A different pack size: never mixed into the box's cap or floor.
+          { packLevelId: 'pack-strip', printedMrpMinor: 100, unitCostMinor: 999, unitsPerPack: 1 },
+        ]
+      ),
     },
     pharmacyCompetitorPriceObservation: {
-      findFirst: vi.fn(async () => ({ observedPriceMinor: 1_100 })),
+      findFirst: vi.fn<
+        (args: { where: Record<string, unknown> }) => Promise<{ observedPriceMinor: number }>
+      >(async () => ({ observedPriceMinor: 1_100 })),
     },
-    pharmacySaleLine: { findMany: vi.fn(async () => []) },
+    pharmacySaleLine: {
+      findMany: vi.fn<(args: { where: Record<string, unknown> }) => Promise<never[]>>(
+        async () => []
+      ),
+    },
   };
 }
 
@@ -40,11 +55,10 @@ describe('DEV-66 discount suggestions read', () => {
       now: NOW,
     });
 
-    const lotWhere = (
-      db.pharmacyInventoryLot.findMany.mock.calls[0] as unknown as [
-        { where: Record<string, unknown> },
-      ]
-    )[0].where;
+    const lotArgs = db.pharmacyInventoryLot.findMany.mock.calls[0]![0];
+    const lotWhere = lotArgs.where;
+    // Bounds aggregate every eligible lot, never a truncated sample.
+    expect(lotArgs).not.toHaveProperty('take');
     expect(lotWhere).toMatchObject({
       organizationId: 'org-a',
       branchId: 'branch-a',
@@ -52,11 +66,12 @@ describe('DEV-66 discount suggestions read', () => {
       batch: { state: 'ACTIVE', expiresAt: { gt: NOW }, medicine: { saleable: true } },
       balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
     });
-    const competitorWhere = (
-      db.pharmacyCompetitorPriceObservation.findFirst.mock.calls[0] as unknown as [
-        { where: Record<string, unknown> },
-      ]
-    )[0].where;
+    const competitorWhere = db.pharmacyCompetitorPriceObservation.findFirst.mock.calls[0]![0].where;
+    // Demand evidence is restricted to the selected pack as well.
+    expect(db.pharmacySaleLine.findMany.mock.calls[0]![0].where).toMatchObject({
+      medicineId: 'medicine-a',
+      packLevelId: 'pack-box',
+    });
     expect(competitorWhere).toMatchObject({ medicineId: 'medicine-a', packLevelId: 'pack-box' });
 
     expect(row).toMatchObject({
