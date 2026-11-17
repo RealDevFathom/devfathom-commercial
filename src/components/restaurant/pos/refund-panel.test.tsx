@@ -312,4 +312,6 @@ it('submits the optional MANUAL machine reference with the refund and its retry 
     .mock.calls.find(([, options]) => options?.method === 'POST')?.[1];
   expect(options?.body).toMatchObject({ cardMachineRefundReference: 'BANK-REFUND-123' });
   expect(options?.intent).toContain('BANK-REFUND-123');
+  // A later partial refund of the same tender must not silently reuse the reference.
+  expect(screen.getByLabelText('Card machine refund reference (optional)')).toHaveValue('');
 });

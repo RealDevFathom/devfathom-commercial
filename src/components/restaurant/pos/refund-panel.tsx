@@ -258,6 +258,7 @@ export function RefundPanel({
         })}`,
       });
       setManagerSecret('');
+      setCardMachineRefundReference('');
       setResult(receipt);
       setState('ready');
       await load();
