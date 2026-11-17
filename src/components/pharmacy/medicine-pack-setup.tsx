@@ -35,8 +35,12 @@ export function MedicinePackSetup() {
   );
   const presentation = medicine.data?.presentations.find((item) => item.id === presentationId);
   const create = trpc.pharmacyMedicine.createPackLevel.useMutation({
-    onSuccess: async () => {
-      setMessage('Pack created. Return to Pharmacy setup to continue with opening stock.');
+    onSuccess: async (result) => {
+      setMessage(
+        'status' in result
+          ? 'Pack submitted for catalogue approval.'
+          : 'Pack created. Return to Pharmacy setup to continue with opening stock.'
+      );
       setLevel('');
       setUnits('');
       await utils.pharmacyMedicine.get.invalidate({ id: medicineId });
@@ -336,8 +340,11 @@ function PackBarcodeEditor({
   const [message, setMessage] = useState('');
   const save = trpc.pharmacyMedicine.setPackBarcode.useMutation({
     onSuccess: async (row) => {
-      setCode(row.code);
-      setMessage(`Barcode ${row.code} saved on this pack.`);
+      if ('status' in row) setMessage('Barcode submitted for catalogue approval.');
+      else {
+        setCode(row.code);
+        setMessage(`Barcode ${row.code} saved on this pack.`);
+      }
       await onSaved();
     },
   });

@@ -715,7 +715,7 @@ export default async function PharmacyReceivingPage({
                 <p className="mt-1 text-sm text-text-body">{exception.detail}</p>
                 <p className="mt-1 text-xs text-text-muted">
                   {exception.goodsReceipt.reference} · {exception.goodsReceipt.supplier.name} ·
-                  raised {dateTime(exception.raisedAt)}
+                  raised {dateTime(exception.raisedAt, ctx.organization?.timezone)}
                   {exception.expectedUnits != null
                     ? ` · expected ${exception.expectedUnits} units, observed ${exception.observedUnits ?? 0}`
                     : ''}
@@ -725,7 +725,8 @@ export default async function PharmacyReceivingPage({
                 </p>
                 {exception.status === 'RESOLVED' ? (
                   <p className="mt-2 text-xs text-text-muted">
-                    Resolved {dateTime(exception.resolvedAt)} · {exception.resolutionNote}
+                    Resolved {dateTime(exception.resolvedAt, ctx.organization?.timezone)} ·{' '}
+                    {exception.resolutionNote}
                   </p>
                 ) : (
                   <PurchasingActionForm
@@ -787,8 +788,8 @@ export default async function PharmacyReceivingPage({
                   </span>
                 </div>
                 <p className="mt-1 text-xs text-text-muted">
-                  Raised {dateTime(draft.raisedAt)} from the match. Amounts come from the recorded
-                  bill and order figures and cannot be edited.
+                  Raised {dateTime(draft.raisedAt, ctx.organization?.timezone)} from the match.
+                  Amounts come from the recorded bill and order figures and cannot be edited.
                 </p>
                 <div className="mt-3 overflow-x-auto">
                   <table className="w-full min-w-[32rem] text-sm">
@@ -1375,6 +1376,7 @@ export default async function PharmacyReceivingPage({
             branchId={branchId}
             lots={lots}
             notice={notice}
+            timeZone={ctx.organization?.timezone}
             onPost={postReceipt}
             onReverse={reverseReceipt}
             receipt={selectedReceipt}
@@ -1685,6 +1687,7 @@ function ReceiptDetail({
   lots,
   branchId,
   notice,
+  timeZone,
   onPost,
   onReverse,
   witnesses,
@@ -1699,6 +1702,7 @@ function ReceiptDetail({
   }[];
   branchId: string;
   notice: Notice | null;
+  timeZone?: string | null;
   onPost: (form: FormData) => Promise<string>;
   onReverse: (form: FormData) => Promise<string>;
   witnesses: ReadonlyArray<{ id: string; name: string; self?: boolean }>;
@@ -1728,7 +1732,7 @@ function ReceiptDetail({
             <span className="font-medium">Direct purchase.</span> {receipt.bypassReason}
           </p>
           <p className="mt-1 text-xs text-text-muted">
-            Bypass approved {dateTime(receipt.bypassApprovedAt)}. Recorded permanently.
+            Bypass approved {dateTime(receipt.bypassApprovedAt, timeZone)}. Recorded permanently.
           </p>
         </div>
       ) : null}
