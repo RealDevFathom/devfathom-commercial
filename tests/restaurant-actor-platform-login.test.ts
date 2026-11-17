@@ -7,7 +7,7 @@ vi.mock('./e2e/fixtures/restaurant-platform-auth', () => ({ signInPlatformActor 
 import { actorFixture, signInAs } from './e2e/fixtures/restaurant-actor-accessibility';
 
 it('routes the restaurant SuperAdmin through MFA before awaiting the authenticated destination', async () => {
-  const waitForURL = vi.fn(async () => undefined);
+  const waitForURL = vi.fn(async (_url: string | RegExp, _options?: unknown) => undefined);
   const page = {
     goto: vi.fn(async () => undefined),
     getByLabel: () => ({ fill: vi.fn() }),
@@ -20,10 +20,12 @@ it('routes the restaurant SuperAdmin through MFA before awaiting the authenticat
     waitForLoadState: vi.fn(),
     url: () => 'http://admin.localhost:4319/platform',
   } as unknown as Page;
-  signInPlatformActor.mockImplementation(async () => {
+  signInPlatformActor.mockImplementation(async (_page: Page, _email: string) => {
     expect(waitForURL).not.toHaveBeenCalled();
   });
   expect(await signInAs(page, 'superAdmin')).toBe('http://admin.localhost:4319');
   expect(signInPlatformActor).toHaveBeenCalledExactlyOnceWith(page, actorFixture.superAdmin.email);
   expect(waitForURL).toHaveBeenCalled();
+});
+();
 });
