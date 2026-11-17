@@ -438,11 +438,30 @@ test('publishes bridge routing and persists a routed KOT job with the fired item
   expect(opened.status()).toBe(201);
   ({ orderId, orderNumber } = (await opened.json()) as { orderId: string; orderNumber: number });
 
+  // Required modifiers remain server-enforced; the valid fixture below must
+  // satisfy Heat rather than relaxing the menu rule to reach printing.
+  const missingHeat = await request.post('/api/restaurant/orders/add-item', {
+    headers: {
+      ...pos.headers,
+      'Idempotency-Key': e2eIdempotencyKey('software-receipt-missing-heat', orderNumber),
+    },
+    data: { orderId, menuItemId: menuItem!.id, quantity: 1 },
+  });
+  expect(missingHeat.status()).toBe(400);
+  expect(await missingHeat.json()).toMatchObject({
+    error: 'Modifier group Heat requires at least 1 and at most 1 selections; received 0.',
+  });
+
   await post(
     request,
     pos,
     '/api/restaurant/orders/add-item',
-    { orderId, menuItemId: menuItem!.id, quantity: 1 },
+    {
+      orderId,
+      menuItemId: menuItem!.id,
+      quantity: 1,
+      modifierOptionIds: [fixture.modifier.optionId],
+    },
     e2eIdempotencyKey('software-receipt-add-item', orderNumber)
   );
   await post(
@@ -616,7 +635,14 @@ test('a receipt dispatch persists the settled snapshot and dedupes on the docume
     request,
     pos,
     '/api/restaurant/checkout/tender',
-    { billId, tender: { type: 'CARD', amount: summary.derivedOrderTotal } },
+    {
+      billId,
+      tender: {
+        type: 'CARD',
+        amount: summary.derivedOrderTotal,
+        manualConfirmation: { approvalCode: 'E2E739', reference: '4242' },
+      },
+    },
     e2eIdempotencyKey('software-receipt-tender', orderNumber)
   );
 
@@ -702,7 +728,12 @@ test('a receipt dispatch persists the settled snapshot and dedupes on the docume
     request,
     asciiPos,
     '/api/restaurant/orders/add-item',
-    { orderId: asciiOrderId, menuItemId: asciiMenuItem!.id, quantity: 1 },
+    {
+      orderId: asciiOrderId,
+      menuItemId: asciiMenuItem!.id,
+      quantity: 1,
+      modifierOptionIds: [fixture.modifier.optionId],
+    },
     e2eIdempotencyKey('software-receipt-ascii-add-item', asciiOrderNumber)
   );
   await post(
@@ -733,7 +764,14 @@ test('a receipt dispatch persists the settled snapshot and dedupes on the docume
     request,
     asciiPos,
     '/api/restaurant/checkout/tender',
-    { billId: asciiBillId, tender: { type: 'CARD', amount: asciiSummary.derivedOrderTotal } },
+    {
+      billId: asciiBillId,
+      tender: {
+        type: 'CARD',
+        amount: asciiSummary.derivedOrderTotal,
+        manualConfirmation: { approvalCode: 'E2E739', reference: '4242' },
+      },
+    },
     e2eIdempotencyKey('software-receipt-ascii-tender', asciiOrderNumber)
   );
 

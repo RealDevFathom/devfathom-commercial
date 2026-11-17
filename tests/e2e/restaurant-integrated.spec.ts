@@ -195,6 +195,9 @@ test('WHA-1600: POS earns, redeems on the next sale, and reverses earned points 
         await expect(checkout.getByLabel('Amount', { exact: true })).toHaveValue('13.90');
       }
       await checkout.getByLabel('Tender type').selectOption('CARD');
+      // Synthetic slip facts exercise the current manual-confirmation guard.
+      await checkout.getByLabel('Approval code').fill('E2E739');
+      await checkout.getByLabel('Last 4 digits or reference').fill('4242');
       const payment = responseFor('checkout/tender');
       await checkout.getByRole('button', { name: 'Apply tender', exact: true }).click();
       const paidResponse = await payment;
@@ -210,13 +213,14 @@ test('WHA-1600: POS earns, redeems on the next sale, and reverses earned points 
 
       const settledBalance = (await snapshot(attached.billId)).balance;
       expect(settledBalance).toBe(openingBalance + (sale === 0 ? 14 : 17));
-      // Settlement earns points but does not finalize the order in this UI.
-      // The authorized close must preserve that earn without adding it again.
-      const closed = await request.post('/api/restaurant/orders/close', {
-        headers: { ...manager.headers, 'Idempotency-Key': `wha1600-close-${opened.orderId}` },
-        data: { orderId: opened.orderId },
-      });
+      // Checkout already finalizes a fully served, paid order. Read its durable
+      // state instead of issuing a second close against a terminal order.
+      const closed = await request.get(
+        `/api/restaurant/orders/detail?orderId=${encodeURIComponent(opened.orderId)}`,
+        { headers: manager.headers }
+      );
       expect(closed.status(), await closed.text()).toBe(200);
+      expect(await closed.json()).toMatchObject({ id: opened.orderId, status: 'CLOSED' });
       expect((await snapshot(attached.billId)).balance).toBe(
         openingBalance + (sale === 0 ? 14 : 17)
       );
