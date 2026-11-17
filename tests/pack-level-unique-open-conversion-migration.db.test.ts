@@ -1,5 +1,4 @@
 // @vitest-environment node
-import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
@@ -11,19 +10,18 @@ const sql = readFileSync(
 );
 
 (databaseUrl ? describe : describe.skip)('open pack uniqueness migration on PostgreSQL', () => {
+  // A session-scoped temp table needs no schema-creation privilege (CI connects
+  // as a restricted runtime role) and shadows any real table of the same name.
   async function withSchema(run: (c: Client) => Promise<void>) {
     const c = new Client({ connectionString: databaseUrl });
     await c.connect();
-    const schema = `packu_${randomUUID().replaceAll('-', '')}`;
     try {
-      await c.query(`CREATE SCHEMA ${schema}; SET search_path TO ${schema}`);
-      await c.query(`CREATE TABLE pharmacy_pack_levels (
+      await c.query(`CREATE TEMP TABLE pharmacy_pack_levels (
         id TEXT PRIMARY KEY, "organizationId" TEXT NOT NULL, "presentationId" TEXT NOT NULL,
         "parentPackLevelId" TEXT, level TEXT NOT NULL, "unitsPerParent" INTEGER NOT NULL,
         "effectiveTo" TIMESTAMP(3))`);
       await run(c);
     } finally {
-      await c.query(`DROP SCHEMA ${schema} CASCADE`);
       await c.end();
     }
   }
@@ -50,7 +48,7 @@ const sql = readFileSync(
       const rows = await c.query('SELECT id FROM pharmacy_pack_levels WHERE "effectiveTo" IS NULL');
       expect(rows.rowCount).toBe(2);
       const idx = await c.query(
-        `SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'pharmacy_pack_levels_open_conversion_key'`
+        `SELECT 1 FROM pg_indexes WHERE tablename = 'pharmacy_pack_levels' AND indexname = 'pharmacy_pack_levels_open_conversion_key' AND schemaname LIKE 'pg_temp%'`
       );
       expect(idx.rowCount).toBe(0);
     });
