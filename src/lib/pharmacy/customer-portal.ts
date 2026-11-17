@@ -173,7 +173,10 @@ export async function resolvePortalLink(db: ScopedDb, organizationId: string, to
   return link;
 }
 
-/** Sends a fresh code to the customer's stored phone. A new code replaces the old one. */
+/**
+ * Sends a fresh code to the customer's stored phone. A new code replaces the old one;
+ * the failed-guess counter carries over and clears only on a correct code.
+ */
 export async function startPortalSignIn(
   db: ScopedDb,
   organizationId: string,
@@ -190,7 +193,7 @@ export async function startPortalSignIn(
     data: {
       otpHash: hashPortalOtp(otp),
       otpExpiresAt: new Date(Date.now() + PORTAL_OTP_TTL_MS),
-      otpFailedAttempts: 0,
+      // otpFailedAttempts is deliberately not reset: a resend must not refresh the guess limit.
     },
   });
   try {
@@ -228,8 +231,9 @@ export type PortalVerifyResult =
   { ok: true; sessionToken: string; expiresAt: Date } | { ok: false };
 
 /**
- * Checks the code. A wrong code counts against the link; after five, or once the
- * code expires, the customer must request a new one. A correct code is single use.
+ * Checks the code. A wrong code counts against the link; after five the link
+ * stays locked, even across resends; staff must issue a new link. An expired
+ * code needs a resend. A correct code is single use.
  */
 export async function verifyPortalSignIn(
   db: ScopedDb,
