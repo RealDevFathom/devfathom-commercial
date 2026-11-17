@@ -108,6 +108,7 @@ import {
   counterUnitNoun,
   plural,
   looseSaleUnitOption,
+  onHandInSaleUnitLabel,
   previewSaleLine,
   type SaleUnitKind,
 } from '@/lib/pharmacy/counter-pricing';
@@ -1482,7 +1483,7 @@ function ScopedPharmacyCounterConsole({
 
   const stageRow = useCallback((row: CounterSearchRow) => {
     setActiveRow(row);
-    setQuantityText('');
+    setQuantityText('1');
     setSaleUnit(row.saleUnits[0]?.kind ?? null);
     setLotOverride(null);
   }, []);
@@ -1537,7 +1538,7 @@ function ScopedPharmacyCounterConsole({
       if (!selectionPreview.sufficient) {
         setNotice({
           tone: 'warning',
-          message: `Only ${selectionPreview.availableUnits} safe units are on hand. Reduce the quantity or record the shortage.`,
+          message: `Only ${onHandInSaleUnitLabel(selectionPreview)} on hand. Reduce the quantity or record the shortage.`,
         });
         return;
       }
@@ -1837,7 +1838,10 @@ function ScopedPharmacyCounterConsole({
           setActiveSale(null);
         }
         await refreshCart();
-        setNotice({ tone: 'success', message: `Bill ${action === 'void' ? 'voided' : action}.` });
+        setNotice({
+          tone: 'success',
+          message: `Bill ${action === 'void' ? 'voided' : action === 'hold' ? 'held' : action}.`,
+        });
         focusSearch();
       } catch (error) {
         setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
@@ -3410,7 +3414,11 @@ function ScopedPharmacyCounterConsole({
           <SectionCard
             className="rounded-xl p-4"
             eyebrow="Bill total"
-            actions={<span className="text-xs text-text-muted">{lineCount} lines</span>}
+            actions={
+              <span className="text-xs text-text-muted">
+                {lineCount} {lineCount === 1 ? 'line' : 'lines'}
+              </span>
+            }
           >
             <dl className="space-y-2 text-sm">
               {(
@@ -3615,7 +3623,8 @@ function ScopedPharmacyCounterConsole({
         finalFocus={searchRef}
       >
         <p className="text-xs text-text-muted">
-          {lineCount} lines · Tendered {currentBill ? formatMinor(cart.totals.tenderedMinor) : '—'}
+          {lineCount} {lineCount === 1 ? 'line' : 'lines'} · Tendered{' '}
+          {currentBill ? formatMinor(cart.totals.tenderedMinor) : '—'}
         </p>
         <div className="mb-4 space-y-1">
           <Label htmlFor="counter-auto-print" className="flex min-h-11 items-center gap-3">
@@ -4077,7 +4086,7 @@ function CounterOverlay({
           </div>
           {summary ? <div className="shrink-0 px-5 pt-5 empty:hidden">{summary}</div> : null}
           <DialogDescription className="sr-only">
-            {drawer ? 'Saved receipt for this branch.' : `${title} for the current counter bill.`}
+            {`${title} for the current counter bill.`}
           </DialogDescription>
           <div className="grid min-h-0 gap-4 overflow-y-auto p-5">{children}</div>
         </DialogPrimitive.Popup>

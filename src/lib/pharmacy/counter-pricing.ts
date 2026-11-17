@@ -563,3 +563,13 @@ export function incrementRepeatScan<
     position === index ? { ...line, quantity: line.quantity + step } : line
   );
 }
+
+/** Safe on-hand stock in the cashier's chosen sale unit, e.g. "236 strips". */
+export function onHandInSaleUnitLabel(
+  preview: Pick<SaleLinePreview, 'option' | 'availableUnits'>
+): string {
+  const perUnit = Math.max(1, preview.option.canonicalUnitsPerSaleUnit);
+  const count = Math.floor(preview.availableUnits / perUnit);
+  const name = preview.option.levelLabel.trim().toLowerCase() || 'unit';
+  return `${count} ${plural(name, count)}`;
+}

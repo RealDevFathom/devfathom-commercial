@@ -6,7 +6,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
-import type { SaleLinePreview, SaleUnitKind, SaleUnitOption } from '@/lib/pharmacy/counter-pricing';
+import {
+  onHandInSaleUnitLabel,
+  type SaleLinePreview,
+  type SaleUnitKind,
+  type SaleUnitOption,
+} from '@/lib/pharmacy/counter-pricing';
 
 export type CounterUnitToggleProps = {
   options: readonly SaleUnitOption[];
@@ -243,8 +248,8 @@ export function CounterUnitToggle({
                   label={`Short by ${preview.shortfallUnits} units`}
                 />
                 <span className="text-sm text-text-body">
-                  Only {preview.availableUnits} safe units are on hand. Reduce the quantity or
-                  record the shortage.
+                  Only {onHandInSaleUnitLabel(preview)} on hand. Reduce the quantity or record the
+                  shortage.
                 </span>
               </span>
             )}
