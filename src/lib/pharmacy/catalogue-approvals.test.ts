@@ -260,7 +260,7 @@ describe('DEV-766 durable catalogue approvals', () => {
   });
   it('fails closed for missing tenant targets and forbids saleability/family injection', async () => {
     const f = fixture();
-    f.raw.medicine.findFirst.mockResolvedValueOnce(null as never);
+    f.raw.medicine.findFirst.mockResolvedValueOnce(null);
     await expect(
       submitCatalogueEdit(f.db, scope, 'foreign', { productName: 'x' })
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
