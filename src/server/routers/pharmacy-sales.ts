@@ -3234,8 +3234,9 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) =>
-          linkRestockRecoveries(txDb(tx), await scopeFor(ctx, input.branchId))
+          linkRestockRecoveries(txDb(tx), scope)
         );
       } catch (error) {
         fail(error);
