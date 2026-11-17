@@ -483,8 +483,6 @@ it('states quantity and gross when historical per-lot pricing is unavailable', (
   expect(screen.getAllByRole('listitem')[0]).not.toHaveTextContent('3 unit × 1.00');
 });
 
-
-
 it.each([true, false])(
   'routes automatic printing through the copy allocation handler and reports success=%s once',
   async (printed) => {
