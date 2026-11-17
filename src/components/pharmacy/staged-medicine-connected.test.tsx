@@ -160,6 +160,32 @@ describe('staged page → server action → router → review (connected)', () =
     expect(screen.getAllByText('29 units').length).toBeGreaterThan(0);
     expect(screen.queryByText(/packs ×/)).toBeNull();
   });
+  it('shows an unresolved pack count from a nonstandard quantity header', async () => {
+    const csv = 'Product,Pack,Exported count\nExample Tablet,,29';
+    render(await Page({ searchParams: Promise.resolve({}) }));
+    const file = new File([csv], 'odd.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'arrayBuffer', {
+      value: async () => new TextEncoder().encode(csv).buffer,
+    });
+    fireEvent.change(screen.getByLabelText('Source file'), { target: { files: [file] } });
+    await screen.findByLabelText('Quantity column counts');
+    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('Quantity column counts'), {
+      target: { value: 'PACKS' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Stage for review' }));
+    await waitFor(() => expect(mocks.push).toHaveBeenCalled());
+    expect(db.state.batches[0]).toMatchObject({ quantityColumn: 'Exported count' });
+    const url = new URL(mocks.push.mock.calls[0]![0] as string, 'http://x');
+    cleanup();
+    render(
+      await Page({ searchParams: Promise.resolve(Object.fromEntries(url.searchParams.entries())) })
+    );
+    expect(
+      screen.getAllByText('Unresolved: "29" packs (no countable pack factor)').length
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText('Not supplied')).toBeNull();
+  });
   it('shows a legacy batch with no recorded choice as a raw count', async () => {
     await stageAndReopen('UNITS');
     cleanup();

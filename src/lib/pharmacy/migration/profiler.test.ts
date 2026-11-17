@@ -339,6 +339,17 @@ describe('Quantity column meaning is chosen in the column mapping', () => {
   });
 });
 
+describe('mapped quantity column identity', () => {
+  it('records the header of the mapped quantity column', () => {
+    const result = profileTable(
+      excelCsvProfiler,
+      parseDelimitedText('Product,Pack,Qty\nExample,30,29'),
+      { quantityUnit: 'PACKS' }
+    );
+    expect(result.quantityColumn).toBe('Qty');
+  });
+});
+
 describe('unrecorded quantity mapping', () => {
   it('does not stage a raw count as units without a choice', () => {
     const result = profileTable(

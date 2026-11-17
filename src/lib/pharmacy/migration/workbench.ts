@@ -116,6 +116,7 @@ export async function persistProfile(
       label: input.label,
       profilerVersion: input.profiler.version,
       quantityUnit: input.result.quantityUnit,
+      quantityColumn: input.result.quantityColumn,
       status: 'PROFILING',
     },
   });

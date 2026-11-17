@@ -130,6 +130,8 @@ export type ProfiledException = {
 export type ProfileResult = {
   columnMap: ColumnMap;
   quantityUnit: QuantityUnit | null;
+  /** Header of the mapped quantity column, or null when none is mapped. */
+  quantityColumn: string | null;
   rows: ProfiledRow[];
   exceptions: ProfiledException[];
 };
@@ -186,7 +188,10 @@ export function profileTable(
   );
   const exceptions = deriveExceptions(rows, table, columnMap, context, profiler);
 
-  return { columnMap, quantityUnit, rows, exceptions };
+  const quantityIndex = columnMap.quantity;
+  const quantityColumn =
+    quantityIndex === undefined ? null : (table.headers[quantityIndex] ?? null);
+  return { columnMap, quantityUnit, quantityColumn, rows, exceptions };
 }
 
 function cellAt(

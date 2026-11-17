@@ -78,6 +78,10 @@ describeIfDatabase('migration quantityUnit column (legacy-preserving)', () => {
        WHERE table_name = 'pharmacy_migration_batches' AND column_name = 'quantityUnit'`
     );
     expect(column.rows).toEqual([{ is_nullable: 'YES', column_default: null }]);
+    const mapped = await db.query(
+      `SELECT "quantityColumn" FROM "pharmacy_migration_batches" WHERE "id" = 'legacy_1'`
+    );
+    expect(mapped.rows).toEqual([{ quantityColumn: null }]);
   });
 
   it('accepts only PACKS, UNITS or null', async () => {

@@ -180,22 +180,26 @@ describe('unresolved supplied quantities', () => {
         ...fixture(),
         packFactor: null,
         quantityCanonical: null,
-        rawPayload: { QTY: '29' },
+        rawPayload: { 'Exported count': '29', QTY: 'decoy' },
       },
       source,
       'batch_1',
-      unit
+      unit,
+      'Exported count'
     ).quantityReview.label;
   it('labels a pack count without a factor as unresolved, not missing', () => {
     expect(unresolved('PACKS')).toBe('Unresolved: "29" packs (no countable pack factor)');
+    // The mapped column is used, never a synonym-named decoy column.
+    expect(unresolved('PACKS')).not.toContain('decoy');
     expect(unresolved(null)).toBe('Unresolved: "29" (choose packs or units)');
   });
   it('reserves a null label for an empty quantity cell', () => {
     const view = stagedReference(
-      { ...fixture(), quantityCanonical: null, rawPayload: { QTY: '' } },
+      { ...fixture(), quantityCanonical: null, rawPayload: { QTY: '', Other: '7' } },
       source,
       'batch_1',
-      'PACKS'
+      'PACKS',
+      'QTY'
     );
     expect(view.quantityReview.label).toBeNull();
   });
