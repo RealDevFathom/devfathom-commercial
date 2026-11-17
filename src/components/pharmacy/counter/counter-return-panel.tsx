@@ -672,10 +672,16 @@ export function ReturnForm({
             enterKeyHint="search"
             maxLength={40}
             required
-            aria-describedby="return-receipt-hint"
+            aria-invalid={unparsed}
+            aria-describedby={
+              unparsed ? 'return-receipt-error return-receipt-hint' : 'return-receipt-hint'
+            }
             value={number}
             disabled={locked}
-            onChange={(event) => setNumber(event.target.value)}
+            onChange={(event) => {
+              setNumber(event.target.value);
+              if (unparsed) setSearched(null);
+            }}
             className="h-11"
           />
         </div>
@@ -690,6 +696,12 @@ export function ReturnForm({
         <p id="return-receipt-hint" className="w-full text-sm text-text-muted">
           Scan the receipt or type the number printed on it, for example 1042 or QA-1042.
         </p>
+        {unparsed && (
+          <p id="return-receipt-error" className="w-full text-sm text-destructive">
+            Enter a receipt number made of digits, for example 1042 or QA-1042. Negative numbers and
+            zero are not receipt numbers.
+          </p>
+        )}
       </form>
       {lookup.isFetching && !!searched?.value && <p role="status">Looking up receipt…</p>}
       {!unparsed && lookup.isError && (
