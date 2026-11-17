@@ -21,7 +21,7 @@ export async function verifyReportPrint(markup: string) {
   const browser = await chromium.launch({
     executablePath:
       process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ??
-      (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined),
+      ['/usr/bin/chromium', '/opt/pw-browsers/chromium'].find((path) => existsSync(path)),
     args: ['--no-sandbox'],
   });
   try {

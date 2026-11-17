@@ -29,6 +29,7 @@ import { MarketingSummary } from './marketing-summary';
 import { ObservedDemand } from './observed-demand';
 import { plainReportPermission, plainReportSource } from '@/lib/pharmacy/report-labels';
 import { StaffingSuggestions } from './staffing-suggestions';
+import { ReportCsvButton } from './report-csv-button';
 import { ReportPrintButton } from './report-print-button';
 import { DEFAULT_STAFFING_CONFIG } from '@/lib/pharmacy/staffing-suggestions';
 
@@ -464,6 +465,13 @@ export default async function PharmacyReportsPage({
           // header's action slot as Studio controls rather than as bare links.
           <nav aria-label="Sub-reports" className="flex flex-wrap gap-2">
             {result ? <ReportPrintButton /> : null}
+            {result ? (
+              <ReportCsvButton
+                rows={cards.map((card) => ({ label: card.label, figure: String(card.figure) }))}
+                context={{ Branch: branch ?? 'All available branches', From: from, To: to }}
+                filename={`pharmacy-report-${from}-to-${to}.csv`}
+              />
+            ) : null}
             <Link
               href={`/pharmacy/reports/replenishment${branch ? `?${new URLSearchParams({ branch })}` : ''}`}
               className={buttonVariants({ variant: 'outline', size: 'lg' })}
