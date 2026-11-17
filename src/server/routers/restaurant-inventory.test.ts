@@ -654,6 +654,25 @@ describe('restaurantInventoryRouter', () => {
     expect(mocks.deleteLowStockRule).not.toHaveBeenCalled();
   });
 
+  it('allows low-stock rule mutations after resolving an assigned active branch', async () => {
+    mocks.createLowStockRule.mockResolvedValue({ id: 'rule_new', threshold: D('5') });
+    mocks.updateLowStockRule.mockResolvedValue({ id: 'rule_1', threshold: D('6') });
+
+    const api = caller();
+    await expect(
+      api.createLowStockRule({ stockItemId: 'item_1', locationId: 'loc_1', threshold: '5' })
+    ).resolves.toMatchObject({ id: 'rule_new', threshold: '5' });
+    await expect(api.updateLowStockRule({ id: 'rule_1', threshold: '6' })).resolves.toMatchObject({
+      id: 'rule_1',
+      threshold: '6',
+    });
+    await expect(api.deleteLowStockRule({ id: 'rule_1' })).resolves.toEqual({ deleted: true });
+
+    expect(mocks.createLowStockRule).toHaveBeenCalledOnce();
+    expect(mocks.updateLowStockRule).toHaveBeenCalledOnce();
+    expect(mocks.deleteLowStockRule).toHaveBeenCalledOnce();
+  });
+
   it('denies low-stock rule mutations when the user has no active staff profile', async () => {
     mocks.findStaffProfiles.mockResolvedValue([]);
 
