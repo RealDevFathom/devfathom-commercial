@@ -125,7 +125,13 @@ function pendingFetch() {
 
 function pharmacyAccess(capabilities: string[], overrides: Record<string, unknown> = {}) {
   fixtures.pharmacyAccess.mockReturnValue({
-    data: { userId: user.id, organizationId: user.organizationId, capabilities, ...overrides },
+    data: {
+      userId: user.id,
+      organizationId: user.organizationId,
+      capabilities,
+      reportsGranted: capabilities.includes('reports:operational'),
+      ...overrides,
+    },
     isError: false,
   });
 }
@@ -183,6 +189,13 @@ describe('Ask Fathom context and suggestions', () => {
     expect(screen.getByText(/Report access is checked when you ask/)).toBeVisible();
     view.rerender(panel(entitlement('PHARMACY', [])));
     expect(screen.getByText(/Pharmacy reports are not enabled/)).toBeVisible();
+  });
+  it('offers no report prompts to a manager whose reports are only branch-scoped', () => {
+    pharmacyAccess(['reports:operational'], { reportsGranted: false });
+    render(panel(entitlement('PHARMACY', ['pharmacy-reports'])));
+    expect(
+      screen.queryByText(/or pharmacy reports|Report access is checked/)
+    ).not.toBeInTheDocument();
   });
   it('gives a cashier stock and return starting points without report promises', () => {
     pharmacyAccess(['pharmacy:counter']);

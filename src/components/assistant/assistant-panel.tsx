@@ -89,10 +89,16 @@ function humanizeTool(name: string): string {
 export function AssistantPanel() {
   const entitlements = useEntitlements();
   const { data: session, status } = useSession();
-  const { capabilities } = usePharmacyNavigationAccess(
+  const { capabilities, reportsGranted } = usePharmacyNavigationAccess(
     status === 'authenticated' && entitlements.vertical === 'PHARMACY'
   );
-  const entry = assistantEntry(entitlements, session?.user, status, capabilities);
+  const entry = assistantEntry(
+    entitlements,
+    session?.user,
+    status,
+    // Report prompts need the grant itself; the rail's branch-scoped fallback is not enough.
+    reportsGranted ? capabilities : capabilities.filter((c) => c !== 'reports:operational')
+  );
   // Match the shell's live-session identity boundary. Remount before rendering
   // another tenant/user/access context; never reuse or persist their messages.
   const contextKey = JSON.stringify([
