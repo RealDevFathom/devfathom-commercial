@@ -108,6 +108,28 @@ describe('assistant API scope', () => {
     expect(args.system).not.toContain('forged');
   });
 
+  it('defaults replies to the stored workspace locale, and an Urdu-script message still wins', async () => {
+    mocks.findOrganization.mockResolvedValue({
+      id: 'server-org',
+      askFathomEnabled: true,
+      locale: 'ur-PK',
+    });
+    await POST(request({ messages: [user] }));
+    const system = mocks.stream.mock.calls[0][0].system as string;
+    expect(system).toContain('workspace’s language is Urdu');
+    expect(system).toContain('explicitly asks for another language');
+  });
+
+  it('keeps the English instruction when the stored locale is English', async () => {
+    mocks.findOrganization.mockResolvedValue({
+      id: 'server-org',
+      askFathomEnabled: true,
+      locale: 'en-PK',
+    });
+    await POST(request({ messages: [user] }));
+    expect(mocks.stream.mock.calls[0][0].system).not.toContain('Nastaliq');
+  });
+
   it.each(['AGENCY', 'RESTAURANT', 'PHARMACY'])(
     'rejects disabled approval tool for %s',
     async (vertical) => {

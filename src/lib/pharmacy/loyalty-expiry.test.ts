@@ -4,8 +4,12 @@ vi.mock('./consent-writer', () => ({ lockCustomerConsent: vi.fn(async () => unde
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: vi.fn(), withTenantDb: vi.fn() }));
 
 import { lockCustomerConsent } from './consent-writer';
+import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 import {
   expireCustomerLoyaltyPoints,
+  pastExpiryByBranch,
+  processDuePharmacyLoyaltyExpiries,
+  readAcrossBranches,
   expireStrandedRestoration,
   LOYALTY_EXPIRY_ACTOR,
   planPharmacyLotExpiries,
@@ -31,8 +35,11 @@ const entry = (
   reversesEntryId: null,
   expiresAt: null,
   occurredAt: day(occurred),
+  branchId: 'branch-a',
   ...extra,
 });
+/** No branch bound: the ledger read runs as it is. */
+const unbound = () => vi.fn(async () => [{ branchId: null }]);
 
 describe('DEV-764 pharmacy points expiry planning', () => {
   it('expires what is left of each due lot after oldest-first spending', () => {
@@ -146,8 +153,8 @@ describe('DEV-764 pharmacy points expiry ledger entries', () => {
       entry('earn-b', 'EARN', 20, 2, { saleId: 'sale-b', expiresAt: day(31) }),
       entry('redeem', 'REDEEM', -100, 3, { saleId: 'sale-c' }),
     ]);
-    const db = { pharmacyLoyaltyPointsEntry: { findMany, create } };
-    const scope = { organizationId: 'org-a', branchId: 'branch-a', customerId: 'customer-a' };
+    const db = { $queryRaw: unbound(), pharmacyLoyaltyPointsEntry: { findMany, create } };
+    const scope = { organizationId: 'org-a', customerId: 'customer-a' };
 
     await expect(expireCustomerLoyaltyPoints(db as never, scope, day(40))).resolves.toEqual({
       lots: 2,
@@ -161,7 +168,6 @@ describe('DEV-764 pharmacy points expiry ledger entries', () => {
       expect.objectContaining({
         where: {
           organizationId: 'org-a',
-          branchId: 'branch-a',
           customerId: 'customer-a',
           occurredAt: { lte: day(40) },
         },
@@ -232,6 +238,7 @@ describe('DEV-764 points that come back keep their expiry', () => {
   it('writes one immediate EXPIRY entry for stranded points, linked to the restoring entry', async () => {
     const create = vi.fn(async ({ data }) => data);
     const db = {
+      $queryRaw: unbound(),
       pharmacyLoyaltyPointsEntry: {
         findMany: vi.fn(async () => [
           entry('earn-a', 'EARN', 100, 1, { saleId: 'sale-a', expiresAt: day(31) }),
@@ -261,10 +268,11 @@ describe('DEV-764 points that come back keep their expiry', () => {
 });
 
 describe('DEV-764 points past expiry cannot be spent before the sweep runs', () => {
-  const scope = { organizationId: 'org-a', branchId: 'branch-a', customerId: 'customer-a' };
+  const scope = { organizationId: 'org-a', customerId: 'customer-a' };
 
   it('counts what is left of due, unswept lots', async () => {
     const db = {
+      $queryRaw: unbound(),
       pharmacyLoyaltyPointsEntry: {
         count: vi.fn(async () => 1),
         findMany: vi.fn(async () => [
@@ -278,7 +286,6 @@ describe('DEV-764 points past expiry cannot be spent before the sweep runs', () 
     expect(db.pharmacyLoyaltyPointsEntry.count).toHaveBeenCalledWith({
       where: {
         organizationId: 'org-a',
-        branchId: 'branch-a',
         customerId: 'customer-a',
         kind: { in: ['EARN', 'KHATA_EARN'] },
         expiresAt: { lte: day(40) },
@@ -289,7 +296,10 @@ describe('DEV-764 points past expiry cannot be spent before the sweep runs', () 
 
   it('does not read the ledger when no lot is past expiry', async () => {
     const findMany = vi.fn();
-    const db = { pharmacyLoyaltyPointsEntry: { count: vi.fn(async () => 0), findMany } };
+    const db = {
+      $queryRaw: unbound(),
+      pharmacyLoyaltyPointsEntry: { count: vi.fn(async () => 0), findMany },
+    };
     await expect(pointsPastExpiry(db as never, scope, day(40))).resolves.toBe(0);
     expect(findMany).not.toHaveBeenCalled();
   });
@@ -297,13 +307,14 @@ describe('DEV-764 points past expiry cannot be spent before the sweep runs', () 
 
 describe('DEV-764 a spend between expiry and the sweep conserves points', () => {
   it('never spends an expired lot, so redemptions stop at the unexpired points and the sweep expires the rest', async () => {
-    const scope = { organizationId: 'org-a', branchId: 'branch-a', customerId: 'customer-a' };
+    const scope = { organizationId: 'org-a', customerId: 'customer-a' };
     // Lot A: 100 points, expired on day 10 and not yet swept. Lot B: 50 points, still valid.
     const ledger: PharmacyPointsEntryForExpiry[] = [
       entry('lot-a', 'EARN', 100, 1, { saleId: 'sale-a', expiresAt: day(10) }),
       entry('lot-b', 'EARN', 50, 2, { saleId: 'sale-b', expiresAt: day(90) }),
     ];
     const db = {
+      $queryRaw: unbound(),
       pharmacyLoyaltyPointsEntry: {
         count: vi.fn(
           async () =>
@@ -349,5 +360,191 @@ describe('DEV-764 a spend between expiry and the sweep conserves points', () => 
     );
     // The reversal removed lot A's points; the sweep must not remove them a second time.
     expect(plan).toEqual([{ lotId: 'lot-a', programVersionId: 'program-1', points: 0 }]);
+  });
+});
+
+describe('DEV-764 one balance across branches', () => {
+  it('spends the oldest lot first whichever branch it was earned at', () => {
+    const plan = planPharmacyLotExpiries(
+      [
+        entry('lot-a', 'EARN', 100, 1, { saleId: 'sale-a', expiresAt: day(31) }),
+        entry('lot-b', 'EARN', 100, 2, {
+          saleId: 'sale-b',
+          expiresAt: day(90),
+          branchId: 'branch-b',
+        }),
+        entry('redeem-b', 'REDEEM', -100, 5, {
+          saleId: 'sale-r',
+          tenderId: 'points-r',
+          branchId: 'branch-b',
+        }),
+      ],
+      day(40)
+    );
+    // The redemption at branch B used branch A's older points, so nothing is left to expire.
+    expect(plan).toEqual([{ lotId: 'lot-a', programVersionId: 'program-1', points: 0 }]);
+  });
+
+  it('replays a spend from before the merge against its own branch, so no expiry is taken twice', () => {
+    const ledger = [
+      entry('lot-a', 'EARN', 100, 1, { saleId: 'sale-a', expiresAt: day(31), branchLocal: true }),
+      entry('lot-b', 'EARN', 100, 2, {
+        saleId: 'sale-b',
+        expiresAt: day(90),
+        branchId: 'branch-b',
+        branchLocal: true,
+      }),
+      // Spent at branch B while balances were per branch: it took branch B's lot.
+      entry('redeem-b', 'REDEEM', -100, 5, {
+        saleId: 'sale-r',
+        tenderId: 'points-r',
+        branchId: 'branch-b',
+        branchLocal: true,
+      }),
+    ];
+    // Branch A's lot was still whole when it expired, and the sweep took all 100 points.
+    expect(planPharmacyLotExpiries(ledger, day(40))).toEqual([
+      { lotId: 'lot-a', programVersionId: 'program-1', points: 100 },
+    ]);
+    const swept = [
+      ...ledger,
+      entry('expiry-a', 'EXPIRY', -100, 40, { reversesEntryId: 'lot-a', branchLocal: true }),
+    ];
+    // After the merge, branch B's lot is already spent: it expires empty, so the customer's one
+    // balance (100 + 100 - 100 - 100 = 0) never goes below zero.
+    expect(planPharmacyLotExpiries(swept, day(100))).toEqual([
+      { lotId: 'lot-b', programVersionId: 'program-1', points: 0 },
+    ]);
+  });
+
+  it('lets a spend after the merge use points that were earned before it at another branch', () => {
+    const plan = planPharmacyLotExpiries(
+      [
+        entry('lot-a', 'EARN', 100, 1, { saleId: 'sale-a', expiresAt: day(31), branchLocal: true }),
+        entry('redeem-b', 'REDEEM', -60, 5, {
+          saleId: 'sale-r',
+          tenderId: 'points-r',
+          branchId: 'branch-b',
+          branchLocal: false,
+        }),
+      ],
+      day(40)
+    );
+    expect(plan).toEqual([{ lotId: 'lot-a', programVersionId: 'program-1', points: 40 }]);
+  });
+
+  it("closes due lots at every branch, each expiry posted at its own lot's branch", async () => {
+    const create = vi.fn(async ({ data }) => data);
+    const db = {
+      $queryRaw: unbound(),
+      pharmacyLoyaltyPointsEntry: {
+        findMany: vi.fn(async () => [
+          entry('lot-a', 'EARN', 30, 1, { saleId: 'sale-a', expiresAt: day(31) }),
+          entry('lot-b', 'EARN', 20, 2, {
+            saleId: 'sale-b',
+            expiresAt: day(31),
+            branchId: 'branch-b',
+          }),
+        ]),
+        create,
+      },
+    };
+    await expect(
+      expireCustomerLoyaltyPoints(
+        db as never,
+        { organizationId: 'org-a', customerId: 'customer-a' },
+        day(40)
+      )
+    ).resolves.toEqual({ lots: 2, points: 50 });
+    expect(
+      create.mock.calls.map(([call]) => [call.data.reversesEntryId, call.data.branchId])
+    ).toEqual([
+      ['lot-a', 'branch-a'],
+      ['lot-b', 'branch-b'],
+    ]);
+    await expect(
+      pastExpiryByBranch(
+        db as never,
+        { organizationId: 'org-a', customerId: 'customer-a' },
+        day(40)
+      )
+    ).resolves.toEqual(
+      new Map([
+        ['branch-a', 30],
+        ['branch-b', 20],
+      ])
+    );
+  });
+
+  it('sweeps each customer once across branches', async () => {
+    const candidates = [{ organizationId: 'org-a', customerId: 'customer-a' }];
+    const findMany = vi.fn(async () => candidates);
+    vi.mocked(withPlatformDb).mockImplementation(
+      async (run) => run({ pharmacyLoyaltyPointsEntry: { findMany } } as never) as never
+    );
+    const tenantDb = {
+      $queryRaw: unbound(),
+      pharmacyLoyaltyPointsEntry: { findMany: vi.fn(async () => []), create: vi.fn() },
+    };
+    vi.mocked(withTenantDb).mockImplementation(
+      async (_org, run) => run(tenantDb as never) as never
+    );
+    await expect(processDuePharmacyLoyaltyExpiries(day(40))).resolves.toMatchObject({
+      customers: 1,
+      failed: 0,
+    });
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        distinct: ['organizationId', 'customerId'],
+        select: { organizationId: true, customerId: true },
+      })
+    );
+    expect(withTenantDb).toHaveBeenCalledWith('org-a', expect.any(Function));
+    expect(tenantDb.pharmacyLoyaltyPointsEntry.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org-a', customerId: 'customer-a', occurredAt: { lte: day(40) } },
+      })
+    );
+  });
+});
+
+describe('DEV-764 reading the whole ledger inside a branch-bound transaction', () => {
+  it('lifts the khata branch binding for the read only, then puts it back', async () => {
+    const calls: string[] = [];
+    const $queryRaw = vi.fn(async (query: { strings: readonly string[]; values: unknown[] }) => {
+      const sql = query.strings.join('?');
+      calls.push(`${sql}|${query.values.join(',')}`);
+      return sql.includes('current_setting') ? [{ branchId: 'branch-a' }] : [];
+    });
+    const read = vi.fn(async () => {
+      calls.push('read');
+      return 7;
+    });
+    await expect(readAcrossBranches({ $queryRaw } as never, read)).resolves.toBe(7);
+    expect(calls).toEqual([
+      expect.stringContaining('current_setting'),
+      expect.stringMatching(/set_config\('app\.current_branch_id', '', true\)/),
+      'read',
+      expect.stringMatching(/set_config\('app\.current_branch_id', \?, true\).*\|branch-a$/),
+    ]);
+  });
+
+  it('puts the binding back even when the read fails', async () => {
+    const $queryRaw = vi.fn(async (query: { strings: readonly string[]; values: unknown[] }) =>
+      query.strings.join('?').includes('current_setting') ? [{ branchId: 'branch-a' }] : []
+    );
+    await expect(
+      readAcrossBranches({ $queryRaw } as never, async () => {
+        throw new Error('read failed');
+      })
+    ).rejects.toThrow('read failed');
+    expect($queryRaw).toHaveBeenCalledTimes(3);
+    expect($queryRaw.mock.calls[2]![0].values).toEqual(['branch-a']);
+  });
+
+  it('reads as it is when no branch is bound', async () => {
+    const $queryRaw = unbound();
+    await expect(readAcrossBranches({ $queryRaw } as never, async () => 3)).resolves.toBe(3);
+    expect($queryRaw).toHaveBeenCalledTimes(1);
   });
 });

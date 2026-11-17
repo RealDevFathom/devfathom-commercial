@@ -17,6 +17,7 @@ import {
   reserveAttempt,
   resolveTransport,
   runPrintBridge,
+  bridgeVertical,
   writeToPrinter,
 } from '../scripts/print-bridge';
 
@@ -497,6 +498,103 @@ describe('durable duplicate prevention and server contract', () => {
       return new Response(null, { status: 204 });
     });
     await runPrintBridge({ ...input(), signal: controller.signal });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(await readdir(stateDir)).toHaveLength(0);
+  });
+});
+
+describe('DEV-741 pharmacy bridge mode', () => {
+  const pharmacyToken = `ppb_${'A'.repeat(43)}.${Buffer.from('org_pharmacy').toString('base64url')}`;
+
+  beforeEach(() => {
+    vi.stubGlobal('process', { ...process, platform: 'darwin' });
+  });
+
+  function pharmacyInput() {
+    return { ...input(), token: pharmacyToken };
+  }
+
+  it('selects the queue from the credential and keeps every other token on Restaurant', () => {
+    expect(bridgeVertical(pharmacyToken)).toBe('pharmacy');
+    expect(bridgeVertical('rdk_abc')).toBe('restaurant');
+    expect(bridgeVertical('secret-never-log')).toBe('restaurant');
+    expect(() => bridgeVertical('ppb_short.x')).toThrow('Malformed Pharmacy');
+  });
+
+  it('claims from the pharmacy endpoint and acknowledges TRANSPORT_ACCEPTED, never PRINTED', async () => {
+    const controller = new AbortController();
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(claimed({ attempt: 1 }))
+      .mockImplementationOnce(async () => {
+        controller.abort();
+        return new Response('{}');
+      });
+    fakeChild();
+    await runPrintBridge({ ...pharmacyInput(), signal: controller.signal });
+    const [claimUrl] = vi.mocked(fetch).mock.calls[0];
+    expect(String(claimUrl)).toBe('https://print.example/api/pharmacy/print-bridge?wait=20');
+    const [ackUrl, ack] = vi.mocked(fetch).mock.calls[1];
+    expect(String(ackUrl)).toBe('https://print.example/api/pharmacy/print-bridge');
+    expect(ack).toMatchObject({
+      method: 'POST',
+      redirect: 'error',
+      body: JSON.stringify({ jobId: 'job-1', claimToken, status: 'TRANSPORT_ACCEPTED' }),
+    });
+    expect(String(ack?.body)).not.toContain(receipt.toString('base64'));
+  });
+
+  it('reports a transport failure once, keeps the marker, and never retries the same attempt', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(claimed({ attempt: 1 }))
+      .mockResolvedValueOnce(new Response('{}'));
+    fakeChild(1);
+    await expect(runPrintBridge(pharmacyInput())).rejects.toThrow('delivery may be partial');
+    expect(vi.mocked(fetch).mock.calls[1][1]).toMatchObject({
+      body: JSON.stringify({
+        jobId: 'job-1',
+        claimToken,
+        status: 'FAILED',
+        failureCode: 'TRANSPORT_FAILED',
+      }),
+    });
+    vi.mocked(fetch).mockResolvedValueOnce(claimed({ attempt: 1 }));
+    await expect(runPrintBridge(pharmacyInput())).rejects.toThrow('Attempt marker exists');
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('an operator retry is a new attempt with its own marker', async () => {
+    const first = new AbortController();
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(claimed({ attempt: 1 }))
+      .mockImplementationOnce(async () => {
+        first.abort();
+        return new Response('{}');
+      });
+    fakeChild();
+    await runPrintBridge({ ...pharmacyInput(), signal: first.signal });
+    const second = new AbortController();
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(claimed({ attempt: 2 }))
+      .mockImplementationOnce(async () => {
+        second.abort();
+        return new Response('{}');
+      });
+    fakeChild();
+    await runPrintBridge({ ...pharmacyInput(), signal: second.signal });
+    expect(await readdir(stateDir)).toHaveLength(2);
+    expect(spawn).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses a missing attempt and reports a non-allowlisted printer without dispatch', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(claimed());
+    await expect(runPrintBridge(pharmacyInput())).rejects.toThrow('Invalid claimed attempt');
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(claimed({ attempt: 1, printerId: 'tcp://10.0.0.9:9100' }))
+      .mockResolvedValueOnce(new Response('{}'));
+    await expect(runPrintBridge(pharmacyInput())).rejects.toThrow('not in the host allowlist');
+    expect(vi.mocked(fetch).mock.calls[2][1]).toMatchObject({
+      body: expect.stringContaining('"failureCode":"PRINTER_NOT_ALLOWED"'),
+    });
     expect(spawn).not.toHaveBeenCalled();
     expect(await readdir(stateDir)).toHaveLength(0);
   });

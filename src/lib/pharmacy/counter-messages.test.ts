@@ -99,6 +99,8 @@ describe('counterErrorMessage', () => {
       // DEV-821: a till the user does not run, and a cashier not on the branch.
       'DRAWER_NOT_YOURS',
       'CASHIER_NOT_ASSIGNED',
+      // DEV-712: a payment whose attempt a supervisor discarded.
+      'TENDER_ATTEMPT_DISCARDED',
     ] as const;
 
     for (const reason of settlementReasons) {

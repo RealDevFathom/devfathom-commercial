@@ -67,6 +67,8 @@ export function computeReconciledFinancials(input: {
     taxRefundAmount: Prisma.Decimal;
     serviceChargeRefundAmount: Prisma.Decimal;
     deliveryFeeRefundAmount: Prisma.Decimal;
+    /** Refunded share of a fractional bill's untaxed remainder cent. */
+    roundingRefundAmount?: Prisma.Decimal;
   }[];
   drawers: readonly RawDrawer[];
 }): ReconciledFinancials {
@@ -85,8 +87,11 @@ export function computeReconciledFinancials(input: {
   const refundedSales = sum(
     input.refunds.map((refund) =>
       sub(
-        sub(sub(refund.amount, refund.taxRefundAmount), refund.serviceChargeRefundAmount),
-        refund.deliveryFeeRefundAmount
+        sub(
+          sub(sub(refund.amount, refund.taxRefundAmount), refund.serviceChargeRefundAmount),
+          refund.deliveryFeeRefundAmount
+        ),
+        refund.roundingRefundAmount ?? ZERO
       )
     )
   );
@@ -350,6 +355,7 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
         taxRefundAmount: true,
         serviceChargeRefundAmount: true,
         deliveryFeeRefundAmount: true,
+        roundingRefundAmount: true,
       },
     });
     const drawers = await tx.restaurantDrawerSession.findMany({

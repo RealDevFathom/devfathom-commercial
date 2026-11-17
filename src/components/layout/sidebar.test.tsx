@@ -603,38 +603,41 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     expect(currentLinks()[0]).toHaveAccessibleName(expect.stringMatching(new RegExp(`${label}$`)));
   });
 
-  const pharmacyPageRoot = join(process.cwd(), 'src/app/(app)');
-  const pharmacyPageRoutes = readdirSync(join(pharmacyPageRoot, 'pharmacy'), {
+  // One test per route keeps each render well inside the default timeout when
+  // the full suite runs on a busy machine; every route is still checked.
+  const pharmacyPageRoutes = readdirSync(join(process.cwd(), 'src/app/(app)/pharmacy'), {
     recursive: true,
     encoding: 'utf8',
   })
     .filter((file) => file.endsWith('page.tsx'))
     .map((file) => `/pharmacy/${dirname(file)}`.replace(/\/\.$/, '').replaceAll('\\', '/'));
 
-  it('discovers the pharmacy root and account statement routes (DEV-497)', () => {
+  it('finds every pharmacy page route (DEV-497)', () => {
     expect(pharmacyPageRoutes).toContain('/pharmacy');
     expect(pharmacyPageRoutes).toContain('/pharmacy/accounts/profit-loss');
   });
 
-  // Each discovered route retains its assertion and gets its own render lifecycle.
-  it.each(pharmacyPageRoutes)('marks the expected destination current at %s (DEV-497)', (route) => {
-    pharmacyRailQuery.safety = true;
-    pharmacyRailQuery.sop = true;
-    try {
+  describe.each(pharmacyPageRoutes)('pharmacy page %s', (route) => {
+    beforeEach(() => {
+      pharmacyRailQuery.safety = true;
+      pharmacyRailQuery.sop = true;
+    });
+    afterEach(() => {
+      pharmacyRailQuery.safety = false;
+      pharmacyRailQuery.sop = false;
+    });
+
+    it('marks exactly one destination current (DEV-497)', () => {
       // DEV-502: the not-found catch-all is not a destination. Render it at a
       // real unknown address; it must mark no entry current.
       const notFound = route === '/pharmacy/[...missing]';
       const pathname = notFound ? '/pharmacy/does-not-exist' : route;
-      cleanup();
       renderNavigation({ pathname, granted: everyModule, capabilities: everyCapability });
       expect({ pathname, current: currentLinks().length }).toEqual({
         pathname,
         current: notFound ? 0 : 1,
       });
-    } finally {
-      pharmacyRailQuery.safety = false;
-      pharmacyRailQuery.sop = false;
-    }
+    });
   });
 
   it('marks the statements current under Reports for a reports reader without Finance', () => {
