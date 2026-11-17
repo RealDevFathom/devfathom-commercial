@@ -173,7 +173,9 @@ describe('PostgreSQL backup', () => {
     (key) => {
       env.BACKUP_KMS_KEY_ID = key;
       expectRefused(run('backup'));
-      expect(calls().some((call) => call.command === 'aws' || call.command === 'pg_dump')).toBe(false);
+      expect(calls().some((call) => call.command === 'aws' || call.command === 'pg_dump')).toBe(
+        false
+      );
     }
   );
 
