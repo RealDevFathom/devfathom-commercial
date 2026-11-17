@@ -224,3 +224,28 @@ describe('CounterUnitToggle (POS-03)', () => {
     expect(preview.parentElement!.className).toContain('flex-wrap');
   });
 });
+
+describe('DEV-633 quantity input', () => {
+  it('exposes its focus ref and shortcut marker and submits only plain Enter', () => {
+    const ref = { current: null as HTMLInputElement | null };
+    const onSubmit = vi.fn();
+    renderToggle({ quantityRef: ref, onSubmit });
+    const input = screen.getByLabelText('Quantity');
+    expect(ref.current).toBe(input);
+    expect(input).toHaveAttribute('data-counter-quantity');
+    for (const event of [
+      { key: '2' },
+      { key: 'Backspace' },
+      { key: 'ArrowLeft' },
+      { key: 'Enter', shiftKey: true },
+      { key: 'Enter', ctrlKey: true },
+      { key: 'Enter', altKey: true },
+      { key: 'Enter', metaKey: true },
+      { key: 'Enter', isComposing: true },
+    ])
+      expect(fireEvent.keyDown(input, event)).toBe(true);
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(fireEvent.keyDown(input, { key: 'Enter' })).toBe(false);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+});

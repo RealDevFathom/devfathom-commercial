@@ -55,6 +55,19 @@ openssl rand -base64 32
 
 Keep `.env.local` private. It is ignored by Git.
 
+An exported `DATABASE_URL` in your shell silently overrides `.env.local`, including for
+the running Next.js server. Editing the file will not change that exported value.
+To use the URLs in `.env.local`, clear stale overrides before seeding or starting the server:
+
+```bash
+unset DATABASE_URL MIGRATION_DATABASE_URL
+bun run db:seed
+bun run dev
+```
+
+Restart an already-running server after correcting its environment. The seed still prefers
+`MIGRATION_DATABASE_URL` over `DATABASE_URL`; keep the runtime URL on the restricted app role.
+
 ## 2. Create the databases
 
 ```bash
@@ -157,6 +170,30 @@ Open:
 
 - Tenant workspace: [http://devfathom.localhost:3000](http://devfathom.localhost:3000)
 - Admin panel: [http://admin.localhost:3000/platform](http://admin.localhost:3000/platform)
+
+### Each workspace has its own login hostname
+
+Plain `http://localhost:3000` uses `DEFAULT_ORGANIZATION_ID` (the agency workspace,
+`org_devfathom`, in this setup). It does **not** select a workspace by the email you enter.
+A pharmacy owner's credentials therefore fail there with the generic "Invalid email or
+password" message. Open `http://<workspace-slug>.localhost:3000/login` for that pharmacy,
+using its actual workspace slug, not its display name or organization ID.
+
+For example, if you start the server with `bun run dev --port 3100`:
+
+- Agency: `http://devfathom.localhost:3100/login` (plain `http://localhost:3100` also
+  selects the default agency).
+- Pharmacy with slug `my-pharmacy`: `http://my-pharmacy.localhost:3100/login`.
+- Platform operator: `http://admin.localhost:3100/platform/login`.
+
+Keep `AUTH_URL` and `NEXT_PUBLIC_APP_URL` on the port you actually run. The local seed
+prints a login URL for each existing workspace, including pharmacies created separately;
+`bun run db:seed` itself creates the agency demo, not a pharmacy. Its printed port comes
+from `PORT`, then `NEXT_PUBLIC_APP_URL` (or `AUTH_URL`), defaulting to 3000. A later
+`--port` override must also be reflected in the address you open. Use the pharmacy's own
+credentials; the agency demo accounts do not become pharmacy users.
+
+Login errors stay generic so they do not reveal whether an account exists in another workspace.
 
 Stop the server with `Ctrl+C`. Start it again with `bun run dev`.
 

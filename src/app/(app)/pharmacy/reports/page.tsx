@@ -782,7 +782,7 @@ export default async function PharmacyReportsPage({
                           <p className="mt-2 text-sm leading-6 text-text-body">
                             {item.explanation}
                           </p>
-                          <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-2 font-mono text-[11px] text-text-muted tabular-nums">
+                          <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-2 font-mono text-xs text-text-muted tabular-nums">
                             <div>
                               <dt className="inline font-semibold text-text-body">Batch: </dt>
                               <dd className="inline">{item.batchNumber}</dd>
@@ -887,7 +887,7 @@ export default async function PharmacyReportsPage({
                               <h3 className="font-semibold text-text-strong">
                                 {signal.kind.replaceAll('_', ' ').toLowerCase()}
                               </h3>
-                              <p className="mt-1 font-mono text-[11px] text-text-muted">
+                              <p className="mt-1 font-mono text-xs text-text-muted">
                                 Scope ·{' '}
                                 {Object.entries(scope)
                                   .map(([key, item]) => `${key}: ${item}`)
@@ -908,7 +908,7 @@ export default async function PharmacyReportsPage({
                           <p className="mt-3 max-w-4xl text-sm leading-6 text-text-body">
                             {signal.explanation}
                           </p>
-                          <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-2 font-mono text-[11px] text-text-muted tabular-nums">
+                          <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-2 font-mono text-xs text-text-muted tabular-nums">
                             {Object.entries(exactNumbers).map(([key, item]) => (
                               <div key={key}>
                                 <dt className="inline font-semibold text-text-body">{key}: </dt>
@@ -1075,7 +1075,7 @@ export default async function PharmacyReportsPage({
                           <h3 className="font-semibold text-text-strong">
                             {flag.source.toLowerCase()} scan
                           </h3>
-                          <p className="mt-1 font-mono text-[11px] text-text-muted">
+                          <p className="mt-1 font-mono text-xs text-text-muted">
                             GTIN {flag.gtin ?? 'not available'} · batch{' '}
                             {flag.batchNumber ?? 'not available'} · serial{' '}
                             {flag.serial ?? 'not available'}
@@ -1156,7 +1156,7 @@ export default async function PharmacyReportsPage({
                           <p className="mt-1 text-xs leading-5 text-text-muted">
                             {contract.definition}
                           </p>
-                          <dl className="mt-2 grid gap-1 font-mono text-[11px] text-text-body">
+                          <dl className="mt-2 grid gap-1 font-mono text-xs text-text-body">
                             <div>
                               <dt className="inline font-semibold">Source: </dt>
                               <dd className="inline">

@@ -187,6 +187,118 @@ async function openDrawer(page: Page) {
   await expect(page.getByLabel('Scan or search')).toBeFocused();
 }
 
+/** Checkbox/radio labels are part of their native activation target. */
+async function expectCounterTargets(page: Page) {
+  const undersized = await page.locator('main, [role="dialog"]').evaluateAll((roots) => {
+    const controls = new Set(
+      roots.flatMap((root) =>
+        Array.from(
+          root.querySelectorAll<HTMLElement>(
+            'button, input:not([type="hidden"]), select, textarea, a[href], [role="radio"], [role="combobox"]'
+          )
+        )
+      )
+    );
+    return [...controls].flatMap((control) => {
+      if (!control.checkVisibility() || control.closest('[inert]')) return [];
+      const usesLabel =
+        (control instanceof HTMLInputElement && /^(checkbox|radio)$/.test(control.type)) ||
+        ['checkbox', 'radio', 'switch'].includes(control.getAttribute('role') ?? '');
+      const label = usesLabel
+        ? [...document.querySelectorAll('label')].find(
+            (label) =>
+              label.contains(control) || Boolean(control.id && label.htmlFor === control.id)
+          )
+        : null;
+      const rect = (label ?? control).getBoundingClientRect();
+      return rect.width >= 44 && rect.height >= 44
+        ? []
+        : [
+            {
+              control:
+                control.getAttribute('aria-label') || control.id || control.textContent?.trim(),
+              width: rect.width,
+              height: rect.height,
+            },
+          ];
+    });
+  });
+  expect(undersized).toEqual([]);
+  for (const control of await page.locator('main, [role="dialog"]').getByRole('button').all()) {
+    await expect(control).toHaveAccessibleName(/\S/);
+  }
+}
+
+test('a11y — counter targets, names, skip destinations and full-page axe across the Studio matrix', async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  await signIn(page);
+  await page.goto('/pharmacy/counter');
+  await expect(page.getByRole('heading', { name: 'Counter', level: 1 })).toBeVisible();
+  await expect(page.getByLabel('Opening cash', { exact: true })).toBeEnabled();
+  await expectCounterTargets(page);
+  await openDrawer(page);
+  await search(page, PHARMACY_E2E.medicines.otc.brandName);
+  await stageFirstResult(page, PHARMACY_E2E.medicines.otc.name);
+  for (const width of [375, 768, 1024, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const theme of ['light', 'dark'] as const) {
+      for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+        await page.emulateMedia({ colorScheme: theme, reducedMotion });
+        await page.evaluate(
+          (value) => document.documentElement.setAttribute('data-theme', value),
+          theme
+        );
+        await expect(page.getByRole('main')).toHaveCount(1);
+        await expectCounterTargets(page);
+        const tinyText = await page
+          .locator('.pharmacy-workspace *')
+          .evaluateAll((elements) =>
+            elements
+              .filter(
+                (element) =>
+                  element.checkVisibility() &&
+                  [...element.childNodes].some(
+                    (node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim()
+                  ) &&
+                  parseFloat(getComputedStyle(element).fontSize) < 12
+              )
+              .map((element) => element.textContent?.trim())
+          );
+        expect(tinyText).toEqual([]);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+          true
+        );
+        const axe = await new AxeBuilder({ page })
+          .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
+          .analyze();
+        expect(
+          axe.violations.filter((violation) =>
+            ['serious', 'critical'].includes(violation.impact ?? '')
+          )
+        ).toEqual([]);
+        await page.screenshot({
+          path: `playwright-artifacts/pharmacy-counter/a11y-${width}-${theme}-${reducedMotion}.png`,
+        });
+      }
+    }
+  }
+  const scanLink = page.getByRole('link', { name: 'Skip to scan or search' });
+  await pressControl(scanLink);
+  await expect(page.getByLabel('Scan or search')).toBeFocused();
+  await pressControl(page.getByRole('link', { name: 'Skip to bill total' }));
+  await expect(page.getByRole('complementary', { name: 'Bill total' })).toBeFocused();
+  await page.setViewportSize({ width: 375, height: 900 });
+  await pressControl(page.getByRole('button', { name: 'Actions', exact: true }));
+  await pressControl(page.getByRole('button', { name: 'Shortcuts', exact: true }));
+  await expectCounterTargets(page);
+  await page.keyboard.press('Escape');
+  await pressControl(page.getByRole('button', { name: 'Open bills', exact: true }));
+  await expectCounterTargets(page);
+  await page.keyboard.press('Escape');
+});
+
 async function search(page: Page, term: string) {
   // F2 is the POS-01 chord for the scan field; using it here proves the chord
   // works rather than merely that the field exists.
@@ -360,6 +472,14 @@ test('bill 3 — Urdu transliteration alias resolves the same medicine and sells
   // POS-02: the alias path (MED-03 transliteration) reaches the same medicine
   // the barcode did.
   await search(page, otc.alias);
+  const aliasResult = page
+    .getByRole('list', { name: 'Search results' })
+    .getByRole('button')
+    .first();
+  await expect(aliasResult).toContainText(otc.brandName);
+  await expect(aliasResult).toContainText(`Strength: ${otc.strength}`);
+  await expect(aliasResult).toContainText('Form:');
+  await expect(aliasResult).toContainText('Stock:');
   await stageFirstResult(page, otc.name);
 
   await page.keyboard.press('F3');
@@ -822,14 +942,21 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   await dialog.getByLabel('Returned lot / batch').selectOption({ index: 1 });
   await dialog.getByLabel('Return quantity (strips)').fill('0');
   await dialog.getByLabel('Plus loose units').fill('5');
-  await dialog.getByLabel('Stock disposition', { exact: true }).selectOption('RESTOCK');
+  await expect(
+    dialog.getByRole('button', { name: /^Keep aside.*Confirm return & refund$/ })
+  ).toBeDisabled();
+  await pressControl(
+    dialog
+      .getByRole('group', { name: 'Reason', exact: true })
+      .getByRole('button', { name: 'Wrong item / strip', exact: true })
+  );
   await dialog
     .getByLabel('Inspection and integrity decision (optional)')
     .fill('Intact strip, correct storage verified');
   await expect(dialog.getByLabel('Refund to')).not.toHaveValue('');
   await expect(dialog.getByLabel('Refund for this return (PKR)')).toHaveValue(half);
   await dialog.getByLabel('Your manager or owner PIN').fill(PHARMACY_E2E.adminPin);
-  await pressControl(dialog.getByRole('button', { name: 'Confirm return & refund', exact: true }));
+  await pressControl(dialog.getByRole('button', { name: /^Restock.*Confirm return & refund$/ }));
   await expect(dialog.getByRole('status')).toContainText(
     `Return recorded and refunded: PKR ${half}`
   );
@@ -840,7 +967,21 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   await dialog.getByLabel('Returned lot / batch').selectOption('');
   await dialog.getByLabel('Return quantity (strips)').fill('0');
   await dialog.getByLabel('Plus loose units').fill('5');
-  await dialog.getByLabel('Quarantine location').selectOption({ index: 1 });
+  await expect(
+    dialog
+      .getByRole('group', { name: 'Reason', exact: true })
+      .getByRole('button', { name: 'Wrong item / strip', exact: true })
+  ).toHaveAttribute('aria-pressed', 'false');
+  await expect(dialog.getByRole('button', { name: /^Keep aside — don't resell/ })).toHaveAttribute(
+    'aria-pressed',
+    'false'
+  );
+  await pressControl(
+    dialog
+      .getByRole('group', { name: 'Reason', exact: true })
+      .getByRole('button', { name: 'Wrong item / strip', exact: true })
+  );
+  await dialog.getByLabel('Keep-aside (quarantine) location').selectOption({ index: 1 });
   await dialog
     .getByLabel('Inspection and integrity decision (optional)')
     .fill('Batch marking unreadable; pharmacist verification required');
@@ -848,7 +989,7 @@ test('sell → return → refund → reprint from the counter', async ({ page })
     (Number(PHARMACY_E2E_EXPECTED.otcStripPrice) - Number(half)).toFixed(2)
   );
   await dialog.getByLabel('Your manager or owner PIN').fill(PHARMACY_E2E.adminPin);
-  await pressControl(dialog.getByRole('button', { name: 'Confirm return & refund', exact: true }));
+  await pressControl(dialog.getByRole('button', { name: /^Keep aside.*Confirm return & refund$/ }));
   await expect(dialog.getByRole('status')).toContainText('Return recorded and refunded');
   await expect(dialog.getByRole('region', { name: 'Return and refund history' })).toContainText(
     'pharmacist verification pending'

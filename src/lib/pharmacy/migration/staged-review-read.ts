@@ -47,6 +47,8 @@ async function sourceBatch(
       label: true,
       status: true,
       profilerVersion: true,
+      quantityUnit: true,
+      quantityColumn: true,
       source: { select: { id: true, contentHash: true, fileName: true } },
     },
   });
@@ -126,7 +128,9 @@ export async function listStagedMedicines(
       count: g._count._all,
       workflow: exceptionWorkflow(g.bucket),
     })),
-    rows: rows.map((row) => stagedReference(row, batch.source, batch.id)),
+    rows: rows.map((row) =>
+      stagedReference(row, batch.source, batch.id, batch.quantityUnit, batch.quantityColumn)
+    ),
   };
 }
 export async function stagedMedicineDetail(
@@ -146,5 +150,5 @@ export async function stagedMedicineDetail(
   });
   if (!row)
     throw new TRPCError({ code: 'NOT_FOUND', message: 'Candidate not found in this batch.' });
-  return stagedReference(row, batch.source, batch.id);
+  return stagedReference(row, batch.source, batch.id, batch.quantityUnit, batch.quantityColumn);
 }

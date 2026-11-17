@@ -408,7 +408,7 @@ async function createOrder(
 }
 
 async function addRecipeLine(page: Page, description: string, portions: string, unitPrice: string) {
-  await page.getByLabel('Product or recipe').selectOption(`recipe:${acceptance.recipe.id}`);
+  await page.getByLabel('Recipe', { exact: true }).selectOption(acceptance.recipe.id);
   await page.getByLabel('Description').fill(description);
   await page.getByLabel('Portions').fill(portions);
   await page.getByLabel('Unit price').fill(unitPrice);

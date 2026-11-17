@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, type ReactNode } from 'react';
+import { useId, type ReactNode, type Ref } from 'react';
 
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -20,6 +20,8 @@ export type CounterUnitToggleProps = {
   inline?: boolean;
   onSelect: (kind: SaleUnitKind) => void;
   onQuantityChange: (quantity: string) => void;
+  quantityRef?: Ref<HTMLInputElement>;
+  onSubmit?: () => void;
   /** Rendered beside each unit so the operator sees the chord, not a tooltip. */
   chordFor?: (kind: SaleUnitKind) => string | null;
   /** Why there is no sale unit, in shop words (out of stock, pack setup to fix). */
@@ -54,6 +56,8 @@ export function CounterUnitToggle({
   inline = false,
   onSelect,
   onQuantityChange,
+  quantityRef,
+  onSubmit,
   chordFor,
   emptyMessage,
 }: CounterUnitToggleProps) {
@@ -128,7 +132,7 @@ export function CounterUnitToggle({
                   ) : null}
                 </span>
                 <span
-                  className={`font-mono text-[0.625rem] tracking-wide ${active ? 'text-primary-foreground' : 'text-text-muted'}`}
+                  className={`font-mono text-xs tracking-wide ${active ? 'text-primary-foreground' : 'text-text-muted'}`}
                 >
                   {option.canonicalUnitsPerSaleUnit} units{chord ? ` · ${chord}` : ''}
                 </span>
@@ -152,6 +156,8 @@ export function CounterUnitToggle({
           </button>
           <Input
             id={quantityId}
+            ref={quantityRef}
+            data-counter-quantity=""
             type="text"
             pattern="[0-9]*"
             inputMode="numeric"
@@ -169,6 +175,20 @@ export function CounterUnitToggle({
             }
             onFocus={(event) => event.currentTarget.select()}
             onChange={(event) => onQuantityChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (
+                event.key !== 'Enter' ||
+                event.nativeEvent.isComposing ||
+                event.shiftKey ||
+                event.ctrlKey ||
+                event.altKey ||
+                event.metaKey ||
+                !onSubmit
+              )
+                return;
+              event.preventDefault();
+              onSubmit();
+            }}
             className="h-11 w-16 text-center tabular-nums"
           />
           <button
@@ -199,13 +219,13 @@ export function CounterUnitToggle({
           }
         >
           <div>
-            <dt className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
+            <dt className="font-mono text-xs tracking-wide text-text-muted uppercase">
               Units
             </dt>
             <dd className="font-mono tabular-nums text-text-strong">{preview.canonicalUnits}</dd>
           </div>
           <div>
-            <dt className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
+            <dt className="font-mono text-xs tracking-wide text-text-muted uppercase">
               Unit price
             </dt>
             <dd className="font-mono tabular-nums text-text-strong">
@@ -213,7 +233,7 @@ export function CounterUnitToggle({
             </dd>
           </div>
           <div className={inline ? 'sr-only' : undefined}>
-            <dt className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
+            <dt className="font-mono text-xs tracking-wide text-text-muted uppercase">
               Pro-rata ceiling
             </dt>
             <dd className="font-mono tabular-nums text-text-muted">
@@ -221,7 +241,7 @@ export function CounterUnitToggle({
             </dd>
           </div>
           <div>
-            <dt className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
+            <dt className="font-mono text-xs tracking-wide text-text-muted uppercase">
               Line total
             </dt>
             <dd className="font-mono tabular-nums text-text-strong">
