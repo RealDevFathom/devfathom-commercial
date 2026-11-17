@@ -23,6 +23,7 @@ type Query = {
 
 const mocks = vi.hoisted(() => ({
   queries: {} as Record<string, Query>,
+  renderBranchChildren: false,
   mutations: {} as Record<string, ReturnType<typeof vi.fn>>,
   pausedMutations: new Set<string>(),
   refetch: vi.fn(),
@@ -153,6 +154,7 @@ vi.mock('@/lib/trpc', async () => {
         'counterKeymap',
         'counterSaveKeymap',
         'counterSearch',
+        'upsellSuggestions',
         'counterCart',
         'counterReceipt',
         'counterLotOptions',
@@ -217,14 +219,23 @@ vi.mock('./counter-rx-panel', () => ({
     );
   },
 }));
-vi.mock('./counter-search-results', () => ({
-  CounterSearchResults: (props: ComponentProps<typeof CounterSearchResults>) => {
-    mocks.searchProps(props);
-    return null;
-  },
-}));
+vi.mock('./counter-search-results', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./counter-search-results')>();
+  return {
+    CounterSearchResults: (props: ComponentProps<typeof CounterSearchResults>) => {
+      mocks.searchProps(props);
+      return mocks.renderBranchChildren ? <actual.CounterSearchResults {...props} /> : null;
+    },
+  };
+});
 vi.mock('./counter-substitute-proposals', () => ({ CounterSubstituteProposals: () => null }));
-vi.mock('./counter-upsell-suggestions', () => ({ CounterUpsellSuggestions: () => null }));
+vi.mock('./counter-upsell-suggestions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./counter-upsell-suggestions')>();
+  return {
+    CounterUpsellSuggestions: (props: ComponentProps<typeof actual.CounterUpsellSuggestions>) =>
+      mocks.renderBranchChildren ? <actual.CounterUpsellSuggestions {...props} /> : null,
+  };
+});
 
 import { PharmacyCounterConsole } from './counter-console';
 import { resolveCounterKeymap } from '@/lib/pharmacy/counter-keymap';
@@ -441,6 +452,7 @@ function enterPayment(type = 'CASH') {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.renderBranchChildren = false;
   browserPrint.ready.mockReset();
   mocks.keymapSetData.mockImplementation((_input, saved) => {
     mocks.queries.counterKeymap = query(saved);
@@ -1367,35 +1379,38 @@ describe('PharmacyCounterConsole tender recovery', () => {
   it.each([
     ['without a prescription', null, false],
     ['with a prescription no pharmacist has signed for this line', 'rx-line-a', false],
-  ])('DEV-629: blocks payment for an Rx line the server holds %s, even when the patient has a signed one', (_label, prescriptionLineId, prescriptionSigned) => {
-    const bill = cart();
-    bill.lines[0]!.rx = true;
-    bill.lines[0]!.prescriptionLineId = prescriptionLineId;
-    bill.lines[0]!.prescriptionSigned = prescriptionSigned;
-    mocks.queries.counterCart!.data = bill;
-    mocks.queries.counterPatientPanel = query({
-      prescriptions: [
-        {
-          validFrom: '2020-01-01T00:00:00.000Z',
-          validUntil: '2999-12-31T00:00:00.000Z',
-          lines: [
-            {
-              prescriptionLineId: 'rx-line-a',
-              medicineId: bill.lines[0]!.medicineId,
-              verified: true,
-              remainingAuthorizedUnits: 10,
-            },
-          ],
-        },
-      ],
-    });
-    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-    expect(
-      screen.getAllByText(/This bill carries an unresolved safety block/)[0]
-    ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeDisabled();
-    expect(mocks.mutations.tender).not.toHaveBeenCalled();
-  });
+  ])(
+    'DEV-629: blocks payment for an Rx line the server holds %s, even when the patient has a signed one',
+    (_label, prescriptionLineId, prescriptionSigned) => {
+      const bill = cart();
+      bill.lines[0]!.rx = true;
+      bill.lines[0]!.prescriptionLineId = prescriptionLineId;
+      bill.lines[0]!.prescriptionSigned = prescriptionSigned;
+      mocks.queries.counterCart!.data = bill;
+      mocks.queries.counterPatientPanel = query({
+        prescriptions: [
+          {
+            validFrom: '2020-01-01T00:00:00.000Z',
+            validUntil: '2999-12-31T00:00:00.000Z',
+            lines: [
+              {
+                prescriptionLineId: 'rx-line-a',
+                medicineId: bill.lines[0]!.medicineId,
+                verified: true,
+                remainingAuthorizedUnits: 10,
+              },
+            ],
+          },
+        ],
+      });
+      renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      expect(
+        screen.getAllByText(/This bill carries an unresolved safety block/)[0]
+      ).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeDisabled();
+      expect(mocks.mutations.tender).not.toHaveBeenCalled();
+    }
+  );
 
   it('preserves unresolved prescription safety blocks', () => {
     const bill = cart();
@@ -4978,4 +4993,178 @@ describe('DEV-41 remaining disabled explanations', () => {
       expect(mocks.mutations.openDrawer).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('DEV-41 post-merge branch reasons and composed explanations', () => {
+  const branchCases = [
+    {
+      state: 'loading',
+      result: { ...query(), isSuccess: false, isLoading: true, isFetching: true },
+    },
+    {
+      state: 'failed',
+      result: { ...query(), isSuccess: false, isError: true },
+    },
+    {
+      state: 'failed with cached branches',
+      result: {
+        ...query({ branches: [{ id: 'branch-a', name: 'Synthetic branch', code: 'MT1' }] }),
+        isError: true,
+      },
+    },
+    {
+      state: 'empty',
+      result: query({ branches: [] }),
+    },
+    {
+      state: 'unavailable',
+      result: { ...query(), isSuccess: false },
+    },
+    {
+      state: 'missing data',
+      result: query(),
+    },
+    {
+      state: 'unverified cached branch',
+      result: {
+        ...query({ branches: [{ id: 'branch-a', name: 'Synthetic branch', code: 'MT1' }] }),
+        isSuccess: false,
+      },
+    },
+    {
+      state: 'unauthorized selection',
+      result: query({ branches: [{ id: 'branch-b', name: 'Other branch', code: 'OTHER' }] }),
+    },
+  ];
+
+  it.each(branchCases)(
+    'preserves the $state branch guard without claiming payment recovery is pending',
+    ({ state, result }) => {
+      enableBranchChildren();
+      mocks.queries.counterBranches = result;
+      const view = render(
+        <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+      );
+      if (state === 'loading') {
+        expect(screen.getByRole('status', { name: 'Loading pharmacy counter' })).toBeVisible();
+      } else if (state.startsWith('failed')) {
+        expect(screen.getByRole('heading', { name: 'Branches unavailable' })).toBeVisible();
+        fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+        expect(result.refetch).toHaveBeenCalledExactlyOnceWith();
+      } else if (state === 'unauthorized selection' || state === 'unverified cached branch') {
+        expect(screen.getByRole('alert')).toHaveTextContent(
+          'This branch could not be verified for your account.'
+        );
+      } else {
+        expect(screen.getByRole('heading', { name: 'Before this counter can sell' })).toBeVisible();
+      }
+      for (const name of [/^Hold/, /^Resume/, /^Void$/, /^Open drawer$/, /^Find item$/]) {
+        expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
+      }
+      expect(screen.queryByLabelText('Branch')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Scan or search')).not.toBeInTheDocument();
+      expect(
+        screen.queryByText('Checking saved payment details. Please wait.')
+      ).not.toBeInTheDocument();
+      for (const key of ['F6', 'F7', 'F8']) fireEvent.keyDown(window, { key });
+      expect(mocks.mutations.transition).not.toHaveBeenCalled();
+      expect(mocks.mutations.create).not.toHaveBeenCalled();
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+      expect(mocks.mutations.openDrawer).not.toHaveBeenCalled();
+      expect(mocks.mutations.tender).not.toHaveBeenCalled();
+      mocks.queries.counterBranches = query({
+        branches: [{ id: 'branch-a', name: 'Synthetic branch', code: 'MT1' }],
+      });
+      view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      expect(screen.getByLabelText('Branch')).toBeEnabled();
+      expect(screen.getByLabelText('Branch')).not.toHaveAccessibleDescription();
+      expect(screen.getByRole('button', { name: /^Hold/ })).toBeEnabled();
+      expect(screen.getByRole('button', { name: /^Hold/ })).not.toHaveAccessibleDescription();
+    }
+  );
+
+  function enableBranchChildren() {
+    mocks.renderBranchChildren = true;
+    mocks.queries.counterSearch = query({ rows: [barcodeRow()], truncated: false });
+    mocks.queries.upsellSuggestions = query([
+      {
+        medicineId: 'synthetic-spacer',
+        presentationId: 'synthetic-presentation',
+        displayName: 'Synthetic spacer',
+        presentation: 'Each',
+        availableCanonicalUnits: 3,
+        packMrpMinor: 100,
+        ruleId: 'synthetic-rule',
+        reason: 'Often bought together',
+      },
+    ]);
+  }
+
+  it('shares busy explanations with real search and upsell children, then removes them when enabled', async () => {
+    enableBranchChildren();
+    let reject!: (error: Error) => void;
+    mocks.mutations.transition!.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, fail) => {
+          reject = fail;
+        })
+    );
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Scan or search'), { target: { value: 'para' } });
+    const results = await screen.findByRole('list', { name: 'Search results' });
+    const searchButton = within(results).getByRole('button');
+    const upsellButton = screen.getByRole('button', { name: 'Find item' });
+    expect(searchButton).toBeEnabled();
+    expect(upsellButton).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: /^Hold/ }));
+    const reason = 'Wait for the current counter action to finish.';
+    const branchArea = screen.getByLabelText('Counter bill').parentElement!;
+    expect(within(branchArea).queryAllByText(reason)).toHaveLength(0);
+    expect(document.getElementById('counter-branch-reason')).toBeVisible();
+    for (const button of [searchButton, upsellButton]) {
+      expect(button).toBeDisabled();
+      expect(button).toHaveAccessibleDescription(reason);
+      expect(button).toHaveAttribute('aria-describedby', 'counter-branch-reason');
+      fireEvent.click(button);
+    }
+    const billReason = document.getElementById('counter-bill-action-reason')!;
+    expect(within(billReason.parentElement!).getAllByText(reason)).toHaveLength(1);
+    expect(screen.queryByRole('region', { name: 'Next line' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Scan or search')).toHaveValue('para');
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    await act(async () => reject(new Error('Synthetic refusal')));
+    expect(screen.queryByText(reason)).not.toBeInTheDocument();
+    for (const button of [
+      searchButton,
+      upsellButton,
+      screen.getByRole('button', { name: /^Hold/ }),
+      screen.getByRole('button', { name: /^Void$/ }),
+    ]) {
+      expect(button).toBeEnabled();
+      expect(button).not.toHaveAccessibleDescription();
+    }
+    fireEvent.click(upsellButton);
+    expect(screen.getByLabelText('Scan or search')).toHaveValue('Synthetic spacer');
+  });
+
+  it('keeps the shared upsell description mounted when the drawer step replaces search', () => {
+    enableBranchChildren();
+    closeDrawer();
+    window.localStorage.setItem(tenderAttemptStorageKey(scope), '{');
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const reason = 'Browser recovery is unavailable. Review payment status before continuing.';
+    const button = screen.getByRole('button', { name: 'Find item' });
+    expect(screen.queryByLabelText('Scan or search')).not.toBeInTheDocument();
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute('aria-describedby', 'counter-branch-reason');
+    expect(button).toHaveAccessibleDescription(reason);
+    expect(document.getElementById('counter-branch-reason')).toBeVisible();
+    expect(
+      within(button.closest('[data-slot="section-card"]')!).queryByText(reason)
+    ).not.toBeInTheDocument();
+    fireEvent.click(button);
+    expect(mocks.mutations.create).not.toHaveBeenCalled();
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    expect(mocks.mutations.openDrawer).not.toHaveBeenCalled();
+  });
 });
