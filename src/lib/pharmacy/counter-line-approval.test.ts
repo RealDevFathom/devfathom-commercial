@@ -245,6 +245,32 @@ describe('counter scanned-pack FEFO approval (DEV-843)', () => {
     expectDummyCompareOnly(db);
   });
 
+  it('counts a wrong manager PIN toward lockout and refuses', async () => {
+    const db = fixture();
+    vi.mocked(verifyOperatorCredential).mockResolvedValue(false);
+    await expect(
+      authorizeCounterApproval(db as never, scope, 'SCANNED_PACK_FEFO', pin)
+    ).rejects.toBeInstanceOf(CounterApprovalDenied);
+    expect(db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
+      where: { id: 'cred' },
+      data: { failedAttempts: 1 },
+    });
+    // Committed in its own tenant transaction, so the strike survives the refused sale.
+    expect(withTenantDb).toHaveBeenCalledWith('org', expect.any(Function), {
+      userId: 'cashier',
+      skipDrain: true,
+    });
+  });
+
+  it('refuses a pharmacist on duty who self-approves while a manager can approve', async () => {
+    const self = { ...actor };
+    const db = fixture(self, ['cashier', 'manager'], [manager]);
+    await expect(
+      authorizeCounterApproval(db as never, scope, 'SCANNED_PACK_FEFO', pin)
+    ).rejects.toBeInstanceOf(CounterApprovalDenied);
+    expectDummyCompareOnly(db);
+  });
+
   it('lets a solo owner self-approve with a fresh PIN, recorded as self-approved', async () => {
     const self = { ...actor };
     const db = fixture(self, ['cashier'], []);

@@ -276,6 +276,41 @@ describe('pharmacySales.addLine scanned pack approval (DEV-843)', () => {
     });
   });
 
+  it('records a solo owner self-approval on the safety audit row', async () => {
+    const f = fixture();
+    vi.mocked(authorizeCounterApproval).mockResolvedValueOnce({
+      approvedByUserId: 'actor-1',
+      approvalPolicy: 'SOLE_APPROVER_PIN_REAUTH',
+      selfApproved: true,
+      credentialId: null,
+    });
+    vi.mocked(addSaleLine).mockResolvedValue({
+      line: { id: 'line-1' },
+      allocation: { overrideId: 'override-1', recommendedLotId: 'lot-fefo' },
+    } as never);
+
+    await f.caller.addLine({ ...packLine, scannedPack: { ...scannedPack, approval: managerPin } });
+
+    const [, , input] = vi.mocked(addSaleLine).mock.calls[0]!;
+    // The self-approver is the actor, so the policy carries no second user id.
+    expect(input.scannedPack).toEqual({
+      payload: scannedPack.payload,
+      fefoApprovalPolicy: 'SOLE_APPROVER_PIN_REAUTH',
+    });
+    expect(lastAudit()).toMatchObject({
+      outcome: 'SUCCESS',
+      detail: {
+        category: 'PHARMACY_SAFETY',
+        action: 'fefo_override',
+        metadata: {
+          scannedPackApprovalPolicy: 'SOLE_APPROVER_PIN_REAUTH',
+          scannedPackApprovedByUserId: 'actor-1',
+          overrideId: 'override-1',
+        },
+      },
+    });
+  });
+
   it('refuses a wrong or ineligible manager PIN before the sale transaction opens', async () => {
     const f = fixture();
     vi.mocked(authorizeCounterApproval).mockRejectedValueOnce(
