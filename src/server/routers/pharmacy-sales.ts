@@ -184,6 +184,7 @@ import {
   readOpenPharmacyDrawer,
   PharmacySettlementError,
   readPharmacyTenderOutcome,
+  discardPharmacyTenderAttempt,
   recordPharmacyCashMovement,
   refundPharmacyTender,
   requireCurrentPharmacyBusinessDate,
@@ -1849,6 +1850,77 @@ export const pharmacySalesRouter = router({
           : await assignedBranchScope(ctx, input.branchId);
     return readPharmacyTenderOutcome(ctx.db, scope, ledgerTender(input));
   }),
+  /**
+   * DEV-712: who can approve discarding a payment attempt whose outcome is unknown: other
+   * active managers or owners with a live counter PIN or, when there is nobody else (solo
+   * rule), the signed-in user's own profile. Names and staff profile ids only.
+   */
+  tenderDiscardApprovers: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+      return listCounterApprovers(ctx.db as unknown as ScopedDb, scope, 'TENDER_DISCARD');
+    }),
+  /**
+   * DEV-712: a manager or owner releases a counter payment attempt whose outcome is unknown,
+   * with their PIN and a reason. The attempt's key is claimed so it can never be recorded
+   * later; an attempt that did commit is returned as accepted instead of being discarded.
+   */
+  discardTenderAttempt: protectedProcedure
+    .input(
+      z
+        .object({
+          attempt: tenderInput,
+          reason: z.string().trim().min(3).max(500),
+          approval: counterApprovalPin,
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { attempt } = input;
+      // Manual capture references stay out of the audit input, as on the tender itself.
+      if (isManualTender(attempt.type) || attempt.approvalCode !== undefined)
+        annotateAudit(ctx, { skipInput: true });
+      try {
+        const scope =
+          attempt.type === 'KHATA' || attempt.type === 'CREDIT' || attempt.familyAccountId
+            ? await khataScope(ctx, attempt.branchId, 'write')
+            : await requireCounterReceiptAccess(ctx, attempt.branchId, true);
+        // Verified in its own transaction, so a wrong PIN keeps its lockout strike.
+        const approval = await authorizeCounterApproval(
+          ctx.db as unknown as ScopedDb,
+          scope,
+          'TENDER_DISCARD',
+          input.approval
+        );
+        annotateAudit(ctx, {
+          metadata: {
+            tenderDiscard: {
+              saleId: attempt.saleId,
+              approvedByUserId: approval.approvedByUserId,
+              approvalPolicy: approval.approvalPolicy,
+              selfApproved: approval.selfApproved,
+              reason: input.reason,
+            },
+          },
+        });
+        const result = await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          await confirmCounterApproval(db, scope, 'TENDER_DISCARD', approval);
+          return discardPharmacyTenderAttempt(db, scope, ledgerTender(attempt), {
+            reason: input.reason,
+            approvedByUserId: approval.approvedByUserId,
+            approvalPolicy: approval.approvalPolicy,
+            selfApproved: approval.selfApproved,
+          });
+        });
+        if (!result) throw new TRPCError({ code: 'NOT_FOUND', message: 'NOT_FOUND' });
+        annotateAudit(ctx, { metadata: { tenderDiscardOutcome: result.status } });
+        return result;
+      } catch (error) {
+        fail(error);
+      }
+    }),
   tender: protectedProcedure.input(tenderInput).mutation(async ({ ctx, input }) => {
     if (isManualTender(input.type) || input.approvalCode !== undefined)
       annotateAudit(ctx, { skipInput: true });

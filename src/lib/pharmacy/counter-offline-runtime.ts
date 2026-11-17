@@ -48,6 +48,7 @@ import {
   enqueueCounterCommand,
   nextCounterReplay,
   purgeCounterQueue,
+  remainingReceiptNumbers,
   resumeCounterAfterReauth,
 } from './counter-command-queue';
 import type {
@@ -123,6 +124,46 @@ export type CounterReplayResponse = {
   serverRef?: string | null;
 };
 
+/**
+ * DEV-712: reserve one more block of receipt numbers for this counter. The surface supplies
+ * the transport (`POST /api/pharmacy/counter/lease`); the server answers with the lease row.
+ */
+export type CounterLeaseReserver = (size: number) => Promise<unknown>;
+
+/** Renew when fewer than this many reserved numbers are left. */
+export const COUNTER_LEASE_LOW_WATER = 20;
+/** Numbers reserved per renewal; the server caps a block at 1,000. */
+export const COUNTER_LEASE_RENEWAL_SIZE = 100;
+/** How often the background renewal re-checks the runway while the counter is open. */
+export const COUNTER_LEASE_RENEWAL_INTERVAL_MS = 60_000;
+
+export type LeaseRenewalResult = {
+  status: 'SUFFICIENT' | 'RENEWED' | 'FAILED' | 'STOPPED';
+  /** Unissued reserved numbers after this attempt. */
+  remaining: number;
+};
+
+/** The server's lease row, checked before it is trusted as this counter's runway. */
+function leaseCursor(value: unknown, deviceId: string): CounterLeaseCursor | null {
+  if (!value || typeof value !== 'object') return null;
+  const lease = value as Record<string, unknown>;
+  const { id, blockStart, blockEnd, nextNumber } = lease;
+  if (
+    typeof id !== 'string' ||
+    !id ||
+    lease.deviceId !== deviceId ||
+    !Number.isSafeInteger(blockStart) ||
+    !Number.isSafeInteger(blockEnd) ||
+    !Number.isSafeInteger(nextNumber)
+  )
+    return null;
+  const start = blockStart as number;
+  const end = blockEnd as number;
+  const next = nextNumber as number;
+  if (start <= 0 || end < start || next < start || next > end + 1) return null;
+  return { leaseId: id, blockStart: start, blockEnd: end, nextNumber: next };
+}
+
 type ReplayResult = {
   state: 'IDLE' | 'PAUSED' | 'STOPPED' | 'REFUSED';
   discarded: { commands: number } | null;
@@ -131,6 +172,7 @@ type ReplayResult = {
 export class PharmacyCounterRuntime {
   private state: CounterRuntimeState;
   private activeReplay: Promise<ReplayResult> | null = null;
+  private activeLeaseRenewal: Promise<LeaseRenewalResult> | null = null;
   /**
    * #554: the tail of the single-flight transition chain. Every read-compute-
    * write of the persisted document runs behind it, so two overlapping calls
@@ -350,6 +392,62 @@ export class PharmacyCounterRuntime {
     );
   }
 
+  /**
+   * DEV-712: top up the receipt-number runway before it runs out, so a cashier is never
+   * stopped mid-shift by an exhausted lease. Single-flight; a failure (offline, no manager
+   * session, a refused device) keeps every block already held and never throws, so it can
+   * run in the background. A new block is appended; numbers already issued never move.
+   */
+  renewReceiptLeases(
+    reserve: CounterLeaseReserver,
+    options: { lowWater?: number; size?: number } = {}
+  ): Promise<LeaseRenewalResult> {
+    if (this.activeLeaseRenewal) return this.activeLeaseRenewal;
+    const renewal = this.runLeaseRenewal(reserve, options);
+    this.activeLeaseRenewal = renewal;
+    const clear = () => {
+      if (this.activeLeaseRenewal === renewal) this.activeLeaseRenewal = null;
+    };
+    void renewal.then(clear, clear);
+    return renewal;
+  }
+
+  private async runLeaseRenewal(
+    reserve: CounterLeaseReserver,
+    options: { lowWater?: number; size?: number }
+  ): Promise<LeaseRenewalResult> {
+    const lowWater = options.lowWater ?? COUNTER_LEASE_LOW_WATER;
+    const size = options.size ?? COUNTER_LEASE_RENEWAL_SIZE;
+    const remaining = () => remainingReceiptNumbers(this.queue());
+    if (this.queue().replay === 'STOPPED_REVOKED') return { status: 'STOPPED', remaining: 0 };
+    if (remaining() >= lowWater) return { status: 'SUFFICIENT', remaining: remaining() };
+    let lease: CounterLeaseCursor | null;
+    try {
+      lease = leaseCursor(await reserve(size), this.scope.deviceId);
+    } catch {
+      lease = null;
+    }
+    if (!lease) return { status: 'FAILED', remaining: remaining() };
+    const block = lease;
+    return this.exclusive(async (): Promise<LeaseRenewalResult> => {
+      // A heartbeat may have revoked and purged this counter while the request was out.
+      if (this.queue().replay === 'STOPPED_REVOKED') return { status: 'STOPPED', remaining: 0 };
+      const held = this.queue().leases;
+      if (held.some((existing) => existing.leaseId === block.leaseId))
+        return { status: 'RENEWED', remaining: remaining() };
+      // Blocks never overlap; one that does is not this counter's to print from.
+      if (
+        held.some(
+          (existing) =>
+            block.blockStart <= existing.blockEnd && existing.blockStart <= block.blockEnd
+        )
+      )
+        return { status: 'FAILED', remaining: remaining() };
+      await this.commit({ ...this.state, queue: { ...this.queue(), leases: [...held, block] } });
+      return { status: 'RENEWED', remaining: remaining() };
+    });
+  }
+
   /** Record the OFF-03 quotas this counter was granted before going offline. */
   adoptQuotas(quotas: readonly CounterQuota[]): Promise<void> {
     return this.exclusive(() =>
@@ -564,4 +662,38 @@ export class PharmacyCounterRuntime {
     await writeTerminalState(this.driver, nextState, COUNTER_STORE_SCHEMA_VERSION);
     this.state = nextState;
   }
+}
+
+/**
+ * DEV-712: keep a counter's receipt-number runway topped up in the background: once now, then
+ * on every interval and whenever the browser comes back online. Returns a stop function.
+ */
+export function startReceiptLeaseRenewal(
+  runtime: Pick<PharmacyCounterRuntime, 'renewReceiptLeases'>,
+  reserve: CounterLeaseReserver,
+  options: {
+    intervalMs?: number;
+    lowWater?: number;
+    size?: number;
+    onResult?: (result: LeaseRenewalResult) => void;
+  } = {}
+): () => void {
+  let stopped = false;
+  const run = () => {
+    if (stopped) return;
+    void runtime
+      .renewReceiptLeases(reserve, { lowWater: options.lowWater, size: options.size })
+      .then((result) => {
+        if (!stopped) options.onResult?.(result);
+      });
+  };
+  run();
+  const timer = setInterval(run, options.intervalMs ?? COUNTER_LEASE_RENEWAL_INTERVAL_MS);
+  const online = typeof window === 'undefined' ? null : window;
+  online?.addEventListener('online', run);
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+    online?.removeEventListener('online', run);
+  };
 }

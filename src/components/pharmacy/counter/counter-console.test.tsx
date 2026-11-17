@@ -50,6 +50,8 @@ const mocks = vi.hoisted(() => ({
   khataStatement: vi.fn(),
   cartRead: vi.fn(),
   khataApprovers: vi.fn(),
+  discardApprovers: vi.fn(),
+  discardAttempt: vi.fn(),
   signIn: vi.fn(),
   signOut: vi.fn(),
   receiptRefetch: vi.fn(),
@@ -132,6 +134,8 @@ vi.mock('@/lib/trpc', async () => {
         khataStatement: { query: mocks.khataStatement },
         counterCart: { query: mocks.cartRead },
         khataOverLimitApprovers: { query: mocks.khataApprovers },
+        tenderDiscardApprovers: { query: mocks.discardApprovers },
+        discardTenderAttempt: { mutate: mocks.discardAttempt },
       },
     },
     pharmacySales: {
@@ -5924,6 +5928,110 @@ describe('DEV-41 post-merge branch reasons and composed explanations', () => {
     expect(mocks.mutations.create).not.toHaveBeenCalled();
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
     expect(mocks.mutations.openDrawer).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-712 supervisor discard of an unknown payment attempt', () => {
+  const approvers = [{ id: 'staff-manager', name: 'Synthetic manager', self: false }];
+
+  async function discardWith(reason = 'Customer did not pay') {
+    fireEvent.click(screen.getByRole('button', { name: 'Supervisor: discard this attempt' }));
+    const approver = await screen.findByLabelText('Approving manager or owner');
+    await waitFor(() => expect(approver).toBeEnabled());
+    fireEvent.change(approver, { target: { value: 'staff-manager' } });
+    fireEvent.change(screen.getByLabelText('Approver PIN'), { target: { value: '4321' } });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: reason } });
+    fireEvent.click(screen.getByRole('button', { name: 'Discard payment attempt' }));
+  }
+
+  beforeEach(() => {
+    mocks.discardApprovers.mockReset().mockResolvedValue(approvers);
+    mocks.discardAttempt.mockReset().mockResolvedValue({ status: 'DISCARDED' });
+  });
+
+  it('releases the saved attempt and sends the next payment under a fresh key', async () => {
+    mocks.mutations.tender!.mockRejectedValueOnce(new Error('Acknowledgement lost'));
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    enterPayment();
+    await screen.findByText(/Payment outcome is unknown/);
+    const original = mocks.mutations.tender!.mock.calls[0]![0];
+    expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeDisabled();
+
+    await discardWith();
+    await screen.findByText(/Payment attempt discarded/);
+    expect(mocks.discardAttempt).toHaveBeenCalledExactlyOnceWith({
+      attempt: original,
+      reason: 'Customer did not pay',
+      approval: { staffProfileId: 'staff-manager', pin: '4321' },
+    });
+    expect(readTenderAttempt(scope)).toEqual({ status: 'empty' });
+    expect(mocks.refetch).toHaveBeenCalled();
+
+    mocks.mutations.tender!.mockResolvedValueOnce(accepted());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeEnabled()
+    );
+    enterPayment();
+    await screen.findByText('Payment recorded.');
+    const retry = mocks.mutations.tender!.mock.calls[1]![0];
+    // Same bill, same amount: the discarded key is never reused.
+    expect(retry.amountMinor).toBe(original.amountMinor);
+    expect(retry.idempotencyKey).toMatch(
+      new RegExp(`^${original.idempotencyKey}:retry:[0-9a-f-]{36}$`)
+    );
+  });
+
+  it('keeps the attempt locked when the supervisor PIN is refused', async () => {
+    const attempt = savedAttempt();
+    persistTenderAttempt(attempt);
+    mocks.discardAttempt.mockRejectedValue(
+      refused(
+        'FORBIDDEN',
+        'Discarding a payment attempt needs a manager or owner to approve it with their PIN.'
+      )
+    );
+    renderPayment(<PharmacyCounterConsole />);
+    await discardWith();
+    expect(
+      await screen.findAllByText(
+        /The attempt was not discarded\. Discarding a payment attempt needs/
+      )
+    ).not.toHaveLength(0);
+    expect(readTenderAttempt(scope)).toEqual({ status: 'pending', attempt });
+    expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeDisabled();
+    expect(screen.getByLabelText('Approver PIN')).toHaveValue('');
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
+
+  it('records an attempt that reached the shop instead of discarding it', async () => {
+    persistTenderAttempt(savedAttempt());
+    mocks.discardAttempt.mockResolvedValue({ status: 'ACCEPTED', result: accepted(0) });
+    mocks.queries.counterCart!.data = cart({
+      status: 'COMPLETED',
+      receiptNumber: 42,
+      totals: { grossMinor: 12550, discountMinor: 0, netMinor: 12550, tenderedMinor: 12550 },
+    });
+    renderPayment(<PharmacyCounterConsole />);
+    await discardWith();
+    await screen.findByText(/Payment recorded\. The attempt was not discarded/);
+    await waitFor(() => expect(readTenderAttempt(scope)).toEqual({ status: 'empty' }));
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
+
+  it('needs an approver, a PIN and a reason before it can be sent', async () => {
+    persistTenderAttempt(savedAttempt());
+    renderPayment(<PharmacyCounterConsole />);
+    fireEvent.click(screen.getByRole('button', { name: 'Supervisor: discard this attempt' }));
+    const send = screen.getByRole('button', { name: 'Discard payment attempt' });
+    expect(send).toBeDisabled();
+    const approver = await screen.findByLabelText('Approving manager or owner');
+    await waitFor(() => expect(approver).toBeEnabled());
+    fireEvent.change(approver, { target: { value: 'staff-manager' } });
+    fireEvent.change(screen.getByLabelText('Approver PIN'), { target: { value: '4321' } });
+    expect(send).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'No money taken' } });
+    expect(send).toBeEnabled();
+    expect(mocks.discardAttempt).not.toHaveBeenCalled();
   });
 });
 
