@@ -50,7 +50,15 @@ describe('DEV-748 loyalty card panel', () => {
     expect(printed.querySelector('path')?.getAttribute('fill')).toBe('#000');
     expect(printed.querySelector('path')?.getAttribute('d')).toBe(qrSvgPath(encodeQr(CODE), 4));
     expect(printed.querySelector('rect')?.getAttribute('fill')).toBe('#fff');
-    expect(printed.textContent).toBe('Loyalty cardDFLC ABCD EFGH IJKL MNOP QRST UVWX YZ');
+    // The card prints exactly a heading and the code, and no other text (no name, phone or
+    // balance). Compared per line, whitespace-normalized, so wrapping cannot break it.
+    const lines = [...printed.querySelectorAll('p')].map((p) =>
+      (p.textContent ?? '').replace(/\s+/g, ' ').trim()
+    );
+    expect(lines).toEqual(['Loyalty card', 'DFLC ABCD EFGH IJKL MNOP QRST UVWX YZ']);
+    expect((printed.textContent ?? '').replace(/\s+/g, '')).toBe(
+      lines.join('').replace(/\s+/g, '')
+    );
     open.mockRestore();
   });
 

@@ -2,11 +2,15 @@ import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
-const consent = vi.hoisted(() => ({ granted: vi.fn() }));
+const consent = vi.hoisted(() => ({
+  granted: vi.fn<(db: unknown, organizationId: string, customerId: string) => Promise<boolean>>(),
+  lock: vi.fn<(db: unknown, organizationId: string, customerId: string) => Promise<void>>(),
+}));
 vi.mock('./loyalty-program', async () => ({
   ...(await vi.importActual<typeof import('./loyalty-program')>('./loyalty-program')),
   hasLoyaltyEarningConsent: consent.granted,
 }));
+vi.mock('./consent-writer', () => ({ lockCustomerConsent: consent.lock }));
 
 import { PharmacyLoyaltyError } from './customer-loyalty';
 import {
@@ -50,12 +54,20 @@ describe('DEV-748 loyalty card codes', () => {
   });
 });
 
-function cardDb(active: { id: string; issuedAt: Date } | null = null) {
+type ActiveCard = { id: string; issuedAt: Date };
+
+function cardDb(active: ActiveCard | null = null) {
   const db = {
-    pharmacyCustomer: { findFirst: vi.fn().mockResolvedValue({ id: 'customer-a' }) },
+    pharmacyCustomer: {
+      findFirst: vi
+        .fn<(args: unknown) => Promise<{ id: string } | null>>()
+        .mockResolvedValue({ id: 'customer-a' }),
+    },
     pharmacyLoyaltyCard: {
-      findFirst: vi.fn().mockResolvedValue(active),
-      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      findFirst: vi.fn<(args: unknown) => Promise<ActiveCard | null>>().mockResolvedValue(active),
+      updateMany: vi
+        .fn<(args: unknown) => Promise<{ count: number }>>()
+        .mockResolvedValue({ count: 1 }),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
         id: 'card-new',
         issuedAt: new Date('2026-11-15T00:00:00Z'),
@@ -150,42 +162,66 @@ describe('DEV-748 issuing and replacing a card', () => {
       revokeLoyaltyCard(db as never, scope, { customerId: 'customer-a', reason: 'Stolen' })
     ).rejects.toEqual(new PharmacyLoyaltyError('LOYALTY_CARD_NOT_ACTIVE'));
   });
+
+  it('takes the customer lock an issue takes before reading the working card', async () => {
+    const db = cardDb({ id: 'card-old', issuedAt: new Date() });
+    await revokeLoyaltyCard(db as never, scope, { customerId: 'customer-a', reason: 'Stolen' });
+    expect(consent.lock).toHaveBeenCalledExactlyOnceWith(db, 'org-a', 'customer-a');
+    expect(consent.lock.mock.invocationCallOrder[0]).toBeLessThan(
+      db.pharmacyLoyaltyCard.findFirst.mock.invocationCallOrder[0]!
+    );
+  });
 });
 
-function scanDb(card: unknown) {
+type ScannedCard = ReturnType<typeof customerCard>;
+type Consent = { granted: boolean; revokedAt: Date | null };
+type RawQuery = { sql: string; values: unknown[] };
+
+function scanDb(card: ScannedCard | null) {
   return {
-    pharmacyLoyaltyCard: { findFirst: vi.fn().mockResolvedValue(card) },
+    pharmacyLoyaltyCard: {
+      findFirst: vi.fn<(args: unknown) => Promise<ScannedCard | null>>().mockResolvedValue(card),
+    },
     patientConsent: {
-      findFirst: vi.fn().mockResolvedValue({ granted: true, revokedAt: null }),
+      findFirst: vi
+        .fn<(args: unknown) => Promise<Consent | null>>()
+        .mockResolvedValue({ granted: true, revokedAt: null }),
     },
-    $queryRaw: vi.fn().mockResolvedValue([]),
+    // The sale lock returns its row; the card re-read under lock finds the card still working.
+    $queryRaw: vi.fn(async (query: RawQuery) =>
+      query.sql.includes('pharmacy_loyalty_cards') ? [{ id: 'card-a' }] : [{ id: 'sale-a' }]
+    ),
     pharmacySale: {
-      findFirst: vi.fn().mockResolvedValue({ id: 'sale-a', status: 'OPEN' }),
-      update: vi.fn(),
+      findFirst: vi
+        .fn<(args: unknown) => Promise<{ id: string; status: string } | null>>()
+        .mockResolvedValue({ id: 'sale-a', status: 'OPEN' }),
+      update: vi.fn<(args: unknown) => Promise<unknown>>(),
     },
-    pharmacySaleLine: { findFirst: vi.fn().mockResolvedValue(null) },
+    pharmacySaleLine: {
+      findFirst: vi.fn<(args: unknown) => Promise<{ id: string } | null>>().mockResolvedValue(null),
+    },
     pharmacyCustomer: {
-      upsert: vi.fn().mockResolvedValue({
-        id: 'customer-a',
-        displayName: 'Ayesha',
-        phoneLast4: '1234',
-      }),
+      upsert: vi
+        .fn<(args: unknown) => Promise<{ id: string; displayName: string; phoneLast4: string }>>()
+        .mockResolvedValue({ id: 'customer-a', displayName: 'Ayesha', phoneLast4: '1234' }),
     },
   };
 }
 
-const customerCard = (customer: Record<string, unknown> = {}) => ({
-  id: 'card-a',
-  customer: {
-    id: 'customer-a',
-    organizationId: 'org-a',
-    patientId: 'patient-a',
-    displayName: 'Ayesha',
-    phoneLast4: '1234',
-    active: true,
-    ...customer,
-  },
-});
+function customerCard(customer: Record<string, unknown> = {}) {
+  return {
+    id: 'card-a',
+    customer: {
+      id: 'customer-a',
+      organizationId: 'org-a',
+      patientId: 'patient-a',
+      displayName: 'Ayesha',
+      phoneLast4: '1234',
+      active: true,
+      ...customer,
+    },
+  };
+}
 
 describe('DEV-748 scanning a card at the counter', () => {
   it('links the card holder to the open bill through the consent-checked link', async () => {
@@ -236,6 +272,34 @@ describe('DEV-748 scanning a card at the counter', () => {
         linkLoyaltyCardToSale(malformed as never, scope, { saleId: 'sale-a', code })
       ).rejects.toEqual(new PharmacyLoyaltyError('LOYALTY_CARD_NOT_RECOGNISED'));
     expect(malformed.pharmacyLoyaltyCard.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('re-reads the card under lock, in sale, customer, card order, before linking', async () => {
+    const db = scanDb(customerCard());
+    await linkLoyaltyCardToSale(db as never, scope, { saleId: 'sale-a', code: CODE });
+    const [saleLock, cardLock] = db.$queryRaw.mock.calls.map(([query]) => query.sql);
+    expect(saleLock).toContain('FROM pharmacy_sales');
+    expect(saleLock).toContain('FOR UPDATE');
+    expect(cardLock).toContain('FROM pharmacy_loyalty_cards');
+    expect(cardLock).toContain('"revokedAt" IS NULL FOR SHARE');
+    expect(db.$queryRaw.mock.calls[1]![0].values).toEqual(['org-a', 'card-a', 'customer-a']);
+    const order = (mock: { mock: { invocationCallOrder: number[] } }, i = 0) =>
+      mock.mock.invocationCallOrder[i]!;
+    expect(order(db.$queryRaw, 0)).toBeLessThan(order(consent.lock));
+    expect(order(consent.lock)).toBeLessThan(order(db.$queryRaw, 1));
+    expect(order(db.$queryRaw, 1)).toBeLessThan(order(db.pharmacySale.update));
+  });
+
+  it('refuses a card revoked after it was looked up, before touching the bill', async () => {
+    const db = scanDb(customerCard());
+    db.$queryRaw.mockImplementation(async (query: RawQuery) =>
+      query.sql.includes('pharmacy_loyalty_cards') ? [] : [{ id: 'sale-a' }]
+    );
+    await expect(
+      linkLoyaltyCardToSale(db as never, scope, { saleId: 'sale-a', code: CODE })
+    ).rejects.toEqual(new PharmacyLoyaltyError('LOYALTY_CARD_NOT_RECOGNISED'));
+    expect(db.pharmacyCustomer.upsert).not.toHaveBeenCalled();
+    expect(db.pharmacySale.update).not.toHaveBeenCalled();
   });
 
   it('still requires current loyalty consent for the card holder', async () => {

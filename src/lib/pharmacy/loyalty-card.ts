@@ -2,8 +2,10 @@ import 'server-only';
 
 import { createHash, randomBytes } from 'node:crypto';
 
+import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { lockCustomerConsent } from './consent-writer';
 import { linkCustomerToSale, PharmacyLoyaltyError } from './customer-loyalty';
 import {
   LOYALTY_CARD_PREFIX,
@@ -122,6 +124,9 @@ export async function revokeLoyaltyCard(
     select: { id: true },
   });
   if (!customer) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
+  // The same customer lock an issue or replacement takes, so a revoke never races a replacement
+  // into refusing with "no working card" while the new card stays active.
+  await lockCustomerConsent(db, scope.organizationId, customer.id);
   const active = await readActiveLoyaltyCard(db, scope.organizationId, customer.id);
   if (!active) throw new PharmacyLoyaltyError('LOYALTY_CARD_NOT_ACTIVE');
   const revoked = await db.pharmacyLoyaltyCard.updateMany({
@@ -169,6 +174,18 @@ export async function linkLoyaltyCardToSale(
   const customer = card?.customer;
   if (!card || !customer?.active || customer.organizationId !== scope.organizationId)
     throw new PharmacyLoyaltyError('LOYALTY_CARD_NOT_RECOGNISED');
+  // Locks in one order on every path: sale, then patient and customer (as a redemption takes
+  // them), then the card (as an issue, replacement or revoke takes customer, then card). The card
+  // is re-read under that lock: a revoke that committed after the lookup above is seen here and
+  // refuses the scan, and one that starts later waits until this link has committed.
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM pharmacy_sales WHERE id=${input.saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
+  );
+  await lockCustomerConsent(db, scope.organizationId, customer.id);
+  const working = await db.$queryRaw<Array<{ id: string }>>(
+    Prisma.sql`SELECT id FROM pharmacy_loyalty_cards WHERE "organizationId"=${scope.organizationId} AND id=${card.id} AND "customerId"=${customer.id} AND "revokedAt" IS NULL FOR SHARE`
+  );
+  if (working.length !== 1) throw new PharmacyLoyaltyError('LOYALTY_CARD_NOT_RECOGNISED');
   const linked = await linkCustomerToSale(db, scope, {
     saleId: input.saleId,
     patientId: customer.patientId,

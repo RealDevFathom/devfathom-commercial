@@ -71,7 +71,20 @@ function uniqueViolation() {
 }
 
 const db = {
-  $queryRaw: vi.fn(async () => []),
+  // Row locks are the database's; the card re-read under lock answers from the store.
+  $queryRaw: vi.fn(async (query: { sql: string; values: unknown[] }) => {
+    if (!query.sql.includes('pharmacy_loyalty_cards')) return [];
+    const [organizationId, cardId, customerId] = query.values;
+    return store.cards
+      .filter(
+        (c) =>
+          c.organizationId === organizationId &&
+          c.id === cardId &&
+          c.customerId === customerId &&
+          !c.revokedAt
+      )
+      .map((c) => ({ id: c.id }));
+  }),
   patientConsent: {
     findFirst: vi.fn(async ({ where }: { where: Row }) => {
       const rows = store.consents.filter((c) => matches(c, where));
@@ -195,7 +208,11 @@ function openSale(scope: { organizationId: string; branchId: string }, grossMino
     status: 'OPEN',
     customerId: null as string | null,
     lines: [
-      { grossMinor, discountMinor: 0, medicine: { rx: false, restricted: false, controlled: false } },
+      {
+        grossMinor,
+        discountMinor: 0,
+        medicine: { rx: false, restricted: false, controlled: false },
+      },
     ],
   };
   store.sales.push(sale);
@@ -216,7 +233,9 @@ function payCash(sale: { id: string; organizationId: string; branchId: string },
 
 function balance(branchId: string, customerId = 'customer-a') {
   return store.entries
-    .filter((e) => e.organizationId === ORG && e.branchId === branchId && e.customerId === customerId)
+    .filter(
+      (e) => e.organizationId === ORG && e.branchId === branchId && e.customerId === customerId
+    )
     .reduce((sum, e) => sum + Number(e.points), 0);
 }
 
@@ -245,8 +264,20 @@ beforeEach(() => {
       },
     ],
     consents: [
-      { organizationId: ORG, patientId: 'patient-a', purpose: 'LOYALTY', granted: true, revokedAt: null },
-      { organizationId: 'org-b', patientId: 'patient-z', purpose: 'LOYALTY', granted: true, revokedAt: null },
+      {
+        organizationId: ORG,
+        patientId: 'patient-a',
+        purpose: 'LOYALTY',
+        granted: true,
+        revokedAt: null,
+      },
+      {
+        organizationId: 'org-b',
+        patientId: 'patient-z',
+        purpose: 'LOYALTY',
+        granted: true,
+        revokedAt: null,
+      },
     ],
     cards: [],
     sales: [],
@@ -396,6 +427,22 @@ describe('DEV-748 a loyalty card through its whole life', () => {
     await expect(
       issueLoyaltyCard(db as never, owner, { customerId: 'customer-z' })
     ).rejects.toEqual(new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND'));
+  });
+
+  it('refuses a scan whose card is revoked between its lookup and the link', async () => {
+    const card = await issueLoyaltyCard(db as never, owner, { customerId: 'customer-a' });
+    const sale = openSale(branchA, 10_000);
+    // The manager's revoke commits after the scan read the card, before it took the locks.
+    const lookup = db.pharmacyLoyaltyCard.findFirst.getMockImplementation()!;
+    db.pharmacyLoyaltyCard.findFirst.mockImplementationOnce(async (args) => {
+      const found = await lookup(args);
+      await revokeLoyaltyCard(db as never, owner, { customerId: 'customer-a', reason: 'Stolen' });
+      return found;
+    });
+    await expect(
+      linkLoyaltyCardToSale(db as never, branchA, { saleId: sale.id, code: card.code })
+    ).rejects.toEqual(notRecognised);
+    expect(sale.customerId).toBeNull();
   });
 
   it('stops a card working once its holder withdraws loyalty consent', async () => {
