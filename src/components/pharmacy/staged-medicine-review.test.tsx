@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   detail: vi.fn(),
   context: vi.fn(),
 }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
 vi.mock('@/server/routers/pharmacy-staged-review', () => ({
   pharmacyStagedReviewRouter: {
@@ -125,6 +126,7 @@ describe('staged medicine review UI', () => {
     );
     expect(screen.getByText('Source SHA256 recorded on row')).toBeTruthy();
     expect(screen.getByText('Unrecorded source checksum')).toBeTruthy();
+    expect(screen.getByText('not recorded (staged as raw count)')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'All open exceptions in this batch' })).toBeTruthy();
     expect(screen.getAllByText('1.0000').length).toBeGreaterThan(0);
     expect(screen.getAllByText('1.000000').length).toBeGreaterThan(0);

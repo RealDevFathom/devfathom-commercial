@@ -33,6 +33,7 @@ export type ReviewRow = {
   rowNumber: number;
   productName: string | null;
   packLabel: string | null;
+  packFactor?: bigint | null;
   quantityCanonical: bigint | null;
   rawPayload: Prisma.JsonValue;
   exceptions: { bucket: ExceptionBucket; status: string; severity: string }[];
@@ -41,7 +42,11 @@ export type ReviewRow = {
 export function stagedReference(
   row: ReviewRow,
   source: { id: string; contentHash: string },
-  batchId: string
+  batchId: string,
+  /** The batch's recorded mapping choice; null means a legacy batch that recorded none. */
+  batchQuantityUnit: string | null = null,
+  /** Header of the quantity column chosen in the mapping; null for legacy batches. */
+  batchQuantityColumn: string | null = null
 ) {
   const raw =
     row.rawPayload && typeof row.rawPayload === 'object' && !Array.isArray(row.rawPayload)
@@ -54,6 +59,42 @@ export function stagedReference(
   ) as Record<(typeof SOURCE_REFERENCE_COLUMNS)[number], string | null>;
   const sourceHash = cell('__source_sha256');
   const sourceRow = cell('__source_row');
+  // Only the batch is authoritative; row JSON (an uploaded column) never records a choice.
+  const quantityUnit =
+    batchQuantityUnit === 'PACKS' || batchQuantityUnit === 'UNITS' ? batchQuantityUnit : null;
+  const suppliedQuantity = (batchQuantityColumn ? cell(batchQuantityColumn) : null)?.trim() ?? '';
+  const canonical = row.quantityCanonical;
+  const packFactor = row.packFactor;
+  const quantityReview = {
+    unit: quantityUnit,
+    choiceLabel:
+      quantityUnit === 'PACKS'
+        ? 'Packs'
+        : quantityUnit === 'UNITS'
+          ? 'Units'
+          : 'not recorded (staged as raw count)',
+    // Packs are only claimed when the mapping says so and the factor is known.
+    packs:
+      quantityUnit === 'PACKS' && canonical !== null && packFactor
+        ? (canonical / packFactor).toString()
+        : null,
+    units: canonical?.toString() ?? null,
+    unitsPerPack: packFactor?.toString() ?? null,
+    label:
+      canonical === null
+        ? suppliedQuantity && quantityUnit
+          ? quantityUnit === 'PACKS'
+            ? `Unresolved: "${suppliedQuantity}" packs (no countable pack factor)`
+            : `Unresolved: "${suppliedQuantity}" units (not a whole count)`
+          : suppliedQuantity
+            ? `Unresolved: "${suppliedQuantity}" (choose packs or units)`
+            : null
+        : quantityUnit === null
+          ? `${canonical} (staged as raw count)`
+          : quantityUnit === 'PACKS' && packFactor
+            ? `${canonical / packFactor} packs × ${packFactor} = ${canonical} units`
+            : `${canonical} units`,
+  };
   const flags = cell('__review_flags')?.split(';').filter(Boolean) ?? [];
   const lineage =
     sourceHash === null
@@ -82,6 +123,7 @@ export function stagedReference(
       ? naturalKey(MIGRATION_TARGET_KEYS.PRODUCT, row.productName)
       : null,
     canonicalQuantity: row.quantityCanonical?.toString() ?? null,
+    quantityReview,
     status: 'Staged — unverified' as const,
     catalogueStatus: 'Identity / pack review required' as const,
     draftStatus: 'No linked draft established' as const,
