@@ -157,6 +157,32 @@ describe('inventory table keyboard scrolling', () => {
   });
 });
 
+describe('DEV-862 salt and strength under the product name', () => {
+  it('shows the salt and strength under the name when recorded', async () => {
+    lots.mockResolvedValue([
+      {
+        ...lot,
+        batch: {
+          ...lot.batch,
+          medicine: {
+            productName: 'Medicine A',
+            brandName: null,
+            strengths: [{ value: '500.000000', unit: 'mg', ingredient: { name: 'paracetamol' } }],
+          },
+        },
+      },
+    ]);
+    await show();
+    expect(screen.getByText('paracetamol 500 mg')).toBeInTheDocument();
+  });
+
+  it('shows nothing extra when no strength is recorded', async () => {
+    await show();
+    expect(screen.queryByText(/paracetamol/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Batch B-100/)).toBeInTheDocument();
+  });
+});
+
 describe('physical count prerequisites', () => {
   function countCard() {
     return within(

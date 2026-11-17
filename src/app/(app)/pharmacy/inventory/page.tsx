@@ -37,6 +37,7 @@ import {
   admittedInventoryBranchIds,
   pharmacyInventoryRouter,
 } from '@/server/routers/pharmacy-inventory';
+import { renderStockComposition } from '@/lib/pharmacy/counter';
 import { createTRPCContext } from '@/server/trpc';
 
 import { BreakPackForm } from './break-pack-form';
@@ -244,7 +245,20 @@ export default async function PharmacyInventoryPage({
       where: { organizationId, branchId: branch.id },
       orderBy: [{ batch: { expiresAt: 'asc' } }, { createdAt: 'asc' }],
       include: {
-        batch: { include: { medicine: { select: { productName: true, brandName: true } } } },
+        batch: {
+          include: {
+            medicine: {
+              select: {
+                productName: true,
+                brandName: true,
+                strengths: {
+                  orderBy: { createdAt: 'asc' },
+                  select: { value: true, unit: true, ingredient: { select: { name: true } } },
+                },
+              },
+            },
+          },
+        },
         balances: { include: { location: true } },
         // DEV-727: the received pack hierarchy, so stock reads as boxes + strips.
         packLevel: {
@@ -656,6 +670,11 @@ export default async function PharmacyInventoryPage({
                     <span className="font-medium text-text-strong">
                       {lot.batch.medicine.brandName ?? lot.batch.medicine.productName}
                     </span>
+                    {renderStockComposition(lot.batch.medicine.strengths ?? []) ? (
+                      <span dir="auto" className="block text-xs text-text-body">
+                        {renderStockComposition(lot.batch.medicine.strengths ?? [])}
+                      </span>
+                    ) : null}
                     <span className="block text-xs text-text-muted">
                       Batch {lot.batch.batchNumber} · {lot.supplierName}
                     </span>

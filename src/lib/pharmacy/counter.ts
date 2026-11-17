@@ -142,6 +142,22 @@ function renderStrength(components: readonly { value: unknown; unit: string }[])
 }
 
 /**
+ * DEV-862: the salt and strength a stock list shows under the product name,
+ * for example `paracetamol 500 mg` or `paracetamol 500 mg + caffeine 30 mg`.
+ * Returns null when nothing is recorded, so the caller renders nothing extra.
+ */
+export function renderStockComposition(
+  components: readonly { value: unknown; unit: string; ingredient: { name: string } }[]
+): string | null {
+  if (components.length === 0) return null;
+  return components
+    .map(
+      (c) => `${c.ingredient.name.trim()} ${renderStrengthValue(c.value)} ${c.unit}`.trim()
+    )
+    .join(' + ');
+}
+
+/**
  * POS-02: every field a counter searches by.
  *
  * A scanned barcode is resolved by exact normalized code and wins outright —
