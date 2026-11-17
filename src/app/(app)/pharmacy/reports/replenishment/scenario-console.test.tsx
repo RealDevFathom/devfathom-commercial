@@ -289,5 +289,63 @@ it('uses plain wording instead of statistics jargon', () => {
   expect(text).not.toContain('Weekly seasonal naive');
   expect(text).not.toContain('forecast origin');
   expect(text).not.toContain('USER_SUPPLIED_ASSUMPTIONS');
-  expect(text).not.toContain('Basis:');
+});
+
+it('shows the planning basis in plain words once a report is returned', async () => {
+  render(<ScenarioConsole {...props} financial />);
+  const input = await typeAndSearch();
+  fireEvent.keyDown(input, { key: 'ArrowDown' });
+  fireEvent.keyDown(input, { key: 'Enter' });
+  const provenance = {
+    kind: 'OBSERVED_TRANSACTIONS',
+    reference: 'sales',
+    readAt: 'x',
+    sources: [],
+  };
+  const scope = { organizationId: 'org-1', branchId: 'branch-1', medicineId: 'medicine-1' };
+  mocks.replenishment.mockImplementationOnce(
+    async (input: { historyStartDate: string; originDate: string }) => ({
+      scope,
+      readAt: '2026-11-03T00:00:00Z',
+      permissions: { financial: true, operational: true },
+      observations: {
+        demand: {
+          scope,
+          period: { startDate: input.historyStartDate, endDateExclusive: input.originDate },
+          provenance,
+          consumption: { observedCanonicalUnits: 0 },
+          coverage: {},
+          days: [],
+          missingInputs: [],
+        },
+        supply: {
+          scope,
+          stock: [],
+          excludedStock: [],
+          inbound: [],
+          limitations: [],
+          constraints: {},
+          inventorySource: { kind: 'x', reference: 'y', asOf: 'z' },
+        },
+        supplyCoverage: { status: 'UNVERIFIED', reason: '', recordedEligibleLots: 0 },
+      },
+      forecast: { status: 'INSUFFICIENT_EVIDENCE', result: null },
+      backtest: { status: 'INELIGIBLE', result: null, reasons: [] },
+      planning: {
+        status: 'NOT_REQUESTED',
+        basis: 'USER_SUPPLIED_ASSUMPTIONS',
+        dailyDemandUnits: null,
+        decision: null,
+        goalComparison: null,
+      },
+      limitations: [],
+    })
+  );
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Read replenishment report' }));
+    await Promise.resolve();
+  });
+  const text = document.body.textContent ?? '';
+  expect(text).toContain('Based on: Your settings');
+  expect(text).not.toContain('USER_SUPPLIED_ASSUMPTIONS');
 });
