@@ -320,16 +320,6 @@ export async function assertStoredBranchMayOperate(
   branchId: string,
   action: BranchOperationAction
 ): Promise<void> {
-  const at = action.at ?? new Date();
-  const profile = await db.branchRegulatoryProfile.findFirst({
-    where: {
-      organizationId,
-      branchId,
-      ...regulatoryProfileInForceWhere(at, action.timeZone),
-    },
-    include: { jurisdictionRuleSet: true, branch: true },
-    orderBy: { effectiveFrom: 'desc' },
-  });
   const auditDenied = (reason: BranchOperationDenialReason, deniedAction: BranchOperationAction) =>
     recordAudit({
       organizationId,
@@ -345,6 +335,27 @@ export async function assertStoredBranchMayOperate(
       errorMessage: 'Branch operation denied by regulatory guard.',
       metadata: { operation: deniedAction.name, schedule: deniedAction.schedule ?? null },
     });
+  await checkStoredBranch(db, organizationId, branchId, action, auditDenied);
+}
+
+/** The stored-profile checks of `assertStoredBranchMayOperate`, with the denial hook supplied. */
+async function checkStoredBranch(
+  db: PrismaClient,
+  organizationId: string,
+  branchId: string,
+  action: BranchOperationAction,
+  auditDenied: BranchRegulatoryState['auditDenied']
+): Promise<void> {
+  const at = action.at ?? new Date();
+  const profile = await db.branchRegulatoryProfile.findFirst({
+    where: {
+      organizationId,
+      branchId,
+      ...regulatoryProfileInForceWhere(at, action.timeZone),
+    },
+    include: { jurisdictionRuleSet: true, branch: true },
+    orderBy: { effectiveFrom: 'desc' },
+  });
 
   if (!profile) {
     auditDenied('PROFILE_MISSING', action);
@@ -416,4 +427,39 @@ export async function assertStoredPharmacyMayOperate(
     ...action,
     timeZone: action.timeZone ?? organization.timezone,
   });
+}
+
+/**
+ * DEV-860: the reason `assertStoredPharmacyMayOperate` would refuse this action now, or
+ * null when it would pass. The counter's ready-to-sell check reads it before the first
+ * scan. It runs the same organization, profile, binding and rule checks, but takes no
+ * locks and writes no denial audit: it answers a question and authorizes nothing. Every
+ * operation still runs the asserting gate in its own transaction.
+ */
+export async function storedPharmacyOperationDenial(
+  db: PrismaClient,
+  organizationId: string,
+  branchId: string,
+  action: BranchOperationAction
+): Promise<BranchOperationDenialReason | null> {
+  const organization = await db.organization.findUnique({
+    where: { id: organizationId },
+    select: { status: true, timezone: true },
+  });
+  if (!organization || !OPERATING_ORGANIZATION_STATUSES.has(organization.status)) {
+    return 'ORGANIZATION_NOT_ACTIVE';
+  }
+  try {
+    await checkStoredBranch(
+      db,
+      organizationId,
+      branchId,
+      { ...action, timeZone: action.timeZone ?? organization.timezone },
+      () => undefined
+    );
+    return null;
+  } catch (error) {
+    if (error instanceof BranchOperationDeniedError) return error.reason;
+    throw error;
+  }
 }

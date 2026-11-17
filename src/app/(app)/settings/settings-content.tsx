@@ -46,6 +46,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { trpc } from '@/lib/trpc';
+import { ApprovalAuthenticatorSection } from './approval-authenticator-section';
 import { PrintRoutingSection } from '@/components/restaurant/print-routing-section';
 export { PrintRoutingSection };
 import { useEntitlements } from '@/components/entitlements-provider';
@@ -53,6 +54,7 @@ import { supportsRestaurantPrintSettings, type EntitlementView } from '@/lib/mod
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { cn } from '@/lib/utils';
+import { AuthenticatorQr } from '@/components/ui/authenticator-qr';
 import {
   usePreferences,
   type Density,
@@ -134,6 +136,9 @@ export function SettingsContent() {
 
         {/* Two-factor authentication (IMP-AUTH-02) */}
         <TwoFactorSection />
+
+        {/* Authenticator for manager and owner approvals (DEV-879) */}
+        <ApprovalAuthenticatorSection />
 
         {/* Recent sign-ins (IMP-AUTH-03 — visibility half) */}
         <RecentSignInsSection />
@@ -1247,14 +1252,16 @@ function TwoFactorSection() {
                 Authenticator.
               </li>
               <li>
-                Add an account using a setup key. Give it a name you recognize, enter the key below,
-                and choose &quot;Time based&quot; if asked.
+                Add an account by scanning the QR code below. If you cannot scan it, add the account
+                using a setup key instead: give it a name you recognize, enter the key below, and
+                choose &quot;Time based&quot; if asked.
               </li>
               <li>
                 Enter the 6-digit code shown in the app below, then select &quot;Verify &amp;
                 enable&quot;.
               </li>
             </ol>
+            <AuthenticatorQr uri={enrolling.otpauthUri} />
             <div>
               <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
                 Setup key

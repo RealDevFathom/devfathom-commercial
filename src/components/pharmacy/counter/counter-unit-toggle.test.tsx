@@ -206,14 +206,17 @@ describe('CounterUnitToggle (POS-03)', () => {
     expect(screen.getByRole('status')).not.toHaveTextContent('Out of stock');
   });
 
-  it.each([false, true])('explains exhausted stock without a pack warning (inline: %s)', (inline) => {
-    renderToggle({ options: [], onHandUnits: 0, selected: null, preview: null, inline });
-    expect(screen.getByRole('status')).toHaveTextContent('Out of stock');
-    expect(screen.getByRole('status')).toHaveTextContent('Capture as unfulfilled demand');
-    expect(screen.getByRole('status')).not.toHaveTextContent('pack hierarchy');
-    expect(screen.queryAllByRole('radio')).toHaveLength(0);
-    expect(screen.queryByLabelText('Quantity')).not.toBeInTheDocument();
-  });
+  it.each([false, true])(
+    'explains exhausted stock without a pack warning (inline: %s)',
+    (inline) => {
+      renderToggle({ options: [], onHandUnits: 0, selected: null, preview: null, inline });
+      expect(screen.getByRole('status')).toHaveTextContent('Out of stock');
+      expect(screen.getByRole('status')).toHaveTextContent('Capture as unfulfilled demand');
+      expect(screen.getByRole('status')).not.toHaveTextContent('pack hierarchy');
+      expect(screen.queryAllByRole('radio')).toHaveLength(0);
+      expect(screen.queryByLabelText('Quantity')).not.toBeInTheDocument();
+    }
+  );
 
   it('wraps the inline price preview instead of using fixed columns that overlap the Add button', () => {
     renderToggle({ inline: true });
@@ -223,6 +226,27 @@ describe('CounterUnitToggle (POS-03)', () => {
     expect(preview.className).not.toContain('grid-cols-3');
     expect(preview.parentElement!.className).toContain('flex-wrap');
   });
+});
+
+it('DEV-705 moves keyboard focus with the radio selection so consecutive arrows traverse units', () => {
+  const props = renderToggle({ selected: 'STRIP' });
+  screen.getByRole('radio', { name: /Strip/ }).focus();
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
+  expect(props.onSelect).toHaveBeenLastCalledWith('UNIT');
+  expect(screen.getByRole('radio', { name: /Unit/ })).toHaveFocus();
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
+  expect(props.onSelect).toHaveBeenLastCalledWith('PACK');
+  expect(screen.getByRole('radio', { name: /Pack/ })).toHaveFocus();
+});
+
+it.each([
+  ['an empty quantity', { quantity: '', preview: null }],
+  ['a quantity above safe stock', { quantity: '9', preview: previewFor('STRIP', 9, 5) }],
+])('DEV-705 hands Enter in quantity to the add handler for %s', (_case, props) => {
+  const onSubmit = vi.fn();
+  renderToggle({ ...props, onSubmit });
+  fireEvent.keyDown(screen.getByLabelText('Quantity'), { key: 'Enter' });
+  expect(onSubmit).toHaveBeenCalledOnce();
 });
 
 describe('DEV-633 quantity input', () => {

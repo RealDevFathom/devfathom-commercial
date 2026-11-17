@@ -237,3 +237,13 @@ it('redacts owner PIN before resolver execution including validation and capabil
     reportId: 'pv_1',
   });
 });
+
+it('redacts a payment reference so a card number typed into one is never audited (DEV-875)', () => {
+  expect(
+    toAuditJson({ type: 'BANK_TRANSFER', providerRef: '4242424242424242', amountMinor: 3000 })
+  ).toEqual({
+    type: 'BANK_TRANSFER',
+    providerRef: '[REDACTED]',
+    amountMinor: 3000,
+  });
+});

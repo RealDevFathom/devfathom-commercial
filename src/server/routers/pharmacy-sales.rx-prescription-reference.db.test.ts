@@ -31,6 +31,7 @@ const ids = {
   branch: `br_r518rx_${suffix}`,
   cashier: `user_r518rx_cashier_${suffix}`,
   pharmacist: `user_r518rx_pharm_${suffix}`,
+  reviewer: `user_r518rx_reviewer_${suffix}`,
 };
 const rulesId = pharmacyRegulatoryFixture(ids.branch).rules.id;
 const DAY = 24 * 60 * 60 * 1000;
@@ -56,7 +57,7 @@ type ScopedDb = import('@/lib/tenancy/scoped-db').ScopedDb;
 type Medicine = { medicineId: string; presentationId: string; packLevelId: string };
 type SalesCaller = {
   create: (input: { branchId: string; deviceId: string }) => Promise<{ id: string }>;
-  addLine: (input: Record<string, unknown>) => Promise<{ line: { id: string } }>;
+  addLine: (input: Record<string, unknown>) => Promise<{ line: { id: string }; replayed: boolean }>;
   linkCustomer: (input: Record<string, unknown>) => Promise<unknown>;
   counterCart: (input: { branchId: string; saleId: string }) => Promise<{ lines: unknown[] }>;
   transition: (input: {
@@ -327,6 +328,7 @@ beforeAll(async () => {
     for (const [userId, capabilities] of [
       [ids.cashier, ['pharmacy:counter', 'pharmacy:orders']],
       [ids.pharmacist, ['pharmacy:dispense', 'pharmacy:counter']],
+      [ids.reviewer, ['pharmacy:dispense', 'pharmacy:counter']],
     ] as const) {
       await tx.organizationRole.create({
         data: {
@@ -360,7 +362,7 @@ beforeAll(async () => {
       },
     });
     rx = await medicineIn(tx, 'Amoxicillin 500mg', { rx: true }, 500);
-    otc = await medicineIn(tx, 'Paracetamol 500mg', {});
+    otc = await medicineIn(tx, 'Paracetamol 500mg', {}, 20);
     controlled = await medicineIn(tx, 'Tramadol 50mg', { controlled: true });
     patients.ayesha = (
       await tx.pharmacyPatient.create({ data: { displayName: 'Ayesha Khan' } })
@@ -665,12 +667,12 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
           data: {
             reviewItemId: review.id,
             kind: 'SIGN',
-            actorUserId: ids.pharmacist,
+            actorUserId: ids.reviewer,
             signedAt: new Date(),
           },
         });
       },
-      { userId: ids.pharmacist }
+      { userId: ids.reviewer }
     );
     await complete();
     const state = await withTenantDb(ids.org, async (tx) => ({
@@ -725,4 +727,29 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
       idempotencyKey: `rx-reference:${winningLineId}`,
     });
   });
+});
+
+describeIfDatabase('[DEF-10] counter API replay (DEV-874)', () => {
+  it.each(['ordinary', 'prescription'])(
+    'replays a committed %s line without duplicate review work',
+    async (path) => {
+      const saleId = await newSale(ids.pharmacist);
+      const request = line(
+        saleId,
+        path === 'ordinary' ? otc : rx,
+        path === 'ordinary' ? {} : withReference(lines.valid)
+      );
+      const first = await act(ids.pharmacist, (api) => api.addLine(request));
+      const replay = await act(ids.pharmacist, (api) => api.addLine(request));
+      expect(replay.line.id).toBe(first.line.id);
+      expect(replay.replayed).toBe(true);
+      await act(ids.pharmacist, async (_api, db) => {
+        expect(await db.pharmacySaleLine.count({ where: { saleId } })).toBe(1);
+        expect(
+          await db.pharmacyPharmacistReviewItem.count({ where: { saleLineId: first.line.id } })
+        ).toBe(path === 'prescription' ? 1 : 0);
+        expect(await db.pharmacySaleEvent.count({ where: { saleId, kind: 'LINE_ADDED' } })).toBe(1);
+      });
+    }
+  );
 });

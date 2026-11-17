@@ -83,6 +83,19 @@ function catalog(
 }
 
 describe('counter search relevance (DEV-500)', () => {
+  it('returns the recorded salt and strength as the row composition (DEV-862)', async () => {
+    const withStrength = {
+      ...medicine('with', 'Paracetamol', 'Panadol'),
+      strengths: [{ value: '500.000000', unit: 'mg', ingredient: { name: 'paracetamol' } }],
+    } as unknown as ReturnType<typeof medicine>;
+    const db = catalog([withStrength, medicine('without', 'Paracetab')]);
+    const result = await searchCounterCatalog(db as never, scope, { query: 'para' });
+    const byId = new Map(result.rows.map((r) => [r.medicineId, r]));
+    expect(byId.get('with')?.composition).toBe('paracetamol 500 mg');
+    // Nothing recorded: nothing invented.
+    expect(byId.get('without')?.composition).toBeNull();
+  });
+
   it('ranks a prefix ahead of an alphabetically earlier substring', async () => {
     const db = catalog([medicine('substring', 'Apara'), medicine('prefix', 'Paracetamol')]);
     const result = await searchCounterCatalog(db as never, scope, { query: ' PARA ' });

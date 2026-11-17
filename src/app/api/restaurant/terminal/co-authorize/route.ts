@@ -72,6 +72,10 @@ export const POST = withTerminalAuth(async (ctx, request) => {
     secret,
     branchId: ctx.device.branchId,
     now,
+    approval: {
+      action: 'restaurant.terminal.coAuthorize',
+      requestedByStaffProfileId: actingStaffProfileId,
+    },
   });
   if (!auth.ok) {
     if (auth.reason === 'LOCKED') {
