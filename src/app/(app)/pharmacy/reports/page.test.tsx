@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { TRPCError } from '@trpc/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -191,12 +191,87 @@ describe('pharmacy report catalog filters', () => {
     extraCatalog.metrics = [];
   });
 
+  it('DEV-61 puts summary figures before caveats and supporting reports', async () => {
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+    const summary = screen.getByRole('heading', { name: 'Selected period at a glance' });
+    const sales = within(summary.closest('[data-slot="section-card"]')!).getByText('PKR 100.00');
+    const caveat = screen.getByText(/Currency basis: current organization setting/);
+    expect(sales.compareDocumentPosition(caveat) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const demand = screen.getByRole('heading', { name: 'Observed unmet demand' });
+    expect(summary.compareDocumentPosition(demand) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('DEV-61 defaults the only authorized branch and the recent workspace week', async () => {
+    reportBranches.mockResolvedValueOnce({ branches: [{ id: 'b1', name: 'Main' }] });
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-16T21:00:00Z'));
+    try {
+      render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
+      expect(screen.getByRole('combobox', { name: 'Branch' })).toHaveValue('b1');
+      expect(commandCentre).toHaveBeenCalledWith({
+        branchId: 'b1',
+        from: '2026-11-11',
+        to: '2026-11-17',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('DEV-61 preserves off-screen report sections in Chromium A4 PDFs across the Studio matrix', async () => {
+    const { verifyReportPrint } =
+      await import('../../../../../tests/helpers/pharmacy-report-print');
+    const { container } = render(
+      await PharmacyReportsPage({
+        searchParams: Promise.resolve({ branch: 'b1', from: '2026-09-01', to: '2026-09-04' }),
+      })
+    );
+    await verifyReportPrint(container.innerHTML);
+  }, 120_000);
+
+  it('DEV-61 prints the loaded report without changing its selected filters', async () => {
+    const print = vi.spyOn(window, 'print').mockImplementation(() => {});
+    try {
+      render(
+        await PharmacyReportsPage({
+          searchParams: Promise.resolve({ branch: 'b1', from: '2026-09-01', to: '2026-09-04' }),
+        })
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Print / Save as PDF' }));
+      expect(print).toHaveBeenCalledOnce();
+      expect(screen.getByLabelText('From')).toHaveValue('2026-09-01');
+      expect(screen.getByLabelText('To')).toHaveValue('2026-09-04');
+    } finally {
+      print.mockRestore();
+    }
+  });
+
+  it('DEV-61 does not offer printing for an invalid range or failed report', async () => {
+    const first = render(
+      await PharmacyReportsPage({
+        searchParams: Promise.resolve({ from: '2026-09-05', to: '2026-09-01' }),
+      })
+    );
+    expect(screen.queryByRole('button', { name: 'Print / Save as PDF' })).toBeNull();
+    first.unmount();
+    commandCentre.mockRejectedValueOnce(new Error('Unavailable'));
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+    expect(screen.queryByRole('button', { name: 'Print / Save as PDF' })).toBeNull();
+  });
+
   it.each([
     [{ branch: 'b1' }, '/pharmacy/inventory/expiry?within=180&branch=b1'],
     [{}, '/pharmacy/inventory/expiry?within=180'],
   ])(
     'drills expiry value 180 days into the expiry board in the report branch scope (%o)',
     async (searchParams, href) => {
+      // This case exercises all-branch drill-through; a sole branch now auto-selects.
+      reportBranches.mockResolvedValueOnce({
+        branches: [
+          { id: 'b1', name: 'Main' },
+          { id: 'b2', name: 'Second' },
+        ],
+      });
       extraCatalog.reports = [
         {
           key: 'stock-expiry',
