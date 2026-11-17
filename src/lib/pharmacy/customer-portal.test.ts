@@ -103,6 +103,19 @@ describe('DEV-15 customer PWA sign-in', () => {
     expect(result.sentTo).toBe('•••• 4567');
   });
 
+  it('does not reset the failed-guess counter when a code is resent', async () => {
+    const update = vi.fn(async (_args: { data: Record<string, unknown> }) => ({}));
+    const db = asDb({
+      pharmacyCustomer: { findFirst: async () => customerRow },
+      pharmacyCustomerPortalLink: {
+        findUnique: async () => linkRow({ otpFailedAttempts: 5 }),
+        update,
+      },
+    });
+    await startPortalSignIn(db, ORG, TOKEN, async () => {});
+    expect(update.mock.calls[0][0].data).not.toHaveProperty('otpFailedAttempts');
+  });
+
   it('refuses a link from another tenant, revoked or expired', async () => {
     for (const row of [
       linkRow({ organizationId: 'org-2' }),
