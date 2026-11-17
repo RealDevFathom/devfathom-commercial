@@ -318,6 +318,65 @@ type AddSaleLineInput = {
   idempotencyKey: string;
 };
 
+/** Take the organization-wide request lock before any prescription, register or stock lock.
+ * Multi-line offline commands hold all their line keys before preparing stock. */
+export async function lockSaleLineKey(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId'>,
+  idempotencyKey: string
+) {
+  await db.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(
+    hashtextextended(${scope.organizationId + ':sale-line:' + idempotencyKey}, 0))`;
+}
+
+/** Read committed line evidence without dispensing or consuming a voucher again. */
+export async function replaySaleLine(db: ScopedDb, scope: LedgerScope, input: AddSaleLineInput) {
+  await lockSaleLineKey(db, scope, input.idempotencyKey);
+  const previous = await db.pharmacySaleLine.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      idempotencyKey: input.idempotencyKey,
+    },
+    include: { allocations: { orderBy: { stockMovementId: 'asc' } } },
+  });
+  if (!previous) return null;
+  // Never return another branch's line or let a key silently change its target or quantity.
+  if (
+    previous.branchId !== scope.branchId ||
+    previous.saleId !== input.saleId ||
+    previous.medicineId !== input.medicineId ||
+    previous.presentationId !== input.presentationId ||
+    previous.packLevelId !== input.packLevelId ||
+    previous.saleUnit !== input.saleUnit ||
+    previous.quantity !== input.quantity ||
+    previous.canonicalUnitsPerSaleUnit !== input.canonicalUnitsPerSaleUnit ||
+    previous.voucherId !== (input.voucherId ?? null) ||
+    (input.discountKind !== undefined && previous.discountKind !== input.discountKind) ||
+    (input.discountMinor !== undefined &&
+      previous.discountMinor !== input.discountMinor &&
+      // An explicit zero, like an omitted discount, opts into automatic promotions.
+      !(previous.promotionId && input.discountMinor === 0 && input.discountKind === undefined))
+  )
+    throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+  const { allocations, ...line } = previous;
+  return {
+    line,
+    allocation: {
+      allocations: allocations.map((part) => ({
+        inventoryLotId: part.inventoryLotId,
+        stockLocationId: part.stockLocationId,
+        units: part.canonicalUnits,
+      })),
+      movementIds: allocations.map((part) => part.stockMovementId),
+      recommendedLotId: null,
+      blocked: [],
+      overrideId: null,
+      discrepancyId: null,
+    },
+    replayed: true,
+  };
+}
+
 /**
  * DEV-830 (F05): the canonical units in one sale unit come from the stored medicine,
  * presentation and pack hierarchy, never from the request. The pack level must belong
@@ -520,6 +579,8 @@ async function addSaleLineWithAllocation(
   await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
     name: 'pharmacy.sale.dispense',
   });
+  const replay = !reservation ? await replaySaleLine(db, scope, input) : null;
+  if (replay) return replay;
   const sale = await saleInScope(db, scope, input.saleId);
   if (sale.status !== 'OPEN') throw new PharmacySaleError('INVALID_STATE');
   // Lock the sale row before allocating stock. At PostgreSQL READ COMMITTED,
@@ -757,7 +818,7 @@ async function addSaleLineWithAllocation(
         }
       : {}),
   });
-  return { line, allocation };
+  return { line, allocation, replayed: false };
 }
 
 /**

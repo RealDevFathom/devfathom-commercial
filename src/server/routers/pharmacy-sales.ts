@@ -143,6 +143,7 @@ import {
 } from '@/lib/pharmacy/duplicate-salt-acknowledgement';
 import {
   addSaleLine,
+  replaySaleLine,
   addRestockInterest,
   captureSafeRestockArrival,
   captureDemand,
@@ -2008,8 +2009,6 @@ export const pharmacySalesRouter = router({
         );
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          for (const { kind, approval } of approvals)
-            await confirmCounterApproval(db, scope, kind, approval);
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
@@ -2021,14 +2020,19 @@ export const pharmacySalesRouter = router({
             // #518: an Rx/restricted line needs the exact dispense grant (DENY wins).
             if (medicine) await assertRxSaleAllowed(db, scope, [medicine]);
             const { prescription } = input;
-            if (!prescription) return addSaleLine(db, scope, lineInput, COUNTER_LINE_PRICING);
             // Recording a prescription fill is a pharmacist's act, whatever the medicine.
             if (
+              prescription &&
               !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
                 db,
               }))
             )
               throw new PharmacyRxReferenceError('PRESCRIPTION_NEEDS_PHARMACIST');
+            const replay = await replaySaleLine(db, scope, lineInput);
+            if (replay) return replay;
+            for (const { kind, approval } of approvals)
+              await confirmCounterApproval(db, scope, kind, approval);
+            if (!prescription) return addSaleLine(db, scope, lineInput, COUNTER_LINE_PRICING);
             const units = input.quantity * input.canonicalUnitsPerSaleUnit;
             const reference = await resolvePrescriptionReference(db, scope, {
               ...prescription,
@@ -2116,6 +2120,12 @@ export const pharmacySalesRouter = router({
             where: { id: credential.id },
             data: clearLockout(),
           });
+          // DEV-874: a retry replays only after the independent pharmacist PIN passes again,
+          // so a missing or wrong PIN never returns the saved controlled line.
+          const replay = await replaySaleLine(db, scope, lineInput);
+          if (replay) return replay;
+          for (const { kind, approval } of approvals)
+            await confirmCounterApproval(db, scope, kind, approval);
           const refEntry = await earlierRegisterEntry(db, scope, authorization.refSerial);
           if (authorization.refSerial && !refEntry) {
             return { blocked: 'That earlier register serial is not on this branch.' };
@@ -2270,19 +2280,6 @@ export const pharmacySalesRouter = router({
           )
             return blocked;
           const units = input.quantity * input.canonicalUnitsPerSaleUnit;
-          const previous = await db.pharmacySaleLine.findFirst({
-            where: {
-              organizationId: scope.organizationId,
-              branchId: scope.branchId,
-              saleId: input.saleId,
-              idempotencyKey: input.idempotencyKey,
-            },
-          });
-          if (previous)
-            return {
-              blocked:
-                'This request was already recorded. Refresh the cart before adding another line.',
-            };
           if (
             !Number.isSafeInteger(units) ||
             rx.fills.reduce((sum, fill) => sum + fill.quantityCanonicalUnits, 0) + units >

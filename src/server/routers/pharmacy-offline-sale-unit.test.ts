@@ -185,3 +185,27 @@ describe('DEV-830 offline replay derives the sale-unit multiplier', () => {
     expect(mocks.addSaleLine.mock.calls[0]![3]).toEqual({ saleUnitAt: new Date(SALE_AT) });
   });
 });
+
+describe('DEV-874 offline add-line lock ordering', () => {
+  it('locks every line key before preparing stock, including later lines in the command', async () => {
+    const target = db();
+    const body = command(10);
+    body.lines.push({ ...body.lines[0]! });
+    await expect(replay(target, body)).rejects.toThrow('REACHED_LINE');
+    const calls = vi.mocked(target.$queryRaw).mock.calls as unknown as unknown[][];
+    const keys = calls.flatMap((call, index) =>
+      typeof call[1] === 'string' && call[1].startsWith('org_a:sale-line:')
+        ? [{ key: call[1], index }]
+        : []
+    );
+    expect(keys.map(({ key }) => key)).toEqual([
+      'org_a:sale-line:idem_1:0',
+      'org_a:sale-line:idem_1:1',
+    ]);
+    const stock = calls.findIndex(([query]) =>
+      Boolean((query as { sql?: string }).sql?.includes('AS "batchId"'))
+    );
+    expect(stock).toBeGreaterThanOrEqual(0);
+    for (const key of keys) expect(key.index).toBeLessThan(stock);
+  });
+});

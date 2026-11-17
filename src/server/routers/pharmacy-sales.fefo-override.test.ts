@@ -58,7 +58,9 @@ function fixture() {
   const transaction = vi.fn(async (callback: (tx: unknown) => unknown) => callback(db));
   const lotRead = vi.fn();
   const db = {
+    pharmacySaleLine: { findFirst: vi.fn(async () => null) },
     $transaction: transaction,
+    $queryRaw: vi.fn(async () => []),
     pharmacyBranch: {
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
