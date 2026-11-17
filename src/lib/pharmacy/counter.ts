@@ -426,6 +426,7 @@ export async function searchCounterCatalog(
     let best: { lot: LotRow; locationId: string } | null = null;
     let labelLot: CounterLabelLot | null = null;
     let labelLotRow: LotRow | null = null;
+    let labelLocationId: string | null = null;
     const sellableLots = new Map<string, LotRow>();
 
     for (const lot of medicineLots) {
@@ -450,7 +451,10 @@ export async function searchCounterCatalog(
           if (reason !== 'EMPTY') blocked.add(reason);
           continue;
         }
-        if (labelLot?.inventoryLotId === lot.id) labelLot.sellableUnits += balance.onHandUnits;
+        if (labelLot?.inventoryLotId === lot.id) {
+          labelLot.sellableUnits += balance.onHandUnits;
+          labelLocationId ??= balance.stockLocationId;
+        }
         onHandUnits += balance.onHandUnits;
         sellableLots.set(lot.id, lot);
         const better =
@@ -472,8 +476,10 @@ export async function searchCounterCatalog(
 
     // DEV-90: a sellable shelf-label lot is the one being sold, so its own pack
     // conversion and price drive the sale units, even when it is not FEFO's lot.
-    const priced: LotRow | null =
-      labelLotRow && labelLot?.blockedBy === null ? labelLotRow : (best?.lot ?? null);
+    const pricedFromLabel = Boolean(labelLotRow && labelLot?.blockedBy === null);
+    const priced: LotRow | null = pricedFromLabel ? labelLotRow : (best?.lot ?? null);
+    // The batch, expiry and location shown must belong to the same lot as the price.
+    const shownLocationId = pricedFromLabel ? labelLocationId : (best?.locationId ?? null);
 
     const presentationId =
       (priced && presentationByPackLevel.get(priced.packLevelId)) ??
@@ -533,7 +539,7 @@ export async function searchCounterCatalog(
         })
       : [];
 
-    const location = best ? locationById.get(best.locationId) : undefined;
+    const location = shownLocationId ? locationById.get(shownLocationId) : undefined;
     rows.push({
       medicineId: medicine.id,
       displayName: medicine.productName,
@@ -550,8 +556,8 @@ export async function searchCounterCatalog(
       unitsPerPack: priced?.unitsPerPack ?? null,
       printedMrpMinor: priced?.printedMrpMinor ?? null,
       roundingIncrementMinor,
-      batchNumber: best?.lot.batch.batchNumber ?? null,
-      nearestSafeExpiry: best?.lot.batch.expiresAt.toISOString() ?? null,
+      batchNumber: priced?.batch.batchNumber ?? null,
+      nearestSafeExpiry: priced?.batch.expiresAt.toISOString() ?? null,
       onHandUnits: availableUnits,
       saleableUnits,
       saleUnits,
@@ -890,5 +896,11 @@ export async function readCounterReceipt(
     lines,
     tenders,
     totals: counterReceiptTotals({ lines, tenders }),
+  };
+}
+s({ lines, tenders }),
+  };
+}
+}),
   };
 }
