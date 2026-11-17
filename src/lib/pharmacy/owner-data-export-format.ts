@@ -379,6 +379,7 @@ export function exportReadme(meta: OwnerDataExportMeta, counts: OwnerDataExportC
     'A cell that a spreadsheet would read as a formula starts with an apostrophe.',
     'medicines.csv, stock_lots.csv, customers.csv and suppliers.csv use the column names the',
     'DevFathom migration wizard reads, so they can be imported back in.',
+    'When mapping stock_lots.csv, explicitly choose Units for the quantity column; it contains base units, not packs.',
     '',
     ...sections.flatMap((section) => [section, '']),
   ].join('\n');
