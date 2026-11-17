@@ -414,6 +414,52 @@ describe('[DEF-10] add-line retry (DEV-874)', () => {
   });
 });
 
+describe('add-line replay discount identity (DEV-874)', () => {
+  const saved = (discount: Record<string, unknown>) => ({
+    ...lineInput,
+    branchId: scope.branchId,
+    voucherId: null,
+    promotionId: null,
+    discountKind: null,
+    discountMinor: 0,
+    ...discount,
+    allocations: [],
+  });
+
+  it.each([
+    ['omits a saved manual discount', { discountKind: 'DISCOUNT', discountMinor: 50 }, {}],
+    [
+      'changes a saved manual discount',
+      { discountKind: 'DISCOUNT', discountMinor: 50 },
+      { discountKind: 'DISCOUNT' as const, discountMinor: 40 },
+    ],
+    ['adds a discount to an undiscounted line', {}, { discountKind: 'DISCOUNT' as const }],
+    [
+      'adds a manual discount to a promoted line',
+      { promotionId: 'promotion-a', discountKind: 'PROMOTION', discountMinor: 20 },
+      { discountKind: 'DISCOUNT' as const, discountMinor: 20 },
+    ],
+  ])('refuses a retry that %s', async (_change, stored, requested) => {
+    const db = counterDb();
+    db.pharmacySaleLine.findFirst.mockResolvedValue(saved(stored));
+    await expect(addSaleLine(db as never, scope, { ...lineInput, ...requested })).rejects.toThrow(
+      'IDEMPOTENCY_CONFLICT'
+    );
+    expect(db.pharmacySaleLine.create).not.toHaveBeenCalled();
+  });
+
+  it('replays the same manual discount', async () => {
+    const db = counterDb();
+    db.pharmacySaleLine.findFirst.mockResolvedValue(
+      saved({ discountKind: 'DISCOUNT', discountMinor: 50 })
+    );
+    await expect(
+      addSaleLine(db as never, scope, { ...lineInput, discountKind: 'DISCOUNT', discountMinor: 50 })
+    ).resolves.toMatchObject({ replayed: true, line: { discountMinor: 50 } });
+    expect(db.pharmacySaleLine.create).not.toHaveBeenCalled();
+  });
+});
+
 describe('add-line replay scope (DEV-874)', () => {
   it.each([
     ['branch', { branchId: 'other-branch' }],

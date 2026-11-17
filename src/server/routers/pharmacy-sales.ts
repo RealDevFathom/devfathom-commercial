@@ -2029,7 +2029,15 @@ export const pharmacySalesRouter = router({
             )
               throw new PharmacyRxReferenceError('PRESCRIPTION_NEEDS_PHARMACIST');
             const replay = await replaySaleLine(db, scope, lineInput);
-            if (replay) return replay;
+            if (replay) {
+              // The counter's key omits the prescription, so a changed reference is a new request.
+              if (
+                replay.line.prescriptionLineId !== (prescription?.prescriptionLineId ?? null) ||
+                replay.line.prescriptionPatientId !== (prescription?.patientId ?? null)
+              )
+                throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+              return replay;
+            }
             for (const { kind, approval } of approvals)
               await confirmCounterApproval(db, scope, kind, approval);
             if (!prescription) return addSaleLine(db, scope, lineInput, COUNTER_LINE_PRICING);
@@ -3232,9 +3240,7 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
-        return await ctx.db.$transaction(async (tx) =>
-          linkRestockRecoveries(txDb(tx), scope)
-        );
+        return await ctx.db.$transaction(async (tx) => linkRestockRecoveries(txDb(tx), scope));
       } catch (error) {
         fail(error);
       }

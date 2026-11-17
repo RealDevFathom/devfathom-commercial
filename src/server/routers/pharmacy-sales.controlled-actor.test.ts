@@ -555,8 +555,12 @@ describe('[DEF-10] counter add-line replay (DEV-874)', () => {
         id: 'saved-line',
         organizationId: 'org-1',
         voucherId: null,
+        promotionId: null,
         grossMinor: 100,
+        discountKind: null,
         discountMinor: 0,
+        prescriptionLineId: path === 'prescription' ? 'rx-line-1' : null,
+        prescriptionPatientId: path === 'prescription' ? 'patient-1' : null,
       };
       const { branchId: _branch, ...expectedLine } = stored;
       void _branch;
@@ -587,6 +591,45 @@ describe('[DEF-10] counter add-line replay (DEV-874)', () => {
         where: { organizationId: 'org-1', idempotencyKey: plain.idempotencyKey },
         include: { allocations: { orderBy: { stockMovementId: 'asc' } } },
       });
+    }
+  );
+
+  it.each([
+    ['adds a prescription to an unreferenced line', null, 'rx-line-1'],
+    ['names a different prescription line', 'rx-line-1', 'rx-line-2'],
+    ['drops the saved prescription', 'rx-line-1', null],
+  ])(
+    'refuses a retry that %s instead of replaying it',
+    async (_change, savedLineId, requestedLineId) => {
+      const f = callerFor([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]);
+      f.db.medicine.findFirst = async () => ({
+        id: 'medicine-1',
+        controlled: false,
+        manufacturer: 'Maker',
+      });
+      const { controlledAuthorization, ...plain } = line;
+      void controlledAuthorization;
+      f.db.pharmacySaleLine.findFirst.mockResolvedValue({
+        ...plain,
+        id: 'saved-line',
+        organizationId: 'org-1',
+        voucherId: null,
+        promotionId: null,
+        discountKind: null,
+        discountMinor: 0,
+        prescriptionLineId: savedLineId,
+        prescriptionPatientId: savedLineId ? 'patient-1' : null,
+        allocations: [],
+      });
+      await expect(
+        f.caller.addLine({
+          ...plain,
+          ...(requestedLineId
+            ? { prescription: { prescriptionLineId: requestedLineId, patientId: 'patient-1' } }
+            : {}),
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'IDEMPOTENCY_CONFLICT' });
+      expect(addSaleLine).not.toHaveBeenCalled();
     }
   );
 

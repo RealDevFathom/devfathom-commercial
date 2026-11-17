@@ -340,6 +340,15 @@ export async function replaySaleLine(db: ScopedDb, scope: LedgerScope, input: Ad
     include: { allocations: { orderBy: { stockMovementId: 'asc' } } },
   });
   if (!previous) return null;
+  // Saved lines are never re-priced, so an omitted manual discount means none. Only a
+  // voucher or automatic promotion priced the line itself, and either needs no manual discount.
+  const manualDiscountRequested = Boolean(input.discountKind || input.discountMinor);
+  const discountChanged = previous.voucherId
+    ? false
+    : previous.promotionId
+      ? manualDiscountRequested
+      : previous.discountKind !== (input.discountKind ?? null) ||
+        previous.discountMinor !== (input.discountMinor ?? 0);
   // Never return another branch's line or let a key silently change its target or quantity.
   if (
     previous.branchId !== scope.branchId ||
@@ -351,11 +360,7 @@ export async function replaySaleLine(db: ScopedDb, scope: LedgerScope, input: Ad
     previous.quantity !== input.quantity ||
     previous.canonicalUnitsPerSaleUnit !== input.canonicalUnitsPerSaleUnit ||
     previous.voucherId !== (input.voucherId ?? null) ||
-    (input.discountKind !== undefined && previous.discountKind !== input.discountKind) ||
-    (input.discountMinor !== undefined &&
-      previous.discountMinor !== input.discountMinor &&
-      // An explicit zero, like an omitted discount, opts into automatic promotions.
-      !(previous.promotionId && input.discountMinor === 0 && input.discountKind === undefined))
+    discountChanged
   )
     throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
   const { allocations, ...line } = previous;
