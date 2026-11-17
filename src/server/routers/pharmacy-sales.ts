@@ -248,6 +248,14 @@ const tenderInput = z
     referenceSkipped: z.boolean().optional(),
     /** DEV-713: approval code from a standalone card terminal slip. */
     approvalCode: z.string().regex(MANUAL_CARD_APPROVAL_CODE).optional(),
+    // #708: the buyer the Sindh cash memo names. Last, so existing payload hashes hold.
+    buyerName: z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .regex(/^[^\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069<>]*$/u, 'Use a plain name.')
+      .optional(),
   })
   .strict();
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
@@ -1647,7 +1655,11 @@ export const pharmacySalesRouter = router({
       }
     }),
   tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
-    if (isManualTender(input.type) || input.approvalCode !== undefined)
+    if (
+      isManualTender(input.type) ||
+      input.approvalCode !== undefined ||
+      input.buyerName !== undefined
+    )
       annotateAudit(ctx, { skipInput: true });
     const scope =
       input.type === 'KHATA' || input.type === 'CREDIT' || input.familyAccountId
@@ -1659,7 +1671,11 @@ export const pharmacySalesRouter = router({
     return readPharmacyTenderOutcome(ctx.db, scope, ledgerTender(input));
   }),
   tender: protectedProcedure.input(tenderInput).mutation(async ({ ctx, input }) => {
-    if (isManualTender(input.type) || input.approvalCode !== undefined)
+    if (
+      isManualTender(input.type) ||
+      input.approvalCode !== undefined ||
+      input.buyerName !== undefined
+    )
       annotateAudit(ctx, { skipInput: true });
     try {
       if (input.type !== 'KHATA' && input.type !== 'CREDIT') {
@@ -3297,7 +3313,7 @@ export const pharmacySalesRouter = router({
                 },
               }),
         },
-        select: { id: true, code: true, name: true, city: true },
+        select: { id: true, code: true, name: true, city: true, provinceCode: true },
         orderBy: [{ name: 'asc' }, { id: 'asc' }],
       }),
       ctx.db.organization.findUnique({

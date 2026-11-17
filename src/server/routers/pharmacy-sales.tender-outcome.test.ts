@@ -10,6 +10,7 @@ vi.mock('@/lib/entitlements', () => ({
   resolveOrganizationEntitlements: vi.fn(),
 }));
 vi.mock('@/server/audit', () => ({
+  annotateAudit: (ctx: { audit: { detail: object } }, detail: object) => Object.assign(ctx.audit.detail, detail),
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => false),
   recordTrpcAudit: vi.fn(),
@@ -163,6 +164,34 @@ beforeEach(() => {
 });
 
 describe('pharmacySales.tenderOutcome', () => {
+  it('binds the cash-memo buyer to the original tender recovery payload', async () => {
+    const f = fixture();
+    const named = { ...input, buyerName: 'B'.repeat(200) };
+    f.prior.payloadHash = digest(named);
+    await expect(f.caller().tenderOutcome(named)).resolves.toMatchObject({ status: 'ACCEPTED' });
+    expect(f.context.audit?.detail.skipInput).toBe(true);
+    await expect(f.caller().tenderOutcome({ ...named, buyerName: 'Different Buyer' })).resolves.toEqual({
+      status: 'UNKNOWN', replayUnsafe: true,
+    });
+    expect(f.transaction).not.toHaveBeenCalled();
+    expect(f.unexpected).not.toHaveBeenCalled();
+  });
+  it.each(['<buyer>', 'buyer\u202ename', 'buyer\nname', 'x'.repeat(201)])(
+    'rejects invalid cash-memo buyer text before any payment read or write: %j',
+    async (buyerName) => {
+      const f = fixture();
+      await expect(f.caller().tender({ ...input, buyerName })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+      await expect(f.caller().tenderOutcome({ ...input, buyerName })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+      expect(f.saleRead).not.toHaveBeenCalled();
+      expect(f.keyRead).not.toHaveBeenCalled();
+      expect(f.transaction).not.toHaveBeenCalled();
+    }
+  );
+
   it('DEV-713 reads a card outcome only with the counter access a card write needs', async () => {
     const card = { ...input, type: 'CARD' as const, cashReceivedMinor: undefined };
     const allowed = fixture(card);
