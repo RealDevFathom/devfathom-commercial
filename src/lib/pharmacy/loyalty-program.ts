@@ -149,7 +149,8 @@ export async function publishLoyaltyProgramVersion(
 
 /**
  * Locks the customer's consent rows, then answers whether LOYALTY consent stands now.
- * Points are only earned while the customer consents at the moment of earning.
+ * Points are only earned while the customer consents at the moment of earning, and (DEV-764)
+ * while they are an enrolled member: a deactivated member earns nothing until re-enrolled.
  */
 export async function hasLoyaltyEarningConsent(
   db: ScopedDb,
@@ -159,9 +160,9 @@ export async function hasLoyaltyEarningConsent(
   await lockCustomerConsent(db, organizationId, customerId);
   const customer = await db.pharmacyCustomer.findFirst({
     where: { id: customerId, organizationId, active: true },
-    select: { patientId: true },
+    select: { patientId: true, loyaltyActive: true },
   });
-  if (!customer?.patientId) return false;
+  if (!customer?.patientId || customer.loyaltyActive === false) return false;
   const consent = await db.patientConsent.findFirst({
     where: { organizationId, patientId: customer.patientId, purpose: 'LOYALTY' },
     orderBy: [{ version: 'desc' }, { recordedAt: 'desc' }],

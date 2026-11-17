@@ -1350,6 +1350,12 @@ model PharmacyCustomer {
   phoneLast4       String?
   creditLimitMinor Int                          @default(0)
   active           Boolean                      @default(true)
+  /// DEV-764: loyalty membership. A deactivated member keeps their points but neither earns
+  /// nor spends them until re-enrolled. Separate from `active` (the retail identity).
+  loyaltyActive          Boolean   @default(true)
+  loyaltyStatusChangedAt DateTime?
+  /// Why the member was last deactivated or re-enrolled.
+  loyaltyStatusReason    String?
   userId           String?
   createdAt        DateTime                     @default(now())
   updatedAt        DateTime                     @updatedAt
@@ -1357,6 +1363,7 @@ model PharmacyCustomer {
   patient                PharmacyPatient              @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
   sales                  PharmacySale[]
   pointsEntries          PharmacyLoyaltyPointsEntry[]
+  loyaltyReconciliations PharmacyLoyaltyBalanceReconciliation[]
   paidFamilyAccounts     PharmacyFamilyAccount[]      @relation("PharmacyFamilyPayer")
   familyMemberships      PharmacyFamilyMember[]
   user                   User?                        @relation("PharmacyCustomerUser", fields: [organizationId, userId], references: [organizationId, id], onDelete: Restrict)
@@ -1528,6 +1535,9 @@ model PharmacyLoyaltyPointsEntry {
   expiresAt        DateTime?
   /// DEV-764: EXPIRY only, the earned lot it closes.
   reversesEntryId  String?
+  /// DEV-764: true on entries posted while balances were kept per branch (a spend among them
+  /// took only from lots of its own branch). Entries posted since spend organization-wide.
+  branchLocal      Boolean                  @default(false)
   actorId          String
   idempotencyKey   String
   occurredAt       DateTime                 @default(now())
@@ -1543,9 +1553,29 @@ model PharmacyLoyaltyPointsEntry {
   @@unique([organizationId, id])
   @@unique([organizationId, idempotencyKey])
   @@index([organizationId, branchId, customerId, occurredAt])
+  @@index([organizationId, customerId, occurredAt], map: "pharmacy_loyalty_points_entries_customer_idx")
   @@index([organizationId, saleId])
   @@index([organizationId, refundId])
   @@map("pharmacy_loyalty_points_entries")
+}
+
+/// DEV-764: the audited merge of per-branch loyalty balances into one balance per customer.
+/// One row per branch for every customer who held points at more than one branch, written once
+/// by the merge migration. Append-only.
+model PharmacyLoyaltyBalanceReconciliation {
+  id             String           @id @default(dbgenerated("gen_random_uuid()::text"))
+  organizationId String           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  customerId     String
+  branchId       String
+  /// The customer's balance at this branch when the balances were merged.
+  points         Int
+  /// Ledger entries behind that balance.
+  entries        Int
+  reconciledAt   DateTime         @default(now())
+  customer       PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_loyalty_balance_reconciliations_customer_fkey")
+
+  @@unique([organizationId, customerId, branchId], map: "pharmacy_loyalty_balance_reconciliations_branch_key")
+  @@map("pharmacy_loyalty_balance_reconciliations")
 }
 
 model PharmacyMoneyIdempotencyKey {
