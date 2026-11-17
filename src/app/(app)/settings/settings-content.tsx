@@ -46,6 +46,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { trpc } from '@/lib/trpc';
+import { ApprovalAuthenticatorSection } from './approval-authenticator-section';
 import { PrintRoutingSection } from '@/components/restaurant/print-routing-section';
 export { PrintRoutingSection };
 import { useEntitlements } from '@/components/entitlements-provider';
@@ -135,6 +136,9 @@ export function SettingsContent() {
 
         {/* Two-factor authentication (IMP-AUTH-02) */}
         <TwoFactorSection />
+
+        {/* Authenticator for manager and owner approvals (DEV-879) */}
+        <ApprovalAuthenticatorSection />
 
         {/* Recent sign-ins (IMP-AUTH-03 — visibility half) */}
         <RecentSignInsSection />

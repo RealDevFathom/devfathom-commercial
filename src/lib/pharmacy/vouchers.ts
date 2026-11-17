@@ -254,7 +254,12 @@ export async function authenticateVoucherCashierPin(input: {
   const result = await withTenantDb(
     input.organizationId,
     (db) =>
-      verifyRefundPin(db, { organizationId: input.organizationId, actorId: input.actorId, pin }),
+      verifyRefundPin(db, {
+        organizationId: input.organizationId,
+        actorId: input.actorId,
+        pin,
+        action: 'pharmacy.voucherRedemption',
+      }),
     { userId: input.actorId, skipDrain: true }
   );
   return 'verified' in result;

@@ -6,6 +6,7 @@ import {
   hashRecoveryCode,
   totpAuthUri,
   verifyTotp,
+  matchTotpStep,
 } from './totp';
 
 describe('platform TOTP and recovery codes', () => {
@@ -35,5 +36,15 @@ describe('platform TOTP and recovery codes', () => {
     expect(recovery.hashes).toEqual(recovery.codes.map(hashRecoveryCode));
     expect(hashRecoveryCode(' ABCDE-12345 ')).toBe(hashRecoveryCode('abcde-12345'));
     expect(recovery.hashes.every((hash) => /^[a-f0-9]{64}$/.test(hash))).toBe(true);
+  });
+
+  it('returns the matched time step within one step either side, and null outside (DEV-879)', () => {
+    const secret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'; // gitleaks:allow — public RFC 6238 test vector
+    // RFC 6238: 287082 is the code for step 1 (T = 59 s).
+    expect(matchTotpStep(secret, '287082', 1, 59_000)).toBe(1);
+    expect(matchTotpStep(secret, '287082', 1, 89_000)).toBe(1);
+    expect(matchTotpStep(secret, '287082', 1, 30_000 * 3)).toBeNull();
+    expect(matchTotpStep(secret, '287082', 0, 89_000)).toBeNull();
+    expect(matchTotpStep(secret, '28708', 1, 59_000)).toBeNull();
   });
 });

@@ -448,6 +448,10 @@ function enterPayment(type = 'CASH') {
   fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
   if (type === 'CASH')
     fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '200.00' } });
+  if (type === 'BANK_TRANSFER')
+    fireEvent.change(screen.getByLabelText('Transfer reference'), {
+      target: { value: 'BANK-001' },
+    });
   if (type === 'CARD') {
     fireEvent.change(screen.getByLabelText('Card last 4 digits or terminal reference'), {
       target: { value: '4242' },
@@ -3286,6 +3290,9 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     });
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     chooseTender('BANK_TRANSFER');
+    fireEvent.change(screen.getByLabelText('Transfer reference'), {
+      target: { value: 'BANK-001' },
+    });
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '250.00' } });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
     await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledTimes(1));
@@ -4088,7 +4095,7 @@ describe('DEV-618 counter composition', () => {
     expect(quantity).toHaveValue('1');
     expect(within(next).getByText('Covered · 100 units on hand')).toBeInTheDocument();
     for (const [key, name] of [
-      ['F5', /^Unit/],
+      ['F5', /^Tablet/],
       ['F4', /^Strip/],
       ['F3', /^Pack/],
     ] as const) {
@@ -5152,6 +5159,135 @@ describe('DEV-41 cashier actions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Loyalty and khata · not linked' }));
     expect(screen.getByRole('dialog', { name: 'Customer loyalty and khata' })).toBeVisible();
     expect(document.body).not.toHaveTextContent(/\b(?:AI|RX|CRM|POS)-[A-Z]?\d{2}(?!\d)/);
+  });
+});
+
+describe('DEV-705 keyboard loose sale', () => {
+  it('stages the first fresh result when Enter beats the search debounce', async () => {
+    mocks.searchFetch.mockResolvedValue({ rows: [barcodeRow()], truncated: false });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    fireEvent.change(search, { target: { value: 'Panadol' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await waitFor(() => expect(screen.getByLabelText('Quantity')).toHaveFocus());
+    expect(mocks.searchFetch).toHaveBeenCalledWith(
+      { branchId: 'branch-a', query: 'Panadol' },
+      { staleTime: 10000 }
+    );
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+  it('discards a late Enter result after the operator changes the query', async () => {
+    let resolveSearch!: (value: unknown) => void;
+    mocks.searchFetch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSearch = resolve;
+        })
+    );
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    fireEvent.change(search, { target: { value: 'Panadol' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await waitFor(() => expect(mocks.searchFetch).toHaveBeenCalled());
+    fireEvent.change(search, { target: { value: 'Another' } });
+    await act(async () => resolveSearch({ rows: [barcodeRow()], truncated: false }));
+    expect(screen.queryByLabelText('Quantity')).not.toBeInTheDocument();
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+
+  it('stages the current first text result with Enter and moves directly to quantity', async () => {
+    mocks.queries.counterSearch = query({ rows: [barcodeRow()], truncated: false });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    fireEvent.change(search, { target: { value: 'Panadol' } });
+    await waitFor(() => expect(mocks.searchProps.mock.calls.at(-1)![0].state).toBe('ready'));
+    fireEvent.keyDown(search, { key: 'Enter' });
+    expect(screen.getByLabelText('Quantity')).toHaveFocus();
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+  it('does not stage stale results while the current text search failed', async () => {
+    mocks.searchFetch.mockRejectedValue(new Error('Search failed'));
+    mocks.queries.counterSearch = {
+      ...query({ rows: [barcodeRow()], truncated: false }),
+      isError: true,
+    };
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    fireEvent.change(search, { target: { value: 'Panadol' } });
+    await waitFor(() => expect(mocks.searchProps.mock.calls.at(-1)![0].state).toBe('error'));
+    await act(async () => fireEvent.keyDown(search, { key: 'Enter' }));
+    expect(screen.queryByLabelText('Quantity')).not.toBeInTheDocument();
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+
+  function looseRow(overrides: Partial<CounterSearchRow> = {}) {
+    return barcodeRow({
+      unitsPerPack: 10,
+      printedMrpMinor: 1000,
+      onHandUnits: 30,
+      saleUnits: [
+        { kind: 'PACK', packLevelId: 'pack-a', levelLabel: 'STRIP', canonicalUnitsPerSaleUnit: 10 },
+        { kind: 'UNIT', packLevelId: 'pack-a', levelLabel: 'UNIT', canonicalUnitsPerSaleUnit: 1 },
+      ],
+      ...overrides,
+    });
+  }
+  it('defaults to a tablet, focuses quantity and adds one tablet with Enter', async () => {
+    mocks.mutations.addLine!.mockResolvedValue({ saleLineId: 'loose-line' });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(looseRow()));
+    const quantity = screen.getByLabelText('Quantity');
+    expect(screen.getByRole('radio', { name: /Tablet/ })).toHaveAttribute('aria-checked', 'true');
+    expect(quantity).toHaveFocus();
+    expect(screen.getByText('1 tablet = 1/10 of strip')).toBeVisible();
+    fireEvent.change(quantity, { target: { value: '1' } });
+    fireEvent.keyDown(quantity, { key: 'Enter' });
+    await waitFor(() =>
+      expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ saleUnit: 'UNIT', canonicalUnitsPerSaleUnit: 1, quantity: 1 })
+      )
+    );
+    await waitFor(() => expect(screen.getByLabelText('Scan or search')).toHaveFocus());
+    fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F9' });
+    expect(screen.getByRole('dialog', { name: 'Payment' })).toBeInTheDocument();
+  });
+  it('shows every unit with its price and lets the operator switch to the strip', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(looseRow()));
+    const strip = screen.getByRole('radio', { name: /Strip of 10.*PKR 10.00/ });
+    expect(screen.getByRole('radio', { name: /Tablet.*PKR 1.00/ })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    fireEvent.click(strip);
+    expect(strip).toHaveAttribute('aria-checked', 'true');
+  });
+  it('explains a single-unit pack without offering a second loose choice', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(barcodeRow()));
+    expect(screen.getAllByRole('radio')).toHaveLength(1);
+    expect(screen.getByText(/Already sold as one tablet/)).toBeVisible();
+  });
+  it('keeps controlled loose tablets behind prescription authorization on Enter', async () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() =>
+      mocks.searchProps.mock.calls.at(-1)![0].onSelect(
+        looseRow({
+          restriction: {
+            rx: true,
+            otc: false,
+            controlled: true,
+            restricted: true,
+            highAlert: false,
+            lasa: false,
+          },
+        })
+      )
+    );
+    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '1' } });
+    fireEvent.keyDown(screen.getByLabelText('Quantity'), { key: 'Enter' });
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/patient|prescription/i);
   });
 });
 

@@ -28,7 +28,8 @@ import {
   isManualTender,
   manualMerchantPolicies,
   MANUAL_CARD_APPROVAL_CODE,
-  MANUAL_CARD_REFERENCE,
+  BANK_TRANSFER_REFERENCE_MAX_LENGTH,
+  hasValidTenderProviderReference,
 } from '@/lib/pharmacy/manual-payments';
 import {
   readManualPaymentSettings,
@@ -73,8 +74,8 @@ import {
   isLockedOut,
   registerFailedAttempt,
   clearLockout,
-  verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
+import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import { closePharmacyDay, readPharmacyClose } from '@/lib/pharmacy/day-close';
 import { listOpenBills } from '@/lib/pharmacy/open-bills';
 import { readPharmacyCashCloseCheck } from '@/lib/pharmacy/cash-close-check-operations';
@@ -250,14 +251,16 @@ const tenderInput = z
      */
     overLimitApproval: counterApprovalPin.optional(),
     // Wallets: last 4–6 transaction digits. Manual card: last 4 digits or terminal
-    // reference, never a full card number. Each tender's shape is enforced in settlement.
-    providerRef: z.string().regex(MANUAL_CARD_REFERENCE).optional(),
+    // reference, never a full card number. Bank transfers use the bank statement reference.
+    // Each tender's shape is enforced in settlement.
+    providerRef: z.string().max(BANK_TRANSFER_REFERENCE_MAX_LENGTH).optional(),
     payerName: z.string().trim().min(1).max(100).optional(),
     referenceSkipped: z.boolean().optional(),
     /** DEV-713: approval code from a standalone card terminal slip. */
     approvalCode: z.string().regex(MANUAL_CARD_APPROVAL_CODE).optional(),
   })
-  .strict();
+  .strict()
+  .refine(hasValidTenderProviderReference, { path: ['providerRef'], message: 'Invalid payment reference.' });
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
 const demandReason = z.enum([
   'STOCKOUT',
@@ -2290,7 +2293,15 @@ export const pharmacySalesRouter = router({
             return blocked;
           if (!(await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }))) return blocked;
           if (
-            !(await verifyOperatorCredential('PIN', authorization.pin, credential.credentialHash))
+            !(await verifyApprovalSecret(db, {
+              organizationId: scope.organizationId,
+              approverUserId: pharmacist.id,
+              credentialHash: credential.credentialHash,
+              secret: authorization.pin,
+              action: 'pharmacySales.controlledAuthorization',
+              requestedById: scope.actorId,
+              now,
+            }))
           ) {
             await db.restaurantOperatorCredential.update({
               where: { id: credential.id },

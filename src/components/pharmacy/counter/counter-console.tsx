@@ -118,6 +118,7 @@ import {
   counterUnitNoun,
   plural,
   looseSaleUnitOption,
+  preferredSaleUnitOption,
   previewSaleLine,
   type SaleUnitKind,
 } from '@/lib/pharmacy/counter-pricing';
@@ -589,6 +590,7 @@ function ScopedPharmacyCounterConsole({
 
   const searchRef = useRef<HTMLInputElement>(null);
   const quantityRef = useRef<HTMLInputElement>(null);
+  const focusQuantityOnStage = useRef(false);
   const restoreSearchAfterAdd = useRef(false);
   const rxPanelRef = useRef<HTMLDivElement>(null);
   const tenderRef = useRef<HTMLDivElement>(null);
@@ -1521,12 +1523,38 @@ function ScopedPharmacyCounterConsole({
     [authenticatePack, branchAuthorized, branchId, busy, query]
   );
 
-  const stageRow = useCallback((row: CounterSearchRow) => {
+  const stageRow = useCallback((row: CounterSearchRow, focusQuantity = true) => {
+    focusQuantityOnStage.current = focusQuantity;
     setActiveRow(row);
     setQuantityText('');
-    setSaleUnit(row.saleUnits[0]?.kind ?? null);
+    setSaleUnit(preferredSaleUnitOption(row.saleUnits, row.dosageForm)?.kind ?? null);
     setLotOverride(null);
   }, []);
+
+  useEffect(() => {
+    if (activeRow && focusQuantityOnStage.current) quantityRef.current?.focus();
+    focusQuantityOnStage.current = false;
+  }, [activeRow]);
+
+  const searchAndStage = useCallback(
+    async (text: string) => {
+      const search = await runSearch(text);
+      if (!search || search.blocked) return;
+      try {
+        const result = await utils.pharmacySales.counterSearch.fetch(
+          { branchId, query: search.query },
+          { staleTime: 10_000 }
+        );
+        // A changed query, branch or scanner invalidates the in-flight selection.
+        if (search.revision !== scannerRevision.current) return;
+        if (result.rows[0]) stageRow(result.rows[0]);
+      } catch (error) {
+        if (search.revision === scannerRevision.current)
+          setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
+      }
+    },
+    [branchId, runSearch, stageRow, utils]
+  );
 
   const openSale = useCallback(async () => {
     if (drawerRequiredRef.current) throw new Error('DRAWER_NOT_OPEN');
@@ -1836,7 +1864,8 @@ function ScopedPharmacyCounterConsole({
         const restage =
           activeRow?.medicineId !== row.medicineId || saleUnit !== (row.saleUnits[0]?.kind ?? null);
         if (restage) {
-          stageRow(row);
+          stageRow(row, false);
+          setSaleUnit(row.saleUnits[0]?.kind ?? null);
           // Barcode entry keeps its one-item default; manual selection starts empty.
           setQuantityText('1');
         }
@@ -3345,7 +3374,8 @@ function ScopedPharmacyCounterConsole({
                                 : index < 0
                                   ? rows.length - 1
                                   : (index - 1 + rows.length) % rows.length;
-                            stageRow(rows[next]!);
+                            // Arrowing through results keeps focus in search (DEV-633).
+                            stageRow(rows[next]!, false);
                             return;
                           }
                           if (event.key !== 'Enter') return;
@@ -3360,7 +3390,15 @@ function ScopedPharmacyCounterConsole({
                             else void addToCart();
                             return;
                           }
-                          void runSearch();
+                          const first =
+                            searchCurrent &&
+                            !searchQuery.isPlaceholderData &&
+                            !searchQuery.isFetching &&
+                            !searchQuery.isError
+                              ? searchQuery.data?.rows[0]
+                              : undefined;
+                          if (first) stageRow(first);
+                          else void searchAndStage(trimmed);
                         }}
                         className="h-12"
                       />
@@ -3440,6 +3478,10 @@ function ScopedPharmacyCounterConsole({
                     <CounterUnitToggle
                       inline
                       options={activeRow.saleUnits}
+                      dosageForm={activeRow.dosageForm}
+                      priceFor={(option) =>
+                        counterSelectionPreview(activeRow, option, 1)?.unitPriceMinor ?? null
+                      }
                       onHandUnits={activeRow.onHandUnits}
                       selected={saleUnit}
                       quantity={quantityText}
