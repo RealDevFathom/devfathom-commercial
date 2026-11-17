@@ -272,6 +272,9 @@ export function matchCounterAction(
  */
 export const COUNTER_SCAN_FIELD_ATTRIBUTE = 'data-counter-scan';
 
+/** The next-line quantity field also hands function keys to the counter. */
+export const COUNTER_QUANTITY_FIELD_ATTRIBUTE = 'data-counter-quantity';
+
 /** A field the operator is typing in owns the keyboard. F-keys wait. */
 export function counterChordTargetIsField(target: EventTarget | null | undefined): boolean {
   if (typeof HTMLElement === 'undefined' || !(target instanceof HTMLElement)) return false;
@@ -281,20 +284,16 @@ export function counterChordTargetIsField(target: EventTarget | null | undefined
 
 /**
  * Whether `target` keeps `key` for itself. Every field does, except that the
- * scan field hands its F-keys to the counter. Quantity may hand off only an
- * explicitly matched unit-selection or add action. Enter remains field-owned.
+ * marked scan and quantity fields hand their F-keys to the counter. Enter and
+ * editing keys stay with their fields, which handle Enter themselves.
  */
-function fieldKeepsKey(
-  target: EventTarget | null | undefined,
-  key: string,
-  quantityAction: boolean
-): boolean {
+function fieldKeepsKey(target: EventTarget | null | undefined, key: string): boolean {
   if (!counterChordTargetIsField(target)) return false;
-  const scanField =
+  const counterField =
     target instanceof HTMLElement &&
     (target.hasAttribute(COUNTER_SCAN_FIELD_ATTRIBUTE) ||
-      (quantityAction && target.hasAttribute('data-counter-quantity')));
-  return !(scanField && /^F\d+$/.test(key));
+      target.hasAttribute(COUNTER_QUANTITY_FIELD_ATTRIBUTE));
+  return !(counterField && /^F\d+$/.test(key));
 }
 
 /**
@@ -304,25 +303,12 @@ function fieldKeepsKey(
  * with the field while focus is in an input, textarea, or select, and they stay
  * silent while a dialog is open so a void or tender step cannot be skipped.
  *
- * Quantity supports unit selection and add only (DEV-705); tender, hold and
- * destructive actions retain the original field guard. Dialogs silence all chords.
+ * The counter's scan and quantity fields keep F-keys live during line entry
+ * (POS-01). A dialog still silences them.
  */
-export function shouldHandleCounterKey(
-  event: CounterKeyEvent,
-  dialogOpen = false,
-  action: CounterAction | null = null
-): boolean {
-  const quantityAction =
-    action === 'selectPackUnit' ||
-    action === 'selectStripUnit' ||
-    action === 'selectLooseUnit' ||
-    action === 'addToCart';
+export function shouldHandleCounterKey(event: CounterKeyEvent, dialogOpen = false): boolean {
   const active = typeof document !== 'undefined' ? document.activeElement : null;
-  if (
-    dialogOpen ||
-    fieldKeepsKey(active, event.key, quantityAction) ||
-    fieldKeepsKey(event.target, event.key, quantityAction)
-  ) {
+  if (dialogOpen || fieldKeepsKey(active, event.key) || fieldKeepsKey(event.target, event.key)) {
     return false;
   }
   return event.key.length > 1;

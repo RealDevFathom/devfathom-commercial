@@ -13,8 +13,6 @@ export type CounterUnitToggleProps = {
   options: readonly SaleUnitOption[];
   dosageForm?: string | null;
   priceFor?: (option: SaleUnitOption) => number | null;
-  onAdd?: () => void;
-  quantityRef?: Ref<HTMLInputElement>;
   /** Safe stock available in the selected branch, supplied by the catalog row. */
   onHandUnits: number;
   selected: SaleUnitKind | null;
@@ -25,6 +23,8 @@ export type CounterUnitToggleProps = {
   inline?: boolean;
   onSelect: (kind: SaleUnitKind) => void;
   onQuantityChange: (quantity: string) => void;
+  quantityRef?: Ref<HTMLInputElement>;
+  onSubmit?: () => void;
   /** Rendered beside each unit so the operator sees the chord, not a tooltip. */
   chordFor?: (kind: SaleUnitKind) => string | null;
   /** Why there is no sale unit, in shop words (out of stock, pack setup to fix). */
@@ -53,8 +53,6 @@ export function CounterUnitToggle({
   options,
   dosageForm = null,
   priceFor,
-  onAdd,
-  quantityRef,
   onHandUnits,
   selected,
   quantity,
@@ -63,6 +61,8 @@ export function CounterUnitToggle({
   inline = false,
   onSelect,
   onQuantityChange,
+  quantityRef,
+  onSubmit,
   chordFor,
   emptyMessage,
 }: CounterUnitToggleProps) {
@@ -172,9 +172,9 @@ export function CounterUnitToggle({
             −
           </button>
           <Input
+            id={quantityId}
             ref={quantityRef}
             data-counter-quantity=""
-            id={quantityId}
             type="text"
             pattern="[0-9]*"
             inputMode="numeric"
@@ -190,24 +190,22 @@ export function CounterUnitToggle({
             aria-invalid={
               (quantity !== '' && !validQuantity) || (preview ? !preview.sufficient : undefined)
             }
+            onFocus={(event) => event.currentTarget.select()}
+            onChange={(event) => onQuantityChange(event.target.value)}
             onKeyDown={(event) => {
-              // Ctrl+Enter is the legacy preset's add chord; both reach the add handler,
-              // which explains an empty, invalid or short quantity instead of ignoring it.
               if (
                 event.key !== 'Enter' ||
-                event.repeat ||
                 event.nativeEvent.isComposing ||
+                event.shiftKey ||
+                event.ctrlKey ||
                 event.altKey ||
                 event.metaKey ||
-                event.shiftKey
+                !onSubmit
               )
                 return;
               event.preventDefault();
-              event.stopPropagation();
-              if (!disabled) onAdd?.();
+              onSubmit();
             }}
-            onFocus={(event) => event.currentTarget.select()}
-            onChange={(event) => onQuantityChange(event.target.value)}
             className="h-11 w-16 text-center tabular-nums"
           />
           <button

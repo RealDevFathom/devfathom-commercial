@@ -240,19 +240,36 @@ it('DEV-705 moves keyboard focus with the radio selection so consecutive arrows 
 });
 
 it.each([
-  ['an empty quantity', { quantity: '', preview: null }, false],
-  ['a quantity above safe stock', { quantity: '9', preview: previewFor('STRIP', 9, 5) }, false],
-  ['the legacy Ctrl+Enter chord', { quantity: '1', preview: previewFor('STRIP', 1) }, true],
-])('DEV-705 hands Enter in quantity to the add handler for %s', (_case, props, ctrlKey) => {
-  const onAdd = vi.fn();
-  renderToggle({ ...props, onAdd });
-  fireEvent.keyDown(screen.getByLabelText('Quantity'), { key: 'Enter', ctrlKey });
-  expect(onAdd).toHaveBeenCalledOnce();
+  ['an empty quantity', { quantity: '', preview: null }],
+  ['a quantity above safe stock', { quantity: '9', preview: previewFor('STRIP', 9, 5) }],
+])('DEV-705 hands Enter in quantity to the add handler for %s', (_case, props) => {
+  const onSubmit = vi.fn();
+  renderToggle({ ...props, onSubmit });
+  fireEvent.keyDown(screen.getByLabelText('Quantity'), { key: 'Enter' });
+  expect(onSubmit).toHaveBeenCalledOnce();
 });
 
-it('DEV-705 does not add from quantity while the toggle is disabled', () => {
-  const onAdd = vi.fn();
-  renderToggle({ quantity: '1', onAdd, disabled: true });
-  fireEvent.keyDown(screen.getByLabelText('Quantity'), { key: 'Enter' });
-  expect(onAdd).not.toHaveBeenCalled();
+describe('DEV-633 quantity input', () => {
+  it('exposes its focus ref and shortcut marker and submits only plain Enter', () => {
+    const ref = { current: null as HTMLInputElement | null };
+    const onSubmit = vi.fn();
+    renderToggle({ quantityRef: ref, onSubmit });
+    const input = screen.getByLabelText('Quantity');
+    expect(ref.current).toBe(input);
+    expect(input).toHaveAttribute('data-counter-quantity');
+    for (const event of [
+      { key: '2' },
+      { key: 'Backspace' },
+      { key: 'ArrowLeft' },
+      { key: 'Enter', shiftKey: true },
+      { key: 'Enter', ctrlKey: true },
+      { key: 'Enter', altKey: true },
+      { key: 'Enter', metaKey: true },
+      { key: 'Enter', isComposing: true },
+    ])
+      expect(fireEvent.keyDown(input, event)).toBe(true);
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(fireEvent.keyDown(input, { key: 'Enter' })).toBe(false);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
 });
