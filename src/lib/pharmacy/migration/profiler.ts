@@ -18,6 +18,7 @@ import {
   readExpiryDate,
   readMoneyMinor,
   readPackFactor,
+  isStrengthPackLabel,
   readQuantity,
   readText,
   type SourceTable,
@@ -238,14 +239,18 @@ function buildRow(
 
   const packFactor = readPackFactor(cellAt(columnMap, cells, 'pack'));
   const sourceQuantity = readQuantity(cellAt(columnMap, cells, 'quantity'));
-  // A pack count is only convertible with a known pack factor; never assume 1.
+  // A pack count is only convertible with a known units-per-pack factor; never assume 1,
+  // and never read a dosage strength such as "500mg" as one.
+  const conversionFactor = isStrengthPackLabel(cellAt(columnMap, cells, 'pack'))
+    ? null
+    : packFactor;
   const quantityCanonical =
     sourceQuantity === null || quantityUnit === null
       ? null
       : quantityUnit === 'PACKS'
-        ? packFactor === null
+        ? conversionFactor === null
           ? null
-          : sourceQuantity * packFactor
+          : sourceQuantity * conversionFactor
         : sourceQuantity;
 
   return {
@@ -388,8 +393,7 @@ function deriveExceptions(
           'UNIT_AMBIGUOUS',
           !quantityUnit
             ? `Choose whether quantity counts PACKS or UNITS for ${where}.`
-            : quantityUnit === 'PACKS' &&
-                readQuantity(quantityRaw ?? undefined) !== null
+            : quantityUnit === 'PACKS' && readQuantity(quantityRaw ?? undefined) !== null
               ? `Quantity "${quantityRaw}" packs for ${where} cannot be converted: no countable pack factor.`
               : `Quantity "${quantityRaw}" for ${where} is not a whole count of a canonical unit.`
         );

@@ -32,10 +32,21 @@ function organizationId(ctx: TRPCContext): string {
   return id;
 }
 
+/** Headers the staging path writes itself; an upload may not shadow its own lineage evidence. */
+const RESERVED_HEADERS = ['__source_sha256', '__source_row', '__review_flags'];
+
 async function readUpload(input: { fileName: string; content: string }) {
   try {
-    return await parseOwnerUpload(input.fileName, Buffer.from(input.content, 'base64'));
+    const table = await parseOwnerUpload(input.fileName, Buffer.from(input.content, 'base64'));
+    const clash = table.headers.find((header) => RESERVED_HEADERS.includes(header.trim()));
+    if (clash)
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: `Rename the reserved column "${clash}" before staging this file.`,
+      });
+    return table;
   } catch (error) {
+    if (error instanceof TRPCError) throw error;
     if (error instanceof OwnerImportError)
       throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
     throw error;

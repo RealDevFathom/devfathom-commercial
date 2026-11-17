@@ -339,6 +339,30 @@ describe('Quantity column meaning is chosen in the column mapping', () => {
   });
 });
 
+describe('pack labels that are strengths, not counts', () => {
+  it.each(['500mg', '30 g', '5%'])('does not multiply packs by %s', (label) => {
+    const result = profileTable(
+      excelCsvProfiler,
+      parseDelimitedText(`Product,Pack,Qty\nExample,${label},2`),
+      { quantityUnit: 'PACKS' }
+    );
+    expect(result.rows[0]!.quantityCanonical).toBeNull();
+    expect(result.exceptions.some((e) => e.bucket === 'UNIT_AMBIGUOUS')).toBe(true);
+  });
+  it.each([
+    ['10x10', 200],
+    ['20 Tabs', 40],
+    ['100ML', 200],
+  ])('still converts countable pack %s', (label, units) => {
+    const result = profileTable(
+      excelCsvProfiler,
+      parseDelimitedText(`Product,Pack,Qty\nExample,${label},2`),
+      { quantityUnit: 'PACKS' }
+    );
+    expect(result.rows[0]!.quantityCanonical).toBe(BigInt(units));
+  });
+});
+
 describe('mapped quantity column identity', () => {
   it('records the header of the mapped quantity column', () => {
     const result = profileTable(

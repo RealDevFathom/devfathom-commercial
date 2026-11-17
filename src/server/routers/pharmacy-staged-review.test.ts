@@ -253,6 +253,18 @@ describe('production batch staging', () => {
       expect(db.pharmacyMigrationBatch.create).not.toHaveBeenCalled();
     }
   );
+  it.each(['__source_row', '__source_sha256'])(
+    'rejects an upload whose header shadows lineage evidence (%s)',
+    async (header) => {
+      await expect(
+        caller().stageBatch({
+          ...staging,
+          content: Buffer.from(`Product,Pack,Qty,${header}\nExample,30,29,x`).toString('base64'),
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(db.pharmacyMigrationBatch.create).not.toHaveBeenCalled();
+    }
+  );
   it('never invents a pack factor', async () => {
     await caller().stageBatch({
       ...staging,
