@@ -62,6 +62,25 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         store.consents.find((consent) => consent.patientId === where.patientId) ?? null,
     },
     pharmacyMessageLog: {
+      findFirst: async ({
+        where,
+      }: {
+        where: {
+          organizationId: string;
+          dedupeKey: { in: string[] };
+          createdAt: { gte: Date; lt: Date };
+        };
+      }) =>
+        store.logs.find(
+          (log) =>
+            log.organizationId === where.organizationId &&
+            log.kind === 'KHATA_REMINDER' &&
+            log.direction === 'OUTBOUND' &&
+            where.dedupeKey.in.includes(log.dedupeKey) &&
+            log.createdAt instanceof Date &&
+            log.createdAt >= where.createdAt.gte &&
+            log.createdAt < where.createdAt.lt
+        ) ?? null,
       count: async () => store.logs.length,
       createManyAndReturn: async ({ data }: { data: Array<Omit<LogRow, 'id'>> }) => {
         const row = data[0]!;
@@ -149,7 +168,7 @@ describe('planKhataReminder', () => {
       NOW
     );
     expect(plan).toMatchObject({ due: true, dueDate: '2026-10-21' });
-    expect(plan.dedupeKey).toMatch(/^khata:family-1:w\d+$/);
+    expect(plan.dedupeKey).toBe('khata:family-1:w2026-43');
   });
 
   it('is not due without an overdue charge, below the floor, or in the future', () => {
@@ -189,9 +208,89 @@ describe('planKhataReminder', () => {
     expect(sameInstant.dedupeKey).toBe(base.dedupeKey);
     expect(nextWeek.dedupeKey).not.toBe(base.dedupeKey);
   });
+
+  it.each([
+    ['2026-10-25T18:59:59.999Z', 'w2026-43'],
+    ['2026-10-25T19:00:00.000Z', 'w2026-44'],
+    ['2026-10-28T18:59:59.999Z', 'w2026-44'],
+    ['2026-10-29T00:00:00.000Z', 'w2026-44'],
+    ['2027-01-03T18:59:59.999Z', 'w2026-53'],
+    ['2027-01-03T19:00:00.000Z', 'w2027-1'],
+  ])('uses the Karachi ISO week at %s', (at, week) => {
+    expect(
+      planKhataReminder(
+        { familyAccountId: 'f', balanceMinor: 50_000, oldestOverdueAt: NOW },
+        new Date(at)
+      ).dedupeKey
+    ).toBe(`khata:f:${week}`);
+  });
 });
 
 describe('processDueWhatsAppKhataReminders', () => {
+  it.each([
+    ['2026-10-19T08:00:00Z', 'PENDING', ''],
+    ['2026-10-19T08:00:00Z', 'SENT', ''],
+    ['2026-10-19T08:00:00Z', 'FAILED', ''],
+    ['2026-10-22T08:00:00Z', 'IGNORED', ''],
+    ['2026-10-19T08:00:00Z', 'SENT', 'sms:'],
+    ['2026-10-22T08:00:00Z', 'PENDING', 'sms:'],
+  ])(
+    'preserves the legacy weekly claim from %s (%s, %s) across rollout',
+    async (at, status, prefix) => {
+      store.accounts = [account()];
+      store.customers = [customer(true)];
+      store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+      const createdAt = new Date(at);
+      store.logs = [
+        {
+          id: 'legacy',
+          organizationId: 'org_a',
+          kind: 'KHATA_REMINDER',
+          direction: 'OUTBOUND',
+          status,
+          createdAt,
+          dedupeKey: `${prefix}khata:family-1:w${Math.floor(createdAt.getTime() / (7 * 86_400_000))}`,
+        },
+      ];
+      const provider = new MockWhatsAppProvider(config);
+      const result = await processDueWhatsAppKhataReminders({
+        now: new Date('2026-10-23T08:00:00Z'),
+        config,
+        provider,
+      });
+      expect(result).toMatchObject({ duplicate: 1, prepared: 0 });
+      expect(provider.calls).toEqual([]);
+      expect(store.logs).toHaveLength(1);
+    }
+  );
+
+  it('does not let an earlier-week or another-tenant legacy claim block this week', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    store.logs = [
+      {
+        id: 'earlier',
+        organizationId: 'org_a',
+        kind: 'KHATA_REMINDER',
+        direction: 'OUTBOUND',
+        createdAt: new Date('2026-10-18T18:59:59Z'),
+        dedupeKey: 'khata:family-1:w2963',
+      },
+      {
+        id: 'other',
+        organizationId: 'org_b',
+        kind: 'KHATA_REMINDER',
+        direction: 'OUTBOUND',
+        createdAt: NOW,
+        dedupeKey: 'khata:family-1:w2963',
+      },
+    ];
+    const provider = new MockWhatsAppProvider(config);
+    const result = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+    expect(result).toMatchObject({ duplicate: 0, prepared: 1 });
+    expect(provider.calls).toHaveLength(1);
+  });
   it('sends once per family account per week across repeated runs', async () => {
     store.accounts = [account()];
     store.customers = [customer(true)];
@@ -708,7 +807,7 @@ describe('planKhataReminder cadence', () => {
     const nextDay = planKhataReminder(candidate, new Date(NOW.getTime() + 86_400_000), 10_000, 1);
     expect(daily).toMatch(/^khata:family-1:c1:\d+$/);
     expect(nextDay.dedupeKey).not.toBe(daily);
-    expect(planKhataReminder(candidate, NOW, 10_000, 99).dedupeKey).toMatch(/:w\d+$/);
+    expect(planKhataReminder(candidate, NOW, 10_000, 99).dedupeKey).toBe('khata:family-1:w2026-43');
   });
   it('formats the due date in the workspace calendar', () => {
     expect(formatKhataDueDate(new Date('2026-10-09T20:00:00Z'), 'Asia/Karachi')).toBe(

@@ -41,6 +41,24 @@ import {
 
 const DAY_MS = 86_400_000;
 const WEEK_MS = 7 * DAY_MS;
+const KARACHI_OFFSET_MS = 5 * 60 * 60 * 1000;
+
+/** ISO Monday-to-Monday week on the Karachi calendar, including its UTC bounds. */
+function karachiReminderWeek(now: Date) {
+  const localDay = new Date(Math.floor((now.getTime() + KARACHI_OFFSET_MS) / DAY_MS) * DAY_MS);
+  const monday = localDay.getTime() - ((localDay.getUTCDay() + 6) % 7) * DAY_MS;
+  const thursday = new Date(monday + 3 * DAY_MS);
+  const year = thursday.getUTCFullYear();
+  const week = Math.ceil((thursday.getTime() - Date.UTC(year, 0, 1) + DAY_MS) / WEEK_MS);
+  const start = new Date(monday - KARACHI_OFFSET_MS);
+  const end = new Date(start.getTime() + WEEK_MS);
+  // A Karachi calendar week overlaps two old Thursday-based UTC epoch buckets.
+  const legacyPeriods = [
+    Math.floor(start.getTime() / WEEK_MS),
+    Math.floor((end.getTime() - 1) / WEEK_MS),
+  ];
+  return { period: `w${year}-${week}`, start, end, legacyPeriods };
+}
 
 /** Do not nag over a few paisa: a reminder needs a real outstanding balance. */
 const DEFAULT_MIN_BALANCE_MINOR = KHATA_REMINDER_DEFAULTS.minBalanceMinor;
@@ -62,7 +80,7 @@ export type KhataReminderCandidate = {
  * floor. The dedupe key buckets by account x the branch's owner-configured
  * cadence (weekly by default), so the scheduled job nudges an overdue payer at
  * most once per period until the balance clears — never a promotion, only the
- * utility fact that money is owed. The weekly key keeps its original shape.
+ * utility fact that money is owed. Weekly keys follow the Karachi ISO calendar.
  */
 export function planKhataReminder(
   candidate: KhataReminderCandidate,
@@ -79,7 +97,7 @@ export function planKhataReminder(
   const cadence = cadenceDaysOrDefault(cadenceDays);
   const period =
     cadence === 7
-      ? `w${Math.floor(now.getTime() / WEEK_MS)}`
+      ? karachiReminderWeek(now).period
       : `c${cadence}:${Math.floor(now.getTime() / (cadence * DAY_MS))}`;
   return {
     due,
@@ -126,6 +144,7 @@ type KhataPaymentDetails = { dueDate: string; payTo: string | null };
 type KhataRecipientResult =
   | { kind: 'configuration'; configurationError: string }
   | { kind: 'quiet-hours' }
+  | { kind: 'duplicate' }
   | ({ kind: 'sms'; customerId: string } & KhataPaymentDetails)
   | ({
       kind: 'recipient';
@@ -345,6 +364,28 @@ export async function processDueWhatsAppKhataReminders(
           orderBy: { version: 'desc' },
           select: { granted: true, revokedAt: true, recordedAt: true },
         });
+        if (cadenceDaysOrDefault(account.cadenceDays) === 7) {
+          const week = karachiReminderWeek(now);
+          // Keep persisted claims effective across the namespace change, on both
+          // channels. The consent lock serializes this check with other sends.
+          // Include FAILED claims: the old unique key also prevented their replay.
+          const legacyClaim = await db.pharmacyMessageLog.findFirst({
+            where: {
+              organizationId: account.organizationId,
+              direction: 'OUTBOUND',
+              kind: 'KHATA_REMINDER',
+              dedupeKey: {
+                in: week.legacyPeriods.flatMap((period) => [
+                  `khata:${account.familyAccountId}:w${period}`,
+                  `sms:khata:${account.familyAccountId}:w${period}`,
+                ]),
+              },
+              createdAt: { gte: week.start, lt: week.end },
+            },
+            select: { id: true },
+          });
+          if (legacyClaim) return { kind: 'duplicate' };
+        }
         const to = normalizeWhatsAppNumber(customer.patient.phone);
         if (
           !whatsappBound ||
@@ -429,6 +470,10 @@ export async function processDueWhatsAppKhataReminders(
     }
     if (recipient.kind === 'quiet-hours') {
       result.skippedQuietHours += 1;
+      continue;
+    }
+    if (recipient.kind === 'duplicate') {
+      result.duplicate += 1;
       continue;
     }
     const smsFallback = (customerId: string, details: KhataPaymentDetails) =>
