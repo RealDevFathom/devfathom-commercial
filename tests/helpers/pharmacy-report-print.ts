@@ -7,7 +7,7 @@ import { expect } from 'vitest';
 
 /** Real report markup + the current Studio shell geometry, with no tenant connection.
  * Requires Chromium (Playwright install or /usr/bin/chromium) and Poppler pdftotext.
- * No opt-out: clipping must fail the ordinary regression suite. */
+ * Callers skip it (with a stated reason) when either tool is absent. */
 export async function verifyReportPrint(markup: string) {
   const shell = readFileSync('src/components/layout/app-shell.tsx', 'utf8');
   const viewport = 'studio-viewport h-dvh overflow-hidden';

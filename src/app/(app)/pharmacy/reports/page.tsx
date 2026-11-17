@@ -469,7 +469,9 @@ export default async function PharmacyReportsPage({
               <ReportCsvButton
                 rows={cards.map((card) => ({ label: card.label, figure: String(card.figure) }))}
                 context={{
-                  Branch: branch ?? 'All available branches',
+                  Branch: branch
+                    ? (branchResult.branches.find((item) => item.id === branch)?.name ?? branch)
+                    : 'All available branches',
                   From: from,
                   To: to,
                   Supplier: supplier

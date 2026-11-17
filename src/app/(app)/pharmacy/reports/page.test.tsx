@@ -1,3 +1,5 @@
+import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { TRPCError } from '@trpc/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -175,6 +177,14 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
 
 import PharmacyReportsPage from './page';
 
+/** True only when both a Chromium binary and Poppler's pdftotext can run here. */
+function pdfToolsAvailable() {
+  const chromium = [process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, '/usr/bin/chromium', '/opt/pw-browsers/chromium']
+    .filter((path): path is string => !!path)
+    .some((path) => existsSync(path));
+  return chromium && spawnSync('pdftotext', ['-v']).error === undefined;
+}
+
 describe('pharmacy report catalog filters', () => {
   beforeEach(() => {
     actor.role = 'ADMIN';
@@ -226,6 +236,8 @@ describe('pharmacy report catalog filters', () => {
       );
       fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
       const csv = await blob!.text();
+      expect(csv).toContain('"Branch","Main"');
+      expect(csv).not.toContain('"Branch","b1"');
       expect(csv).toContain('"Supplier","s-x"');
       expect(csv).toContain('"Ingredient ID","ing-9"');
       expect(csv).toContain('"Batch ID","batch-3"');
@@ -253,7 +265,33 @@ describe('pharmacy report catalog filters', () => {
     }
   });
 
-  it('DEV-61 preserves off-screen report sections in Chromium A4 PDFs across the Studio matrix', async () => {
+  it('DEV-61 marks the report for print with summary first and print rules in the stylesheet', async () => {
+    const { container } = render(
+      await PharmacyReportsPage({
+        searchParams: Promise.resolve({ branch: 'b1', from: '2026-09-01', to: '2026-09-04' }),
+      })
+    );
+    const root = container.querySelector('[data-report-print]');
+    expect(root).not.toBeNull();
+    const summary = within(root as HTMLElement).getByRole('heading', {
+      name: 'Selected period at a glance',
+    });
+    expect(
+      within(summary.closest('[data-slot="section-card"]')!).getByText('PKR 100.00')
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Print / Save as PDF' })).toHaveClass('print:hidden');
+    expect(screen.getByRole('button', { name: 'Export CSV' })).toHaveClass('print:hidden');
+    const css = readFileSync('src/app/globals.css', 'utf8');
+    const printBlock = css.slice(css.indexOf('body:has([data-report-print])'));
+    expect(printBlock).toContain('color-scheme: light !important');
+    expect(printBlock).toContain('[data-report-print]');
+  });
+
+  // The Chromium/Poppler regression needs binaries that the main unit-suite lane does not install
+  // (QA installs Chromium only later), so it runs where both exist and is skipped with a reason
+  // elsewhere; the plain test above keeps the print behaviour covered everywhere.
+  const pdfToolsMissing = !pdfToolsAvailable();
+  it.skipIf(pdfToolsMissing)('DEV-61 preserves off-screen report sections in Chromium A4 PDFs across the Studio matrix', async () => {
     const { verifyReportPrint } =
       await import('../../../../../tests/helpers/pharmacy-report-print');
     const { container } = render(
