@@ -22,6 +22,7 @@ import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { isModuleGranted } from '@/lib/module-catalog';
 import {
   clearTenderAttempt,
+  freshTenderKey,
   persistTenderAttempt,
   readTenderAttempt,
   tenderAttemptStorageKey,
@@ -59,6 +60,7 @@ import {
   type CounterTenderBillState,
   type KhataSignupInput,
 } from './counter-tender-panel';
+import type { CounterTenderDiscardInput } from './counter-tender-discard';
 import { CounterUnitToggle } from './counter-unit-toggle';
 import { CounterUpsellSuggestions } from './counter-upsell-suggestions';
 import { useBrowserOnline } from './use-browser-online';
@@ -101,6 +103,7 @@ import {
   counterErrorMessage,
   counterErrorTone,
   counterPaymentErrorMessage,
+  TENDER_ATTEMPT_DISCARDED,
 } from '@/lib/pharmacy/counter-messages';
 import { CounterSignOut } from './counter-sign-out';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
@@ -574,6 +577,9 @@ function ScopedPharmacyCounterConsole({
   const [restoredAttempt, setRestoredAttempt] = useState<TenderAttempt | null>(null);
   const [checkingOutcome, setCheckingOutcome] = useState(false);
   const outcomeInFlight = useRef(false);
+  // DEV-712: payment keys a supervisor discarded. The server refuses them for good, so the
+  // next payment of the same amount on the same bill is sent under a fresh key.
+  const discardedTenderKeys = useRef(new Set<string>());
 
   const searchRef = useRef<HTMLInputElement>(null);
   const rxPanelRef = useRef<HTMLDivElement>(null);
@@ -2070,6 +2076,7 @@ function ScopedPharmacyCounterConsole({
       discardReceiptIntent();
       setReceiptSettlement(null);
       let dispatched = false;
+      let sentKey: string | null = null;
       let outcome: CounterTenderResult;
       try {
         const saved = readTenderAttempt(recoveryScope);
@@ -2094,9 +2101,12 @@ function ScopedPharmacyCounterConsole({
             input.payerName !== undefined ||
             input.approvalCode !== undefined
               ? `counter-tender:${saleId}:${input.type}:${browserUuid()}`
-              : `counter-tender:${saleId}:${input.type}:${input.amountMinor}${
-                  paidMinor > 0 ? `:after:${paidMinor}` : ''
-                }`,
+              : freshTenderKey(
+                  `counter-tender:${saleId}:${input.type}:${input.amountMinor}${
+                    paidMinor > 0 ? `:after:${paidMinor}` : ''
+                  }`,
+                  discardedTenderKeys.current
+                ),
           ...(input.familyAccountId
             ? {
                 familyAccountId: input.familyAccountId,
@@ -2113,6 +2123,7 @@ function ScopedPharmacyCounterConsole({
             : {}),
           ...(input.approvalCode !== undefined ? { approvalCode: input.approvalCode } : {}),
         };
+        sentKey = payload.idempotencyKey;
         const original: TenderAttempt = { version: 1, scope: recoveryScope, input: payload, draft };
         // Persistence and read-back must succeed before any money write starts.
         persistTenderAttempt(original);
@@ -2148,6 +2159,13 @@ function ScopedPharmacyCounterConsole({
       } catch (error) {
         discardReceiptIntent();
         if (!dispatched) setStorageError(true);
+        if (
+          dispatched &&
+          sentKey &&
+          error instanceof Error &&
+          error.message === TENDER_ATTEMPT_DISCARDED
+        )
+          discardedTenderKeys.current.add(sentKey);
         outcome =
           !dispatched || tenderRejected(error)
             ? {
@@ -2249,6 +2267,95 @@ function ScopedPharmacyCounterConsole({
     }
     return outcome;
   }, [branchAuthorized, refreshTenderBill, saleId, tenderOutcome, utils]);
+
+  const loadDiscardApprovers = useCallback(
+    () => utils.client.pharmacySales.tenderDiscardApprovers.query({ branchId }),
+    [branchId, utils]
+  );
+
+  /**
+   * DEV-712: a manager or owner discards the saved attempt whose outcome is unknown. Only the
+   * server's answer resolves it: DISCARDED proves the attempt can never be recorded, so the
+   * saved attempt is cleared and the bill re-read; ACCEPTED means it was recorded after all.
+   * A refusal (wrong PIN, no permission, no connection) keeps the attempt locked.
+   */
+  const discardPaymentAttempt = useCallback(
+    async (input: CounterTenderDiscardInput): Promise<CounterTenderResult> => {
+      const original = attemptRef.current;
+      const locked: CounterTenderResult = {
+        status: 'unknown',
+        message:
+          'The attempt was not discarded. Wait for the current check to finish, then try again. The saved attempt is still locked.',
+      };
+      if (
+        !original ||
+        !branchAuthorized ||
+        original.input.saleId !== saleId ||
+        tenderInFlight.current ||
+        outcomeInFlight.current
+      )
+        return locked;
+      outcomeInFlight.current = true;
+      setCheckingOutcome(true);
+      let outcome: CounterTenderResult;
+      let resolution: 'accepted' | 'rejected' | null = null;
+      try {
+        const result = await utils.client.pharmacySales.discardTenderAttempt.mutate({
+          attempt: original.input,
+          reason: input.reason,
+          approval: { staffProfileId: input.staffProfileId, pin: input.pin },
+        });
+        if (result.status === 'ACCEPTED' && tenderAcknowledgement(result.result)) {
+          resolution = 'accepted';
+          outcome = {
+            status: 'accepted',
+            message: 'Payment recorded. The attempt was not discarded because it reached the shop.',
+            changeMinor:
+              original.input.type === 'CASH'
+                ? (original.input.cashReceivedMinor ?? original.input.amountMinor) -
+                  original.input.amountMinor
+                : 0,
+          };
+        } else if (result.status === 'DISCARDED') {
+          resolution = 'rejected';
+          discardedTenderKeys.current.add(original.input.idempotencyKey);
+          outcome = {
+            status: 'rejected',
+            message:
+              'Payment attempt discarded. It was not recorded and never will be. Take the payment again if the customer has not paid.',
+          };
+          try {
+            clearTenderAttempt(original);
+            attemptRef.current = null;
+            setAttempt(null);
+            setRestoredAttempt(null);
+            setStorageError(false);
+          } catch {
+            setStorageError(true);
+          }
+        } else {
+          outcome = {
+            status: 'unknown',
+            message:
+              'The discard answer could not be read. The saved attempt is still locked; check the payment outcome.',
+          };
+        }
+      } catch (error) {
+        outcome = {
+          status: 'unknown',
+          message: `The attempt was not discarded. ${messageFrom(error)} The saved attempt is still locked.`,
+        };
+      }
+      setTenderOutcome(outcome);
+      setTenderReadRequired(true);
+      outcomeInFlight.current = false;
+      setCheckingOutcome(false);
+      // Only fresh bill and receipt reads establish today's balance for the next payment.
+      if (resolution) await refreshTenderBill(resolution);
+      return outcome;
+    },
+    [branchAuthorized, refreshTenderBill, saleId, utils]
+  );
 
   const attachCustomer = useCallback(async () => {
     if (!patient || busy) return;
@@ -3674,6 +3781,8 @@ function ScopedPharmacyCounterConsole({
           onCheckOutcome={
             attempt && tenderOutcome?.status === 'unknown' ? checkPaymentOutcome : undefined
           }
+          onDiscardAttempt={discardPaymentAttempt}
+          loadDiscardApprovers={loadDiscardApprovers}
           error={
             storageError
               ? TENDER_STORAGE_MESSAGE

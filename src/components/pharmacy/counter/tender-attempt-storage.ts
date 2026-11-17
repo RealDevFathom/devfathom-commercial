@@ -1,3 +1,4 @@
+import { browserUuid } from '@/lib/browser-uuid';
 import { z } from '@/lib/zod-csp';
 import type { inferRouterInputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
@@ -140,6 +141,16 @@ export function persistTenderAttempt(attempt: TenderAttempt): void {
   if (window.localStorage.getItem(key) !== null) throw new Error(TENDER_STORAGE_MESSAGE);
   window.localStorage.setItem(key, raw);
   if (window.localStorage.getItem(key) !== raw) throw new Error(TENDER_STORAGE_MESSAGE);
+}
+
+/**
+ * DEV-712: a supervisor's discard claims its attempt's key for good. The counter's amount-based
+ * key would come out the same for the next payment of that amount on that bill, so a
+ * discarded key gets a fresh attempt suffix; any other key is kept, so a double tap replays.
+ */
+export function freshTenderKey(key: string, discarded: ReadonlySet<string>): string {
+  if (!discarded.has(key)) return key;
+  return `${key}:retry:${browserUuid()}`;
 }
 
 /** Only call after server acceptance or a proven transactional rejection. */
