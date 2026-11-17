@@ -449,6 +449,8 @@ describe('DEV-881 manager ceiling applies to the day total per customer', () => 
           row.kind === 'ADJUSTMENT' &&
           row.organizationId === where.organizationId &&
           row.customerId === where.customerId &&
+          // Honour a branch filter, so a branch-scoped day total would fail the cross-branch test.
+          (where.branchId === undefined || row.branchId === where.branchId) &&
           (row.occurredAt as Date) >= where.occurredAt.gte &&
           (row.occurredAt as Date) < where.occurredAt.lt &&
           (where.points.gt !== undefined
@@ -511,6 +513,19 @@ describe('DEV-881 manager ceiling applies to the day total per customer', () => 
         }),
       })
     );
+  });
+
+  it("counts the customer's adjustments at every branch towards the day total", async () => {
+    const { db, created } = ledger([{ points: 400, occurredAt: now, branchId: 'branch-b' }]);
+    await expect(
+      adjustLoyaltyPoints(db as never, scope, grant('other-branch', 101), {
+        managerLimit: 500,
+        now,
+      })
+    ).rejects.toThrow('MANAGER_ADJUSTMENT_LIMIT');
+    expect(created).toHaveLength(1);
+    for (const [query] of db.pharmacyLoyaltyPointsEntry.aggregate.mock.calls)
+      if (query.where.kind === 'ADJUSTMENT') expect(query.where).not.toHaveProperty('branchId');
   });
 
   it('starts a fresh allowance at midnight Pakistan time', async () => {
