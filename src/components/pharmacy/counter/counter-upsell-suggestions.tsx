@@ -17,6 +17,7 @@ export function CounterUpsellList({
   error,
   disabled,
   disabledReason,
+  disabledReasonId,
   onChoose,
   onRetry,
 }: {
@@ -25,10 +26,13 @@ export function CounterUpsellList({
   error?: string | null;
   disabled: boolean;
   disabledReason?: string | null;
+  /** A visible explanation owned by the parent; standalone uses its own text. */
+  disabledReasonId?: string;
   onChoose: (suggestion: UpsellSuggestion) => void;
   onRetry: () => void;
 }) {
-  const reasonId = useId();
+  const localReasonId = useId();
+  const reasonId = disabledReasonId ?? localReasonId;
   const reason = disabled
     ? (disabledReason ?? 'Wait for the current counter action to finish.')
     : null;
@@ -58,7 +62,7 @@ export function CounterUpsellList({
   }
   return (
     <div className="space-y-3">
-      {reason ? (
+      {reason && !disabledReasonId ? (
         <p id={reasonId} className="text-sm text-text-muted">
           {reason}
         </p>
@@ -114,12 +118,15 @@ export function CounterUpsellSuggestions({
   medicineIds,
   disabled,
   disabledReason,
+  disabledReasonId,
   onChoose,
 }: {
   branchId: string;
   medicineIds: readonly string[];
   disabled: boolean;
   disabledReason?: string | null;
+  /** A visible explanation owned by the parent; standalone uses its own text. */
+  disabledReasonId?: string;
   onChoose: (suggestion: UpsellSuggestion) => void;
 }) {
   const ids = [...new Set(medicineIds)].sort().slice(0, 50);
@@ -138,6 +145,7 @@ export function CounterUpsellSuggestions({
         error={query.error ? counterErrorMessage(query.error) : null}
         disabled={disabled}
         disabledReason={disabledReason}
+        disabledReasonId={disabledReasonId}
         onChoose={onChoose}
         onRetry={() => void query.refetch()}
       />
