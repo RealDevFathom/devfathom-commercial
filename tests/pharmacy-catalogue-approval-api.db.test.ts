@@ -158,10 +158,17 @@ vi.mock('@/server/audit', async () => {
           medicineId: id('med_a'),
           changes: { brandName: 'Stale brand' },
         });
-        await reviewer.decideCatalogueEdit({
-          editId: p1.id,
-          decision: 'APPROVE',
-        });
+        assert.deepEqual(
+          await reviewer.decideCatalogueEdit({
+            editId: p1.id,
+            decision: 'APPROVE',
+          }),
+          { id: p1.id, status: 'APPROVED', staleEdits: 1 }
+        );
+        assert.equal(
+          (await reviewer.catalogueEdits()).find((row) => row.id === p2.id)?.stale,
+          true
+        );
         await refusal(
           reviewer.decideCatalogueEdit({ editId: p2.id, decision: 'APPROVE' }),
           'CONFLICT'
@@ -175,6 +182,106 @@ vi.mock('@/server/audit', async () => {
           'PENDING'
         );
         checks.push('stale publication rolls back proposal decision');
+        await reviewer.decideCatalogueEdit({ editId: p2.id, decision: 'REJECT' });
+
+        // Hold the row so both decisions read it as PENDING before either writes;
+        // only the status guard on the write can then stop both from applying.
+        async function race(
+          org: string,
+          table: string,
+          rowId: string,
+          decisions: () => Promise<unknown>[]
+        ) {
+          await c.query('BEGIN');
+          // Tenant tables force RLS, so the lock is taken inside the tenant's scope.
+          await c.query("SELECT set_config('app.current_organization_id', $1, true)", [id(org)]);
+          const held = await c.query(`SELECT id FROM ${table} WHERE id = $1 FOR UPDATE`, [rowId]);
+          assert.equal(held.rowCount, 1);
+          const settled = Promise.allSettled(decisions());
+          let waiting = 0;
+          for (let attempt = 0; attempt < 400 && waiting < 2; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 25));
+            waiting = (
+              await c.query<{ n: number }>(
+                'SELECT count(DISTINCT pid)::int AS n FROM pg_locks WHERE NOT granted'
+              )
+            ).rows[0]!.n;
+          }
+          await c.query('COMMIT');
+          assert.equal(waiting, 2, 'both decisions must be blocked on the same row');
+          const results = await settled;
+          const won = results.filter((result) => result.status === 'fulfilled');
+          const lost = results.filter((result) => result.status === 'rejected');
+          assert.equal(won.length, 1);
+          assert.equal(lost.length, 1);
+          assert.equal(
+            ((lost[0] as PromiseRejectedResult).reason as { code?: string }).code,
+            'CONFLICT'
+          );
+          return results;
+        }
+        const contested = await editor.proposeCatalogueEdit({
+          medicineId: id('med_a'),
+          changes: { brandName: 'Contested brand' },
+        });
+        const [approval] = await race('a', 'pharmacy_catalogue_edits', contested.id, () => [
+          reviewer.decideCatalogueEdit({ editId: contested.id, decision: 'APPROVE' }),
+          reviewer.decideCatalogueEdit({ editId: contested.id, decision: 'REJECT' }),
+        ]);
+        const contestedRow = await runtime.pharmacyCatalogueEdit.findFirstOrThrow({
+          where: { id: contested.id },
+        });
+        const brand = (await runtime.medicine.findFirstOrThrow({ where: { id: id('med_a') } }))
+          .brandName;
+        if (approval!.status === 'fulfilled') {
+          assert.equal(contestedRow.status, 'APPROVED');
+          assert.equal(brand, 'Contested brand');
+        } else {
+          assert.equal(contestedRow.status, 'REJECTED');
+          assert.equal(brand, 'First brand');
+        }
+        checks.push('simultaneous approve and reject apply exactly one decision');
+
+        // pharmacy:catalogue-review is an explicit grant (a wildcard does not
+        // cover it). A rejection publishes nothing, so it needs no second person.
+        await c.query(
+          `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'pharmacy:catalogue-review','ALLOW')`,
+          [id('review_perm'), id('solo'), id('ownerrole')]
+        );
+        await c.query(
+          `INSERT INTO pharmacy_reference_connectors (id,"organizationId",key,label,schedule,"createdBy","updatedAt") VALUES ($1,$2,'manual-file','Fixture file','{}',$3,now())`,
+          [id('connector'), id('solo'), id('owner_solo')]
+        );
+        await c.query(
+          `INSERT INTO pharmacy_reference_connector_runs (id,"organizationId","connectorId","inputDigest","batchId","fileName","triggerKind","triggeredBy") VALUES ($1,$2,$3,'digest','batch','fixture.csv','MANUAL',$4)`,
+          [id('run'), id('solo'), id('connector'), id('owner_solo')]
+        );
+        await c.query(
+          `INSERT INTO pharmacy_reference_connector_proposals (id,"organizationId","runId","connectorId","inputDigest","rowSourceKey",payload) VALUES ($1,$2,$3,$4,'digest','row-1','{}')`,
+          [id('proposal'), id('solo'), id('run'), id('connector')]
+        );
+        await race('solo', 'pharmacy_reference_connector_proposals', id('proposal'), () => [
+          solo.decideReferenceConnectorProposal({
+            proposalId: id('proposal'),
+            decision: 'REJECT',
+          }),
+          solo.decideReferenceConnectorProposal({
+            proposalId: id('proposal'),
+            decision: 'REJECT',
+          }),
+        ]);
+        assert.equal(
+          (
+            await createTenantDb(
+              id('solo'),
+              id('owner_solo')
+            ).pharmacyReferenceConnectorProposal.findFirstOrThrow({
+              where: { id: id('proposal') },
+            })
+          ).status,
+          'REJECTED'
+        );
+        checks.push('simultaneous connector decisions apply exactly one');
         const alias = await editor.addAlias({
           medicineId: id('med_a'),
           type: 'BRAND',
@@ -326,7 +433,7 @@ vi.mock('@/server/audit', async () => {
           0
         );
         checks.push('front-shop publication has reviewed provenance and no invented strength');
-        assert.equal(checks.length, 10);
+        assert.equal(checks.length, 12);
       } finally {
         await c.end();
       }

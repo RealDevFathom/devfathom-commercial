@@ -228,6 +228,12 @@ export function CatalogueApprovalQueue() {
               Submitted by {edit.editor.name}
             </p>
             <dl className="my-4 grid gap-2 text-sm">
+              {edit.targets.map((target, index) => (
+                <div key={`${target.label}-${index}`} className="flex min-w-0 flex-wrap gap-2">
+                  <dt className="font-semibold">{target.label}</dt>
+                  <dd className="break-words">{target.value}</dd>
+                </div>
+              ))}
               {Object.entries(
                 (edit.operation === 'UPDATE_MEDICINE'
                   ? edit.changes

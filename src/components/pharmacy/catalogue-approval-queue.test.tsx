@@ -54,6 +54,7 @@ beforeEach(() => {
       medicine: { productName: 'Fixture lotion' },
       editor: { name: 'Editor' },
       changes: { productName: 'Reviewed lotion' },
+      targets: [],
     },
   ];
 });
@@ -120,6 +121,7 @@ describe('DEV-766 catalogue approval queue', () => {
         editor: { name: 'Editor' },
         changes: { productName: 'Older proposal' },
         stale: true,
+        targets: [],
       },
     ];
     render(<CatalogueApprovalQueue />);
@@ -134,6 +136,25 @@ describe('DEV-766 catalogue approval queue', () => {
     expect(m.decide.mutate).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Reject edit' }));
     expect(m.decide.mutate).toHaveBeenCalledWith({ editId: 'stale-edit', decision: 'REJECT' });
+  });
+  it('names the pack a barcode edit attaches to instead of hiding its id', () => {
+    m.queue.data = [
+      {
+        id: 'barcode-edit',
+        operation: 'setPackBarcode',
+        medicine: { productName: 'Fixture tablets' },
+        editor: { name: 'Editor' },
+        changes: { json: { packLevelId: 'pack_strip', code: '5012345678900' } },
+        stale: false,
+        targets: [{ label: 'Pack', value: 'STRIP (10 per pack), 3 x 10 tablets' }],
+      },
+    ];
+    render(<CatalogueApprovalQueue />);
+    expect(screen.getByText('Attach pack barcode')).toBeVisible();
+    expect(screen.getByText('Pack')).toBeVisible();
+    expect(screen.getByText('STRIP (10 per pack), 3 x 10 tablets')).toBeVisible();
+    expect(screen.getByText('5012345678900')).toBeVisible();
+    expect(screen.queryByText('pack_strip')).not.toBeInTheDocument();
   });
   it('says how many other pending edits an approval made stale', async () => {
     render(<CatalogueApprovalQueue />);

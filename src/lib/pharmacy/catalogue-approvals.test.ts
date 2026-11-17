@@ -37,7 +37,7 @@ function fixture(editorId = 'editor') {
   };
   const raw = {
     medicine: {
-      findFirst: vi.fn(async () => medicine),
+      findFirst: vi.fn(async (): Promise<typeof medicine | null> => medicine),
       updateMany: vi.fn(
         async (args: { where: unknown; data: { productName?: string; updatedAt: Date } }) => {
           Object.assign(medicine, args.data);
@@ -56,6 +56,19 @@ function fixture(editorId = 'editor') {
       findMany: vi.fn(async (): Promise<unknown[]> => []),
     },
     auditLog: { create: vi.fn(async () => ({ id: 'audit' })) },
+    packLevel: {
+      findMany: vi.fn(async () => [
+        {
+          id: 'pack_strip',
+          level: 'STRIP',
+          unitsPerParent: 10,
+          presentation: { presentation: '3 x 10 tablets' },
+        },
+      ]),
+    },
+    presentation: {
+      findMany: vi.fn(async () => [{ id: 'presentation_a', presentation: '3 x 10 tablets' }]),
+    },
     $queryRaw: vi.fn(),
   };
   const db = Object.assign(raw, {
@@ -230,6 +243,38 @@ describe('DEV-766 durable catalogue approvals', () => {
       expect.objectContaining({ where: { status: 'PENDING' } })
     );
   });
+  it('names the pack and presentation each queued command targets', async () => {
+    const f = fixture();
+    const row = (id: string, operation: string, json: Record<string, unknown>) => ({
+      id,
+      operation,
+      changes: { json },
+      expectedUpdatedAt: timestamp,
+      medicine: { productName: 'Tablets', updatedAt: timestamp },
+      editor: { name: 'Editor' },
+    });
+    f.raw.pharmacyCatalogueEdit.findMany.mockResolvedValue([
+      row('barcode', 'setPackBarcode', { packLevelId: 'pack_strip', code: '501' }),
+      row('pack', 'createPackLevel', { presentationId: 'presentation_a', level: 'BOX' }),
+      row('revise', 'revisePackLevel', { id: 'pack_strip', unitsPerParent: 12 }),
+      row('missing', 'recordPrintedMrp', { packLevelId: 'pack_gone', printedMrpMinor: 500 }),
+      {
+        ...row('details', 'UPDATE_MEDICINE', {}),
+        changes: { productName: 'Renamed', id: 'x' },
+      },
+    ]);
+    const edits = await listPendingCatalogueEdits(f.db);
+    expect(Object.fromEntries(edits.map((edit) => [edit.id, edit.targets]))).toEqual({
+      barcode: [{ label: 'Pack', value: 'STRIP (10 per pack), 3 x 10 tablets' }],
+      pack: [{ label: 'Presentation', value: '3 x 10 tablets' }],
+      revise: [{ label: 'Pack', value: 'STRIP (10 per pack), 3 x 10 tablets' }],
+      missing: [{ label: 'Pack', value: 'Pack not found' }],
+      details: [],
+    });
+    expect(f.raw.packLevel.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: { in: ['pack_strip', 'pack_gone'] } } })
+    );
+  });
   it('refuses concurrent and repeated decisions', async () => {
     const f = fixture();
     f.raw.pharmacyCatalogueEdit.updateMany.mockResolvedValue({ count: 0 });
@@ -260,18 +305,22 @@ describe('DEV-766 durable catalogue approvals', () => {
   });
   it('fails closed for missing tenant targets and forbids saleability/family injection', async () => {
     const f = fixture();
-    f.raw.medicine.findFirst.mockResolvedValueOnce(null as never);
+    f.raw.medicine.findFirst.mockResolvedValueOnce(null);
     await expect(
       submitCatalogueEdit(f.db, scope, 'foreign', { productName: 'x' })
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
     await expect(
       submitCatalogueEdit(f.db, scope, 'medicine', { saleable: true })
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     await expect(
       submitCatalogueEdit(f.db, scope, 'medicine', {
         productFamily: 'FRONT_SHOP',
       })
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    // An out-of-range price is a validation error, never an internal server error.
+    await expect(
+      submitCatalogueEdit(f.db, scope, 'medicine', { retailPriceMinor: 2_147_483_648 })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(f.raw.pharmacyCatalogueEdit.create).not.toHaveBeenCalled();
   });
   it('enforces the separation check for assertions as well as catalogue proposals', async () => {

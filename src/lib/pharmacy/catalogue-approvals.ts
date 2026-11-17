@@ -109,7 +109,14 @@ function validatedChanges(
   },
   raw: unknown
 ) {
-  const changes = catalogueChanges.parse(raw);
+  const parsed = catalogueChanges.safeParse(raw);
+  // Report an out-of-range or unknown field as a validation error, not a server fault.
+  if (!parsed.success)
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: parsed.error.issues[0]?.message ?? 'Invalid catalogue edit.',
+    });
+  const changes = parsed.data;
   try {
     const retail = validateRetailFields({
       productFamily: medicine.productFamily,
@@ -156,11 +163,62 @@ export async function listPendingCatalogueEdits(db: ScopedDb) {
     orderBy: { createdAt: 'asc' },
     take: 250,
   });
-  return edits.map(({ medicine, ...edit }) => ({
+  // Pack, barcode and printed-MRP commands carry only record ids. Resolve them to
+  // the pack and presentation a reviewer can recognise before approving.
+  const commands = edits.map((edit) => commandIds(edit.operation, edit.changes));
+  const packIds = [...new Set(commands.flatMap((ids) => ids.packs))];
+  const presentationIds = [...new Set(commands.flatMap((ids) => ids.presentations))];
+  const [packs, presentations] = await Promise.all([
+    packIds.length
+      ? db.packLevel.findMany({
+          where: { id: { in: packIds } },
+          include: { presentation: { select: { presentation: true } } },
+        })
+      : [],
+    presentationIds.length
+      ? db.presentation.findMany({ where: { id: { in: presentationIds } } })
+      : [],
+  ]);
+  const packLabel = new Map(
+    packs.map((pack) => [
+      pack.id,
+      `${pack.level} (${pack.unitsPerParent} per pack), ${pack.presentation.presentation}`,
+    ])
+  );
+  const presentationLabel = new Map(presentations.map((item) => [item.id, item.presentation]));
+  return edits.map(({ medicine, ...edit }, index) => ({
     ...edit,
     medicine: { productName: medicine.productName },
     stale: medicine.updatedAt.getTime() !== edit.expectedUpdatedAt.getTime(),
+    targets: [
+      ...commands[index]!.presentations.map((id) => ({
+        label: 'Presentation',
+        value: presentationLabel.get(id) ?? 'Presentation not found',
+      })),
+      ...commands[index]!.packs.map((id) => ({
+        label: 'Pack',
+        value: packLabel.get(id) ?? 'Pack not found',
+      })),
+    ],
   }));
+}
+
+function commandIds(operation: string | undefined, changes: unknown) {
+  const input =
+    operation && operation !== 'UPDATE_MEDICINE' && changes && typeof changes === 'object'
+      ? (changes as { json?: Record<string, unknown> }).json
+      : undefined;
+  const text = (value: unknown) => (typeof value === 'string' && value ? [value] : []);
+  if (!input) return { packs: [] as string[], presentations: [] as string[] };
+  return {
+    presentations: text(input.presentationId),
+    packs: [
+      // revisePackLevel identifies the pack it revises by `id`.
+      ...text(operation === 'revisePackLevel' ? input.id : undefined),
+      ...text(input.packLevelId),
+      ...text(input.parentPackLevelId),
+    ],
+  };
 }
 
 export async function submitCatalogueEdit(

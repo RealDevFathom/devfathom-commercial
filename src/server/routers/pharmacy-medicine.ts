@@ -829,15 +829,24 @@ export const pharmacyMedicineRouter = router({
             reviewerId: ctx.session.user.id,
           },
         });
-        return tx.pharmacyReferenceConnectorProposal.update({
+        const data = {
+          status: 'CONFIRMED',
+          targetMedicineId: medicine.id,
+          decidedBy: ctx.session.user.id,
+          decidedAt,
+        } as const;
+        // A concurrent decision may have claimed the row since it was read; refuse
+        // with the same conflict as REJECT, rolling back everything written above.
+        const confirmed = await tx.pharmacyReferenceConnectorProposal.updateMany({
           where: { id: proposal.id, status: 'PENDING' },
-          data: {
-            status: 'CONFIRMED',
-            targetMedicineId: medicine.id,
-            decidedBy: ctx.session.user.id,
-            decidedAt,
-          },
+          data,
         });
+        if (confirmed.count !== 1)
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'Connector proposal already has a pharmacist decision.',
+          });
+        return { id: proposal.id, ...data };
       })
     ),
 

@@ -210,7 +210,7 @@ describe('MED-06 connector router boundary', () => {
             },
           },
         }),
-        update: vi.fn().mockResolvedValue({ id: 'proposal-d', status: 'CONFIRMED' }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       medicine: {
         findFirst: vi.fn(),
@@ -230,6 +230,10 @@ describe('MED-06 connector router boundary', () => {
 
     expect(tx.medicine.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ productName: 'Amoxil', rx: true, saleable: false }),
+    });
+    expect(tx.pharmacyReferenceConnectorProposal.updateMany).toHaveBeenCalledWith({
+      where: { id: 'proposal-d', status: 'PENDING' },
+      data: expect.objectContaining({ status: 'CONFIRMED', targetMedicineId: 'medicine-d' }),
     });
     expect(created).toHaveLength(2);
     for (const assertion of created) {
