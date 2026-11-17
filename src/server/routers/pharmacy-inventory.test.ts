@@ -2503,7 +2503,7 @@ describe('DEV-660 — every branch-scoped procedure is classified', () => {
 
     expect(new Set(classified).size).toBe(classified.length);
     expect(branchScoped).toEqual(classified);
-    expect(ASSIGNMENT_GATED).toHaveLength(42);
+    expect(ASSIGNMENT_GATED).toHaveLength(43);
   });
 });
 
