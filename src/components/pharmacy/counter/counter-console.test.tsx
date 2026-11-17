@@ -5024,6 +5024,9 @@ describe('DEV-41 remaining disabled explanations', () => {
     'explains the drawer %s gate',
     (state) => {
       closeDrawer();
+      // Quick amounts are offered to managers only (DEV-873), so the preset's
+      // disabled explanation is asserted for a manager.
+      mocks.queries.refundAccess = query({ authorized: true });
       if (state === 'loading')
         mocks.queries.drawerStatus = { ...query(), isSuccess: false, isLoading: true };
       else
