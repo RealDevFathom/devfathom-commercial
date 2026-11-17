@@ -273,8 +273,16 @@ vi.mock('@/lib/rate-limit', () => ({
   clientIp: () => '127.0.0.1',
 }));
 
-async function setup(manualType?: ManualTenderType, allowReferenceSkip = false) {
-  const fixture = await scenario(ORG_A, manualType ? tag('merchant-branch') : BRANCH_A, 'transport');
+async function setup(
+  manualType?: ManualTenderType,
+  allowReferenceSkip = false,
+  privateBranch = false
+) {
+  const fixture = await scenario(
+    ORG_A,
+    manualType || privateBranch ? tag('merchant-branch') : BRANCH_A,
+    'transport'
+  );
   // Replay creates and tenders the sale through the persisted regulatory gate.
   if (!regulatedBranches.has(fixture.branchId)) {
     const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
@@ -613,6 +621,97 @@ describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
     const lease = await r.json();
     expect(lease.blockEnd - lease.blockStart + 1).toBe(1000);
   });
+  // DEV-877: an offline sale is journaled at the server's replay time, never
+  // back-dated to the device's originalSaleAt. A sale whose business day sits in
+  // a period closed before replay posts into the open period covering the
+  // replay; a replay whose own period is closed is refused and rolls back.
+  it('DEV-877 posts an offline cash sale replayed after its business day closed into the open replay period', async () => {
+    const f = await setup(undefined, false, true);
+    const scope = scopeOf(f.fixture);
+    const soldAt = new Date(f.command.leasedReceipt.originalSaleAt);
+    const closedFrom = new Date(soldAt.getTime() - 24 * 60 * 60 * 1000);
+    const closedUntil = new Date(soldAt.getTime() + 1);
+    const bookkeeping = await import('@/lib/pharmacy/bookkeeping');
+    await inOrg(ORG_A, (db) =>
+      bookkeeping.closeAccountingPeriod(db, scope, { startsAt: closedFrom, endsAt: closedUntil })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const response = await f.replay();
+    expect(response.status, JSON.stringify(await response.clone().json())).toBe(200);
+    const { saleId } = await response.json();
+    await inOrg(ORG_A, async (db) => {
+      const sale = await db.pharmacySale.findFirstOrThrow({
+        where: { id: saleId },
+        include: { tenders: true, lines: true },
+      });
+      expect(sale.status).toBe('COMPLETED');
+      // The drawer still records the original business day.
+      expect(sale.tenders[0]!.businessDate.toISOString().slice(0, 10)).toBe(
+        f.command.leasedReceipt.originalSaleAt.slice(0, 10)
+      );
+      const entries = await db.financeJournalEntry.findMany({
+        where: {
+          branchId: f.fixture.branchId,
+          OR: [
+            { sourceKind: 'PHARMACY_TENDER', sourceId: sale.tenders[0]!.id },
+            { sourceKind: 'PHARMACY_SALE_LINE', sourceId: { in: sale.lines.map((l) => l.id) } },
+          ],
+        },
+      });
+      expect(entries.map((entry) => entry.sourceKind).sort()).toEqual([
+        'PHARMACY_SALE_LINE',
+        'PHARMACY_TENDER',
+      ]);
+      for (const entry of entries) {
+        expect(entry.occurredAt.getTime()).toBeGreaterThanOrEqual(closedUntil.getTime());
+      }
+      expect(
+        await db.financeJournalEntry.count({
+          where: {
+            branchId: f.fixture.branchId,
+            occurredAt: { gte: closedFrom, lt: closedUntil },
+          },
+        })
+      ).toBe(0);
+    });
+  });
+
+  it('DEV-877 refuses an offline replay whose replay period is closed and accepts it after reopen', async () => {
+    const f = await setup(undefined, false, true);
+    const scope = scopeOf(f.fixture);
+    const bookkeeping = await import('@/lib/pharmacy/bookkeeping');
+    const soldAt = new Date(f.command.leasedReceipt.originalSaleAt);
+    const period = await inOrg(ORG_A, (db) =>
+      bookkeeping.closeAccountingPeriod(db, scope, {
+        startsAt: new Date(soldAt.getTime() - 24 * 60 * 60 * 1000),
+        endsAt: new Date(soldAt.getTime() + 24 * 60 * 60 * 1000),
+      })
+    );
+    const before = await f.counts();
+    const journalCount = () =>
+      inOrg(ORG_A, (db) =>
+        db.financeJournalEntry.count({ where: { branchId: f.fixture.branchId } })
+      );
+    const journalBefore = await journalCount();
+
+    const refused = await f.replay();
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: 'PERIOD_CLOSED' });
+    expect(await f.counts()).toEqual(before);
+    expect(await journalCount()).toBe(journalBefore);
+
+    await inOrg(ORG_A, (db) =>
+      bookkeeping.reopenAccountingPeriod(db, scope, {
+        periodId: period.id,
+        reason: 'Post the late offline sale',
+      })
+    );
+    const accepted = await f.replay();
+    expect(accepted.status).toBe(200);
+    expect(await f.counts()).toMatchObject({ commands: 1, sales: 1, consumed: 1 });
+  });
+
   it('rolls back stock, quota and log when tender total changes', async () => {
     const f = await setup();
     const before = await f.counts();

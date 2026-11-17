@@ -60,6 +60,7 @@ vi.mock('@/lib/pharmacy/finance-postings', () => ({
 }));
 
 import { Prisma } from '@/generated/prisma/client';
+import { FinancePostingError } from '@/lib/finance/journal';
 import { moduleForProcedure } from '@/lib/module-catalog';
 import { EXPIRY_CLAIM_MAX_POSITIONS } from '@/lib/pharmacy/expiry-claim';
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
@@ -326,6 +327,59 @@ describe('transfer short-close accounting (DEV-131)', () => {
       { organizationId: 'org_a', branchId: 'branch_a', actorId: 'user_a' },
       { transferLineId: 'line_1', stockMovementId: 'loss_movement', at: occurredAt }
     );
+  });
+});
+
+describe('DEV-877 transfer postings inside a closed accounting period', () => {
+  it('refuses a transit loss with a typed PERIOD_CLOSED instead of an internal error', async () => {
+    grant([allow('pharmacy:inventory')]);
+    witnessPinOnFile();
+    db.user.findFirst.mockResolvedValue({ id: 'user_b' });
+    db.$queryRaw
+      .mockResolvedValueOnce([{ id: 'transfer_1' }] as never)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { onHandUnits: 20, sealedPacks: 2, looseUnits: 0, unitsPerPack: 10 },
+      ] as never);
+    db.pharmacyInterbranchTransfer.findFirst.mockResolvedValue({
+      id: 'transfer_1',
+      status: 'DISPATCHED',
+      fromBranchId: 'branch_src',
+      toBranchId: 'branch_a',
+      lines: [
+        {
+          id: 'line_1',
+          sourceLotId: 'lot_src',
+          sourceStockLocationId: 'location_src',
+          destinationStockLocationId: 'location_1',
+          quantityUnits: 20,
+          receivedUnits: 0,
+        },
+      ],
+    });
+    db.pharmacyStockMovement.create.mockResolvedValue({
+      id: 'loss_movement',
+      occurredAt: new Date('2026-11-02T09:00:00.000Z'),
+    });
+    mocks.postInterbranchTransferLossEntry.mockRejectedValueOnce(
+      new FinancePostingError('PERIOD_CLOSED')
+    );
+
+    await expect(
+      caller().receiveTransferWithVariance({
+        branchId: 'branch_a',
+        transferId: 'transfer_1',
+        lines: [{ lineId: 'line_1', receivedUnits: 0 }],
+        variance: {
+          reason: 'Lost in transit',
+          witnessId: 'user_b',
+          witnessPin: '2468',
+          evidenceRef: 'COURIER-1',
+        },
+        idempotencyKeyPrefix: 'receive-1',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'PERIOD_CLOSED' });
   });
 });
 
