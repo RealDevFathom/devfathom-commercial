@@ -114,7 +114,12 @@ describe('manual card refund reference command', () => {
     expect(tx.restaurantRefund.create).not.toHaveBeenCalled();
   });
   it('rejects card-number-shaped references before any ledger writes', async () => {
-    for (const bad of ['4111111111111111', '4111-1111-1111-1111', 'REF 42']) {
+    for (const bad of [
+      '4111111111111111',
+      '4111-1111-1111-1111',
+      '4111/1111/1111/1111',
+      'REF 42',
+    ]) {
       const { db, tx } = refundDb();
       await expect(
         refundTender(db, { ...input, cardMachineRefundReference: bad })

@@ -437,7 +437,12 @@ describe('manual card refund reference validation', () => {
     ).toBe(false);
   });
   it('rejects card-number-shaped and malformed references at the request boundary', () => {
-    for (const bad of ['4111111111111111', '4111-1111-1111-1111', 'REF 42']) {
+    for (const bad of [
+      '4111111111111111',
+      '4111-1111-1111-1111',
+      '4111/1111/1111/1111',
+      'REF 42',
+    ]) {
       expect(refundBody.safeParse({ ...body, cardMachineRefundReference: bad }).success).toBe(
         false
       );

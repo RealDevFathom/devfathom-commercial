@@ -26,7 +26,7 @@ export function refundReferenceProblem(value: string): string | null {
   if (!ALLOWED.test(value)) {
     return 'The card machine refund reference may only contain letters, digits, dash and slash.';
   }
-  const compact = value.replace(/[\s-]/g, '');
+  const compact = value.replace(/[\s/-]/g, '');
   const runs = compact.match(/\d+/g) ?? [];
   for (const run of runs) {
     // Any 13+ digit run is refused outright; the Luhn test is kept as an explicit
