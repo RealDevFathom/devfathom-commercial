@@ -1,3 +1,4 @@
+import { allRulesConfirmed } from '@/lib/platform/jurisdiction-rules';
 /**
  * PLAT-02 / PLAT-03 tenant surfaces — the twelve-step onboarding checklist, the
  * branch regulatory profile, and the activation status the operator reads when
@@ -505,12 +506,25 @@ export const pharmacyOnboardingRouter = router({
               jurisdictionRuleSetId: true,
               jurisdictionRuleSet: {
                 select: {
+                  version: true,
                   licenceCategories: true,
                   permittedSchedules: true,
                   pharmacistCoverageRule: true,
                 },
               },
             },
+          })
+        : [];
+
+      // Include scheduled publications in the notice, but keep the selectable
+      // jurisdictions and save procedure effective-dated. Never change a profile's binding.
+      const successorRules = versions.length
+        ? await ctx.db.jurisdictionRuleSet.findMany({
+            where: {
+              isPlaceholder: false,
+              OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+            },
+            orderBy: { version: 'desc' },
           })
         : [];
 
@@ -538,8 +552,22 @@ export const pharmacyOnboardingRouter = router({
             selected ? { profile: version, site: { ...selected, active: true } } : undefined,
             timeZone
           );
+          const newerRules = successorRules.find(
+            (rules) =>
+              sameProvince(rules.code, version.provinceCode) &&
+              allRulesConfirmed(rules) &&
+              rules.version > jurisdictionRuleSet.version
+          );
           return {
             ...version,
+            ...(newerRules
+              ? {
+                  newerConfirmedRuleSet: {
+                    version: newerRules.version,
+                    effectiveFrom: newerRules.effectiveFrom,
+                  },
+                }
+              : {}),
             provinceName: provinceName(version.provinceCode),
             pendingLegalReview: rulesPendingLegalReview(jurisdictionRuleSet),
             ...status,

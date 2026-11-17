@@ -136,3 +136,51 @@ describe('regulatory profile start day (DEV-298)', () => {
     expect(result.versions[0]).toMatchObject({ effective: false, inForce: false });
   });
 });
+
+describe('DEV-99 pinned rule versions', () => {
+  it.each([
+    [true, today],
+    [false, today],
+    [false, new Date('2099-01-01')],
+  ] as const)(
+    'reports a newer confirmed version without changing the profile (provisional: %s, effective: %s)',
+    async (provisional, ruleEffectiveFrom) => {
+      const { testOnlyRules } = await import('@/lib/test-support/jurisdiction-rules');
+      const oldProfile = {
+        ...versionStartingToday(),
+        provinceCode: 'TEST_ONLY',
+        jurisdictionRuleSetId: 'test_only_v1',
+        jurisdictionRuleSet: { ...testOnlyRules, version: 1 },
+      };
+      mocks.profileFindMany.mockResolvedValue([oldProfile]);
+      mocks.ruleSetFindMany.mockResolvedValue([
+        {
+          ...testOnlyRules,
+          id: 'test_only_v2',
+          code: 'TEST_ONLY',
+          version: 2,
+          effectiveFrom: ruleEffectiveFrom,
+          effectiveTo: null,
+          licenceCategories: { ...testOnlyRules.licenceCategories, provisional },
+        },
+      ]);
+      const result = await pharmacyOnboardingRouter.createCaller(context()).regulatory();
+      expect(result.versions[0]!.jurisdictionRuleSetId).toBe('test_only_v1');
+      if (provisional) expect(result.versions[0]!.newerConfirmedRuleSet).toBeUndefined();
+      else
+        expect(result.versions[0]!.newerConfirmedRuleSet).toEqual({
+          version: 2,
+          effectiveFrom: ruleEffectiveFrom,
+        });
+      expect(mocks.ruleSetFindMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            isPlaceholder: false,
+            effectiveFrom: { lte: expect.any(Date) },
+            OR: [{ effectiveTo: null }, { effectiveTo: { gt: expect.any(Date) } }],
+          }),
+        })
+      );
+    }
+  );
+});
