@@ -23,6 +23,7 @@ import type { TerminalRequest } from './checkout-panel';
 
 type Tender = {
   tenderId: string;
+  paymentProvider?: string | null;
   orderNumber: number;
   receiptNumber: string | null;
   type: string;
@@ -70,6 +71,7 @@ export function RefundPanel({
   const [amount, setAmount] = useState('');
   const [tipAmount, setTipAmount] = useState('0.00');
   const [reason, setReason] = useState('');
+  const [cardMachineRefundReference, setCardMachineRefundReference] = useState('');
   const [managerId, setManagerId] = useState('');
   const [managerSecret, setManagerSecret] = useState('');
   const [demoApproval, setDemoApproval] = useState<DemoApproval | null>(null);
@@ -166,6 +168,7 @@ export function RefundPanel({
 
   function selectTender(id: string) {
     setTenderId(id);
+    setCardMachineRefundReference('');
     setResult(null);
     setError(null);
     const next = tenders.find((tender) => tender.tenderId === id);
@@ -225,6 +228,9 @@ export function RefundPanel({
     }
     const approvingStaffProfileId = approval?.staffProfileId ?? managerId;
     const body = {
+      ...(selected.paymentProvider === 'MANUAL' && cardMachineRefundReference.trim()
+        ? { cardMachineRefundReference: cardMachineRefundReference.trim() }
+        : {}),
       originalTenderId: selected.tenderId,
       amount,
       ...(moneyNumber(tipAmount) ? { tipRefundAmount: tipAmount } : {}),
@@ -240,6 +246,9 @@ export function RefundPanel({
         method: 'POST',
         body,
         intent: `refund:${JSON.stringify({
+          ...(selected.paymentProvider === 'MANUAL' && cardMachineRefundReference.trim()
+            ? { cardMachineRefundReference: cardMachineRefundReference.trim() }
+            : {}),
           originalTenderId: selected.tenderId,
           amount,
           tipRefundAmount: tipAmount,
@@ -389,6 +398,19 @@ export function RefundPanel({
                 />
               </div>
             </div>
+            {selected?.paymentProvider === 'MANUAL' ? (
+              <div className="space-y-1.5">
+                <Label htmlFor="refund-machine-reference">
+                  Card machine refund reference (optional)
+                </Label>
+                <Input
+                  id="refund-machine-reference"
+                  maxLength={120}
+                  value={cardMachineRefundReference}
+                  onChange={(event) => setCardMachineRefundReference(event.target.value)}
+                />
+              </div>
+            ) : null}
             <div>
               <Label htmlFor="refund-reason">Reason</Label>
               <Input
