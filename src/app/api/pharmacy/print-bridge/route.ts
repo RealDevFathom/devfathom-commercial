@@ -31,6 +31,28 @@ import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 const headers = { 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' };
 const MAX_WAIT_SECONDS = 20;
 const POLL_INTERVAL_MS = 500;
+const MAX_ACK_BYTES = 4_096;
+
+/** Read at most `limit` bytes; null as soon as the body exceeds it (never buffers more). */
+async function readBoundedBody(request: Request, limit: number): Promise<string | null> {
+  const declared = Number.parseInt(request.headers.get('content-length') ?? '', 10);
+  if (Number.isFinite(declared) && declared > limit) return null;
+  if (!request.body) return '';
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
 
 const ackBody = z
   .object({
@@ -113,7 +135,11 @@ async function guarded(request: Request, run: () => Promise<Response>): Promise<
     if (error instanceof BridgeRequestError)
       return reply({ error: error.publicMessage }, error.status);
     // Never echo internals, receipt contents or credentials.
-    console.error('Pharmacy print bridge request failed.');
+    console.error('Pharmacy print bridge request failed.', {
+      // Name and code only: messages and stacks can embed receipt text or credentials.
+      name: error instanceof Error ? error.name : typeof error,
+      code: (error as { code?: unknown } | null)?.code,
+    });
     return reply({ error: 'Print bridge request failed.' }, 500);
   }
 }
@@ -148,8 +174,8 @@ export async function POST(request: Request) {
   return guarded(request, async () => {
     const credential = credentialFrom(request);
     if (!credential) return reply({ error: 'Print bridge credential required.' }, 401);
-    const raw = await request.text();
-    if (Buffer.byteLength(raw) > 4_096) return reply({ error: 'Acknowledgement too large.' }, 413);
+    const raw = await readBoundedBody(request, MAX_ACK_BYTES);
+    if (raw === null) return reply({ error: 'Acknowledgement too large.' }, 413);
     let body: unknown = null;
     try {
       body = JSON.parse(raw);

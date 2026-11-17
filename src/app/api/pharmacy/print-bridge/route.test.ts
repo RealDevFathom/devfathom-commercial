@@ -191,6 +191,27 @@ describe('pharmacy print bridge transport', () => {
     expect(missing.status).toBe(404);
   });
 
+  it('stops reading an oversized acknowledgement stream before parsing', async () => {
+    let pulled = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        controller.enqueue(new Uint8Array(1_024).fill(120));
+        if (pulled > 1_000) controller.close();
+      },
+    });
+    const oversized = new Request('https://app.example/api/pharmacy/print-bridge', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${credential}` },
+      body: stream,
+      duplex: 'half',
+    } as RequestInit);
+    const response = await POST(oversized);
+    expect(response.status).toBe(413);
+    expect(pulled).toBeLessThan(20);
+    expect(mocks.acknowledgePharmacyPrintJob).not.toHaveBeenCalled();
+  });
+
   it('hides internal errors', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     mocks.claimNextPharmacyPrintJob.mockRejectedValueOnce(new Error('secret receipt text'));
