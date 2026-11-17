@@ -1917,6 +1917,7 @@ export async function recoverRestockInterest(
     throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
   // Recovery credit starts only when the back-in-stock notice was actually
   // sent (provider accepted it); a sale completed before that is not credited.
+  // The log's updatedAt is the PENDING->SENT write; createdAt is only the claim.
   const noticeKeys = interest.notifications.map((notice) => `back-in-stock:${notice.id}`);
   const sentLogs = noticeKeys.length
     ? await db.pharmacyMessageLog.findMany({
@@ -1926,10 +1927,10 @@ export async function recoverRestockInterest(
           status: 'SENT',
           dedupeKey: { in: noticeKeys },
         },
-        select: { createdAt: true },
+        select: { updatedAt: true },
       })
     : [];
-  const firstSentAt = sentLogs.map((log) => log.createdAt.getTime()).sort((x, y) => x - y)[0];
+  const firstSentAt = sentLogs.map((log) => log.updatedAt.getTime()).sort((x, y) => x - y)[0];
   const soldAt = line.sale.completedAt;
   if (firstSentAt === undefined || !soldAt || soldAt.getTime() <= firstSentAt)
     throw new PharmacySaleError('INVALID_STATE');
@@ -2018,10 +2019,10 @@ export async function linkRestockRecoveries(
           status: 'SENT',
           dedupeKey: { in: noticeKeys },
         },
-        select: { dedupeKey: true, createdAt: true },
+        select: { dedupeKey: true, updatedAt: true },
       })
     : [];
-  const sentAt = new Map(sent.map((log) => [log.dedupeKey, log.createdAt]));
+  const sentAt = new Map(sent.map((log) => [log.dedupeKey, log.updatedAt]));
   const pending = interests
     .map((interest) => ({
       id: interest.id,

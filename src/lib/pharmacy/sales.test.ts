@@ -1005,7 +1005,7 @@ describe('DEM-03 restock interest', () => {
       },
       pharmacyMessageLog: {
         findMany: async () => [
-          { dedupeKey: 'back-in-stock:notice-a', createdAt: new Date('2026-06-01T00:00:00Z') },
+          { dedupeKey: 'back-in-stock:notice-a', updatedAt: new Date('2026-06-01T00:00:00Z') },
         ],
       },
       unfulfilledDemandEvent: {
@@ -1123,7 +1123,7 @@ describe('DEV-79 back-in-stock capture and recovery', () => {
       pharmacyMessageLog: {
         findMany: async (args: { where: Record<string, unknown> }) => {
           logWhere = args.where;
-          return sentAt ? [{ dedupeKey: 'back-in-stock:notice-a', createdAt: sentAt }] : [];
+          return sentAt ? [{ dedupeKey: 'back-in-stock:notice-a', updatedAt: sentAt }] : [];
         },
       },
       pharmacyRestockInterest: {
