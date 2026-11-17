@@ -102,6 +102,8 @@ function counterDb(
         { id: 'pack-a', level: 'PACK', parentPackLevelId: null, unitsPerParent: 10 },
       ]),
     },
+    // DEV-66: no configured discount policy, so the default cost floor applies.
+    pharmacyBranch: { findFirst: vi.fn(async () => ({ discountPolicy: null })) },
     medicinePackMrp: { findMany: vi.fn(async () => []) },
     pharmacyPromotion: { findMany: vi.fn(async () => promotions) },
     pharmacySaleLine: {

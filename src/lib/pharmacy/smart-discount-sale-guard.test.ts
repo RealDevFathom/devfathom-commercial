@@ -11,6 +11,11 @@ vi.mock('./regulatory', async () => ({
   assertStoredPharmacyMayOperate: vi.fn(async () => undefined),
 }));
 
+vi.mock('./voucher-controls', async () => ({
+  ...(await vi.importActual<typeof import('./voucher-controls')>('./voucher-controls')),
+  assertVoucherIssuerRights: vi.fn(async () => 'owner-a'),
+}));
+
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'cashier-a' };
 
 // One sealed pack of 10 at MRP 1000; cost 70 per unit (700 per pack).
@@ -69,10 +74,21 @@ function saleDb(discountPolicy: unknown) {
         discountMinor: 200,
         eligibleCategories: ['NON_DRUG'],
         issuedByUserId: 'owner-a',
-        validUntil: null,
+        validUntil: new Date('2099-01-01T00:00:00Z'),
+        maxUses: 1,
+        usedCount: 0,
+        revokedAt: null,
+        approvedByUserId: 'owner-a',
+        approvalPolicy: 'OWNER',
       })),
+      updateMany: vi.fn(async () => ({ count: 1 })),
     },
     pharmacyInventoryLot: { findMany: vi.fn(async () => [lot]) },
+    packLevel: {
+      findMany: vi.fn(async () => [
+        { id: 'pack-box', level: 'PACK', parentPackLevelId: null, unitsPerParent: 10 },
+      ]),
+    },
     medicinePackMrp: { findMany: vi.fn(async () => []) },
     pharmacySaleLine: {
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
@@ -139,6 +155,7 @@ describe('DEV-66 minimum-margin guard on the sale path', () => {
       canonicalUnitsPerSaleUnit: 1,
       idempotencyKey: 'line-voucher',
       voucherId: 'voucher-a',
+      voucherCashierPinVerified: true as const,
     };
 
     it('refuses a voucher that would breach the configured minimum margin', async () => {
