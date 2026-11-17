@@ -953,13 +953,16 @@ function ScopedPharmacyCounterConsole({
     requestedCanonicalUnits !== null &&
     Number.isSafeInteger(requestedCanonicalUnits) &&
     requestedCanonicalUnits > 0
-      ? Math.max(0, requestedCanonicalUnits - activeRow.onHandUnits)
+      ? Math.max(
+          0,
+          requestedCanonicalUnits - (activeRow.medicineOnHandUnits ?? activeRow.onHandUnits)
+        )
       : 0;
   const substituteInput =
     activeRow &&
     selectedOption &&
     requestedCanonicalUnits !== null &&
-    activeRow.onHandUnits < requestedCanonicalUnits
+    (activeRow.medicineOnHandUnits ?? activeRow.onHandUnits) < requestedCanonicalUnits
       ? {
           branchId,
           medicineId: activeRow.medicineId,
@@ -2364,7 +2367,7 @@ function ScopedPharmacyCounterConsole({
           canonicalUnitsPerSaleUnit: selectedOption?.canonicalUnitsPerSaleUnit ?? 1,
           requestedCanonicalUnits: requestedCanonicalUnits ?? quantity,
           shortfallCanonicalUnits: capturedUnits,
-          onHandUnits: activeRow?.onHandUnits ?? 0,
+          onHandUnits: activeRow?.medicineOnHandUnits ?? activeRow?.onHandUnits ?? 0,
           blocked: activeRow?.blocked ?? [],
           capturedAt: new Date().toISOString(),
         },

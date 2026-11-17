@@ -68,6 +68,11 @@ export type CounterSearchRow = {
   nearestSafeExpiry: string | null;
   /** Safe canonical units on hand for this branch (blocked stock excluded). */
   onHandUnits: number;
+  /**
+   * DEV-90: set only on a shelf-label scan, where `onHandUnits` is that lot's own
+   * units. The medicine-wide safe total, for shortage capture and substitutes.
+   */
+  medicineOnHandUnits?: number;
   /** The saleable arrangement, per available sale unit (POS-02). */
   saleableUnits: Array<{
     kind: SaleUnitKind;
@@ -562,6 +567,7 @@ export async function searchCounterCatalog(
       batchNumber: shown?.lot.batch.batchNumber ?? null,
       nearestSafeExpiry: shown?.lot.batch.expiresAt.toISOString() ?? null,
       onHandUnits: availableUnits,
+      ...(labelLotId ? { medicineOnHandUnits: onHandUnits } : {}),
       saleableUnits,
       saleUnits,
       packMismatch,

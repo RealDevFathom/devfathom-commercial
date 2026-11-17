@@ -145,6 +145,8 @@ describe('DEV-90 shelf sticker scan at the counter', () => {
       medicineId: 'med-a',
       matchedOn: 'BARCODE',
       recommendedLotId: 'early',
+      // The scanned lot's own units drive the sale; the medicine total feeds shortages.
+      onHandUnits: 30,
       // The row names the scanned lot, not the FEFO lot it did not sell.
       batchNumber: 'B-late',
       nearestSafeExpiry: '2028-01-01T00:00:00.000Z',
@@ -156,6 +158,8 @@ describe('DEV-90 shelf sticker scan at the counter', () => {
         blockedBy: null,
       },
     });
+    // Shortage capture must see the whole medicine, not only the scanned lot.
+    expect(rows[0]!.medicineOnHandUnits).toBeGreaterThan(rows[0]!.onHandUnits);
     // The labelled lot is not FEFO's: selling it is the existing, approved override.
     expect(counterLabelScanDecision(rows[0]!)).toEqual({
       kind: 'OVERRIDE',
