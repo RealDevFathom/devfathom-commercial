@@ -31,6 +31,7 @@ function refundDb(provider = 'MANUAL') {
           branchId: 'branch-1',
           serviceChargeTotal: D('0'),
           deliveryFeeTotal: D('0'),
+          roundingAdjustment: D('0'),
           tenders: [{ id: 'tender-1', amount: D('10.00') }],
         },
       }),
@@ -48,7 +49,7 @@ function refundDb(provider = 'MANUAL') {
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
     restaurantRefund: {
-      aggregate: vi.fn().mockResolvedValue({ _sum: {} }),
+      aggregate: vi.fn().mockResolvedValue({ _sum: { roundingRefundAmount: D('0') } }),
       create: vi.fn().mockResolvedValue({ id: 'refund-1' }),
     },
     restaurantTaxTenderAllocationSnapshot: { findMany: vi.fn().mockResolvedValue([]) },

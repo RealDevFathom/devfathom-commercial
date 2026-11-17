@@ -52,8 +52,10 @@ export { DailyCloseError, type DailyCloseErrorReason } from './daily-close-error
  *                    refund components processed on this business date
  *   - discountTotal= Σ SETTLED bill.discountTotal
  *   - netSales     = grossSales − compTotal − discountTotal − refunded
- *                    pre-tax sales principal. Tax, service charge and delivery
- *                    fee refund components are not sales principal.
+ *                    pre-tax sales principal. Tax, service charge, delivery
+ *                    fee and rounding refund components are not sales principal.
+ *                    (A fractional bill's remainder cent is rounding, never
+ *                    grossSales, so refunding it must not reduce net sales.)
  *   - tipTotal     = Σ tender.tipAmount for the date (== Σ child tipAmount)
  *   - refundTotal  = Σ (refund.amount − refund.deliveryFeeRefundAmount) for the
  *                    PROCESSING date (C7 — cross-date corrections land on the day
@@ -98,6 +100,8 @@ export type AggregateRefund = CardReturn & {
   taxRefundAmount: Prisma.Decimal;
   serviceChargeRefundAmount: Prisma.Decimal;
   deliveryFeeRefundAmount: Prisma.Decimal;
+  /** Refunded share of a fractional bill's untaxed remainder cent. */
+  roundingRefundAmount?: Prisma.Decimal;
 };
 export type AggregateDrawer = {
   status: DrawerStatus;
@@ -166,8 +170,11 @@ export function computeCloseAggregate(inputs: AggregateInputs): CloseAggregate {
   const refundedSales = sum(
     inputs.refunds.map((r) =>
       sub(
-        sub(sub(r.amount, r.taxRefundAmount), r.serviceChargeRefundAmount),
-        r.deliveryFeeRefundAmount
+        sub(
+          sub(sub(r.amount, r.taxRefundAmount), r.serviceChargeRefundAmount),
+          r.deliveryFeeRefundAmount
+        ),
+        r.roundingRefundAmount ?? ZERO
       )
     )
   );
@@ -293,6 +300,7 @@ async function loadCloseInputs(
       taxRefundAmount: true,
       serviceChargeRefundAmount: true,
       deliveryFeeRefundAmount: true,
+      roundingRefundAmount: true,
     },
   });
   const drawers = await db.restaurantDrawerSession.findMany({

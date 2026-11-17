@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   MANUAL_TENDER_TYPES, manualPaymentSettingsSchema, merchantQrSchema,
-  validateManualTender, manualMerchantPolicies, aggregateTenderTotals, manualCardCaptureSchema,
+  validateManualTender, manualMerchantPolicies, aggregateTenderTotals, manualCardCaptureSchema, looksLikeCardNumber,
 } from './manual-payments';
 
 const settings = { RAAST: { destination: 'PK00TEST000000', allowReferenceSkip: false } };
@@ -104,4 +104,14 @@ describe('DEV-713 manual card and optional merchant details', () => {
       ] },
     ]);
   });
+});
+
+describe('DEV-875 looksLikeCardNumber', () => {
+  it.each(['4111111111111111', '4111.1111.1111.1111', '4111,1111,1111,1111', '٤١١١٤١١١٤١١١٤١١١'])(
+    'flags %s',
+    (text) => expect(looksLikeCardNumber(text)).toBe(true)
+  );
+  it.each(['BANK/2026-001', 'IBFT 123456789', 'TRX-20261117-0001'])('accepts %s', (text) =>
+    expect(looksLikeCardNumber(text)).toBe(false)
+  );
 });

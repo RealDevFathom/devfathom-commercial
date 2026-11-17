@@ -1,5 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// DEV-879: these fixtures model an approver with no approval authenticator, so the PIN is
+// checked exactly as before. approval-authenticator.test.ts covers the authenticator path.
+vi.mock('@/lib/approval-authenticator', async () => {
+  const { verifyOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
+  return {
+    verifyApprovalSecret: async (
+      _db: unknown,
+      input: { secret: string; credentialHash: string }
+    ) =>
+      (await verifyOperatorCredential('PIN', input.secret, input.credentialHash)) ? 'PIN' : null,
+  };
+});
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -72,6 +84,7 @@ function callerFor(
   const register = vi.fn();
   const lock = vi.fn();
   const db = {
+    pharmacySaleLine: { findFirst: vi.fn<(args: unknown) => Promise<unknown>>(async () => null) },
     $transaction: async (callback: (tx: unknown) => unknown) => callback(db),
     $queryRaw: lock,
     pharmacyBranch: {
@@ -119,7 +132,12 @@ function callerFor(
       }),
     },
     restaurantOperatorCredential: { findFirst: credential },
-    pharmacyControlledRegisterEntry: { create: register, findFirst: vi.fn(), aggregate: vi.fn() },
+    pharmacyControlledRegisterEntry: {
+      create: register,
+      findFirst: vi.fn<(args: unknown) => Promise<unknown>>(),
+      aggregate: vi.fn(),
+      findMany: vi.fn<(args: unknown) => Promise<unknown[]>>(async () => []),
+    },
   };
   const context = {
     db,
@@ -173,7 +191,40 @@ function emergencyCallerFor(
   return { ...fixture, profile, recentSupplies, openFollowUp, consent };
 }
 
+/** A register row as appendControlledSaleEntries writes it for `line`'s emergency supply. */
+function recordedEntry(change: Record<string, unknown> = {}) {
+  return {
+    patientId: 'patient-1',
+    patientAddress: '12 Mall Road, Gulberg',
+    prescriptionLineId: null,
+    emergency: true,
+    prescriberName: 'Dr Khan',
+    prescriberRegNo: null,
+    rxSerialWritten: true,
+    refEntryId: null,
+    ...change,
+  };
+}
+
+function withValidWitness(fixture: ReturnType<typeof callerFor>) {
+  vi.mocked(verifyOperatorCredential).mockResolvedValue(true);
+  fixture.credential.mockResolvedValue({
+    id: 'credential-1',
+    credentialHash: 'hash',
+    failedAttempts: 0,
+    lockedUntil: null,
+    staffProfile: {
+      status: 'ACTIVE',
+      user: { id: 'pharmacist-1', organizationId: 'org-1', status: 'ACTIVE', role: 'EMPLOYEE' },
+    },
+  });
+  const update = vi.fn();
+  Object.assign(fixture.db.restaurantOperatorCredential, { update });
+  return { update };
+}
+
 beforeEach(() => {
+  vi.mocked(verifyOperatorCredential).mockReset();
   vi.mocked(addSaleLine).mockReset();
   vi.mocked(annotateAudit).mockClear();
 });
@@ -257,7 +308,7 @@ describe('pharmacySales.addLine controlled actor', () => {
   });
 
   it('checks the independent witness after accepting an authorized actor', async () => {
-    const { caller, credential, register, lock } = callerFor([
+    const { caller, credential, register, lock, db } = callerFor([
       { capability: 'pharmacy:dispense', effect: 'ALLOW' },
     ]);
     credential.mockResolvedValue(null);
@@ -266,7 +317,12 @@ describe('pharmacySales.addLine controlled actor', () => {
       blocked:
         'Controlled medicine requires the patient address, an independent pharmacist PIN, and either a valid prescription or an emergency supply with the prescriber name.',
     });
+    // DEV-874: a refused witness never reaches the line-key lock or the replay lookup.
     expect(lock).toHaveBeenCalledTimes(1);
+    expect((lock.mock.calls[0]![0] as string[]).join('?')).toContain(
+      'restaurant_operator_credentials'
+    );
+    expect(db.pharmacySaleLine.findFirst).not.toHaveBeenCalled();
     expect(credential).toHaveBeenCalledExactlyOnceWith({
       where: {
         organizationId: 'org-1',
@@ -491,5 +547,257 @@ describe('pharmacySales.addLine prescription reference (DEV-629)', () => {
         requestedByUserId: 'cashier-1',
       },
     });
+  });
+});
+
+describe('[DEF-10] counter add-line replay (DEV-874)', () => {
+  it.each(['ordinary', 'prescription', 'controlled prescription', 'controlled emergency'])(
+    'replays a recorded %s line before any second dispense side effects',
+    async (path) => {
+      const f = callerFor([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]);
+      const { controlledAuthorization, ...plain } = line;
+      const request =
+        path === 'ordinary'
+          ? plain
+          : path === 'prescription'
+            ? {
+                ...plain,
+                prescription: { prescriptionLineId: 'rx-line-1', patientId: 'patient-1' },
+              }
+            : path === 'controlled prescription'
+              ? {
+                  ...line,
+                  controlledAuthorization: {
+                    ...controlledAuthorization,
+                    emergency: false,
+                    prescriptionLineId: 'rx-line-1',
+                  },
+                }
+              : line;
+      const controlled = path.startsWith('controlled');
+      if (!controlled)
+        f.db.medicine.findFirst = async () => ({
+          id: 'medicine-1',
+          controlled: false,
+          manufacturer: 'Maker',
+        });
+      else {
+        withValidWitness(f);
+        f.db.pharmacyControlledRegisterEntry.findMany.mockResolvedValue([
+          path === 'controlled emergency'
+            ? recordedEntry()
+            : recordedEntry({
+                prescriptionLineId: 'rx-line-1',
+                emergency: false,
+                // Snapshotted from the prescription line, so not compared with the request.
+                prescriberName: 'Dr Prescriber',
+                prescriberRegNo: 'PMC-1',
+              }),
+        ]);
+      }
+      const stored = {
+        ...plain,
+        id: 'saved-line',
+        organizationId: 'org-1',
+        voucherId: null,
+        promotionId: null,
+        grossMinor: 100,
+        discountKind: null,
+        discountMinor: 0,
+        prescriptionLineId: path === 'prescription' ? 'rx-line-1' : null,
+        prescriptionPatientId: path === 'prescription' ? 'patient-1' : null,
+      };
+      const { branchId: _branch, ...expectedLine } = stored;
+      void _branch;
+      f.db.pharmacySaleLine.findFirst.mockResolvedValue({
+        ...stored,
+        allocations: [
+          {
+            inventoryLotId: 'lot-1',
+            stockLocationId: 'shelf-1',
+            canonicalUnits: 2,
+            stockMovementId: 'movement-1',
+          },
+        ],
+      });
+      await expect(f.caller.addLine(request)).resolves.toMatchObject({
+        line: expectedLine,
+        replayed: true,
+        allocation: { movementIds: ['movement-1'] },
+      });
+      expect(addSaleLine).not.toHaveBeenCalled();
+      // A controlled retry re-proves the independent pharmacist PIN before replaying.
+      if (controlled) {
+        expect(f.credential).toHaveBeenCalledOnce();
+        expect(verifyOperatorCredential).toHaveBeenCalledExactlyOnceWith('PIN', '1234', 'hash');
+        expect(f.db.pharmacyControlledRegisterEntry.findMany).toHaveBeenCalledExactlyOnceWith({
+          where: { organizationId: 'org-1', stockMovementId: { in: ['movement-1'] } },
+          select: {
+            patientId: true,
+            patientAddress: true,
+            prescriptionLineId: true,
+            emergency: true,
+            prescriberName: true,
+            prescriberRegNo: true,
+            rxSerialWritten: true,
+            refEntryId: true,
+          },
+        });
+      } else expect(f.credential).not.toHaveBeenCalled();
+      expect(f.register).not.toHaveBeenCalled();
+      expect(f.db.pharmacySaleLine.findFirst).toHaveBeenCalledExactlyOnceWith({
+        where: { organizationId: 'org-1', idempotencyKey: plain.idempotencyKey },
+        include: { allocations: { orderBy: { stockMovementId: 'asc' } } },
+      });
+    }
+  );
+
+  it.each([
+    ['adds a prescription to an unreferenced line', null, 'rx-line-1'],
+    ['names a different prescription line', 'rx-line-1', 'rx-line-2'],
+    ['drops the saved prescription', 'rx-line-1', null],
+  ])(
+    'refuses a retry that %s instead of replaying it',
+    async (_change, savedLineId, requestedLineId) => {
+      const f = callerFor([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]);
+      f.db.medicine.findFirst = async () => ({
+        id: 'medicine-1',
+        controlled: false,
+        manufacturer: 'Maker',
+      });
+      const { controlledAuthorization, ...plain } = line;
+      void controlledAuthorization;
+      f.db.pharmacySaleLine.findFirst.mockResolvedValue({
+        ...plain,
+        id: 'saved-line',
+        organizationId: 'org-1',
+        voucherId: null,
+        promotionId: null,
+        discountKind: null,
+        discountMinor: 0,
+        prescriptionLineId: savedLineId,
+        prescriptionPatientId: savedLineId ? 'patient-1' : null,
+        allocations: [],
+      });
+      await expect(
+        f.caller.addLine({
+          ...plain,
+          ...(requestedLineId
+            ? { prescription: { prescriptionLineId: requestedLineId, patientId: 'patient-1' } }
+            : {}),
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'IDEMPOTENCY_CONFLICT' });
+      expect(addSaleLine).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ['names a different patient', recordedEntry({ patientId: 'patient-2' }), {}],
+    [
+      'turns an emergency supply into a prescription fill',
+      recordedEntry(),
+      { emergency: false, prescriptionLineId: 'rx-line-1' },
+    ],
+    [
+      'names a different prescription line',
+      recordedEntry({ prescriptionLineId: 'rx-line-1', emergency: false }),
+      { emergency: false, prescriptionLineId: 'rx-line-2' },
+    ],
+    ['changes the patient address', recordedEntry({ patientAddress: '7 Canal Road' }), {}],
+    ['changes the serial-written flag', recordedEntry(), { rxSerialWritten: false }],
+    ['changes the emergency prescriber', recordedEntry(), { prescriberName: 'Dr Ahmed' }],
+    ['adds a prescriber registration', recordedEntry(), { prescriberRegNo: 'PMC-9' }],
+    ['adds an earlier register serial', recordedEntry(), { refSerial: 9 }],
+    ['drops the earlier register serial', recordedEntry({ refEntryId: 'entry-9' }), {}],
+    ['has no register evidence for the saved line', null, {}],
+  ])(
+    'refuses a controlled retry that %s instead of replaying it',
+    async (_change, recorded, authorizationChange) => {
+      const f = callerFor([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]);
+      withValidWitness(f);
+      f.db.pharmacyControlledRegisterEntry.findMany.mockResolvedValue(recorded ? [recorded] : []);
+      f.db.pharmacyControlledRegisterEntry.findFirst.mockResolvedValue({ id: 'entry-9' });
+      const { controlledAuthorization, ...plain } = line;
+      f.db.pharmacySaleLine.findFirst.mockResolvedValue({
+        ...plain,
+        id: 'saved-line',
+        organizationId: 'org-1',
+        voucherId: null,
+        promotionId: null,
+        discountKind: null,
+        discountMinor: 0,
+        prescriptionLineId: null,
+        prescriptionPatientId: null,
+        allocations: [
+          {
+            inventoryLotId: 'lot-1',
+            stockLocationId: 'shelf-1',
+            canonicalUnits: 2,
+            stockMovementId: 'movement-1',
+          },
+        ],
+      });
+      await expect(
+        f.caller.addLine({
+          ...line,
+          controlledAuthorization: { ...controlledAuthorization, ...authorizationChange },
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'IDEMPOTENCY_CONFLICT' });
+      expect(addSaleLine).not.toHaveBeenCalled();
+      expect(f.register).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses an unknown earlier register serial before replaying the saved line', async () => {
+    const f = callerFor([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]);
+    withValidWitness(f);
+    f.db.pharmacyControlledRegisterEntry.findFirst.mockResolvedValue(null);
+    await expect(
+      f.caller.addLine({
+        ...line,
+        controlledAuthorization: { ...line.controlledAuthorization, refSerial: 404 },
+      })
+    ).resolves.toEqual({ blocked: 'That earlier register serial is not on this branch.' });
+    expect(f.db.pharmacySaleLine.findFirst).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it.each(['missing', 'wrong'])(
+    'refuses a controlled retry with a %s pharmacist PIN instead of replaying the saved line',
+    async (pin) => {
+      const f = callerFor([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]);
+      const { update } = withValidWitness(f);
+      vi.mocked(verifyOperatorCredential).mockResolvedValue(pin !== 'wrong');
+      f.db.pharmacySaleLine.findFirst.mockResolvedValue({
+        ...line,
+        id: 'saved-line',
+        organizationId: 'org-1',
+        voucherId: null,
+        allocations: [],
+      });
+      const { controlledAuthorization, ...plain } = line;
+      const request = pin === 'missing' ? plain : line;
+      void controlledAuthorization;
+      const result = await f.caller.addLine(request);
+      expect(result).toEqual({
+        blocked:
+          'Controlled medicine requires the patient address, an independent pharmacist PIN, and either a valid prescription or an emergency supply with the prescriber name.',
+      });
+      expect(result).not.toHaveProperty('line');
+      expect(f.db.pharmacySaleLine.findFirst).not.toHaveBeenCalled();
+      expect(addSaleLine).not.toHaveBeenCalled();
+      expect(f.register).not.toHaveBeenCalled();
+      if (pin === 'wrong')
+        expect(update).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { id: 'credential-1' } })
+        );
+      else expect(f.credential).not.toHaveBeenCalled();
+    }
+  );
+
+  it('still denies replay to an actor whose dispense permission was revoked', async () => {
+    const f = callerFor([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    await expect(f.caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.pharmacySaleLine.findFirst).not.toHaveBeenCalled();
   });
 });

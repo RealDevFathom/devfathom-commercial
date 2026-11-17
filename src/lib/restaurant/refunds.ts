@@ -135,6 +135,7 @@ type LoadedTender = {
     branchId: string;
     serviceChargeTotal: Prisma.Decimal;
     deliveryFeeTotal: Prisma.Decimal;
+    roundingAdjustment: Prisma.Decimal;
     tenders: { id: string; amount: Prisma.Decimal }[];
   };
 };
@@ -275,6 +276,26 @@ export async function refundTender(
       ? tenderDeliveryTotal
       : roundMoney(tenderDeliveryTotal.mul(cumulativePrincipal).div(tender.amount));
     const deliveryFeeRefundAmount = sub(cumulativeDelivery, priorDeliveryRefund);
+    // A fractional bill's largest-remainder cent is an untaxed rounding adjustment
+    // that settlement never reports as gross sales. Its share of the refund is its
+    // own component, so a full refund nets sales back to exactly zero (DEV-773).
+    const roundingShares = allocate(
+      tender.bill.roundingAdjustment,
+      tender.bill.tenders.map((row) => row.amount.mul(100).toNumber())
+    );
+    const tenderRoundingTotal = roundingShares[tenderIndex] ?? ZERO;
+    const priorRoundingRefund = money(
+      (
+        await tx.restaurantRefund.aggregate({
+          where: { originalTenderId: tender.id },
+          _sum: { roundingRefundAmount: true },
+        })
+      )._sum.roundingRefundAmount ?? ZERO
+    );
+    const cumulativeRounding = equals(cumulativePrincipal, tender.amount)
+      ? tenderRoundingTotal
+      : roundMoney(tenderRoundingTotal.mul(cumulativePrincipal).div(tender.amount));
+    const roundingIncrement = sub(cumulativeRounding, priorRoundingRefund);
 
     const frozenTaxAllocations = (
       await tx.restaurantTaxTenderAllocationSnapshot.findMany({
@@ -333,6 +354,18 @@ export async function refundTender(
     const taxRefundAmount = new Prisma.Decimal(
       taxRefundRows.reduce((total, row) => total + row.cents, 0)
     ).div(100);
+    // Tax and rounding round independently, so on a tiny partial refund both can
+    // step by a cent at once. Rounding takes only what this refund has left after
+    // tax, service and delivery; a deferred cent is caught up by a later refund,
+    // because each refund books the cumulative share minus what was already refunded.
+    const unclassifiedPrincipal = sub(
+      sub(sub(amount, taxRefundAmount), serviceChargeRefundAmount),
+      deliveryFeeRefundAmount
+    );
+    const roundingRefundAmount = Prisma.Decimal.max(
+      ZERO,
+      Prisma.Decimal.min(roundingIncrement, unclassifiedPrincipal)
+    );
 
     // Processing business date (C7): the register's CURRENT business date.
     const branch = await tx.restaurantBranch.findUnique({
@@ -388,6 +421,7 @@ export async function refundTender(
         tipRefundAmount,
         serviceChargeRefundAmount,
         deliveryFeeRefundAmount,
+        roundingRefundAmount,
         taxRefundAmount,
         kind,
         businessDate,
@@ -500,6 +534,7 @@ async function loadTender(tx: ScopedDb, tenderId: string, branchId: string): Pro
           branchId: true,
           serviceChargeTotal: true,
           deliveryFeeTotal: true,
+          roundingAdjustment: true,
           tenders: {
             orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
             select: { id: true, amount: true },
