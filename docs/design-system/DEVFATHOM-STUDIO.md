@@ -2,7 +2,7 @@
 
 Status: canonical  
 Version: 1.0  
-Last reviewed: 2026-07-28
+Last reviewed: 2026-11-15
 
 This document is the permanent UI/UX source of truth for DevFathom Hub, including the tenant
 workspace, platform control plane, authentication, organization administration, and future
@@ -136,6 +136,16 @@ with coral merely because it needs attention.
 
 Shadows should be soft and nearly invisible at rest. A border plus tonal surface change is the
 default separation model.
+
+Controls (buttons, inputs, skip links, inline actions) take `rounded-sm` (`--radius-sm`, 12px);
+compact surfaces such as inline alerts, keycaps, and stat chips take `rounded-xs`. Lift comes from
+`shadow-sm`/`shadow-md`. Do not hardcode a radius or shadow (`rounded-[3px]`,
+`shadow-[…rgba(…)]`) on a control: the shared `Button` and every hand-built action read these
+tokens, so changing the scale here changes the whole product consistently.
+
+`globals.css` holds exactly one `:root` block and one `[data-theme='dark']` block, inside the
+DevFathom Studio section. Add new primitives and semantic tokens there; never add a second token
+block that relies on cascade order to win.
 
 ### Spacing
 
@@ -321,8 +331,9 @@ another animation runtime for ordinary product interactions.
 - No gradients, glassmorphism, neon glow, or decorative noise.
 - No generic admin-dashboard sidebar dropped into the platform product.
 - No return to the old teal/brass “Abyss” palette or Oxanium heading system.
-- No raw legacy palette utility in new UI (`abyss-*`, `paper-*`, `brass-*`) when a Studio semantic
-  token exists.
+- No legacy palette utility (`abyss-*`, `paper-*`, `brass-*`); those scales and their aliases have
+  been removed from the token source. Use the Studio semantic tokens.
+- No arbitrary radius or shadow values on controls; use the `--radius-*` and `--shadow-*` scale.
 - No hardcoded component colors, new fonts, or isolated dark-mode branches.
 - No excessive pill-shaped cards.
 - No emoji as interface iconography; use the existing Lucide/Fathom icon language.

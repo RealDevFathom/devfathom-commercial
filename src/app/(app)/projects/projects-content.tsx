@@ -835,7 +835,7 @@ type ProjectData = {
    ============================================ */
 function StatChip({ label, value, dot }: { label: string; value: number; dot?: string }) {
   return (
-    <div className="inline-flex min-h-8 items-center gap-1.5 rounded-[3px] border border-border-default bg-card px-2.5 py-1">
+    <div className="inline-flex min-h-8 items-center gap-1.5 rounded-xs border border-border-default bg-card px-2.5 py-1">
       {dot && <span className={cn('h-1.5 w-1.5 rounded-full', dot)} />}
       <span className="text-sm font-semibold text-foreground tabular-nums">{value}</span>
       <span className="text-xs text-muted-foreground">{label}</span>
