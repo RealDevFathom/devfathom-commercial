@@ -701,11 +701,11 @@ export async function adjustLoyaltyPoints(
       throw new PharmacyLoyaltyError('IDEMPOTENCY_CONFLICT');
     return { entry: prior, balanceBefore: null, balanceAfter: null, replayed: true };
   }
-  // One instant, read after the customer lock, both picks the day and dates a manager's entry:
-  // the column default is the transaction start, which can fall in the previous day.
-  const at = options.now ?? new Date();
+  // Taken after the lock, and stored as the entry's occurredAt below, so the cap window and the
+  // recorded day always agree even when this transaction waited for the lock across midnight.
+  const now = options.now ?? new Date();
   if (options.managerLimit !== undefined) {
-    const day = loyaltyAdjustmentDay(at);
+    const day = loyaltyAdjustmentDay(now);
     const today = {
       organizationId: scope.organizationId,
       customerId: customer.id,
@@ -755,7 +755,7 @@ export async function adjustLoyaltyPoints(
       reason,
       actorId: scope.actorId,
       idempotencyKey: key,
-      ...(options.managerLimit !== undefined ? { occurredAt: at } : {}),
+      occurredAt: now,
     },
   });
   return { entry, balanceBefore, balanceAfter: balanceBefore + input.points, replayed: false };

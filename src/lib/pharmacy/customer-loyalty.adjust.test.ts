@@ -497,17 +497,38 @@ describe('DEV-881 manager ceiling applies to the day total per customer', () => 
     expect(vi.mocked(lockCustomerConsent).mock.invocationCallOrder[0]).toBeLessThan(
       db.pharmacyLoyaltyPointsEntry.aggregate.mock.invocationCallOrder[0]!
     );
+    expect(db.pharmacyLoyaltyPointsEntry.aggregate).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org-a',
+        customerId: 'customer-a',
+        kind: 'ADJUSTMENT',
+        occurredAt: {
+          gte: new Date('2026-11-16T19:00:00.000Z'),
+          lt: new Date('2026-11-17T19:00:00.000Z'),
+        },
+        points: { gt: 0 },
+      },
+      _sum: { points: true },
+    });
+  });
+
+  it('records the adjustment on the same day its cap window was checked', async () => {
+    // A transaction that started before Pakistan midnight but took the lock after it: the cap is
+    // checked against the day of the lock-time instant, so the entry must be stamped with it too.
+    const { db, created } = ledger();
+    const lateNow = new Date('2026-11-16T19:00:30.000Z'); // 00:00:30 PKT, 17 Nov
+    await adjustLoyaltyPoints(db as never, scope, grant('midnight', 100), {
+      managerLimit: 500,
+      now: lateNow,
+    });
+    expect(created[0]!.occurredAt).toEqual(lateNow);
     expect(db.pharmacyLoyaltyPointsEntry.aggregate).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          organizationId: 'org-a',
-          customerId: 'customer-a',
-          kind: 'ADJUSTMENT',
           occurredAt: {
             gte: new Date('2026-11-16T19:00:00.000Z'),
             lt: new Date('2026-11-17T19:00:00.000Z'),
           },
-          points: { gt: 0 },
         }),
       })
     );
@@ -528,19 +549,6 @@ describe('DEV-881 manager ceiling applies to the day total per customer', () => 
       adjustLoyaltyPoints(db as never, scope, grant('retry', 500), options)
     ).resolves.toMatchObject({ replayed: true });
     expect(created).toHaveLength(1);
-  });
-
-  it('dates a manager entry with the instant its day was checked against', async () => {
-    // 23:59:59.999 PKT, after a wait for the lock that began before midnight.
-    const lateNow = new Date('2026-11-17T18:59:59.999Z');
-    const { db } = ledger();
-    await adjustLoyaltyPoints(db as never, scope, grant('midnight', 500), {
-      managerLimit: 500,
-      now: lateNow,
-    });
-    expect(db.pharmacyLoyaltyPointsEntry.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ occurredAt: lateNow, points: 500 }),
-    });
   });
 
   it('applies no day total when no manager ceiling is given (the owner)', async () => {
