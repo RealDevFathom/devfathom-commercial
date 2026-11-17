@@ -2,16 +2,21 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { workspaceDateRange } from '@/lib/timezone';
 
 const DAY = 86_400_000;
 const QUERY_TIMEOUT_MS = 10_000;
 export const REPEAT_DEFINITION =
-  'First observed qualifying original completed receipt across all available data in selected authorized branches; not first-ever customers. Enrollment dates are inclusive UTC days, clipped at the frozen as-of instant. Follow-up uses elapsed 24-hour days; a repeat is a distinct receipt strictly later than first observation, at or before the horizon boundary.';
+  'First observed qualifying original completed receipt across all available data in selected authorized branches; not first-ever customers. Enrollment dates are inclusive days on the organization clock (its time zone), clipped at the frozen as-of instant. Follow-up uses elapsed 24-hour days; a repeat is a distinct receipt strictly later than first observation, at or before the horizon boundary.';
 export const REPEAT_LIMITS =
   'Qualification requires a receipt number, completion timestamp, positive original line value and remaining original units after posted returns, with posted refunds below original line value, all as of cutoff. Partial reversals can qualify. Returns and refunds have no direct matching link: these are independent exclusion tests, not a reconciled net-revenue measure. Current sale status and commercial identity are used; past status/identity changes cannot be reconstructed. Data start, missing receipts, ingestion delays, outages and off-system purchases are unknown; elapsed follow-up does not prove complete observation. No adherence, competitor churn or uplift inference. Anonymous receipts remain in coverage totals, outside person rates. All available selected history is aggregated in the database; receipt and detail counts are not truncated. Reports exceeding the 10-second database execution budget fail without partial rates. Large branch or chain histories may still exceed this budget; narrower enrollment dates do not reduce the history required.';
 
 export type RepeatFilters = { branchIds: string[]; from: string; to: string; asOf: string };
-export function validateRepeatFilters(input: RepeatFilters, now = new Date()) {
+export function validateRepeatFilters(
+  input: RepeatFilters,
+  now = new Date(),
+  timeZone?: string | null
+) {
   const from = new Date(`${input.from}T00:00:00.000Z`);
   const to = new Date(`${input.to}T00:00:00.000Z`);
   const asOf = new Date(input.asOf);
@@ -27,13 +32,14 @@ export function validateRepeatFilters(input: RepeatFilters, now = new Date()) {
     !Number.isFinite(asOf.getTime()) ||
     asOf > now ||
     from > to ||
-    to > asOf ||
+    workspaceDateRange(input.to, input.to, timeZone).from > asOf ||
     to.getTime() - from.getTime() >= 90 * DAY
   )
     throw new Error(
-      'Use valid UTC enrollment dates (maximum 90 days), ending on or before a nonfuture as-of cutoff, and 1–100 authorized branches.'
+      'Use valid enrollment dates (maximum 90 days), ending on or before a nonfuture as-of cutoff, and 1–100 authorized branches.'
     );
-  return { from, toExclusive: new Date(to.getTime() + DAY), asOf };
+  const bounds = workspaceDateRange(input.from, input.to, timeZone);
+  return { from: bounds.from, toExclusive: bounds.to, asOf };
 }
 
 type ReturnLine = {
@@ -74,9 +80,10 @@ export function summarizeRepeatPurchasing(
   rows: RepeatReceipt[],
   organizationId: string,
   input: RepeatFilters,
-  now = new Date()
+  now = new Date(),
+  timeZone?: string | null
 ) {
-  const { from, toExclusive, asOf } = validateRepeatFilters(input, now);
+  const { from, toExclusive, asOf } = validateRepeatFilters(input, now, timeZone);
   const selected = distinct(rows).filter(
     (s) =>
       s.organizationId === organizationId &&
@@ -187,9 +194,10 @@ export function summarizeRepeatPurchasing(
 export async function readRepeatPurchasing(
   db: ScopedDb,
   organizationId: string,
-  input: RepeatFilters
+  input: RepeatFilters,
+  timeZone?: string | null
 ) {
-  const { from, toExclusive, asOf } = validateRepeatFilters(input);
+  const { from, toExclusive, asOf } = validateRepeatFilters(input, new Date(), timeZone);
   const branches = Prisma.join(input.branchIds);
   // Match String.trim() for identity presence, without changing identity grouping.
   const whitespace =

@@ -136,3 +136,57 @@ export function workspaceDateRange(
     to: workspaceDayStart(Date.parse(`${to}T00:00:00.000Z`) + 86_400_000, zone),
   };
 }
+
+/** Milliseconds the zone's wall clock is ahead of UTC at `instant`. */
+function zoneOffsetMs(instant: number, zone: string): number {
+  const field = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: zone,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      second: 'numeric',
+    })
+      .formatToParts(new Date(instant))
+      .map((part) => [part.type, Number(part.value)])
+  );
+  const wall = new Date(0);
+  wall.setUTCFullYear(field.year!, field.month! - 1, field.day!);
+  wall.setUTCHours(field.hour!, field.minute!, field.second!, 0);
+  return wall.getTime() - Math.floor(instant / 1000) * 1000;
+}
+
+const MINUTE_INPUT = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::(\d{2}))?$/;
+
+/**
+ * A `datetime-local` picker value (`2026-05-01T09:30`, no zone) read on the
+ * workspace's wall clock, as an ISO instant. A value that already carries a
+ * zone, or is not a picker value, passes through unchanged.
+ */
+export function workspaceInstantFromInput(
+  raw: string,
+  timeZone: string | null | undefined
+): string {
+  const match = MINUTE_INPUT.exec(raw);
+  if (!match) return raw;
+  const zone = workspaceTimezone(timeZone);
+  const naive = Date.parse(`${match[1]}T${match[2]}:${match[3] ?? '00'}.000Z`);
+  if (!Number.isFinite(naive)) return raw;
+  let instant = naive - zoneOffsetMs(naive, zone);
+  instant = naive - zoneOffsetMs(instant, zone);
+  return new Date(instant).toISOString().replace('.000Z', 'Z');
+}
+
+/** The `datetime-local` value for an instant on the workspace clock; empty when invalid. */
+export function workspaceMinuteInput(
+  value: Date | string,
+  timeZone: string | null | undefined
+): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  const zone = workspaceTimezone(timeZone);
+  return new Date(date.getTime() + zoneOffsetMs(date.getTime(), zone)).toISOString().slice(0, 16);
+}

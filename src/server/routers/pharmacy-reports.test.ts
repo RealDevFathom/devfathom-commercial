@@ -1252,10 +1252,15 @@ describe('repeat purchasing authorization', () => {
     expect(mocks.branchFindMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { organizationId: 'org_1', active: true } })
     );
-    expect(mocks.repeatRead).toHaveBeenCalledWith(expect.anything(), 'org_1', {
-      ...input,
-      branchIds: ['branch_1'],
-    });
+    expect(mocks.repeatRead).toHaveBeenCalledWith(
+      expect.anything(),
+      'org_1',
+      {
+        ...input,
+        branchIds: ['branch_1'],
+      },
+      undefined
+    );
   });
   it('rejects future cutoff and irrelevant item filters', async () => {
     await expect(

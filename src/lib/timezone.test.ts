@@ -102,3 +102,20 @@ describe('workspace time zones', () => {
     expect(workspaceZoneLabel('Europe/London')).toBe('Europe/London');
   });
 });
+
+describe('workspace picker instants', () => {
+  it('reads a datetime-local value on the workspace clock and writes it back', async () => {
+    const { workspaceInstantFromInput, workspaceMinuteInput } = await import('./timezone');
+    expect(workspaceInstantFromInput('2026-05-01T01:30', 'Asia/Karachi')).toBe(
+      '2026-04-30T20:30:00Z'
+    );
+    expect(workspaceMinuteInput('2026-04-30T20:30:00Z', 'Asia/Karachi')).toBe('2026-05-01T01:30');
+    expect(workspaceInstantFromInput('2026-05-01T09:30', undefined)).toBe('2026-05-01T09:30:00Z');
+    expect(workspaceInstantFromInput('2026-07-01T12:00', 'Europe/London')).toBe(
+      '2026-07-01T11:00:00Z'
+    );
+    expect(workspaceInstantFromInput('2026-05-01T09:30:00Z', 'Asia/Karachi')).toBe(
+      '2026-05-01T09:30:00Z'
+    );
+  });
+});
