@@ -26,7 +26,11 @@ vi.mock('@/lib/pharmacy/stock-ledger', async (importOriginal) => ({
 vi.mock('@/lib/pharmacy/counter-line-approval', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pharmacy/counter-line-approval')>();
   // The real check runs unless a test stubs one call (DEV-843 manager PIN approvals).
-  return { ...actual, authorizeCounterApproval: vi.fn(actual.authorizeCounterApproval) };
+  return {
+    ...actual,
+    authorizeCounterApproval: vi.fn(actual.authorizeCounterApproval),
+    listCounterApprovers: vi.fn(actual.listCounterApprovers),
+  };
 });
 vi.mock('@/lib/abac', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/abac')>()),
@@ -36,6 +40,7 @@ vi.mock('@/lib/abac', async (importOriginal) => ({
 import { can } from '@/lib/abac';
 import {
   authorizeCounterApproval,
+  listCounterApprovers,
   CounterApprovalDenied,
 } from '@/lib/pharmacy/counter-line-approval';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
@@ -218,6 +223,34 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
     });
     expect(f.transaction).toHaveBeenCalledOnce();
     expect(addSaleLine).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-889 scanned-pack approver directory', () => {
+  it('uses the scanned-pack approval policy under the counter branch gate', async () => {
+    const f = fixture();
+    const profiles = [{ id: 'manager-profile', name: 'Manager', self: false }];
+    vi.mocked(listCounterApprovers).mockResolvedValueOnce(profiles);
+    await expect(f.caller.scannedPackFefoApprovers({ branchId: 'branch-1' })).resolves.toEqual(
+      profiles
+    );
+    expect(listCounterApprovers).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        organizationId: 'org-1',
+        branchId: 'branch-1',
+        actorId: 'actor-1',
+      },
+      'SCANNED_PACK_FEFO'
+    );
+  });
+
+  it('refuses an unassigned branch before listing approvers', async () => {
+    const f = fixture();
+    await expect(
+      f.caller.scannedPackFefoApprovers({ branchId: 'branch-other' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(listCounterApprovers).not.toHaveBeenCalled();
   });
 });
 

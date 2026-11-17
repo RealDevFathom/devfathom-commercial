@@ -1731,6 +1731,12 @@ const ASSIGNMENT_GATED: ReadonlyArray<{
       }),
   },
   {
+    name: 'allocateRequestedTransfer',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().allocateRequestedTransfer({ branchId: 'branch_a', transferId: 'transfer_1' }),
+  },
+  {
     name: 'approveTransfer',
     capability: 'pharmacy:inventory',
     invoke: () => caller().approveTransfer({ branchId: 'branch_a', transferId: 'transfer_1' }),

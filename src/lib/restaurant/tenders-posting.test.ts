@@ -1048,3 +1048,381 @@ describe('DEV-773 fractional settlement tax evidence (no DB)', () => {
     });
   });
 });
+
+describe('DEV-773 fractional refunds: partial, remainder cents and daily close (no DB)', () => {
+  type FrozenAllocation = {
+    id: string;
+    cents: bigint;
+    snapshotId: string;
+    rateBucketSnapshotId: string;
+    paymentCategory: string;
+    originalTenderId: string;
+    rateBucket: { billLineId: string | null; unitOrdinal: number | null };
+    refundAllocations: Array<{ cents: bigint }>;
+  };
+  type RefundRow = {
+    id: string;
+    billId: string;
+    originalTenderId: string;
+    businessDate: Date;
+    amount: Prisma.Decimal;
+    tipRefundAmount: Prisma.Decimal;
+    serviceChargeRefundAmount: Prisma.Decimal;
+    deliveryFeeRefundAmount: Prisma.Decimal;
+    roundingRefundAmount: Prisma.Decimal;
+    taxRefundAmount: Prisma.Decimal;
+  };
+
+  /** A taxed (10% exclusive) fractional bill of a 20.00 order, settled and
+   * refunded through the real tender, settlement-quote and refund code. Only
+   * persistence is in memory: frozen tax allocations, refund rows and their tax
+   * refund allocations are recorded so later refunds and the close read them. */
+  function fractionalHarness(cut: {
+    numerator: number;
+    denominator: number;
+    subtotal: string;
+    roundingAdjustment: string;
+  }) {
+    const f = fixture();
+    Object.assign(f.bill, {
+      businessDate: D2,
+      splitKind: 'FRACTIONAL',
+      fractionNumerator: cut.numerator,
+      fractionDenominator: cut.denominator,
+      subtotal: D(cut.subtotal),
+      compTotal: D('0'),
+      roundingAdjustment: D(cut.roundingAdjustment),
+      grandTotal: D(cut.subtotal).plus(D(cut.roundingAdjustment)),
+      lines: [],
+    });
+    f.linesByBill.set('bill', []);
+    Object.assign(f.raw, {
+      restaurantOrderItem: {
+        findMany: vi.fn(async () => [
+          { id: 'item', quantity: 1, unitPrice: D('20'), modifiers: [] },
+        ]),
+      },
+    });
+    const siblings = Array.from({ length: cut.denominator / cut.numerator }, (_, index) => ({
+      id: index === 0 ? 'bill' : `bill-${index + 1}`,
+      fractionNumerator: cut.numerator,
+    }));
+    const findBills = f.raw.restaurantBill.findMany.getMockImplementation()!;
+    f.raw.restaurantBill.findMany.mockImplementation(
+      async ({ where }: { where: Where & { splitKind?: string } }) =>
+        where.splitKind === 'FRACTIONAL' ? (siblings as never) : findBills({ where })
+    );
+    const frozen: FrozenAllocation[] = [];
+    const refunds: RefundRow[] = [];
+    vi.mocked(finalizeBillSettlement).mockImplementation(async (_tx, input) => {
+      for (const [index, row] of (input.tenderTaxAllocations ?? []).entries()) {
+        frozen.push({
+          id: `allocation-${index}`,
+          cents: BigInt(row.cents),
+          snapshotId: 'snapshot',
+          rateBucketSnapshotId: `bucket-${index}`,
+          paymentCategory: row.paymentCategory,
+          originalTenderId: row.originalTenderId,
+          rateBucket: { billLineId: null, unitOrdinal: row.bucket.unitOrdinal ?? null },
+          refundAllocations: [],
+        });
+      }
+      Object.assign(f.bill, {
+        status: 'SETTLED',
+        subtotal: input.subtotal,
+        taxTotal: input.taxTotal,
+        discountTotal: input.discountTotal,
+        serviceChargeTotal: input.serviceChargeTotal,
+        roundingAdjustment: input.roundingAdjustment,
+        grandTotal: input.grandTotal,
+      });
+      return { receiptNumber: 1, alreadySettled: false } as never;
+    });
+    f.raw.restaurantTaxTenderAllocationSnapshot.findMany.mockImplementation((async ({
+      where,
+    }: {
+      where: { originalTenderId: string };
+    }) => frozen.filter((row) => row.originalTenderId === where.originalTenderId)) as never);
+    f.raw.restaurantTaxRefundAllocation.create.mockImplementation((async ({
+      data,
+    }: {
+      data: { originalTenderAllocationId: string; cents: bigint };
+    }) => {
+      frozen
+        .find((row) => row.id === data.originalTenderAllocationId)!
+        .refundAllocations.push({ cents: data.cents });
+      return { id: 'tax-refund' };
+    }) as never);
+    f.raw.restaurantRefund.create.mockImplementation((async ({
+      data,
+    }: {
+      data: Omit<RefundRow, 'id'>;
+    }) => {
+      const row = { ...data, id: `refund-${refunds.length + 1}` };
+      refunds.push(row);
+      return { id: row.id };
+    }) as never);
+    f.raw.restaurantRefund.aggregate.mockImplementation((async ({
+      where,
+    }: {
+      where: { billId?: string; originalTenderId?: string };
+    }) => {
+      const rows = refunds.filter((row) =>
+        where.billId ? row.billId === where.billId : row.originalTenderId === where.originalTenderId
+      );
+      const total = (field: keyof RefundRow) =>
+        rows.reduce((acc, row) => acc.plus(row[field] as Prisma.Decimal), D('0'));
+      return {
+        _sum:
+          rows.length === 0
+            ? {}
+            : {
+                amount: total('amount'),
+                tipRefundAmount: total('tipRefundAmount'),
+                serviceChargeRefundAmount: total('serviceChargeRefundAmount'),
+                deliveryFeeRefundAmount: total('deliveryFeeRefundAmount'),
+                roundingRefundAmount: total('roundingRefundAmount'),
+              },
+      };
+    }) as never);
+    f.raw.restaurantRefund.findMany.mockImplementation((async ({
+      where,
+    }: {
+      where?: { businessDate?: Date };
+    } = {}) =>
+      refunds.filter(
+        (row) => !where?.businessDate || row.businessDate.getTime() === where.businessDate.getTime()
+      )) as never);
+
+    const settle = async (...tenders: Array<{ type: 'CASH' | 'OTHER'; amount: string }>) => {
+      const ids: string[] = [];
+      for (const [index, tender] of tenders.entries()) {
+        const result = await f.collect({
+          actor: { ...actor, idempotencyKey: `collect-${index}` },
+          tender:
+            tender.type === 'CASH'
+              ? { type: 'CASH', amount: tender.amount, cashReceived: tender.amount }
+              : { type: 'OTHER', amount: tender.amount },
+        });
+        ids.push(result.tenderId);
+      }
+      return ids;
+    };
+    let refundCount = 0;
+    const refund = (originalTenderId: string, amount: string) =>
+      refundTender(f.db, {
+        originalTenderId,
+        amount,
+        reason: 'Synthetic fractional refund',
+        approvingStaffProfileId: 'manager',
+        actor: { ...actor, idempotencyKey: `refund-${++refundCount}` },
+        branchId: 'branch',
+        now: NOW,
+      });
+    const frozenCents = (tenderId: string) =>
+      frozen
+        .filter((row) => row.originalTenderId === tenderId)
+        .reduce((total, row) => total + Number(row.cents), 0);
+    return { f, frozen, refunds, settle, refund, frozenCents };
+  }
+  async function useTenPercent(f: ReturnType<typeof fixture>) {
+    const [profile] = await f.raw.restaurantTaxProfileVersion.findMany();
+    f.raw.restaurantTaxProfileVersion.findMany.mockResolvedValue([
+      { ...profile!, rules: profile!.rules.map((rule) => ({ ...rule, rate: D('0.10') })) },
+    ]);
+  }
+  async function validateSettlement(f: ReturnType<typeof fixture>) {
+    const settlement = vi.mocked(finalizeBillSettlement).mock.calls.at(-1)![1];
+    const persistenceReached = 'settlement validation passed; persistence reached';
+    const actual = await vi.importActual<typeof import('./bills')>('./bills');
+    await expect(
+      actual.finalizeBillSettlement(
+        {
+          restaurantBill: {
+            findUnique: vi.fn(async () => ({
+              ...f.bill,
+              status: 'OPEN',
+              subtotal: settlement.subtotal,
+            })),
+          },
+          restaurantTender: {
+            findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+              f.tenders.filter((tender) => where.id.in.includes(tender.id))
+            ),
+          },
+          $queryRaw: vi.fn(async () => {
+            throw new Error(persistenceReached);
+          }),
+        } as unknown as ScopedDb,
+        settlement
+      )
+    ).rejects.toThrow(persistenceReached);
+    return settlement;
+  }
+
+  it('reverses exact frozen tax across successive partial refunds that exhaust the tender', async () => {
+    const h = fractionalHarness({
+      numerator: 1,
+      denominator: 2,
+      subtotal: '10',
+      roundingAdjustment: '0',
+    });
+    await useTenPercent(h.f);
+    const [tenderId] = await h.settle({ type: 'OTHER', amount: '11.00' });
+    await validateSettlement(h.f);
+    expect(h.frozenCents(tenderId!)).toBe(100);
+
+    // 3.33 / 11.00 of 100 frozen cents is 30.27, so the first refund returns 0.30.
+    const first = await h.refund(tenderId!, '3.33');
+    expect(first.taxRefundAmount.toFixed(2)).toBe('0.30');
+    // Policy changes after settlement must not move refunded tax.
+    const [profile] = await h.f.raw.restaurantTaxProfileVersion.findMany();
+    h.f.raw.restaurantTaxProfileVersion.findMany.mockResolvedValue([
+      { ...profile!, rules: profile!.rules.map((rule) => ({ ...rule, rate: D('0.25') })) },
+    ]);
+    const second = await h.refund(tenderId!, '5.50');
+    // Cumulative 8.83 / 11.00 of 100 cents is 80.27 → 80; the increment is 0.50.
+    expect(second.taxRefundAmount.toFixed(2)).toBe('0.50');
+    const last = await h.refund(tenderId!, '2.17');
+    expect(last.taxRefundAmount.toFixed(2)).toBe('0.20');
+
+    expect(h.refunds.map((row) => row.amount.toFixed(2))).toEqual(['3.33', '5.50', '2.17']);
+    expect(
+      h.refunds.reduce((total, row) => total.plus(row.taxRefundAmount), D('0')).toFixed(2)
+    ).toBe('1.00');
+    expect(h.frozen[0]!.refundAllocations.map((row) => Number(row.cents))).toEqual([30, 50, 20]);
+    await expect(h.refund(tenderId!, '0.01')).rejects.toMatchObject({
+      reason: 'REFUND_EXCEEDS_TENDER',
+    });
+  });
+
+  it('freezes and reverses tax on a remainder-cent fractional bill', async () => {
+    // 20.00 cut three ways: this bill holds the 6.66 floor share plus the
+    // largest-remainder cent, so it collects 6.66 + 0.67 tax + 0.01 = 7.34.
+    const h = fractionalHarness({
+      numerator: 1,
+      denominator: 3,
+      subtotal: '6.66',
+      roundingAdjustment: '0.01',
+    });
+    await useTenPercent(h.f);
+    const quote = await quoteOpenBillSettlement(h.f.db, 'bill', NOW);
+    expect(quote?.tax.toFixed(2)).toBe('0.67');
+    expect(quote?.remainingDue.toFixed(2)).toBe('7.34');
+    const [tenderId] = await h.settle({ type: 'OTHER', amount: '7.34' });
+    const settlement = await validateSettlement(h.f);
+    expect(settlement.taxTotal.toFixed(2)).toBe('0.67');
+    expect(settlement.roundingAdjustment.toFixed(2)).toBe('0.01');
+    expect(h.frozenCents(tenderId!)).toBe(67);
+
+    // 3.67 / 7.34 of 67 cents is 33.5 → 34; the rest returns the other 33.
+    expect((await h.refund(tenderId!, '3.67')).taxRefundAmount.toFixed(2)).toBe('0.34');
+    expect((await h.refund(tenderId!, '3.67')).taxRefundAmount.toFixed(2)).toBe('0.33');
+    expect(h.frozen[0]!.refundAllocations.map((row) => Number(row.cents))).toEqual([34, 33]);
+    // The untaxed remainder cent is refunded as rounding, never as sales principal.
+    expect(h.refunds.map((row) => row.roundingRefundAmount.toFixed(2))).toEqual(['0.01', '0.00']);
+  });
+
+  it('keeps every partial refund tax and rounding component within its own amount', async () => {
+    const h = fractionalHarness({
+      numerator: 1,
+      denominator: 3,
+      subtotal: '6.66',
+      roundingAdjustment: '0.01',
+    });
+    await useTenPercent(h.f);
+    const [tenderId] = await h.settle({ type: 'OTHER', amount: '7.34' });
+    await validateSettlement(h.f);
+
+    // At 3.67 cumulative, tax (33.5 → 34 cents) and rounding (0.005 → 0.01) both
+    // step up; the 0.01 refund cannot carry both, so the rounding cent waits.
+    await h.refund(tenderId!, '3.66');
+    await h.refund(tenderId!, '0.01');
+    await h.refund(tenderId!, '3.67');
+    for (const row of h.refunds) {
+      const components = row.taxRefundAmount
+        .plus(row.serviceChargeRefundAmount)
+        .plus(row.deliveryFeeRefundAmount)
+        .plus(row.roundingRefundAmount);
+      expect(components.lte(row.amount)).toBe(true);
+      expect(row.roundingRefundAmount.gte(0)).toBe(true);
+    }
+    expect(h.refunds.map((row) => row.taxRefundAmount.toFixed(2))).toEqual([
+      '0.33',
+      '0.01',
+      '0.33',
+    ]);
+    expect(h.refunds.map((row) => row.roundingRefundAmount.toFixed(2))).toEqual([
+      '0.00',
+      '0.00',
+      '0.01',
+    ]);
+    const close = await closePreview(h.f.db, { branchId: 'branch', businessDate: '2026-09-11' });
+    expect(close.taxTotal.toFixed(2)).toBe('0.00');
+    expect(close.netSales.toFixed(2)).toBe('0.00');
+  });
+
+  it('reverses each split tender only from its own frozen tax share', async () => {
+    const h = fractionalHarness({
+      numerator: 1,
+      denominator: 2,
+      subtotal: '10',
+      roundingAdjustment: '0',
+    });
+    await useTenPercent(h.f);
+    const [cashId, otherId] = await h.settle(
+      { type: 'CASH', amount: '4.00' },
+      { type: 'OTHER', amount: '7.00' }
+    );
+    await validateSettlement(h.f);
+    const cashCents = h.frozenCents(cashId!);
+    const otherCents = h.frozenCents(otherId!);
+    expect(cashCents + otherCents).toBe(100);
+    expect(cashCents).toBeGreaterThan(0);
+    expect(otherCents).toBeGreaterThan(0);
+
+    const other = await h.refund(otherId!, '7.00');
+    expect(other.taxRefundAmount.toFixed(2)).toBe((otherCents / 100).toFixed(2));
+    const cash = await h.refund(cashId!, '4.00');
+    expect(cash.taxRefundAmount.toFixed(2)).toBe((cashCents / 100).toFixed(2));
+    expect(h.f.movements.filter((row) => row.kind === 'CASH_REFUND')).toHaveLength(1);
+  });
+
+  it.each([
+    { label: 'an even fractional bill', subtotal: '10', roundingAdjustment: '0', denominator: 2 },
+    {
+      label: 'a remainder-cent fractional bill',
+      subtotal: '6.66',
+      roundingAdjustment: '0.01',
+      denominator: 3,
+    },
+  ])(
+    'leaves no retained tax or sales in the daily close after fully refunding $label',
+    async ({ subtotal, roundingAdjustment, denominator }) => {
+      const h = fractionalHarness({ numerator: 1, denominator, subtotal, roundingAdjustment });
+      await useTenPercent(h.f);
+      const quote = await quoteOpenBillSettlement(h.f.db, 'bill', NOW);
+      const due = quote!.remainingDue.toFixed(2);
+      const [tenderId] = await h.settle({ type: 'OTHER', amount: due });
+      await validateSettlement(h.f);
+
+      const settled = await closePreview(h.f.db, {
+        branchId: 'branch',
+        businessDate: '2026-09-11',
+      });
+      expect(settled.taxTotal.toFixed(2)).toBe(quote!.tax.toFixed(2));
+      expect(
+        settled.tenderTotals.find((row) => row.tenderType === 'OTHER')?.amount.toFixed(2)
+      ).toBe(due);
+
+      await h.refund(tenderId!, due);
+      const close = await closePreview(h.f.db, { branchId: 'branch', businessDate: '2026-09-11' });
+      expect(close.taxTotal.toFixed(2)).toBe('0.00');
+      expect(close.netSales.toFixed(2)).toBe('0.00');
+      expect(close.refundTotal.toFixed(2)).toBe(due);
+      expect(h.refunds[0]!.roundingRefundAmount.toFixed(2)).toBe(
+        roundingAdjustment === '0' ? '0.00' : roundingAdjustment
+      );
+    }
+  );
+});

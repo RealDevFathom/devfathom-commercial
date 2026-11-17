@@ -114,6 +114,7 @@ async function readRole(client: RuntimeRoleClient): Promise<RoleAttributes | und
 export async function prepareRuntimeRole(
   client: RuntimeRoleClient,
   password: string | undefined,
+  databaseName: string,
   logger: Logger = console,
   openExtensionAdmin?: OpenExtensionAdmin
 ): Promise<void> {
@@ -157,7 +158,10 @@ export async function prepareRuntimeRole(
   } else logger.log('password: skipped (APP_DATABASE_URL has no password)');
 
   const grants = [
-    ['database connect', `GRANT CONNECT ON DATABASE devfathom TO ${ROLE_NAME}`],
+    [
+      'database connect',
+      `GRANT CONNECT ON DATABASE ${pg.escapeIdentifier(databaseName)} TO ${ROLE_NAME}`,
+    ],
     ['schema usage', `GRANT USAGE ON SCHEMA public TO ${ROLE_NAME}`],
     [
       'existing tables',
@@ -233,7 +237,8 @@ async function main() {
   try {
     await client.connect();
     const password = appUrl.password ? decodeURIComponent(appUrl.password) : undefined;
-    await prepareRuntimeRole(client, password, console, openExtensionAdmin);
+    const databaseName = decodeURIComponent(adminUrl.pathname.slice(1));
+    await prepareRuntimeRole(client, password, databaseName, console, openExtensionAdmin);
   } finally {
     await extensionAdmin?.end();
     await client.end();

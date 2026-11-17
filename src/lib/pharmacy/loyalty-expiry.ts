@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { Prisma } from '@/generated/prisma/client';
 import { withPlatformDb, withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { lockCustomerConsent } from './consent-writer';
@@ -19,6 +20,14 @@ export type PharmacyPointsEntryForExpiry = {
   reversesEntryId: string | null;
   expiresAt: Date | null;
   occurredAt: Date;
+  /** Branch the entry was posted at. */
+  branchId?: string;
+  /**
+   * DEV-764: true on entries posted while balances were kept per branch. A spend among them
+   * took only from lots of its own branch, and replaying it the same way keeps every expiry
+   * already posted exact. Entries posted since take from the customer's lots at every branch.
+   */
+  branchLocal?: boolean;
 };
 
 type Lot = PharmacyPointsEntryForExpiry & { remaining: number };
@@ -44,8 +53,8 @@ function linkedLots(entry: PharmacyPointsEntryForExpiry, lots: readonly Lot[]): 
 }
 
 /**
- * DEV-764: replays one customer's ledger at one branch up to `at`, tracking what is left of
- * each earned lot. Same lot model as the restaurant planner (spending consumes the oldest lots
+ * DEV-764: replays one customer's ledger, across every branch of the organization, up to `at`,
+ * tracking what is left of each earned lot. Same lot model as the restaurant planner (spending consumes the oldest lots
  * first; points given back by a positive adjustment never expire), with pharmacy rules:
  * - an expiry closes exactly its lot, and a spend never takes from a lot already past its
  *   expiry date at the time of the spend (only an earn reversal takes back its own lot);
@@ -115,7 +124,12 @@ function replayLots(entries: readonly PharmacyPointsEntryForExpiry[], at: Date) 
     let consume = -entry.points;
     const portions: Array<{ lot: Lot; used: number }> = [];
     const own = linkedLots(entry, lots);
-    for (const lot of [...own, ...lots]) {
+    // DEV-764: one balance across branches. A spend from before the merge stays with the lots
+    // of its own branch, as it was planned when it was posted.
+    const spendable = entry.branchLocal
+      ? lots.filter((lot) => lot.branchId === entry.branchId)
+      : lots;
+    for (const lot of [...own, ...spendable]) {
       if (consume === 0) break;
       // A spend never comes out of a lot already past its expiry date: those points are gone
       // even before the sweep closes the lot. Only an earn reversal may take back its own lot.
@@ -142,7 +156,7 @@ function replayLots(entries: readonly PharmacyPointsEntryForExpiry[], at: Date) 
 }
 
 /**
- * DEV-764: which earned lots of one customer at one branch are due to expire at `at`, and how
+ * DEV-764: which earned lots of one customer (at any branch) are due to expire at `at`, and how
  * many points each still holds (see replayLots). A due lot already spent in full is returned
  * with 0 points, so it can be closed and is never planned again.
  */
@@ -191,21 +205,51 @@ const ENTRY_FOR_EXPIRY = {
   reversesEntryId: true,
   expiresAt: true,
   occurredAt: true,
+  branchId: true,
+  branchLocal: true,
 } as const;
 
-type CustomerAtBranch = { organizationId: string; branchId: string; customerId: string };
+/**
+ * DEV-764: one customer's points are one balance across the organization's branches. The
+ * branch is where an entry is posted; it never limits which of the customer's points count.
+ */
+export type LoyaltyCustomerScope = { organizationId: string; customerId: string };
+/** The customer, and the branch where an entry the caller writes is posted. */
+type CustomerAtBranch = LoyaltyCustomerScope & { branchId: string };
 
-function readEntriesForExpiry(db: ScopedDb, scope: CustomerAtBranch, at: Date) {
-  return db.pharmacyLoyaltyPointsEntry.findMany({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      customerId: scope.customerId,
-      occurredAt: { lte: at },
-    },
-    orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
-    select: ENTRY_FOR_EXPIRY,
-  });
+/**
+ * DEV-764: reads the customer's ledger across every branch of the tenant. A khata transaction
+ * binds its branch (app.current_branch_id) for the khata tables, and the ledger's tenant policy
+ * then shows only that branch's entries, which would replay a partial ledger. The read runs
+ * with that binding lifted for this one statement and puts it back straight after, so tenant
+ * isolation is unchanged and every other statement in the transaction stays bound.
+ */
+export async function readAcrossBranches<T>(db: ScopedDb, read: () => Promise<T>): Promise<T> {
+  const [binding] = await db.$queryRaw<Array<{ branchId: string | null }>>(
+    Prisma.sql`SELECT NULLIF(current_setting('app.current_branch_id', true), '') AS "branchId"`
+  );
+  const bound = binding?.branchId ?? null;
+  if (!bound) return read();
+  await db.$queryRaw(Prisma.sql`SELECT set_config('app.current_branch_id', '', true)`);
+  try {
+    return await read();
+  } finally {
+    await db.$queryRaw(Prisma.sql`SELECT set_config('app.current_branch_id', ${bound}, true)`);
+  }
+}
+
+function readEntriesForExpiry(db: ScopedDb, scope: LoyaltyCustomerScope, at: Date) {
+  return readAcrossBranches(db, () =>
+    db.pharmacyLoyaltyPointsEntry.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        customerId: scope.customerId,
+        occurredAt: { lte: at },
+      },
+      orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
+      select: ENTRY_FOR_EXPIRY,
+    })
+  );
 }
 
 /**
@@ -213,39 +257,59 @@ function readEntriesForExpiry(db: ScopedDb, scope: CustomerAtBranch, at: Date) {
  * They cannot be spent: redemption and manual removal subtract this from the balance. The
  * caller holds the customer lock. Reads the ledger only when such a lot exists.
  */
-export async function pointsPastExpiry(db: ScopedDb, scope: CustomerAtBranch, at: Date) {
-  const due = await db.pharmacyLoyaltyPointsEntry.count({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      customerId: scope.customerId,
-      kind: { in: [...LOT_KINDS] },
-      expiresAt: { lte: at },
-      closedBy: { none: { kind: 'EXPIRY' } },
-    },
-  });
+export async function pointsPastExpiry(db: ScopedDb, scope: LoyaltyCustomerScope, at: Date) {
+  const due = await readAcrossBranches(db, () =>
+    db.pharmacyLoyaltyPointsEntry.count({
+      where: {
+        organizationId: scope.organizationId,
+        customerId: scope.customerId,
+        kind: { in: [...LOT_KINDS] },
+        expiresAt: { lte: at },
+        closedBy: { none: { kind: 'EXPIRY' } },
+      },
+    })
+  );
   if (!due) return 0;
-  const entries = await readEntriesForExpiry(db, scope, at);
-  return planPharmacyLotExpiries(entries, at).reduce((sum, lot) => sum + lot.points, 0);
+  let total = 0;
+  for (const points of (await pastExpiryByBranch(db, scope, at)).values()) total += points;
+  return total;
 }
 
 /**
- * DEV-764: expiry attributed to each lot of one customer at one branch (see
+ * DEV-764: the points of pointsPastExpiry, by the branch each earned lot was posted at. Reads
+ * the ledger; callers that only need the total use pointsPastExpiry, which skips the read when
+ * no lot is due.
+ */
+export async function pastExpiryByBranch(db: ScopedDb, scope: LoyaltyCustomerScope, at: Date) {
+  const entries = await readEntriesForExpiry(db, scope, at);
+  const branchOf = new Map(entries.map((entry) => [entry.id, entry.branchId]));
+  const byBranch = new Map<string, number>();
+  for (const lot of planPharmacyLotExpiries(entries, at)) {
+    if (lot.points <= 0) continue;
+    const branchId = branchOf.get(lot.lotId)!;
+    byBranch.set(branchId, (byBranch.get(branchId) ?? 0) + lot.points);
+  }
+  return byBranch;
+}
+
+/**
+ * DEV-764: expiry attributed to each lot of one customer, at every branch (see
  * expiredPointsByLot), or null when no restored points were ever expired at once, in which
  * case each lot's own EXPIRY entry is the whole story. The caller holds the customer lock.
  */
-export async function readExpiredPointsByLot(db: ScopedDb, scope: CustomerAtBranch, at: Date) {
-  const restoredThenExpired = await db.pharmacyLoyaltyPointsEntry.count({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      customerId: scope.customerId,
-      kind: 'EXPIRY',
-      reverses: {
-        is: { kind: { in: [...RESTORING_KINDS] as ('REFUND' | 'REDEMPTION_RELEASE')[] } },
+export async function readExpiredPointsByLot(db: ScopedDb, scope: LoyaltyCustomerScope, at: Date) {
+  const restoredThenExpired = await readAcrossBranches(db, () =>
+    db.pharmacyLoyaltyPointsEntry.count({
+      where: {
+        organizationId: scope.organizationId,
+        customerId: scope.customerId,
+        kind: 'EXPIRY',
+        reverses: {
+          is: { kind: { in: [...RESTORING_KINDS] as ('REFUND' | 'REDEMPTION_RELEASE')[] } },
+        },
       },
-    },
-  });
+    })
+  );
   if (!restoredThenExpired) return null;
   return expiredPointsByLot(await readEntriesForExpiry(db, scope, at), at);
 }
@@ -281,21 +345,26 @@ export async function expireStrandedRestoration(
 }
 
 /**
- * DEV-764: closes every due lot of one customer at one branch with one EXPIRY entry each,
- * taking the points the lot still holds. Runs in the caller's tenant transaction. Takes the
+ * DEV-764: closes every due lot of one customer, at every branch, with one EXPIRY entry each,
+ * posted at the lot's own branch and taking the points the lot still holds. Runs in the caller's tenant transaction. Takes the
  * same per-customer lock as redemption and manual adjustment, so a lot cannot be both spent
  * and expired. Idempotent: each lot has one expiry key and a unique closing entry.
  */
-export async function expireCustomerLoyaltyPoints(db: ScopedDb, scope: CustomerAtBranch, at: Date) {
+export async function expireCustomerLoyaltyPoints(
+  db: ScopedDb,
+  scope: LoyaltyCustomerScope,
+  at: Date
+) {
   await lockCustomerConsent(db, scope.organizationId, scope.customerId);
   const entries = await readEntriesForExpiry(db, scope, at);
+  const branchOf = new Map(entries.map((entry) => [entry.id, entry.branchId]));
   let expiredPoints = 0;
   const due = planPharmacyLotExpiries(entries, at);
   for (const lot of due) {
     await db.pharmacyLoyaltyPointsEntry.create({
       data: {
         organizationId: scope.organizationId,
-        branchId: scope.branchId,
+        branchId: branchOf.get(lot.lotId)!,
         customerId: scope.customerId,
         kind: 'EXPIRY',
         points: lot.points > 0 ? -lot.points : 0,
@@ -325,9 +394,9 @@ export async function processDuePharmacyLoyaltyExpiries(now = new Date(), limit 
         expiresAt: { lte: now },
         closedBy: { none: { kind: 'EXPIRY' } },
       },
-      distinct: ['organizationId', 'branchId', 'customerId'],
+      distinct: ['organizationId', 'customerId'],
       orderBy: [{ expiresAt: 'asc' }, { id: 'asc' }],
-      select: { organizationId: true, branchId: true, customerId: true },
+      select: { organizationId: true, customerId: true },
       take,
     })
   );
@@ -338,7 +407,11 @@ export async function processDuePharmacyLoyaltyExpiries(now = new Date(), limit 
   for (const candidate of candidates) {
     try {
       const result = await withTenantDb(candidate.organizationId, (db) =>
-        expireCustomerLoyaltyPoints(db, candidate, now)
+        expireCustomerLoyaltyPoints(
+          db,
+          { organizationId: candidate.organizationId, customerId: candidate.customerId },
+          now
+        )
       );
       customers += 1;
       lots += result.lots;

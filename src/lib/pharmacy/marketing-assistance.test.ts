@@ -104,3 +104,30 @@ it('fails closed when the medicine names cannot be read', async () => {
     approved: false,
   });
 });
+it('asks for Urdu and accepts an Urdu draft when the workspace locale is Urdu', async () => {
+  mocks.route.mockResolvedValue({ text: 'ہمارے اسٹور میں خوش آمدید۔ بند کرنے کے لیے STOP لکھیں۔' });
+  const result = await draftMarketingCopy(
+    { occasion: 'WELCOME', tone: 'FRIENDLY' },
+    { ...context, locale: 'ur' }
+  );
+  expect(result).toMatchObject({ available: true });
+  expect(mocks.route.mock.calls[0][0].system).toContain('Urdu script');
+});
+it('rejects an English draft when Urdu was requested, and an Urdu draft for English', async () => {
+  const ur = { occasion: 'WELCOME', tone: 'FRIENDLY' } as const;
+  expect(await draftMarketingCopy(ur, { ...context, locale: 'ur' })).toMatchObject({
+    available: false,
+    body: null,
+  });
+  mocks.route.mockResolvedValue({ text: 'ہمارے اسٹور میں خوش آمدید۔ STOP لکھیں۔' });
+  expect(await draftMarketingCopy(ur, context)).toMatchObject({ available: false, body: null });
+});
+it('rejects an English draft whose only Urdu is the opt-out sentence', async () => {
+  mocks.route.mockResolvedValue({ text: 'Welcome to our store. STOP لکھ کر جواب دیں۔' });
+  expect(
+    await draftMarketingCopy(
+      { occasion: 'WELCOME', tone: 'FRIENDLY' },
+      { ...context, locale: 'ur' }
+    )
+  ).toMatchObject({ available: false, body: null });
+});
