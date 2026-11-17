@@ -360,7 +360,12 @@ describe('pharmacy report catalog filters', () => {
       minimumStaff: 1,
     });
     expect(screen.getByLabelText('To')).toHaveValue('2026-11-15');
-    expect(screen.getByText('As of 4 Sep 2026, 3:00 PM PKT')).toBeVisible();
+    expect(screen.getByText('Updated 4 Sep 2026, 3:00 PM PKT')).toBeVisible();
+    const calculation = screen
+      .getByText(/to the start of the day after the last, in PKT\. Finance/)
+      .closest('details')!;
+    expect(calculation).not.toHaveAttribute('open');
+    calculation.open = true;
     expect(
       screen.getByText(/to the start of the day after the last, in PKT\. Finance/)
     ).toBeVisible();
@@ -627,7 +632,7 @@ describe('pharmacy report catalog filters', () => {
         },
       } as never);
 
-    it('flags an abnormal refund ratio and a cash variance in amber with a visible label', async () => {
+    it('flags abnormal refunds in amber and short cash in red with visible labels', async () => {
       withMetrics({ refundsMinor: 82_797, cashVarianceMinor: -400 });
       render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
 
@@ -643,8 +648,8 @@ describe('pharmacy report catalog filters', () => {
 
       const variance = kpi('Cash variance');
       expect(variance).toHaveAttribute('data-flagged', 'true');
-      expect(variance.querySelector('.stat-figure')).toHaveTextContent('PKR -4.00');
-      expect(variance.querySelector('.stat-figure')).toHaveClass('text-warning');
+      expect(variance.querySelector('.stat-figure')).toHaveTextContent('PKR 4 short');
+      expect(variance.querySelector('.stat-figure')).toHaveClass('text-destructive');
       expect(within(variance).getByText('Review')).toBeVisible();
     });
 
@@ -668,5 +673,26 @@ describe('pharmacy report catalog filters', () => {
       ).toBeVisible();
       expect(variance).not.toHaveAttribute('data-flagged');
     });
+  });
+  it('shows a concise owner period with calculation caveats under a disclosure', async () => {
+    render(
+      await PharmacyReportsPage({
+        searchParams: Promise.resolve({ from: '2026-10-28', to: '2026-11-03' }),
+      })
+    );
+    const owner = screen
+      .getByRole('heading', { name: 'Selected period at a glance' })
+      .closest<HTMLDivElement>('[data-slot="section-card"]')!;
+    expect(within(owner).getByText('28 Oct – 3 Nov · All branches')).toBeVisible();
+    expect(
+      within(owner)
+        .getByText(/historical transaction currency is not verified/)
+        .closest('details')
+    ).not.toBeNull();
+    expect(within(owner).getByText('How is this calculated?')).toHaveAttribute(
+      'class',
+      expect.stringContaining('focus-visible')
+    );
+    expect(within(owner).queryByText(/All available branches · ledger source/)).toBeNull();
   });
 });
