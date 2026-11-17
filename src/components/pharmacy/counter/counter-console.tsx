@@ -2301,11 +2301,22 @@ function ScopedPharmacyCounterConsole({
       if (replaceClosedBill) clearBill();
       try {
         const activeSaleId = replaceClosedBill ? await openSale() : await ensureSale();
-        const linked = await scanLoyaltyCard.mutateAsync({
-          branchId,
-          saleId: activeSaleId,
-          cardToken,
-        });
+        const link = (linkSaleId: string) =>
+          scanLoyaltyCard.mutateAsync({ branchId, saleId: linkSaleId, cardToken });
+        let linked: Awaited<ReturnType<typeof link>>;
+        try {
+          linked = await link(activeSaleId);
+        } catch (error) {
+          // DEV-712: the bill moved on (paid or voided on another screen, or this copy was
+          // stale). Re-read it and, only once it is confirmed paid or voided, link the card to a
+          // new bill. A held bill keeps its ID so it can still be resumed.
+          const freshBill = replaceClosedBill || activeSaleId !== saleId;
+          if (!counterBillMovedOn(error) || freshBill || attemptRef.current) throw error;
+          const read = await cartQuery.refetch();
+          if (!read.isSuccess || !billClosed(read.data, activeSaleId)) throw error;
+          clearBill();
+          linked = await link(await openSale());
+        }
         setCustomerId(linked.id);
         setRedeemPoints(0);
         setNotice({
@@ -2320,7 +2331,7 @@ function ScopedPharmacyCounterConsole({
         setPending(null);
       }
     },
-    [branchId, busy, cartQuery.data, clearBill, ensureSale, openSale, saleId, scanLoyaltyCard]
+    [branchId, busy, cartQuery, clearBill, ensureSale, openSale, saleId, scanLoyaltyCard]
   );
 
   const redeemCustomerPoints = useCallback(async () => {

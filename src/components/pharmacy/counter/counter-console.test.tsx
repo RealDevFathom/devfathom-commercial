@@ -3102,11 +3102,48 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
 
     await screen.findByText('Loyalty card: Ayesha linked to this bill.');
     expect(mocks.mutations.create).toHaveBeenCalledTimes(1);
-    expect(mocks.mutations.scanLoyaltyCard).toHaveBeenCalledExactlyOnceWith({
-      branchId: 'branch-a',
-      saleId: 'sale-b',
-      cardToken: 'DFLCABCDEFGHIJKLMNOPQRSTUVWXYZ',
+    expect(mocks.mutations.scanLoyaltyCard).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        branchId: 'branch-a',
+        saleId: 'sale-b',
+        cardToken: 'DFLCABCDEFGHIJKLMNOPQRSTUVWXYZ',
+      })
+    );
+  });
+
+  it('re-reads a bill paid on another screen and links the card to a new bill (DEV-748)', async () => {
+    openTheDrawer();
+    mocks.mutations
+      .scanLoyaltyCard!.mockRejectedValueOnce(refused('BAD_REQUEST', 'SALE_NOT_OPEN'))
+      .mockResolvedValueOnce({ id: 'customer-a', displayName: 'Ayesha' });
+    mocks.refetch.mockImplementationOnce(async () => {
+      Object.assign(mocks.queries.counterCart!, { data: settled(), isSuccess: true });
+      return mocks.queries.counterCart;
     });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+    scan('DFLCABCDEFGHIJKLMNOPQRSTUVWXYZ');
+
+    await screen.findByText('Loyalty card: Ayesha linked to this bill.');
+    expect(mocks.refetch).toHaveBeenCalled();
+    expect(mocks.mutations.create).toHaveBeenCalledTimes(1);
+    expect(mocks.mutations.scanLoyaltyCard.mock.calls.map(([input]) => input.saleId)).toEqual([
+      'sale-a',
+      'sale-b',
+    ]);
+  });
+
+  it('keeps the card on its bill when the re-read still finds it open (DEV-748)', async () => {
+    openTheDrawer();
+    mocks.mutations.scanLoyaltyCard!.mockRejectedValueOnce(refused('BAD_REQUEST', 'SALE_NOT_OPEN'));
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+    scan('DFLCABCDEFGHIJKLMNOPQRSTUVWXYZ');
+
+    await waitFor(() => expect(mocks.mutations.scanLoyaltyCard).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mocks.refetch).toHaveBeenCalled());
+    expect(mocks.mutations.create).not.toHaveBeenCalled();
+    expect(mocks.mutations.scanLoyaltyCard).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the bill and shows a neutral notice when the re-read still finds it open', async () => {
