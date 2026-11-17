@@ -1,3 +1,5 @@
+import { pricePrepaidSale } from './prepaid-discount';
+import { movePrepaid, PREPAID_PROVIDER } from './prepaid-tiers';
 import { requestCounterEvidence } from './counter-evidence';
 import 'server-only';
 
@@ -427,7 +429,7 @@ export async function applyPharmacyTender(
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_sales WHERE id = ${input.saleId} AND "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId} FOR UPDATE`
   );
-  const sale = await db.pharmacySale.findFirst({
+  let sale = await db.pharmacySale.findFirst({
     where: { id: input.saleId, organizationId: scope.organizationId, branchId: scope.branchId },
     include: completionSaleInclude,
   });
@@ -454,6 +456,7 @@ export async function applyPharmacyTender(
   // #659: before any lease, provider charge, tender or posting. A batch recalled,
   // quarantined or expired since add-to-cart refuses the payment.
   await assertSaleBatchesSellable(db, scope, sale.id);
+  sale = await pricePrepaidSale(db, sale, true);
   const totalMinor = saleTotalMinor(sale.lines);
   const tenderedMinor = sale.tenders.reduce((sum, tender) => sum + tender.amountMinor, 0);
   if (input.amountMinor > totalMinor - tenderedMinor)
@@ -555,6 +558,9 @@ export async function applyPharmacyTender(
     approvalCode = capture.data.approvalCode;
     // The signed-in cashier attests the terminal slip shows an approval.
     confirmedById = scope.actorId;
+  } else if (input.type === 'WALLET' && !input.adapter) {
+    if (!sale.customerId) throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
+    provider = PREPAID_PROVIDER;
   } else if (input.type === 'CARD' || input.type === 'WALLET') {
     if (!input.adapter) throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
     const adapter = requireReleaseSafeAdapter(input.adapter);
@@ -589,6 +595,7 @@ export async function applyPharmacyTender(
       deviceId: input.deviceId,
     },
   });
+  if (provider === PREPAID_PROVIDER) await movePrepaid(db, scope, {customerId: sale.customerId!, kind:'SPEND', amountMinor:input.amountMinor, tenderId:tender.id, idempotencyKey:`prepaid:spend:${tender.id}`});
   await postTenderEntry(db, scope, { tenderId: tender.id, at: tender.createdAt });
   if (drawerSessionId)
     await db.pharmacyDrawerMovement.create({
@@ -738,6 +745,7 @@ export async function refundPharmacyTender(
       throw new PharmacySettlementError('REFUND_EXCEEDS_TENDER');
   }
   const manualReversalRequired =
+    tender.provider !== PREPAID_PROVIDER &&
     (tender.type === 'CARD' || tender.type === 'WALLET') &&
     !input.adapter &&
     input.manualCashFallback === true;
@@ -746,7 +754,9 @@ export async function refundPharmacyTender(
     : input.reason.trim();
   let providerRef: string | undefined;
   let drawerSessionId: string | undefined;
-  if ((tender.type === 'CARD' || tender.type === 'WALLET') && !manualReversalRequired) {
+  if (tender.provider === PREPAID_PROVIDER) {
+    if (!tender.sale.customerId) throw new PharmacySettlementError('INVALID_AMOUNT');
+  } else if ((tender.type === 'CARD' || tender.type === 'WALLET') && !manualReversalRequired) {
     if (!input.adapter || !tender.providerRef)
       throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
     const adapter = requireReleaseSafeAdapter(input.adapter);
@@ -781,6 +791,7 @@ export async function refundPharmacyTender(
       actorId: scope.actorId,
     },
   });
+  if (tender.provider === PREPAID_PROVIDER) await movePrepaid(db, scope, {customerId:tender.sale.customerId!,kind:'RESTORE',amountMinor:input.amountMinor,tenderId:tender.id,refundId:refund.id,idempotencyKey:`prepaid:restore:${refund.id}`});
   await postTenderRefundEntry(db, scope, { refundId: refund.id, at: refund.createdAt });
   if (tender.type === 'LOYALTY' && tender.sale.customerId) {
     await restoreRefundedLoyaltyPoints(db, scope, {

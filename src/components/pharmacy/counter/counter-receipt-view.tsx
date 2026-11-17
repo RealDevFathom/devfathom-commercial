@@ -1,4 +1,5 @@
 'use client';
+import { receiptTierLines } from '@/lib/pharmacy/counter-receipt';
 
 import { useEffect, useRef, useState } from 'react';
 
@@ -685,6 +686,7 @@ export function CounterReceiptView({
           })}
         </ul>
 
+        {receiptTierLines(receipt, locale).map(text => <p key={text} className="text-sm">{text}</p>)}
         <dl className="space-y-1 border-t border-border-subtle pt-3">
           {(
             [

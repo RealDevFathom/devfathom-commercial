@@ -64,6 +64,7 @@ export type KhataSignupInput =
   | { patientId: string; displayName: string; consentGranted: true }
   | { displayName: string; phone: string; consentGranted: true };
 export type CounterTenderPanelProps = {
+  prepaidBalanceMinor?: number;
   /** #722: payments already recorded on this bill, in the order taken. */
   tenders?: readonly CounterCartTender[];
   /** Receipt total retained after the parent has verified this bill's settlement. */
@@ -155,6 +156,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
   function CounterTenderPanel(
     {
       balanceMinor,
+      prepaidBalanceMinor = 0,
       tenders = [],
       confirmedChangeMinor,
       state,
@@ -259,6 +261,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       (entry) =>
         entry.value === type ||
         entry.offer === 'always' ||
+        (entry.value === 'WALLET' && prepaidBalanceMinor > 0) ||
         (entry.offer === 'configured' &&
           !manualSettingsLoading &&
           !manualSettingsError &&
@@ -788,7 +791,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               ) : null}
             </div>
           ) : null}
-          {selected.requiresAdapter ? (
+          {selected.requiresAdapter && !(type === 'WALLET' && prepaidBalanceMinor > 0) ? (
             <p className="text-sm text-text-muted">
               A payment provider must be connected before you can use this method. Ask your manager
               if it is unavailable.
@@ -796,6 +799,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           ) : null}
         </div>
 
+        {type === 'WALLET' && prepaidBalanceMinor > 0 && <p className="text-sm">Prepaid balance: PKR {formatMinor(prepaidBalanceMinor)}</p>}
         <div className="space-y-1.5">
           <Label htmlFor="tender-amount">Amount</Label>
           <Input

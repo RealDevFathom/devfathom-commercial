@@ -2,6 +2,7 @@ import type { FinanceAccountCode } from '@/generated/prisma/client';
 
 /** Plain-language names for every account in the canonical chart of accounts. */
 export const FINANCE_ACCOUNT_LABELS = {
+  CUSTOMER_PREPAID: 'Customer prepaid balance',
   INVENTORY: 'Inventory',
   INVENTORY_IN_TRANSIT: 'Inventory in transit',
   GOODS_RECEIVED_ACCRUAL: 'Goods received accrual',

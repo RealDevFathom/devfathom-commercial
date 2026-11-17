@@ -1,3 +1,4 @@
+import { PREPAID_PROVIDER } from './prepaid-tiers';
 /**
  * PH-FIN / PRD §6.8 FIN-01 — the pharmacy posting adapters.
  *
@@ -909,7 +910,7 @@ export async function postTenderEntry(
   if (!tender) throw new PharmacyFinanceError('NOT_FOUND');
   if (tender.branchId !== scope.branchId) throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
   const settlementAccount =
-    tender.type === 'CASH'
+    tender.provider === PREPAID_PROVIDER ? 'CUSTOMER_PREPAID' : tender.type === 'CASH'
       ? 'CASH'
       : tender.type === 'CREDIT'
         ? 'ACCOUNTS_RECEIVABLE'
@@ -994,12 +995,12 @@ export async function postTenderRefundEntry(
 ) {
   const refund = await db.pharmacyRefund.findFirst({
     where: { id: input.refundId, organizationId: scope.organizationId },
-    include: { originalTender: { select: { type: true } } },
+    include: { originalTender: { select: { type: true, provider: true } } },
   });
   if (!refund) throw new PharmacyFinanceError('NOT_FOUND');
   if (refund.branchId !== scope.branchId) throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
   const settlementAccount =
-    refund.drawerSessionId || refund.originalTender.type === 'CASH'
+    refund.originalTender.provider === PREPAID_PROVIDER ? 'CUSTOMER_PREPAID' : refund.drawerSessionId || refund.originalTender.type === 'CASH'
       ? 'CASH'
       : refund.originalTender.type === 'CREDIT'
         ? 'ACCOUNTS_RECEIVABLE'
