@@ -342,4 +342,25 @@ describe('required-field validation (DEV-520)', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Reference is required.');
     expect(screen.getByLabelText('Reference')).toHaveAttribute('aria-invalid', 'true');
   });
+
+  it('keeps the required-field error while an unrelated field is edited', async () => {
+    const action = vi.fn();
+    vi.stubGlobal('window', {
+      document,
+      location: { origin: 'https://workspace.test', replace: vi.fn() },
+    });
+    render(
+      <PurchasingActionForm action={action}>
+        <TextField label="Trading name" name="name" notice={null} required />
+        <TextField label="Contact name" name="contactName" notice={null} />
+        <button type="submit">Add supplier</button>
+      </PurchasingActionForm>
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Add supplier' }));
+    });
+    fireEvent.change(screen.getByLabelText('Contact name'), { target: { value: 'Ali' } });
+    expect(screen.getByLabelText('Trading name')).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('alert')).toHaveTextContent('Trading name is required.');
+  });
 });

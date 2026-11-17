@@ -197,6 +197,7 @@ export function ReturnForm({
   );
   const [number, setNumber] = useState('');
   const [searched, setSearched] = useState<{ value: number | null } | null>(null);
+  const [editedSinceSearch, setEditedSinceSearch] = useState(false);
   const [chosenSaleId, setSaleId] = useState(recovery.attempt?.saleId ?? '');
   const [chosenLineId, setLineId] = useState('');
   const [lotId, setLotId] = useState('');
@@ -232,6 +233,7 @@ export function ReturnForm({
   );
   // A reference with no receipt sequence (for example QA-0000) cannot match any receipt.
   const unparsed = !!searched && searched.value === null;
+  const showInvalid = unparsed && !editedSinceSearch;
   // DEV-501: a scan or search with exactly one match in this branch opens that receipt.
   const onlyMatch =
     !unparsed && !!searched?.value && lookup.data?.length === 1 ? lookup.data[0] : undefined;
@@ -657,6 +659,7 @@ export function ReturnForm({
         onSubmit={(event) => {
           event.preventDefault();
           setSearched({ value: parseReceiptNumber(number) });
+          setEditedSinceSearch(false);
           setSaleId('');
           resetReturn();
           setTenderId('');
@@ -672,15 +675,16 @@ export function ReturnForm({
             enterKeyHint="search"
             maxLength={40}
             required
-            aria-invalid={unparsed}
+            aria-invalid={showInvalid}
             aria-describedby={
-              unparsed ? 'return-receipt-error return-receipt-hint' : 'return-receipt-hint'
+              showInvalid ? 'return-receipt-error return-receipt-hint' : 'return-receipt-hint'
             }
             value={number}
             disabled={locked}
             onChange={(event) => {
               setNumber(event.target.value);
-              if (unparsed) setSearched(null);
+              // The explanation describes the submitted text; results stay hidden until a new search.
+              setEditedSinceSearch(true);
             }}
             className="h-11"
           />
@@ -696,7 +700,7 @@ export function ReturnForm({
         <p id="return-receipt-hint" className="w-full text-sm text-text-muted">
           Scan the receipt or type the number printed on it, for example 1042 or QA-1042.
         </p>
-        {unparsed && (
+        {showInvalid && (
           <p id="return-receipt-error" className="w-full text-sm text-destructive">
             Enter a receipt number made of digits, for example 1042 or QA-1042. Negative numbers and
             zero are not receipt numbers.

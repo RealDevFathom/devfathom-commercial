@@ -128,7 +128,11 @@ function ActionAttempt({
         control.focus();
       }}
       onChange={(event) => {
-        setClientInvalid(null);
+        // Only editing the control that failed dismisses its explanation.
+        const changed = event.target;
+        if (changed instanceof HTMLElement && 'name' in changed) {
+          setClientInvalid((current) => (current?.field === changed.name ? null : current));
+        }
         if (financialOperation) {
           setSelection(allocationOperation(new FormData(event.currentTarget)));
         }

@@ -166,6 +166,19 @@ describe('counter returns', () => {
     fireEvent.change(field, { target: { value: '5' } });
     expect(field).toHaveAttribute('aria-invalid', 'false');
   });
+  it('does not redisplay cached receipts after an invalid search is edited', () => {
+    render(<ReturnForm {...props} />);
+    const field = screen.getByLabelText('Receipt number');
+    const form = screen.getByRole('button', { name: 'Find receipt' }).closest('form')!;
+    fireEvent.change(field, { target: { value: '12' } });
+    fireEvent.submit(form);
+    expect(screen.getByRole('button', { name: /Receipt 12/ })).toBeVisible();
+    fireEvent.change(field, { target: { value: '-5' } });
+    fireEvent.submit(form);
+    expect(screen.queryByRole('button', { name: /Receipt 12/ })).toBeNull();
+    fireEvent.change(field, { target: { value: '-6' } });
+    expect(screen.queryByRole('button', { name: /Receipt 12/ })).toBeNull();
+  });
   it('reads the receipt sequence from printed references', () => {
     expect(parseReceiptNumber('1042')).toBe(1042);
     expect(parseReceiptNumber(' QA-1042 ')).toBe(1042);
