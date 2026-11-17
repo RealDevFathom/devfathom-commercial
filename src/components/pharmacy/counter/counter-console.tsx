@@ -669,6 +669,9 @@ function ScopedPharmacyCounterConsole({
     () => () => {
       scannerRevision.current += 1;
       catalogueCache.clear();
+      // A scan cancelled by this change must not discard scans queued for the next branch.
+      drainedScan.current = null;
+      lastAddOutcome.current = 'added';
     },
     [branchAuthorized, branchId, catalogueCache]
   );
@@ -765,13 +768,16 @@ function ScopedPharmacyCounterConsole({
   // DEV-575: a scanner types a code in a burst and ends it with Enter, so a code
   // being typed never fires a search per digit; Enter submits it.
   const scannerQuery = looksLikeScannedCode(trimmedQuery);
-  // A completed name search follows a branch change, so it never waits on the old branch.
-  const [searchBranchId, setSearchBranchId] = useState(branchId);
-  if (searchBranchId !== branchId) {
-    setSearchBranchId(branchId);
-    if (trimmedQuery.length >= 2 && !scannerQuery && submittedSearch.text === trimmedQuery)
-      setSubmittedSearch({ text: trimmedQuery, query: trimmedQuery, branchId });
-  }
+  // A name search follows the selected branch, including one submitted (or debounced)
+  // just before a branch change, so it never waits on the old branch.
+  if (
+    branchAuthorized &&
+    trimmedQuery.length >= 2 &&
+    !scannerQuery &&
+    submittedSearch.text === trimmedQuery &&
+    submittedSearch.branchId !== branchId
+  )
+    setSubmittedSearch({ text: trimmedQuery, query: trimmedQuery, branchId });
   const searchCurrent =
     branchAuthorized &&
     trimmedQuery.length >= 2 &&

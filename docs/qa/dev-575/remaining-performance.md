@@ -33,6 +33,10 @@ scans with no drops, and the client-side catalogue cache.
   still cancels the pending scan as before. A repeated Enter on the code being saved is a
   duplicate press and is ignored. If a line is not added, the scans queued behind it are
   discarded and the notice says how many to scan again. A branch change discards them too.
+  Anything typed during a save survives its clear; a name typed then is searched once the
+  save finishes. A newer scan that starts while the previous code is still being looked up
+  replaces it, as before (an existing test requires this, so a stuck lookup never blocks
+  the counter); with the catalogue cache a repeat code is not looked up again.
   The field stays disabled for payment-recovery and other non-add busy states.
 
 ## Before/after timings
@@ -89,6 +93,9 @@ earlier pull request 1958 this test fails because the field is disabled during a
 - scans buffered behind a refused line are discarded with a notice
 - a repeated Enter on the code being saved is a duplicate press
 - results return to idle when the field is edited below two characters
+- a name search is re-run on a newly selected branch, including one debounced just before the change
+- a name typed during a save is kept and searched once the save finishes
+- a scan queued for a new branch is added after the previous branch's scan was cancelled
 - existing: 150 ms debounce with abort, no search per scanner digit
 
 `src/lib/pharmacy/counter-catalogue-cache.test.ts`: expiry without renewal, alias debits,

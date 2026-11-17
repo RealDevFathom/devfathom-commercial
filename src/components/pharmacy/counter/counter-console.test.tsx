@@ -3755,6 +3755,91 @@ describe('PharmacyCounterConsole search latency (DEV-575)', () => {
     expect(mocks.searchProps.mock.lastCall![0]).not.toMatchObject({ state: 'loading' });
   });
 
+  it('re-runs a name search whose debounce fires just before a branch change', () => {
+    vi.useFakeTimers();
+    mocks.queries.counterBranches = query({
+      branches: [
+        { id: 'branch-a', name: 'A' },
+        { id: 'branch-b', name: 'B' },
+      ],
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Scan or search'), { target: { value: 'para' } });
+    act(() => vi.advanceTimersByTime(100));
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch-b' } });
+    act(() => vi.advanceTimersByTime(50));
+    const last = mocks.queryInputs.mock.calls.filter(([name]) => name === 'counterSearch').at(-1);
+    expect(last?.[1]).toEqual({ branchId: 'branch-b', query: 'para' });
+    expect(lastSearchOptions()).toMatchObject({ enabled: true });
+  });
+
+  it('keeps a name typed during a save and searches it once the save finishes', async () => {
+    const saves = heldSaves();
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    typeBurst(search, '8964000123456');
+    await act(async () => fireEvent.keyDown(search, { key: 'Enter' }));
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    for (const text of ['p', 'pa', 'par', 'para'])
+      fireEvent.change(search, { target: { value: text } });
+    await act(async () => saves.shift()!());
+    await screen.findByText('1 × Paracetamol added.');
+    expect(search).toHaveValue('para');
+    await waitFor(() => {
+      const last = mocks.queryInputs.mock.calls
+        .filter(([name]) => name === 'counterSearch')
+        .at(-1);
+      expect(last?.[1]).toEqual({ branchId: 'branch-a', query: 'para' });
+      expect(lastSearchOptions()).toMatchObject({ enabled: true });
+    });
+    expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
+  });
+
+  it('adds a scan queued for a new branch after the previous branch scan was cancelled', async () => {
+    mocks.queries.counterBranches = query({
+      branches: [
+        { id: 'branch-a', name: 'A' },
+        { id: 'branch-b', name: 'B' },
+      ],
+    });
+    mocks.mutations.create!.mockResolvedValue({ id: 'sale-b' });
+    const saves = heldSaves();
+    let resolveLookup!: () => void;
+    mocks.searchQuery.mockImplementation(({ query: code }: { query: string }) => {
+      const result = {
+        rows: [barcodeRow({ medicineId: `med-${code}`, displayName: `Item ${code}` })],
+        truncated: false,
+      };
+      return code === '8964000100002'
+        ? new Promise((resolve) => (resolveLookup = () => resolve(result)))
+        : Promise.resolve(result);
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    typeBurst(search, '8964000100001');
+    await act(async () => fireEvent.keyDown(search, { key: 'Enter' }));
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    typeBurst(search, '8964000100002');
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await act(async () => saves.shift()!());
+    // The queued scan's lookup is still pending when the operator changes branch.
+    await waitFor(() =>
+      expect(mocks.searchQuery).toHaveBeenLastCalledWith(
+        { branchId: 'branch-a', query: '8964000100002' },
+        { staleTime: 10_000 }
+      )
+    );
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch-b' } });
+    typeBurst(search, '8964000100003');
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await act(async () => resolveLookup());
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(2));
+    expect(mocks.mutations.addLine!.mock.calls[1]![0]).toMatchObject({
+      medicineId: 'med-8964000100003',
+    });
+    expect(screen.queryByText(/later scan was not added/)).not.toBeInTheDocument();
+  });
+
   it('returns results to idle when the field is edited below two characters', () => {
     vi.useFakeTimers();
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);

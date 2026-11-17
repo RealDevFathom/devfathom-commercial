@@ -54,9 +54,11 @@ export function CounterScanInput({
   });
   let next = state;
   if (next.value !== value || next.resetVersion !== resetVersion) {
-    // A post-add clear (an empty or unchanged value) keeps a scan typed during the save;
-    // a new value set by the counter (a suggestion, a key typed over a receipt) replaces it.
-    const keep = next.buffered && (value === '' || value === next.value);
+    // A post-add clear (an empty or unchanged value, or the counter echoing the draft)
+    // keeps what was typed during the save; any other value set by the counter (a
+    // suggestion, a key typed over a receipt) replaces it.
+    const keep =
+      next.buffered && (value === '' || value === next.value || value === next.draft);
     next = { ...next, value, resetVersion, draft: keep ? next.draft : value, buffered: keep };
   }
   // The save finished: anything typed meanwhile becomes a normal edit, which clears
@@ -97,14 +99,14 @@ export function CounterScanInput({
       value={state.draft}
       onChange={(event) => {
         const text = event.currentTarget.value;
-        // Only a scanner burst is held during a save; a human edit (a name, a cleared
-        // field) is a normal edit and still cancels the pending scan.
-        const hold = buffering && isScanPrefix(text.trim());
-        setState({ value, resetVersion, draft: text, buffered: hold, handover: null });
+        // Anything typed during a save survives its post-add clear. A scanner burst is
+        // held silently; a human edit (a name, a cleared field) is a normal edit that
+        // still cancels the pending scan, and it searches once the save finishes.
+        setState({ value, resetVersion, draft: text, buffered: buffering, handover: null });
         cancel();
-        if (hold) return;
+        if (buffering && isScanPrefix(text.trim())) return;
         onDraftChange(text);
-        schedule(text);
+        if (!buffering) schedule(text);
       }}
       onKeyDown={(event) => {
         if (event.key === 'Enter') {
