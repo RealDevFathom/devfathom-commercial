@@ -397,7 +397,7 @@ describeDatabase('numbered receipt issuance on migrated PostgreSQL', () => {
     expect(receipt.receiptNumber).toBeGreaterThan(0);
     expect(receipt.lines[0]).toMatchObject({
       identityStatus: 'UNAVAILABLE',
-      medicineName: 'Historical identity unavailable',
+      medicineName: 'Original item details unavailable',
     });
     expect(receipt.lines[0]!.allocations?.map((a) => a.batchNumber)).toEqual([null, null]);
     // An issued receipt is immutable: renumbering it is refused by the database trigger.

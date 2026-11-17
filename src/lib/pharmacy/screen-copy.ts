@@ -67,7 +67,7 @@ export const SHOP_SCREEN_COPY = {
     anomalyReviewSignals: 'Anomaly review signals',
     refreshSignals: 'Refresh signals',
     deterministicEventChecksOnlySignalsNeverRankStaff:
-      'Deterministic event checks only. Signals never rank staff, imply misconduct, or create orders, stock movements, price changes, or finance postings. A human opens and reviews the source evidence.',
+      'Deterministic event checks only. Signals never rank staff, imply misconduct, or create orders, stock movements, price changes, or finance postings. A human opens and reviews the source records.',
     anomalySignalStateUpdated: 'Anomaly signal state updated.',
     theAnomalyActionCouldNotBeCompletedCheck:
       'The anomaly action could not be completed. Check the reason, date, and access.',
@@ -91,7 +91,7 @@ export const SHOP_SCREEN_COPY = {
     noAnomalySignalsMatchTheseFiltersRefreshTo:
       'No anomaly signals match these filters. Refresh to evaluate the current ledger window; no operational data will be changed.',
     financialReportAndOwnerPermissionsAreRequiredTo2:
-      'Financial report and owner permissions are required to view anomaly evidence.',
+      'Financial report and owner permissions are required to view anomaly records.',
     safe05Advisory: 'SAFE-05 · Advisory',
     packAuthenticationFlags: 'Pack authentication flags',
     receivingAndDispensingScansCompareGtinBatchExpiry:
@@ -164,7 +164,10 @@ export const SHOP_SCREEN_COPY = {
     sourceLabel: 'Source:',
     observed: 'Observed: ',
     computed: '. Computed:',
-    secondsSinceLastCheck: '. Seconds since last check:',
+    secondsSinceLastCheck: '. Allowed age of this check (seconds):',
+    endNotIncluded: ' (end not included)',
+    selectedDatesNotApplied: 'Selected dates do not apply',
+    limitReached: 'The check reached its limit; more items may exist.',
     dueOrExpiryTime: '. Due or expiry time:',
     whatWasChecked: 'What was checked',
     noAvailableUnexpiredStockWasFoundForExpiry:
@@ -210,11 +213,11 @@ export const SHOP_SCREEN_COPY = {
     current: '. Current:',
     periodsAreStartInclusiveEndExclusiveSameBranch:
       '. Periods are start inclusive, end exclusive. Same branch, equal elapsed duration.',
-    noMatchingPostedJournalGroupsIn: 'No matching posted journal groups in',
+    noMatchingPostedJournalGroupsIn: 'No matching sales entries in',
     ledgerTotalsAreZeroForThatPeriodThis:
       '. Ledger totals are zero for that period; this does not prove complete source data.',
     accountingDecompositionCurrencyNotConfirmedPostedRevenueDiscounts:
-      'Accounting decomposition · currency not confirmed · posted revenue, discounts and COGS, including reversals and returns recorded in the journal.',
+      'Accounting decomposition · currency not confirmed · posted revenue, discounts and cost of goods, including reversals and returns.',
     account: 'Account',
     previous2: 'Previous',
     current2: 'Current',
@@ -254,7 +257,7 @@ export const SHOP_SCREEN_COPY = {
       ' Discrepancy is canonical CASH plus BANK account closing from the financial statements, read in the same snapshot, minus the projected closing.',
     noScopedCashPostingsThisDoesNotProve:
       'No cash movements were found for these dates. Other activity may be missing.',
-    paymentsAndReversals: 'Payments and reversals',
+    paymentsAndReversals: 'Cash movements',
     classificationRequiresSupportedSourceAndCounterpartEvidenceAmbiguous:
       'Classification requires supported source and counterpart evidence. Ambiguous, mixed, and future policies remain unclassified; this is not a statutory or audited statement.',
     showing: 'Showing ',
@@ -264,9 +267,9 @@ export const SHOP_SCREEN_COPY = {
     entry: 'Entry ',
     sourceLabel: ' · source ',
     classificationJournalLines: 'Classification journal lines',
-    evidencePages: 'Payment pages',
-    previousEvidence: 'Previous payments',
-    nextEvidence: 'Next payments',
+    evidencePages: 'Cash movement pages',
+    previousEvidence: 'Previous cash movements',
+    nextEvidence: 'Next cash movements',
   },
   journalExport: {
     pharmacyAccounts: 'Pharmacy / accounts',

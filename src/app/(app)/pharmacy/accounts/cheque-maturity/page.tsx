@@ -245,7 +245,7 @@ function EvidenceTable({ rows }: { rows: ReturnType<typeof chequeMaturityEvidenc
                   row.state === 'CLEARED'
                     ? 'success'
                     : row.state === 'BOUNCED' || row.state === 'REVERSED'
-                      ? 'warning'
+                      ? 'danger'
                       : 'neutral'
                 }
               />

@@ -141,4 +141,13 @@ describe('cheque maturity accounts page', () => {
     expect(screen.queryByText('JPY 125.00')).not.toBeInTheDocument();
     expect(screen.getByText('Post-dated')).toBeVisible();
   });
+  it('shows bounced cheques in the danger colour', async () => {
+    mocks.workspace.mockResolvedValue({
+      transactions: [{ ...cheque(0), chequeStatus: 'BOUNCED' }],
+    });
+    await show();
+    const pill = screen.getByText('Bounced');
+    expect(pill.className).toContain('text-destructive');
+    expect(pill.className).not.toContain('text-warning');
+  });
 });

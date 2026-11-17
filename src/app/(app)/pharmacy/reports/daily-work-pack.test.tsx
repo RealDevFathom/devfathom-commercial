@@ -1,12 +1,13 @@
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { PharmacyDailyWorkPack } from '@/lib/pharmacy/daily-work-pack';
+import { formatShopTime } from '@/lib/pharmacy/plain-language';
 import { DailyWorkPack, type DailyWorkPackProps } from './daily-work-pack';
 
 afterEach(cleanup);
 
 const failure =
-  'Expiry advice could not load. Refresh daily work pack to retry. No stock or supplier-return data was changed. Expiry risk has not been assessed.';
+  'Expiry advice could not load; refresh to try again.';
 
 function pack(
   status: 'available' | 'unavailable',
@@ -50,7 +51,7 @@ function pack(
   };
 }
 
-async function show(value: PharmacyDailyWorkPack) {
+async function show(value: PharmacyDailyWorkPack, timeZone?: string) {
   const read = vi.fn<DailyWorkPackProps['read']>().mockResolvedValue(value);
   render(
     await DailyWorkPack({
@@ -58,6 +59,7 @@ async function show(value: PharmacyDailyWorkPack) {
       filters: { branchId: 'branch_1', from: '2026-11-01', to: '2026-11-07' },
       branches: [{ id: 'branch_1', name: 'Main pharmacy' }],
       refreshFields: { branch: 'branch_1', from: '2026-11-01', to: '2026-11-07' },
+      timeZone,
     })
   );
   const source = screen.getByText('Expiry advice · Main pharmacy').closest('li')!;
@@ -257,4 +259,13 @@ it('uses plain wording, readable times and one action per card', async () => {
   expect(document.body.textContent).not.toMatch(
     /minor units|Row limit|persisted|freshness seconds/i
   );
+});
+
+it('shows work pack times in the shop time zone', async () => {
+  const value = pack('available', 0);
+  await show(value, 'Pacific/Auckland');
+  expect(screen.getByText(/Prepared at/)).toHaveTextContent(
+    `Prepared at ${formatShopTime(value.readAt, 'Pacific/Auckland')}`
+  );
+  expect(formatShopTime(value.readAt, 'Pacific/Auckland')).not.toBe(formatShopTime(value.readAt));
 });

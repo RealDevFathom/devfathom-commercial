@@ -26,6 +26,7 @@ import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { pharmacySalesRouter } from '@/server/routers/pharmacy-sales';
 import { createTRPCContext } from '@/server/trpc';
 import { DailyWorkPack, DailyWorkPackLoading } from './daily-work-pack';
+import { ReportDetails } from '@/components/pharmacy/report-details';
 import { LostSalesRecovery } from './lost-sales-recovery';
 import { MarketingSummary } from './marketing-summary';
 import { ObservedDemand } from './observed-demand';
@@ -626,6 +627,7 @@ export default async function PharmacyReportsPage({
         <Suspense key={returnQuery.toString()} fallback={<DailyWorkPackLoading />}>
           <DailyWorkPack
             read={caller.dailyWorkPack}
+            timeZone={timeZone}
             filters={{ ...(branch ? { branchId: branch } : {}), from, to }}
             branches={branchResult.branches}
             refreshFields={Object.fromEntries(returnQuery)}
@@ -954,14 +956,16 @@ export default async function PharmacyReportsPage({
                               </div>
                             ))}
                           </dl>
-                          <p className="mt-3 text-xs leading-5 text-text-muted">
-                            {screenCopy.reports.window}
-                            {new Date(signal.dataWindowStart).toLocaleString()}–
-                            {new Date(signal.dataWindowEnd).toLocaleString()}
-                            {screenCopy.reports.sourceObserved}{' '}
-                            {new Date(signal.sourceObservedAt).toLocaleString()}
-                            {screenCopy.reports.policy} {signal.policyVersion}
-                          </p>
+                          <ReportDetails>
+                            <p className="text-xs leading-5 text-text-muted">
+                              {screenCopy.reports.window}
+                              {formatShopTime(signal.dataWindowStart, timeZone ?? 'Asia/Karachi')}–
+                              {formatShopTime(signal.dataWindowEnd, timeZone ?? 'Asia/Karachi')}
+                              {screenCopy.reports.sourceObserved}{' '}
+                              {formatShopTime(signal.sourceObservedAt, timeZone ?? 'Asia/Karachi')}
+                              {screenCopy.reports.policy} {signal.policyVersion}
+                            </p>
+                          </ReportDetails>
                           <div className="mt-3 flex flex-wrap gap-3 text-xs">
                             {scope.userId ? (
                               <span className="font-mono text-text-body">

@@ -337,7 +337,7 @@ describe('daily Pharmacy work pack source composition', () => {
       coverage: 'partial',
       returnedRows: null,
       missingInputs: expect.arrayContaining([
-        'Expiry advice could not load. Refresh daily work pack to retry. No stock or supplier-return data was changed. Expiry risk has not been assessed.',
+        'Expiry advice could not load; refresh to try again.',
       ]),
     });
     expect(pack.completeness.status).toBe('partial');

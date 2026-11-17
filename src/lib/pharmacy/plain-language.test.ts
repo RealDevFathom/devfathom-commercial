@@ -23,6 +23,8 @@ describe('shop report presentation', () => {
   it('distinguishes short, over, balanced and missing cash without inventing currency', () => {
     expect(cashVarianceLabel(-400, 'PKR')).toBe('PKR 4 short');
     expect(cashVarianceLabel(425, 'PKR')).toBe('PKR 4.25 over');
+    expect(cashVarianceLabel(-1234550, 'PKR')).toBe('PKR 12,345.50 short');
+    expect(cashVarianceLabel(-100000, 'PKR')).toBe('PKR 1,000 short');
     expect(cashVarianceLabel(0, 'USD')).toBe('Balanced');
     expect(cashVarianceLabel(null, 'PKR')).toBe('—');
     expect(cashVarianceLabel(Number.NaN, 'PKR')).toBe('—');

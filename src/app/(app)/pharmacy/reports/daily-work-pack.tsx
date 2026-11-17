@@ -21,6 +21,7 @@ export type DailyWorkPackProps = {
   filters: Omit<Parameters<Reader>[0], 'asOf'>;
   branches: { id: string; name: string }[];
   refreshFields: Record<string, string>;
+  timeZone?: string | null;
 };
 
 const sourceAnchor = (id: string) => `work-pack-source-${id}`;
@@ -65,7 +66,10 @@ export async function DailyWorkPack({
   filters,
   branches,
   refreshFields,
+  timeZone,
 }: DailyWorkPackProps) {
+  const shopTime = (value: string | Date | null | undefined) =>
+    formatShopTime(value, timeZone ?? 'Asia/Karachi');
   let pack: WorkPack | null = null;
   try {
     // Generate as-of on every server read, including GET refresh; never trust a URL timestamp.
@@ -123,7 +127,7 @@ export async function DailyWorkPack({
           </p>
           <p className="break-words">
             {screenCopy.workPack.preparedAt}
-            {formatShopTime(pack.readAt)}.
+            {shopTime(pack.readAt)}.
           </p>
           <p>{copy.workPack.explanation}</p>
           <p>{copy.workPack.completeness}</p>
@@ -196,11 +200,11 @@ export async function DailyWorkPack({
                       </dl>
                       <p className="break-words text-text-muted">
                         {screenCopy.workPack.observed}
-                        {formatShopTime(evidence.observedAt)}
-                        {screenCopy.workPack.computed} {formatShopTime(evidence.computedAt)}
+                        {shopTime(evidence.observedAt)}
+                        {screenCopy.workPack.computed} {shopTime(evidence.computedAt)}
                         {screenCopy.workPack.secondsSinceLastCheck}{' '}
                         {evidence.freshnessSeconds ?? 'Unavailable'}
-                        {screenCopy.workPack.dueOrExpiryTime} {formatShopTime(evidence.dueAt)}.
+                        {screenCopy.workPack.dueOrExpiryTime} {shopTime(evidence.dueAt)}.
                       </p>
                       {evidence.missingInputs.map((reason) => (
                         <p key={reason} className="text-text-muted">
@@ -289,27 +293,29 @@ export async function DailyWorkPack({
                 }
                 tone="warning"
               />
+              {source.kind === 'expiry' && source.status === 'unavailable' ? (
+                <p className="text-text-muted">{copy.workPack.expiryFailureDetail}</p>
+              ) : null}
               <p className="text-text-muted">{source.timeBasis}</p>
               <p className="text-text-muted">
                 {screenCopy.workPack.itemsReturned}
                 {source.returnedRows ?? 'Unavailable'}
                 {screenCopy.workPack.maximumItems} {source.rowLimit ?? 'Not confirmed'}.{' '}
-                {source.limitReached ? 'The check reached its limit; more items may exist.' : ''}
+                {source.limitReached ? screenCopy.workPack.limitReached : ''}
               </p>
               <p className="break-words text-text-muted">
                 {screenCopy.workPack.window}{' '}
                 {source.window
-                  ? `${formatShopTime(source.window.from)} to ${formatShopTime(source.window.toExclusive)} (end not included)`
-                  : 'Selected dates do not apply'}
+                  ? `${shopTime(source.window.from)} to ${shopTime(source.window.toExclusive)}${screenCopy.workPack.endNotIncluded}`
+                  : screenCopy.workPack.selectedDatesNotApplied}
                 {screenCopy.workPack.evaluatedAsOf}
-                {formatShopTime(source.evaluatedAsOf)}
+                {shopTime(source.evaluatedAsOf)}
                 {screenCopy.workPack.readAt}
-                {formatShopTime(source.readAt)}
+                {shopTime(source.readAt)}
                 {screenCopy.workPack.lastCheck}{' '}
                 {source.freshness === 'persisted-unverified'
                   ? copy.workPack.savedCheck
                   : copy.workPack.currentCheck}
-                .
               </p>
               {Array.from(
                 new Set([

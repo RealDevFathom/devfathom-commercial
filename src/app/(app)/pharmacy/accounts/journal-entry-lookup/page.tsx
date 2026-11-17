@@ -108,7 +108,7 @@ export default async function JournalEntryLookupPage({
   const message: Partial<Record<ViewState['status'], string>> = {
     INITIAL: 'Enter the journal entry ID, the branch and the dates to search.',
     INVALID:
-      'Provide each field once. Use nonempty IDs and RFC3339 instants in a window of no more than 92 days.',
+      'Enter each field once, with an ID and dates no more than 92 days apart.',
     DENIED: 'You do not have access to this financial report scope.',
     FAILURE: 'The journal lookup is unavailable. Retry; no stale details are shown.',
     NOT_FOUND: 'No journal entry was found in this exact branch and window.',

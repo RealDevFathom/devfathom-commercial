@@ -121,11 +121,11 @@ describe('cash-flow page', () => {
     expect(screen.getByText(/Showing 51–100 of 120/)).toBeVisible();
     expect(screen.getByText(/· Entry 50$/)).toBeInTheDocument();
     expect(screen.queryByText(/· Entry 49$/)).toBeNull();
-    expect(screen.getByRole('link', { name: 'Next payments' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Next cash movements' })).toHaveAttribute(
       'href',
       `?${new URLSearchParams({ ...filters, page: '3' })}`
     );
-    expect(screen.getByRole('link', { name: 'Previous payments' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Previous cash movements' })).toHaveAttribute(
       'href',
       `?${new URLSearchParams({ ...filters, page: '1' })}`
     );

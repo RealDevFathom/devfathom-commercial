@@ -70,10 +70,12 @@ export const PHARMACY_COPY = {
       'Checks can overlap. Figures are estimates or recorded values, not savings to add together. An empty list does not mean every item was checked.',
     savedCheck: 'Saved checks may not reflect the latest records.',
     currentCheck: 'These are current records, not records saved for an earlier date.',
+    expiryFailureDetail:
+      'No stock or supplier-return data was changed. Expiry risk has not been assessed.',
     emptyCheck: 'No items were returned by this check; other items may still need attention.',
     failedCheck: 'This check could not load. Refresh or open the report to try again.',
     expiryFailure:
-      'Expiry advice could not load. Refresh daily work pack to retry. No stock or supplier-return data was changed. Expiry risk has not been assessed.',
+      'Expiry advice could not load; refresh to try again.',
   },
   account: {
     exportCsv: 'Download CSV',
@@ -148,7 +150,9 @@ export function formatShopPeriod(from: string, to: string): string {
 export function cashVarianceLabel(value: number | null, currency: string | null): string {
   if (value === null || !Number.isSafeInteger(value)) return '—';
   if (value === 0) return PHARMACY_COPY.owner.balanced;
-  const amount = formatMinor(Math.abs(value)).replace(/\.00$/, '');
+  const amount = formatMinor(Math.abs(value))
+    .replace(/\B(?=(\d{3})+\.)/g, ',')
+    .replace(/\.00$/, '');
   const prefix = currency ? `${currency} ` : '';
   return `${prefix}${amount}${currency ? '' : ` (${PHARMACY_COPY.currencyUnconfirmed})`} ${value < 0 ? PHARMACY_COPY.owner.short : PHARMACY_COPY.owner.over}`;
 }
