@@ -4974,16 +4974,16 @@ describe('DEV-705 keyboard loose sale', () => {
     fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F9' });
     expect(screen.getByRole('dialog', { name: 'Payment' })).toBeInTheDocument();
   });
-  it('honours the branch preferred unit and shows prices before entering quantity', () => {
+  it('shows every unit with its price and lets the operator switch to the strip', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-    act(() =>
-      mocks.searchProps.mock.calls.at(-1)![0].onSelect(looseRow({ preferredSaleUnit: 'PACK' }))
-    );
-    expect(screen.getByRole('radio', { name: /Strip of 10.*PKR 10.00/ })).toHaveAttribute(
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(looseRow()));
+    const strip = screen.getByRole('radio', { name: /Strip of 10.*PKR 10.00/ });
+    expect(screen.getByRole('radio', { name: /Tablet.*PKR 1.00/ })).toHaveAttribute(
       'aria-checked',
       'true'
     );
-    expect(screen.getByRole('radio', { name: /Tablet.*PKR 1.00/ })).toBeVisible();
+    fireEvent.click(strip);
+    expect(strip).toHaveAttribute('aria-checked', 'true');
   });
   it('explains a single-unit pack without offering a second loose choice', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);

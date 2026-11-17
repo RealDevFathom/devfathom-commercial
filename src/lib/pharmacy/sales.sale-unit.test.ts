@@ -319,6 +319,20 @@ describe('DEV-705 legacy strip server conversion', () => {
       [3, 300],
     ]);
   });
+  it('refuses a strip on a box that is not counted in tablets or capsules', async () => {
+    const db = saleDb();
+    db.packLevel.findMany.mockResolvedValue([
+      {
+        ...hierarchy[0],
+        unitsPerParent: 100,
+        presentation: { presentation: '10x10', dosageForm: 'Injection' },
+      },
+    ] as never);
+    await expect(
+      addSaleLine(db as never, scope, { ...line, saleUnit: 'STRIP', canonicalUnitsPerSaleUnit: 10 })
+    ).rejects.toThrow(new PharmacySaleError('INVALID_SALE_UNIT'));
+    expectNoSideEffects(db);
+  });
   it.each([1, 5, 20, 99])(
     'refuses forged legacy strip multiplier %s before allocation',
     async (multiplier) => {

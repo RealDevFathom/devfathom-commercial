@@ -12,7 +12,6 @@ const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'cashier
 
 function catalogDb(barcodeHit: boolean) {
   return {
-    pharmacySaleLine: { groupBy: vi.fn(async () => []) },
     medicineBarcode: {
       findFirst: vi.fn(async () =>
         barcodeHit ? { presentation: { medicineId: 'medicine-a' } } : null

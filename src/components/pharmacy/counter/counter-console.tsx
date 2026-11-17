@@ -1489,7 +1489,7 @@ function ScopedPharmacyCounterConsole({
     setActiveRow(row);
     setQuantityText('');
     setSaleUnit(
-      preferredSaleUnitOption(row.saleUnits, row.dosageForm, row.preferredSaleUnit)?.kind ?? null
+      preferredSaleUnitOption(row.saleUnits, row.dosageForm)?.kind ?? null
     );
     setLotOverride(null);
   }, []);

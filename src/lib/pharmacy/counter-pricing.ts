@@ -330,14 +330,13 @@ export function legacyStripOption(input: {
   };
 }
 
-/** Stable default when this branch has no completed-sale preference. */
+/** The unit a manually staged line starts on: a loose tablet (else its strip) for
+ * tablets, otherwise the largest unit. The operator can still pick any offered unit. */
 export function preferredSaleUnitOption<T extends SaleUnitOption>(
   options: readonly T[],
-  dosageForm: string | null,
-  preferred?: SaleUnitKind | null
+  dosageForm: string | null
 ): T | null {
   return (
-    options.find((option) => option.kind === preferred) ??
     (counterUnitNoun(dosageForm) === 'tablet'
       ? (looseSaleUnitOption(options) ?? options.find((option) => option.levelLabel === 'STRIP'))
       : null) ??
