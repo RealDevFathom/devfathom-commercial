@@ -5,9 +5,6 @@ import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
   output: 'standalone',
-  // DEV-857: `next dev` otherwise re-adds a managed block to AGENTS.md on every
-  // start. The repository maintains its own agent instructions there.
-  agentRules: false,
   // Dev-only (WHA-1623). The browser suites serve `next dev` on 127.0.0.1, and
   // Next 16 blocks its dev websocket for any origin not listed here. That
   // socket also carries the React debug channel, so without it the page never
