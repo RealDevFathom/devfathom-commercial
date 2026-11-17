@@ -6,19 +6,11 @@ external services. Track those recovery assets separately before accepting compl
 
 ## Recovery status
 
-The earlier cloud commit `06e5694` was unavailable in the local object stores checked during recovery;
-GitHub retrieval had previously returned 404. This implementation was reconstructed on `develop`.
-Historical checks recorded passing on the earlier bytes were:
-
-- `bun x vitest run tests/postgres-backup.test.ts`
-- `bash -n scripts/backup/*.sh`
-- `git diff --check`
-- Prettier check of `tests/postgres-backup.test.ts`
-
-**None of those checks were executed on these reconstructed bytes.** Tests, syntax, lint, format,
-build and diff checks were deliberately not run in this recovery lane. Historical passes do not
-validate this implementation. No live EC2/S3 backup or restore was executed; credentials and the
-target environment were unavailable. DEV-94 operational acceptance remains pending a real drill.
+The scripts have automated command-level coverage in `tests/postgres-backup.test.ts`, which runs them
+against fake `pg_dump`, `pg_restore`, `psql`, `createdb` and `aws` commands. This verifies command
+sequencing, encryption flags, integrity checks and refusals only; it is not a real database restore.
+No live EC2/S3 backup or restore has been executed. DEV-94 operational acceptance remains pending a
+real drill with the evidence listed below.
 
 ## Prerequisites and boundaries
 
@@ -232,4 +224,4 @@ backups as part of a drill; lifecycle retention is managed separately.
 checksum/encryption failure before creation, strict names and allow flag, source/existing-target
 refusal, target-directed restoration, migration probes and failure preservation. PostgreSQL and AWS
 commands are mocked locally; even a future passing unit run will not substitute for a real EC2/S3
-restore. These reconstructed tests remain unexecuted per recovery instructions.
+restore. These tests use fake commands and do not replace a real restore drill.
