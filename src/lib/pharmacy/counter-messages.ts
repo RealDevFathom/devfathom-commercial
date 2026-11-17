@@ -13,6 +13,11 @@
 
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
+import {
+  COUNTER_SETUP_GUIDANCE,
+  counterSetupReason,
+  type CounterSetupReason,
+} from './counter-setup';
 
 /** The refusal the server sends when the actor may not sell a prescription-only line. */
 const RX_SALE_DENIED_SERVER_MESSAGE =
@@ -109,6 +114,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     'This 2D code has no readable pack serial. Search the medicine by name instead.',
   SERIAL_LOT_UNAVAILABLE:
     'The batch this pack came from cannot be sold from this counter. Check the pack against stock in Inventory.',
+  // DEV-843: a scanned pack from a later-expiry batch is a batch override like any other.
+  SERIAL_FEFO_APPROVAL_REQUIRED:
+    'This pack is not from the earliest-expiry batch. Sell an earliest-expiry pack, or have a manager or owner approve this one with their PIN.',
   // Scope and lookup.
   NOT_FOUND: 'That record is no longer available. Refresh the counter and try again.',
   CROSS_BRANCH_REFERENCE: 'That record belongs to a different branch.',
@@ -166,6 +174,13 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // DEV-622: the server's Rx sale refusal (a default Cashier on a prescription line, at
   // add-line or at payment) names who can finish the bill.
   [RX_SALE_DENIED_SERVER_MESSAGE]: COUNTER_RX_NEEDS_PHARMACIST_MESSAGE,
+  // DEV-860: a sale or line refused for a setup gap names what is missing instead of
+  // "Refresh and try again". The drawer keeps its own sentence above.
+  ...Object.fromEntries(
+    (Object.keys(COUNTER_SETUP_GUIDANCE) as CounterSetupReason[])
+      .filter((reason) => reason !== 'DRAWER_NOT_OPEN')
+      .map((reason) => [reason, COUNTER_SETUP_GUIDANCE[reason].message])
+  ),
 };
 
 /**
@@ -202,8 +217,13 @@ const COUNTER_DANGER_REASONS = new Set([
   'IDEMPOTENCY_CONFLICT',
 ]);
 
+/** DEV-860: a declared setup reason (`data.reason`) wins over the refusal's words. */
+function counterReason(error: unknown): string {
+  return counterSetupReason(error) ?? (error instanceof Error ? error.message : '');
+}
+
 export function counterErrorTone(error: unknown): CounterNoticeTone {
-  const reason = error instanceof Error ? error.message : '';
+  const reason = counterReason(error);
   if (COUNTER_INFO_REASONS.has(reason)) return 'info';
   if (COUNTER_DANGER_REASONS.has(reason)) return 'danger';
   return COUNTER_ERROR_MESSAGES[reason] ? 'warning' : 'danger';
@@ -250,18 +270,62 @@ export const COUNTER_GENERIC_ERROR_MESSAGE = 'Request failed.';
  */
 export function counterErrorMessage(error: unknown): string {
   if (!(error instanceof Error) || !error.message) return COUNTER_GENERIC_ERROR_MESSAGE;
-  const mapped = COUNTER_ERROR_MESSAGES[error.message];
+  const mapped = COUNTER_ERROR_MESSAGES[counterReason(error)];
   if (mapped) return mapped;
   if (RAW_REASON_CODE.test(error.message)) return COUNTER_UNKNOWN_ERROR_MESSAGE;
   return error.message;
 }
 
-function isForbidden(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null || !('data' in error)) return false;
+/**
+ * The tRPC codes a procedure throws on purpose, with words written for the operator
+ * (a FEFO batch that needs a pharmacist's PIN, a prescription reference that does not
+ * match). An unexpected failure arrives as INTERNAL_SERVER_ERROR or as no tRPC error
+ * at all (a network or client fault), and its text is never shown.
+ */
+const DELIBERATE_REFUSAL_CODES = new Set([
+  'BAD_REQUEST',
+  'UNAUTHORIZED',
+  'FORBIDDEN',
+  'NOT_FOUND',
+  'CONFLICT',
+  'PRECONDITION_FAILED',
+  'UNPROCESSABLE_CONTENT',
+  'TOO_MANY_REQUESTS',
+]);
+
+function trpcErrorCode(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null || !('data' in error)) return null;
   const data = (error as { data?: unknown }).data;
-  return (
-    typeof data === 'object' && data !== null && (data as { code?: unknown }).code === 'FORBIDDEN'
-  );
+  if (typeof data !== 'object' || data === null) return null;
+  const code = (data as { code?: unknown }).code;
+  return typeof code === 'string' ? code : null;
+}
+
+/**
+ * DEV-860: opening a bill or adding a line. A mapped reason shows its copy; a deliberate
+ * server refusal keeps its own operator-facing words; anything else (an internal
+ * failure, a network or client fault, serialized validation output, an unmapped code)
+ * shows the generic counter sentence, so unexpected text never reaches the screen.
+ */
+export function counterSaleErrorMessage(error: unknown): string {
+  const reason = counterReason(error);
+  if (Object.hasOwn(COUNTER_ERROR_MESSAGES, reason)) return COUNTER_ERROR_MESSAGES[reason]!;
+  if (!(error instanceof Error) || !error.message) return COUNTER_UNKNOWN_ERROR_MESSAGE;
+  const code = trpcErrorCode(error);
+  const message = error.message.trim();
+  if (
+    code &&
+    DELIBERATE_REFUSAL_CODES.has(code) &&
+    message &&
+    !RAW_REASON_CODE.test(message) &&
+    !/^[[{]/.test(message)
+  )
+    return error.message;
+  return COUNTER_UNKNOWN_ERROR_MESSAGE;
+}
+
+function isForbidden(error: unknown): boolean {
+  return trpcErrorCode(error) === 'FORBIDDEN';
 }
 
 /**

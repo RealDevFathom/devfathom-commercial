@@ -14,6 +14,9 @@ import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import type { TenderDraft } from './tender-attempt-storage';
 import {
   isManualTender,
+  BANK_TRANSFER_REFERENCE_MAX_LENGTH,
+  bankTransferCaptureSchema,
+  looksLikeCardNumber,
   MANUAL_CARD_APPROVAL_CODE,
   MANUAL_CARD_REFERENCE,
   manualCardCaptureSchema,
@@ -271,6 +274,10 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const walletOptions = offered.filter((entry) => entry.offer === 'configured');
     const isKhata = type === 'KHATA' || type === 'CREDIT';
     const manual = isManualTender(type);
+    const bankTransfer = type === 'BANK_TRANSFER';
+    const transferCapture = bankTransfer
+      ? bankTransferCaptureSchema.safeParse({ providerRef })
+      : null;
     const manualCard = type === 'CARD';
     const cardCapture = manualCard
       ? manualCardCaptureSchema.safeParse({ providerRef, approvalCode })
@@ -396,6 +403,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           capture?.success === true &&
           (!referenceSkipped || merchant?.allowReferenceSkip === true))) &&
       (!manualCard || cardCapture?.success === true) &&
+      (!bankTransfer || transferCapture?.success === true) &&
       (!isKhata ||
         (Boolean(account) &&
           !khataLoading &&
@@ -443,13 +451,18 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                                         (!capture?.success ||
                                           (referenceSkipped && !merchant?.allowReferenceSkip))
                                       ? 'Enter the payer’s name and 4–6 transaction ID digits, or use the allowed reference skip.'
-                                      : manualCard && !cardCapture?.success
-                                        ? 'Enter the card reference and approval code from the terminal slip.'
-                                        : khataLoading
-                                          ? 'Loading Khata accounts…'
-                                          : isKhata && !account
-                                            ? 'Choose a family Khata account before taking payment.'
-                                            : 'A manager or owner must approve the credit limit increase first.';
+                                      : bankTransfer && !transferCapture?.success
+                                        ? providerRef.trim() !== '' &&
+                                          looksLikeCardNumber(providerRef)
+                                          ? 'This looks like a card number. Enter the bank’s transfer reference instead.'
+                                          : 'Enter the bank transfer reference before taking payment.'
+                                        : manualCard && !cardCapture?.success
+                                          ? 'Enter the card reference and approval code from the terminal slip.'
+                                          : khataLoading
+                                            ? 'Loading Khata accounts…'
+                                            : isKhata && !account
+                                              ? 'Choose a family Khata account before taking payment.'
+                                              : 'A manager or owner must approve the credit limit increase first.';
 
     async function submitTender() {
       if (!submittable || amountMinor === null || submissionRef.current) return;
@@ -504,6 +517,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 }
               : {}),
             ...(manualCard && cardCapture?.success ? cardCapture.data : {}),
+            ...(bankTransfer && transferCapture?.success ? transferCapture.data : {}),
           },
           { amount, cashReceived: type === 'CASH' ? (cashReceived ?? '') : '' }
         );
@@ -587,7 +601,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 ? payer
                   ? 'reference'
                   : 'payer'
-                : null;
+                : entry.value === 'BANK_TRANSFER'
+                  ? 'reference'
+                  : null;
               setType(entry.value);
               setProviderRef('');
               setPayerName(payer);
@@ -830,6 +846,29 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             </p>
           ) : null}
         </div>
+
+        {bankTransfer ? (
+          <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
+            <Label htmlFor="bank-transfer-reference">Transfer reference</Label>
+            <Input
+              id="bank-transfer-reference"
+              ref={providerRefInput}
+              className="min-h-11 font-mono"
+              autoComplete="off"
+              value={providerRef}
+              maxLength={BANK_TRANSFER_REFERENCE_MAX_LENGTH}
+              required
+              disabled={!editable}
+              aria-invalid={providerRef !== '' && !transferCapture?.success}
+              aria-describedby="bank-transfer-help"
+              onChange={(event) => setProviderRef(event.target.value)}
+            />
+            <p id="bank-transfer-help" className="text-sm text-text-muted">
+              Enter the reference shown by the bank after confirming the transfer was received. You
+              are recorded as the person who confirmed this payment.
+            </p>
+          </div>
+        ) : null}
 
         {manualCard ? (
           <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">

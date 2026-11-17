@@ -45,5 +45,7 @@ export function usePharmacyNavigationAccess(scopeEnabled: boolean) {
   return {
     query,
     capabilities: current && query.data ? query.data.capabilities : NO_CAPABILITIES,
+    // The reports grant itself, not a Manager's branch-scoped fallback.
+    reportsGranted: Boolean(current && query.data?.reportsGranted),
   };
 }

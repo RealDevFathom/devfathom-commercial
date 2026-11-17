@@ -8,8 +8,8 @@ import {
   clearLockout,
   isLockedOut,
   registerFailedAttempt,
-  verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
+import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import { bundleProposalWhatsAppText, mineBundleProposals } from './basket-analysis';
 import { growthPeriodInput, growthPeriods, type GrowthReviewRow } from './growth-insights';
 import {
@@ -158,7 +158,17 @@ async function ownerPin(db: ScopedDb, scope: MarketingScope, pin: string | undef
     },
   });
   if (!credential || isLockedOut(credential, now)) return null;
-  if (!(await verifyOperatorCredential('PIN', pin, credential.credentialHash))) {
+  if (
+    !(await verifyApprovalSecret(db, {
+      organizationId: scope.organizationId,
+      approverUserId: scope.actorId,
+      credentialHash: credential.credentialHash,
+      secret: pin,
+      action: 'pharmacy.marketing.basketInsightReview',
+      requestedById: scope.actorId,
+      now,
+    }))
+  ) {
     await db.restaurantOperatorCredential.update({
       where: { id: credential.id },
       data: registerFailedAttempt(credential, now),
