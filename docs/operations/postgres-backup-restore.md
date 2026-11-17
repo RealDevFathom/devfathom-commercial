@@ -73,6 +73,16 @@ BACKUP_S3_URI=s3://YOUR-BACKUP-BUCKET/pharmacy/postgres
 # BACKUP_KMS_KEY_ID=arn:aws:kms:us-east-1:ACCOUNT_ID:key/KEY_ID
 ```
 
+Install the PostgreSQL server's CA certificate (verified out of band, e.g. against the database
+host's configuration) at the `PGSSLROOTCERT` path and confirm the backup account can read it. Do not
+enable the timer until this check succeeds:
+
+```sh
+sudo install -o root -g devfathom-backup -m 0640 /path/to/verified-database-ca.pem \
+  /etc/devfathom-backup/database-ca.pem
+sudo -u devfathom-backup test -r /etc/devfathom-backup/database-ca.pem && echo CA readable
+```
+
 Place credentials in `backup.pgpass`, owned by `devfathom-backup`, mode `0600`, using PostgreSQL's
 `host:port:database:user:password` syntax. Escape `:` and `\` in credentials according to pgpass rules.
 Use a separate protected pgpass file for the drill login, covering the source and disposable target.

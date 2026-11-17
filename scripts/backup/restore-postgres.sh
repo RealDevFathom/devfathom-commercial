@@ -26,6 +26,10 @@ bucket=${BASH_REMATCH[1]}
 key=${BASH_REMATCH[2]}
 filename=${key##*/}
 
+kms_arn_re='^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/[A-Za-z0-9-]+$'
+[[ -z "${BACKUP_KMS_KEY_ID:-}" || "$BACKUP_KMS_KEY_ID" =~ $kms_arn_re ]] ||
+  fail 'BACKUP_KMS_KEY_ID must be a full KMS key ARN (not a key ID or alias)'
+
 source_database=$(psql --no-password --no-psqlrc --tuples-only --no-align \
   --set=ON_ERROR_STOP=1 --command='SELECT current_database();')
 [[ "$source_database" == "$PGDATABASE" ]] || fail 'connected source does not match PGDATABASE'

@@ -18,6 +18,10 @@ fail() { printf 'Backup refused: %s\n' "$*" >&2; exit 1; }
 [[ "$BACKUP_S3_URI" =~ ^s3://[a-z0-9][a-z0-9.-]+/[a-zA-Z0-9/_-]+$ ]] ||
   fail 'BACKUP_S3_URI must contain a bucket and a plain prefix'
 
+kms_arn_re='^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/[A-Za-z0-9-]+$'
+[[ -z "${BACKUP_KMS_KEY_ID:-}" || "$BACKUP_KMS_KEY_ID" =~ $kms_arn_re ]] ||
+  fail 'BACKUP_KMS_KEY_ID must be a full KMS key ARN (not a key ID or alias)'
+
 encryption=(--sse AES256)
 if [[ -n "${BACKUP_KMS_KEY_ID:-}" ]]; then
   encryption=(--sse aws:kms --sse-kms-key-id "$BACKUP_KMS_KEY_ID")

@@ -113,6 +113,14 @@ function run(script: 'backup' | 'restore', args: string[] = []) {
   });
 }
 
+// A timeout (null status, error set) is not a refusal: require a concrete non-zero exit.
+function expectRefused(result: ReturnType<typeof run>) {
+  expect(result.error).toBeUndefined();
+  expect(result.signal).toBeNull();
+  expect(result.status).toEqual(expect.any(Number));
+  expect(result.status).not.toBe(0);
+}
+
 function calls() {
   return readFileSync(join(root, 'calls'), 'utf8')
     .trim()
@@ -160,15 +168,24 @@ describe('PostgreSQL backup', () => {
     }
   );
 
+  it.each(['alias/pharmacy-backup', '1234abcd-12ab-34cd-56ef-1234567890ab'])(
+    'refuses a KMS key that is not a full key ARN: %s',
+    (key) => {
+      env.BACKUP_KMS_KEY_ID = key;
+      expectRefused(run('backup'));
+      expect(calls().some((call) => call.command === 'aws' || call.command === 'pg_dump')).toBe(false);
+    }
+  );
+
   it('does not upload an unreadable archive', () => {
     env.BAD_ARCHIVE = '1';
-    expect(run('backup').status).not.toBe(0);
+    expectRefused(run('backup'));
     expect(calls().some((call) => call.command === 'aws')).toBe(false);
   });
 
   it('does not publish a completion sidecar after a failed dump upload', () => {
     env.UPLOAD_FAIL = '1';
-    expect(run('backup').status).not.toBe(0);
+    expectRefused(run('backup'));
     expect(calls().filter((call) => call.command === 'aws')).toHaveLength(1);
   });
 });
@@ -237,15 +254,24 @@ describe('disposable PostgreSQL restore', () => {
     ['PGDATABASE', 'dbname=pharmacy password=secret'],
   ])('fails before database creation when %s=%s', (key, value) => {
     env[key] = value;
-    expect(run('restore', [sourceUri, target]).status).not.toBe(0);
+    expectRefused(run('restore', [sourceUri, target]));
     expectNoCreation();
   });
+
+  it.each(['alias/pharmacy-backup', '1234abcd-12ab-34cd-56ef-1234567890ab'])(
+    'refuses a KMS key that is not a full key ARN: %s',
+    (key) => {
+      env.BACKUP_KMS_KEY_ID = key;
+      expectRefused(run('restore', [sourceUri, target]));
+      expectNoCreation();
+    }
+  );
 
   it('refuses a different KMS key', () => {
     env.ENCRYPTION = 'aws:kms';
     env.OBJECT_KMS_KEY = `${kmsArn}-other`;
     env.BACKUP_KMS_KEY_ID = kmsArn;
-    expect(run('restore', [sourceUri, target]).status).not.toBe(0);
+    expectRefused(run('restore', [sourceUri, target]));
     expectNoCreation();
   });
 
@@ -255,19 +281,19 @@ describe('disposable PostgreSQL restore', () => {
     'devfathom_restore_x dbname=pharmacy',
     `devfathom_restore_${'x'.repeat(47)}`,
   ])('rejects unsafe target %s', (name) => {
-    expect(run('restore', [sourceUri, name]).status).not.toBe(0);
+    expectRefused(run('restore', [sourceUri, name]));
     expectNoCreation();
   });
 
   it('refuses the source even when its name has the disposable prefix', () => {
     env.PGDATABASE = target;
-    expect(run('restore', [sourceUri, target]).status).not.toBe(0);
+    expectRefused(run('restore', [sourceUri, target]));
     expectNoCreation();
   });
 
   it('does not restore or drop anything when atomic target creation fails', () => {
     env.TARGET_EXISTS = '1';
-    expect(run('restore', [sourceUri, target]).status).not.toBe(0);
+    expectRefused(run('restore', [sourceUri, target]));
     expect(calls().at(-1)?.command).toBe('createdb');
     expect(calls().filter((call) => call.command === 'pg_restore')).toHaveLength(1);
     expect(calls().some((call) => call.command === 'dropdb')).toBe(false);
@@ -278,7 +304,7 @@ describe('disposable PostgreSQL restore', () => {
     (key) => {
       env[key] = key === 'MIGRATION_COUNT' ? '0' : '1';
       const result = run('restore', [sourceUri, target]);
-      expect(result.status).not.toBe(0);
+      expectRefused(result);
       expect(result.stdout).not.toContain('Restore drill complete');
       expect(calls().some((call) => call.command === 'dropdb')).toBe(false);
     }
