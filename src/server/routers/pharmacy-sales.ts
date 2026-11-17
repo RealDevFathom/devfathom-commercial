@@ -3365,6 +3365,12 @@ export const pharmacySalesRouter = router({
       // close has been read. A stored value Intl refuses is handed over as UTC.
       timezone: workspaceTimezone(organization?.timezone),
       paymentSandboxAvailable: ctx.session.user.role === 'ADMIN' && paymentSandboxAdmitted(),
+      // DEV-860: a member who is not an administrator and lists no branch is not assigned
+      // to any active branch. That names only the caller's own standing: nothing about
+      // which branches exist or who else is assigned. An administrator sees every active
+      // branch, so an empty list for them means no branch is set up.
+      setupReason: !orgAdmin && branches.length === 0 ? BRANCH_NOT_ASSIGNED : null,
+      canFixSetup: orgAdmin,
     };
   }),
 

@@ -105,6 +105,9 @@ import {
   counterSaleErrorMessage,
 } from '@/lib/pharmacy/counter-messages';
 import {
+  ASK_OWNER_OR_MANAGER,
+  BRANCH_NOT_ASSIGNED,
+  COUNTER_NO_ASSIGNED_BRANCH_MESSAGE,
   counterSetupAdvice,
   counterSetupReason,
   type CounterSetupAdvice,
@@ -2778,6 +2781,48 @@ function ScopedPharmacyCounterConsole({
             </Button>
           </div>
         </SectionCard>
+      </div>
+    );
+  }
+
+  // DEV-860: a member assigned to no active branch is told so, and whom to ask. No
+  // setup link: branch assignments are the owner's or an administrator's to change.
+  if (
+    branches.length === 0 &&
+    branchesQuery.data?.setupReason === BRANCH_NOT_ASSIGNED &&
+    branchesQuery.data.canFixSetup !== true
+  ) {
+    return (
+      <div className="space-y-6">
+        <PageHeader
+          eyebrow="Pharmacy"
+          heading="Counter"
+          description="You are not assigned to a branch yet."
+        />
+        <SectionCard title="Before this counter can sell">
+          <div className="space-y-3" role="alert">
+            <p className="text-sm text-text-body">{COUNTER_NO_ASSIGNED_BRANCH_MESSAGE}</p>
+            <div className="text-sm">
+              <CounterSetupNextStep
+                advice={{
+                  reason: BRANCH_NOT_ASSIGNED,
+                  message: COUNTER_NO_ASSIGNED_BRANCH_MESSAGE,
+                  nextStep: ASK_OWNER_OR_MANAGER,
+                  link: null,
+                }}
+              />
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11"
+              onClick={() => void branchesQuery.refetch()}
+            >
+              Check again
+            </Button>
+          </div>
+        </SectionCard>
+        <SectionCard title="Shortcuts">{keymapLegend}</SectionCard>
       </div>
     );
   }

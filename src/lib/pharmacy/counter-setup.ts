@@ -105,6 +105,13 @@ export const COUNTER_SETUP_GUIDANCE: Record<CounterSetupReason, SetupGuidance> =
 /** Shown to an operator who cannot clear a setup gap themselves. */
 export const ASK_OWNER_OR_MANAGER = 'Ask your owner or manager to set this up.';
 
+/**
+ * Shown before any branch loads, when the server says the caller is assigned to no
+ * active branch (`counterBranches.setupReason`). It names only the caller's own standing.
+ */
+export const COUNTER_NO_ASSIGNED_BRANCH_MESSAGE =
+  'You are not assigned to an active branch, so this counter cannot sell.';
+
 export function isCounterSetupReason(value: unknown): value is CounterSetupReason {
   return typeof value === 'string' && Object.hasOwn(COUNTER_SETUP_GUIDANCE, value);
 }

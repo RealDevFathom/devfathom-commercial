@@ -273,20 +273,56 @@ export function counterErrorMessage(error: unknown): string {
   return error.message;
 }
 
-/** Sale admission displays only known copy; unexpected server prose can contain private data. */
+/**
+ * The tRPC codes a procedure throws on purpose, with words written for the operator
+ * (a FEFO batch that needs a pharmacist's PIN, a prescription reference that does not
+ * match). An unexpected failure arrives as INTERNAL_SERVER_ERROR or as no tRPC error
+ * at all (a network or client fault), and its text is never shown.
+ */
+const DELIBERATE_REFUSAL_CODES = new Set([
+  'BAD_REQUEST',
+  'UNAUTHORIZED',
+  'FORBIDDEN',
+  'NOT_FOUND',
+  'CONFLICT',
+  'PRECONDITION_FAILED',
+  'UNPROCESSABLE_CONTENT',
+  'TOO_MANY_REQUESTS',
+]);
+
+function trpcErrorCode(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null || !('data' in error)) return null;
+  const data = (error as { data?: unknown }).data;
+  if (typeof data !== 'object' || data === null) return null;
+  const code = (data as { code?: unknown }).code;
+  return typeof code === 'string' ? code : null;
+}
+
+/**
+ * DEV-860: opening a bill or adding a line. A mapped reason shows its copy; a deliberate
+ * server refusal keeps its own operator-facing words; anything else (an internal
+ * failure, a network or client fault, serialized validation output, an unmapped code)
+ * shows the generic counter sentence, so unexpected text never reaches the screen.
+ */
 export function counterSaleErrorMessage(error: unknown): string {
   const reason = counterReason(error);
-  return Object.hasOwn(COUNTER_ERROR_MESSAGES, reason)
-    ? COUNTER_ERROR_MESSAGES[reason]!
-    : COUNTER_UNKNOWN_ERROR_MESSAGE;
+  if (Object.hasOwn(COUNTER_ERROR_MESSAGES, reason)) return COUNTER_ERROR_MESSAGES[reason]!;
+  if (!(error instanceof Error) || !error.message) return COUNTER_UNKNOWN_ERROR_MESSAGE;
+  const code = trpcErrorCode(error);
+  const message = error.message.trim();
+  if (
+    code &&
+    DELIBERATE_REFUSAL_CODES.has(code) &&
+    message &&
+    !RAW_REASON_CODE.test(message) &&
+    !/^[[{]/.test(message)
+  )
+    return error.message;
+  return COUNTER_UNKNOWN_ERROR_MESSAGE;
 }
 
 function isForbidden(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null || !('data' in error)) return false;
-  const data = (error as { data?: unknown }).data;
-  return (
-    typeof data === 'object' && data !== null && (data as { code?: unknown }).code === 'FORBIDDEN'
-  );
+  return trpcErrorCode(error) === 'FORBIDDEN';
 }
 
 /**
