@@ -29,7 +29,9 @@ vi.mock('@/lib/trpc', () => ({
       search: { useQuery: () => mocks.search },
       get: { useQuery: () => mocks.medicine },
       createPackLevel: {
-        useMutation: (options: { onSuccess: (row: { id: string; status?: string }) => Promise<void> }) => {
+        useMutation: (options: {
+          onSuccess: (row: { id: string; status?: string }) => Promise<void>;
+        }) => {
           mocks.onSuccess = options.onSuccess;
           return mocks.mutation;
         },

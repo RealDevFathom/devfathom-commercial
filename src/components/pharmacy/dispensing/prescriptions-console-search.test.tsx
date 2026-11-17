@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -334,9 +334,7 @@ describe('multiple prescription lines', () => {
     render(<PrescriptionsConsole />);
     const form = within(captureForm());
     const add = form.getByRole('button', { name: 'Add line' });
-    act(() => {
-      for (let index = 1; index < 30; index++) fireEvent.click(add);
-    });
+    for (let index = 1; index < 30; index++) fireEvent.click(add);
     expect(form.getAllByRole('group', { name: /^Line \d+$/ })).toHaveLength(30);
     expect(add).toBeDisabled();
     expect(add).toHaveAccessibleDescription(/up to 30 lines. Remove a line/);
