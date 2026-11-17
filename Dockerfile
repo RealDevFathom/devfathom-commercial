@@ -1,4 +1,4 @@
-FROM oven/bun:1.4.3-slim AS dependencies
+FROM oven/bun:1.4.4-slim AS dependencies
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --ignore-scripts
@@ -52,7 +52,7 @@ RUN AUTH_SECRET=container-build-only node node_modules/next/dist/bin/next build
 # the colocated test suite or its explicitly test-only helpers.
 RUN ./scripts/prepare-runtime-src.sh ./src /runtime-src
 
-FROM oven/bun:1.4.3-slim AS runner
+FROM oven/bun:1.4.4-slim AS runner
 # Bun remains an accepted serving-time risk, not a risk closed by a green smoke
 # deploy. See docs/operations/build-runtime.md before changing this stage or CMD.
 WORKDIR /app
