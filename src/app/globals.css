@@ -1310,6 +1310,12 @@
   }
 }
 
+/* Pharmacy metadata uses the 12px Studio step, including shared primitives.
+   Portalled pharmacy dialogs carry the same scope class as the route layout. */
+.pharmacy-workspace :is([data-slot='status-pill'], [data-slot='eyebrow']) {
+  font-size: var(--text-xs);
+}
+
 /* Unlayered so these beat Tailwind hover/active transforms on POS controls. */
 .pos-calm [data-slot='button'],
 .pos-calm button {
