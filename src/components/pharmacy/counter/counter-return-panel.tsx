@@ -716,7 +716,7 @@ export function ReturnForm({
           </Button>
         </p>
       )}
-      {(unparsed || (!!searched?.value && lookup.isSuccess && lookup.data.length === 0)) && (
+      {(showInvalid || (!!searched?.value && lookup.isSuccess && lookup.data.length === 0)) && (
         <p role="status">Receipt not found</p>
       )}
       {!unparsed && !!lookup.data?.length && (

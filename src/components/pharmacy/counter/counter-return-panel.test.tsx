@@ -178,6 +178,7 @@ describe('counter returns', () => {
     expect(screen.queryByRole('button', { name: /Receipt 12/ })).toBeNull();
     fireEvent.change(field, { target: { value: '-6' } });
     expect(screen.queryByRole('button', { name: /Receipt 12/ })).toBeNull();
+    expect(screen.queryByText('Receipt not found')).toBeNull();
   });
   it('reads the receipt sequence from printed references', () => {
     expect(parseReceiptNumber('1042')).toBe(1042);
