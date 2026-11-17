@@ -60,6 +60,8 @@ function fixture(options: {
   role?: 'ADMIN' | 'EMPLOYEE';
 }) {
   const db = {
+    // DEV-631: a counter bill or line is refused while today's business day is closed.
+    pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     $transaction: vi.fn(async (callback: (tx: unknown) => unknown) => callback(db)),
     $queryRaw: vi.fn().mockResolvedValue([]),
     pharmacyBranch: {

@@ -977,15 +977,17 @@ test('day close — open sell count lock and print Z-report', async ({ page, con
   await expect(popup.locator('body')).toContainText('One rupee short at nightly count');
   await popup.close();
   await page.goto('/pharmacy/counter');
-  await page.getByLabel('Opening cash', { exact: true }).fill('0');
-  await pressControl(page.getByRole('button', { name: 'Open drawer' }));
-  await expect(
-    page.getByRole('alert').filter({ hasText: /This business day is closed/ })
-  ).toBeVisible();
-  // DEV-725: with the day closed no drawer opens, so no bill can be started that
-  // payment would then refuse: the opening step stays and scan/search is not offered.
-  await expect(page.getByLabel('Opening cash', { exact: true })).toBeVisible();
+  // DEV-631: the counter says the day is closed before a bill is built; no drawer
+  // step or scan/search is offered, so nothing is added that payment would refuse.
+  await expect(page.getByRole('status', { name: 'Business day closed' })).toContainText(
+    'The owner or a manager can reopen today for trading on Day close'
+  );
+  await expect(page.getByLabel('Opening cash', { exact: true })).toHaveCount(0);
   await expect(page.getByLabel('Scan or search', { exact: true })).toHaveCount(0);
+  // The owner's reopen for trading needs their own staff PIN, which this fixture does
+  // not seed; it is covered by the day-close console and router tests.
+  await page.goto('/pharmacy/counter/close');
+  await expect(page.getByRole('form', { name: 'Reopen today for trading' })).toBeVisible();
 });
 
 test('this spec drives the counter without a pointer', async () => {
