@@ -601,6 +601,8 @@ function ScopedPharmacyCounterConsole({
   const outcomeInFlight = useRef(false);
 
   const searchRef = useRef<HTMLInputElement>(null);
+  const quantityRef = useRef<HTMLInputElement>(null);
+  const restoreSearchAfterAdd = useRef(false);
   const rxPanelRef = useRef<HTMLDivElement>(null);
   const tenderRef = useRef<HTMLDivElement>(null);
   const [paymentOpen, setPaymentOpen] = useState(false);
@@ -1771,8 +1773,12 @@ function ScopedPharmacyCounterConsole({
         setAddVersion(completedAdds.current);
         setQuery('');
         // A focused field may already hold the next scan's digits; selecting them
-        // would let the scanner's next digit replace them.
-        if (document.activeElement !== searchRef.current) focusSearch();
+        // would let the scanner's next digit replace them. A field that lost focus
+        // (disabled while adding, or an add from a button) gets it back once enabled.
+        if (document.activeElement !== searchRef.current) {
+          restoreSearchAfterAdd.current = true;
+          focusSearch();
+        }
       } catch (error) {
         catalogueCache.clear();
         const message = messageFrom(error);
@@ -2792,7 +2798,10 @@ function ScopedPharmacyCounterConsole({
    * recovery is ready, so `autoFocus` alone cannot land on it.
    */
   useEffect(() => {
-    if (!busy && document.activeElement === document.body) focusSearch();
+    if (!busy && (restoreSearchAfterAdd.current || document.activeElement === document.body)) {
+      restoreSearchAfterAdd.current = false;
+      focusSearch();
+    }
   }, [busy, focusSearch]);
 
   const chordFor = useCallback(
@@ -3294,6 +3303,38 @@ function ScopedPharmacyCounterConsole({
                           setQuantityText('1');
                         }}
                         onKeyDown={(event) => {
+                          if (
+                            event.nativeEvent.isComposing ||
+                            event.shiftKey ||
+                            event.ctrlKey ||
+                            event.altKey ||
+                            event.metaKey
+                          )
+                            return;
+                          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                            const rows = searchQuery.data?.rows ?? [];
+                            if (
+                              busy ||
+                              !searchCurrent ||
+                              searchQuery.isFetching ||
+                              searchQuery.isError ||
+                              searchQuery.isPlaceholderData ||
+                              rows.length === 0
+                            )
+                              return;
+                            event.preventDefault();
+                            const index = rows.findIndex(
+                              (row) => row.medicineId === activeRow?.medicineId
+                            );
+                            const next =
+                              event.key === 'ArrowDown'
+                                ? (index + 1) % rows.length
+                                : index < 0
+                                  ? rows.length - 1
+                                  : (index - 1 + rows.length) % rows.length;
+                            stageRow(rows[next]!);
+                            return;
+                          }
                           if (event.key !== 'Enter') return;
                           event.preventDefault();
                           const trimmed = event.currentTarget.value.trim();
@@ -3303,7 +3344,8 @@ function ScopedPharmacyCounterConsole({
                             return;
                           }
                           if (activeRow) {
-                            void addToCart();
+                            if (quantity === null) quantityRef.current?.focus();
+                            else void addToCart();
                             return;
                           }
                           void runSearch(trimmed);
@@ -3393,6 +3435,8 @@ function ScopedPharmacyCounterConsole({
                       disabled={busy}
                       onSelect={setSaleUnit}
                       onQuantityChange={setQuantityText}
+                      quantityRef={quantityRef}
+                      onSubmit={() => void addToCart()}
                       chordFor={chordFor}
                       emptyMessage={<CounterUnsellableMessage row={activeRow} />}
                     />
