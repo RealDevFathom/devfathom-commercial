@@ -192,12 +192,7 @@ async function matchMedicineIds(
         where: {
           organizationId: scope.organizationId,
           saleable: true,
-          OR: [
-            { productName: text },
-            { brandName: text },
-            { manufacturer: text },
-            { drapRegistrationNumber: text },
-          ],
+          OR: [{ productName: text }, { brandName: text }],
         },
         select: { id: true },
         orderBy: [{ productName: 'asc' }, { id: 'asc' }],
@@ -225,6 +220,23 @@ async function matchMedicineIds(
       }),
     ]);
   };
+  // Manufacturer and registration number are weaker signals than a name, brand
+  // or alias. They are read in the later stage, so they can never displace a
+  // brand alias from the bounded first-stage candidates.
+  const producerMatches = (operator: 'startsWith' | 'contains') =>
+    db.medicine.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        saleable: true,
+        OR: [
+          { manufacturer: { [operator]: trimmed, mode: 'insensitive' as const } },
+          { drapRegistrationNumber: { [operator]: trimmed, mode: 'insensitive' as const } },
+        ],
+      },
+      select: { id: true },
+      orderBy: [{ productName: 'asc' }, { id: 'asc' }],
+      take: limit + 1,
+    });
   const [aliases, prefixes] = await Promise.all([
     normalized
       ? db.medicineAlias.findMany({
@@ -251,7 +263,16 @@ async function matchMedicineIds(
       remember(presentation.medicineId, 'PRESENTATION', ranks[2]);
   };
   rememberText(prefixes, [1, 3, 4]);
-  if (matches.size <= limit) rememberText(await textMatches('contains'), [5, 6, 7]);
+  if (matches.size <= limit) {
+    const [producerPrefixes, producerContains, contains] = await Promise.all([
+      producerMatches('startsWith'),
+      producerMatches('contains'),
+      textMatches('contains'),
+    ]);
+    for (const medicine of producerPrefixes) remember(medicine.id, 'NAME', 2.5);
+    rememberText(contains, [5, 6, 7]);
+    for (const medicine of producerContains) remember(medicine.id, 'NAME', 5.5);
+  }
 
   return matches;
 }

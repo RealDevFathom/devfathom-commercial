@@ -2,11 +2,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { searchCounterCatalog } from './counter';
 
 const scope = { organizationId: 'org-a', branchId: 'branch-a' };
-const medicine = (id: string, productName: string, brandName: string | null = null) => ({
+const medicine = (
+  id: string,
+  productName: string,
+  brandName: string | null = null,
+  manufacturer: string | null = null
+) => ({
   id,
   productName,
   brandName,
-  manufacturer: null,
+  manufacturer,
   strengths: [],
   presentations: [{ id: `p-${id}`, presentation: 'Tablet', dosageForm: 'Tablet' }],
 });
@@ -119,6 +124,20 @@ describe('counter search relevance (DEV-500)', () => {
         (r) => r.medicineId
       )
     ).toEqual(['brand']);
+  });
+
+  it('does not let a manufacturer prefix displace a brand alias at the limit', async () => {
+    const db = catalog(
+      [
+        medicine('maker', 'Aspirin', null, 'Panadolia Labs'),
+        medicine('brand', 'Paracetamol', 'Calpol'),
+      ],
+      [{ medicineId: 'brand', normalizedValue: 'panadol' }]
+    );
+    const limited = await searchCounterCatalog(db as never, scope, { query: 'panadol', limit: 1 });
+    expect(limited.rows.map((r) => r.medicineId)).toEqual(['brand']);
+    const all = await searchCounterCatalog(db as never, scope, { query: 'panadol' });
+    expect(all.rows.map((r) => r.medicineId)).toEqual(['brand', 'maker']);
   });
 
   it('ranks a brand-name prefix even when no alias was stored', async () => {
