@@ -66,6 +66,19 @@ describe('staging column mapping', () => {
       );
     }
   );
+  it('clears the file input after a refused read so the same file can be chosen again', async () => {
+    mocks.read.mockResolvedValue({ error: 'The file could not be staged. Try again.' });
+    render(<MigrationStagingForm branchId="branch_a" route="/pharmacy/medicines/staged" />);
+    const input = screen.getByLabelText('Source file') as HTMLInputElement;
+    const file = new File(['x'], 'bad.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'arrayBuffer', {
+      value: async () => new TextEncoder().encode('x').buffer,
+    });
+    const clear = vi.spyOn(input, 'value', 'set');
+    fireEvent.change(input, { target: { files: [file] } });
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(clear).toHaveBeenCalledWith('');
+  });
   it('resets the quantity choice for a new file', async () => {
     render(<MigrationStagingForm branchId="branch_a" route="/pharmacy/medicines/staged" />);
     await upload();

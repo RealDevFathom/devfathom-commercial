@@ -128,7 +128,9 @@ export async function listStagedMedicines(
       count: g._count._all,
       workflow: exceptionWorkflow(g.bucket),
     })),
-    rows: rows.map((row) => stagedReference(row, batch.source, batch.id, batch.quantityUnit, batch.quantityColumn)),
+    rows: rows.map((row) =>
+      stagedReference(row, batch.source, batch.id, batch.quantityUnit, batch.quantityColumn)
+    ),
   };
 }
 export async function stagedMedicineDetail(

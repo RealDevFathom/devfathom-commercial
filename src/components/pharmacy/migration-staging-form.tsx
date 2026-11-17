@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -26,6 +26,11 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const fileInput = useRef<HTMLInputElement>(null);
+  // Clearing the native value lets the same file be chosen again after a failure.
+  const resetFileInput = () => {
+    if (fileInput.current) fileInput.current.value = '';
+  };
 
   async function chooseFile(file?: File) {
     setSource(null);
@@ -37,6 +42,7 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
     if (!file) return;
     if (!file.size || file.size > STAGING_MAX_BYTES) {
       setError('Choose a nonempty file up to 512 KiB.');
+      resetFileInput();
       return;
     }
     setBusy(true);
@@ -48,6 +54,7 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
       const result = await readStagingUpload({ ...next, branchId });
       if (!result.data) {
         setError(result.error);
+        resetFileInput();
         return;
       }
       setSource(next);
@@ -58,6 +65,7 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
       );
     } catch {
       setError('The file could not be read. Choose it again.');
+      resetFileInput();
     } finally {
       setBusy(false);
     }
@@ -107,6 +115,7 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
           <Input
             type="file"
             accept=".csv,.xlsx"
+            ref={fileInput}
             className="mt-1 min-h-11"
             onChange={(event) => void chooseFile(event.target.files?.[0])}
           />
