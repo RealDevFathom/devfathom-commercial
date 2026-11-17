@@ -815,7 +815,11 @@ function ScopedPharmacyCounterConsole({
     { branchId, ...(deviceId ? { deviceId } : {}) },
     { enabled: Boolean(branchAuthorized && branchId), staleTime: 30_000, retry: false }
   );
-  const canFixSetup = saleReadiness.data?.canFixSetup === true;
+  // Both answers come from the same administrator rule on the server. The branch list
+  // loads before any scan, so a refusal while readiness is loading or failed still
+  // offers an administrator the setup link.
+  const canFixSetup =
+    saleReadiness.data?.canFixSetup === true || branchesQuery.data?.canFixSetup === true;
   const refetchSaleReadiness = saleReadiness.refetch;
   const setupNotice = useCallback(
     (error: unknown): { setup?: CounterSetupAdvice } => {

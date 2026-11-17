@@ -2364,6 +2364,22 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
       expect(notice).not.toHaveTextContent('Ask your owner or manager');
     });
 
+    // Review finding: readiness still loading (or failed) must not demote an administrator.
+    it('links an administrator to the setup step before readiness has answered', async () => {
+      mocks.queries.saleReadiness = { ...query(), isSuccess: false, isLoading: true };
+      mocks.queries.counterBranches = query({
+        branches: [{ id: 'branch-a', name: 'Synthetic branch', code: 'MT1' }],
+        setupReason: null,
+        canFixSetup: true,
+      });
+      const message = await scanRefusedBill();
+      const notice = message.closest('[role="alert"]') as HTMLElement;
+      expect(
+        within(notice).getByRole('link', { name: 'Add the branch regulatory profile' })
+      ).toHaveAttribute('href', '/pharmacy/regulatory?branch=branch-a');
+      expect(notice).not.toHaveTextContent('Ask your owner or manager');
+    });
+
     it('names a missing branch assignment from the reason the refusal declares', async () => {
       mocks.queries.saleReadiness = readiness(false);
       openTheDrawer();
