@@ -11,6 +11,7 @@ import { COUNTER_NATIVE_SELECT_CLASS, type CounterCashier } from './counter-draw
 export type CounterOpenDrawerStepProps = {
   /** Status not yet known, a write in flight, or no authorized branch. */
   disabled: boolean;
+  disabledReason?: string | null;
   /** The drawer status read failed: the drawer may or may not be open. */
   statusError?: boolean;
   /** Site storage is blocked, so this browser has no counter device id. */
@@ -42,6 +43,7 @@ export const OPENING_FLOAT_QUICK_AMOUNTS = ['0', '1000', '2000', '5000'] as cons
  */
 export function CounterOpenDrawerStep({
   disabled,
+  disabledReason,
   statusError = false,
   deviceUnavailable = false,
   checking = false,
@@ -56,6 +58,11 @@ export function CounterOpenDrawerStep({
   const [cashierId, setCashierId] = useState(currentUserId ?? '');
   const chooseCashier = Boolean(cashiers?.length);
   const openingFloatMinor = parseAmountMinor(openingCash);
+  const reason = disabled
+    ? deviceUnavailable
+      ? 'Allow site storage for this site, then reload before opening the drawer.'
+      : (disabledReason ?? 'Wait for the current counter action to finish.')
+    : null;
   const invalid = submitted && openingFloatMinor === null;
 
   return (
@@ -143,7 +150,14 @@ export function CounterOpenDrawerStep({
             value={openingCash}
             disabled={disabled}
             aria-invalid={invalid}
-            aria-describedby={invalid ? 'counter-opening-cash-error' : undefined}
+            aria-describedby={
+              [
+                invalid ? 'counter-opening-cash-error' : '',
+                reason ? 'counter-drawer-disabled-reason' : '',
+              ]
+                .filter(Boolean)
+                .join(' ') || undefined
+            }
             onChange={(event) => setOpeningCash(event.target.value)}
             className="h-11 font-mono tabular-nums"
           />
@@ -156,6 +170,7 @@ export function CounterOpenDrawerStep({
               className={COUNTER_NATIVE_SELECT_CLASS}
               value={cashierId}
               disabled={disabled}
+              aria-describedby={reason ? 'counter-drawer-disabled-reason' : undefined}
               onChange={(event) => setCashierId(event.target.value)}
             >
               {currentUserId && !cashiers!.some((cashier) => cashier.id === currentUserId) ? (
@@ -169,10 +184,20 @@ export function CounterOpenDrawerStep({
             </select>
           </div>
         ) : null}
-        <Button type="submit" className="h-11" disabled={disabled}>
+        <Button
+          type="submit"
+          className="h-11"
+          disabled={disabled}
+          aria-describedby={reason ? 'counter-drawer-disabled-reason' : undefined}
+        >
           Open drawer
         </Button>
       </div>
+      {reason ? (
+        <p id="counter-drawer-disabled-reason" className="text-sm text-text-muted">
+          {reason}
+        </p>
+      ) : null}
       <div role="group" aria-label="Quick amounts" className="flex flex-wrap gap-2">
         {OPENING_FLOAT_QUICK_AMOUNTS.map((amount) => (
           <Button
@@ -182,6 +207,7 @@ export function CounterOpenDrawerStep({
             className="h-11 font-mono tabular-nums"
             aria-pressed={openingCash === amount}
             disabled={disabled}
+            aria-describedby={reason ? 'counter-drawer-disabled-reason' : undefined}
             onClick={() => setOpeningCash(amount)}
           >
             {amount === '0' ? 'Empty (0)' : `PKR ${Number(amount).toLocaleString('en-PK')}`}
