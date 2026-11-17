@@ -1,7 +1,10 @@
 'use client';
 
 import { useMemo } from 'react';
-import { encode } from 'uqr';
+import { encodeQrCode } from '@/lib/qr-code';
+
+/** White modules the QR standard requires around the code. */
+const QUIET_ZONE = 4;
 
 /**
  * Builds the QR matrix for an authenticator setup link (`otpauth://…`).
@@ -10,13 +13,14 @@ import { encode } from 'uqr';
  * quiet zone the QR standard requires around the code.
  */
 export function authenticatorQrPath(uri: string): { path: string; size: number } {
-  const { data, size } = encode(uri, { ecc: 'M', border: 4 });
+  const modules = encodeQrCode(uri);
+  const size = modules.length + QUIET_ZONE * 2;
   let path = '';
-  for (let y = 0; y < size; y += 1) {
-    for (let x = 0; x < size; x += 1) {
-      if (data[y]?.[x]) path += `M${x} ${y}h1v1h-1z`;
-    }
-  }
+  modules.forEach((row, y) =>
+    row.forEach((dark, x) => {
+      if (dark) path += `M${x + QUIET_ZONE} ${y + QUIET_ZONE}h1v1h-1z`;
+    })
+  );
   return { path, size };
 }
 

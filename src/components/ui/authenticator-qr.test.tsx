@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
-import { encode } from 'uqr';
 import { describe, expect, it } from 'vitest';
+import { encodeQrCode } from '@/lib/qr-code';
 import { totpAuthUri } from '@/lib/totp';
 import { AuthenticatorQr, authenticatorQrPath } from './authenticator-qr';
 
@@ -18,10 +18,13 @@ function gridFromPath(path: string, size: number): boolean[][] {
 
 describe('AuthenticatorQr (DEV-898)', () => {
   it('draws exactly the QR matrix of the same setup link the manual key comes from', () => {
-    const expected = encode(URI, { ecc: 'M', border: 4 });
+    const modules = encodeQrCode(URI);
     const { path, size } = authenticatorQrPath(URI);
-    expect(size).toBe(expected.size);
-    expect(gridFromPath(path, size)).toEqual(expected.data);
+    expect(size).toBe(modules.length + 8);
+    const inner = gridFromPath(path, size)
+      .slice(4, size - 4)
+      .map((row) => row.slice(4, size - 4));
+    expect(inner).toEqual(modules);
     // The link carries the same secret the person would otherwise type.
     expect(URI).toContain(`secret=${SECRET}`);
   });
