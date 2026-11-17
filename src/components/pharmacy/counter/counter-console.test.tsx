@@ -5967,7 +5967,10 @@ describe('DEV-878 search alternative uses the normal counter line path', () => {
               saleUnit: 'UNIT',
               quantity: 1,
               canonicalUnitsPerSaleUnit: 1,
-              idempotencyKey: expect.stringContaining('counter:sale-a:stock-alternative:'),
+              // DEV-575: the same per-attempt add-line key scheme as every other line.
+              idempotencyKey: expect.stringMatching(
+                /^counter-add:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+              ),
             })
           )
         );
