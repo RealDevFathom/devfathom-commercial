@@ -151,9 +151,7 @@ export function renderStockComposition(
 ): string | null {
   if (components.length === 0) return null;
   return components
-    .map(
-      (c) => `${c.ingredient.name.trim()} ${renderStrengthValue(c.value)} ${c.unit}`.trim()
-    )
+    .map((c) => `${c.ingredient.name.trim()} ${renderStrengthValue(c.value)} ${c.unit}`.trim())
     .join(' + ');
 }
 
