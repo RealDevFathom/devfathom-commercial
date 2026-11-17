@@ -384,12 +384,14 @@ async function promotionScope(ctx: TRPCContext, branch: string): Promise<LedgerS
 }
 type CounterLineRequest = Omit<
   SaleLineInput,
-  'override' | 'approvedByUserId' | 'approvalPolicy' | 'voucherCashierPinVerified'
+  'override' | 'approvedByUserId' | 'approvalPolicy' | 'voucherCashierPinVerified' | 'scannedPack'
 > & {
   discountApproval?: CounterApprovalPin;
   /** DEV-819: the redeeming cashier's own PIN, required with a voucher. */
   voucherPin?: string;
   override?: { inventoryLotId: string; reason: string; approval?: CounterApprovalPin };
+  /** DEV-843: a pharmacist's PIN approves a scanned pack that is not from the FEFO lot. */
+  scannedPack?: { payload: string; approval?: CounterApprovalPin };
 };
 
 /**
@@ -440,6 +442,39 @@ async function approvedLineInput(
     lineInput.approvedByUserId = approval.approvedByUserId;
     lineInput.approvalPolicy = approval.approvalPolicy;
     annotateAudit(ctx, { metadata: { discountApproval: approval } });
+  }
+  const { scannedPack } = input;
+  if (scannedPack) {
+    lineInput.scannedPack = { payload: scannedPack.payload };
+    // DEV-843: whether the pack's lot is FEFO's choice is known only once the sale resolves
+    // it, so an approval is settled here and the domain refuses an out-of-order pack without
+    // one. A pharmacist on duty approves by default; anyone else may send a pharmacist's PIN.
+    // A wrong or ineligible PIN is refused outright; a cashier who sent none may still sell
+    // a pack from the earliest-expiry lot. A batch override's own approval covers the pack.
+    if (!override) {
+      const approval = await authorizeCounterApproval(
+        db,
+        scope,
+        'FEFO_OVERRIDE',
+        scannedPack.approval
+      ).catch((error: unknown) => {
+        if (error instanceof CounterApprovalDenied && !scannedPack.approval) return null;
+        throw error;
+      });
+      if (approval) {
+        approvals.push({ kind: 'FEFO_OVERRIDE', approval });
+        lineInput.scannedPack.fefoApprovalPolicy = fefoOverrideApprovalPolicy(
+          approval,
+          scope.actorId
+        );
+        annotateAudit(ctx, {
+          metadata: {
+            scannedPackApprovalPolicy: approval.approvalPolicy,
+            scannedPackApprovedByUserId: approval.approvedByUserId,
+          },
+        });
+      }
+    }
   }
   if (override) {
     const approval = await authorizeCounterApproval(db, scope, 'FEFO_OVERRIDE', override.approval);
@@ -695,7 +730,12 @@ function fail(error: unknown): never {
   if (error instanceof PharmacySerializedPackError) {
     // A pack that was already sold is a state conflict the operator must see.
     throw new TRPCError({
-      code: error.reason === 'SERIAL_ALREADY_SOLD' ? 'CONFLICT' : 'BAD_REQUEST',
+      code:
+        error.reason === 'SERIAL_ALREADY_SOLD'
+          ? 'CONFLICT'
+          : error.reason === 'SERIAL_FEFO_APPROVAL_REQUIRED'
+            ? 'FORBIDDEN'
+            : 'BAD_REQUEST',
       message: error.reason,
     });
   }
@@ -1960,7 +2000,11 @@ export const pharmacySalesRouter = router({
             .optional(),
           // DEV-92: the raw DataMatrix of one serialized pack; the server re-reads it.
           scannedPack: z
-            .object({ payload: z.string().trim().min(1).max(256) })
+            .object({
+              payload: z.string().trim().min(1).max(256),
+              // DEV-843: a pharmacist's PIN for a pack that is not from the FEFO lot.
+              approval: counterApprovalPin.optional(),
+            })
             .strict()
             .optional(),
           idempotencyKey: z.string().trim().min(1).max(160),
@@ -2350,7 +2394,10 @@ export const pharmacySalesRouter = router({
           });
           return result;
         });
-        if (input.override && 'line' in outcome) {
+        if (
+          'line' in outcome &&
+          (input.override || (input.scannedPack && outcome.allocation.overrideId))
+        ) {
           annotateAudit(ctx, {
             metadata: {
               saleLineId: outcome.line.id,
@@ -3235,9 +3282,7 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
-        return await ctx.db.$transaction(async (tx) =>
-          linkRestockRecoveries(txDb(tx), scope)
-        );
+        return await ctx.db.$transaction(async (tx) => linkRestockRecoveries(txDb(tx), scope));
       } catch (error) {
         fail(error);
       }

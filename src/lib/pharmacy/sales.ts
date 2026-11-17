@@ -313,8 +313,12 @@ type AddSaleLineInput = {
   approvedByUserId?: string;
   approvalPolicy?: string;
   override?: { inventoryLotId: string; reason: string; approvalPolicy: string };
-  /** DEV-92: the GS1 DataMatrix scanned off the one serialized pack this line sells. */
-  scannedPack?: { payload: string };
+  /**
+   * DEV-92: the GS1 DataMatrix scanned off the one serialized pack this line sells.
+   * DEV-843: `fefoApprovalPolicy` is set only by the server from a verified FEFO-override
+   * approval; without it a pack whose lot is not the earliest-expiry one is refused.
+   */
+  scannedPack?: { payload: string; fefoApprovalPolicy?: string };
   idempotencyKey: string;
 };
 
@@ -573,10 +577,13 @@ async function addSaleLineWithAllocation(
     });
     if (override && override.inventoryLotId !== pack.inventoryLotId)
       throw new PharmacySerializedPackError('SERIAL_LOT_UNAVAILABLE');
+    const packApproval = input.scannedPack.fefoApprovalPolicy;
     override ??= {
       inventoryLotId: pack.inventoryLotId,
       reason: serializedPackOverrideReason(pack.serialNumber),
-      approvalPolicy: SERIALIZED_PACK_APPROVAL_POLICY,
+      approvalPolicy: packApproval
+        ? `${SERIALIZED_PACK_APPROVAL_POLICY}:${packApproval}`
+        : SERIALIZED_PACK_APPROVAL_POLICY,
     };
   }
   // DEV-27: a voucher is a stored record. Its eligible-category allowlist is
@@ -613,6 +620,11 @@ async function addSaleLineWithAllocation(
       )
     )
       throw new PharmacySerializedPackError('SERIAL_LOT_UNAVAILABLE');
+    // DEV-843: a scanned pack is not an approval. When its lot is not FEFO's choice the
+    // allocation records an override, and that override needs the same verified approval
+    // as a batch picked by hand. The sale transaction rolls back everything allocated above.
+    if (allocation.overrideId && !input.override && !input.scannedPack?.fefoApprovalPolicy)
+      throw new PharmacySerializedPackError('SERIAL_FEFO_APPROVAL_REQUIRED');
   }
   // MED-08: price each lot with the rounding increment of its own
   // (pack level, batch) MRP rule, exactly as the counter quoted it.
