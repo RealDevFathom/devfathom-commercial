@@ -109,6 +109,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     'This 2D code has no readable pack serial. Search the medicine by name instead.',
   SERIAL_LOT_UNAVAILABLE:
     'The batch this pack came from cannot be sold from this counter. Check the pack against stock in Inventory.',
+  // DEV-843: a scanned pack from a later-expiry batch is a batch override like any other.
+  SERIAL_FEFO_APPROVAL_REQUIRED:
+    'This pack is not from the earliest-expiry batch. Sell an earliest-expiry pack, or have a manager or owner approve this one with their PIN.',
   // Scope and lookup.
   NOT_FOUND: 'That record is no longer available. Refresh the counter and try again.',
   CROSS_BRANCH_REFERENCE: 'That record belongs to a different branch.',

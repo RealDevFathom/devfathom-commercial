@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-const name = '20261117090600_pharmacy_catalogue_edit_approvals';
+const name = '20261117200518_pharmacy_catalogue_edit_approvals';
 const sql = readFileSync(`prisma/migrations/${name}/migration.sql`, 'utf8');
 describe('DEV-766 durable catalogue queue migration', () => {
   it('is ordered, transactional, additive and rerunnable', () => {
