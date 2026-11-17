@@ -69,7 +69,7 @@ export default async function PharmacyShelfLabelsPage({
   );
   if (!ctx?.session?.user || !moduleEnabled || !permitted) {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         {header}
         <SectionCard title={moduleEnabled ? 'Permission required' : 'Inventory module unavailable'}>
           <p className="text-sm text-text-muted">
@@ -78,7 +78,7 @@ export default async function PharmacyShelfLabelsPage({
               : 'Enable Pharmacy Inventory in workspace modules to print shelf labels.'}
           </p>
         </SectionCard>
-      </main>
+      </div>
     );
   }
 
@@ -94,7 +94,7 @@ export default async function PharmacyShelfLabelsPage({
     workingBranches.find((item) => item.id === query.branch) ?? workingBranches[0] ?? null;
   if (!branch) {
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         {header}
         {branches.length > 0 ? (
           <BranchAssignmentRequired canAssign={ctx.session.user.role === 'ADMIN'} />
@@ -105,7 +105,7 @@ export default async function PharmacyShelfLabelsPage({
             </p>
           </SectionCard>
         )}
-      </main>
+      </div>
     );
   }
 
@@ -140,7 +140,7 @@ export default async function PharmacyShelfLabelsPage({
   }
 
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       {header}
       <SectionCard eyebrow="Branch-scoped" title="Choose what to label">
         <div className="grid gap-5 lg:grid-cols-2">
@@ -231,6 +231,6 @@ export default async function PharmacyShelfLabelsPage({
           </p>
         </SectionCard>
       )}
-    </main>
+    </div>
   );
 }
