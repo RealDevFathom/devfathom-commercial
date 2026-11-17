@@ -45,7 +45,7 @@ import {
   PharmacySaleError,
 } from '@/lib/pharmacy/sales';
 import { BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
-import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
+import { applyPharmacyTender, lockPharmacyDay } from '@/lib/pharmacy/settlement';
 import {
   manualTenderCaptureSchema,
   validateManualTenderPolicy,
@@ -367,6 +367,11 @@ export async function replayCounterCommand(
     select: { id: true },
   });
   if (earlier) throw new CounterTransportError('earlier_command_pending', 409);
+  const businessDate = new Date(command.leasedReceipt.originalSaleAt.slice(0, 10) + 'T00:00:00Z');
+  // DEV-631: take the sale's day lock before any stock lock, the same order the online
+  // counter uses (day, then stock), so a replay and a counter line cannot deadlock.
+  // The tender below re-enters this lock and still refuses a closed day.
+  await lockPharmacyDay(db, scope, businessDate);
   const sale = await createSale(db, scope);
   // DEV-825: one transaction adds every line and then tenders, so take the stock
   // locks for all of them up front in the global order (stock-lock-order.ts):
@@ -447,7 +452,7 @@ export async function replayCounterCommand(
     {
       saleId: sale.id,
       deviceId,
-      businessDate: new Date(command.leasedReceipt.originalSaleAt.slice(0, 10) + 'T00:00:00Z'),
+      businessDate,
       type: command.manualCapture?.type ?? 'CASH',
       amountMinor: command.amountMinor,
       cashReceivedMinor: command.cashReceivedMinor,

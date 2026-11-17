@@ -22,6 +22,7 @@ import {
 } from './refill-subscription-rules';
 
 import { assertRxSaleAllowed } from './rx-sale-gate';
+import { requirePharmacyTodayOpenForTrading } from './settlement';
 import { addReservedSaleLine, createSale } from './sales';
 import type { LedgerScope } from './stock-ledger';
 
@@ -616,6 +617,9 @@ export async function startRefillCycleCheckout(db: ScopedDb, scope: LedgerScope,
     throw new RefillSubscriptionError('PHARMACIST_APPROVAL_REQUIRED');
   }
   if (cycle.status !== 'RESERVED') throw new RefillSubscriptionError('INVALID_STATE');
+  // DEV-631: no counter bill is opened, and no hold is consumed into one, while today's
+  // business day is closed for trading. Takes the day lock before any stock lock.
+  await requirePharmacyTodayOpenForTrading(db, scope);
   const { subscription } = cycle;
   const medicine = await subscribableMedicine(db, scope.organizationId, subscription);
   // Both the flag snapshotted at opening and the medicine's current schedule count:

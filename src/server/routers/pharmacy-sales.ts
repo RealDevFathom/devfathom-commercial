@@ -3362,12 +3362,23 @@ export const pharmacySalesRouter = router({
     authorized: await actorMayRefund(ctx.db, ctx.session.user),
   })),
   /**
-   * DEV-631: whether Day close offers "Reopen day for trading": the owner or a
-   * manager (`pharmacy:manage`). `reopenDay` re-checks the branch and the PIN.
+   * DEV-631: whether Day close offers "Reopen day for trading" on this branch: the
+   * same branch-scoped owner-or-manager gate as `reopenDay` (`pharmacy:manage`,
+   * deny wins, an active branch assignment or the audited administrator exception),
+   * so the form is never offered where the reopen would be refused. `reopenDay`
+   * still re-checks all of it and the PIN.
    */
-  dayReopenAccess: protectedProcedure.query(async ({ ctx }) => ({
-    authorized: await actorMayRefund(ctx.db, ctx.session.user),
-  })),
+  dayReopenAccess: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        await requireDrawerManagerAccess(ctx, input.branchId);
+        return { authorized: true };
+      } catch (error) {
+        if (error instanceof TRPCError && error.code === 'FORBIDDEN') return { authorized: false };
+        throw error;
+      }
+    }),
 
   /**
    * The branches this counter may open a bill against, with the money format.

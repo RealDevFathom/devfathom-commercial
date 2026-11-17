@@ -20,7 +20,11 @@ const mocks = vi.hoisted(() => ({
   error: null as Error | null,
   close: null as Record<string, unknown> | null,
   mutate: vi.fn(),
+  /** The options the day-close mutation was created with (its onSuccess). */
+  closeOptions: vi.fn(),
   reopenMutate: vi.fn(),
+  reopenAccessInput: vi.fn(),
+  invalidateTradingDay: vi.fn(),
   /** Whether the server says this actor may reopen a day (owner or manager). */
   reopenAuthorized: true,
   /** Whether the recorded close superseded an owner's reopen for trading. */
@@ -73,6 +77,9 @@ vi.mock('@/components/entitlements-provider', () => ({
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    useUtils: () => ({
+      pharmacySales: { tradingDayStatus: { invalidate: mocks.invalidateTradingDay } },
+    }),
     pharmacyAccess: {
       navigation: {
         useQuery: (input: unknown, options: { enabled: boolean }) => {
@@ -139,15 +146,21 @@ vi.mock('@/lib/trpc', () => ({
         },
       },
       closeDay: {
-        useMutation: () => ({
-          mutate: mocks.mutate,
-          reset: vi.fn(),
-          data: mocks.mutationClose,
-          error: mocks.mutationError,
-        }),
+        useMutation: (options: unknown) => {
+          mocks.closeOptions(options);
+          return {
+            mutate: mocks.mutate,
+            reset: vi.fn(),
+            data: mocks.mutationClose,
+            error: mocks.mutationError,
+          };
+        },
       },
       dayReopenAccess: {
-        useQuery: () => ({ data: { authorized: mocks.reopenAuthorized }, isSuccess: true }),
+        useQuery: (input: unknown) => {
+          mocks.reopenAccessInput(input);
+          return { data: { authorized: mocks.reopenAuthorized }, isSuccess: true };
+        },
       },
       reopenDay: {
         useMutation: () => ({ mutate: mocks.reopenMutate, reset: vi.fn(), isPending: false }),
@@ -217,6 +230,9 @@ beforeEach(() => {
   mocks.accessError = null;
   mocks.accessOptions.mockReset();
   mocks.mutate.mockReset();
+  mocks.closeOptions.mockReset();
+  mocks.reopenAccessInput.mockReset();
+  mocks.invalidateTradingDay.mockReset();
   mocks.reopenMutate.mockReset();
   mocks.reopenAuthorized = true;
   mocks.previewInput.mockReset();
@@ -903,7 +919,22 @@ describe('day-close console', () => {
     const callbacks = mocks.reopenMutate.mock.calls[0]![1] as { onSettled: () => void };
     act(() => callbacks.onSettled());
     expect(pin).toHaveValue('');
-    expect(within(form).getByLabelText('Reason for reopening')).toHaveValue('Closed early by mistake');
+    expect(within(form).getByLabelText('Reason for reopening')).toHaveValue(
+      'Closed early by mistake'
+    );
+    // The access check is for this branch, the one reopenDay re-checks.
+    expect(mocks.reopenAccessInput).toHaveBeenLastCalledWith({ branchId: 'b' });
+    // A reopen refreshes the counter's closed-day status for this branch at once.
+    const { onSuccess } = mocks.reopenMutate.mock.calls[0]![1] as { onSuccess: () => void };
+    act(() => onSuccess());
+    expect(mocks.invalidateTradingDay).toHaveBeenCalledWith({ branchId: 'b' });
+  });
+  it('refreshes the counter closed-day status once the day is closed (DEV-631)', () => {
+    render(<PharmacyDayCloseConsole />);
+    const { onSuccess } = mocks.closeOptions.mock.calls.at(-1)![0] as { onSuccess: () => void };
+    expect(mocks.invalidateTradingDay).not.toHaveBeenCalled();
+    act(() => onSuccess());
+    expect(mocks.invalidateTradingDay).toHaveBeenCalledWith({ branchId: 'b' });
   });
   it('offers the reopen to a manager who closes the day (DEV-631)', () => {
     mocks.role = 'EMPLOYEE';

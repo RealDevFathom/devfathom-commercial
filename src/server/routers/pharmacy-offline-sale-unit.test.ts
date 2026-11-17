@@ -185,3 +185,26 @@ describe('DEV-830 offline replay derives the sale-unit multiplier', () => {
     expect(mocks.addSaleLine.mock.calls[0]![3]).toEqual({ saleUnitAt: new Date(SALE_AT) });
   });
 });
+
+describe('DEV-631 offline replay lock order', () => {
+  it('takes the sale day lock before any stock lock, as the online counter does', async () => {
+    const target = db();
+    await expect(replay(target, command(10))).rejects.toThrow('REACHED_LINE');
+    const queries = (target.$queryRaw as unknown as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([query]) => {
+        const sql = query as { sql?: string; strings?: string[]; values?: unknown[] };
+        return { text: sql.sql ?? sql.strings?.join('?') ?? '', values: sql.values ?? [] };
+      }
+    );
+    const dayLock = queries.findIndex(
+      (query) =>
+        query.text.includes('pg_advisory_xact_lock') &&
+        query.values.includes(`${SCOPE.organizationId}:${SCOPE.branchId}:${SALE_AT.slice(0, 10)}`)
+    );
+    const firstStockLock = queries.findIndex((query) =>
+      /pharmacy_inventory_lots|pharmacy_stock_balances|manufacturing_batches/.test(query.text)
+    );
+    expect(dayLock).toBeGreaterThanOrEqual(0);
+    expect(firstStockLock).toBeGreaterThan(dayLock);
+  });
+});

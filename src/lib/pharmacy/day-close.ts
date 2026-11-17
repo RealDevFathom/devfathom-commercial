@@ -166,7 +166,12 @@ export async function closePharmacyDay(
   const preview = await readPharmacyClose(db, scope, input.businessDate);
   // A transport retry returns the recorded close, never cuts a second report.
   // A close the owner reopened for trading is closed again with a new report.
-  if (preview.close && !preview.close.reopen) return preview.close;
+  if (preview.close && !preview.close.reopen) {
+    // The same recorded close the first call returned, without the preview's reopen read.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { reopen, ...recorded } = preview.close;
+    return recorded;
+  }
   const open = preview.drawers.filter((d) => d.status === 'OPEN');
   if (
     preview.totals.sourceHash !== input.sourceHash ||

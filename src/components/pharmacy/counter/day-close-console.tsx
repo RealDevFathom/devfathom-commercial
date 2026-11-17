@@ -286,7 +286,12 @@ function DayCloseForm({
 }) {
   const input = { branchId, businessDate: new Date(`${date}T00:00:00.000Z`) };
   const preview = trpc.pharmacySales.closePreview.useQuery(input, { refetchOnWindowFocus: false });
-  const close = trpc.pharmacySales.closeDay.useMutation();
+  const utils = trpc.useUtils();
+  // DEV-631: the counter reads whether today is closed for trading; refresh it the
+  // moment this screen closes or reopens the day rather than at its next poll.
+  const refreshTradingDay = () =>
+    void utils.pharmacySales.tradingDayStatus.invalidate({ branchId });
+  const close = trpc.pharmacySales.closeDay.useMutation({ onSuccess: refreshTradingDay });
   const [recovery] = useState(() => readDayCloseDraft(draftKey));
   const [draft, setDraft] = useState(recovery.draft);
   const [draftWarning, setDraftWarning] = useState(recovery.warning);
@@ -298,9 +303,10 @@ function DayCloseForm({
   }
   const reopen = trpc.pharmacySales.reopenDay.useMutation();
   // DEV-631: the owner or a manager may reopen; the server re-checks branch and PIN.
-  const reopenAccess = trpc.pharmacySales.dayReopenAccess.useQuery(undefined, {
-    staleTime: 30_000,
-  });
+  const reopenAccess = trpc.pharmacySales.dayReopenAccess.useQuery(
+    { branchId },
+    { staleTime: 30_000 }
+  );
   const mayReopen = reopenAccess.data?.authorized === true;
   const [reopenReason, setReopenReason] = useState('');
   const [reopenPin, setReopenPin] = useState('');
@@ -500,6 +506,7 @@ function DayCloseForm({
                       // The PIN is never kept after an attempt, accepted or refused.
                       onSettled: () => setReopenPin(''),
                       onSuccess: () => {
+                        refreshTradingDay();
                         close.reset();
                         setReopenReason('');
                         updateDraft({ counts: {}, note: '' });

@@ -240,7 +240,9 @@ describe('pharmacySales.reopenDay', () => {
 describe('pharmacySales.dayReopenAccess', () => {
   it('offers the reopen to a holder of pharmacy:manage and to nobody else', async () => {
     const { caller } = fixture({ role: 'EMPLOYEE', rules: MANAGER });
-    await expect(caller.dayReopenAccess()).resolves.toEqual({ authorized: true });
+    await expect(caller.dayReopenAccess({ branchId: BRANCH })).resolves.toEqual({
+      authorized: true,
+    });
     expect(can).toHaveBeenLastCalledWith(
       expect.objectContaining({ id: 'user-1' }),
       'pharmacy:manage',
@@ -248,7 +250,32 @@ describe('pharmacySales.dayReopenAccess', () => {
       expect.anything()
     );
     vi.mocked(can).mockResolvedValueOnce(false);
-    await expect(caller.dayReopenAccess()).resolves.toEqual({ authorized: false });
+    await expect(caller.dayReopenAccess({ branchId: BRANCH })).resolves.toEqual({
+      authorized: false,
+    });
+  });
+
+  // The form follows reopenDay's own branch gate, so it is never offered where the
+  // reopen would then be refused.
+  it.each([
+    ['a cashier', { role: 'EMPLOYEE' as const, rules: CASHIER }],
+    [
+      'a manager with an explicit counter deny',
+      {
+        role: 'EMPLOYEE' as const,
+        rules: MANAGER,
+        overrides: [{ capability: 'pharmacy:counter', effect: 'DENY' as const }],
+      },
+    ],
+    [
+      'a manager on a branch they are not assigned to',
+      { role: 'EMPLOYEE' as const, rules: MANAGER, assigned: [] },
+    ],
+  ])('offers no reopen to %s', async (_label, options) => {
+    const { caller } = fixture(options);
+    await expect(caller.dayReopenAccess({ branchId: BRANCH })).resolves.toEqual({
+      authorized: false,
+    });
   });
 });
 
