@@ -7,6 +7,7 @@ import type { PromotionRule } from '@/lib/restaurant/promotion-contracts';
 import { evaluatePromotions } from '@/lib/restaurant/promotion-evaluator';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { LedgerScope } from './stock-ledger';
+import { minimumPriceForMargin } from './smart-discount';
 
 /**
  * #727: date-based automatic counter promotions.
@@ -120,7 +121,7 @@ export type PharmacyPromotionResult = {
  * Pick the promotion for one counter line. Rx, restricted and controlled
  * medicines never receive one. Candidates are tried by priority descending,
  * then id ascending; the first that discounts the line without selling below
- * cost wins. Promotions never stack.
+ * the branch's minimum-margin floor (never below cost) wins. Promotions never stack.
  */
 export function evaluatePharmacyPromotion(input: {
   organizationId: string;
@@ -129,6 +130,8 @@ export function evaluatePharmacyPromotion(input: {
   regulated: boolean;
   grossMinor: number;
   costMinor: number;
+  /** DEV-66: the branch's minimum margin; an offer below its floor is never selected. */
+  minMarginBps?: number;
   at: Date;
   promotions: readonly PharmacyPromotionRule[];
 }): PharmacyPromotionResult | null {
@@ -264,4 +267,7 @@ export async function promotionCreatorMayManage(
 /** The approval policy stamped on a line priced by a promotion. */
 export function promotionApprovalPolicy(promotionId: string) {
   return `pharmacy-promotion:${promotionId}`;
+}
+harmacy-promotion:${promotionId}`;
+}
 }

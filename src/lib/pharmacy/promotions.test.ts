@@ -91,6 +91,17 @@ describe('evaluatePharmacyPromotion (#727 date-based counter promotions)', () =>
     expect(evaluate([promotion()], { regulated: true })).toBeNull();
   });
 
+  it('skips an offer priced between cost and the minimum-margin floor', () => {
+    // Cost 500 with a 20% minimum margin: the floor is 625, so a 40% offer (net 600) is
+    // above cost but below the floor and must not be selected.
+    const deep = promotion({ id: 'promo-deep', benefitBasisPoints: 4_000 });
+    expect(evaluate([deep], { minMarginBps: 2_000 })).toBeNull();
+    const safe = promotion({ id: 'promo-safe', benefitBasisPoints: 3_000 });
+    expect(evaluate([deep, safe], { minMarginBps: 2_000 })).toMatchObject({
+      promotion: { id: 'promo-safe' },
+    });
+  });
+
   it('picks the highest priority, then the lowest id, and never stacks', () => {
     const low = promotion({ id: 'promo-low', benefitBasisPoints: 3_000, priority: 1 });
     const high = promotion({ id: 'promo-high', benefitBasisPoints: 500, priority: 5 });
