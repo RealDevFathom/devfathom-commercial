@@ -18,6 +18,7 @@ function fixture() {
       count: vi.fn().mockResolvedValue(26),
       findMany: vi.fn().mockResolvedValue([]),
     },
+    pharmacyLoyaltyBalanceReconciliation: { findMany: vi.fn().mockResolvedValue([]) },
   };
 }
 // Directory reads also total branch balances; history tests keep the narrower ledger mock.
@@ -41,7 +42,9 @@ describe('ordinary loyalty history reads', () => {
       where: { id: 'branch-a', organizationId: 'org-a', active: true },
       select: { id: true },
     });
-    const where = { organizationId: 'org-a', branchId: 'branch-a', customerId: 'customer-a' };
+    // DEV-764: one balance across branches, so the ledger reads are customer-wide; the branch
+    // is still checked above.
+    const where = { organizationId: 'org-a', customerId: 'customer-a' };
     // DEV-764: the balance sums every entry; the listing leaves out only zero-point lot closures.
     expect(db.pharmacyLoyaltyPointsEntry.aggregate).toHaveBeenCalledWith(
       expect.objectContaining({ where })
@@ -91,7 +94,15 @@ describe('ordinary loyalty history reads', () => {
     );
     expect(db.pharmacyCustomer.findFirst).toHaveBeenCalledWith({
       where: { id: 'foreign-customer', organizationId: 'org-a', active: true },
-      select: { id: true, displayName: true, phoneLast4: true, preferredLanguage: true },
+      select: {
+        id: true,
+        displayName: true,
+        phoneLast4: true,
+        preferredLanguage: true,
+        loyaltyActive: true,
+        loyaltyStatusChangedAt: true,
+        loyaltyStatusReason: true,
+      },
     });
     expect(db.pharmacyLoyaltyPointsEntry.findMany).not.toHaveBeenCalled();
   });
@@ -135,15 +146,24 @@ describe('ordinary loyalty history reads', () => {
           refundId: true,
           reason: true,
           expiresAt: true,
+          branchId: true,
           sale: { select: { receiptNumber: true, receiptDeviceId: true } },
         },
       })
     );
   });
-  it('keeps a sibling branch selection explicit in all ledger predicates', async () => {
+  it('reads the same customer-wide ledger from a sibling branch, after checking that branch', async () => {
     const db = fixture();
     await readLoyaltyHistory(db as never, { ...scope, branchId: 'branch-b' }, 'customer-a');
-    const where = { organizationId: 'org-a', branchId: 'branch-b', customerId: 'customer-a' };
+    expect(db.pharmacyBranch.findFirst).toHaveBeenCalledWith({
+      where: { id: 'branch-b', organizationId: 'org-a', active: true },
+      select: { id: true },
+    });
+    // DEV-764: one balance across branches. Still exact, tenant- and customer-bound predicates.
+    const where = { organizationId: 'org-a', customerId: 'customer-a' };
+    expect(db.pharmacyLoyaltyBalanceReconciliation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where })
+    );
     // Exact predicates for every ledger read. The balance sums every entry; the listing leaves
     // out only zero-point lot closures (DEV-764).
     const exact = {
@@ -187,12 +207,12 @@ describe('ordinary loyalty history reads', () => {
           },
         ],
       },
-      select: { id: true, displayName: true, phoneLast4: true },
+      select: { id: true, displayName: true, phoneLast4: true, loyaltyActive: true },
       orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
       take: 51,
     });
   });
-  it('lists every active customer with branch balances when no search is entered', async () => {
+  it('lists every active customer with their one balance when no search is entered', async () => {
     const db = directoryFixture();
     db.pharmacyCustomer.findMany.mockResolvedValue([
       { id: 'customer-a', displayName: 'Ahmed Raza', phoneLast4: '4567' },
@@ -210,7 +230,6 @@ describe('ordinary loyalty history reads', () => {
       by: ['customerId'],
       where: {
         organizationId: 'org-a',
-        branchId: 'branch-a',
         customerId: { in: ['customer-a', 'customer-b'] },
       },
       _sum: { points: true },

@@ -51,6 +51,8 @@ export type CounterSearchRow = {
   manufacturer: string | null;
   /** Rendered strength components, for example `500 mg + 30 mg`. */
   strength: string | null;
+  /** DEV-862: salt and strength, e.g. `paracetamol 500 mg`; null when none recorded. */
+  composition?: string | null;
   presentationId: string;
   presentation: string;
   dosageForm: string | null;
@@ -138,6 +140,20 @@ function renderStrength(components: readonly { value: unknown; unit: string }[])
   if (components.length === 0) return null;
   return components
     .map((component) => `${renderStrengthValue(component.value)} ${component.unit}`)
+    .join(' + ');
+}
+
+/**
+ * DEV-862: the salt and strength a stock list shows under the product name,
+ * for example `paracetamol 500 mg` or `paracetamol 500 mg + caffeine 30 mg`.
+ * Returns null when nothing is recorded, so the caller renders nothing extra.
+ */
+export function renderStockComposition(
+  components: readonly { value: unknown; unit: string; ingredient: { name: string } }[]
+): string | null {
+  if (components.length === 0) return null;
+  return components
+    .map((c) => `${c.ingredient.name.trim()} ${renderStrengthValue(c.value)} ${c.unit}`.trim())
     .join(' + ');
 }
 
@@ -511,6 +527,7 @@ export async function searchCounterCatalog(
       brandName: medicine.brandName,
       manufacturer: medicine.manufacturer,
       strength: renderStrength(medicine.strengths),
+      composition: renderStockComposition(medicine.strengths),
       presentationId,
       presentation: presentation.presentation,
       dosageForm: presentation.dosageForm,

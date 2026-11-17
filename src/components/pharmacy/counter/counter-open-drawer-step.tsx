@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -56,6 +56,12 @@ export function CounterOpenDrawerStep({
   const [openingCash, setOpeningCash] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [cashierId, setCashierId] = useState(currentUserId ?? '');
+  const openingCashRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    // A disabled field cannot receive its mount-time autofocus while access loads.
+    // Preserve focus if the cashier has already chosen another control.
+    if (!disabled && document.activeElement === document.body) openingCashRef.current?.focus();
+  }, [disabled]);
   const chooseCashier = Boolean(cashiers?.length);
   const openingFloatMinor = parseAmountMinor(openingCash);
   const reason = disabled
@@ -143,6 +149,7 @@ export function CounterOpenDrawerStep({
           <Label htmlFor="counter-opening-cash">Opening cash</Label>
           <Input
             id="counter-opening-cash"
+            ref={openingCashRef}
             inputMode="decimal"
             autoComplete="off"
             autoFocus

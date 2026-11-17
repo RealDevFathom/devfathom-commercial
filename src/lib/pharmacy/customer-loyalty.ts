@@ -19,7 +19,12 @@ import {
 } from '@/lib/commerce/loyalty-arithmetic';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { expireStrandedRestoration, pointsPastExpiry } from './loyalty-expiry';
+import {
+  expireStrandedRestoration,
+  pastExpiryByBranch,
+  pointsPastExpiry,
+  readAcrossBranches,
+} from './loyalty-expiry';
 import {
   currentLoyaltyProgram,
   hasLoyaltyEarningConsent,
@@ -49,6 +54,8 @@ export class PharmacyLoyaltyError extends Error {
       | 'IDEMPOTENCY_CONFLICT'
       | 'INVALID_ADJUSTMENT'
       | 'ADJUSTMENT_EXCEEDS_BALANCE'
+      | 'LOYALTY_INACTIVE'
+      | 'INVALID_MEMBERSHIP_CHANGE'
       // DEV-748: physical loyalty cards.
       | 'LOYALTY_CARD_NOT_RECOGNISED'
       | 'LOYALTY_CARD_NOT_ACTIVE'
@@ -56,6 +63,25 @@ export class PharmacyLoyaltyError extends Error {
   ) {
     super(reason);
   }
+}
+
+/**
+ * DEV-764: a customer's points balance: one balance across every branch of the organization.
+ * The branch an entry was posted at never limits where its points count. Read across branches
+ * even inside a transaction bound to one branch.
+ */
+export async function customerPointsBalance(
+  db: ScopedDb,
+  organizationId: string,
+  customerId: string
+) {
+  const balance = await readAcrossBranches(db, () =>
+    db.pharmacyLoyaltyPointsEntry.aggregate({
+      where: { organizationId, customerId },
+      _sum: { points: true },
+    })
+  );
+  return balance._sum.points ?? 0;
 }
 
 export async function linkCustomerToSale(
@@ -235,9 +261,11 @@ export async function redeemSalePoints(
   await lockCustomerConsent(db, scope.organizationId, sale.customerId);
   const customer = await db.pharmacyCustomer.findFirst({
     where: { id: sale.customerId, organizationId: scope.organizationId, active: true },
-    select: { patientId: true },
+    select: { patientId: true, loyaltyActive: true },
   });
   if (!customer?.patientId) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
+  // DEV-764: a deactivated member keeps their points but cannot spend them until re-enrolled.
+  if (customer.loyaltyActive === false) throw new PharmacyLoyaltyError('LOYALTY_INACTIVE');
   const consent = await db.patientConsent.findFirst({
     where: {
       organizationId: scope.organizationId,
@@ -249,14 +277,8 @@ export async function redeemSalePoints(
   });
   if (!consent?.granted || consent.revokedAt)
     throw new PharmacyLoyaltyError('LOYALTY_CONSENT_REQUIRED');
-  const balance = await db.pharmacyLoyaltyPointsEntry.aggregate({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      customerId: sale.customerId,
-    },
-    _sum: { points: true },
-  });
+  // DEV-764: one balance across every branch of the organization.
+  const balance = await customerPointsBalance(db, scope.organizationId, sale.customerId);
   const totalMinor = sale.lines.reduce(
     (sum, line) => sum + line.grossMinor - line.discountMinor,
     0
@@ -267,14 +289,14 @@ export async function redeemSalePoints(
   // and points already past their expiry date cannot be spent even before the sweep runs.
   const pastExpiry = await pointsPastExpiry(
     db,
-    { organizationId: scope.organizationId, branchId: scope.branchId, customerId: sale.customerId },
+    { organizationId: scope.organizationId, customerId: sale.customerId },
     new Date()
   );
   let redemption: { points: number; amountMinor: number };
   try {
     redemption = redemptionFor({
       requestedPoints: input.points,
-      availablePoints: Math.max(0, (balance._sum.points ?? 0) - pastExpiry),
+      availablePoints: Math.max(0, balance - pastExpiry),
       outstandingMinor,
       pointValueMinor: program?.redemptionValueMinor ?? LOYALTY_POINT_VALUE_MINOR,
     });
@@ -414,14 +436,19 @@ export async function readCustomerSnapshot(
 ) {
   const customer = await db.pharmacyCustomer.findFirst({
     where: { id: customerId, organizationId: scope.organizationId, active: true },
-    select: { id: true, displayName: true, phoneLast4: true, creditLimitMinor: true },
+    select: {
+      id: true,
+      displayName: true,
+      phoneLast4: true,
+      creditLimitMinor: true,
+      loyaltyActive: true,
+    },
   });
   if (!customer) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
+  // DEV-764: points are one balance across the organization's branches, so the balance and
+  // the points history cover every branch. Purchases and khata stay this branch's.
   const [points, sales, pointsHistory, pointsCount, program] = await Promise.all([
-    db.pharmacyLoyaltyPointsEntry.aggregate({
-      where: { organizationId: scope.organizationId, branchId: scope.branchId, customerId },
-      _sum: { points: true },
-    }),
+    customerPointsBalance(db, scope.organizationId, customerId),
     db.pharmacySale.findMany({
       where: {
         organizationId: scope.organizationId,
@@ -444,7 +471,6 @@ export async function readCustomerSnapshot(
     db.pharmacyLoyaltyPointsEntry.findMany({
       where: {
         organizationId: scope.organizationId,
-        branchId: scope.branchId,
         customerId,
         NOT: CLOSED_LOT_WITHOUT_POINTS,
       },
@@ -458,13 +484,13 @@ export async function readCustomerSnapshot(
         occurredAt: true,
         saleId: true,
         refundId: true,
+        branchId: true,
         sale: { select: { receiptNumber: true } },
       },
     }),
     db.pharmacyLoyaltyPointsEntry.count({
       where: {
         organizationId: scope.organizationId,
-        branchId: scope.branchId,
         customerId,
         NOT: CLOSED_LOT_WITHOUT_POINTS,
       },
@@ -483,7 +509,9 @@ export async function readCustomerSnapshot(
     );
   return {
     customer,
-    pointsBalance: points._sum.points ?? 0,
+    pointsBalance: points,
+    // DEV-764: false once the member is deactivated: no earning or spending until re-enrolled.
+    loyaltyActive: customer.loyaltyActive !== false,
     // DEV-746: false until the owner sets an earn rate; nothing new is earned until then.
     earnRateSet: Boolean(program),
     // DEV-764: what one point redeems for at the counter now.
@@ -546,14 +574,14 @@ export async function listLoyaltyCustomers(db: ScopedDb, scope: LedgerScope, que
   if (query.trim().length > 100) throw new RangeError('INVALID_CUSTOMER_QUERY');
   await assertLoyaltyHistoryBranch(db, scope);
   const terms = loyaltyCustomerSearch(query);
-  // Retail identities are tenant-wide; balances and entries below are branch-specific.
+  // Retail identities and (DEV-764) points balances are both organization-wide.
   const rows = await db.pharmacyCustomer.findMany({
     where: {
       organizationId: scope.organizationId,
       active: true,
       ...(terms.length ? { AND: terms } : {}),
     },
-    select: { id: true, displayName: true, phoneLast4: true },
+    select: { id: true, displayName: true, phoneLast4: true, loyaltyActive: true },
     orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
     take: 51,
   });
@@ -563,7 +591,6 @@ export async function listLoyaltyCustomers(db: ScopedDb, scope: LedgerScope, que
         by: ['customerId'],
         where: {
           organizationId: scope.organizationId,
-          branchId: scope.branchId,
           customerId: { in: customers.map((customer) => customer.id) },
         },
         _sum: { points: true },
@@ -590,14 +617,28 @@ export async function readLoyaltyHistory(
   await assertLoyaltyHistoryBranch(db, scope);
   const customer = await db.pharmacyCustomer.findFirst({
     where: { id: customerId, organizationId: scope.organizationId, active: true },
-    select: { id: true, displayName: true, phoneLast4: true, preferredLanguage: true },
+    select: {
+      id: true,
+      displayName: true,
+      phoneLast4: true,
+      preferredLanguage: true,
+      loyaltyActive: true,
+      loyaltyStatusChangedAt: true,
+      loyaltyStatusReason: true,
+    },
   });
   if (!customer) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
-  const where = { organizationId: scope.organizationId, branchId: scope.branchId, customerId };
+  // DEV-764: one balance across branches; each entry still shows the branch it was posted at.
+  const where = { organizationId: scope.organizationId, customerId };
   const listed = { ...where, NOT: CLOSED_LOT_WITHOUT_POINTS };
-  const [balance, total] = await Promise.all([
+  const [balance, total, reconciliation] = await Promise.all([
     db.pharmacyLoyaltyPointsEntry.aggregate({ where, _sum: { points: true } }),
     db.pharmacyLoyaltyPointsEntry.count({ where: listed }),
+    db.pharmacyLoyaltyBalanceReconciliation.findMany({
+      where,
+      orderBy: [{ branchId: 'asc' }],
+      select: { branchId: true, points: true, entries: true, reconciledAt: true },
+    }),
   ]);
   const pageCount = Math.max(1, Math.ceil(total / LOYALTY_HISTORY_PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
@@ -616,12 +657,15 @@ export async function readLoyaltyHistory(
       refundId: true,
       reason: true,
       expiresAt: true,
+      branchId: true,
       sale: { select: { receiptNumber: true, receiptDeviceId: true } },
     },
   });
   return {
     customer,
     pointsBalance: balance._sum.points ?? 0,
+    // DEV-764: the per-branch balances merged into this one balance, when there were several.
+    reconciliation,
     entries,
     total,
     page: currentPage,
@@ -636,8 +680,8 @@ export async function readLoyaltyHistory(
 export const LOYALTY_MAX_ADJUSTMENT_POINTS = 1_000_000;
 
 /**
- * DEV-764: an owner's or manager's correction to a customer's points at one branch, with a
- * written reason. Append-only: it is a new signed entry, never an edit of an earlier one. A
+ * DEV-764: an owner's or manager's correction to a customer's points, recorded at one branch,
+ * with a written reason. Append-only: it is a new signed entry, never an edit of an earlier one. A
  * removal may not take the balance below zero. The caller has authorized the actor and records
  * the audit; this runs in the caller's tenant transaction.
  */
@@ -664,6 +708,15 @@ export async function adjustLoyaltyPoints(
   // Same per-customer lock as redemption, so a removal and a redemption cannot both spend
   // the same points.
   await lockCustomerConsent(db, scope.organizationId, customer.id);
+  // DEV-764: a deactivated member's points are frozen until they are re-enrolled. Read under
+  // the lock membership changes also take, so a deactivation that commits while this waits
+  // is seen here.
+  const member = await db.pharmacyCustomer.findFirst({
+    where: { id: customer.id, organizationId: scope.organizationId, active: true },
+    select: { loyaltyActive: true },
+  });
+  if (!member) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
+  if (member.loyaltyActive === false) throw new PharmacyLoyaltyError('LOYALTY_INACTIVE');
   const key = `loyalty:adjust:${input.idempotencyKey}`;
   const prior = await db.pharmacyLoyaltyPointsEntry.findUnique({
     where: {
@@ -681,20 +734,12 @@ export async function adjustLoyaltyPoints(
       throw new PharmacyLoyaltyError('IDEMPOTENCY_CONFLICT');
     return { entry: prior, balanceBefore: null, balanceAfter: null, replayed: true };
   }
-  const balance = await db.pharmacyLoyaltyPointsEntry.aggregate({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      customerId: customer.id,
-    },
-    _sum: { points: true },
-  });
-  const balanceBefore = balance._sum.points ?? 0;
+  const balanceBefore = await customerPointsBalance(db, scope.organizationId, customer.id);
   // A removal may take only points that can still be spent: not those already past expiry.
   if (input.points < 0) {
     const pastExpiry = await pointsPastExpiry(
       db,
-      { organizationId: scope.organizationId, branchId: scope.branchId, customerId: customer.id },
+      { organizationId: scope.organizationId, customerId: customer.id },
       new Date()
     );
     if (balanceBefore - pastExpiry + input.points < 0)
@@ -716,8 +761,13 @@ export async function adjustLoyaltyPoints(
 }
 
 /**
- * DEV-764: value of unredeemed points, organization-wide and per branch, at the current
- * redemption value (PKR 1 per point before an owner sets one). Balances are branch-scoped.
+ * DEV-764: value of unredeemed points at the current redemption value (PKR 1 per point before
+ * an owner sets one). Each customer has one balance across the organization's branches; a
+ * customer's points count once, net of points already past their expiry date.
+ *
+ * Per branch: the net points posted there (earned or added there, less what was spent or
+ * expired there). Points are one balance, so a branch whose customers spent points earned at
+ * another branch can be net negative; its value owed is then 0.
  */
 export async function readLoyaltyLiability(db: ScopedDb, organizationId: string) {
   const [balances, program] = await Promise.all([
@@ -738,28 +788,38 @@ export async function readLoyaltyLiability(db: ScopedDb, organizationId: string)
       expiresAt: { lte: now },
       closedBy: { none: { kind: 'EXPIRY' } },
     },
-    distinct: ['branchId', 'customerId'],
-    select: { branchId: true, customerId: true },
+    distinct: ['customerId'],
+    select: { customerId: true },
   });
-  const expired = new Map<string, number>();
+  const expired = new Map<string, Map<string, number>>();
   for (const row of due)
     expired.set(
-      `${row.branchId}:${row.customerId}`,
-      await pointsPastExpiry(db, { organizationId, ...row }, now)
+      row.customerId,
+      await pastExpiryByBranch(db, { organizationId, customerId: row.customerId }, now)
     );
+  const pastExpiryAt = (customerId: string, branchId: string) =>
+    expired.get(customerId)?.get(branchId) ?? 0;
+  const byCustomer = new Map<string, number>();
+  for (const row of balances)
+    byCustomer.set(
+      row.customerId,
+      (byCustomer.get(row.customerId) ?? 0) +
+        (row._sum.points ?? 0) -
+        pastExpiryAt(row.customerId, row.branchId)
+    );
+  const owed = [...byCustomer.entries()].filter(([, points]) => points > 0);
+  const owedTo = new Set(owed.map(([customerId]) => customerId));
   const byBranch = new Map<string, { points: number; customers: number }>();
   for (const row of balances) {
-    const points = Math.max(
-      0,
-      (row._sum.points ?? 0) - (expired.get(`${row.branchId}:${row.customerId}`) ?? 0)
-    );
-    if (points === 0) continue;
+    if (!owedTo.has(row.customerId)) continue;
+    const points = (row._sum.points ?? 0) - pastExpiryAt(row.customerId, row.branchId);
     const branch = byBranch.get(row.branchId) ?? { points: 0, customers: 0 };
     branch.points += points;
     branch.customers += 1;
     byBranch.set(row.branchId, branch);
   }
   const branches = [...byBranch.entries()]
+    .filter(([, row]) => row.points !== 0)
     .map(([branchId, row]) => ({
       branchId,
       points: row.points,
@@ -767,11 +827,11 @@ export async function readLoyaltyLiability(db: ScopedDb, organizationId: string)
       liabilityMinor: loyaltyLiabilityMinor(row.points, pointValueMinor),
     }))
     .sort((a, b) => a.branchId.localeCompare(b.branchId));
-  const points = branches.reduce((sum, row) => sum + row.points, 0);
+  const points = owed.reduce((sum, [, value]) => sum + value, 0);
   return {
     pointValueMinor,
     points,
-    customers: branches.reduce((sum, row) => sum + row.customers, 0),
+    customers: owed.length,
     liabilityMinor: loyaltyLiabilityMinor(points, pointValueMinor),
     branches,
   };

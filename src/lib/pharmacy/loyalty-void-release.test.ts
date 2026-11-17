@@ -28,6 +28,8 @@ function ledger(
   const created: Row[] = [];
   const journal: Row[] = [];
   const db = {
+    // No branch bound: the ledger replay reads every branch of the tenant as it is.
+    $queryRaw: vi.fn(async () => [{ branchId: null }]),
     pharmacyTender: {
       findMany: vi.fn(async ({ where }: { where: { type?: unknown } }) =>
         tenders.filter((tender) =>

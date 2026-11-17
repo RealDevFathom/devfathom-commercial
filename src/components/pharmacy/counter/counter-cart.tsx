@@ -95,13 +95,10 @@ export function CounterCartPanel({
   }
 
   return (
-    <div className="min-w-0 overflow-x-auto">
-      <table role="table" className="block w-full lg:table" aria-label="Cart lines">
-        <thead className="sr-only bg-surface-sunken lg:not-sr-only lg:table-header-group">
-          <tr
-            role="row"
-            className="font-mono text-xs tracking-wide text-text-muted uppercase"
-          >
+    <div className="@container min-w-0 overflow-x-auto">
+      <table role="table" className="block w-full @min-[40rem]:table" aria-label="Cart lines">
+        <thead className="sr-only bg-surface-sunken @min-[40rem]:not-sr-only @min-[40rem]:table-header-group">
+          <tr role="row" className="font-mono text-xs tracking-wide text-text-muted uppercase">
             {['#', 'Medicine', 'Unit × qty', 'Batch · Expiry', 'Amount'].map((heading) => (
               <th
                 key={heading}
@@ -120,22 +117,22 @@ export function CounterCartPanel({
             <tbody
               key={line.saleLineId}
               role="rowgroup"
-              className="block border-t border-border-subtle lg:table-row-group"
+              className="block border-t border-border-subtle @min-[40rem]:table-row-group"
             >
               <tr
                 role="row"
-                className="grid grid-cols-[1.25rem_minmax(0,1fr)_auto] gap-x-3 gap-y-1 p-4 align-top hover:bg-surface-sunken/50 lg:table-row"
+                className="grid grid-cols-[1.25rem_minmax(0,1fr)_auto] gap-x-3 gap-y-1 p-4 align-top hover:bg-surface-sunken/50 @min-[40rem]:table-row"
               >
                 <td
                   role="cell"
-                  className="row-span-3 font-mono text-xs tabular-nums text-text-muted lg:px-4 lg:py-3"
+                  className="row-span-3 font-mono text-xs tabular-nums text-text-muted @min-[40rem]:px-4 @min-[40rem]:py-3"
                 >
                   {index + 1}
                 </td>
                 <th
                   scope="row"
                   role="rowheader"
-                  className="min-w-0 text-left font-normal lg:w-2/5 lg:py-3 lg:pr-4"
+                  className="min-w-0 text-left font-normal @min-[40rem]:w-2/5 @min-[40rem]:py-3 @min-[40rem]:pr-4"
                 >
                   <p className="text-sm font-semibold text-text-strong">
                     {line.medicineName}
@@ -174,7 +171,10 @@ export function CounterCartPanel({
                     ) : null}
                   </div>
                 </th>
-                <td role="cell" className="col-span-2 col-start-2 row-start-2 lg:py-3 lg:pr-4">
+                <td
+                  role="cell"
+                  className="col-span-2 col-start-2 row-start-2 @min-[40rem]:py-3 @min-[40rem]:pr-4"
+                >
                   <p className="font-mono text-sm font-semibold tabular-nums text-text-strong">
                     {line.quantity} ×{' '}
                     {line.saleUnit === 'UNIT'
@@ -186,7 +186,10 @@ export function CounterCartPanel({
                     {plural(counterUnitNoun(line.dosageForm), line.canonicalUnits)}
                   </p>
                 </td>
-                <td role="cell" className="col-span-2 col-start-2 row-start-3 lg:py-3 lg:pr-4">
+                <td
+                  role="cell"
+                  className="col-span-2 col-start-2 row-start-3 @min-[40rem]:py-3 @min-[40rem]:pr-4"
+                >
                   <ul
                     className="space-y-2"
                     aria-label={`Batch allocation for ${line.medicineName}`}
@@ -222,15 +225,19 @@ export function CounterCartPanel({
                 </td>
                 <td
                   role="cell"
-                  className="col-start-3 row-start-1 text-right font-mono text-sm font-semibold tabular-nums text-text-strong lg:py-3 lg:pr-4"
+                  className="col-start-3 row-start-1 text-right font-mono text-sm font-semibold tabular-nums text-text-strong @min-[40rem]:py-3 @min-[40rem]:pr-4"
                 >
                   {formatMinor(line.lineTotalMinor)}
                 </td>
               </tr>
               {lineAlerts.length > 0 ? (
-                <tr role="row" className="block lg:table-row">
-                  <td role="cell" className="hidden lg:table-cell" />
-                  <td role="cell" colSpan={4} className="block px-4 pb-3 lg:table-cell lg:pl-0">
+                <tr role="row" className="block @min-[40rem]:table-row">
+                  <td role="cell" className="hidden @min-[40rem]:table-cell" />
+                  <td
+                    role="cell"
+                    colSpan={4}
+                    className="block px-4 pb-3 @min-[40rem]:table-cell @min-[40rem]:pl-0"
+                  >
                     <div className="space-y-2">
                       {lineAlerts.map((alert) => (
                         <div
