@@ -412,7 +412,7 @@ test('the seeded daily SOP is completed, submitted LATE past its window, and ver
     await expect(sopCard(page, 'Due')).toHaveCount(0);
     await expect(
       main(page).getByRole('button', { name: 'Submit for review', exact: true })
-    ).toBeVisible();
+    ).toHaveCount(0);
 
     // ── Complete the checklist ───────────────────────────────────────────────
     await withFixtureContext(
@@ -441,6 +441,9 @@ test('the seeded daily SOP is completed, submitted LATE past its window, and ver
     // ── Submit after the window closed ───────────────────────────────────────
     // Recorded as the signed-in staff profile, like every SOP command.
     const submitControls = sopForm(page, 'Submit for review');
+    await expect(
+      submitControls.getByRole('button', { name: 'Submit for review', exact: true })
+    ).toBeEnabled();
     // The seeded window ended 2026-08-28T03:00Z, so `submitOccurrence` records
     // LATE rather than SUBMITTED. That is the assertion — not a tolerance.
     await runSopCommand(
