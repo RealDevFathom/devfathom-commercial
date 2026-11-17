@@ -20,6 +20,8 @@ export type CounterSearchResultsProps = {
   error?: string | null;
   disabled?: boolean;
   disabledReason?: string | null;
+  /** A visible explanation owned by the parent; standalone uses its own text. */
+  disabledReasonId?: string;
   onSelect: (row: CounterSearchRow) => void;
   onCaptureDemand: () => void;
   onRetry: () => void;
@@ -63,19 +65,22 @@ export function CounterSearchResults({
   error,
   disabled = false,
   disabledReason,
+  disabledReasonId,
   onSelect,
   onCaptureDemand,
   onRetry,
 }: CounterSearchResultsProps) {
-  const reasonId = useId();
+  const localReasonId = useId();
+  const reasonId = disabledReasonId ?? localReasonId;
   const reason = disabled
     ? (disabledReason ?? 'Wait for the current counter action to finish.')
     : null;
-  const reasonText = reason ? (
-    <p id={reasonId} className="text-sm text-text-muted">
-      {reason}
-    </p>
-  ) : null;
+  const reasonText =
+    reason && !disabledReasonId ? (
+      <p id={reasonId} className="text-sm text-text-muted">
+        {reason}
+      </p>
+    ) : null;
   if (state === 'idle') {
     return (
       <p className="text-sm text-text-muted">
