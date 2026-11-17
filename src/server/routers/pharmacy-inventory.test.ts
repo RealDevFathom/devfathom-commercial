@@ -1709,6 +1709,12 @@ const ASSIGNMENT_GATED: ReadonlyArray<{
       }),
   },
   {
+    name: 'allocateRequestedTransfer',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().allocateRequestedTransfer({ branchId: 'branch_a', transferId: 'transfer_1' }),
+  },
+  {
     name: 'approveTransfer',
     capability: 'pharmacy:inventory',
     invoke: () => caller().approveTransfer({ branchId: 'branch_a', transferId: 'transfer_1' }),
@@ -2474,7 +2480,7 @@ describe('DEV-660 — every branch-scoped procedure is classified', () => {
 
     expect(new Set(classified).size).toBe(classified.length);
     expect(branchScoped).toEqual(classified);
-    expect(ASSIGNMENT_GATED).toHaveLength(41);
+    expect(ASSIGNMENT_GATED).toHaveLength(42);
   });
 });
 

@@ -809,12 +809,73 @@ export async function allocateTransfer(
   });
 }
 
-export async function approveTransfer(db: ScopedDb, scope: LedgerScope, transferId: string) {
+/**
+ * DEV-80 — the source branch takes up a DRAFT transfer request (raised by another
+ * branch from lost-demand advice or a stock signal). A person at the source branch
+ * allocates it, becoming its allocator; it then needs the usual second-person
+ * approval before dispatch. Lines are re-checked against the two branches, and the
+ * status flip is conditional so two people cannot both allocate the same request.
+ */
+export async function allocateRequestedTransfer(
+  db: ScopedDb,
+  scope: LedgerScope,
+  transferId: string
+) {
+  const transfer = await db.pharmacyInterbranchTransfer.findFirst({
+    where: { id: transferId, organizationId: scope.organizationId, fromBranchId: scope.branchId },
+    include: { lines: true },
+  });
+  if (!transfer) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
+  if (transfer.status !== 'DRAFT' || transfer.lines.length === 0)
+    throw new PharmacyInventoryError('INVALID_STATE');
+  for (const line of transfer.lines) {
+    assertPositive(line.quantityUnits);
+    const [lot, destination] = await Promise.all([
+      db.pharmacyInventoryLot.findFirst({
+        where: {
+          id: line.sourceLotId,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+        },
+      }),
+      db.pharmacyStockLocation.findFirst({
+        where: {
+          id: line.destinationStockLocationId,
+          organizationId: scope.organizationId,
+          branchId: transfer.toBranchId,
+        },
+      }),
+    ]);
+    if (line.sourceBranchId !== scope.branchId || !lot || !destination)
+      throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
+  }
+  const flipped = await db.pharmacyInterbranchTransfer.updateMany({
+    where: { id: transfer.id, organizationId: scope.organizationId, status: 'DRAFT' },
+    data: { status: 'ALLOCATED', allocatedById: scope.actorId },
+  });
+  if (flipped.count !== 1) throw new PharmacyInventoryError('INVALID_STATE');
+  return db.pharmacyInterbranchTransfer.findFirstOrThrow({
+    where: { id: transfer.id, organizationId: scope.organizationId },
+    include: { lines: true },
+  });
+}
+
+export async function approveTransfer(
+  db: ScopedDb,
+  scope: LedgerScope,
+  transferId: string,
+  options: { soloSelfApproval?: boolean } = {}
+) {
   const transfer = await db.pharmacyInterbranchTransfer.findFirst({
     where: { id: transferId, organizationId: scope.organizationId, fromBranchId: scope.branchId },
   });
   if (!transfer) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
-  if (transfer.status !== 'ALLOCATED' || transfer.allocatedById === scope.actorId)
+  // Solo-pharmacy rule: only the router, after a fresh PIN from a sole owner, may
+  // let the allocator approve their own transfer.
+  if (
+    transfer.status !== 'ALLOCATED' ||
+    (transfer.allocatedById === scope.actorId && !options.soloSelfApproval)
+  )
     throw new PharmacyInventoryError('COAUTH_REQUIRED');
   return db.pharmacyInterbranchTransfer.update({
     where: { id: transfer.id },
