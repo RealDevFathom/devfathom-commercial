@@ -807,3 +807,19 @@ describe('packLevelCanonicalUnits (DEV-830 server-derived multiplier)', () => {
     }
   });
 });
+
+describe('onHandInSaleUnitLabel', () => {
+  it('reports stock in the chosen sale unit, not canonical units', async () => {
+    const { onHandInSaleUnitLabel } = await import('./counter-pricing');
+    const option = {
+      kind: 'STRIP' as const,
+      packLevelId: 's',
+      levelLabel: 'Strip',
+      canonicalUnitsPerSaleUnit: 10,
+    };
+    expect(onHandInSaleUnitLabel({ option, availableUnits: 2360 })).toBe('236 strips');
+    expect(onHandInSaleUnitLabel({ option, availableUnits: 10 })).toBe('1 strip');
+    const box = { ...option, levelLabel: 'Box', canonicalUnitsPerSaleUnit: 100 };
+    expect(onHandInSaleUnitLabel({ option: box, availableUnits: 250 })).toBe('2 boxes');
+  });
+});

@@ -2529,6 +2529,14 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     expect(document.activeElement).toBe(amount);
   });
 
+  it('announces a held bill as "Bill held." (CRT-003)', async () => {
+    openTheDrawer();
+    mocks.mutations.transition!.mockResolvedValue({});
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.click(screen.getByRole('button', { name: /^Hold/ }));
+    expect(await screen.findByText('Bill held.')).toBeInTheDocument();
+  });
+
   it('runs F9 and Shift+F4 from the scan field, where focus rests for the whole bill (POS-01)', async () => {
     openTheDrawer();
     mocks.mutations.transition!.mockResolvedValue({});
@@ -3664,7 +3672,7 @@ describe('DEV-618 counter composition', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(barcodeRow({ onHandUnits: 100 })));
     const input = screen.getByLabelText('Quantity') as HTMLInputElement;
-    expect(input).toHaveValue('');
+    expect(input).toHaveValue('1');
     fireEvent.change(input, { target: { value: '1' } });
     input.blur();
     input.focus();
@@ -3686,7 +3694,7 @@ describe('DEV-618 counter composition', () => {
     act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(row));
     const input = screen.getByLabelText('Quantity');
     fireEvent.change(input, { target: { value: '8' } });
-    expect(input).toHaveAccessibleDescription(/Only 5 safe units are on hand/);
+    expect(input).toHaveAccessibleDescription(/Only 5 units on hand/);
     fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F6' });
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
   });
@@ -3719,7 +3727,7 @@ describe('DEV-618 counter composition', () => {
         .onSelect(barcodeRow({ saleUnits: [], onHandUnits: 0 }))
     );
     const input = screen.getByLabelText('Requested tablets') as HTMLInputElement;
-    expect(input.value).toBe('');
+    expect(input.value).toBe('1');
     fireEvent.change(input, { target: { value: '1' } });
     fireEvent.change(input, { target: { value: '' } });
     expect(input.value).toBe('');
@@ -3810,7 +3818,8 @@ describe('DEV-618 counter composition', () => {
     expect(next).toHaveTextContent('Store A');
     expect(next).toHaveTextContent('Earliest-expiry batch B-1 is used');
     const quantity = within(next).getByLabelText('Quantity');
-    expect(quantity).toHaveValue('');
+    expect(quantity).toHaveValue('1');
+    fireEvent.change(quantity, { target: { value: '' } });
     fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F6' });
     expect(within(next).getByText('Enter a quantity')).toBeVisible();
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
