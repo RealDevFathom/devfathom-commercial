@@ -1,5 +1,13 @@
-import { createHash, createHmac } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveRestaurantE2eDatabaseUrl } from '../../../scripts/restaurant-e2e-database';
@@ -41,6 +49,26 @@ function readAuthenticator(origin: string, email: string) {
   return readFileSync(file, 'utf8');
 }
 
+/**
+ * Record the key the real enrollment UI just issued. A disposable database can be
+ * re-created under the same URL, so an earlier run's key may still be cached; the
+ * fresh enrollment is authoritative and atomically replaces it in a private file.
+ */
+export function storeEnrolledAuthenticator(origin: string, email: string, secret: string) {
+  const file = authenticatorFile(origin, email);
+  if (file) {
+    const pending = `${file}.${process.pid}.${randomUUID()}`;
+    try {
+      writeFileSync(pending, secret, { mode: 0o600, flag: 'wx' });
+      renameSync(pending, file);
+    } catch (error) {
+      rmSync(pending, { force: true });
+      throw error;
+    }
+  }
+  authenticators.set(identityKey(origin, email), secret);
+}
+
 export function fixtureTotp(secret: string, now = Date.now()) {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
   let bits = '';
@@ -67,7 +95,6 @@ export function platformActorCode(origin: string, email: string) {
 /** Password + real enrollment/TOTP, never a session injection or MFA bypass. */
 export async function signInPlatformActor(page: Page, email: string) {
   const origin = new URL(page.url()).origin;
-  const key = identityKey(origin, email);
   const secret = readAuthenticator(origin, email);
   if (secret)
     await page.getByLabel('Authentication code', { exact: true }).fill(fixtureTotp(secret));
@@ -102,8 +129,6 @@ export async function signInPlatformActor(page: Page, email: string) {
   await enrollment.getByRole('button', { name: 'Verify authenticator' }).click();
   expect((await confirmed).status(), 'Authenticator enrollment must succeed').toBe(200);
   await expect(enrollment.getByRole('heading', { name: 'Save your recovery codes' })).toBeVisible();
-  const file = authenticatorFile(origin, email);
-  if (file) writeFileSync(file, enrolledSecret, { mode: 0o600, flag: 'wx' });
-  authenticators.set(key, enrolledSecret);
+  storeEnrolledAuthenticator(origin, email, enrolledSecret);
   await enrollment.getByRole('button', { name: 'I saved my codes — continue' }).click();
 }

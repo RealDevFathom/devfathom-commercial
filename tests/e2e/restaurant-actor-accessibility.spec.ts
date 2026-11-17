@@ -1,4 +1,3 @@
-import { platformActorCode } from './fixtures/restaurant-platform-auth';
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
@@ -11,6 +10,7 @@ import {
   signInAs,
   type ActorKey,
 } from './fixtures/restaurant-actor-accessibility';
+import { platformActorCode } from './fixtures/restaurant-platform-auth';
 
 // Enrollment, OTP and recovery keys must never enter automatic browser artifacts.
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
