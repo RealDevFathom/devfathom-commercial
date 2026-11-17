@@ -559,6 +559,154 @@ describe('DEV-41 shared and standalone search explanations', () => {
   });
 });
 
+describe('DEV-878 stock alternatives in search results', () => {
+  const alternative: CounterSearchRow = {
+    ...row,
+    medicineId: 'alternative',
+    brandName: 'Synthetic brand',
+    onHandUnits: 30,
+    restriction: { ...row.restriction, controlled: false },
+    saleableUnits: [
+      {
+        kind: 'PACK',
+        levelLabel: 'BOX',
+        canonicalUnitsPerSaleUnit: 10,
+        wholeUnits: 3,
+        unitPriceMinor: 25000,
+        proRataCeilingMinor: 25000,
+      },
+    ],
+  };
+  function props() {
+    return {
+      state: 'ready' as const,
+      query: 'Nalbin',
+      activeMedicineId: null,
+      onSelect: vi.fn(),
+      onCaptureDemand: vi.fn(),
+      onRetry: vi.fn(),
+    };
+  }
+  it('automatically displays exact and different-form groups with pack, price, quantity and pharmacist disclaimer', () => {
+    const callbacks = props();
+    const other = {
+      ...alternative,
+      medicineId: 'other-form',
+      dosageForm: 'Injection',
+      brandName: 'Other form brand',
+    };
+    const unavailable = {
+      ...row,
+      onHandUnits: 0,
+      stockAlternatives: {
+        ingredientRecorded: true,
+        exact: [alternative],
+        other: [other],
+        truncated: false,
+      },
+    };
+    render(<CounterSearchResults {...callbacks} rows={[unavailable]} />);
+    const exact = screen.getByRole('list', { name: 'Same ingredient, strength and form' });
+    const different = screen.getByRole('list', { name: 'Other strengths or forms' });
+    expect(exact).toHaveTextContent('Synthetic brand');
+    expect(exact).toHaveTextContent('500 mg');
+    expect(exact).toHaveTextContent('Tablet');
+    expect(exact).toHaveTextContent('Pack: 10 units');
+    expect(exact).toHaveTextContent('250.00');
+    expect(exact).toHaveTextContent('30 tabs');
+    expect(exact).not.toHaveTextContent('Other form brand');
+    expect(different).toHaveTextContent('Other form brand');
+    expect(screen.getByText('Suggestion only')).toBeVisible();
+    expect(screen.getByText(/the pharmacist decides on substitution/)).toBeVisible();
+    expect(callbacks.onSelect).not.toHaveBeenCalled();
+    fireEvent.click(within(exact).getByRole('button'));
+    expect(callbacks.onSelect).toHaveBeenCalledExactlyOnceWith(alternative);
+  });
+  it('displays the missing-ingredient gap and never offers a choice', () => {
+    render(
+      <CounterSearchResults
+        {...props()}
+        rows={[
+          {
+            ...row,
+            onHandUnits: 0,
+            stockAlternatives: {
+              ingredientRecorded: false,
+              exact: [],
+              other: [],
+              truncated: false,
+            },
+          },
+        ]}
+      />
+    );
+    expect(screen.getByText('No ingredient recorded for this product')).toBeVisible();
+    expect(
+      screen.queryByRole('list', { name: 'Same ingredient, strength and form' })
+    ).not.toBeInTheDocument();
+  });
+  it('says when more same-ingredient brands may be in stock than were checked', () => {
+    const rows = (truncated: boolean) => [
+      {
+        ...row,
+        onHandUnits: 0,
+        stockAlternatives: { ingredientRecorded: true, exact: [alternative], other: [], truncated },
+      },
+    ];
+    const view = render(<CounterSearchResults {...props()} rows={rows(true)} />);
+    expect(screen.getByText(/More brands with this ingredient may be in stock/)).toBeVisible();
+    view.rerender(<CounterSearchResults {...props()} rows={rows(false)} />);
+    expect(screen.queryByText(/More brands with this ingredient/)).not.toBeInTheDocument();
+  });
+
+  it('explains when no exact brand is available', () => {
+    render(
+      <CounterSearchResults
+        {...props()}
+        rows={[
+          {
+            ...row,
+            onHandUnits: 0,
+            stockAlternatives: { ingredientRecorded: true, exact: [], other: [], truncated: false },
+          },
+        ]}
+      />
+    );
+    expect(screen.getByText(/No in-stock brand with the same ingredient/)).toBeVisible();
+  });
+  it('keeps alternative selection disabled while the counter is busy', () => {
+    const callbacks = props();
+    render(
+      <CounterSearchResults
+        {...callbacks}
+        disabled
+        rows={[
+          {
+            ...row,
+            onHandUnits: 0,
+            stockAlternatives: {
+              ingredientRecorded: true,
+              exact: [alternative],
+              other: [],
+              truncated: false,
+            },
+          },
+        ]}
+      />
+    );
+    const option = within(
+      screen.getByRole('list', { name: 'Same ingredient, strength and form' })
+    ).getByRole('button');
+    expect(option).toBeDisabled();
+    fireEvent.click(option);
+    expect(callbacks.onSelect).not.toHaveBeenCalled();
+    // One visible explanation describes the match and its nested alternatives.
+    const reason = 'Wait for the current counter action to finish.';
+    expect(screen.getAllByText(reason)).toHaveLength(1);
+    expect(option).toHaveAccessibleDescription(reason);
+  });
+});
+
 it('separates strength, form and stock into labeled lines below the medicine identity', () => {
   render(
     <CounterSearchResults

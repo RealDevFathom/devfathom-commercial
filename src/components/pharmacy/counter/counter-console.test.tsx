@@ -28,6 +28,7 @@ type Query = {
 };
 
 const mocks = vi.hoisted(() => ({
+  renderSearchResults: false,
   queries: {} as Record<string, Query>,
   renderBranchChildren: false,
   mutations: {} as Record<string, ReturnType<typeof vi.fn>>,
@@ -237,7 +238,9 @@ vi.mock('./counter-search-results', async (importOriginal) => {
   return {
     CounterSearchResults: (props: ComponentProps<typeof CounterSearchResults>) => {
       mocks.searchProps(props);
-      return mocks.renderBranchChildren ? <actual.CounterSearchResults {...props} /> : null;
+      return mocks.renderBranchChildren || mocks.renderSearchResults ? (
+        <actual.CounterSearchResults {...props} />
+      ) : null;
     },
   };
 });
@@ -470,6 +473,7 @@ function enterPayment(type = 'CASH') {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.renderBranchChildren = false;
+  mocks.renderSearchResults = false;
   browserPrint.ready.mockReset();
   mocks.keymapSetData.mockImplementation((_input, saved) => {
     mocks.queries.counterKeymap = query(saved);
@@ -6205,6 +6209,90 @@ describe('DEV-41 post-merge branch reasons and composed explanations', () => {
   });
 });
 
+describe('DEV-878 search alternative uses the normal counter line path', () => {
+  it.each(['ordinary', 'controlled', 'server-refusal'])(
+    'preserves %s handling when choosing an alternative',
+    async (kind) => {
+      mocks.renderSearchResults = true;
+      const candidate = barcodeRow({
+        medicineId: 'stock-alternative',
+        displayName: 'Synthetic alternative',
+        matchedOn: 'NAME',
+        saleableUnits: [
+          {
+            kind: 'UNIT',
+            levelLabel: 'UNIT',
+            canonicalUnitsPerSaleUnit: 1,
+            wholeUnits: 10,
+            unitPriceMinor: 10000,
+            proRataCeilingMinor: 10000,
+          },
+        ],
+      });
+      if (kind === 'controlled')
+        candidate.restriction = { ...candidate.restriction, controlled: true, rx: true };
+      const unavailable = barcodeRow({
+        medicineId: 'requested-brand',
+        displayName: 'Requested brand',
+        onHandUnits: 0,
+        saleUnits: [],
+        stockAlternatives: {
+          ingredientRecorded: true,
+          exact: [candidate],
+          other: [],
+          truncated: false,
+        },
+      });
+      mocks.queries.counterSearch = query({ rows: [unavailable], truncated: false });
+      if (kind === 'server-refusal')
+        mocks.mutations.addLine!.mockRejectedValue(
+          refused('FORBIDDEN', 'Pharmacist presence required')
+        );
+      else mocks.mutations.addLine!.mockResolvedValue({});
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      fireEvent.change(screen.getByLabelText('Scan or search'), {
+        target: { value: 'Requested brand' },
+      });
+      const options = await screen.findByRole('list', {
+        name: 'Same ingredient, strength and form',
+      });
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+      fireEvent.click(within(options).getByRole('button'));
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+      fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '1' } });
+      fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
+      if (kind === 'controlled') {
+        await screen.findByText(/Controlled medicine needs the patient address/);
+        expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+      } else {
+        await waitFor(() =>
+          expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+              branchId: 'branch-a',
+              saleId: 'sale-a',
+              medicineId: 'stock-alternative',
+              presentationId: candidate.presentationId,
+              packLevelId: 'pack-a',
+              saleUnit: 'UNIT',
+              quantity: 1,
+              canonicalUnitsPerSaleUnit: 1,
+              // DEV-575: the same per-attempt add-line key scheme as every other line.
+              idempotencyKey: expect.stringMatching(
+                /^counter-add:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+              ),
+            })
+          )
+        );
+        if (kind === 'server-refusal') {
+          await screen.findByText('Pharmacist presence required');
+          expect(screen.queryByText(/Synthetic alternative added/)).not.toBeInTheDocument();
+        } else await screen.findByText('1 × Synthetic alternative added.');
+      }
+      expect(mocks.mutations.tender).not.toHaveBeenCalled();
+    }
+  );
+});
+
 describe('DEV-712 supervisor discard of an unknown payment attempt', () => {
   const approvers = [{ id: 'staff-manager', name: 'Synthetic manager', self: false }];
 
@@ -6343,6 +6431,46 @@ describe('DEV-633 keyboard-only counter', () => {
     fireEvent.keyDown(search, { key: 'ArrowUp' });
     expect(active()).toBe(rows[0]!.medicineId);
     expect(document.activeElement).toBe(search);
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+
+  it('keeps arrow selection on the results while an alternatives panel is shown (DEV-878)', () => {
+    const alternative = barcodeRow({
+      medicineId: 'stock-alternative',
+      displayName: 'In-stock brand',
+    });
+    const unavailable = barcodeRow({
+      medicineId: 'second-result',
+      displayName: 'Second item',
+      onHandUnits: 0,
+      saleUnits: [],
+      stockAlternatives: {
+        ingredientRecorded: true,
+        exact: [alternative],
+        other: [],
+        truncated: false,
+      },
+    });
+    mocks.queries.counterSearch = query({ rows: [rows[0]!, unavailable], truncated: false });
+    mocks.renderSearchResults = true;
+    const { search } = searchResults();
+    const active = () => mocks.searchProps.mock.calls.at(-1)![0].activeMedicineId;
+    const panel = screen.getByRole('list', { name: 'Same ingredient, strength and form' });
+    // Arrows walk the search results only; the nested alternative is not a stop.
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(active()).toBe(rows[0]!.medicineId);
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(active()).toBe('second-result');
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(active()).toBe(rows[0]!.medicineId);
+    expect(document.activeElement).toBe(search);
+    // The alternative is still a button of its own and stages through the same path.
+    fireEvent.click(within(panel).getByRole('button'));
+    expect(active()).toBe('stock-alternative');
+    // From a staged alternative the arrows return to the first search result.
+    search.focus();
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(active()).toBe(rows[0]!.medicineId);
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
   });
 

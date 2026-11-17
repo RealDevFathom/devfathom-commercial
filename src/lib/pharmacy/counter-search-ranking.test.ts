@@ -60,6 +60,9 @@ function catalog(
           expect(where.saleable).toBe(true);
           const ids = where.id?.in;
           if (ids) return medicines.filter((m) => ids.includes(m.id));
+          // DEV-878's same-ingredient alternatives read: this fixture has no lots, so
+          // no medicine is an in-stock alternative.
+          if (!where.OR) return [];
           return medicines
             .filter((m) =>
               where.OR!.some((clause: Record<string, Record<string, string>>) =>
