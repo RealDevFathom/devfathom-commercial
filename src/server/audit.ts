@@ -108,6 +108,8 @@ function isSensitiveKey(key: string): boolean {
     k.endsWith('pin') ||
     k === 'previousgrantid' ||
     k === 'baseurl' ||
+    // Cash-memo buyer text can reach validation-failure audit before its resolver.
+    k === 'buyername' ||
     SENSITIVE_SUBSTRINGS.some((s) => k.includes(s))
   );
 }

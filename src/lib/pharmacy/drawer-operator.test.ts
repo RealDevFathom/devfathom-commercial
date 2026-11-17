@@ -189,6 +189,8 @@ describe('a cash sale tender goes only into a till the cashier runs (DEV-821)', 
   function saleFixture() {
     let idempotency: Record<string, unknown> | null = null;
     const db = {
+      organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi' }) },
+      branchRegulatoryProfile: { findFirst: vi.fn().mockResolvedValue(null) },
       pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
       $executeRaw: vi.fn(async (query: { values: unknown[] }) => {
         idempotency = {

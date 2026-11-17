@@ -972,6 +972,86 @@ describe('DEV-716 inline Khata signup', () => {
   });
 });
 
+describe('#708 Sindh cash memo buyer name', () => {
+  it('validates the buyer before entering payment recovery and allows correction', async () => {
+    const { props } = setup({ cashMemo: true });
+    const buyer = screen.getByLabelText('Buyer name (cash memo, optional)');
+    fireEvent.change(buyer, { target: { value: '<invalid>' } });
+    expect(buyer).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    expect(props.onTender).not.toHaveBeenCalled();
+    fireEvent.change(buyer, { target: { value: 'Synthetic Buyer' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await waitFor(() =>
+      expect(props.onTender).toHaveBeenCalledWith(
+        { type: 'CASH', amountMinor: 25000, buyerName: 'Synthetic Buyer' },
+        { amount: '', cashReceived: '' }
+      )
+    );
+  });
+
+  it('offers no buyer field outside Sindh and sends no buyer name', async () => {
+    const { props } = setup({
+      khataSignupPatient: { patientId: 'patient-a', displayName: 'Bilal' },
+    });
+    expect(screen.queryByLabelText('Buyer name (cash memo, optional)')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await waitFor(() =>
+      expect(props.onTender).toHaveBeenCalledWith(
+        { type: 'CASH', amountMinor: 25000 },
+        { amount: '', cashReceived: '' }
+      )
+    );
+  });
+
+  it('fills the buyer from the selected patient and sends the typed name at tender', async () => {
+    const { props } = setup({
+      cashMemo: true,
+      khataSignupPatient: { patientId: 'patient-a', displayName: 'Bilal Ahmed' },
+    });
+    const buyer = screen.getByLabelText('Buyer name (cash memo, optional)');
+    expect(buyer).toHaveValue('Bilal Ahmed');
+    fireEvent.change(buyer, { target: { value: '  Ayesha Khan ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await waitFor(() =>
+      expect(props.onTender).toHaveBeenCalledWith(
+        { type: 'CASH', amountMinor: 25000, buyerName: 'Ayesha Khan' },
+        { amount: '', cashReceived: '' }
+      )
+    );
+  });
+
+  it('preserves the full 200-character name accepted by patient creation', async () => {
+    const longName = `${'A'.repeat(99)}BC${'D'.repeat(99)}`;
+    const { props } = setup({
+      cashMemo: true,
+      khataSignupPatient: { patientId: 'patient-a', displayName: longName },
+    });
+    expect(screen.getByLabelText('Buyer name (cash memo, optional)')).toHaveValue(
+      longName
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await waitFor(() =>
+      expect(props.onTender).toHaveBeenCalledWith(
+        { type: 'CASH', amountMinor: 25000, buyerName: longName },
+        { amount: '', cashReceived: '' }
+      )
+    );
+  });
+
+  it('lets a walk-in pay without a buyer name', async () => {
+    const { props } = setup({ cashMemo: true });
+    expect(screen.getByLabelText('Buyer name (cash memo, optional)')).toHaveValue('');
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await waitFor(() =>
+      expect(props.onTender).toHaveBeenCalledWith(
+        { type: 'CASH', amountMinor: 25000 },
+        { amount: '', cashReceived: '' }
+      )
+    );
+  });
+});
+
 describe('#722 split tender rows', () => {
   it('takes Rs 600 cash, then offers the Rs 400 remainder to a Khata account within its limit', async () => {
     const loadKhataAccounts = vi
