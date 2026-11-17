@@ -22,7 +22,7 @@ const TRIGGER_LABEL: Record<LostDemandTrigger, string> = {
   WALK_OUT_RATE: 'Walk-outs',
 };
 
-const TABLE_LABEL = 'px-3 py-2 font-mono text-[0.625rem] tracking-wide text-text-muted uppercase';
+const TABLE_LABEL = 'px-3 py-2 font-mono text-xs tracking-wide text-text-muted uppercase';
 
 export type LostDemandPanelState =
   | {
@@ -243,7 +243,7 @@ function AdviceCard({ card, branchId }: { card: LostDemandAdvice; branchId: stri
           ['On order', `${card.onOrderUnits} units`],
         ].map(([label, value]) => (
           <div key={label}>
-            <dt className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
+            <dt className="font-mono text-xs tracking-wide text-text-muted uppercase">
               {label}
             </dt>
             <dd className="mt-1 text-text-strong tabular-nums">{value}</dd>
@@ -334,7 +334,7 @@ function AdviceCard({ card, branchId }: { card: LostDemandAdvice; branchId: stri
 
       {card.alternates.length ? (
         <div>
-          <h4 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
+          <h4 className="font-mono text-xs tracking-wide text-text-muted uppercase">
             Same salt and strength
           </h4>
           <ul className="mt-2 space-y-1 text-sm">
