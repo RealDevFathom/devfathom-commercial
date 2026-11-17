@@ -14,7 +14,7 @@ import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
 import { financeAccountLabel } from '@/lib/finance/account-labels';
-import { formatUtcInstant } from '@/lib/utc-instant';
+import { formatWorkspaceDateTime, workspaceDateRange, workspaceZoneLabel } from '@/lib/timezone';
 
 export const metadata: Metadata = { title: 'Trial-balance control · Pharmacy accounts' };
 
@@ -52,18 +52,18 @@ function parseQuery(query: Query): { controls?: Controls; error?: string } {
   const values = [query.branch, query.from, query.to];
   if (values.every((value) => value === undefined)) return {};
   if (values.some((value) => typeof value !== 'string')) {
-    return { error: 'Choose one branch and provide both UTC dates.' };
+    return { error: 'Choose one branch and provide both dates.' };
   }
   const [branchValue, fromValue, toValue] = values as [string, string, string];
   const branchId = branchValue.trim();
   const from = day(fromValue);
   const to = day(toValue);
   if (!branchId || branchId.length > 128 || !from || !to) {
-    return { error: 'Choose a valid branch and two valid UTC dates.' };
+    return { error: 'Choose a valid branch and two valid dates.' };
   }
   const duration = to.getTime() - from.getTime();
   if (duration <= 0 || duration > 92 * 86_400_000) {
-    return { error: 'Choose a UTC date window greater than zero and no longer than 92 days.' };
+    return { error: 'Choose a date window greater than zero and no longer than 92 days.' };
   }
   return { controls: { branchId, from: fromValue, to: toValue } };
 }
@@ -74,7 +74,14 @@ function minor(value: bigint): string {
   return `${negative ? '-' : ''}${absolute / BigInt(100)}.${String(absolute % BigInt(100)).padStart(2, '0')}`;
 }
 
-function ControlForm({ controls }: { controls?: Partial<Controls> }) {
+function ControlForm({
+  controls,
+  timeZone,
+}: {
+  controls?: Partial<Controls>;
+  timeZone?: string | null;
+}) {
+  const zone = timeZone ? workspaceZoneLabel(timeZone) : 'workspace timezone';
   return (
     <SectionCard title="Report controls" titleLevel={2}>
       <form method="get" className="grid gap-4 md:grid-cols-4 md:items-end">
@@ -90,7 +97,7 @@ function ControlForm({ controls }: { controls?: Partial<Controls> }) {
           />
         </label>
         <label className="grid gap-2 text-sm">
-          From (UTC)
+          From ({zone})
           <Input
             className="min-h-11"
             name="from"
@@ -100,7 +107,7 @@ function ControlForm({ controls }: { controls?: Partial<Controls> }) {
           />
         </label>
         <label className="grid gap-2 text-sm">
-          To, exclusive (UTC)
+          To, exclusive ({zone})
           <Input className="min-h-11" name="to" type="date" defaultValue={controls?.to} required />
         </label>
         <Button type="submit" className="min-h-11">
@@ -118,7 +125,7 @@ function Notice({ state }: { state: Exclude<State, { kind: 'loaded' }> }) {
   const content = {
     initial: [
       'Choose a report scope',
-      'Select one branch and a UTC half-open date window. No financial source has been read.',
+      'Select one branch and a half-open date window in your workspace timezone. No financial source has been read.',
     ],
     invalid: ['Report controls need attention', state.kind === 'invalid' ? state.message : ''],
     denied: [
@@ -139,7 +146,13 @@ function Notice({ state }: { state: Exclude<State, { kind: 'loaded' }> }) {
   );
 }
 
-function Results({ state }: { state: Extract<State, { kind: 'loaded' }> }) {
+function Results({
+  state,
+  timeZone,
+}: {
+  state: Extract<State, { kind: 'loaded' }>;
+  timeZone?: string | null;
+}) {
   const { controls } = state;
   const status = controls.empty
     ? 'No matching posted account rows'
@@ -152,8 +165,9 @@ function Results({ state }: { state: Extract<State, { kind: 'loaded' }> }) {
     <SectionCard title={status} titleLevel={2}>
       <p className="text-sm text-text-muted">
         Posted branch journal lines only; coverage and completeness remain unknown. Window{' '}
-        {formatUtcInstant(state.from)} to {formatUtcInstant(state.to)} (end exclusive). Source:
-        posted accounts. Retrieved {formatUtcInstant(state.retrievedAt)}.
+        {formatWorkspaceDateTime(state.from, timeZone)} to{' '}
+        {formatWorkspaceDateTime(state.to, timeZone)} (end exclusive). Source: posted accounts.
+        Retrieved {formatWorkspaceDateTime(state.retrievedAt, timeZone)}.
       </p>
       <p className="mt-2 text-sm text-text-muted">
         A nonzero control may be legitimate for an interbranch scope. Zero is not evidence of
@@ -280,10 +294,14 @@ export default async function TrialBalanceControlPage({
   let state: State = parsed.error
     ? { kind: 'invalid', message: parsed.error }
     : { kind: 'initial' };
+  // The organization zone is known only after the actor resolves; before any read the
+  // form names it generically.
+  let timeZone: string | null | undefined;
 
   if (parsed.controls) {
     try {
       const actor = await resolveTenantActor();
+      timeZone = actor?.organization?.timezone ?? 'UTC';
       if (!actor) {
         state = { kind: 'denied' };
       } else {
@@ -293,8 +311,18 @@ export default async function TrialBalanceControlPage({
           support: actor.support,
         });
         const caller = pharmacyFinanceRouter.createCaller(ctx);
-        const requestedFrom = new Date(`${parsed.controls.from}T00:00:00.000Z`);
-        const requestedTo = new Date(`${parsed.controls.to}T00:00:00.000Z`);
+        // `to` is exclusive: the start of that day on the organization's clock.
+        const zoneName = timeZone;
+        const requestedFrom = workspaceDateRange(
+          parsed.controls.from,
+          parsed.controls.from,
+          zoneName
+        ).from;
+        const requestedTo = workspaceDateRange(
+          parsed.controls.to,
+          parsed.controls.to,
+          zoneName
+        ).from;
         const report = await caller.financialStatements({
           branchId: parsed.controls.branchId,
           from: requestedFrom.toISOString(),
@@ -337,8 +365,12 @@ export default async function TrialBalanceControlPage({
         heading="Trial-balance control"
         description="Review every returned account code through per-currency opening, movement and supplied-closing controls."
       />
-      <ControlForm controls={formControls} />
-      {state.kind === 'loaded' ? <Results state={state} /> : <Notice state={state} />}
+      <ControlForm controls={formControls} timeZone={timeZone} />
+      {state.kind === 'loaded' ? (
+        <Results state={state} timeZone={timeZone} />
+      ) : (
+        <Notice state={state} />
+      )}
     </div>
   );
 }

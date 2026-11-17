@@ -131,7 +131,7 @@ export const pharmacyApInvoicesRouter = router({
     try {
       return {
         scope: { organizationId: scope.organizationId, branchId: scope.branchId },
-        view: await readApAging(ctx.db, scope, input.asOf),
+        view: await readApAging(ctx.db, scope, input.asOf, new Date(), ctx.organization?.timezone),
         retrievedAt: new Date(),
       };
     } catch (error) {

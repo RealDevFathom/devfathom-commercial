@@ -15,7 +15,7 @@ import {
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyGeneralJournalRouter } from '@/server/routers/pharmacy-general-journal';
 import { createTRPCContext } from '@/server/trpc';
-import { formatUtcInstant } from '@/lib/utc-instant';
+import { formatWorkspaceDateTime, workspaceToday, workspaceZoneLabel } from '@/lib/timezone';
 
 export const metadata: Metadata = { title: 'General journal vouchers · Pharmacy accounts' };
 
@@ -162,11 +162,18 @@ function Notice({ state }: { state: Exclude<State, { kind: 'loaded' }> }) {
   );
 }
 
-function Register({ state }: { state: Extract<State, { kind: 'loaded' }> }) {
+function Register({
+  state,
+  timeZone,
+}: {
+  state: Extract<State, { kind: 'loaded' }>;
+  timeZone?: string | null;
+}) {
   return (
     <SectionCard title="Voucher register" titleLevel={2}>
       <p className="text-sm text-text-muted">
-        Retrieved {formatUtcInstant(state.retrievedAt)}. Amounts are shown with two decimals.
+        Retrieved {formatWorkspaceDateTime(state.retrievedAt, timeZone)}. Amounts are shown with two
+        decimals.
       </p>
       {state.vouchers.length === 0 ? (
         <p className="mt-4 text-sm">
@@ -178,13 +185,19 @@ function Register({ state }: { state: Extract<State, { kind: 'loaded' }> }) {
           <table className="mt-3 w-full min-w-max text-sm tabular-nums">
             <thead className="font-mono text-xs uppercase">
               <tr>
-                {['Reference', 'Status', 'Date (UTC)', 'Debit', 'Credit', 'Amount', 'Evidence'].map(
-                  (label) => (
-                    <th key={label} scope="col" className="p-3 text-left">
-                      {label}
-                    </th>
-                  )
-                )}
+                {[
+                  'Reference',
+                  'Status',
+                  `Date (${timeZone ? workspaceZoneLabel(timeZone) : 'workspace timezone'})`,
+                  'Debit',
+                  'Credit',
+                  'Amount',
+                  'Evidence',
+                ].map((label) => (
+                  <th key={label} scope="col" className="p-3 text-left">
+                    {label}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -204,7 +217,7 @@ function Register({ state }: { state: Extract<State, { kind: 'loaded' }> }) {
                         label={voucher.status.toLowerCase()}
                       />
                     </td>
-                    <td className="p-3">{voucher.occurredAt.toISOString().slice(0, 10)}</td>
+                    <td className="p-3">{workspaceToday(timeZone, voucher.occurredAt)}</td>
                     <td className="p-3">{debit ? financeAccountLabel(debit.accountCode) : '—'}</td>
                     <td className="p-3">
                       {credit ? financeAccountLabel(credit.accountCode) : '—'}
@@ -232,10 +245,14 @@ export default async function GeneralJournalPage({
   const query = await searchParams;
   const parsed = parseBranch(query);
   let state: State = parsed.invalid ? { kind: 'invalid' } : { kind: 'initial' };
+  // The organization zone is known only after the actor resolves; before any read the
+  // form names it generically.
+  let timeZone: string | null | undefined;
 
   if (parsed.branchId) {
     try {
       const actor = await resolveTenantActor();
+      timeZone = actor?.organization?.timezone ?? 'UTC';
       if (!actor) {
         state = { kind: 'denied' };
       } else {
@@ -275,7 +292,11 @@ export default async function GeneralJournalPage({
         description="Review non-trade operating accrual vouchers for one branch and the only accounts they may use."
       />
       <BranchForm branchId={typeof query.branch === 'string' ? query.branch : undefined} />
-      {state.kind === 'loaded' ? <Register state={state} /> : <Notice state={state} />}
+      {state.kind === 'loaded' ? (
+        <Register state={state} timeZone={timeZone} />
+      ) : (
+        <Notice state={state} />
+      )}
       <Catalog />
     </div>
   );

@@ -11,7 +11,7 @@ import {
   formatWorkspaceDateTime,
   workspaceInstantFromInput,
   workspaceMinuteInput,
-  workspaceToday,
+  workspaceDateOffset,
   workspaceZoneLabel,
 } from '@/lib/timezone';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
@@ -37,9 +37,8 @@ export default async function RepeatPurchasingPage({
   const asOf = rawAsOf
     ? workspaceInstantFromInput(rawAsOf, timeZone)
     : `${now.toISOString().slice(0, 16)}:00Z`;
-  const daysAgo = (n: number) => workspaceToday(timeZone, new Date(now.getTime() - n * 86_400_000));
-  const from = scalar(query.from) ?? daysAgo(179);
-  const to = scalar(query.to) ?? daysAgo(90);
+  const from = scalar(query.from) ?? workspaceDateOffset(timeZone, -179, now);
+  const to = scalar(query.to) ?? workspaceDateOffset(timeZone, -90, now);
   const branchId = scalar(query.branch);
   let branches: { id: string; name: string }[] = [];
   let result: Awaited<

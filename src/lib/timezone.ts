@@ -190,3 +190,17 @@ export function workspaceMinuteInput(
   const zone = workspaceTimezone(timeZone);
   return new Date(date.getTime() + zoneOffsetMs(date.getTime(), zone)).toISOString().slice(0, 16);
 }
+
+/**
+ * The workspace's today shifted by whole calendar days, as `YYYY-MM-DD`. Counting
+ * calendar days (not 24-hour periods) keeps a default window the same length
+ * across a daylight-saving change.
+ */
+export function workspaceDateOffset(
+  timeZone: string | null | undefined,
+  days: number,
+  now = new Date()
+): string {
+  const today = Date.parse(`${workspaceToday(timeZone, now)}T00:00:00.000Z`);
+  return new Date(today + days * 86_400_000).toISOString().slice(0, 10);
+}

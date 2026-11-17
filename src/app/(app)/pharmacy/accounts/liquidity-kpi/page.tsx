@@ -18,7 +18,7 @@ import {
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
-import { formatUtcInstant } from '@/lib/utc-instant';
+import { formatWorkspaceDateTime, workspaceDateRange, workspaceZoneLabel } from '@/lib/timezone';
 import { ExportCsv } from './export-csv';
 
 export const metadata: Metadata = { title: 'Posted cash coverage · Pharmacy accounts' };
@@ -57,12 +57,12 @@ function parseQuery(query: Query): { controls?: Controls; error?: string } {
   const values = [query.branch, query.cutoff];
   if (values.every((value) => value === undefined)) return {};
   if (values.some((value) => typeof value !== 'string')) {
-    return { error: 'Choose one branch and one UTC cutoff date.' };
+    return { error: 'Choose one branch and one cutoff date.' };
   }
   const [branchValue, cutoffValue] = values as [string, string];
   const branchId = branchValue.trim();
   if (!branchId || branchId.length > 128 || !day(cutoffValue)) {
-    return { error: 'Choose a valid branch and a valid UTC cutoff date.' };
+    return { error: 'Choose a valid branch and a valid cutoff date.' };
   }
   return { controls: { branchId, cutoff: cutoffValue } };
 }
@@ -80,7 +80,14 @@ const FLAG_LABEL: Record<LiquidityKpiFlag, string> = {
   DEBIT_GOODS_RECEIVED_ACCRUAL: 'Debit goods-received accrual',
 };
 
-function ControlForm({ controls }: { controls?: Partial<Controls> }) {
+function ControlForm({
+  controls,
+  timeZone,
+}: {
+  controls?: Partial<Controls>;
+  timeZone?: string | null;
+}) {
+  const zone = timeZone ? workspaceZoneLabel(timeZone) : 'workspace timezone';
   return (
     <SectionCard title="Report controls" titleLevel={2}>
       <form method="get" className="grid gap-4 md:grid-cols-3 md:items-end">
@@ -96,7 +103,7 @@ function ControlForm({ controls }: { controls?: Partial<Controls> }) {
           />
         </label>
         <label className="grid gap-2 text-sm">
-          Cutoff, exclusive (UTC)
+          Cutoff, exclusive ({zone})
           <Input
             className="min-h-11"
             name="cutoff"
@@ -120,7 +127,7 @@ function Notice({ state }: { state: Exclude<State, { kind: 'loaded' }> }) {
   const content = {
     initial: [
       'Choose a report scope',
-      'Select one branch and a UTC cutoff date. No financial source has been read.',
+      'Select one branch and a cutoff date in your workspace timezone. No financial source has been read.',
     ],
     invalid: ['Report controls need attention', state.kind === 'invalid' ? state.message : ''],
     denied: [
@@ -151,7 +158,13 @@ function Status({ row }: { row: LiquidityKpiCurrency }) {
   return <StatusPill status="calculated" tone="info" label="Calculated" />;
 }
 
-function Results({ state }: { state: Extract<State, { kind: 'loaded' }> }) {
+function Results({
+  state,
+  timeZone,
+}: {
+  state: Extract<State, { kind: 'loaded' }>;
+  timeZone?: string | null;
+}) {
   const { kpi } = state;
   const csv = liquidityKpiCsv(kpi, {
     branchId: state.branchId,
@@ -165,8 +178,9 @@ function Results({ state }: { state: Extract<State, { kind: 'loaded' }> }) {
       actions={kpi.empty ? undefined : <ExportCsv csv={csv} />}
     >
       <p className="text-sm text-text-muted">
-        Closing balances posted before {formatUtcInstant(state.cutoff)}. Source: posted accounts.
-        Retrieved {formatUtcInstant(state.retrievedAt)}. {LIQUIDITY_KPI_COVERAGE}
+        Closing balances posted before {formatWorkspaceDateTime(state.cutoff, timeZone)}. Source:
+        posted accounts. Retrieved {formatWorkspaceDateTime(state.retrievedAt, timeZone)}.{' '}
+        {LIQUIDITY_KPI_COVERAGE}
       </p>
       <p className="mt-2 text-sm text-text-muted">
         Coverage = (CASH + BANK) ÷ (accounts payable + goods-received accrual), each currency
@@ -259,10 +273,14 @@ export default async function LiquidityKpiPage({ searchParams }: { searchParams:
   let state: State = parsed.error
     ? { kind: 'invalid', message: parsed.error }
     : { kind: 'initial' };
+  // The organization zone is known only after the actor resolves; before any read the
+  // form names it generically.
+  let timeZone: string | null | undefined;
 
   if (parsed.controls) {
     try {
       const actor = await resolveTenantActor();
+      timeZone = actor?.organization?.timezone ?? 'UTC';
       if (!actor) {
         state = { kind: 'denied' };
       } else {
@@ -272,9 +290,18 @@ export default async function LiquidityKpiPage({ searchParams }: { searchParams:
           support: actor.support,
         });
         const caller = pharmacyFinanceRouter.createCaller(ctx);
-        const cutoff = new Date(`${parsed.controls.cutoff}T00:00:00.000Z`);
-        // Closing balances include every posting before the cutoff, so a one-day window suffices.
-        const from = new Date(cutoff.getTime() - DAY_MS);
+        // The cutoff is the start of the picked day on the organization's clock. Closing
+        // balances include every posting before it, so a one-day window suffices.
+        const zoneName = timeZone;
+        const cutoff = workspaceDateRange(
+          parsed.controls.cutoff,
+          parsed.controls.cutoff,
+          zoneName
+        ).from;
+        const previousDay = new Date(Date.parse(`${parsed.controls.cutoff}T00:00:00.000Z`) - DAY_MS)
+          .toISOString()
+          .slice(0, 10);
+        const from = workspaceDateRange(previousDay, previousDay, zoneName).from;
         const report = await caller.financialStatements({
           branchId: parsed.controls.branchId,
           from: from.toISOString(),
@@ -314,8 +341,12 @@ export default async function LiquidityKpiPage({ searchParams }: { searchParams:
         heading="Posted cash coverage"
         description="Compare posted cash and bank balances with posted payables and goods-received accruals, per recorded currency."
       />
-      <ControlForm controls={formControls} />
-      {state.kind === 'loaded' ? <Results state={state} /> : <Notice state={state} />}
+      <ControlForm controls={formControls} timeZone={timeZone} />
+      {state.kind === 'loaded' ? (
+        <Results state={state} timeZone={timeZone} />
+      ) : (
+        <Notice state={state} />
+      )}
     </div>
   );
 }

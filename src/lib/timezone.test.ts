@@ -119,3 +119,15 @@ describe('workspace picker instants', () => {
     );
   });
 });
+
+describe('workspaceDateOffset', () => {
+  it('counts calendar days on the workspace clock, across a daylight-saving change', async () => {
+    const { workspaceDateOffset } = await import('./timezone');
+    // 23:30 UTC on 27 Jun is already 28 Jun in London (BST).
+    const now = new Date('2026-06-27T23:30:00Z');
+    expect(workspaceDateOffset('Europe/London', 0, now)).toBe('2026-06-28');
+    expect(workspaceDateOffset('Europe/London', -179, now)).toBe('2025-12-31');
+    expect(workspaceDateOffset('Europe/London', -90, now)).toBe('2026-03-30');
+    expect(workspaceDateOffset(undefined, 1, now)).toBe('2026-06-28');
+  });
+});
