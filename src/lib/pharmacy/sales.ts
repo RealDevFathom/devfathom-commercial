@@ -1896,7 +1896,10 @@ export async function recoverRestockInterest(
       branchId: scope.branchId,
       status: { in: ['OPEN', 'NOTIFIED'] },
     },
-    include: { demandEvent: true },
+    include: {
+      demandEvent: true,
+      notifications: { where: { status: 'CAPTURED' }, select: { id: true } },
+    },
   });
   if (interest?.orderLineId || isRefillCycleCampaignKey(interest?.campaignKey))
     throw new PharmacySaleError('INVALID_STATE');
@@ -1912,6 +1915,24 @@ export async function recoverRestockInterest(
     line.sale.receiptNumber === null
   )
     throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+  // Recovery credit starts only when the back-in-stock notice was actually
+  // sent (provider accepted it); a sale completed before that is not credited.
+  const noticeKeys = interest.notifications.map((notice) => `back-in-stock:${notice.id}`);
+  const sentLogs = noticeKeys.length
+    ? await db.pharmacyMessageLog.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          kind: 'BACK_IN_STOCK',
+          status: 'SENT',
+          dedupeKey: { in: noticeKeys },
+        },
+        select: { createdAt: true },
+      })
+    : [];
+  const firstSentAt = sentLogs.map((log) => log.createdAt.getTime()).sort((x, y) => x - y)[0];
+  const soldAt = line.sale.completedAt;
+  if (firstSentAt === undefined || !soldAt || soldAt.getTime() <= firstSentAt)
+    throw new PharmacySaleError('INVALID_STATE');
   const recoveredAt = new Date();
   await db.unfulfilledDemandEvent.update({
     where: {

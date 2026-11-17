@@ -984,6 +984,7 @@ describe('DEM-03 restock interest', () => {
           id: 'interest-a',
           demandEventId: 'demand-a',
           demandEvent: { requestedMedicineId: 'med-a' },
+          notifications: [{ id: 'notice-a' }],
         }),
         update: async (args: { data: Record<string, unknown> }) => {
           writes.push(args.data);
@@ -995,8 +996,17 @@ describe('DEM-03 restock interest', () => {
           id: 'line-a',
           saleId: 'sale-a',
           medicineId: 'med-a',
-          sale: { status: 'COMPLETED', receiptNumber: 42 },
+          sale: {
+            status: 'COMPLETED',
+            receiptNumber: 42,
+            completedAt: new Date('2026-06-02T00:00:00Z'),
+          },
         }),
+      },
+      pharmacyMessageLog: {
+        findMany: async () => [
+          { dedupeKey: 'back-in-stock:notice-a', createdAt: new Date('2026-06-01T00:00:00Z') },
+        ],
       },
       unfulfilledDemandEvent: {
         update: async (args: { data: Record<string, unknown> }) => {
@@ -1134,6 +1144,7 @@ describe('DEV-79 back-in-stock capture and recovery', () => {
             id: where.id,
             demandEventId: 'demand-a',
             demandEvent: { requestedMedicineId: 'med-a' },
+            notifications: [{ id: 'notice-a' }],
           };
         },
         update: async ({ data }: { data: { recoveredSaleLineId: string } }) => {
@@ -1158,7 +1169,7 @@ describe('DEV-79 back-in-stock capture and recovery', () => {
             id: line.id,
             saleId: `sale-${line.id}`,
             medicineId: line.medicineId,
-            sale: { status: 'COMPLETED', receiptNumber: 7 },
+            sale: { status: 'COMPLETED', receiptNumber: 7, completedAt: line.completedAt },
           };
         },
       },
@@ -1198,6 +1209,35 @@ describe('DEV-79 back-in-stock capture and recovery', () => {
     expect(
       await linkRestockRecoveries(sentAfterSale.db as never, scope, { now: AT, policy })
     ).toEqual([]);
+  });
+
+  it('manual recovery credits nothing before the notice was sent', async () => {
+    const early = [{ id: 'early', medicineId: 'med-a', completedAt: ago(12), patientId: null }];
+    const unsent = recoveryDb(early, [], null);
+    await expect(
+      recoverRestockInterest(unsent.db as never, scope, {
+        interestId: 'interest-a',
+        saleLineId: 'early',
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+    const beforeSend = recoveryDb(early, [], ago(10));
+    await expect(
+      recoverRestockInterest(beforeSend.db as never, scope, {
+        interestId: 'interest-a',
+        saleLineId: 'early',
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+    expect(beforeSend.recovered).toEqual([]);
+    const afterSend = recoveryDb(
+      [{ id: 'ok', medicineId: 'med-a', completedAt: ago(5), patientId: null }],
+      [],
+      ago(10)
+    );
+    await recoverRestockInterest(afterSend.db as never, scope, {
+      interestId: 'interest-a',
+      saleLineId: 'ok',
+    });
+    expect(afterSend.recovered).toEqual([{ interestId: 'interest-a', saleLineId: 'ok' }]);
   });
 
   it('does not link a sale more than 7 days after the notice or already linked elsewhere', async () => {
