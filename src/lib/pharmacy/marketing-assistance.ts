@@ -48,7 +48,13 @@ export async function draftMarketingCopy(
     });
     const body = z.string().trim().min(1).max(1000).parse(result.text);
     // Output-language check: the draft must be in the requested language.
-    if (detectReplyLocale(body) !== locale) throw new Error('Draft is in the wrong language.');
+    // The fixed opt-out sentence is excluded so it cannot tip the language heuristic.
+    const substance = body
+      .split(/(?<=[.!?۔؟])\s+|\n+/u)
+      .filter((part) => !/STOP/i.test(part))
+      .join(' ');
+    if (!substance.trim() || detectReplyLocale(substance) !== locale)
+      throw new Error('Draft is in the wrong language.');
     validateMarketingBody(body);
     // Customer-facing text never names a drug: reject any of this tenant's medicine,
     // brand, alias or ingredient names, not only the generic clinical words above.

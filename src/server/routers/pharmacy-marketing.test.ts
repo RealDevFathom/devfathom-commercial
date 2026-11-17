@@ -244,7 +244,7 @@ describe('marketing workflow authorization', () => {
       status: 'ACTIVE',
       vertical: 'PHARMACY',
       timezone: 'Asia/Karachi',
-      locale: 'ur',
+      locale: 'ur-PK',
     });
     await caller().assist({ ...input, occasion: 'WELCOME', tone: 'FRIENDLY' });
     expect(mocks.assist).toHaveBeenCalledWith(

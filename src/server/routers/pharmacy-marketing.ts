@@ -457,7 +457,8 @@ export const pharmacyMarketingRouter = router({
         {
           organizationId: resolved.organizationId,
           branchId: resolved.branchId,
-          locale: org?.locale === 'ur' ? 'ur' : 'en',
+          // Stored locales can be regional (ur-PK, en-PK): compare the language subtag.
+          locale: org?.locale?.toLowerCase().split(/[-_]/)[0] === 'ur' ? 'ur' : 'en',
         }
       );
     }),

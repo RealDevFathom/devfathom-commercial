@@ -122,3 +122,12 @@ it('rejects an English draft when Urdu was requested, and an Urdu draft for Engl
   mocks.route.mockResolvedValue({ text: 'ہمارے اسٹور میں خوش آمدید۔ STOP لکھیں۔' });
   expect(await draftMarketingCopy(ur, context)).toMatchObject({ available: false, body: null });
 });
+it('rejects an English draft whose only Urdu is the opt-out sentence', async () => {
+  mocks.route.mockResolvedValue({ text: 'Welcome to our store. STOP لکھ کر جواب دیں۔' });
+  expect(
+    await draftMarketingCopy(
+      { occasion: 'WELCOME', tone: 'FRIENDLY' },
+      { ...context, locale: 'ur' }
+    )
+  ).toMatchObject({ available: false, body: null });
+});
