@@ -19,16 +19,25 @@ vi.mock('@/server/audit', () => ({
   recordTrpcAudit: vi.fn(),
 }));
 
-const reads = vi.hoisted(() => ({
-  searchCounterCatalog: vi.fn(async () => ({ results: [] })),
-  readCustomerSnapshot: vi.fn(async () => ({ customer: null })),
-  onHand: vi.fn(async () => []),
-  readOpenPharmacyDrawer: vi.fn(async () => null),
-  readPharmacyTenderOutcome: vi.fn(async () => ({ status: 'ACCEPTED' })),
-  findSubstituteProposals: vi.fn(async () => []),
-  findUpsellSuggestions: vi.fn(async () => []),
-  authenticatePharmacyPack: vi.fn(async () => ({ status: 'UNVERIFIED' })),
-}));
+/** Every stubbed library read takes the database, then the branch scope, then its input. */
+type BranchRead = (
+  db: unknown,
+  scope: { organizationId: string; branchId: string; actorId: string },
+  ...input: unknown[]
+) => Promise<unknown>;
+const reads = vi.hoisted(() => {
+  const read = (result: unknown) => vi.fn<BranchRead>(async () => result);
+  return {
+    searchCounterCatalog: read({ results: [] }),
+    readCustomerSnapshot: read({ customer: null }),
+    onHand: read([]),
+    readOpenPharmacyDrawer: read(null),
+    readPharmacyTenderOutcome: read({ status: 'ACCEPTED' }),
+    findSubstituteProposals: read([]),
+    findUpsellSuggestions: read([]),
+    authenticatePharmacyPack: read({ status: 'UNVERIFIED' }),
+  };
+});
 vi.mock('@/lib/pharmacy/counter', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/counter')>()),
   searchCounterCatalog: reads.searchCounterCatalog,
@@ -133,19 +142,16 @@ const activeBranches = new Set([MAIN, DHA]);
 let db: {
   $transaction: ReturnType<typeof vi.fn>;
   pharmacyBranch: { findMany: ReturnType<typeof vi.fn>; findFirst: ReturnType<typeof vi.fn> };
-  pharmacyBranchAssignment: {
-    findMany: ReturnType<typeof vi.fn>;
-    findFirst: ReturnType<typeof vi.fn>;
-  };
+  pharmacyBranchAssignment: { findMany: ReturnType<typeof vi.fn> };
   pharmacyInventoryLot: { findMany: ReturnType<typeof vi.fn> };
   user: { findUnique: ReturnType<typeof vi.fn>; findFirst: ReturnType<typeof vi.fn> };
 };
 
 /** The branch scope the library read was handed (its second argument). */
-function scopeOf(read: Read): unknown {
-  const calls = reads[read].mock.calls as unknown as unknown[][];
+function scopeOf(read: Read) {
+  const calls = reads[read].mock.calls;
   expect(calls).toHaveLength(1);
-  return calls[0][1];
+  return calls[0]![1];
 }
 
 function caller(role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOYEE'): Caller {
@@ -183,7 +189,6 @@ beforeEach(() => {
           ? [{ branchId: MAIN }]
           : []
       ),
-      findFirst: vi.fn(async () => null),
     },
     pharmacyInventoryLot: { findMany: vi.fn(async () => []) },
     // A counter member with the canonical counter grant, so any refusal is the branch.
