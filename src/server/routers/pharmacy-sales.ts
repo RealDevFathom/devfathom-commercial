@@ -73,8 +73,8 @@ import {
   isLockedOut,
   registerFailedAttempt,
   clearLockout,
-  verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
+import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import { closePharmacyDay, readPharmacyClose } from '@/lib/pharmacy/day-close';
 import { listOpenBills } from '@/lib/pharmacy/open-bills';
 import { readPharmacyCashCloseCheck } from '@/lib/pharmacy/cash-close-check-operations';
@@ -2290,7 +2290,15 @@ export const pharmacySalesRouter = router({
             return blocked;
           if (!(await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }))) return blocked;
           if (
-            !(await verifyOperatorCredential('PIN', authorization.pin, credential.credentialHash))
+            !(await verifyApprovalSecret(db, {
+              organizationId: scope.organizationId,
+              approverUserId: pharmacist.id,
+              credentialHash: credential.credentialHash,
+              secret: authorization.pin,
+              action: 'pharmacySales.controlledAuthorization',
+              requestedById: scope.actorId,
+              now,
+            }))
           ) {
             await db.restaurantOperatorCredential.update({
               where: { id: credential.id },

@@ -631,7 +631,8 @@ export function ReturnForm({
         onChange={(event) => setManagerPin(event.target.value.replace(/\D/g, ''))}
       />
       <p id="refund-manager-pin-hint" className="text-sm text-text-muted">
-        Required for every return and refund. The PIN is never saved on this device.
+        Required for every return and refund. If you set up an authenticator for approvals, enter
+        its 6-digit code instead. Neither is ever saved on this device.
       </p>
     </div>
   );
