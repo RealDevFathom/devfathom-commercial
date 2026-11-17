@@ -20,14 +20,14 @@ vi.mock('@/server/audit', () => ({
 }));
 
 const reads = vi.hoisted(() => ({
-  searchCounterCatalog: vi.fn(async () => ({ results: [] })),
-  readCustomerSnapshot: vi.fn(async () => ({ customer: null })),
-  onHand: vi.fn(async () => []),
-  readOpenPharmacyDrawer: vi.fn(async () => null),
-  readPharmacyTenderOutcome: vi.fn(async () => ({ status: 'ACCEPTED' })),
-  findSubstituteProposals: vi.fn(async () => []),
-  findUpsellSuggestions: vi.fn(async () => []),
-  authenticatePharmacyPack: vi.fn(async () => ({ status: 'UNVERIFIED' })),
+  searchCounterCatalog: vi.fn(async (..._args: unknown[]) => ({ results: [] })),
+  readCustomerSnapshot: vi.fn(async (..._args: unknown[]) => ({ customer: null })),
+  onHand: vi.fn(async (..._args: unknown[]) => []),
+  readOpenPharmacyDrawer: vi.fn(async (..._args: unknown[]) => null),
+  readPharmacyTenderOutcome: vi.fn(async (..._args: unknown[]) => ({ status: 'ACCEPTED' })),
+  findSubstituteProposals: vi.fn(async (..._args: unknown[]) => []),
+  findUpsellSuggestions: vi.fn(async (..._args: unknown[]) => []),
+  authenticatePharmacyPack: vi.fn(async (..._args: unknown[]) => ({ status: 'UNVERIFIED' })),
 }));
 vi.mock('@/lib/pharmacy/counter', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/counter')>()),
@@ -143,7 +143,7 @@ let db: {
 
 /** The branch scope the library read was handed (its second argument). */
 function scopeOf(read: Read): unknown {
-  const calls = reads[read].mock.calls as unknown as unknown[][];
+  const calls = reads[read].mock.calls;
   expect(calls).toHaveLength(1);
   return calls[0][1];
 }
@@ -183,9 +183,9 @@ beforeEach(() => {
           ? [{ branchId: MAIN }]
           : []
       ),
-      findFirst: vi.fn(async () => null),
+      findFirst: vi.fn(async (..._args: unknown[]) => null),
     },
-    pharmacyInventoryLot: { findMany: vi.fn(async () => []) },
+    pharmacyInventoryLot: { findMany: vi.fn(async (..._args: unknown[]) => []) },
     // A counter member with the canonical counter grant, so any refusal is the branch.
     user: {
       findUnique: vi.fn(async () => ({
@@ -199,7 +199,7 @@ beforeEach(() => {
         },
         permissionOverrides: [],
       })),
-      findFirst: vi.fn(async () => null),
+      findFirst: vi.fn(async (..._args: unknown[]) => null),
     },
   };
 });
