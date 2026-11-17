@@ -927,9 +927,30 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
       })) satisfies MouseEventHandler<HTMLButtonElement>,
     sendReviewedOrder: (draftId: string, displayedReview: PosDraftReview | null) =>
       (async () => {
-        await offlineRuntime.current?.resolveReview(draftId, 'REPLAY', displayedReview);
-        syncQueue();
-        await replayQueue(runtime);
+        if (busy) return;
+        setPending('review');
+        try {
+          const result = await offlineRuntime.current?.resolveReview(
+            draftId,
+            'REPLAY',
+            displayedReview
+          );
+          syncQueue();
+          if (result !== 'APPLIED') {
+            setNotice({
+              tone: 'warning',
+              message:
+                'This order changed. Nothing was sent. Review the updated item and prices before sending deliberately again.',
+            });
+            return;
+          }
+          setNotice(null);
+          await replayQueue(runtime);
+        } catch (error) {
+          handleError(error);
+        } finally {
+          setPending(null);
+        }
       }) satisfies MouseEventHandler<HTMLButtonElement>,
     discardReviewedOrder: (draft: (typeof reviewDrafts)[number]) =>
       (async () => {

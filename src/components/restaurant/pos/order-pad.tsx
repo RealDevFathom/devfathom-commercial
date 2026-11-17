@@ -19,6 +19,7 @@ import { ORDER_CHANNELS } from '@/lib/restaurant/order-channels';
 import type { CommercialTermsQuote } from '@/lib/restaurant/commercial-terms';
 import { quoteDraftCheckTotal } from '@/lib/restaurant/draft-check-total';
 import { shouldHandleCounterKey } from '@/lib/pharmacy/counter-keymap';
+import type { PosDraftReview } from '@/lib/restaurant/pos-command-queue';
 
 export function OrderPad({ demo = false }: { demo?: boolean }) {
   const pos = usePosRuntime({ demo });
@@ -212,13 +213,19 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
               {pos.reviewDrafts.map((draft) => (
                 <div
                   key={draft.draftId}
+                  role="region"
+                  aria-label={`Queued order ${draft.sequence} review`}
                   className="rounded-md border border-warning/30 bg-warning/10 p-3"
                 >
-                  <p className="font-medium">Needs review · {draft.review?.message}</p>
+                  <div id={`review-${draft.draftId}`} aria-live="polite" aria-atomic="true">
+                    <p className="font-medium">Needs review · {draft.review?.message}</p>
+                    <ReviewDetails review={draft.review} />
+                  </div>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <Button
                       type="button"
                       variant="outline"
+                      aria-describedby={`review-${draft.draftId}`}
                       disabled={
                         !pos.online || pos.busy || draft.review?.reason === 'COMPOSER_UNVERIFIED'
                       }
@@ -745,6 +752,27 @@ function PosShell({
           </div>
         </main>
       </div>
+    </div>
+  );
+}
+
+function ReviewDetails({ review }: { review: PosDraftReview | null }) {
+  const line = review?.catalog?.line;
+  if (!line) return null;
+  return (
+    <div className="mt-2 space-y-1 text-sm text-text-body">
+      <p className="font-medium">
+        Line {line.number} · {line.name ?? 'Item no longer on the menu'}
+      </p>
+      <p>
+        Price: {line.quotedPrice ?? 'not recorded'} → {line.currentPrice ?? 'unavailable'}
+      </p>
+      {line.modifiers.map((modifier, index) => (
+        <p key={modifier.optionId}>
+          {modifier.name ?? `Selected modifier ${index + 1}`}:{' '}
+          {modifier.quotedPrice ?? 'not recorded'} → {modifier.currentPrice ?? 'unavailable'}
+        </p>
+      ))}
     </div>
   );
 }

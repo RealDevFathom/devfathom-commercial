@@ -121,6 +121,32 @@ export type PosDraftReview = {
   message: string;
   /** The command that raised it, when the trigger was a replay response. */
   atCommandId: string | null;
+  /** Persisted values shown with this review; absent on older saved reviews. */
+  catalog?: PosReviewCatalog;
+};
+
+type PosReviewCatalog = {
+  branchId: string;
+  channel: PosOrderChannel;
+  publicationId: string;
+  menuId: string;
+  channelOpen: boolean;
+  line: {
+    number: number;
+    menuItemId: string;
+    productId: string | null;
+    variantId: string | null;
+    name: string | null;
+    available: boolean;
+    quotedPrice: string | null;
+    currentPrice: string | null;
+    modifiers: Array<{
+      optionId: string;
+      name: string | null;
+      quotedPrice: string | null;
+      currentPrice: string | null;
+    }>;
+  } | null;
 };
 
 export type PosQueuedDraft = {
@@ -671,11 +697,11 @@ export function reviewAgainstCatalog(
   catalog: PosCatalogSnapshot
 ): PosDraftReview | null {
   if (!catalog.channelOpen) {
-    return {
+    return withReviewCatalog(draft, catalog, {
       reason: 'CHANNEL_CLOSED',
       message: 'This channel is no longer open for orders. Review this order before sending.',
       atCommandId: null,
-    };
+    });
   }
 
   // A newer catalog version alone is not a conflict: the draft is re-validated line
@@ -694,23 +720,23 @@ function reviewLines(
     if (command.commandId === acceptedCommandId) continue;
     const item = findCatalogItem(catalog, command.body.menuItemId);
     if (!item || !item.available) {
-      return {
+      return withReviewCatalog(draft, catalog, {
         reason: 'ITEM_UNAVAILABLE',
         message: item
           ? 'An item on this order is no longer available. Review it before sending.'
           : 'An item on this order is no longer on the menu. Review it before sending.',
         atCommandId: command.commandId,
-      };
+      });
     }
     if (item.price !== command.body.quotedUnitPrice) {
-      return {
+      return withReviewCatalog(draft, catalog, {
         reason: 'PRICE_CHANGED',
         message: 'A price on this order changed. Review it before sending.',
         atCommandId: command.commandId,
-      };
+      });
     }
     const modifierReview = reviewModifiers(command.commandId, command.body, item);
-    if (modifierReview) return modifierReview;
+    if (modifierReview) return withReviewCatalog(draft, catalog, modifierReview);
   }
   return null;
 }
@@ -751,6 +777,55 @@ function reviewModifiers(
     }
   }
   return null;
+}
+
+/** Capture exactly the menu scope and line values that deliberate approval can rebaseline.
+ * Unrelated catalog/version changes do not invalidate an otherwise identical quote.
+ */
+function withReviewCatalog(
+  draft: PosQueuedDraft,
+  catalog: PosCatalogSnapshot,
+  review: PosDraftReview
+): PosDraftReview {
+  const lines = draft.commands.filter((command) => command.kind === 'ADD_ITEM');
+  const index = lines.findIndex((command) => command.commandId === review.atCommandId);
+  const command = lines[index];
+  const item = command ? findCatalogItem(catalog, command.body.menuItemId) : null;
+  const options = new Map(
+    (item?.modifierGroups ?? []).flatMap((group) =>
+      group.options.map((option) => [option.id, option] as const)
+    )
+  );
+  return {
+    ...review,
+    catalog: {
+      branchId: catalog.branchId,
+      channel: catalog.channel,
+      publicationId: catalog.publicationId,
+      menuId: catalog.menuId,
+      channelOpen: catalog.channelOpen,
+      line: command
+        ? {
+            number: index + 1,
+            menuItemId: command.body.menuItemId,
+            productId: item?.productId ?? null,
+            variantId: item?.variantId ?? null,
+            name: item?.name ?? null,
+            available: item?.available ?? false,
+            quotedPrice: command.body.quotedUnitPrice,
+            currentPrice: item?.price ?? null,
+            modifiers: (command.body.modifierOptionIds ?? []).map((optionId) => ({
+              optionId,
+              name: options.get(optionId)?.name ?? null,
+              quotedPrice:
+                command.body.quotedModifiers?.find((quote) => quote.optionId === optionId)
+                  ?.priceDelta ?? null,
+              currentPrice: options.get(optionId)?.priceDelta ?? null,
+            })),
+          }
+        : null,
+    },
+  };
 }
 
 /**
@@ -824,27 +899,34 @@ export function resolveReviewedDraft(
   catalogVersion: string,
   /** The catalog the operator reviewed against; its prices become the accepted quote. */
   catalog: PosCatalogSnapshot | null = null
-): PosQueueSnapshot {
+): { snapshot: PosQueueSnapshot; status: 'APPLIED' | 'STALE' | 'REFUSED' } {
   if (decision === 'DISCARD') {
-    return { ...snapshot, drafts: snapshot.drafts.filter((d) => d.draftId !== draftId) };
+    return {
+      snapshot: { ...snapshot, drafts: snapshot.drafts.filter((d) => d.draftId !== draftId) },
+      status: 'APPLIED',
+    };
   }
+  const stored = snapshot.drafts.find((draft) => draft.draftId === draftId);
   // A review cannot establish authorship for work saved before composer proofs.
+  if (!stored?.review || stored.review.reason === 'COMPOSER_UNVERIFIED')
+    return { snapshot, status: 'REFUSED' };
+  // Recompute against the catalog loaded under the same terminal lock, including
+  // for legacy reviews and same-version value drift. Never trust only a version
+  // or the generic reason/message to identify the quote the operator saw.
+  const currentReview = catalog ? withReviewCatalog(stored, catalog, stored.review) : stored.review;
   if (
-    snapshot.drafts.find((draft) => draft.draftId === draftId)?.review?.reason ===
-    'COMPOSER_UNVERIFIED'
-  )
-    return snapshot;
-  return mapDraft(snapshot, draftId, (draft) => {
-    // A different tab may have replaced the conflict since this card rendered.
-    // Approve only the review the operator saw, never the freshly loaded one.
-    if (
-      !displayedReview ||
-      !draft.review ||
-      draft.review.atCommandId !== displayedReview.atCommandId ||
-      draft.review.reason !== displayedReview.reason ||
-      draft.review.message !== displayedReview.message
-    )
-      return draft;
+    !displayedReview ||
+    currentReview.atCommandId !== displayedReview.atCommandId ||
+    currentReview.reason !== displayedReview.reason ||
+    currentReview.message !== displayedReview.message ||
+    JSON.stringify(currentReview.catalog) !== JSON.stringify(displayedReview.catalog)
+  ) {
+    return {
+      snapshot: mapDraft(snapshot, draftId, (draft) => ({ ...draft, review: currentReview })),
+      status: 'STALE',
+    };
+  }
+  const resolved = mapDraft(snapshot, draftId, (draft) => {
     // Without a catalog of this draft's own menu nothing can be re-checked or
     // re-baselined: send it as composed, and the server prices every line.
     if (!catalog || !draftMatchesCatalog(draft, catalog)) {
@@ -858,4 +940,5 @@ export function resolveReviewedDraft(
     if (next) return { ...rebased, status: 'NEEDS_REVIEW', review: next };
     return { ...rebased, status: 'QUEUED', review: null, catalogVersion };
   });
+  return { snapshot: resolved, status: 'APPLIED' };
 }

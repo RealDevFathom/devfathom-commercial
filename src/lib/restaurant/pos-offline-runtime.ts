@@ -156,20 +156,18 @@ export class PosOfflineRuntime {
     draftId: string,
     decision: 'REPLAY' | 'DISCARD',
     displayedReview: PosDraftReview | null
-  ): Promise<void> {
-    await this.commit(() => {
-      this.state = {
-        ...this.state,
-        queue: resolveReviewedDraft(
-          this.queue(),
-          draftId,
-          decision,
-          displayedReview,
-          this.state.catalog?.version ?? '',
-          this.state.catalog ?? null
-        ),
-      };
-      return { persist: true, result: undefined };
+  ): Promise<ReturnType<typeof resolveReviewedDraft>['status']> {
+    return this.commit(() => {
+      const resolved = resolveReviewedDraft(
+        this.queue(),
+        draftId,
+        decision,
+        displayedReview,
+        this.state.catalog?.version ?? '',
+        this.state.catalog ?? null
+      );
+      this.state = { ...this.state, queue: resolved.snapshot };
+      return { persist: true, result: resolved.status };
     });
   }
 

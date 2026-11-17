@@ -774,6 +774,138 @@ describe('review before a stale submission (criterion 5)', () => {
       expect(reviewAgainstCatalog(draft, withModifiers('50.00'))).toBeNull();
     });
 
+    it.each(['base price', 'modifier price'] as const)(
+      'rejects repeated %s changes with identical reason, message and command, including same-version drift',
+      (changed) => {
+        const original = modifierDraftSnapshot([{ optionId: 'opt-cheese', priceDelta: '20.00' }]);
+        const menuA = withModifiers('50.00');
+        const menuB = withModifiers('80.00');
+        if (changed === 'base price') {
+          menuA.sections[0].items[0].price = '500.00';
+          menuB.sections[0].items[0].price = '700.00';
+        }
+        const a = markDraftsForCatalogReview(original, menuA).snapshot;
+        const b = markDraftsForCatalogReview(a, menuB).snapshot;
+        const displayed = a.drafts[0].review!;
+        expect(b.drafts[0].review).toMatchObject({
+          reason: displayed.reason,
+          message: displayed.message,
+          atCommandId: displayed.atCommandId,
+        });
+        expect(menuA.version).toBe(menuB.version);
+        const result = resolveReviewedDraft(
+          b,
+          b.drafts[0].draftId,
+          'REPLAY',
+          displayed,
+          menuB.version,
+          menuB
+        );
+        expect(result.status).toBe('STALE');
+        expect(result.snapshot).toEqual(b);
+        expect(result.snapshot.drafts[0].commands).toEqual(original.drafts[0].commands);
+        expect(nextReplayCommand(result.snapshot, DEVICE, OPERATOR).status).toBe('IDLE');
+
+        // Even if a persisted review was not refreshed alongside the catalog, the
+        // resolver must compare against actual current values before rebaselining.
+        const drift = resolveReviewedDraft(
+          a,
+          a.drafts[0].draftId,
+          'REPLAY',
+          displayed,
+          menuB.version,
+          menuB
+        );
+        expect(drift.status).toBe('STALE');
+        expect(drift.snapshot.drafts[0].review).toEqual(b.drafts[0].review);
+        expect(drift.snapshot.drafts[0].commands).toEqual(original.drafts[0].commands);
+        const fresh = resolveReviewedDraft(
+          b,
+          b.drafts[0].draftId,
+          'REPLAY',
+          b.drafts[0].review,
+          menuB.version,
+          menuB
+        );
+        expect(fresh.status).toBe('APPLIED');
+        expect(fresh.snapshot.drafts[0].status).toBe('QUEUED');
+        expect(fresh.snapshot.drafts[0].commands[1].body).toMatchObject({
+          quotedUnitPrice: menuB.sections[0].items[0].price,
+          quotedModifiers: [{ optionId: 'opt-cheese', priceDelta: '80.00' }],
+        });
+      }
+    );
+
+    it('requires a fresh display for older reviews without captured catalog values', () => {
+      const current = withModifiers('80.00');
+      const snapshot = markDraftsForCatalogReview(
+        modifierDraftSnapshot([{ optionId: 'opt-cheese', priceDelta: '50.00' }]),
+        current
+      ).snapshot;
+      const legacy = structuredClone(snapshot);
+      delete legacy.drafts[0].review!.catalog;
+      const result = resolveReviewedDraft(
+        legacy,
+        legacy.drafts[0].draftId,
+        'REPLAY',
+        legacy.drafts[0].review,
+        current.version,
+        current
+      );
+      expect(result.status).toBe('STALE');
+      expect(result.snapshot).toEqual(snapshot);
+      expect(nextReplayCommand(result.snapshot, DEVICE, OPERATOR).status).toBe('IDLE');
+    });
+
+    it.each(['branchId', 'channel', 'publicationId', 'menuId'] as const)(
+      'binds the approval to its catalog %s',
+      (field) => {
+        const current = withModifiers('80.00');
+        const snapshot = markDraftsForCatalogReview(
+          modifierDraftSnapshot([{ optionId: 'opt-cheese', priceDelta: '50.00' }]),
+          current
+        ).snapshot;
+        const other = {
+          ...current,
+          [field]: field === 'channel' ? ('TAKEAWAY' as const) : 'other-menu-scope',
+        };
+        const result = resolveReviewedDraft(
+          snapshot,
+          snapshot.drafts[0].draftId,
+          'REPLAY',
+          snapshot.drafts[0].review,
+          other.version,
+          other
+        );
+        expect(result.status).toBe('STALE');
+        expect(result.snapshot.drafts[0].status).toBe('NEEDS_REVIEW');
+        expect(result.snapshot.drafts[0].commands).toEqual(snapshot.drafts[0].commands);
+      }
+    );
+
+    it('ignores unrelated version and unselected modifier updates', () => {
+      const current = withModifiers('80.00');
+      const snapshot = markDraftsForCatalogReview(
+        modifierDraftSnapshot([{ optionId: 'opt-cheese', priceDelta: '50.00' }]),
+        current
+      ).snapshot;
+      const newer = withModifiers('80.00', [
+        { id: 'opt-cheese', priceDelta: '80.00' },
+        { id: 'unselected', priceDelta: '900.00' },
+      ]);
+      newer.version = 'new-unrelated-version';
+      const result = resolveReviewedDraft(
+        snapshot,
+        snapshot.drafts[0].draftId,
+        'REPLAY',
+        snapshot.drafts[0].review,
+        newer.version,
+        newer
+      );
+      expect(result.status).toBe('APPLIED');
+      expect(result.snapshot.drafts[0].status).toBe('QUEUED');
+    });
+
     it('flags a repriced modifier even when the base price is unchanged', () => {
       const draft = modifierDraft([{ optionId: 'opt-cheese', priceDelta: '50.00' }]);
       const review = reviewAgainstCatalog(draft, withModifiers('80.00'));
@@ -846,7 +978,7 @@ describe('review before a stale submission (criterion 5)', () => {
         flagged.drafts[0].review,
         current.version,
         current
-      );
+      ).snapshot;
       // Unchanged since the review: the accepted draft is not flagged again.
       const refreshed = markDraftsForCatalogReview(accepted, current);
       expect(refreshed.flagged).toBe(0);
@@ -877,7 +1009,7 @@ describe('review before a stale submission (criterion 5)', () => {
         flagged.drafts[0].review,
         takeaway.version,
         takeaway
-      );
+      ).snapshot;
       expect(accepted.drafts[0].commands[1]).toEqual(legacy.drafts[0].commands[1]);
       expect(markDraftsForCatalogReview(accepted, withModifiers('50.00')).flagged).toBe(1);
     });
@@ -914,7 +1046,7 @@ describe('review before a stale submission (criterion 5)', () => {
         flagged.drafts[0].review,
         current.version,
         current
-      );
+      ).snapshot;
       expect(first.drafts[0].status).toBe('NEEDS_REVIEW');
       expect(first.drafts[0].review).toMatchObject({ reason: 'PRICE_CHANGED', atCommandId: 'c3' });
       expect(nextReplayCommand(first, DEVICE, OPERATOR).status).toBe('IDLE');
@@ -926,7 +1058,7 @@ describe('review before a stale submission (criterion 5)', () => {
         first.drafts[0].review,
         current.version,
         current
-      );
+      ).snapshot;
       expect(second.drafts[0].status).toBe('QUEUED');
       expect(markDraftsForCatalogReview(second, current).flagged).toBe(0);
     });
@@ -944,7 +1076,7 @@ describe('review before a stale submission (criterion 5)', () => {
         flagged.drafts[0].review,
         closed.version,
         closed
-      );
+      ).snapshot;
       expect(accepted.drafts[0].status).toBe('NEEDS_REVIEW');
       expect(accepted.drafts[0].review).toMatchObject({
         reason: 'PRICE_CHANGED',
@@ -1082,7 +1214,7 @@ describe('review before a stale submission (criterion 5)', () => {
       'REPLAY',
       snapshot.drafts[0].review,
       'v1:bbbb'
-    );
+    ).snapshot;
     expect(accepted.drafts[0].status).toBe('QUEUED');
     expect(accepted.drafts[0].review).toBeNull();
     expect(accepted.drafts[0].catalogVersion).toBe('v1:bbbb');
@@ -1093,7 +1225,7 @@ describe('review before a stale submission (criterion 5)', () => {
       'DISCARD',
       snapshot.drafts[1].review,
       'v1:bbbb'
-    );
+    ).snapshot;
     expect(dropped.drafts).toHaveLength(1);
   });
 
@@ -1115,7 +1247,13 @@ describe('review before a stale submission (criterion 5)', () => {
               ...(field === 'message' ? { message: 'A different conflict was displayed.' } : {}),
             };
       // Even without a matching catalog, stale approval cannot release the review.
-      const result = resolveReviewedDraft(snapshot, draft.draftId, 'REPLAY', displayed, 'v2');
+      const result = resolveReviewedDraft(
+        snapshot,
+        draft.draftId,
+        'REPLAY',
+        displayed,
+        'v2'
+      ).snapshot;
       expect(result).toEqual(snapshot);
       expect(nextReplayCommand(result, DEVICE, OPERATOR).status).toBe('IDLE');
     }

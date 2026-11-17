@@ -991,6 +991,15 @@ describe('OrderPad transport', () => {
     expect(
       await screen.findByText(/Needs review · An item on this order is no longer available/)
     ).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'This order changed. Nothing was sent. Review the updated item and prices before sending deliberately again.'
+    );
+    expect(screen.getByRole('region', { name: /Queued order .* review/ })).toHaveTextContent(
+      'Line 1 · Coffee'
+    );
+    expect(screen.getByRole('button', { name: 'Send deliberately' })).toHaveAccessibleDescription(
+      /Line 1 · Coffee.*Price: 3.00 → 4.00/
+    );
     await otherTab.refresh();
     expect(otherTab.snapshot().queue!.drafts[0]).toMatchObject({
       status: 'NEEDS_REVIEW',
