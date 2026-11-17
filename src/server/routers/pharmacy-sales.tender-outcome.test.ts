@@ -404,7 +404,6 @@ describe('pharmacySales.tenderOutcome', () => {
   });
 });
 
-
 describe('DEV-875 bank transfer reference recovery', () => {
   it('accepts bank statement references through the router and verifies the saved evidence', async () => {
     const legacy = { ...input, type: 'BANK_TRANSFER' as const, cashReceivedMinor: undefined };
@@ -412,7 +411,9 @@ describe('DEV-875 bank transfer reference recovery', () => {
     const transfer = { ...f.parsed, providerRef: 'BANK/2026-001' };
     f.keyRead.mockResolvedValue({ ...f.prior, payloadHash: digest(transfer) });
     f.tenderRead.mockResolvedValue({
-      ...(await f.tenderRead()), providerRef: 'BANK/2026-001', confirmedById: 'actor-1',
+      ...(await f.tenderRead()),
+      providerRef: 'BANK/2026-001',
+      confirmedById: 'actor-1',
     });
     expect(await f.caller().tenderOutcome(transfer)).toMatchObject({ status: 'ACCEPTED' });
     f.tenderRead.mockResolvedValue({ ...(await f.tenderRead()), providerRef: 'OTHER-TRANSFER' });
@@ -424,20 +425,38 @@ describe('DEV-875 bank transfer reference recovery', () => {
     expect(await f.caller().tenderOutcome(f.parsed)).toMatchObject({ status: 'ACCEPTED' });
     expect(await f.caller().tender(f.parsed)).toMatchObject({ ...stored, replayed: true });
   });
-  it.each(['', '   ', 'x'.repeat(121)])('rejects an invalid bank reference at the API boundary %j', async (providerRef) => {
+  it.each(['', '   ', 'x'.repeat(121)])(
+    'rejects an invalid bank reference at the API boundary %j',
+    async (providerRef) => {
+      const f = fixture();
+      await expect(
+        f.caller().tender({ ...input, type: 'BANK_TRANSFER', providerRef })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(f.transaction).not.toHaveBeenCalled();
+    }
+  );
+  it.each([
+    '4242424242424242',
+    '4242 4242 4242 4242',
+    '4242-4242-4242-4242',
+    '1234567890123',
+    'TRF 4111111111111111',
+    '4111.1111.1111.1111',
+    '4242\u200b4242\u200b4242\u200b4242',
+  ])('refuses a card number typed into a bank transfer reference %j', async (providerRef) => {
     const f = fixture();
-    await expect(f.caller().tender({ ...input, type: 'BANK_TRANSFER', providerRef })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      f.caller().tender({ ...input, type: 'BANK_TRANSFER', providerRef })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(f.transaction).not.toHaveBeenCalled();
   });
-  it.each(['4242424242424242', '4242 4242 4242 4242', '4242-4242-4242-4242', '1234567890123', 'TRF 4111111111111111'])(
-    'refuses a card number typed into a bank transfer reference %j', async (providerRef) => {
-      const f = fixture();
-      await expect(f.caller().tender({ ...input, type: 'BANK_TRANSFER', providerRef })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-      expect(f.transaction).not.toHaveBeenCalled();
-    });
   it('keeps full card numbers blocked at the API boundary', async () => {
     const f = fixture();
-    await expect(f.caller().tender({ ...input, type: 'CARD', providerRef: '4242424242424242', approvalCode: 'A1B2' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      f
+        .caller()
+        .tender({ ...input, type: 'CARD', providerRef: '4242424242424242', approvalCode: 'A1B2' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(f.transaction).not.toHaveBeenCalled();
   });
 });

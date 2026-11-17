@@ -15,6 +15,7 @@ import {
   isManualTender,
   BANK_TRANSFER_REFERENCE_MAX_LENGTH,
   bankTransferCaptureSchema,
+  looksLikeCardNumber,
   MANUAL_CARD_APPROVAL_CODE,
   MANUAL_CARD_REFERENCE,
   manualCardCaptureSchema,
@@ -450,14 +451,17 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                                           (referenceSkipped && !merchant?.allowReferenceSkip))
                                       ? 'Enter the payer’s name and 4–6 transaction ID digits, or use the allowed reference skip.'
                                       : bankTransfer && !transferCapture?.success
-                                        ? 'Enter the bank transfer reference before taking payment.'
-                                      : manualCard && !cardCapture?.success
-                                        ? 'Enter the card reference and approval code from the terminal slip.'
-                                        : khataLoading
-                                          ? 'Loading Khata accounts…'
-                                          : isKhata && !account
-                                            ? 'Choose a family Khata account before taking payment.'
-                                            : 'A manager or owner must approve the credit limit increase first.';
+                                        ? providerRef.trim() !== '' &&
+                                          looksLikeCardNumber(providerRef)
+                                          ? 'This looks like a card number. Enter the bank’s transfer reference instead.'
+                                          : 'Enter the bank transfer reference before taking payment.'
+                                        : manualCard && !cardCapture?.success
+                                          ? 'Enter the card reference and approval code from the terminal slip.'
+                                          : khataLoading
+                                            ? 'Loading Khata accounts…'
+                                            : isKhata && !account
+                                              ? 'Choose a family Khata account before taking payment.'
+                                              : 'A manager or owner must approve the credit limit increase first.';
 
     async function submitTender() {
       if (!submittable || amountMinor === null || submissionRef.current) return;
@@ -596,7 +600,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 ? payer
                   ? 'reference'
                   : 'payer'
-                : entry.value === 'BANK_TRANSFER' ? 'reference' : null;
+                : entry.value === 'BANK_TRANSFER'
+                  ? 'reference'
+                  : null;
               setType(entry.value);
               setProviderRef('');
               setPayerName(payer);
@@ -857,8 +863,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               onChange={(event) => setProviderRef(event.target.value)}
             />
             <p id="bank-transfer-help" className="text-sm text-text-muted">
-              Enter the reference shown by the bank after confirming the transfer was received.
-              You are recorded as the person who confirmed this payment.
+              Enter the reference shown by the bank after confirming the transfer was received. You
+              are recorded as the person who confirmed this payment.
             </p>
           </div>
         ) : null}

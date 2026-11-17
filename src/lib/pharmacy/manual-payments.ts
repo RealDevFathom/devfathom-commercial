@@ -82,9 +82,13 @@ export const manualCardCaptureSchema = z.object({
 
 /** Bank statement reference, required for every new bank transfer. */
 export const BANK_TRANSFER_REFERENCE_MAX_LENGTH = 120;
-/** True when the text holds a 13-19 digit run (spaces and dashes ignored): a card number. */
+/** True when the text holds a 13-19 digit run (separators ignored): a possible card number. */
 export function looksLikeCardNumber(text: string): boolean {
-  const compact = text.replace(/[\s-]+/g, '');
+  // Fold full-width digits, then drop spaces, dashes, dots, slashes, underscores and
+  // invisible characters so a card number cannot be split into short runs.
+  const compact = text
+    .normalize('NFKC')
+    .replace(/[\s\-._/\p{Cf}]+/gu, '');
   const runs = compact.match(/\d{13,}/g);
   if (!runs) return false;
   // Any run of 13-19 digits is refused outright, so a Luhn-valid number at those lengths

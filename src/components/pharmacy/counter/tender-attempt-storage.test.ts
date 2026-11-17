@@ -338,7 +338,6 @@ it('round-trips Khata recovery without storing authentication credentials', () =
   expect(window.localStorage.length).toBe(0);
 });
 
-
 it('DEV-875 retains bank transfer evidence for recovery and rejects mixed capture', () => {
   const attempt = original();
   attempt.input.type = 'BANK_TRANSFER';
@@ -348,7 +347,14 @@ it('DEV-875 retains bank transfer evidence for recovery and rejects mixed captur
   persistTenderAttempt(attempt);
   expect(readTenderAttempt(attempt.scope)).toEqual({ status: 'pending', attempt });
   clearTenderAttempt(attempt);
-  for (const change of [{ providerRef: '   ' }, { payerName: 'Ayesha' }, { referenceSkipped: true }, { approvalCode: 'A1B2' }]) {
-    expect(() => persistTenderAttempt({ ...attempt, input: { ...attempt.input, ...change } })).toThrow();
+  for (const change of [
+    { providerRef: '   ' },
+    { payerName: 'Ayesha' },
+    { referenceSkipped: true },
+    { approvalCode: 'A1B2' },
+  ]) {
+    expect(() =>
+      persistTenderAttempt({ ...attempt, input: { ...attempt.input, ...change } })
+    ).toThrow();
   }
 });

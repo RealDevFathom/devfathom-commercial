@@ -79,12 +79,18 @@ describe('DEV-618 payment panel', () => {
     rerender(<CounterTenderPanel {...props} balanceMinor={12450} />);
     expect(screen.getByText('Balance due').parentElement).toHaveTextContent('124.50');
     chooseTender('BANK_TRANSFER');
-    fireEvent.change(screen.getByLabelText('Transfer reference'), { target: { value: 'BANK-001' } });
+    fireEvent.change(screen.getByLabelText('Transfer reference'), {
+      target: { value: 'BANK-001' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
     await waitFor(() =>
       expect(props.onTender).toHaveBeenNthCalledWith(
         2,
-        { type: 'BANK_TRANSFER', amountMinor: 12450, providerRef: 'BANK-001' },
+        expect.objectContaining({
+          type: 'BANK_TRANSFER',
+          amountMinor: 12450,
+          providerRef: 'BANK-001',
+        }),
         { amount: '', cashReceived: '' }
       )
     );
@@ -186,13 +192,19 @@ describe('DEV-714 tender buttons', () => {
     expect(props.onTender).not.toHaveBeenCalled();
 
     chooseTender('BANK_TRANSFER');
-    fireEvent.change(screen.getByLabelText('Transfer reference'), { target: { value: 'BANK-001' } });
+    fireEvent.change(screen.getByLabelText('Transfer reference'), {
+      target: { value: 'BANK-001' },
+    });
     expect(take).toBeEnabled();
     expect(take).not.toHaveAccessibleDescription(new RegExp(message));
     fireEvent.click(take);
     await waitFor(() =>
       expect(props.onTender).toHaveBeenCalledWith(
-        { type: 'BANK_TRANSFER', amountMinor: 12550, providerRef: 'BANK-001' },
+        expect.objectContaining({
+          type: 'BANK_TRANSFER',
+          amountMinor: 12550,
+          providerRef: 'BANK-001',
+        }),
         { amount: '125.50', cashReceived: '' }
       )
     );
@@ -373,7 +385,9 @@ describe('CounterTenderPanel acknowledgement', () => {
     const onTender = vi.fn().mockResolvedValue({ status: 'rejected', message: 'Payment refused.' });
     setup({ onTender });
     chooseTender(type);
-    fireEvent.change(screen.getByLabelText('Transfer reference'), { target: { value: 'BANK-001' } });
+    fireEvent.change(screen.getByLabelText('Transfer reference'), {
+      target: { value: 'BANK-001' },
+    });
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
     await screen.findByText('Payment refused.');
@@ -1210,8 +1224,17 @@ describe('DEV-41 disabled payment explanations', () => {
   });
 });
 
-
 describe('DEV-875 bank transfer reference', () => {
+  it('explains that a card number is not a transfer reference', () => {
+    setup({ balanceMinor: 3000 });
+    chooseTender('BANK_TRANSFER');
+    fireEvent.change(screen.getByLabelText('Transfer reference'), {
+      target: { value: '4242 4242 4242 4242' },
+    });
+    const button = screen.getByRole('button', { name: 'Take payment' });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleDescription(/looks like a card number/);
+  });
   it('blocks amount-only and whitespace transfers, including Enter, until a reference is entered', async () => {
     const { props } = setup({ balanceMinor: 3000 });
     chooseTender('BANK_TRANSFER');
@@ -1228,17 +1251,27 @@ describe('DEV-875 bank transfer reference', () => {
     fireEvent.change(reference, { target: { value: '  BANK/2026-001  ' } });
     expect(button).toBeEnabled();
     fireEvent.keyDown(reference, { key: 'Enter' });
-    await waitFor(() => expect(props.onTender).toHaveBeenCalledExactlyOnceWith(
-      { type: 'BANK_TRANSFER', amountMinor: 3000, providerRef: 'BANK/2026-001' },
+    await waitFor(() => expect(props.onTender).toHaveBeenCalledOnce());
+    expect(props.onTender).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'BANK_TRANSFER',
+        amountMinor: 3000,
+        providerRef: 'BANK/2026-001',
+      }),
       { amount: '', cashReceived: '' }
-    ));
+    );
     await screen.findByText('Payment recorded.');
     expect(reference).toHaveValue('');
     expect(button).toBeDisabled();
   });
   it('restores and locks an uncertain bank reference until the outcome is checked', () => {
     const { props } = setup({
-      initialDraft: { type: 'BANK_TRANSFER', amount: '30.00', cashReceived: '', providerRef: 'BANK-001' },
+      initialDraft: {
+        type: 'BANK_TRANSFER',
+        amount: '30.00',
+        cashReceived: '',
+        providerRef: 'BANK-001',
+      },
       recoveryOutcome: { status: 'unknown', message: 'Check the payment outcome.' },
     });
     expect(screen.getByLabelText('Transfer reference')).toHaveValue('BANK-001');

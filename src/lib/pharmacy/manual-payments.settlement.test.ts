@@ -154,7 +154,7 @@ describe('DEV-713 manual card and wallet confirmation', () => {
 
 
 describe('DEV-875 bank transfer capture', () => {
-  it.each([undefined, '', '   ', 'x'.repeat(121), '4242424242424242', '4242 4242-4242 4242', 'REF 4111111111111111 X', '1234567890123'])(
+  it.each([undefined, '', '   ', 'x'.repeat(121), '4242424242424242', '4242 4242-4242 4242', 'REF 4111111111111111 X', '1234567890123', '4111.1111.1111.1111', '4242/4242/4242/4242', '4242\u200b4242\u200b4242\u200b4242'])(
     'refuses a bank transfer with missing or invalid reference %j before money writes',
     async (providerRef) => {
       const input = { ...cardBase, type: 'BANK_TRANSFER' as const, providerRef };
