@@ -491,7 +491,7 @@ function ScopedPharmacyCounterConsole({
   const [activeRow, setActiveRow] = useState<CounterSearchRow | null>(null);
   const [saleUnit, setSaleUnit] = useState<SaleUnitKind | null>(null);
   const [quantityText, setQuantityText] = useState('1');
-  const [focusSearchAfterAdd, setFocusSearchAfterAdd] = useState(false);
+  const focusSearchAfterAdd = useRef(false);
   const [lotOverride, setLotOverride] = useState<CounterLotOverrideValue | null>(null);
   const [saleId, setSaleId] = useState<string | null>(initialSaleId);
   const [heldSaleId, setHeldSaleId] = useState<string | null>(null);
@@ -579,6 +579,7 @@ function ScopedPharmacyCounterConsole({
 
   const searchRef = useRef<HTMLInputElement>(null);
   const quantityRef = useRef<HTMLInputElement>(null);
+  const focusQuantityOnStage = useRef(false);
   const rxPanelRef = useRef<HTMLDivElement>(null);
   const tenderRef = useRef<HTMLDivElement>(null);
   const [paymentOpen, setPaymentOpen] = useState(false);
@@ -1478,7 +1479,8 @@ function ScopedPharmacyCounterConsole({
     [authenticatePack, branchAuthorized, branchId, busy, query]
   );
 
-  const stageRow = useCallback((row: CounterSearchRow) => {
+  const stageRow = useCallback((row: CounterSearchRow, focusQuantity = true) => {
+    focusQuantityOnStage.current = focusQuantity;
     setActiveRow(row);
     setQuantityText('');
     setSaleUnit(
@@ -1488,7 +1490,8 @@ function ScopedPharmacyCounterConsole({
   }, []);
 
   useEffect(() => {
-    if (activeRow) quantityRef.current?.focus();
+    if (activeRow && focusQuantityOnStage.current) quantityRef.current?.focus();
+    focusQuantityOnStage.current = false;
   }, [activeRow]);
 
   const searchAndStage = useCallback(
@@ -1733,7 +1736,7 @@ function ScopedPharmacyCounterConsole({
         });
         setQuery('');
         // Focus after the pending state clears; disabled inputs cannot receive focus.
-        setFocusSearchAfterAdd(true);
+        focusSearchAfterAdd.current = true;
       } catch (error) {
         const message = messageFrom(error);
         setNotice({
@@ -1813,7 +1816,7 @@ function ScopedPharmacyCounterConsole({
         const restage =
           activeRow?.medicineId !== row.medicineId || saleUnit !== (row.saleUnits[0]?.kind ?? null);
         if (restage) {
-          stageRow(row);
+          stageRow(row, false);
           setSaleUnit(row.saleUnits[0]?.kind ?? null);
           // Barcode entry keeps its one-item default; manual selection starts empty.
           setQuantityText('1');
@@ -2700,11 +2703,11 @@ function ScopedPharmacyCounterConsole({
    * recovery is ready, so `autoFocus` alone cannot land on it.
    */
   useEffect(() => {
-    if (!busy && (focusSearchAfterAdd || document.activeElement === document.body)) {
+    if (!busy && (focusSearchAfterAdd.current || document.activeElement === document.body)) {
       focusSearch();
-      setFocusSearchAfterAdd(false);
+      focusSearchAfterAdd.current = false;
     }
-  }, [busy, focusSearch, focusSearchAfterAdd]);
+  }, [busy, focusSearch]);
 
   const chordFor = useCallback(
     (kind: SaleUnitKind) =>
