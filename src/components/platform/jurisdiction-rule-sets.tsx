@@ -50,9 +50,9 @@ function draftFields(ruleSet: JurisdictionRuleSet): CommandField[] {
     {
       name: 'effectiveFrom',
       label: 'Effective from',
-      type: 'datetime-local',
+      type: 'date',
       required: true,
-      help: 'Choose a future time after the previous version starts. This uses your browser’s local time.',
+      help: 'Choose a future date after the previous version starts. The new version starts at 00:00 UTC on that date, the same day boundary branch profiles use.',
     },
     { name: 'reviewerName', label: 'Reviewer name', required: true, maxLength: 200 },
     {

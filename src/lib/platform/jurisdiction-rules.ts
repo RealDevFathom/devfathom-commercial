@@ -176,7 +176,17 @@ export const publishJurisdictionRulesSchema = jurisdictionRulesSchema.extend({
     .min(3)
     .max(128)
     .regex(/^[a-zA-Z0-9_-]+$/),
-  effectiveFrom: z.iso.datetime().transform((value) => new Date(value)),
+  // Branch profiles are dated by day and bind the rule set in force at that
+  // day's UTC midnight (saveRegulatoryProfile), so a publication starts at a
+  // UTC midnight too. A mid-day start could not be adopted by a profile dated
+  // that day, which would silently keep the predecessor.
+  effectiveFrom: z.iso
+    .datetime()
+    .transform((value) => new Date(value))
+    .refine(
+      (value) => value.getTime() % 86_400_000 === 0,
+      'Choose a date; a new version starts at the beginning of that day (UTC).'
+    ),
   reason: z.string().trim().min(10).max(500),
   reviewerName: z.string().trim().min(1).max(200),
   reviewerRole: z.string().trim().min(1).max(200),

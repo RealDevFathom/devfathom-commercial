@@ -34,7 +34,7 @@ function draft() {
   render(<JurisdictionRuleSets ruleSets={[ruleSet]} />);
   fireEvent.click(screen.getByText('Draft version 2'));
   fireEvent.change(screen.getByLabelText('Effective from'), {
-    target: { value: '2099-01-01T12:00' },
+    target: { value: '2099-01-01' },
   });
   fireEvent.change(screen.getByLabelText('Reviewer name'), {
     target: { value: 'TEST_ONLY reviewer' },

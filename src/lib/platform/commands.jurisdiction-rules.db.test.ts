@@ -42,6 +42,10 @@ const unenrolled = { id: `op_dev99_nomfa_${suffix}`, role: 'SUPER_ADMIN' } as Pl
 // TEST_ONLY base32 TOTP secret ("Hello!\xde\xad\xbe\xef").
 const totpSecret = 'JBSWY3DPEHPK3PXP';
 const day = 24 * 60 * 60 * 1000;
+/** UTC midnight `days` from today: publications start on a day boundary. */
+function midnightIn(days: number) {
+  return new Date(Math.floor(Date.now() / day) * day + days * day);
+}
 let fixtureCount = 0;
 
 function totp(at = Date.now()) {
@@ -82,7 +86,7 @@ function publish(
     {
       ...testOnlyRules,
       previousId,
-      effectiveFrom: new Date(Date.now() + day).toISOString(),
+      effectiveFrom: midnightIn(1).toISOString(),
       reviewerName: 'TEST_ONLY reviewer',
       reviewerRole: 'TEST_ONLY reviewer role',
       reason: 'TEST_ONLY reviewed publication',
@@ -179,8 +183,7 @@ describeIfDatabase('jurisdiction.rules.publish on PostgreSQL (TEST_ONLY rules)',
 
   it('closes the predecessor, inserts the successor and audits both in one commit', async () => {
     const before = await predecessor();
-    const effectiveFrom = new Date(Date.now() + 2 * day);
-    effectiveFrom.setUTCMilliseconds(0);
+    const effectiveFrom = midnightIn(2);
     const permittedSchedules = { values: ['G', 'TEST_ONLY_SCHEDULE'], provisional: false };
     const pharmacistCoverageRule = {
       values: {
@@ -255,8 +258,8 @@ describeIfDatabase('jurisdiction.rules.publish on PostgreSQL (TEST_ONLY rules)',
   it('lets only one of two concurrent publishers succeed', async () => {
     const before = await predecessor();
     const results = await Promise.allSettled([
-      publish(before.id, { effectiveFrom: new Date(Date.now() + 3 * day).toISOString() }),
-      publish(before.id, { effectiveFrom: new Date(Date.now() + 4 * day).toISOString() }),
+      publish(before.id, { effectiveFrom: midnightIn(3).toISOString() }),
+      publish(before.id, { effectiveFrom: midnightIn(4).toISOString() }),
     ]);
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
     expect(results.find((result) => result.status === 'rejected')).toMatchObject({

@@ -29,7 +29,7 @@ let audits: Record<string, unknown>[];
 let failInsert = false;
 let failAudit = false;
 const at = new Date('2026-11-17T12:00:00Z');
-const effectiveFrom = '2026-11-18T12:00:00.000Z';
+const effectiveFrom = '2026-11-18T00:00:00.000Z';
 const original: JurisdictionRuleSet = {
   id: 'test_only_v1',
   code: 'TEST_ONLY',
@@ -204,7 +204,7 @@ describe('jurisdiction.rules.publish', () => {
     await expect(publish({ id: 'test_only_v2', version: 2 })).rejects.toThrow();
     expect(rows).toEqual(published);
   });
-  it.each(['2025-01-01T00:00:00.000Z', '2026-11-17T11:00:00.000Z'])(
+  it.each(['2025-01-01T00:00:00.000Z', '2026-11-17T00:00:00.000Z'])(
     'refuses backdating to %s',
     async (date) => {
       await expect(publish({ effectiveFrom: date })).rejects.toMatchObject({ status: 400 });
@@ -239,6 +239,14 @@ describe('jurisdiction.rules.publish', () => {
     expect(db.jurisdictionRuleSet.create).not.toHaveBeenCalled();
     expect(audits.filter((audit) => audit.success)).toEqual([]);
   });
+  it.each(['2026-11-18T12:00:00.000Z', '2026-11-18T00:00:00.001Z', '2026-11-18T19:00:00.000Z'])(
+    'refuses a start partway through a day (%s), which a dated profile could not adopt',
+    async (date) => {
+      await expect(publish({ effectiveFrom: date })).rejects.toThrow();
+      expect(rows).toEqual([original]);
+      expect(db.jurisdictionRuleSet.update).not.toHaveBeenCalled();
+    }
+  );
   it('does not publish a successor of a placeholder', async () => {
     rows[0]!.isPlaceholder = true;
     await expect(publish()).rejects.toMatchObject({ status: 400 });
