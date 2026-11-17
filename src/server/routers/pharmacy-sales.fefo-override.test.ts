@@ -331,8 +331,7 @@ describe('pharmacySales.addLine scanned pack approval (DEV-843)', () => {
       detail: {
         category: 'PHARMACY_SAFETY',
         action: 'fefo_override',
-        description:
-          'Counter refused the manager PIN sent to approve a scanned pack out of FEFO order.',
+        description: 'Counter refused the manager PIN sent with a scanned pack.',
       },
     });
   });

@@ -415,7 +415,7 @@ function labelScannedPackFefo(
         : outcome === 'refused'
           ? 'Counter refused a scanned pack out of FEFO order without a manager approval.'
           : // Refused before the pack was resolved, so this does not claim it was out of order.
-            'Counter refused the manager PIN sent to approve a scanned pack out of FEFO order.',
+            'Counter refused the manager PIN sent with a scanned pack.',
     metadata: { branchId: input.branchId, medicineId: input.medicineId, scannedPack: true },
   });
 }

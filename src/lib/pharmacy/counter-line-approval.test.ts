@@ -255,7 +255,9 @@ describe('counter scanned-pack FEFO approval (DEV-843)', () => {
       where: { id: 'cred' },
       data: { failedAttempts: 1 },
     });
-    // Committed in its own tenant transaction, so the strike survives the refused sale.
+    // Committed in its own tenant transaction, so the strike survives the refused sale. This is
+    // shown here with mocks only, like the discount case above; the router resolves the approval
+    // before the sale transaction opens.
     expect(withTenantDb).toHaveBeenCalledWith('org', expect.any(Function), {
       userId: 'cashier',
       skipDrain: true,
