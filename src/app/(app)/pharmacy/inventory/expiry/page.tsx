@@ -5,7 +5,8 @@ import { redirect } from 'next/navigation';
 
 import { BranchAssignmentRequired } from '@/components/pharmacy/inventory/branch-assignment-required';
 import { ExpiryBoard, type ExpiryBoardRow } from '@/components/pharmacy/inventory/expiry-board';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { UrlFilterForm } from '@/components/ui/url-filter-form';
+import { buttonVariants } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { hasModule } from '@/lib/entitlements';
@@ -248,7 +249,7 @@ export default async function PharmacyExpiryBoardPage({
         </div>
       ) : null}
       <SectionCard className="print:hidden" eyebrow="Branch-scoped" title="Board filters">
-        <form className="flex flex-wrap items-end gap-3" method="get">
+        <UrlFilterForm action={route} className="flex flex-wrap items-end gap-3">
           {view === 'print' ? <input name="view" type="hidden" value="print" /> : null}
           <label className="min-w-64 flex-1 text-sm text-text-body">
             Branch
@@ -270,16 +271,13 @@ export default async function PharmacyExpiryBoardPage({
               ))}
             </select>
           </label>
-          <Button type="submit" variant="secondary">
-            Show
-          </Button>
           <Link
             className={buttonVariants({ variant: 'ghost' })}
             href={`/pharmacy/inventory?branch=${encodeURIComponent(branch.id)}`}
           >
             Back to inventory
           </Link>
-        </form>
+        </UrlFilterForm>
       </SectionCard>
       <ExpiryBoard
         action={perform}

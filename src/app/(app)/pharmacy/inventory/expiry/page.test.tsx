@@ -1,4 +1,4 @@
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import type { ExpiryBoardProps } from '@/components/pharmacy/inventory/expiry-board';
@@ -11,8 +11,12 @@ const mocks = vi.hoisted(() => ({
   assigned: vi.fn(async () => new Set(['branch_a'])),
   claim: vi.fn(),
   redirect: vi.fn(),
+  replace: vi.fn(),
 }));
-vi.mock('next/navigation', () => ({ redirect: mocks.redirect }));
+vi.mock('next/navigation', () => ({
+  redirect: mocks.redirect,
+  useRouter: () => ({ replace: mocks.replace }),
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: () => true }));
@@ -275,4 +279,43 @@ it('DEV-627: tells the board when the read withheld purchase cost', async () => 
   expect(props.riskBuckets).toEqual([]);
   expect(props.rows[0]?.valueAtRiskMinor).toBeNull();
   expect(props.rows[0]).not.toHaveProperty('unitCostMinor');
+});
+
+it('DEV-61 applies expiry filters immediately with replacement history and one-click return', async () => {
+  const context = {
+    session: { user: { id: 'user_a' } },
+    organization: { id: 'org_a' },
+    entitlements: {},
+    db: {
+      pharmacyBranch: {
+        findMany: vi.fn().mockResolvedValue([{ id: 'branch_a', name: 'Main', city: 'Karachi' }]),
+      },
+    },
+  };
+  mocks.actor.mockResolvedValue(context);
+  mocks.context.mockResolvedValue(context);
+  mocks.lots.mockResolvedValue({
+    generatedAt: new Date('2026-11-16T00:00:00Z'),
+    costVisible: false,
+    riskBuckets: [],
+    rows: [],
+    suppliers: [],
+  });
+  render(
+    await Page({
+      searchParams: Promise.resolve({ branch: 'branch_a', within: '30', view: 'print' }),
+    })
+  );
+  fireEvent.change(screen.getByRole('combobox', { name: 'Expiring within' }), {
+    target: { value: '90' },
+  });
+  expect(mocks.replace).toHaveBeenCalledExactlyOnceWith(
+    '/pharmacy/inventory/expiry?view=print&branch=branch_a&within=90',
+    { scroll: false }
+  );
+  expect(screen.queryByRole('button', { name: 'Show' })).toBeNull();
+  expect(screen.getByRole('link', { name: 'Back to inventory' })).toHaveAttribute(
+    'href',
+    '/pharmacy/inventory?branch=branch_a'
+  );
 });

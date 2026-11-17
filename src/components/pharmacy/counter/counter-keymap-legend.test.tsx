@@ -4,6 +4,19 @@ import { resolveCounterKeymap } from '@/lib/pharmacy/counter-keymap';
 import { CounterKeymapLegend } from './counter-keymap-legend';
 
 describe('counter shortcut preference', () => {
+  it('keeps the administrator preview warning in operator language', () => {
+    render(
+      <CounterKeymapLegend
+        keymap={resolveCounterKeymap({ preset: 'legacySpeed' })}
+        allowUnconfirmed
+        onPresetChange={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('Unconfirmed');
+    expect(screen.getByRole('status')).toHaveTextContent('Confirm them with your team');
+    expect(document.body).not.toHaveTextContent(/Phase 0|D01|scorecard|Placeholder/);
+  });
+
   it('only offers confirmed presets to staff and labels F8/F9 from the active map', () => {
     render(
       <CounterKeymapLegend

@@ -279,7 +279,7 @@ export function forecastDemandEvidence(input: DemandEvidenceInput): DemandForeca
     assumptions: [
       'Observed units must be complete consumption in canonical units; returns and adjustments are separate.',
       'UTC calendar days; recent mean excludes unknown, closed and stockout-censored days and rounds each forecast day upward.',
-      'Weekly seasonal naive uses the latest matching weekday before origin; unavailable matches fall back to recent mean.',
+      'Based on the same weekday last week (the latest matching weekday before the forecast start); if that day is unavailable, the recent average is used.',
       'Source kind and known-at version timestamps are caller assertions; this pure function does not verify a live reader.',
       'No calibrated intervals, service probabilities, latent-demand recovery or profit guarantees.',
       ...(calendar

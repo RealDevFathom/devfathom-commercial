@@ -851,7 +851,7 @@ function ReportEvidence({
           tone="neutral"
         />
         <p className="mt-3 text-sm text-text-muted">
-          Basis: {report.planning.basis}. Read-only comparison; no order, reservation or approval is
+          Based on: {report.planning.basis === 'USER_SUPPLIED_ASSUMPTIONS' ? 'Your settings' : report.planning.basis}. Read-only comparison; no order, reservation or approval is
           created.
         </p>
         {(!financial || !report.permissions.financial || report.planning.status === 'REDACTED') && (

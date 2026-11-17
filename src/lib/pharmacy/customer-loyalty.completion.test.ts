@@ -109,6 +109,29 @@ describe('ordinary loyalty settlement completion (held policy fixtures excluded)
     expect(db.pharmacyTender.create).not.toHaveBeenCalled();
     expect(db.pharmacyLoyaltyPointsEntry.create).not.toHaveBeenCalled();
   });
+  it('refuses a deactivated member before tender or point writes (DEV-764)', async () => {
+    const { db } = fixture();
+    db.pharmacyCustomer.findFirst.mockResolvedValue({
+      id: 'customer-a',
+      patientId: 'patient-a',
+      active: true,
+      loyaltyActive: false,
+    });
+    await expect(redeemSalePoints(db as never, scope, input)).rejects.toThrow('LOYALTY_INACTIVE');
+    expect(db.pharmacyTender.create).not.toHaveBeenCalled();
+    expect(db.pharmacyLoyaltyPointsEntry.create).not.toHaveBeenCalled();
+  });
+  it('spends from the one balance across every branch, not only this branch (DEV-764)', async () => {
+    const { db } = fixture();
+    await redeemSalePoints(db as never, scope, input);
+    expect(db.pharmacyLoyaltyPointsEntry.aggregate).toHaveBeenCalledWith({
+      where: { organizationId: 'org-a', customerId: 'customer-a' },
+      _sum: { points: true },
+    });
+    expect(db.pharmacyLoyaltyPointsEntry.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ kind: 'REDEEM', branchId: 'branch-a', points: -2 }),
+    });
+  });
   it('posts redemption and sale, freezes receipt allocation identity, requests evidence', async () => {
     const { db } = fixture();
     expect(await redeemSalePoints(db as never, scope, input)).toMatchObject({

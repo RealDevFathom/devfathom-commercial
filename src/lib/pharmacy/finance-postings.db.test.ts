@@ -1576,15 +1576,18 @@ describeIfDatabase('FIN-03 — perpetual valuation, margin and leakage', () => {
         `count-${tag('leakage')}`,
         'Shelf recount'
       );
-      await deps.postings.postCountAdjustmentEntry(db, scopeOf(f), {
+      const adjustment = await deps.postings.postCountAdjustmentEntry(db, scopeOf(f), {
         countLineId: count.lines[0]!.id,
         at: LATER,
       });
+      if (!adjustment) throw new Error('Expected count variance posting');
 
+      // approveCount journals the variance at approval time. The adapter call
+      // above replays that entry unchanged, so reach its actual timestamp.
       return deps.reports.leakageReport(
         db,
         { organizationId: ORG_A, branchId: f.branchId },
-        WINDOW
+        { from: WINDOW.from, to: new Date(adjustment.occurredAt.getTime() + 1) }
       );
     });
 
