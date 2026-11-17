@@ -4951,3 +4951,113 @@ describe('DEV-41 cashier actions', () => {
     expect(document.body).not.toHaveTextContent(/\b(?:AI|RX|CRM|POS)-[A-Z]?\d{2}(?!\d)/);
   });
 });
+
+describe('DEV-41 remaining disabled explanations', () => {
+  it('explains missing bills and clears reasons when Hold and Void become available', () => {
+    const view = render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    for (const name of [/^Hold/, /^Void$/]) {
+      const button = screen.getByRole('button', { name });
+      expect(button).toBeDisabled();
+      expect(button).toHaveAccessibleDescription(
+        'Start or resume an open bill to hold or void it.'
+      );
+    }
+    expect(screen.getByRole('button', { name: /^Resume/ })).toHaveAccessibleDescription(
+      'No bill is held on this counter. Use Open bills to find another bill.'
+    );
+    view.unmount();
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    for (const name of [/^Hold/, /^Void$/]) {
+      expect(screen.getByRole('button', { name })).toBeEnabled();
+      expect(screen.getByRole('button', { name })).not.toHaveAccessibleDescription();
+    }
+  });
+
+  it.each(['HELD', 'COMPLETED', 'VOID'] as const)(
+    'explains why a %s bill cannot be held or voided',
+    (status) => {
+      mocks.queries.counterCart!.data = { ...cart(), status };
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      for (const name of [/^Hold/, /^Void$/]) {
+        expect(screen.getByRole('button', { name })).toBeDisabled();
+        expect(screen.getByRole('button', { name })).toHaveAccessibleDescription(
+          status === 'HELD'
+            ? 'Resume this held bill before holding or voiding it.'
+            : 'This bill is closed. Start or resume an open bill to hold or void it.'
+        );
+      }
+      expect(mocks.mutations.transition).not.toHaveBeenCalled();
+    }
+  );
+
+  it('explains recovery locks on bill actions and the branch selector', () => {
+    window.localStorage.setItem(tenderAttemptStorageKey(scope), '{');
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const reason = 'Browser recovery is unavailable. Review payment status before continuing.';
+    for (const name of [/^Hold/, /^Resume/, /^Void$/]) {
+      const button = screen.getByRole('button', { name });
+      expect(button).toBeDisabled();
+      expect(button).toHaveAccessibleDescription(reason);
+      fireEvent.click(button);
+    }
+    expect(screen.getByLabelText('Branch')).toBeDisabled();
+    expect(screen.getByLabelText('Branch')).toHaveAccessibleDescription(reason);
+    expect(screen.getByLabelText('Scan or search')).toHaveAccessibleDescription(
+      expect.stringContaining(reason)
+    );
+    expect(mocks.mutations.transition).not.toHaveBeenCalled();
+  });
+
+  it('explains a pending action and restores Resume after holding a bill', async () => {
+    let finish!: () => void;
+    mocks.mutations.transition!.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        })
+    );
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.click(screen.getByRole('button', { name: /^Hold/ }));
+    for (const name of [/^Hold/, /^Resume/, /^Void$/]) {
+      expect(screen.getByRole('button', { name })).toHaveAccessibleDescription(
+        'Wait for the current counter action to finish.'
+      );
+    }
+    expect(screen.getByLabelText('Branch')).toHaveAccessibleDescription(
+      'Wait for the current counter action to finish.'
+    );
+    await act(async () => finish());
+    expect(screen.getByRole('button', { name: /^Resume/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Resume/ })).not.toHaveAccessibleDescription();
+  });
+
+  it.each(['loading', 'access-loading', 'access-error'] as const)(
+    'explains the drawer %s gate',
+    (state) => {
+      closeDrawer();
+      if (state === 'loading')
+        mocks.queries.drawerStatus = { ...query(), isSuccess: false, isLoading: true };
+      else
+        mocks.queries.settlementAccess = {
+          ...query(),
+          isSuccess: false,
+          isLoading: state === 'access-loading',
+          isError: state === 'access-error',
+        };
+      render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+      const reason =
+        state === 'loading'
+          ? 'Checking the cash drawer. Please wait.'
+          : state === 'access-error'
+            ? "Couldn't check payment access. Retry payment access before opening the drawer."
+            : 'Checking payment access before opening the drawer.';
+      const button = screen.getByRole('button', { name: 'Open drawer' });
+      expect(button).toBeDisabled();
+      expect(button).toHaveAccessibleDescription(reason);
+      expect(screen.getByLabelText('Opening cash')).toHaveAccessibleDescription(reason);
+      expect(screen.getByRole('button', { name: 'Empty (0)' })).toHaveAccessibleDescription(reason);
+      fireEvent.click(button);
+      expect(mocks.mutations.openDrawer).not.toHaveBeenCalled();
+    }
+  );
+});
