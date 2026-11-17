@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, type ReactNode } from 'react';
+import { useId, type ReactNode, type Ref } from 'react';
 
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -20,6 +20,8 @@ export type CounterUnitToggleProps = {
   inline?: boolean;
   onSelect: (kind: SaleUnitKind) => void;
   onQuantityChange: (quantity: string) => void;
+  quantityRef?: Ref<HTMLInputElement>;
+  onSubmit?: () => void;
   /** Rendered beside each unit so the operator sees the chord, not a tooltip. */
   chordFor?: (kind: SaleUnitKind) => string | null;
   /** Why there is no sale unit, in shop words (out of stock, pack setup to fix). */
@@ -54,6 +56,8 @@ export function CounterUnitToggle({
   inline = false,
   onSelect,
   onQuantityChange,
+  quantityRef,
+  onSubmit,
   chordFor,
   emptyMessage,
 }: CounterUnitToggleProps) {
@@ -152,6 +156,8 @@ export function CounterUnitToggle({
           </button>
           <Input
             id={quantityId}
+            ref={quantityRef}
+            data-counter-quantity=""
             type="text"
             pattern="[0-9]*"
             inputMode="numeric"
@@ -169,6 +175,20 @@ export function CounterUnitToggle({
             }
             onFocus={(event) => event.currentTarget.select()}
             onChange={(event) => onQuantityChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (
+                event.key !== 'Enter' ||
+                event.nativeEvent.isComposing ||
+                event.shiftKey ||
+                event.ctrlKey ||
+                event.altKey ||
+                event.metaKey ||
+                !onSubmit
+              )
+                return;
+              event.preventDefault();
+              onSubmit();
+            }}
             className="h-11 w-16 text-center tabular-nums"
           />
           <button

@@ -2511,8 +2511,8 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
   it('does not run F9 while a field is focused or another dialog is open', async () => {
     openTheDrawer();
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(barcodeRow()));
-    const quantity = screen.getByLabelText('Quantity');
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(barcodeRow({ saleUnits: [] })));
+    const quantity = screen.getByLabelText('Requested tablets');
     quantity.focus();
     fireEvent.keyDown(quantity, { key: 'F9' });
     expect(document.activeElement).toBe(quantity);
@@ -5252,4 +5252,180 @@ describe('DEV-878 search alternative uses the normal counter line path', () => {
       expect(mocks.mutations.tender).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('DEV-633 keyboard-only counter', () => {
+  const rows = [
+    barcodeRow(),
+    barcodeRow({ medicineId: 'second-result', displayName: 'Second item' }),
+  ];
+
+  beforeEach(() => {
+    mocks.queries.counterSearch = query({ rows, truncated: false });
+    mocks.mutations.addLine!.mockResolvedValue({});
+  });
+
+  function searchResults() {
+    const rendered = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    const search = screen.getByLabelText('Scan or search');
+    search.focus();
+    fireEvent.change(search, { target: { value: 'para' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    return { ...rendered, search };
+  }
+
+  it('picks and wraps ready results with arrows while keeping scan focus', () => {
+    const { search } = searchResults();
+    const active = () => mocks.searchProps.mock.calls.at(-1)![0].activeMedicineId;
+    expect(fireEvent.keyDown(search, { key: 'ArrowUp' })).toBe(false);
+    expect(active()).toBe('second-result');
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(active()).toBe(rows[0]!.medicineId);
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(active()).toBe('second-result');
+    fireEvent.keyDown(search, { key: 'ArrowUp' });
+    expect(active()).toBe(rows[0]!.medicineId);
+    expect(document.activeElement).toBe(search);
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+
+  it('keeps arrow selection on the results while an alternatives panel is shown (DEV-878)', () => {
+    const alternative = barcodeRow({
+      medicineId: 'stock-alternative',
+      displayName: 'In-stock brand',
+    });
+    const unavailable = barcodeRow({
+      medicineId: 'second-result',
+      displayName: 'Second item',
+      onHandUnits: 0,
+      saleUnits: [],
+      stockAlternatives: {
+        ingredientRecorded: true,
+        exact: [alternative],
+        other: [],
+        truncated: false,
+      },
+    });
+    mocks.queries.counterSearch = query({ rows: [rows[0]!, unavailable], truncated: false });
+    mocks.renderSearchResults = true;
+    const { search } = searchResults();
+    const active = () => mocks.searchProps.mock.calls.at(-1)![0].activeMedicineId;
+    const panel = screen.getByRole('list', { name: 'Same ingredient, strength and form' });
+    // Arrows walk the search results only; the nested alternative is not a stop.
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(active()).toBe(rows[0]!.medicineId);
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(active()).toBe('second-result');
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(active()).toBe(rows[0]!.medicineId);
+    expect(document.activeElement).toBe(search);
+    // The alternative is still a button of its own and stages through the same path.
+    fireEvent.click(within(panel).getByRole('button'));
+    expect(active()).toBe('stock-alternative');
+    // From a staged alternative the arrows return to the first search result.
+    search.focus();
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(active()).toBe(rows[0]!.medicineId);
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+
+  it.each(['empty', 'loading', 'error', 'placeholder', 'superseded'] as const)(
+    'leaves arrows with the field for %s results',
+    (state) => {
+      const { search, rerender } = searchResults();
+      if (state === 'empty') mocks.queries.counterSearch!.data = { rows: [], truncated: false };
+      if (state === 'loading') mocks.queries.counterSearch!.isFetching = true;
+      if (state === 'error') mocks.queries.counterSearch!.isError = true;
+      if (state === 'placeholder') mocks.queries.counterSearch!.isPlaceholderData = true;
+      if (state === 'superseded') fireEvent.change(search, { target: { value: 'different' } });
+      rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      expect(fireEvent.keyDown(search, { key: 'ArrowDown' })).toBe(true);
+      expect(mocks.searchProps.mock.calls.at(-1)![0].activeMedicineId).toBeNull();
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    }
+  );
+
+  it('claims F6 from a pointer-selected Quantity without repeating the add', async () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(rows[0]!));
+    const quantity = screen.getByLabelText('Quantity');
+    quantity.focus();
+    fireEvent.change(quantity, { target: { value: '2' } });
+    expect(fireEvent.keyDown(quantity, { key: 'F6' })).toBe(false);
+    await waitFor(() =>
+      expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ medicineId: rows[0]!.medicineId, quantity: 2 })
+      )
+    );
+  });
+
+  it('moves from a picked result to Quantity, adds once with F6 and restores scan focus', async () => {
+    const { search } = searchResults();
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    const quantity = screen.getByLabelText('Quantity');
+    expect(document.activeElement).toBe(quantity);
+    expect(quantity).toHaveValue('');
+    fireEvent.change(quantity, { target: { value: '2' } });
+    expect(fireEvent.keyDown(quantity, { key: 'F6' })).toBe(false);
+    await waitFor(() =>
+      expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ medicineId: rows[0]!.medicineId, quantity: 2 })
+      )
+    );
+    await waitFor(() => expect(document.activeElement).toBe(search));
+  });
+
+  it.each(['scan', 'quantity'] as const)(
+    'adds the selected quantity once with Enter from %s',
+    async (field) => {
+      const { search } = searchResults();
+      fireEvent.keyDown(search, { key: 'ArrowDown' });
+      const quantity = screen.getByLabelText('Quantity');
+      fireEvent.change(quantity, { target: { value: '2' } });
+      const target = field === 'scan' ? search : quantity;
+      target.focus();
+      expect(fireEvent.keyDown(target, { key: 'Enter' })).toBe(false);
+      await waitFor(() =>
+        expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ medicineId: rows[0]!.medicineId, quantity: 2 })
+        )
+      );
+    }
+  );
+
+  it('allows F9 from Quantity and blocks F6/F9 while a dialog is open', async () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(rows[0]!));
+    const quantity = screen.getByLabelText('Quantity');
+    quantity.focus();
+    fireEvent.change(quantity, { target: { value: '2' } });
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    document.body.append(dialog);
+    try {
+      expect(fireEvent.keyDown(quantity, { key: 'F6' })).toBe(true);
+      expect(fireEvent.keyDown(quantity, { key: 'F9' })).toBe(true);
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+      expect(screen.queryByRole('dialog', { name: 'Payment' })).not.toBeInTheDocument();
+    } finally {
+      dialog.remove();
+    }
+    expect(fireEvent.keyDown(quantity, { key: 'F9' })).toBe(false);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByLabelText('Amount').closest('[tabindex="-1"]')
+      )
+    );
+  });
+
+  it('keeps modified arrows and composing Enter with the scan field', () => {
+    const { search } = searchResults();
+    expect(fireEvent.keyDown(search, { key: 'ArrowDown', shiftKey: true })).toBe(true);
+    expect(mocks.searchProps.mock.calls.at(-1)![0].activeMedicineId).toBeNull();
+    expect(fireEvent.keyDown(search, { key: 'Enter', isComposing: true })).toBe(true);
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
 });
