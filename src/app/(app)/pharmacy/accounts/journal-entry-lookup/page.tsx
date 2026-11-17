@@ -106,13 +106,13 @@ export default async function JournalEntryLookupPage({
     }
   }
   const message: Partial<Record<ViewState['status'], string>> = {
-    INITIAL: 'Enter an exact posted journal ID, active branch, and UTC window.',
+    INITIAL: 'Enter the journal entry ID, the branch and the dates to search.',
     INVALID:
       'Provide each field once. Use nonempty IDs and RFC3339 instants in a window of no more than 92 days.',
     DENIED: 'You do not have access to this financial report scope.',
     FAILURE: 'The journal lookup is unavailable. Retry; no stale details are shown.',
     NOT_FOUND: 'No journal entry was found in this exact branch and window.',
-    INVALID_SOURCE: 'The posted source failed validation. No partial details or totals are shown.',
+    INVALID_SOURCE: 'The records could not be checked, so no details or totals are shown.',
     TRUNCATED: 'This branch slice exceeds 200 lines. No partial details or totals are shown.',
   };
   return (
@@ -120,7 +120,7 @@ export default async function JournalEntryLookupPage({
       <PageHeader
         eyebrow="Pharmacy accounts"
         heading="Journal entry lookup"
-        description="Inspect one posted journal entry within an authorized branch and bounded UTC window."
+        description="Look up one journal entry for a branch and a date range."
       />
       <Link
         className="text-sm underline focus-visible:outline-2 focus-visible:outline-ring"
