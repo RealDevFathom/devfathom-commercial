@@ -314,6 +314,9 @@ function domainError(error: unknown): never {
   throw error;
 }
 
+const DUPLICATE_PACK_MESSAGE =
+  'This pack already exists for this medicine. Use the existing pack instead of adding it again.';
+
 export const pharmacyMedicineRouter = router({
   priceNotices: capabilityProcedure('pharmacy:safety').query(({ ctx }) =>
     priceIntelligence(ctx.db, {
@@ -919,7 +922,22 @@ export const pharmacyMedicineRouter = router({
           code: 'FORBIDDEN',
           message: 'Parent pack is outside this presentation.',
         });
-      return ctx.db.packLevel.create({ data: { ...input, version: 1 } });
+      const duplicate = {
+        presentationId: input.presentationId,
+        parentPackLevelId: input.parentPackLevelId ?? null,
+        level: input.level,
+        unitsPerParent: input.unitsPerParent,
+        effectiveTo: null,
+      };
+      if (await ctx.db.packLevel.findFirst({ where: duplicate }))
+        throw new TRPCError({ code: 'CONFLICT', message: DUPLICATE_PACK_MESSAGE });
+      try {
+        return await ctx.db.packLevel.create({ data: { ...input, version: 1 } });
+      } catch (error) {
+        if ((error as { code?: string })?.code === 'P2002')
+          throw new TRPCError({ code: 'CONFLICT', message: DUPLICATE_PACK_MESSAGE });
+        throw error;
+      }
     }),
 
   revisePackLevel: adminProcedure
