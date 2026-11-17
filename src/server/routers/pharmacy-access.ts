@@ -61,6 +61,9 @@ export const pharmacyAccessRouter = router({
         });
       const subject = subjectFromSession(user);
       const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
+      // The Reports page and the assistant's report tool need the grant itself;
+      // the rail's `reports:operational` also covers a Manager's branch scope.
+      let reportsGranted = false;
       const decisions = await Promise.all(
         PHARMACY_NAVIGATION_CAPABILITIES.map(async (capability) => {
           let allowed: boolean;
@@ -69,7 +72,8 @@ export const pharmacyAccessRouter = router({
           else if (capability === 'reports:operational') {
             // DEV-505: the grant itself, or a Manager's reports for their assigned branches.
             const reportBranches = await pharmacyReportAccess(ctx);
-            allowed = reportBranches === 'ALL' || reportBranches.length > 0;
+            reportsGranted = reportBranches === 'ALL';
+            allowed = reportsGranted || reportBranches.length > 0;
           } else allowed = await can(subject, capability, undefined, options);
           return allowed ? capability : null;
         })
@@ -77,6 +81,7 @@ export const pharmacyAccessRouter = router({
       return {
         userId: user.id,
         organizationId: ctx.entitlements?.organizationId ?? null,
+        reportsGranted,
         capabilities: decisions.filter(
           (capability): capability is PharmacyNavigationCapability => capability !== null
         ),

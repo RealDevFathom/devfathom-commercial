@@ -240,7 +240,13 @@ function CounterReceiptEvidence({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm font-semibold text-text-strong">Camera evidence</p>
         {onRefresh && (error || pending) ? (
-          <Button type="button" variant="secondary" disabled={refreshing} onClick={onRefresh}>
+          <Button
+            size="touch"
+            type="button"
+            variant="secondary"
+            disabled={refreshing}
+            onClick={onRefresh}
+          >
             {refreshing ? 'Refreshing evidence…' : 'Refresh evidence'}
           </Button>
         ) : null}

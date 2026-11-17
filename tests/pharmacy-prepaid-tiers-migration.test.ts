@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 const sql = readFileSync(
-  'prisma/migrations/20261117090600_pharmacy_prepaid_tiers/migration.sql',
+  'prisma/migrations/20261117200457_pharmacy_prepaid_tiers/migration.sql',
   'utf8'
 );
 describe('DEV-863 prepaid migration', () => {

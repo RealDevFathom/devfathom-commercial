@@ -179,7 +179,7 @@ export function CounterReturnPanel(props: Omit<Props, 'refundAuthorized'>) {
         {title}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl">
+        <DialogContent className="pharmacy-workspace [&_[data-slot=dialog-close]]:min-h-11 [&_[data-slot=dialog-close]]:min-w-11 max-h-[85dvh] overflow-y-auto sm:max-w-2xl">
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
             {refundAuthorized
@@ -589,7 +589,12 @@ export function ReturnForm({
       ) : pharmacists.isError ? (
         <p role="alert">
           {counterErrorMessage(pharmacists.error)}{' '}
-          <Button type="button" variant="outline" onClick={() => void pharmacists.refetch()}>
+          <Button
+            size="touch"
+            type="button"
+            variant="outline"
+            onClick={() => void pharmacists.refetch()}
+          >
             Reload pharmacists
           </Button>
         </p>
@@ -756,7 +761,7 @@ export function ReturnForm({
       {!unparsed && lookup.isError && (
         <p role="alert">
           {counterErrorMessage(lookup.error)}{' '}
-          <Button variant="outline" onClick={() => void lookup.refetch()}>
+          <Button size="touch" variant="outline" onClick={() => void lookup.refetch()}>
             Retry lookup
           </Button>
         </p>
@@ -793,7 +798,7 @@ export function ReturnForm({
       {saleId && history.isError && (
         <p role="alert">
           {counterErrorMessage(history.error)}{' '}
-          <Button variant="outline" onClick={() => void history.refetch()}>
+          <Button size="touch" variant="outline" onClick={() => void history.refetch()}>
             Reload history
           </Button>
         </p>
@@ -1041,7 +1046,12 @@ export function ReturnForm({
                             : 'Enter the quantity to price the refund.'}
                     </p>
                     {quote.isError && (
-                      <Button type="button" variant="outline" onClick={() => void quote.refetch()}>
+                      <Button
+                        size="touch"
+                        type="button"
+                        variant="outline"
+                        onClick={() => void quote.refetch()}
+                      >
                         Reprice refund
                       </Button>
                     )}
@@ -1229,7 +1239,7 @@ export function ReturnForm({
               Reprint receipt with refunds
             </Button>
             {receipt.isError && (
-              <Button variant="outline" onClick={() => void receipt.refetch()}>
+              <Button size="touch" variant="outline" onClick={() => void receipt.refetch()}>
                 Reload receipt
               </Button>
             )}
