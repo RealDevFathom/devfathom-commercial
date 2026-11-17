@@ -956,10 +956,10 @@ export default async function PharmacyReportsPage({
                           </dl>
                           <p className="mt-3 text-xs leading-5 text-text-muted">
                             {screenCopy.reports.window}
-                            {new Date(signal.dataWindowStart).toLocaleString()}–
-                            {new Date(signal.dataWindowEnd).toLocaleString()}
+                            {formatShopTime(signal.dataWindowStart, timeZone ?? 'Asia/Karachi')}–
+                            {formatShopTime(signal.dataWindowEnd, timeZone ?? 'Asia/Karachi')}
                             {screenCopy.reports.sourceObserved}{' '}
-                            {new Date(signal.sourceObservedAt).toLocaleString()}
+                            {formatShopTime(signal.sourceObservedAt, timeZone ?? 'Asia/Karachi')}
                             {screenCopy.reports.policy} {signal.policyVersion}
                           </p>
                           <div className="mt-3 flex flex-wrap gap-3 text-xs">
