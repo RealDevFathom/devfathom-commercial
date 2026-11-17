@@ -2,7 +2,7 @@ import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { packLevelCanonicalUnits } from './counter-pricing';
+import { legacyStripOption, packLevelCanonicalUnits } from './counter-pricing';
 import { mrpRoundingIncrementForLot, priceFromLot } from './medicine';
 import {
   branchUnknownLossProbability,
@@ -324,6 +324,70 @@ type AddSaleLineInput = {
   idempotencyKey: string;
 };
 
+/** Take the organization-wide request lock before any prescription, register or stock lock.
+ * Multi-line offline commands hold all their line keys before preparing stock. */
+export async function lockSaleLineKey(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId'>,
+  idempotencyKey: string
+) {
+  await db.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(
+    hashtextextended(${scope.organizationId + ':sale-line:' + idempotencyKey}, 0))`;
+}
+
+/** Read committed line evidence without dispensing or consuming a voucher again. */
+export async function replaySaleLine(db: ScopedDb, scope: LedgerScope, input: AddSaleLineInput) {
+  await lockSaleLineKey(db, scope, input.idempotencyKey);
+  const previous = await db.pharmacySaleLine.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      idempotencyKey: input.idempotencyKey,
+    },
+    include: { allocations: { orderBy: { stockMovementId: 'asc' } } },
+  });
+  if (!previous) return null;
+  // Saved lines are never re-priced, so an omitted manual discount means none. Only a
+  // voucher or automatic promotion priced the line itself, and either needs no manual discount.
+  const manualDiscountRequested = Boolean(input.discountKind || input.discountMinor);
+  const discountChanged = previous.voucherId
+    ? false
+    : previous.promotionId
+      ? manualDiscountRequested
+      : previous.discountKind !== (input.discountKind ?? null) ||
+        previous.discountMinor !== (input.discountMinor ?? 0);
+  // Never return another branch's line or let a key silently change its target or quantity.
+  if (
+    previous.branchId !== scope.branchId ||
+    previous.saleId !== input.saleId ||
+    previous.medicineId !== input.medicineId ||
+    previous.presentationId !== input.presentationId ||
+    previous.packLevelId !== input.packLevelId ||
+    previous.saleUnit !== input.saleUnit ||
+    previous.quantity !== input.quantity ||
+    previous.canonicalUnitsPerSaleUnit !== input.canonicalUnitsPerSaleUnit ||
+    previous.voucherId !== (input.voucherId ?? null) ||
+    discountChanged
+  )
+    throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+  const { allocations, ...line } = previous;
+  return {
+    line,
+    allocation: {
+      allocations: allocations.map((part) => ({
+        inventoryLotId: part.inventoryLotId,
+        stockLocationId: part.stockLocationId,
+        units: part.canonicalUnits,
+      })),
+      movementIds: allocations.map((part) => part.stockMovementId),
+      recommendedLotId: null,
+      blocked: [],
+      overrideId: null,
+      discrepancyId: null,
+    },
+    replayed: true,
+  };
+}
+
 /**
  * DEV-830 (F05): the canonical units in one sale unit come from the stored medicine,
  * presentation and pack hierarchy, never from the request. The pack level must belong
@@ -355,6 +419,7 @@ export async function assertSaleUnitConversion(
       effectiveFrom: true,
       effectiveTo: true,
       versionGroupId: true,
+      presentation: { select: { presentation: true, dosageForm: true } },
     },
   });
   if (!packLevels.some((level) => level.id === input.packLevelId))
@@ -367,6 +432,19 @@ export async function assertSaleUnitConversion(
     packLevelCanonicalUnits({ packLevels, packLevelId: input.packLevelId, at }).includes(
       input.canonicalUnitsPerSaleUnit
     )
+  )
+    return;
+  // Legacy strips are accepted only at the multiplier derived from this tenant's
+  // stored, reviewed box wording. PACK and UNIT retain their existing checks.
+  const pack = packLevels.find((level) => level.id === input.packLevelId)!;
+  if (
+    input.saleUnit === 'STRIP' &&
+    legacyStripOption({
+      packLevels,
+      packLevelId: input.packLevelId,
+      presentation: pack.presentation?.presentation,
+      dosageForm: pack.presentation?.dosageForm ?? null,
+    })?.canonicalUnitsPerSaleUnit === input.canonicalUnitsPerSaleUnit
   )
     return;
   const received = await db.pharmacyInventoryLot.findFirst({
@@ -526,6 +604,8 @@ async function addSaleLineWithAllocation(
   await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
     name: 'pharmacy.sale.dispense',
   });
+  const replay = !reservation ? await replaySaleLine(db, scope, input) : null;
+  if (replay) return replay;
   const sale = await saleInScope(db, scope, input.saleId);
   if (sale.status !== 'OPEN') throw new PharmacySaleError('INVALID_STATE');
   // Lock the sale row before allocating stock. At PostgreSQL READ COMMITTED,
@@ -774,7 +854,7 @@ async function addSaleLineWithAllocation(
         }
       : {}),
   });
-  return { line, allocation };
+  return { line, allocation, replayed: false };
 }
 
 /**
@@ -972,7 +1052,7 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
         include: {
           medicine: { select: { productName: true, controlled: true } },
           // DEV-638: the pack level actually sold, so a standalone strip is not called a box.
-          packLevel: { select: { level: true } },
+          packLevel: { select: { level: true, parentPackLevelId: true } },
           returnLines: true,
           unidentifiedReturnHolds: true,
           allocations: { include: { lot: { include: { batch: true } } } },
@@ -1024,7 +1104,12 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
       // Controlled restorations need a fresh independent pharmacist witness PIN.
       controlled: line.medicine.controlled,
       saleUnit: line.saleUnit,
-      levelLabel: line.packLevel?.level ?? null,
+      // DEV-705: a strip cut from a standalone legacy box is stored on the box level;
+      // a hierarchy strip never sits on a top level, so name the strip, not the box.
+      levelLabel:
+        line.saleUnit === 'STRIP' && line.packLevel?.parentPackLevelId === null
+          ? 'STRIP'
+          : (line.packLevel?.level ?? null),
       quantity: line.quantity,
       canonicalUnitsPerSaleUnit: line.canonicalUnitsPerSaleUnit,
       canonicalUnits: line.canonicalUnits,

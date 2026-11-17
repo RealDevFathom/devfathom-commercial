@@ -35,6 +35,7 @@ import { CounterCartPanel, CounterLotOverride, type CounterLotOverrideValue } fr
 import { CounterChangeDue } from './counter-change-due';
 import { CounterKeymapLegend } from './counter-keymap-legend';
 import { CounterOpenDrawerStep } from './counter-open-drawer-step';
+import { CounterSaleReadiness, CounterSetupNextStep } from './counter-sale-readiness';
 import { CounterDrawerOperator } from './counter-drawer-operator';
 import { CounterOpenBills, type CounterOpenBill } from './counter-open-bills';
 import { CounterVoidDialog } from './counter-void-dialog';
@@ -102,13 +103,23 @@ import {
   counterErrorMessage,
   counterErrorTone,
   counterPaymentErrorMessage,
+  counterSaleErrorMessage,
 } from '@/lib/pharmacy/counter-messages';
+import {
+  ASK_OWNER_OR_MANAGER,
+  BRANCH_NOT_ASSIGNED,
+  COUNTER_NO_ASSIGNED_BRANCH_MESSAGE,
+  counterSetupAdvice,
+  counterSetupReason,
+  type CounterSetupAdvice,
+} from '@/lib/pharmacy/counter-setup';
 import { CounterSignOut } from './counter-sign-out';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
 import {
   counterUnitNoun,
   plural,
   looseSaleUnitOption,
+  preferredSaleUnitOption,
   previewSaleLine,
   type SaleUnitKind,
 } from '@/lib/pharmacy/counter-pricing';
@@ -135,6 +146,8 @@ type Notice = {
   tone: 'success' | 'info' | 'warning' | 'danger' | 'neutral';
   message: string;
   inventoryBranchId?: string;
+  /** DEV-860: a sale refused for a setup gap carries its fix link or whom to ask. */
+  setup?: CounterSetupAdvice;
 };
 
 type ReceiptIntent = {
@@ -578,6 +591,7 @@ function ScopedPharmacyCounterConsole({
 
   const searchRef = useRef<HTMLInputElement>(null);
   const quantityRef = useRef<HTMLInputElement>(null);
+  const focusQuantityOnStage = useRef(false);
   const restoreSearchAfterAdd = useRef(false);
   const rxPanelRef = useRef<HTMLDivElement>(null);
   const tenderRef = useRef<HTMLDivElement>(null);
@@ -800,6 +814,27 @@ function ScopedPharmacyCounterConsole({
   const drawerOpen = Boolean(openDrawerSession) && !drawerQuery.isError;
   // DEV-97: someone who takes no payment opens no drawer, and still builds bills.
   const drawerRequired = branchAuthorized && !settlementDenied && !drawerOpen;
+  // DEV-860: the ready-to-sell check lists missing setup before the first scan. The
+  // server answers with reason codes and whether this account may fix them.
+  const saleReadiness = trpc.pharmacySales.saleReadiness.useQuery(
+    { branchId, ...(deviceId ? { deviceId } : {}) },
+    { enabled: Boolean(branchAuthorized && branchId), staleTime: 30_000, retry: false }
+  );
+  // Both answers come from the same administrator rule on the server. The branch list
+  // loads before any scan, so a refusal while readiness is loading or failed still
+  // offers an administrator the setup link.
+  const canFixSetup =
+    saleReadiness.data?.canFixSetup === true || branchesQuery.data?.canFixSetup === true;
+  const refetchSaleReadiness = saleReadiness.refetch;
+  const setupNotice = useCallback(
+    (error: unknown): { setup?: CounterSetupAdvice } => {
+      const reason = counterSetupReason(error);
+      // The drawer has its own step on the counter; nobody else is asked to open it.
+      if (!reason || reason === 'DRAWER_NOT_OPEN') return {};
+      return { setup: counterSetupAdvice(reason, { canFixSetup, branchId }) };
+    },
+    [branchId, canFixSetup]
+  );
   // Read at call time: a scan or shortcut can finish after the drawer closed.
   const drawerRequiredRef = useRef(drawerRequired);
   useEffect(() => {
@@ -1492,7 +1527,7 @@ function ScopedPharmacyCounterConsole({
     [authenticatePack, branchAuthorized, branchId, busy, query]
   );
 
-  const stageRow = useCallback((row: CounterSearchRow) => {
+  const stageRow = useCallback((row: CounterSearchRow, focusQuantity = true) => {
     const label = counterLabelScanDecision(row);
     if (label.kind === 'BLOCKED') {
       setActiveRow(null);
@@ -1502,13 +1537,39 @@ function ScopedPharmacyCounterConsole({
       setNotice({ tone: 'danger', message: label.message });
       return;
     }
+    focusQuantityOnStage.current = focusQuantity;
     setActiveRow(row);
     setQuantityText('');
-    setSaleUnit(row.saleUnits[0]?.kind ?? null);
+    setSaleUnit(preferredSaleUnitOption(row.saleUnits, row.dosageForm)?.kind ?? null);
     setLotOverride(
       label.kind === 'OVERRIDE' ? { inventoryLotId: label.inventoryLotId, reason: '' } : null
     );
   }, []);
+
+  useEffect(() => {
+    if (activeRow && focusQuantityOnStage.current) quantityRef.current?.focus();
+    focusQuantityOnStage.current = false;
+  }, [activeRow]);
+
+  const searchAndStage = useCallback(
+    async (text: string) => {
+      const search = await runSearch(text);
+      if (!search || search.blocked) return;
+      try {
+        const result = await utils.pharmacySales.counterSearch.fetch(
+          { branchId, query: search.query },
+          { staleTime: 10_000 }
+        );
+        // A changed query, branch or scanner invalidates the in-flight selection.
+        if (search.revision !== scannerRevision.current) return;
+        if (result.rows[0]) stageRow(result.rows[0]);
+      } catch (error) {
+        if (search.revision === scannerRevision.current)
+          setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
+      }
+    },
+    [branchId, runSearch, stageRow, utils]
+  );
 
   const openSale = useCallback(async () => {
     if (drawerRequiredRef.current) throw new Error('DRAWER_NOT_OPEN');
@@ -1736,14 +1797,16 @@ function ScopedPharmacyCounterConsole({
         restoreSearchAfterAdd.current = true;
         focusSearch();
       } catch (error) {
-        const message = messageFrom(error);
+        const message = counterSaleErrorMessage(error);
         setNotice({
           tone: counterErrorTone(error),
           message,
           ...(message === COUNTER_ERROR_MESSAGES.INVALID_ARRANGEMENT
             ? { inventoryBranchId: branchId }
             : {}),
+          ...setupNotice(error),
         });
+        if (counterSetupReason(error)) void refetchSaleReadiness();
       } finally {
         setControlledAuth((value) => ({ ...value, pin: '' }));
         setPending(null);
@@ -1768,10 +1831,12 @@ function ScopedPharmacyCounterConsole({
       preview,
       quantity,
       quantityText,
+      refetchSaleReadiness,
       refreshCart,
       saleId,
       selectedOption,
       setActiveSale,
+      setupNotice,
       utils,
     ]
   );
@@ -1818,7 +1883,9 @@ function ScopedPharmacyCounterConsole({
           return;
         }
         if (label.kind === 'OVERRIDE') {
-          stageRow(row);
+          // A scan keeps focus in the scan field and its one-item, first-unit default.
+          stageRow(row, false);
+          setSaleUnit(row.saleUnits[0]?.kind ?? null);
           setQuantityText('1');
           setNotice({ tone: 'warning', message: label.message });
           return;
@@ -1829,7 +1896,8 @@ function ScopedPharmacyCounterConsole({
           activeRow?.medicineId !== row.medicineId ||
           saleUnit !== (row.saleUnits[0]?.kind ?? null);
         if (restage) {
-          stageRow(row);
+          stageRow(row, false);
+          setSaleUnit(row.saleUnits[0]?.kind ?? null);
           // Barcode entry keeps its one-item default; manual selection starts empty.
           setQuantityText('1');
         }
@@ -1844,12 +1912,28 @@ function ScopedPharmacyCounterConsole({
         }
       } catch (error) {
         if (revision === scannerRevision.current)
-          setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
+          setNotice({
+            tone: counterErrorTone(error),
+            message: messageFrom(error),
+            ...setupNotice(error),
+          });
       } finally {
         if (scannerInFlight.current === scan) scannerInFlight.current = null;
       }
     },
-    [activeRow, addToCart, branchId, busy, preview, query, runSearch, saleUnit, stageRow, utils]
+    [
+      activeRow,
+      addToCart,
+      branchId,
+      busy,
+      preview,
+      query,
+      runSearch,
+      saleUnit,
+      setupNotice,
+      stageRow,
+      utils,
+    ]
   );
 
   const runTransition = useCallback(
@@ -2784,6 +2868,48 @@ function ScopedPharmacyCounterConsole({
     );
   }
 
+  // DEV-860: a member assigned to no active branch is told so, and whom to ask. No
+  // setup link: branch assignments are the owner's or an administrator's to change.
+  if (
+    branches.length === 0 &&
+    branchesQuery.data?.setupReason === BRANCH_NOT_ASSIGNED &&
+    branchesQuery.data.canFixSetup !== true
+  ) {
+    return (
+      <div className="space-y-6">
+        <PageHeader
+          eyebrow="Pharmacy"
+          heading="Counter"
+          description="You are not assigned to a branch yet."
+        />
+        <SectionCard title="Before this counter can sell">
+          <div className="space-y-3" role="alert">
+            <p className="text-sm text-text-body">{COUNTER_NO_ASSIGNED_BRANCH_MESSAGE}</p>
+            <div className="text-sm">
+              <CounterSetupNextStep
+                advice={{
+                  reason: BRANCH_NOT_ASSIGNED,
+                  message: COUNTER_NO_ASSIGNED_BRANCH_MESSAGE,
+                  nextStep: ASK_OWNER_OR_MANAGER,
+                  link: null,
+                }}
+              />
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11"
+              onClick={() => void branchesQuery.refetch()}
+            >
+              Check again
+            </Button>
+          </div>
+        </SectionCard>
+        <SectionCard title="Shortcuts">{keymapLegend}</SectionCard>
+      </div>
+    );
+  }
+
   if (branches.length === 0) {
     return (
       <div className="space-y-6">
@@ -3072,6 +3198,14 @@ function ScopedPharmacyCounterConsole({
           ) : null}
         </div>
       )}
+      {branchAuthorized && !saleId && saleReadiness.data ? (
+        <CounterSaleReadiness
+          readiness={saleReadiness.data}
+          branchId={branchId}
+          checking={saleReadiness.isFetching}
+          onCheckAgain={() => void refetchSaleReadiness()}
+        />
+      ) : null}
       <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="min-w-0 space-y-3">
           <SectionCard
@@ -3099,6 +3233,7 @@ function ScopedPharmacyCounterConsole({
                   <StatusPill status={notice.tone} tone={notice.tone} />
                   <div className="min-w-0 space-y-2 text-sm">
                     <p className="text-text-body">{notice.message}</p>
+                    {notice.setup ? <CounterSetupNextStep advice={notice.setup} /> : null}
                     {notice.inventoryBranchId ? (
                       <Link
                         href={`/pharmacy/inventory?branch=${encodeURIComponent(notice.inventoryBranchId)}`}
@@ -3271,7 +3406,8 @@ function ScopedPharmacyCounterConsole({
                                 : index < 0
                                   ? rows.length - 1
                                   : (index - 1 + rows.length) % rows.length;
-                            stageRow(rows[next]!);
+                            // Arrowing through results keeps focus in search (DEV-633).
+                            stageRow(rows[next]!, false);
                             return;
                           }
                           if (event.key !== 'Enter') return;
@@ -3286,7 +3422,15 @@ function ScopedPharmacyCounterConsole({
                             else void addToCart();
                             return;
                           }
-                          void runSearch();
+                          const first =
+                            searchCurrent &&
+                            !searchQuery.isPlaceholderData &&
+                            !searchQuery.isFetching &&
+                            !searchQuery.isError
+                              ? searchQuery.data?.rows[0]
+                              : undefined;
+                          if (first) stageRow(first);
+                          else void searchAndStage(trimmed);
                         }}
                         className="h-12"
                       />
@@ -3366,6 +3510,10 @@ function ScopedPharmacyCounterConsole({
                     <CounterUnitToggle
                       inline
                       options={activeRow.saleUnits}
+                      dosageForm={activeRow.dosageForm}
+                      priceFor={(option) =>
+                        counterSelectionPreview(activeRow, option, 1)?.unitPriceMinor ?? null
+                      }
                       onHandUnits={activeRow.onHandUnits}
                       selected={saleUnit}
                       quantity={quantityText}
