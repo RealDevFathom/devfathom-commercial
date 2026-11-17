@@ -10,8 +10,12 @@ const fixtures = vi.hoisted(() => ({
   session: vi.fn(),
   messages: [] as UIMessage[],
   reducedMotion: false,
+  pharmacyAccess: vi.fn(),
 }));
 vi.mock('next-auth/react', () => ({ useSession: fixtures.session }));
+vi.mock('@/lib/trpc', () => ({
+  trpc: { pharmacyAccess: { navigation: { useQuery: fixtures.pharmacyAccess } } },
+}));
 vi.mock('motion/react', () => ({ useReducedMotion: () => fixtures.reducedMotion }));
 // Seed tool states while retaining the installed SDK's transport, streaming,
 // status changes, approval continuation, stop and unmount behavior.
@@ -119,7 +123,16 @@ function pendingFetch() {
   return () => signal;
 }
 
+function pharmacyAccess(capabilities: string[], overrides: Record<string, unknown> = {}) {
+  fixtures.pharmacyAccess.mockReturnValue({
+    data: { userId: user.id, organizationId: user.organizationId, capabilities, ...overrides },
+    isError: false,
+  });
+}
+
 beforeEach(() => {
+  fixtures.pharmacyAccess.mockReset();
+  fixtures.pharmacyAccess.mockReturnValue({ data: undefined, isError: false });
   fixtures.messages = [];
   fixtures.reducedMotion = false;
   fixtures.session.mockReturnValue({ data: { user }, status: 'authenticated' });
@@ -165,11 +178,103 @@ describe('Ask Fathom context and suggestions', () => {
     expect(screen.queryByText(/Catering/)).not.toBeInTheDocument();
   });
   it('describes the existing Pharmacy report tool only when entitled', () => {
+    pharmacyAccess(['reports:operational']);
     const view = render(panel(entitlement('PHARMACY', ['pharmacy-reports'])));
     expect(screen.getByText(/Report access is checked when you ask/)).toBeVisible();
     view.rerender(panel(entitlement('PHARMACY', [])));
     expect(screen.getByText(/Pharmacy reports are not enabled/)).toBeVisible();
   });
+  it('gives a cashier stock and return starting points without report promises', () => {
+    pharmacyAccess(['pharmacy:counter']);
+    render(panel(entitlement('PHARMACY', ['pharmacy-counter', 'pharmacy-reports'])));
+    expect(
+      screen.queryByText(/or pharmacy reports|Report access is checked/)
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /sales|expiring|stock/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/No suggested actions/)).not.toBeInTheDocument();
+    for (const name of [
+      'Look up stock at the Counter',
+      'Find a receipt for a return at the Counter',
+    ]) {
+      expect(screen.getByRole('link', { name })).toHaveAttribute('href', '/pharmacy/counter');
+    }
+  });
+  it('closes the panel when following a counter starting point without sending a chat request', () => {
+    pharmacyAccess(['pharmacy:counter']);
+    render(panel(entitlement('PHARMACY', ['pharmacy-counter'])));
+    const link = screen.getByRole('link', { name: 'Look up stock at the Counter' });
+    link.addEventListener('click', (event) => event.preventDefault());
+    fireEvent.click(link);
+    expect(useAssistant.getState().open).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it.each(['EMPLOYEE', 'ADMIN'])(
+    'uses server report access rather than inferring it from the %s role',
+    (role) => {
+      fixtures.session.mockReturnValue({
+        data: { user: { ...user, role } },
+        status: 'authenticated',
+      });
+      pharmacyAccess([]);
+      const view = render(panel(entitlement('PHARMACY', ['pharmacy-reports'])));
+      expect(
+        screen.queryByText(/or pharmacy reports|Report access is checked/)
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: /sales|expiring|stock/i })
+      ).not.toBeInTheDocument();
+      pharmacyAccess(['reports:operational']);
+      view.rerender(panel(entitlement('PHARMACY', ['pharmacy-reports'])));
+      expect(screen.getByRole('button', { name: "What are today's sales?" })).toBeEnabled();
+      expect(screen.getByText(/or pharmacy reports/)).toBeVisible();
+      expect(
+        screen.queryByRole('navigation', { name: 'Counter shortcuts' })
+      ).not.toBeInTheDocument();
+    }
+  );
+  it.each(['pending', 'failed', 'another user', 'another workspace'])(
+    'offers no pharmacy reports or counter shortcuts when access is %s',
+    (state) => {
+      if (state !== 'pending') {
+        pharmacyAccess(['pharmacy:counter', 'reports:operational'], {
+          ...(state === 'another user' ? { userId: 'synthetic-user-b' } : {}),
+          ...(state === 'another workspace' ? { organizationId: 'synthetic-org-b' } : {}),
+        });
+        if (state === 'failed')
+          fixtures.pharmacyAccess.mockReturnValue({
+            ...fixtures.pharmacyAccess(),
+            isError: true,
+          });
+      }
+      render(panel(entitlement('PHARMACY', ['pharmacy-counter', 'pharmacy-reports'])));
+      expect(
+        screen.queryByText(/or pharmacy reports|Report access is checked/)
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: /sales|expiring|stock/i })
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('navigation', { name: 'Counter shortcuts' })
+      ).not.toBeInTheDocument();
+    }
+  );
+  it('requires the counter license even when a cached capability allows counter access', () => {
+    pharmacyAccess(['pharmacy:counter']);
+    const view = render(panel(entitlement('PHARMACY', ['pharmacy-counter'])));
+    expect(screen.getByRole('navigation', { name: 'Counter shortcuts' })).toBeVisible();
+    view.rerender(panel(entitlement('PHARMACY', [])));
+    expect(screen.queryByRole('navigation', { name: 'Counter shortcuts' })).not.toBeInTheDocument();
+  });
+  it.each(['AGENCY', 'RESTAURANT', 'PHARMACY'] as const)(
+    'keys the permission lookup to the current member and tenant in %s',
+    (vertical) => {
+      render(panel(entitlement(vertical, [])));
+      expect(fixtures.pharmacyAccess).toHaveBeenLastCalledWith(
+        { userId: user.id, organizationId: user.organizationId },
+        expect.objectContaining({ enabled: vertical === 'PHARMACY' })
+      );
+    }
+  );
   it.each(['EMPLOYEE', 'HR', 'ADMIN'])(
     'does not infer financial grants from the %s role',
     (role) => {
@@ -251,9 +356,12 @@ describe('Ask Fathom request and result states', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
   it('offers pharmacy report example questions and hints on an empty send', () => {
+    pharmacyAccess(['reports:operational']);
     render(panel(entitlement('PHARMACY', ['pharmacy-reports'])));
     expect(screen.getByRole('button', { name: "What are today's sales?" })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Which medicines are expiring soon?' })).toBeEnabled();
+    expect(
+      screen.getByRole('button', { name: 'Which medicines are expiring soon?' })
+    ).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
     fireEvent.keyDown(screen.getByLabelText('Your question'), { key: 'Enter' });
     expect(screen.getByText('Type a question before sending.')).toBeVisible();
@@ -481,7 +589,9 @@ describe('Ask Fathom lifecycle and keyboard', () => {
     await act(async () => {});
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(
-      screen.getAllByText('Find my notes').filter((el) => el.tagName === 'P' && el.closest('.bg-primary'))
+      screen
+        .getAllByText('Find my notes')
+        .filter((el) => el.tagName === 'P' && el.closest('.bg-primary'))
     ).toHaveLength(1);
   });
 });
