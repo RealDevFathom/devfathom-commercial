@@ -1108,6 +1108,11 @@ function ScopedPharmacyCounterConsole({
   const resumeDisabledReason =
     counterBusyReason ??
     (!heldSaleId ? 'No bill is held on this counter. Use Open bills to find another bill.' : null);
+  const resumeReasonId = resumeDisabledReason
+    ? resumeDisabledReason === billActionReason
+      ? 'counter-bill-action-reason'
+      : 'counter-resume-reason'
+    : undefined;
   const drawerDisabledReason = !canSettlePayments
     ? settlementAccess.isError
       ? "Couldn't check payment access. Retry payment access before opening the drawer."
@@ -2804,11 +2809,8 @@ function ScopedPharmacyCounterConsole({
     );
   }
 
-  return (
-    <div
-      className="pos-calm h-full min-h-0 overflow-y-auto bg-surface-page px-4 pt-3 pb-28 xl:pb-4"
-      data-counter-console=""
-    >
+  const scrollableCounter = (
+    <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-28 xl:pb-4" data-counter-console="">
       <header className="mb-3 space-y-3">
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight text-text-strong">Counter</h1>
@@ -2860,11 +2862,6 @@ function ScopedPharmacyCounterConsole({
                 </option>
               ))}
             </select>
-            {counterBusyReason ? (
-              <p id="counter-branch-reason" className="text-xs text-text-muted">
-                {counterBusyReason}
-              </p>
-            ) : null}
 
             <div className="flex flex-wrap items-center gap-2" aria-label="Bill status">
               <StatusPill
@@ -3153,7 +3150,7 @@ function ScopedPharmacyCounterConsole({
                         placeholder="Brand, generic or barcode"
                         aria-describedby={
                           counterBusyReason
-                            ? 'counter-search-help counter-branch-controls-reason'
+                            ? 'counter-search-help counter-branch-reason'
                             : 'counter-search-help'
                         }
                         onChange={(event) => {
@@ -3187,11 +3184,6 @@ function ScopedPharmacyCounterConsole({
                     </div>
                   </div>
 
-                  {branchControlReason ? (
-                    <p id="counter-branch-controls-reason" className="text-xs text-text-muted">
-                      {branchControlReason}
-                    </p>
-                  ) : null}
                   <CounterSearchResults
                     rows={
                       searchCurrent && !searchQuery.isPlaceholderData
@@ -3211,7 +3203,7 @@ function ScopedPharmacyCounterConsole({
                     }
                     query={trimmedQuery}
                     disabled={busy || !branchAuthorized}
-                    disabledReason={branchControlReason}
+                    disabledReasonId={branchControlReason ? 'counter-branch-reason' : undefined}
                     activeMedicineId={activeRow?.medicineId ?? null}
                     error={searchQuery.error ? messageFrom(searchQuery.error) : null}
                     onSelect={stageRow}
@@ -3293,9 +3285,7 @@ function ScopedPharmacyCounterConsole({
                         variant="outline"
                         className="h-auto min-h-11 whitespace-normal"
                         disabled={busy || !branchAuthorized}
-                        aria-describedby={
-                          branchControlReason ? 'counter-branch-controls-reason' : undefined
-                        }
+                        aria-describedby={branchControlReason ? 'counter-branch-reason' : undefined}
                         onClick={() => void captureShortfall()}
                       >
                         {pending === 'captureDemand'
@@ -3400,7 +3390,7 @@ function ScopedPharmacyCounterConsole({
             branchId={branchId}
             medicineIds={currentBill ? cart.lines.map((line) => line.medicineId) : []}
             disabled={busy || !branchAuthorized}
-            disabledReason={branchControlReason}
+            disabledReasonId={branchControlReason ? 'counter-branch-reason' : undefined}
             onChoose={(suggestion) => {
               setQuery(suggestion.displayName);
               setSubmittedSearch({
@@ -3539,7 +3529,7 @@ function ScopedPharmacyCounterConsole({
                 variant="outline"
                 className="h-11 px-2 text-xs"
                 disabled={busy || !heldSaleId}
-                aria-describedby={resumeDisabledReason ? 'counter-resume-reason' : undefined}
+                aria-describedby={resumeReasonId}
                 onClick={() => void runTransition('resume')}
               >
                 Resume{' '}
@@ -3562,7 +3552,7 @@ function ScopedPharmacyCounterConsole({
                 {billActionReason}
               </p>
             ) : null}
-            {resumeDisabledReason ? (
+            {resumeReasonId === 'counter-resume-reason' ? (
               <p id="counter-resume-reason" className="mt-2 text-xs text-text-muted">
                 {resumeDisabledReason}
               </p>
@@ -4025,6 +4015,21 @@ function ScopedPharmacyCounterConsole({
       <p className="sr-only" aria-live="polite">
         {COUNTER_ACTION_LABELS.focusSearch}: {formatBinding(keymap.bindings.focusSearch)}
       </p>
+    </div>
+  );
+
+  return (
+    <div className="pos-calm flex h-full min-h-0 flex-col overflow-hidden bg-surface-page">
+      {/* Reserve space outside the scroller: one reason stays visible without covering controls. */}
+      {counterBusyReason ? (
+        <p
+          id="counter-branch-reason"
+          className="shrink-0 border-b border-border-subtle px-4 py-2 text-xs text-text-muted"
+        >
+          {counterBusyReason}
+        </p>
+      ) : null}
+      {scrollableCounter}
     </div>
   );
 }

@@ -152,7 +152,7 @@ describe('DEV-41 remaining disabled explanations for drawer handover', () => {
       screen.getByRole('button', { name: 'Handing over…' }),
     ]) {
       expect(element).toBeDisabled();
-      expect(element).toHaveAccessibleDescription('Saving the till handover. Please wait.');
+      expect(element).toHaveAccessibleDescription('Saving the change of cashier. Please wait.');
     }
     view.rerender(<CounterDrawerOperator {...props} />);
     expect(screen.getByRole('button', { name: 'Hand over' })).not.toHaveAccessibleDescription();

@@ -79,7 +79,7 @@ export function CounterDrawerOperator({
       </div>
       {pending ? (
         <p id="counter-handover-pending" className="text-sm text-text-muted">
-          Saving the till handover. Please wait.
+          Saving the change of cashier. Please wait.
         </p>
       ) : null}
       {canHandOver && open ? (
