@@ -38,10 +38,10 @@ const OPERATION_LABEL: Record<SupplierComplianceOperation, string> = {
   CENTRAL_PURCHASE_ORDER_CREATE: 'Central purchase order raised',
 };
 
-function setBy(read: SupplierCompliancePolicyRead): string {
+function setBy(read: SupplierCompliancePolicyRead, timeZone?: string | null): string {
   const { policy } = read;
   if (!policy.updatedAt) return '';
-  return ` Changed ${dateTime(policy.updatedAt)}${
+  return ` Changed ${dateTime(policy.updatedAt, timeZone)}${
     policy.updatedByName ? ` by ${policy.updatedByName}` : ''
   } (policy version ${policy.version}).`;
 }
@@ -51,12 +51,14 @@ export function SupplierCompliancePanel({
   history,
   notice,
   onSetPolicy,
+  timeZone,
 }: {
   /** `null` when the policy could not be read; the server enforces in that case. */
   read: SupplierCompliancePolicyRead | null;
   history: SupplierCompliancePolicyHistory | null;
   notice: Notice | null;
   onSetPolicy: (form: FormData) => Promise<string>;
+  timeZone?: string | null;
 }) {
   if (!read) {
     return (
@@ -93,14 +95,14 @@ export function SupplierCompliancePanel({
           approve or send a purchase order, or draft or post a goods receipt from it.
           {read.policy.source === 'FAIL_CLOSED'
             ? ' The stored setting could not be read, so the checks are enforced.'
-            : setBy(read)}
+            : setBy(read, timeZone)}
         </p>
       ) : (
         <div className="space-y-2 text-sm text-text-body">
           <p className="text-text-body">
             Supplier licence and trade-authorization checks are off. Orders and receipts are not
             refused because a licence or authorization is missing, and suppliers are shown as
-            &ldquo;Not checked&rdquo;.{setBy(read)}
+            &ldquo;Not checked&rdquo;.{setBy(read, timeZone)}
           </p>
           <p className="text-text-muted">
             This includes suppliers of controlled medicines. The controlled-drug safeguards
@@ -201,7 +203,7 @@ export function SupplierCompliancePanel({
                 <span className="font-medium text-text-strong">
                   {change.newValue ? 'Turned on' : 'Turned off'}
                 </span>{' '}
-                · {dateTime(change.changedAt)} · {change.actorName ?? 'Unknown user'}
+                · {dateTime(change.changedAt, timeZone)} · {change.actorName ?? 'Unknown user'}
                 {change.policyVersion ? ` · version ${change.policyVersion}` : ''}
                 {!change.newValue && change.acknowledgement ? ' · warning acknowledged' : ''}
               </li>
@@ -250,7 +252,13 @@ export function SupplierPolicyStanding({
 }
 
 /** Writes that went ahead for this supplier while the checks were off. Evidence only. */
-export function SupplierComplianceSkipList({ skips }: { skips: SupplierComplianceSkips | null }) {
+export function SupplierComplianceSkipList({
+  skips,
+  timeZone,
+}: {
+  skips: SupplierComplianceSkips | null;
+  timeZone?: string | null;
+}) {
   if (!skips || skips.length === 0) return null;
   return (
     <div className="mt-4 border-t border-border-subtle pt-4">
@@ -261,7 +269,7 @@ export function SupplierComplianceSkipList({ skips }: { skips: SupplierComplianc
             <span className="font-medium text-text-strong">
               {OPERATION_LABEL[skip.operation] ?? skip.operation}
             </span>
-            {skip.reference ? ` ${skip.reference}` : ''} · {dateTime(skip.recordedAt)} ·{' '}
+            {skip.reference ? ` ${skip.reference}` : ''} · {dateTime(skip.recordedAt, timeZone)} ·{' '}
             {skip.actorName ?? 'Unknown user'} · policy version {skip.policyVersion} ·{' '}
             {skip.supplierAuthorized ? 'authorized' : 'not authorized'},{' '}
             {LICENCE_STATUS_LABEL[skip.licenceStatus as SupplierLicenceStatus]?.toLowerCase() ??
