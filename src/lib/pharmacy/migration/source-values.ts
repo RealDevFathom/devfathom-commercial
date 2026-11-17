@@ -285,6 +285,16 @@ function endOfMonth(year: number, month: number): Date | null {
 }
 
 /**
+ * True when a pack label states a dosage/net strength ("500mg", "30 g", "5%") rather than a
+ * count of units per pack. `readPackFactor` reads the digits of such a label, so a PACKS
+ * quantity must never be multiplied by it.
+ */
+export function isStrengthPackLabel(raw: string | undefined): boolean {
+  if (isBlank(raw)) return false;
+  return /\d\s*(?:mg|mcg|µg|ug|g|gm|kg|iu|meq|mmol|%)(?![a-z])/i.test(raw!);
+}
+
+/**
  * Read a pack label into the integer number of canonical units it contains.
  *
  * Handles the two forms these exports use: a multiplied grid ("10x10", "1 x 20")

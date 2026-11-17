@@ -55,7 +55,10 @@ export function CounterSignOut({ hasOpenSale }: { hasOpenSale: boolean }) {
         </p>
       ) : null}
       <Dialog open={confirming} onOpenChange={setConfirming}>
-        <DialogContent finalFocus={buttonRef}>
+        <DialogContent
+          className="pharmacy-workspace [&_[data-slot=dialog-close]]:min-h-11 [&_[data-slot=dialog-close]]:min-w-11"
+          finalFocus={buttonRef}
+        >
           <DialogTitle>Sign out with an open sale?</DialogTitle>
           <DialogDescription>
             A sale is still open. Signing out will not complete or cancel it. Check any unfinished

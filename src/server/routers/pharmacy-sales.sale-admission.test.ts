@@ -29,7 +29,14 @@ vi.mock('@/lib/pharmacy/customer-loyalty', async (importOriginal) => ({
   linkCustomerToSale: vi.fn(),
 }));
 
+import { TRPCError } from '@trpc/server';
 import { linkCustomerToSale } from '@/lib/pharmacy/customer-loyalty';
+import { CounterApprovalDenied } from '@/lib/pharmacy/counter-line-approval';
+import {
+  COUNTER_UNKNOWN_ERROR_MESSAGE,
+  counterSaleErrorMessage,
+} from '@/lib/pharmacy/counter-messages';
+import { PharmacyRxReferenceError } from '@/lib/pharmacy/rx-prescription-reference';
 import { addSaleLine, createSale } from '@/lib/pharmacy/sales';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
@@ -60,6 +67,7 @@ function fixture(options: {
   role?: 'ADMIN' | 'EMPLOYEE';
 }) {
   const db = {
+    pharmacySaleLine: { findFirst: vi.fn(async () => null) },
     $transaction: vi.fn(async (callback: (tx: unknown) => unknown) => callback(db)),
     $queryRaw: vi.fn().mockResolvedValue([]),
     pharmacyBranch: {
@@ -182,6 +190,39 @@ describe('counter sale admission (DEV-607)', () => {
     expect(vi.mocked(addSaleLine).mock.calls[0]![1]).toEqual(scope);
   });
 
+  // DEV-860: the counter shows only known or deliberate refusal copy for add-line. These
+  // are the forms the router actually sends for a FEFO approval and a prescription
+  // reference refusal, so the counter must keep their words, not the generic sentence.
+  it.each([
+    ['a FEFO batch approval', () => new CounterApprovalDenied('FEFO_OVERRIDE')],
+    [
+      'a prescription reference',
+      () => new PharmacyRxReferenceError('PRESCRIPTION_PATIENT_MISMATCH'),
+    ],
+    ['a missing prescription', () => new PharmacyRxReferenceError('PRESCRIPTION_REQUIRED')],
+  ] as const)('keeps the counter wording of %s refusal', async (_label, refusal) => {
+    const { caller } = fixture({ capabilities: ['pharmacy:counter'], assignedBranches: [BRANCH] });
+    const domain = refusal();
+    vi.mocked(addSaleLine).mockRejectedValue(domain);
+    const error = await caller.addLine(line).catch((thrown: unknown) => thrown);
+    expect(error).toBeInstanceOf(TRPCError);
+    const { code, message } = error as TRPCError;
+    expect(code).not.toBe('INTERNAL_SERVER_ERROR');
+    // As the counter receives it: the message plus `data.code`.
+    const received = Object.assign(new Error(message), { data: { code } });
+    expect(counterSaleErrorMessage(received)).toBe(domain.message);
+    expect(counterSaleErrorMessage(received)).not.toBe(COUNTER_UNKNOWN_ERROR_MESSAGE);
+  });
+
+  it('keeps an unexpected add-line failure generic at the counter', async () => {
+    const { caller } = fixture({ capabilities: ['pharmacy:counter'], assignedBranches: [BRANCH] });
+    vi.mocked(addSaleLine).mockRejectedValue(new Error('tenant org-2 row internal-id-9 failed'));
+    const error = (await caller.addLine(line).catch((thrown: unknown) => thrown)) as TRPCError;
+    expect(error.code).toBe('INTERNAL_SERVER_ERROR');
+    const received = Object.assign(new Error(error.message), { data: { code: error.code } });
+    expect(counterSaleErrorMessage(received)).toBe(COUNTER_UNKNOWN_ERROR_MESSAGE);
+  });
+
   it('keeps the organization administrator able to open a bill on any active branch', async () => {
     const { caller } = fixture({
       capabilities: ['pharmacy:counter'],
@@ -235,6 +276,39 @@ describe('DEV-830 counter branch scope (security scan F04)', () => {
       organizationId: 'org-1',
       active: true,
       branchAssignments: { some: { organizationId: 'org-1', userId: 'cashier-1', active: true } },
+    });
+  });
+
+  // DEV-860: an unassigned cashier lists no branch, so the counter must still say why.
+  it('tells a member assigned to no active branch that the assignment is missing', async () => {
+    const { caller } = fixture({ capabilities: ['pharmacy:counter'], assignedBranches: [] });
+    await expect(caller.counterBranches()).resolves.toMatchObject({
+      branches: [],
+      setupReason: 'BRANCH_NOT_ASSIGNED',
+      canFixSetup: false,
+    });
+  });
+
+  it('names no missing assignment once a member lists an assigned branch', async () => {
+    const { db, caller } = fixture({ capabilities: ['pharmacy:counter'], assignedBranches: [] });
+    db.pharmacyBranch.findMany.mockResolvedValueOnce([{ id: BRANCH }]);
+    await expect(caller.counterBranches()).resolves.toMatchObject({
+      branches: [{ id: BRANCH }],
+      setupReason: null,
+      canFixSetup: false,
+    });
+  });
+
+  it('names no missing assignment for an administrator with no branch set up', async () => {
+    const { caller } = fixture({
+      capabilities: ['pharmacy:counter'],
+      assignedBranches: [],
+      role: 'ADMIN',
+    });
+    await expect(caller.counterBranches()).resolves.toMatchObject({
+      branches: [],
+      setupReason: null,
+      canFixSetup: true,
     });
   });
 
