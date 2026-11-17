@@ -25,12 +25,7 @@ function identityFor({
   ingredientKey,
   medicines,
 }: Omit<CounterDuplicateSaltAcknowledgeProps, 'disabled'>): string {
-  return JSON.stringify([
-    branchId,
-    saleId,
-    ingredientKey,
-    duplicateSaltGroupFingerprint(medicines),
-  ]);
+  return JSON.stringify([branchId, saleId, ingredientKey, duplicateSaltGroupFingerprint(medicines)]);
 }
 
 /**

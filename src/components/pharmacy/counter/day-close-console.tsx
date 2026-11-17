@@ -319,9 +319,7 @@ function DayCloseForm({
       </SectionCard>
     );
   const data = preview.data;
-  const tenderTotals = tenderTotalsSchema.parse(
-    (report ? report.tenderTotals : data.tenderTotals) ?? []
-  );
+  const tenderTotals = tenderTotalsSchema.parse((report ? report.tenderTotals : data.tenderTotals) ?? []);
   const expected = report?.cashExpectedMinor ?? data.totals.cashExpectedMinor;
   const open = data.drawers.filter((d) => d.status === 'OPEN');
   const valid = open.every((d) => cashMinor(counts[d.id] ?? '') !== null);
@@ -403,15 +401,11 @@ function DayCloseForm({
           {tenderTotals.map((row) => (
             <div key={row.type} className="space-y-1">
               <p className="text-sm text-text-body">
-                <span className="font-medium">{row.type}</span> · Received{' '}
-                {formatMinor(row.amountMinor)} · Refunds {formatMinor(row.refundMinor)} · Net{' '}
-                {formatMinor(row.netMinor)} {currency}
+                <span className="font-medium">{row.type}</span> · Received {formatMinor(row.amountMinor)}
+                {' '}· Refunds {formatMinor(row.refundMinor)} · Net {formatMinor(row.netMinor)} {currency}
               </p>
               {row.confirmers?.length ? (
-                <ul
-                  className="ps-4 text-sm text-text-muted"
-                  aria-label={`${row.type} confirmed by`}
-                >
+                <ul className="ps-4 text-sm text-text-muted" aria-label={`${row.type} confirmed by`}>
                   {row.confirmers.map((confirmer, index) => (
                     <li key={confirmer.id ?? `${confirmer.name}-${index}`}>
                       Confirmed by {confirmer.name} · {confirmer.count}{' '}
@@ -597,9 +591,7 @@ function DayCloseForm({
             </label>
             {close.error && <p role="alert">{counterErrorMessage(close.error)}</p>}
             {draftWarning && (
-              <p role="alert" className="text-sm text-destructive">
-                {draftWarning}
-              </p>
+              <p role="alert" className="text-sm text-destructive">{draftWarning}</p>
             )}
             <div className="flex flex-wrap gap-3">
               <Button
