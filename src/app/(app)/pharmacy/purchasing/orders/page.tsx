@@ -711,6 +711,7 @@ export default async function PharmacyOrdersPage({
               comparisons={orderComparisons}
               landed={landed}
               notice={notice}
+              timeZone={ctx.organization?.timezone}
               onAdvance={advanceOrder}
               order={order}
             />
@@ -1133,6 +1134,7 @@ function OrderDetailPanel({
   checksOff,
   comparisons,
   notice,
+  timeZone,
   onAdvance,
 }: {
   order: PurchaseOrderDetail;
@@ -1159,6 +1161,7 @@ function OrderDetailPanel({
   checksOff: boolean;
   comparisons: LineComparison[];
   notice: Notice | null;
+  timeZone?: string | null;
   onAdvance: (form: FormData) => Promise<string>;
 }) {
   // PUR-02 segregation of duties, stated before the button is pressed rather
@@ -1294,8 +1297,8 @@ function OrderDetailPanel({
           <ul className="mt-2 space-y-1">
             {order.approvals.map((approval) => (
               <li className="text-xs text-text-muted" key={approval.id}>
-                {dateTime(approval.createdAt)} · {approval.decision} ({approval.fromStatus} →{' '}
-                {approval.toStatus}) under {approval.policy}
+                {dateTime(approval.createdAt, timeZone)} · {approval.decision} (
+                {approval.fromStatus} → {approval.toStatus}) under {approval.policy}
                 {approval.reason ? ` · ${approval.reason}` : ''}
               </li>
             ))}

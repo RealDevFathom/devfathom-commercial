@@ -2,7 +2,7 @@
 
 import { browserUuid } from '@/lib/browser-uuid';
 
-import { useRef, useState } from 'react';
+import { memo, useRef, useState } from 'react';
 import { Download, FileSpreadsheet, Loader2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -39,7 +39,11 @@ type ConnectorHealth = {
 
 type ReferenceSource = 'manual-file' | typeof DRAP_REGISTRY_CONNECTOR_ID;
 
-type ParsedFile = { name: string; headers: string[]; rows: Array<Record<string, unknown>> };
+type ParsedFile = {
+  name: string;
+  headers: string[];
+  rows: Array<Record<string, unknown>>;
+};
 
 type ChunkedUpload = {
   source: ReferenceSource;
@@ -55,7 +59,10 @@ const PREVIEW_DISPLAY_ROWS = 500;
 // re-sent to continue from the stored cursor. Bounded so a stuck run cannot loop forever.
 const MAX_CALLS_PER_PART = 20;
 
-function parseCsv(text: string): { headers: string[]; rows: Array<Record<string, unknown>> } {
+function parseCsv(text: string): {
+  headers: string[];
+  rows: Array<Record<string, unknown>>;
+} {
   const matrix: string[][] = [];
   let row: string[] = [];
   let cell = '';
@@ -251,6 +258,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
   const reviewing = usePendingKeys();
   const publishing = usePendingKeys();
   const utils = trpc.useUtils();
+  const [soloReviewPin, setSoloReviewPin] = useState('');
   const candidates = trpc.pharmacyMedicine.referenceCandidates.useQuery(undefined, {
     retry: false,
   });
@@ -259,18 +267,26 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
   });
   const decideProposal = trpc.pharmacyMedicine.decideReferenceConnectorProposal.useMutation({
     onSuccess: async () => {
+      setSoloReviewPin('');
       toast.success('Reference proposal confirmed. Review its assertions before publication.');
       await refreshQueues();
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => {
+      setSoloReviewPin('');
+      toast.error(error.message);
+    },
   });
   const importBatch = trpc.pharmacyMedicine.runReferenceConnectorNow.useMutation();
   const review = trpc.pharmacyMedicine.recordReviewDecision.useMutation({
     onSuccess: async () => {
+      setSoloReviewPin('');
       toast.success('Review decision recorded.');
       await utils.pharmacyMedicine.referenceCandidates.invalidate();
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => {
+      setSoloReviewPin('');
+      toast.error(error.message);
+    },
   });
   const publish = trpc.pharmacyMedicine.publishAssertions.useMutation({
     onSuccess: async () => {
@@ -410,6 +426,18 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
 
   return (
     <div className="space-y-6">
+      <label className="block max-w-sm space-y-2 text-sm text-text-body">
+        <span>Solo owner PIN for reference self-approval</span>
+        <input
+          className="min-h-11 w-full rounded-sm border border-border bg-surface-card px-3 focus-visible:outline-ring"
+          type="password"
+          inputMode="numeric"
+          autoComplete="off"
+          maxLength={64}
+          value={soloReviewPin}
+          onChange={(event) => setSoloReviewPin(event.target.value)}
+        />
+      </label>
       <section aria-label="Connector health" className="grid gap-3 md:grid-cols-3">
         {health.map((connector) => (
           <SectionCard key={connector.id} title={connector.label} titleLevel={2}>
@@ -601,45 +629,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
           </p>
         )}
 
-        {preview.length ? (
-          <div className="mt-5 overflow-x-auto rounded-md border border-border-subtle">
-            <table className="w-full min-w-[780px] text-left text-sm">
-              <thead className="bg-surface-sunken font-mono text-xs uppercase tracking-wide text-text-muted">
-                <tr>
-                  <th className="px-3 py-3">Source row</th>
-                  <th className="px-3 py-3">Product</th>
-                  <th className="px-3 py-3">Strength</th>
-                  <th className="px-3 py-3">Form</th>
-                  <th className="px-3 py-3">Pack</th>
-                  <th className="px-3 py-3">State</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border-subtle">
-                {preview.slice(0, PREVIEW_DISPLAY_ROWS).map((row) => (
-                  <tr key={row.rowSourceKey} className="hover:bg-surface-sunken/60">
-                    <td className="px-3 py-3 font-mono text-xs">{row.rowSourceKey}</td>
-                    <td className="px-3 py-3">{row.values.productName ?? 'Missing'}</td>
-                    <td className="px-3 py-3">{row.values.strength ?? 'Missing'}</td>
-                    <td className="px-3 py-3">{row.values.dosageForm ?? 'Missing'}</td>
-                    <td className="px-3 py-3">{row.values.pack ?? 'Missing'}</td>
-                    <td className="px-3 py-3">
-                      <StatusPill
-                        status={row.blockingIssues.length ? 'Blocked' : 'Ready'}
-                        tone={row.blockingIssues.length ? 'danger' : 'success'}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {preview.length > PREVIEW_DISPLAY_ROWS ? (
-              <p className="border-t border-border-subtle px-3 py-3 text-xs text-text-muted">
-                Showing the first {PREVIEW_DISPLAY_ROWS} of {preview.length} rows. All rows are
-                uploaded in parts of {REFERENCE_BATCH_MAX_ROWS}.
-              </p>
-            ) : null}
-          </div>
-        ) : null}
+        <ReferencePreview preview={preview} />
       </SectionCard>
 
       <SectionCard
@@ -716,7 +706,11 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                   disabled={isConfirming}
                   onClick={() =>
                     void confirming.run(proposal.id, () =>
-                      decideProposal.mutateAsync({ proposalId: proposal.id, decision: 'CONFIRM' })
+                      decideProposal.mutateAsync({
+                        proposalId: proposal.id,
+                        decision: 'CONFIRM',
+                        soloPin: soloReviewPin || undefined,
+                      })
                     )
                   }
                 >
@@ -825,6 +819,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                           review.mutateAsync({
                             duplicateKey: `reference:${candidate.id}`,
                             action,
+                            soloPin: soloReviewPin || undefined,
                             medicineIds: [candidate.id],
                             payload: { assertionIds: reviewAssertionIds },
                           })
@@ -872,3 +867,49 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
     </div>
   );
 }
+
+const ReferencePreview = memo(function ReferencePreview({
+  preview,
+}: {
+  preview: NormalizedMedicineReferenceRow[];
+}) {
+  return preview.length ? (
+    <div className="mt-5 overflow-x-auto rounded-md border border-border-subtle">
+      <table className="w-full min-w-[780px] text-left text-sm">
+        <thead className="bg-surface-sunken font-mono text-xs uppercase tracking-wide text-text-muted">
+          <tr>
+            <th className="px-3 py-3">Source row</th>
+            <th className="px-3 py-3">Product</th>
+            <th className="px-3 py-3">Strength</th>
+            <th className="px-3 py-3">Form</th>
+            <th className="px-3 py-3">Pack</th>
+            <th className="px-3 py-3">State</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border-subtle">
+          {preview.slice(0, PREVIEW_DISPLAY_ROWS).map((row) => (
+            <tr key={row.rowSourceKey} className="hover:bg-surface-sunken/60">
+              <td className="px-3 py-3 font-mono text-xs">{row.rowSourceKey}</td>
+              <td className="px-3 py-3">{row.values.productName ?? 'Missing'}</td>
+              <td className="px-3 py-3">{row.values.strength ?? 'Missing'}</td>
+              <td className="px-3 py-3">{row.values.dosageForm ?? 'Missing'}</td>
+              <td className="px-3 py-3">{row.values.pack ?? 'Missing'}</td>
+              <td className="px-3 py-3">
+                <StatusPill
+                  status={row.blockingIssues.length ? 'Blocked' : 'Ready'}
+                  tone={row.blockingIssues.length ? 'danger' : 'success'}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {preview.length > PREVIEW_DISPLAY_ROWS ? (
+        <p className="border-t border-border-subtle px-3 py-3 text-xs text-text-muted">
+          Showing the first {PREVIEW_DISPLAY_ROWS} of {preview.length} rows. All rows are uploaded
+          in parts of {REFERENCE_BATCH_MAX_ROWS}.
+        </p>
+      ) : null}
+    </div>
+  ) : null;
+});

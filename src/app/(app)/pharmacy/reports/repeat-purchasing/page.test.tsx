@@ -4,7 +4,8 @@ import { TRPCError } from '@trpc/server';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 const mocks = vi.hoisted(() => ({ repeatPurchasing: vi.fn(), branches: vi.fn() }));
-vi.mock('@/server/trpc', () => ({ createTRPCContext: vi.fn().mockResolvedValue({}) }));
+const ctx = vi.hoisted(() => ({ organization: { timezone: 'UTC' } as { timezone: string } }));
+vi.mock('@/server/trpc', () => ({ createTRPCContext: vi.fn(async () => ctx) }));
 vi.mock('@/server/routers/pharmacy-reports', () => ({
   pharmacyReportsRouter: { createCaller: () => mocks },
 }));
@@ -21,7 +22,10 @@ beforeEach(() => {
   mocks.repeatPurchasing.mockResolvedValue(empty);
   mocks.branches.mockResolvedValue({ branches: [{ id: 'b1', name: 'Main' }] });
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  ctx.organization.timezone = 'UTC';
+});
 describe('repeat purchasing page', () => {
   it('shows unavailable denominators, anonymous coverage and observation limits', async () => {
     render(await Page({ searchParams: Promise.resolve({}) }));
@@ -75,6 +79,31 @@ describe('repeat purchasing page', () => {
     expect(cutoff).toHaveValue('2026-05-01T09:30');
     expect(screen.getByText(/Frozen cutoff: 1 May 2026, 12:00 AM UTC\./)).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+  });
+  it('reads the picked cutoff and shows times in the organization time zone', async () => {
+    ctx.organization.timezone = 'Asia/Karachi';
+    mocks.repeatPurchasing.mockResolvedValue({
+      ...empty,
+      asOf: '2026-05-01T04:30:00.000Z',
+      earliestObservedAt: '2026-01-01T19:30:00.000Z',
+    });
+    render(
+      await Page({
+        searchParams: Promise.resolve({
+          asOf: '2026-05-01T09:30',
+          from: '2026-01-01',
+          to: '2026-01-31',
+        }),
+      })
+    );
+    expect(mocks.repeatPurchasing).toHaveBeenCalledWith({
+      from: '2026-01-01',
+      to: '2026-01-31',
+      asOf: '2026-05-01T04:30:00Z',
+    });
+    expect(screen.getByLabelText('As-of cutoff (PKT)')).toHaveValue('2026-05-01T09:30');
+    expect(screen.getByText(/Frozen cutoff: 1 May 2026, 9:30 AM PKT\./)).toBeInTheDocument();
+    expect(screen.getByText(/2 Jan 2026, 12:30 AM PKT/)).toBeInTheDocument();
   });
   it('shows loaded eligible, repeated and immature counts', async () => {
     mocks.repeatPurchasing.mockResolvedValue({

@@ -12,7 +12,12 @@ import { loadCashFlowProjection } from '@/lib/pharmacy/accounts/cash-flow';
 import { financeEntryDescription } from '@/lib/finance/source-labels';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
-import { formatUtcInstant } from '@/lib/utc-instant';
+import {
+  formatWorkspaceDateTime,
+  workspaceDateOffset,
+  workspaceDateRange,
+  workspaceZoneLabel,
+} from '@/lib/timezone';
 
 export const metadata: Metadata = { title: 'Classified cash-flow projection' };
 
@@ -30,9 +35,14 @@ export default async function CashFlowPage({
 }) {
   const query = await searchParams;
   const now = new Date();
-  const from = query.from ?? new Date(now.getTime() - 30 * 86_400_000).toISOString().slice(0, 10);
-  // Exclusive UTC upper bound defaults to tomorrow so today's postings are included.
-  const to = query.to ?? new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10);
+  // The organization zone is known once the tenant actor resolves; until then (or if it fails)
+  // the default window is counted on the UTC clock.
+  let timeZone: string | null | undefined;
+  const defaults = () => ({
+    from: query.from ?? workspaceDateOffset(timeZone, -30, now),
+    // Exclusive upper bound defaults to tomorrow so today's postings are included.
+    to: query.to ?? workspaceDateOffset(timeZone, 1, now),
+  });
   const requestedPage = Number.parseInt(query.page ?? '1', 10);
   let branches: Array<{ id: string; name: string }> = [];
   let projection: Awaited<ReturnType<typeof loadCashFlowProjection>> | null = null;
@@ -42,6 +52,7 @@ export default async function CashFlowPage({
   try {
     const actor = await resolveTenantActor();
     if (!actor) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    timeZone = actor.organization?.timezone ?? 'UTC';
     const ctx = await createTRPCContext({
       session: actor.session,
       organization: actor.organization,
@@ -53,11 +64,20 @@ export default async function CashFlowPage({
       select: { id: true, name: true },
     });
     if (query.branch) {
-      const start = new Date(`${from}T00:00:00Z`),
-        end = new Date(`${to}T00:00:00Z`);
-      if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
+      const { from, to } = defaults();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
         throw new TRPCError({ code: 'BAD_REQUEST' });
       }
+      if (
+        !Number.isFinite(Date.parse(`${from}T00:00:00Z`)) ||
+        !Number.isFinite(Date.parse(`${to}T00:00:00Z`))
+      ) {
+        throw new TRPCError({ code: 'BAD_REQUEST' });
+      }
+      // The picked days are read on the organization's clock: the window starts at the
+      // start of `from` and ends at the start of `to` (exclusive), both in that zone.
+      const start = workspaceDateRange(from, from, timeZone).from;
+      const end = workspaceDateRange(to, to, timeZone).from;
       const branchId = query.branch;
       // One repeatable-read transaction: authorization, canonical controls and the projection
       // share a snapshot, so a concurrent posting cannot surface as a false discrepancy.
@@ -91,11 +111,13 @@ export default async function CashFlowPage({
       message =
         'Owner Pharmacy Reports access and operational plus financial report capabilities are required.';
     } else if (error instanceof TRPCError && error.code === 'BAD_REQUEST') {
-      message = 'Choose an active branch and a valid UTC window of at most 92 days, then retry.';
+      message = 'Choose an active branch and a valid date window of at most 92 days, then retry.';
     } else {
       message = 'The cash-flow projection could not be read. Please retry.';
     }
   }
+  const { from, to } = defaults();
+  const zone = timeZone ? workspaceZoneLabel(timeZone) : 'workspace timezone';
   const pages = Math.max(1, Math.ceil((projection?.evidence.length ?? 0) / EVIDENCE_PAGE_SIZE));
   const page = Number.isFinite(requestedPage) ? Math.min(Math.max(requestedPage, 1), pages) : 1;
   const evidencePage =
@@ -115,7 +137,7 @@ export default async function CashFlowPage({
         heading="Classified cash-flow projection"
         description="A conservative posted-ledger projection with transfer netting and visible unclassified evidence."
       />
-      <SectionCard title="Scope and UTC period">
+      <SectionCard title={`Scope and period (${zone})`}>
         <form className="flex flex-wrap items-end gap-3">
           <label className="grid min-w-64 gap-2 text-sm">
             Active branch
@@ -157,10 +179,10 @@ export default async function CashFlowPage({
           <SectionCard title="Opening-to-closing reconciliation">
             <p className="text-sm text-text-muted">
               Recorded currency minor-unit totals from every scoped posted cash/bank line. Retrieved{' '}
-              {formatUtcInstant(projection.metadata.retrievedAt)}. Completeness: unknown —{' '}
-              {projection.metadata.completenessReason} Discrepancy is canonical CASH plus BANK
-              account closing from the financial statements, read in the same snapshot, minus the
-              projected closing.
+              {formatWorkspaceDateTime(projection.metadata.retrievedAt, timeZone)}. Completeness:
+              unknown — {projection.metadata.completenessReason} Discrepancy is canonical CASH plus
+              BANK account closing from the financial statements, read in the same snapshot, minus
+              the projected closing.
             </p>
             <div className="overflow-x-auto">
               <table className="mt-4 w-full text-sm">
@@ -226,8 +248,9 @@ export default async function CashFlowPage({
             {evidencePage.map((entry) => (
               <details className="mt-3 rounded-sm border border-border-default p-3" key={entry.id}>
                 <summary className="min-h-11 cursor-pointer">
-                  {formatUtcInstant(entry.occurredAt)} · {entry.classification} · {entry.currency}{' '}
-                  {money(entry.netMinor)} · {financeEntryDescription(entry.description)}
+                  {formatWorkspaceDateTime(entry.occurredAt, timeZone)} · {entry.classification} ·{' '}
+                  {entry.currency} {money(entry.netMinor)} ·{' '}
+                  {financeEntryDescription(entry.description)}
                 </summary>
                 <p className="break-all text-xs text-text-muted">
                   Entry {entry.id} · source {entry.sourceKind}/{entry.sourceId}
