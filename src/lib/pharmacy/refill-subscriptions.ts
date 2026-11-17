@@ -22,6 +22,7 @@ import {
 } from './refill-subscription-rules';
 
 import { assertRxSaleAllowed } from './rx-sale-gate';
+import { requirePharmacyTodayOpenForTrading } from './settlement';
 import { addReservedSaleLine, createSale } from './sales';
 import type { LedgerScope } from './stock-ledger';
 
@@ -644,6 +645,8 @@ export async function startRefillCycleCheckout(db: ScopedDb, scope: LedgerScope,
   if (held.reduce((total, row) => total + row.reservedUnits, 0) !== cycle.canonicalUnits) {
     throw new RefillSubscriptionError('INVALID_STATE');
   }
+  // DEV-631: no counter bill is opened while today's business day is closed.
+  await requirePharmacyTodayOpenForTrading(db, scope);
   await settleCycleReservations(db, scope, cycle.id, 'CONSUMED');
   const sale = await createSale(db, scope);
   await db.pharmacySale.update({

@@ -6,7 +6,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { blockReasonFor, planAllocation, PharmacyInventoryError } from './inventory';
 import { priceFromLot } from './medicine';
 import { deliveryTotals } from './customer-delivery';
-import { saleTotalMinor } from './settlement';
+import { requirePharmacyTodayOpenForTrading, saleTotalMinor } from './settlement';
 import { MAX_DELIVERY_DISTANCE_METERS } from './delivery-radius-profitability';
 import { addReservedSaleLine, createSale } from './sales';
 import type { LedgerScope } from './stock-ledger';
@@ -840,6 +840,8 @@ export async function startCustomerOrderCheckout(
   )
     throw new PharmacyCustomerOrderError('INVALID_STATE');
   if (order.counterSaleId) return { saleId: order.counterSaleId, replayed: true };
+  // DEV-631: no checkout opens a bill or allocates reserved stock while today is closed.
+  await requirePharmacyTodayOpenForTrading(db, scope);
   const reservations = await revalidateOrderReservations(db, scope, order.id);
   if (order.reservationExpiresAt.getTime() <= Date.now()) {
     throw new PharmacyCustomerOrderError('RESERVATION_UNAVAILABLE');
