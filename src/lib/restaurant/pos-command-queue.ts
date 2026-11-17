@@ -110,6 +110,7 @@ export type PosDraftStatus = 'QUEUED' | 'REPLAYING' | 'NEEDS_REVIEW' | 'QUARANTI
 
 export type PosDraftReviewReason =
   | 'CATALOG_CONFLICT'
+  | 'CATALOG_SCOPE_CHANGED'
   | 'PRICE_CHANGED'
   | 'ITEM_UNAVAILABLE'
   | 'CHANNEL_CLOSED'
@@ -121,6 +122,37 @@ export type PosDraftReview = {
   message: string;
   /** The command that raised it, when the trigger was a replay response. */
   atCommandId: string | null;
+  /** Persisted values shown with this review; absent on older saved reviews. */
+  catalog?: PosReviewCatalog;
+  originalCatalogRequired?: boolean;
+};
+
+type PosReviewCatalog = {
+  retainedOriginal?: boolean;
+  branchId: string;
+  channel: PosOrderChannel;
+  publicationId: string;
+  menuId: string;
+  menuName: string;
+  orderChannel: PosOrderChannel | null;
+  publicationMatchesOrder: boolean;
+  channelOpen: boolean;
+  line: {
+    number: number;
+    menuItemId: string;
+    productId: string | null;
+    variantId: string | null;
+    name: string | null;
+    available: boolean;
+    quotedPrice: string | null;
+    currentPrice: string | null;
+    modifiers: Array<{
+      optionId: string;
+      name: string | null;
+      quotedPrice: string | null;
+      currentPrice: string | null;
+    }>;
+  } | null;
 };
 
 export type PosQueuedDraft = {
@@ -142,6 +174,11 @@ export type PosQueuedDraft = {
   serverOrderId: string | null;
   commands: PosQueuedCommand[];
   review: PosDraftReview | null;
+  /** A server refusal is an obligation, independent of derived catalog conflicts. */
+  serverReview?: PosDraftReview | null;
+  /** Keep review mandatory while returning from an unrelated publication. */
+  scopeReview?: PosDraftReview | null;
+  retainOriginalCatalog?: boolean;
 };
 
 export type PosReplayState = 'READY' | 'PAUSED_REAUTH' | 'STOPPED_REVOKED';
@@ -151,6 +188,12 @@ export type PosQueueSnapshot = {
   nextSequence: number;
   replay: PosReplayState;
   drafts: PosQueuedDraft[];
+  /** Bounded to catalogs still needed by saved orders plus the currently loaded menu. */
+  reviewCatalogs?: PosCatalogSnapshot[];
+  /** Catalog request/write coordination; unrelated queue mutations do not invalidate reads. */
+  catalogInstance?: string;
+  catalogRevision?: number;
+  catalogRequestSequence?: number;
 };
 
 export function createQueueSnapshot(deviceId: string): PosQueueSnapshot {
@@ -333,7 +376,13 @@ export function nextReplayCommand(
   if (snapshot.replay === 'PAUSED_REAUTH') return { status: 'PAUSED', reason: 'REAUTH' };
 
   const candidates = snapshot.drafts
-    .filter((draft) => REPLAYABLE.includes(draft.status) && draft.deviceId === deviceId)
+    .filter(
+      (draft) =>
+        REPLAYABLE.includes(draft.status) &&
+        draft.deviceId === deviceId &&
+        !pendingServerReview(draft) &&
+        !draft.scopeReview
+    )
     .sort((a, b) => a.sequence - b.sequence);
 
   const waitingComposers = new Set<string | null>();
@@ -545,6 +594,8 @@ export function applyReplayOutcome(
     outcome: TerminalReplayOutcome;
     /** The id the server returned (order id for OPEN_ORDER, item/ticket id otherwise). */
     serverRef?: string | null;
+    /** Fresh catalog read under the same lock as the response's queue mutation. */
+    catalog?: PosCatalogSnapshot | null;
   }
 ): ApplyReplayResult {
   const { outcome } = input;
@@ -567,15 +618,20 @@ export function applyReplayOutcome(
 
   if (outcome.action === 'REVIEW' || outcome.action === 'QUARANTINE') {
     return {
-      snapshot: mapDraft(snapshot, input.draftId, (draft) => ({
-        ...mapCommand(draft, input.commandId, (command) => ({ ...command, status: 'PENDING' })),
-        status: outcome.action === 'REVIEW' ? 'NEEDS_REVIEW' : 'QUARANTINED',
-        review: {
+      snapshot: mapDraft(snapshot, input.draftId, (draft) => {
+        const review: PosDraftReview = {
           reason: outcome.reason === 'CATALOG_CONFLICT' ? 'CATALOG_CONFLICT' : 'REJECTED',
           message: outcome.message,
           atCommandId: input.commandId,
-        },
-      })),
+        };
+        return {
+          ...mapCommand(draft, input.commandId, (command) => ({ ...command, status: 'PENDING' })),
+          status: outcome.action === 'REVIEW' ? 'NEEDS_REVIEW' : 'QUARANTINED',
+          serverReview: review,
+          // Capture before persistence/display, never for the first time on approval.
+          review: input.catalog ? withReviewCatalog(draft, input.catalog, review) : review,
+        };
+      }),
       discarded: null,
     };
   }
@@ -594,16 +650,18 @@ export function applyReplayOutcome(
       const done = firstUnacknowledged(acknowledged) === null;
       // A catalog review raised while this command was in flight still governs the
       // remaining lines: only a review about the command just acknowledged is settled.
+      const obligation = pendingServerReview(draft) ?? draft.scopeReview;
       const keepReview =
-        !done &&
-        draft.status === 'NEEDS_REVIEW' &&
-        draft.review !== null &&
-        draft.review.atCommandId !== input.commandId;
+        Boolean(obligation) ||
+        (!done &&
+          draft.status === 'NEEDS_REVIEW' &&
+          draft.review !== null &&
+          draft.review.atCommandId !== input.commandId);
       return {
         ...acknowledged,
         serverOrderId,
-        status: done ? 'COMPLETED' : keepReview ? 'NEEDS_REVIEW' : 'REPLAYING',
-        review: keepReview ? draft.review : null,
+        status: keepReview ? 'NEEDS_REVIEW' : done ? 'COMPLETED' : 'REPLAYING',
+        review: keepReview ? (draft.review ?? obligation ?? null) : null,
       };
     }),
     discarded: null,
@@ -618,7 +676,10 @@ function pauseCommand(
   return mapDraft(snapshot, draftId, (draft) => ({
     ...mapCommand(draft, commandId, (command) => ({ ...command, status: 'PENDING' })),
     // A catalog review raised meanwhile keeps the draft out of replay.
-    status: draft.status === 'NEEDS_REVIEW' ? 'NEEDS_REVIEW' : 'QUEUED',
+    status:
+      draft.status === 'NEEDS_REVIEW' || pendingServerReview(draft) || draft.scopeReview
+        ? 'NEEDS_REVIEW'
+        : 'QUEUED',
   }));
 }
 
@@ -671,11 +732,11 @@ export function reviewAgainstCatalog(
   catalog: PosCatalogSnapshot
 ): PosDraftReview | null {
   if (!catalog.channelOpen) {
-    return {
+    return withReviewCatalog(draft, catalog, {
       reason: 'CHANNEL_CLOSED',
       message: 'This channel is no longer open for orders. Review this order before sending.',
       atCommandId: null,
-    };
+    });
   }
 
   // A newer catalog version alone is not a conflict: the draft is re-validated line
@@ -694,23 +755,23 @@ function reviewLines(
     if (command.commandId === acceptedCommandId) continue;
     const item = findCatalogItem(catalog, command.body.menuItemId);
     if (!item || !item.available) {
-      return {
+      return withReviewCatalog(draft, catalog, {
         reason: 'ITEM_UNAVAILABLE',
         message: item
           ? 'An item on this order is no longer available. Review it before sending.'
           : 'An item on this order is no longer on the menu. Review it before sending.',
         atCommandId: command.commandId,
-      };
+      });
     }
     if (item.price !== command.body.quotedUnitPrice) {
-      return {
+      return withReviewCatalog(draft, catalog, {
         reason: 'PRICE_CHANGED',
         message: 'A price on this order changed. Review it before sending.',
         atCommandId: command.commandId,
-      };
+      });
     }
     const modifierReview = reviewModifiers(command.commandId, command.body, item);
-    if (modifierReview) return modifierReview;
+    if (modifierReview) return withReviewCatalog(draft, catalog, modifierReview);
   }
   return null;
 }
@@ -753,6 +814,62 @@ function reviewModifiers(
   return null;
 }
 
+/** Capture exactly the menu scope and line values that deliberate approval can rebaseline.
+ * Unrelated catalog/version changes do not invalidate an otherwise identical quote.
+ */
+function withReviewCatalog(
+  draft: PosQueuedDraft,
+  catalog: PosCatalogSnapshot,
+  review: PosDraftReview
+): PosDraftReview {
+  const open = draft.commands.find((command) => command.kind === 'OPEN_ORDER');
+  const lines = draft.commands.filter((command) => command.kind === 'ADD_ITEM');
+  const index = lines.findIndex((command) => command.commandId === review.atCommandId);
+  const command = lines[index];
+  const item = command ? findCatalogItem(catalog, command.body.menuItemId) : null;
+  const options = new Map(
+    (item?.modifierGroups ?? []).flatMap((group) =>
+      group.options.map((option) => [option.id, option] as const)
+    )
+  );
+  return {
+    ...review,
+    ...(draft.retainOriginalCatalog ? { originalCatalogRequired: false } : {}),
+    catalog: {
+      ...(draft.retainOriginalCatalog ? { retainedOriginal: true } : {}),
+      branchId: catalog.branchId,
+      channel: catalog.channel,
+      publicationId: catalog.publicationId,
+      menuId: catalog.menuId,
+      menuName: catalog.menuName,
+      orderChannel: open?.body.channel ?? null,
+      publicationMatchesOrder:
+        !open?.body.publicationId || open.body.publicationId === catalog.publicationId,
+      channelOpen: catalog.channelOpen,
+      line: command
+        ? {
+            number: index + 1,
+            menuItemId: command.body.menuItemId,
+            productId: item?.productId ?? null,
+            variantId: item?.variantId ?? null,
+            name: item?.name ?? null,
+            available: item?.available ?? false,
+            quotedPrice: command.body.quotedUnitPrice,
+            currentPrice: item?.price ?? null,
+            modifiers: (command.body.modifierOptionIds ?? []).map((optionId) => ({
+              optionId,
+              name: options.get(optionId)?.name ?? null,
+              quotedPrice:
+                command.body.quotedModifiers?.find((quote) => quote.optionId === optionId)
+                  ?.priceDelta ?? null,
+              currentPrice: options.get(optionId)?.priceDelta ?? null,
+            })),
+          }
+        : null,
+    },
+  };
+}
+
 /**
  * Re-check every unresolved draft after a catalog refresh and flag the ones that now
  * need review. Drafts that are still consistent are returned to `QUEUED` so a
@@ -765,10 +882,21 @@ export function markDraftsForCatalogReview(
   let flagged = 0;
   const drafts = snapshot.drafts.map((draft) => {
     if (draft.status === 'COMPLETED' || draft.status === 'QUARANTINED') return draft;
-    const review = reviewAgainstCatalog(draft, catalog);
+    const serverReview = pendingServerReview(draft);
+    // Server approval takes precedence. Values for its command remain current;
+    // other changed lines are reviewed after this obligation is explicitly settled.
+    const review = serverReview
+      ? withReviewCatalog(draft, catalog, serverReview)
+      : (reviewAgainstCatalog(draft, catalog) ??
+        (draft.scopeReview ? withReviewCatalog(draft, catalog, draft.scopeReview) : null));
     if (review) {
       flagged += 1;
-      return { ...draft, status: 'NEEDS_REVIEW' as const, review };
+      return {
+        ...draft,
+        ...(serverReview ? { serverReview } : {}),
+        status: 'NEEDS_REVIEW' as const,
+        review,
+      };
     }
     if (draft.status === 'NEEDS_REVIEW')
       return { ...draft, status: 'QUEUED' as const, review: null };
@@ -777,8 +905,18 @@ export function markDraftsForCatalogReview(
   return { snapshot: { ...snapshot, drafts }, flagged };
 }
 
+/** Upgrade still-visible legacy server reviews before a local transition can erase their origin. */
+function pendingServerReview(draft: PosQueuedDraft): PosDraftReview | null {
+  return (
+    draft.serverReview ??
+    (draft.review?.reason === 'CATALOG_CONFLICT' || draft.review?.reason === 'REJECTED'
+      ? draft.review
+      : null)
+  );
+}
+
 /** A draft is only comparable with a catalog of the channel and publication it was composed on. */
-function draftMatchesCatalog(draft: PosQueuedDraft, catalog: PosCatalogSnapshot): boolean {
+export function draftMatchesCatalog(draft: PosQueuedDraft, catalog: PosCatalogSnapshot): boolean {
   const open = draft.commands.find((command) => command.kind === 'OPEN_ORDER');
   if (!open || open.body.channel !== catalog.channel) return false;
   return !open.body.publicationId || open.body.publicationId === catalog.publicationId;
@@ -820,20 +958,41 @@ export function resolveReviewedDraft(
   snapshot: PosQueueSnapshot,
   draftId: string,
   decision: 'REPLAY' | 'DISCARD',
+  displayedReview: PosDraftReview | null,
   catalogVersion: string,
   /** The catalog the operator reviewed against; its prices become the accepted quote. */
   catalog: PosCatalogSnapshot | null = null
-): PosQueueSnapshot {
+): { snapshot: PosQueueSnapshot; status: 'APPLIED' | 'STALE' | 'REFUSED' } {
   if (decision === 'DISCARD') {
-    return { ...snapshot, drafts: snapshot.drafts.filter((d) => d.draftId !== draftId) };
+    return {
+      snapshot: { ...snapshot, drafts: snapshot.drafts.filter((d) => d.draftId !== draftId) },
+      status: 'APPLIED',
+    };
   }
+  const stored = snapshot.drafts.find((draft) => draft.draftId === draftId);
   // A review cannot establish authorship for work saved before composer proofs.
+  if (!stored?.review || stored.review.reason === 'COMPOSER_UNVERIFIED')
+    return { snapshot, status: 'REFUSED' };
+  // Recompute against the catalog loaded under the same terminal lock, including
+  // for legacy reviews and same-version value drift. Never trust only a version
+  // or the generic reason/message to identify the quote the operator saw.
+  const obligation = pendingServerReview(stored) ?? stored.review;
+  const currentReview = catalog ? withReviewCatalog(stored, catalog, obligation) : obligation;
   if (
-    snapshot.drafts.find((draft) => draft.draftId === draftId)?.review?.reason ===
-    'COMPOSER_UNVERIFIED'
-  )
-    return snapshot;
-  return mapDraft(snapshot, draftId, (draft) => {
+    !displayedReview ||
+    currentReview.atCommandId !== displayedReview.atCommandId ||
+    currentReview.reason !== displayedReview.reason ||
+    currentReview.message !== displayedReview.message ||
+    JSON.stringify(currentReview.catalog) !== JSON.stringify(displayedReview.catalog)
+  ) {
+    return {
+      snapshot: mapDraft(snapshot, draftId, (draft) => ({ ...draft, review: currentReview })),
+      status: 'STALE',
+    };
+  }
+  const resolved = mapDraft(snapshot, draftId, (storedDraft) => {
+    // Only a valid, displayed approval releases these persisted obligations.
+    const draft = { ...storedDraft, serverReview: null, scopeReview: null };
     // Without a catalog of this draft's own menu nothing can be re-checked or
     // re-baselined: send it as composed, and the server prices every line.
     if (!catalog || !draftMatchesCatalog(draft, catalog)) {
@@ -847,4 +1006,5 @@ export function resolveReviewedDraft(
     if (next) return { ...rebased, status: 'NEEDS_REVIEW', review: next };
     return { ...rebased, status: 'QUEUED', review: null, catalogVersion };
   });
+  return { snapshot: resolved, status: 'APPLIED' };
 }

@@ -43,7 +43,11 @@ describe('PosOfflineRuntime', () => {
         review: { reason: 'COMPOSER_UNVERIFIED' },
         commands: legacy.commands,
       });
-      await reloaded.resolveReview(legacy.draftId, 'REPLAY');
+      await reloaded.resolveReview(
+        legacy.draftId,
+        'REPLAY',
+        reloaded.snapshot().queue!.drafts[0].review
+      );
       expect(reloaded.snapshot().queue!.drafts[0].status).toBe('QUARANTINED');
       let sent = 0;
       await reloaded.replay('staff-1', async (request) => {
@@ -53,7 +57,11 @@ describe('PosOfflineRuntime', () => {
       });
       expect(sent).toBe(2); // Only the signed draft's open/add commands.
       expect(reloaded.snapshot().queue!.drafts[1].status).toBe('COMPLETED');
-      await reloaded.resolveReview(legacy.draftId, 'DISCARD');
+      await reloaded.resolveReview(
+        legacy.draftId,
+        'DISCARD',
+        reloaded.snapshot().queue!.drafts[0].review
+      );
       const again = new PosOfflineRuntime(scope, driver);
       await again.hydrate();
       expect(again.snapshot().queue!.drafts.map((draft) => draft.draftId)).not.toContain(
@@ -281,6 +289,107 @@ describe('PosOfflineRuntime across tabs of one terminal', () => {
     );
   }
 
+  it.each(['reason', 'command ID'] as const)(
+    'keeps a newer review when a stale tab approves a different %s, then accepts the displayed review',
+    async (changedField) => {
+      const driver = createMemoryDriver();
+      const tabA = new PosOfflineRuntime(scope, driver);
+      let pauseWrite = false;
+      let releaseWrite!: () => void;
+      let writerEntered!: () => void;
+      const writeGate = new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+      const writerReady = new Promise<void>((resolve) => {
+        writerEntered = resolve;
+      });
+      const tabB = new PosOfflineRuntime(scope, driver, (name, run) =>
+        withTerminalScopeLock(name, async () => {
+          if (pauseWrite) {
+            pauseWrite = false;
+            writerEntered();
+            await writeGate;
+          }
+          return run();
+        })
+      );
+      await tabA.hydrate();
+      await tabB.hydrate();
+      await tabA.enqueue({ ...input, lines: [...input.lines, ...draftB.lines] });
+      const catalog = (price1: string, available1: boolean, price2: string) => ({
+        ...catalogPayload,
+        publicationId: input.open.publicationId,
+        channel: input.open.channel,
+        sections: [
+          {
+            id: 'section-1',
+            name: 'Menu',
+            sortOrder: 1,
+            items: [
+              {
+                id: 'menu-item-1',
+                displayName: 'First item',
+                price: price1,
+                available: available1,
+              },
+              { id: 'menu-item-2', displayName: 'Second item', price: price2, available: true },
+            ].map((item) => ({
+              ...item,
+              productId: item.id,
+              product: { name: item.displayName },
+              sortOrder: 1,
+              priceSource: 'BASE_LIST',
+              modifierGroups: [],
+            })),
+          },
+        ],
+      });
+      await tabA.cacheCatalog(catalog('5.00', true, '6.00'), '2026-11-17T00:00:00.000Z');
+      const displayed = tabA.snapshot().queue!.drafts[0];
+      expect(displayed.review?.reason).toBe('PRICE_CHANGED');
+
+      pauseWrite = true;
+      const updating = tabB.cacheCatalog(
+        changedField === 'reason' ? catalog('5.00', false, '6.00') : catalog('4.00', true, '7.00'),
+        '2026-11-17T00:01:00.000Z'
+      );
+      await writerReady;
+      // The click arrives while B holds the lock: compare only after B commits.
+      const approving = tabA.resolveReview(displayed.draftId, 'REPLAY', displayed.review);
+      releaseWrite();
+      await updating;
+      const current = tabB.snapshot().queue!.drafts[0];
+      expect(current.review).not.toEqual(displayed.review);
+      if (changedField === 'reason') {
+        expect(current.review?.atCommandId).toBe(displayed.review?.atCommandId);
+        expect(current.review?.reason).toBe('ITEM_UNAVAILABLE');
+      } else {
+        expect(current.review?.reason).toBe(displayed.review?.reason);
+        expect(current.review?.atCommandId).not.toBe(displayed.review?.atCommandId);
+      }
+
+      await approving;
+      expect(tabA.snapshot().queue!.drafts[0]).toEqual(current);
+      expect(await persistedDrafts(driver)).toEqual([current]);
+      const send = vi.fn(async () => ({ status: 201, serverRef: 'server-ref' }));
+      expect((await tabA.replay('staff-1', send)).state).toBe('IDLE');
+      expect(send).not.toHaveBeenCalled();
+
+      const reloaded = new PosOfflineRuntime(scope, driver);
+      await reloaded.hydrate();
+      expect(reloaded.snapshot().queue!.drafts[0]).toEqual(current);
+      // A fresh click on the now-displayed conflict is still allowed to send.
+      await tabA.resolveReview(current.draftId, 'REPLAY', { ...current.review! });
+      expect(tabA.snapshot().queue!.drafts[0].status).toBe('QUEUED');
+      await tabA.replay('staff-1', send);
+      expect(send).toHaveBeenCalledTimes(3);
+      expect((await persistedDrafts(driver))[0].status).toBe('COMPLETED');
+      tabA.close();
+      tabB.close();
+      reloaded.close();
+    }
+  );
+
   it('keeps both drafts when two hydrated tabs save one after the other', async () => {
     const driver = createMemoryDriver();
     const tabA = new PosOfflineRuntime(scope, driver);
@@ -417,4 +526,409 @@ describe('PosOfflineRuntime across tabs of one terminal', () => {
     expect(refused).toMatchObject({ ok: false, reason: 'DEVICE_REVOKED' });
     expect(await driver.read(posScopeKey(scope))).toBeUndefined();
   });
+});
+
+describe('persisted server review creation', () => {
+  const menu = (price = '4.00') => ({
+    version: 'same-version',
+    branchId: scope.branchId,
+    channel: input.open.channel,
+    publicationId: input.open.publicationId,
+    channelOpen: true,
+    menu: { id: 'menu-1', name: 'All day' },
+    sections: [
+      {
+        id: 'section-1',
+        name: 'Drinks',
+        sortOrder: 1,
+        items: [
+          {
+            id: 'menu-item-1',
+            productId: 'product-1',
+            variantId: null,
+            displayName: 'Coffee',
+            modifierGroups: [],
+            product: { name: 'Coffee' },
+            price,
+            available: true,
+            priceSource: 'BASE_LIST',
+            sortOrder: 1,
+          },
+        ],
+      },
+    ],
+  });
+
+  it('persists the 409 identity, survives reload/menu refresh, then approves once', async () => {
+    const driver = createMemoryDriver();
+    const tabA = new PosOfflineRuntime(scope, driver);
+    await tabA.cacheCatalog(menu(), '2026-11-17T00:00:00Z');
+    await tabA.enqueue(input);
+    let calls = 0;
+    const send = vi.fn(async () =>
+      ++calls === 1 ? { status: 201, serverRef: 'order-1' } : { status: 409 }
+    );
+    await tabA.replay('staff-1', send);
+    expect(send).toHaveBeenCalledTimes(2);
+    const displayed = tabA.snapshot().queue!.drafts[0];
+    expect(displayed.review?.catalog?.line).toMatchObject({
+      name: 'Coffee',
+      currentPrice: '4.00',
+      quotedPrice: '4.00',
+    });
+    const tabB = new PosOfflineRuntime(scope, driver);
+    await tabB.hydrate();
+    await tabB.cacheCatalog(menu(), '2026-11-17T01:00:00Z');
+    expect(tabB.snapshot().queue!.drafts[0]).toEqual(displayed);
+    expect(await tabB.resolveReview(displayed.draftId, 'REPLAY', displayed.review)).toBe('APPLIED');
+    const retry = vi.fn(async () => ({ status: 201, serverRef: 'item-1' }));
+    await tabB.replay('staff-1', retry);
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(tabB.snapshot().queue!.drafts[0].status).toBe('COMPLETED');
+  });
+
+  it('captures fresh values when another tab changes the catalog during the HTTP request', async () => {
+    const driver = createMemoryDriver();
+    const tabA = new PosOfflineRuntime(scope, driver);
+    const tabB = new PosOfflineRuntime(scope, driver);
+    await tabA.cacheCatalog(menu(), '2026-11-17T00:00:00Z');
+    await tabA.enqueue(input);
+    let calls = 0;
+    await tabA.replay('staff-1', async () => {
+      if (++calls === 1) return { status: 201, serverRef: 'order-1' };
+      await tabB.cacheCatalog(menu('5.00'), '2026-11-17T01:00:00Z');
+      return { status: 409 };
+    });
+    const displayed = tabA.snapshot().queue!.drafts[0];
+    expect(displayed.review?.catalog?.line?.currentPrice).toBe('5.00');
+    await tabB.cacheCatalog(menu('7.00'), '2026-11-17T02:00:00Z');
+    expect(await tabA.resolveReview(displayed.draftId, 'REPLAY', displayed.review)).toBe('STALE');
+    expect(tabA.snapshot().queue!.drafts[0].commands).toEqual(displayed.commands);
+    const send = vi.fn(async () => ({ status: 201, serverRef: 'item-1' }));
+    await tabA.replay('staff-1', send);
+    expect(send).not.toHaveBeenCalled();
+    const fresh = tabA.snapshot().queue!.drafts[0];
+    expect(await tabA.resolveReview(fresh.draftId, 'REPLAY', fresh.review)).toBe('APPLIED');
+    await tabA.replay('staff-1', send);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+  it.each([true, false])(
+    'returns successive foreign publications to original scope (cached=%s)',
+    async (cached) => {
+      const driver = createMemoryDriver();
+      const tabA = new PosOfflineRuntime(scope, driver);
+      const tabB = new PosOfflineRuntime(scope, driver);
+      await tabA.hydrate();
+      if (cached) await tabA.cacheCatalog(menu(), '2026-11-17T00:00:00Z');
+      await tabA.enqueue(input);
+      await tabA.cacheCatalog(
+        { ...menu('5.00'), publicationId: 'foreign-2' },
+        '2026-11-17T01:00:00Z'
+      );
+      const displayed = tabA.snapshot().queue!.drafts[0];
+      await tabB.cacheCatalog(
+        { ...menu('5.00'), publicationId: 'foreign-3' },
+        '2026-11-17T02:00:00Z'
+      );
+      expect(await tabA.resolveReview(displayed.draftId, 'REPLAY', displayed.review)).toBe(
+        cached ? 'STALE' : 'CATALOG_REQUIRED'
+      );
+      const send = vi.fn(async () => ({ status: 201, serverRef: 'ref' }));
+      await tabA.resume();
+      await tabA.replay('staff-1', send);
+      expect(send).not.toHaveBeenCalled();
+      if (!cached) {
+        await tabB.cacheCatalog(
+          { ...menu('9.00'), publicationId: 'foreign-4' },
+          '2026-11-17T03:00:00Z'
+        );
+        expect(await tabA.resolveReview(displayed.draftId, 'REPLAY', displayed.review)).toBe(
+          'CATALOG_REQUIRED'
+        );
+        await tabA.replay('staff-1', send);
+        expect(send).not.toHaveBeenCalled();
+        await tabB.cacheCatalog(menu(), '2026-11-17T04:00:00Z');
+      }
+      await tabB.cacheCatalog(
+        { ...menu('9.00'), publicationId: 'foreign-5' },
+        '2026-11-17T05:00:00Z'
+      );
+      const reloaded = new PosOfflineRuntime(scope, driver);
+      await reloaded.hydrate();
+      const fresh = reloaded.snapshot().queue!.drafts[0];
+      expect(fresh.status).toBe('NEEDS_REVIEW');
+      expect(fresh.commands).toEqual(displayed.commands);
+      expect(fresh.review?.catalog).toMatchObject({
+        publicationId: input.open.publicationId,
+        retainedOriginal: true,
+        line: { currentPrice: '4.00', quotedPrice: '4.00' },
+      });
+      expect(reloaded.snapshot().queue!.reviewCatalogs).toHaveLength(2);
+      expect(await reloaded.resolveReview(fresh.draftId, 'REPLAY', fresh.review)).toBe('APPLIED');
+      await reloaded.replay('staff-1', send);
+      expect(send).toHaveBeenCalledTimes(2);
+      const completed = reloaded.snapshot().queue!.drafts[0];
+      expect(completed.commands[0].body).toEqual(displayed.commands[0].body);
+      expect(completed.commands[1].body).toMatchObject({ quotedUnitPrice: '4.00' });
+      expect(completed.status).toBe('COMPLETED');
+    }
+  );
+
+  it('requires a fresh approval if the retained original catalog itself changes', async () => {
+    const driver = createMemoryDriver();
+    const a = new PosOfflineRuntime(scope, driver);
+    const b = new PosOfflineRuntime(scope, driver);
+    await a.cacheCatalog(menu(), '2026-11-17T00:00:00Z');
+    await a.enqueue(input);
+    await a.cacheCatalog({ ...menu('5.00'), publicationId: 'foreign-2' }, '2026-11-17T01:00:00Z');
+    const first = a.snapshot().queue!.drafts[0];
+    await b.cacheCatalog({ ...menu('5.00'), publicationId: 'foreign-3' }, '2026-11-17T02:00:00Z');
+    expect(await a.resolveReview(first.draftId, 'REPLAY', first.review)).toBe('STALE');
+    const original = a.snapshot().queue!.drafts[0];
+    await b.cacheCatalog(menu('7.00'), '2026-11-17T03:00:00Z');
+    expect(await a.resolveReview(first.draftId, 'REPLAY', original.review)).toBe('STALE');
+    expect(a.snapshot().queue!.drafts[0].commands).toEqual(first.commands);
+    const fresh = a.snapshot().queue!.drafts[0];
+    expect(fresh.review?.catalog?.line?.currentPrice).toBe('7.00');
+    expect(await a.resolveReview(first.draftId, 'REPLAY', fresh.review)).toBe('APPLIED');
+    expect(a.snapshot().queue!.drafts[0].commands[1].body).toMatchObject({
+      quotedUnitPrice: '7.00',
+    });
+  });
+  it('creates a new obligation when explicit retry receives another 409', async () => {
+    const runtime = new PosOfflineRuntime(scope, createMemoryDriver());
+    await runtime.cacheCatalog(menu(), '2026-11-17T00:00:00Z');
+    await runtime.enqueue(input);
+    let calls = 0;
+    const send = vi.fn(async () =>
+      ++calls === 1 ? { status: 201, serverRef: 'order' } : { status: 409 }
+    );
+    await runtime.replay('staff-1', send);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await runtime.cacheCatalog(menu('5.00'), '2026-11-17T01:00:00Z');
+      await runtime.cacheCatalog(menu(), '2026-11-17T02:00:00Z');
+      await runtime.resume();
+      const count = send.mock.calls.length;
+      await runtime.replay('staff-1', send);
+      expect(send).toHaveBeenCalledTimes(count);
+      const displayed = runtime.snapshot().queue!.drafts[0];
+      expect(displayed.status).toBe('NEEDS_REVIEW');
+      expect(await runtime.resolveReview(displayed.draftId, 'REPLAY', displayed.review)).toBe(
+        'APPLIED'
+      );
+      await runtime.replay('staff-1', send);
+      expect(send).toHaveBeenCalledTimes(count + 1);
+      expect(runtime.snapshot().queue!.drafts[0].serverReview?.reason).toBe('CATALOG_CONFLICT');
+    }
+  });
+  async function restorationPair() {
+    const driver = createMemoryDriver();
+    const a = new PosOfflineRuntime(scope, driver);
+    const b = new PosOfflineRuntime(scope, driver);
+    await a.enqueue(input);
+    await a.cacheCatalog({ ...menu('5.00'), publicationId: 'foreign-2' }, '2026-11-17T00:00:00Z');
+    const displayed = a.snapshot().queue!.drafts[0];
+    await b.cacheCatalog({ ...menu('5.00'), publicationId: 'foreign-3' }, '2026-11-17T01:00:00Z');
+    expect(await a.resolveReview(displayed.draftId, 'REPLAY', displayed.review)).toBe(
+      'CATALOG_REQUIRED'
+    );
+    return { a, b, driver, draftId: displayed.draftId };
+  }
+
+  function delayedMenu() {
+    let release!: (value: ReturnType<typeof menu>) => void;
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const response = new Promise<ReturnType<typeof menu>>((resolve) => {
+      release = resolve;
+    });
+    return {
+      ready,
+      release: (value: ReturnType<typeof menu>) => release(value),
+      fetch: () => {
+        started();
+        return response;
+      },
+    };
+  }
+
+  it('restores A without changing live scope or unrelated accepted B, including an enqueue during HTTP await', async () => {
+    const { a, b, draftId } = await restorationPair();
+    const pending = delayedMenu();
+    const restoring = a.restoreReviewCatalog(draftId, pending.fetch);
+    await pending.ready;
+    await b.enqueue({
+      ...input,
+      open: { ...input.open, publicationId: 'foreign-3' },
+      lines: [{ ...input.lines[0], quotedUnitPrice: '5.00' }],
+    });
+    const live = b.snapshot().catalog;
+    const acceptedB = b.snapshot().queue!.drafts[1];
+    pending.release(menu());
+    expect(await restoring).not.toBeNull();
+    expect(a.snapshot().catalog).toEqual(live);
+    expect(a.snapshot().queue!.drafts[1]).toEqual(acceptedB);
+    const send = vi.fn(async () => ({ status: 201, serverRef: 'B-ref' }));
+    await b.replay('staff-1', send);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(b.snapshot().queue!.drafts[0].status).toBe('NEEDS_REVIEW');
+    expect(b.snapshot().queue!.drafts[1].status).toBe('COMPLETED');
+  });
+
+  it.each(['old-first', 'new-first'] as const)(
+    'keeps the latest-started original request when responses finish %s',
+    async (order) => {
+      const { a, b, driver, draftId } = await restorationPair();
+      const old = delayedMenu();
+      const fresh = delayedMenu();
+      const first = a.restoreReviewCatalog(draftId, old.fetch);
+      await old.ready;
+      const second = b.restoreReviewCatalog(draftId, fresh.fetch);
+      await fresh.ready;
+      if (order === 'old-first') {
+        old.release(menu());
+        expect(await first).toBeNull();
+      }
+      fresh.release(menu('7.00'));
+      expect(await second).not.toBeNull();
+      if (order === 'new-first') {
+        old.release(menu());
+        expect(await first).toBeNull();
+      }
+      await a.refresh();
+      expect(a.snapshot().catalog?.publicationId).toBe('foreign-3');
+      expect(a.snapshot().queue!.drafts[0].review?.catalog?.line?.currentPrice).toBe('7.00');
+      expect(a.snapshot().queue!.drafts[0].commands[1].body).toMatchObject({
+        quotedUnitPrice: '4.00',
+      });
+      const reloaded = new PosOfflineRuntime(scope, driver);
+      await reloaded.hydrate();
+      const review = reloaded.snapshot().queue!.drafts[0];
+      expect(review.review?.catalog?.line?.currentPrice).toBe('7.00');
+      expect(await reloaded.resolveReview(draftId, 'REPLAY', review.review)).toBe('APPLIED');
+      expect(reloaded.snapshot().queue!.drafts[0].commands[1].body).toMatchObject({
+        quotedUnitPrice: '7.00',
+      });
+    }
+  );
+
+  it.each(['7.00', '4.00'])(
+    'rejects a response after an intervening live write, including ABA to %s',
+    async (price) => {
+      const { a, b, draftId } = await restorationPair();
+      const pending = delayedMenu();
+      const restoring = a.restoreReviewCatalog(draftId, pending.fetch);
+      await pending.ready;
+      await b.cacheCatalog(menu('7.00'), '2026-11-17T02:00:00Z');
+      if (price === '4.00') await b.cacheCatalog(menu(), '2026-11-17T03:00:00Z');
+      pending.release(menu('9.00'));
+      expect(await restoring).toBeNull();
+      expect(a.snapshot().catalog?.sections[0].items[0].price).toBe(price);
+      expect(a.snapshot().queue!.drafts[0].review?.catalog?.line?.currentPrice).toBe(price);
+      const send = vi.fn(async () => ({ status: 201 }));
+      await a.replay('staff-1', send);
+      expect(send).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['old-first', 'new-first'] as const)(
+    'guards live menu requests too, with %s completion',
+    async (order) => {
+      const { a, b } = await restorationPair();
+      const old = delayedMenu();
+      const fresh = delayedMenu();
+      const first = a.fetchLiveCatalog(input.open.channel, old.fetch);
+      await old.ready;
+      const second = b.fetchLiveCatalog(input.open.channel, fresh.fetch);
+      await fresh.ready;
+      if (order === 'old-first') {
+        old.release(menu());
+        expect(await first).toBeNull();
+      }
+      fresh.release(menu('7.00'));
+      expect(await second).not.toBeNull();
+      if (order === 'new-first') {
+        old.release(menu());
+        expect(await first).toBeNull();
+      }
+      await a.refresh();
+      expect(a.snapshot().catalog?.sections[0].items[0].price).toBe('7.00');
+    }
+  );
+
+  it.each(['branch', 'channel', 'publication'] as const)(
+    'refuses an original response for the wrong %s',
+    async (field) => {
+      const { a, draftId } = await restorationPair();
+      const live = a.snapshot().catalog;
+      const wrong = {
+        ...menu(),
+        ...(field === 'branch'
+          ? { branchId: 'other-branch' }
+          : field === 'channel'
+            ? { channel: 'DINE_IN' }
+            : { publicationId: 'other-publication' }),
+      };
+      await expect(a.restoreReviewCatalog(draftId, async () => wrong)).rejects.toThrow(
+        /branch|scope/
+      );
+      expect(a.snapshot().catalog).toEqual(live);
+      expect(a.snapshot().queue!.drafts[0].status).toBe('NEEDS_REVIEW');
+    }
+  );
+
+  it('retains the obligation after fetch failure and an unrelated catalog write, then accepts a fresh retry', async () => {
+    const { a, b, driver, draftId } = await restorationPair();
+    await expect(
+      a.restoreReviewCatalog(draftId, async () => {
+        throw new Error('Menu unavailable');
+      })
+    ).rejects.toThrow('Menu unavailable');
+    const pending = delayedMenu();
+    const restoring = a.restoreReviewCatalog(draftId, pending.fetch);
+    await pending.ready;
+    await b.cacheCatalog({ ...menu('6.00'), publicationId: 'foreign-4' }, '2026-11-17T03:00:00Z');
+    pending.release(menu());
+    expect(await restoring).toBeNull();
+    const reloaded = new PosOfflineRuntime(scope, driver);
+    await reloaded.hydrate();
+    expect(reloaded.snapshot().queue!.drafts[0].status).toBe('NEEDS_REVIEW');
+    expect(await reloaded.restoreReviewCatalog(draftId, async () => menu())).not.toBeNull();
+    expect(reloaded.snapshot().catalog?.publicationId).toBe('foreign-4');
+    const displayed = reloaded.snapshot().queue!.drafts[0];
+    expect(await reloaded.resolveReview(draftId, 'REPLAY', displayed.review)).toBe('APPLIED');
+  });
+  it.each(['old-first', 'new-first'] as const)(
+    'a newer live fetch supersedes an original fetch even across request paths: %s',
+    async (order) => {
+      const { a, b, draftId } = await restorationPair();
+      const old = delayedMenu();
+      const fresh = delayedMenu();
+      const first = a.restoreReviewCatalog(draftId, old.fetch);
+      await old.ready;
+      const second = b.fetchLiveCatalog(input.open.channel, fresh.fetch);
+      await fresh.ready;
+      if (order === 'old-first') {
+        old.release(menu());
+        expect(await first).toBeNull();
+      }
+      fresh.release(menu('7.00'));
+      expect(await second).not.toBeNull();
+      if (order === 'new-first') {
+        old.release(menu());
+        expect(await first).toBeNull();
+      }
+      await a.refresh();
+      expect(a.snapshot().catalog?.sections[0].items[0].price).toBe('7.00');
+      expect(a.snapshot().queue!.drafts[0].review?.catalog?.line?.currentPrice).toBe('7.00');
+      expect(a.snapshot().queue!.drafts[0].commands[1].body).toMatchObject({
+        quotedUnitPrice: '4.00',
+      });
+      const send = vi.fn(async () => ({ status: 201 }));
+      await a.replay('staff-1', send);
+      expect(send).not.toHaveBeenCalled();
+    }
+  );
 });

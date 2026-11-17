@@ -19,6 +19,7 @@ import { ORDER_CHANNELS } from '@/lib/restaurant/order-channels';
 import type { CommercialTermsQuote } from '@/lib/restaurant/commercial-terms';
 import { quoteDraftCheckTotal } from '@/lib/restaurant/draft-check-total';
 import { shouldHandleCounterKey } from '@/lib/pharmacy/counter-keymap';
+import type { PosDraftReview } from '@/lib/restaurant/pos-command-queue';
 
 export function OrderPad({ demo = false }: { demo?: boolean }) {
   const pos = usePosRuntime({ demo });
@@ -212,17 +213,23 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
               {pos.reviewDrafts.map((draft) => (
                 <div
                   key={draft.draftId}
+                  role="region"
+                  aria-label={`Queued order ${draft.sequence} review`}
                   className="rounded-md border border-warning/30 bg-warning/10 p-3"
                 >
-                  <p className="font-medium">Needs review · {draft.review?.message}</p>
+                  <div id={`review-${draft.draftId}`} aria-live="polite" aria-atomic="true">
+                    <p className="font-medium">Needs review · {draft.review?.message}</p>
+                    <ReviewDetails review={draft.review} />
+                  </div>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <Button
                       type="button"
                       variant="outline"
+                      aria-describedby={`review-${draft.draftId}`}
                       disabled={
                         !pos.online || pos.busy || draft.review?.reason === 'COMPOSER_UNVERIFIED'
                       }
-                      onClick={workspace.sendReviewedOrder(draft)}
+                      onClick={workspace.sendReviewedOrder(draft.draftId, draft.review)}
                     >
                       Send deliberately
                     </Button>
@@ -745,6 +752,61 @@ function PosShell({
           </div>
         </main>
       </div>
+    </div>
+  );
+}
+
+function ReviewDetails({ review }: { review: PosDraftReview | null }) {
+  const catalog = review?.catalog;
+  if (!catalog) return null;
+  const line = catalog.line;
+  const channelName = (channel: string | null) =>
+    channel === 'DINE_IN' ? 'Dine in' : channel === 'TAKEAWAY' ? 'Takeaway' : 'Delivery';
+  return (
+    <div className="mt-2 space-y-1 text-sm text-text-body">
+      {review?.originalCatalogRequired && (
+        <p>The saved order’s menu must be loaded before approval. Nothing has been sent.</p>
+      )}
+      {catalog.retainedOriginal && (
+        <p>
+          Reviewing the saved order’s original menu. Changes to other publications are not applied
+          to this order.
+        </p>
+      )}
+      <p>
+        Menu: {catalog.menuName} · {channelName(catalog.channel)}
+      </p>
+      <p>Channel: {catalog.channelOpen ? 'Open' : 'Closed'}</p>
+      <p>
+        Publication:{' '}
+        {catalog.publicationMatchesOrder
+          ? 'Same as the saved order'
+          : 'Different from the saved order'}
+      </p>
+      {(catalog.channel !== catalog.orderChannel || !catalog.publicationMatchesOrder) && (
+        <p>
+          This menu is for a different channel or publication. Sending keeps the order’s original{' '}
+          {channelName(catalog.orderChannel)} channel and publication; these menu prices will not
+          replace its saved prices.
+        </p>
+      )}
+      {line && (
+        <>
+          <p className="font-medium">
+            Line {line.number} · {line.name ?? 'Item no longer on the menu'}
+          </p>
+          <p>
+            Price: {line.quotedPrice ?? 'not recorded'} → {line.currentPrice ?? 'unavailable'}
+          </p>
+          <p>Item: {line.available ? 'Available' : 'Unavailable'}</p>
+          {line.modifiers.map((modifier, index) => (
+            <p key={modifier.optionId}>
+              {modifier.name ?? `Selected modifier ${index + 1}`}:{' '}
+              {modifier.quotedPrice ?? 'not recorded'} → {modifier.currentPrice ?? 'unavailable'}
+            </p>
+          ))}
+        </>
+      )}
     </div>
   );
 }

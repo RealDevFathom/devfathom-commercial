@@ -48,6 +48,7 @@ import {
 import {
   composerProofNeedsRenewal,
   countQueuedCommands,
+  type PosDraftReview,
   type PosQueueSnapshot,
   type PosQuotedModifier,
 } from '@/lib/restaurant/pos-command-queue';
@@ -388,13 +389,26 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
       const epoch = stateEpoch.current;
       if (standalone) setPending('menu');
       try {
-        const data = await request<EffectiveMenu>(effectiveMenuPath(nextChannel), {
-          headers: authHeaders(activeRuntime),
+        let data: EffectiveMenu | undefined;
+        const catalog = await offlineRuntime.current?.fetchLiveCatalog(nextChannel, async () => {
+          data = await request<EffectiveMenu>(effectiveMenuPath(nextChannel), {
+            headers: authHeaders(activeRuntime),
+          });
+          if (epoch !== stateEpoch.current) throw new Error('The terminal session changed.');
+          return data;
         });
         if (epoch !== stateEpoch.current) return;
-        setDraftMenu(data);
-        await offlineRuntime.current?.cacheCatalog(data, new Date().toISOString());
         syncQueue();
+        if (!catalog || !data) {
+          const latest = offlineRuntime.current?.snapshot().catalog;
+          setDraftMenu(latest?.channel === nextChannel ? cachedMenu(latest) : null);
+          setNotice({
+            tone: 'warning',
+            message: 'The menu changed while loading. Refresh it before composing another order.',
+          });
+          return;
+        }
+        setDraftMenu(data);
         setNotice({ tone: 'success', message: `${data.menu.name} loaded.` });
       } catch (error) {
         if (epoch !== stateEpoch.current) return;
@@ -924,15 +938,44 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
         // attempt so the stable idempotency key is actually retried.
         return replayQueue(runtime);
       })) satisfies MouseEventHandler<HTMLButtonElement>,
-    sendReviewedOrder: (draft: (typeof reviewDrafts)[number]) =>
+    sendReviewedOrder: (draftId: string, displayedReview: PosDraftReview | null) =>
       (async () => {
-        await offlineRuntime.current?.resolveReview(draft.draftId, 'REPLAY');
-        syncQueue();
-        await replayQueue(runtime);
+        if (busy) return;
+        setPending('review');
+        try {
+          const result = await offlineRuntime.current?.resolveReview(
+            draftId,
+            'REPLAY',
+            displayedReview
+          );
+          syncQueue();
+          if (result === 'CATALOG_REQUIRED') {
+            await offlineRuntime.current?.restoreReviewCatalog(draftId, (channel, publicationId) =>
+              request<EffectiveMenu>(effectiveMenuPath(channel, publicationId), {
+                headers: authHeaders(runtime),
+              })
+            );
+          }
+          syncQueue();
+          if (result !== 'APPLIED') {
+            setNotice({
+              tone: 'warning',
+              message:
+                'This order changed. Nothing was sent. Review the updated item and prices before sending deliberately again.',
+            });
+            return;
+          }
+          setNotice(null);
+          await replayQueue(runtime);
+        } catch (error) {
+          handleError(error);
+        } finally {
+          setPending(null);
+        }
       }) satisfies MouseEventHandler<HTMLButtonElement>,
     discardReviewedOrder: (draft: (typeof reviewDrafts)[number]) =>
       (async () => {
-        await offlineRuntime.current?.resolveReview(draft.draftId, 'DISCARD');
+        await offlineRuntime.current?.resolveReview(draft.draftId, 'DISCARD', draft.review);
         syncQueue();
       }) satisfies MouseEventHandler<HTMLButtonElement>,
     openOrder: openOrder,

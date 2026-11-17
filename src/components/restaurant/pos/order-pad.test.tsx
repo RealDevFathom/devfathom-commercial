@@ -69,7 +69,11 @@ function menu(publicationId: string, itemName: string) {
   return {
     version: `version-${publicationId}`,
     branchId: 'branch-1',
-    channel: publicationId.includes('TAKEAWAY') ? 'TAKEAWAY' : 'DINE_IN',
+    channel: publicationId.includes('DELIVERY')
+      ? 'DELIVERY'
+      : publicationId.includes('TAKEAWAY')
+        ? 'TAKEAWAY'
+        : 'DINE_IN',
     publicationId,
     channelOpen: true,
     menu: { id: 'menu-1', name: 'Dinner' },
@@ -952,6 +956,77 @@ describe('OrderPad transport', () => {
     const reloaded = new PosOfflineRuntime(local.scope, driver);
     await reloaded.hydrate();
     expect(reloaded.snapshot().queue!.drafts).toEqual([]);
+  });
+
+  it('shows the newer cross-tab conflict after a stale Send deliberately click and requires a fresh click', async () => {
+    const driver = posStore.createMemoryDriver();
+    const otherTab = new PosOfflineRuntime(
+      { organizationId: 'organization-1', branchId: 'branch-1', deviceId: 'device-1' },
+      driver
+    );
+    await otherTab.enqueue({
+      deviceId: 'device-1',
+      composerStaffProfileId: 'staff-1',
+      composerProof: 'signed-proof-staff-1',
+      catalogVersion: 'old-price',
+      clientOriginAt: '2026-11-17T00:00:00Z',
+      open: { channel: 'DINE_IN', publicationId: 'draft-DINE_IN' },
+      lines: [{ menuItemId: 'menu-item-1', quantity: 1, quotedUnitPrice: '3.00' }],
+    });
+    vi.spyOn(posStore, 'createMemoryDriver').mockReturnValue(driver);
+    const resolveReview = vi.spyOn(PosOfflineRuntime.prototype, 'resolveReview');
+    const fetch = transport();
+    await unlock(fetch);
+    expect(await screen.findByText(/Needs review · A price on this order changed/)).toBeVisible();
+    await otherTab.refresh();
+    const displayed = otherTab.snapshot().queue!.drafts[0];
+    expect(displayed.review?.reason).toBe('PRICE_CHANGED');
+
+    const unavailable = menu('draft-DINE_IN', 'Coffee');
+    unavailable.sections[0].items[0].available = false;
+    await otherTab.cacheCatalog(unavailable, '2026-11-17T00:01:00Z');
+    const newer = otherTab.snapshot().queue!.drafts[0];
+    expect(newer.review?.reason).toBe('ITEM_UNAVAILABLE');
+    expect(newer.review?.atCommandId).toBe(displayed.review?.atCommandId);
+    // The first tab still displays A, while the shared record contains B.
+    expect(screen.getByText(/Needs review · A price on this order changed/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Send deliberately' }));
+    expect(resolveReview).toHaveBeenLastCalledWith(displayed.draftId, 'REPLAY', displayed.review);
+    expect(
+      await screen.findByText(/Needs review · An item on this order is no longer available/)
+    ).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'This order changed. Nothing was sent. Review the updated item and prices before sending deliberately again.'
+    );
+    expect(screen.getByRole('region', { name: /Queued order .* review/ })).toHaveTextContent(
+      'Line 1 · Coffee'
+    );
+    expect(screen.getByRole('button', { name: 'Send deliberately' })).toHaveAccessibleDescription(
+      /Line 1 · Coffee.*Price: 3.00 → 4.00/
+    );
+    await otherTab.refresh();
+    expect(otherTab.snapshot().queue!.drafts[0]).toMatchObject({
+      status: 'NEEDS_REVIEW',
+      review: newer.review,
+      commands: displayed.commands,
+    });
+    expect(fetch.mock.calls.some(([path]) => /\/orders\/(open|add-item)$/.test(String(path)))).toBe(
+      false
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send deliberately' }));
+    expect(resolveReview).toHaveBeenLastCalledWith(displayed.draftId, 'REPLAY', newer.review);
+    await waitFor(() =>
+      expect(
+        fetch.mock.calls.filter(([path]) => /\/orders\/(open|add-item)$/.test(String(path)))
+      ).toHaveLength(2)
+    );
+    await waitFor(async () => {
+      await otherTab.refresh();
+      expect(otherTab.snapshot().queue!.drafts[0].status).toBe('COMPLETED');
+    });
+    expect(screen.queryByRole('button', { name: 'Send deliberately' })).not.toBeInTheDocument();
+    otherTab.close();
   });
 
   it('requires reauthentication after replay pauses and resumes the preserved queue on unlock', async () => {
