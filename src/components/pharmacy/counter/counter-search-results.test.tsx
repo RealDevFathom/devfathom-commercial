@@ -435,6 +435,49 @@ it.each(['batch', 'expiry'])('keeps known metadata when only %s is missing', (mi
   }
 });
 
+describe('DEV-41 remaining disabled explanations for branch search', () => {
+  it.each(['ready', 'error'] as const)(
+    'explains disabled %s search controls and preserves callbacks',
+    (state) => {
+      const onSelect = vi.fn();
+      const onCaptureDemand = vi.fn();
+      const onRetry = vi.fn();
+      const props = {
+        rows: [row],
+        state,
+        query: 'para',
+        activeMedicineId: null,
+        onSelect,
+        onCaptureDemand,
+        onRetry,
+      };
+      const view = render(
+        <CounterSearchResults
+          {...props}
+          disabled
+          disabledReason="Select a branch you can access before continuing."
+        />
+      );
+      const buttons = screen.getAllByRole('button');
+      for (const button of buttons) {
+        expect(button).toBeDisabled();
+        expect(button).toHaveAccessibleDescription(
+          'Select a branch you can access before continuing.'
+        );
+        fireEvent.click(button);
+      }
+      expect(onSelect).not.toHaveBeenCalled();
+      expect(onCaptureDemand).not.toHaveBeenCalled();
+      expect(onRetry).not.toHaveBeenCalled();
+      view.rerender(<CounterSearchResults {...props} disabled={false} />);
+      for (const button of screen.getAllByRole('button')) {
+        expect(button).toBeEnabled();
+        expect(button).not.toHaveAccessibleDescription();
+      }
+    }
+  );
+});
+
 it('separates strength, form and stock into labeled lines below the medicine identity', () => {
   render(
     <CounterSearchResults
