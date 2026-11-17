@@ -1812,6 +1812,7 @@ function ScopedPharmacyCounterConsole({
         }
         const restage =
           label.kind === 'FEFO' ||
+          Boolean(activeRow?.labelLot) ||
           activeRow?.medicineId !== row.medicineId ||
           saleUnit !== (row.saleUnits[0]?.kind ?? null);
         if (restage) {
@@ -3354,7 +3355,17 @@ function ScopedPharmacyCounterConsole({
                     }
                     error={lotOptionsQuery.error ? messageFrom(lotOptionsQuery.error) : null}
                     disabled={busy}
-                    onChange={setLotOverride}
+                    onChange={(next) => {
+                      // An explicit batch choice replaces the scanned sticker's lot pin;
+                      // otherwise the server refuses the chosen batch as a mismatch.
+                      setActiveRow((current) =>
+                        current?.labelLot &&
+                        next?.inventoryLotId !== current.labelLot.inventoryLotId
+                          ? { ...current, labelLot: null }
+                          : current
+                      );
+                      setLotOverride(next);
+                    }}
                     onRetry={() => void lotOptionsQuery.refetch()}
                   />
                 </div>

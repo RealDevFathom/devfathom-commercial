@@ -2711,6 +2711,58 @@ describe('PharmacyCounterConsole barcode safety', () => {
     );
   });
 
+  it('drops the shelf-label lot pin when the operator picks another batch', async () => {
+    mocks.queries.counterLotOptions = query([
+      {
+        inventoryLotId: 'lot-a',
+        batchNumber: 'B-1',
+        expiresAt: '2028-01-01',
+        sellableUnits: 10,
+        blockedBy: null,
+      },
+      {
+        inventoryLotId: 'lot-b',
+        batchNumber: 'B-2',
+        expiresAt: '2028-06-01',
+        sellableUnits: 10,
+        blockedBy: null,
+      },
+    ]);
+    mocks.searchQuery.mockResolvedValue({
+      rows: [barcodeRow({ labelLot: labelLot() })],
+      truncated: false,
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    scan('7100000000000411');
+    await screen.findByText(/Shelf label batch B-LABEL is not the batch FEFO sells first/);
+    fireEvent.click(screen.getByRole('radio', { name: /Batch B-2/ }));
+    fireEvent.change(screen.getByLabelText('Override reason'), {
+      target: { value: 'Patient request' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    const line = mocks.mutations.addLine!.mock.calls[0]![0];
+    expect(line).not.toHaveProperty('shelfLabelLotId');
+    expect(line.override).toEqual(expect.objectContaining({ inventoryLotId: 'lot-b' }));
+  });
+
+  it('does not carry a staged shelf-label lot into the next product-barcode scan', async () => {
+    mocks.searchQuery
+      .mockResolvedValueOnce({ rows: [barcodeRow({ labelLot: labelLot() })], truncated: false })
+      .mockResolvedValueOnce({ rows: [barcodeRow()], truncated: false });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    scan('7100000000000411');
+    await screen.findByText(/Shelf label batch B-LABEL is not the batch FEFO sells first/);
+    scan('8964000000012');
+    await screen.findByText('1 × Paracetamol added.');
+    expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+      expect.not.objectContaining({ shelfLabelLotId: expect.anything() })
+    );
+    expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+      expect.not.objectContaining({ override: expect.anything() })
+    );
+  });
+
   it.each(['complete', 'missing reason'])(
     'does not reuse a previous batch override with a %s reason',
     async (reason) => {
