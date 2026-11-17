@@ -64,3 +64,43 @@ describe('transfer card expiry (QA-3)', () => {
     expect(medicine.textContent).toContain('2027');
   });
 });
+
+describe('DEV-80 transfer requests and solo approval', () => {
+  const renderCard = (overrides: Record<string, unknown>, soloApprover = false) =>
+    render(
+      <TransferCard
+        action={vi.fn()}
+        branchId="branch-1"
+        currentUserId="user-1"
+        soloApprover={soloApprover}
+        transfer={{ ...transfer, ...overrides } as unknown as TransferBoardRow}
+        witnesses={[]}
+      />
+    );
+
+  it('lets the source branch allocate a DRAFT request, and offers no approval for it', () => {
+    renderCard({ allocatedById: 'user-2' });
+    expect(screen.getByRole('button', { name: /Allocate request TR-/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Approve/ })).not.toBeInTheDocument();
+    const form = screen.getByRole('button', { name: /Allocate request/ }).closest('form')!;
+    expect(form.querySelector('input[name="action"]')).toHaveValue('allocate-request');
+  });
+
+  it('tells the requesting branch the request still has to be allocated and approved', () => {
+    renderCard({ direction: 'INBOUND' });
+    expect(screen.queryByRole('button', { name: /Allocate request/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/Main allocates it, then a colleague approves it/)).toBeInTheDocument();
+  });
+
+  it('asks a solo owner for their PIN to approve their own allocation', () => {
+    renderCard({ status: 'ALLOCATED' }, true);
+    expect(screen.getByLabelText('Your PIN')).toHaveAttribute('name', 'soloPin');
+    expect(screen.getByRole('button', { name: /Approve TR-.* with PIN/ })).toBeInTheDocument();
+  });
+
+  it('still waits for a colleague when the allocator is not a solo owner', () => {
+    renderCard({ status: 'ALLOCATED' });
+    expect(screen.queryByLabelText('Your PIN')).not.toBeInTheDocument();
+    expect(screen.getByText(/Waiting for a colleague to approve/)).toBeInTheDocument();
+  });
+});
