@@ -118,7 +118,14 @@ function command(multiplier: number) {
   });
 }
 
-function db() {
+/** `$queryRaw` takes a tagged-template strings array or a `Prisma.Sql` object plus bound values. */
+type QueryRawMock = (
+  query: TemplateStringsArray | Prisma.Sql,
+  ...values: unknown[]
+) => Promise<unknown[]>;
+
+function dbWithQueryRaw() {
+  const queryRaw = vi.fn<QueryRawMock>(async () => []);
   const packLevel = {
     // One sealed pack counted directly in ten canonical tablets.
     findMany: vi.fn(async () => [
@@ -126,8 +133,8 @@ function db() {
     ]),
     findFirst: vi.fn(async () => ({ id: 'pack_1' })),
   };
-  return {
-    $queryRaw: vi.fn(async () => []),
+  const target = {
+    $queryRaw: queryRaw,
     pharmacyInventoryLot: {
       findMany: vi.fn(async () => [{ id: 'lot_1', batch: { state: 'ACTIVE' } }]),
       // No lot of this medicine was received as a one-tablet pack.
@@ -139,7 +146,12 @@ function db() {
     },
     presentation: { findFirst: vi.fn(async () => ({ id: 'presentation_1' })) },
     packLevel,
-  } as unknown as ScopedDb;
+  };
+  return { target: target as unknown as ScopedDb, queryRaw };
+}
+
+function db() {
+  return dbWithQueryRaw().target;
 }
 
 function replay(target: ScopedDb, body: ReturnType<typeof command>) {
@@ -207,5 +219,8 @@ describe('DEV-874 offline add-line lock ordering', () => {
     );
     expect(stock).toBeGreaterThanOrEqual(0);
     for (const key of keys) expect(key.index).toBeLessThan(stock);
+  });
+});
+s) expect(key.index).toBeLessThan(stock);
   });
 });
