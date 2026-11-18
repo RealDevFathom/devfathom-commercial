@@ -16,6 +16,14 @@ const mocks = vi.hoisted(() => ({
   provinceOnError: undefined as ((error: SaveError) => void) | undefined,
 }));
 
+// The coverage-hours panel has its own query and its own tests
+// (pharmacist-coverage-hours.test.tsx); here it only needs to render.
+vi.mock('./pharmacist-coverage-hours', () => ({
+  PharmacistCoverageHoursPanel: ({ branchId }: { branchId: string }) => (
+    <div data-testid="pharmacist-coverage-hours">{branchId}</div>
+  ),
+}));
+
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     useUtils: () => ({ pharmacyOnboarding: { regulatory: { fetch: mocks.fetch } } }),
@@ -73,6 +81,11 @@ it('sends the configured pharmacy phone to the supported profile save procedure'
       premisesPhone: '+92 (42) 123-4567',
     })
   );
+});
+
+it('shows the pharmacist coverage hours for the selected branch (DEV-846)', () => {
+  render(<PharmacyRegulatoryProfileForm initial={initial} />);
+  expect(screen.getByTestId('pharmacist-coverage-hours')).toHaveTextContent('branch-1');
 });
 
 it('preserves the entered phone and focuses its field when the server rejects it', () => {
