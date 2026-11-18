@@ -1,6 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
+import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { annotateAudit } from '@/server/audit';
@@ -69,7 +70,72 @@ async function assignableMember(ctx: TRPCContext, organizationId: string, userId
   return member;
 }
 
+/** DEV-907: owner authority comes from the live member row, never the session role. */
+async function isOwner(ctx: TRPCContext, organizationId: string): Promise<boolean> {
+  const actor = await ctx.db.user.findFirst({
+    where: { id: ctx.session!.user.id, organizationId },
+    select: {
+      status: true,
+      role: true,
+      organizationRole: {
+        select: {
+          key: true,
+          isSystem: true,
+          permissions: { select: { capability: true, effect: true } },
+        },
+      },
+      permissionOverrides: {
+        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+        select: { capability: true, effect: true },
+      },
+    },
+  });
+  return Boolean(actor && hasAllCapabilityAccess(actor));
+}
+
 export const pharmacyBranchAssignmentsRouter = router({
+  /** DEV-907: the owner's "also in stock at another branch" counter switch. */
+  otherBranchAvailability: adminProcedure.query(async ({ ctx }) => {
+    const organizationId = pharmacyOrganizationId(ctx);
+    const [organization, owner] = await Promise.all([
+      ctx.db.organization.findUnique({
+        where: { id: organizationId },
+        select: { pharmacyOtherBranchAvailability: true },
+      }),
+      isOwner(ctx, organizationId),
+    ]);
+    return {
+      enabled: organization?.pharmacyOtherBranchAvailability === true,
+      canChange: owner,
+    };
+  }),
+
+  /** DEV-907: only the owner turns the line on or off; every change is audited. */
+  setOtherBranchAvailability: adminProcedure
+    .input(z.object({ enabled: z.boolean() }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = pharmacyOrganizationId(ctx);
+      if (!(await isOwner(ctx, organizationId))) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Only the owner can change this setting.',
+        });
+      }
+      const saved = await ctx.db.organization.update({
+        where: { id: organizationId },
+        data: { pharmacyOtherBranchAvailability: input.enabled },
+        select: { pharmacyOtherBranchAvailability: true },
+      });
+      annotateAudit(ctx, {
+        operation: 'UPDATE',
+        targetType: 'Organization',
+        targetId: organizationId,
+        description: `${saved.pharmacyOtherBranchAvailability ? 'Turned on' : 'Turned off'} other-branch availability at the counter`,
+        metadata: { pharmacyOtherBranchAvailability: saved.pharmacyOtherBranchAvailability },
+      });
+      return { enabled: saved.pharmacyOtherBranchAvailability };
+    }),
+
   list: adminProcedure.query(async ({ ctx }) => {
     const organizationId = pharmacyOrganizationId(ctx);
     const [branches, people, rows] = await Promise.all([

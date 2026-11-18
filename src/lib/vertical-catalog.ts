@@ -896,6 +896,7 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
   'pharmacy:dispense',
   'pharmacy:prescriptions',
   'pharmacy:catalogue-review',
+  'pharmacy:catalogue-edit',
   'pharmacy:manage',
   'pharmacy:counter',
   'pharmacy:close',
@@ -926,6 +927,7 @@ export const PHARMACY_CHECKED_CAPABILITIES = [
   'pharmacy:prescriptions',
   'pharmacy:safety',
   'pharmacy:catalogue-review',
+  'pharmacy:catalogue-edit',
   'pharmacy:orders',
   'reports:operational',
   'reports:financial',
@@ -980,6 +982,8 @@ const PHARMACY_BASE_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       // PUR-02: the proprietor approves and sends purchase orders and authorizes
       // suppliers; self-approval stays refused outside the solo-owner exception.
       'pharmacy:procurement-approve',
+      // DEV-19: the proprietor submits catalogue edits for review.
+      'pharmacy:catalogue-edit',
     ],
   },
   {
