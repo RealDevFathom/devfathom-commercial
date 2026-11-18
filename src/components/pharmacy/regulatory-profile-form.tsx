@@ -30,6 +30,7 @@ import Link from 'next/link';
 import type { inferRouterOutputs } from '@trpc/server';
 
 import { PendingLegalReviewNotice } from './pending-legal-review-notice';
+import { PharmacistCoverageHoursPanel } from './pharmacist-coverage-hours';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
@@ -926,6 +927,8 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
           </div>
         </form>
       </SectionCard>
+
+      {branch ? <PharmacistCoverageHoursPanel branchId={branch.id} key={branch.id} /> : null}
 
       <VersionHistory versions={data.versions} />
     </div>

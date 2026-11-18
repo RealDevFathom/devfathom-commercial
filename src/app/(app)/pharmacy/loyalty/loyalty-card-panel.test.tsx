@@ -105,4 +105,72 @@ describe('DEV-748 loyalty card panel', () => {
     );
     expect(screen.queryByRole('button', { name: 'Print card' })).not.toBeInTheDocument();
   });
+  it('DEV-747: offers the same card as Apple and Google Wallet test passes', async () => {
+    const walletTestPasses = {
+      mode: 'TEST',
+      notice: 'Test pass: not signed by an issuer.',
+      balancePoints: 1250,
+      pointValueMinor: 100,
+      apple: { serialNumber: 'plw_1', barcodes: [{ message: CODE }] },
+      google: { id: 'test-issuer.plw_1', barcode: { value: CODE } },
+    };
+    actions.issue.mockResolvedValue({
+      status: 'issued',
+      message: 'Card issued.',
+      code: CODE,
+      walletTestPasses,
+    });
+    render(<LoyaltyCardPanel branchId="branch-a" customerId="customer-a" activeCard={null} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Issue card' }));
+    await screen.findByText('Card issued.');
+    expect(screen.getByRole('heading', { name: 'Wallet passes' })).toBeInTheDocument();
+    expect(screen.getByText('Test only')).toBeInTheDocument();
+    expect(screen.getByText(/1 point = PKR 1\./)).toHaveTextContent('1,250 points');
+
+    const saved: Blob[] = [];
+    const names: string[] = [];
+    const create = vi.fn((blob: Blob) => {
+      saved.push(blob);
+      return 'blob:pass';
+    });
+    const revoke = vi.fn();
+    Object.assign(URL, { createObjectURL: create, revokeObjectURL: revoke });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement
+    ) {
+      names.push(this.download);
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Download Apple Wallet test pass' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Download Google Wallet test pass' }));
+    expect(names).toEqual([
+      'loyalty-card-apple-wallet-test-pass.json',
+      'loyalty-card-google-wallet-test-pass.json',
+    ]);
+    expect(revoke).toHaveBeenCalledTimes(2);
+    const [apple, google] = await Promise.all(
+      saved.map(async (blob) => JSON.parse(await blob.text()))
+    );
+    expect(apple).toEqual({
+      mode: 'TEST',
+      platform: 'APPLE_WALLET',
+      notice: walletTestPasses.notice,
+      pass: walletTestPasses.apple,
+    });
+    expect(google).toMatchObject({
+      mode: 'TEST',
+      platform: 'GOOGLE_WALLET',
+      pass: walletTestPasses.google,
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    click.mockRestore();
+    Reflect.deleteProperty(URL, 'createObjectURL');
+    Reflect.deleteProperty(URL, 'revokeObjectURL');
+  });
+
+  it('DEV-747: offers no wallet pass when none came with the card', async () => {
+    render(<LoyaltyCardPanel branchId="branch-a" customerId="customer-a" activeCard={null} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Issue card' }));
+    await screen.findByText('Card issued.');
+    expect(screen.queryByRole('button', { name: /Wallet test pass/ })).not.toBeInTheDocument();
+  });
 });
