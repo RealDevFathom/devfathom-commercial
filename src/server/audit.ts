@@ -479,6 +479,33 @@ export function recordAudit(row: AuditRowInput, db?: ScopedDb): void | Promise<v
 // Capture-point adapters
 // ---------------------------------------------------------------------------
 
+const AUDIT_BRANCH_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+function branchIdFrom(value: unknown): string | null {
+  return typeof value === 'string' && AUDIT_BRANCH_ID.test(value) ? value : null;
+}
+
+/**
+ * DEV-913: the branch an action was taken at, recorded on the row as
+ * `metadata.branchId` so the audit log can be filtered and scoped by branch.
+ * An annotation wins; otherwise the request's own `branchId` (or the
+ * `pharmacyBranchId` the procedures take), or the `scope.branchId` some
+ * pharmacy procedures take. Never guessed from anything
+ * else, so an entry without a branch stays workspace-wide.
+ */
+export function auditBranchId(input: unknown, detail?: AuditDetail): string | null {
+  const annotated = branchIdFrom(detail?.metadata?.branchId);
+  if (annotated) return annotated;
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  const record = input as Record<string, unknown>;
+  const direct = branchIdFrom(record.branchId) ?? branchIdFrom(record.pharmacyBranchId);
+  if (direct) return direct;
+  const scope = record.scope;
+  return scope && typeof scope === 'object' && !Array.isArray(scope)
+    ? branchIdFrom((scope as Record<string, unknown>).branchId)
+    : null;
+}
+
 /** Called by the tRPC audit middleware after each procedure resolves. */
 export function recordTrpcAudit(args: {
   ctx: AuditContext;
@@ -492,6 +519,7 @@ export function recordTrpcAudit(args: {
   const user = args.ctx.session?.user ?? null;
   const detail = args.ctx.audit?.detail ?? {};
   const { code, message } = extractError(args.error);
+  const branchId = auditBranchId(args.input, detail);
 
   return recordAudit(
     {
@@ -514,6 +542,7 @@ export function recordTrpcAudit(args: {
       result: detail.result !== undefined ? toAuditJson(detail.result) : undefined,
       metadata: toAuditJson({
         ...(detail.metadata ?? {}),
+        ...(branchId ? { branchId } : {}),
         ...(user?.isSupportSession
           ? {
               supportSessionId: user.supportSessionId,

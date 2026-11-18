@@ -747,8 +747,13 @@ describe('Pharmacy grouped top navigation (DEV-497)', () => {
       Array.from(nav.children)
         .filter((child) => child.tagName === 'A')
         .map((link) => link.getAttribute('href'))
-    ).toEqual(['/dashboard', '/pharmacy/purchasing', '/pharmacy/finance']);
-    expect(nav.children).toHaveLength(9);
+    ).toEqual(['/dashboard', '/pharmacy/purchasing', '/audit-logs', '/pharmacy/finance']);
+    // DEV-913: the audit log is the owner's own entry, whatever the plan.
+    expect(within(nav).getByRole('link', { name: 'Audit log: who did what' })).toHaveAttribute(
+      'href',
+      '/audit-logs'
+    );
+    expect(nav.children).toHaveLength(10);
     expect(nav).toHaveClass('flex-wrap');
     expect(nav).not.toHaveClass('overflow-x-auto');
     expect(

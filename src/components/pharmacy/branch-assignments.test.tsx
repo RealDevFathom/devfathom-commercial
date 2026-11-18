@@ -44,6 +44,22 @@ describe('branch assignment panel', () => {
     expect(screen.getByText('Amina at Counter A')).toBeInTheDocument();
   });
 
+  it('links each person to their actions at that branch in the audit log (DEV-913)', () => {
+    render(
+      <BranchAssignmentsPanel
+        {...view}
+        notice={null}
+        pending={false}
+        onAssign={vi.fn()}
+        onUnassign={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('link', { name: "See Amina's actions" })).toHaveAttribute(
+      'href',
+      '/audit-logs?actorId=cashier-1&branchId=branch-a'
+    );
+  });
+
   it('explains an empty workspace and does not assign', () => {
     const onAssign = vi.fn();
     render(

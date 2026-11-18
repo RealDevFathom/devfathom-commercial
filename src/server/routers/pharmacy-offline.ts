@@ -552,6 +552,145 @@ export type CounterOperation = 'establish' | 'snapshot' | 'replay' | 'lease' | '
 
 /** Live web actor plus enrolled device, with an actor/device-bound terminal
  * token after establishment. Errors are mapped only outside the transaction. */
+type CounterAuditEntry = {
+  action: string;
+  operation: 'CREATE' | 'UPDATE' | 'EXECUTE';
+  targetType: string;
+  targetId: string | null;
+  metadata: Record<string, string | number | boolean | null>;
+};
+
+/** Filled in by the counter route once the actor, branch and terminal are verified. */
+type CounterAuditTarget = {
+  scope?: { organizationId: string; branchId: string; actorId: string };
+  deviceId?: string;
+};
+
+function field(value: unknown, key: string): unknown {
+  return value && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined;
+}
+
+function scalar(value: unknown): string | number | boolean | null {
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+    ? value
+    : null;
+}
+
+function text(value: unknown): string | null {
+  const found = scalar(value);
+  return found === null ? null : String(found);
+}
+
+/**
+ * DEV-913: what the audit log records for a successful counter operation, or
+ * null when nothing new happened (a replay of a sale that was already posted).
+ * Only identifiers and counts are kept: never the device secret, the terminal
+ * session token, signatures or signed payloads.
+ */
+export function counterAuditEntry(
+  operation: Exclude<CounterOperation, 'reject'>,
+  body: unknown,
+  outcome: unknown
+): CounterAuditEntry | null {
+  switch (operation) {
+    case 'establish':
+      return {
+        action: 'openCounterSession',
+        operation: 'EXECUTE',
+        targetType: 'PharmacyRegisteredDevice',
+        targetId: text(field(field(outcome, 'device'), 'id')),
+        metadata: {},
+      };
+    case 'lease':
+      return {
+        action: 'reserveReceiptNumbers',
+        operation: 'CREATE',
+        targetType: 'PharmacyReceiptNumberLease',
+        targetId: text(field(outcome, 'id')),
+        metadata: { size: scalar(field(body, 'size')) },
+      };
+    case 'quota':
+      return {
+        action: 'grantOfflineLotQuota',
+        operation: 'UPDATE',
+        targetType: 'PharmacyInventoryLot',
+        targetId: text(field(body, 'inventoryLotId')),
+        metadata: {
+          stockLocationId: scalar(field(body, 'stockLocationId')),
+          units: scalar(field(body, 'units')),
+        },
+      };
+    case 'snapshot':
+      return {
+        action: 'issueOfflineSnapshot',
+        operation: 'EXECUTE',
+        targetType: 'PharmacyRegisteredDevice',
+        targetId: null,
+        metadata: {},
+      };
+    case 'replay':
+      if (field(outcome, 'replayed') === true) return null;
+      return {
+        action: 'replayOfflineSale',
+        operation: 'CREATE',
+        targetType: 'PharmacySale',
+        targetId: text(field(outcome, 'saleId')),
+        metadata: {
+          receiptNumber: scalar(field(outcome, 'receiptNumber')),
+          sequence: scalar(field(body, 'sequence')),
+          commandAction: scalar(field(body, 'action')),
+        },
+      };
+  }
+}
+
+/**
+ * DEV-913: every counter operation that changes money, stock or the receipt
+ * runway leaves an entry naming the person, branch and terminal, written in the
+ * same transaction as the change so neither commits without the other.
+ * Recovery (`reject`) writes its own entry inside the work.
+ */
+function withCounterAudit<T>(
+  operation: CounterOperation,
+  request: Request,
+  user: { name?: string | null; email?: string | null; role?: string | null },
+  body: unknown,
+  target: CounterAuditTarget,
+  work: (db: ScopedDb) => Promise<T>
+) {
+  return async (db: ScopedDb): Promise<T> => {
+    const outcome = await work(db);
+    const entry = operation === 'reject' ? null : counterAuditEntry(operation, body, outcome);
+    if (entry && target.scope) {
+      await db.auditLog.create({
+        data: {
+          organizationId: target.scope.organizationId,
+          actorId: target.scope.actorId,
+          actorName: user.name ?? null,
+          actorEmail: user.email ?? null,
+          actorRole: user.role ?? null,
+          source: 'REST_API',
+          category: 'PHARMACY',
+          operation: entry.operation,
+          action: `pharmacyOffline.${entry.action}`,
+          targetType: entry.targetType,
+          targetId: entry.targetId,
+          httpMethod: 'POST',
+          path: new URL(request.url).pathname,
+          ip: clientIp(request),
+          userAgent: request.headers.get('user-agent'),
+          metadata: {
+            branchId: target.scope.branchId,
+            deviceId: target.deviceId ?? null,
+            ...entry.metadata,
+          },
+        },
+      });
+    }
+    return outcome;
+  };
+}
+
 export function pharmacyCounterRoute(operation: CounterOperation) {
   return async (request: Request): Promise<Response> => {
     try {
@@ -568,7 +707,8 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
       const raw = await request.text();
       if (Buffer.byteLength(raw) > 256_000) throw new CounterTransportError('body_too_large', 413);
       const body: unknown = JSON.parse(raw || '{}');
-      const result = await withTenantDb(actor.organization.id, async (db) => {
+      const audit: CounterAuditTarget = {};
+      const counterWork = async (db: ScopedDb) => {
         if (
           !hasModule(
             await resolveOrganizationEntitlements(actor.organization.id, db),
@@ -604,6 +744,8 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           deviceSecret: secret,
         };
         await activeBranch(db, ctx.scope.organizationId, ctx.scope.branchId);
+        audit.scope = ctx.scope;
+        audit.deviceId = device.id;
         // DEV-831: an enrolled terminal does not lend its branch to the actor.
         // Establishment, snapshots and replay take the online counter's live
         // grant and branch-assignment gate before any token, snapshot or sale.
@@ -853,7 +995,11 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           request.headers.get('x-command-signature') ?? '',
           request.headers.get('x-receipt-signature') ?? ''
         );
-      });
+      };
+      const result = await withTenantDb(
+        actor.organization.id,
+        withCounterAudit(operation, request, actor.session.user, body, audit, counterWork)
+      );
       return Response.json(result, {
         status: operation === 'establish' ? 201 : 200,
         headers: { 'Cache-Control': 'no-store' },

@@ -174,7 +174,9 @@ export function isPathModuleEnabled(
   entitlements: Pick<EntitlementView, 'enabledModules' | 'vertical'>
 ) {
   const moduleKey = moduleForPath(pathname, entitlements.vertical);
-  return !moduleKey || isModuleGranted(moduleKey, entitlements.enabledModules);
+  return (
+    !moduleKey || isModuleGranted(moduleKey, entitlements.enabledModules, entitlements.vertical)
+  );
 }
 
 export function AppShell({
@@ -195,7 +197,8 @@ export function AppShell({
   const entitlements = useEntitlements();
   const currentModule = moduleForPath(pathname, entitlements.vertical);
   const moduleEnabled =
-    !currentModule || isModuleGranted(currentModule, entitlements.enabledModules);
+    !currentModule ||
+    isModuleGranted(currentModule, entitlements.enabledModules, entitlements.vertical);
   const counterPos = pathname === '/pharmacy/counter';
   const immersive =
     counterPos || pathname === '/chat' || /^\/meetings\/[^/]+\/call$/.test(pathname);
