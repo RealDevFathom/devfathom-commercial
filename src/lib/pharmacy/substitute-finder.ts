@@ -74,6 +74,9 @@ export async function findSubstituteProposals(
     (presentation) => presentation.id === input.presentationId
   );
   if (!requested || !requestedPresentation) throw new PharmacySubstituteError('NOT_FOUND');
+  // DEV-852: an imported medicine may have no recorded strength. Without ingredient and
+  // strength evidence nothing can be proposed as an exact equivalent.
+  if (requested.strengths.length === 0) return [];
 
   const historicalReference =
     input.referencePriceMinor === undefined
@@ -126,6 +129,7 @@ export async function findSubstituteProposals(
       (lot.printedMrpMinor * input.quantityCanonicalUnits) / lot.unitsPerPack
     );
     if (
+      medicine.strengths.length === 0 ||
       strengthKey(medicine.strengths) !== requestedStrength ||
       normalized(presentation.dosageForm) !== normalized(requestedPresentation.dosageForm) ||
       normalized(presentation.route) !== normalized(requestedPresentation.route) ||
