@@ -1,7 +1,16 @@
 /** DEV-103: the aging page's query contract (branch + inclusive as-of day on the organization's clock). */
 import { workspaceToday } from '@/lib/timezone';
 
-export type AgingQuery = { branch?: string | string[]; asOf?: string | string[] };
+export type AgingQuery = {
+  branch?: string | string[];
+  asOf?: string | string[];
+  /** DEV-694: optional payment-draft request. */
+  payee?: string | string[];
+  currency?: string | string[];
+  budget?: string | string[];
+  /** DEV-694: narrow the view to one payee. */
+  payeeFilter?: string | string[];
+};
 
 
 export function parseAgingQuery(

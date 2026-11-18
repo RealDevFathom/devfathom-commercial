@@ -150,3 +150,146 @@ export async function payApInvoiceFromForm(
     );
   }
 }
+
+const SET_OFF_REASONS: Record<string, string> = {
+  ...SHARED_REASONS,
+  INVALID_AMOUNT: AMOUNT_HELP,
+  SET_OFF_EXCEEDS_CREDIT:
+    'That is more than is left on the credit note, counting requests already waiting. Nothing was saved.',
+  SET_OFF_EXCEEDS_BILL:
+    'That is more than the bill still owes, counting requests already waiting. Nothing was saved.',
+  SUPPLIER_MISMATCH: "The credit note's supplier is not this bill's payee. Choose a matching bill.",
+  INVALID_STATE: 'Only an open PKR bill on this branch can take a credit note.',
+  NOT_FOUND: 'That bill or credit note is not on this branch.',
+  ALREADY_DECIDED: 'This set-off was already approved or rejected. Reload the page.',
+  INVALID_DATE: 'The bill is dated later than today, so it cannot be set off yet.',
+  ALREADY_REVERSED: 'This set-off was already reversed. Reload the page.',
+  PERIOD_CLOSED: 'Today falls in a closed accounting period. Nothing was changed.',
+};
+
+/**
+ * DEV-694: staff choose the bill a supplier credit note is set off against.
+ * This only records the request; the router re-checks every money rule.
+ */
+export async function requestCreditSetOffFromForm(
+  _previous: ApEntryFormState,
+  form: FormData
+): Promise<ApEntryFormState> {
+  const amount = amountMinor(field(form, 'amount'));
+  if (amount === null) return { status: 'error', message: AMOUNT_HELP };
+  const note = field(form, 'note');
+  try {
+    const caller = pharmacyApInvoicesRouter.createCaller(await createTRPCContext());
+    await caller.requestCreditSetOff({
+      branchId: field(form, 'branchId'),
+      invoiceId: field(form, 'invoiceId'),
+      supplierCreditId: field(form, 'supplierCreditId'),
+      requestKey: field(form, 'requestKey'),
+      amountMinor: amount,
+      ...(note ? { note } : {}),
+    });
+    revalidatePath(AGING_PATH);
+    return {
+      status: 'saved',
+      message: 'Set-off requested. The bill is unchanged until a manager approves it.',
+    };
+  } catch (error) {
+    return failure(
+      error,
+      SET_OFF_REASONS,
+      'The set-off was not requested. Choose a bill and a credit note, and keep the note under 500 characters.'
+    );
+  }
+}
+
+/** DEV-694: a manager or owner approves with their own PIN; only then does the payable fall. */
+export async function approveCreditSetOffFromForm(
+  _previous: ApEntryFormState,
+  form: FormData
+): Promise<ApEntryFormState> {
+  // The PIN is passed through once and never stored or echoed back.
+  const pin = String(form.get('pin') ?? '');
+  if (!/^\d{4,8}$/.test(pin)) {
+    return { status: 'error', message: 'Enter your 4 to 8 digit manager or owner PIN.' };
+  }
+  try {
+    const caller = pharmacyApInvoicesRouter.createCaller(await createTRPCContext());
+    await caller.approveCreditSetOff({
+      branchId: field(form, 'branchId'),
+      setOffId: field(form, 'setOffId'),
+      decisionKey: field(form, 'decisionKey'),
+      pin,
+    });
+    revalidatePath(AGING_PATH);
+    return { status: 'saved', message: 'Set-off approved. The bill now owes that much less.' };
+  } catch (error) {
+    unstable_rethrow(error);
+    if (error instanceof TRPCError && error.code === 'FORBIDDEN') {
+      return { status: 'error', message: error.message };
+    }
+    return failure(error, SET_OFF_REASONS, 'The set-off was not approved. Reload and try again.');
+  }
+}
+
+export async function rejectCreditSetOffFromForm(
+  _previous: ApEntryFormState,
+  form: FormData
+): Promise<ApEntryFormState> {
+  const reason = field(form, 'reason');
+  if (!reason) return { status: 'error', message: 'Say why the set-off is rejected.' };
+  try {
+    const caller = pharmacyApInvoicesRouter.createCaller(await createTRPCContext());
+    await caller.rejectCreditSetOff({
+      branchId: field(form, 'branchId'),
+      setOffId: field(form, 'setOffId'),
+      decisionKey: field(form, 'decisionKey'),
+      reason,
+    });
+    revalidatePath(AGING_PATH);
+    return { status: 'saved', message: 'Set-off rejected. No money moved.' };
+  } catch (error) {
+    unstable_rethrow(error);
+    if (error instanceof TRPCError && error.code === 'FORBIDDEN') {
+      return { status: 'error', message: error.message };
+    }
+    return failure(error, SET_OFF_REASONS, 'The set-off was not rejected. Reload and try again.');
+  }
+}
+
+/**
+ * DEV-694: a manager or owner undoes an approved set-off with their own PIN and
+ * a reason. The router posts the mirror entry; the bill owes the amount again.
+ */
+export async function reverseCreditSetOffFromForm(
+  _previous: ApEntryFormState,
+  form: FormData
+): Promise<ApEntryFormState> {
+  // The PIN is passed through once and never stored or echoed back.
+  const pin = String(form.get('pin') ?? '');
+  if (!/^\d{4,8}$/.test(pin)) {
+    return { status: 'error', message: 'Enter your 4 to 8 digit manager or owner PIN.' };
+  }
+  const reason = field(form, 'reason');
+  if (!reason) return { status: 'error', message: 'Say why the set-off is reversed.' };
+  try {
+    const caller = pharmacyApInvoicesRouter.createCaller(await createTRPCContext());
+    await caller.reverseCreditSetOff({
+      branchId: field(form, 'branchId'),
+      setOffId: field(form, 'setOffId'),
+      commandKey: field(form, 'commandKey'),
+      reason,
+      pin,
+    });
+    revalidatePath(AGING_PATH);
+    return {
+      status: 'saved',
+      message: 'Set-off reversed. The bill owes that amount again and the credit note has it back.',
+    };
+  } catch (error) {
+    unstable_rethrow(error);
+    if (error instanceof TRPCError && error.code === 'FORBIDDEN') {
+      return { status: 'error', message: error.message };
+    }
+    return failure(error, SET_OFF_REASONS, 'The set-off was not reversed. Reload and try again.');
+  }
+}
