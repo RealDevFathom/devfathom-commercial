@@ -12,7 +12,10 @@ import { Input } from '@/components/ui/input';
 import { StagedMedicineExport } from '@/components/pharmacy/staged-medicine-export';
 import {
   STAGED_COLUMN_HEADINGS,
-  STAGED_LIST_INTRO,
+  stagedListIntro,
+  plainExceptionStatus,
+  plainReviewFlag,
+  plainSeverity,
   STAGED_NOT_SUPPLIED,
   STAGED_PRICE_COLUMN_NOTE,
   STAGED_STATUS_LABEL,
@@ -241,7 +244,9 @@ export async function StagedMedicineCatalogue({
       </SectionCard>
       {result && (
         <SectionCard title="Candidates and source quantities" titleLevel={2}>
-          <p className="mb-2 text-sm font-medium text-text-strong">{STAGED_LIST_INTRO}</p>
+          <p className="mb-2 text-sm font-medium text-text-strong">
+            {stagedListIntro(creation !== null)}
+          </p>
           <p className="mb-4 text-sm">
             {result.candidateCount.toLocaleString('en-US')} staged product candidates available for
             review. {result.total.toLocaleString('en-US')} match this search. Source quantities are
@@ -454,12 +459,12 @@ export async function StagedMedicineCatalogue({
           <h3 className="mt-6 font-semibold">Retained review flags and exceptions</h3>
           <ul className="mt-3 space-y-1 break-words text-sm">
             {detail.flags.map((flag) => (
-              <li key={flag}>{flag}</li>
+              <li key={flag}>{plainReviewFlag(flag)}</li>
             ))}
             {detail.exceptions.map((e, i) => (
               <li key={`${e.bucket}-${i}`}>
-                {plainExceptionLabel(e.bucket)} ({e.bucket}) · {e.workflow} · {e.status} ·{' '}
-                {e.severity}
+                {plainExceptionLabel(e.bucket)} · {e.workflow} · {plainExceptionStatus(e.status)} ·{' '}
+                {plainSeverity(e.severity)}
               </li>
             ))}
           </ul>
