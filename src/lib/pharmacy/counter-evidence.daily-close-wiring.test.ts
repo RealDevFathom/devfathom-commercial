@@ -16,6 +16,8 @@ const input = { businessDate: new Date('2026-09-29') };
 function fixture(camera: { id: string } | null) {
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
+    // DEV-743: no card-terminal payment is open on the day.
+    pharmacyCardTerminalAttempt: { count: vi.fn().mockResolvedValue(0) },
     pharmacyDrawerSession: {
       count: vi.fn().mockResolvedValue(0),
       findMany: vi.fn().mockResolvedValue([]),

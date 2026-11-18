@@ -97,6 +97,7 @@ import {
 } from '@/lib/pharmacy/controlled-register';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { annotateAudit } from '@/server/audit';
+import { annotateAuditBranch } from '@/server/audit-branch';
 import {
   authenticateVoucherCashierPin,
   counterVoucherInput,
@@ -791,6 +792,11 @@ const HOSTED_RECEIPT_ERROR_MESSAGES: Record<HostedReceiptError['reason'], string
   NOT_NEUTRAL: 'The receipt message would name a medicine, so it was not sent.',
 };
 
+/** DEV-743: the card-terminal router answers a tender guard's refusal exactly as a tender does. */
+export function failPharmacySale(error: unknown): never {
+  return fail(error);
+}
+
 function fail(error: unknown): never {
   if (error instanceof PrepaidPinError)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
@@ -857,10 +863,11 @@ function fail(error: unknown): never {
     });
   }
   if (error instanceof PharmacySettlementError) {
-    // A drawer that is already open is a state conflict, not a malformed request.
+    // A drawer that is already open, or a terminal payment still open on the day being closed
+    // (DEV-743), is a state conflict, not a malformed request.
     throw new TRPCError({
       code:
-        error.reason === 'OPEN_DRAWER'
+        error.reason === 'OPEN_DRAWER' || error.reason === 'CARD_TERMINAL_PAYMENT_OPEN'
           ? 'CONFLICT'
           : error.reason === 'DRAWER_NOT_YOURS'
             ? 'FORBIDDEN'
@@ -2224,6 +2231,7 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { attempt } = input;
+      annotateAuditBranch(ctx, attempt.branchId);
       // Manual capture references stay out of the audit input, as on the tender itself.
       if (isManualTender(attempt.type) || attempt.approvalCode !== undefined)
         annotateAudit(ctx, { skipInput: true });

@@ -60,6 +60,8 @@ function fakeDb() {
       calls.push(sql(query));
       return [];
     }),
+    // No close stands on the business day.
+    pharmacyDailyClose: { findFirst: vi.fn(async () => null) },
     pharmacyCardTerminalAttempt: {
       findFirst: vi.fn(),
       create: vi.fn(async ({ data }: { data: object }) => {
@@ -104,6 +106,8 @@ describe('DEV-743 durable attempt store', () => {
       'SAVEPOINT card_terminal_preflight',
       'applyPharmacyTender',
       'ROLLBACK TO SAVEPOINT card_terminal_preflight',
+      // The savepoint rollback released the preflight's day lock: it is taken again to commit.
+      expect.stringContaining('pg_advisory_xact_lock'),
       'create',
     ]);
     expect(db.pharmacyCardTerminalAttempt.create).toHaveBeenCalledWith({
@@ -119,6 +123,30 @@ describe('DEV-743 durable attempt store', () => {
     await expect(runner(db).create(scope, draft)).rejects.toBe(refusal);
     expect(db.calls.at(-1)).toBe('ROLLBACK TO SAVEPOINT card_terminal_preflight');
     expect(db.pharmacyCardTerminalAttempt.create).not.toHaveBeenCalled();
+  });
+
+  it('commits no attempt when the day closed after the preflight released its day lock', async () => {
+    const db = fakeDb();
+    db.pharmacyCardTerminalAttempt.findFirst.mockResolvedValue(null);
+    // A close cut while the preflight's savepoint was rolled back (that releases its day lock).
+    db.pharmacyDailyClose.findFirst.mockResolvedValue({ id: 'close-1', reopen: null } as never);
+    settlement.applyPharmacyTender.mockImplementation(async (_db, _scope, tender) => {
+      await tender.adapter.execute({ capability: 'SALE', amountMinor: 1500, operationRef: 'x' });
+    });
+    await expect(runner(db).create(scope, draft)).rejects.toMatchObject({ reason: 'DAY_CLOSED' });
+    expect(db.calls.at(-1)).toEqual(expect.stringContaining('pg_advisory_xact_lock'));
+    expect(db.pharmacyCardTerminalAttempt.create).not.toHaveBeenCalled();
+  });
+
+  it("reads the sale's newest attempt within the branch", async () => {
+    const db = fakeDb();
+    const latest = attempt({ status: 'UNKNOWN', providerRef: null });
+    db.pharmacyCardTerminalAttempt.findFirst.mockResolvedValueOnce(latest);
+    await expect(runner(db).latestForSale(scope, 'sale-1')).resolves.toBe(latest);
+    expect(db.pharmacyCardTerminalAttempt.findFirst).toHaveBeenCalledWith({
+      where: { organizationId: 'org-1', branchId: 'branch-1', saleId: 'sale-1' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    });
   });
 
   it('undoes and refuses a preflight that somehow wrote a tender', async () => {

@@ -2,6 +2,7 @@ import { can, subjectFromSession } from '@/lib/abac';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { annotateAudit } from '@/server/audit';
+import { annotateAuditBranch } from '@/server/audit-branch';
 import {
   appendControlledCorrection,
   assignedRegisterBranchIds,
@@ -407,9 +408,15 @@ export const pharmacySafetyRouter = router({
     }),
   approveRegisterIncident: safety
     .input(z.object({ incidentId: z.string().min(1), reason: z.string().trim().min(1) }).strict())
-    .mutation(({ ctx, input }) =>
-      ctx.db.pharmacyRegisterIncidentApproval.create({
+    .mutation(async ({ ctx, input }) => {
+      // DEV-913: the incident's branch goes on the audit entry.
+      const incident = await ctx.db.pharmacyRegisterIncident.findFirst({
+        where: { id: input.incidentId },
+        select: { branchId: true },
+      });
+      annotateAuditBranch(ctx, incident?.branchId);
+      return ctx.db.pharmacyRegisterIncidentApproval.create({
         data: { ...input, approvedByUserId: ctx.session!.user.id },
-      })
-    ),
+      });
+    }),
 });

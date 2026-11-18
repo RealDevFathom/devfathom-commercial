@@ -3,8 +3,15 @@ import 'server-only';
 import { Prisma, type PharmacyCardTerminalAttempt } from '@/generated/prisma/client';
 import type { PharmacyCardTerminalAttemptStatus } from '@/generated/prisma/enums';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { applyPharmacyTender, type PharmacyPaymentAdapter } from '../settlement';
+import {
+  applyPharmacyTender,
+  requirePharmacyDayOpen,
+  type PharmacyPaymentAdapter,
+} from '../settlement';
 import type { LedgerScope } from '../stock-ledger';
+import { OPEN_ATTEMPT_STATUSES } from './open-attempts';
+
+export { OPEN_ATTEMPT_STATUSES } from './open-attempts';
 
 /**
  * DEV-743: persistence for the one durable card-terminal payment-attempt record.
@@ -24,15 +31,6 @@ export type CardTerminalAttemptStatus = PharmacyCardTerminalAttemptStatus;
  * clear a PKR sale with no conversion. The migration's currency check holds the same value.
  */
 export const PHARMACY_TERMINAL_CURRENCY = 'PKR';
-
-/** States that hold the sale: no second terminal charge or other tender may start. */
-export const OPEN_ATTEMPT_STATUSES: readonly CardTerminalAttemptStatus[] = Object.freeze([
-  'CREATED',
-  'SENT',
-  'UNKNOWN',
-  'APPROVED',
-  'MANUAL_REVIEW',
-]);
 
 export type CardTerminalAttemptDraft = {
   saleId: string;
@@ -102,6 +100,8 @@ export interface CardTerminalAttemptStore {
    */
   settle(scope: LedgerScope, attemptId: string): Promise<{ tenderId: string; replayed: boolean }>;
   listOpen(scope: LedgerScope): Promise<CardTerminalAttempt[]>;
+  /** The sale's newest attempt, open or finished, for the counter to show. */
+  latestForSale(scope: LedgerScope, saleId: string): Promise<CardTerminalAttempt | null>;
 }
 
 export function sameDraft(
@@ -230,6 +230,10 @@ export function prismaCardTerminalAttemptStore(run: TenantRunner): CardTerminalA
         });
         if (open) throw new CardTerminalError('ATTEMPT_IN_PROGRESS');
         await preflightTerminalCharge(db, scope, draft);
+        // The preflight's day lock was taken inside its savepoint, and rolling the savepoint back
+        // released it. Hold the day lock to commit, so a day close either sees this attempt or
+        // has already closed the day (DEV-743 day-close gate).
+        await requirePharmacyDayOpen(db, scope, draft.businessDate);
         try {
           const attempt = await db.pharmacyCardTerminalAttempt.create({
             data: { ...scoped(scope), ...draft, actorId: scope.actorId },
@@ -305,6 +309,13 @@ export function prismaCardTerminalAttemptStore(run: TenantRunner): CardTerminalA
         db.pharmacyCardTerminalAttempt.findMany({
           where: { ...scoped(scope), status: { in: [...OPEN_ATTEMPT_STATUSES] } },
           orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        })
+      ),
+    latestForSale: (scope, saleId) =>
+      run((db) =>
+        db.pharmacyCardTerminalAttempt.findFirst({
+          where: { ...scoped(scope), saleId },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         })
       ),
   };

@@ -2,8 +2,24 @@ import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
 import { auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
 import { TRPCError } from '@trpc/server';
+import { annotateAuditBranch } from '../audit-branch';
+import type { TRPCContext } from '../trpc';
 
 const dispense = capabilityProcedure('pharmacy:dispense');
+
+/**
+ * DEV-913: a review or substitution is about one counter sale line, so its audit
+ * entry carries that sale's branch. Read only for the entry; a line that does not
+ * resolve leaves it workspace-wide and the write decides the outcome as before.
+ */
+async function tagSaleLineBranch(ctx: TRPCContext, saleLineId: string | null | undefined) {
+  if (!saleLineId) return;
+  const line = await ctx.db.pharmacySaleLine.findFirst({
+    where: { id: saleLineId },
+    select: { branchId: true },
+  });
+  annotateAuditBranch(ctx, line?.branchId);
+}
 
 // DEV-832: dispensing queues show who the prescription is for, nothing more.
 // CNIC, phone, address and date of birth stay behind the audited, masked
@@ -125,11 +141,12 @@ export const pharmacyDispensingRouter = router({
     .input(
       z.object({ prescriptionLineId: z.string().min(1), saleLineId: z.string().min(1) }).strict()
     )
-    .mutation(({ ctx, input }) =>
-      ctx.db.pharmacyPharmacistReviewItem.create({
+    .mutation(async ({ ctx, input }) => {
+      await tagSaleLineBranch(ctx, input.saleLineId);
+      return ctx.db.pharmacyPharmacistReviewItem.create({
         data: { ...input, requestedByUserId: ctx.session!.user.id },
-      })
-    ),
+      });
+    }),
   decideReview: dispense
     .input(
       z
@@ -140,15 +157,20 @@ export const pharmacyDispensingRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) =>
-      ctx.db.pharmacyPharmacistReviewDecision.create({
+    .mutation(async ({ ctx, input }) => {
+      const item = await ctx.db.pharmacyPharmacistReviewItem.findFirst({
+        where: { id: input.reviewItemId },
+        select: { saleLineId: true },
+      });
+      await tagSaleLineBranch(ctx, item?.saleLineId);
+      return ctx.db.pharmacyPharmacistReviewDecision.create({
         data: {
           ...input,
           actorUserId: ctx.session!.user.id,
           signedAt: input.kind === 'SIGN' ? new Date() : undefined,
         },
-      })
-    ),
+      });
+    }),
   recordSubstitution: dispense
     .input(
       z
@@ -163,9 +185,10 @@ export const pharmacyDispensingRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) =>
-      ctx.db.pharmacySubstitutionRecord.create({
+    .mutation(async ({ ctx, input }) => {
+      await tagSaleLineBranch(ctx, input.saleLineId);
+      return ctx.db.pharmacySubstitutionRecord.create({
         data: { ...input, actorUserId: ctx.session!.user.id },
-      })
-    ),
+      });
+    }),
 });

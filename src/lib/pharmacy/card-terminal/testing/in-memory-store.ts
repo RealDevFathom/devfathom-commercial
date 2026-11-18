@@ -148,5 +148,12 @@ export function createInMemoryAttemptStore(
         .filter((row) => inScope(row, scope) && OPEN_ATTEMPT_STATUSES.includes(row.status))
         .map(copy);
     },
+    async latestForSale(scope, saleId) {
+      // Rows are kept in creation order, so the last match is the newest.
+      const row = [...rows.values()]
+        .filter((candidate) => inScope(candidate, scope) && candidate.saleId === saleId)
+        .at(-1);
+      return row ? copy(row) : null;
+    },
   };
 }

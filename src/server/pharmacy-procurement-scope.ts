@@ -56,10 +56,16 @@ export async function assertProcurementBranch(
   if (assignment) return { organizationId, branchId, actorId };
 
   if (await actorIsPharmacyOwner(db, organizationId, actorId)) {
+    // The branch reached is kept under its own key: this check also runs for
+    // related records (an order's requisition), so it must not replace the
+    // branch the entry is recorded at (DEV-913, `metadata.branchId`).
     annotateAudit(ctx, {
       targetType: 'PharmacyBranch',
       targetId: branchId,
-      metadata: { branchId, reason: 'owner-procurement-access-without-branch-assignment' },
+      metadata: {
+        ownerAccessBranchId: branchId,
+        reason: 'owner-procurement-access-without-branch-assignment',
+      },
     });
     return { organizationId, branchId, actorId };
   }
