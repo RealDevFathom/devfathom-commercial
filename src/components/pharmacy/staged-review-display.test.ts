@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   STAGED_COLUMN_HEADINGS,
   STAGED_LIST_INTRO,
+  STAGED_PRICE_COLUMN_NOTE,
   formatStagedPrice,
   formatStagedQuantity,
   formatStagedQuantityReview,
@@ -30,6 +31,10 @@ describe('staged review display helpers', () => {
     expect(plainExceptionLabel('MISSING_BATCH')).toBe('No batch or expiry recorded');
     expect(plainExceptionLabel('EXPIRED_STOCK')).toBe('Expiry has passed');
     expect(STAGED_LIST_INTRO).toMatch(/cannot be sold/);
+    expect(STAGED_LIST_INTRO).toMatch(/Create medicines/);
+    expect(STAGED_LIST_INTRO).not.toMatch(/not available on this screen/);
+    expect(STAGED_PRICE_COLUMN_NOTE.saleprice).toMatch(/MRP/);
+    expect(STAGED_PRICE_COLUMN_NOTE.purprice).toMatch(/distributor/);
   });
   it('shows the counted quantity in plain words without trailing zeros', () => {
     const base = {

@@ -158,6 +158,10 @@ describe('staged medicine review UI', () => {
     expect(screen.getAllByText('Staged — unverified').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Not reviewed yet').length).toBeGreaterThan(0);
     expect(screen.getByText(/waiting for review/)).toBeTruthy();
+    expect(screen.getByText(/use “Create medicines” below/)).toBeTruthy();
+    expect(screen.queryByText(/not available on this screen yet/)).toBeNull();
+    expect(screen.getByText('MRP (the sale price printed on the pack)')).toBeTruthy();
+    expect(screen.getByText('Purchase price (the price you pay the distributor)')).toBeTruthy();
     const heads = screen.getAllByRole('columnheader').map((h) => h.textContent);
     expect(heads).toContain('Purchase price (from distributor)');
     expect(heads).toContain('MRP');

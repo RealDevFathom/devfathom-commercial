@@ -4,7 +4,7 @@
  */
 
 export const STAGED_LIST_INTRO =
-  'These rows come from your old system and are waiting for review. They are not in the medicine catalogue or in stock yet, so they cannot be sold. Next: open a medicine to check its name, quantity and prices against your old records. Approval for the catalogue is not available on this screen yet.';
+  'These rows come from your old system and are waiting for review. They are not in the medicine catalogue or in stock yet, so they cannot be sold. Next: open a medicine to check its name, quantity and prices against your old records. When the list looks right, use “Create medicines” below to add them to your catalogue. Stock is not added by this step.';
 
 export const STAGED_COLUMN_HEADINGS = [
   'Medicine',
@@ -16,6 +16,12 @@ export const STAGED_COLUMN_HEADINGS = [
   'Quantity counted for review',
   'Status',
 ] as const;
+
+/** Plain names for the two old-system price columns, shown next to the raw column name. */
+export const STAGED_PRICE_COLUMN_NOTE: Record<string, string> = {
+  saleprice: 'MRP (the sale price printed on the pack)',
+  purprice: 'Purchase price (the price you pay the distributor)',
+};
 
 export const STAGED_NOT_SUPPLIED = 'Not supplied';
 const NOT_SUPPLIED_AS_TEXT = 'Not supplied as text';

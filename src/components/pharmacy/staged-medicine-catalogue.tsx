@@ -14,6 +14,7 @@ import {
   STAGED_COLUMN_HEADINGS,
   STAGED_LIST_INTRO,
   STAGED_NOT_SUPPLIED,
+  STAGED_PRICE_COLUMN_NOTE,
   STAGED_STATUS_LABEL,
   formatStagedPrice,
   formatStagedQuantity,
@@ -121,7 +122,7 @@ export async function StagedMedicineCatalogue({
     <PageHeader
       eyebrow="Pharmacy / source review"
       heading={heading}
-      description="Review preserved medicine names, source counts and prices before catalogue or stock approval."
+      description="Review preserved medicine names, source counts and prices before you create catalogue medicines. Stock is not added here."
     />
   );
   if ('errorCode' in loaded) {
@@ -431,7 +432,12 @@ export async function StagedMedicineCatalogue({
           <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
             {SOURCE_REFERENCE_COLUMNS.map((key) => (
               <div key={key} className="min-w-0">
-                <dt className="font-mono text-text-muted">{key}</dt>
+                <dt className="font-mono text-text-muted">
+                  {key}
+                  {STAGED_PRICE_COLUMN_NOTE[key] && (
+                    <span className="block font-sans text-xs">{STAGED_PRICE_COLUMN_NOTE[key]}</span>
+                  )}
+                </dt>
                 <dd className="break-all whitespace-pre-wrap">
                   {detail.references[key] ?? 'Not supplied as text'}
                 </dd>
@@ -442,8 +448,8 @@ export async function StagedMedicineCatalogue({
             Name is the source product name. A classname of NARCOTICS imports the item as a
             controlled medicine; correct a wrong flag through the catalogue edit path. Other
             classname values, lowercase name and Category are unverified legacy groupings. aliasname
-            is a legacy code, not a verified barcode. All price columns remain references; no MRP or
-            cost conversion is applied.
+            is a legacy code, not a verified barcode. saleprice is the MRP and purprice is the price
+            the pharmacy pays the distributor; both are shown as recorded in the old file.
           </p>
           <h3 className="mt-6 font-semibold">Retained review flags and exceptions</h3>
           <ul className="mt-3 space-y-1 break-words text-sm">
