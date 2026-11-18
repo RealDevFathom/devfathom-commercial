@@ -99,7 +99,7 @@ export function CounterKeymapLegend({
               {overridden.has(action) ? (
                 <StatusPill status="custom" tone="info" label="Custom" />
               ) : null}
-              <kbd className="rounded-[3px] border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs text-text-strong">
+              <kbd className="rounded-control border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs text-text-strong">
                 {formatBinding(keymap.bindings[action])}
               </kbd>
             </dd>

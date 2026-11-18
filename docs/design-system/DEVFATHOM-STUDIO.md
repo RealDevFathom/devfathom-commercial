@@ -2,7 +2,7 @@
 
 Status: canonical  
 Version: 1.0  
-Last reviewed: 2026-07-28
+Last reviewed: 2026-11-18
 
 This document is the permanent UI/UX source of truth for DevFathom Hub, including the tenant
 workspace, platform control plane, authentication, organization administration, and future
@@ -123,19 +123,56 @@ with coral merely because it needs attention.
 
 ### Geometry and elevation tokens
 
-| Role                      | Token/value                    |
-| ------------------------- | ------------------------------ |
-| Compact surface           | `--radius-xs: 8px`             |
-| Control                   | `--radius-sm: 12px`            |
-| Card                      | `--radius-md: 16px`            |
-| Major panel               | `--radius-lg: 20px`            |
-| Featured panel            | `--radius-xl: 24px`            |
-| Desktop application shell | `36px`                         |
-| Hairline elevation        | `--shadow-xs`                  |
-| Interactive lift          | `--shadow-sm` or `--shadow-md` |
+| Role                      | Token/value                                  |
+| ------------------------- | -------------------------------------------- |
+| Control                   | `--radius-control: 3px`                      |
+| Compact surface           | `--radius-xs: 8px`                           |
+| Small surface             | `--radius-sm: 12px`                          |
+| Card                      | `--radius-md: 16px`                          |
+| Major panel               | `--radius-lg: 20px`                          |
+| Featured panel            | `--radius-xl: 24px`                          |
+| Desktop application shell | `36px`                                       |
+| Hairline elevation        | `--shadow-xs`                                |
+| Interactive lift          | `--shadow-sm` or `--shadow-md`               |
+| Filled action lift        | `--shadow-control` or `--shadow-control-ink` |
 
 Shadows should be soft and nearly invisible at rest. A border plus tonal surface change is the
 default separation model.
+
+Control corners as they ship today. Most controls use one of two corner sizes:
+
+- **3px, `rounded-control` (`--radius-control`).** This is the default control corner. It covers the
+  shared `Button` base, the hand-built actions, inline alerts and inverse panels in the platform
+  console, the platform sign-in form (inputs, alert and submit), skip links, and keycaps.
+- **12px, `--radius-sm`.** Several existing surfaces round their controls to 12px instead:
+  - Tenant authentication screens. Inside `.studio-auth`, `globals.css` rounds inputs, selects and
+    every `Button` to 12px. The login, register, forgot-password, reset-password and invite forms
+    also hand-build 12px fields, alerts and submits.
+  - Platform console form fields. `.platform-workspace` rounds inputs, selects and textareas to
+    12px.
+  - Hand-built controls, and some small panels, written as `rounded-[var(--radius-sm)]` in 65
+    product files: 43 pharmacy files (mostly purchasing, inventory, accounts, finance, counter and
+    pharmacist queue), 11 restaurant files, 7 tenant auth files, the `PasswordInput` reveal button,
+    two camera screens and the settings approval-authenticator section. Inside these screens the
+    shared `Button` keeps its 3px base unless the screen passes `rounded-[var(--radius-sm)]` to it,
+    as some pharmacy counter actions do.
+
+The shadcn field primitives keep their own steps: `Input` and the `Select` trigger use
+`rounded-md`, and `Textarea` uses `rounded-lg`. The `Checkbox` primitive and the
+`.platform-workspace` checkbox rule use a fixed 4px corner.
+
+New controls take `rounded-control`. Moving the 12px controls listed above to 3px is a visible
+change and needs its own decision. Surfaces (cards, panels, chips, menus) use the 8–24px steps.
+
+A filled primary action takes its lift from one of two tokens. The shared `Button` uses
+`shadow-control`, and hand-built ink actions on the platform and platform sign-in use
+`shadow-control-ink`. Do not add a hardcoded radius or shadow (`rounded-[3px]`,
+`shadow-[…rgba(…)]`) to a control. Controls read these tokens, so changing the scale here changes
+every control that uses it.
+
+`globals.css` holds exactly one `:root` block and one `[data-theme='dark']` block, inside the
+DevFathom Studio section. Add new primitives and semantic tokens there; never add a second token
+block that relies on cascade order to win.
 
 ### Spacing
 
@@ -225,6 +262,9 @@ should represent a real content group, not wrap every sentence or field.
 
 - Use ink for the primary action and neutral paper surfaces for secondary actions.
 - The destructive variant must use the destructive semantic token.
+- New buttons and action links take the 3px control corner (`rounded-control`). The 12px controls
+  that ship today are listed in §3 under control corners. Do not add new ones, and do not round a
+  control with an arbitrary value.
 - Controls should be at least 44px tall for primary forms and touch-heavy contexts.
 - Every interactive element needs hover, focus-visible, active, disabled, and loading behavior
   where applicable.
@@ -321,8 +361,11 @@ another animation runtime for ordinary product interactions.
 - No gradients, glassmorphism, neon glow, or decorative noise.
 - No generic admin-dashboard sidebar dropped into the platform product.
 - No return to the old teal/brass “Abyss” palette or Oxanium heading system.
-- No raw legacy palette utility in new UI (`abyss-*`, `paper-*`, `brass-*`) when a Studio semantic
-  token exists.
+- No legacy palette utility (`abyss-*`, `paper-*`, `brass-*`); those scales and their aliases have
+  been removed from the token source. Use the Studio semantic tokens.
+- No new arbitrary radius or shadow values on controls; use the `--radius-*` and `--shadow-*`
+  scale. The one shipped exception is the 4px checkbox (`Checkbox` primitive and the
+  `.platform-workspace` checkbox rule).
 - No hardcoded component colors, new fonts, or isolated dark-mode branches.
 - No excessive pill-shaped cards.
 - No emoji as interface iconography; use the existing Lucide/Fathom icon language.

@@ -536,7 +536,7 @@ export function PlatformCommandForm({
       {error ? (
         <p
           role="alert"
-          className="mx-5 mb-4 rounded-[3px] border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+          className="mx-5 mb-4 rounded-control border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
         >
           {error}
         </p>
@@ -550,7 +550,7 @@ export function PlatformCommandForm({
           <button
             type="button"
             onClick={() => void navigator.clipboard.writeText(revealed)}
-            className="mt-3 min-h-9 rounded-[3px] border border-warning/40 px-3 text-[10px] font-semibold transition hover:bg-warning/10"
+            className="mt-3 min-h-9 rounded-control border border-warning/40 px-3 text-[10px] font-semibold transition hover:bg-warning/10"
           >
             Copy secret
           </button>
@@ -565,7 +565,7 @@ export function PlatformCommandForm({
         <button
           type="submit"
           disabled={pending}
-          className="inline-flex h-10 items-center gap-2 rounded-[3px] bg-primary px-4 text-xs font-semibold text-primary-foreground shadow-[0_8px_18px_-13px_rgba(17,17,16,0.72)] transition-all hover:-translate-y-px hover:bg-primary-hover disabled:cursor-wait disabled:opacity-60"
+          className="inline-flex h-10 items-center gap-2 rounded-control bg-primary px-4 text-xs font-semibold text-primary-foreground shadow-control-ink transition-all hover:-translate-y-px hover:bg-primary-hover disabled:cursor-wait disabled:opacity-60"
         >
           {pending ? (
             <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
@@ -627,7 +627,7 @@ export function PlatformCommandButton({
       onClick={run}
       disabled={pending}
       className={cn(
-        'inline-flex min-h-10 items-center gap-2 rounded-[3px] border px-3 text-xs font-semibold transition disabled:cursor-wait disabled:opacity-60',
+        'inline-flex min-h-10 items-center gap-2 rounded-control border px-3 text-xs font-semibold transition disabled:cursor-wait disabled:opacity-60',
         tone === 'danger' &&
           'border-destructive/25 bg-destructive/10 text-destructive hover:bg-destructive/20',
         tone === 'quiet' && 'border-border-default bg-card text-text-body hover:bg-muted',
