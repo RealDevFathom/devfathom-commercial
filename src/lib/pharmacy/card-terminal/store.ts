@@ -184,7 +184,13 @@ export interface CardTerminalAttemptStore {
     scope: LedgerScope,
     current: CardTerminalAttempt,
     patch: CardTerminalAttemptPatch,
-    audit?: CardTerminalAuditDetail
+    audit?: CardTerminalAuditDetail,
+    /**
+     * Runs inside the change's own transaction, with the attempt row locked, just before the
+     * write. Throwing refuses the change. A rule that must hold at the moment of the write (the
+     * solo-approver rule) is checked here rather than earlier in the request.
+     */
+    guard?: (db: ScopedDb) => Promise<void>
   ): Promise<CardTerminalAttempt | null>;
   /**
    * Turns an APPROVED attempt into exactly one CARD tender and marks it SETTLED in the same
@@ -353,8 +359,14 @@ export function prismaCardTerminalAttemptStore(
       run((db) =>
         db.pharmacyCardTerminalAttempt.findFirst({ where: { ...scoped(scope), attemptKey } })
       ),
-    transition: (scope, current, patch, detail) =>
+    transition: (scope, current, patch, detail, guard) =>
       run(async (db) => {
+        if (guard) {
+          await db.$queryRaw(
+            Prisma.sql`SELECT id FROM pharmacy_card_terminal_attempts WHERE id=${current.id} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
+          );
+          await guard(db);
+        }
         let count: number;
         try {
           ({ count } = await db.pharmacyCardTerminalAttempt.updateMany({

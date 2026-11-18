@@ -38,6 +38,19 @@ const registry = vi.hoisted(() => ({
 }));
 vi.mock('./registry', () => ({ resolvePharmacyCardTerminal: registry.resolve }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn(async () => null) }));
+// Lets a test change membership between the router's solo check and the write (the PIN check
+// runs in between). The real PIN check always runs.
+const pinHook = vi.hoisted(() => ({ before: null as null | (() => Promise<void>) }));
+vi.mock('@/lib/pharmacy/refund-authorization', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/pharmacy/refund-authorization')>();
+  return {
+    ...real,
+    authenticateRefundPin: async (...args: Parameters<typeof real.authenticateRefundPin>) => {
+      await pinHook.before?.();
+      return real.authenticateRefundPin(...args);
+    },
+  };
+});
 vi.mock('@/server/audit', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/server/audit')>()),
   recordTrpcAudit: vi.fn(),
@@ -843,6 +856,117 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
     ]);
   });
 
+  /** Another manager in the organization, who may or may not be able to act at a branch. */
+  async function addManager(
+    id: string,
+    options: { branchId: string; counter: 'ALLOW' | 'DENY'; status?: 'ACTIVE' | 'INACTIVE' }
+  ) {
+    await tenant(async (db) => {
+      await db.user.create({
+        data: {
+          id,
+          name: `Manager ${id}`,
+          email: `${id}@example.test`,
+          department: 'LEADERSHIP',
+          title: 'Manager',
+          role: 'EMPLOYEE',
+          status: options.status ?? 'ACTIVE',
+        },
+      });
+      await db.userPermissionOverride.create({
+        data: { userId: id, capability: 'pharmacy:manage', effect: 'ALLOW', reason: 'DEV-743' },
+      });
+      await db.userPermissionOverride.create({
+        data: {
+          userId: id,
+          capability: 'pharmacy:counter',
+          effect: options.counter,
+          reason: 'DEV-743',
+        },
+      });
+      await db.pharmacyBranchAssignment.create({
+        data: { userId: id, branchId: options.branchId },
+      });
+    });
+  }
+
+  async function ownerResolvesOwnCharge(providerRef: string) {
+    const { saleId, review } = await chargeIntoReview(branchMain, providerRef);
+    const resolved = await request((db) =>
+      counterCaller(db).resolveReview({
+        branchId: branchMain,
+        attemptKey: review.attemptKey,
+        outcome: 'REVERSED',
+        resolutionReason: 'Customer was charged',
+        slipRef: providerRef,
+        managerPin,
+      })
+    );
+    const [entry] = (await auditFor(review.id)).filter(
+      (row) => row.action === 'pharmacyCardTerminal.attempt.reviewResolved'
+    );
+    return { saleId, review, resolved, entry };
+  }
+
+  it('does not let a manager who cannot act at this branch block the owner’s own review', async () => {
+    // (a) assigned only to another branch; (b) holds pharmacy:manage, but counter access denied.
+    await addManager(`ct-mgr-other-branch-${run}`, { branchId: branchClose, counter: 'ALLOW' });
+    await addManager(`ct-mgr-no-counter-${run}`, { branchId: branchMain, counter: 'DENY' });
+    const { saleId, resolved, entry } = await ownerResolvesOwnCharge(`RRN-${run}-10`);
+    expect(resolved).toMatchObject({ phase: 'REVERSED', open: false });
+    expect(await attemptsFor(saleId)).toEqual([
+      expect.objectContaining({ status: 'REVERSED', actorId, resolvedById: actorId }),
+    ]);
+    expect(entry).toMatchObject({
+      metadata: expect.objectContaining({
+        initiatedById: actorId,
+        approverId: actorId,
+        pinVerified: true,
+        selfApproved: true,
+        soloOwner: true,
+      }),
+    });
+  });
+
+  it('re-checks the solo rule in the write’s transaction: a manager activated meanwhile blocks it', async () => {
+    const lateManager = `ct-mgr-late-${run}`;
+    await addManager(lateManager, { branchId: branchMain, counter: 'ALLOW', status: 'INACTIVE' });
+    const { saleId, review } = await chargeIntoReview(branchMain, `RRN-${run}-11`);
+    // After the router's solo check passed, before the write: the manager is made active.
+    pinHook.before = () =>
+      tenant(async (db) => {
+        await db.user.update({ where: { id: lateManager }, data: { status: 'ACTIVE' } });
+      });
+    try {
+      await expect(
+        request((db) =>
+          counterCaller(db).resolveReview({
+            branchId: branchMain,
+            attemptKey: review.attemptKey,
+            outcome: 'REVERSED',
+            resolutionReason: 'Customer was charged',
+            slipRef: `RRN-${run}-11`,
+            managerPin,
+          })
+        )
+      ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'OWN_CHARGE_NEEDS_ANOTHER_APPROVER' });
+    } finally {
+      pinHook.before = null;
+    }
+    expect(await attemptsFor(saleId)).toEqual([
+      expect.objectContaining({ status: 'MANUAL_REVIEW', resolvedById: null }),
+    ]);
+    expect(
+      (await auditFor(review.id)).filter(
+        (row) => row.action === 'pharmacyCardTerminal.attempt.reviewResolved'
+      )
+    ).toEqual([]);
+    // The manager leaves again, so the next test starts from the same staffing.
+    await tenant((db) =>
+      db.user.update({ where: { id: lateManager }, data: { status: 'INACTIVE' } })
+    );
+  });
+
   // Last: it adds a second manager, so the owner is no longer the only one who may resolve.
   it('in a staffed pharmacy, refuses a manager’s own charge and lets another manager resolve it', async () => {
     const { hashOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
@@ -888,7 +1012,8 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
       request((db) => counterCaller(db).resolveReview({ ...resolution, managerPin }))
     ).rejects.toMatchObject({
       code: 'FORBIDDEN',
-      message: 'Another manager or owner must resolve a payment you took.',
+      message:
+        'Another manager or owner must resolve a payment you took. Ask Second manager or another manager at this branch to resolve it.',
     });
     // Nothing changed, and no PIN was asked (no refused-PIN audit row for the owner here).
     expect(await attemptsFor(saleId)).toEqual([

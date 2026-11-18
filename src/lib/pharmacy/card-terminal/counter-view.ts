@@ -43,6 +43,18 @@ export type CardTerminalCounterView = {
   chargeReported: boolean;
 };
 
+/**
+ * Whether the signed-in person may resolve this attempt's review (MANUAL_REVIEW only). The server
+ * checks again on resolve. `selfResolve`: they took this charge, and nobody else could resolve it
+ * at this branch, so the solo rule lets them with their PIN. `askName`: someone who can resolve
+ * it, when the person took the charge and may not.
+ */
+export type CardTerminalReviewAccess = {
+  mayResolve: boolean;
+  selfResolve: boolean;
+  askName: string | null;
+};
+
 const PHASES: Record<PharmacyCardTerminalAttemptStatus, CardTerminalCounterPhase> = {
   CREATED: 'SENDING',
   SENT: 'PENDING',

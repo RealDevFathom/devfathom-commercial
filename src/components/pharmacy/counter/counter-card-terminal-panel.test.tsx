@@ -1,12 +1,18 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { CardTerminalCounterView } from '@/lib/pharmacy/card-terminal/counter-view';
+import type {
+  CardTerminalCounterView,
+  CardTerminalReviewAccess,
+} from '@/lib/pharmacy/card-terminal/counter-view';
+
+/** The `attempt` query's answer: the counter view plus, under review, who may resolve it. */
+type LatestAttempt = CardTerminalCounterView & { reviewAccess?: CardTerminalReviewAccess | null };
 
 const mocks = vi.hoisted(() => ({
   available: true,
   mayResolveReview: true,
-  latest: null as CardTerminalCounterView | null,
+  latest: null as LatestAttempt | null,
   availabilityInput: vi.fn(),
   charge: vi.fn(),
   checkStatus: vi.fn(),
@@ -50,7 +56,7 @@ vi.mock('@/lib/trpc', () => ({
 
 import { CounterCardTerminalPanel } from './counter-card-terminal-panel';
 
-const view = (patch: Partial<CardTerminalCounterView>): CardTerminalCounterView => ({
+const view = (patch: Partial<LatestAttempt>): LatestAttempt => ({
   attemptKey: 'card-terminal:key-1',
   phase: 'PAID',
   amountMinor: 150_000,
@@ -63,6 +69,8 @@ const view = (patch: Partial<CardTerminalCounterView>): CardTerminalCounterView 
   declineCode: null,
   reviewReason: null,
   chargeReported: false,
+  // A manager resolving a cashier's charge, unless a test says otherwise.
+  reviewAccess: { mayResolve: true, selfResolve: false, askName: null },
   ...patch,
 });
 
@@ -181,14 +189,44 @@ describe('DEV-743 counter card-terminal panel', () => {
   });
 
   it('tells a cashier to call a manager or owner instead of showing the review form', () => {
-    mocks.mayResolveReview = false;
-    mocks.latest = view({ phase: 'MANUAL_REVIEW', open: true });
+    mocks.latest = view({
+      phase: 'MANUAL_REVIEW',
+      open: true,
+      reviewAccess: { mayResolve: false, selfResolve: false, askName: null },
+    });
     renderPanel();
     expect(
       screen.getByText('Call a manager or owner to review this payment against the terminal slip.')
     ).toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Your manager or owner PIN')).not.toBeInTheDocument();
+  });
+
+  it('tells a manager whose own charge someone else can resolve who to ask, with no form', () => {
+    mocks.latest = view({
+      phase: 'MANUAL_REVIEW',
+      open: true,
+      reviewAccess: { mayResolve: false, selfResolve: false, askName: 'Ayesha Khan' },
+    });
+    renderPanel();
+    expect(
+      screen.getByText(
+        'You took this payment. Ask Ayesha Khan or another manager at this branch to resolve it.'
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Your manager or owner PIN')).not.toBeInTheDocument();
+  });
+
+  it('tells a sole manager or owner they may resolve their own charge with their PIN', () => {
+    mocks.latest = view({
+      phase: 'MANUAL_REVIEW',
+      open: true,
+      reviewAccess: { mayResolve: true, selfResolve: true, askName: null },
+    });
+    renderPanel();
+    expect(screen.getByText(/you may resolve it yourself with your PIN/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Your manager or owner PIN')).toBeInTheDocument();
   });
 
   function fillReview(outcome: RegExp, pin = '2468') {

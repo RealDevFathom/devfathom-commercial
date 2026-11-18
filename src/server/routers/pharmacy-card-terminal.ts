@@ -5,7 +5,10 @@ import {
   terminalAdmissionRefusal,
   PRODUCTION_TERMINAL_ADMISSION,
 } from '@/lib/pharmacy/card-terminal/contract';
-import { cardTerminalCounterView } from '@/lib/pharmacy/card-terminal/counter-view';
+import {
+  cardTerminalCounterView,
+  type CardTerminalReviewAccess,
+} from '@/lib/pharmacy/card-terminal/counter-view';
 import {
   resolvePharmacyCardTerminal,
   type ResolvedCardTerminal,
@@ -28,7 +31,7 @@ import {
   authenticateRefundPin,
   refundApprovalAudit,
 } from '@/lib/pharmacy/refund-authorization';
-import { isSoleActiveApprover } from '@/lib/pharmacy/counter-line-approval';
+import { otherCardTerminalReviewers } from '@/lib/pharmacy/card-terminal/review-approvers';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { annotateAudit } from '@/server/audit';
@@ -65,6 +68,32 @@ export const CARD_TERMINAL_REVIEW_FORBIDDEN =
   'Only a manager or owner can resolve a card terminal payment under review.';
 export const CARD_TERMINAL_REVIEW_OWN_CHARGE =
   'Another manager or owner must resolve a payment you took.';
+
+/** The own-charge refusal, naming someone who can resolve it at this branch. */
+export function cardTerminalOwnChargeMessage(name: string | null) {
+  return name
+    ? `${CARD_TERMINAL_REVIEW_OWN_CHARGE} Ask ${name} or another manager at this branch to resolve it.`
+    : `${CARD_TERMINAL_REVIEW_OWN_CHARGE} Ask another manager or owner at this branch to resolve it.`;
+}
+
+/**
+ * Whether the signed-in person may resolve THIS attempt's review, for the counter to show the form
+ * or a plain line. The server checks again on resolve, inside the write's transaction.
+ */
+async function reviewAccessFor(
+  ctx: { db: unknown; session: { user: Parameters<typeof actorMayRefund>[1] } | null },
+  scope: LedgerScope,
+  attempt: { actorId: string }
+): Promise<CardTerminalReviewAccess> {
+  if (!(await actorMayRefund(ctx.db as ScopedDb, ctx.session!.user)))
+    return { mayResolve: false, selfResolve: false, askName: null };
+  if (attempt.actorId !== scope.actorId)
+    return { mayResolve: true, selfResolve: false, askName: null };
+  const [other] = await otherCardTerminalReviewers(ctx.db as ScopedDb, scope);
+  return other
+    ? { mayResolve: false, selfResolve: false, askName: other.name }
+    : { mayResolve: true, selfResolve: true, askName: null };
+}
 const attemptKey = z.string().regex(/^[A-Za-z0-9:_-]{8,128}$/);
 
 /**
@@ -154,7 +183,12 @@ export const pharmacyCardTerminalRouter = router({
     .query(async ({ ctx, input }) => {
       const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
       const latest = await storeFor(scope).latestForSale(scope, input.saleId);
-      return latest ? cardTerminalCounterView(latest) : null;
+      if (!latest) return null;
+      return {
+        ...cardTerminalCounterView(latest),
+        reviewAccess:
+          latest.status === 'MANUAL_REVIEW' ? await reviewAccessFor(ctx, scope, latest) : null,
+      };
     }),
   charge: protectedProcedure
     .input(
@@ -230,15 +264,20 @@ export const pharmacyCardTerminalRouter = router({
         const store = storeFor(scope);
         const attempt = await store.get(scope, input.attemptKey);
         if (!attempt) throw new CardTerminalError('ATTEMPT_NOT_FOUND');
-        // Second person: a charge you took is resolved by another manager or owner, unless no
-        // other active member holds `pharmacy:manage` (the solo-pharmacy rule, as the Khata
-        // over-limit approval applies it). Refused before any PIN is asked.
+        // Second person: a charge you took is resolved by someone else who could resolve it at
+        // this branch (`otherCardTerminalReviewers`). Only when nobody could does the solo rule
+        // let you resolve it with your PIN. Refused here, before any PIN is asked, naming who can;
+        // the service checks again inside the write's transaction.
         const ownCharge = attempt.actorId === scope.actorId;
-        const soloOwner =
-          ownCharge &&
-          (await isSoleActiveApprover(ctx.db as unknown as ScopedDb, scope, 'KHATA_OVER_LIMIT'));
-        if (ownCharge && !soloOwner)
-          throw new TRPCError({ code: 'FORBIDDEN', message: CARD_TERMINAL_REVIEW_OWN_CHARGE });
+        if (ownCharge) {
+          const [other] = await otherCardTerminalReviewers(ctx.db as unknown as ScopedDb, scope);
+          if (other)
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: cardTerminalOwnChargeMessage(other.name),
+            });
+        }
+        const soloOwner = ownCharge;
         // An independent transaction, so a refused PIN commits its lockout strike and its
         // FAILURE audit row even though this request answers with a refusal.
         const pin = await authenticateRefundPin({
@@ -267,8 +306,8 @@ export const pharmacyCardTerminalRouter = router({
           scope,
           { ...resolution, reason: resolutionReason },
           approval,
-          // The service checks the attempt again as it reads it to resolve.
-          async () => soloOwner
+          // Re-checked inside the write's transaction, with the attempt row locked.
+          async (db) => (await otherCardTerminalReviewers(db, scope)).length === 0
         );
         return cardTerminalCounterView(resolved);
       } catch (error) {

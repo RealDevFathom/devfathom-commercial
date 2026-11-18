@@ -23,13 +23,20 @@ type Outcome = 'DECLINED' | 'REVERSED';
 type Props = {
   branchId: string;
   view: CardTerminalCounterView;
+  /** The person took this charge, and nobody else can resolve it at this branch (solo rule). */
+  selfResolve?: boolean;
   onResolved: (next: CardTerminalCounterView) => Promise<void> | void;
 };
 
 const PIN = /^\d{4,8}$/;
 const SLIP_REF = /^[A-Za-z0-9._:/-]{1,64}$/;
 
-export function CounterCardTerminalReview({ branchId, view, onResolved }: Props) {
+export function CounterCardTerminalReview({
+  branchId,
+  view,
+  selfResolve = false,
+  onResolved,
+}: Props) {
   const id = useId();
   const resolve = trpc.pharmacyCardTerminal.resolveReview.useMutation();
   // The terminal reported a charge: it cannot be recorded as not charged.
@@ -110,6 +117,12 @@ export function CounterCardTerminalReview({ branchId, view, onResolved }: Props)
           Only a manager or owner can record this, with their own PIN. Check the terminal slip
           first.
         </p>
+        {selfResolve ? (
+          <p className="text-sm text-text-body">
+            You took this payment, and no other manager or owner can resolve it at this branch, so
+            you may resolve it yourself with your PIN. It is recorded as self-approved.
+          </p>
+        ) : null}
         {view.reviewReason ? (
           <p className="text-sm text-text-body">Why it needs review: {view.reviewReason}</p>
         ) : null}

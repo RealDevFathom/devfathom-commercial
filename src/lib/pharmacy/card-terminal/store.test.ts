@@ -354,6 +354,25 @@ describe('DEV-743 durable attempt store', () => {
       );
   });
 
+  it('runs a guard inside the change’s transaction, after locking the attempt, before writing', async () => {
+    const db = fakeDb();
+    const current = attempt({ status: 'MANUAL_REVIEW', providerRef: null });
+    const guard = vi.fn(async (tx: unknown) => {
+      expect(tx).toBe(db);
+      db.calls.push('guard');
+      throw new Error('a second manager is now active');
+    });
+    await expect(
+      runner(db).transition(scope, current, { status: 'DECLINED' }, {}, guard)
+    ).rejects.toThrow('a second manager is now active');
+    expect(db.calls).toEqual([
+      expect.stringMatching(/FROM pharmacy_card_terminal_attempts WHERE id=\?.*FOR UPDATE/),
+      'guard',
+    ]);
+    expect(db.pharmacyCardTerminalAttempt.updateMany).not.toHaveBeenCalled();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+  });
+
   it('refuses a slip reference already recorded on another terminal payment', async () => {
     const db = fakeDb();
     db.pharmacyCardTerminalAttempt.updateMany.mockRejectedValueOnce(

@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { PharmacySettlementError } from '../settlement';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { LedgerScope } from '../stock-ledger';
 import { assertNoCardholderData, CardholderDataError, redactForLog } from './cardholder-data';
 import {
@@ -409,14 +410,16 @@ export type ResolveCardTerminalReviewInput = {
  * sale or its business day. Never calls the terminal, so it needs no admitted provider.
  *
  * Second person: the resolver may not resolve a charge they took themselves (the attempt's
- * `actorId`), unless `soleApprover` says no other active member could (the solo-pharmacy rule).
+ * `actorId`), unless `soleApprover` says nobody else could resolve it at this branch (the
+ * solo-pharmacy rule). That is checked inside the write's own transaction, with the attempt row
+ * locked, so a second manager activated after an earlier check still blocks the self-resolution.
  */
 export async function resolveCardTerminalReview(
   deps: Pick<CardTerminalDeps, 'store' | 'now'>,
   scope: LedgerScope,
   input: ResolveCardTerminalReviewInput,
   approval: CardTerminalAuditDetail,
-  soleApprover: () => Promise<boolean> = async () => false
+  soleApprover: (db: ScopedDb) => Promise<boolean> = async () => false
 ) {
   const reason = input.reason.trim();
   const slipRef = input.slipRef.trim();
@@ -435,8 +438,7 @@ export async function resolveCardTerminalReview(
   }
   const attempt = await requireAttempt(deps, scope, input.attemptKey);
   if (attempt.status !== 'MANUAL_REVIEW') throw new CardTerminalError('REVIEW_NOT_OPEN');
-  if (attempt.actorId === scope.actorId && !(await soleApprover()))
-    throw new CardTerminalError('OWN_CHARGE_NEEDS_ANOTHER_APPROVER');
+  const ownCharge = attempt.actorId === scope.actorId;
   // The terminal reported a charge reference: it cannot be recorded as "nothing was charged".
   if (input.outcome === 'DECLINED' && attempt.providerRef)
     throw new CardTerminalError('CHARGE_EVIDENCE_RECORDED');
@@ -454,7 +456,13 @@ export async function resolveCardTerminalReview(
       // A reversal records the charge it reverses; an unknown outcome learns it from the slip.
       ...(input.outcome === 'REVERSED' && !attempt.providerRef ? { providerRef: slipRef } : {}),
     },
-    approval
+    approval,
+    ownCharge
+      ? async (db) => {
+          if (!(await soleApprover(db)))
+            throw new CardTerminalError('OWN_CHARGE_NEEDS_ANOTHER_APPROVER');
+        }
+      : undefined
   );
   // Another manager resolved it first: theirs stands.
   if (!next) throw new CardTerminalError('REVIEW_NOT_OPEN');

@@ -117,7 +117,8 @@ export function createInMemoryAttemptStore(
       );
       return row ? copy(row) : null;
     },
-    async transition(scope, current, patch, detail = {}) {
+    async transition(scope, current, patch, detail = {}, guard) {
+      await guard?.({} as never);
       const row = rows.get(current.id);
       if (
         !row ||

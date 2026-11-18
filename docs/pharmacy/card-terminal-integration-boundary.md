@@ -137,11 +137,19 @@ terminal, so all of this stays dormant.
   refused before any PIN is asked, and the counter shows a cashier no review form, only a line to
   call a manager or owner.
 - A second person: nobody resolves a charge they took themselves (the attempt's `actorId`) while
-  another active member holds `pharmacy:manage`. They are refused ("Another manager or owner must
-  resolve a payment you took.") before any PIN is asked. The solo rule is `isSoleActiveApprover`,
-  the same check as the Khata over-limit approval: when no other active member holds
-  `pharmacy:manage`, the owner resolves their own charge with their PIN, so a pharmacy with only
-  cashiers can still close its day.
+  someone else could resolve it at this branch. Someone else counts (`otherCardTerminalReviewers`)
+  only if they are an active member who passes the counter's operator and branch gate for this
+  branch (`counterOperatorDenial`, the gate the resolve procedure applies) and holds
+  `pharmacy:manage`. A manager assigned only to another branch, or whose counter access is denied,
+  does not block the resolver.
+  - If someone else could, the resolver is refused before any PIN is asked, with a message naming
+    one of them: "Another manager or owner must resolve a payment you took. Ask <name> or another
+    manager at this branch to resolve it." The counter shows that line instead of the form.
+  - If nobody could (the solo rule), the owner resolves their own charge with their PIN, so a
+    pharmacy with only cashiers can still close its day. The counter says they may resolve it
+    themselves.
+  - The rule is checked again inside the write's own transaction, with the attempt row locked, so a
+    manager activated after the first check still blocks the self-resolution.
 - The signed-in manager or owner re-enters their own PIN (`authenticateRefundPin`, policy
   `PHARMACY_CARD_TERMINAL_REVIEW_MANAGER_PIN`). A refused PIN commits its lockout strike and a
   FAILURE audit row, and changes nothing. The audit entry records `initiatedById` (who took the

@@ -53,11 +53,13 @@ vi.mock('@/lib/pharmacy/refund-authorization', async (original) => ({
   authenticateRefundPin: refundAuth.authenticateRefundPin,
 }));
 const approvers = vi.hoisted(() => ({
-  isSoleActiveApprover: vi.fn(async (): Promise<boolean> => false),
+  // Who else could resolve a review at this branch. A staffed pharmacy unless a test says so.
+  others: vi.fn(async (): Promise<{ id: string; name: string | null }[]> => [
+    { id: 'manager-b', name: 'Ayesha Khan' },
+  ]),
 }));
-vi.mock('@/lib/pharmacy/counter-line-approval', async (original) => ({
-  ...(await original<typeof import('@/lib/pharmacy/counter-line-approval')>()),
-  isSoleActiveApprover: approvers.isSoleActiveApprover,
+vi.mock('@/lib/pharmacy/card-terminal/review-approvers', () => ({
+  otherCardTerminalReviewers: approvers.others,
 }));
 vi.mock('@/lib/pharmacy/card-terminal/registry', () => ({
   resolvePharmacyCardTerminal: harness.resolve,
@@ -133,7 +135,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   refundAuth.actorMayRefund.mockResolvedValue(false);
   refundAuth.authenticateRefundPin.mockResolvedValue({ verified: true });
-  approvers.isSoleActiveApprover.mockResolvedValue(false);
+  approvers.others.mockResolvedValue([{ id: 'manager-b', name: 'Ayesha Khan' }]);
   harness.runners = [];
   terminal = createFakeTerminal();
   store = createInMemoryAttemptStore({ saleRemaining: () => 1500 });
@@ -402,16 +404,12 @@ describe('DEV-743 card-terminal router', () => {
     it('refuses a manager’s own charge while another manager or owner could resolve it', async () => {
       const attemptKey = await underReview('card-terminal:k-own', 'user-a');
       refundAuth.actorMayRefund.mockResolvedValue(true);
-      approvers.isSoleActiveApprover.mockResolvedValue(false);
       await expect(caller().resolveReview(resolution(attemptKey))).rejects.toMatchObject({
         code: 'FORBIDDEN',
-        message: CARD_TERMINAL_REVIEW_OWN_CHARGE,
+        message: `${CARD_TERMINAL_REVIEW_OWN_CHARGE} Ask Ayesha Khan or another manager at this branch to resolve it.`,
       });
-      expect(approvers.isSoleActiveApprover).toHaveBeenCalledWith(
-        expect.anything(),
-        scope,
-        'KHATA_OVER_LIMIT'
-      );
+      // Only people who could resolve it at THIS branch count (the counter and branch gate).
+      expect(approvers.others).toHaveBeenCalledWith(expect.anything(), scope);
       // Refused before any PIN is asked, and nothing changes.
       expect(refundAuth.authenticateRefundPin).not.toHaveBeenCalled();
       expect(store.all()[0]).toMatchObject({ status: 'MANUAL_REVIEW', resolvedById: null });
@@ -425,7 +423,7 @@ describe('DEV-743 card-terminal router', () => {
         phase: 'DECLINED',
       });
       // Not the resolver's own charge: the solo rule is not consulted.
-      expect(approvers.isSoleActiveApprover).not.toHaveBeenCalled();
+      expect(approvers.others).not.toHaveBeenCalled();
       expect(store.audits.at(-1)?.detail).toMatchObject({
         initiatedById: 'cashier-z',
         approverId: 'user-a',
@@ -437,8 +435,8 @@ describe('DEV-743 card-terminal router', () => {
 
     it('lets a solo owner self-approve with a fresh PIN, audited, with no terminal bound', async () => {
       const attemptKey = await underReview('card-terminal:k-review', 'user-a');
-      // No other active member holds pharmacy:manage: the owner resolves their own charge.
-      approvers.isSoleActiveApprover.mockResolvedValue(true);
+      // Nobody else could resolve it at this branch: the owner resolves their own charge.
+      approvers.others.mockResolvedValue([]);
       // Resolution reads the slip, never the terminal: it works with no provider bound.
       harness.resolve.mockResolvedValue(null);
       refundAuth.actorMayRefund.mockResolvedValue(true);
@@ -484,6 +482,43 @@ describe('DEV-743 card-terminal router', () => {
       });
       await expect(caller().charge(chargeInput('card-terminal:k-after'))).resolves.toMatchObject({
         phase: 'PAID',
+      });
+    });
+
+    it('refuses a self-resolution when a second manager appears between the check and the write', async () => {
+      const attemptKey = await underReview('card-terminal:k-race', 'user-a');
+      refundAuth.actorMayRefund.mockResolvedValue(true);
+      // Alone at the first check (before the PIN); a manager is activated before the write.
+      approvers.others
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ id: 'manager-b', name: 'Ayesha Khan' }]);
+      await expect(caller().resolveReview(resolution(attemptKey))).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'OWN_CHARGE_NEEDS_ANOTHER_APPROVER',
+      });
+      // The second check ran inside the write's transaction, and nothing changed.
+      expect(approvers.others).toHaveBeenCalledTimes(2);
+      expect(store.all()[0]).toMatchObject({ status: 'MANUAL_REVIEW', resolvedById: null });
+      expect(store.audits.filter((entry) => entry.from === 'MANUAL_REVIEW')).toEqual([]);
+    });
+
+    it('tells the counter whether this person may resolve this attempt', async () => {
+      const read = () => caller().attempt({ branchId: 'branch-a', saleId: 'sale-1' });
+      await underReview('card-terminal:k-access', 'user-a');
+      // A cashier: no form.
+      await expect(read()).resolves.toMatchObject({
+        phase: 'MANUAL_REVIEW',
+        reviewAccess: { mayResolve: false, selfResolve: false, askName: null },
+      });
+      refundAuth.actorMayRefund.mockResolvedValue(true);
+      // Their own charge, and someone else can resolve it here: who to ask.
+      await expect(read()).resolves.toMatchObject({
+        reviewAccess: { mayResolve: false, selfResolve: false, askName: 'Ayesha Khan' },
+      });
+      // Nobody else can: they may resolve it themselves with their PIN.
+      approvers.others.mockResolvedValue([]);
+      await expect(read()).resolves.toMatchObject({
+        reviewAccess: { mayResolve: true, selfResolve: true, askName: null },
       });
     });
 

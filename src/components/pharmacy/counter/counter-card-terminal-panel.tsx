@@ -104,8 +104,6 @@ function CardTerminalPanelForSale({
     { enabled: Boolean(deviceId), staleTime: 60_000 }
   );
   const available = availability.data?.available === true;
-  // The server refuses a cashier; the form is shown only to those it would let resolve.
-  const mayResolveReview = availability.data?.mayResolveReview === true;
   const latest = trpc.pharmacyCardTerminal.attempt.useQuery(
     { branchId, saleId: saleId ?? '' },
     { enabled: available && Boolean(saleId) }
@@ -131,6 +129,8 @@ function CardTerminalPanelForSale({
     result && latest.data?.attemptKey === result.attemptKey
       ? latest.data
       : (result ?? latest.data ?? null);
+  const reviewAccess =
+    view && latest.data?.attemptKey === view.attemptKey ? latest.data.reviewAccess : null;
   const busy = charge.isPending || checkStatus.isPending;
   const phase: CardTerminalCounterPhase | null = charge.isPending
     ? 'PENDING'
@@ -224,11 +224,21 @@ function CardTerminalPanelForSale({
         </p>
       ) : null}
       {view && phase === 'MANUAL_REVIEW' ? (
-        mayResolveReview ? (
-          <CounterCardTerminalReview branchId={branchId} view={view} onResolved={settle} />
+        // The server says whether THIS person may resolve THIS review (and checks again on
+        // resolve): a cashier, or a manager whose own charge someone else can resolve, gets a
+        // plain line instead of the form.
+        reviewAccess?.mayResolve ? (
+          <CounterCardTerminalReview
+            branchId={branchId}
+            view={view}
+            selfResolve={reviewAccess.selfResolve}
+            onResolved={settle}
+          />
         ) : (
           <p className="text-sm text-text-body">
-            Call a manager or owner to review this payment against the terminal slip.
+            {reviewAccess?.askName
+              ? `You took this payment. Ask ${reviewAccess.askName} or another manager at this branch to resolve it.`
+              : 'Call a manager or owner to review this payment against the terminal slip.'}
           </p>
         )
       ) : null}
