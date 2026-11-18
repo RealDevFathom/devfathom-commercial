@@ -36,6 +36,7 @@ const reads = vi.hoisted(() => {
     findSubstituteProposals: read([]),
     findUpsellSuggestions: read([]),
     authenticatePharmacyPack: read({ status: 'UNVERIFIED' }),
+    lookupCounterVoucher: read({ id: 'voucher-1', status: 'READY' }),
   };
 });
 vi.mock('@/lib/pharmacy/counter', async (original) => ({
@@ -62,6 +63,11 @@ vi.mock('@/lib/pharmacy/substitute-finder', async (original) => ({
 vi.mock('@/lib/pharmacy/upsell-suggestions', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/upsell-suggestions')>()),
   findUpsellSuggestions: reads.findUpsellSuggestions,
+}));
+// DEV-780: the counter's voucher lookup.
+vi.mock('@/lib/pharmacy/vouchers', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/vouchers')>()),
+  lookupCounterVoucher: reads.lookupCounterVoucher,
 }));
 vi.mock('@/lib/pharmacy/pack-authentication-operations', () => ({
   authenticatePharmacyPack: reads.authenticatePharmacyPack,
@@ -135,6 +141,11 @@ const procedures: Array<[string, Read, (caller: Caller, branchId: string) => Pro
     'authenticatePack',
     'authenticatePharmacyPack',
     (c, branchId) => c.authenticatePack({ branchId, payload: '0100' }),
+  ],
+  [
+    'counterVoucher',
+    'lookupCounterVoucher',
+    (c, branchId) => c.counterVoucher({ branchId, code: 'GIFT10' }),
   ],
 ];
 

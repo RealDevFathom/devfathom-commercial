@@ -36,6 +36,9 @@ const COUNTER: Rule[] = [{ capability: 'pharmacy:counter', effect: 'ALLOW' }];
 
 function fixture(openDrawer: { id: string; businessDate: Date } | null, permissions = COUNTER) {
   const db = {
+    // DEV-631: a counter bill or line is refused while today's business day is closed.
+    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'UTC' }) },
+    pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     $queryRaw: vi.fn().mockResolvedValue([]),
     // DEV-607: create takes the counter gate (member, pharmacy:counter, branch assignment).
     user: {
@@ -159,6 +162,29 @@ describe('pharmacySales.create drawer gate (DEV-725)', () => {
       { status: 'QUOTATION' }
     );
     expect(f.db.pharmacyDrawerSession.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("DEV-631: refuses a counter bill while today's business day is closed, before any bill is written", async () => {
+    const f = fixture(drawer);
+    f.db.pharmacyDailyClose.findFirst.mockResolvedValue({ id: 'close-1', reopen: null });
+    await expect(
+      f.caller.create({ branchId: 'branch-1', quotation: false, deviceId: 'counter-device' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'DAY_CLOSED' });
+    // Today in the workspace zone, read for the scope's organization.
+    expect(f.db.organization.findUnique).toHaveBeenCalledWith({
+      where: { id: 'org-1' },
+      select: { timezone: true },
+    });
+    expect(f.db.pharmacySale.create).not.toHaveBeenCalled();
+    expect(f.db.pharmacySaleEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('DEV-631: starts the bill again once the owner reopened the day for trading', async () => {
+    const f = fixture(drawer);
+    f.db.pharmacyDailyClose.findFirst.mockResolvedValue({ id: 'close-1', reopen: { id: 'r-1' } });
+    await expect(
+      f.caller.create({ branchId: 'branch-1', quotation: false, deviceId: 'counter-device' })
+    ).resolves.toMatchObject({ id: 'sale-new', status: 'OPEN' });
   });
 
   it('lets the regulatory refusal (and its audit) win over a closed drawer', async () => {

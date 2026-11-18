@@ -6,6 +6,7 @@ import { lockCustomerConsent } from './consent-writer';
 import {
   adjustLoyaltyPoints,
   listLoyaltyRedemptions,
+  loyaltyAdjustmentDay,
   readLoyaltyLiability,
   restoreRefundedLoyaltyPoints,
 } from './customer-loyalty';
@@ -445,5 +446,189 @@ describe('DEV-764 liability leaves out points already past expiry', () => {
       },
       distinct: ['customerId'],
     });
+  });
+});
+
+describe('DEV-881 manager ceiling applies to the day total per customer', () => {
+  // 10:00 on 17 Nov 2026 in Pakistan (05:00 UTC).
+  const now = new Date('2026-11-17T05:00:00.000Z');
+
+  /** Ledger whose aggregate reads back the entries this test has written. */
+  function ledger(
+    seed: { points: number; occurredAt: Date; customerId?: string; branchId?: string }[] = []
+  ) {
+    const { db, created } = fixture(10_000);
+    created.push(
+      ...seed.map((row, index) => ({
+        id: `seed-${index}`,
+        kind: 'ADJUSTMENT',
+        organizationId: 'org-a',
+        customerId: 'customer-a',
+        idempotencyKey: `loyalty:adjust:seed-${index}`,
+        ...row,
+      }))
+    );
+    db.pharmacyLoyaltyPointsEntry.create.mockImplementation(async ({ data }) => {
+      const row = { id: `adjust-${created.length}`, occurredAt: now, ...data };
+      created.push(row);
+      return row;
+    });
+    db.pharmacyLoyaltyPointsEntry.aggregate.mockImplementation(async ({ where }) => {
+      if (where.kind !== 'ADJUSTMENT') return { _sum: { points: 10_000 } };
+      const rows = created.filter(
+        (row) =>
+          row.kind === 'ADJUSTMENT' &&
+          row.organizationId === where.organizationId &&
+          row.customerId === where.customerId &&
+          // Honour a branch filter, so a branch-scoped day total would fail the cross-branch test.
+          (where.branchId === undefined || row.branchId === where.branchId) &&
+          (row.occurredAt as Date) >= where.occurredAt.gte &&
+          (row.occurredAt as Date) < where.occurredAt.lt &&
+          (where.points.gt !== undefined
+            ? (row.points as number) > where.points.gt
+            : (row.points as number) < where.points.lt)
+      );
+      return {
+        _sum: {
+          points: rows.length ? rows.reduce((sum, row) => sum + (row.points as number), 0) : null,
+        },
+      };
+    });
+    return { db, created };
+  }
+  const grant = (key: string, points: number) => ({ ...adjustment, idempotencyKey: key, points });
+
+  it('refuses a grant split into entries that are each under the ceiling', async () => {
+    const { db, created } = ledger();
+    const options = { managerLimit: 500, now };
+    await adjustLoyaltyPoints(db as never, scope, grant('split-1', 300), options);
+    await adjustLoyaltyPoints(db as never, scope, grant('split-2', 200), options);
+    await expect(
+      adjustLoyaltyPoints(db as never, scope, grant('split-3', 1), options)
+    ).rejects.toThrow('MANAGER_ADJUSTMENT_LIMIT');
+    expect(created.map((row) => row.points)).toEqual([300, 200]);
+  });
+
+  it('counts removals too, and checks the total after taking the customer lock', async () => {
+    const { db, created } = ledger([
+      { points: 300, occurredAt: new Date('2026-11-16T19:00:00.000Z') }, // 00:00 PKT today
+      { points: -150, occurredAt: now },
+    ]);
+    await expect(
+      adjustLoyaltyPoints(db as never, scope, grant('after-removal', 51), {
+        managerLimit: 500,
+        now,
+      })
+    ).rejects.toThrow('MANAGER_ADJUSTMENT_LIMIT');
+    expect(created).toHaveLength(2);
+    await expect(
+      adjustLoyaltyPoints(db as never, scope, grant('after-removal-2', 50), {
+        managerLimit: 500,
+        now,
+      })
+    ).resolves.toMatchObject({ replayed: false });
+    expect(vi.mocked(lockCustomerConsent).mock.invocationCallOrder[0]).toBeLessThan(
+      db.pharmacyLoyaltyPointsEntry.aggregate.mock.invocationCallOrder[0]!
+    );
+    expect(db.pharmacyLoyaltyPointsEntry.aggregate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org-a',
+          customerId: 'customer-a',
+          kind: 'ADJUSTMENT',
+          occurredAt: {
+            gte: new Date('2026-11-16T19:00:00.000Z'),
+            lt: new Date('2026-11-17T19:00:00.000Z'),
+          },
+          points: { gt: 0 },
+        }),
+      })
+    );
+  });
+
+  it("counts the customer's adjustments at every branch towards the day total", async () => {
+    const { db, created } = ledger([{ points: 400, occurredAt: now, branchId: 'branch-b' }]);
+    await expect(
+      adjustLoyaltyPoints(db as never, scope, grant('other-branch', 101), {
+        managerLimit: 500,
+        now,
+      })
+    ).rejects.toThrow('MANAGER_ADJUSTMENT_LIMIT');
+    expect(created).toHaveLength(1);
+    for (const [query] of db.pharmacyLoyaltyPointsEntry.aggregate.mock.calls)
+      if (query.where.kind === 'ADJUSTMENT') expect(query.where).not.toHaveProperty('branchId');
+  });
+
+  it('still counts every branch when the transaction is bound to one branch', async () => {
+    const { db, created } = ledger([{ points: 400, occurredAt: now, branchId: 'branch-b' }]);
+    // Row-level security shows only the bound branch's entries while a branch is bound.
+    let bound: string | null = 'branch-a';
+    db.$queryRaw = vi.fn(async (query: { strings: readonly string[]; values: unknown[] }) => {
+      const text = query.strings.join('?');
+      if (text.includes('current_setting')) return [{ branchId: bound }];
+      if (text.includes('set_config')) bound = (query.values[0] as string | undefined) || null;
+      return [];
+    }) as never;
+    const visible = db.pharmacyLoyaltyPointsEntry.aggregate.getMockImplementation()!;
+    db.pharmacyLoyaltyPointsEntry.aggregate.mockImplementation(async (args) =>
+      visible(bound ? { ...args, where: { ...args.where, branchId: bound } } : args)
+    );
+    await expect(
+      adjustLoyaltyPoints(db as never, scope, grant('bound-branch', 101), {
+        managerLimit: 500,
+        now,
+      })
+    ).rejects.toThrow('MANAGER_ADJUSTMENT_LIMIT');
+    expect(created).toHaveLength(1);
+    expect(bound).toBe('branch-a');
+  });
+
+  it('starts a fresh allowance at midnight Pakistan time', async () => {
+    const { db } = ledger([{ points: 500, occurredAt: new Date('2026-11-16T18:59:59.999Z') }]);
+    await expect(
+      adjustLoyaltyPoints(db as never, scope, grant('next-day', 500), { managerLimit: 500, now })
+    ).resolves.toMatchObject({ replayed: false });
+  });
+
+  it('replays a recorded adjustment without counting it against the ceiling again', async () => {
+    const { db, created } = ledger();
+    const options = { managerLimit: 500, now };
+    await adjustLoyaltyPoints(db as never, scope, grant('retry', 500), options);
+    await expect(
+      adjustLoyaltyPoints(db as never, scope, grant('retry', 500), options)
+    ).resolves.toMatchObject({ replayed: true });
+    expect(created).toHaveLength(1);
+  });
+
+  it('dates a manager entry with the instant its day was checked against', async () => {
+    // 23:59:59.999 PKT, after a wait for the lock that began before midnight.
+    const lateNow = new Date('2026-11-17T18:59:59.999Z');
+    const { db } = ledger();
+    await adjustLoyaltyPoints(db as never, scope, grant('midnight', 500), {
+      managerLimit: 500,
+      now: lateNow,
+    });
+    expect(db.pharmacyLoyaltyPointsEntry.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ occurredAt: lateNow, points: 500 }),
+    });
+  });
+
+  it('applies no day total when no manager ceiling is given (the owner)', async () => {
+    const { db } = ledger([{ points: 5_000, occurredAt: now }]);
+    await expect(
+      adjustLoyaltyPoints(db as never, scope, grant('owner', 5_000), { now })
+    ).resolves.toMatchObject({ replayed: false });
+  });
+});
+
+describe('DEV-881 adjustment day', () => {
+  it('is the Pakistan calendar day, as a half-open UTC range', () => {
+    expect(loyaltyAdjustmentDay(new Date('2026-11-16T19:00:00.000Z'))).toEqual({
+      from: new Date('2026-11-16T19:00:00.000Z'),
+      to: new Date('2026-11-17T19:00:00.000Z'),
+    });
+    expect(loyaltyAdjustmentDay(new Date('2026-11-16T18:59:59.999Z')).from).toEqual(
+      new Date('2026-11-15T19:00:00.000Z')
+    );
   });
 });
