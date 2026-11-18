@@ -244,6 +244,48 @@ function usePendingKeys() {
   return { has: (key: string) => pending.has(key), run };
 }
 
+type CatalogueMatchMedicine = {
+  productName: string;
+  strength: string | null;
+  dosageForm: string | null;
+  drapRegistrationNumber: string | null;
+  rx: boolean;
+  controlled: boolean;
+};
+
+/** DEV-683: the catalogue medicine a confirmation would update, shown next to the proposal. */
+function CatalogueMatch({ medicine }: { medicine: CatalogueMatchMedicine }) {
+  const rows: Array<[string, string]> = [
+    ['Name', medicine.productName],
+    ['Strength', medicine.strength ?? 'Not recorded'],
+    ['Dosage form', medicine.dosageForm ?? 'Not recorded'],
+    ['Registration', medicine.drapRegistrationNumber ?? 'Not recorded'],
+    ['Prescription only', medicine.rx ? 'Yes' : 'No'],
+    ['Controlled', medicine.controlled ? 'Yes' : 'No'],
+  ];
+  return (
+    <section
+      aria-label="Catalogue medicine this updates"
+      className="min-w-0 space-y-2 rounded-sm border border-border-subtle p-3"
+    >
+      <h4 className="text-sm font-semibold text-text-strong">Catalogue medicine this updates</h4>
+      <dl className="grid min-w-0 gap-2 sm:grid-cols-3">
+        {rows.map(([label, value]) => (
+          <div key={label} className="min-w-0">
+            <dt className="font-mono text-xs uppercase text-text-muted">{label}</dt>
+            <dd className="mt-1 break-words text-sm text-text-body">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="text-xs text-text-muted">
+        Confirming keeps this name. A different name, strength or form is refused: reject the row or
+        correct the medicine first. A stated flag can raise this medicine to prescription-only or
+        controlled, never lower it.
+      </p>
+    </section>
+  );
+}
+
 const CATALOGUE_REVIEW_DENIED =
   'Confirming connector proposals needs the pharmacy:catalogue-review permission granted to your role by name. Wildcard grants such as * or pharmacy:* do not include it.';
 
@@ -687,7 +729,9 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                     {sourceLabel ? (
                       <p className="mt-1 text-xs text-text-muted">
                         Source: {sourceLabel}
-                        {proposal.targetMedicine ? ' · updates an existing medicine' : ''}
+                        {proposal.targetMedicine || proposal.catalogueMatch
+                          ? ' · updates an existing medicine'
+                          : ''}
                       </p>
                     ) : null}
                   </div>
@@ -703,6 +747,9 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                     </div>
                   ))}
                 </dl>
+                {proposal.catalogueMatch ? (
+                  <CatalogueMatch medicine={proposal.catalogueMatch} />
+                ) : null}
                 <Button
                   className="min-h-11"
                   disabled={isConfirming}
