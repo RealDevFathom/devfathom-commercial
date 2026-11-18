@@ -226,7 +226,13 @@ test('the cashier is offered only destinations a cashier can open (DEV-497)', as
  */
 async function openDrawer(page: Page) {
   // DEV-725: opening the drawer is the shift's first step and records the counted cash.
-  await page.getByLabel('Opening cash', { exact: true }).fill('0');
+  const openingCash = page.getByLabel('Opening cash', { exact: true });
+  if ((await openingCash.getAttribute('readonly')) !== null) {
+    // Cashiers open empty tills; only managers can edit the opening float.
+    await expect(openingCash).toHaveValue('0');
+  } else {
+    await openingCash.fill('0');
+  }
   await pressControl(page.getByRole('button', { name: 'Open drawer' }));
   await expect(
     page.getByRole('status').filter({ hasText: /Cash drawer opened for this counter/i })
@@ -1241,6 +1247,44 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   await page.keyboard.press('Escape');
   await expect(dialog).not.toBeVisible();
   await expect(page.getByRole('button', { name: 'Returns & refunds' })).toBeFocused();
+});
+
+test('[DEF-13] cashier float guidance and refusal preserve empty-drawer access', async ({
+  page,
+}) => {
+  await openCounter(page, PHARMACY_E2E.cashierEmail);
+  const openingCash = page.getByLabel('Opening cash', { exact: true });
+  await expect(openingCash).toHaveAttribute('readonly', '');
+  await expect(openingCash).toHaveValue('0');
+  await expect(page.getByRole('group', { name: 'Quick amounts' })).toHaveCount(0);
+  await expect(page.getByText(/Count the cash in the drawer/)).toHaveCount(0);
+  await expect(page.getByText(/Ask a manager or owner to declare any opening float/)).toBeVisible();
+
+  // Simulate stale presentation data after a permission change. The real cashier
+  // session and database grants remain unchanged: the server must refuse the float.
+  await page.route('**/api/trpc/**', async (route) => {
+    const names = new URL(route.request().url()).pathname.split('/api/trpc/')[1]?.split(',') ?? [];
+    const index = names.indexOf('pharmacySales.refundAccess');
+    if (index < 0) return route.continue();
+    const response = await route.fetch();
+    const body = await response.json();
+    const result = Array.isArray(body) ? body[index] : body;
+    if (result?.result?.data?.json) result.result.data.json.authorized = true;
+    await route.fulfill({ response, json: body });
+  });
+  await page.reload();
+  await expect(openingCash).toBeEditable();
+  await openingCash.fill('5000');
+  await pressControl(page.getByRole('button', { name: 'Open drawer' }));
+  await expect(
+    page.getByRole('alert').filter({ hasText: 'Only a manager or owner can open with a float.' })
+  ).toContainText(
+    'Only a manager or owner can open with a float. Open with 0 if the drawer is empty, or ask a manager.'
+  );
+  await expect(page.getByText(/Your role does not take payments/)).toHaveCount(0);
+  await expect(openingCash).toHaveValue('5000');
+  await expect(page.getByLabel('Scan or search')).toHaveCount(0);
+  await openDrawer(page);
 });
 
 test('cashier — the seeded cashier sells from the counter and gets the receipt', async ({

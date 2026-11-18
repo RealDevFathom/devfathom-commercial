@@ -157,12 +157,43 @@ describe('MED-06 connector router boundary', () => {
     expect(transaction).not.toHaveBeenCalled();
   });
 
+  it('guards a connector rejection on PENDING so two decisions cannot both apply', async () => {
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const tx = {
+      pharmacyReferenceConnectorProposal: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'proposal-r',
+          status: 'PENDING',
+          run: { triggeredBy: 'editor-1' },
+        }),
+        update: vi.fn(),
+        updateMany,
+      },
+    };
+    const db = { $transaction: (run: (client: typeof tx) => unknown) => run(tx) };
+    await expect(
+      caller(db).decideReferenceConnectorProposal({ proposalId: 'proposal-r', decision: 'REJECT' })
+    ).resolves.toMatchObject({ id: 'proposal-r', status: 'REJECTED' });
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: 'proposal-r', status: 'PENDING' },
+      data: expect.objectContaining({ status: 'REJECTED', decidedBy: 'pharmacist-a' }),
+    });
+    expect(tx.pharmacyReferenceConnectorProposal.update).not.toHaveBeenCalled();
+
+    // A concurrent decision claimed the row between the read and this update.
+    updateMany.mockResolvedValue({ count: 0 });
+    await expect(
+      caller(db).decideReferenceConnectorProposal({ proposalId: 'proposal-r', decision: 'REJECT' })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+  });
+
   it('records confirmed DRAP values as regulator provenance', async () => {
     const created: Array<Record<string, unknown>> = [];
     const tx = {
       pharmacyReferenceConnectorProposal: {
         findFirst: vi.fn().mockResolvedValue({
           id: 'proposal-d',
+          run: { triggeredBy: 'editor-1' },
           status: 'PENDING',
           targetMedicineId: null,
           inputDigest: 'digest',
@@ -179,7 +210,7 @@ describe('MED-06 connector router boundary', () => {
             },
           },
         }),
-        update: vi.fn().mockResolvedValue({ id: 'proposal-d', status: 'CONFIRMED' }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       medicine: {
         findFirst: vi.fn(),
@@ -199,6 +230,10 @@ describe('MED-06 connector router boundary', () => {
 
     expect(tx.medicine.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ productName: 'Amoxil', rx: true, saleable: false }),
+    });
+    expect(tx.pharmacyReferenceConnectorProposal.updateMany).toHaveBeenCalledWith({
+      where: { id: 'proposal-d', status: 'PENDING' },
+      data: expect.objectContaining({ status: 'CONFIRMED', targetMedicineId: 'medicine-d' }),
     });
     expect(created).toHaveLength(2);
     for (const assertion of created) {

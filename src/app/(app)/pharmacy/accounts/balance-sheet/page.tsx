@@ -4,6 +4,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
+import { workspaceToday } from '@/lib/timezone';
 import { BalanceSheetReport } from './balance-sheet-report';
 
 export const metadata: Metadata = { title: 'Pharmacy balance sheet' };
@@ -72,7 +73,8 @@ export default async function PharmacyBalanceSheetPage({
     );
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const timeZone = ctx.organization?.timezone;
+  const today = workspaceToday(timeZone);
   const requestedCutoff = typeof query.cutoff === 'string' ? query.cutoff : '';
   const parsedCutoff = new Date(`${requestedCutoff}T00:00:00.000Z`);
   const cutoff =
@@ -92,6 +94,7 @@ export default async function PharmacyBalanceSheetPage({
         caller={pharmacyFinanceRouter.createCaller(ctx)}
         branchId={branch.id}
         cutoff={cutoff}
+        timeZone={timeZone}
       />
     </div>
   );

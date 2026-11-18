@@ -246,7 +246,7 @@ const search = { branch: 'branch_1', from: '2026-09-01', to: '2026-09-03' };
 const renderPage = (query: Record<string, string | string[] | undefined> = search) =>
   ProfitAndLossPage({ searchParams: Promise.resolve(query) }).then(renderToStaticMarkup);
 
-it('serves the isolated route with reports-only licensing, UTC filters, subtotals and metadata', async () => {
+it('serves the isolated route with reports-only licensing, organization-day filters, subtotals and metadata', async () => {
   vi.mocked(hasModule).mockImplementation((_, module) => module === 'pharmacy-reports');
   const html = await renderPage();
   expect(html).toContain('action="/pharmacy/accounts/profit-loss"');
@@ -324,7 +324,7 @@ it.each([
   { from: ['2026-09-01', '2026-09-02'] },
 ])('allows correcting invalid filters without displaying totals: %j', async (change) => {
   const html = await renderPage({ ...search, ...change });
-  expect(html).toContain('valid UTC date window');
+  expect(html).toContain('valid date window');
   expect(html).toContain('Read profit and loss');
   expect(html).not.toContain('NET PROFIT');
   expect(mocks.raw).not.toHaveBeenCalled();
@@ -388,4 +388,15 @@ it('renders a labeled loading state', () => {
   const html = renderToStaticMarkup(<Loading />);
   expect(html).toContain('role="status"');
   expect(html).toContain('Loading profit and loss');
+});
+
+it('reads the picked days on the organization clock at the day boundary', async () => {
+  mocks.context.mockResolvedValue(context({ organization: { id: 'org_1', timezone: 'Asia/Karachi' } }));
+  const html = await renderPage();
+  expect(html).toContain('From (PKT)');
+  expect(html).toContain('To, exclusive (PKT)');
+  // 1 Sep 00:00 PKT is 31 Aug 19:00 UTC: the window starts on the organization's day, not UTC's.
+  expect(html).toContain('1 Sep 2026, 12:00 AM PKT');
+  expect(html).toContain('3 Sep 2026, 12:00 AM PKT');
+  expect(html).not.toContain('12:00 AM UTC');
 });
