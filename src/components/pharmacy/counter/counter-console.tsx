@@ -379,6 +379,31 @@ function counterSelectionPreview(
   }
 }
 
+/**
+ * DEV-921: the first real reason "Add to cart" is unavailable, checked in
+ * order: missing MRP, missing sale unit, then a bad quantity.
+ */
+export function counterAddToCartBlockReason(
+  row: CounterSearchRow | null,
+  option: CounterSearchRow['saleUnits'][number] | null,
+  quantity: number | null
+): string {
+  // No sellable stock also leaves MRP and sale units empty; that is a stock
+  // problem, not a pricing setup problem (see CounterUnsellableMessage).
+  if (row && row.onHandUnits === 0) {
+    return 'Nothing can be sold from stock here right now. Receive stock or record the shortage.';
+  }
+  if (row && row.printedMrpMinor === null) {
+    return 'This medicine has no MRP set, so it cannot be priced. Ask the owner to add the MRP in Medicines.';
+  }
+  if (row && row.saleUnits.length === 0) {
+    return 'This medicine has no sale unit set up. Ask the owner to add one in Medicines › Packs for receiving.';
+  }
+  if (row && !option) return 'Choose a sale unit to add this item.';
+  if (quantity === null) return 'Enter a valid quantity to add this item.';
+  return 'This item cannot be priced right now. Check its pack setup in Medicines.';
+}
+
 const LINK_CLASS =
   'inline-flex min-h-11 min-w-11 items-center font-semibold text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
 
@@ -934,14 +959,22 @@ function ScopedPharmacyCounterConsole({
   const canFixSetup =
     saleReadiness.data?.canFixSetup === true || branchesQuery.data?.canFixSetup === true;
   const refetchSaleReadiness = saleReadiness.refetch;
+  // DEV-905: a refusal for a workspace waiting on approval says so, like the panel does.
+  const organizationApproval = saleReadiness.data?.approval ?? null;
   const setupNotice = useCallback(
     (error: unknown): { setup?: CounterSetupAdvice } => {
       const reason = counterSetupReason(error);
       // The drawer has its own step on the counter; nobody else is asked to open it.
       if (!reason || reason === 'DRAWER_NOT_OPEN') return {};
-      return { setup: counterSetupAdvice(reason, { canFixSetup, branchId }) };
+      return {
+        setup: counterSetupAdvice(reason, {
+          canFixSetup,
+          branchId,
+          approval: organizationApproval,
+        }),
+      };
     },
-    [branchId, canFixSetup]
+    [organizationApproval, branchId, canFixSetup]
   );
   // DEV-911: the owner switched the pharmacist check at each sale off. Only an explicit OFF
   // from the server counts; unknown (loading, failed, offline before a read) means on. The
@@ -4094,7 +4127,7 @@ function ScopedPharmacyCounterConsole({
                     <p id="counter-add-to-cart-reason" className="text-xs text-text-muted">
                       {preview
                         ? 'Not enough stock for this quantity. Reduce it or record the shortage.'
-                        : 'Enter a valid quantity to add this item.'}
+                        : counterAddToCartBlockReason(activeRow, selectedOption, quantity)}
                     </p>
                   ) : null}
                 </div>

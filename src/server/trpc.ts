@@ -262,6 +262,25 @@ function auditMiddleware(opts: { auditReads: boolean }) {
 const auditMutations = auditMiddleware({ auditReads: false });
 const auditAll = auditMiddleware({ auditReads: true });
 
+/** The middleware functions that write the audit entry, for `procedureWritesAudit`. */
+const AUDIT_MIDDLEWARES: ReadonlySet<unknown> = new Set([
+  ...auditMutations._middlewares,
+  ...auditAll._middlewares,
+]);
+
+/**
+ * DEV-913: does calling this procedure write an audit entry? True when its
+ * middleware chain runs the audit middleware (every procedure built on
+ * `protectedProcedure`, `adminProcedure`, `capabilityProcedure`,
+ * `denyByDefaultProcedure` and friends does; `publicProcedure` does not). The
+ * pharmacy guard test asks this of every pharmacy mutation.
+ */
+export function procedureWritesAudit(procedure: {
+  _def: { middlewares: readonly unknown[] };
+}): boolean {
+  return procedure._def.middlewares.some((middleware) => AUDIT_MIDDLEWARES.has(middleware));
+}
+
 // Auth guard for any logged-in, active account.
 function assertDemoProcedureAllowed(
   ctx: TRPCContext,
@@ -455,6 +474,27 @@ export const hrProcedure = baseProcedure
  */
 export function capabilityProcedure(action: Action) {
   return baseProcedure.use(auditAll).use(requireCapability(action)).use(requireLicensedModule);
+}
+
+/**
+ * Like `capabilityProcedure`, but the actions (all required) are chosen per call
+ * from the context. DEV-19: a catalogue command needs the editor's capabilities to
+ * submit, and the approver's authority when an approved edit replays it on the
+ * server. The selector may read only server-built context, never client input.
+ */
+export function contextualCapabilityProcedure(select: (ctx: TRPCContext) => readonly Action[]) {
+  return baseProcedure
+    .use(auditAll)
+    .use(
+      t.middleware(async ({ ctx, next, path, type }) => {
+        const actions = select(ctx);
+        // An empty selection would authorize nothing; refuse rather than allow.
+        if (actions.length === 0) throw capabilityRefusal('admin:access');
+        const session = await assertCapabilities(ctx, path, type, actions);
+        return next({ ctx: { ...ctx, session } });
+      })
+    )
+    .use(requireLicensedModule);
 }
 
 /**

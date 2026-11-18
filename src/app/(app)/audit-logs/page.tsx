@@ -12,7 +12,8 @@ export default async function AuditLogPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const session = (await resolveTenantActor())?.session;
+  const actor = await resolveTenantActor();
+  const session = actor?.session;
   if (session?.user?.role !== 'ADMIN') {
     redirect('/dashboard');
   }
@@ -20,6 +21,14 @@ export default async function AuditLogPage({
   const initialFilters = {
     actorId: typeof query.actorId === 'string' ? query.actorId : '',
     search: typeof query.search === 'string' ? query.search : '',
+    branchId: typeof query.branchId === 'string' ? query.branchId : '',
   };
-  return <AuditContent key={JSON.stringify(initialFilters)} initialFilters={initialFilters} />;
+  return (
+    <AuditContent
+      key={JSON.stringify(initialFilters)}
+      initialFilters={initialFilters}
+      timeZone={actor?.organization?.timezone ?? null}
+      pharmacy={actor?.organization?.vertical === 'PHARMACY'}
+    />
+  );
 }

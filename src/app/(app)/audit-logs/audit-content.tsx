@@ -18,7 +18,7 @@ import {
   User as UserIcon,
   X,
 } from 'lucide-react';
-import { format, formatDistanceToNow } from 'date-fns';
+import { formatDistanceToNow } from 'date-fns';
 import type { inferRouterOutputs } from '@trpc/server';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -33,6 +33,13 @@ import {
 } from '@/components/ui/sheet';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
+import {
+  auditActionLabel,
+  auditCategoryLabel,
+  auditOperationLabel,
+  auditRoleLabel,
+} from '@/lib/audit-labels';
+import { formatWorkspaceDateTime } from '@/lib/timezone';
 import type { AppRouter } from '@/server/routers/_app';
 
 type AuditEntry = inferRouterOutputs<AppRouter>['audit']['list']['items'][number];
@@ -105,6 +112,7 @@ const EMPTY_FILTERS = {
   operation: '',
   outcome: '',
   actorId: '',
+  branchId: '',
   startDate: '',
   endDate: '',
   assistantOnly: '',
@@ -112,8 +120,14 @@ const EMPTY_FILTERS = {
 
 export function AuditContent({
   initialFilters = {},
+  timeZone = null,
+  pharmacy = false,
 }: {
-  initialFilters?: Partial<Pick<typeof EMPTY_FILTERS, 'actorId' | 'search'>>;
+  initialFilters?: Partial<Pick<typeof EMPTY_FILTERS, 'actorId' | 'search' | 'branchId'>>;
+  /** The workspace's time zone: every time on the page is read on its clock. */
+  timeZone?: string | null;
+  /** DEV-913: a pharmacy workspace names the page by what it answers. */
+  pharmacy?: boolean;
 }) {
   const utils = trpc.useUtils();
   const [filters, setFilters] = useState({ ...EMPTY_FILTERS, ...initialFilters });
@@ -129,6 +143,7 @@ export function AuditContent({
       operation: (filters.operation || undefined) as never,
       outcome: (filters.outcome || undefined) as never,
       actorId: filters.actorId || undefined,
+      branchId: filters.branchId || undefined,
       startDate: filters.startDate ? new Date(filters.startDate) : undefined,
       endDate: filters.endDate ? new Date(`${filters.endDate}T23:59:59`) : undefined,
       assistantOnly: filters.assistantOnly ? true : undefined,
@@ -141,6 +156,7 @@ export function AuditContent({
       filters.operation,
       filters.outcome,
       filters.actorId,
+      filters.branchId,
       filters.startDate,
       filters.endDate,
       filters.assistantOnly,
@@ -150,10 +166,18 @@ export function AuditContent({
   const { data: stats } = trpc.audit.stats.useQuery();
   const { data: filterOpts } = trpc.audit.filters.useQuery();
 
-  const { data, isLoading, isFetching, fetchNextPage, hasNextPage, isFetchingNextPage, refetch } =
-    trpc.audit.list.useInfiniteQuery(queryInput, {
-      getNextPageParam: (last) => last.nextCursor,
-    });
+  const {
+    data,
+    error,
+    isLoading,
+    isFetching,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    refetch,
+  } = trpc.audit.list.useInfiniteQuery(queryInput, {
+    getNextPageParam: (last) => last.nextCursor,
+  });
 
   const rows = useMemo(() => data?.pages.flatMap((p) => p.items) ?? [], [data]);
 
@@ -168,9 +192,13 @@ export function AuditContent({
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="SYSTEM"
-        heading="Audit Log"
-        description="Every action across the workspace — who did what, when, and from where."
+        eyebrow={pharmacy ? 'PHARMACY' : 'SYSTEM'}
+        heading={pharmacy ? 'Audit log: who did what' : 'Audit Log'}
+        description={
+          pharmacy
+            ? 'Every action in your pharmacy: who did it, at which branch, when, what changed and who approved it.'
+            : 'Every action across the workspace — who did what, when, and from where.'
+        }
         actions={
           <>
             {/* IMP-PLAT-04: export the loaded (filtered) audit rows to CSV. */}
@@ -181,24 +209,32 @@ export function AuditContent({
                 const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
                 const header = [
                   'Time',
+                  'Workspace time',
                   'Actor',
                   'Email',
+                  'Role',
+                  'Branch',
                   'Action',
                   'Operation',
                   'Category',
                   'Target',
+                  'Approved by',
                   'Outcome',
                 ];
                 const csv = [
                   header,
                   ...rows.map((r) => [
                     new Date(r.createdAt).toISOString(),
+                    formatWorkspaceDateTime(r.createdAt, timeZone),
                     r.actorName ?? '',
                     r.actorEmail ?? '',
-                    r.action,
+                    auditRoleLabel(r.actorRole) ?? '',
+                    r.branchName ?? r.branchId ?? '',
+                    auditActionLabel(r.action),
                     r.operation,
-                    r.category,
+                    auditCategoryLabel(r.category),
                     r.targetLabel ?? '',
+                    approverNames(r).join('; '),
                     r.outcome,
                   ]),
                 ]
@@ -287,7 +323,7 @@ export function AuditContent({
               <option value="">All categories</option>
               {filterOpts?.categories.map((c) => (
                 <option key={c} value={c}>
-                  {c}
+                  {auditCategoryLabel(c)}
                 </option>
               ))}
             </select>
@@ -300,7 +336,7 @@ export function AuditContent({
               <option value="">All operations</option>
               {filterOpts?.operations.map((o) => (
                 <option key={o} value={o}>
-                  {o}
+                  {auditOperationLabel(o)}
                 </option>
               ))}
             </select>
@@ -333,11 +369,11 @@ export function AuditContent({
 
             <select
               value={filters.actorId}
-              aria-label="Actor"
+              aria-label={pharmacy ? 'Person' : 'Actor'}
               onChange={(e) => set('actorId', e.target.value)}
               className={selectClass()}
             >
-              <option value="">All actors</option>
+              <option value="">{pharmacy ? 'Everyone' : 'All actors'}</option>
               {filters.actorId && !filterOpts?.actors.some((a) => a.id === filters.actorId) ? (
                 <option value={filters.actorId}>{filters.actorId}</option>
               ) : null}
@@ -347,6 +383,26 @@ export function AuditContent({
                 </option>
               ))}
             </select>
+
+            {pharmacy || filters.branchId || (filterOpts?.branches.length ?? 0) > 0 ? (
+              <select
+                value={filters.branchId}
+                aria-label="Branch"
+                onChange={(e) => set('branchId', e.target.value)}
+                className={selectClass()}
+              >
+                <option value="">All branches</option>
+                {filters.branchId &&
+                !filterOpts?.branches.some((b) => b.id === filters.branchId) ? (
+                  <option value={filters.branchId}>{filters.branchId}</option>
+                ) : null}
+                {filterOpts?.branches.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name} ({b.code})
+                  </option>
+                ))}
+              </select>
+            ) : null}
 
             <div className="flex items-center gap-1.5">
               <input
@@ -394,6 +450,12 @@ export function AuditContent({
                 <Skeleton key={i} className="h-12 w-full" />
               ))}
             </div>
+          ) : error && rows.length === 0 ? (
+            <div className="py-20 text-center" role="alert">
+              <ShieldAlert className="mx-auto h-10 w-10 text-muted-foreground" />
+              <p className="mt-3 text-sm text-foreground">These entries could not be shown.</p>
+              <p className="mt-1 text-sm text-muted-foreground">{error.message}</p>
+            </div>
           ) : rows.length === 0 ? (
             <div className="py-20 text-center">
               <ScrollText className="mx-auto h-10 w-10 text-muted-foreground/20" />
@@ -404,7 +466,12 @@ export function AuditContent({
           ) : (
             <div className="divide-y divide-border/60">
               {rows.map((row) => (
-                <AuditRow key={row.id} row={row} onClick={() => setSelected(row)} />
+                <AuditRow
+                  key={row.id}
+                  row={row}
+                  timeZone={timeZone}
+                  onClick={() => setSelected(row)}
+                />
               ))}
             </div>
           )}
@@ -429,7 +496,7 @@ export function AuditContent({
         </div>
       )}
 
-      <AuditDetailSheet entry={selected} onClose={() => setSelected(null)} />
+      <AuditDetailSheet entry={selected} timeZone={timeZone} onClose={() => setSelected(null)} />
     </div>
   );
 }
@@ -437,8 +504,22 @@ export function AuditContent({
 /* ============================================================
    One log row
    ============================================================ */
-function AuditRow({ row, onClick }: { row: AuditEntry; onClick: () => void }) {
+function approverNames(row: AuditEntry): string[] {
+  return row.approvers.map((approver) => approver.name ?? approver.id);
+}
+
+function AuditRow({
+  row,
+  timeZone,
+  onClick,
+}: {
+  row: AuditEntry;
+  timeZone: string | null;
+  onClick: () => void;
+}) {
   const created = new Date(row.createdAt);
+  const role = auditRoleLabel(row.actorRole);
+  const approvers = approverNames(row);
   return (
     <button
       onClick={onClick}
@@ -450,15 +531,17 @@ function AuditRow({ row, onClick }: { row: AuditEntry; onClick: () => void }) {
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-foreground">
             {row.actorName ?? row.actorEmail ?? 'Anonymous'}
-            {row.actorRole && (
+            {role && (
               <span className="ml-1.5 text-[10px] font-normal uppercase tracking-wide text-muted-foreground">
-                {row.actorRole}
+                {role}
               </span>
             )}
           </p>
           <p className="truncate text-xs text-muted-foreground">
-            <span className="font-mono">{row.action}</span>
+            <span>{auditActionLabel(row.action)}</span>
             {row.targetLabel ? <span> · {row.targetLabel}</span> : null}
+            {row.branchName ? <span> · {row.branchName}</span> : null}
+            {approvers.length ? <span> · Approved by {approvers.join(', ')}</span> : null}
           </p>
         </div>
       </div>
@@ -467,9 +550,11 @@ function AuditRow({ row, onClick }: { row: AuditEntry; onClick: () => void }) {
       <div className="hidden shrink-0 items-center gap-1.5 sm:flex">
         {isAssistantRow(row) && <AssistantBadge />}
         <Pill className={operationStyles[row.operation] ?? operationStyles.OTHER}>
-          {row.operation}
+          {auditOperationLabel(row.operation)}
         </Pill>
-        <Pill className="bg-secondary text-muted-foreground">{row.category}</Pill>
+        <Pill className="bg-secondary text-muted-foreground">
+          {auditCategoryLabel(row.category)}
+        </Pill>
         <Pill className={sourceStyles[row.source] ?? sourceStyles.SYSTEM}>{row.source}</Pill>
       </div>
 
@@ -483,11 +568,16 @@ function AuditRow({ row, onClick }: { row: AuditEntry; onClick: () => void }) {
       </div>
 
       {/* Time */}
-      <div className="hidden w-28 shrink-0 text-right md:block" title={format(created, 'PPpp')}>
+      <div
+        className="hidden w-36 shrink-0 text-right md:block"
+        title={formatWorkspaceDateTime(created, timeZone)}
+      >
         <p className="text-xs text-foreground">
           {formatDistanceToNow(created, { addSuffix: true })}
         </p>
-        <p className="text-[10px] text-muted-foreground">{format(created, 'MMM d, HH:mm')}</p>
+        <p className="text-[10px] text-muted-foreground">
+          {formatWorkspaceDateTime(created, timeZone)}
+        </p>
       </div>
     </button>
   );
@@ -511,22 +601,30 @@ function ActorIcon({ actorType }: { actorType: AuditEntry['actorType'] }) {
 /* ============================================================
    Detail sheet — the full granular record
    ============================================================ */
-function AuditDetailSheet({ entry, onClose }: { entry: AuditEntry | null; onClose: () => void }) {
+function AuditDetailSheet({
+  entry,
+  timeZone,
+  onClose,
+}: {
+  entry: AuditEntry | null;
+  timeZone: string | null;
+  onClose: () => void;
+}) {
   return (
     <Sheet open={!!entry} onOpenChange={(open) => !open && onClose()}>
       <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-xl">
         {entry && (
           <>
             <SheetHeader className="border-b border-border/60">
-              <SheetTitle className="flex flex-wrap items-center gap-2 font-mono text-sm">
-                {entry.action}
+              <SheetTitle className="flex flex-wrap items-center gap-2 text-sm">
+                {auditActionLabel(entry.action)}
                 {isAssistantRow(entry) && <AssistantBadge />}
                 <Pill className={operationStyles[entry.operation] ?? operationStyles.OTHER}>
-                  {entry.operation}
+                  {auditOperationLabel(entry.operation)}
                 </Pill>
               </SheetTitle>
               <SheetDescription>
-                {format(new Date(entry.createdAt), 'PPPP · pp')} ·{' '}
+                {formatWorkspaceDateTime(entry.createdAt, timeZone)} ·{' '}
                 {entry.outcome === 'SUCCESS' ? 'Succeeded' : 'Failed'}
                 {typeof entry.durationMs === 'number' ? ` · ${entry.durationMs}ms` : ''}
               </SheetDescription>
@@ -545,7 +643,9 @@ function AuditDetailSheet({ entry, onClose }: { entry: AuditEntry | null; onClos
               <Section title="Who">
                 <Field label="Actor" value={entry.actorName ?? '—'} />
                 <Field label="Email" value={entry.actorEmail ?? '—'} mono />
-                <Field label="Role" value={entry.actorRole ?? '—'} />
+                <Field label="Role" value={auditRoleLabel(entry.actorRole) ?? '—'} />
+                <Field label="Branch" value={entry.branchName ?? entry.branchId ?? '—'} />
+                <Field label="Approved by" value={approverNames(entry).join(', ') || '—'} />
                 <Field label="Actor type" value={entry.actorType} />
                 <Field label="Actor ID" value={entry.actorId ?? '—'} mono />
                 {entry.tokenName && <Field label="API token" value={entry.tokenName} />}
@@ -553,9 +653,11 @@ function AuditDetailSheet({ entry, onClose }: { entry: AuditEntry | null; onClos
               </Section>
 
               <Section title="What">
-                <Field label="Action" value={entry.action} mono />
-                <Field label="Category" value={entry.category} />
-                <Field label="Operation" value={entry.operation} />
+                <Field label="Action" value={auditActionLabel(entry.action)} />
+                <Field label="Category" value={auditCategoryLabel(entry.category)} />
+                <Field label="Operation" value={auditOperationLabel(entry.operation)} />
+                <Field label="Time" value={formatWorkspaceDateTime(entry.createdAt, timeZone)} />
+                <Field label="Technical name" value={entry.action} mono />
                 <Field label="Source" value={entry.source} />
                 {entry.description && <Field label="Description" value={entry.description} />}
               </Section>

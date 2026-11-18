@@ -132,8 +132,43 @@ export function supportsRestaurantPrintSettings(vertical: string | null | undefi
  * Every other band (PLATFORM and VERTICAL_*) is granted only by the resolved
  * entitlement list, so this stays fail-closed for everything that is sold.
  */
-export function isModuleGranted(moduleKey: string, enabledModules: readonly string[]): boolean {
-  return MODULES_BY_KEY.get(moduleKey)?.band === 'BASELINE' || enabledModules.includes(moduleKey);
+export function isModuleGranted(
+  moduleKey: string,
+  enabledModules: readonly string[],
+  vertical?: OrganizationVertical | null
+): boolean {
+  return (
+    MODULES_BY_KEY.get(moduleKey)?.band === 'BASELINE' ||
+    isVerticalBaselineModule(vertical, moduleKey) ||
+    enabledModules.includes(moduleKey)
+  );
+}
+
+/**
+ * DEV-913: shared modules that are part of one vertical's core, whatever the
+ * plan. Every pharmacy workspace keeps its audit log ("who did what") for the
+ * owner and administrators: a package, contract or override can neither omit
+ * nor disable it there. Other verticals still buy `audit` as before.
+ * `resolveOrganizationEntitlements` reports these as BASELINE for the vertical,
+ * so the tRPC module gate, the route gate and the navigation agree.
+ */
+const VERTICAL_BASELINE_MODULES: Readonly<
+  Partial<Record<OrganizationVertical, readonly string[]>>
+> = {
+  PHARMACY: ['audit'],
+};
+
+export function verticalBaselineModules(
+  vertical: OrganizationVertical | null | undefined
+): readonly string[] {
+  return (vertical && VERTICAL_BASELINE_MODULES[vertical]) || [];
+}
+
+export function isVerticalBaselineModule(
+  vertical: OrganizationVertical | null | undefined,
+  moduleKey: string
+): boolean {
+  return verticalBaselineModules(vertical).includes(moduleKey);
 }
 
 export const PROCEDURE_MODULES: Record<string, string> = {

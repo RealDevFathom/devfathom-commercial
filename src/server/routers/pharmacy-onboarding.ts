@@ -26,8 +26,8 @@ import {
   PHARMACY_ONBOARDING_STEPS,
   evaluatePharmacyReadiness,
   pharmacyOnboardingStep,
+  reconcileTenantPackageGate,
   type PharmacyOnboardingGate,
-  type PharmacyReadiness,
 } from '@/lib/pharmacy/onboarding';
 import {
   pharmacyActivationSummary,
@@ -179,45 +179,6 @@ function midnightUtc(isoDate: string): Date {
   return new Date(`${isoDate}T00:00:00.000Z`);
 }
 
-/**
- * `evaluatePharmacyReadiness` answers the commercial-package gate by reading the
- * assigned package's own vertical. `platform_packages` is FORCE row-level
- * security and carries no tenant policy, so under a *tenant* connection that
- * read returns nothing and the gate is reported outstanding — while
- * `assertActivationReady`, which runs on the platform connection, sees it
- * satisfied and activates. The tenant surface would then be telling the operator
- * to fix something that is not broken, and naming a step activation does not
- * hold against them.
- *
- * The two facts a tenant CAN see are sufficient to settle it: the organization's
- * own vertical, and that a package is assigned. A package of another vertical
- * can never be assigned to this organization — `assertPackageCompatibleWithVertical`
- * refuses that pairing at creation and at every package change — so a pharmacy
- * organization with a package has a pharmacy package.
- *
- * This only ever moves the tenant surface *towards* the platform's own verdict;
- * it can never report ready where activation would refuse, because activation
- * re-evaluates on the connection that can see the package.
- */
-function reconcilePackageGate(
-  readiness: PharmacyReadiness,
-  organization: { vertical: string | null; packageId: string | null } | null
-): PharmacyReadiness {
-  const packageAssigned = Boolean(organization?.packageId) && organization?.vertical === 'PHARMACY';
-  const gate = readiness.gates.find((candidate) => candidate.gate === 'COMMERCIAL_PACKAGE');
-  if (!packageAssigned || !gate || gate.status === 'PASSED') return readiness;
-
-  const gates = readiness.gates.map((candidate) =>
-    candidate.gate === 'COMMERCIAL_PACKAGE'
-      ? { ...candidate, status: 'PASSED' as const, downgradeReason: null }
-      : candidate
-  );
-  const blocking = gates
-    .filter((candidate) => candidate.p0 && candidate.status !== 'PASSED')
-    .map((candidate) => candidate.gate);
-  return { ...readiness, gates, blocking, ready: blocking.length === 0 };
-}
-
 /** The checklist, activation summary and organization state, in one read. */
 async function readOverview(ctx: TRPCContext) {
   const organizationId = ctx.entitlements.organizationId;
@@ -238,7 +199,7 @@ async function readOverview(ctx: TRPCContext) {
       orderBy: { effectiveFrom: 'desc' },
     }),
   ]);
-  const readiness = reconcilePackageGate(evaluated, organization);
+  const readiness = reconcileTenantPackageGate(evaluated, organization);
   const checklist = pharmacyOnboardingChecklist(readiness, {
     at: now,
     licenceValidTo: currentProfile?.licenceValidTo,
@@ -669,6 +630,7 @@ export const pharmacyOnboardingRouter = router({
         .extend({
           revision: z.number().int().nonnegative(),
           windows: pharmacistCoverageWindowsSchema,
+          timeZone: z.string().trim().min(1).max(64).optional(),
         })
         .strict()
     )
@@ -687,9 +649,16 @@ export const pharmacyOnboardingRouter = router({
         select: { timezone: true },
       });
       const windows = normalizeCoverageWindows(input.windows);
-      const hours = windows.length
-        ? { timeZone: coverageTimeZone(organization?.timezone), windows }
-        : null;
+      // A save never changes the zone already stored for the branch.
+      const storedZone = (branch.pharmacistCoverageHours as { timeZone?: unknown } | null)
+        ?.timeZone;
+      const keptTimeZone =
+        typeof storedZone === 'string' && isIanaTimezone(storedZone)
+          ? storedZone
+          : input.timeZone && isIanaTimezone(input.timeZone)
+            ? input.timeZone
+            : coverageTimeZone(organization?.timezone);
+      const hours = windows.length ? { timeZone: keptTimeZone, windows } : null;
       const revision = input.revision + 1;
       await ctx.db.$transaction(async (tx) => {
         const updated = await tx.pharmacyBranch.updateMany({

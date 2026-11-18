@@ -177,6 +177,27 @@ describe('savePharmacistCoverage', () => {
     );
   });
 
+  it('keeps the branch’s stored time zone on save instead of the workspace zone', async () => {
+    mocks.branchFindFirst.mockResolvedValue({
+      id: 'branch-1',
+      name: 'Main pharmacy',
+      pharmacistCoverageHours: { timeZone: 'Asia/Dubai', windows: [] },
+    });
+    await pharmacyOnboardingRouter.createCaller(context()).savePharmacistCoverage({
+      branchId: 'branch-1',
+      revision: 2,
+      windows: [weekdays],
+      timeZone: 'Asia/Tokyo',
+    });
+    expect(mocks.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          pharmacistCoverageHours: expect.objectContaining({ timeZone: 'Asia/Dubai' }),
+        }),
+      })
+    );
+  });
+
   it('clears the record when no windows are saved', async () => {
     await pharmacyOnboardingRouter
       .createCaller(context())

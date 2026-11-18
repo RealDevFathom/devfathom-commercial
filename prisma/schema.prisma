@@ -690,11 +690,12 @@ model Medicine {
 model PharmacyCatalogueEdit {
   id                String   @id @default(cuid())
   organizationId    String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  medicineId        String
+  // Null only for a queued createIngredient: a new ingredient belongs to no medicine.
+  medicineId        String?
   editorId          String
   editor            User     @relation("CatalogueEditEditor", fields: [organizationId, editorId], references: [organizationId, id], onDelete: Restrict)
   operation         String   @default("UPDATE_MEDICINE")
-  medicine          Medicine @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
+  medicine          Medicine? @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
   changes           Json
   expectedUpdatedAt DateTime
   status            String   @default("PENDING")
@@ -2823,6 +2824,11 @@ model PharmacyInterbranchTransfer {
   createdAt      DateTime                          @default(now())
   dispatchedAt   DateTime?
   receivedAt     DateTime?
+  /// DEV-908: who closed the receipt at the destination branch.
+  receivedById   String?
+  /// DEV-908: the premises licences in force at each end when the stock left.
+  fromLicenceNumber String?
+  toLicenceNumber String?
   lines          PharmacyInterbranchTransferLine[]
   signalActions  PharmacyStockSignalAction[]
 
@@ -6003,9 +6009,24 @@ model Organization {
   /// DEV-879: when true, no member's fixed PIN is accepted for an approval; every approver
   /// must enter a code from their enrolled approval authenticator.
   requireApprovalAuthenticator  Boolean                        @default(false)
+  /// DEV-908: the owner switches on recorded stock transfers between their own
+  /// licensed branches. Off by default; controlled drugs never move this way.
+  pharmacyBranchTransfersEnabled Boolean                       @default(false)
+  /// DEV-907: owner switch for the counter's "also in stock at another branch"
+  /// line. Off by default; branch names only, never controlled drugs.
+  pharmacyOtherBranchAvailability Boolean                      @default(false)
   lastDemoResetAt               DateTime?
   gracePeriodDays               Int                            @default(0)
   activatedAt                   DateTime?
+  /// DEV-905: the super admin's manual approval of a pharmacy. While set (and the
+  /// organization is ONBOARDING, ACTIVE or GRACE), the standing organization- and
+  /// branch-level gates do not refuse it (src/lib/pharmacy/platform-approval.ts).
+  /// Only the platform control plane may write these four columns (database trigger).
+  platformApprovedAt            DateTime?
+  platformApprovedById          String?
+  platformApprovalNote          String?
+  /// The checks that were not met when the pharmacy was approved: [{ key, label }].
+  platformApprovalUnmetChecks   Json?
   suspendedAt                   DateTime?
   terminatedAt                  DateTime?
   purgeScheduledAt              DateTime?

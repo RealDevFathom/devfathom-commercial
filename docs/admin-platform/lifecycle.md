@@ -52,6 +52,27 @@ Activation is manual. Before `ACTIVE`, verify:
 
 The transition can enqueue `PROVISION_SHARED` or `PROVISION_DEDICATED`.
 
+### Pharmacy approval (DEV-905)
+
+A super admin approves a pharmacy by hand from `/platform/approvals` or the organization page
+(`organization.pharmacy.approve`, capability `organizations:security:write`). Owner decision,
+18 Nov: approval may be given whatever the pharmacy's state. The checks it does not meet are
+shown, must be confirmed by name, and are stored with the approval (`platformApprovedAt`, the
+approver, the note and the unmet checks) and in the platform audit ledger. An `ONBOARDING`
+pharmacy becomes `ACTIVE`.
+
+While the approval is in effect (`ONBOARDING`, `ACTIVE` or `GRACE`), the gates in
+`src/lib/pharmacy/platform-approval.ts` do not refuse the pharmacy, on ordinary and regulated
+operations alike: organization not active, the activation preflight, and the branch regulatory gate
+(profile, licence, qualified person, and the profile's presence-hours and schedule limits). Per-sale
+rules are unchanged and run on every sale: the pharmacist dispensing grant, the pharmacist-attached
+prescription and signed review for an Rx line, the controlled-medicine witness PIN and register,
+refund and discount approvals, stock, tax and money. A later suspension or termination is not
+overridden. `organization.pharmacy.approval.withdraw` (or a placeholder lock) clears the approval
+and restores every check; a pharmacy the approval made active returns to `ONBOARDING`. Only the
+platform control plane can write the approval columns; a database trigger refuses any other
+transaction.
+
 ## Suspension and resume
 
 Suspension enqueues a `SUSPEND` job. The worker marks non-decommissioned deployments degraded and revokes active support sessions. Resume enqueues `RESUME`, restores deployment state to ready, and records health timestamps.

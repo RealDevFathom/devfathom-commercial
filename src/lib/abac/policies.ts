@@ -83,6 +83,9 @@ export const ALL_ACTIONS = [
   'pharmacy:prescriptions', // prescription workspace/files: pharmacist or tenant administrator
   'pharmacy:safety', // RX-05: controlled register and incident approval
   'pharmacy:catalogue-review', // MED-06: confirm or reject regulated connector proposals
+  // DEV-19: submit catalogue edits (new ingredients and medicines, packs, MRPs,
+  // barcodes, aliases) to the review queue. Deny by default.
+  'pharmacy:catalogue-edit',
   'pharmacy:orders', // MKT-03/05: staff acceptance and fulfilment of customer proposals
   // H1-01: hospitality capabilities use explicit organization-role grants.
   // Property scope is enforced separately by the consuming procedures.
@@ -276,6 +279,11 @@ export const POLICIES: Record<Action, Policy[]> = {
   'pharmacy:prescriptions': [isAdmin],
   'pharmacy:safety': [],
   'pharmacy:catalogue-review': [],
+  // DEV-19: like procurement approval, the tenant-admin fallback reaches only an
+  // administrator without an organization role (`can()` keeps an assigned role
+  // without the grant from falling through). `pharmacy:*` (Owner) and the Owner /
+  // Operator template grant it; every other role is refused unless granted.
+  'pharmacy:catalogue-edit': [isAdmin],
   'pharmacy:orders': [],
 
   // H1-01: no static agency-role policy grants hospitality capabilities.
