@@ -172,6 +172,22 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // DEV-743: the day cannot close while a terminal payment on it may have charged the customer.
   CARD_TERMINAL_PAYMENT_OPEN:
     'A card terminal payment on this day is still open. Check its status on the counter, or have a manager review it, before closing the day.',
+  // DEV-743: a terminal charge goes back through the card provider, never as cash.
+  CARD_TERMINAL_REFUND_VIA_PROVIDER:
+    'This payment was taken on the card terminal, so it cannot be refunded here. Do not give cash. Refund it through the card provider’s own refund process, and keep the provider’s refund slip with this bill.',
+  BILL_HAS_CARD_TERMINAL_PAYMENT:
+    'This bill was paid on the card terminal, so it cannot be voided or refunded here. Do not give cash. Refund the card payment through the card provider’s own refund process, and keep the provider’s refund slip with this bill.',
+  // DEV-743: resolving a card terminal payment under review.
+  REVIEW_NOT_OPEN:
+    'This card terminal payment is no longer waiting for review. It may already have been resolved. Refresh the bill to see where it stands.',
+  CHARGE_EVIDENCE_RECORDED:
+    'The terminal reported a charge for this payment, so it cannot be recorded as not charged. If the slip shows the money was taken, record it as taken and refund it through the card provider.',
+  SLIP_REFERENCE_MISMATCH:
+    'That reference is not the one the terminal reported for this payment. Enter the reference printed on the terminal slip.',
+  OWN_CHARGE_NEEDS_ANOTHER_APPROVER:
+    'Another manager or owner must resolve a payment you took. Ask another manager or owner at this branch to resolve it.',
+  SLIP_REFERENCE_IN_USE:
+    'That slip reference is already recorded on another card terminal payment. Check the slip and enter its reference again.',
   // DEV-821: cash goes only into a till the signed-in user runs.
   DRAWER_NOT_YOURS:
     'Another cashier runs the cash drawer on this counter. Ask a manager or owner to hand it over to you, then take the cash.',

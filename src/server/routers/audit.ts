@@ -1,9 +1,9 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { router, adminProcedure, type TRPCContext } from '../trpc';
-import type { Prisma } from '@/generated/prisma/client';
-import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
+import { Prisma } from '@/generated/prisma/client';
 import { auditApproverIds, auditRowBranchId } from '@/lib/audit-labels';
+import { auditActorBranches } from '@/server/audit-actor-branches';
 
 /**
  * Admin-only read API over the audit trail. Every procedure here is an
@@ -38,43 +38,34 @@ type AuditReadScope = { kind: 'ALL' } | { kind: 'BRANCHES'; branchIds: string[] 
 async function auditReadScope(ctx: TRPCContext): Promise<AuditReadScope> {
   if (ctx.entitlements?.vertical !== 'PHARMACY') return { kind: 'ALL' };
   const userId = ctx.session?.user?.id;
-  const organizationId = ctx.entitlements.organizationId;
   if (!userId) return { kind: 'BRANCHES', branchIds: [] };
-  const member = await ctx.db.user.findFirst({
-    where: { id: userId, organizationId },
-    select: {
-      status: true,
-      role: true,
-      organizationRole: {
-        select: {
-          key: true,
-          isSystem: true,
-          permissions: { select: { capability: true, effect: true } },
-        },
-      },
-      permissionOverrides: {
-        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
-        select: { capability: true, effect: true },
-      },
-    },
-  });
-  if (member && hasAllCapabilityAccess(member)) return { kind: 'ALL' };
-  if (!member || member.status !== 'ACTIVE') return { kind: 'BRANCHES', branchIds: [] };
-  const assignments = await ctx.db.pharmacyBranchAssignment.findMany({
-    where: { organizationId, userId, active: true, branch: { organizationId, active: true } },
-    select: { branchId: true },
-  });
-  return { kind: 'BRANCHES', branchIds: [...new Set(assignments.map((row) => row.branchId))] };
+  const actor = await auditActorBranches(ctx.db, ctx.entitlements.organizationId, userId);
+  return actor.all ? { kind: 'ALL' } : { kind: 'BRANCHES', branchIds: actor.branchIds };
 }
 
-/** Rows recorded at one of `branchIds` (metadata first, then the raw request). */
+/**
+ * Rows recorded at one of `branchIds`: the recorded branch, the branches the
+ * person works at for an entry recorded away from the branch it named
+ * (DEV-937), then the raw request of an entry that recorded no branch at all
+ * (written before the recorder kept one). A raw request branch is only what the
+ * person named, so it never places a refusal, an entry the recorder moved away
+ * from it (`requestedBranchId`), or an entry recorded at another branch.
+ */
 function atBranches(branchIds: readonly string[]): Prisma.AuditLogWhereInput {
   if (branchIds.length === 0) return { id: { in: [] } };
+  const unrecorded: Prisma.AuditLogWhereInput = {
+    AND: [
+      { outcome: 'SUCCESS' },
+      { metadata: { path: ['branchId'], equals: Prisma.AnyNull } },
+      { metadata: { path: ['requestedBranchId'], equals: Prisma.AnyNull } },
+    ],
+  };
   return {
-    OR: branchIds.flatMap((branchId) => [
+    OR: branchIds.flatMap((branchId): Prisma.AuditLogWhereInput[] => [
       { metadata: { path: ['branchId'], equals: branchId } },
-      { input: { path: ['branchId'], equals: branchId } },
-      { input: { path: ['pharmacyBranchId'], equals: branchId } },
+      { metadata: { path: ['actorBranchIds'], array_contains: [branchId] } },
+      { AND: [unrecorded, { input: { path: ['branchId'], equals: branchId } }] },
+      { AND: [unrecorded, { input: { path: ['pharmacyBranchId'], equals: branchId } }] },
     ]),
   };
 }

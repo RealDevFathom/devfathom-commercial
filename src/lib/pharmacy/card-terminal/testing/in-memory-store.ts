@@ -6,6 +6,7 @@ import {
   type CardTerminalAttempt,
   type CardTerminalAttemptStatus,
   type CardTerminalAttemptStore,
+  type CardTerminalAuditDetail,
 } from '../store';
 
 /**
@@ -27,11 +28,19 @@ const ALLOWED: Record<CardTerminalAttemptStatus, readonly CardTerminalAttemptSta
 };
 
 const EVIDENCE = ['providerRef', 'approvalCode', 'cardBrand', 'cardLast4', 'sentAt'] as const;
+const RESOLUTION = ['resolvedById', 'resolutionReason', 'resolutionRef'] as const;
 
 export type InMemoryAttemptStore = CardTerminalAttemptStore & {
   all(): CardTerminalAttempt[];
   /** Tender ids written by `settle`, in order. */
   tenders: { tenderId: string; attemptId: string; providerRef: string; amountMinor: number }[];
+  /** One entry per committed change, as the real store writes its audit rows. */
+  audits: {
+    attemptId: string;
+    from: CardTerminalAttemptStatus | null;
+    to: CardTerminalAttemptStatus;
+    detail: CardTerminalAuditDetail;
+  }[];
 };
 
 export function createInMemoryAttemptStore(
@@ -45,6 +54,7 @@ export function createInMemoryAttemptStore(
 ): InMemoryAttemptStore {
   const rows = new Map<string, CardTerminalAttempt>();
   const tenders: InMemoryAttemptStore['tenders'] = [];
+  const audits: InMemoryAttemptStore['audits'] = [];
   let sequence = 0;
   const copy = (row: CardTerminalAttempt) => structuredClone(row);
   const inScope = (row: CardTerminalAttempt, scope: LedgerScope) =>
@@ -52,6 +62,7 @@ export function createInMemoryAttemptStore(
 
   return {
     tenders,
+    audits,
     all: () => [...rows.values()].map(copy),
     async create(scope, draft) {
       const existing = [...rows.values()].find(
@@ -89,12 +100,15 @@ export function createInMemoryAttemptStore(
         tenderId: null,
         reviewReason: null,
         resolvedById: null,
+        resolutionReason: null,
+        resolutionRef: null,
         actorId: scope.actorId,
         sentAt: null,
         resolvedAt: null,
         createdAt: options.now?.() ?? new Date(),
       };
       rows.set(attempt.id, attempt);
+      audits.push({ attemptId: attempt.id, from: null, to: 'CREATED', detail: {} });
       return { created: true, attempt: copy(attempt) };
     },
     async get(scope, attemptKey) {
@@ -103,7 +117,8 @@ export function createInMemoryAttemptStore(
       );
       return row ? copy(row) : null;
     },
-    async transition(scope, current, patch) {
+    async transition(scope, current, patch, detail = {}, guard) {
+      await guard?.({} as never);
       const row = rows.get(current.id);
       if (
         !row ||
@@ -121,8 +136,23 @@ export function createInMemoryAttemptStore(
       }
       if (patch.status === 'DECLINED' && (patch.providerRef ?? row.providerRef))
         throw new Error('an approved charge cannot be marked declined');
+      const resolving = row.status === 'MANUAL_REVIEW';
+      for (const field of RESOLUTION)
+        if (field in patch && (!resolving || row[field] !== null))
+          throw new Error(`${field} is written once, by a review resolution`);
+      if (
+        resolving &&
+        (!patch.resolvedById ||
+          !patch.resolvedAt ||
+          (patch.resolutionReason?.trim().length ?? 0) < 3 ||
+          !patch.resolutionRef)
+      )
+        throw new Error('a review needs its resolver, reason and slip reference');
       const next = { ...row, ...patch };
+      if (resolving && next.status === 'REVERSED' && next.providerRef !== next.resolutionRef)
+        throw new Error('a reversal must match its slip reference');
       rows.set(row.id, next);
+      audits.push({ attemptId: row.id, from: row.status, to: next.status, detail });
       return copy(next);
     },
     async settle(scope, attemptId) {
@@ -141,6 +171,7 @@ export function createInMemoryAttemptStore(
         amountMinor: row.amountMinor,
       });
       rows.set(row.id, { ...row, status: 'SETTLED', tenderId, resolvedAt: new Date() });
+      audits.push({ attemptId: row.id, from: 'APPROVED', to: 'SETTLED', detail: {} });
       return { tenderId, replayed: false };
     },
     async listOpen(scope) {

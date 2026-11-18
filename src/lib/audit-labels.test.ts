@@ -37,6 +37,23 @@ describe('DEV-913 plain-language audit labels', () => {
     expect(auditRowBranchId({ metadata: null, input: '[skipped]' })).toBeNull();
   });
 
+  it('never shows the branch a refused request merely named (DEV-937)', () => {
+    expect(
+      auditRowBranchId({
+        outcome: 'FAILURE',
+        metadata: { requestedBranchId: 'b_south', actorBranchIds: ['b_north'] },
+        input: { branchId: 'b_south' },
+      })
+    ).toBeNull();
+    expect(
+      auditRowBranchId({ outcome: 'FAILURE', metadata: null, input: { pharmacyBranchId: 'b_s' } })
+    ).toBeNull();
+    // A refusal the recorder kept at its branch still shows it.
+    expect(auditRowBranchId({ outcome: 'FAILURE', metadata: { branchId: 'b1' }, input: {} })).toBe(
+      'b1'
+    );
+  });
+
   it('finds approvers in what was recorded, never in what was requested', () => {
     expect(
       auditApproverIds({

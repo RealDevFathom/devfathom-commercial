@@ -409,6 +409,7 @@ describe('DEV-913 pharmacy audit branch guard', () => {
       'pharmacySafety.approveRegisterIncident',
       'pharmacySupplierLinks.revoke',
       'pharmacySales.discardTenderAttempt',
+      'pharmacyPrescriptions.captureRefillReminder',
     ]) {
       const [namespace, name] = key.split('.') as [string, string];
       expect(handlerTagsBranch(files.get(namespace)!, name), key).toBe(true);

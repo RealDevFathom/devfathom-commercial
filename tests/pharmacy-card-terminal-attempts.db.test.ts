@@ -229,6 +229,71 @@ describeIfDatabase('pharmacy card-terminal attempts PostgreSQL RLS and guards (D
     );
     await expectPgCode('55000', () => update(id, `status='DECLINED'`));
     await expectPgCode('23514', () => update(id, `status='REVERSED'`));
-    await update(id, `status='REVERSED',"resolvedById"='owner'`);
+    // DEV-743 review: a resolver alone is not enough; the reason and slip reference are required.
+    await expectPgCode('55000', () => update(id, `status='REVERSED',"resolvedById"='owner'`));
+    await update(
+      id,
+      `status='REVERSED',"resolvedById"='owner',"resolvedAt"=now(),
+       "resolutionReason"='Customer was charged',"resolutionRef"='ref-r'`
+    );
+  });
+
+  it('requires a complete, matching, write-once resolution of a manual review (DEV-743)', async () => {
+    const id = `attempt_rv_${suffix}`;
+    // The earlier review on saleA2 is resolved, so the sale may take a new attempt.
+    await insertAttempt(id, 'org-a-attempt-8', saleA2);
+    // An attempt never starts resolved.
+    await expectPgCode('55000', () =>
+      client.query(
+        `INSERT INTO pharmacy_card_terminal_attempts
+          (id,"organizationId","branchId","saleId","deviceId","terminalId",provider,"attemptKey",
+           "amountMinor",currency,"businessDate","actorId","resolutionRef","updatedAt")
+         VALUES ($1,$2,$3,$4,'device-1','counter-1','FAKE_TERMINAL','org-a-attempt-9',1000,'PKR',
+           '2026-11-18','cashier','ref-x',now())`,
+        [`attempt_rv2_${suffix}`, orgA, branchA, saleA]
+      )
+    );
+    await update(id, `status='SENT',"sentAt"=now()`);
+    // Resolution fields belong to a review resolution only.
+    await expectPgCode('55000', () =>
+      update(id, `status='UNKNOWN',"resolvedById"='owner',"resolutionReason"='early'`)
+    );
+    await update(id, `status='UNKNOWN',"statusChecks"=1`);
+    await update(id, `status='MANUAL_REVIEW',"reviewReason"='Terminal outcome still unknown'`);
+    const resolved = `"resolvedById"='owner',"resolvedAt"=now(),"resolutionReason"='Slip checked'`;
+    // No slip reference, a short reason, or a card number in either field is refused.
+    await expectPgCode('55000', () => update(id, `status='DECLINED',${resolved}`));
+    await expectPgCode('55000', () =>
+      update(
+        id,
+        `status='DECLINED',"resolvedById"='owner',"resolvedAt"=now(),"resolutionReason"='no',"resolutionRef"='slip-1'`
+      )
+    );
+    await expectPgCode('23514', () =>
+      update(id, `status='DECLINED',${resolved},"resolutionRef"='4111111111111111'`)
+    );
+    // A reversal records the charge it reverses: the provider reference is the slip's.
+    await expectPgCode('55000', () =>
+      update(id, `status='REVERSED',${resolved},"resolutionRef"='slip-1'`)
+    );
+    await expectPgCode('55000', () =>
+      update(id, `status='REVERSED',${resolved},"resolutionRef"='slip-1',"providerRef"='slip-2'`)
+    );
+    await update(id, `status='DECLINED',${resolved},"resolutionRef"='slip-1'`);
+    // Resolved once: the record of who, why and which slip never changes.
+    await expectPgCode('55000', () => update(id, `"resolutionReason"='Changed my mind'`));
+    await expectPgCode('55000', () => update(id, `"resolvedById"='someone-else'`));
+    const row = await client.query(
+      `SELECT status,"resolvedById","resolutionReason","resolutionRef" FROM pharmacy_card_terminal_attempts WHERE id=$1`,
+      [id]
+    );
+    expect(row.rows).toEqual([
+      {
+        status: 'DECLINED',
+        resolvedById: 'owner',
+        resolutionReason: 'Slip checked',
+        resolutionRef: 'slip-1',
+      },
+    ]);
   });
 });
