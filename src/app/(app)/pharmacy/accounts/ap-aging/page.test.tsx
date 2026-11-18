@@ -160,7 +160,14 @@ describe('ApAgingPage', () => {
       );
     });
 
-    it('offers no branches to a non-owner and still lets the router refuse a typed branch', async () => {
+    it('shows the prompt, not another branch, when the URL names an unlisted branch', async () => {
+      const output = await html({ branch: 'branch_other', asOf: '2026-11-15' });
+      expect(output).toContain('<option value="">Choose a branch</option>');
+      expect(output).not.toMatch(/<option value="branch_[12]"[^>]*selected/);
+      expect(output).not.toMatch(/<option value=""[^>]*disabled/);
+    });
+
+    it('offers no branches to a non-owner and passes a typed branch to the router unchanged', async () => {
       mocks.createTRPCContext.mockResolvedValue({
         session: { user: { id: 'u', organizationId: 'org_1', role: 'STAFF' } },
         db: { pharmacyBranch: { findMany } },

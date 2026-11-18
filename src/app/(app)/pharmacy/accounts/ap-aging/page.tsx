@@ -91,15 +91,14 @@ function QueryForm({
         <label className="grid gap-2 text-sm">
           Branch
           <select
-            className="min-h-11 rounded-md border border-border bg-surface px-3 text-sm"
+            className="min-h-11 w-full min-w-0 rounded-md border border-input bg-surface-card px-2.5 text-sm text-foreground transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
             name="branch"
             defaultValue={branchId ?? ''}
             required
             aria-describedby="aging-help"
           >
-            <option value="" disabled>
-              Choose a branch
-            </option>
+            {/* Not disabled: a branch in the URL that is not listed must show this prompt, never another branch. */}
+            <option value="">Choose a branch</option>
             {branches.map((branch) => (
               <option key={branch.id} value={branch.id}>
                 {branch.name}
