@@ -110,6 +110,8 @@ function isSensitiveKey(key: string): boolean {
     k === 'baseurl' ||
     // DEV-875: a rejected bank-transfer reference may be a card number typed by mistake.
     k === 'providerref' ||
+    // Cash-memo buyer text can reach validation-failure audit before its resolver.
+    k === 'buyername' ||
     SENSITIVE_SUBSTRINGS.some((s) => k.includes(s))
   );
 }

@@ -2,6 +2,7 @@
 import type { Prisma } from '@/generated/prisma/client';
 import { naturalKey, MIGRATION_TARGET_KEYS } from './mapping-targets';
 import type { ExceptionBucket } from './profiler';
+import { isLegacyControlledRow, legacyClassValue } from './legacy-class';
 
 export const SOURCE_REFERENCE_COLUMNS = [
   'Name',
@@ -96,6 +97,7 @@ export function stagedReference(
             : `${canonical} units`,
   };
   const flags = cell('__review_flags')?.split(';').filter(Boolean) ?? [];
+  const legacyClass = legacyClassValue(raw)?.trim() || null;
   const lineage =
     sourceHash === null
       ? 'Unrecorded source checksum'
@@ -123,6 +125,9 @@ export function stagedReference(
       ? naturalKey(MIGRATION_TARGET_KEYS.PRODUCT, row.productName)
       : null,
     canonicalQuantity: row.quantityCanonical?.toString() ?? null,
+    legacyClass,
+    /** DEV-854: a NARCOTICS-class row is imported as a controlled medicine, with no review hold. */
+    controlled: isLegacyControlledRow(raw),
     quantityReview,
     status: 'Staged — unverified' as const,
     catalogueStatus: 'Identity / pack review required' as const,

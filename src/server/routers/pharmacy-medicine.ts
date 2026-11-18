@@ -51,6 +51,7 @@ import {
 import { isEffective } from '@/lib/pharmacy/pack-conversion';
 import { isSoloPharmacyOwner } from '@/lib/pharmacy/solo-owner';
 import { can, subjectFromSession } from '@/lib/abac';
+import { applyLegacyControlledToMedicine } from '@/lib/pharmacy/migration/legacy-controlled';
 import { annotateAudit } from '../audit';
 import { adminProcedure, auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
 
@@ -847,6 +848,13 @@ export const pharmacyMedicineRouter = router({
             },
           });
         }
+
+        // DEV-854: a staged NARCOTICS-class legacy row makes this medicine controlled, no hold.
+        await applyLegacyControlledToMedicine(
+          tx as typeof ctx.db,
+          ctx.entitlements.organizationId,
+          medicine
+        );
 
         const assertions = [];
         for (const [field, value] of Object.entries(values)) {
