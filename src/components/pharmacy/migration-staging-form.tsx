@@ -90,7 +90,9 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
       setSource(null);
       setHeaders([]);
       setMessage(
-        `${result.data.rowCount} rows staged for review with ${result.data.exceptionCount} exceptions. No stock was posted.`
+        `${result.data.rowCount} rows staged for review with ${result.data.exceptionCount} exceptions. ` +
+          `${result.data.controlledFromClass} set as controlled from legacy class NARCOTICS` +
+          ` (${result.data.controlledMedicinesFlagged} catalogue ${result.data.controlledMedicinesFlagged === 1 ? 'medicine' : 'medicines'} flagged). No stock was posted.`
       );
       router.push(
         `${route}?${new URLSearchParams({ branchId, sourceId: result.data.sourceId, batchId: result.data.batchId })}`

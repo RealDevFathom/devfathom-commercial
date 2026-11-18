@@ -49,6 +49,7 @@ const storedSchema = z
         payerName: z.string().trim().min(1).max(100).optional(),
         referenceSkipped: z.boolean().optional(),
         approvalCode: z.string().regex(MANUAL_CARD_APPROVAL_CODE).optional(),
+        buyerName: z.string().trim().min(1).max(200).optional(),
       })
       .strict()
       .refine(hasValidTenderProviderReference, { path: ['providerRef'], message: 'Invalid payment reference.' }),

@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { PasswordInput } from '@/components/ui/password-input';
 
 const inputClass =
-  'flex h-12 w-full rounded-[3px] border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-muted transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20';
+  'flex h-12 w-full rounded-control border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-muted transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20';
 const signInErrorId = 'platform-sign-in-error';
 
 export function PlatformLoginForm({ initialEnrollment = false }: { initialEnrollment?: boolean }) {
@@ -199,7 +199,7 @@ export function PlatformLoginForm({ initialEnrollment = false }: { initialEnroll
         <div
           id={signInErrorId}
           role="alert"
-          className="rounded-[3px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+          className="rounded-control border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
         >
           {error}
         </div>
@@ -277,7 +277,7 @@ export function PlatformLoginForm({ initialEnrollment = false }: { initialEnroll
       <button
         type="submit"
         disabled={pending}
-        className="group flex h-12 w-full items-center justify-center rounded-[3px] bg-primary text-sm font-semibold text-primary-foreground shadow-[0_10px_22px_-14px_rgba(17,17,16,0.86)] transition-all hover:-translate-y-px hover:bg-primary-hover active:translate-y-0 disabled:pointer-events-none disabled:opacity-50"
+        className="group flex h-12 w-full items-center justify-center rounded-control bg-primary text-sm font-semibold text-primary-foreground shadow-control-ink transition-all hover:-translate-y-px hover:bg-primary-hover active:translate-y-0 disabled:pointer-events-none disabled:opacity-50"
       >
         {pending ? (
           <>

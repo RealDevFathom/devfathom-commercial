@@ -68,6 +68,8 @@ function fixture() {
     tenders: [],
   };
   const db = {
+    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi' }) },
+    branchRegulatoryProfile: { findFirst: vi.fn().mockResolvedValue(null) },
     $queryRaw: vi
       .fn()
       .mockImplementation(async (q) =>

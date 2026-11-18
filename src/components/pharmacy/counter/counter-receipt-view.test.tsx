@@ -11,6 +11,20 @@ vi.mock('./counter-thermal-print', () => ({
 
 import { CounterReceiptView, type CounterReceiptViewProps } from './counter-receipt-view';
 
+// #708: the cash memo is held off by a hard-coded constant until counsel confirms it. Tests
+// read the real constant unless one sets `cashMemoHold.live` to check the post-hold memo.
+const cashMemoHold = vi.hoisted(() => ({ live: undefined as boolean | undefined }));
+vi.mock('@/lib/pharmacy/sindh-cash-memo-hold', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pharmacy/sindh-cash-memo-hold')>();
+  return {
+    get SINDH_CASH_MEMO_LIVE() {
+      return cashMemoHold.live ?? actual.SINDH_CASH_MEMO_LIVE;
+    },
+  };
+});
+afterEach(() => {
+  cashMemoHold.live = undefined;
+});
 afterEach(cleanup);
 
 function props(overrides: Partial<CounterReceiptViewProps> = {}): CounterReceiptViewProps {
@@ -534,6 +548,53 @@ it.each([true, false])(
   }
 );
 
+it('#708 shows the Sindh cash memo facts on the receipt preview, reprint included', () => {
+  cashMemoHold.live = true; // As the memo will behave once counsel lifts the hold.
+  const input = props({ reprint: true });
+  const receipt = input.receipt!;
+  receipt.buyerName = 'Ayesha Khan';
+  receipt.lines[0]!.identityStatus = 'ISSUED';
+  receipt.lines[0]!.manufacturer = 'GSK Pakistan';
+  receipt.taxIdentity = {
+    ntn: null,
+    strn: null,
+    licenceNumber: 'DSL-SD-77',
+    provinceCode: 'PK-SD',
+    licenceValidFrom: '2026-01-01T00:00:00.000Z',
+    licenceValidTo: '2027-12-31T00:00:00.000Z',
+    pharmacistRegistration: 'PCP-9001',
+  };
+  render(<CounterReceiptView {...input} />);
+  const preview = within(screen.getByRole('region', { name: 'Receipt 12' }));
+  expect(preview.getByText('Sindh cash memo')).toBeTruthy();
+  expect(
+    preview.getByText('Drug-sale licence: DSL-SD-77 (valid 2026-01-01 to 2027-12-31)')
+  ).toBeTruthy();
+  expect(preview.getByText('Pharmacist registration: PCP-9001')).toBeTruthy();
+  expect(preview.getByText('Buyer: Ayesha Khan')).toBeTruthy();
+  expect(preview.getByText('Manufacturer: GSK Pakistan')).toBeTruthy();
+  expect(preview.getByText('Signature of qualified person: ________________')).toBeTruthy();
+});
+
+it('#708 keeps a Punjab receipt preview free of cash memo facts', () => {
+  const input = props();
+  const receipt = input.receipt!;
+  receipt.buyerName = 'Ayesha Khan';
+  receipt.lines[0]!.identityStatus = 'ISSUED';
+  receipt.lines[0]!.manufacturer = 'GSK Pakistan';
+  receipt.taxIdentity = {
+    ntn: null,
+    strn: null,
+    licenceNumber: 'DSL-PB-42',
+    provinceCode: 'PK-PB',
+  };
+  render(<CounterReceiptView {...input} />);
+  const preview = within(screen.getByRole('region', { name: 'Receipt 12' }));
+  expect(preview.queryByText(/Cash memo/)).toBeNull();
+  expect(preview.queryByText(/Ayesha Khan/)).toBeNull();
+  expect(preview.queryByText(/GSK Pakistan/)).toBeNull();
+  expect(preview.queryByText(/Signature of qualified person/)).toBeNull();
+});
 it('DEV-16: sends a WhatsApp receipt only after the cashier confirms the customer asked', async () => {
   const onSendWhatsApp = vi.fn(async () => ({
     ok: true,
@@ -597,6 +658,30 @@ it('previews the issue time and cashier in the on-screen header (DEF-15)', () =>
   const header = screen.getByRole('heading', { level: 4 }).closest('header')!;
   expect(within(header).getByText(/Date:.*15:00/)).toBeTruthy();
   expect(within(header).getByText('Cashier: Ayesha Khan')).toBeTruthy();
+});
+
+it('#708 hold: a Sindh profile shows the ordinary receipt preview and hides the memo facts', () => {
+  const input = props({ reprint: true });
+  const receipt = input.receipt!;
+  receipt.buyerName = 'Ayesha Khan';
+  receipt.lines[0]!.identityStatus = 'ISSUED';
+  receipt.lines[0]!.manufacturer = 'GSK Pakistan';
+  receipt.taxIdentity = {
+    ntn: null,
+    strn: null,
+    licenceNumber: 'DSL-SD-77',
+    provinceCode: 'PK-SD',
+    licenceValidFrom: '2026-01-01T00:00:00.000Z',
+    licenceValidTo: '2027-12-31T00:00:00.000Z',
+    pharmacistRegistration: 'PCP-9001',
+  };
+  render(<CounterReceiptView {...input} />);
+  const preview = within(screen.getByRole('region', { name: 'Receipt 12' }));
+  expect(preview.queryByText(/cash memo/i)).toBeNull();
+  expect(preview.queryByText(/Ayesha Khan/)).toBeNull();
+  expect(preview.queryByText(/GSK Pakistan/)).toBeNull();
+  expect(preview.queryByText(/Pharmacist registration/)).toBeNull();
+  expect(preview.queryByText(/Signature of qualified person/)).toBeNull();
 });
 
 it('sends a settled receipt to the thermal print queue instead of offering a file download', () => {
