@@ -1394,6 +1394,7 @@ model PharmacyCustomer {
   patient                PharmacyPatient              @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
   sales                  PharmacySale[]
   pointsEntries          PharmacyLoyaltyPointsEntry[]
+  loyaltyCards           PharmacyLoyaltyCard[]
   loyaltyReconciliations PharmacyLoyaltyBalanceReconciliation[]
   paidFamilyAccounts     PharmacyFamilyAccount[]      @relation("PharmacyFamilyPayer")
   familyMemberships      PharmacyFamilyMember[]
@@ -1539,6 +1540,31 @@ model PharmacyLoyaltyProgramVersion {
   @@unique([organizationId, id])
   @@unique([organizationId, version])
   @@map("pharmacy_loyalty_program_versions")
+}
+
+/// DEV-748: a physical loyalty card. Its QR holds only an opaque random code; the code itself
+/// is never stored, only its SHA-256, looked up within the organization. A card is active while
+/// revokedAt is null; a revoked card never works again (a lost card is replaced by a new one).
+/// Cards are organization-wide, so one card is recognised at every branch of the organization.
+model PharmacyLoyaltyCard {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  customerId     String
+  codeHash       String
+  issuedById     String
+  issuedAt       DateTime  @default(now())
+  revokedById    String?
+  revokedAt      DateTime?
+  revokedReason  String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  customer PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, codeHash])
+  @@index([organizationId, customerId])
+  @@map("pharmacy_loyalty_cards")
 }
 
 /// Append-only, signed whole-point ledger. Branch is stamped at posting time;

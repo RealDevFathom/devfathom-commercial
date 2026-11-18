@@ -99,6 +99,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   CONSENT_REQUIRED: 'Recorded patient consent is required before dispensing this medicine.',
   LOYALTY_CONSENT_REQUIRED:
     'Loyalty consent is required before linking this customer or redeeming loyalty points.',
+  // DEV-748: unknown, revoked and other-organization cards are refused alike.
+  LOYALTY_CARD_NOT_RECOGNISED:
+    'That loyalty card is not recognised or has been replaced. Ask the customer for their current card, or link them by name.',
   // DEV-712: the bill was paid, voided or held. A scan opens the next bill by
   // itself, so the sentence never sends the operator to refresh.
   INVALID_STATE:
