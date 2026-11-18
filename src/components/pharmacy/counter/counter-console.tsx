@@ -56,6 +56,7 @@ import { CounterReturnPanel } from './counter-return-panel';
 import { CounterRxPanel } from './counter-rx-panel';
 import { CounterSearchResults } from './counter-search-results';
 import { CounterScanInput } from './counter-scan-input';
+import { CounterVoucherEntry, type CounterHeldVoucher } from './counter-voucher';
 import { CounterSkeleton } from './counter-skeleton';
 import { CounterSubstituteProposals } from './counter-substitute-proposals';
 import {
@@ -557,6 +558,11 @@ function ScopedPharmacyCounterConsole({
   const [patientQuery, setPatientQuery] = useState('');
   const [submittedPatientQuery, setSubmittedPatientQuery] = useState('');
   const [controlledAuth, setControlledAuth] = useState(EMPTY_CONTROLLED_AUTH);
+  // DEV-780: a voucher checked and confirmed with the cashier's own PIN, sent with the next
+  // item added. It is dropped after that add, whatever the outcome, so the PIN is not kept.
+  const [voucherHold, setHeldVoucher] = useState<
+    (CounterHeldVoucher & { branchId: string }) | null
+  >(null);
   const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
     enabled: safetyLicensed,
   });
@@ -678,6 +684,8 @@ function ScopedPharmacyCounterConsole({
     () => ({ organizationId, accountId, branchId }),
     [organizationId, accountId, branchId]
   );
+  // A voucher belongs to the branch it was checked at; switching branch drops it.
+  const heldVoucher = voucherHold?.branchId === branchId ? voucherHold : null;
   const branchAuthorized =
     branchesQuery.isSuccess &&
     !branchesQuery.isError &&
@@ -793,6 +801,7 @@ function ScopedPharmacyCounterConsole({
         setAttempt(saved.attempt);
         setRestoredAttempt(saved.attempt);
         setSelectedBranchId(saved.attempt.input.branchId);
+        setHeldVoucher(null);
         setSaleId(saved.attempt.input.saleId);
         setTenderOutcome({ status: 'unknown', message: UNKNOWN_TENDER_MESSAGE });
         setTenderReadRequired(true);
@@ -1819,6 +1828,7 @@ function ScopedPharmacyCounterConsole({
               )
           : undefined;
         const refSerial = Number(billAuth.refSerial);
+        const voucher = heldVoucher;
         const attemptKeys: string[] = [];
         const postLine = (lineSaleId: string, approval?: CounterApprovalPin) => {
           const selection = JSON.stringify([
@@ -1831,6 +1841,10 @@ function ScopedPharmacyCounterConsole({
             row.labelLot?.inventoryLotId,
             scannedPack?.serial.toUpperCase(),
           ]);
+          // DEV-780: the voucher is not part of the attempt's identity. The held voucher (and its
+          // PIN) is dropped after every add, so a retry after a lost response reuses this key:
+          // the server replays the committed line, or refuses a changed voucher, and never adds
+          // the item a second time.
           let key = lineAttempts.current.get(selection);
           if (!key) {
             key = `counter-add:${browserUuid()}`;
@@ -1864,6 +1878,8 @@ function ScopedPharmacyCounterConsole({
             branchId,
             saleId: lineSaleId,
             medicineId: row.medicineId,
+            // DEV-780: the server sets the voucher's amount and re-checks every rule.
+            ...(voucher ? { voucherId: voucher.id, voucherPin: voucher.pin } : {}),
             presentationId: row.presentationId,
             packLevelId: option.packLevelId,
             saleUnit: option.kind,
@@ -1956,7 +1972,7 @@ function ScopedPharmacyCounterConsole({
         setLotOverride(null);
         setNotice({
           tone: 'success',
-          message: `${startedNextBill ? 'New bill started. ' : ''}${units} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}.`,
+          message: `${startedNextBill ? 'New bill started. ' : ''}${units} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}${voucher ? ` with voucher ${voucher.code}` : ''}.`,
         });
         setAddVersion(completedAdds.current);
         setQuery('');
@@ -1985,12 +2001,14 @@ function ScopedPharmacyCounterConsole({
         setPackApproval(null);
         packApprovalResolver.current = null;
         setControlledAuth((value) => ({ ...value, pin: '' }));
+        if (heldVoucher) setHeldVoucher(null);
         setPending(null);
       }
     },
     [
       activeRow,
       addLine,
+      heldVoucher,
       catalogueCache,
       cartQuery,
       clearBill,
@@ -2215,7 +2233,7 @@ function ScopedPharmacyCounterConsole({
         focusSearch();
         return true;
       } catch (error) {
-        setNotice({ tone: 'danger', message: messageFrom(error) });
+        setNotice({ tone: 'warning', message: messageFrom(error) });
         return false;
       } finally {
         setPending(null);
@@ -2257,7 +2275,7 @@ function ScopedPharmacyCounterConsole({
         setNotice({ tone: 'success', message: 'Bill voided. Its stock is back on sale.' });
         return true;
       } catch (error) {
-        setNotice({ tone: 'danger', message: messageFrom(error) });
+        setNotice({ tone: 'warning', message: messageFrom(error) });
         return false;
       } finally {
         setPending(null);
@@ -3228,7 +3246,7 @@ function ScopedPharmacyCounterConsole({
         />
         <SectionCard title="Branches unavailable">
           <div className="space-y-3" role="alert">
-            <p className="text-sm text-destructive">{messageFrom(branchesQuery.error)}</p>
+            <p className="text-sm text-warning">{messageFrom(branchesQuery.error)}</p>
             <Button
               type="button"
               variant="outline"
@@ -3423,6 +3441,8 @@ function ScopedPharmacyCounterConsole({
               onChange={(event) => {
                 scannerRevision.current += 1;
                 setSelectedBranchId(event.target.value);
+                // A voucher and the cashier PIN held for one branch never carry to another.
+                setHeldVoucher(null);
                 setLastReceipt(null);
                 setReceiptReprint(false);
                 setActiveRow(null);
@@ -3883,6 +3903,22 @@ function ScopedPharmacyCounterConsole({
                         selected medicine, or a barcode. {formatBinding(keymap.bindings.openTender)}{' '}
                         opens pay.
                       </p>
+                    </div>
+                    <div className="mt-3">
+                      <CounterVoucherEntry
+                        branchId={branchId}
+                        held={heldVoucher}
+                        disabled={busy || !branchAuthorized || !online}
+                        onHold={(voucher) => {
+                          setHeldVoucher({ ...voucher, branchId });
+                          setNotice({
+                            tone: 'success',
+                            message: `Voucher ${voucher.code} will be used on the next item you add.`,
+                          });
+                          focusSearch();
+                        }}
+                        onClear={() => setHeldVoucher(null)}
+                      />
                     </div>
                   </div>
 

@@ -150,7 +150,7 @@ describe('journal lookup page', () => {
 
   it.each([
     ['TRUNCATED', 'exceeds 200 lines'],
-    ['INVALID_SOURCE', 'failed validation'],
+    ['INVALID_SOURCE', 'could not be checked'],
     ['NOT_FOUND', 'No journal entry was found'],
   ])('renders the distinct %s state without stale details', async (status, copy) => {
     mocks.lookup.mockResolvedValue({ status });

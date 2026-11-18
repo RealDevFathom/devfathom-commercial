@@ -1,5 +1,7 @@
 'use client';
 
+import { PHARMACY_COPY } from '@/lib/pharmacy/plain-language';
+
 import { Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -20,7 +22,7 @@ export function AccountActivityExportButton({ csv, filename }: { csv: string; fi
   return (
     <Button type="button" size="lg" onClick={download}>
       <Download data-icon="inline-start" />
-      Export evidence CSV
+      {PHARMACY_COPY.account.exportCsv}
     </Button>
   );
 }

@@ -76,7 +76,11 @@ import {
 } from '@/lib/pharmacy/controlled-register';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { annotateAudit } from '@/server/audit';
-import { authenticateVoucherCashierPin } from '@/lib/pharmacy/vouchers';
+import {
+  authenticateVoucherCashierPin,
+  counterVoucherInput,
+  lookupCounterVoucher,
+} from '@/lib/pharmacy/vouchers';
 import {
   isLockedOut,
   registerFailedAttempt,
@@ -3978,6 +3982,22 @@ export const pharmacySalesRouter = router({
             limit: input.limit,
           }
         );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  /**
+   * DEV-780: the counter reads a typed or scanned voucher code before applying it to the next
+   * item. Read-only: the voucher is redeemed (and every rule re-checked) only by `addLine`.
+   */
+  counterVoucher: protectedProcedure
+    .input(counterVoucherInput.extend({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        await assignedBranchScope(ctx, input.branchId);
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        return await lookupCounterVoucher(ctx.db as unknown as ScopedDb, scope, input.code);
       } catch (error) {
         fail(error);
       }

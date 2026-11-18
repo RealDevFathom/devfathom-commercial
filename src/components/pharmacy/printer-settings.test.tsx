@@ -34,6 +34,14 @@ vi.mock('@/lib/pharmacy/counter-browser-print', async (importOriginal) => ({
   printPrinterTestPage: mocks.print,
 }));
 
+const bridges = vi.hoisted(() => ({ props: vi.fn() }));
+vi.mock('./print-bridges', () => ({
+  PharmacyPrintBridges: (props: { branchName: string }) => {
+    bridges.props(props);
+    return <p>Print bridges for {props.branchName}</p>;
+  },
+}));
+
 import { layoutWithPaper, PharmacyPrinterSettingsConsole } from './printer-settings';
 
 const ok = (data: unknown) => ({ data, isLoading: false, isError: false, refetch: vi.fn() });
@@ -154,6 +162,20 @@ describe('PharmacyPrinterSettingsConsole', () => {
     mocks.branches = ok({ branches: [] });
     render(<PharmacyPrinterSettingsConsole canSave />);
     expect(screen.getByText(/No active pharmacy branch/)).toBeInTheDocument();
+  });
+
+  it('shows the print bridge section to administrators for the selected branch only', () => {
+    bridges.props.mockClear();
+    const { unmount } = render(<PharmacyPrinterSettingsConsole canSave />);
+    expect(screen.getByRole('heading', { name: 'Thermal print bridges' })).toBeInTheDocument();
+    expect(bridges.props).toHaveBeenLastCalledWith({ branchId: 'b1', branchName: 'Main' });
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'b2' } });
+    expect(bridges.props).toHaveBeenLastCalledWith({ branchId: 'b2', branchName: 'Second' });
+    unmount();
+    bridges.props.mockClear();
+    render(<PharmacyPrinterSettingsConsole canSave={false} />);
+    expect(screen.queryByRole('heading', { name: 'Thermal print bridges' })).toBeNull();
+    expect(bridges.props).not.toHaveBeenCalled();
   });
 
   it('offers no restaurant kitchen routing', () => {

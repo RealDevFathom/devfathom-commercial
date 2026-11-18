@@ -66,13 +66,13 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('cash-flow page', () => {
-  it('submits the selected branch and dates when Read projection is clicked', async () => {
+  it('submits the selected branch and dates when Show cash flow is clicked', async () => {
     await show();
-    const button = screen.getByRole('button', { name: 'Read projection' });
+    const button = screen.getByRole('button', { name: 'Show cash flow' });
     const form = button.closest('form')!;
     const submitted = vi.fn((event: Event) => event.preventDefault());
     form.addEventListener('submit', submitted);
-    fireEvent.change(screen.getByLabelText('From (inclusive)'), {
+    fireEvent.change(screen.getByLabelText('From (UTC)'), {
       target: { value: '2026-10-02' },
     });
 
@@ -94,7 +94,7 @@ describe('cash-flow page', () => {
       { from: new Date('2026-10-01T00:00:00Z'), to: new Date('2026-10-31T00:00:00Z') },
       accounts
     );
-    expect(screen.getByText(/No scoped cash postings/)).toBeVisible();
+    expect(screen.getByText(/No cash movements were found/)).toBeVisible();
   });
 
   it('defaults the exclusive upper bound to tomorrow so today is included', async () => {
@@ -104,7 +104,7 @@ describe('cash-flow page', () => {
     } finally {
       vi.useRealTimers();
     }
-    expect(screen.getByLabelText('To (exclusive)')).toHaveValue('2026-11-01');
+    expect(screen.getByLabelText('To, exclusive (UTC)')).toHaveValue('2026-11-01');
     expect(mocks.projection.mock.calls[0][2]).toEqual({
       from: new Date('2026-10-01T00:00:00Z'),
       to: new Date('2026-11-01T00:00:00Z'),
@@ -121,11 +121,11 @@ describe('cash-flow page', () => {
     expect(screen.getByText(/Showing 51–100 of 120/)).toBeVisible();
     expect(screen.getByText(/· Entry 50$/)).toBeInTheDocument();
     expect(screen.queryByText(/· Entry 49$/)).toBeNull();
-    expect(screen.getByRole('link', { name: 'Next evidence' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Next cash movements' })).toHaveAttribute(
       'href',
       `?${new URLSearchParams({ ...filters, page: '3' })}`
     );
-    expect(screen.getByRole('link', { name: 'Previous evidence' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Previous cash movements' })).toHaveAttribute(
       'href',
       `?${new URLSearchParams({ ...filters, page: '1' })}`
     );
@@ -145,7 +145,9 @@ describe('cash-flow page', () => {
       metadata: { retrievedAt: new Date('2026-10-31T12:00:00Z'), completenessReason: 'Test' },
     });
     const { container } = await show();
-    const summaries = [...container.querySelectorAll('summary')].map((s) => s.textContent);
+    const summaries = [...container.querySelectorAll('details.mt-3 > summary')].map(
+      (s) => s.textContent
+    );
     expect(summaries[0]).toMatch(/· Payment received$/);
     expect(summaries[1]).toMatch(/· Refund$/);
     for (const summary of summaries) expect(summary).not.toContain('cmvz');
@@ -233,5 +235,7 @@ describe('cash-flow page', () => {
       to: new Date('2026-10-30T19:00:00Z'),
     });
     expect(screen.getByText('Scope and period (PKT)')).toBeVisible();
+    expect(screen.getByLabelText('From (PKT)')).toBeVisible();
+    expect(screen.getByLabelText('To, exclusive (PKT)')).toBeVisible();
   });
 });
