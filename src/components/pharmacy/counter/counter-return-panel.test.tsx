@@ -1440,7 +1440,7 @@ describe('DEV-501 returns in six steps or fewer', () => {
     render(<ReturnForm {...props} />);
     fireEvent.change(screen.getByLabelText('Receipt number'), { target: { value: '12' } });
     fireEvent.submit(screen.getByLabelText('Receipt number').closest('form')!);
-    expect(screen.getByText(/Receipt numbers can repeat/)).toBeVisible();
+    expect(screen.getByText(/Older receipts can share a number/)).toBeVisible();
     // Nothing is opened until the right date and counter is chosen.
     for (const match of screen.getAllByRole('button', { name: /Receipt 12/ }))
       expect(match).toHaveAttribute('aria-pressed', 'false');

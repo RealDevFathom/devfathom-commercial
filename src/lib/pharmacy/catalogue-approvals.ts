@@ -147,7 +147,8 @@ export async function recordCatalogueApproval(
   targetId: string,
   solo: boolean,
   targetType = 'PharmacyCatalogueEdit',
-  reason?: string
+  reason?: string,
+  controlledReviewed = false
 ) {
   await db.auditLog.create({
     data: {
@@ -160,7 +161,14 @@ export async function recordCatalogueApproval(
       action: solo ? 'pharmacy.catalogueSoloOwnerApproval' : 'pharmacy.catalogueApproval',
       targetType,
       targetId,
-      metadata: { soloOwner: solo, pinVerified: solo, ...(reason ? { reason } : {}) },
+      // DEV-925: `controlledReviewed` marks an approved controlled-flag change, made by a holder
+      // of the catalogue review grant or by the owner with no other reviewer, with a fresh PIN.
+      metadata: {
+        soloOwner: solo,
+        pinVerified: solo,
+        ...(reason ? { reason } : {}),
+        ...(controlledReviewed ? { controlledReviewed: true } : {}),
+      },
     },
   });
 }
@@ -330,6 +338,17 @@ export async function submitCatalogueEdit(
   });
 }
 
+/** True when an UPDATE_MEDICINE edit changes the controlled flag. */
+function changesControlled(operation: string, changes: Prisma.JsonValue): boolean {
+  return (
+    operation === 'UPDATE_MEDICINE' &&
+    !!changes &&
+    typeof changes === 'object' &&
+    !Array.isArray(changes) &&
+    changes.controlled !== undefined
+  );
+}
+
 export async function decideCatalogueEdit(
   db: ScopedDb,
   scope: Scope,
@@ -451,7 +470,8 @@ export async function decideCatalogueEdit(
         proposal.id,
         solo,
         'PharmacyCatalogueEdit',
-        approvalReason
+        approvalReason,
+        changesControlled(proposal.operation, proposal.changes)
       );
       // Every other pending edit on this item was submitted against the version
       // this approval just replaced, so none of them can be approved any more.

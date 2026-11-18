@@ -1,8 +1,9 @@
 /**
- * Receipt numbers are sequenced per counter device, so a branch can hold several
- * "Receipt 1". The label below is what tells them apart on paper and in the
- * returns dialog: the registered counter name when there is one, otherwise a
- * short stable code from the device id, never the raw id.
+ * The counter that issued a receipt, printed on paper and shown in the returns
+ * dialog. Receipt numbers are now unique per branch (DEV-637), but receipts issued
+ * before that were sequenced per counter device and can repeat a number; the label
+ * tells those apart. It is the registered counter name when there is one, otherwise
+ * a short stable code from the device id, never the raw id.
  */
 export function counterLabel(
   deviceId: string | null | undefined,
