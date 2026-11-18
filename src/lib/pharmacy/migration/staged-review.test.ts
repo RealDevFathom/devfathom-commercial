@@ -52,6 +52,24 @@ describe('staged medicine evidence', () => {
     expect(JSON.stringify(view)).not.toContain('privateUnrelatedField');
     expect(JSON.stringify(row)).toBe(before);
   });
+  it('shows a NARCOTICS-class row as a controlled medicine and an ordinary row as not (DEV-854)', () => {
+    const narcotics = stagedReference(
+      {
+        ...fixture(),
+        rawPayload: { ...(fixture().rawPayload as object), classname: ' Narcotics ' },
+      },
+      source,
+      'batch_1'
+    );
+    expect(narcotics).toMatchObject({ legacyClass: 'Narcotics', controlled: true });
+    const ordinary = stagedReference(
+      { ...fixture(), rawPayload: { ...(fixture().rawPayload as object), classname: 'NARCOTIC' } },
+      source,
+      'batch_1'
+    );
+    expect(ordinary).toMatchObject({ legacyClass: 'NARCOTIC', controlled: false });
+    expect(stagedReference(fixture(), source, 'batch_1').controlled).toBe(false);
+  });
   it('does not invent original text from JSON numbers or missing cells', () => {
     const view = stagedReference({ ...fixture(), rawPayload: { QTY: 1 } }, source, 'batch_1');
     expect(view.references.QTY).toBeNull();
