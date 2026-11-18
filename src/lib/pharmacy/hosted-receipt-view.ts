@@ -19,6 +19,8 @@ export type HostedReceiptView = {
   /** DEV-637: "Printed offline as receipt 12" when replay renumbered the sale. */
   offlineReference: string | null;
   completedAt: string | null;
+  /** DEV-943: the organisation zone the completion time is read in. */
+  timeZone?: string | null;
   currency: string;
   lines: {
     id: string;
@@ -44,6 +46,7 @@ export function hostedReceiptView(receipt: CounterReceipt): HostedReceiptView | 
     counterLabel: receipt.counterLabel ?? null,
     offlineReference: receiptOfflineReferenceLine(receipt, 'en'),
     completedAt: receipt.completedAt,
+    ...(receipt.timeZone !== undefined ? { timeZone: receipt.timeZone } : {}),
     currency: receipt.currency,
     lines: receipt.lines.map((line) => ({
       id: line.saleLineId,

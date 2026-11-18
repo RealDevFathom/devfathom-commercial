@@ -1194,7 +1194,7 @@ export async function readCounterReceipt(
   db: ScopedDb,
   scope: CounterScope,
   saleId: string,
-  branch: { name: string; currency: string }
+  branch: { name: string; currency: string; timeZone?: string | null }
 ): Promise<CounterReceipt> {
   const sale = await saleInScope(db, scope, saleId);
   if (sale.lines.length === 0) throw new PharmacyCounterError('NOT_FOUND');
@@ -1293,6 +1293,8 @@ export async function readCounterReceipt(
     branchName: branch.name,
     businessDate: sale.businessDate ? sale.businessDate.toISOString().slice(0, 10) : null,
     completedAt: sale.completedAt ? sale.completedAt.toISOString() : null,
+    // DEV-943: the organisation zone the completion time is printed in.
+    ...(branch.timeZone !== undefined ? { timeZone: branch.timeZone } : {}),
     cashierName: cashier?.name ?? null,
     buyerName: snapshot?.buyerName ?? null,
     ...(snapshot?.cashMemoIdentity !== undefined

@@ -526,7 +526,7 @@ export function CounterReceiptView({
           <p className="text-text-muted">
             {strings.date}:{' '}
             {receipt.completedAt
-              ? formatReceiptIssuedAt(receipt.completedAt)
+              ? formatReceiptIssuedAt(receipt.completedAt, receipt.timeZone)
               : (receipt.businessDate ?? formatReceiptDate(receipt.completedAt))}
           </p>
           {receipt.cashierName ? (

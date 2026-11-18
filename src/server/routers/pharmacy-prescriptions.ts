@@ -26,6 +26,7 @@ import {
 } from '@/lib/pharmacy/rx-ocr';
 import { buildRxDraftCart } from '@/lib/pharmacy/rx-draft-cart';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { workspaceTimezone } from '@/lib/timezone';
 import type { TRPCContext } from '../trpc';
 import { annotateAuditBranch } from '../audit-branch';
 import {
@@ -247,6 +248,8 @@ export const pharmacyPrescriptionsRouter = router({
       return {
         branches,
         selectedBranchId: selectedBranch?.id ?? null,
+        // DEV-943: the caller's own organisation zone, so date defaults use the shop's day.
+        timezone: workspaceTimezone(ctx.organization?.timezone),
         canDispense,
         patients: patients.map(maskedPatient),
         prescribers,

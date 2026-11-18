@@ -352,7 +352,13 @@ export const pharmacyReportsRouter = router({
           message: error instanceof Error ? error.message : 'Invalid marketing report dates.',
         });
       }
-      return readPharmacyMarketingReport(ctx.db, ctx.entitlements.organizationId, scoped);
+      // DEV-943: the selected dates are the caller organisation's own days.
+      return readPharmacyMarketingReport(
+        ctx.db,
+        ctx.entitlements.organizationId,
+        scoped,
+        ctx.organization?.timezone
+      );
     }),
   /** DEV-79: estimated lost, recovered and net demand value by branch, salt and distributor. */
   lostSalesRecovery: reports

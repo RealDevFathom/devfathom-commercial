@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { cleanup, render, screen, fireEvent, within } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 vi.mock('@/lib/trpc', () => ({
   trpc: {
@@ -263,5 +263,68 @@ describe('DEV-693 official price changes', () => {
     expect(onRetry).toHaveBeenCalled();
     rerender(<DrapPriceAlertsView forbidden onRetry={onRetry} onDismiss={vi.fn()} />);
     expect(screen.getByText(/safety access is required/)).toBeInTheDocument();
+  });
+});
+
+describe('DEV-943 price dates use the shop’s day', () => {
+  it.each([
+    // A price set at 19:30 UTC is already the next day in Karachi; at 18:59 UTC it is not.
+    ['Asia/Karachi', '2026-11-18T19:30:00.000Z', '2026-11-19'],
+    ['Asia/Karachi', '2026-11-18T18:59:00.000Z', '2026-11-18'],
+    // A UTC organisation keeps the UTC day, exactly as before.
+    ['UTC', '2026-11-18T19:30:00.000Z', '2026-11-18'],
+    [undefined, '2026-11-18T19:30:00.000Z', '2026-11-18'],
+  ])('in %s a price policy and an override set at %s read %s', (timeZone, at, day) => {
+    render(
+      <PriceNoticesView
+        {...base}
+        timeZone={timeZone}
+        data={{ ...data, packRows: [{ ...packRow, effectiveDate: new Date(at) }] }}
+      />
+    );
+    const table = screen.getByRole('table', { name: 'Current pack variance, PKR' });
+    expect(within(table).getByText(day)).toBeInTheDocument();
+    cleanup();
+    render(
+      <PriceOverridesView
+        timeZone={timeZone}
+        onRetry={base.onRetry}
+        data={[
+          {
+            id: 'override',
+            organizationId: 'org',
+            presentationId: 'presentation',
+            packLevelId: 'box',
+            branchId: 'branch',
+            branchName: 'Main branch',
+            medicine: 'Medicine',
+            presentation: 'Tablet',
+            packLevel: 'BOX',
+            isOverride: true,
+            mrpMinor: 12300,
+            sellingPriceMinor: 12000,
+            effectiveFrom: new Date(at),
+            source: 'manual',
+            proposalId: null,
+            reviewedOrgPriceId: null,
+            createdById: 'actor',
+            proposedById: null,
+            createdAt: new Date(at),
+            needsReview: false,
+          },
+        ]}
+      />
+    );
+    expect(screen.getByText(day)).toBeInTheDocument();
+  });
+  it('reads a DRAP notice’s calendar date as stored, in every zone', () => {
+    render(
+      <PriceNoticesView
+        {...base}
+        timeZone="America/New_York"
+        data={{ ...data, rows: [{ ...row, effectiveDate: new Date('2027-01-01') }] }}
+      />
+    );
+    expect(screen.getAllByText('2027-01-01').length).toBeGreaterThan(0);
   });
 });

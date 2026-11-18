@@ -939,13 +939,15 @@ async function loadCounterReceipt(
     }),
     ctx.db.organization.findUnique({
       where: { id: scope.organizationId },
-      select: { currency: true },
+      select: { currency: true, timezone: true },
     }),
   ]);
   if (!branch) throw new PharmacyCounterError('CROSS_BRANCH_REFERENCE');
   return readCounterReceipt(ctx.db, scope, saleId, {
     name: branch.name,
     currency: organization?.currency ?? 'PKR',
+    // DEV-943: the receipt time is printed on the caller organisation's own clock.
+    timeZone: workspaceTimezone(organization?.timezone),
   });
 }
 

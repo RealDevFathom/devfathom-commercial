@@ -87,7 +87,7 @@ function escPosFacts(
   // (and older snapshots without the frozen identity) keep the profile read for the sale.
   const taxIdentity = receipt.cashMemoIdentity ?? currentTaxIdentity;
   const strings = COUNTER_RECEIPT_STRINGS.en;
-  const date = `${strings.date}: ${formatReceiptIssuedAt(receipt.completedAt)}`;
+  const date = `${strings.date}: ${formatReceiptIssuedAt(receipt.completedAt, receipt.timeZone)}`;
   let cashReceived: number | null;
   try {
     cashReceived = receiptCashReceived(receipt.tenders);

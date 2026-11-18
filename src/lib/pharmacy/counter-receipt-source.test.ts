@@ -187,3 +187,18 @@ describe('#708 cash memo facts on reprint', () => {
     expect((await snapshotFixture({ cashMemoIdentity: null })).cashMemoIdentity).toBeNull();
   });
 });
+
+describe('DEV-943 receipt zone', () => {
+  it('carries the organisation zone the caller supplies, and none when it supplies none', async () => {
+    const f = fixture();
+    const scope = { organizationId: 'org-a', branchId: 'branch-a' };
+    await expect(
+      readCounterReceipt(f.db as never, scope, 'sale-a', {
+        name: 'Synthetic pharmacy',
+        currency: 'PKR',
+        timeZone: 'Asia/Karachi',
+      })
+    ).resolves.toMatchObject({ timeZone: 'Asia/Karachi' });
+    await expect(f.read()).resolves.not.toHaveProperty('timeZone');
+  });
+});

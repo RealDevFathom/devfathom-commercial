@@ -5,7 +5,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CounterAlert } from '@/lib/pharmacy/counter-alerts';
 import type { CounterPatientPanel } from '@/lib/pharmacy/counter-prescriptions';
 
-const mocks = vi.hoisted(() => ({ acknowledge: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  acknowledge: vi.fn(),
+  workspace: undefined as
+    undefined | { timezone: string; prescribers: never[]; medicines: never[] },
+}));
 
 vi.mock('@/components/pharmacy/dispensing/prescriptions-console', () => ({
   attachmentUrl: (url: string) => url.startsWith('/api/pharmacy/prescription-files?'),
@@ -18,7 +22,7 @@ vi.mock('@/lib/trpc', () => ({
   trpc: {
     useUtils: () => ({}),
     pharmacyPrescriptions: {
-      workspace: { useQuery: () => ({ data: undefined, isLoading: false, error: null }) },
+      workspace: { useQuery: () => ({ data: mocks.workspace, isLoading: false, error: null }) },
       uploadSource: { useMutation: () => ({ isPending: false }) },
       extractSource: { useMutation: () => ({ isPending: false }) },
       capture: { useMutation: () => ({ isPending: false }) },
@@ -142,7 +146,10 @@ function authorization(
   };
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.workspace = undefined;
+});
 
 describe('CounterRxPanel checks', () => {
   it('leads with safety blocks, keeps notices distinct, and only acknowledges advice', () => {
@@ -355,5 +362,28 @@ describe('CounterRxPanel checks', () => {
     expect(screen.getByRole('button', { name: 'Detach patient' })).toBeDisabled();
     expect(screen.getByLabelText('Approving pharmacist')).toBeDisabled();
     expect(screen.getByLabelText('Emergency supply, no prescription')).toBeDisabled();
+  });
+});
+
+describe('DEV-943: Rx photo dates use the shop’s day', () => {
+  it.each([
+    // 19:30 UTC on 18 Nov is already 00:30 on 19 Nov in Karachi.
+    ['Asia/Karachi', '2026-11-18T19:30:00.000Z', '2026-11-20', '2026-12-19'],
+    // 18:59 UTC is still 23:59 on 18 Nov in Karachi.
+    ['Asia/Karachi', '2026-11-18T18:59:00.000Z', '2026-11-19', '2026-12-18'],
+    // A UTC organisation keeps the UTC day, exactly as before.
+    ['UTC', '2026-11-18T19:30:00.000Z', '2026-11-19', '2026-12-18'],
+  ])('in %s at %s the valid-until field starts at %s and defaults to %s', (zone, now, min, day) => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(now) });
+    try {
+      mocks.workspace = { timezone: zone, prescribers: [], medicines: [] };
+      render(<CounterRxPanel {...props({ patient })} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Photograph prescription' }));
+      const validUntil = screen.getByLabelText('Valid until');
+      expect(validUntil).toHaveAttribute('min', min);
+      expect(validUntil).toHaveValue(day);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

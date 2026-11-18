@@ -1,3 +1,4 @@
+import { workspaceTimezone, workspaceZoneLabel } from '@/lib/timezone';
 import { formatKarachiDateTime } from './karachi-time';
 /**
  * PH-POS / POS-08 — the counter receipt: thermal and A4, Urdu and English.
@@ -105,6 +106,11 @@ export type CounterReceipt = {
   branchName: string;
   businessDate: string | null;
   completedAt: string | null;
+  /**
+   * DEV-943: the organisation's configured zone, which the completion time is read in.
+   * Supplied by settled receipt reads; absent only for legacy in-memory callers.
+   */
+  timeZone?: string | null;
   cashierName?: string | null;
   /** #708: buyer named at completion (typed at tender, or the sale's customer/patient). */
   buyerName?: string | null;
@@ -553,11 +559,32 @@ export function counterReceiptTotals(input: {
   };
 }
 
-/** Completion wall time on customer paper; the accounting business date stays separate. */
-export function formatReceiptIssuedAt(value: string | null): string {
+/**
+ * Completion wall time on customer paper; the accounting business date stays separate.
+ * DEV-943: read on the organisation's own clock (`receipt.timeZone`, as
+ * {@link workspaceTimezone} reads it: a missing or refused zone is UTC), named beside the
+ * time: "2026-11-19 00:30 PKT", "2026-11-18 19:30 UTC". Only a caller with no
+ * organisation zone at all (`undefined`, such as a legacy in-memory receipt) keeps the
+ * Pakistan wall time.
+ */
+export function formatReceiptIssuedAt(value: string | null, timeZone?: string | null): string {
   if (!value) return '—';
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '—' : formatKarachiDateTime(date);
+  if (Number.isNaN(date.getTime())) return '—';
+  if (timeZone === undefined) return formatKarachiDateTime(date);
+  const zone = workspaceTimezone(timeZone);
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: zone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value ?? '';
+  return `${part('year')}-${part('month')}-${part('day')} ${part('hour')}:${part('minute')} ${workspaceZoneLabel(zone)}`;
 }
 
 /** Separate informational savings lines; already included in total discounts. */

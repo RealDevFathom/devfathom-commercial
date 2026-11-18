@@ -348,3 +348,48 @@ it('DEV-786: needs no authorizer when every completed-sale line is already retur
     expect.objectContaining({ data: { status: 'RETURNED' } })
   );
 });
+it.each([
+  // DEV-943: 19:30 UTC is already 00:30 the next day in Karachi; 18:59 UTC is still 23:59.
+  ['Asia/Karachi', '2026-11-18T19:30:00.000Z', '2026-11-19'],
+  ['Asia/Karachi', '2026-11-18T18:59:00.000Z', '2026-11-18'],
+  // A UTC organisation books on the UTC day, as before.
+  ['UTC', '2026-11-18T19:30:00.000Z', '2026-11-18'],
+])(
+  'DEV-943: a %s return refund at %s books on the shop day %s when no date is sent',
+  async (timezone, now, day) => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(now) });
+    try {
+      const { db } = fixture();
+      const findUnique = vi.fn().mockResolvedValue({ timezone });
+      const scoped = { ...db, organization: { findUnique } };
+      const { businessDate: _omitted, ...withoutDate } = physicalReturn;
+      void _omitted;
+      await recordDeliveryCommand(scoped as never, scope, withoutDate, {
+        authorizeRefund: async () => {},
+      });
+      // The zone is read from the caller's own organisation, never from input.
+      expect(findUnique).toHaveBeenCalledWith({
+        where: { id: scope.organizationId },
+        select: { timezone: true },
+      });
+      expect(refundPharmacyTender).toHaveBeenCalledWith(
+        scoped,
+        scope,
+        expect.objectContaining({ businessDate: new Date(`${day}T00:00:00.000Z`) }),
+        { drawerOperator: { kind: 'COUNTER', actorIsManager: true } }
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+);
+it('DEV-943: a return without a drawer device still asks for the drawer', async () => {
+  const { db } = fixture();
+  const { businessDate: _date, deviceId: _device, ...withoutDrawer } = physicalReturn;
+  void _date;
+  void _device;
+  await expect(
+    recordDeliveryCommand(db as never, scope, withoutDrawer, { authorizeRefund: async () => {} })
+  ).rejects.toThrow('DRAWER_REQUIRED');
+  expect(refundPharmacyTender).not.toHaveBeenCalled();
+});

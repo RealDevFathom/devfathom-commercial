@@ -4922,7 +4922,7 @@ function ScopedPharmacyCounterConsole({
                     >
                       <span>
                         {entry.kind} · Receipt {entry.sale?.receiptNumber ?? '—'} ·{' '}
-                        {new Date(entry.occurredAt).toISOString().slice(0, 10)}
+                        {workspaceToday(workspaceZone, new Date(entry.occurredAt))}
                       </span>
                       <span className="font-mono tabular-nums">
                         {entry.points > 0 ? '+' : ''}

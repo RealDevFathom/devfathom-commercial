@@ -160,6 +160,7 @@ export async function sendWhatsAppReceiptLink(input: {
   const receipt = await readCounterReceipt(db, scope, input.saleId, {
     name: branch.name,
     currency: organization.currency ?? 'PKR',
+    timeZone: workspaceTimezone(organization.timezone),
   });
   const { token, tokenHash } = mintHostedReceiptToken();
   const url = tenantHostUrl(organization.slug, `/receipt/${token}`);
@@ -268,7 +269,7 @@ async function receiptFor(db: ScopedDb, link: LiveLink): Promise<HostedReceiptVi
     }),
     db.organization.findUnique({
       where: { id: link.organizationId },
-      select: { currency: true },
+      select: { currency: true, timezone: true },
     }),
     db.pharmacySale.findFirst({
       where: { id: link.saleId, organizationId: link.organizationId, branchId: link.branchId },
@@ -279,6 +280,8 @@ async function receiptFor(db: ScopedDb, link: LiveLink): Promise<HostedReceiptVi
   const receipt = await readCounterReceipt(db, scope, link.saleId, {
     name: branch.name,
     currency: organization?.currency ?? 'PKR',
+    // DEV-943: the hosted receipt's time is read on the shop's own clock.
+    timeZone: workspaceTimezone(organization?.timezone),
   });
   return hostedReceiptView(receipt);
 }

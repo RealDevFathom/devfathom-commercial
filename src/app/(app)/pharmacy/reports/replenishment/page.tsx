@@ -44,6 +44,11 @@ export default async function ReplenishmentPage({
       financial: ctx.session?.user?.role === 'ADMIN' && catalog.permissions.financial,
       initialBranchId: invalidBranch ? '' : branchId,
       invalidInitialBranch: invalidBranch,
+      // DEV-943: kept on the UTC day on purpose. The replenishment reader counts demand
+      // coverage, history and scenario dates in UTC days and refuses a history that ends
+      // after the read instant (`validatePharmacyReplenishmentReportInput`), so between
+      // 00:00 and 04:59 PKT the shop's day would make the default window invalid. The
+      // screen says so in Details; label and server window agree.
       today: new Date().toISOString().slice(0, 10),
       timeZone: actor.organization?.timezone ?? null,
     };

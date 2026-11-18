@@ -166,7 +166,7 @@ export function buildCounterReceiptPreview(
           ? receiptTitle(receipt, locale)
           : String(receipt.receiptNumber),
       invoiceLabel: memo ? memo.title : strings.invoice,
-      issuedAt: `${memo ? `${memo.licence.join('\n')}\n${memo.buyer}\n` : ''}${strings.date}: ${formatReceiptIssuedAt(receipt.completedAt)}${receipt.counterLabel ? `\n${receipt.counterLabel}` : ''}${offlineReference ? `\n${offlineReference}` : ''}${receipt.cashierName ? `\n${strings.cashier}: ${receipt.cashierName}` : ''}`,
+      issuedAt: `${memo ? `${memo.licence.join('\n')}\n${memo.buyer}\n` : ''}${strings.date}: ${formatReceiptIssuedAt(receipt.completedAt, receipt.timeZone)}${receipt.counterLabel ? `\n${receipt.counterLabel}` : ''}${offlineReference ? `\n${offlineReference}` : ''}${receipt.cashierName ? `\n${strings.cashier}: ${receipt.cashierName}` : ''}`,
       lines: receipt.lines.map((line) => {
         const presentation = counterLinePresentation(line, locale);
         const promotion = receiptPromotionLabel(line, locale);

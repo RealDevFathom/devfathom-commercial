@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 import { CalendarClock, Plus, Upload } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
+import { workspaceToday } from '@/lib/timezone';
 import type { PrescriptionUpload } from '@/lib/pharmacy/prescription-files';
 import {
   formatPrescriptionDate,
@@ -15,8 +16,6 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { AccessDeniedState, Field, WorkspaceState, fieldClass, isAccessDenied } from './field';
 import { MedicationCard } from './medication-card';
 import { PrescriptionDirectoryCard } from './prescription-directory';
-
-const today = () => new Date().toISOString().slice(0, 10);
 
 /** Private, authenticated, no-store evidence thumbnail; next/image would cache it. */
 function EvidenceThumbnail({ url, label }: { url: string; label: string }) {
@@ -414,7 +413,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                         required
                         name="validFrom"
                         type="date"
-                        defaultValue={today()}
+                        defaultValue={workspaceToday(workspace.data.timezone)}
                         className={fieldClass}
                       />
                     </Field>

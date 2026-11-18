@@ -6,6 +6,7 @@ import {
   counterReceiptTotals,
   formatMinor,
   formatReceiptExpiry,
+  formatReceiptIssuedAt,
   formatShortExpiry,
   localizeReceiptNumber,
   PharmacyCounterReceiptError,
@@ -474,5 +475,44 @@ describe('bilingual string table', () => {
       if (key === 'saleUnit') continue;
       expect(COUNTER_RECEIPT_STRINGS.ur[key], key).not.toBe(COUNTER_RECEIPT_STRINGS.en[key]);
     }
+  });
+});
+
+describe('DEV-943 receipt time on the organisation clock', () => {
+  const printJob = (source: CounterReceipt) =>
+    buildPharmacyReceiptPrintDocument(source, 'en', {
+      layout: DEFAULT_RECEIPT_LAYOUT,
+      taxIdentity: { ntn: null, strn: null },
+      reprint: false,
+    }).receiptSnapshot!.facts.issuedAt;
+
+  it.each([
+    // 19:30 UTC is 00:30 the next day in Karachi; 18:59 UTC is still 23:59 the same day.
+    ['2026-11-18T19:30:00.000Z', 'Asia/Karachi', '2026-11-19 00:30 PKT'],
+    ['2026-11-18T18:59:00.000Z', 'Asia/Karachi', '2026-11-18 23:59 PKT'],
+    // A UTC organisation reads its own clock; a missing or refused zone reads as UTC.
+    ['2026-11-18T19:30:00.000Z', 'UTC', '2026-11-18 19:30 UTC'],
+    ['2026-11-18T19:30:00.000Z', null, '2026-11-18 19:30 UTC'],
+    ['2026-11-18T19:30:00.000Z', 'PKT', '2026-11-18 19:30 UTC'],
+    ['2026-07-01T12:00:00.000Z', 'Europe/London', '2026-07-01 13:00 Europe/London'],
+  ])('formats %s in %s as %s', (at, zone, text) => {
+    expect(formatReceiptIssuedAt(at, zone)).toBe(text);
+  });
+
+  it('keeps the Pakistan wall time for a legacy receipt with no zone at all', () => {
+    expect(formatReceiptIssuedAt('2026-11-18T19:30:00.000Z')).toBe('2026-11-19 00:30 PKT');
+    expect(formatReceiptIssuedAt(null, 'UTC')).toBe('—');
+    expect(formatReceiptIssuedAt('not a time', 'UTC')).toBe('—');
+  });
+
+  it('prints, previews and hosts the receipt time in the receipt’s organisation zone', () => {
+    const utc = receipt({ completedAt: '2026-11-18T19:30:00.000Z', timeZone: 'UTC' });
+    const karachi = receipt({ completedAt: '2026-11-18T19:30:00.000Z', timeZone: 'Asia/Karachi' });
+    expect(printJob(utc)).toContain('2026-11-18 19:30 UTC');
+    expect(printJob(karachi)).toContain('2026-11-19 00:30 PKT');
+    expect(buildCounterReceiptPreview(utc, 'en', 80)).toContain('2026-11-18 19:30 UTC');
+    expect(buildCounterReceiptPreview(karachi, 'en', 80)).toContain('2026-11-19 00:30 PKT');
+    expect(hostedReceiptView(utc)).toMatchObject({ timeZone: 'UTC' });
+    expect(hostedReceiptView(receipt())).not.toHaveProperty('timeZone');
   });
 });

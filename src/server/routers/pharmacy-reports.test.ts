@@ -3,6 +3,7 @@ import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 
 const mocks = vi.hoisted(() => ({
   repeatRead: vi.fn().mockResolvedValue({ horizons: [] }),
+  marketingRead: vi.fn().mockResolvedValue({}),
   can: vi.fn<typeof import('@/lib/abac').can>(async () => false),
   branchFindMany: vi.fn(),
   supplierFindMany: vi.fn(),
@@ -94,6 +95,13 @@ vi.mock('@/lib/pharmacy/repeat-purchasing', async () => ({
     '@/lib/pharmacy/repeat-purchasing'
   )),
   readRepeatPurchasing: mocks.repeatRead,
+}));
+
+vi.mock('@/lib/pharmacy/marketing-report', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/pharmacy/marketing-report')>(
+    '@/lib/pharmacy/marketing-report'
+  )),
+  readPharmacyMarketingReport: mocks.marketingRead,
 }));
 
 vi.mock('server-only', () => ({}));
@@ -1282,6 +1290,40 @@ describe('repeat purchasing authorization', () => {
       caller().repeatPurchasing({ ...input, supplierId: 'supplier' } as typeof input)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mocks.repeatRead).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-943 marketing report zone', () => {
+  const input = { from: '2026-11-13', to: '2026-11-19' };
+  beforeEach(() => {
+    mocks.can.mockResolvedValue(true);
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.marketingRead.mockClear();
+  });
+  it.each([
+    ['Asia/Karachi', 'Asia/Karachi'],
+    ['UTC', 'UTC'],
+    [undefined, undefined],
+  ])('reads the days in the session organisation zone %s', async (stored, zone) => {
+    const ctx = context();
+    (ctx as { organization: unknown }).organization = {
+      id: 'org_1',
+      ...(stored ? { timezone: stored } : {}),
+    };
+    await pharmacyReportsRouter.createCaller(ctx).marketing(input);
+    expect(mocks.marketingRead).toHaveBeenCalledWith(
+      expect.anything(),
+      'org_1',
+      { ...input, branchIds: ['branch_1'] },
+      zone
+    );
+  });
+  it('takes no zone from input', async () => {
+    await expect(
+      caller().marketing({ ...input, timezone: 'Asia/Karachi' } as typeof input)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.marketingRead).not.toHaveBeenCalled();
   });
 });
 

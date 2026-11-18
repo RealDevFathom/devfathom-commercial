@@ -804,6 +804,36 @@ describe('PharmacyCounterConsole authoritative bill state', () => {
     expect(screen.queryByText(notice)).not.toBeInTheDocument();
   });
 
+  it.each([
+    // DEV-943: 19:30 UTC is already 00:30 the next day in Karachi; 18:59 UTC is still 23:59.
+    ['Asia/Karachi', '2026-11-18T19:30:00.000Z', '2026-11-19'],
+    ['Asia/Karachi', '2026-11-18T18:59:00.000Z', '2026-11-18'],
+    // A UTC organisation keeps the UTC day, as before.
+    ['UTC', '2026-11-18T19:30:00.000Z', '2026-11-18'],
+  ])('dates a %s points-ledger entry at %s on the shop’s day', (timezone, occurredAt, day) => {
+    mocks.queries.counterBranches = query({
+      branches: [{ id: 'branch-a', name: 'Synthetic branch', code: 'MT1' }],
+      timezone,
+    });
+    mocks.queries.customerSnapshot = query({
+      customer: { id: 'customer-a', displayName: 'Retail name', creditLimitMinor: 0 },
+      pointsBalance: 35,
+      earnRateSet: true,
+      creditBalanceMinor: 0,
+      availableCreditMinor: 0,
+      pointsHistory: [
+        { id: 'points-a', kind: 'EARN', points: 5, occurredAt, sale: { receiptNumber: 7 } },
+      ],
+      pointsCount: 1,
+      pointsPage: 1,
+      history: [],
+    });
+    renderPayment(<PharmacyCounterConsole />);
+    fireEvent.click(screen.getByRole('button', { name: '35 loyalty points', hidden: true }));
+    const ledger = screen.getByRole('list', { name: 'Points ledger', hidden: true });
+    expect(ledger).toHaveTextContent(`EARN · Receipt 7 · ${day}`);
+  });
+
   it('does not settle an idle counter', () => {
     renderPayment(<PharmacyCounterConsole />);
     expect(screen.queryByText('Settled')).not.toBeInTheDocument();

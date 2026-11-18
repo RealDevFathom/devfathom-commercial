@@ -62,3 +62,38 @@ it('uses shop language for the campaign heading', () => {
   expect(screen.getByRole('heading', { name: 'Campaign results' })).toBeVisible();
   expect(screen.queryByText('Marketing evidence')).not.toBeInTheDocument();
 });
+
+it('DEV-943: names the organisation zone the period was counted in', () => {
+  const report = {
+    period: { from: '2026-11-13', to: '2026-11-19', timezone: 'Asia/Karachi' },
+    cutoff: '2026-11-19T19:00:00Z',
+    prepared: 0,
+    providerAccepted: 0,
+    delivered: 0,
+    failed: 0,
+    unknown: 0,
+    contradictory: 0,
+    consentOptOuts: 0,
+    unassignedConsentOptOuts: 0,
+    sandbox: { captures: 0, delivered: 0, failed: 0, unknown: 0 },
+    attribution: {
+      attributedReceipts: 0,
+      recoveredSalesMinor: 0,
+      recoveredMarginMinor: 0,
+      excludedUnverifiedLinks: 0,
+      excludedCompetingLinks: 0,
+    },
+    definitions: {},
+    exclusions: [],
+  };
+  const { unmount } = render(<MarketingSummary report={report as never} money={String} />);
+  expect(screen.getByText(/2026-11-13–2026-11-19 \(PKT/)).toBeInTheDocument();
+  unmount();
+  render(
+    <MarketingSummary
+      report={{ ...report, period: { ...report.period, timezone: 'UTC' } } as never}
+      money={String}
+    />
+  );
+  expect(screen.getByText(/2026-11-13–2026-11-19 \(UTC/)).toBeInTheDocument();
+});
