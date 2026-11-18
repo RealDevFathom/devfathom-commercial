@@ -4560,6 +4560,33 @@ describe('PharmacyCounterConsole search latency (DEV-575)', () => {
     ).toEqual([]);
   });
 
+  it('keeps the focused scan field neutral until a search fails (DEV-44)', () => {
+    vi.useFakeTimers();
+    const view = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    const search = screen.getByLabelText('Scan or search');
+    // Focused on load: no error state, and a neutral focus ring instead of the coral one.
+    expect(search).toHaveFocus();
+    expect(search).not.toHaveAttribute('aria-invalid');
+    expect(search).toHaveClass('[--ring:var(--text-muted)]');
+    expect(search).not.toHaveClass('[--ring:var(--destructive)]');
+
+    mocks.queries.counterSearch = {
+      ...query(),
+      isSuccess: false,
+      isError: true,
+      error: new Error('Search unavailable'),
+    };
+    fireEvent.change(search, { target: { value: 'para' } });
+    act(() => vi.advanceTimersByTime(1000));
+    view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(mocks.searchProps.mock.lastCall![0]).toMatchObject({ state: 'error' });
+    expect(search).toHaveAttribute('aria-invalid', 'true');
+    expect(search).toHaveClass('[--ring:var(--destructive)]');
+    expect(search).not.toHaveClass('[--ring:var(--text-muted)]');
+  });
+
   it('re-runs a completed name search on the newly selected branch', () => {
     vi.useFakeTimers();
     mocks.queries.counterBranches = query({

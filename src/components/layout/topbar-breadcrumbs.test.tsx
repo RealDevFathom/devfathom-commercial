@@ -167,4 +167,56 @@ describe('TopbarBreadcrumbs hydration', () => {
     expect(container).not.toHaveTextContent('Pharmacist-queue');
     await act(async () => root.unmount());
   });
+
+  it('names every pharmacy destination as the pharmacy menu does (DEV-44)', async () => {
+    const pages = menu.filter((item) => item.group === 'Pharmacy');
+    expect(pages.map((item) => item.href)).toEqual(
+      expect.arrayContaining(['/pharmacy', '/pharmacy/medicines', '/pharmacy/counter/close'])
+    );
+    const container = document.createElement('nav');
+    container.innerHTML = renderToString(<TopbarBreadcrumbs />);
+    document.body.appendChild(container);
+    let root: ReturnType<typeof hydrateRoot>;
+    await act(async () => {
+      root = hydrateRoot(container, <TopbarBreadcrumbs />);
+    });
+    for (const page of pages) {
+      navigation.pathname = page.href;
+      await act(async () => root.render(<TopbarBreadcrumbs />));
+      expect(container.querySelector('[aria-current="page"]'), page.href).toHaveTextContent(
+        page.label
+      );
+    }
+    await act(async () => root.unmount());
+  });
+
+  it('links a pharmacy menu destination above the current page, but not the workspace (DEV-44)', async () => {
+    const container = document.createElement('nav');
+    container.innerHTML = renderToString(<TopbarBreadcrumbs />);
+    document.body.appendChild(container);
+    let root: ReturnType<typeof hydrateRoot>;
+    await act(async () => {
+      root = hydrateRoot(container, <TopbarBreadcrumbs />);
+    });
+
+    navigation.pathname = '/pharmacy/counter/close';
+    await act(async () => root.render(<TopbarBreadcrumbs />));
+    expect(container.querySelector('a[href="/pharmacy/counter"]')).toHaveTextContent('Counter');
+    expect(container.querySelector('[aria-current="page"]')).toHaveTextContent('Day close');
+    // The workspace segment is not the Onboarding page and does not link to it.
+    expect(container.querySelector('a[href="/pharmacy"]')).toBeNull();
+    expect(container).toHaveTextContent('PharmacyCounterDay close');
+    expect(container).not.toHaveTextContent('Onboarding');
+
+    navigation.pathname = '/pharmacy/inventory/expiry';
+    await act(async () => root.render(<TopbarBreadcrumbs />));
+    expect(container.querySelector('a[href="/pharmacy/inventory"]')).toHaveTextContent('Inventory');
+
+    navigation.pathname = '/pharmacy/reports';
+    await act(async () => root.render(<TopbarBreadcrumbs />));
+    expect(container.querySelector('[aria-current="page"]')).toHaveTextContent(
+      'Reports & Insights'
+    );
+    await act(async () => root.unmount());
+  });
 });

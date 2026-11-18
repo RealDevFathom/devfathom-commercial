@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import { ChevronRight } from 'lucide-react';
 import { useBreadcrumbStore } from '@/lib/breadcrumb-store';
 import { cn } from '@/lib/utils';
+import { navigation } from './sidebar';
 
 export const routeLabels: Record<string, string> = {
   '/dashboard': 'Dashboard',
@@ -51,11 +52,27 @@ export const routeLabels: Record<string, string> = {
   '/pharmacy/pharmacist-queue': 'Pharmacist queue',
 };
 
+/**
+ * DEV-44: a pharmacy page is named in the breadcrumb as the pharmacy menu names it
+ * ("Medicine catalog", "Day close", "Reports & Insights"), and a menu destination
+ * that sits above the current page links back to it. `/pharmacy` itself is only
+ * "Onboarding" when it is the current page; above another page it is the workspace.
+ */
+const pharmacyMenuLabels = new Map(
+  navigation
+    .filter((item) => item.href === '/pharmacy' || item.href.startsWith('/pharmacy/'))
+    .map((item) => [item.href, item.label])
+);
+
 const linkableDetailRoute = /^\/(projects|clients|notes|team|meetings)\/[^/]+$/;
 const subscribeToHydration = () => () => {};
 
 function isLinkableBreadcrumb(href: string) {
-  return href in routeLabels || linkableDetailRoute.test(href);
+  return (
+    href in routeLabels ||
+    (href !== '/pharmacy' && pharmacyMenuLabels.has(href)) ||
+    linkableDetailRoute.test(href)
+  );
 }
 
 export function TopbarBreadcrumbs() {
@@ -79,6 +96,9 @@ export function TopbarBreadcrumbs() {
     return {
       label:
         routeLabels[href] ||
+        (href !== '/pharmacy' || index === segments.length - 1
+          ? pharmacyMenuLabels.get(href)
+          : undefined) ||
         breadcrumbLabels[segment] ||
         segment.charAt(0).toUpperCase() + segment.slice(1),
       href,
