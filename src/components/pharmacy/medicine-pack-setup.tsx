@@ -76,7 +76,7 @@ export function MedicinePackSetup() {
         }}
       >
         <label className="min-w-0 flex-1 space-y-2 text-sm text-text-body">
-          <span>Medicine name</span>
+          <span>Find a medicine</span>
           <input
             className={control}
             required
