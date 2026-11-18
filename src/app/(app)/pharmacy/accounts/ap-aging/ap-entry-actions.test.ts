@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   requestSetOff: vi.fn(),
   approveSetOff: vi.fn(),
   rejectSetOff: vi.fn(),
+  reverseSetOff: vi.fn(),
 }));
 vi.mock('next/cache', () => ({ revalidatePath: mocks.revalidatePath }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.createTRPCContext }));
@@ -20,6 +21,7 @@ vi.mock('@/server/routers/pharmacy-ap-invoices', () => ({
       requestCreditSetOff: mocks.requestSetOff,
       approveCreditSetOff: mocks.approveSetOff,
       rejectCreditSetOff: mocks.rejectSetOff,
+      reverseCreditSetOff: mocks.reverseSetOff,
     }),
   },
 }));
@@ -30,6 +32,7 @@ import {
   recordApInvoiceFromForm,
   rejectCreditSetOffFromForm,
   requestCreditSetOffFromForm,
+  reverseCreditSetOffFromForm,
 } from './ap-entry-actions';
 
 const idle = { status: 'idle' as const, message: '' };
@@ -289,5 +292,42 @@ describe('DEV-694 credit-note set-off actions', () => {
     expect(mocks.rejectSetOff).toHaveBeenCalledWith(
       expect.objectContaining({ reason: 'Wrong bill' })
     );
+  });
+
+  it('reverses only with a PIN and a reason, and explains a closed period', async () => {
+    const reverseForm = (fields: Record<string, string>) =>
+      form({
+        branchId: 'branch_1',
+        setOffId: 'so_1',
+        commandKey: 'ap-set-off-rev:key-0001',
+        ...fields,
+      });
+    expect((await reverseCreditSetOffFromForm(idle, reverseForm({ reason: 'x' }))).status).toBe(
+      'error'
+    );
+    expect((await reverseCreditSetOffFromForm(idle, reverseForm({ pin: '2468' }))).status).toBe(
+      'error'
+    );
+    expect(mocks.reverseSetOff).not.toHaveBeenCalled();
+    mocks.reverseSetOff.mockResolvedValue({ id: 'so_1' });
+    const saved = await reverseCreditSetOffFromForm(
+      idle,
+      reverseForm({ pin: '2468', reason: 'Wrong bill' })
+    );
+    expect(saved.status).toBe('saved');
+    expect(mocks.reverseSetOff).toHaveBeenCalledWith({
+      branchId: 'branch_1',
+      setOffId: 'so_1',
+      commandKey: 'ap-set-off-rev:key-0001',
+      reason: 'Wrong bill',
+      pin: '2468',
+    });
+    mocks.reverseSetOff.mockRejectedValue(
+      new TRPCError({ code: 'BAD_REQUEST', message: 'PERIOD_CLOSED' })
+    );
+    expect(
+      (await reverseCreditSetOffFromForm(idle, reverseForm({ pin: '2468', reason: 'Wrong bill' })))
+        .message
+    ).toContain('closed accounting period');
   });
 });

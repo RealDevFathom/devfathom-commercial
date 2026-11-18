@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   listSetOffs: vi.fn(),
   soleApprover: vi.fn(),
   setOffGroupBy: vi.fn(),
+  reverseSetOff: vi.fn(),
 }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -62,6 +63,7 @@ vi.mock('@/lib/pharmacy/accounts/ap-credit-set-off', async () => ({
   rejectApCreditSetOff: mocks.rejectSetOff,
   listApCreditSetOffs: mocks.listSetOffs,
   isSoleSetOffApprover: mocks.soleApprover,
+  reverseApCreditSetOff: mocks.reverseSetOff,
 }));
 vi.mock('@/lib/pharmacy/accounts/ap-aging', async () => ({
   ...(await vi.importActual<typeof import('@/lib/pharmacy/accounts/ap-aging')>(
@@ -375,7 +377,8 @@ describe('pharmacyApInvoices router — payablesDrafts', () => {
       scope,
       '2026-11-15',
       expect.any(Date),
-      undefined
+      undefined,
+      { allPages: true }
     );
     expect(mocks.creditFindMany.mock.calls[0]![0].where).toMatchObject({
       organizationId: 'org_1',
@@ -414,7 +417,8 @@ describe('pharmacyApInvoices router — payablesDrafts', () => {
         scope,
         '2026-11-16',
         expect.any(Date),
-        'Asia/Karachi'
+        'Asia/Karachi',
+        { allPages: true }
       );
       const where = mocks.creditFindMany.mock.calls[0]![0].where;
       expect(where.receivedAt.lt).toEqual(new Date('2026-11-16T19:00:00.000Z'));
@@ -556,7 +560,7 @@ describe('pharmacyApInvoices router — credit set-off', () => {
     mocks.mayManage.mockResolvedValue(false);
     await expect(caller().approveCreditSetOff(approveInput)).rejects.toMatchObject({
       code: 'FORBIDDEN',
-      message: 'Only a manager or owner can approve or reject a set-off.',
+      message: 'Only a manager or owner can approve, reject or reverse a set-off.',
     });
     await expect(
       caller().rejectCreditSetOff({
@@ -671,7 +675,10 @@ describe('pharmacyApInvoices router — set-off suggestion capacity', () => {
     await caller().payablesDrafts(draftsInput);
     expect(mocks.creditFindMany.mock.calls[0]![0].select.apSetOffs.where).toEqual({
       requestedAt: { lt: cutoff },
-      OR: [{ status: { not: 'REJECTED' } }, { decidedAt: { gte: cutoff } }],
+      NOT: [
+        { status: 'REJECTED', decidedAt: { lt: cutoff } },
+        { status: 'REVERSED', reversedAt: { lt: cutoff } },
+      ],
     });
   });
 
@@ -712,5 +719,103 @@ describe('pharmacyApInvoices router — set-off suggestion capacity', () => {
     expect(result.setOffDraft.unmatchedCreditMinor).toBe(900);
     // The reminders still use the unchanged aging.
     expect(result.reminders[0]!.overdueMinor).toBe(2_000);
+  });
+});
+
+describe('pharmacyApInvoices router — credit set-off reversal', () => {
+  const reverseInput = {
+    branchId: 'branch_1',
+    setOffId: 'so_1',
+    commandKey: 'ap-set-off-rev:0001',
+    reason: 'Wrong bill',
+    pin: '2468',
+  };
+  const reversed = {
+    id: 'so_1',
+    status: 'REVERSED',
+    invoiceId: 'inv_1',
+    supplierCreditId: 'cr_1',
+    amountMinor: 2_500,
+    requestedByUserId: 'clerk_1',
+    reversedByUserId: 'owner_1',
+    reversedAt: new Date('2026-11-18T11:00:00.000Z'),
+    reversalPolicy: 'PHARMACY_AP_SET_OFF_REVERSAL_MANAGER_PIN',
+    reversalEntryId: 'entry_rev',
+  };
+
+  beforeEach(() => {
+    mocks.mayManage.mockResolvedValue(true);
+    mocks.pin.mockResolvedValue({ verified: true });
+    mocks.reverseSetOff.mockResolvedValue({ setOff: reversed, replayed: false });
+  });
+
+  it('is mounted on the root router', async () => {
+    const { appRouter } = await import('./_app');
+    expect(Object.keys(appRouter._def.procedures)).toContain(
+      'pharmacyApInvoices.reverseCreditSetOff'
+    );
+  }, 60_000);
+
+  it('refuses a non-manager and a refused PIN before any money moves', async () => {
+    mocks.mayManage.mockResolvedValue(false);
+    await expect(caller().reverseCreditSetOff(reverseInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.pin).not.toHaveBeenCalled();
+    mocks.mayManage.mockResolvedValue(true);
+    mocks.pin.mockResolvedValue({ blocked: 'nope' });
+    await expect(caller().reverseCreditSetOff(reverseInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Set-off not reversed. Enter your manager or owner PIN.',
+    });
+    expect(mocks.pin).toHaveBeenCalledWith({
+      organizationId: 'org_1',
+      actorId: 'owner_1',
+      pin: '2468',
+      action: 'pharmacyApInvoices.reverseCreditSetOff',
+      policy: 'PHARMACY_AP_SET_OFF_REVERSAL_MANAGER_PIN',
+      errorCode: 'AP_SET_OFF_REVERSAL_PIN_REFUSED',
+    });
+    expect(mocks.transaction).not.toHaveBeenCalled();
+    expect(mocks.reverseSetOff).not.toHaveBeenCalled();
+  });
+
+  it('reverses in one audited transaction with the solo check wired in', async () => {
+    mocks.soleApprover.mockResolvedValue(false);
+    await expect(caller().reverseCreditSetOff(reverseInput)).resolves.toMatchObject({
+      status: 'REVERSED',
+    });
+    expect(mocks.reverseSetOff).toHaveBeenCalledWith(
+      TX,
+      scope,
+      reverseInput,
+      expect.objectContaining({ soleApprover: expect.any(Function) })
+    );
+    await mocks.reverseSetOff.mock.calls[0]![3].soleApprover();
+    expect(mocks.soleApprover).toHaveBeenCalledWith(TX, 'org_1', 'owner_1');
+    expect(mocks.recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'pharmacyApInvoices.reverseCreditSetOff',
+        operation: 'EXECUTE',
+        result: expect.objectContaining({ status: 'REVERSED', reversalEntryId: 'entry_rev' }),
+        metadata: expect.objectContaining({
+          policy: 'PHARMACY_AP_SET_OFF_REVERSAL_MANAGER_PIN',
+          reversedById: 'owner_1',
+          initiatedById: 'clerk_1',
+          pinVerified: true,
+          selfApproved: false,
+        }),
+      }),
+      TX
+    );
+  });
+
+  it.each([
+    ['ALREADY_REVERSED', 'CONFLICT'],
+    ['PERIOD_CLOSED', 'BAD_REQUEST'],
+    ['SELF_APPROVAL', 'FORBIDDEN'],
+  ] as const)('maps %s to %s', async (reason, code) => {
+    mocks.reverseSetOff.mockRejectedValue(new PharmacyApInvoiceError(reason));
+    await expect(caller().reverseCreditSetOff(reverseInput)).rejects.toMatchObject({ code });
   });
 });

@@ -796,4 +796,51 @@ describe('DEV-694: approved credit-note set-offs settle the bill', () => {
       )
     ).rejects.toMatchObject({ reason: 'ACTIVE_SETTLEMENTS' });
   });
+
+  it('allows reversing the bill once its set-off is reversed, but not before that instant', async () => {
+    const reversedInvoice = {
+      ...setOffInvoice,
+      creditSetOffs: [
+        {
+          amountMinor: 40,
+          decidedAt: new Date('2026-11-10T00:00:00.000Z'),
+          status: 'REVERSED',
+          reversedAt: new Date('2026-11-12T00:00:00.000Z'),
+        },
+      ],
+    };
+    const db = () =>
+      ({
+        $queryRaw: vi.fn(async () => []),
+        pharmacyApInvoice: {
+          findFirst: vi.fn(async (args: { where: Record<string, unknown> }) =>
+            'reverseCommandKey' in args.where ? null : reversedInvoice
+          ),
+        },
+        pharmacyAccountingPeriod: { findFirst: vi.fn(async () => null) },
+      }) as unknown as ScopedDb;
+    const clocks = invoiceSettlementClocks(reversedInvoice);
+    // In force on 11-11, gone after its reversal on 11-12.
+    expect(
+      payableMinorFrom({ amountMinor: 100, settlements: clocks }, new Date('2026-11-11T00:00:00Z'))
+    ).toBe(60);
+    expect(
+      payableMinorFrom({ amountMinor: 100, settlements: clocks }, new Date('2026-11-15T00:00:00Z'))
+    ).toBe(100);
+    // The bill cannot be reversed at an instant before the set-off's reversal.
+    await expect(
+      reverseApInvoice(
+        db(),
+        scope,
+        {
+          branchId: 'branch_1',
+          invoiceId: 'inv_9',
+          commandKey: 'rev-inv-0010',
+          reason: 'Duplicate',
+          at: '2026-11-11T00:00:00.000Z',
+        },
+        NOW
+      )
+    ).rejects.toMatchObject({ reason: 'INVALID_DATE' });
+  });
 });

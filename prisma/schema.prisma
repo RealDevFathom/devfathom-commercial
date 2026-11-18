@@ -3462,12 +3462,14 @@ enum PharmacyApCreditSetOffStatus {
   PENDING
   APPROVED
   REJECTED
+  REVERSED
 }
 
 /// DEV-694: staff choose the AP invoice a supplier credit note is set off
 /// against (PENDING); the payable reduces only when a manager approves it with
 /// their own fresh PIN (APPROVED), which posts Dr ACCOUNTS_PAYABLE /
-/// Cr SUPPLIER_CLAIM_RECEIVABLE. A rejected request changes no money.
+/// Cr SUPPLIER_CLAIM_RECEIVABLE. A rejected request changes no money. A manager
+/// may reverse an approved set-off once (REVERSED), posting the mirror entry.
 model PharmacyApCreditSetOff {
   id                 String                       @id @default(cuid())
   organizationId     String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -3488,6 +3490,13 @@ model PharmacyApCreditSetOff {
   approvalPolicy     String?
   rejectionReason    String?
   journalEntryId     String?
+  reversedAt         DateTime?
+  reversedByUserId   String?
+  reversalReason     String?
+  reversalPolicy     String?
+  reverseCommandKey  String?
+  reversePayloadHash String?
+  reversalEntryId    String?
   createdAt          DateTime                     @default(now())
   updatedAt          DateTime                     @updatedAt
 
@@ -3498,6 +3507,8 @@ model PharmacyApCreditSetOff {
   @@unique([organizationId, requestKey], map: "pharmacy_ap_credit_set_offs_org_request_key")
   @@unique([organizationId, decisionKey], map: "pharmacy_ap_credit_set_offs_org_decision_key")
   @@unique([organizationId, journalEntryId], map: "pharmacy_ap_credit_set_offs_org_entry_key")
+  @@unique([organizationId, reverseCommandKey], map: "pharmacy_ap_credit_set_offs_org_reverse_command_key")
+  @@unique([organizationId, reversalEntryId], map: "pharmacy_ap_credit_set_offs_org_reversal_entry_key")
   @@index([organizationId, branchId, status], map: "pharmacy_ap_credit_set_offs_org_branch_status_idx")
   @@index([organizationId, supplierCreditId, status], map: "pharmacy_ap_credit_set_offs_org_credit_status_idx")
   @@index([organizationId, branchId, invoiceId, status], map: "pharmacy_ap_credit_set_offs_org_invoice_status_idx")

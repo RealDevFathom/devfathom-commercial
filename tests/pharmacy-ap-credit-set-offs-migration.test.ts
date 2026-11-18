@@ -57,7 +57,7 @@ describe('DEV-694 AP credit-note set-off storage contract', () => {
       'CREATE UNIQUE INDEX IF NOT EXISTS "pharmacy_ap_credit_set_offs_org_entry_key"'
     );
     expect(migration).toMatch(
-      /"status" = 'APPROVED' AND "decidedAt" IS NOT NULL AND "decidedByUserId" IS NOT NULL\s+AND "decisionKey" IS NOT NULL AND "journalEntryId" IS NOT NULL/
+      /"status" IN \('APPROVED', 'REVERSED'\) AND "decidedAt" IS NOT NULL AND "decidedByUserId" IS NOT NULL\s+AND "decisionKey" IS NOT NULL AND "journalEntryId" IS NOT NULL/
     );
     expect(migration).toMatch(/"status" = 'PENDING'[^)]*"journalEntryId" IS NULL/);
   });
@@ -67,9 +67,27 @@ describe('DEV-694 AP credit-note set-off storage contract', () => {
     expect(migration).toContain(`CHECK ("currency" = 'PKR')`);
     expect(migration).toContain('pharmacy AP credit set-offs cannot be deleted');
     expect(migration).toContain('BEFORE UPDATE OR DELETE ON "pharmacy_ap_credit_set_offs"');
-    expect(migration).toContain(`IF OLD."status" <> 'PENDING' THEN`);
+    expect(migration).toContain(`IF OLD."status" IN ('REJECTED', 'REVERSED') THEN`);
+    expect(migration).toContain(`(OLD."status" = 'APPROVED' AND NEW."status" <> 'REVERSED')`);
+    expect(migration).toContain('OLD."journalEntryId" IS DISTINCT FROM NEW."journalEntryId"');
     expect(migration).toContain('OLD."amountMinor" IS DISTINCT FROM NEW."amountMinor"');
     expect(migration).toContain('OLD."invoiceId" IS DISTINCT FROM NEW."invoiceId"');
     expect(migration).toContain('OLD."supplierCreditId" IS DISTINCT FROM NEW."supplierCreditId"');
+  });
+
+  it('reverses an approved set-off once, through its own linked mirror entry', () => {
+    expect(migration).toContain(`ENUM ('PENDING', 'APPROVED', 'REJECTED', 'REVERSED')`);
+    expect(migration).toContain(
+      'CONSTRAINT "pharmacy_ap_credit_set_offs_reversal_fkey" FOREIGN KEY ("organizationId", "reversalEntryId") REFERENCES "finance_journal_entries"("organizationId", "id")'
+    );
+    expect(migration).toContain(
+      'CREATE UNIQUE INDEX IF NOT EXISTS "pharmacy_ap_credit_set_offs_org_reverse_command_key"'
+    );
+    expect(migration).toContain(
+      'CREATE UNIQUE INDEX IF NOT EXISTS "pharmacy_ap_credit_set_offs_org_reversal_entry_key"'
+    );
+    expect(migration).toMatch(
+      /"status" = 'REVERSED' AND "reversedAt" IS NOT NULL[\s\S]*"reversalEntryId" IS NOT NULL AND "reversedAt" >= "decidedAt"/
+    );
   });
 });

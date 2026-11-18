@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   lock: vi.fn(),
   post: vi.fn(),
+  reverse: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/bookkeeping', () => ({ lockPharmacyLedgerScope: mocks.lock }));
 vi.mock('@/lib/finance/journal', async () => ({
   ...(await vi.importActual<typeof import('@/lib/finance/journal')>('@/lib/finance/journal')),
   postJournalEntry: mocks.post,
+  reverseJournalEntry: mocks.reverse,
 }));
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -16,8 +18,12 @@ import {
   AP_SET_OFF_SOLE_APPROVER_POLICY,
   apCreditSetOffPostingKey,
   approveApCreditSetOff,
+  AP_SET_OFF_REVERSAL_POLICY,
+  AP_SET_OFF_REVERSAL_SOLE_APPROVER_POLICY,
+  apCreditSetOffReversalKey,
   isSoleSetOffApprover,
   rejectApCreditSetOff,
+  reverseApCreditSetOff,
   requestApCreditSetOff,
 } from './ap-credit-set-off';
 
@@ -92,7 +98,11 @@ function fixture(overrides: Partial<State> = {}) {
     },
     pharmacyApCreditSetOff: {
       findFirst: vi.fn(async (args: { where: Record<string, unknown> }) =>
-        'requestKey' in args.where || 'decisionKey' in args.where ? state.replay : state.setOff
+        'requestKey' in args.where ||
+        'decisionKey' in args.where ||
+        'reverseCommandKey' in args.where
+          ? state.replay
+          : state.setOff
       ),
       aggregate: vi.fn(async (args: { where: Record<string, unknown> }) => {
         if ('invoiceId' in args.where) {
@@ -144,6 +154,13 @@ const pendingSetOff = {
 beforeEach(() => {
   mocks.lock.mockReset();
   mocks.post.mockReset();
+  mocks.reverse.mockReset();
+  mocks.reverse.mockImplementation(async (_db, _scope, input) => ({
+    id: 'entry_rev',
+    reversesEntryId: input.entryId,
+    sourceKind: 'PHARMACY_AP_CREDIT_SET_OFF',
+    sourceId: 'so_1',
+  }));
   mocks.post.mockImplementation(async (_db, _scope, input) => ({
     id: 'entry_1',
     organizationId: 'org_1',
@@ -412,5 +429,104 @@ describe('isSoleSetOffApprover', () => {
     });
     db.user.count.mockResolvedValueOnce(1);
     await expect(isSoleSetOffApprover(scoped, 'org_1', 'owner_1')).resolves.toBe(false);
+  });
+});
+
+describe('reverseApCreditSetOff', () => {
+  const approvedSetOff = {
+    ...pendingSetOff,
+    status: 'APPROVED',
+    decisionKey: 'ap-set-off-ok:0001',
+    decidedByUserId: 'manager_1',
+    decidedAt: new Date('2026-11-17T10:00:00.000Z'),
+    journalEntryId: 'entry_1',
+  };
+  const input = { setOffId: 'so_1', commandKey: 'ap-set-off-rev:0001', reason: ' Wrong bill ' };
+  const opts = { soleApprover: async () => false, now: NOW };
+
+  it('posts the mirror of the approval entry and marks the set-off reversed', async () => {
+    const { db, scoped, order } = fixture({ setOff: approvedSetOff });
+    const result = await reverseApCreditSetOff(scoped, managerScope, input, opts);
+    expect(order).toEqual(['set-off-lock', 'credit-lock', 'invoice-lock']);
+    expect(mocks.reverse).toHaveBeenCalledWith(scoped, managerScope, {
+      entryId: 'entry_1',
+      reason: 'Wrong bill',
+      at: NOW,
+      idempotencyKey: apCreditSetOffReversalKey('so_1'),
+    });
+    expect(mocks.post).not.toHaveBeenCalled();
+    expect(db.pharmacyApCreditSetOff.update.mock.calls[0]![0].data).toMatchObject({
+      status: 'REVERSED',
+      reversedAt: NOW,
+      reversedByUserId: 'manager_1',
+      reversalReason: 'Wrong bill',
+      reversalPolicy: AP_SET_OFF_REVERSAL_POLICY,
+      reverseCommandKey: 'ap-set-off-rev:0001',
+      reversalEntryId: 'entry_rev',
+    });
+    expect(result.selfApproved).toBe(false);
+  });
+
+  it('applies the solo rule: the requester reverses only as the sole owner-level user', async () => {
+    const refused = fixture({ setOff: approvedSetOff });
+    await expect(reverseApCreditSetOff(refused.scoped, scope, input, opts)).rejects.toMatchObject({
+      reason: 'SELF_APPROVAL',
+    });
+    expect(mocks.reverse).not.toHaveBeenCalled();
+    const solo = fixture({ setOff: approvedSetOff });
+    const result = await reverseApCreditSetOff(solo.scoped, scope, input, {
+      soleApprover: async () => true,
+      now: NOW,
+    });
+    expect(result.selfApproved).toBe(true);
+    expect(solo.db.pharmacyApCreditSetOff.update.mock.calls[0]![0].data.reversalPolicy).toBe(
+      AP_SET_OFF_REVERSAL_SOLE_APPROVER_POLICY
+    );
+  });
+
+  it('refuses a set-off that is not approved, already reversed, or a blank reason', async () => {
+    await expect(
+      reverseApCreditSetOff(fixture({ setOff: pendingSetOff }).scoped, managerScope, input, opts)
+    ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+    await expect(
+      reverseApCreditSetOff(
+        fixture({ setOff: { ...approvedSetOff, status: 'REVERSED' } }).scoped,
+        managerScope,
+        input,
+        opts
+      )
+    ).rejects.toMatchObject({ reason: 'ALREADY_REVERSED' });
+    await expect(
+      reverseApCreditSetOff(
+        fixture({ setOff: approvedSetOff }).scoped,
+        managerScope,
+        { ...input, reason: '  ' },
+        opts
+      )
+    ).rejects.toMatchObject({ reason: 'MISSING_REASON' });
+  });
+
+  it('maps a closed period to PERIOD_CLOSED and changes nothing', async () => {
+    const { db, scoped } = fixture({ setOff: approvedSetOff });
+    const { FinancePostingError } = await import('@/lib/finance/journal');
+    mocks.reverse.mockRejectedValueOnce(new FinancePostingError('PERIOD_CLOSED'));
+    await expect(reverseApCreditSetOff(scoped, managerScope, input, opts)).rejects.toMatchObject({
+      reason: 'PERIOD_CLOSED',
+    });
+    expect(db.pharmacyApCreditSetOff.update).not.toHaveBeenCalled();
+  });
+
+  it('replays the same key and reason, and refuses a changed payload', async () => {
+    const first = fixture({ setOff: approvedSetOff });
+    await reverseApCreditSetOff(first.scoped, managerScope, input, opts);
+    const stored = first.db.pharmacyApCreditSetOff.update.mock.calls[0]![0].data;
+    const again = fixture({ replay: { ...approvedSetOff, ...stored } });
+    await expect(
+      reverseApCreditSetOff(again.scoped, managerScope, input, opts)
+    ).resolves.toMatchObject({ replayed: true });
+    expect(mocks.reverse).toHaveBeenCalledTimes(1);
+    await expect(
+      reverseApCreditSetOff(again.scoped, managerScope, { ...input, reason: 'Other' }, opts)
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
   });
 });

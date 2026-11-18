@@ -354,6 +354,25 @@ describe('ApAgingPage', () => {
       expect(output).toContain('Reason to reject');
     });
 
+    it('lists approved set-offs with a PIN-gated reverse form', async () => {
+      mocks.payablesDrafts.mockResolvedValue(drafts);
+      mocks.creditSetOffs.mockImplementation(async ({ status }: { status: string }) => ({
+        scope,
+        setOffs: status === 'APPROVED' ? [{ ...pending, status: 'APPROVED' }] : [],
+        retrievedAt: NOW,
+      }));
+      const output = await html({ branch: 'branch_1', asOf: '2026-11-15' });
+      expect(mocks.creditSetOffs).toHaveBeenCalledWith({
+        branchId: 'branch_1',
+        status: 'APPROVED',
+      });
+      expect(output).toContain('Approved set-offs');
+      expect(output).toContain('No set-off is waiting for approval.');
+      expect(output).toContain('Reverse set-off');
+      expect(output).toContain('Reason to reverse');
+      expect(output).toMatch(/name="commandKey" value="ap-set-off-rev:[0-9a-f-]{36}"/);
+    });
+
     it('keeps the aging when the drafts cannot be read, and says so', async () => {
       mocks.payablesDrafts.mockRejectedValue(new Error('boom'));
       const output = await html({ branch: 'branch_1' });

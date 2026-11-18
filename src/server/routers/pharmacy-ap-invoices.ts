@@ -21,8 +21,10 @@ import {
   approveApCreditSetOff,
   isSoleSetOffApprover,
   listApCreditSetOffs,
+  AP_SET_OFF_REVERSAL_POLICY,
   rejectApCreditSetOff,
   requestApCreditSetOff,
+  reverseApCreditSetOff,
 } from '@/lib/pharmacy/accounts/ap-credit-set-off';
 import { actorMayRefund, authenticateRefundPin } from '@/lib/pharmacy/refund-authorization';
 import { z } from 'zod';
@@ -40,6 +42,7 @@ import {
   listApCreditSetOffsSchema,
   rejectApCreditSetOffSchema,
   requestApCreditSetOffSchema,
+  reverseApCreditSetOffSchema,
   listApInvoicesSchema,
   payApInvoiceSchema,
   recordApInvoiceSchema,
@@ -70,7 +73,10 @@ const CONFLICT_REASONS = new Set([
 
 /** DEV-694: the manager's own fresh PIN approves a set-off; this names the policy. */
 export const AP_SET_OFF_PIN_BLOCKED = 'Set-off not approved. Enter your manager or owner PIN.';
-export const AP_SET_OFF_FORBIDDEN = 'Only a manager or owner can approve or reject a set-off.';
+export const AP_SET_OFF_FORBIDDEN =
+  'Only a manager or owner can approve, reject or reverse a set-off.';
+export const AP_SET_OFF_REVERSAL_PIN_BLOCKED =
+  'Set-off not reversed. Enter your manager or owner PIN.';
 export const AP_SET_OFF_SELF_APPROVAL =
   'Another manager or owner must approve a set-off you requested.';
 
@@ -93,13 +99,16 @@ function fail(error: unknown): never {
 }
 
 /**
- * DEV-694: a set-off holds credit at `cutoff` when it was requested before it and
- * was not rejected before it (pending then, or approved at any time).
+ * DEV-694: a set-off holds credit at `cutoff` when it was requested before it
+ * and had not been released before it, by a rejection or by a reversal.
  */
 function setOffHeldAt(cutoff: Date) {
   return {
     requestedAt: { lt: cutoff },
-    OR: [{ status: { not: 'REJECTED' as const } }, { decidedAt: { gte: cutoff } }],
+    NOT: [
+      { status: 'REJECTED' as const, decidedAt: { lt: cutoff } },
+      { status: 'REVERSED' as const, reversedAt: { lt: cutoff } },
+    ],
   };
 }
 
@@ -118,7 +127,8 @@ type ApAuditAction =
   | 'pharmacyApInvoices.reverseInvoice'
   | 'pharmacyApInvoices.requestCreditSetOff'
   | 'pharmacyApInvoices.approveCreditSetOff'
-  | 'pharmacyApInvoices.rejectCreditSetOff';
+  | 'pharmacyApInvoices.rejectCreditSetOff'
+  | 'pharmacyApInvoices.reverseCreditSetOff';
 
 async function recordApAudit(
   tx: ScopedDb,
@@ -208,7 +218,10 @@ export const pharmacyApInvoicesRouter = router({
       try {
         const now = new Date();
         const timeZone = ctx.organization?.timezone;
-        const view = await readApAging(ctx.db, scope, input.asOf, now, timeZone);
+        // Owner decision: every bill, 5,000 per page, before any total or draft.
+        const view = await readApAging(ctx.db, scope, input.asOf, now, timeZone, {
+          allPages: true,
+        });
         const { cutoff } = apAgingWindow(input.asOf, now, timeZone);
         // Owner decision: read supplier credits in pages of 5,000 and fetch every
         // page before any total or set-off draft is reported.
@@ -433,6 +446,65 @@ export const pharmacyApInvoicesRouter = router({
             result: { status: result.setOff.status, invoiceId: result.setOff.invoiceId },
           });
           return result.setOff;
+        });
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  /**
+   * DEV-694: undo an approved set-off with the mirror entry. Same gate as
+   * approval: a manager or owner, their own fresh PIN, and not the requester
+   * unless they are the only owner-level user.
+   */
+  reverseCreditSetOff: adminProcedure
+    .input(reverseApCreditSetOffSchema)
+    .mutation(async ({ ctx, input }) => {
+      const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      if (!(await actorMayRefund(ctx.db, ctx.session.user)))
+        throw new TRPCError({ code: 'FORBIDDEN', message: AP_SET_OFF_FORBIDDEN });
+      const pin = await authenticateRefundPin({
+        organizationId: scope.organizationId,
+        actorId: scope.actorId,
+        pin: input.pin,
+        action: 'pharmacyApInvoices.reverseCreditSetOff',
+        policy: AP_SET_OFF_REVERSAL_POLICY,
+        errorCode: 'AP_SET_OFF_REVERSAL_PIN_REFUSED',
+      });
+      if ('blocked' in pin)
+        throw new TRPCError({ code: 'FORBIDDEN', message: AP_SET_OFF_REVERSAL_PIN_BLOCKED });
+      try {
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const result = await reverseApCreditSetOff(db, scope, input, {
+            soleApprover: () => isSoleSetOffApprover(db, scope.organizationId, scope.actorId),
+          });
+          const setOff = result.setOff;
+          await recordApAudit(db, ctx, scope, {
+            action: 'pharmacyApInvoices.reverseCreditSetOff',
+            description: `Reversed a supplier credit set-off against invoice ${setOff.invoiceId}`,
+            targetType: 'PharmacyApCreditSetOff',
+            targetId: setOff.id,
+            targetLabel: setOff.id,
+            commandKey: input.commandKey,
+            replayed: result.replayed,
+            result: {
+              status: setOff.status,
+              invoiceId: setOff.invoiceId,
+              supplierCreditId: setOff.supplierCreditId,
+              amountMinor: setOff.amountMinor,
+              reversalEntryId: setOff.reversalEntryId,
+            },
+            metadata: {
+              policy: setOff.reversalPolicy,
+              reversedById: setOff.reversedByUserId,
+              initiatedById: setOff.requestedByUserId,
+              pinVerified: true,
+              selfApproved: setOff.reversedByUserId === setOff.requestedByUserId,
+              reversedAt: setOff.reversedAt?.toISOString() ?? null,
+            },
+          });
+          return setOff;
         });
       } catch (error) {
         fail(error);

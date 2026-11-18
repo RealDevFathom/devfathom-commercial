@@ -27,7 +27,7 @@
  * credit serialize.
  */
 import { Prisma } from '@/generated/prisma/client';
-import { FinancePostingError, postJournalEntry } from '@/lib/finance/journal';
+import { FinancePostingError, postJournalEntry, reverseJournalEntry } from '@/lib/finance/journal';
 import { lockPharmacyLedgerScope } from '@/lib/pharmacy/bookkeeping';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
@@ -36,6 +36,7 @@ import {
   type ListApCreditSetOffsInput,
   type RejectApCreditSetOffInput,
   type RequestApCreditSetOffInput,
+  type ReverseApCreditSetOffInput,
 } from './ap-invoices-schema';
 import {
   type ApInvoiceScope,
@@ -52,7 +53,13 @@ export const AP_SET_OFF_CURRENCY = 'PKR';
 export const AP_SET_OFF_SEGREGATED_POLICY = 'PHARMACY_AP_SET_OFF_MANAGER_PIN';
 export const AP_SET_OFF_SOLE_APPROVER_POLICY = 'PHARMACY_AP_SET_OFF_SOLE_APPROVER_PIN';
 
+export const AP_SET_OFF_REVERSAL_POLICY = 'PHARMACY_AP_SET_OFF_REVERSAL_MANAGER_PIN';
+export const AP_SET_OFF_REVERSAL_SOLE_APPROVER_POLICY =
+  'PHARMACY_AP_SET_OFF_REVERSAL_SOLE_APPROVER_PIN';
+
 export const apCreditSetOffPostingKey = (setOffId: string) => `ap-credit-set-off:${setOffId}`;
+export const apCreditSetOffReversalKey = (setOffId: string) =>
+  `ap-credit-set-off-reversal:${setOffId}`;
 
 function fail(reason: ApInvoiceErrorReason): never {
   throw new PharmacyApInvoiceError(reason);
@@ -343,6 +350,100 @@ export async function rejectApCreditSetOff(
   return { setOff: rejected, replayed: false as const };
 }
 
+/**
+ * DEV-694: undo an approved set-off once, e.g. one approved against the wrong
+ * bill. A manager or owner (fresh PIN in the router; the requester only under
+ * the solo rule) posts the mirror entry, Dr SUPPLIER_CLAIM_RECEIVABLE /
+ * Cr ACCOUNTS_PAYABLE, at `now`. From then on the bill owes the amount again
+ * and the credit note has it back, exactly; the bill can be reversed again once
+ * nothing else settles it. A closed period refuses it.
+ */
+export async function reverseApCreditSetOff(
+  db: ScopedDb,
+  scope: ApInvoiceScope,
+  input: Pick<ReverseApCreditSetOffInput, 'setOffId' | 'commandKey' | 'reason'>,
+  options: { soleApprover: () => Promise<boolean>; now?: Date }
+) {
+  const now = options.now ?? new Date();
+  const reason = input.reason.trim();
+  if (!reason) fail('MISSING_REASON');
+  await lockPharmacyLedgerScope(db, scope);
+  const payloadHash = commandPayloadHash({
+    branchId: scope.branchId,
+    setOffId: input.setOffId,
+    reason,
+  });
+  const replay = await db.pharmacyApCreditSetOff.findFirst({
+    where: { organizationId: scope.organizationId, reverseCommandKey: input.commandKey },
+  });
+  if (replay) {
+    if (
+      replay.branchId !== scope.branchId ||
+      replay.id !== input.setOffId ||
+      replay.reversePayloadHash !== payloadHash
+    ) {
+      fail('IDEMPOTENCY_CONFLICT');
+    }
+    return { setOff: replay, replayed: true as const };
+  }
+
+  const setOff = await lockSetOff(db, scope, input.setOffId);
+  if (setOff.status === 'REVERSED') fail('ALREADY_REVERSED');
+  if (setOff.status !== 'APPROVED' || !setOff.journalEntryId || !setOff.decidedAt) {
+    fail('INVALID_STATE');
+  }
+  if (now < setOff.decidedAt) fail('INVALID_DATE');
+  let policy = AP_SET_OFF_REVERSAL_POLICY;
+  if (setOff.requestedByUserId === scope.actorId) {
+    if (!(await options.soleApprover())) fail('SELF_APPROVAL');
+    policy = AP_SET_OFF_REVERSAL_SOLE_APPROVER_POLICY;
+  }
+  // Same lock order as approval and debit-note allocation.
+  await lockCredit(db, scope, setOff.supplierCreditId);
+  await lockInvoice(db, scope, setOff.invoiceId);
+
+  let reversal;
+  try {
+    reversal = await reverseJournalEntry(db, scope, {
+      entryId: setOff.journalEntryId,
+      reason,
+      at: now,
+      idempotencyKey: apCreditSetOffReversalKey(setOff.id),
+    });
+  } catch (error) {
+    if (error instanceof FinancePostingError)
+      fail(error.reason === 'PERIOD_CLOSED' ? 'PERIOD_CLOSED' : 'INVALID_STATE');
+    throw error;
+  }
+  if (
+    reversal.reversesEntryId !== setOff.journalEntryId ||
+    reversal.sourceKind !== 'PHARMACY_AP_CREDIT_SET_OFF' ||
+    reversal.sourceId !== setOff.id
+  ) {
+    fail('IDEMPOTENCY_CONFLICT');
+  }
+
+  const reversed = await db.pharmacyApCreditSetOff.update({
+    where: { id: setOff.id },
+    data: {
+      status: 'REVERSED',
+      reversedAt: now,
+      reversedByUserId: scope.actorId,
+      reversalReason: reason,
+      reversalPolicy: policy,
+      reverseCommandKey: input.commandKey,
+      reversePayloadHash: payloadHash,
+      reversalEntryId: reversal.id,
+    },
+  });
+  return {
+    setOff: reversed,
+    entry: reversal,
+    selfApproved: policy === AP_SET_OFF_REVERSAL_SOLE_APPROVER_POLICY,
+    replayed: false as const,
+  };
+}
+
 export function listApCreditSetOffs(
   db: ScopedDb,
   scope: { organizationId: string; branchId: string },
@@ -365,6 +466,8 @@ export function listApCreditSetOffs(
       decidedByUserId: true,
       decidedAt: true,
       rejectionReason: true,
+      reversedAt: true,
+      reversalReason: true,
       invoice: { select: { id: true, reference: true, payeeName: true, supplierInvoiceRef: true } },
       credit: {
         select: { id: true, reference: true, supplier: { select: { name: true } } },

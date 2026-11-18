@@ -6,7 +6,11 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { DUE_SOON_DAYS } from '@/lib/pharmacy/accounts/ap-payables-drafts';
 import type { pharmacyApInvoicesRouter } from '@/server/routers/pharmacy-ap-invoices';
-import { DecideCreditSetOffForms, RequestCreditSetOffForm } from './ap-entry-forms';
+import {
+  DecideCreditSetOffForms,
+  RequestCreditSetOffForm,
+  ReverseCreditSetOffForm,
+} from './ap-entry-forms';
 
 type Caller = ReturnType<typeof pharmacyApInvoicesRouter.createCaller>;
 export type PayablesDrafts = Awaited<ReturnType<Caller['payablesDrafts']>>;
@@ -216,11 +220,14 @@ export function PaymentDraft({
 export function CreditSetOff({
   drafts,
   pending,
+  approved,
   branchId,
   bills,
 }: {
   drafts: PayablesDrafts;
   pending: PendingSetOffs;
+  /** Approved set-offs still in force, which a manager may reverse. */
+  approved: PendingSetOffs;
   branchId: string;
   bills: ReadonlyArray<{
     invoiceId: string;
@@ -340,6 +347,42 @@ export function CreditSetOff({
               );
             })}
           </ul>
+        )}
+      </SectionCard>
+      <SectionCard title="Approved set-offs" titleLevel={2}>
+        {approved.length === 0 ? (
+          <p className="text-sm text-text-muted">No approved set-off is in force.</p>
+        ) : (
+          <>
+            <p className="text-sm text-text-muted">
+              Reversing posts the mirror entry: the bill owes the amount again and the credit note
+              has it back. It needs a manager or owner PIN and a reason.
+            </p>
+            <ul className="mt-3 divide-y divide-border-subtle">
+              {approved.map((setOff) => {
+                const label = `${setOff.credit.reference} against ${setOff.invoice.reference}`;
+                return (
+                  <li key={setOff.id} className="grid gap-3 py-4">
+                    <p className="text-sm">
+                      <span className="font-medium">{label}</span>{' '}
+                      <span className="font-mono tabular-nums">
+                        {setOff.currency} {minor(setOff.amountMinor)}
+                      </span>{' '}
+                      <span className="text-text-muted">
+                        · {setOff.credit.supplier.name} · bill {setOff.invoice.supplierInvoiceRef}
+                      </span>
+                    </p>
+                    <ReverseCreditSetOffForm
+                      branchId={branchId}
+                      setOffId={setOff.id}
+                      label={label}
+                      initialKey={`ap-set-off-rev:${randomUUID()}`}
+                    />
+                  </li>
+                );
+              })}
+            </ul>
+          </>
         )}
       </SectionCard>
     </>

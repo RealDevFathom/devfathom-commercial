@@ -3,8 +3,10 @@
  * DEV-694 — supplier credit-note set-off against PostgreSQL: a staff request
  * moves no money, a manager approval posts one canonical entry and reduces the
  * bill in the AP aging, both ceilings (credit left, bill owed) hold, payment
- * and reversal respect an approved set-off, the immutability trigger and
- * tenant RLS. Skips without a database URL.
+ * and reversal respect an approved set-off, a reversal restores bill and credit
+ * exactly, racing approvals and racing reversals each apply once, a closed
+ * period refuses both, the immutability trigger and tenant RLS. Skips without
+ * a database URL.
  */
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
@@ -22,6 +24,10 @@ const branchId = `branch_so_${suffix}`;
 const supplierId = `supplier_so_${suffix}`;
 const creditId = `credit_so_${suffix}`;
 const secondCreditId = `credit_so_b_${suffix}`;
+const thirdCreditId = `credit_so_c_${suffix}`;
+const fourthCreditId = `credit_so_d_${suffix}`;
+const closedBranchId = `branch_so_closed_${suffix}`;
+const closedCreditId = `credit_so_closed_${suffix}`;
 const clerk = { organizationId, branchId, actorId: `clerk_so_${suffix}` };
 const manager = { organizationId, branchId, actorId: `manager_so_${suffix}` };
 const SUPPLIER = 'Al-Shifa Distributors';
@@ -79,26 +85,49 @@ beforeAll(async () => {
       `INSERT INTO pharmacy_supplier_credits (id,"organizationId","branchId","supplierId",reference,"amountMinor","receivedAt","recordedByUserId") VALUES ($1,$2,$3,$4,$5,50000,now() - interval '2 days',$6)`,
       [secondCreditId, organizationId, branchId, supplierId, `CN-B-${suffix}`, clerk.actorId]
     );
+    await owner.query(
+      `INSERT INTO pharmacy_branches (id,"organizationId",code,name,"addressLine",city,"provinceCode","createdAt","updatedAt") VALUES ($1,$2,$3,'Closed-period pharmacy','2 Test Road','Lahore','PB',now(),now())`,
+      [closedBranchId, organizationId, `SOC-${suffix}`]
+    );
+    for (const [id, branch, reference] of [
+      [thirdCreditId, branchId, `CN-C-${suffix}`],
+      [fourthCreditId, branchId, `CN-D-${suffix}`],
+      [closedCreditId, closedBranchId, `CN-X-${suffix}`],
+    ]) {
+      await owner.query(
+        `INSERT INTO pharmacy_supplier_credits (id,"organizationId","branchId","supplierId",reference,"amountMinor","receivedAt","recordedByUserId") VALUES ($1,$2,$3,$4,$5,50000,now() - interval '2 days',$6)`,
+        [id, organizationId, branch, supplierId, reference, clerk.actorId]
+      );
+    }
   } finally {
     await owner.end();
   }
 }, 120_000);
 
-async function recordBill(n: number, amountMinor: number, currency: 'PKR' | 'USD' = 'PKR') {
+async function recordBill(
+  n: number,
+  amountMinor: number,
+  currency: 'PKR' | 'USD' = 'PKR',
+  atBranch: string = branchId
+) {
   const result = await inTenant((db) =>
-    deps.ap.recordApInvoice(db, clerk, {
-      branchId,
-      createKey: `so-bill-${suffix}-${n}`,
-      reference: `SO-${suffix}-${n}`,
-      payeeName: ` al-shifa   DISTRIBUTORS `,
-      supplierInvoiceRef: `ASD-${suffix}-${n}`,
-      invoiceDate: day(-10),
-      dueDate: day(-3),
-      amountMinor,
-      currency,
-      description: 'Supplier bill',
-      evidenceReference: `Bill ${n}`,
-    })
+    deps.ap.recordApInvoice(
+      db,
+      { ...clerk, branchId: atBranch },
+      {
+        branchId: atBranch,
+        createKey: `so-bill-${suffix}-${n}`,
+        reference: `SO-${suffix}-${n}`,
+        payeeName: ` al-shifa   DISTRIBUTORS `,
+        supplierInvoiceRef: `ASD-${suffix}-${n}`,
+        invoiceDate: day(-10),
+        dueDate: day(-3),
+        amountMinor,
+        currency,
+        description: 'Supplier bill',
+        evidenceReference: `Bill ${n}`,
+      }
+    )
   );
   return result.invoice;
 }
@@ -167,9 +196,7 @@ describeDb('AP credit-note set-off', () => {
     );
     expect(entries).toHaveLength(1);
     expect(
-      entries[0]!.lines
-        .map((line) => `${line.accountCode}:${line.side}:${line.amountMinor}`)
-        .sort()
+      entries[0]!.lines.map((line) => `${line.accountCode}:${line.side}:${line.amountMinor}`).sort()
     ).toEqual(['ACCOUNTS_PAYABLE:DEBIT:30000', 'SUPPLIER_CLAIM_RECEIVABLE:CREDIT:30000']);
     expect(entries[0]!.id).toBe(approved.setOff.journalEntryId);
 
@@ -307,4 +334,236 @@ describeDb('AP credit-note set-off', () => {
     );
     expect(foreign).toEqual([]);
   }, 60_000);
+
+  it('reverses an approved set-off once, restoring the bill and the credit exactly', async () => {
+    const bill = await recordBill(5, 100_000);
+    const { setOff } = await inTenant((db) =>
+      deps.setOff.requestApCreditSetOff(db, clerk, {
+        invoiceId: bill.id,
+        supplierCreditId: thirdCreditId,
+        requestKey: `so-req-${suffix}-5`,
+        amountMinor: 40_000,
+      })
+    );
+    await inTenant((db) =>
+      deps.setOff.approveApCreditSetOff(
+        db,
+        manager,
+        { setOffId: setOff.id, decisionKey: `so-ok-${suffix}-5` },
+        { soleApprover: async () => false }
+      )
+    );
+    const creditLeft = () =>
+      inTenant((db) =>
+        deps.setOff.creditRemainingMinor(
+          db,
+          manager,
+          { id: thirdCreditId, amountMinor: 50_000 },
+          { includePending: true }
+        )
+      );
+    expect(await outstanding(bill.id)).toMatchObject({ outstandingMinor: 60_000 });
+    expect(await creditLeft()).toBe(10_000);
+
+    // The requester may not reverse while another owner-level user could.
+    await expect(
+      inTenant((db) =>
+        deps.setOff.reverseApCreditSetOff(
+          db,
+          clerk,
+          { setOffId: setOff.id, commandKey: `so-rev-${suffix}-self`, reason: 'Wrong bill' },
+          { soleApprover: async () => false }
+        )
+      )
+    ).rejects.toMatchObject({ reason: 'SELF_APPROVAL' });
+
+    // Three managers race to reverse it with different keys: exactly one applies.
+    const results = await Promise.allSettled(
+      ['a', 'b', 'c'].map((key) =>
+        inTenant((db) =>
+          deps.setOff.reverseApCreditSetOff(
+            db,
+            manager,
+            { setOffId: setOff.id, commandKey: `so-rev-${suffix}-5${key}`, reason: 'Wrong bill' },
+            { soleApprover: async () => false }
+          )
+        )
+      )
+    );
+    const won = results.filter((r) => r.status === 'fulfilled');
+    expect(won).toHaveLength(1);
+    for (const lost of results.filter((r) => r.status === 'rejected')) {
+      expect((lost as PromiseRejectedResult).reason).toMatchObject({
+        reason: 'ALREADY_REVERSED',
+      });
+    }
+    const winner = (
+      won[0] as PromiseFulfilledResult<{ setOff: { reverseCommandKey: string | null } }>
+    ).value.setOff;
+    // A retry of the winning command replays; nothing is posted twice.
+    await expect(
+      inTenant((db) =>
+        deps.setOff.reverseApCreditSetOff(
+          db,
+          manager,
+          { setOffId: setOff.id, commandKey: winner.reverseCommandKey!, reason: 'Wrong bill' },
+          { soleApprover: async () => false }
+        )
+      )
+    ).resolves.toMatchObject({ replayed: true, setOff: { status: 'REVERSED' } });
+
+    const entries = await inTenant((db) =>
+      db.financeJournalEntry.findMany({
+        where: { organizationId, sourceKind: 'PHARMACY_AP_CREDIT_SET_OFF', sourceId: setOff.id },
+        include: { lines: true },
+      })
+    );
+    expect(entries).toHaveLength(2);
+    const reversal = entries.find((entry) => entry.reversesEntryId !== null)!;
+    expect(reversal.reversesEntryId).toBe(entries.find((e) => e.reversesEntryId === null)!.id);
+    expect(
+      reversal.lines.map((line) => `${line.accountCode}:${line.side}:${line.amountMinor}`).sort()
+    ).toEqual(['ACCOUNTS_PAYABLE:CREDIT:40000', 'SUPPLIER_CLAIM_RECEIVABLE:DEBIT:40000']);
+
+    expect(await outstanding(bill.id)).toMatchObject({ setOffMinor: 0, outstandingMinor: 100_000 });
+    expect(await creditLeft()).toBe(50_000);
+    // With nothing left settling it, the bill can be reversed again.
+    await expect(
+      inTenant((db) =>
+        deps.ap.reverseApInvoice(db, manager, {
+          branchId,
+          invoiceId: bill.id,
+          commandKey: `so-rev-inv-${suffix}-5`,
+          reason: 'Duplicate',
+          at: new Date().toISOString(),
+        })
+      )
+    ).resolves.toMatchObject({ invoice: { status: 'REVERSED' } });
+    // A reversed set-off is final.
+    await expect(
+      inTenant((db) =>
+        db.pharmacyApCreditSetOff.update({
+          where: { id: setOff.id },
+          data: { status: 'APPROVED' },
+        })
+      )
+    ).rejects.toThrow();
+  }, 90_000);
+
+  it('applies one of several racing approvals', async () => {
+    const bill = await recordBill(6, 100_000);
+    const { setOff } = await inTenant((db) =>
+      deps.setOff.requestApCreditSetOff(db, clerk, {
+        invoiceId: bill.id,
+        supplierCreditId: fourthCreditId,
+        requestKey: `so-req-${suffix}-6`,
+        amountMinor: 30_000,
+      })
+    );
+    const results = await Promise.allSettled(
+      ['a', 'b', 'c'].map((key) =>
+        inTenant((db) =>
+          deps.setOff.approveApCreditSetOff(
+            db,
+            manager,
+            { setOffId: setOff.id, decisionKey: `so-ok-${suffix}-6${key}` },
+            { soleApprover: async () => false }
+          )
+        )
+      )
+    );
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    for (const lost of results.filter((r) => r.status === 'rejected')) {
+      expect((lost as PromiseRejectedResult).reason).toMatchObject({ reason: 'ALREADY_DECIDED' });
+    }
+    const entries = await inTenant((db) =>
+      db.financeJournalEntry.findMany({
+        where: { organizationId, sourceKind: 'PHARMACY_AP_CREDIT_SET_OFF', sourceId: setOff.id },
+      })
+    );
+    expect(entries).toHaveLength(1);
+    expect(await outstanding(bill.id)).toMatchObject({ outstandingMinor: 70_000 });
+  }, 90_000);
+
+  it('refuses approval and reversal in a closed period and changes nothing', async () => {
+    const closed = { organizationId, branchId: closedBranchId };
+    const bill = await recordBill(7, 100_000, 'PKR', closedBranchId);
+    const request = (n: string, amountMinor: number) =>
+      inTenant((db) =>
+        deps.setOff.requestApCreditSetOff(
+          db,
+          { ...clerk, branchId: closedBranchId },
+          {
+            invoiceId: bill.id,
+            supplierCreditId: closedCreditId,
+            requestKey: `so-req-${suffix}-7${n}`,
+            amountMinor,
+          }
+        )
+      );
+    const first = (await request('a', 10_000)).setOff;
+    await inTenant((db) =>
+      deps.setOff.approveApCreditSetOff(
+        db,
+        { ...manager, branchId: closedBranchId },
+        { setOffId: first.id, decisionKey: `so-ok-${suffix}-7a` },
+        { soleApprover: async () => false }
+      )
+    );
+    const second = (await request('b', 5_000)).setOff;
+
+    // Close the period around today for this branch, inside the tenant scope.
+    await inTenant((db) =>
+      db.pharmacyAccountingPeriod.create({
+        data: {
+          organizationId,
+          branchId: closedBranchId,
+          startsAt: new Date(Date.now() - 86_400_000),
+          endsAt: new Date(Date.now() + 86_400_000),
+          status: 'CLOSED',
+          closedAt: new Date(),
+          closedByUserId: manager.actorId,
+        },
+      })
+    );
+
+    await expect(
+      inTenant((db) =>
+        deps.setOff.approveApCreditSetOff(
+          db,
+          { ...manager, branchId: closedBranchId },
+          { setOffId: second.id, decisionKey: `so-ok-${suffix}-7b` },
+          { soleApprover: async () => false }
+        )
+      )
+    ).rejects.toMatchObject({ reason: 'PERIOD_CLOSED' });
+    await expect(
+      inTenant((db) =>
+        deps.setOff.reverseApCreditSetOff(
+          db,
+          { ...manager, branchId: closedBranchId },
+          { setOffId: first.id, commandKey: `so-rev-${suffix}-7a`, reason: 'Wrong bill' },
+          { soleApprover: async () => false }
+        )
+      )
+    ).rejects.toMatchObject({ reason: 'PERIOD_CLOSED' });
+
+    const rows = await inTenant((db) =>
+      db.pharmacyApCreditSetOff.findMany({
+        where: { organizationId, branchId: closed.branchId },
+        orderBy: { requestedAt: 'asc' },
+      })
+    );
+    expect(rows.map((row) => row.status)).toEqual(['APPROVED', 'PENDING']);
+    const entries = await inTenant((db) =>
+      db.financeJournalEntry.count({
+        where: {
+          organizationId,
+          sourceKind: 'PHARMACY_AP_CREDIT_SET_OFF',
+          sourceId: { in: [first.id, second.id] },
+        },
+      })
+    );
+    expect(entries).toBe(1);
+  }, 90_000);
 });

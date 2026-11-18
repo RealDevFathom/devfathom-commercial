@@ -154,8 +154,8 @@ export async function lockInvoice(
     include: {
       settlements: true,
       creditSetOffs: {
-        where: { status: 'APPROVED' },
-        select: { amountMinor: true, decidedAt: true },
+        where: { status: { in: ['APPROVED', 'REVERSED'] } },
+        select: { amountMinor: true, decidedAt: true, status: true, reversedAt: true },
       },
     },
   });
@@ -163,22 +163,29 @@ export async function lockInvoice(
   return invoice;
 }
 
+type SetOffClock = {
+  amountMinor: number;
+  decidedAt: Date | null;
+  status?: string;
+  reversedAt?: Date | null;
+};
+
 /**
  * DEV-694: an invoice's settlement clocks — its payments plus every approved
- * credit-note set-off, which reduces the payable from its approval instant and
- * is never reversed.
+ * credit-note set-off, which reduces the payable from its approval instant until
+ * its reversal instant, exactly like a payment and its reversal.
  */
 export function invoiceSettlementClocks(invoice: {
   settlements: readonly SettlementClock[];
-  creditSetOffs?: readonly { amountMinor: number; decidedAt: Date | null }[];
+  creditSetOffs?: readonly SetOffClock[];
 }): SettlementClock[] {
   return [
     ...invoice.settlements,
     ...(invoice.creditSetOffs ?? []).map((setOff) => ({
       amountMinor: setOff.amountMinor,
       paidAt: setOff.decidedAt ?? new Date(0),
-      status: 'ACTIVE',
-      reversedAt: null,
+      status: setOff.status === 'REVERSED' ? 'REVERSED' : 'ACTIVE',
+      reversedAt: setOff.status === 'REVERSED' ? (setOff.reversedAt ?? null) : null,
     })),
   ];
 }
@@ -445,7 +452,10 @@ export async function payApInvoice(
   const invoice = await lockInvoice(db, scope, input.invoiceId);
   if (invoice.status !== 'POSTED') fail('INVALID_STATE');
   if (paidAt < invoice.invoiceDate) fail('INVALID_DATE');
-  const clocks = { amountMinor: invoice.amountMinor, settlements: invoiceSettlementClocks(invoice) };
+  const clocks = {
+    amountMinor: invoice.amountMinor,
+    settlements: invoiceSettlementClocks(invoice),
+  };
   if (input.amountMinor > payableMinorFrom(clocks, paidAt)) fail('OVERPAYMENT');
 
   let transaction;
@@ -611,17 +621,16 @@ export async function reverseApInvoice(
 
   const invoice = await lockInvoice(db, scope, input.invoiceId);
   if (invoice.status === 'REVERSED') fail('ALREADY_REVERSED');
-  if (
-    invoice.settlements.some((settlement) => settlement.status === 'ACTIVE') ||
-    (invoice.creditSetOffs ?? []).length > 0
-  ) {
+  const clocks = invoiceSettlementClocks(invoice);
+  // DEV-694: an approved set-off still in force blocks the reversal like a payment.
+  if (clocks.some((settlement) => settlement.status === 'ACTIVE')) {
     fail('ACTIVE_SETTLEMENTS');
   }
   if (at < invoice.invoiceDate) fail('INVALID_DATE');
   // The invoice clock may not end before its payment clocks did: an invoice
   // reversal dated before a payment or that payment's reversal would make the
   // aging view and the ledger disagree for the days in between.
-  for (const settlement of invoice.settlements) {
+  for (const settlement of clocks) {
     if (at < settlement.paidAt || (settlement.reversedAt && at < settlement.reversedAt)) {
       fail('INVALID_DATE');
     }

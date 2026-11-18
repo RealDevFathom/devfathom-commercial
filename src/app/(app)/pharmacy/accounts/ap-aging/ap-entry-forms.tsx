@@ -9,6 +9,7 @@ import {
   recordApInvoiceFromForm,
   rejectCreditSetOffFromForm,
   requestCreditSetOffFromForm,
+  reverseCreditSetOffFromForm,
   type ApEntryFormState,
 } from './ap-entry-actions';
 
@@ -443,5 +444,60 @@ export function DecideCreditSetOffForms({
         <Status id={rejectStatus} state={reject.state} />
       </form>
     </div>
+  );
+}
+
+/** DEV-694: undo an approved set-off with the manager's own PIN and a reason. */
+export function ReverseCreditSetOffForm({
+  branchId,
+  setOffId,
+  label,
+  initialKey,
+}: {
+  branchId: string;
+  setOffId: string;
+  label: string;
+  initialKey: string;
+}) {
+  const { key, formKey, state, onSubmit, pending, invalid } = useEntryAction(
+    reverseCreditSetOffFromForm,
+    initialKey,
+    'ap-set-off-rev'
+  );
+  const status = `ap-set-off-reverse-${setOffId}`;
+  const aria = { 'aria-invalid': invalid || undefined, 'aria-describedby': status };
+  return (
+    <form
+      key={formKey}
+      onSubmit={onSubmit}
+      className="grid gap-3 md:grid-cols-[1fr_1fr_auto] md:items-end"
+      aria-label={`Reverse set-off ${label}`}
+    >
+      <input type="hidden" name="branchId" value={branchId} />
+      <input type="hidden" name="setOffId" value={setOffId} />
+      <input type="hidden" name="commandKey" value={key} />
+      <label className={fieldClass}>
+        Reason to reverse
+        <Input className="min-h-11" name="reason" maxLength={500} required {...aria} />
+      </label>
+      <label className={fieldClass}>
+        Your manager or owner PIN
+        <Input
+          className="min-h-11 font-mono"
+          name="pin"
+          type="password"
+          inputMode="numeric"
+          autoComplete="off"
+          pattern="\d{4,8}"
+          maxLength={8}
+          required
+          {...aria}
+        />
+      </label>
+      <Button type="submit" variant="destructive" className="min-h-11" disabled={pending}>
+        {pending ? 'Reversing…' : 'Reverse set-off'}
+      </Button>
+      <Status id={status} state={state} />
+    </form>
   );
 }

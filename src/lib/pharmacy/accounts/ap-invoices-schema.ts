@@ -112,10 +112,21 @@ export const rejectApCreditSetOffSchema = z
   })
   .strict();
 
+/** DEV-694: undo an approved set-off; the manager's own fresh PIN, never stored. */
+export const reverseApCreditSetOffSchema = z
+  .object({
+    branchId: id,
+    setOffId: id,
+    commandKey,
+    reason: z.string().trim().min(1).max(500),
+    pin: z.string().regex(/^\d{4,8}$/),
+  })
+  .strict();
+
 export const listApCreditSetOffsSchema = z
   .object({
     branchId: id,
-    status: z.enum(['PENDING', 'APPROVED', 'REJECTED']).optional(),
+    status: z.enum(['PENDING', 'APPROVED', 'REJECTED', 'REVERSED']).optional(),
     take: z.number().int().min(1).max(100).default(50),
   })
   .strict();
@@ -128,4 +139,5 @@ export type ListApInvoicesInput = z.infer<typeof listApInvoicesSchema>;
 export type RequestApCreditSetOffInput = z.infer<typeof requestApCreditSetOffSchema>;
 export type ApproveApCreditSetOffInput = z.infer<typeof approveApCreditSetOffSchema>;
 export type RejectApCreditSetOffInput = z.infer<typeof rejectApCreditSetOffSchema>;
+export type ReverseApCreditSetOffInput = z.infer<typeof reverseApCreditSetOffSchema>;
 export type ListApCreditSetOffsInput = z.infer<typeof listApCreditSetOffsSchema>;

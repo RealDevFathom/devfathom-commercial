@@ -49,7 +49,7 @@ type State =
 type Payables =
   | { kind: 'none' }
   | { kind: 'failure' }
-  | { kind: 'loaded'; drafts: PayablesDrafts; pending: PendingSetOffs };
+  | { kind: 'loaded'; drafts: PayablesDrafts; pending: PendingSetOffs; approved: PendingSetOffs };
 
 /** DEV-694: the optional payment-draft request (payee, currency, budget in major units). */
 function paymentDraftQuery(query: Query) {
@@ -317,23 +317,31 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
         };
         try {
           const caller = pharmacyApInvoicesRouter.createCaller(ctx);
-          const [drafts, setOffs] = await Promise.all([
+          const [drafts, setOffs, approvedSetOffs] = await Promise.all([
             caller.payablesDrafts({
               branchId: parsed.branchId,
               asOf: parsed.asOf,
               ...(draftQuery.request ? { payee: draftQuery.request } : {}),
             }),
             caller.creditSetOffs({ branchId: parsed.branchId, status: 'PENDING' }),
+            caller.creditSetOffs({ branchId: parsed.branchId, status: 'APPROVED' }),
           ]);
           if (
             drafts.scope.organizationId !== actor.organization.id ||
             drafts.scope.branchId !== parsed.branchId ||
             setOffs.scope.organizationId !== actor.organization.id ||
-            setOffs.scope.branchId !== parsed.branchId
+            setOffs.scope.branchId !== parsed.branchId ||
+            approvedSetOffs.scope.organizationId !== actor.organization.id ||
+            approvedSetOffs.scope.branchId !== parsed.branchId
           ) {
             throw new Error('Payables scope mismatch.');
           }
-          payables = { kind: 'loaded', drafts, pending: setOffs.setOffs };
+          payables = {
+            kind: 'loaded',
+            drafts,
+            pending: setOffs.setOffs,
+            approved: approvedSetOffs.setOffs,
+          };
         } catch {
           payables = { kind: 'failure' };
         }
@@ -420,6 +428,7 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
               <CreditSetOff
                 drafts={payables.drafts}
                 pending={payables.pending}
+                approved={payables.approved}
                 branchId={state.branchId}
                 bills={state.view.rows.filter((row) => row.currency === 'PKR')}
               />

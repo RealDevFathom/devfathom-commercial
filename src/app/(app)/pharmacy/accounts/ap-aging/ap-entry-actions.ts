@@ -163,6 +163,8 @@ const SET_OFF_REASONS: Record<string, string> = {
   NOT_FOUND: 'That bill or credit note is not on this branch.',
   ALREADY_DECIDED: 'This set-off was already approved or rejected. Reload the page.',
   INVALID_DATE: 'The bill is dated later than today, so it cannot be set off yet.',
+  ALREADY_REVERSED: 'This set-off was already reversed. Reload the page.',
+  PERIOD_CLOSED: 'Today falls in a closed accounting period. Nothing was changed.',
 };
 
 /**
@@ -251,5 +253,43 @@ export async function rejectCreditSetOffFromForm(
       return { status: 'error', message: error.message };
     }
     return failure(error, SET_OFF_REASONS, 'The set-off was not rejected. Reload and try again.');
+  }
+}
+
+/**
+ * DEV-694: a manager or owner undoes an approved set-off with their own PIN and
+ * a reason. The router posts the mirror entry; the bill owes the amount again.
+ */
+export async function reverseCreditSetOffFromForm(
+  _previous: ApEntryFormState,
+  form: FormData
+): Promise<ApEntryFormState> {
+  // The PIN is passed through once and never stored or echoed back.
+  const pin = String(form.get('pin') ?? '');
+  if (!/^\d{4,8}$/.test(pin)) {
+    return { status: 'error', message: 'Enter your 4 to 8 digit manager or owner PIN.' };
+  }
+  const reason = field(form, 'reason');
+  if (!reason) return { status: 'error', message: 'Say why the set-off is reversed.' };
+  try {
+    const caller = pharmacyApInvoicesRouter.createCaller(await createTRPCContext());
+    await caller.reverseCreditSetOff({
+      branchId: field(form, 'branchId'),
+      setOffId: field(form, 'setOffId'),
+      commandKey: field(form, 'commandKey'),
+      reason,
+      pin,
+    });
+    revalidatePath(AGING_PATH);
+    return {
+      status: 'saved',
+      message: 'Set-off reversed. The bill owes that amount again and the credit note has it back.',
+    };
+  } catch (error) {
+    unstable_rethrow(error);
+    if (error instanceof TRPCError && error.code === 'FORBIDDEN') {
+      return { status: 'error', message: error.message };
+    }
+    return failure(error, SET_OFF_REASONS, 'The set-off was not reversed. Reload and try again.');
   }
 }

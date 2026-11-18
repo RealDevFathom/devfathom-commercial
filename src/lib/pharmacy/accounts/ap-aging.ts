@@ -7,7 +7,8 @@
  * commands.
  *
  * DEV-694: a manager-approved supplier credit-note set-off reduces the bill
- * from its approval instant; a pending or rejected request never does.
+ * from its approval instant until its reversal instant; a pending or rejected
+ * request never does.
  *
  * Historical eligibility uses two business clocks and an inclusive as-of day:
  *   - the invoice clock: an invoice counts once its invoice date is on or
@@ -87,7 +88,12 @@ export type ApAgingInvoiceInput = {
     reversedAt: Date | null;
   }>;
   /** DEV-694: approved credit-note set-offs; each reduces the bill from its approval instant. */
-  creditSetOffs?: ReadonlyArray<{ amountMinor: number; decidedAt: Date | null }>;
+  creditSetOffs?: ReadonlyArray<{
+    amountMinor: number;
+    decidedAt: Date | null;
+    status?: string;
+    reversedAt?: Date | null;
+  }>;
 };
 
 export type ApAgingRow = {
@@ -137,7 +143,11 @@ export function computeApAging(
       )
       .reduce((sum, settlement) => sum + settlement.amountMinor, 0);
     const setOffMinor = (invoice.creditSetOffs ?? [])
-      .filter((setOff) => before(setOff.decidedAt, window.cutoff))
+      .filter(
+        (setOff) =>
+          before(setOff.decidedAt, window.cutoff) &&
+          !(setOff.status === 'REVERSED' && before(setOff.reversedAt ?? null, window.cutoff))
+      )
       .reduce((sum, setOff) => sum + setOff.amountMinor, 0);
     const outstandingMinor = invoice.amountMinor - paidMinor - setOffMinor;
     if (outstandingMinor <= 0) continue;
@@ -190,21 +200,32 @@ export function computeApAging(
   };
 }
 
-/** Reads at most AP_AGING_MAX_INVOICES eligible native invoices and ages them. */
+/**
+ * DEV-694 owner decision: reminders and drafts read every eligible invoice,
+ * 5,000 rows per page, fetching each later page before any total is reported.
+ */
+export const AP_PAYABLES_PAGE_ROWS = 5_000;
+
+/**
+ * Reads at most AP_AGING_MAX_INVOICES eligible native invoices and ages them.
+ * With `allPages`, reads every eligible invoice in pages of AP_PAYABLES_PAGE_ROWS
+ * instead, so the view is always complete.
+ */
 export async function readApAging(
   db: ScopedDb,
   scope: { organizationId: string; branchId: string },
   asOf: string,
   now: Date = new Date(),
-  timeZone?: string | null
+  timeZone?: string | null,
+  options: { allPages?: boolean } = {}
 ): Promise<ApAgingView> {
   const window = apAgingWindow(asOf, now, timeZone);
-  const invoices = await db.pharmacyApInvoice.findMany({
+  const query = {
     where: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       invoiceDate: { lt: window.cutoff },
-      OR: [{ status: 'POSTED' }, { reversedAt: { gte: window.cutoff } }],
+      OR: [{ status: 'POSTED' as const }, { reversedAt: { gte: window.cutoff } }],
     },
     select: {
       id: true,
@@ -222,11 +243,31 @@ export async function readApAging(
         select: { amountMinor: true, paidAt: true, status: true, reversedAt: true },
       },
       creditSetOffs: {
-        where: { status: 'APPROVED', decidedAt: { lt: window.cutoff } },
-        select: { amountMinor: true, decidedAt: true },
+        where: {
+          status: { in: ['APPROVED' as const, 'REVERSED' as const] },
+          decidedAt: { lt: window.cutoff },
+        },
+        select: { amountMinor: true, decidedAt: true, status: true, reversedAt: true },
       },
     },
-    orderBy: [{ dueDate: 'asc' }, { id: 'asc' }],
+    orderBy: [{ dueDate: 'asc' as const }, { id: 'asc' as const }],
+  };
+  if (options.allPages) {
+    const invoices = [];
+    for (let cursor: string | undefined; ;) {
+      const page = await db.pharmacyApInvoice.findMany({
+        ...query,
+        take: AP_PAYABLES_PAGE_ROWS,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      });
+      invoices.push(...page);
+      if (page.length < AP_PAYABLES_PAGE_ROWS) break;
+      cursor = page[page.length - 1]!.id;
+    }
+    return computeApAging(invoices, window, true);
+  }
+  const invoices = await db.pharmacyApInvoice.findMany({
+    ...query,
     take: AP_AGING_MAX_INVOICES + 1,
   });
   const complete = invoices.length <= AP_AGING_MAX_INVOICES;
