@@ -41,7 +41,13 @@
  *     position as the key and the item code survives in `rawPayload`.
  */
 import { MIGRATION_TARGET_KEYS } from './mapping-targets';
-import type { ColumnMap, ProfiledRow, SourceField, SourceProfiler } from './profiler';
+import {
+  batchIdentity,
+  type ColumnMap,
+  type ProfiledRow,
+  type SourceField,
+  type SourceProfiler,
+} from './profiler';
 import { parseDelimitedRecords, type SourceTable } from './source-values';
 
 /**
@@ -236,6 +242,9 @@ export const margBatchStockProfiler: SourceProfiler = {
   // The Batch Stock report lists one item once per batch.
   duplicateDiscriminator(row: ProfiledRow): string {
     if (row.targetModelKey !== MIGRATION_TARGET_KEYS.PRODUCT) return '';
-    return (row.batchNumber ?? '').toLowerCase();
+    return batchIdentity(row);
   },
+
+  // DEV-927: a blank batch or expiry is "not recorded"; a passed expiry still blocks.
+  unrecordedBatchAndExpiry: 'NOT_RECORDED',
 };

@@ -169,7 +169,7 @@ describe('staged review authorization and reads', () => {
             some: {
               organizationId: 'org_a',
               status: 'OPEN',
-              bucket: { in: ['MISSING_BATCH', 'MISSING_EXPIRY'] },
+              bucket: { in: ['MISSING_BATCH', 'MISSING_EXPIRY', 'EXPIRED_STOCK'] },
             },
           },
         }),
