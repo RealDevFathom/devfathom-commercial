@@ -54,7 +54,17 @@ export const NO_OTHER_REVIEWER = 'no other reviewer';
  * reviewer exists, a different reviewer is required again; when that reviewer is
  * deactivated, the owner may approve with a fresh PIN once more.
  */
-export async function isOwnerWithoutOtherReviewer(db: ScopedDb, scope: Scope): Promise<boolean> {
+export async function isOwnerWithoutOtherReviewer(
+  db: ScopedDb,
+  scope: Scope,
+  /**
+   * Self-approval: another active owner (no DENY) also counts as a reviewer, so an
+   * owner cannot approve their own edit while a second owner exists. Approving
+   * someone else's edit counts only holders of the review grant, so two owners
+   * can always approve each other's edits.
+   */
+  options: { countOtherOwners?: boolean } = {}
+): Promise<boolean> {
   if (scope.actorOrganizationId !== scope.organizationId) return false;
   if (!(await actorIsPharmacyOwner(db, scope.organizationId, scope.actorId))) return false;
   const others = await db.user.findMany({
@@ -73,6 +83,11 @@ export async function isOwnerWithoutOtherReviewer(db: ScopedDb, scope: Scope): P
       })
     )
       return false;
+    if (
+      options.countOtherOwners &&
+      (await actorIsPharmacyOwner(db, scope.organizationId, member.id))
+    )
+      return false;
   }
   return true;
 }
@@ -82,18 +97,27 @@ export async function requireIndependentCatalogueReviewer(
   scope: Scope,
   editorIds: Array<string | null>,
   soloPin?: string,
-  /** Catalogue edits: an owner with no other active reviewer counts as solo. */
-  options: { ownerWithoutOtherReviewer?: boolean } = {}
+  options: {
+    /** Catalogue edits: an owner with no other active reviewer counts as solo. */
+    ownerWithoutOtherReviewer?: boolean;
+    /** The approver submitted the edit; another active owner then counts as a reviewer. */
+    selfApproval?: boolean;
+  } = {}
 ): Promise<boolean> {
   if (!editorIds.includes(scope.actorId)) return false;
-  const eligible = options.ownerWithoutOtherReviewer
-    ? isOwnerWithoutOtherReviewer(db, scope)
-    : isSoloPharmacyOwner(db, {
-        organizationId: scope.organizationId,
-        actorId: scope.actorId,
-        actorOrganizationId: scope.actorOrganizationId,
-      });
-  if (!soloPin || !(await eligible)) {
+  // Started only when needed: a refusal must not leave a query running after the
+  // transaction it belongs to has rolled back.
+  const eligible = () =>
+    options.ownerWithoutOtherReviewer
+      ? isOwnerWithoutOtherReviewer(db, scope, {
+          countOtherOwners: options.selfApproval ?? true,
+        })
+      : isSoloPharmacyOwner(db, {
+          organizationId: scope.organizationId,
+          actorId: scope.actorId,
+          actorOrganizationId: scope.actorOrganizationId,
+        });
+  if (!soloPin || !(await eligible())) {
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: options.ownerWithoutOtherReviewer
@@ -325,7 +349,10 @@ export async function decideCatalogueEdit(
         // solo-owner and fresh-PIN checks even when someone else submitted it.
         options.soloOwnerAuthority ? [scope.actorId] : [proposal.editorId],
         input.soloPin,
-        { ownerWithoutOtherReviewer: options.ownerWithoutOtherReviewer }
+        {
+          ownerWithoutOtherReviewer: options.ownerWithoutOtherReviewer,
+          selfApproval: proposal.editorId === scope.actorId,
+        }
       ));
     const approvalReason =
       solo && options.ownerWithoutOtherReviewer ? NO_OTHER_REVIEWER : undefined;

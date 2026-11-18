@@ -705,6 +705,63 @@ describe('catalogue-edit capability, queue access and solo owner (DEV-19)', () =
       );
     });
 
+    it('Owner + Owner: neither approves their own edit, but each approves the other with their own PIN', async () => {
+      addMember('owner_b', owner);
+      const proposal = await queueOwnerAlias();
+      await expect(
+        soloCaller().decideCatalogueEdit({
+          editId: proposal.id,
+          decision: 'APPROVE',
+          soloPin: '2468',
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.verifyPin).not.toHaveBeenCalled();
+      expect(db.medicineAlias.create).not.toHaveBeenCalled();
+
+      await expect(
+        soloCaller('owner_b').decideCatalogueEdit({ editId: proposal.id, decision: 'APPROVE' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(
+        soloCaller('owner_b').decideCatalogueEdit({
+          editId: proposal.id,
+          decision: 'APPROVE',
+          soloPin: '1357',
+        })
+      ).resolves.toMatchObject({ status: 'APPROVED' });
+      expect(mocks.verifyPin).toHaveBeenCalledExactlyOnceWith({
+        organizationId: 'org_a',
+        userId: 'owner_b',
+        pin: '1357',
+      });
+      expect(db.medicineAlias.create).toHaveBeenCalledOnce();
+      expect(db.pharmacyCatalogueEdit.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: 'APPROVED', reviewerId: 'owner_b' }),
+        })
+      );
+      expect(db.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            action: 'pharmacy.catalogueSoloOwnerApproval',
+            actorId: 'owner_b',
+            metadata: { soloOwner: true, pinVerified: true, reason: 'no other reviewer' },
+          }),
+        })
+      );
+    });
+
+    it('lets an owner approve their own edit once the other owner is deactivated', async () => {
+      addMember('owner_b', owner, 'DEACTIVATED');
+      const proposal = await queueOwnerAlias();
+      await expect(
+        soloCaller().decideCatalogueEdit({
+          editId: proposal.id,
+          decision: 'APPROVE',
+          soloPin: '2468',
+        })
+      ).resolves.toMatchObject({ status: 'APPROVED' });
+    });
+
     it('falls back to the owner with a PIN once the only other reviewer is deactivated', async () => {
       addMember('pharmacist_c', pharmacist, 'DEACTIVATED');
       addMember('cashier_b', cashier);
