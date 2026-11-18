@@ -2851,6 +2851,9 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      // DEV-936: an organization-wide central grant says *what*; the receiving
+      // branch still needs an assignment (or the live owner exception).
+      await assertProcurementBranch(ctx, input.receivingBranchId);
       try {
         return await createCentralPurchaseOrder(
           ctx.db,
@@ -2890,16 +2893,22 @@ const purchasingRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction((tx) =>
-          allocateCentralReceipt(
-            txDb(tx),
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          // DEV-936: every destination branch is checked before anything is written.
+          const destinations = new Set(input.allocations.map((a) => a.destinationBranchId));
+          for (const destination of destinations) {
+            await assertProcurementBranch(ctx, destination, db);
+          }
+          return allocateCentralReceipt(
+            db,
             {
               organizationId: tenantScope(ctx).organizationId,
               actorId: ctx.session.user.id,
             },
             input
-          )
-        );
+          );
+        });
       } catch (error) {
         domainError(error);
       }

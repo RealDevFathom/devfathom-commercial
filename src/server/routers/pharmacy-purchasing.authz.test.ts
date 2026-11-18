@@ -602,6 +602,9 @@ const BRANCH_SCOPED: ProcedureName[] = [
   'ignoreLostDemandAdvice',
   'requestLostDemandTransfer',
   'reorderDrafts',
+  // DEV-936: receiving and destination branches of central purchasing.
+  'createCentralPurchaseOrder',
+  'allocateCentralReceipt',
 ];
 const ORDER_SCOPED: ProcedureName[] = [
   'submitPurchaseOrder',
