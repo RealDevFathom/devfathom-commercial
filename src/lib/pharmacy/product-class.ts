@@ -12,6 +12,8 @@
  *   template may feature.
  */
 
+import { EXPIRY_NOT_RECORDED } from './unrecorded-batch';
+
 export const PHARMACY_PRODUCT_CLASSES = ['MEDICINE', 'NON_DRUG_RETAIL'] as const;
 export type PharmacyProductClass = (typeof PHARMACY_PRODUCT_CLASSES)[number];
 
@@ -101,12 +103,14 @@ export const NO_EXPIRY_LABEL = 'No expiry';
 
 /**
  * QA-3 — the one way a lot expiry is shown or printed: "No expiry" for the marker, otherwise the
- * caller's own rendering of the date (each surface keeps its date style).
+ * caller's own rendering of the date (each surface keeps its date style). DEV-853: a null value
+ * is an expiry that was never recorded (legacy opening stock) and reads "Expiry not recorded".
  */
 export function formatLotExpiry<T extends Date | string>(
-  value: T,
+  value: T | null,
   render: (value: T) => string
 ): string {
+  if (value === null) return EXPIRY_NOT_RECORDED;
   return isNoExpiryDate(value) ? NO_EXPIRY_LABEL : render(value);
 }
 export const NON_DRUG_HOUSE_BATCH_PREFIX = 'RETAIL-';

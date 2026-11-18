@@ -59,6 +59,7 @@ import {
   type Notice,
   type SearchQuery,
 } from '../_lib/console';
+import { batchPhrase } from '@/lib/pharmacy/unrecorded-batch';
 
 export const metadata: Metadata = { title: 'Returns & claims · Pharmacy purchasing' };
 
@@ -450,7 +451,8 @@ export default async function PharmacyReturnsPage({
                     .filter((line) => line.windowState !== 'OPEN')
                     .map((line) => (
                       <li className="text-xs text-text-muted" key={line.id}>
-                        {line.lot.batch.medicine.productName} · batch {line.lot.batch.batchNumber} ·{' '}
+                        {line.lot.batch.medicine.productName} ·{' '}
+                        {batchPhrase(line.lot.batch.batchNumber, 'batch')} ·{' '}
                         {line.windowState === 'CLOSED'
                           ? `window closed ${Math.abs(line.daysToWindowEnd)} days ago — this line can no longer be dispatched for credit`
                           : `window closes in ${line.daysToWindowEnd} days (${dateOnly(line.returnWindowEndsAt)})`}
@@ -583,7 +585,7 @@ export default async function PharmacyReturnsPage({
                         notice={notice}
                         options={lots.map((balance) => ({
                           value: `${balance.lot.id}|${balance.location.id}`,
-                          label: `${balance.lot.batch.medicine.productName} · batch ${balance.lot.batch.batchNumber} · ${formatLotExpiry(balance.lot.batch.expiresAt, (value) => `expires ${dateOnly(value)}`)} · ${balance.onHandUnits} available in ${balance.location.name}`,
+                          label: `${balance.lot.batch.medicine.productName} · ${batchPhrase(balance.lot.batch.batchNumber, 'batch')} · ${formatLotExpiry(balance.lot.batch.expiresAt, (value) => `expires ${dateOnly(value)}`)} · ${balance.onHandUnits} available in ${balance.location.name}`,
                         }))}
                         placeholder="Skip this line"
                       />
@@ -856,7 +858,7 @@ function ReturnDetail({
               />
             </div>
             <p className="mt-1 text-xs text-text-muted">
-              Batch {line.lot.batch.batchNumber} ·{' '}
+              {batchPhrase(line.lot.batch.batchNumber)} ·{' '}
               {formatLotExpiry(line.lot.batch.expiresAt, (value) => `expires ${dateOnly(value)}`)} ·{' '}
               {units(line.quantityUnits)} from {line.location.name} · expects{' '}
               {money(line.expectedCreditMinor)} · {line.reason}

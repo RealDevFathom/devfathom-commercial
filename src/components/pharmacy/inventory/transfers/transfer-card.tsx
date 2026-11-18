@@ -23,6 +23,7 @@ import {
   transferStatusTone,
   type TransferBoardRow,
 } from './transfer-presentation';
+import { batchPhrase } from '@/lib/pharmacy/unrecorded-batch';
 
 const when = (value: Date | string) =>
   new Intl.DateTimeFormat('en-PK', { dateStyle: 'medium' }).format(new Date(value));
@@ -102,7 +103,9 @@ export function TransferCard({
               <TableRow key={line.id}>
                 <TableCell>
                   <span className="font-medium text-text-strong">{line.medicineName}</span>
-                  <span className="block text-xs text-text-muted">Batch {line.batchNumber}</span>
+                  <span className="block text-xs text-text-muted">
+                    {batchPhrase(line.batchNumber)}
+                  </span>
                 </TableCell>
                 <TableCell>{formatLotExpiry(line.expiresAt, when)}</TableCell>
                 <TableCell className="text-sm">

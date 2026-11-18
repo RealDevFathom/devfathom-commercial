@@ -3093,7 +3093,7 @@ async function drapRecall(db: ScopedDb, fixture: RecallFixture, scope: 'batch' |
     kind: 'RECALL',
     sourceReference: tag('drap-overlap'),
     drapRegistrationNumber: fixture.registration,
-    ...(scope === 'batch' ? { batchNumbers: [fixture.first.batch.batchNumber] } : {}),
+    ...(scope === 'batch' ? { batchNumbers: [fixture.first.batch.batchNumber as string] } : {}),
     reason: 'Regulator recall',
   });
   // DEV-692: a matched alert is only a draft until a person confirms it.

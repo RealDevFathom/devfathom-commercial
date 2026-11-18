@@ -186,7 +186,8 @@ describe('DEV-878 automatic out-of-stock search alternatives', () => {
           batches: {
             some: {
               state: 'ACTIVE',
-              expiresAt: { gt: at },
+              // DEV-853: an unrecorded expiry is never treated as expired.
+              OR: [{ expiresAt: null }, { expiresAt: { gt: at } }],
               lots: {
                 some: {
                   branchId: 'branch-a',

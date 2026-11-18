@@ -9,6 +9,7 @@ import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import { csvCell } from '@/lib/csv';
 import { EXPIRY_CLAIM_MAX_POSITIONS } from '@/lib/pharmacy/expiry-claim';
+import { BATCH_NOT_RECORDED, batchNumberLabel } from '@/lib/pharmacy/unrecorded-batch';
 import {
   Table,
   TableBody,
@@ -31,7 +32,8 @@ export type ExpiryBoardRow = {
   stockLocationId: string;
   locationName: string;
   medicineName: string;
-  batchNumber: string;
+  /** DEV-853: null when the batch number was never recorded. */
+  batchNumber: string | null;
   batchState: string;
   expiresAt: string;
   daysLeft: number;
@@ -177,7 +179,7 @@ export function nearExpiryCsv(rows: readonly ExpiryBoardRow[], costVisible: bool
   const lines = rows.map((row) =>
     [
       row.medicineName,
-      row.batchNumber,
+      batchNumberLabel(row.batchNumber),
       row.expiresAt.slice(0, 10),
       expiryText(row),
       row.locationName,
@@ -277,7 +279,8 @@ function PrintableList(props: ExpiryBoardProps) {
                   <TableCell>
                     <span className="font-medium text-text-strong">{row.medicineName}</span>
                     <span className="block text-xs text-text-muted">
-                      Batch {row.batchNumber} · {row.supplierName}
+                      {row.batchNumber === null ? BATCH_NOT_RECORDED : `Batch ${row.batchNumber}`} ·{' '}
+                      {row.supplierName}
                     </span>
                   </TableCell>
                   <TableCell>
@@ -335,7 +338,8 @@ function LotCard({ row, props }: { row: ExpiryBoardRow; props: ExpiryBoardProps 
   const returnable = returnableUnits(row);
   const risk = RISK_STEP[expiryRiskBand(row)];
   const canMarkDown = row.markdownEligible && !row.expired && row.batchState === 'ACTIVE';
-  const heading = `${row.medicineName} · batch ${row.batchNumber} · ${row.locationName}`;
+  const batch = row.batchNumber === null ? BATCH_NOT_RECORDED : `batch ${row.batchNumber}`;
+  const heading = `${row.medicineName} · ${batch} · ${row.locationName}`;
   return (
     <article
       aria-label={heading}

@@ -9,11 +9,14 @@
  */
 import type { CounterReceiptFormat } from '@/lib/pharmacy/counter-browser-print';
 import { formatLotExpiry } from '@/lib/pharmacy/product-class';
+import { batchPhrase } from '@/lib/pharmacy/unrecorded-batch';
 
 export type PackingSlipLine = {
   medicineName: string;
-  batchNumber: string;
-  expiresAt: string;
+  /** DEV-853: null when the batch number was never recorded. */
+  batchNumber: string | null;
+  /** DEV-853: null when the expiry was never recorded. */
+  expiresAt: string | null;
   sourceLocation: string;
   destinationLocation: string;
   quantityUnits: number;
@@ -73,7 +76,7 @@ export function buildPackingSlipText(slip: PackingSlip, columns: number): string
   slip.lines.forEach((line, index) => {
     out.push(
       `${index + 1}. ${line.medicineName}`,
-      `   Batch ${line.batchNumber} · ${formatLotExpiry(line.expiresAt, (value) => `exp ${day(value)}`)}`,
+      `   ${batchPhrase(line.batchNumber)} · ${formatLotExpiry(line.expiresAt, (value) => `exp ${day(value)}`)}`,
       `   ${line.quantityUnits} units = ${line.sealedPacks} sealed × ${line.unitsPerPack} + ${line.looseUnits} loose`,
       `   Pick: ${line.sourceLocation}`,
       `   Put:  ${line.destinationLocation}`,

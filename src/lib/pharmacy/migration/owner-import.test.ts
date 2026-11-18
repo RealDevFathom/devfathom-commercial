@@ -44,8 +44,7 @@ describe('owner opening import dry run', () => {
     expect(db.packLevel.findMany.mock.calls[0]?.[0].where.organizationId).toBe(scope.organizationId);
   });
   it.each([
-    'SRC-1,00123,,2099-06,25,1.25,10,10,',
-    'SRC-1,00123,B1,,25,1.25,10,10,',
+    'SRC-1,00123,B1,June 2099,25,1.25,10,10,',
     'SRC-1,00123,B1,2099-06,,1.25,10,10,',
     'SRC-1,00123,B1,2099-06,25,1.255,10,10,',
     'SRC-1,00123,B1,2099-06,25,1.25,10,,',
@@ -56,6 +55,42 @@ describe('owner opening import dry run', () => {
     'SRC-1,00123,B1,2099-06,25,100000,100000,100000,',
   ])('blocks missing, fractional, overflowing, unexplained or expired evidence: %s', async (row) => {
     expect((await previewOwnerImport(scoped(), scope, input(row))).canCommit).toBe(false);
+  });
+  /**
+   * DEV-853 owner decision: legacy stock has no batch number and no expiry. A
+   * blank cell is "not recorded" — never invented — and the row still imports.
+   */
+  it.each([
+    ['no batch', 'SRC-1,00123,,2099-06,25,1.25,10,10,', null, 'MONTH'],
+    ['no expiry', 'SRC-1,00123,B1,,25,1.25,10,10,', 'B1', null],
+    ['neither', 'SRC-1,00123,,,25,1.25,10,10,', '', null],
+  ] as const)('imports a legacy row with %s', async (_label, row, batch, precision) => {
+    const preview = await previewOwnerImport(scoped(), scope, input(row));
+    expect(preview.lines[0]!.errors).toEqual([]);
+    expect(preview.canCommit).toBe(true);
+    expect(preview.totalUnits).toBe(10);
+    expect(preview.lines[0]).toMatchObject({ expiryPrecision: precision });
+    if (precision === null) expect(preview.lines[0]).toMatchObject({ expiryDate: null, expiresAt: null });
+    if (batch !== null) expect(preview.lines[0]!.batchNumber).toBe(batch);
+  });
+  it('still refuses a known expiry that has already passed', async () => {
+    const preview = await previewOwnerImport(scoped(), scope, input('SRC-1,00123,,2000-06,25,1.25,10,10,'));
+    expect(preview.canCommit).toBe(false);
+    expect(preview.lines[0]!.errors.join(' ')).toContain('future expiry');
+  });
+  it('maps batch and expiry as optional columns', async () => {
+    const { batch, expiry, ...required } = mapping;
+    void batch;
+    void expiry;
+    const value = { ...input('SRC-1,00123,,,25,1.25,10,10,'), mapping: required };
+    const preview = await previewOwnerImport(scoped(), scope, value);
+    expect(preview.canCommit).toBe(true);
+  });
+  it('lets a row with no expiry join an existing batch whose expiry is known', async () => {
+    db.pharmacyManufacturingBatch.findFirst.mockResolvedValueOnce({ id: 'batch', state: 'ACTIVE', expiryPrecision: 'MONTH', expiresAt: new Date('2099-06-30T19:00:00Z') } as never);
+    const preview = await previewOwnerImport(scoped(), scope, input('SRC-1,00123,B1,,25,1.25,10,10,'));
+    expect(preview.lines[0]!.errors).toEqual([]);
+    expect(preview.lines[0]!.manufacturingBatchId).toBe('batch');
   });
   it('preserves explicit zero counts and costs', async () => {
     const preview = await previewOwnerImport(scoped(), scope, input('SRC-1,00123,B1,2099-06,0,0,0,0,'));

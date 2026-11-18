@@ -78,7 +78,7 @@ async function frontShopItem(units: number) {
       supplierInvoiceRef: randomUUID(),
       unitCostMinor: 100,
       printedMrpMinor: 500,
-      receivedExpiresAt: batch.expiresAt,
+      receivedExpiresAt: batch.expiresAt as Date,
       receivedExpiryPrecision: 'DAY',
       quantityUnits: units,
       idempotencyKey: randomUUID(),

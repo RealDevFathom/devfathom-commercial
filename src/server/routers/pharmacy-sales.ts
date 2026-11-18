@@ -4185,7 +4185,7 @@ export const pharmacySalesRouter = router({
           {
             inventoryLotId,
             batchNumber: lot.batch.batchNumber,
-            expiresAt: lot.batch.expiresAt.toISOString(),
+            expiresAt: lot.batch.expiresAt?.toISOString() ?? null,
             sellableUnits,
             blockedBy:
               sellableUnits > 0

@@ -6,7 +6,8 @@ export type ExpiryLotFact = {
   lotId: string;
   branchId: string;
   medicineName: string;
-  batchNumber: string;
+  /** DEV-853: null when the batch number was never recorded. */
+  batchNumber: string | null;
   supplierId: string | null;
   supplierName: string;
   stockLocationId: string;

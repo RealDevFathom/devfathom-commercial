@@ -2046,6 +2046,19 @@ const ASSIGNMENT_GATED: ReadonlyArray<{
         requestKey: 'quarantine-1',
       }),
   },
+  {
+    // DEV-853: record the real batch and expiry of a legacy lot.
+    name: 'recordUnrecordedBatch',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().recordUnrecordedBatch({
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        batchNumber: 'B-REAL',
+        printedExpiry: new Date('2027-06-01T00:00:00.000Z'),
+        expiryPrecision: 'MONTH',
+      }),
+  },
 ];
 
 /** The user-record lookup that confirms a session ADMIN is a live ADMIN of this tenant. */
@@ -2557,7 +2570,7 @@ describe('DEV-660 — every branch-scoped procedure is classified', () => {
 
     expect(new Set(classified).size).toBe(classified.length);
     expect(branchScoped).toEqual(classified);
-    expect(ASSIGNMENT_GATED).toHaveLength(43);
+    expect(ASSIGNMENT_GATED).toHaveLength(44);
   });
 });
 

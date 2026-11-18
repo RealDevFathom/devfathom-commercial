@@ -316,7 +316,7 @@ export async function pharmacyLoyaltyAndInventoryFacts(
         AND m.disposition='AVAILABLE' AND m."occurredAt"<${cutoff}
         AND lot."receivedAt" IS NOT NULL AND lot."receivedAt"<=${cutoff}
         AND batch.state='ACTIVE'
-        AND batch."expiresAt">${cutoff}
+        AND (batch."expiresAt" IS NULL OR batch."expiresAt">${cutoff})
       GROUP BY m."inventoryLotId" HAVING SUM(m."quantityUnits")>0
     ) held
   `);

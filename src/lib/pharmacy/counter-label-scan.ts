@@ -10,6 +10,7 @@
  */
 
 import type { CounterSearchRow } from './counter';
+import { batchPhrase } from './unrecorded-batch';
 
 export type CounterLabelScanDecision =
   | { kind: 'NONE' }
@@ -37,13 +38,13 @@ export function counterLabelScanDecision(
   if (lot.blockedBy !== null || lot.sellableUnits <= 0) {
     return {
       kind: 'BLOCKED',
-      message: `Batch ${lot.batchNumber} on this shelf label cannot be sold: ${BLOCKED_LABEL[lot.blockedBy ?? 'EMPTY'] ?? 'it is not sellable'}. Remove the sticker and check the shelf.`,
+      message: `${batchPhrase(lot.batchNumber)} on this shelf label cannot be sold: ${BLOCKED_LABEL[lot.blockedBy ?? 'EMPTY'] ?? 'it is not sellable'}. Remove the sticker and check the shelf.`,
     };
   }
   if (lot.inventoryLotId === row.recommendedLotId) return { kind: 'FEFO' };
   return {
     kind: 'OVERRIDE',
     inventoryLotId: lot.inventoryLotId,
-    message: `Shelf label batch ${lot.batchNumber} is not the batch FEFO sells first. Enter a reason to sell it, or choose a different batch.`,
+    message: `Shelf label ${batchPhrase(lot.batchNumber, 'batch')} is not the batch FEFO sells first. Enter a reason to sell it, or choose a different batch.`,
   };
 }
