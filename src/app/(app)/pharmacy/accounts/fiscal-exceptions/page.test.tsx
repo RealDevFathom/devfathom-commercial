@@ -8,7 +8,7 @@ vi.mock('./access', () => ({ loadFiscalExceptionRegister: mocks.load }));
 import Page from './page';
 import Loading from './loading';
 import ErrorState from './error';
-import { fiscalExceptionHref, fiscalExceptionQuery } from './query';
+import { fiscalExceptionError, fiscalExceptionHref, fiscalExceptionQuery } from './query';
 
 const query = { branchId: 'branch-1', from: '2026-07-01', to: '2026-10-01' };
 function register(): FiscalExceptionRegister {
@@ -38,7 +38,7 @@ describe('fiscal exception evidence page', () => {
     expect(screen.getByText(/Coverage unknown/)).toBeVisible();
     expect(screen.getByText(/Total unknown/)).toHaveTextContent('Page capped');
     expect(screen.getByText(/CSV downloads re-read/)).toBeVisible();
-    expect(screen.getByLabelText('Created before (UTC, exclusive)')).toHaveValue(query.to);
+    expect(screen.getByLabelText('Created before (not included)')).toHaveValue(query.to);
     const region = screen.getByRole('region', { name: 'Fiscal exception documents' });
     expect(region).toHaveAttribute('tabindex', '0');
     region.focus();
@@ -51,6 +51,32 @@ describe('fiscal exception evidence page', () => {
     expect(screen.getByRole('link', { name: 'Next page' })).toHaveAttribute('href',
       fiscalExceptionHref({ ...register().filters, page: 1 }));
     expect(screen.queryByRole('button', { name: /retry|send|dispatch/i })).not.toBeInTheDocument();
+  });
+
+  it('reads the same UTC-day window and shows recorded times on the organisation clock (DEV-722)', async () => {
+    // 00:30 in Karachi on 1 Aug is 19:30 UTC on 31 Jul.
+    mocks.load.mockResolvedValue({
+      ...register(), timeZone: 'Asia/Karachi', readAt: '2026-07-31T19:30:00.000Z',
+      rows: [{ ...register().rows[0]!, nextAttemptAt: '2026-07-31T19:30:00.000Z',
+        createdAt: '2026-07-31T19:30:00.000Z', updatedAt: '2026-08-01T04:00:00.000Z' }],
+    });
+    const window = { branchId: 'branch-1', from: '2026-08-01', to: '2026-08-02' };
+    const { container } = render(await Page({ searchParams: Promise.resolve(window) }));
+    // The reader still receives the typed calendar days unchanged: the server contract is UTC days.
+    expect(mocks.load).toHaveBeenCalledWith({ ...window, page: undefined, pageSize: undefined });
+    const region = screen.getByRole('region', { name: 'Fiscal exception documents' });
+    expect(within(region).getAllByText('1 Aug 2026, 12:30 AM PKT')).toHaveLength(2);
+    expect(within(region).getByText('1 Aug 2026, 9:00 AM PKT').closest('time')).toHaveAttribute(
+      'dateTime', '2026-08-01T04:00:00.000Z');
+    expect(screen.getAllByText(/Read started/)[0]).toHaveTextContent(
+      'Read started 1 Aug 2026, 12:30 AM PKT');
+    expect(screen.getByLabelText('Created from')).toHaveValue('2026-08-01');
+    // Precise UTC wording stays inside the Details disclosures only.
+    const outside = container.cloneNode(true) as HTMLElement;
+    outside.querySelectorAll('details').forEach((details) => details.remove());
+    expect(outside.textContent).not.toMatch(/\bUTC\b/);
+    expect(container.querySelectorAll('details').length).toBeGreaterThan(0);
+    expect([...container.querySelectorAll('details')].some((d) => /UTC/.test(d.textContent ?? ''))).toBe(true);
   });
 
   it('keeps empty evidence unknown and offers filter guidance', async () => {
@@ -118,5 +144,30 @@ describe('local URL interpretation', () => {
     expect(fiscalExceptionQuery({ ...query, branchId: ['one', 'two'] }).branchId).toEqual(['one', 'two']);
     expect(fiscalExceptionQuery({ ...query, pageSize: '1e2' }).pageSize).toBeNaN();
     expect(fiscalExceptionQuery({ ...query, page: '' }).page).toBeNaN();
+  });
+
+  it('keeps the default UTC-day window unchanged at 00:30 in Karachi, and it still holds now', () => {
+    vi.useFakeTimers();
+    try {
+      // 00:30 on 1 Aug in Karachi is 19:30 UTC on 31 Jul; the reader's window is UTC days.
+      vi.setSystemTime(new Date('2026-07-31T19:30:00Z'));
+      const defaults = fiscalExceptionQuery({ branchId: 'branch-1' });
+      expect(defaults).toMatchObject({ from: '2026-07-25', to: '2026-08-01' });
+      const now = Date.now();
+      expect(Date.parse(`${defaults.from}T00:00:00Z`)).toBeLessThanOrEqual(now);
+      expect(Date.parse(`${defaults.to}T00:00:00Z`)).toBeGreaterThan(now);
+      // A typed window passes to the reader as typed.
+      expect(fiscalExceptionQuery({ branchId: 'b', from: '2026-08-01', to: '2026-08-02' }))
+        .toMatchObject({ from: '2026-08-01', to: '2026-08-02' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('explains a refused window in plain words', () => {
+    const message = fiscalExceptionError(new TRPCError({ code: 'BAD_REQUEST' }));
+    expect(message).toContain('real calendar dates');
+    expect(message).toContain('The end date is not included');
+    expect(message).not.toMatch(/\bUTC\b|exclusive/);
   });
 });

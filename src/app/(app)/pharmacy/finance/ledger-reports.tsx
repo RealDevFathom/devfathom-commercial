@@ -15,8 +15,14 @@ import {
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { EMPTY_LEDGER_LABELS, type LedgerLabels } from '@/lib/pharmacy/finance-labels';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
-import { formatUtcInstant } from '@/lib/utc-instant';
 import { plainReportSource } from '@/lib/pharmacy/report-labels';
+import {
+  formatWorkspaceDateTime,
+  workspaceDateOffset,
+  workspaceDateRange,
+  workspaceToday,
+  workspaceZoneLabel,
+} from '@/lib/timezone';
 
 type Caller = Pick<
   ReturnType<typeof pharmacyFinanceRouter.createCaller>,
@@ -62,8 +68,15 @@ function labelsOf(report: { labels?: LedgerLabels }): LedgerLabels {
   return report.labels ?? EMPTY_LEDGER_LABELS;
 }
 
-function utcDate(value: Date) {
-  return value.toISOString().slice(0, 10);
+/** Workspace IANA zone (UTC when absent): picked days start at its midnight, times show on it. */
+type Zone = string | null | undefined;
+
+/**
+ * The instant a picked day starts on the organisation's clock, as the ISO string the ledger
+ * readers take. For a UTC organisation this is `YYYY-MM-DDT00:00:00.000Z`, exactly as before.
+ */
+export function ledgerDayStart(day: string, timeZone: Zone): string {
+  return workspaceDateRange(day, day, timeZone).from.toISOString();
 }
 
 // Guard the receipt formatter's invalid-number fallback: missing/unsafe money is never zero.
@@ -88,23 +101,21 @@ function net(row: Margin['rows'][number]) {
   return total([row.revenueMinor, -row.discountMinor]);
 }
 
-const pktFormat = new Intl.DateTimeFormat('en-GB', {
-  timeZone: 'Asia/Karachi',
-  day: 'numeric',
-  month: 'short',
-  year: 'numeric',
-  hour: '2-digit',
-  minute: '2-digit',
-  hour12: false,
-});
-const pkt = (value: Date) => `${pktFormat.format(value)} PKT`;
-
-/** Leakage header: local (PKT) dates and no source or coverage jargon. */
-function LeakageMetadata({ report, branchName }: { report: Leakage; branchName: string }) {
+/** Leakage header: the organisation's clock and no source or coverage jargon. */
+function LeakageMetadata({
+  report,
+  branchName,
+  timeZone,
+}: {
+  report: Leakage;
+  branchName: string;
+  timeZone: Zone;
+}) {
+  const at = (value: Date) => formatWorkspaceDateTime(value, timeZone);
   return (
     <div className="space-y-2 break-words text-sm text-text-muted">
       <p>
-        From {pkt(report.period.from)} up to (not including) {pkt(report.period.to)}. Branch:{' '}
+        From {at(report.period.from)} up to (not including) {at(report.period.to)}. Branch:{' '}
         {branchName}.
       </p>
       <p>
@@ -116,20 +127,29 @@ function LeakageMetadata({ report, branchName }: { report: Leakage; branchName: 
       </p>
       <p>
         Built only from entries posted to the books. Refunds count only once they are posted as
-        reversals. Retrieved {pkt(report.freshness.retrievedAt)}.
+        reversals. Retrieved {at(report.freshness.retrievedAt)}.
       </p>
     </div>
   );
 }
 
-function Metadata({ report, branchName }: { report: Report; branchName: string }) {
+function Metadata({
+  report,
+  branchName,
+  timeZone,
+}: {
+  report: Report;
+  branchName: string;
+  timeZone: Zone;
+}) {
+  const at = (value: Date) => formatWorkspaceDateTime(value, timeZone);
   return (
     <div className="space-y-2 break-words text-sm text-text-muted">
       <p>
         {'at' in report.period
-          ? `Up to and including ${utcDate(report.period.at)}.`
-          : `From ${utcDate(report.period.from)} up to (not including) ${utcDate(report.period.to)}.`}{' '}
-        Dates are in {report.timezone}. Branch: {branchName}.
+          ? `Stock value at ${at(report.period.at)}.`
+          : `From ${at(report.period.from)} up to (not including) ${at(report.period.to)}.`}{' '}
+        Branch: {branchName}.
       </p>
       <p>
         {report.currency
@@ -145,11 +165,8 @@ function Metadata({ report, branchName }: { report: Report; branchName: string }
         {report.coverage.completeness}. Refunds count only once they are posted as reversals.
       </p>
       <p>
-        Retrieved: {formatUtcInstant(report.freshness.retrievedAt)}. Latest posting:{' '}
-        {report.freshness.latestPostingAt
-          ? formatUtcInstant(report.freshness.latestPostingAt)
-          : 'unknown'}
-        .
+        Retrieved: {at(report.freshness.retrievedAt)}. Latest posting:{' '}
+        {report.freshness.latestPostingAt ? at(report.freshness.latestPostingAt) : 'unknown'}.
       </p>
       <StatusPill status="warning" label={`Cost coverage: ${report.coverage.costCoverage}`} />
       <p>
@@ -205,7 +222,15 @@ function LedgerTable({
   );
 }
 
-export function ValuationLedger({ report, branchName }: { report: Valuation; branchName: string }) {
+export function ValuationLedger({
+  report,
+  branchName,
+  timeZone,
+}: {
+  report: Valuation;
+  branchName: string;
+  timeZone?: Zone;
+}) {
   const labels = labelsOf(report);
   const unallocated = BigInt(report.unallocatedValueMinor ?? 0);
   const lotTotal = total(report.rows.map((row) => row.valueMinor));
@@ -226,7 +251,7 @@ export function ValuationLedger({ report, branchName }: { report: Valuation; bra
     ]);
   return (
     <div className="min-w-0 space-y-4">
-      <Metadata report={report} branchName={branchName} />
+      <Metadata report={report} branchName={branchName} timeZone={timeZone} />
       {rows.length > 0 && (
         <Stat
           label="Posted inventory value"
@@ -273,12 +298,20 @@ function marginKeyLabel(report: Margin, key: string | null) {
   return key ? `Sale line ref ${key}` : unknown;
 }
 
-export function MarginLedger({ report, branchName }: { report: Margin; branchName: string }) {
+export function MarginLedger({
+  report,
+  branchName,
+  timeZone,
+}: {
+  report: Margin;
+  branchName: string;
+  timeZone?: Zone;
+}) {
   const revenue = total(report.rows.flatMap((row) => [row.revenueMinor, -row.discountMinor]));
   const unmatchedReturns = report.by === 'batch' && report.rows.some((row) => row.key === null);
   return (
     <div className="min-w-0 space-y-4">
-      <Metadata report={report} branchName={branchName} />
+      <Metadata report={report} branchName={branchName} timeZone={timeZone} />
       {report.rows.length > 0 && (
         <div className="grid min-w-0 gap-5 md:grid-cols-3">
           <Stat
@@ -336,11 +369,19 @@ export function MarginLedger({ report, branchName }: { report: Margin; branchNam
   );
 }
 
-export function LeakageLedger({ report, branchName }: { report: Leakage; branchName: string }) {
+export function LeakageLedger({
+  report,
+  branchName,
+  timeZone,
+}: {
+  report: Leakage;
+  branchName: string;
+  timeZone?: Zone;
+}) {
   const labels = labelsOf(report);
   return (
     <div className="min-w-0 space-y-4">
-      <LeakageMetadata report={report} branchName={branchName} />
+      <LeakageMetadata report={report} branchName={branchName} timeZone={timeZone} />
       <p className="text-sm text-text-body">
         Counts discounts given, stock written off, and stock lost or found. Stock found offsets
         stock lost. Discounts are business choices, so these totals are not all lost money. Expired
@@ -413,6 +454,7 @@ export async function LedgerReportsSection({
   marginFrom,
   marginTo,
   profitBy,
+  timeZone,
 }: {
   caller: Caller;
   branch: { id: string; name: string };
@@ -423,14 +465,15 @@ export async function LedgerReportsSection({
   marginFrom?: string;
   marginTo?: string;
   profitBy?: string;
+  /** Workspace IANA zone: picked days are the organisation's days (UTC when absent). */
+  timeZone?: Zone;
 }) {
   const now = new Date();
-  const today = now.toISOString().slice(0, 10);
+  const today = workspaceToday(timeZone, now);
   const end = to ?? today;
-  const start =
-    from ??
-    new Date(new Date(`${today}T00:00:00Z`).getTime() - 30 * day).toISOString().slice(0, 10);
+  const start = from ?? workspaceDateOffset(timeZone, -30, now);
   const cutoff = at ?? today;
+  const zone = workspaceZoneLabel(timeZone);
   const group = by ?? 'batch';
   const fromDate = dateOnly(start),
     toDate = dateOnly(end),
@@ -440,15 +483,21 @@ export async function LedgerReportsSection({
     !!toDate &&
     toDate.getTime() > fromDate.getTime() &&
     toDate.getTime() - fromDate.getTime() <= 92 * day;
-  const atValid = !!atDate && atDate.getTime() <= now.getTime();
+  // The cutoff is the start of the picked day on the organisation's clock; it cannot be later
+  // than now, so today is the latest day that can be picked.
+  const atValid = !!atDate && Date.parse(ledgerDayStart(cutoff, timeZone)) <= now.getTime();
   const groupValid = groups.includes(group as Group);
   let results:
     | [PromiseSettledResult<Valuation>, PromiseSettledResult<Margin>, PromiseSettledResult<Leakage>]
     | undefined;
   if (periodValid && atValid && groupValid) {
-    const period = { branchId: branch.id, from: fromDate.toISOString(), to: toDate.toISOString() };
+    const period = {
+      branchId: branch.id,
+      from: ledgerDayStart(start, timeZone),
+      to: ledgerDayStart(end, timeZone),
+    };
     results = await Promise.allSettled([
-      caller.perpetualValuation({ branchId: branch.id, at: atDate.toISOString() }),
+      caller.perpetualValuation({ branchId: branch.id, at: ledgerDayStart(cutoff, timeZone) }),
       caller.grossMargin({ ...period, by: group as Group }),
       caller.leakageReport(period),
     ]);
@@ -458,8 +507,10 @@ export async function LedgerReportsSection({
     <section aria-label="Pharmacy ledger reports" className="min-w-0 space-y-6">
       <SectionCard title="Ledger reports" titleLevel={2} eyebrow="Valuation · margin · leakage">
         <p className="mb-4 break-words text-sm text-text-muted">
-          Branch: {branch.name}. Reporting period uses UTC midnight, start inclusive and end
-          exclusive, up to 92 days. Valuation uses its separate inclusive cutoff at UTC midnight.
+          Branch: {branch.name}. The period runs from midnight at the start of the first day up to
+          midnight at the start of the end day, which is not included, for up to 92 days. Stock
+          value is taken at midnight at the start of its own chosen day. Days and times are {zone}{' '}
+          time.
         </p>
         <form
           action="/pharmacy/finance"
@@ -473,19 +524,19 @@ export async function LedgerReportsSection({
           {[
             {
               name: 'ledgerFrom',
-              label: 'Period start (UTC)',
+              label: `Period start (midnight, ${zone})`,
               value: start,
               invalid: !periodValid,
             },
             {
               name: 'ledgerTo',
-              label: 'Period end (UTC, exclusive)',
+              label: `Period end (midnight, ${zone}, not included)`,
               value: end,
               invalid: !periodValid,
             },
             {
               name: 'ledgerAt',
-              label: 'Valuation cutoff (00:00 UTC)',
+              label: `Stock value at (midnight, ${zone})`,
               value: cutoff,
               invalid: !atValid,
             },
@@ -537,21 +588,33 @@ export async function LedgerReportsSection({
         <>
           <SectionCard title="Perpetual valuation" titleLevel={2}>
             {results[0].status === 'fulfilled' ? (
-              <ValuationLedger report={results[0].value} branchName={branch.name} />
+              <ValuationLedger
+                timeZone={timeZone}
+                report={results[0].value}
+                branchName={branch.name}
+              />
             ) : (
               <Failure error={results[0].reason} />
             )}
           </SectionCard>
           <SectionCard title="Ledger gross margin" titleLevel={2}>
             {results[1].status === 'fulfilled' ? (
-              <MarginLedger report={results[1].value} branchName={branch.name} />
+              <MarginLedger
+                timeZone={timeZone}
+                report={results[1].value}
+                branchName={branch.name}
+              />
             ) : (
               <Failure error={results[1].reason} />
             )}
           </SectionCard>
           <SectionCard title="Recorded leakage" titleLevel={2}>
             {results[2].status === 'fulfilled' ? (
-              <LeakageLedger report={results[2].value} branchName={branch.name} />
+              <LeakageLedger
+                timeZone={timeZone}
+                report={results[2].value}
+                branchName={branch.name}
+              />
             ) : (
               <Failure error={results[2].reason} />
             )}
@@ -572,14 +635,16 @@ function profitKey(row: TrueProfit['rows'][number], by: ProfitGroup) {
 export function TrueProfitLedger({
   report,
   branchName,
+  timeZone,
 }: {
   report: TrueProfit;
   branchName: string;
+  timeZone?: Zone;
 }) {
   const label = profitGroupLabels[report.by];
   return (
     <div className="min-w-0 space-y-4">
-      <Metadata report={report} branchName={branchName} />
+      <Metadata report={report} branchName={branchName} timeZone={timeZone} />
       {report.rows.length > 0 && (
         <div className="grid min-w-0 gap-5 md:grid-cols-3">
           <Stat
@@ -640,6 +705,7 @@ export async function TrueProfitSection({
   to,
   by,
   preserved = {},
+  timeZone,
 }: {
   caller: TrueProfitCaller;
   branch: { id: string; name: string };
@@ -648,12 +714,12 @@ export async function TrueProfitSection({
   by?: string;
   /** Other report filters on the page, carried through this form unchanged. */
   preserved?: Record<string, string | undefined>;
+  /** Workspace IANA zone: picked days are the organisation's days (UTC when absent). */
+  timeZone?: Zone;
 }) {
-  const today = new Date().toISOString().slice(0, 10);
-  const end = to ?? today;
-  const start =
-    from ??
-    new Date(new Date(`${today}T00:00:00Z`).getTime() - 30 * day).toISOString().slice(0, 10);
+  const now = new Date();
+  const end = to ?? workspaceToday(timeZone, now);
+  const start = from ?? workspaceDateOffset(timeZone, -30, now);
   const group = by ?? 'item';
   const fromDate = dateOnly(start),
     toDate = dateOnly(end);
@@ -668,8 +734,8 @@ export async function TrueProfitSection({
     [result] = await Promise.allSettled([
       caller.trueProfit({
         branchId: branch.id,
-        from: fromDate.toISOString(),
-        to: toDate.toISOString(),
+        from: ledgerDayStart(start, timeZone),
+        to: ledgerDayStart(end, timeZone),
         by: group as ProfitGroup,
       }),
     ]);
@@ -681,9 +747,9 @@ export async function TrueProfitSection({
       eyebrow="Landed cost · item · category · hour · staff"
     >
       <p className="mb-4 break-words text-sm text-text-muted">
-        Branch: {branch.name}. Uses the ledger reporting period above ({start} to {end}, UTC, end
-        exclusive). Cost is each lot&apos;s landed cost: invoice net plus non-creditable tax and
-        freight, spread over paid and bonus units.
+        Branch: {branch.name}. Uses the ledger reporting period above, from {start} up to (not
+        including) {end}, {workspaceZoneLabel(timeZone)} time. Cost is each lot&apos;s landed cost:
+        invoice net plus non-creditable tax and freight, spread over paid and bonus units.
       </p>
       <form
         action="/pharmacy/finance"
@@ -723,7 +789,7 @@ export async function TrueProfitSection({
       )}
       {result &&
         (result.status === 'fulfilled' ? (
-          <TrueProfitLedger report={result.value} branchName={branch.name} />
+          <TrueProfitLedger report={result.value} branchName={branch.name} timeZone={timeZone} />
         ) : (
           <Failure error={result.reason} />
         ))}

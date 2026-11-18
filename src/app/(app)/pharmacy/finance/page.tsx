@@ -28,6 +28,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
+import { workspaceDateOffset } from '@/lib/timezone';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
 
@@ -279,11 +280,11 @@ export default async function PharmacyFinancePage({
 
   const now = new Date();
   const today = now.toISOString().slice(0, 10);
-  // Shared UTC [from, to) posting window includes today; valuation stays independent.
-  const ledgerFrom =
-    query.ledgerFrom ?? new Date(now.getTime() - 30 * 86_400_000).toISOString().slice(0, 10);
-  const ledgerTo =
-    query.ledgerTo ?? new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10);
+  // Shared [from, to) posting window in the organisation's days (UTC when it has no zone): it
+  // includes today; valuation stays independent.
+  const timeZone = ctx.organization?.timezone;
+  const ledgerFrom = query.ledgerFrom ?? workspaceDateOffset(timeZone, -30, now);
+  const ledgerTo = query.ledgerTo ?? workspaceDateOffset(timeZone, 1, now);
   return (
     <div className="min-w-0 space-y-6">
       <PageHeader
@@ -306,6 +307,7 @@ export default async function PharmacyFinancePage({
           from={ledgerFrom}
           to={ledgerTo}
           page={query.journalPage}
+          timeZone={timeZone}
         />
       </Suspense>
       <Suspense
@@ -322,6 +324,7 @@ export default async function PharmacyFinancePage({
           marginFrom={query.marginFrom}
           marginTo={query.marginTo}
           profitBy={query.profitBy}
+          timeZone={timeZone}
         />
       </Suspense>
       <Suspense
@@ -348,6 +351,7 @@ export default async function PharmacyFinancePage({
             marginFrom: query.marginFrom,
             marginTo: query.marginTo,
           }}
+          timeZone={timeZone}
         />
       </Suspense>
       <Suspense
@@ -367,7 +371,7 @@ export default async function PharmacyFinancePage({
           ledgerAt={query.ledgerAt}
           ledgerBy={query.ledgerBy}
           profitBy={query.profitBy}
-          timeZone={ctx.organization?.timezone}
+          timeZone={timeZone}
         />
       </Suspense>
       {query.notice ? (

@@ -166,12 +166,9 @@ const EVIDENCE_STATUS: Record<CounterEvidenceView['status'], string> = {
   PURGED: 'Still removed under the camera retention period.',
 };
 
+/** Evidence times read on the same shop clock as the receipt's own sale time. */
 function evidenceTime(value: string | null): string {
-  if (!value) return '—';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? '—'
-    : `${date.toISOString().slice(0, 10)} ${date.toISOString().slice(11, 16)} UTC`;
+  return formatReceiptIssuedAt(value);
 }
 
 /** Operator-only evidence stills; kept outside the receipt document on purpose. */

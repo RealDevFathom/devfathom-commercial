@@ -35,6 +35,6 @@ export function fiscalExceptionError(error: unknown) {
   return error instanceof TRPCError && ['FORBIDDEN', 'UNAUTHORIZED'].includes(error.code)
     ? 'Access denied. An active pharmacy workspace, ADMIN role, Reports module, both operational and financial report capabilities, and an active branch in this organization are required.'
     : error instanceof TRPCError && error.code === 'BAD_REQUEST'
-      ? 'Enter an active branch ID and valid UTC dates. The end date is exclusive, the window must be 1–92 days, page size is 1–100, and pages are limited to 20.'
+      ? 'Enter an active branch ID and real calendar dates. The end date is not included, the window must be 1–92 days, page size is 1–100, and pages are limited to 20.'
       : 'Fiscal evidence could not be loaded. Try again; contact support if the problem continues.';
 }

@@ -57,4 +57,16 @@ describe('DEV-79 lost sales and recovery', () => {
     rerender(<LostSalesRecovery report={null} money={money} financial />);
     expect(screen.getByRole('status').textContent).toMatch(/No zero totals inferred/);
   });
+
+  it('shows the period in plain dates and keeps the UTC-day note inside Details (DEV-722)', () => {
+    const { container } = render(<LostSalesRecovery report={report} money={money} financial />);
+    expect(screen.getByText(/Estimates for 1 Nov – 15 Nov\./)).toBeTruthy();
+    const details = container.querySelector('details');
+    expect(details?.hasAttribute('open')).toBe(false);
+    // The report still covers exactly the dates the server read: whole UTC calendar days.
+    expect(details?.textContent).toContain('2026-11-01 to 2026-11-15 are whole UTC calendar days');
+    const outside = container.cloneNode(true) as HTMLElement;
+    outside.querySelector('details')?.remove();
+    expect(outside.textContent).not.toMatch(/\bUTC\b|2026-11-01/);
+  });
 });

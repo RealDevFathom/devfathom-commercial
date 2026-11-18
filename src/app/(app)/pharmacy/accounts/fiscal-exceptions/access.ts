@@ -11,7 +11,9 @@ export async function loadFiscalExceptionRegister(input: unknown, request?: Requ
   const start = Date.now();
   let failure: TRPCError | undefined;
   try {
-    return await readFiscalExceptions(ctx, input);
+    const register = await readFiscalExceptions(ctx, input);
+    // The page shows times on the organisation's clock; the reader and the CSV stay UTC.
+    return { ...register, timeZone: ctx.organization?.timezone ?? null };
   } catch (error) {
     failure = error instanceof TRPCError ? error : new TRPCError({
       code: 'INTERNAL_SERVER_ERROR', message: 'Fiscal evidence is unavailable.',

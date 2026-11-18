@@ -6,7 +6,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { financeAccountLabel } from '@/lib/finance/account-labels';
 import { financeEntryDescription, financeSourceLabel } from '@/lib/finance/source-labels';
-import { formatKarachiDateTime } from '@/lib/pharmacy/karachi-time';
+import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/plain-language';
+import {
+  formatWorkspaceDateTime,
+  workspaceDateOffset,
+  workspaceDateRange,
+  workspaceZoneLabel,
+} from '@/lib/timezone';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 
 const money = (value: string | number) => {
@@ -14,28 +20,48 @@ const money = (value: string | number) => {
     absolute = n < BigInt(0) ? -n : n;
   return `${n < BigInt(0) ? '-' : ''}${absolute / BigInt(100)}.${String(absolute % BigInt(100)).padStart(2, '0')}`;
 };
+/**
+ * The instant a picked day starts on the organisation's clock, in the reader's existing
+ * `YYYY-MM-DDTHH:MM:SSZ` form: for a UTC organisation, `${day}T00:00:00Z` exactly as before. A
+ * malformed day passes through as before, so the reader still refuses it.
+ */
+export function statementDayStart(day: string, timeZone: string | null | undefined): string {
+  const utc = new Date(`${day}T00:00:00.000Z`);
+  // Only a real calendar day is moved: 2026-02-30 would otherwise roll over to 2 March.
+  const real =
+    /^\d{4}-\d{2}-\d{2}$/.test(day) &&
+    Number.isFinite(utc.getTime()) &&
+    utc.toISOString().slice(0, 10) === day;
+  if (!real) return `${day}T00:00:00Z`;
+  return workspaceDateRange(day, day, timeZone).from.toISOString().replace('.000Z', 'Z');
+}
+
 export async function FinancialStatements({
   caller,
   branchId,
   from,
   to,
   page,
+  timeZone,
 }: {
   caller: ReturnType<typeof pharmacyFinanceRouter.createCaller>;
   branchId: string;
   from?: string;
   to?: string;
   page?: string;
+  /** Workspace IANA zone: picked days are the organisation's days (UTC when absent). */
+  timeZone?: string | null;
 }) {
   const now = new Date();
-  const start = from || new Date(now.getTime() - 30 * 86400000).toISOString().slice(0, 10);
-  const end = to || new Date(now.getTime() + 86400000).toISOString().slice(0, 10);
+  const start = from || workspaceDateOffset(timeZone, -30, now);
+  const end = to || workspaceDateOffset(timeZone, 1, now);
+  const zone = workspaceZoneLabel(timeZone);
   let result;
   try {
     result = await caller.financialStatements({
       branchId,
-      from: `${start}T00:00:00Z`,
-      to: `${end}T00:00:00Z`,
+      from: statementDayStart(start, timeZone),
+      to: statementDayStart(end, timeZone),
       page: Number(page || 1),
     });
   } catch (error) {
@@ -69,18 +95,22 @@ export async function FinancialStatements({
       <form className="mb-4 flex flex-wrap items-end gap-3">
         <input type="hidden" name="branch" value={branchId} />
         <label className="grid gap-2 text-sm">
-          From (UTC)
+          {screenCopy.marginComparison.fromMidnight}
+          {zone}
+          {screenCopy.marginComparison.closeZone}
           <Input type="date" name="ledgerFrom" defaultValue={start} required />
         </label>
         <label className="grid gap-2 text-sm">
-          To, exclusive (UTC)
+          {screenCopy.marginComparison.untilMidnight}
+          {zone}
+          {screenCopy.marginComparison.closeZoneNotIncluded}
           <Input type="date" name="ledgerTo" defaultValue={end} required />
         </label>
         <Button className="min-h-11">Read statements</Button>
       </form>
       <p className="text-sm text-text-muted">
         {result.definition} Amounts shown in the recorded currency. Retrieved{' '}
-        {formatKarachiDateTime(result.freshness.retrievedAt)}.
+        {formatWorkspaceDateTime(result.freshness.retrievedAt, timeZone)}.
       </p>
       <ProfitAndLossReport statements={result.profitAndLoss} />
       <h3 className="mt-6 font-semibold">Receivables, payables and cash at cutoff</h3>
@@ -196,7 +226,7 @@ export async function FinancialStatements({
       {result.journal.map((e) => (
         <details key={e.id} className="mt-3 rounded-sm border border-border p-3">
           <summary className="min-h-11 cursor-pointer break-words focus-visible:outline-2 focus-visible:outline-ring">
-            {formatKarachiDateTime(e.occurredAt)} · {financeSourceLabel(e.sourceKind)}
+            {formatWorkspaceDateTime(e.occurredAt, timeZone)} · {financeSourceLabel(e.sourceKind)}
             {result.journalLabels?.paymentMethods[e.id]
               ? ` · ${result.journalLabels.paymentMethods[e.id]}`
               : ''}{' '}

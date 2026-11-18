@@ -93,6 +93,23 @@ describe('DEV-748 loyalty card panel', () => {
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
   });
 
+  it('shows the issue date on the organisation clock, without UTC wording (DEV-722)', () => {
+    // 00:30 in Karachi on 1 Nov is still 31 Oct on the UTC calendar.
+    const card = { issuedAt: '2026-10-31T19:30:00.000Z' };
+    const { rerender } = render(
+      <LoyaltyCardPanel
+        branchId="branch-a"
+        customerId="customer-a"
+        activeCard={card}
+        timeZone="Asia/Karachi"
+      />
+    );
+    expect(screen.getByText('Issued 1 Nov 2026')).toBeInTheDocument();
+    rerender(<LoyaltyCardPanel branchId="branch-a" customerId="customer-a" activeCard={card} />);
+    expect(screen.getByText('Issued 31 Oct 2026')).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/\bUTC\b/);
+  });
+
   it('shows a refusal without a code', async () => {
     actions.issue.mockResolvedValue({
       status: 'error',
