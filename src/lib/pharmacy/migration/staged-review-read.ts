@@ -164,6 +164,10 @@ export async function stagedMedicineDetail(
       outcome: true,
       barcode: true,
       barcodeAttached: true,
+      supplierName: true,
+      supplierId: true,
+      reorderLevelPacks: true,
+      reorderLevelApplied: true,
     },
   });
   return {

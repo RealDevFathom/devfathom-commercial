@@ -69,6 +69,19 @@ const soloReexport = [
   'Solo Name Only,,,,,,,,,',
 ].join('\r\n');
 
+/**
+ * The medicine import template, products only: no quantity column, so no packs-or-units choice.
+ * Suppliers are matched to existing ones by exact normalised name; reorder levels are packs.
+ */
+const soloTemplate = [
+  'Product name,Units per pack,MRP,Purchase price,Supplier,Reorder level,Legacy code',
+  'Template Known Supplier,10,100.00,80.00,  solo   DISTRIBUTORS ,20,T-1',
+  'Template Unknown Supplier,10,100.00,80.00,Nobody Wholesale,5,T-2',
+  'Template No Pack Size,,100.00,80.00,Solo Distributors,7,T-3',
+  'Template Twin Supplier,10,100.00,80.00,Twin Traders,3,T-4',
+  'Template Name Only,,,,,,',
+].join('\n');
+
 (ownerUrl && runtimeUrl ? describe : describe.skip)(
   'DEV-912 staged medicine creation under restricted PostgreSQL runtime',
   () => {
@@ -185,10 +198,11 @@ const soloReexport = [
               branchId: id('branch_' + org),
             };
             const read = await staging(org).stagingUpload(upload);
+            const mapping = read.mapping as { product: number; quantity?: number };
             return staging(org).stageBatch({
               ...upload,
-              quantityUnit: 'PACKS',
-              mapping: read.mapping as { product: number; quantity: number },
+              ...(mapping.quantity === undefined ? {} : { quantityUnit: 'PACKS' as const }),
+              mapping,
             });
           }
 
@@ -209,8 +223,14 @@ const soloReexport = [
           await refusal(cashier.createStagedMedicines({ batchId }), 'FORBIDDEN');
           await refusal(cashier.runStagedMedicineCreation({ batchId }), 'FORBIDDEN');
 
-          const request = await editor.createStagedMedicines({ batchId });
+          // The editor names a branch, but holds no stock control there: no reorder branch.
+          const request = await editor.createStagedMedicines({ batchId, branchId: id('branch_a') });
           assert.equal((request as { status: string }).status, 'PENDING');
+          assert.equal(
+            (request as unknown as { changes: { json: { reorderBranchId: string | null } } })
+              .changes.json.reorderBranchId,
+            null
+          );
           assert.equal((request as { medicineId: string | null }).medicineId, null);
           // Asking again returns the same request.
           assert.equal(
@@ -372,6 +392,10 @@ const soloReexport = [
             outcome: 'CREATED',
             barcode: BARCODE,
             barcodeAttached: true,
+            supplierName: null,
+            supplierId: null,
+            reorderLevelPacks: null,
+            reorderLevelApplied: null,
           });
           // The barcode is on the box, and only once in the organization.
           const barcodes = await runtime.medicineBarcode.findMany({
@@ -381,6 +405,15 @@ const soloReexport = [
             barcodes.map((barcode) => [barcode.presentationId, barcode.packLevelId, barcode.type]),
             [[box.found.presentations[0]!.id, box.levels[0]!.id, 'GTIN']]
           );
+
+          // The purchase price is the owner's and managers' only: the reviewer (no
+          // `pharmacy:manage`) and the cashier get neither the price nor its provenance.
+          for (const who of [reviewer, cashier]) {
+            const read = await who.get({ id: box.found.id });
+            assert.deepEqual([read.purchasePriceVisible, read.purchasePrice], [false, null]);
+            assert.ok(read.provenance.length > 0);
+            assert.ok(read.provenance.every((item) => item.field !== 'purchasePriceMinor'));
+          }
 
           const plainBox = await created1('Fixture Box Tablet');
           assert.deepEqual(
@@ -536,6 +569,121 @@ const soloReexport = [
             0
           );
           assert.equal(reexport.barcodesNotAttached, 1);
+
+          // DEV-912 template, products only (no quantity column), with suppliers and reorder levels.
+          for (const [key, name] of [
+            ['sup_known', 'Solo Distributors'],
+            ['sup_twin_1', 'Twin Traders'],
+            ['sup_twin_2', 'twin  traders'],
+          ])
+            await c.query(
+              `INSERT INTO pharmacy_suppliers (id,"organizationId",name,"updatedAt") VALUES ($1,$2,$3,now())`,
+              [id(key), id('solo'), name]
+            );
+          const suppliersBefore = await solodb.pharmacySupplier.count();
+          const template = await stage('solo', 'solo-template.csv', soloTemplate);
+          const templateBatch = await solodb.pharmacyMigrationBatch.findUniqueOrThrow({
+            where: { id: template.batchId },
+          });
+          assert.deepEqual(
+            [templateBatch.quantityUnit, templateBatch.quantityColumn],
+            [null, null]
+          );
+          assert.equal(
+            await solodb.pharmacyMigrationException.count({
+              where: { batchId: template.batchId, bucket: 'UNIT_AMBIGUOUS' },
+            }),
+            0
+          );
+          // The owner holds stock control at the branch, so the reorder levels go there.
+          const templateRequest = (await solo.createStagedMedicines({
+            batchId: template.batchId,
+            branchId: id('branch_solo'),
+          })) as unknown as {
+            id: string;
+            changes: { json: { reorderBranchId: string; reorderBranch: string } };
+          };
+          assert.deepEqual(
+            [
+              templateRequest.changes.json.reorderBranchId,
+              templateRequest.changes.json.reorderBranch,
+            ],
+            [id('branch_solo'), 'Main']
+          );
+          await solo.decideCatalogueEdit({
+            editId: templateRequest.id,
+            decision: 'APPROVE',
+            soloPin: '2468',
+          });
+          const templateStep = await solo.runStagedMedicineCreation({ batchId: template.batchId });
+          assert.deepEqual(
+            [
+              templateStep.created,
+              templateStep.remaining,
+              templateStep.suppliersNotMatched,
+              templateStep.reorderLevelsNotApplied,
+            ],
+            [5, 0, 2, 1]
+          );
+          // No supplier is ever created by an import.
+          assert.equal(await solodb.pharmacySupplier.count(), suppliersBefore);
+          const templateLinks = new Map(
+            (
+              await solodb.pharmacyStagedMedicineLink.findMany({
+                where: { batchId: template.batchId },
+              })
+            ).map((link) => [link.legacyCode ?? 'none', link])
+          );
+          const pick = (code: string) => {
+            const link = templateLinks.get(code)!;
+            return [
+              link.supplierName,
+              link.supplierId,
+              link.reorderLevelPacks,
+              link.reorderLevelApplied,
+            ];
+          };
+          assert.deepEqual(pick('T-1'), ['solo DISTRIBUTORS', id('sup_known'), 20, true]);
+          assert.deepEqual(pick('T-2'), ['Nobody Wholesale', null, 5, true]);
+          // No units per pack: the level cannot be counted in units, so it is not set.
+          assert.deepEqual(pick('T-3'), ['Solo Distributors', id('sup_known'), 7, false]);
+          // Two suppliers whose names normalise alike: no match, reported.
+          assert.deepEqual(pick('T-4'), ['Twin Traders', null, 3, true]);
+          assert.deepEqual(pick('none'), [null, null, null, null]);
+          const safety = await solodb.pharmacySafetyStock.findMany({
+            where: {
+              medicineId: { in: [...templateLinks.values()].map((link) => link.medicineId) },
+            },
+            orderBy: { safetyStockUnits: 'desc' },
+          });
+          assert.deepEqual(
+            safety.map((item) => [
+              item.medicineId,
+              item.branchId,
+              item.safetyStockUnits,
+              item.approvedByUserId,
+            ]),
+            [
+              [templateLinks.get('T-1')!.medicineId, id('branch_solo'), 200, id('owner_solo')],
+              [templateLinks.get('T-2')!.medicineId, id('branch_solo'), 50, id('owner_solo')],
+              [templateLinks.get('T-4')!.medicineId, id('branch_solo'), 30, id('owner_solo')],
+            ]
+          );
+          // The owner sees the purchase price on the medicine's own detail, with its supplier.
+          const known = await solo.get({ id: templateLinks.get('T-1')!.medicineId });
+          assert.equal(known.purchasePriceVisible, true);
+          assert.deepEqual(
+            known.purchasePrice && [
+              known.purchasePrice.purchasePriceMinor,
+              known.purchasePrice.supplierName,
+              known.purchasePrice.supplierMatched,
+            ],
+            [8_000, 'solo DISTRIBUTORS', true]
+          );
+          assert.equal(
+            (await solo.get({ id: templateLinks.get('none')!.medicineId })).purchasePrice,
+            null
+          );
         } finally {
           await c.end();
         }

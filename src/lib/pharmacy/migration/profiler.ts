@@ -174,8 +174,9 @@ export type ProfileContext = {
   /** Party natural key → the balance the pharmacy's own statement declares. */
   declaredPartyBalanceMinor?: ReadonlyMap<string, bigint>;
   /**
-   * Column-mapping choice: what the quantity column counts. No choice leaves
-   * canonical quantities null and raises UNIT_AMBIGUOUS. PACKS converts by
+   * Column-mapping choice: what the quantity column counts. With a quantity
+   * column mapped, no choice leaves canonical quantities null and raises
+   * UNIT_AMBIGUOUS; a sheet with no quantity column has nothing to choose. PACKS converts by
    * the row's pack factor. The choice is stored on the batch, never in row evidence.
    */
   quantityUnit?: QuantityUnit;
@@ -432,7 +433,9 @@ function deriveExceptions(
         raise(index, 'UNIT_AMBIGUOUS', `Pack "${packRaw}" for ${where} names no countable unit.`);
       }
       const quantityRaw = rawOf(columnMap, cells, 'quantity');
-      if ((quantityRaw || !quantityUnit) && row.quantityCanonical === null) {
+      // DEV-912: a file with no quantity column (products only) has no count to resolve.
+      const quantityMapped = columnMap.quantity !== undefined;
+      if ((quantityRaw || (!quantityUnit && quantityMapped)) && row.quantityCanonical === null) {
         raise(
           index,
           'UNIT_AMBIGUOUS',

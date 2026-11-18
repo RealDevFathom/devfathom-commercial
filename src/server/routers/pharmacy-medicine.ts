@@ -63,6 +63,7 @@ import {
   stagedCreationProgress,
 } from '@/lib/pharmacy/migration/staged-creation';
 import { STAGING_MAX_ROWS } from '@/lib/pharmacy/migration/staging-input';
+import { admittedInventoryBranchIds } from './pharmacy-inventory';
 import { annotateAudit } from '../audit';
 import {
   adminProcedure,
@@ -398,6 +399,29 @@ async function catalogueAccess(ctx: TRPCContext) {
     ownerFallback || (await actorIsPharmacyOwner(ctx.db, scope.organizationId, user.id));
   return { reviewer, editor, ownerFallback, owner };
 }
+/** PUR-07's rule for setting a stock threshold at a branch: stock control, admitted there. */
+async function maySetStockThresholds(ctx: TRPCContext, branchId: string) {
+  const user = ctx.session!.user;
+  if (
+    !(await can(subjectFromSession(user), 'pharmacy:inventory', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    }))
+  )
+    return false;
+  return (await admittedInventoryBranchIds(ctx)).has(branchId);
+}
+
+/** The reorder branch an approved bulk creation request carries; null for none or an older one. */
+function approvedReorderBranch(changes: Prisma.JsonValue): string | null {
+  const json =
+    changes && typeof changes === 'object' && !Array.isArray(changes) ? changes.json : null;
+  const value =
+    json && typeof json === 'object' && !Array.isArray(json) ? json.reorderBranchId : null;
+  return typeof value === 'string' && value ? value : null;
+}
+
 const catalogueCommands = [
   'setPackPrice',
   'createIngredient',
@@ -1098,6 +1122,13 @@ export const pharmacyMedicineRouter = router({
           // Checked again on approval; never shown to the reviewer.
           sourceSha256: z.string().max(64).optional(),
           medicines: z.number().int().min(1).max(STAGING_MAX_ROWS).optional(),
+          // The branch the file's reorder levels become approved safety stock at. Kept only
+          // when the requester may set stock thresholds there (PUR-07); otherwise the levels
+          // are reported as not applied.
+          branchId: boundedId.optional(),
+          // Filled in by the server; the reviewer sees the branch name.
+          reorderBranchId: boundedId.nullable().optional(),
+          reorderBranch: z.string().max(200).nullable().optional(),
         })
         .strict()
     )
@@ -1123,20 +1154,40 @@ export const pharmacyMedicineRouter = router({
           ctx.entitlements.organizationId,
           batch.id
         );
+        const replay = isCatalogueReplay(ctx);
+        // PUR-07: a reorder level is an approved stock threshold, which only a member holding
+        // stock control (`pharmacy:inventory`) on that branch may set. On approval the branch
+        // the requester was allowed is checked to still be an active branch.
+        const wantedBranch = replay ? input.reorderBranchId : input.branchId;
+        const branch = wantedBranch
+          ? await tx.pharmacyBranch.findFirst({
+              where: {
+                id: wantedBranch,
+                organizationId: ctx.entitlements.organizationId,
+                active: true,
+              },
+              select: { id: true, name: true },
+            })
+          : null;
+        const reorderBranch =
+          branch && (replay || (await maySetStockThresholds(ctx, branch.id))) ? branch : null;
         const request = {
           batchId: batch.id,
           fileName: batch.source.fileName.slice(0, 255),
           uploadedAt: batch.createdAt.toISOString(),
           sourceSha256: batch.source.contentHash,
           medicines: progress.candidates,
+          reorderBranchId: reorderBranch?.id ?? null,
+          reorderBranch: reorderBranch?.name.slice(0, 200) ?? null,
         };
-        if (isCatalogueReplay(ctx)) {
+        if (replay) {
           // The approval names exactly the batch and file the editor asked for.
           if (
             input.fileName !== request.fileName ||
             input.uploadedAt !== request.uploadedAt ||
             input.sourceSha256 !== request.sourceSha256 ||
-            input.medicines !== request.medicines
+            input.medicines !== request.medicines ||
+            (input.reorderBranchId ?? null) !== request.reorderBranchId
           )
             throw new TRPCError({
               code: 'CONFLICT',
@@ -1220,7 +1271,7 @@ export const pharmacyMedicineRouter = router({
               changes: { path: ['json', 'batchId'], equals: input.batchId },
             },
             orderBy: [{ reviewedAt: 'asc' }, { id: 'asc' }],
-            select: { id: true, editorId: true, reviewerId: true },
+            select: { id: true, editorId: true, reviewerId: true, changes: true },
           });
           if (!approved?.reviewerId)
             throw new TRPCError({
@@ -1237,6 +1288,7 @@ export const pharmacyMedicineRouter = router({
                 editorId: approved.editorId,
                 reviewerId: approved.reviewerId,
                 batchId: input.batchId,
+                reorderBranchId: approvedReorderBranch(approved.changes),
               }
             )),
           };
@@ -1405,7 +1457,39 @@ export const pharmacyMedicineRouter = router({
         },
       });
       if (!medicine) throw new TRPCError({ code: 'NOT_FOUND', message: 'Medicine not found.' });
-      return medicine;
+      // DEV-912: what the pharmacy pays the distributor is for the owner and managers only
+      // (`pharmacy:manage`): it is read here and never sent to anyone else, not even inside
+      // the import provenance.
+      const purchasePriceVisible = await can(
+        subjectFromSession(ctx.session!.user),
+        'pharmacy:manage',
+        undefined,
+        { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }
+      );
+      if (!purchasePriceVisible)
+        return {
+          ...medicine,
+          provenance: medicine.provenance.filter((item) => item.field !== 'purchasePriceMinor'),
+          purchasePriceVisible,
+          purchasePrice: null,
+        };
+      const imported = await ctx.db.pharmacyStagedMedicineLink.findFirst({
+        where: { medicineId: medicine.id, purchasePriceMinor: { not: null } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        select: { purchasePriceMinor: true, supplierName: true, supplierId: true, createdAt: true },
+      });
+      return {
+        ...medicine,
+        purchasePriceVisible,
+        purchasePrice: imported
+          ? {
+              purchasePriceMinor: imported.purchasePriceMinor!,
+              supplierName: imported.supplierName,
+              supplierMatched: imported.supplierId !== null,
+              recordedAt: imported.createdAt,
+            }
+          : null,
+      };
     }),
 
   createPackLevel: catalogueCommandProcedure

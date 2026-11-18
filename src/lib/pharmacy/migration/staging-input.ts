@@ -40,13 +40,17 @@ export const stagingUploadInput = z
     branchId: z.string().min(1).max(128),
   })
   .strict();
+/**
+ * DEV-912: a products-only file (a catalogue with no stock) maps no quantity column and makes no
+ * packs-or-units choice. When a quantity column is mapped, the choice is still required.
+ */
 export const stagingInput = stagingUploadInput
   .extend({
-    quantityUnit: z.enum(['PACKS', 'UNITS']),
+    quantityUnit: z.enum(['PACKS', 'UNITS']).optional(),
     mapping: z
       .object({
         product: column,
-        quantity: column,
+        quantity: column.optional(),
         pack: column.optional(),
         batch: column.optional(),
         expiry: column.optional(),
@@ -56,6 +60,10 @@ export const stagingInput = stagingUploadInput
       })
       .strict(),
   })
-  .strict();
+  .strict()
+  .refine((input) => input.mapping.quantity === undefined || input.quantityUnit !== undefined, {
+    message: 'Choose whether the quantity column counts packs or units.',
+    path: ['quantityUnit'],
+  });
 export type StagingInput = z.input<typeof stagingInput>;
 export type StagingUploadInput = z.input<typeof stagingUploadInput>;

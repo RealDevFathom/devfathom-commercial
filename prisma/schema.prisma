@@ -13049,6 +13049,14 @@ model PharmacyStagedMedicineLink {
   matchKey           String?
   /// CREATED, or MATCHED when an earlier staged file already created this medicine.
   outcome            String   @default("CREATED")
+  /// The supplier cell as read; `supplierId` is the existing supplier with exactly that
+  /// normalised name, null when none or several match (reported, never created).
+  supplierName       String?
+  supplierId         String?
+  /// The reorder level cell (whole packs); `reorderLevelApplied` says whether it became the
+  /// medicine's approved safety stock at the requested branch. Null: not recorded.
+  reorderLevelPacks  Int?
+  reorderLevelApplied Boolean?
   createdById        String
   createdAt          DateTime @default(now())
 

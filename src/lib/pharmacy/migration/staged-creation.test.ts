@@ -5,6 +5,7 @@ import {
   planStagedMedicine,
   stagedLevelPrices,
   stagedMatchKey,
+  stagedReorderUnits,
   type StagedRowForCreation,
 } from './staged-creation';
 
@@ -53,6 +54,8 @@ describe('DEV-912 planStagedMedicine', () => {
       barcode: null,
       packLabel: null,
       narcoticsClass: false,
+      supplierName: null,
+      reorderLevelPacks: null,
     });
   });
 
@@ -222,5 +225,35 @@ describe('DEV-912 stagedMatchKey', () => {
 
   it('has one normalisation rule, applied before the key is stored', () => {
     expect(normalizeMatchText('  Ｆｉｘｔｕｒｅ\t TAB\u00a0 500mg ')).toBe('fixture tab 500mg');
+  });
+});
+
+describe('DEV-912 supplier and reorder level', () => {
+  it('reads the template supplier and reorder level, and the legacy headers', () => {
+    expect(
+      planStagedMedicine(
+        row({
+          packFactor: BigInt(10),
+          rawPayload: { Supplier: ' Example  Distributors ', 'Reorder level': '20' },
+        })
+      )
+    ).toMatchObject({ supplierName: 'Example Distributors', reorderLevelPacks: 20 });
+    expect(
+      planStagedMedicine(row({ rawPayload: { distributor: 'Other Co', REORDERPOINT: '5.0' } }))
+    ).toMatchObject({ supplierName: 'Other Co', reorderLevelPacks: 5 });
+  });
+
+  it('stores a blank, zero, fractional or unreadable reorder level as not recorded', () => {
+    for (const cell of ['', '0', '2.5', 'ten', '-3'])
+      expect(
+        planStagedMedicine(row({ rawPayload: { 'Reorder level': cell, Supplier: '' } }))
+      ).toMatchObject({ reorderLevelPacks: null, supplierName: null });
+  });
+
+  it('counts a reorder level in units from the units per pack, or not at all', () => {
+    expect(stagedReorderUnits({ reorderLevelPacks: 20, unitsPerPack: 10 })).toBe(200);
+    expect(stagedReorderUnits({ reorderLevelPacks: 20, unitsPerPack: null })).toBeNull();
+    expect(stagedReorderUnits({ reorderLevelPacks: null, unitsPerPack: 10 })).toBeNull();
+    expect(stagedReorderUnits({ reorderLevelPacks: 2_000_000_000, unitsPerPack: 10 })).toBeNull();
   });
 });
