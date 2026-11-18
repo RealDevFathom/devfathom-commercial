@@ -18,6 +18,7 @@ vi.mock('next/navigation', async () => ({
 }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: vi.fn().mockResolvedValue({}) }));
 vi.mock('./loyalty-router', () => ({ pharmacyLoyaltyRouter: { createCaller: () => mocks } }));
+import { createTRPCContext } from '@/server/trpc';
 import LoyaltyPage from './page';
 import LoyaltyLoading from './loading';
 beforeEach(() => {
@@ -105,7 +106,7 @@ describe('DEV-746 earning rate card', () => {
     await show();
     expect(screen.queryByText(/Points are not being earned/)).not.toBeInTheDocument();
     expect(screen.getAllByText('1 point for every PKR 1,000 spent').length).toBeGreaterThan(0);
-    expect(screen.getByText(/Version 2, in effect since 2026-11-10/)).toBeInTheDocument();
+    expect(screen.getByText(/Version 2, in effect since 10 Nov 2026\. /)).toBeInTheDocument();
     const history = screen.getByRole('region', { name: 'Earning rate history' });
     expect(history).toHaveTextContent('1.5% of spend');
     expect(history).toHaveTextContent('1 Nov 2026, 8:00 AM UTC');
@@ -388,7 +389,7 @@ describe('DEV-764 loyalty owner console', () => {
     mocks.card.mockResolvedValue({ id: 'card-a', issuedAt: new Date('2026-11-01T09:00:00Z') });
     await show({ customerId: 'customer-a' });
     expect(screen.getByText('Card active')).toBeInTheDocument();
-    expect(screen.getByText('Issued 2026-11-01 (UTC)')).toBeInTheDocument();
+    expect(screen.getByText('Issued 1 Nov 2026')).toBeInTheDocument();
     expect(screen.getByLabelText('Reason for replacing or revoking the card')).toBeRequired();
     expect(screen.getByRole('button', { name: 'Replace card' })).toHaveAttribute('value', 'issue');
     expect(screen.getByRole('button', { name: 'Revoke without replacing' })).toHaveAttribute(
@@ -522,5 +523,68 @@ describe('DEV-764 one balance across branches and membership', () => {
     expect(
       screen.getByText(/Points cannot be adjusted while the member is deactivated/)
     ).toBeInTheDocument();
+  });
+});
+
+describe('DEV-722 loyalty times on the organisation clock', () => {
+  it('shows every loyalty date and time in Asia/Karachi, with no UTC wording', async () => {
+    vi.mocked(createTRPCContext).mockResolvedValueOnce({
+      organization: { timezone: 'Asia/Karachi' },
+    } as never);
+    // 00:30 in Karachi on 1 Nov is 19:30 UTC on 31 Oct: every date must read 1 Nov.
+    const boundary = new Date('2026-10-31T19:30:00Z');
+    const v2 = {
+      id: 'program-2',
+      version: 2,
+      effectiveFrom: boundary,
+      earnMode: 'POINTS_PER_SPEND_STEP',
+      earnPoints: 1,
+      perSpendMinor: 100_000,
+    };
+    const v1 = {
+      ...v2,
+      id: 'program-1',
+      version: 1,
+      effectiveFrom: new Date('2026-10-01T04:00:00Z'),
+    };
+    mocks.earnRate.mockResolvedValue({ current: v2, versions: [v2, v1] });
+    mocks.card.mockResolvedValue({ id: 'card-a', issuedAt: boundary });
+    mocks.history.mockResolvedValue({
+      customer: { id: 'customer-a', displayName: 'Retail customer', preferredLanguage: 'en' },
+      pointsBalance: 20,
+      reconciliation: [],
+      total: 1,
+      page: 1,
+      pageCount: 1,
+      hasNext: false,
+      entries: [
+        {
+          id: 'earn-a',
+          kind: 'EARN',
+          points: 20,
+          occurredAt: boundary,
+          saleId: 'sale-a',
+          tenderId: 'tender-a',
+          refundId: null,
+          reason: null,
+          expiresAt: new Date('2027-10-31T19:30:00Z'),
+          sale: { receiptNumber: 12, receiptDeviceId: 'counter-a' },
+        },
+      ],
+    });
+    await show({ customerId: 'customer-a' });
+    expect(screen.getByText(/Version 2, in effect since 1 Nov 2026\. /)).toBeInTheDocument();
+    const rates = screen.getByRole('region', { name: 'Earning rate history' });
+    expect(rates).toHaveTextContent('1 Nov 2026, 12:30 AM PKT');
+    expect(rates).toHaveTextContent('1 Oct 2026, 9:00 AM PKT');
+    expect(screen.getByText('Issued 1 Nov 2026')).toBeInTheDocument();
+    const ledger = screen.getByRole('region', { name: 'Loyalty history' });
+    expect(ledger).toHaveTextContent('1 Nov 2026, 12:30 AM PKT');
+    expect(ledger).toHaveTextContent('Expires 1 Nov 2027');
+    expect(within(ledger).getByText('1 Nov 2026, 12:30 AM PKT').closest('time')).toHaveAttribute(
+      'dateTime',
+      '2026-10-31T19:30:00.000Z'
+    );
+    expect(document.body).not.toHaveTextContent(/\bUTC\b/);
   });
 });

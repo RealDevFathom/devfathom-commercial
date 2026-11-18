@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  formatWorkspaceDate,
   formatWorkspaceDateTime,
   ianaTimezone,
   isIanaTimezone,
@@ -61,6 +62,16 @@ describe('workspace time zones', () => {
     expect(formatWorkspaceDateTime('2026-11-03T13:24:15.000Z', null)).toBe(
       '3 Nov 2026, 1:24 PM UTC'
     );
+  });
+
+  it('shows the calendar date of an instant on the workspace clock', () => {
+    // 00:30 in Karachi on 1 Nov is still 31 Oct on the UTC calendar.
+    expect(formatWorkspaceDate('2026-10-31T19:30:00.000Z', 'Asia/Karachi')).toBe('1 Nov 2026');
+    expect(formatWorkspaceDate('2026-10-31T19:30:00.000Z', 'UTC')).toBe('31 Oct 2026');
+    expect(formatWorkspaceDate(new Date('2026-10-31T18:59:59.999Z'), 'Asia/Karachi')).toBe(
+      '31 Oct 2026'
+    );
+    expect(formatWorkspaceDate('not a date', 'Asia/Karachi')).toBe('—');
   });
 
   it('bounds inclusive workspace dates by the workspace midnights', () => {

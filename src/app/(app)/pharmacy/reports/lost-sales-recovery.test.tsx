@@ -57,4 +57,11 @@ describe('DEV-79 lost sales and recovery', () => {
     rerender(<LostSalesRecovery report={null} money={money} financial />);
     expect(screen.getByRole('status').textContent).toMatch(/No zero totals inferred/);
   });
+
+  it('shows the period in plain dates with no UTC wording (DEV-722)', () => {
+    const { container } = render(<LostSalesRecovery report={report} money={money} financial />);
+    expect(screen.getByText(/Estimates for 1 Nov – 15 Nov\./)).toBeTruthy();
+    expect(container.querySelector('details')).toBeNull();
+    expect(container.textContent).not.toMatch(/\bUTC\b|2026-11-01/);
+  });
 });

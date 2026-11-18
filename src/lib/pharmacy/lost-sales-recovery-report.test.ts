@@ -133,4 +133,58 @@ describe('DEV-79 lost-sales recovery report', () => {
       })
     ).rejects.toThrow('Use valid UTC dates');
   });
+
+  describe('DEV-722 window on the organisation clock', () => {
+    async function windowFor(timeZone: string | null | undefined) {
+      const db = fixtureDb();
+      const findMany = vi.fn(db.unfulfilledDemandEvent.findMany);
+      db.unfulfilledDemandEvent.findMany = findMany;
+      await readLostSalesRecovery(
+        db as never,
+        'org-1',
+        { branchIds: ['b1'], from: '2026-11-01', to: '2026-11-15' },
+        timeZone
+      );
+      return (
+        findMany.mock.calls[0] as unknown as [{ where: { createdAt: { gte: Date; lt: Date } } }]
+      )[0].where.createdAt;
+    }
+    const inside = (window: { gte: Date; lt: Date }, at: string) =>
+      new Date(at) >= window.gte && new Date(at) < window.lt;
+
+    it.each([undefined, null, 'UTC'])(
+      'reads the same UTC-day window as before for a UTC organisation (%s)',
+      async (timeZone) => {
+        expect(await windowFor(timeZone)).toEqual({
+          gte: new Date('2026-11-01T00:00:00.000Z'),
+          lt: new Date('2026-11-16T00:00:00.000Z'),
+        });
+      }
+    );
+
+    it('reads Karachi days: shop midnight to shop midnight', async () => {
+      const window = await windowFor('Asia/Karachi');
+      expect(window).toEqual({
+        gte: new Date('2026-10-31T19:00:00.000Z'),
+        lt: new Date('2026-11-15T19:00:00.000Z'),
+      });
+      // 19:30 UTC on 31 Oct is 00:30 on 1 Nov in Karachi: counted on 1 Nov.
+      expect(inside(window, '2026-10-31T19:30:00Z')).toBe(true);
+      // 18:59 UTC on 31 Oct is 23:59 on 31 Oct in Karachi: before the window.
+      expect(inside(window, '2026-10-31T18:59:00Z')).toBe(false);
+      // 18:59 UTC on 15 Nov is 23:59 on 15 Nov in Karachi: the last day is included.
+      expect(inside(window, '2026-11-15T18:59:00Z')).toBe(true);
+      expect(inside(window, '2026-11-15T19:30:00Z')).toBe(false);
+    });
+
+    it('keeps the period as the picked days', async () => {
+      const report = await readLostSalesRecovery(
+        fixtureDb() as never,
+        'org-1',
+        { branchIds: ['b1'], from: '2026-11-01', to: '2026-11-15' },
+        'Asia/Karachi'
+      );
+      expect(report.period).toEqual({ from: '2026-11-01', to: '2026-11-15' });
+    });
+  });
 });

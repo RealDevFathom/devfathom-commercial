@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatLoyaltyCardCode } from '@/lib/pharmacy/loyalty-card-code';
+import { formatWorkspaceDate } from '@/lib/timezone';
 import { encodeQr, qrSvgPath } from '@/lib/qr/qr-code';
 import {
   issueLoyaltyCard,
@@ -157,10 +158,13 @@ export function LoyaltyCardPanel({
   branchId,
   customerId,
   activeCard,
+  timeZone,
 }: {
   branchId: string;
   customerId: string;
   activeCard: { issuedAt: string } | null;
+  /** Workspace IANA zone: the issue date shows on the organisation's clock (UTC when absent). */
+  timeZone?: string | null;
 }) {
   const [state, action, pending] = useActionState(
     (previous: LoyaltyCardFormState, form: FormData) =>
@@ -184,7 +188,9 @@ export function LoyaltyCardPanel({
         {activeCard ? (
           <>
             <StatusPill status="active" label="Card active" />
-            <span className="text-text-muted">Issued {activeCard.issuedAt.slice(0, 10)} (UTC)</span>
+            <span className="text-text-muted">
+              Issued {formatWorkspaceDate(activeCard.issuedAt, timeZone)}
+            </span>
           </>
         ) : (
           <StatusPill status="none" label="No card" />
