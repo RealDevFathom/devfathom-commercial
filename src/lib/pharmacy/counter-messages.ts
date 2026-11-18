@@ -62,6 +62,13 @@ export const TENDER_ATTEMPT_DISCARDED = 'TENDER_ATTEMPT_DISCARDED';
  * DEV-66: why an automatic discount was not applied to a line that was still added. The
  * add-line response carries the key; the counter shows the sentence to the cashier.
  */
+/**
+ * DEV-929: the refusal a manual discount gets when the operator does not hold the discount
+ * right and no manager's PIN came with it. The counter asks for the PIN when it sees it.
+ */
+export const COUNTER_DISCOUNT_APPROVAL_REQUIRED =
+  'A discount needs a manager to approve it with their PIN.';
+
 export const COUNTER_DISCOUNT_NOTICES = {
   PROMOTION_ABOVE_MAXIMUM:
     "This promotion is above the owner's maximum discount, so the item was added at full price.",
@@ -98,7 +105,8 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     'That unit does not match how this item is packed. Search for it again and choose the unit from the list.',
   // Sale aggregate (POS).
   PRICE_ABOVE_MRP: 'That price is above the printed MRP, which is not allowed.',
-  MARGIN_GUARDRAIL: 'That discount falls below the permitted margin.',
+  MARGIN_GUARDRAIL:
+    "This discount would take the item below its cost or the branch's minimum margin. Give a smaller discount.",
   // DEV-66: the owner's maximum discount applies to everyone.
   DISCOUNT_ABOVE_MAXIMUM:
     "This discount or voucher is above the owner's maximum discount. Give a smaller discount, or ask the owner to raise the maximum.",

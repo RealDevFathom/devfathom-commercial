@@ -40,6 +40,27 @@ export function DiscountMaximumPanel({ branchId }: { branchId: string }) {
   const value = draft ?? loaded;
   const canChange = query.data?.canChange === true;
   const disabled = query.isLoading || query.isError || save.isPending || !canChange;
+  const submit = async (maxDiscountBps: number, savedNotice: string) => {
+    try {
+      await save.mutateAsync({ branchId, maxDiscountBps, pin });
+      setPin('');
+      const refreshed = await query.refetch();
+      if (refreshed.error) {
+        setNotice('Saved. Reload the page before making further changes.');
+        return;
+      }
+      setDraft(null);
+      setInvalid(false);
+      setNotice(savedNotice);
+    } catch (error) {
+      setPin('');
+      setNotice(
+        error instanceof Error && error.message
+          ? error.message
+          : 'Could not save. Only the owner can change the maximum discount.'
+      );
+    }
+  };
   const inputId = `discount-maximum-${branchId}`;
   const pinId = `discount-maximum-pin-${branchId}`;
   return (
@@ -108,7 +129,7 @@ export function DiscountMaximumPanel({ branchId }: { branchId: string }) {
             <Button
               className="min-h-11"
               disabled={disabled || draft === null || !pin}
-              onClick={async () => {
+              onClick={() => {
                 if (draft === null) return;
                 const maxDiscountBps = percentToBps(draft);
                 if (maxDiscountBps === null) {
@@ -116,28 +137,27 @@ export function DiscountMaximumPanel({ branchId }: { branchId: string }) {
                   setNotice('Enter a percentage from 0 to 100, with at most two decimal places.');
                   return;
                 }
-                try {
-                  await save.mutateAsync({ branchId, maxDiscountBps, pin });
-                  setPin('');
-                  const refreshed = await query.refetch();
-                  if (refreshed.error) {
-                    setNotice('Saved. Reload the page before making further changes.');
-                    return;
-                  }
-                  setDraft(null);
-                  setNotice('Maximum discount saved.');
-                } catch (error) {
-                  setPin('');
-                  setNotice(
-                    error instanceof Error && error.message
-                      ? error.message
-                      : 'Could not save. Only the owner can change the maximum discount.'
-                  );
-                }
+                void submit(maxDiscountBps, 'Maximum discount saved.');
               }}
             >
               {save.isPending ? 'Saving…' : 'Save maximum discount'}
             </Button>
+            {/* DEV-929: the owner can go back to no maximum, with the same PIN. */}
+            {query.data && !unset ? (
+              <Button
+                variant="outline"
+                className="min-h-11"
+                disabled={disabled || !pin}
+                onClick={() =>
+                  void submit(
+                    NO_MAXIMUM_DISCOUNT_BPS,
+                    'Maximum discount removed. No maximum is set.'
+                  )
+                }
+              >
+                Remove maximum
+              </Button>
+            ) : null}
           </>
         ) : null}
       </div>
