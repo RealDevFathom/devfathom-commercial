@@ -356,6 +356,14 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     }
   });
 
+  it('DEV-930 offers an owner Onboarding in one click, never inside a closed menu', () => {
+    renderNavigation();
+    const onboarding = screen.getByRole('link', { name: /Onboarding$/ });
+    expect(onboarding).toHaveAttribute('href', '/pharmacy');
+    // Not in a menu panel, which stays hidden until its button is pressed.
+    expect(onboarding.closest('ul.hidden, [hidden]')).toBeNull();
+  });
+
   it('offers an inventory member without procurement or reports neither destination (#979)', () => {
     renderNavigation({ role: 'MEMBER', capabilities: ['pharmacy:inventory'] });
     expect(screen.getByRole('link', { name: /Inventory$/ })).toBeInTheDocument();
@@ -761,13 +769,19 @@ describe('Pharmacy grouped top navigation (DEV-497)', () => {
       Array.from(nav.children)
         .filter((child) => child.tagName === 'A')
         .map((link) => link.getAttribute('href'))
-    ).toEqual(['/dashboard', '/pharmacy/purchasing', '/audit-logs', '/pharmacy/finance']);
+    ).toEqual([
+      '/dashboard',
+      '/pharmacy',
+      '/pharmacy/purchasing',
+      '/audit-logs',
+      '/pharmacy/finance',
+    ]);
     // DEV-913: the audit log is the owner's own entry, whatever the plan.
     expect(within(nav).getByRole('link', { name: 'Audit log: who did what' })).toHaveAttribute(
       'href',
       '/audit-logs'
     );
-    expect(nav.children).toHaveLength(10);
+    expect(nav.children).toHaveLength(11);
     expect(nav).toHaveClass('flex-wrap');
     expect(nav).not.toHaveClass('overflow-x-auto');
     expect(
@@ -775,10 +789,11 @@ describe('Pharmacy grouped top navigation (DEV-497)', () => {
         .getAllByRole('link')
         .map((link) => link.textContent)
     ).toEqual(['Counter', 'Day close', 'Khata', 'Loyalty points', 'Marketing & growth']);
-    expect(within(panel('Settings')).getByRole('link', { name: 'Onboarding' })).toHaveAttribute(
-      'href',
-      '/pharmacy'
-    );
+    // DEV-930: a new owner reaches onboarding in one click, straight from the bar.
+    const onboarding = within(nav).getByRole('link', { name: /Onboarding$/ });
+    expect(onboarding).toHaveAttribute('href', '/pharmacy');
+    expect(onboarding.parentElement).toBe(nav);
+    expect(within(panel('Settings')).queryByRole('link', { name: /Onboarding$/ })).toBeNull();
   });
 
   it('offers a cashier only pages a cashier can open, with no menus to dig through', () => {

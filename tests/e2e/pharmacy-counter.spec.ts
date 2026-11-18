@@ -139,14 +139,16 @@ test('pharmacy-only navigation exposes pharmacy destinations and excludes Restau
   await expect(navigation.getByRole('link', { name: 'Purchasing' })).toBeVisible({
     timeout: 30_000,
   });
+  // DEV-930: Onboarding is the owner's own entry in the bar, one click away.
+  await expect(navigation.getByRole('link', { name: 'Onboarding' })).toBeVisible();
   await pressControl(navigation.getByRole('button', { name: 'Sell', exact: true }));
   await expect(navigation.getByRole('link', { name: 'Counter' })).toBeVisible();
   await pressControl(navigation.getByRole('button', { name: 'Settings', exact: true }));
   await expect(navigation.getByRole('link', { name: 'Counter' })).toBeHidden();
-  await expect(navigation.getByRole('link', { name: 'Onboarding' })).toBeVisible();
   await expect(navigation.getByRole('link', { name: 'Regulatory profile' })).toBeVisible();
   await page.keyboard.press('Escape');
-  await expect(navigation.getByRole('link', { name: 'Onboarding' })).toBeHidden();
+  await expect(navigation.getByRole('link', { name: 'Regulatory profile' })).toBeHidden();
+  await expect(navigation.getByRole('link', { name: 'Onboarding' })).toBeVisible();
   await expect(navigation.getByRole('link', { name: 'Point of sale' })).toHaveCount(0);
   await expect(navigation.getByRole('link', { name: 'Kitchen display' })).toHaveCount(0);
   await expect(navigation.getByRole('link', { name: 'Restaurant staff' })).toHaveCount(0);

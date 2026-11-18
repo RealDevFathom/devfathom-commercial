@@ -654,6 +654,8 @@ export interface NavSection {
  * pages the member can use, and a menu left with none is not shown.
  */
 const PHARMACY_MENUS: readonly (Omit<NavSection, 'items'> & { hrefs: readonly string[] })[] = [
+  // DEV-930: a new owner reaches setup in one click, never from inside a menu.
+  { label: 'Onboarding', icon: ListChecks, hrefs: ['/pharmacy'] },
   {
     label: 'Sell',
     icon: Monitor,
@@ -690,7 +692,6 @@ const PHARMACY_MENUS: readonly (Omit<NavSection, 'items'> & { hrefs: readonly st
     label: 'Settings',
     icon: Settings,
     hrefs: [
-      '/pharmacy',
       '/pharmacy/regulatory',
       '/pharmacy/settings/branches',
       '/pharmacy/settings/printers',

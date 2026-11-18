@@ -2045,7 +2045,11 @@ function ScopedPharmacyCounterConsole({
         // A focused field may already hold the next scan's digits; selecting them
         // would let the scanner's next digit replace them. A field that lost focus
         // (disabled while adding, or an add from a button) gets it back once enabled.
-        if (document.activeElement !== searchRef.current) {
+        // DEV-930: never from a dialog opened meanwhile (F9 payment), or its Enter is lost.
+        if (
+          document.activeElement !== searchRef.current &&
+          document.querySelector('[role="dialog"]:not([hidden])') === null
+        ) {
           restoreSearchAfterAdd.current = true;
           focusSearch();
         }
