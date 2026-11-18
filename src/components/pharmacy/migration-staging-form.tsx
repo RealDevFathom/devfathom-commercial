@@ -92,7 +92,11 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
       setMessage(
         `${result.data.rowCount} rows staged for review with ${result.data.exceptionCount} exceptions. ` +
           `${result.data.controlledFromClass} set as controlled from legacy class NARCOTICS` +
-          ` (${result.data.controlledMedicinesFlagged} catalogue ${result.data.controlledMedicinesFlagged === 1 ? 'medicine' : 'medicines'} flagged). No stock was posted.`
+          ` (${result.data.controlledMedicinesFlagged} catalogue ${result.data.controlledMedicinesFlagged === 1 ? 'medicine' : 'medicines'} flagged). ` +
+          (result.data.controlledSkippedCorrected
+            ? `${result.data.controlledSkippedCorrected} skipped: a person had already corrected ${result.data.controlledSkippedCorrected === 1 ? 'that medicine' : 'those medicines'} to not controlled. `
+            : '') +
+          'No stock was posted.'
       );
       router.push(
         `${route}?${new URLSearchParams({ branchId, sourceId: result.data.sourceId, batchId: result.data.batchId })}`

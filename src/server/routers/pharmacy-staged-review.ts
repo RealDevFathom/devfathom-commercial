@@ -116,6 +116,7 @@ export const pharmacyStagedReviewRouter = router({
           ...persisted,
           controlledFromClass: legacy.controlledRows,
           controlledMedicineIds: legacy.medicineIds,
+          controlledSkippedCorrected: legacy.skippedCorrectedRows,
         };
       });
       annotateAudit(ctx, {
@@ -127,6 +128,7 @@ export const pharmacyStagedReviewRouter = router({
           sourceId: saved.sourceId,
           controlledFromClass: saved.controlledFromClass,
           controlledMedicineIds: saved.controlledMedicineIds,
+          controlledSkippedCorrected: saved.controlledSkippedCorrected,
         },
       });
       const { controlledMedicineIds, ...summary } = saved;
