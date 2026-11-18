@@ -257,6 +257,7 @@ export async function StagedMedicineCatalogue({
               <StagedMedicineCreation
                 key={selected.batchId}
                 batchId={selected.batchId}
+                branchId={selected.branchId}
                 initial={creation}
               />
             </div>
@@ -388,6 +389,17 @@ export async function StagedMedicineCatalogue({
                   : detail.catalogueMedicine.outcome === 'MATCHED'
                     ? `${detail.catalogueMedicine.barcode} was not added, because the medicine already existed`
                     : `${detail.catalogueMedicine.barcode} already belongs to another pack, so it was not added`,
+              Supplier: !detail.catalogueMedicine?.supplierName
+                ? null
+                : detail.catalogueMedicine.supplierId
+                  ? `${detail.catalogueMedicine.supplierName} — matched to your supplier`
+                  : `${detail.catalogueMedicine.supplierName} — not one of your suppliers, so it was not linked. Add the supplier in Purchasing if you buy from them.`,
+              'Reorder level':
+                detail.catalogueMedicine?.reorderLevelPacks == null
+                  ? null
+                  : detail.catalogueMedicine.reorderLevelApplied
+                    ? `${detail.catalogueMedicine.reorderLevelPacks} packs — set as the branch's safety stock`
+                    : `${detail.catalogueMedicine.reorderLevelPacks} packs — not set: ${detail.catalogueMedicine.outcome === 'MATCHED' ? 'the medicine already existed' : detail.catalogueMedicine.unitsPerPack === null ? 'units per pack is not recorded' : 'the request named no branch where its sender may set stock levels'}`,
               'Controlled medicine': detail.controlled
                 ? 'Yes — set from legacy class NARCOTICS'
                 : 'No — not in the NARCOTICS class',

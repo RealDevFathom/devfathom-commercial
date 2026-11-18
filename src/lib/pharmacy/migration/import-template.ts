@@ -74,7 +74,8 @@ export const MEDICINE_IMPORT_TEMPLATE_COLUMNS: readonly ImportTemplateColumn[] =
   {
     header: 'Supplier',
     required: false,
-    meaning: 'The distributor you usually buy it from.',
+    meaning:
+      'The distributor you usually buy it from. It is linked when it is already one of your suppliers with the same name; a new name is shown on the row and no supplier is added.',
     example: 'Example Distributors',
   },
   {
@@ -111,19 +112,22 @@ export const MEDICINE_IMPORT_TEMPLATE_COLUMNS: readonly ImportTemplateColumn[] =
   {
     header: 'Shelf or rack',
     required: false,
-    meaning: 'Where the stock is kept, for example A-3.',
+    meaning:
+      'Where the stock is kept, for example A-3. It is kept with the row; the shelf is chosen when the opening stock is added.',
     example: 'A-3',
   },
   {
     header: 'Tax rate %',
     required: false,
-    meaning: "Only when it differs from your pharmacy's default rate.",
+    meaning:
+      "Only when it differs from your pharmacy's default rate. It is kept with the row; sales use your branch tax settings.",
     example: '',
   },
   {
     header: 'Reorder level',
     required: false,
-    meaning: 'Order more when stock falls to this many packs.',
+    meaning:
+      'Order more when stock falls to this many packs. It becomes the safety stock of the branch you choose, when units per pack is filled in.',
     example: '20',
   },
 ];

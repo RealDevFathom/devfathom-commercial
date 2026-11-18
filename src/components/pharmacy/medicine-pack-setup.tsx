@@ -13,6 +13,9 @@ import { trpc } from '@/lib/trpc';
 const control =
   'min-h-11 w-full min-w-0 rounded-sm border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50';
 const packTypes = ['UNIT', 'STRIP', 'BOX', 'CARTON'] as const;
+/** A price in rupees from minor units. */
+const rupees = (minor: number) =>
+  `Rs ${(minor / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export function MedicinePackSetup() {
   const [searchText, setSearchText] = useState('');
@@ -284,6 +287,24 @@ export function MedicinePackSetup() {
         <p role="status" className="mt-4 text-sm text-text-body">
           {message}
         </p>
+      ) : null}
+      {medicine.data?.purchasePriceVisible && !medicine.isFetching ? (
+        <dl className="mt-4 grid gap-1 text-sm text-text-body">
+          <dt className="text-text-muted">Purchase price (what you pay the distributor)</dt>
+          <dd>
+            {medicine.data.purchasePrice
+              ? `${rupees(medicine.data.purchasePrice.purchasePriceMinor)} per pack, from the imported file${
+                  medicine.data.purchasePrice.supplierName
+                    ? ` · supplier ${medicine.data.purchasePrice.supplierName}${
+                        medicine.data.purchasePrice.supplierMatched
+                          ? ''
+                          : ' (not one of your suppliers)'
+                      }`
+                    : ''
+                }`
+              : 'Not recorded'}
+          </dd>
+        </dl>
       ) : null}
       {presentation ? (
         <div className="mt-4 text-sm text-text-body">

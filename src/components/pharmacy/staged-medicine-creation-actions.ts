@@ -29,9 +29,9 @@ export async function readStagedMedicineCreation(batchId: string) {
   return readable(async () => (await caller()).stagedMedicineCreation({ batchId }));
 }
 
-export async function requestStagedMedicineCreation(batchId: string) {
+export async function requestStagedMedicineCreation(batchId: string, branchId?: string) {
   return readable(async () => {
-    await (await caller()).createStagedMedicines({ batchId });
+    await (await caller()).createStagedMedicines(branchId ? { batchId, branchId } : { batchId });
     return (await caller()).stagedMedicineCreation({ batchId });
   });
 }

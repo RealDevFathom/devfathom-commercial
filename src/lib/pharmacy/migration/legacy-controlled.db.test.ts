@@ -18,6 +18,7 @@ import { decideCatalogueEdit, submitCatalogueEdit } from '../catalogue-approvals
 import {
   applyLegacyControlledClass,
   applyLegacyControlledToMedicine,
+  applyLegacyControlledToMedicines,
   hasControlledCorrection,
   hasStagedLegacyControlledRow,
 } from './legacy-controlled';
@@ -116,6 +117,9 @@ suite('DEV-925 legacy NARCOTICS class on PostgreSQL', () => {
     await owner.connect();
     db = new PrismaClient({ adapter: new PrismaPg({ connectionString: runtimeUrl }) });
     await owner.query(`SELECT set_config('app.is_platform_admin', 'true', false)`);
+    // The staged migration tables admit no platform-admin bypass: their fixture rows (all in
+    // tenant A) are written in that tenant's context.
+    await owner.query(`SELECT set_config('app.current_organization_id', $1, false)`, [orgA]);
     for (const organizationId of [orgA, orgB])
       await owner.query(
         `INSERT INTO organizations (id, slug, "legalName", "displayName", status, "updatedAt")
@@ -296,6 +300,32 @@ suite('DEV-925 legacy NARCOTICS class on PostgreSQL', () => {
     expect(created.set).toBe(true);
     expect(await controlled(orgA, created.id)).toBe(true);
   });
+  it('DEV-912: applies the same rule to a whole chunk of medicines in one statement', async () => {
+    const result = await tenant(orgA, async (tx) => {
+      const make = (productName: string) =>
+        tx.medicine.create({ data: { productName, productFamily: 'PHARMACEUTICAL' } });
+      // Re-spaced and re-cased: the same name key as the staged NARCOTICS row.
+      const fresh = await make(' synthetic  tranquilliser 2MG');
+      const plain = await make('Synthetic Antacid');
+      const corrected = await tx.medicine.findFirstOrThrow({ where: { id: medicine.opioid } });
+      const ids = await applyLegacyControlledToMedicines(tx, orgA, [
+        corrected,
+        fresh,
+        plain,
+        // Another tenant's medicine of a NARCOTICS name is never reached from this tenant.
+        { id: medicine.otherTenant, productName: 'Synthetic Opioid 50mg', controlled: false },
+      ]);
+      return { ids, fresh: fresh.id, plain: plain.id };
+    });
+    expect(result.ids).toEqual([result.fresh]);
+    expect(await controlled(orgA, result.fresh)).toBe(true);
+    expect(await controlled(orgA, result.plain)).toBe(false);
+    // The person's correction to "not controlled" (DEV-925) is kept.
+    expect(await controlled(orgA, medicine.opioid)).toBe(false);
+    expect(await controlled(orgB, medicine.otherTenant)).toBe(false);
+    expect(await tenant(orgA, (tx) => applyLegacyControlledToMedicines(tx, orgA, []))).toEqual([]);
+  });
+
   it("remembers a solo owner's PIN-approved correction when the file is staged again", async () => {
     const { pharmacyMedicineRouter } = await import('@/server/routers/pharmacy-medicine');
     const { createTenantDb } = await import('@/lib/tenancy/scoped-db');

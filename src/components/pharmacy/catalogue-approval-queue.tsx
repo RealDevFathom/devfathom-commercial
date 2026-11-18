@@ -38,9 +38,10 @@ const editLabels: Record<string, string> = {
   fileName: 'File',
   uploadedAt: 'Uploaded',
   medicines: 'Medicines to create',
+  reorderBranch: 'Reorder levels set at',
 };
-/** Checked on the server only; a file hash means nothing to the person approving. */
-const HIDDEN_FIELDS = new Set(['sourceSha256']);
+/** Checked on the server only; a file hash or branch id means nothing to the person approving. */
+const HIDDEN_FIELDS = new Set(['sourceSha256', 'reorderBranchId']);
 const operationLabels: Record<string, string> = {
   UPDATE_MEDICINE: 'Product details',
   setPackPrice: 'Set pack price',
@@ -56,6 +57,7 @@ const operationLabels: Record<string, string> = {
 
 function displayChange(field: string, value: unknown): string {
   // A pack price without a selling price sells at the MRP.
+  if (value === null && field === 'reorderBranch') return 'Not set from this file';
   if (value === null) return field === 'sellingPriceMinor' ? 'Sell at MRP' : 'Clear value';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
   if ((field === 'effectiveFrom' || field === 'uploadedAt') && typeof value === 'string') {

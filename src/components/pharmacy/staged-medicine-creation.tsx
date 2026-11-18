@@ -18,6 +18,8 @@ export type StagedCreationState = {
   unnamed: number;
   matchedEarlier: number;
   barcodesNotAttached: number;
+  suppliersNotMatched: number;
+  reorderLevelsNotApplied: number;
 };
 
 const count = (value: number) => value.toLocaleString('en-US');
@@ -28,9 +30,12 @@ const count = (value: number) => value.toLocaleString('en-US');
  */
 export function StagedMedicineCreation({
   batchId,
+  branchId,
   initial,
 }: {
   batchId: string;
+  /** The branch the file's reorder levels are set at, when the requester may set them there. */
+  branchId?: string;
   initial: StagedCreationState;
 }) {
   const [state, setState] = useState(initial);
@@ -42,7 +47,7 @@ export function StagedMedicineCreation({
   async function ask() {
     setBusy('request');
     setError(null);
-    const result = await requestStagedMedicineCreation(batchId);
+    const result = await requestStagedMedicineCreation(batchId, branchId);
     if ('error' in result) setError(result.error ?? null);
     else setState(result.data);
     setBusy(null);
@@ -65,6 +70,8 @@ export function StagedMedicineCreation({
         remaining: step.remaining,
         matchedEarlier: step.matchedEarlier,
         barcodesNotAttached: step.barcodesNotAttached,
+        suppliersNotMatched: step.suppliersNotMatched,
+        reorderLevelsNotApplied: step.reorderLevelsNotApplied,
       }));
       if (step.remaining === 0 || step.created + step.matched === 0) break;
     }
@@ -77,7 +84,9 @@ export function StagedMedicineCreation({
         <p className="text-text-muted">
           Each named row becomes one medicine with its MRP, purchase price and units per pack. A
           value the file does not have is stored as not recorded and does not stop the medicine
-          being sold. A row in the NARCOTICS class becomes a controlled medicine.
+          being sold. A row in the NARCOTICS class becomes a controlled medicine. A supplier is
+          linked only when it is already one of your suppliers, and a reorder level becomes the
+          safety stock of the branch chosen above when you may set stock levels there.
         </p>
         <p>
           {count(state.candidates)} medicines in this file · {count(state.done)} created ·{' '}
@@ -94,6 +103,18 @@ export function StagedMedicineCreation({
           <p>
             {count(state.barcodesNotAttached)} barcodes were not added: they already belong to
             another pack, or the medicine already existed. Open a row to see which barcode.
+          </p>
+        )}
+        {state.suppliersNotMatched > 0 && (
+          <p>
+            {count(state.suppliersNotMatched)} rows name a supplier that is not one of your
+            suppliers, so no supplier was linked or created. Open a row to see the name.
+          </p>
+        )}
+        {state.reorderLevelsNotApplied > 0 && (
+          <p>
+            {count(state.reorderLevelsNotApplied)} reorder levels were not set. Open a row to see
+            why, and set them in Stock.
           </p>
         )}
         {status === 'PENDING' && (

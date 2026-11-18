@@ -78,16 +78,19 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
     }
   }
 
+  // DEV-912: a products-only file maps no quantity column and needs no packs-or-units choice.
+  const quantityMapped = mapping.quantity !== undefined;
+  const ready = mapping.product !== undefined && (!quantityMapped || Boolean(quantityUnit));
+
   async function stage() {
-    if (!source || !quantityUnit || mapping.product === undefined || mapping.quantity === undefined)
-      return;
+    if (!source || !ready) return;
     setBusy(true);
     setError('');
     try {
       const result = await stageMigrationBatch({
         ...source,
         branchId,
-        quantityUnit,
+        ...(quantityMapped && quantityUnit ? { quantityUnit } : {}),
         mapping: mapping as StagingInput['mapping'],
       });
       if (!result.data) {
@@ -122,9 +125,10 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
     <SectionCard title="Stage a source file" titleLevel={2}>
       <p className="text-sm text-text-muted">
         Upload a CSV or XLSX product list with up to {count(STAGING_MAX_ROWS)} rows (
-        {MAX_FILE_LABEL}), such as a full catalogue export from your previous system. Choose what
-        the quantity column counts. Staging creates unverified evidence, not sellable stock, and
-        staging the same file again with the same columns reuses its batch.
+        {MAX_FILE_LABEL}), such as a full catalogue export from your previous system. When the file
+        has a quantity column, choose what it counts; a list of medicines without stock needs no
+        quantity column. Staging creates unverified evidence, not sellable stock, and staging the
+        same file again with the same columns reuses its batch.
       </p>
       <fieldset disabled={busy || !branchId} className="mt-4 min-w-0 space-y-4">
         <label className="block text-sm">
@@ -156,9 +160,7 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
                     }}
                   >
                     <option value="">
-                      {field === 'product' || field === 'quantity'
-                        ? 'Choose a column'
-                        : 'Not supplied'}
+                      {field === 'product' ? 'Choose a column' : 'Not supplied'}
                     </option>
                     {headers.map((header, index) => (
                       <option key={index} value={index}>
@@ -171,16 +173,19 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
               <label className="min-w-0 text-sm">
                 Quantity column counts
                 <select
-                  required
+                  required={quantityMapped}
+                  disabled={!quantityMapped}
                   aria-describedby="quantity-choice-help"
                   className={control}
-                  value={quantityUnit}
+                  value={quantityMapped ? quantityUnit : ''}
                   onChange={(event) => {
                     setQuantityUnit(event.target.value as QuantityUnit | '');
                     setError('');
                   }}
                 >
-                  <option value="">Choose packs or units</option>
+                  <option value="">
+                    {quantityMapped ? 'Choose packs or units' : 'No quantity column'}
+                  </option>
                   <option value="PACKS">Packs</option>
                   <option value="UNITS">Units</option>
                 </select>
@@ -194,9 +199,7 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
             <Button
               type="button"
               className="min-h-11"
-              disabled={
-                !quantityUnit || mapping.product === undefined || mapping.quantity === undefined
-              }
+              disabled={!ready}
               onClick={() => void stage()}
             >
               Stage for review

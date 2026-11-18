@@ -19,6 +19,8 @@ const base: StagedCreationState = {
   unnamed: 2,
   matchedEarlier: 0,
   barcodesNotAttached: 0,
+  suppliersNotMatched: 0,
+  reorderLevelsNotApplied: 0,
 };
 
 afterEach(cleanup);
@@ -33,9 +35,32 @@ describe('DEV-912 staged medicine creation panel', () => {
     expect(screen.getByText(/2 rows have no name and are skipped/)).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Ask to create 500 medicines' }));
     expect(await screen.findByText('Waiting for approval')).toBeVisible();
-    expect(mocks.request).toHaveBeenCalledWith('batch_1');
+    expect(mocks.request).toHaveBeenCalledWith('batch_1', undefined);
     expect(screen.getByText(/owner approves it with their own PIN/)).toBeVisible();
     expect(screen.queryByRole('button', { name: /create/i })).toBeNull();
+  });
+
+  it('names the chosen branch for the reorder levels in the request', async () => {
+    mocks.request.mockResolvedValue({
+      data: { ...base, request: { id: 'edit_1', status: 'PENDING' } },
+    });
+    render(<StagedMedicineCreation batchId="batch_1" branchId="branch_1" initial={base} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Ask to create 500 medicines' }));
+    expect(await screen.findByText('Waiting for approval')).toBeVisible();
+    expect(mocks.request).toHaveBeenCalledWith('batch_1', 'branch_1');
+  });
+
+  it('reports suppliers not linked and reorder levels not set', () => {
+    render(
+      <StagedMedicineCreation
+        batchId="batch_1"
+        initial={{ ...base, suppliersNotMatched: 4, reorderLevelsNotApplied: 2 }}
+      />
+    );
+    expect(
+      screen.getByText(/4 rows name a supplier that is not one of your suppliers/)
+    ).toBeVisible();
+    expect(screen.getByText(/2 reorder levels were not set/)).toBeVisible();
   });
 
   it('does not offer the request to a reviewer who cannot edit the catalogue', () => {
@@ -53,6 +78,8 @@ describe('DEV-912 staged medicine creation panel', () => {
           remaining: 250,
           matchedEarlier: 0,
           barcodesNotAttached: 0,
+          suppliersNotMatched: 0,
+          reorderLevelsNotApplied: 0,
         },
       })
       .mockResolvedValueOnce({
@@ -63,6 +90,8 @@ describe('DEV-912 staged medicine creation panel', () => {
           remaining: 0,
           matchedEarlier: 10,
           barcodesNotAttached: 3,
+          suppliersNotMatched: 0,
+          reorderLevelsNotApplied: 0,
         },
       });
     render(
