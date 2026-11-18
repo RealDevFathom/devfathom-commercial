@@ -106,6 +106,11 @@ interface NavItem {
    */
   memberModule?: string;
   /**
+   * DEV-913: the label a pharmacy workspace shows for this entry, where the
+   * shared name would not say what the page is for at the counter.
+   */
+  pharmacyLabel?: string;
+  /**
    * DEV-497: highlight this entry only on its own route, never on the routes
    * nested under it (the `/pharmacy` front door is a prefix of every page).
    */
@@ -593,6 +598,8 @@ export const navigation: NavItem[] = [
     icon: ScrollText,
     adminOnly: true,
     group: 'Firm',
+    // DEV-913: part of every pharmacy workspace, with its own entry in the bar.
+    pharmacyLabel: 'Audit log: who did what',
   },
   {
     label: 'Organization',
@@ -674,8 +681,10 @@ const PHARMACY_MENUS: readonly (Omit<NavSection, 'items'> & { hrefs: readonly st
   {
     label: 'Reports',
     icon: BarChart3,
-    hrefs: ['/pharmacy/reports', '/pharmacy/cameras', '/team/stats', '/audit-logs'],
+    hrefs: ['/pharmacy/reports', '/pharmacy/cameras', '/team/stats'],
   },
+  // DEV-913: one destination, so the bar shows it as its own entry.
+  { label: 'Audit log: who did what', icon: ScrollText, hrefs: ['/audit-logs'] },
   { label: 'Accounts', icon: Landmark, hrefs: ['/pharmacy/finance'] },
   {
     label: 'Settings',
@@ -746,7 +755,11 @@ export function visibleNavigation(
       const moduleVertical = moduleKey ? verticalForModuleKey(moduleKey) : null;
       if (moduleVertical && entitlements.vertical && moduleVertical !== entitlements.vertical)
         return false;
-      if (moduleKey && !isModuleGranted(moduleKey, entitlements.enabledModules)) return false;
+      if (
+        moduleKey &&
+        !isModuleGranted(moduleKey, entitlements.enabledModules, entitlements.vertical)
+      )
+        return false;
       if (item.group === 'Hospitality')
         return (item.hotelCapabilities ?? []).some((capability) =>
           hotelCapabilities.includes(capability)
@@ -768,6 +781,11 @@ export function visibleNavigation(
         return isModuleGranted(item.memberModule, entitlements.enabledModules);
       return true;
     })
+    .map((item) =>
+      entitlements.vertical === 'PHARMACY' && item.pharmacyLabel
+        ? { ...item, label: item.pharmacyLabel }
+        : item
+    )
     .sort((left, right) => GROUP_ORDER.indexOf(left.group) - GROUP_ORDER.indexOf(right.group));
 }
 

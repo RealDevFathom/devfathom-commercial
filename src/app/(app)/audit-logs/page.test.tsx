@@ -73,6 +73,56 @@ describe('audit drill-down destination', () => {
     );
   });
 
+  it('opens a pharmacy workspace on one person at one branch, in plain words (DEV-913)', async () => {
+    resolveActor.mockResolvedValue({
+      session: { user: { role: 'ADMIN' } },
+      organization: { vertical: 'PHARMACY', timezone: 'Asia/Karachi' },
+    });
+    listQuery.mockReturnValueOnce({
+      data: {
+        pages: [
+          {
+            items: [
+              {
+                id: 'audit_1',
+                createdAt: new Date('2026-11-18T10:00:00.000Z'),
+                actorType: 'USER',
+                actorName: 'Cashier One',
+                actorRole: 'EMPLOYEE',
+                action: 'pharmacySales.returnAndRefund',
+                category: 'PHARMACYSALES',
+                operation: 'UPDATE',
+                source: 'TRPC',
+                outcome: 'SUCCESS',
+                metadata: { branchId: 'branch_north' },
+                branchId: 'branch_north',
+                branchName: 'North',
+                approvers: [{ id: 'owner_1', name: 'Owner Person' }],
+              },
+            ],
+          },
+        ],
+      },
+    } as never);
+    render(
+      await AuditLogPage({
+        searchParams: Promise.resolve({ actorId: 'cashier_1', branchId: 'branch_north' }),
+      })
+    );
+    expect(listQuery).toHaveBeenLastCalledWith(
+      expect.objectContaining({ actorId: 'cashier_1', branchId: 'branch_north' }),
+      expect.anything()
+    );
+    expect(screen.getByRole('heading', { name: 'Audit log: who did what' })).toBeVisible();
+    expect(screen.getByLabelText('Person')).toHaveValue('cashier_1');
+    expect(screen.getByLabelText('Branch')).toHaveValue('branch_north');
+    expect(screen.getByText(/Counter and sales: Return and refund/)).toBeVisible();
+    expect(screen.getByText(/· North/)).toBeVisible();
+    expect(screen.getByText(/Approved by Owner Person/)).toBeVisible();
+    expect(screen.getByText('18 Nov 2026, 3:00 PM PKT')).toBeVisible();
+    expect(screen.queryByText('pharmacySales.returnAndRefund')).toBeNull();
+  });
+
   it.each(['MANAGER', 'EMPLOYEE', undefined])(
     'keeps the audit destination restricted for %s',
     async (role) => {
