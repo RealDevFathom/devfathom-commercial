@@ -254,6 +254,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     railOrganizationId = 'pharmacy-1',
     sessionOrganizationId = 'pharmacy-1',
     isError = false,
+    onboarding = false,
   }: {
     role?: string;
     vertical?: EntitlementView['vertical'];
@@ -264,6 +265,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     railOrganizationId?: string;
     sessionOrganizationId?: string;
     isError?: boolean;
+    onboarding?: boolean;
   } = {}) {
     useSessionMock.mockReturnValue({
       data: {
@@ -297,9 +299,9 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
         }}
       >
         {surface === 'mobile' ? (
-          <Sidebar collapsible={false} onNavigate={onNavigate} />
+          <Sidebar collapsible={false} onNavigate={onNavigate} pharmacyOnboarding={onboarding} />
         ) : (
-          <TopNavigation />
+          <TopNavigation pharmacyOnboarding={onboarding} />
         )}
       </EntitlementsProvider>
     );
@@ -354,6 +356,14 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
         screen.queryByRole('link', { name: (name) => name.endsWith(label) })
       ).not.toBeInTheDocument();
     }
+  });
+
+  it('DEV-930 offers an onboarding owner Onboarding in one click, never inside a closed menu', () => {
+    renderNavigation({ onboarding: true });
+    const onboarding = screen.getByRole('link', { name: /Onboarding$/ });
+    expect(onboarding).toHaveAttribute('href', '/pharmacy');
+    // Not in a menu panel, which stays hidden until its button is pressed.
+    expect(onboarding.closest('ul.hidden, [hidden]')).toBeNull();
   });
 
   it('offers an inventory member without procurement or reports neither destination (#979)', () => {
@@ -707,7 +717,14 @@ describe('Pharmacy grouped top navigation (DEV-497)', () => {
     pathname = '/dashboard',
     capabilities = everyCapability,
     granted = everyModule,
-  }: { role?: string; pathname?: string; capabilities?: string[]; granted?: string[] } = {}) {
+    onboarding = false,
+  }: {
+    role?: string;
+    pathname?: string;
+    capabilities?: string[];
+    granted?: string[];
+    onboarding?: boolean;
+  } = {}) {
     useSessionMock.mockReturnValue({
       data: {
         user: {
@@ -738,7 +755,7 @@ describe('Pharmacy grouped top navigation (DEV-497)', () => {
           limits: {},
         }}
       >
-        <TopNavigation />
+        <TopNavigation pharmacyOnboarding={onboarding} />
         <button type="button">Outside</button>
       </EntitlementsProvider>
     );
@@ -775,10 +792,29 @@ describe('Pharmacy grouped top navigation (DEV-497)', () => {
         .getAllByRole('link')
         .map((link) => link.textContent)
     ).toEqual(['Counter', 'Day close', 'Khata', 'Loyalty points', 'Marketing & growth']);
+    // DEV-930: an active pharmacy keeps Onboarding in Settings, so its bar does not grow.
     expect(within(panel('Settings')).getByRole('link', { name: 'Onboarding' })).toHaveAttribute(
       'href',
       '/pharmacy'
     );
+  });
+
+  it('DEV-930 gives an onboarding owner Onboarding in the bar itself, first after Dashboard', () => {
+    const nav = renderBar({ onboarding: true });
+    expect(
+      Array.from(nav.children)
+        .filter((child) => child.tagName === 'A')
+        .map((link) => link.getAttribute('href'))
+    ).toEqual([
+      '/dashboard',
+      '/pharmacy',
+      '/pharmacy/purchasing',
+      '/audit-logs',
+      '/pharmacy/finance',
+    ]);
+    expect(nav.children[1]).toHaveAccessibleName('Onboarding');
+    expect(within(panel('Settings')).queryByRole('link', { name: /Onboarding$/ })).toBeNull();
+    expect(nav).toHaveClass('flex-wrap');
   });
 
   it('offers a cashier only pages a cashier can open, with no menus to dig through', () => {

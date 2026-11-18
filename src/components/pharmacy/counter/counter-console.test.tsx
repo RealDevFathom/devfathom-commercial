@@ -276,6 +276,7 @@ vi.mock('./counter-upsell-suggestions', async (importOriginal) => {
 });
 
 import { PharmacyCounterConsole } from './counter-console';
+import { trpc } from '@/lib/trpc';
 import { resolveCounterKeymap } from '@/lib/pharmacy/counter-keymap';
 import {
   persistTenderAttempt,
@@ -4656,7 +4657,10 @@ describe('PharmacyCounterConsole browser print audit', () => {
   );
 
   it('keeps the unconfirmed-printing notice until dismissed (DEV-910)', async () => {
-    mocks.mutations.counterReceiptBrowserPrint!.mockResolvedValue({ copyNumber: 1, reprint: false });
+    mocks.mutations.counterReceiptBrowserPrint!.mockResolvedValue({
+      copyNumber: 1,
+      reprint: false,
+    });
     const onPrint = renderSettledReceipt();
     vi.useFakeTimers();
     try {
@@ -6566,6 +6570,54 @@ describe('DEV-705 keyboard loose sale', () => {
     await waitFor(() => expect(screen.getByLabelText('Scan or search')).toHaveFocus());
     fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F9' });
     expect(screen.getByRole('dialog', { name: 'Payment' })).toBeInTheDocument();
+  });
+
+  it('DEV-930 leaves focus in payment opened while an add is still settling, so Enter takes it', async () => {
+    // The cart shows the line before the add's follow-up reads finish; F9 is allowed then.
+    let settle!: () => void;
+    const { controlledRegister } = (
+      trpc.useUtils as unknown as () => {
+        pharmacySafety: { controlledRegister: { invalidate: ReturnType<typeof vi.fn> } };
+      }
+    )().pharmacySafety;
+    controlledRegister.invalidate.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (settle = resolve))
+    );
+    mocks.mutations.addLine!.mockResolvedValue({ saleLineId: 'loose-line' });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(looseRow()));
+    fireEvent.keyDown(screen.getByLabelText('Quantity'), { key: 'Enter' });
+    await waitFor(() => expect(controlledRegister.invalidate).toHaveBeenCalled());
+    fireEvent.keyDown(window, { key: 'F9' });
+    const payment = screen.getByRole('dialog', { name: 'Payment' });
+    const panel = within(payment)
+      .getByRole('group', { name: 'Payment method' })
+      .closest<HTMLElement>('[tabindex="-1"]')!;
+    act(() => panel.focus());
+    await act(async () => settle());
+    expect(payment).toContainElement(document.activeElement as HTMLElement);
+    expect(screen.getByLabelText('Scan or search')).not.toHaveFocus();
+  });
+
+  it('DEV-930 leaves focus on a control the cashier moved to while an add is still settling', async () => {
+    let settle!: () => void;
+    const { controlledRegister } = (
+      trpc.useUtils as unknown as () => {
+        pharmacySafety: { controlledRegister: { invalidate: ReturnType<typeof vi.fn> } };
+      }
+    )().pharmacySafety;
+    controlledRegister.invalidate.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (settle = resolve))
+    );
+    mocks.mutations.addLine!.mockResolvedValue({ saleLineId: 'loose-line' });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(looseRow()));
+    fireEvent.keyDown(screen.getByLabelText('Quantity'), { key: 'Enter' });
+    await waitFor(() => expect(controlledRegister.invalidate).toHaveBeenCalled());
+    const patient = screen.getByRole('button', { name: /^Patient/ });
+    act(() => patient.focus());
+    await act(async () => settle());
+    expect(patient).toHaveFocus();
   });
   it('shows every unit with its price and lets the operator switch to the strip', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);

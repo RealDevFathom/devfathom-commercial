@@ -35,3 +35,27 @@ describe('counter opening focus', () => {
     expect(onOpen).toHaveBeenCalledExactlyOnceWith(0, undefined);
   });
 });
+
+describe('DEV-930 manager access arriving after the step is on screen', () => {
+  it('keeps the 0 already shown, now editable, and opens with it', () => {
+    const onOpen = vi.fn();
+    const view = render(<CounterOpenDrawerStep disabled={false} onOpen={onOpen} />);
+    expect(screen.getByLabelText('Opening cash')).toHaveValue('0');
+    view.rerender(<CounterOpenDrawerStep disabled={false} canDeclareFloat onOpen={onOpen} />);
+    const field = screen.getByLabelText('Opening cash');
+    expect(field).toHaveValue('0');
+    expect(field).not.toHaveAttribute('readonly');
+    fireEvent.submit(screen.getByRole('form', { name: 'Open the cash drawer to start the shift' }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(onOpen).toHaveBeenCalledExactlyOnceWith(0, undefined);
+  });
+
+  it('still asks a manager known from the start to enter the counted cash', () => {
+    const onOpen = vi.fn();
+    render(<CounterOpenDrawerStep disabled={false} canDeclareFloat onOpen={onOpen} />);
+    expect(screen.getByLabelText('Opening cash')).toHaveValue('');
+    fireEvent.submit(screen.getByRole('form', { name: 'Open the cash drawer to start the shift' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter the opening cash');
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+});

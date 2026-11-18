@@ -225,10 +225,13 @@ export function AppShell({
   children,
   brand,
   pharmacyPlaceholder = false,
+  pharmacyOnboarding = false,
 }: {
   children: React.ReactNode;
   brand: TenantBrand;
   pharmacyPlaceholder?: boolean;
+  /** DEV-930: the organization is still onboarding (status ONBOARDING). */
+  pharmacyOnboarding?: boolean;
 }) {
   // The server-side invariant lives in the `/(app)` layout, which fails closed
   // before this renders. Here the live session is the moving part, so the check
@@ -346,6 +349,7 @@ export function AppShell({
               onNavigate={() => setMobileMenuOpen(false)}
               onClose={() => setMobileMenuOpen(false)}
               collapsible={false}
+              pharmacyOnboarding={pharmacyOnboarding}
             />
           </div>
         </>
@@ -371,7 +375,7 @@ export function AppShell({
             organization activated before staff profiles were provisioned. Self-
             hiding, so it costs a healthy workspace nothing. */}
         <AdministratorStaffProfileCallout />
-        <TopNavigation />
+        <TopNavigation pharmacyOnboarding={pharmacyOnboarding} />
         <main
           id="main-content"
           tabIndex={-1}
