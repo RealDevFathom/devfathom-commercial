@@ -151,7 +151,7 @@ Control corners as they ship today. Most controls use one of two corner sizes:
   - Platform console form fields. `.platform-workspace` rounds inputs, selects and textareas to
     12px.
   - Hand-built controls, and some small panels, written as `rounded-[var(--radius-sm)]` in 65
-    product files: 43 pharmacy files (purchasing, inventory, accounts, finance, counter and
+    product files: 43 pharmacy files (mostly purchasing, inventory, accounts, finance, counter and
     pharmacist queue), 11 restaurant files, 7 tenant auth files, the `PasswordInput` reveal button,
     two camera screens and the settings approval-authenticator section. Inside these screens the
     shared `Button` keeps its 3px base unless the screen passes `rounded-[var(--radius-sm)]` to it,
