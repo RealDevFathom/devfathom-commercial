@@ -246,6 +246,24 @@ it('redacts owner PIN before resolver execution including validation and capabil
   });
 });
 
+it('redacts a card-terminal review slip reference and reason, typed by hand (DEV-743)', () => {
+  expect(
+    toAuditJson({
+      attemptKey: 'card-terminal:k-1',
+      outcome: 'REVERSED',
+      slipRef: '4242424242424242',
+      resolutionReason: 'card 4242424242424242 was charged',
+      managerPin: '2468',
+    })
+  ).toEqual({
+    attemptKey: 'card-terminal:k-1',
+    outcome: 'REVERSED',
+    slipRef: '[REDACTED]',
+    resolutionReason: '[REDACTED]',
+    managerPin: '[REDACTED]',
+  });
+});
+
 it('redacts a payment reference so a card number typed into one is never audited (DEV-875)', () => {
   expect(
     toAuditJson({ type: 'BANK_TRANSFER', providerRef: '4242424242424242', amountMinor: 3000 })

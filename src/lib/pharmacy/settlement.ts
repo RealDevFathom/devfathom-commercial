@@ -36,7 +36,7 @@ import {
 } from './manual-payments';
 import { readManualPaymentSettings } from './manual-payment-settings';
 import { counterOperatorDenial } from './counter-capability';
-import { countOpenCardTerminalAttempts } from './card-terminal/open-attempts';
+import { anyCardTerminalTender, countOpenCardTerminalAttempts } from './card-terminal/open-attempts';
 
 export type PharmacyTenderType = 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET' | 'CREDIT' | ManualTenderType;
 
@@ -66,6 +66,7 @@ export class PharmacySettlementError extends Error {
       | 'PREPAID_REFUND_RESTORES_BALANCE'
       | 'TENDER_ATTEMPT_DISCARDED'
       | 'CARD_TERMINAL_PAYMENT_OPEN'
+      | 'CARD_TERMINAL_REFUND_VIA_PROVIDER'
   ) {
     super(reason);
   }
@@ -875,6 +876,10 @@ export async function refundPharmacyTender(
   // reversed). Nothing is left on a released tender to refund.
   if (tender.type === 'LOYALTY' && tender.sale.status === 'VOID')
     throw new PharmacySettlementError('REFUND_EXCEEDS_TENDER');
+  // DEV-743: an integrated card-terminal charge is refunded through the provider's own process.
+  // No terminal refund is built yet, so it is refused here, and never paid out as cash instead.
+  if (!input.adapter && (await anyCardTerminalTender(db, scope, [tender])))
+    throw new PharmacySettlementError('CARD_TERMINAL_REFUND_VIA_PROVIDER');
   assertRefundWithinTender(
     tender.amountMinor,
     tender.refunds.reduce((sum, row) => sum + row.amountMinor, 0),

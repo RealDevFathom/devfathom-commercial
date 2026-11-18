@@ -10,6 +10,7 @@ import {
   prismaCardTerminalAttemptStore,
   type CardTerminalAttemptStore,
 } from './store';
+import { CARD_TERMINAL_STALE_AFTER_MS, CARD_TERMINAL_TIMEOUT_MS } from './timing';
 
 /**
  * DEV-743: the scheduled recovery sweep for card-terminal attempts a counter left behind (the
@@ -23,8 +24,7 @@ import {
  * without an admitted terminal).
  */
 
-/** An attempt untouched this long is the sweep's to recover; the counter owns a fresher one. */
-export const CARD_TERMINAL_STALE_AFTER_MS = 2 * 60_000;
+export { CARD_TERMINAL_STALE_AFTER_MS } from './timing';
 
 const SWEPT_STATUSES = OPEN_ATTEMPT_STATUSES.filter((status) => status !== 'MANUAL_REVIEW');
 
@@ -61,8 +61,10 @@ function listDueAttempts(staleBefore: Date, take: number) {
 }
 
 function tenantStore(candidate: CardTerminalSweepCandidate) {
-  return prismaCardTerminalAttemptStore((work) =>
-    withTenantDb(candidate.organizationId, work, { userId: candidate.actorId })
+  // The sweep's outcomes are audited as the system, acting for the attempt's cashier.
+  return prismaCardTerminalAttemptStore(
+    (work) => withTenantDb(candidate.organizationId, work, { userId: candidate.actorId }),
+    'SYSTEM'
   );
 }
 
@@ -100,6 +102,8 @@ export async function processDueCardTerminalRecovery(
         store: (options.storeFor ?? tenantStore)(candidate),
         adapter: terminal.adapter,
         ...(terminal.admission ? { admission: terminal.admission } : {}),
+        // The counter's own timeout: one clock decides when an attempt is stale or unknown.
+        timeoutMs: CARD_TERMINAL_TIMEOUT_MS,
         now: () => now,
       };
       const attempt = await recoverCardTerminalAttempt(deps, scope, candidate.attemptKey);

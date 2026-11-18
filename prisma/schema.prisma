@@ -1756,6 +1756,9 @@ model PharmacyCardTerminalAttempt {
   tenderId       String?
   reviewReason   String?
   resolvedById   String?
+  /// DEV-743: why a manager or owner resolved a manual review, and the slip's provider reference.
+  resolutionReason String?
+  resolutionRef  String?
   actorId        String
   sentAt         DateTime?
   resolvedAt     DateTime?

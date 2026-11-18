@@ -36,6 +36,23 @@ export type CardTerminalCounterView = {
   cardLast4: string | null;
   declineCode: string | null;
   reviewReason: string | null;
+  /**
+   * The terminal reported a charge reference (never shown). A review of such an attempt cannot be
+   * recorded as "nothing was charged".
+   */
+  chargeReported: boolean;
+};
+
+/**
+ * Whether the signed-in person may resolve this attempt's review (MANUAL_REVIEW only). The server
+ * checks again on resolve. `selfResolve`: they took this charge, and nobody else could resolve it
+ * at this branch, so the solo rule lets them with their PIN. `askName`: someone who can resolve
+ * it, when the person took the charge and may not.
+ */
+export type CardTerminalReviewAccess = {
+  mayResolve: boolean;
+  selfResolve: boolean;
+  askName: string | null;
 };
 
 const PHASES: Record<PharmacyCardTerminalAttemptStatus, CardTerminalCounterPhase> = {
@@ -75,6 +92,7 @@ export function cardTerminalCounterView(attempt: {
   cardLast4: string | null;
   declineCode: string | null;
   reviewReason: string | null;
+  providerRef: string | null;
 }): CardTerminalCounterView {
   return {
     attemptKey: attempt.attemptKey,
@@ -88,5 +106,6 @@ export function cardTerminalCounterView(attempt: {
     cardLast4: attempt.cardLast4,
     declineCode: attempt.declineCode,
     reviewReason: attempt.status === 'MANUAL_REVIEW' ? attempt.reviewReason : null,
+    chargeReported: attempt.providerRef !== null,
   };
 }

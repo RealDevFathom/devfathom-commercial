@@ -7,6 +7,7 @@ import {
   dispatchCardTerminalCharge,
   recoverCardTerminalAttempt,
   recoverOpenCardTerminalAttempts,
+  resolveCardTerminalReview,
   type CardTerminalDeps,
 } from './service';
 import { createFakeTerminal } from './testing/fake-terminal';
@@ -341,5 +342,203 @@ describe('DEV-743 card terminal around one durable attempt (mocked end to end)',
       beginCardTerminalCharge(deps, scope, { ...input, ...patch })
     ).rejects.toMatchObject({ reason: 'INVALID_INPUT' });
     expect(store.all()).toEqual([]);
+  });
+
+  describe('resolution of a manual review by a manager or owner', () => {
+    const approval = { policy: 'PHARMACY_CARD_TERMINAL_REVIEW_MANAGER_PIN', pinVerified: true };
+    const manager = { ...scope, actorId: 'manager-1' };
+
+    async function reviewAfterUnknown() {
+      const context = setup();
+      context.terminal.scriptCharge({ kind: 'PENDING' });
+      await chargeCardTerminal(context.deps, scope, input);
+      context.terminal.scriptQuery({ kind: 'PENDING' }, { kind: 'PENDING' }, { kind: 'PENDING' });
+      for (let check = 0; check < 3; check += 1)
+        await recoverCardTerminalAttempt(context.deps, scope, input.attemptKey);
+      expect(only(context.store).status).toBe('MANUAL_REVIEW');
+      return context;
+    }
+
+    it('records "nothing was charged", frees the sale and never calls the terminal', async () => {
+      const { store, terminal, deps } = await reviewAfterUnknown();
+      const charges = terminal.charges.length;
+      const queries = terminal.queries.length;
+      const resolved = await resolveCardTerminalReview(
+        deps,
+        manager,
+        {
+          attemptKey: input.attemptKey,
+          outcome: 'DECLINED',
+          reason: 'Slip shows declined',
+          slipRef: 'SLIP-77',
+        },
+        approval
+      );
+      expect(resolved).toMatchObject({
+        status: 'DECLINED',
+        providerRef: null,
+        resolvedById: 'manager-1',
+        resolutionReason: 'Slip shows declined',
+        resolutionRef: 'SLIP-77',
+      });
+      expect(terminal.charges).toHaveLength(charges);
+      expect(terminal.queries).toHaveLength(queries);
+      expect(store.audits.at(-1)).toEqual({
+        attemptId: resolved.id,
+        from: 'MANUAL_REVIEW',
+        to: 'DECLINED',
+        detail: approval,
+      });
+      // The sale may take another tender now.
+      await expect(
+        beginCardTerminalCharge(deps, scope, { ...input, attemptKey: 'sale-1:card:0002' })
+      ).resolves.toMatchObject({ created: true });
+    });
+
+    it('records money taken against the slip reference for a refund through the provider', async () => {
+      const { deps } = await reviewAfterUnknown();
+      await expect(
+        resolveCardTerminalReview(
+          deps,
+          manager,
+          {
+            attemptKey: input.attemptKey,
+            outcome: 'REVERSED',
+            reason: 'Customer was charged',
+            slipRef: 'RRN-9',
+          },
+          approval
+        )
+      ).resolves.toMatchObject({
+        status: 'REVERSED',
+        providerRef: 'RRN-9',
+        resolutionRef: 'RRN-9',
+      });
+    });
+
+    it('never records "not charged" for an attempt with the terminal’s charge reference', async () => {
+      const { store, terminal, deps } = setup();
+      terminal.scriptCharge({ ...approved, amountMinor: 1600 });
+      await chargeCardTerminal(deps, scope, input);
+      const review = {
+        attemptKey: input.attemptKey,
+        reason: 'Checked slip',
+        slipRef: 'RRN-000111222',
+      };
+      await expect(
+        resolveCardTerminalReview(deps, manager, { ...review, outcome: 'DECLINED' }, approval)
+      ).rejects.toMatchObject({ reason: 'CHARGE_EVIDENCE_RECORDED' });
+      await expect(
+        resolveCardTerminalReview(
+          deps,
+          manager,
+          { ...review, outcome: 'REVERSED', slipRef: 'RRN-OTHER' },
+          approval
+        )
+      ).rejects.toMatchObject({ reason: 'SLIP_REFERENCE_MISMATCH' });
+      expect(only(store).status).toBe('MANUAL_REVIEW');
+      await expect(
+        resolveCardTerminalReview(deps, manager, { ...review, outcome: 'REVERSED' }, approval)
+      ).resolves.toMatchObject({ status: 'REVERSED', providerRef: 'RRN-000111222' });
+    });
+
+    it('never lets the person who took the charge resolve it, unless they are the sole approver', async () => {
+      const { store, deps } = await reviewAfterUnknown();
+      const own = {
+        attemptKey: input.attemptKey,
+        outcome: 'DECLINED' as const,
+        reason: 'Slip shows declined',
+        slipRef: 'SLIP-1',
+      };
+      // `scope` is the cashier who started this charge.
+      await expect(resolveCardTerminalReview(deps, scope, own, approval)).rejects.toMatchObject({
+        reason: 'OWN_CHARGE_NEEDS_ANOTHER_APPROVER',
+      });
+      await expect(
+        resolveCardTerminalReview(deps, scope, own, approval, async () => false)
+      ).rejects.toMatchObject({ reason: 'OWN_CHARGE_NEEDS_ANOTHER_APPROVER' });
+      expect(only(store).status).toBe('MANUAL_REVIEW');
+      await expect(
+        resolveCardTerminalReview(deps, scope, own, approval, async () => true)
+      ).resolves.toMatchObject({ status: 'DECLINED', resolvedById: 'cashier-1' });
+    });
+
+    it('lets exactly one of two racing resolutions win', async () => {
+      const { store, deps } = await reviewAfterUnknown();
+      const resolve = (outcome: 'DECLINED' | 'REVERSED') =>
+        resolveCardTerminalReview(
+          deps,
+          manager,
+          { attemptKey: input.attemptKey, outcome, reason: 'Checked the slip', slipRef: 'RRN-55' },
+          approval
+        );
+      const outcomes = await Promise.allSettled([resolve('DECLINED'), resolve('REVERSED')]);
+      expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+      const [refused] = outcomes.filter((outcome) => outcome.status === 'rejected');
+      expect((refused as PromiseRejectedResult).reason).toMatchObject({
+        reason: 'REVIEW_NOT_OPEN',
+      });
+      expect(store.audits.filter((entry) => entry.from === 'MANUAL_REVIEW')).toHaveLength(1);
+    });
+
+    it.each([
+      { reason: 'no' },
+      { reason: 'x'.repeat(201) },
+      { slipRef: '' },
+      { slipRef: 'has space' },
+      { slipRef: '4111111111111111' },
+      { reason: 'card 4111111111111111' },
+    ])('refuses %j before changing anything', async (patch) => {
+      const { store, deps } = await reviewAfterUnknown();
+      await expect(
+        resolveCardTerminalReview(
+          deps,
+          manager,
+          {
+            attemptKey: input.attemptKey,
+            outcome: 'DECLINED',
+            reason: 'Slip checked',
+            slipRef: 'S-1',
+            ...patch,
+          },
+          approval
+        )
+      ).rejects.toMatchObject({ reason: 'INVALID_INPUT' });
+      expect(only(store).status).toBe('MANUAL_REVIEW');
+    });
+
+    it('refuses an attempt that is not waiting for review', async () => {
+      const { terminal, deps } = setup();
+      terminal.scriptCharge(approved);
+      await chargeCardTerminal(deps, scope, input);
+      await expect(
+        resolveCardTerminalReview(
+          deps,
+          manager,
+          {
+            attemptKey: input.attemptKey,
+            outcome: 'REVERSED',
+            reason: 'Checked',
+            slipRef: 'RRN-000111222',
+          },
+          approval
+        )
+      ).rejects.toMatchObject({ reason: 'REVIEW_NOT_OPEN' });
+    });
+  });
+
+  it('leaves one audit entry for every committed outcome', async () => {
+    const { store, terminal, deps } = setup();
+    terminal.scriptCharge({ kind: 'PENDING' });
+    await chargeCardTerminal(deps, scope, input);
+    terminal.scriptQuery(approved);
+    await recoverCardTerminalAttempt(deps, scope, input.attemptKey);
+    expect(store.audits.map((entry) => `${entry.from}>${entry.to}`)).toEqual([
+      'null>CREATED',
+      'CREATED>SENT',
+      'SENT>UNKNOWN',
+      'UNKNOWN>APPROVED',
+      'APPROVED>SETTLED',
+    ]);
   });
 });

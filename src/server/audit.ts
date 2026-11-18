@@ -113,6 +113,10 @@ function isSensitiveKey(key: string): boolean {
     k === 'providerref' ||
     // Cash-memo buyer text can reach validation-failure audit before its resolver.
     k === 'buyername' ||
+    // DEV-743: a card-terminal review's slip reference and reason are typed by hand and may hold
+    // a card number by mistake; the service refuses one, but raw input is audited before that.
+    k === 'slipref' ||
+    k === 'resolutionreason' ||
     SENSITIVE_SUBSTRINGS.some((s) => k.includes(s))
   );
 }

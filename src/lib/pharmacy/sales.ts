@@ -55,6 +55,7 @@ import {
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
 import { releaseVoidedSaleRedemptions } from './loyalty-void-release';
+import { anyCardTerminalTender } from './card-terminal/open-attempts';
 import {
   backInStockQueue,
   backInStockReference,
@@ -224,6 +225,7 @@ export class PharmacySaleError extends Error {
       | 'UNSAFE_STOCK'
       | 'CROSS_BRANCH_REFERENCE'
       | 'BILL_HAS_PAYMENTS'
+      | 'BILL_HAS_CARD_TERMINAL_PAYMENT'
       | 'NOT_BILL_OWNER'
   ) {
     super(reason);
@@ -1021,15 +1023,28 @@ export async function changeSaleStatus(
         saleId,
         type: { not: 'LOYALTY' },
       },
-      select: { amountMinor: true, refunds: { select: { amountMinor: true } } },
+      select: {
+        id: true,
+        type: true,
+        provider: true,
+        amountMinor: true,
+        refunds: { select: { amountMinor: true } },
+      },
     });
-    const unrefundedMinor = tenders.reduce(
-      (total, tender) =>
-        total +
-        tender.amountMinor -
-        tender.refunds.reduce((refunded, refund) => refunded + refund.amountMinor, 0),
-      0
-    );
+    const unrefunded = (tender: (typeof tenders)[number]) =>
+      tender.amountMinor -
+      tender.refunds.reduce((refunded, refund) => refunded + refund.amountMinor, 0);
+    const unrefundedMinor = tenders.reduce((total, tender) => total + unrefunded(tender), 0);
+    // DEV-743: a card-terminal charge cannot be refunded here (it goes back through the
+    // provider), so the void names that instead of sending the cashier to a refund that refuses.
+    if (
+      await anyCardTerminalTender(
+        db,
+        scope,
+        tenders.filter((tender) => unrefunded(tender) > 0)
+      )
+    )
+      throw new PharmacySaleError('BILL_HAS_CARD_TERMINAL_PAYMENT');
     if (unrefundedMinor > 0) throw new PharmacySaleError('BILL_HAS_PAYMENTS');
     await releaseVoidedSaleRedemptions(db, scope, saleId);
     // DEV-819: a voided unpaid bill gives back the voucher uses its lines took. The sale row is
