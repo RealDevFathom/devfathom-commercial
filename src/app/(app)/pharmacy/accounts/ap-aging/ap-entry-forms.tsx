@@ -4,8 +4,12 @@ import { startTransition, useActionState, useState, type FormEvent } from 'react
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
+  approveCreditSetOffFromForm,
   payApInvoiceFromForm,
   recordApInvoiceFromForm,
+  rejectCreditSetOffFromForm,
+  requestCreditSetOffFromForm,
+  reverseCreditSetOffFromForm,
   type ApEntryFormState,
 } from './ap-entry-actions';
 
@@ -266,6 +270,234 @@ export function PayApInvoiceForm({
         {pending ? 'Recording…' : 'Record payment'}
       </Button>
       <Status id="ap-pay-status" state={state} />
+    </form>
+  );
+}
+
+/** DEV-694: an open PKR bill and an unspent supplier credit note, offered for set-off. */
+export type SetOffBill = {
+  invoiceId: string;
+  reference: string;
+  payeeName: string;
+  supplierInvoiceRef: string;
+  outstanding: string;
+};
+export type SetOffCredit = {
+  creditId: string;
+  reference: string;
+  supplierName: string;
+  remaining: string;
+};
+
+/**
+ * DEV-694: staff choose the bill a credit note is set off against. This only
+ * records a request; the bill is reduced when a manager approves it.
+ */
+export function RequestCreditSetOffForm({
+  branchId,
+  initialKey,
+  bills,
+  credits,
+}: {
+  branchId: string;
+  initialKey: string;
+  bills: readonly SetOffBill[];
+  credits: readonly SetOffCredit[];
+}) {
+  const { key, formKey, state, onSubmit, pending, invalid } = useEntryAction(
+    requestCreditSetOffFromForm,
+    initialKey,
+    'ap-set-off'
+  );
+  const aria = { 'aria-invalid': invalid || undefined, 'aria-describedby': 'ap-set-off-status' };
+  return (
+    <form
+      key={formKey}
+      onSubmit={onSubmit}
+      className="space-y-4"
+      aria-label="Request credit note set-off"
+    >
+      <input type="hidden" name="branchId" value={branchId} />
+      <input type="hidden" name="requestKey" value={key} />
+      <div className="grid gap-4 md:grid-cols-2">
+        <label className={fieldClass}>
+          Credit note
+          <select name="supplierCreditId" required className={selectClass} {...aria}>
+            {credits.map((credit) => (
+              <option key={credit.creditId} value={credit.creditId}>
+                {`${credit.reference} · ${credit.supplierName} · PKR ${credit.remaining} left`}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className={fieldClass}>
+          Supplier bill
+          <select name="invoiceId" required className={selectClass} {...aria}>
+            {bills.map((bill) => (
+              <option key={bill.invoiceId} value={bill.invoiceId}>
+                {`${bill.reference} · ${bill.payeeName} · ${bill.supplierInvoiceRef} · PKR ${bill.outstanding} outstanding`}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className={fieldClass}>
+          Amount to set off (PKR)
+          <Input
+            className="min-h-11 text-right font-mono tabular-nums"
+            name="amount"
+            inputMode="decimal"
+            required
+            placeholder="0.00"
+            {...aria}
+          />
+        </label>
+        <label className={fieldClass}>
+          Note (optional)
+          <Input className="min-h-11" name="note" maxLength={500} {...aria} />
+        </label>
+      </div>
+      <p className="text-sm text-text-muted">
+        The credit note&apos;s supplier must be the bill&apos;s payee. The server refuses more than
+        is left on the credit note or owed on the bill.
+      </p>
+      <Button type="submit" className="min-h-11" disabled={pending}>
+        {pending ? 'Requesting…' : 'Request set-off'}
+      </Button>
+      <Status id="ap-set-off-status" state={state} />
+    </form>
+  );
+}
+
+/** DEV-694: approve with the manager's own PIN, or reject with a reason. */
+export function DecideCreditSetOffForms({
+  branchId,
+  setOffId,
+  label,
+  initialApproveKey,
+  initialRejectKey,
+}: {
+  branchId: string;
+  setOffId: string;
+  /** Names the request for assistive technology, e.g. its credit and bill references. */
+  label: string;
+  initialApproveKey: string;
+  initialRejectKey: string;
+}) {
+  const approve = useEntryAction(approveCreditSetOffFromForm, initialApproveKey, 'ap-set-off-ok');
+  const reject = useEntryAction(rejectCreditSetOffFromForm, initialRejectKey, 'ap-set-off-no');
+  const approveStatus = `ap-set-off-approve-${setOffId}`;
+  const rejectStatus = `ap-set-off-reject-${setOffId}`;
+  return (
+    <div className="grid gap-3 md:grid-cols-2">
+      <form
+        key={`approve-${approve.formKey}`}
+        onSubmit={approve.onSubmit}
+        className="grid gap-2"
+        aria-label={`Approve set-off ${label}`}
+      >
+        <input type="hidden" name="branchId" value={branchId} />
+        <input type="hidden" name="setOffId" value={setOffId} />
+        <input type="hidden" name="decisionKey" value={approve.key} />
+        <label className={fieldClass}>
+          Your manager or owner PIN
+          <Input
+            className="min-h-11 font-mono"
+            name="pin"
+            type="password"
+            inputMode="numeric"
+            autoComplete="off"
+            pattern="\d{4,8}"
+            maxLength={8}
+            required
+            aria-invalid={approve.invalid || undefined}
+            aria-describedby={approveStatus}
+          />
+        </label>
+        <Button type="submit" className="min-h-11" disabled={approve.pending}>
+          {approve.pending ? 'Approving…' : 'Approve set-off'}
+        </Button>
+        <Status id={approveStatus} state={approve.state} />
+      </form>
+      <form
+        key={`reject-${reject.formKey}`}
+        onSubmit={reject.onSubmit}
+        className="grid gap-2"
+        aria-label={`Reject set-off ${label}`}
+      >
+        <input type="hidden" name="branchId" value={branchId} />
+        <input type="hidden" name="setOffId" value={setOffId} />
+        <input type="hidden" name="decisionKey" value={reject.key} />
+        <label className={fieldClass}>
+          Reason to reject
+          <Input
+            className="min-h-11"
+            name="reason"
+            maxLength={500}
+            required
+            aria-invalid={reject.invalid || undefined}
+            aria-describedby={rejectStatus}
+          />
+        </label>
+        <Button type="submit" variant="destructive" className="min-h-11" disabled={reject.pending}>
+          {reject.pending ? 'Rejecting…' : 'Reject'}
+        </Button>
+        <Status id={rejectStatus} state={reject.state} />
+      </form>
+    </div>
+  );
+}
+
+/** DEV-694: undo an approved set-off with the manager's own PIN and a reason. */
+export function ReverseCreditSetOffForm({
+  branchId,
+  setOffId,
+  label,
+  initialKey,
+}: {
+  branchId: string;
+  setOffId: string;
+  label: string;
+  initialKey: string;
+}) {
+  const { key, formKey, state, onSubmit, pending, invalid } = useEntryAction(
+    reverseCreditSetOffFromForm,
+    initialKey,
+    'ap-set-off-rev'
+  );
+  const status = `ap-set-off-reverse-${setOffId}`;
+  const aria = { 'aria-invalid': invalid || undefined, 'aria-describedby': status };
+  return (
+    <form
+      key={formKey}
+      onSubmit={onSubmit}
+      className="grid gap-3 md:grid-cols-[1fr_1fr_auto] md:items-end"
+      aria-label={`Reverse set-off ${label}`}
+    >
+      <input type="hidden" name="branchId" value={branchId} />
+      <input type="hidden" name="setOffId" value={setOffId} />
+      <input type="hidden" name="commandKey" value={key} />
+      <label className={fieldClass}>
+        Reason to reverse
+        <Input className="min-h-11" name="reason" maxLength={500} required {...aria} />
+      </label>
+      <label className={fieldClass}>
+        Your manager or owner PIN
+        <Input
+          className="min-h-11 font-mono"
+          name="pin"
+          type="password"
+          inputMode="numeric"
+          autoComplete="off"
+          pattern="\d{4,8}"
+          maxLength={8}
+          required
+          {...aria}
+        />
+      </label>
+      <Button type="submit" variant="destructive" className="min-h-11" disabled={pending}>
+        {pending ? 'Reversing…' : 'Reverse set-off'}
+      </Button>
+      <Status id={status} state={state} />
     </form>
   );
 }
