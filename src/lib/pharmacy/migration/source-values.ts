@@ -167,9 +167,11 @@ export function readText(raw: string | undefined): string | null {
  * Read a money cell into integer minor units (paisa for PKR).
  *
  * Accepts a leading currency word or symbol, thousands separators, and up to two
- * decimal places. Returns `null` — never a rounded value — for anything else,
- * including three or more decimals, because rounding an incumbent price silently
- * changes what the pharmacy charges.
+ * decimal places. Further decimals are accepted only when they are all zero
+ * ("250.0000", as a legacy database export writes a price), since dropping them
+ * is exact. Returns `null` — never a rounded value — for anything else,
+ * including a non-zero third decimal, because rounding an incumbent price
+ * silently changes what the pharmacy charges.
  */
 export function readMoneyMinor(raw: string | undefined, minorUnitDigits = 2): bigint | null {
   if (isBlank(raw)) return null;
@@ -180,8 +182,9 @@ export function readMoneyMinor(raw: string | undefined, minorUnitDigits = 2): bi
   const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(cleaned);
   if (!match) return null;
 
-  const [, sign, whole, fraction = ''] = match;
-  if (fraction.length > minorUnitDigits) return null;
+  const [, sign, whole, written = ''] = match;
+  if (/[^0]/.test(written.slice(minorUnitDigits))) return null;
+  const fraction = written.slice(0, minorUnitDigits);
 
   const padded = fraction.padEnd(minorUnitDigits, '0');
   const magnitude = BigInt(whole + padded);
@@ -298,7 +301,7 @@ export function isStrengthPackLabel(raw: string | undefined): boolean {
  * Read a pack label into the integer number of canonical units it contains.
  *
  * Handles the two forms these exports use: a multiplied grid ("10x10", "1 x 20")
- * and a counted unit ("20 Tabs", "100ML"). Returns `null` when the label names
+ * and a counted unit ("20 Tabs", "100ML", "10.0000"). Returns `null` when the label names
  * no countable quantity, which raises UNIT_AMBIGUOUS rather than assuming 1 —
  * assuming 1 would silently misstate every opening stock figure for that pack.
  */
@@ -315,7 +318,9 @@ export function readPackFactor(raw: string | undefined): bigint | null {
     return factor > BigInt(0) ? factor : null;
   }
 
-  const counted = /^(\d+)\s*(?:[a-z]+)?$/.exec(value);
+  // A legacy database export writes a whole count as "10.0000"; any non-zero
+  // fraction is still not a countable unit.
+  const counted = /^(\d+)(?:\.0+)?\s*(?:[a-z]+)?$/.exec(value);
   if (counted) {
     const factor = BigInt(counted[1]!);
     return factor > BigInt(0) ? factor : null;
