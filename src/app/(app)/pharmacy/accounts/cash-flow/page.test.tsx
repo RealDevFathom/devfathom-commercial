@@ -72,7 +72,7 @@ describe('cash-flow page', () => {
     const form = button.closest('form')!;
     const submitted = vi.fn((event: Event) => event.preventDefault());
     form.addEventListener('submit', submitted);
-    fireEvent.change(screen.getByLabelText('From (5:00 AM PKT)'), {
+    fireEvent.change(screen.getByLabelText('From (UTC)'), {
       target: { value: '2026-10-02' },
     });
 
@@ -104,7 +104,7 @@ describe('cash-flow page', () => {
     } finally {
       vi.useRealTimers();
     }
-    expect(screen.getByLabelText('Until (5:00 AM PKT, not included)')).toHaveValue('2026-11-01');
+    expect(screen.getByLabelText('To, exclusive (UTC)')).toHaveValue('2026-11-01');
     expect(mocks.projection.mock.calls[0][2]).toEqual({
       from: new Date('2026-10-01T00:00:00Z'),
       to: new Date('2026-11-01T00:00:00Z'),
@@ -235,5 +235,7 @@ describe('cash-flow page', () => {
       to: new Date('2026-10-30T19:00:00Z'),
     });
     expect(screen.getByText('Scope and period (PKT)')).toBeVisible();
+    expect(screen.getByLabelText('From (PKT)')).toBeVisible();
+    expect(screen.getByLabelText('To, exclusive (PKT)')).toBeVisible();
   });
 });

@@ -161,11 +161,11 @@ export default async function CashFlowPage({
             </select>
           </label>
           <label className="grid gap-2 text-sm">
-            {screenCopy.cashFlow.from500AmPkt}
+            {screenCopy.dateWindow.from} ({zone})
             <Input type="date" name="from" defaultValue={from} required />
           </label>
           <label className="grid gap-2 text-sm">
-            {screenCopy.cashFlow.until500AmPktNotIncluded}
+            {screenCopy.dateWindow.toExclusive} ({zone})
             <Input type="date" name="to" defaultValue={to} required />
           </label>
           <Button type="submit" className="min-h-11">

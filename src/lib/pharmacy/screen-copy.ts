@@ -249,8 +249,6 @@ export const SHOP_SCREEN_COPY = {
     branchAndDates: 'Branch and dates',
     activeBranch: 'Active branch',
     noActiveBranchesAvailable: 'No active branches available',
-    from500AmPkt: 'From (5:00 AM PKT)',
-    until500AmPktNotIncluded: 'Until (5:00 AM PKT, not included)',
     showCashFlow: 'Show cash flow',
     projectionUnavailable: 'Projection unavailable',
     noFinancialDataIsShown: ' No financial data is shown.',
