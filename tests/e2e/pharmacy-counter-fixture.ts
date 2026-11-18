@@ -24,6 +24,24 @@ export const PHARMACY_E2E = {
   pharmacistId: 'user_pharmacy_counter_e2e_pharmacist',
   pharmacistEmail: 'pharmacist.counter@pharmacy-counter-e2e.devfathom.invalid',
   pharmacistAssignmentId: 'pba_pharmacy_counter_e2e_pharmacist',
+  /**
+   * DEV-751: the procedures (SOP) team the browser lane drives on desktop and phone.
+   * The manager sets procedures up and checks them; the pharmacist does the work.
+   * Two people, so the manager's role grant to the pharmacist is never a self-grant.
+   */
+  sop: {
+    managerRoleId: 'role_pharmacy_counter_e2e_sop_manager',
+    managerId: 'user_pharmacy_counter_e2e_sop_manager',
+    managerEmail: 'sop.manager@pharmacy-counter-e2e.devfathom.invalid',
+    managerAssignmentId: 'pba_pharmacy_counter_e2e_sop_manager',
+    managerCapabilities: ['sop:manage', 'sop:complete', 'sop:verify'],
+    pharmacistRoleId: 'role_pharmacy_counter_e2e_sop_pharmacist',
+    pharmacistId: 'user_pharmacy_counter_e2e_sop_pharmacist',
+    pharmacistEmail: 'sop.pharmacist@pharmacy-counter-e2e.devfathom.invalid',
+    pharmacistAssignmentId: 'pba_pharmacy_counter_e2e_sop_pharmacist',
+    /** The qualified-person procedure role needs the exact dispense grant. */
+    pharmacistCapabilities: ['pharmacy:dispense', 'sop:complete'],
+  },
   branchId: 'branch_pharmacy_counter_e2e',
   branchName: 'Gulberg Counter E2E',
   branchCode: 'PCE-1',
