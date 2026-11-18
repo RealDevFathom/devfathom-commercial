@@ -31,6 +31,7 @@ vi.mock('@/server/audit', () => ({
 vi.mock('@/lib/rate-limit', () => ({
   rateLimit: () => ({ ok: true, retryAfter: 0 }),
   clearRateLimit: vi.fn(),
+  refundRateLimit: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/host', () => ({
   isTenantLifecycleAccessible: () => true,

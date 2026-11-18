@@ -15,6 +15,11 @@ export interface RateLimitResult {
   /** Seconds until the window resets (when blocked). */
   retryAfter: number;
   remaining: number;
+  /**
+   * When the window this attempt was counted in opened, by the store's clock.
+   * Pass it to `refundRateLimit` to refund exactly that window.
+   */
+  windowStartedAt?: Date;
 }
 
 type Bucket = { count: number; resetAt: number };
@@ -39,6 +44,13 @@ RETURNING count, "resetAt"
 `;
 
 const CLEAR_SQL = `DELETE FROM rate_limit_buckets WHERE key = $1`;
+const REFUND_SQL = `
+UPDATE rate_limit_buckets SET count = count - 1
+WHERE key = $1
+  AND count > 0
+  AND "resetAt" > NOW()
+  AND "resetAt" - ($2::int * INTERVAL '1 millisecond') <= $3::timestamptz
+`;
 const SWEEP_SQL = `DELETE FROM rate_limit_buckets WHERE "resetAt" <= NOW()`;
 
 type RateLimitEnv = {
@@ -86,13 +98,18 @@ function memoryRateLimit(key: string, limit: number, windowMs: number): RateLimi
   const bucket = buckets.get(key);
   if (!bucket || bucket.resetAt <= now) {
     buckets.set(key, { count: 1, resetAt: now + windowMs });
-    return { ok: true, retryAfter: 0, remaining: limit - 1 };
+    return { ok: true, retryAfter: 0, remaining: limit - 1, windowStartedAt: new Date(now) };
   }
   if (bucket.count >= limit) {
     return { ok: false, retryAfter: Math.ceil((bucket.resetAt - now) / 1000), remaining: 0 };
   }
   bucket.count += 1;
-  return { ok: true, retryAfter: 0, remaining: limit - bucket.count };
+  return {
+    ok: true,
+    retryAfter: 0,
+    remaining: limit - bucket.count,
+    windowStartedAt: new Date(bucket.resetAt - windowMs),
+  };
 }
 
 export function interpretRateLimitRow(
@@ -135,7 +152,10 @@ async function postgresRateLimit(
     if (++postgresCalls % 1000 === 0) {
       void query(SWEEP_SQL, []).catch(() => undefined);
     }
-    return interpretRateLimitRow(Number(row.count), resetAt, limit);
+    const result = interpretRateLimitRow(Number(row.count), resetAt, limit);
+    return result.ok
+      ? { ...result, windowStartedAt: new Date(resetAt.getTime() - windowMs) }
+      : result;
   } catch (error) {
     console.error('[rate-limit] store unavailable', error instanceof Error ? error.name : 'error');
     return { ok: false, retryAfter: 1, remaining: 0 };
@@ -192,6 +212,36 @@ export async function clearRateLimit(key: string): Promise<void> {
     await query(CLEAR_SQL, [stored]);
   } catch (error) {
     console.error('[rate-limit] clear failed', error instanceof Error ? error.name : 'error');
+  }
+}
+
+/**
+ * Give back ONE unit, unlike `clearRateLimit`, which forgets the whole window.
+ *
+ * Use it when the attempt that spent the unit turned out to be legitimate and
+ * every other attempt in the window must keep counting — e.g. a fully verified
+ * sign-in refunds only its own unit, so failures from the same address stay
+ * counted. The refund is skipped when the window has rolled over since
+ * `spentAt`, because the unit being returned was never spent in the new window.
+ * There is no clock tolerance: pass the charging result's `windowStartedAt`, or
+ * a time recorded by the same store after the charge. A skewed clock can only
+ * cause a refund to be skipped, never to reach a later window.
+ */
+export async function refundRateLimit(key: string, windowMs: number, spentAt: Date): Promise<void> {
+  const stored = rateLimitStorageKey(key);
+  if (rateLimitBackend() === 'memory') {
+    const bucket = buckets.get(stored);
+    if (!bucket || bucket.count <= 0) return;
+    if (bucket.resetAt <= Date.now()) return;
+    if (bucket.resetAt - windowMs > spentAt.getTime()) return;
+    bucket.count -= 1;
+    return;
+  }
+  const query = rateLimitQuery.current ?? defaultQuery;
+  try {
+    await query(REFUND_SQL, [stored, windowMs, spentAt.toISOString()]);
+  } catch (error) {
+    console.error('[rate-limit] refund failed', error instanceof Error ? error.name : 'error');
   }
 }
 
