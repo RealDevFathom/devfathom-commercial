@@ -64,8 +64,8 @@ const expected: Record<PlatformRole, readonly PlatformReadHref[]> = {
 };
 
 describe('platform read route policy', () => {
-  // DEV-905: approval is the lifecycle transition, which only the super admin's
-  // `organizations:security:write` may run, so no other role is shown the queue.
+  // DEV-905: approving needs the lifecycle permission, which only the super admin's
+  // `organizations:security:write` carries, so no other role is shown the queue.
   it('shows the pharmacy approval queue only to the role that may approve', () => {
     for (const role of roles) {
       expect(canReadPlatformRoute(role, '/platform/approvals'), role).toBe(role === 'SUPER_ADMIN');

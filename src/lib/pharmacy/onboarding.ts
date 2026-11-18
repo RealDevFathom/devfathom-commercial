@@ -430,8 +430,8 @@ export function reconcileTenantPackageGate(
  * DEV-905: where this pharmacy stands with DevFathom approval, read on a tenant
  * connection for the owner's dashboard and the counter's ready-to-sell check.
  *
- * Approval itself is only ever the platform lifecycle transition to ACTIVE, run by a
- * super admin, which re-runs every activation check. This reader authorizes nothing: it
+ * Approval itself is only ever a super admin's manual platform command, which makes the
+ * pharmacy ACTIVE. This reader authorizes nothing: it
  * reads the organization's lifecycle state and, only while it is ONBOARDING, the same
  * onboarding readiness the onboarding page shows, so it can say "waiting for approval"
  * or name the steps still open.
@@ -443,13 +443,19 @@ export async function readPharmacyApprovalStatus(
 ): Promise<PharmacyApprovalStatus | null> {
   const organization = await db.organization.findFirst({
     where: { id: organizationId },
-    select: { status: true, activatedAt: true, vertical: true, packageId: true },
+    select: {
+      status: true,
+      activatedAt: true,
+      vertical: true,
+      packageId: true,
+      platformApprovedAt: true,
+    },
   });
   if (!organization) return null;
   if (organization.status !== 'ONBOARDING') {
     return pharmacyApprovalStatus({
       status: organization.status,
-      activatedAt: organization.activatedAt,
+      activatedAt: organization.platformApprovedAt ?? organization.activatedAt,
     });
   }
   const readiness = reconcileTenantPackageGate(

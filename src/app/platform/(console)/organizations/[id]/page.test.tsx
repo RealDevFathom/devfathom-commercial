@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   branchCount: vi.fn(),
   branchFindMany: vi.fn(),
   jobFindFirst: vi.fn(),
+  platformUserFindUnique: vi.fn(),
   pharmacyReadiness: vi.fn(),
   provisioningConfigured: vi.fn(() => false),
 }));
@@ -21,7 +22,9 @@ vi.mock('@/lib/platform/provisioning-config', () => ({
   isDedicatedProvisioningConfigured: mocks.provisioningConfigured,
 }));
 
-vi.mock('@/lib/pharmacy/onboarding', () => ({
+vi.mock('@/lib/pharmacy/onboarding', async (original) => ({
+  // DEV-905: the approval's unmet-check labels come from the real onboarding steps.
+  ...(await original<typeof import('@/lib/pharmacy/onboarding')>()),
   evaluatePharmacyReadiness: mocks.pharmacyReadiness,
 }));
 
@@ -155,6 +158,7 @@ beforeEach(() => {
       platformContract: { findMany: mocks.contractFindMany },
       restaurantBranch: { count: mocks.branchCount, findMany: mocks.branchFindMany },
       platformJob: { findFirst: mocks.jobFindFirst },
+      platformUser: { findUnique: mocks.platformUserFindUnique },
     })
   );
   mocks.jobFindFirst.mockResolvedValue(null);
@@ -734,54 +738,160 @@ describe('vertical readiness parity', () => {
   });
 });
 
-// DEV-905: the organization page carries the same "Approve pharmacy" action as the queue.
+// DEV-905 (owner decision, 18 Nov): the organization page carries the approval: the
+// action, with unmet checks to confirm by name, or the approval record and its withdrawal.
 describe('OrganizationDetailPage pharmacy approval', () => {
   const ready = { ready: true, blocking: [], gates: [] };
+  const notReady = { ready: false, blocking: ['PREMISES_AND_LICENCES'], gates: [] };
+  // The default fixture has no module, administrator or deployment.
+  const BASE_UNMET = ['enabled_modules', 'administrator', 'production_deployment'];
 
-  it('offers Approve pharmacy with an optional note to an onboarding pharmacy', async () => {
-    mocks.pharmacyReadiness.mockResolvedValue(ready);
-    await renderDetail({ org: organization({ vertical: 'PHARMACY' }) });
-    const section = screen.getByRole('region', { name: 'Approve pharmacy' });
-    expect(within(section).getByLabelText('Approval note (optional)')).not.toBeRequired();
-    expect(within(section).getByRole('button', { name: 'Approve pharmacy' })).toBeEnabled();
-    // The default fixture still misses base gates, so the page says approval is refused.
-    expect(section).toHaveTextContent('Approval is refused until every gate above');
-  });
+  function postedBody(fetchMock: ReturnType<typeof vi.fn>) {
+    return JSON.parse(fetchMock.mock.calls[0]![1].body);
+  }
 
-  it('runs the existing lifecycle transition and shows a refusal naming the gates', async () => {
-    mocks.pharmacyReadiness.mockResolvedValue(ready);
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: false,
-      json: async () => ({
-        error: 'Activation preflight failed: add ready production deployment.',
-        gates: [{ message: 'Add a ready production deployment.' }],
-      }),
-    });
+  it('offers Approve pharmacy, naming the unmet checks to confirm first', async () => {
+    mocks.pharmacyReadiness.mockResolvedValue(notReady);
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: {} }) });
     vi.stubGlobal('fetch', fetchMock);
     try {
       await renderDetail({ org: organization({ vertical: 'PHARMACY' }) });
       const section = screen.getByRole('region', { name: 'Approve pharmacy' });
-      fireEvent.click(within(section).getByRole('button', { name: 'Approve pharmacy' }));
+      expect(within(section).getByLabelText('Approval note (optional)')).not.toBeRequired();
+      expect(within(section).getByText('These 4 checks are not met:')).toBeInTheDocument();
+      expect(
+        within(section).getByText('Premises and licences (PREMISES_AND_LICENCES)')
+      ).toBeInTheDocument();
+      const approve = within(section).getByRole('button', { name: 'Approve pharmacy' });
+      expect(approve).toBeDisabled();
 
-      const alert = await within(section).findByRole('alert');
-      expect(alert).toHaveTextContent('Activation preflight failed');
-      expect(within(alert).getByText('Add a ready production deployment.')).toBeInTheDocument();
-      expect(JSON.parse(fetchMock.mock.calls[0]![1].body)).toMatchObject({
-        action: 'organization.transition',
-        payload: { id: 'org_1', status: 'ACTIVE' },
+      fireEvent.click(
+        within(section).getByRole('checkbox', { name: 'Approve without these 4 checks' })
+      );
+      fireEvent.click(approve);
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      expect(postedBody(fetchMock)).toEqual({
+        action: 'organization.pharmacy.approve',
+        payload: {
+          id: 'org_1',
+          reason: 'Pharmacy approved by DevFathom after onboarding review.',
+          confirmedUnmetChecks: [...BASE_UNMET, 'PREMISES_AND_LICENCES'],
+        },
       });
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it.each([
-    ['an active pharmacy', { vertical: 'PHARMACY', status: 'ACTIVE' }],
-    ['a restaurant', { vertical: 'RESTAURANT', status: 'ONBOARDING' }],
-  ])('offers no pharmacy approval for %s', async (_case, overrides) => {
+  it('shows a server refusal in the section', async () => {
     mocks.pharmacyReadiness.mockResolvedValue(ready);
-    await renderDetail({ org: organization(overrides) });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      json: async () => ({
+        error: 'Confirm the checks this pharmacy does not meet before approving it: X.',
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await renderDetail({ org: organization({ vertical: 'PHARMACY' }) });
+      const section = screen.getByRole('region', { name: 'Approve pharmacy' });
+      fireEvent.click(within(section).getByRole('checkbox'));
+      fireEvent.click(within(section).getByRole('button', { name: 'Approve pharmacy' }));
+
+      const alert = await within(section).findByRole('alert');
+      expect(alert).toHaveTextContent('Confirm the checks this pharmacy does not meet');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('offers approval to an active pharmacy that is not approved', async () => {
+    mocks.pharmacyReadiness.mockResolvedValue(ready);
+    await renderDetail({ org: organization({ vertical: 'PHARMACY', status: 'ACTIVE' }) });
+    const section = screen.getByRole('region', { name: 'Approve pharmacy' });
+    expect(section).toHaveTextContent('keep running if a regulatory or onboarding check');
+  });
+
+  it('says a suspended pharmacy cannot be approved, and offers no approval to a restaurant', async () => {
+    mocks.pharmacyReadiness.mockResolvedValue(ready);
+    await renderDetail({ org: organization({ vertical: 'PHARMACY', status: 'SUSPENDED' }) });
+    const section = screen.getByRole('region', { name: 'Pharmacy approval' });
+    expect(section).toHaveTextContent('A suspended pharmacy cannot be approved.');
+    expect(within(section).queryByRole('button')).toBeNull();
+
+    await renderDetail({ org: organization({ vertical: 'RESTAURANT' }) });
     expect(screen.queryByRole('region', { name: 'Approve pharmacy' })).toBeNull();
+  });
+
+  it('shows who approved, when, the note and the unmet checks, and withdraws with a reason', async () => {
+    mocks.pharmacyReadiness.mockResolvedValue(notReady);
+    mocks.platformUserFindUnique.mockResolvedValue({ name: 'Sam Admin', email: 'sam@ops.test' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: {} }) });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await renderDetail({
+        org: organization({
+          vertical: 'PHARMACY',
+          status: 'ACTIVE',
+          platformApprovedAt: new Date('2026-11-18T09:30:00Z'),
+          platformApprovedById: 'op_1',
+          platformApprovalNote: 'Owner instruction',
+          platformApprovalUnmetChecks: [
+            { key: 'PREMISES_AND_LICENCES', label: 'Premises and licences (PREMISES_AND_LICENCES)' },
+          ],
+        }),
+      });
+      expect(mocks.platformUserFindUnique).toHaveBeenCalledWith({
+        where: { id: 'op_1' },
+        select: { name: true, email: true },
+      });
+      const section = screen.getByRole('region', { name: 'Pharmacy approval' });
+      expect(within(section).getByText('Approved')).toBeInTheDocument();
+      expect(within(section).getByText('Sam Admin (sam@ops.test)')).toBeInTheDocument();
+      expect(within(section).getByText('Nov 18, 2026, 9:30 AM UTC')).toBeInTheDocument();
+      expect(within(section).getByText('Owner instruction')).toBeInTheDocument();
+      expect(
+        within(section).getByText('Premises and licences (PREMISES_AND_LICENCES)')
+      ).toBeInTheDocument();
+      expect(within(section).queryByRole('button', { name: 'Approve pharmacy' })).toBeNull();
+
+      const withdraw = within(section).getByRole('button', { name: 'Withdraw approval' });
+      expect(withdraw).toBeDisabled();
+      fireEvent.change(within(section).getByLabelText('Reason for withdrawing'), {
+        target: { value: 'Licence was never issued' },
+      });
+      fireEvent.click(withdraw);
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      expect(postedBody(fetchMock)).toEqual({
+        action: 'organization.pharmacy.approval.withdraw',
+        payload: { id: 'org_1', reason: 'Licence was never issued' },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('marks an approval that a later suspension holds out of effect', async () => {
+    mocks.pharmacyReadiness.mockResolvedValue(ready);
+    // An operator record that no longer exists falls back to the stored id.
+    mocks.platformUserFindUnique.mockResolvedValue(null);
+    await renderDetail({
+      org: organization({
+        vertical: 'PHARMACY',
+        status: 'SUSPENDED',
+        platformApprovedAt: new Date('2026-11-18T09:30:00Z'),
+        platformApprovedById: 'op_gone',
+        platformApprovalUnmetChecks: [],
+      }),
+    });
+    const section = screen.getByRole('region', { name: 'Pharmacy approval' });
+    expect(
+      within(section).getByText('Approved, not in effect while suspended')
+    ).toBeInTheDocument();
+    expect(within(section).getByText('op_gone')).toBeInTheDocument();
+    expect(within(section).getByText('None. Every check had passed.')).toBeInTheDocument();
   });
 });
 
@@ -813,32 +923,29 @@ describe('pharmacy domain validation', () => {
     }
   );
 
-  it.each([
-    'Hub_Customer.com',
-    '-Hub.Customer.com',
-    'Hub..com',
-    'Hub.123',
-    `${'a'.repeat(64)}.com`,
-  ])('rejects malformed pharmacy hostname %s before submitting', async (value) => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
-    mocks.pharmacyReadiness.mockResolvedValue({ ready: false, gates: [] });
-    try {
-      await renderDetail({ org: organization({ vertical: 'PHARMACY' }) });
-      const form = screen.getByRole('button', { name: 'Add domain' }).closest('form')!;
-      const host = within(form).getByLabelText('Hostname');
-      fireEvent.change(host, { target: { value } });
+  it.each(['Hub_Customer.com', '-Hub.Customer.com', 'Hub..com', 'Hub.123', `${'a'.repeat(64)}.com`])(
+    'rejects malformed pharmacy hostname %s before submitting',
+    async (value) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+      mocks.pharmacyReadiness.mockResolvedValue({ ready: false, gates: [] });
+      try {
+        await renderDetail({ org: organization({ vertical: 'PHARMACY' }) });
+        const form = screen.getByRole('button', { name: 'Add domain' }).closest('form')!;
+        const host = within(form).getByLabelText('Hostname');
+        fireEvent.change(host, { target: { value } });
 
-      expect(host).toBeInvalid();
-      fireEvent.submit(form);
+        expect(host).toBeInvalid();
+        fireEvent.submit(form);
 
-      expect(fetchMock).not.toHaveBeenCalled();
-      expect(host).toHaveFocus();
-      expect(host).toHaveAccessibleDescription('Hostname has an invalid format.');
-    } finally {
-      vi.unstubAllGlobals();
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(host).toHaveFocus();
+        expect(host).toHaveAccessibleDescription('Hostname has an invalid format.');
+      } finally {
+        vi.unstubAllGlobals();
+      }
     }
-  });
+  );
 });
 
 describe('permission override validation', () => {

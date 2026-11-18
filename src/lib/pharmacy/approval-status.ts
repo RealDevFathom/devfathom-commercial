@@ -2,8 +2,8 @@
  * DEV-905: where a pharmacy stands with DevFathom approval, in the owner's words.
  *
  * A pharmacy organization starts in ONBOARDING and cannot sell until a super admin
- * approves it by hand (the platform lifecycle transition to ACTIVE, which re-runs every
- * activation check). Nothing approves a pharmacy automatically. While it waits, the
+ * approves it by hand, which makes it ACTIVE (DEV-905, owner decision 18 Nov). Nothing
+ * approves a pharmacy automatically. While it waits, the
  * dashboard and the counter say which of two things is true: onboarding is complete and
  * DevFathom has still to approve it, or which onboarding steps are still open.
  *

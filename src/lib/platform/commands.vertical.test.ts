@@ -199,7 +199,11 @@ const platformDb = {
 import { executePlatformCommand } from './commands';
 import { PlatformSecurityError } from './security';
 import { assertPlatformCapability } from '@/lib/platform/auth';
-import { pharmacyApprovalCommand, PHARMACY_APPROVAL_REASON } from './pharmacy-approval';
+import {
+  pharmacyApprovalCommand,
+  pharmacyApprovalWithdrawCommand,
+  PHARMACY_APPROVAL_REASON,
+} from './pharmacy-approval';
 
 const actor = { id: 'op_1', role: 'SUPER_ADMIN' } as never;
 const request = new Request('https://admin.devfathom.com/api/platform/control', { method: 'POST' });
@@ -1380,106 +1384,312 @@ describe('pharmacy activation preflight', () => {
   });
 });
 
-// DEV-905: the super admin's "Approve pharmacy" is the same lifecycle transition, so the
-// preflight above decides it; these tests run the exact command the approval form sends.
-describe('pharmacy approval after onboarding (DEV-905)', () => {
+// DEV-905 (owner decision, 18 Nov): a super admin approves a pharmacy by hand, whatever
+// its state. Unmet checks are information the operator must confirm by name; they are
+// recorded with the approval. These tests run the exact commands the console sends.
+describe('pharmacy approval by a super admin (DEV-905)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('approves a ready pharmacy and records the approver, the time and the note', async () => {
+  function readyPharmacy() {
     mocks.orgFindUnique.mockResolvedValue(pharmacyOrg());
-    mocks.orgUpdate.mockResolvedValue({ id: 'org_p', status: 'ACTIVE' });
+    mocks.orgUpdate.mockImplementation(async ({ data }: { data: object }) => ({
+      ...pharmacyOrg(),
+      ...data,
+    }));
     mocks.regulatoryProfileFindFirst.mockResolvedValue(VALID_PROFILE);
     allGatesClaimedPassed();
     allReadinessEvidence();
+  }
+
+  /** No regulatory profile, no qualified person, no onboarding work at all. */
+  function bareOnboardingPharmacy(overrides: Record<string, unknown> = {}) {
+    mocks.orgFindUnique.mockResolvedValue({ ...pharmacyOrg(), ...overrides });
+    mocks.orgUpdate.mockImplementation(async ({ data }: { data: object }) => ({
+      ...pharmacyOrg(),
+      ...overrides,
+      ...data,
+    }));
+    mocks.regulatoryProfileFindFirst.mockResolvedValue(null);
+    noReadinessEvidence();
+  }
+
+  const BARE_UNMET = [
+    'ORG_TYPE',
+    'LEGAL_BUSINESS',
+    'LAUNCH_JURISDICTION',
+    'PREMISES_AND_LICENCES',
+    'BRANCHES_AND_LOCATIONS',
+    'OWNER_AND_ROLE_TEMPLATES',
+    'MEDICINE_CATALOG_READINESS',
+    'OPENING_STOCK_READINESS',
+    'PARTIES_AND_BALANCES',
+    'DEVICES_AND_DOCUMENTS',
+    'READINESS_AND_PARALLEL_RUN',
+  ];
+
+  it('approves a ready pharmacy, makes it active and records who, when and the note', async () => {
+    readyPharmacy();
     const command = pharmacyApprovalCommand('org_p', '  Licence and stock reviewed on call.  ');
 
     await expect(run(command.action, command.payload)).resolves.toBeDefined();
 
     expect(mocks.orgUpdate).toHaveBeenCalledOnce();
-    expect(mocks.orgUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: 'org_p' },
-        data: expect.objectContaining({ status: 'ACTIVE', activatedAt: expect.any(Date) }),
-      })
-    );
+    expect(mocks.orgUpdate).toHaveBeenCalledWith({
+      where: { id: 'org_p' },
+      data: expect.objectContaining({
+        status: 'ACTIVE',
+        activatedAt: expect.any(Date),
+        platformApprovedAt: expect.any(Date),
+        platformApprovedById: 'op_1',
+        platformApprovalNote: 'Licence and stock reviewed on call.',
+        platformApprovalUnmetChecks: [],
+      }),
+    });
     const reason = `${PHARMACY_APPROVAL_REASON} Note: Licence and stock reviewed on call.`;
     expect(platformDb.organizationLifecycleEvent.create).toHaveBeenCalledWith({
-      data: {
+      data: expect.objectContaining({
         organizationId: 'org_p',
         action: 'ACTIVATED',
         fromStatus: 'ONBOARDING',
         toStatus: 'ACTIVE',
         reason,
         actorId: 'op_1',
-      },
+      }),
     });
-    // The platform audit ledger keeps the operator, the transition and the note too.
     expect(mocks.auditCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
           actorPlatformUserId: 'op_1',
-          action: 'organization.transition',
+          action: 'organization.pharmacy.approve',
           reason,
-          after: expect.objectContaining({ status: 'ACTIVE', reason }),
+          before: { status: 'ONBOARDING', platformApproved: false },
+          after: expect.objectContaining({
+            status: 'ACTIVE',
+            platformApproved: true,
+            approval: expect.objectContaining({
+              approvedById: 'op_1',
+              note: 'Licence and stock reviewed on call.',
+              unmetChecks: [],
+            }),
+          }),
         }),
       })
     );
   });
 
-  it('approves without a note using the fixed approval reason', async () => {
-    mocks.orgFindUnique.mockResolvedValue(pharmacyOrg());
-    mocks.orgUpdate.mockResolvedValue({ id: 'org_p', status: 'ACTIVE' });
-    mocks.regulatoryProfileFindFirst.mockResolvedValue(VALID_PROFILE);
-    allGatesClaimedPassed();
-    allReadinessEvidence();
-    const command = pharmacyApprovalCommand('org_p');
-
-    await expect(run(command.action, command.payload)).resolves.toBeDefined();
-    expect(platformDb.organizationLifecycleEvent.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ reason: PHARMACY_APPROVAL_REASON, actorId: 'op_1' }),
-    });
-  });
-
-  it('refuses a pharmacy still onboarding and names the blocking gates', async () => {
-    mocks.orgFindUnique.mockResolvedValue(pharmacyOrg());
-    mocks.regulatoryProfileFindFirst.mockResolvedValue(VALID_PROFILE);
-    allGatesClaimedPassed();
-    allReadinessEvidence();
-    mocks.supplierCount.mockResolvedValue(0);
+  it('refuses to approve past unmet checks the operator has not confirmed', async () => {
+    bareOnboardingPharmacy();
     const command = pharmacyApprovalCommand('org_p', 'Approving early');
 
     const error = await run(command.action, command.payload).catch((thrown: Error) => thrown);
 
     expect(error).toBeInstanceOf(PlatformSecurityError);
-    expect((error as Error).message).toMatch(
-      /onboarding gates not passed \(PARTIES_AND_BALANCES\)/
-    );
+    expect((error as Error).message).toMatch(/Confirm the checks this pharmacy does not meet/);
+    expect((error as Error).message).toMatch(/Premises and licences \(PREMISES_AND_LICENCES\)/);
     expect(mocks.orgUpdate).not.toHaveBeenCalled();
     expect(platformDb.organizationLifecycleEvent.create).not.toHaveBeenCalled();
   });
 
-  it('refuses an operator without the lifecycle permission before any approval work', async () => {
-    vi.mocked(assertPlatformCapability).mockImplementationOnce(() => {
-      throw new PlatformSecurityError('You do not have permission for this action.', 403);
+  it('refuses a confirmation that names a different list of checks', async () => {
+    bareOnboardingPharmacy();
+    const command = pharmacyApprovalCommand('org_p', null, BARE_UNMET.slice(1));
+
+    await expect(run(command.action, command.payload)).rejects.toThrow(
+      /Confirm the checks this pharmacy does not meet/
+    );
+    expect(mocks.orgUpdate).not.toHaveBeenCalled();
+  });
+
+  it('approves a pharmacy with no profile, no pharmacist and no onboarding once the checks are confirmed', async () => {
+    bareOnboardingPharmacy();
+    const command = pharmacyApprovalCommand('org_p', 'Owner instruction', BARE_UNMET);
+
+    await expect(run(command.action, command.payload)).resolves.toBeDefined();
+
+    const update = mocks.orgUpdate.mock.calls[0]![0] as {
+      data: { platformApprovalUnmetChecks: Array<{ key: string; label: string }> };
+    };
+    expect(update.data).toMatchObject({ status: 'ACTIVE', platformApprovedById: 'op_1' });
+    expect(update.data.platformApprovalUnmetChecks.map((check) => check.key)).toEqual(BARE_UNMET);
+    expect(update.data.platformApprovalUnmetChecks[3]).toEqual({
+      key: 'PREMISES_AND_LICENCES',
+      label: 'Premises and licences (PREMISES_AND_LICENCES)',
     });
-    mocks.orgFindUnique.mockResolvedValue(pharmacyOrg());
-    const command = pharmacyApprovalCommand('org_p');
+    expect(platformDb.organizationLifecycleEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'ACTIVATED',
+        toStatus: 'ACTIVE',
+        metadata: { platformApproval: true, unmetChecks: BARE_UNMET },
+      }),
+    });
+    // The audit ledger lists the checks that were not met at that moment.
+    expect(mocks.auditCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'organization.pharmacy.approve',
+          after: expect.objectContaining({
+            approval: expect.objectContaining({
+              unmetChecks: expect.arrayContaining([
+                { key: 'PREMISES_AND_LICENCES', label: 'Premises and licences (PREMISES_AND_LICENCES)' },
+              ]),
+            }),
+          }),
+        }),
+      })
+    );
+  });
+
+  it('names a missing base activation gate among the unmet checks', async () => {
+    bareOnboardingPharmacy({ deployments: [] });
+    const command = pharmacyApprovalCommand('org_p', null, [
+      'production_deployment',
+      ...BARE_UNMET,
+    ]);
+
+    await expect(run(command.action, command.payload)).resolves.toBeDefined();
+    expect(mocks.orgUpdate).toHaveBeenCalledOnce();
+  });
+
+  it('approves an active pharmacy without changing its lifecycle state', async () => {
+    bareOnboardingPharmacy({ status: 'ACTIVE', activatedAt: new Date('2026-10-01') });
+    const command = pharmacyApprovalCommand('org_p', null, BARE_UNMET);
+
+    await expect(run(command.action, command.payload)).resolves.toBeDefined();
+    const update = mocks.orgUpdate.mock.calls[0]![0] as { data: Record<string, unknown> };
+    expect(update.data).not.toHaveProperty('status');
+    expect(update.data.platformApprovedAt).toBeInstanceOf(Date);
+    expect(platformDb.organizationLifecycleEvent.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['SUSPENDED', 'TERMINATED', 'PROSPECT'])('refuses to approve a %s pharmacy', async (status) => {
+    bareOnboardingPharmacy({ status });
+    const command = pharmacyApprovalCommand('org_p', null, BARE_UNMET);
+
+    await expect(run(command.action, command.payload)).rejects.toThrow(/cannot be approved/);
+    expect(mocks.orgUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a second approval and an organization that is not a pharmacy', async () => {
+    bareOnboardingPharmacy({ platformApprovedAt: new Date('2026-11-18') });
+    let command = pharmacyApprovalCommand('org_p', null, BARE_UNMET);
+    await expect(run(command.action, command.payload)).rejects.toThrow(/already approved/);
+
+    bareOnboardingPharmacy({ vertical: 'RESTAURANT' });
+    command = pharmacyApprovalCommand('org_p', null, BARE_UNMET);
+    await expect(run(command.action, command.payload)).rejects.toThrow(
+      /Only a pharmacy organization can be approved/
+    );
+    expect(mocks.orgUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['approve', () => pharmacyApprovalCommand('org_p')],
+    ['withdraw', () => pharmacyApprovalWithdrawCommand('org_p', 'Licence was never issued')],
+  ])(
+    'refuses to %s for an operator without the lifecycle permission, before any work',
+    async (_kind, build) => {
+      vi.mocked(assertPlatformCapability).mockImplementationOnce(() => {
+        throw new PlatformSecurityError('You do not have permission for this action.', 403);
+      });
+      mocks.orgFindUnique.mockResolvedValue(pharmacyOrg());
+      const command = build();
+
+      await expect(
+        executePlatformCommand(
+          { id: 'op_2', role: 'OPERATIONS' } as never,
+          command.action,
+          command.payload,
+          request
+        )
+      ).rejects.toMatchObject({ status: 403 });
+      expect(assertPlatformCapability).toHaveBeenCalledWith(
+        expect.objectContaining({ role: 'OPERATIONS' }),
+        'organizations:security:write'
+      );
+      expect(mocks.orgFindUnique).not.toHaveBeenCalled();
+      expect(mocks.orgUpdate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('withdraws an approval, restoring the checks, and audits who withdrew it and why', async () => {
+    const approvedAt = new Date('2026-11-18T09:00:00.000Z');
+    bareOnboardingPharmacy({
+      status: 'ACTIVE',
+      platformApprovedAt: approvedAt,
+      platformApprovedById: 'op_1',
+      platformApprovalNote: 'Owner instruction',
+      platformApprovalUnmetChecks: [{ key: 'PREMISES_AND_LICENCES', label: 'Premises' }],
+    });
+    const command = pharmacyApprovalWithdrawCommand('org_p', '  Licence was never issued  ');
+
+    await expect(run(command.action, command.payload)).resolves.toBeDefined();
+
+    expect(mocks.orgUpdate).toHaveBeenCalledWith({
+      where: { id: 'org_p' },
+      data: {
+        platformApprovedAt: null,
+        platformApprovedById: null,
+        platformApprovalNote: null,
+        platformApprovalUnmetChecks: expect.anything(),
+      },
+    });
+    expect(mocks.auditCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          actorPlatformUserId: 'op_1',
+          action: 'organization.pharmacy.approval.withdraw',
+          reason: 'Licence was never issued',
+          before: expect.objectContaining({
+            platformApproved: true,
+            approval: expect.objectContaining({
+              approvedAt: approvedAt.toISOString(),
+              note: 'Owner instruction',
+            }),
+          }),
+          after: expect.objectContaining({ platformApproved: false }),
+        }),
+      })
+    );
+  });
+
+  it('refuses to withdraw an approval that does not exist', async () => {
+    bareOnboardingPharmacy();
+    const command = pharmacyApprovalWithdrawCommand('org_p', 'Nothing to withdraw here');
+
+    await expect(run(command.action, command.payload)).rejects.toThrow(/no approval to withdraw/);
+    expect(mocks.orgUpdate).not.toHaveBeenCalled();
+  });
+
+  it('lets an approved pharmacy resume to ACTIVE without the activation checks', async () => {
+    bareOnboardingPharmacy({
+      status: 'SUSPENDED',
+      platformApprovedAt: new Date('2026-11-18T09:00:00.000Z'),
+    });
 
     await expect(
-      executePlatformCommand(
-        { id: 'op_2', role: 'OPERATIONS' } as never,
-        command.action,
-        command.payload,
-        request
-      )
-    ).rejects.toMatchObject({ status: 403 });
-    expect(assertPlatformCapability).toHaveBeenCalledWith(
-      expect.objectContaining({ role: 'OPERATIONS' }),
-      'organizations:security:write'
+      run('organization.transition', {
+        id: 'org_p',
+        status: 'ACTIVE',
+        reason: 'Payment received, resume trading',
+      })
+    ).resolves.toBeDefined();
+    expect(mocks.orgUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'ACTIVE' }) })
     );
-    expect(mocks.orgFindUnique).not.toHaveBeenCalled();
+  });
+
+  it('still refuses the same resume for a pharmacy that is not approved', async () => {
+    bareOnboardingPharmacy({ status: 'SUSPENDED', platformApprovedAt: null });
+
+    await expect(
+      run('organization.transition', {
+        id: 'org_p',
+        status: 'ACTIVE',
+        reason: 'Payment received, resume trading',
+      })
+    ).rejects.toThrow(/PROFILE_MISSING/);
     expect(mocks.orgUpdate).not.toHaveBeenCalled();
   });
 });

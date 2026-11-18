@@ -50,6 +50,14 @@ import { PAKISTAN_PROVINCES } from '@/lib/pharmacy/regulatory-profile-form';
 import { DEFAULT_EMERGENCY_SUPPLY_POLICY } from '@/lib/pharmacy/controlled-register';
 import { isDedicatedProvisioningConfigured } from '@/lib/platform/provisioning-config';
 import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
+import { hasPlatformApproval } from '@/lib/pharmacy/platform-approval';
+import { pharmacyApprovalUnmetChecks } from '@/lib/platform/pharmacy-approval-queue';
+import {
+  confirmsUnmetChecks,
+  PHARMACY_APPROVAL_NOTE_MAX_LENGTH,
+  PHARMACY_APPROVAL_WITHDRAW_ACTION,
+  PHARMACY_APPROVE_ACTION,
+} from '@/lib/platform/pharmacy-approval';
 import { evaluateHotelReadiness } from '@/lib/hotel/onboarding-checklist';
 import { defaultJourneyTemplateSeeds } from '@/lib/hotel/journey-templates';
 import { DEFAULT_HOTEL_MEAL_PLANS } from '@/lib/hotel/meal-plans';
@@ -129,6 +137,21 @@ const COMMAND_CAPABILITY: Record<string, string> = {
   operator: 'operators:write',
   setting: 'settings:write',
 };
+
+/** DEV-905: the lifecycle states a pharmacy can be approved in. */
+const PHARMACY_APPROVABLE_STATUSES: ReadonlySet<OrganizationStatus> = new Set<OrganizationStatus>([
+  'ONBOARDING',
+  'ACTIVE',
+  'GRACE',
+]);
+
+/** DEV-905: the organization columns a withdrawn approval clears. */
+const PLATFORM_APPROVAL_CLEARED = {
+  platformApprovedAt: null,
+  platformApprovedById: null,
+  platformApprovalNote: null,
+  platformApprovalUnmetChecks: Prisma.DbNull,
+} as const;
 
 const TRANSITIONS: Record<OrganizationStatus, readonly OrganizationStatus[]> = {
   PROSPECT: ['ONBOARDING', 'TERMINATED'],
@@ -257,6 +280,10 @@ function sensitiveCommand(action: string): boolean {
       'jurisdiction.rules.publish',
       'organization.pharmacy.placeholder.apply',
       'organization.pharmacy.placeholder.lock',
+      // DEV-905: approving a pharmacy past its checks, or withdrawing that approval, is
+      // a lifecycle decision: the same permission as organization.transition.
+      PHARMACY_APPROVE_ACTION,
+      PHARMACY_APPROVAL_WITHDRAW_ACTION,
     ].includes(action) ||
     action === 'organization.identity' ||
     action.startsWith('organization.identity.') ||
@@ -460,6 +487,10 @@ async function assertActivationReady(db: PrismaClient, organizationId: string) {
     },
   });
   if (!organization) throw new PlatformSecurityError('Organization not found.', 400);
+  // DEV-905 (owner decision, 18 Nov): a pharmacy a super admin approved by hand needs
+  // nothing more to go live. Every other organization, and a pharmacy that is not
+  // approved, meets every check below exactly as before.
+  if (organization.vertical === 'PHARMACY' && hasPlatformApproval(organization)) return;
   // WHA-1180 — the same unmet conditions the console renders as a checklist.
   // The thrown message is rebuilt from these gates and is byte-identical to the
   // sentence this preflight has always produced.
@@ -1905,7 +1936,10 @@ async function runCommand(
         },
         select: { id: true, effectiveFrom: true },
       });
-      if (openPlaceholders.length === 0 && organization.status !== 'ACTIVE') {
+      // DEV-905: the lock stops the pharmacy, so it also withdraws a platform approval
+      // that would otherwise let it keep running without a regulatory profile.
+      const approvalWithdrawn = Boolean(organization.platformApprovedAt);
+      if (openPlaceholders.length === 0 && organization.status !== 'ACTIVE' && !approvalWithdrawn) {
         // Idempotent re-lock: nothing open and nothing to transition.
         return {
           targetType: 'Organization',
@@ -1926,10 +1960,15 @@ async function runCommand(
           },
         });
       }
-      if (organization.status === 'ACTIVE') {
+      if (organization.status === 'ACTIVE' || approvalWithdrawn) {
         await db.organization.update({
           where: { id: input.organizationId },
-          data: { status: 'ONBOARDING', activatedAt: null },
+          data: {
+            ...(organization.status === 'ACTIVE'
+              ? { status: 'ONBOARDING', activatedAt: null }
+              : {}),
+            ...(approvalWithdrawn ? PLATFORM_APPROVAL_CLEARED : {}),
+          },
         });
       }
       await db.organizationLifecycleEvent.create({
@@ -1952,8 +1991,128 @@ async function runCommand(
           placeholder: true,
           locked: true,
           closed: openPlaceholders.length,
+          ...(approvalWithdrawn ? { platformApprovalWithdrawn: true } : {}),
           reason: input.reason,
         },
+      };
+    }
+    case PHARMACY_APPROVE_ACTION: {
+      // DEV-905 (owner decision, 18 Nov): a super admin approves a pharmacy by hand,
+      // whatever its state. The checks it does not meet are recomputed here and must be
+      // confirmed by name; they are recorded with the approval, never enforced by it.
+      const input = z
+        .object({
+          id,
+          reason: sensitiveReason,
+          note: z.string().trim().max(PHARMACY_APPROVAL_NOTE_MAX_LENGTH).nullish(),
+          confirmedUnmetChecks: z.array(z.string().min(1).max(64)).max(64).default([]),
+        })
+        .parse(payload);
+      await db.$queryRawUnsafe('SELECT id FROM organizations WHERE id = $1 FOR UPDATE', input.id);
+      const before = await db.organization.findUnique({ where: { id: input.id } });
+      if (!before) throw new PlatformSecurityError('Organization not found.', 400);
+      if (before.vertical !== 'PHARMACY')
+        throw new PlatformSecurityError('Only a pharmacy organization can be approved.', 400);
+      if (before.platformApprovedAt)
+        throw new PlatformSecurityError('This pharmacy is already approved.', 400);
+      if (!PHARMACY_APPROVABLE_STATUSES.has(before.status))
+        throw new PlatformSecurityError(
+          `A ${before.status} pharmacy cannot be approved. Resume it first, or approve it while it is onboarding or active.`,
+          400
+        );
+      const now = new Date();
+      const unmet = (await pharmacyApprovalUnmetChecks(db, input.id, now)).map(
+        ({ key, label }) => ({ key, label })
+      );
+      if (
+        !confirmsUnmetChecks(
+          unmet.map((check) => check.key),
+          input.confirmedUnmetChecks
+        )
+      ) {
+        throw new PlatformSecurityError(
+          unmet.length
+            ? `Confirm the checks this pharmacy does not meet before approving it: ${unmet
+                .map((check) => check.label)
+                .join('; ')}.`
+            : 'Every check now passes. Reload the page and approve again.',
+          400
+        );
+      }
+      const note = input.note?.trim() || null;
+      const promote = before.status === 'ONBOARDING';
+      const organization = await db.organization.update({
+        where: { id: input.id },
+        data: {
+          platformApprovedAt: now,
+          platformApprovedById: actor.id,
+          platformApprovalNote: note,
+          platformApprovalUnmetChecks: toJson(unmet),
+          ...(promote
+            ? { status: 'ACTIVE', activatedAt: before.activatedAt ?? now, suspendedAt: null }
+            : {}),
+        },
+      });
+      if (promote) {
+        await db.organizationLifecycleEvent.create({
+          data: {
+            organizationId: input.id,
+            action: lifecycleAction(before.status, 'ACTIVE'),
+            fromStatus: before.status,
+            toStatus: 'ACTIVE',
+            reason: input.reason,
+            actorId: actor.id,
+            metadata: toJson({
+              platformApproval: true,
+              unmetChecks: unmet.map((check) => check.key),
+            }),
+          },
+        });
+      }
+      const approval = {
+        approvedAt: now,
+        approvedById: actor.id,
+        note,
+        unmetChecks: unmet,
+      };
+      return {
+        targetType: 'Organization',
+        targetId: input.id,
+        organizationId: input.id,
+        auditBefore: { status: before.status, platformApproved: false },
+        data: organization,
+        audit: { status: organization.status, platformApproved: true, approval },
+      };
+    }
+    case PHARMACY_APPROVAL_WITHDRAW_ACTION: {
+      // DEV-905: withdrawing the approval restores every normal check. The lifecycle
+      // state is left as it is; the operator suspends separately if that is wanted.
+      const input = z.object({ id, reason: sensitiveReason }).parse(payload);
+      await db.$queryRawUnsafe('SELECT id FROM organizations WHERE id = $1 FOR UPDATE', input.id);
+      const before = await db.organization.findUnique({ where: { id: input.id } });
+      if (!before) throw new PlatformSecurityError('Organization not found.', 400);
+      if (before.vertical !== 'PHARMACY' || !before.platformApprovedAt)
+        throw new PlatformSecurityError('This pharmacy has no approval to withdraw.', 400);
+      const organization = await db.organization.update({
+        where: { id: input.id },
+        data: PLATFORM_APPROVAL_CLEARED,
+      });
+      return {
+        targetType: 'Organization',
+        targetId: input.id,
+        organizationId: input.id,
+        auditBefore: {
+          status: before.status,
+          platformApproved: true,
+          approval: {
+            approvedAt: before.platformApprovedAt,
+            approvedById: before.platformApprovedById,
+            note: before.platformApprovalNote,
+            unmetChecks: before.platformApprovalUnmetChecks,
+          },
+        },
+        data: organization,
+        audit: { status: organization.status, platformApproved: false },
       };
     }
     case 'organization.create': {
