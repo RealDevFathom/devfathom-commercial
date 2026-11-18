@@ -1,6 +1,7 @@
 import { afterTenantTransaction } from '@/lib/side-effects/scope';
 import { clientIp } from '@/lib/rate-limit';
 import { type ScopedDb, withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
+import { auditActorBranches } from '@/server/audit-actor-branches';
 
 /**
  * ============================================================================
@@ -350,6 +351,47 @@ export interface AuditRowInput {
   errorCode?: string | null;
   errorMessage?: string | null;
   durationMs?: number | null;
+  /**
+   * DEV-937: set by the tRPC recorder on a refused request that carries a branch.
+   * The writer keeps that branch only when the person really works there.
+   */
+  verifyRefusedBranch?: boolean;
+}
+
+/**
+ * DEV-937: a refused request's branch tag is only what the request named (or
+ * what a handler noted before refusing it), so a person could plant entries in
+ * another branch's log by naming it. The tag stays when the person really works
+ * at that pharmacy branch (an active assignment, or the owner's access to all).
+ * Otherwise the named branch is kept as `requestedBranchId`, for the owner, and
+ * the entry is placed at the branches the person does work at
+ * (`actorBranchIds`), so their own managers see the refusal and the named
+ * branch's do not. A branch that is not one of this workspace's pharmacy
+ * branches is left as it was: no branch-limited reader can match it.
+ */
+async function refusedBranchMetadata(
+  tenantDb: ScopedDb,
+  row: AuditRowInput
+): Promise<Record<string, unknown>> {
+  const metadata = {
+    ...((row.metadata && typeof row.metadata === 'object' ? row.metadata : {}) as Record<
+      string,
+      unknown
+    >),
+  };
+  const branchId = branchIdFrom(metadata.branchId);
+  if (!branchId || !row.organizationId || !tenantDb.pharmacyBranch) return metadata;
+  const branch = await tenantDb.pharmacyBranch.findFirst({
+    where: { id: branchId, organizationId: row.organizationId },
+    select: { id: true },
+  });
+  if (!branch) return metadata;
+  const actor = row.actorId
+    ? await auditActorBranches(tenantDb, row.organizationId, row.actorId)
+    : { all: false, branchIds: [] };
+  if (actor.all || actor.branchIds.includes(branchId)) return metadata;
+  delete metadata.branchId;
+  return { ...metadata, requestedBranchId: branchId, actorBranchIds: actor.branchIds };
 }
 
 /**
@@ -417,7 +459,11 @@ export function recordAudit(row: AuditRowInput, db?: ScopedDb): void | Promise<v
         changes: (row.changes ?? undefined) as never,
         result: (row.result ?? undefined) as never,
         metadata: {
-          ...((row.metadata && typeof row.metadata === 'object' ? row.metadata : {}) as object),
+          ...((row.verifyRefusedBranch && row.outcome === 'FAILURE'
+            ? await refusedBranchMetadata(tenantDb, row)
+            : row.metadata && typeof row.metadata === 'object'
+              ? row.metadata
+              : {}) as object),
           ...(placeholder ? { placeholder: true } : {}),
         } as never,
         ip: row.ip ?? null,
@@ -560,6 +606,7 @@ export function recordTrpcAudit(args: {
       errorCode: code,
       errorMessage: message,
       durationMs: args.durationMs ?? null,
+      ...(args.outcome === 'FAILURE' && branchId ? { verifyRefusedBranch: true } : {}),
     },
     args.ctx.audit?.db
   );

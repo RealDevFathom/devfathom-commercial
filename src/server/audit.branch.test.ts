@@ -68,3 +68,133 @@ describe('recordTrpcAudit branch', () => {
     expect(data.metadata).toEqual({});
   });
 });
+
+// DEV-937: a refused request that names another branch must not plant an entry
+// in that branch's log. The branch stays only when the person really works there.
+describe('recordTrpcAudit branch of a refused request', () => {
+  const BRANCHES = ['branch_north', 'branch_south'];
+  const PEOPLE: Record<string, { owner: boolean; branches: string[] }> = {
+    north_cashier: { owner: false, branches: ['branch_north'] },
+    owner_1: { owner: true, branches: [] },
+  };
+
+  async function record(args: {
+    actorId: string | null;
+    input: unknown;
+    outcome: 'SUCCESS' | 'FAILURE';
+    metadata?: Record<string, unknown>;
+  }) {
+    const create = vi.fn(async () => ({ id: 'audit_1' }));
+    const db = {
+      auditLog: { create },
+      pharmacyBranch: {
+        findFirst: vi.fn(async ({ where }: { where: { id: string } }) =>
+          BRANCHES.includes(where.id) ? { id: where.id } : null
+        ),
+      },
+      user: {
+        findFirst: vi.fn(async ({ where }: { where: { id: string } }) => {
+          const person = PEOPLE[where.id];
+          if (!person) return null;
+          return {
+            status: 'ACTIVE',
+            role: person.owner ? 'ADMIN' : 'EMPLOYEE',
+            organizationRole: person.owner
+              ? { key: 'owner', isSystem: true, permissions: [] }
+              : { key: 'cashier', isSystem: true, permissions: [] },
+            permissionOverrides: [],
+          };
+        }),
+      },
+      pharmacyBranchAssignment: {
+        findMany: vi.fn(async ({ where }: { where: { userId: string } }) =>
+          (PEOPLE[where.userId]?.branches ?? []).map((branchId) => ({ branchId }))
+        ),
+      },
+    } as unknown as ScopedDb;
+    await recordTrpcAudit({
+      ctx: {
+        session: {
+          user: { ...(args.actorId ? { id: args.actorId } : {}), organizationId: 'org_p' },
+        },
+        audit: { detail: args.metadata ? { metadata: args.metadata } : {}, db },
+      },
+      path: 'pharmacySales.returnAndRefund',
+      type: 'mutation',
+      input: args.input,
+      outcome: args.outcome,
+      error: args.outcome === 'FAILURE' ? new Error('Branch is outside your scope.') : undefined,
+    });
+    return (create.mock.calls[0] as unknown as [{ data: Record<string, unknown> }])[0].data;
+  }
+
+  it('places a refusal naming another branch at the branch the person works at', async () => {
+    const data = await record({
+      actorId: 'north_cashier',
+      input: { branchId: 'branch_south', saleId: 'sale_1' },
+      outcome: 'FAILURE',
+    });
+    expect(data.outcome).toBe('FAILURE');
+    expect(data.metadata).toEqual({
+      requestedBranchId: 'branch_south',
+      actorBranchIds: ['branch_north'],
+    });
+    expect(data.input).toMatchObject({ branchId: 'branch_south' });
+  });
+
+  it('does not trust a branch a handler noted before refusing', async () => {
+    const data = await record({
+      actorId: 'north_cashier',
+      input: { saleId: 'sale_1' },
+      outcome: 'FAILURE',
+      metadata: { branchId: 'branch_south', fileName: 'stock.csv' },
+    });
+    expect(data.metadata).toEqual({
+      fileName: 'stock.csv',
+      requestedBranchId: 'branch_south',
+      actorBranchIds: ['branch_north'],
+    });
+  });
+
+  it('keeps a refusal at the branch the person works at', async () => {
+    const data = await record({
+      actorId: 'north_cashier',
+      input: { branchId: 'branch_north' },
+      outcome: 'FAILURE',
+    });
+    expect(data.metadata).toEqual({ branchId: 'branch_north' });
+  });
+
+  it("keeps the owner's refusal at the branch named", async () => {
+    const data = await record({
+      actorId: 'owner_1',
+      input: { branchId: 'branch_south' },
+      outcome: 'FAILURE',
+    });
+    expect(data.metadata).toEqual({ branchId: 'branch_south' });
+  });
+
+  it('places a refusal with no person at no branch', async () => {
+    const data = await record({
+      actorId: null,
+      input: { branchId: 'branch_south' },
+      outcome: 'FAILURE',
+    });
+    expect(data.metadata).toEqual({ requestedBranchId: 'branch_south', actorBranchIds: [] });
+  });
+
+  it('leaves successes and branches outside the pharmacy as they were', async () => {
+    const success = await record({
+      actorId: 'north_cashier',
+      input: { branchId: 'branch_south' },
+      outcome: 'SUCCESS',
+    });
+    expect(success.metadata).toEqual({ branchId: 'branch_south' });
+    const other = await record({
+      actorId: 'north_cashier',
+      input: { branchId: 'restaurant_branch_1' },
+      outcome: 'FAILURE',
+    });
+    expect(other.metadata).toEqual({ branchId: 'restaurant_branch_1' });
+  });
+});
