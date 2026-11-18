@@ -185,7 +185,7 @@ describe('an approved pharmacy is not refused by the standing gates', () => {
   it('ignores an approval stamped on an organization that is not a pharmacy', async () => {
     const db = storedDb(null, {
       status: 'ONBOARDING',
-      vertical: 'RESTAURANT',
+      vertical: 'HOSPITALITY',
       platformApprovedAt: APPROVED_AT,
     });
     await expect(
