@@ -64,6 +64,7 @@ const body = migration.replace(/^BEGIN;$/m, '').replace(/^COMMIT;$/m, '');
         DROP INDEX IF EXISTS pharmacy_sales_branch_receipt_number_key;
         DROP INDEX IF EXISTS pharmacy_sales_legacy_receipt_number_idx;
         ALTER TABLE pharmacy_sales DROP COLUMN IF EXISTS "receiptNumberBranchUnique";
+        ALTER TABLE pharmacy_sales DROP COLUMN IF EXISTS "offlineReceiptReference";
         DROP TABLE IF EXISTS pharmacy_branch_receipt_sequences;`);
 
         // Per-device numbering already printed "Receipt 1" twice in this branch.

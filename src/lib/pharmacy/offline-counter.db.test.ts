@@ -715,6 +715,66 @@ describeIfDatabase('PH-OFF OFF-01 — pre-allocated receipt leases (§8A invaria
 // ── DEV-637 — one receipt sequence per branch ───────────────────────────────
 
 describeIfDatabase('DEV-637 — receipt numbers are unique per branch', () => {
+  it('gives 60 concurrent draws over five connections distinct numbers, branch by branch', async () => {
+    const { Client } = await import('pg');
+    const first = ownBranch('connections-one');
+    const second = ownBranch('connections-two');
+    await inOrg(ORG_A, async (db) => {
+      await ensureBranch(db, ORG_A, first);
+      await ensureBranch(db, ORG_A, second);
+    });
+    const clients = Array.from(
+      { length: 5 },
+      () => new Client({ connectionString: TEST_DATABASE_URL })
+    );
+    await Promise.all(clients.map((client) => client.connect()));
+    try {
+      // The runtime role: row-level security applies, nothing is bypassed.
+      const role = await clients[0]!.query<{ rolsuper: boolean; rolbypassrls: boolean }>(
+        'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user'
+      );
+      expect(role.rows[0]).toEqual({ rolsuper: false, rolbypassrls: false });
+
+      const draw = async (client: InstanceType<typeof Client>, branchId: string) => {
+        await client.query('BEGIN');
+        try {
+          await client.query(`SELECT set_config('app.current_organization_id', $1, true)`, [ORG_A]);
+          const row = await client.query<{ n: number }>(
+            'SELECT pharmacy_allocate_branch_receipt_numbers($1, $2, 1) AS n',
+            [ORG_A, branchId]
+          );
+          // Hold the row lock a moment so the other connections queue behind it.
+          await client.query('SELECT pg_sleep(0.002)');
+          await client.query('COMMIT');
+          return row.rows[0]!.n;
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        }
+      };
+      const drawn = await Promise.all(
+        clients.map(async (client, index) => {
+          const numbers = { first: [] as number[], second: [] as number[] };
+          for (let i = 0; i < 12; i += 1) {
+            numbers.first.push(await draw(client, first));
+            if ((i + index) % 3 === 0) numbers.second.push(await draw(client, second));
+          }
+          return numbers;
+        })
+      );
+      const firstNumbers = drawn.flatMap((d) => d.first).sort((a, b) => a - b);
+      const secondNumbers = drawn.flatMap((d) => d.second).sort((a, b) => a - b);
+      expect(firstNumbers).toHaveLength(60);
+      expect(new Set(firstNumbers).size).toBe(60);
+      expect(firstNumbers).toEqual(Array.from({ length: 60 }, (_, i) => i + 1));
+      // A second branch keeps its own sequence, starting at 1, unaffected by the first.
+      expect(new Set(secondNumbers).size).toBe(secondNumbers.length);
+      expect(secondNumbers).toEqual(Array.from({ length: secondNumbers.length }, (_, i) => i + 1));
+    } finally {
+      await Promise.all(clients.map((client) => client.end()));
+    }
+  });
+
   it('hands concurrent sales and leases from several counters distinct, gap-free numbers', async () => {
     const fixture = await scenario(ORG_A, ownBranch('concurrent'), 'concurrent');
     const counters = [fixture.deviceId];
@@ -1306,11 +1366,19 @@ describeIfDatabase('leased receipt settlement', () => {
     await retirePharmacyRegulatoryRules(withPlatformDb, ruleSetIds);
   });
 
-  async function setup() {
+  async function setup(
+    leaseFor?: (
+      db: ScopedDb,
+      scope: ReturnType<typeof scopeOf>,
+      deviceId: string
+    ) => Promise<{ id: string; blockStart: number }>
+  ) {
     const fixture = await scenario(ORG_A, BRANCH_A, 'leased-settlement');
     const scope = scopeOf(fixture);
     const lease = await inOrg(ORG_A, (db) =>
-      deps.leases.reserveReceiptNumberBlock(db, scope, { deviceId: fixture.deviceId, size: 2 })
+      leaseFor
+        ? leaseFor(db, scope, fixture.deviceId)
+        : deps.leases.reserveReceiptNumberBlock(db, scope, { deviceId: fixture.deviceId, size: 2 })
     );
     const originalSaleAt = new Date().toISOString();
     const signed = await inOrg(ORG_A, (db) =>
@@ -1406,6 +1474,95 @@ describeIfDatabase('leased receipt settlement', () => {
         ),
     };
   }
+
+  it('DEV-637 records an offline sale whose old-range number repeats a branch receipt, under a fresh number', async () => {
+    // A block leased before branch-wide numbering came from the counter's own range, so a
+    // number it printed can already belong to another counter's receipt in the branch.
+    const f = await setup(async (db, scope, deviceId) => {
+      const taken = await deps.receipts.allocateBranchReceiptNumbers(db, scope, 4);
+      await db.pharmacySale.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: BRANCH_A,
+          status: 'COMPLETED',
+          createdByUserId: ACTOR,
+          receiptNumber: taken,
+          receiptDeviceId: 'counter-other-browser',
+          businessDate: new Date('2026-09-02T00:00:00.000Z'),
+          completedAt: NOW,
+        },
+      });
+      return db.pharmacyReceiptNumberLease.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: BRANCH_A,
+          deviceId,
+          blockStart: taken,
+          blockEnd: taken + 1,
+          nextNumber: taken,
+          issuedToActorId: ACTOR,
+        },
+      });
+    });
+    const printed = f.lease.blockStart;
+
+    const result = await f.apply();
+    expect(result).toMatchObject({ settled: true, offlineReference: printed, replayed: false });
+    const issued = (result as { receiptNumber: number }).receiptNumber;
+    expect(issued).toBeGreaterThan(printed + 3);
+
+    await inOrg(ORG_A, async (db) => {
+      const sale = await db.pharmacySale.findFirstOrThrow({ where: { id: f.input.saleId } });
+      expect(sale).toMatchObject({
+        status: 'COMPLETED',
+        receiptNumber: issued,
+        offlineReceiptReference: printed,
+        receiptNumberBranchUnique: true,
+      });
+      // The printed number stays with the receipt it already belonged to; no duplicate.
+      expect(
+        await db.pharmacySale.count({ where: { branchId: BRANCH_A, receiptNumber: printed } })
+      ).toBe(1);
+      expect(
+        await db.pharmacySale.count({ where: { branchId: BRANCH_A, receiptNumber: issued } })
+      ).toBe(1);
+      // The printed number is used up on the lease, never handed out again.
+      const [lease] = await deps.leases.listReceiptLeases(
+        db,
+        scopeOf(f.fixture),
+        f.fixture.deviceId
+      );
+      expect(lease!.nextNumber).toBe(printed + 1);
+      // The audit entry (the issued receipt's snapshot) names both numbers.
+      const completed = await db.pharmacySaleEvent.findFirstOrThrow({
+        where: { saleId: f.input.saleId, kind: 'COMPLETED' },
+      });
+      expect(completed.payload).toMatchObject({ receiptNumber: issued, offlineReference: printed });
+      // A reprint shows the number the customer holds on paper.
+      const { readCounterReceipt } = await import('./counter');
+      const receipt = await readCounterReceipt(db, scopeOf(f.fixture), f.input.saleId, {
+        name: 'Branch',
+        currency: 'PKR',
+      });
+      expect(receipt).toMatchObject({ receiptNumber: issued, offlineReference: printed });
+      // The reference is fixed once issued.
+      const rewrite = await db.pharmacySale
+        .update({
+          where: { organizationId_id: { organizationId: ORG_A, id: f.input.saleId } },
+          data: { offlineReceiptReference: printed + 1 },
+        })
+        .then(() => 'ACCEPTED')
+        .catch((error: Error) => error.message);
+      expect(rewrite).toContain('ISSUED_RECEIPT_IMMUTABLE');
+    });
+
+    // A retry of the same command answers with the same issued number.
+    await expect(f.apply()).resolves.toMatchObject({
+      receiptNumber: issued,
+      offlineReference: printed,
+      replayed: true,
+    });
+  });
 
   it('serializes identical retries into one tender and immutable receipt', async () => {
     const f = await setup();

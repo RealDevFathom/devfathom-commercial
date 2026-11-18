@@ -1350,6 +1350,10 @@ model PharmacySale {
   /// DEV-637: set by the database when a receipt is numbered from the branch-wide sequence;
   /// those numbers are unique per branch. Receipts numbered before that keep false.
   receiptNumberBranchUnique Boolean                      @default(false)
+  /// DEV-637: the number an offline counter printed, kept when replay had to give the sale a
+  /// fresh branch number because a block leased before branch-wide numbering repeated an
+  /// existing receipt. Shown on reprints; fixed once issued.
+  offlineReceiptReference   Int?
   businessDate              DateTime?                    @db.Date
   customerId                String?
   createdAt                 DateTime                     @default(now())

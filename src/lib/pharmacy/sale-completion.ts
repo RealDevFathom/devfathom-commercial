@@ -8,7 +8,7 @@ import { PharmacyReceiptIdentityError, validateReceiptIdentity } from './receipt
 import { assertRxSaleAllowed } from './rx-sale-gate';
 import { readPharmacyReceiptTaxIdentity } from './receipt-print';
 import { sindhCashMemoSelected } from './counter-receipt';
-import { allocateBranchReceiptNumbers } from './branch-receipt-sequence';
+import { allocateBranchReceiptNumbers, branchReceiptNumberTaken } from './branch-receipt-sequence';
 import {
   assertRxLinesPrescribed,
   recordCompletedPrescriptionReference,
@@ -65,8 +65,19 @@ export async function completePaidPharmacySale(
   const checkedBatches = await assertSaleBatchesSellable(db, scope, sale.id);
   // DEV-637: one sequence per branch, whichever counter completes the sale, so a branch
   // never holds two receipts with the same number. Leased (offline) blocks are carved out
-  // of the same sequence and never return to it.
-  const receiptNumber = leasedReceiptNumber ?? (await allocateBranchReceiptNumbers(db, scope, 1));
+  // of the same sequence and never return to it. A number printed from a block leased
+  // before that (the old per-device range) can repeat a branch receipt: the sale is still
+  // recorded, under a fresh branch number, and keeps the printed number as its reference.
+  let receiptNumber: number;
+  let offlineReceiptReference: number | null = null;
+  if (leasedReceiptNumber === null) {
+    receiptNumber = await allocateBranchReceiptNumbers(db, scope, 1);
+  } else if (await branchReceiptNumberTaken(db, scope, leasedReceiptNumber)) {
+    offlineReceiptReference = leasedReceiptNumber;
+    receiptNumber = await allocateBranchReceiptNumbers(db, scope, 1);
+  } else {
+    receiptNumber = leasedReceiptNumber;
+  }
   await db.pharmacySale.update({
     where: { organizationId_id: { organizationId: scope.organizationId, id: sale.id } },
     data: {
@@ -75,6 +86,7 @@ export async function completePaidPharmacySale(
       receiptNumber,
       receiptDeviceId: input.deviceId,
       businessDate: input.businessDate,
+      offlineReceiptReference,
     },
   });
   for (const line of sale.lines) {
@@ -140,6 +152,8 @@ export async function completePaidPharmacySale(
       cashMemoIdentity,
       saleId: sale.id,
       receiptNumber,
+      // DEV-637: the number printed offline, when replay had to renumber the sale.
+      ...(offlineReceiptReference !== null ? { offlineReference: offlineReceiptReference } : {}),
       deviceId: input.deviceId,
       businessDate: input.businessDate.toISOString().slice(0, 10),
       issuedAt: issuedAt.toISOString(),
@@ -183,6 +197,7 @@ export async function completePaidPharmacySale(
       receiptDeviceId: input.deviceId,
       businessDate: input.businessDate,
       completedAt: issuedAt,
+      offlineReceiptReference,
     }
   );
   await db.pharmacySaleEvent.create({

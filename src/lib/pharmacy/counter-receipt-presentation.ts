@@ -13,6 +13,7 @@ import {
   localizeReceiptNumber,
   receiptTitle,
   receiptCashReceived,
+  receiptOfflineReferenceLine,
   receiptPromotionLabel,
   type CounterReceipt,
   type CounterReceiptLine,
@@ -145,6 +146,7 @@ export function buildCounterReceiptPreview(
   const strn = identity?.strn?.trim();
   // #708: Sindh branches print the r.18 cash memo; every other branch is unchanged.
   const memo = counterReceiptCashMemo(receipt, identity, locale);
+  const offlineReference = receiptOfflineReferenceLine(receipt, locale);
   return buildReceiptPreview(
     { ...DEFAULT_RECEIPT_LAYOUT, paperWidth, footerText: reprint ? strings.reprint : '' },
     {
@@ -154,7 +156,7 @@ export function buildCounterReceiptPreview(
           ? receiptTitle(receipt, locale)
           : String(receipt.receiptNumber),
       invoiceLabel: memo ? memo.title : strings.invoice,
-      issuedAt: `${memo ? `${memo.licence.join('\n')}\n${memo.buyer}\n` : ''}${strings.date}: ${formatReceiptIssuedAt(receipt.completedAt)}${receipt.counterLabel ? `\n${receipt.counterLabel}` : ''}${receipt.cashierName ? `\n${strings.cashier}: ${receipt.cashierName}` : ''}`,
+      issuedAt: `${memo ? `${memo.licence.join('\n')}\n${memo.buyer}\n` : ''}${strings.date}: ${formatReceiptIssuedAt(receipt.completedAt)}${receipt.counterLabel ? `\n${receipt.counterLabel}` : ''}${offlineReference ? `\n${offlineReference}` : ''}${receipt.cashierName ? `\n${strings.cashier}: ${receipt.cashierName}` : ''}`,
       lines: receipt.lines.map((line) => {
         const presentation = counterLinePresentation(line, locale);
         const promotion = receiptPromotionLabel(line, locale);

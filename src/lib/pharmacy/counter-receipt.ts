@@ -92,8 +92,13 @@ export type CounterReceipt = {
   saleId: string;
   /** Null until a tender settles the bill; never minted by a render. */
   receiptNumber: number | null;
-  /** Names the counter that issued the number; numbers restart per counter. */
+  /** Names the counter that issued the receipt (DEV-637: numbers are unique per branch). */
   counterLabel?: string | null;
+  /**
+   * DEV-637: the number an offline counter printed, when replay gave the sale a fresh
+   * branch number because a block leased before branch-wide numbering repeated one.
+   */
+  offlineReference?: number | null;
   branchName: string;
   businessDate: string | null;
   completedAt: string | null;
@@ -137,6 +142,7 @@ type Strings = {
   tenders: string;
   invoice: string;
   cashier: string;
+  offlineReference: string;
   licence: string;
   phone: string;
   cashMemo: string;
@@ -182,6 +188,7 @@ export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Stri
     tenders: 'Payments',
     invoice: 'Receipt',
     cashier: 'Cashier',
+    offlineReference: 'Printed offline as receipt',
     licence: 'Drug-sale licence',
     phone: 'Phone',
     cashMemo: 'Sindh cash memo',
@@ -231,6 +238,7 @@ export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Stri
     tenders: 'ادائیگیاں',
     invoice: 'رسید',
     cashier: 'کیشیئر',
+    offlineReference: 'آف لائن چھپی رسید نمبر',
     licence: 'ادویات فروشی لائسنس',
     phone: 'فون',
     cashMemo: 'سندھ کیش میمو',
@@ -300,6 +308,16 @@ export function localizeReceiptNumber(value: string, locale: CounterReceiptLocal
   return value.replace(/[0-9.]/g, (char) =>
     char === '.' ? URDU_DECIMAL_SEPARATOR : URDU_DIGITS[Number(char)]!
   );
+}
+
+/** DEV-637: "Printed offline as receipt 12" when replay renumbered the sale, else null. */
+export function receiptOfflineReferenceLine(
+  receipt: Pick<CounterReceipt, 'offlineReference'>,
+  locale: CounterReceiptLocale
+): string | null {
+  if (!receipt.offlineReference) return null;
+  const number = localizeReceiptNumber(String(receipt.offlineReference), locale);
+  return `${COUNTER_RECEIPT_STRINGS[locale].offlineReference} ${number}`;
 }
 
 /** ISO timestamp reduced to the date a receipt prints. */

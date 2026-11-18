@@ -10,6 +10,10 @@
 --     (set by trigger, never by the caller) and a partial unique index makes those
 --     numbers unique per branch. A newly numbered receipt is also refused if an older
 --     receipt of the branch already carries that number.
+--   * an offline sale replayed from a block leased BEFORE this migration (the old per-device
+--     range) whose printed number already belongs to a receipt of the branch is still
+--     accepted: it gets a fresh branch number and keeps the printed number in
+--     pharmacy_sales.offlineReceiptReference, fixed once issued.
 -- Receipts issued before this migration keep their numbers and are never renumbered.
 -- Where older data already repeats a number within a branch it stays as it is; a branch's
 -- sequence starts above the highest number the branch has issued, leased or reserved.
@@ -62,6 +66,24 @@ CREATE POLICY tenant_branch_isolation ON "pharmacy_branch_receipt_sequences"
 -- carry the branch-wide guarantee.
 ALTER TABLE "pharmacy_sales"
   ADD COLUMN IF NOT EXISTS "receiptNumberBranchUnique" BOOLEAN NOT NULL DEFAULT false;
+-- The number an offline counter printed when the sale had to be renumbered on replay.
+ALTER TABLE "pharmacy_sales"
+  ADD COLUMN IF NOT EXISTS "offlineReceiptReference" INTEGER;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'pharmacy_sales_offline_receipt_reference_check'
+  ) THEN
+    ALTER TABLE "pharmacy_sales"
+      ADD CONSTRAINT "pharmacy_sales_offline_receipt_reference_check" CHECK (
+        "offlineReceiptReference" IS NULL OR (
+          "offlineReceiptReference" > 0
+          AND "receiptNumber" IS NOT NULL
+          AND "offlineReceiptReference" <> "receiptNumber"
+        )
+      );
+  END IF;
+END $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS "pharmacy_sales_branch_receipt_number_key"
   ON "pharmacy_sales"("organizationId", "branchId", "receiptNumber")
@@ -77,6 +99,9 @@ CREATE OR REPLACE FUNCTION pharmacy_mark_branch_receipt_number() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
   IF TG_OP = 'UPDATE' AND OLD."receiptNumber" IS NOT NULL THEN
+    IF NEW."offlineReceiptReference" IS DISTINCT FROM OLD."offlineReceiptReference" THEN
+      RAISE EXCEPTION 'ISSUED_RECEIPT_IMMUTABLE' USING ERRCODE = '55000';
+    END IF;
     NEW."receiptNumberBranchUnique" := OLD."receiptNumberBranchUnique";
     RETURN NEW;
   END IF;
