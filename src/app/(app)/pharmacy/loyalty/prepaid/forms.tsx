@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { amountInputError, amountInputToMinor } from '@/lib/money-input';
 import {
   savePrepaid,
   recordPrepaid,
@@ -29,19 +30,39 @@ export function TierSettingsForm({
     }))
   );
   const [state, action, pending] = useActionState(savePrepaid, initial);
+  const [amountError, setAmountError] = useState('');
   const update = (index: number, key: 'name' | 'amount' | 'percent', value: string) =>
     setRows((old) => old.map((row, i) => (i === index ? { ...row, [key]: value } : row)));
+  // DEV-942: the upfront amount is read by the shared exact reader; a refused entry is
+  // explained and the settings are not sent.
+  const amounts = rows.map((row) => amountInputToMinor(row.amount));
+  const refuseAmount = (event: { preventDefault(): void }) => {
+    const index = amounts.findIndex((amount) => amount.status !== 'OK');
+    const refused = amounts[index];
+    if (!refused || refused.status === 'OK') return setAmountError('');
+    event.preventDefault();
+    setAmountError(
+      `Tier ${index + 1} upfront amount: ${
+        refused.status === 'EMPTY'
+          ? 'Enter an amount, for example 5000.'
+          : amountInputError(refused.reason)
+      }`
+    );
+  };
   return (
-    <form action={action} className="space-y-4">
+    <form action={action} onSubmit={refuseAmount} className="space-y-4">
       <input
         type="hidden"
         name="tiers"
         value={JSON.stringify(
-          rows.map((row) => ({
-            name: row.name,
-            upfrontMinor: Math.round(Number(row.amount) * 100),
-            discountBasisPoints: Math.round(Number(row.percent) * 100),
-          }))
+          rows.map((row, i) => {
+            const amount = amounts[i];
+            return {
+              name: row.name,
+              upfrontMinor: amount.status === 'OK' ? amount.minor : null,
+              discountBasisPoints: Math.round(Number(row.percent) * 100),
+            };
+          })
         )}
       />
       {!rows.length && (
@@ -125,7 +146,11 @@ export function TierSettingsForm({
           {pending ? 'Saving…' : 'Save dated settings'}
         </Button>
       </div>
-      {state.message && <p role={state.status === 'error' ? 'alert' : 'status'}>{state.message}</p>}
+      {amountError ? (
+        <p role="alert">{amountError}</p>
+      ) : (
+        state.message && <p role={state.status === 'error' ? 'alert' : 'status'}>{state.message}</p>
+      )}
     </form>
   );
 }
