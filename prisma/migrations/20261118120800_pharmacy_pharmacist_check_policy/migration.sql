@@ -343,4 +343,36 @@ CREATE TRIGGER pharmacy_refill_cycle_pharmacist_check_off_guard
   BEFORE INSERT OR UPDATE ON "pharmacy_refill_subscription_cycles"
   FOR EACH ROW EXECUTE FUNCTION pharmacy_refill_cycle_pharmacist_check_off_guard();
 
+-- DEV-73 holds a prescription-only cycle past AWAITING_PHARMACIST to a covering prescription
+-- line. That rule is kept; its one exception is a cycle whose approval is the
+-- owner-switched-off marker, which the trigger above accepts only while the setting is off.
+-- Re-added NOT VALID exactly as DEV-73 added it, so legacy rows are not re-checked.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_constraint
+    WHERE conname = 'pharmacy_refill_cycles_rx_prescription_ck'
+      AND conrelid = 'pharmacy_refill_subscription_cycles'::regclass
+      AND pg_catalog.pg_get_constraintdef(oid) NOT LIKE '%pharmacist-check-off:%'
+  ) THEN
+    ALTER TABLE "pharmacy_refill_subscription_cycles"
+      DROP CONSTRAINT "pharmacy_refill_cycles_rx_prescription_ck";
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_constraint
+    WHERE conname = 'pharmacy_refill_cycles_rx_prescription_ck'
+      AND conrelid = 'pharmacy_refill_subscription_cycles'::regclass
+  ) THEN
+    ALTER TABLE "pharmacy_refill_subscription_cycles"
+      ADD CONSTRAINT "pharmacy_refill_cycles_rx_prescription_ck" CHECK (
+        NOT "requiresPharmacist"
+        OR "status" IN ('AWAITING_PHARMACIST', 'RELEASED')
+        OR "prescriptionLineId" IS NOT NULL
+        OR COALESCE("approvalPolicy", '') LIKE 'pharmacist-check-off:%'
+      ) NOT VALID;
+  END IF;
+END;
+$$;
+
 COMMIT;

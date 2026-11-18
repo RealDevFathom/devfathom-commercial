@@ -25,7 +25,7 @@ vi.mock('@/lib/restaurant/operator-credentials', () => ({
 }));
 vi.mock('./sales', () => ({
   createSale: vi.fn(async () => ({ id: 'sale-1' })),
-  addReservedSaleLine: vi.fn(async () => ({})),
+  addReservedSaleLine: vi.fn(async () => ({ line: { id: 'sale-line-1' } })),
 }));
 
 import { can } from '@/lib/abac';
@@ -85,12 +85,45 @@ const subscriptionRow = {
   status: 'ACTIVE',
 };
 
+type RxLine = {
+  id: string;
+  medicineId: string;
+  presentationId: string;
+  authorizedCanonicalUnits: number;
+  prescription: { patientId: string; validFrom: Date; validUntil: Date; authorizedRepeats: number };
+  fills: { quantityCanonicalUnits: number }[];
+};
+
+/** A prescription line for the subscriber's patient that covers the DUE cycle. */
+function rxLine(
+  overrides: Partial<Omit<RxLine, 'prescription'>> & {
+    prescription?: Partial<RxLine['prescription']>;
+  } = {}
+): RxLine {
+  return {
+    id: 'rx-line-1',
+    medicineId: 'med-1',
+    presentationId: 'pres-1',
+    authorizedCanonicalUnits: 180,
+    fills: [],
+    ...overrides,
+    prescription: {
+      patientId: 'patient-1',
+      validFrom: new Date('2026-11-01T00:00:00.000Z'),
+      validUntil: new Date('2027-04-30T00:00:00.000Z'),
+      authorizedRepeats: 5,
+      ...overrides.prescription,
+    },
+  };
+}
+
 function fakeDb(
   options: {
     medicine?: ReturnType<typeof medicine> | null;
     lots?: ReturnType<typeof lot>[];
     creditLimitMinor?: number;
     cycle?: Record<string, unknown> | null;
+    rxLine?: ReturnType<typeof rxLine> | null;
     dayClose?: { id: string; reopen: { id: string } | null } | null;
     policy?: { pharmacistCheckEnabled: boolean; pharmacistCheckPolicyVersion: number } | null;
   } = {}
@@ -114,8 +147,31 @@ function fakeDb(
     organization: { findUnique: async () => ({ timezone: 'UTC' }) },
     pharmacyDailyClose: { findFirst: vi.fn(async () => options.dayClose ?? null) },
     pharmacyCustomer: {
-      findFirst: async () => ({ id: 'cust-1', creditLimitMinor: options.creditLimitMinor ?? 0 }),
+      findFirst: async () => ({
+        id: 'cust-1',
+        patientId: 'patient-1',
+        creditLimitMinor: options.creditLimitMinor ?? 0,
+      }),
     },
+    prescriptionLine: {
+      findFirst: vi.fn(
+        async ({
+          where,
+        }: {
+          where: { id: string; medicineId: string; presentationId: string };
+        }) => {
+          const line = options.rxLine === undefined ? rxLine() : options.rxLine;
+          return line &&
+            line.id === where.id &&
+            line.medicineId === where.medicineId &&
+            line.presentationId === where.presentationId
+            ? line
+            : null;
+        }
+      ),
+    },
+    pharmacySaleLine: { updateMany: record('saleLine.updateMany', { count: 1 }) },
+    pharmacyPharmacistReviewItem: { create: record('reviewItem.create') },
     pharmacyRefillSubscription: {
       findFirst: async () => subscriptionRow,
       create: record('subscription.create', (input: { data: object }) => input.data),
@@ -182,6 +238,7 @@ const awaiting = {
   approvedByUserId: null,
   approvalPolicy: null,
   approvedAt: null,
+  prescriptionLineId: null,
   counterSaleId: null,
   subscription: subscriptionRow,
 };
@@ -284,6 +341,41 @@ describe('checking out a prescription-only refill cycle', () => {
     }
   );
 
+  it('hands over a cycle readied while off with no prescription attached', async () => {
+    const { db, writes } = fakeDb({ cycle: readiedWhileOff, medicine: rx(), policy: OFF });
+    await startRefillCycleCheckout(db as never, scope, 'cycle-1');
+    expect(db.prescriptionLine.findFirst).not.toHaveBeenCalled();
+    expect(writes.some(([name]) => name === 'reviewItem.create')).toBe(false);
+  });
+
+  it('does not stop a pharmacist-approved cycle whose prescription no longer covers it while off', async () => {
+    const approvedWithRx = {
+      ...readiedWhileOff,
+      approvedByUserId: 'pharmacist',
+      approvalPolicy: 'PHARMACIST_PIN_REAUTH',
+      prescriptionLineId: 'rx-line-1',
+    };
+    const { db } = fakeDb({ cycle: approvedWithRx, medicine: rx(), rxLine: null, policy: OFF });
+    await expect(startRefillCycleCheckout(db as never, scope, 'cycle-1')).resolves.toMatchObject({
+      saleId: 'sale-1',
+    });
+  });
+
+  it('still refuses that uncovered cycle while the check is on', async () => {
+    vi.mocked(can).mockResolvedValue(true);
+    const approvedWithRx = {
+      ...readiedWhileOff,
+      approvedByUserId: 'pharmacist',
+      approvalPolicy: 'PHARMACIST_PIN_REAUTH',
+      prescriptionLineId: 'rx-line-1',
+    };
+    const { db } = fakeDb({ cycle: approvedWithRx, medicine: rx(), rxLine: null, policy: ON });
+    await expect(startRefillCycleCheckout(db as never, scope, 'cycle-1')).rejects.toMatchObject({
+      reason: 'PRESCRIPTION_NOT_FOUND',
+    });
+    expect(createSale).not.toHaveBeenCalled();
+  });
+
   it('refuses a cycle readied while off once the owner turns the check back on', async () => {
     const { db } = fakeDb({ cycle: readiedWhileOff, medicine: rx(), policy: ON });
     await expect(startRefillCycleCheckout(db as never, scope, 'cycle-1')).rejects.toMatchObject({
@@ -296,14 +388,18 @@ describe('checking out a prescription-only refill cycle', () => {
     vi.mocked(can).mockResolvedValue(true);
     const { db } = fakeDb({ cycle: readiedWhileOff, medicine: rx(), policy: ON });
     await expect(
-      approveRefillCycle(db as never, scope, 'cycle-1', {
-        approvedByUserId: 'pharmacist',
-        credentialId: 'cred-1',
-      })
+      approveRefillCycle(
+        db as never,
+        scope,
+        'cycle-1',
+        { approvedByUserId: 'pharmacist', credentialId: 'cred-1' },
+        { prescriptionLineId: 'rx-line-1' }
+      )
     ).resolves.toMatchObject({
       status: 'RESERVED',
       approvedByUserId: 'pharmacist',
       approvalPolicy: expect.not.stringMatching(/^pharmacist-check-off:/),
+      prescriptionLineId: 'rx-line-1',
     });
   });
 });

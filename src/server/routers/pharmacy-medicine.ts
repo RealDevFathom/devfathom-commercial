@@ -28,6 +28,7 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import {
   assertSaleable,
+  isImportedIdentity,
   deriveLooseUnitPrice,
   medicineDuplicateKey,
   normalizeMedicineText,
@@ -1616,8 +1617,11 @@ export const pharmacyMedicineRouter = router({
         const medicine = await tx.medicine.findUniqueOrThrow({
           where: { id: medicineId },
         });
+        // DEV-852: a medicine whose identity came from a legacy import may lack strength and
+        // registration; both are then stored as not recorded. Every other check still applies.
+        const imported = isImportedIdentity(selected);
         const required =
-          medicine.productFamily === 'FRONT_SHOP'
+          medicine.productFamily === 'FRONT_SHOP' || imported
             ? ['productName', 'dosageForm', 'pack']
             : ['productName', 'strength', 'dosageForm', 'pack'];
         for (const field of required) {
@@ -1711,6 +1715,7 @@ export const pharmacyMedicineRouter = router({
             values.get('drapRegistrationNumber') ?? medicine.drapRegistrationNumber
           ),
           provenanceFields: new Set(selected.map((assertion) => assertion.field)),
+          imported,
         });
         for (const field of ['rx', 'restricted', 'controlled'] as const) {
           const value = values.get(field);

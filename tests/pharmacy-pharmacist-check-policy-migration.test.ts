@@ -102,6 +102,17 @@ describe('pharmacist check policy migration', () => {
     expect(sql).not.toContain('pharmacy_refill_cycles_rx_approval_ck');
   });
 
+  it('keeps the DEV-73 refill prescription rule, with only the marked check-off exception', () => {
+    const check = section(
+      'ADD CONSTRAINT "pharmacy_refill_cycles_rx_prescription_ck"',
+      ') NOT VALID;'
+    );
+    expect(check).toContain('NOT "requiresPharmacist"');
+    expect(check).toContain(`"status" IN ('AWAITING_PHARMACIST', 'RELEASED')`);
+    expect(check).toContain('"prescriptionLineId" IS NOT NULL');
+    expect(check).toContain(`COALESCE("approvalPolicy", '') LIKE 'pharmacist-check-off:%'`);
+  });
+
   it('does not touch row-level security', () => {
     expect(sql).not.toMatch(/DISABLE ROW LEVEL SECURITY/i);
     expect(sql).not.toMatch(/DROP POLICY/i);

@@ -260,6 +260,7 @@ describe('every pharmacist-verification gate consults the owner setting', () => 
       /independent pharmacist PIN, and either a valid prescription/,
     ],
     ['refill pharmacist hold', /RefillSubscriptionError\('PHARMACIST_APPROVAL_REQUIRED'\)/],
+    ['refill prescription requirement', /RefillSubscriptionError\('PRESCRIPTION_REQUIRED'\)/],
     ['refill cycle held for a pharmacist', /'AWAITING_PHARMACIST' : 'RESERVED'/],
   ];
 

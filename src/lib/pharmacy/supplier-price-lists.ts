@@ -350,6 +350,9 @@ export type SupplierPriceListReviewLine = {
   draftMrpMinor: number | null;
   draftSellingPriceMinor: number | null;
   tradeAboveMrp: boolean;
+  /** On-page change flags: the list differs from the compared record. */
+  tradeChanged: boolean;
+  mrpChanged: boolean;
   stale: boolean;
 };
 
@@ -379,6 +382,10 @@ export async function supplierPriceListReview(
       END AS "mrpChangeBps",
       l."currentSellingPriceMinor", l."draftStatus", l."draftMrpMinor", l."draftSellingPriceMinor",
       COALESCE(l."listTradePriceMinor" > l."listMrpMinor", false) AS "tradeAboveMrp",
+      -- The same rule as the list's alert count: a row is flagged only where a
+      -- listed figure differs from the record it was compared with.
+      COALESCE(l."listTradePriceMinor" <> l."previousTradePriceMinor", false) AS "tradeChanged",
+      COALESCE(l."listMrpMinor" <> l."currentMrpMinor", false) AS "mrpChanged",
       (l."draftStatus" = 'DRAFT' AND (
         SELECT pp.id FROM pharmacy_pack_prices pp
          WHERE pp."organizationId" = l."organizationId" AND pp."packLevelId" = l."packLevelId"

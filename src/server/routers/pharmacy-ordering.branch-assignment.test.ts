@@ -246,6 +246,7 @@ const staffPaths: StaffPath[] = [
         branchId,
         cycleId: 'cycle-1',
         pharmacistPin: { staffProfileId: 'staff-1', pin: '7391' },
+        prescriptionLineId: 'rx-line-1',
       }),
     command: () => verifyRefillCyclePharmacistPin,
   },

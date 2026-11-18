@@ -72,6 +72,31 @@ describe('AI-05 deterministic substitute finder', () => {
     expect(rows).toEqual([]);
   });
 
+  it('DEV-852: never treats two medicines without recorded strength as exact equivalents', async () => {
+    const input = {
+      medicineId: 'requested',
+      presentationId: 'presentation-requested',
+      quantityCanonicalUnits: 10,
+      referencePriceMinor: 1_000,
+    };
+    const strengthless = lot({
+      id: 'strengthless',
+      batch: { medicine: { id: 'panadol', productName: 'Panadol', strengths: [] } },
+    });
+    const db = {
+      medicine: { findFirst: async () => ({ ...requested, strengths: [] }) },
+      pharmacyInventoryLot: { findMany: async () => [strengthless, lot()] },
+    };
+    expect(await findSubstituteProposals(db as never, scope, input)).toEqual([]);
+    // A requested medicine with a strength is never matched to a strengthless one either.
+    const rows = await findSubstituteProposals(
+      dbWith([strengthless, lot()]) as never,
+      scope,
+      input
+    );
+    expect(rows.map((row) => row.inventoryLotId)).toEqual(['lot-a']);
+  });
+
   it('never returns unsaleable stock and sends all safety predicates to the database', async () => {
     let where: unknown;
     const db = {
