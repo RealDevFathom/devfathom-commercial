@@ -158,6 +158,8 @@ import { trpc } from '@/lib/trpc';
 type Notice = {
   tone: 'success' | 'info' | 'warning' | 'danger' | 'neutral';
   message: string;
+  /** DEV-910: stays on screen until the cashier dismisses it. */
+  persistent?: boolean;
   inventoryBranchId?: string;
   /** DEV-860: a sale refused for a setup gap carries its fix link or whom to ask. */
   setup?: CounterSetupAdvice;
@@ -617,7 +619,8 @@ function ScopedPharmacyCounterConsole({
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   useEffect(() => {
-    if (!notice || (notice.tone !== 'success' && notice.tone !== 'info')) return;
+    if (!notice || notice.persistent) return;
+    if (notice.tone !== 'success' && notice.tone !== 'info') return;
     const timer = window.setTimeout(() => setNotice(null), 5000);
     return () => window.clearTimeout(timer);
   }, [notice]);
@@ -3009,6 +3012,7 @@ function ScopedPharmacyCounterConsole({
       setReceiptReprint(allocation.reprint);
       setNotice({
         tone: 'success',
+        persistent: true,
         message:
           'Browser print dialog requested. Select the matching paper size and OS printer. Physical printing is not confirmed.',
       });
@@ -3608,6 +3612,16 @@ function ScopedPharmacyCounterConsole({
                       </Link>
                     ) : null}
                   </div>
+                  {notice.persistent ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="ml-auto min-h-11 min-w-11 shrink-0"
+                      onClick={() => setNotice(null)}
+                    >
+                      Dismiss
+                    </Button>
+                  ) : null}
                 </div>
               ) : null}
               {lostSaleCapture && lostSaleCapture.branchId === branchId ? (
