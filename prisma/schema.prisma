@@ -15115,6 +15115,26 @@ model PharmacyDeviceLotQuota {
   @@map("pharmacy_device_lot_quotas")
 }
 
+/// #518 / DEV-753 / DEV-911 — one owner-policy row per pharmacy organization. The table and
+/// its guard and audit triggers are created by migrations; application writes go through
+/// raw SQL so the triggers stamp the actor, version and audit row. This model exists so the
+/// policy readers can use an ordinary typed read. A missing row means every default below.
+model PharmacyOwnerPolicy {
+  organizationId                    String   @id @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  allowCashierRxSale                Boolean  @default(false)
+  updatedByUserId                   String?
+  updatedAt                         DateTime @default(now())
+  supplierComplianceChecksEnabled   Boolean  @default(true)
+  supplierCompliancePolicyVersion   Int      @default(0)
+  supplierComplianceAcknowledgement String?
+  /// DEV-911: the pharmacist check and prescription record at each sale. ON by default.
+  pharmacistCheckEnabled            Boolean  @default(true)
+  pharmacistCheckPolicyVersion      Int      @default(0)
+  pharmacistCheckAcknowledgement    String?
+
+  @@map("pharmacy_owner_policies")
+}
+
 /// RPT-03 — one owner's explicit daily digest opt-in for one active branch.
 /// `timeMinutes` is local wall-clock minutes after midnight in the owning
 /// organization's IANA timezone. `nextDueAt` makes cron discovery bounded.
