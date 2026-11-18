@@ -223,6 +223,35 @@ describe('DEV-766 catalogue approval queue', () => {
     expect(screen.getByText('All branches')).toBeVisible();
     expect(screen.queryByText('pack_strip')).not.toBeInTheDocument();
   });
+  it('shows a bulk creation by file, count and upload time, never the file hash (DEV-912)', () => {
+    m.queue.data = [
+      {
+        id: 'bulk-edit',
+        operation: 'createStagedMedicines',
+        medicine: { productName: 'New medicines from an imported file' },
+        editor: { name: 'Editor' },
+        changes: {
+          json: {
+            batchId: 'batch_1',
+            fileName: 'abuzar-products.csv',
+            uploadedAt: '2026-11-18T07:00:00.000Z',
+            sourceSha256: 'a'.repeat(64),
+            medicines: 18999,
+          },
+        },
+        stale: false,
+        targets: [],
+      },
+    ];
+    render(<CatalogueApprovalQueue />);
+    expect(screen.getByText('Create medicines from an imported file')).toBeVisible();
+    expect(screen.getByText('abuzar-products.csv')).toBeVisible();
+    expect(screen.getByText('18999')).toBeVisible();
+    expect(screen.getByText('Uploaded')).toBeVisible();
+    expect(screen.queryByText('a'.repeat(64))).not.toBeInTheDocument();
+    expect(screen.queryByText(/SHA/)).not.toBeInTheDocument();
+    expect(screen.queryByText('batch_1')).not.toBeInTheDocument();
+  });
   it('says how many other pending edits an approval made stale', async () => {
     render(<CatalogueApprovalQueue />);
     await act(async () => {
