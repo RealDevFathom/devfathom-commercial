@@ -35,7 +35,7 @@ import { mrpRoundingIncrementForLot, normalizeMedicineText } from './medicine';
 import { readReceiptIdentity } from './receipt-identity';
 import { parseShelfLabelCode } from './shelf-label-code';
 import type { LedgerScope } from './stock-ledger';
-import { compareKnownExpiryFirst } from './unrecorded-batch';
+import { BATCH_NOT_RECORDED, compareKnownExpiryFirst } from './unrecorded-batch';
 
 export class PharmacyCounterError extends Error {
   constructor(readonly reason: 'NOT_FOUND' | 'CROSS_BRANCH_REFERENCE' | 'INVALID_QUERY') {
@@ -1150,8 +1150,8 @@ export async function readCounterReceipt(
       // Compatibility fields never associate the first lot with the entire line.
       batchNumber:
         identity?.allocations
-          // DEV-853: printed after "Batch", so an unrecorded one reads "Batch not recorded".
-          .map((row) => `${row.batchNumber ?? 'not recorded'} (${row.canonicalUnits} units)`)
+          // DEV-853: an unrecorded batch reads exactly "Batch not recorded".
+          .map((row) => `${row.batchNumber ?? BATCH_NOT_RECORDED} (${row.canonicalUnits} units)`)
           .join('; ') ?? 'Historical batches unavailable',
       expiresAt: identity?.allocations.length === 1 ? identity.allocations[0]!.expiresAt : '',
       saleUnit: line.saleUnit as SaleUnitKind,

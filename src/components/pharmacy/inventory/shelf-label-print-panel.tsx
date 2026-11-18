@@ -15,7 +15,11 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
-import { batchNumberLabel, EXPIRY_NOT_RECORDED } from '@/lib/pharmacy/unrecorded-batch';
+import {
+  batchNumberLabel,
+  EXPIRY_NOT_RECORDED,
+  batchPhrase,
+} from '@/lib/pharmacy/unrecorded-batch';
 import {
   MAX_SHELF_LABELS_PER_PRINT,
   printShelfLabels,
@@ -147,7 +151,7 @@ export function ShelfLabelPrintPanel({
                   <TableCell className="font-mono text-xs">{row.code}</TableCell>
                   <TableCell className="text-right">
                     <label className="sr-only" htmlFor={id}>
-                      Labels for {row.name} batch {row.batchNumber ?? 'not recorded'}
+                      Labels for {row.name} {batchPhrase(row.batchNumber, 'batch')}
                     </label>
                     <Input
                       id={id}

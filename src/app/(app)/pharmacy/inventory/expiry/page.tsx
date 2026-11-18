@@ -11,7 +11,7 @@ import { buttonVariants } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { hasModule } from '@/lib/entitlements';
-import { readPrintedExpiry } from '@/lib/pharmacy/unrecorded-batch';
+import { BATCH_NOT_RECORDED, readPrintedExpiry } from '@/lib/pharmacy/unrecorded-batch';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import {
   admittedInventoryBranchIds,
@@ -176,7 +176,7 @@ export default async function PharmacyExpiryBoardPage({
       const action = field(data, 'action');
       let text: string;
       const batchOf = (batchNumber: string | null) =>
-        batchNumber === null ? 'this lot (batch not recorded)' : `batch ${batchNumber}`;
+        batchNumber === null ? `this lot (${BATCH_NOT_RECORDED})` : `batch ${batchNumber}`;
       if (action === 'record') {
         // DEV-853: record the real batch and/or expiry of a legacy lot.
         const batchNumber = field(data, 'batchNumber');

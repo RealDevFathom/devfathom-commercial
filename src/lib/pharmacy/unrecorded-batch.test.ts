@@ -26,6 +26,7 @@ import { evaluateStockSignals, type LotFact } from './stock-signals';
 import {
   BATCH_NOT_RECORDED,
   batchNumberLabel,
+  batchPhrase,
   compareKnownExpiryFirst,
   EXPIRY_NOT_RECORDED,
   hasKnownExpiryPassed,
@@ -59,8 +60,11 @@ describe('DEV-853 plain-words helpers', () => {
     expect(batchNumberLabel('   ')).toBe('Batch not recorded');
     expect(batchNumberLabel('B-17')).toBe('B-17');
     expect(batchLabel({ batchNumber: null, medicineName: 'Panadol' })).toBe(
-      'Panadol · batch not recorded'
+      'Panadol · Batch not recorded'
     );
+    expect(batchPhrase(null, 'batch')).toBe('Batch not recorded');
+    expect(batchPhrase('B-17', 'batch')).toBe('batch B-17');
+    expect(batchPhrase('B-17')).toBe('Batch B-17');
     expect(batchLabel({ batchNumber: null })).toBe('Batch not recorded');
   });
 
@@ -241,7 +245,7 @@ describe('DEV-853 screens and receipts say "not recorded"', () => {
           canonicalUnits: 10,
         },
       ],
-      batchNumber: 'not recorded (10 units)',
+      batchNumber: 'Batch not recorded (10 units)',
       expiresAt: null,
       saleUnit: 'TABLET',
       quantity: 10,
@@ -256,7 +260,8 @@ describe('DEV-853 screens and receipts say "not recorded"', () => {
     expect(shown).toContain('Expiry not recorded');
     expect(shown).not.toMatch(/MISSING_|null|Unavailable/);
     const label = receiptLineLabel(line, 'en');
-    expect(label).toContain('Batch not recorded (10 units)');
+    expect(label).toContain('Batch not recorded');
+    expect(label).not.toContain('Batch Batch');
     expect(label).toContain('Expiry not recorded');
     expect(label).not.toMatch(/MISSING_|null/);
   });

@@ -17,6 +17,7 @@ import {
   soldUnitPluralNoun,
 } from '@/lib/pharmacy/stock-breakdown';
 import { buildCounterBrowserReceipt } from '@/lib/pharmacy/counter-browser-print';
+import { batchPhrase } from '@/lib/pharmacy/unrecorded-batch';
 
 const returnInputSchema = z.object({
   branchId: z.string(),
@@ -943,7 +944,7 @@ export function ReturnForm({
                   </option>
                   {line?.lots.map((lot) => (
                     <option key={lot.lotId} value={lot.lotId} disabled={lot.returnableUnits <= 0}>
-                      Batch {lot.batchNumber ?? 'not recorded'}
+                      {batchPhrase(lot.batchNumber)}
                       {lot.expiresAt
                         ? ` · ${formatLotExpiry(lot.expiresAt, (value) => `expires ${value.toISOString().slice(0, 10)}`)}`
                         : ''}{' '}

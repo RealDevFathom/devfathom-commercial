@@ -40,7 +40,7 @@ import {
 import { renderStockComposition } from '@/lib/pharmacy/counter';
 import { createTRPCContext } from '@/server/trpc';
 
-import { BATCH_NOT_RECORDED, batchNumberLabel } from '@/lib/pharmacy/unrecorded-batch';
+import { BATCH_NOT_RECORDED, batchNumberLabel, batchPhrase } from '@/lib/pharmacy/unrecorded-batch';
 
 import { BreakPackForm } from './break-pack-form';
 
@@ -710,7 +710,7 @@ export default async function PharmacyInventoryPage({
                       <span className="block text-xs text-text-muted">
                         {lot.batch.batchNumber === null
                           ? BATCH_NOT_RECORDED
-                          : `Batch ${lot.batch.batchNumber ?? 'not recorded'}`}{' '}
+                          : `${batchPhrase(lot.batch.batchNumber)}`}{' '}
                         · {lot.supplierName}
                       </span>
                       <Link
@@ -934,7 +934,7 @@ export default async function PharmacyInventoryPage({
                       key={`${lot.id}:${balance.stockLocationId}`}
                       value={`${lot.id}:${balance.stockLocationId}`}
                     >
-                      {lotProductLabel(lot)} · batch {lot.batch.batchNumber ?? 'not recorded'} ·{' '}
+                      {lotProductLabel(lot)} · {batchPhrase(lot.batch.batchNumber, 'batch')} ·{' '}
                       {balance.location.name}
                     </option>
                   ))}
@@ -1077,8 +1077,7 @@ export default async function PharmacyInventoryPage({
                             </span>
                           ) : null}
                           <span className="block text-xs text-text-muted">
-                            batch {item.batchNumber ?? 'not recorded'} · {item.unitsPerPack} per
-                            pack
+                            {batchPhrase(item.batchNumber, 'batch')} · {item.unitsPerPack} per pack
                           </span>
                         </TableCell>
                         <TableCell>{item.locationName}</TableCell>
@@ -1095,7 +1094,7 @@ export default async function PharmacyInventoryPage({
                         </TableCell>
                         <TableCell className="text-right">
                           <Input
-                            aria-label={`Counted sealed packs, ${item.medicineName} batch ${item.batchNumber ?? 'not recorded'} at ${item.locationName}`}
+                            aria-label={`Counted sealed packs, ${item.medicineName} ${batchPhrase(item.batchNumber, 'batch')} at ${item.locationName}`}
                             className="ml-auto w-24"
                             min="0"
                             name="cycleSealed"
@@ -1105,7 +1104,7 @@ export default async function PharmacyInventoryPage({
                         </TableCell>
                         <TableCell className="text-right">
                           <Input
-                            aria-label={`Counted loose units, ${item.medicineName} batch ${item.batchNumber ?? 'not recorded'} at ${item.locationName}`}
+                            aria-label={`Counted loose units, ${item.medicineName} ${batchPhrase(item.batchNumber, 'batch')} at ${item.locationName}`}
                             className="ml-auto w-24"
                             min="0"
                             name="cycleLoose"
@@ -1379,7 +1378,7 @@ export default async function PharmacyInventoryPage({
                 <select className={inputClass} name="batchId">
                   {lots.map((lot) => (
                     <option key={lot.batch.id} value={lot.batch.id}>
-                      {lotProductLabel(lot)} · batch {lot.batch.batchNumber ?? 'not recorded'}
+                      {lotProductLabel(lot)} · {batchPhrase(lot.batch.batchNumber, 'batch')}
                     </option>
                   ))}
                 </select>

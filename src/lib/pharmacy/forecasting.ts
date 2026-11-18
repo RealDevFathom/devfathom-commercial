@@ -590,8 +590,9 @@ export function simulateReplenishmentDecision(
   const stock: AllocationCandidate[] = [];
   for (const lot of input.stock) {
     register(lot);
-    const reason =
-      lot.expiresAt === null ? 'UNKNOWN_EXPIRY' : blockReasonFor(lot as AllocationCandidate, scope);
+    // DEV-853: a lot whose expiry was never recorded is sellable stock that
+    // never expires in the simulation; FEFO draws it after known expiries.
+    const reason = blockReasonFor(lot as AllocationCandidate, scope);
     if (reason)
       excludedStock.push({
         inventoryLotId: lot.inventoryLotId,
@@ -601,7 +602,7 @@ export function simulateReplenishmentDecision(
     else
       stock.push({
         ...lot,
-        expiresAt: new Date(lot.expiresAt!),
+        expiresAt: lot.expiresAt === null ? null : new Date(lot.expiresAt),
         receivedAt: new Date(lot.receivedAt!),
       });
   }

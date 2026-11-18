@@ -7,6 +7,7 @@ import type { CounterCart } from '@/lib/pharmacy/counter';
 import { counterUnitNoun, plural } from '@/lib/pharmacy/counter-pricing';
 import type { CounterAlert } from '@/lib/pharmacy/counter-alerts';
 import { formatMinor, formatShortExpiry } from '@/lib/pharmacy/counter-receipt';
+import { batchPhrase } from '@/lib/pharmacy/unrecorded-batch';
 
 export type CounterCartPanelProps = {
   cart: CounterCart | null;
@@ -203,7 +204,7 @@ export function CounterCartPanel({
                       >
                         <div className="flex flex-wrap gap-x-2 font-mono tabular-nums">
                           <span className="font-semibold text-text-strong">
-                            Batch {allocation.batchNumber ?? 'not recorded'}
+                            {batchPhrase(allocation.batchNumber)}
                           </span>
                           <span>{formatShortExpiry(allocation.expiresAt)}</span>
                         </div>
@@ -378,8 +379,8 @@ export function CounterLotOverride({
     return (
       <div className="space-y-2" role="status" data-testid="counter-lot-override-applied">
         <p className="text-sm font-semibold text-text-strong">
-          Batch {chosenLot.batchNumber ?? 'not recorded'} will be sold on this line (not the
-          earliest-expiry batch).
+          {batchPhrase(chosenLot.batchNumber)} will be sold on this line (not the earliest-expiry
+          batch).
         </p>
         <p className="text-xs text-text-muted">Reason: {value.reason.trim()}</p>
         <div className="flex flex-wrap gap-2">
@@ -446,7 +447,7 @@ export function CounterLotOverride({
                     onChange({ ...value, inventoryLotId: fefo ? null : lot.inventoryLotId })
                   }
                 />
-                <span>Batch {lot.batchNumber ?? 'not recorded'}</span>
+                <span>{batchPhrase(lot.batchNumber)}</span>
                 <span>{formatShortExpiry(lot.expiresAt)}</span>
                 <span>{lot.sellableUnits} units</span>
                 {fefo ? <StatusPill status="fefo" tone="neutral" label="Earliest expiry" /> : null}

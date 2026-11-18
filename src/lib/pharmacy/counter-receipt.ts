@@ -326,8 +326,13 @@ export function receiptTitle(receipt: CounterReceipt, locale: CounterReceiptLoca
 export function receiptLineLabel(line: CounterReceiptLine, locale: CounterReceiptLocale): string {
   const strings = COUNTER_RECEIPT_STRINGS[locale];
   const identity = [line.medicineName, line.strength].filter(Boolean).join(' ');
+  // DEV-853: one dispensed lot with no recorded batch prints the plain words
+  // alone, never "Batch Batch not recorded".
+  const onlyAllocation = line.allocations?.length === 1 ? line.allocations[0] : undefined;
   const tail = [
-    `${strings.batch} ${line.batchNumber}`,
+    onlyAllocation && onlyAllocation.batchNumber === null
+      ? strings.batchNotRecorded
+      : `${strings.batch} ${line.batchNumber}`,
     line.expiresAt === null
       ? strings.expiryNotRecorded
       : isNoExpiryDate(line.expiresAt)

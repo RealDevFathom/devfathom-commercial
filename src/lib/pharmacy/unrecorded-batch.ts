@@ -15,6 +15,18 @@ export function batchNumberLabel(batchNumber: string | null | undefined): string
 }
 
 /**
+ * "Batch B-17" (or "batch B-17" mid-sentence) for a recorded batch, and always
+ * exactly "Batch not recorded" for one that was never recorded.
+ */
+export function batchPhrase(
+  batchNumber: string | null | undefined,
+  word: 'Batch' | 'batch' = 'Batch'
+): string {
+  const trimmed = batchNumber?.trim();
+  return trimmed ? `${word} ${trimmed}` : BATCH_NOT_RECORDED;
+}
+
+/**
  * True only when the expiry is KNOWN and has passed. An unrecorded expiry is
  * never treated as expired and never blocks a sale.
  */

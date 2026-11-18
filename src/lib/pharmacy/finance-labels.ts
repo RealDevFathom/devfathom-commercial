@@ -4,6 +4,7 @@
  * Raw ids stay available as audit references, never as the primary label.
  */
 import { COUNTER_RECEIPT_STRINGS } from './counter-receipt';
+import { batchPhrase } from './unrecorded-batch';
 
 function sentenceCase(code: string) {
   const words = code.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -34,9 +35,10 @@ export const EMPTY_LEDGER_LABELS: LedgerLabels = {
 
 /**
  * "Panadol 500mg · batch B123", or whichever part is known. DEV-853: a batch
- * whose number was never recorded reads "batch not recorded".
+ * whose number was never recorded reads "Batch not recorded".
  */
 export function batchLabel(batch: { batchNumber: string | null; medicineName?: string | null }) {
-  const number = batch.batchNumber ?? 'not recorded';
-  return batch.medicineName ? `${batch.medicineName} · batch ${number}` : `Batch ${number}`;
+  return batch.medicineName
+    ? `${batch.medicineName} · ${batchPhrase(batch.batchNumber, 'batch')}`
+    : batchPhrase(batch.batchNumber);
 }

@@ -208,7 +208,8 @@ export type DailyCycleCountItem = {
   inventoryLotId: string;
   stockLocationId: string;
   medicineName: string;
-  batchNumber: string;
+  /** DEV-853: null when the batch number was never recorded. */
+  batchNumber: string | null;
   locationName: string;
   unitsPerPack: number;
   /** Canonical units sold from this position in the sales window. */
@@ -222,7 +223,8 @@ type DailyCycleCountRow = {
   inventoryLotId: string;
   stockLocationId: string;
   medicineName: string;
-  batchNumber: string;
+  /** DEV-853: null when the batch number was never recorded. */
+  batchNumber: string | null;
   locationName: string;
   unitsPerPack: number;
   soldUnits: number | bigint;

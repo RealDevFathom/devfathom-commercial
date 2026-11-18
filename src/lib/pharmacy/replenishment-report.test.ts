@@ -365,6 +365,29 @@ describe('live replenishment report composition', () => {
     expect(result.observations.supply.constraints.budgetMinor).toBeNull();
   });
 
+  it('DEV-853: counts unrecorded-expiry stock as on hand and still excludes known-expired stock', async () => {
+    const { db } = database();
+    mocks.stock.mockResolvedValue([
+      { ...lot, inventoryLotId: 'legacy', expiresAt: null, availableUnits: 40 },
+      {
+        ...lot,
+        inventoryLotId: 'expired',
+        expiresAt: new Date(readAt.getTime() - 86_400_000),
+        availableUnits: 7,
+      },
+    ]);
+    const result = await readPharmacyReplenishmentReport(db, input, readAt);
+    expect(result.observations.supply.stock).toEqual([
+      expect.objectContaining({ inventoryLotId: 'legacy', expiresAt: null, availableUnits: 40 }),
+    ]);
+    expect(result.observations.supply.excludedStock).toEqual([
+      expect.objectContaining({
+        lot: expect.objectContaining({ inventoryLotId: 'expired' }),
+        reason: 'EXPIRED',
+      }),
+    ]);
+  });
+
   it('retains excluded stock and unknown inbound rather than treating them as available', async () => {
     const { db, reads } = database();
     mocks.stock.mockResolvedValue([{ ...lot, disposition: 'QUARANTINED' }]);
