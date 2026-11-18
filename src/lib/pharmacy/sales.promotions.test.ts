@@ -104,6 +104,18 @@ function counterDb(
         { id: 'pack-a', level: 'PACK', parentPackLevelId: null, unitsPerParent: 10 },
       ]),
     },
+    // DEV-66: no configured discount policy, so the default cost floor applies.
+    pharmacyBranch: {
+      findFirst: vi.fn<(args: unknown) => Promise<{ discountPolicy: unknown }>>(async () => ({
+        discountPolicy: null,
+      })),
+    },
+    // DEV-66: the owner's maximum discount at its stored default of 10%.
+    organization: {
+      findFirst: vi.fn<(args: unknown) => Promise<{ pharmacyMaxDiscountBps: unknown }>>(
+        async () => ({ pharmacyMaxDiscountBps: 1_000 })
+      ),
+    },
     medicinePackMrp: { findMany: vi.fn(async () => []) },
     pharmacyPromotion: { findMany: vi.fn(async () => promotions) },
     pharmacySaleLine: {
@@ -141,6 +153,34 @@ afterEach(() => {
 });
 
 describe('addSaleLine counter promotion hook (#727)', () => {
+  it('skips a promotion that would breach the branch minimum margin and still sells at full price', async () => {
+    // Gross 1000, cost 500, 10% off leaves 900. A 50% minimum margin needs 1000.
+    const db = counterDb();
+    db.pharmacyBranch.findFirst.mockResolvedValue({ discountPolicy: { minMarginBps: 5_000 } });
+
+    await addSaleLine(db as never, scope, lineInput, { applyCounterPromotions: true });
+
+    expect(db.pharmacySaleLine.create.mock.calls[0]![0].data).toMatchObject({
+      grossMinor: 1_000,
+      discountMinor: 0,
+    });
+    expect(db.pharmacySaleLine.create.mock.calls[0]![0].data.promotionId ?? null).toBeNull();
+  });
+
+  it("skips a promotion deeper than the owner's maximum and still sells at full price", async () => {
+    // 10% off 1000 is within the cost and margin floors, but the owner allows 5%.
+    const db = counterDb();
+    db.organization.findFirst.mockResolvedValue({ pharmacyMaxDiscountBps: 500 });
+
+    await addSaleLine(db as never, scope, lineInput, { applyCounterPromotions: true });
+
+    expect(db.pharmacySaleLine.create.mock.calls[0]![0].data).toMatchObject({
+      grossMinor: 1_000,
+      discountMinor: 0,
+    });
+    expect(db.pharmacySaleLine.create.mock.calls[0]![0].data.promotionId ?? null).toBeNull();
+  });
+
   it('prices the line with the live promotion and attributes it', async () => {
     const db = counterDb();
 

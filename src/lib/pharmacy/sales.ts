@@ -5,6 +5,8 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { legacyStripOption, packLevelCanonicalUnits } from './counter-pricing';
 import { mrpRoundingIncrementForLot, priceFromLot } from './medicine';
+import { maxDiscountMinorFor, minimumPriceForMargin } from './smart-discount';
+import { readDiscountLimits } from './smart-discount-service';
 import {
   branchUnknownLossProbability,
   estimateLossMinor,
@@ -183,6 +185,7 @@ export class PharmacySaleError extends Error {
       | 'INVALID_SALE_UNIT'
       | 'PRICE_ABOVE_MRP'
       | 'MARGIN_GUARDRAIL'
+      | 'DISCOUNT_ABOVE_MAXIMUM'
       | 'APPROVAL_REQUIRED'
       | 'REGULATED_DISCOUNT_REFUSED'
       | 'VOUCHER_CATEGORY_REFUSED'
@@ -207,6 +210,14 @@ export function validateDiscount(input: {
   costMinor: number;
   approvedByUserId?: string;
   approvalPolicy?: string;
+  /** DEV-66: the branch's configured minimum margin on a discounted line, in bps. */
+  minMarginBps?: number;
+  /**
+   * DEV-66: the owner's maximum discount, in bps of the gross. Every discount (manual,
+   * promotion or voucher) is refused above it, whoever approved it. Required: a caller
+   * that cannot read the owner's maximum cannot give a discount.
+   */
+  maxDiscountBps: number;
 }) {
   if (input.discountMinor < 0 || input.discountMinor > input.grossMinor)
     throw new PharmacySaleError('MARGIN_GUARDRAIL');
@@ -214,7 +225,15 @@ export function validateDiscount(input: {
     throw new PharmacySaleError('REGULATED_DISCOUNT_REFUSED');
   if (input.discountMinor > 0 && (!input.approvedByUserId || !input.approvalPolicy))
     throw new PharmacySaleError('APPROVAL_REQUIRED');
+  if (input.discountMinor > maxDiscountMinorFor(input.grossMinor, input.maxDiscountBps))
+    throw new PharmacySaleError('DISCOUNT_ABOVE_MAXIMUM');
   if (input.grossMinor - input.discountMinor < input.costMinor)
+    throw new PharmacySaleError('MARGIN_GUARDRAIL');
+  if (
+    input.discountMinor > 0 &&
+    input.grossMinor - input.discountMinor <
+      minimumPriceForMargin(input.costMinor, input.minMarginBps ?? 0)
+  )
     throw new PharmacySaleError('MARGIN_GUARDRAIL');
 }
 
@@ -754,16 +773,23 @@ async function addSaleLineWithAllocation(
   // #727: priced after allocation has finished waiting for its stock locks. A voucher,
   // manual discount or complimentary line is never combined with an automatic promotion.
   const promotionEvaluatedAt = new Date();
-  const promotion =
-    applyCounterPromotions && !voucher && !input.discountKind && !input.discountMinor
-      ? await priceCounterPromotion(db, scope, {
-          medicineId: input.medicineId,
-          regulated,
-          grossMinor,
-          costMinor,
-          at: promotionEvaluatedAt,
-        })
-      : null;
+  const promotionCandidate =
+    applyCounterPromotions && !voucher && !input.discountKind && !input.discountMinor;
+  // DEV-66: an automatic offer that would breach the branch's minimum margin or the owner's
+  // maximum discount is skipped, never allowed to block an otherwise valid full-price sale.
+  const promotionLimits = promotionCandidate ? await readDiscountLimits(db, scope) : null;
+  const promotion = promotionLimits
+    ? await priceCounterPromotion(db, scope, {
+        medicineId: input.medicineId,
+        regulated,
+        grossMinor,
+        costMinor: Math.max(
+          minimumPriceForMargin(costMinor, promotionLimits.minMarginBps),
+          grossMinor - maxDiscountMinorFor(grossMinor, promotionLimits.maxDiscountBps)
+        ),
+        at: promotionEvaluatedAt,
+      })
+    : null;
   const discountMinor = voucher
     ? Math.min(voucher.discountMinor, grossMinor)
     : (promotion?.discountMinor ?? input.discountMinor ?? 0);
@@ -780,7 +806,15 @@ async function addSaleLineWithAllocation(
     : promotion
       ? promotionApprovalPolicy(promotion.promotion.id)
       : input.approvalPolicy;
+  // DEV-66: every discounted line (manual, promotion or voucher) must keep the branch's
+  // configured minimum margin and stay within the owner's maximum discount.
+  const limits =
+    discountMinor > 0
+      ? (promotionLimits ?? (await readDiscountLimits(db, scope)))
+      : { minMarginBps: 0, maxDiscountBps: 0 };
   validateDiscount({
+    minMarginBps: limits.minMarginBps,
+    maxDiscountBps: limits.maxDiscountBps,
     regulated,
     discountMinor,
     grossMinor,

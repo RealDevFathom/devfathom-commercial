@@ -90,6 +90,8 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // Sale aggregate (POS).
   PRICE_ABOVE_MRP: 'That price is above the printed MRP, which is not allowed.',
   MARGIN_GUARDRAIL: 'That discount falls below the permitted margin.',
+  // DEV-66: the owner's maximum discount applies to everyone.
+  DISCOUNT_ABOVE_MAXIMUM: 'That discount is more than the owner allows. Give a smaller discount.',
   APPROVAL_REQUIRED: 'A supervisor must approve this discount before it can be applied.',
   REGULATED_DISCOUNT_REFUSED: 'Regulated medicines cannot be discounted.',
   VOUCHER_CATEGORY_REFUSED:

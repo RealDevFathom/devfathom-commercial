@@ -71,6 +71,8 @@ function fixture(balance = 0, refundable = 0) {
       ),
     },
     pharmacyBranch: { findFirst: vi.fn(async () => ({ id: 'branch-a' })) },
+    // DEV-66: the owner's maximum discount at its stored default of 10%; no branch policy.
+    organization: { findFirst: vi.fn(async () => ({ pharmacyMaxDiscountBps: 1_000 })) },
     pharmacyPrepaidTierVersion: {
       findFirst: vi.fn(async () => ({ actorId: 'owner-a' })),
       findMany: vi.fn(async (): Promise<TierVersion[]> => [
@@ -390,11 +392,54 @@ describe('prepaid discount and receipts', () => {
       ).amountMinor
     ).toBe(0);
   });
+  it("DEV-66: keeps the tier share within the owner's maximum and above the minimum margin", () => {
+    // A 100% tier would take 4000 within the cost floor; the owner allows 10% (1000).
+    expect(
+      prepaidLineDiscount(line, 10000, undefined, { minMarginBps: 0, maxDiscountBps: 1_000 })
+    ).toEqual({ amountMinor: 1000, allocations: [1000, 0] });
+    // An earlier 800 line discount leaves 200 of the owner's 10% for the tier.
+    const discounted = {
+      ...line,
+      discountMinor: 800,
+      allocations: [{ ...line.allocations[0]!, discountMinor: 800 }, line.allocations[1]!],
+    };
+    expect(
+      prepaidLineDiscount(discounted, 10000, undefined, { minMarginBps: 0, maxDiscountBps: 1_000 })
+        .amountMinor
+    ).toBe(200);
+    // A 50% minimum margin floors the cheap lot at 2000, so at most 3000 comes off.
+    expect(
+      prepaidLineDiscount(line, 10000, undefined, { minMarginBps: 5_000, maxDiscountBps: 10_000 })
+    ).toEqual({ amountMinor: 3000, allocations: [3000, 0] });
+    // A zero maximum gives no tier share at all.
+    expect(
+      prepaidLineDiscount(line, 200, undefined, { minMarginBps: 0, maxDiscountBps: 0 }).amountMinor
+    ).toBe(0);
+  });
+  it("DEV-66: prices the bill with the stored owner's maximum", async () => {
+    const f = fixture(10000, 10000);
+    f.db.organization.findFirst.mockResolvedValue({ pharmacyMaxDiscountBps: 100 });
+    const quote = await pricePrepaidSale(f.db as never, {
+      id: 'sale-a',
+      organizationId: 'org-a',
+      branchId: 'branch-a',
+      customerId: 'customer-a',
+      status: 'OPEN',
+      tenders: [],
+      lines: [line],
+    });
+    // The 2% tier would take 200; the owner allows 1% (100).
+    expect(quote.lines[0]!.discountMinor).toBe(100);
+    expect(f.db.organization.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'org-a' } })
+    );
+  });
   it('freezes the quote on first tender, retains immutable allocation evidence and prices returns exactly', async () => {
     const f = fixture(10000, 10000);
     const sale = {
       id: 'sale-a',
       organizationId: 'org-a',
+      branchId: 'branch-a',
       customerId: 'customer-a',
       status: 'OPEN',
       tenders: [],
@@ -440,6 +485,7 @@ describe('prepaid discount and receipts', () => {
       {
         id: 'sale-b',
         organizationId: 'org-a',
+        branchId: 'branch-a',
         customerId: 'customer-a',
         status: 'OPEN',
         tenders: [],
@@ -498,6 +544,7 @@ describe('prepaid discount and receipts', () => {
     const sale = {
       id: 'sale-c',
       organizationId: 'org-a',
+      branchId: 'branch-a',
       customerId: 'customer-a',
       status: 'OPEN',
       tenders: [],

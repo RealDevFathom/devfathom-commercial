@@ -59,6 +59,7 @@ function fixture() {
       findFirst: vi.fn(async () => ({
         id: 'sale-a',
         organizationId: 'org-a',
+        branchId: 'branch-a',
         customerId: 'customer-a',
         status: 'OPEN',
         tenders: [],
@@ -95,6 +96,9 @@ function fixture() {
       })),
     },
     pharmacyPrepaidTierVersion: { findFirst: vi.fn(async () => ({ actorId: 'owner-a' })) },
+    // DEV-66: the owner's maximum discount at its stored default of 10%; no branch policy.
+    organization: { findFirst: vi.fn(async () => ({ pharmacyMaxDiscountBps: 1_000 })) },
+    pharmacyBranch: { findFirst: vi.fn(async () => ({ discountPolicy: null })) },
     pharmacySaleLine: { update: vi.fn() },
     pharmacyTender: { create: vi.fn(async () => ({ id: 'tender-a', createdAt: new Date() })) },
     pharmacyDrawerMovement: { create: vi.fn() },

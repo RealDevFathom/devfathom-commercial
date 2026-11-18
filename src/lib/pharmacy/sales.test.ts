@@ -1267,6 +1267,7 @@ describe('POS-04 discount guardrails', () => {
         discountMinor: 1,
         grossMinor: 100,
         costMinor: 20,
+        maxDiscountBps: 10_000,
         approvedByUserId: 'manager',
         approvalPolicy: 'D06',
       })
@@ -1275,7 +1276,13 @@ describe('POS-04 discount guardrails', () => {
 
   it('requires attributable approval and refuses below-cost discounting', () => {
     expect(() =>
-      validateDiscount({ regulated: false, discountMinor: 10, grossMinor: 100, costMinor: 20 })
+      validateDiscount({
+        regulated: false,
+        discountMinor: 10,
+        grossMinor: 100,
+        costMinor: 20,
+        maxDiscountBps: 10_000,
+      })
     ).toThrow('APPROVAL_REQUIRED');
     expect(() =>
       validateDiscount({
@@ -1283,8 +1290,125 @@ describe('POS-04 discount guardrails', () => {
         discountMinor: 90,
         grossMinor: 100,
         costMinor: 20,
+        maxDiscountBps: 10_000,
         approvedByUserId: 'manager',
         approvalPolicy: 'standard',
+      })
+    ).toThrow('MARGIN_GUARDRAIL');
+  });
+});
+
+describe('DEV-66 minimum-margin guard', () => {
+  const approved = { approvedByUserId: 'manager-a', approvalPolicy: 'MANAGER_PIN' };
+  it('refuses a discount that leaves less than the configured minimum margin', () => {
+    // Cost 800, 20% minimum margin on price: floor is 1000.
+    expect(() =>
+      validateDiscount({
+        regulated: false,
+        discountMinor: 250,
+        grossMinor: 1_200,
+        costMinor: 800,
+        maxDiscountBps: 10_000,
+        minMarginBps: 2_000,
+        ...approved,
+      })
+    ).toThrow('MARGIN_GUARDRAIL');
+    expect(() =>
+      validateDiscount({
+        regulated: false,
+        discountMinor: 200,
+        grossMinor: 1_200,
+        costMinor: 800,
+        maxDiscountBps: 10_000,
+        minMarginBps: 2_000,
+        ...approved,
+      })
+    ).not.toThrow();
+  });
+
+  it('keeps the cost floor when no minimum margin is configured', () => {
+    expect(() =>
+      validateDiscount({
+        regulated: false,
+        discountMinor: 400,
+        grossMinor: 1_200,
+        costMinor: 800,
+        maxDiscountBps: 10_000,
+        ...approved,
+      })
+    ).not.toThrow();
+  });
+
+  it('never blocks an undiscounted line sold at MRP', () => {
+    expect(() =>
+      validateDiscount({
+        regulated: false,
+        discountMinor: 0,
+        grossMinor: 900,
+        costMinor: 800,
+        maxDiscountBps: 10_000,
+        minMarginBps: 2_000,
+      })
+    ).not.toThrow();
+  });
+
+  it('still refuses any discount on regulated stock', () => {
+    expect(() =>
+      validateDiscount({
+        regulated: true,
+        discountMinor: 1,
+        grossMinor: 1_200,
+        costMinor: 100,
+        maxDiscountBps: 10_000,
+        minMarginBps: 0,
+        ...approved,
+      })
+    ).toThrow('REGULATED_DISCOUNT_REFUSED');
+  });
+});
+
+describe("DEV-66 owner's maximum discount", () => {
+  const approved = { approvedByUserId: 'manager-a', approvalPolicy: 'MANAGER_PIN' };
+  const line = { regulated: false, grossMinor: 1_000, costMinor: 100, ...approved };
+
+  it('refuses a discount above the maximum even with a manager approval', () => {
+    expect(() => validateDiscount({ ...line, discountMinor: 101, maxDiscountBps: 1_000 })).toThrow(
+      new PharmacySaleError('DISCOUNT_ABOVE_MAXIMUM')
+    );
+    expect(() =>
+      validateDiscount({
+        ...line,
+        discountMinor: 101,
+        maxDiscountBps: 1_000,
+        approvalPolicy: 'SOLE_APPROVER_PIN_REAUTH',
+      })
+    ).toThrow('DISCOUNT_ABOVE_MAXIMUM');
+  });
+
+  it('accepts a discount up to the maximum', () => {
+    expect(() =>
+      validateDiscount({ ...line, discountMinor: 100, maxDiscountBps: 1_000 })
+    ).not.toThrow();
+  });
+
+  it('refuses every discount when the maximum is zero or unreadable', () => {
+    expect(() => validateDiscount({ ...line, discountMinor: 1, maxDiscountBps: 0 })).toThrow(
+      'DISCOUNT_ABOVE_MAXIMUM'
+    );
+    expect(() =>
+      validateDiscount({ ...line, discountMinor: 1, maxDiscountBps: Number.NaN })
+    ).toThrow('DISCOUNT_ABOVE_MAXIMUM');
+  });
+
+  it('keeps the minimum-margin guard on top of the maximum', () => {
+    // 10% is within a 50% maximum, but cost 850 with a 10% margin needs 945.
+    expect(() =>
+      validateDiscount({
+        ...line,
+        costMinor: 850,
+        discountMinor: 100,
+        maxDiscountBps: 5_000,
+        minMarginBps: 1_000,
       })
     ).toThrow('MARGIN_GUARDRAIL');
   });
