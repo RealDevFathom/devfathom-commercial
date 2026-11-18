@@ -165,6 +165,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // and drawer counts/close, so it names cash in or out, not one operation.
   DRAWER_NOT_OPEN:
     'The cash drawer for this counter is not open. Open it before taking or paying out cash.',
+  // DEV-769: the server refuses a bill on a drawer from an earlier business day.
+  DRAWER_FROM_EARLIER_DAY:
+    'This counter’s cash drawer is still open from an earlier day. Close yesterday’s drawer first, then start the bill.',
   OPEN_DRAWER: 'A drawer is already open on this counter. Close it before opening another.',
   // DEV-821: cash goes only into a till the signed-in user runs.
   DRAWER_NOT_YOURS:

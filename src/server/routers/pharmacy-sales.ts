@@ -220,6 +220,7 @@ import {
   openPharmacyDrawer,
   pharmacyDayClosedForTrading,
   readOpenPharmacyDrawer,
+  requireTodaysPharmacyDrawer,
   requirePharmacyTodayOpenForTrading,
   PharmacySettlementError,
   readPharmacyTenderOutcome,
@@ -2624,7 +2625,9 @@ export const pharmacySalesRouter = router({
             await requirePharmacyTodayOpenForTrading(db, scope);
             if (!takesPayment) return;
             if (!input.deviceId) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
-            await lockOpenPharmacyDrawer(db, scope, input.deviceId);
+            const drawer = await lockOpenPharmacyDrawer(db, scope, input.deviceId);
+            // DEV-769: cash is refused on a drawer from an earlier day, so the bill is too.
+            await requireTodaysPharmacyDrawer(db, scope, drawer);
           });
         });
       } catch (error) {
