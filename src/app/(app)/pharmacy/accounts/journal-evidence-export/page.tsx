@@ -1,4 +1,4 @@
-import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/screen-copy';
+import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/plain-language';
 import { ReportDetails } from '@/components/pharmacy/report-details';
 import type { Metadata } from 'next';
 import { can, subjectFromSession } from '@/lib/abac';

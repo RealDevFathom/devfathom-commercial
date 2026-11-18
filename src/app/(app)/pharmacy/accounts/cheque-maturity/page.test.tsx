@@ -133,7 +133,7 @@ describe('cheque maturity accounts page', () => {
     });
     await show();
     expect(screen.getByText('Amount unavailable (currency not confirmed)')).toBeVisible();
-    const raw = screen.getByText('12500 minor units JPY');
+    const raw = screen.getByText('12500 JPY (smallest unit)');
     expect(raw.closest('details')).not.toHaveAttribute('open');
     expect(raw).not.toBeVisible();
     raw.closest('details')!.open = true;
