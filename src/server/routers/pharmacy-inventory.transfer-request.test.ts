@@ -63,13 +63,44 @@ function makeDb() {
       findFirst: vi.fn().mockResolvedValue(null),
     },
     pharmacyBranchAssignment: { findFirst: vi.fn().mockResolvedValue({ id: 'assignment_a' }) },
+    // DEV-908: the owner has switched branch transfers on, and both branches are
+    // licensed premises of this owner holding no controlled drug on the request.
+    organization: {
+      findFirst: vi
+        .fn()
+        .mockResolvedValue({ pharmacyBranchTransfersEnabled: true, timezone: 'Asia/Karachi' }),
+    },
+    branchRegulatoryProfile: {
+      findFirst: vi.fn(async ({ where }: { where: { branchId: string } }) => ({
+        provinceCode: 'PB',
+        premises: { addressLine: `${where.branchId} road`, city: 'Lahore' },
+        isPlaceholder: false,
+        licenceNumber: `LIC-${where.branchId}`,
+        licenceEvidenceFileRef: 'evidence/licence.pdf',
+        licenceValidFrom: new Date('2020-01-01T00:00:00.000Z'),
+        licenceValidTo: new Date('2999-01-01T00:00:00.000Z'),
+      })),
+    },
     pharmacyBranch: {
-      findFirst: vi.fn().mockResolvedValue({ id: 'branch_a' }),
+      findFirst: vi.fn(async ({ where }: { where: { id: string } }) => ({
+        id: where.id,
+        active: true,
+        provinceCode: 'PB',
+        addressLine: `${where.id} road`,
+        city: 'Lahore',
+      })),
       findMany: vi.fn(async ({ where }: { where: { id?: { in: string[] } } }) =>
         (where.id?.in ?? []).map((id) => ({ id }))
       ),
     },
-    pharmacyInventoryLot: { findFirst: vi.fn().mockResolvedValue({ id: 'lot_1' }) },
+    pharmacyInventoryLot: {
+      findFirst: vi.fn().mockResolvedValue({ id: 'lot_1' }),
+      findMany: vi
+        .fn()
+        .mockResolvedValue([
+          { id: 'lot_1', branchId: 'branch_a', batch: { medicine: { controlled: false } } },
+        ]),
+    },
     pharmacyStockLocation: { findFirst: vi.fn().mockResolvedValue({ id: 'location_dst' }) },
     pharmacyInterbranchTransfer: {
       findFirst: vi.fn().mockResolvedValue(transfer),
