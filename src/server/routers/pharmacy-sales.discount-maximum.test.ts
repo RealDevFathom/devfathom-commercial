@@ -100,6 +100,21 @@ describe("DEV-66 changing the owner's maximum discount", () => {
     expect(JSON.stringify(detail)).not.toContain('2468');
   });
 
+  it('DEV-929: the audit reads "from no maximum" for the first maximum, and back to it', async () => {
+    await fixture().caller.saveDiscountMaximum(save);
+    expect(vi.mocked(recordTrpcAudit).mock.calls[0]![0].ctx.audit?.detail).toMatchObject({
+      description: 'Changed the maximum discount from no maximum to 15%',
+    });
+    vi.mocked(saveMaxDiscountBps).mockResolvedValue({
+      previousMaxDiscountBps: 1_500,
+      maxDiscountBps: 10_000,
+    });
+    await fixture().caller.saveDiscountMaximum({ ...save, maxDiscountBps: 10_000 });
+    expect(vi.mocked(recordTrpcAudit).mock.calls[1]![0].ctx.audit?.detail).toMatchObject({
+      description: 'Changed the maximum discount from 15% to no maximum',
+    });
+  });
+
   it.each([
     ['REJECTED', 'FORBIDDEN'],
     ['LOCKED', 'TOO_MANY_REQUESTS'],
