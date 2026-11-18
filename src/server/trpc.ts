@@ -477,6 +477,27 @@ export function capabilityProcedure(action: Action) {
 }
 
 /**
+ * Like `capabilityProcedure`, but the actions (all required) are chosen per call
+ * from the context. DEV-19: a catalogue command needs the editor's capabilities to
+ * submit, and the approver's authority when an approved edit replays it on the
+ * server. The selector may read only server-built context, never client input.
+ */
+export function contextualCapabilityProcedure(select: (ctx: TRPCContext) => readonly Action[]) {
+  return baseProcedure
+    .use(auditAll)
+    .use(
+      t.middleware(async ({ ctx, next, path, type }) => {
+        const actions = select(ctx);
+        // An empty selection would authorize nothing; refuse rather than allow.
+        if (actions.length === 0) throw capabilityRefusal('admin:access');
+        const session = await assertCapabilities(ctx, path, type, actions);
+        return next({ ctx: { ...ctx, session } });
+      })
+    )
+    .use(requireLicensedModule);
+}
+
+/**
  * Deny-by-default tenant procedure (#979, PR J). Audits like
  * `capabilityProcedure`, but takes its permission from the procedure's own
  * `.meta({ capabilities: [...] })`; without that annotation every caller is

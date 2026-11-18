@@ -55,6 +55,12 @@ vi.mock('@/server/audit', async () => {
               `INSERT INTO users (id,"organizationId","organizationRoleId",name,email,department,title,role,"updatedAt") VALUES ($1,$2,$3,$1,$1,'Pharmacy','Staff','ADMIN',now())`,
               [id(who + '_' + org), id(org), org === 'solo' ? id('ownerrole') : null]
             );
+            // DEV-19: approval is the exact pharmacy:catalogue-review grant.
+            if (org !== 'solo')
+              await c.query(
+                `INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"updatedAt") VALUES ($1,$2,$3,'pharmacy:catalogue-review','ALLOW','fixture',now())`,
+                [id('review_' + who + '_' + org), id(org), id(who + '_' + org)]
+              );
           }
           await c.query(
             `INSERT INTO pharmacy_medicines (id,"organizationId","productName","productFamily",saleable,"updatedAt") VALUES ($1,$2,'Fixture lotion','FRONT_SHOP',true,now())`,
@@ -282,6 +288,19 @@ vi.mock('@/server/audit', async () => {
           'REJECTED'
         );
         checks.push('simultaneous connector decisions apply exactly one');
+        const ingredient = await editor.createIngredient({ name: prefix + ' ingredient' });
+        assert('status' in ingredient);
+        assert.equal(ingredient.medicineId, null);
+        assert.equal(
+          await runtime.ingredient.count({ where: { name: prefix + ' ingredient' } }),
+          0
+        );
+        await reviewer.decideCatalogueEdit({ editId: ingredient.id, decision: 'APPROVE' });
+        assert.equal(
+          await runtime.ingredient.count({ where: { name: prefix + ' ingredient' } }),
+          1
+        );
+        checks.push('new ingredient stays pending until review (DEV-19)');
         const alias = await editor.addAlias({
           medicineId: id('med_a'),
           type: 'BRAND',
@@ -358,6 +377,11 @@ vi.mock('@/server/audit', async () => {
           `INSERT INTO users (id,"organizationId",name,email,department,title,"updatedAt") VALUES ($1,$2,$1,$1,'Pharmacy','Staff',now())`,
           [id('member_solo'), id('solo')]
         );
+        // DEV-19: the exception ends once another active member can review.
+        await c.query(
+          `INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"updatedAt") VALUES ($1,$2,$3,'pharmacy:catalogue-review','ALLOW','fixture',now())`,
+          [id('review_member_solo'), id('solo'), id('member_solo')]
+        );
         await refusal(
           solo.decideCatalogueEdit({ editId: se2.id, decision: 'APPROVE', soloPin: '2468' }),
           'FORBIDDEN'
@@ -368,7 +392,92 @@ vi.mock('@/server/audit', async () => {
           }),
           0
         );
-        checks.push('a true owner with another active member cannot self approve');
+        checks.push('a true owner with another active reviewer cannot self approve');
+
+        // DEV-19: an Owner and a Cashier, nobody else can review. The owner approves
+        // their own edit with a fresh PIN; the approval is audited with its reason.
+        const pair = 'pair';
+        await c.query(
+          `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode","createdAt","updatedAt") VALUES ($1,$1,$1,$1,'ACTIVE','SHARED',now(),now())`,
+          [id(pair)]
+        );
+        await c.query(
+          `INSERT INTO organization_departments (id,"organizationId",key,name,"updatedAt") VALUES ($1,$2,'Pharmacy','Pharmacy',now())`,
+          [id('dep_' + pair), id(pair)]
+        );
+        await c.query(
+          `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,'owner','Owner',true,now())`,
+          [id('pair_owner_role'), id(pair)]
+        );
+        await c.query(
+          `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'pharmacy:*','ALLOW')`,
+          [id('pair_owner_perm'), id(pair), id('pair_owner_role')]
+        );
+        await c.query(
+          `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,'cashier','Cashier',true,now())`,
+          [id('pair_cashier_role'), id(pair)]
+        );
+        await c.query(
+          `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'pharmacy:counter','ALLOW')`,
+          [id('pair_cashier_perm'), id(pair), id('pair_cashier_role')]
+        );
+        await c.query(
+          `INSERT INTO users (id,"organizationId","organizationRoleId",name,email,department,title,role,"updatedAt") VALUES ($1,$2,$3,$1,$1,'Pharmacy','Staff','ADMIN',now()),($4,$2,$5,$4,$4,'Pharmacy','Staff','EMPLOYEE',now())`,
+          [
+            id('owner_' + pair),
+            id(pair),
+            id('pair_owner_role'),
+            id('cashier_' + pair),
+            id('pair_cashier_role'),
+          ]
+        );
+        await c.query(
+          `INSERT INTO pharmacy_medicines (id,"organizationId","productName","productFamily",saleable,"updatedAt") VALUES ($1,$2,'Fixture balm','FRONT_SHOP',true,now())`,
+          [id('med_' + pair), id(pair)]
+        );
+        await c.query(
+          `INSERT INTO restaurant_staff_profiles (id,"organizationId","userId","displayName",status,"updatedAt") VALUES ($1,$2,$3,'Fixture pair owner','ACTIVE',now())`,
+          [id('pair_staff'), id(pair), id('owner_' + pair)]
+        );
+        await c.query(
+          `INSERT INTO restaurant_operator_credentials (id,"organizationId","staffProfileId",type,"credentialHash","updatedAt") VALUES ($1,$2,$3,'PIN',$4,now())`,
+          [
+            id('pair_credential'),
+            id(pair),
+            id('pair_staff'),
+            await hashOperatorCredential('PIN', '1357'),
+          ]
+        );
+        const pairOwner = caller(pair, 'owner');
+        const pe = await pairOwner.proposeCatalogueEdit({
+          medicineId: id('med_' + pair),
+          changes: { productName: 'Owner reviewed balm' },
+        });
+        await refusal(
+          pairOwner.decideCatalogueEdit({ editId: pe.id, decision: 'APPROVE' }),
+          'FORBIDDEN'
+        );
+        await pairOwner.decideCatalogueEdit({
+          editId: pe.id,
+          decision: 'APPROVE',
+          soloPin: '1357',
+        });
+        const pairdb = createTenantDb(id(pair), id('owner_' + pair));
+        assert.equal(
+          (await pairdb.medicine.findFirstOrThrow({ where: { id: id('med_' + pair) } }))
+            .productName,
+          'Owner reviewed balm'
+        );
+        const pairAudit = await pairdb.auditLog.findMany({
+          where: { action: 'pharmacy.catalogueSoloOwnerApproval', targetId: pe.id },
+        });
+        assert.equal(pairAudit.length, 1);
+        assert.deepEqual(pairAudit[0]!.metadata, {
+          soloOwner: true,
+          pinVerified: true,
+          reason: 'no other reviewer',
+        });
+        checks.push('owner approves with a fresh PIN when only a cashier could otherwise review');
 
         const values = {
           productName: 'Fixture soap',
@@ -433,7 +542,7 @@ vi.mock('@/server/audit', async () => {
           0
         );
         checks.push('front-shop publication has reviewed provenance and no invented strength');
-        assert.equal(checks.length, 12);
+        assert.equal(checks.length, 14);
       } finally {
         await c.end();
       }

@@ -146,6 +146,17 @@ export type CounterSearchRow = CounterCatalogRow & {
     /** More same-ingredient brands may be in stock than were checked. */
     truncated: boolean;
   };
+  /**
+   * DEV-907: owner-enabled "also in stock at another branch" line. Set only when
+   * the owner switched it on, this branch has none of the medicine, and it is not
+   * a controlled drug. Branch names of the same organization only — never a
+   * quantity, price, batch, customer or any other detail of the other branch.
+   */
+  otherBranchAvailability?: {
+    branchNames: string[];
+    /** More branches hold it than are named. */
+    more: boolean;
+  };
 };
 
 type LotRow = {
@@ -168,6 +179,8 @@ const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
 /** DEV-878: bound on same-ingredient candidates checked per distinct ingredient set. */
 const MAX_ALTERNATIVE_CANDIDATES = 20;
+/** DEV-907: branch names named on one availability line. */
+const MAX_OTHER_BRANCH_NAMES = 3;
 
 /**
  * A strength component as a counter reads it: `500 mg`, `2.5 mg`, `500 mg + 30 mg`.
@@ -387,7 +400,13 @@ function candidateFrom(scope: CounterScope, lot: LotRow, balance: BalanceRow): A
 export async function searchCounterCatalog(
   db: ScopedDb,
   scope: CounterScope,
-  input: { query: string; limit?: number; at?: Date }
+  input: {
+    query: string;
+    limit?: number;
+    at?: Date;
+    /** DEV-907: the owner's switch, read by the server; never taken from the client. */
+    otherBranchAvailability?: boolean;
+  }
 ): Promise<{ rows: CounterSearchRow[]; truncated: boolean }> {
   const limit = Math.min(Math.max(input.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
   const at = input.at ?? new Date();
@@ -512,7 +531,88 @@ export async function searchCounterCatalog(
       truncated: candidatesBySet.get(ingredientSetKey(source.strengths))?.truncated ?? false,
     };
   }
+  if (input.otherBranchAvailability) {
+    // Only a medicine this branch has none of, and never a controlled drug: the
+    // row flag is checked here and the stored flag again in the read itself.
+    const outOfStock = unavailable.filter(
+      (row) => (row.medicineOnHandUnits ?? row.onHandUnits) === 0 && !row.restriction.controlled
+    );
+    const elsewhere = await readOtherBranchAvailability(
+      db,
+      scope,
+      outOfStock.map((row) => row.medicineId),
+      at
+    );
+    for (const row of outOfStock) {
+      const names = elsewhere.get(row.medicineId);
+      if (!names?.length) continue;
+      row.otherBranchAvailability = {
+        branchNames: names.slice(0, MAX_OTHER_BRANCH_NAMES),
+        more: names.length > MAX_OTHER_BRANCH_NAMES,
+      };
+    }
+  }
   return { rows, truncated: matches.size > medicineIds.length };
+}
+
+/**
+ * DEV-907: the names of the other active branches of this organization that hold
+ * sellable-looking stock of each medicine: an active, unexpired batch of a
+ * non-controlled medicine, received, with an AVAILABLE balance above zero.
+ *
+ * The read is pinned to the caller's organization (and RLS pins it again), so
+ * another organization's stock can never appear. Only branch names leave this
+ * function; quantities, prices, batches and lots are never selected.
+ */
+export async function readOtherBranchAvailability(
+  db: ScopedDb,
+  scope: CounterScope,
+  medicineIds: readonly string[],
+  at: Date
+): Promise<Map<string, string[]>> {
+  const result = new Map<string, string[]>();
+  if (medicineIds.length === 0) return result;
+  const lotFilter = {
+    organizationId: scope.organizationId,
+    receivedAt: { not: null, lte: at },
+    batch: {
+      organizationId: scope.organizationId,
+      medicineId: { in: [...medicineIds] },
+      state: 'ACTIVE' as const,
+      expiresAt: { gt: at },
+      medicine: { organizationId: scope.organizationId, controlled: false },
+    },
+    balances: {
+      some: {
+        organizationId: scope.organizationId,
+        disposition: 'AVAILABLE' as const,
+        onHandUnits: { gt: 0 },
+      },
+    },
+  };
+  const branches = await db.pharmacyBranch.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      active: true,
+      id: { not: scope.branchId },
+      inventoryLots: { some: lotFilter },
+    },
+    select: {
+      id: true,
+      name: true,
+      inventoryLots: { where: lotFilter, select: { batch: { select: { medicineId: true } } } },
+    },
+    orderBy: [{ name: 'asc' }, { id: 'asc' }],
+  });
+  for (const branch of branches) {
+    if (branch.id === scope.branchId) continue;
+    for (const medicineId of new Set(branch.inventoryLots.map((lot) => lot.batch.medicineId))) {
+      const names = result.get(medicineId) ?? [];
+      names.push(branch.name);
+      result.set(medicineId, names);
+    }
+  }
+  return result;
 }
 
 /**
