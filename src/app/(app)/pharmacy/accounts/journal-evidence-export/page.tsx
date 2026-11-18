@@ -118,14 +118,19 @@ export default async function JournalEvidenceExportPage({
   const zone = workspaceZoneLabel(timeZone);
   const pageText = value(query.page) ?? '1';
   const page = /^\d+$/.test(pageText) ? Number(pageText) : 0;
+  const fromInstant = from ? workspaceDateRange(fromText!, fromText!, timeZone).from : null;
+  const toInstant = to ? workspaceDateRange(toText!, toText!, timeZone).from : null;
   const valid =
     !!branchId &&
     branchId.length <= 128 &&
     branches.some((branch) => branch.id === branchId) &&
     !!from &&
     !!to &&
+    !!fromInstant &&
+    !!toInstant &&
     to > from &&
-    to.getTime() - from.getTime() <= 92 * 86_400_000 &&
+    // The server limit applies to the converted instants, which a daylight-saving change can stretch.
+    toInstant.getTime() - fromInstant.getTime() <= 92 * 86_400_000 &&
     Number.isSafeInteger(page) &&
     page >= 1 &&
     page <= 10_000;
@@ -135,8 +140,8 @@ export default async function JournalEvidenceExportPage({
     try {
       const result = await pharmacyFinanceRouter.createCaller(ctx).financialStatements({
         branchId,
-        from: workspaceDateRange(fromText!, fromText!, timeZone).from.toISOString(),
-        to: workspaceDateRange(toText!, toText!, timeZone).from.toISOString(),
+        from: fromInstant.toISOString(),
+        to: toInstant.toISOString(),
         page,
       });
       // Prisma Int journal amounts are exact; serialize them without currency conversion.

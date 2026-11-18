@@ -129,6 +129,24 @@ describe('journal evidence export page', () => {
     expect(html).not.toContain('5:00 AM');
   });
 
+  it('does not read a window whose zone-converted span exceeds 92 days', async () => {
+    mocks.createTRPCContext.mockResolvedValue({
+      session: { user: { id: 'owner-1', role: 'ADMIN' } },
+      organization: { id: 'org-1', timezone: 'Europe/London' },
+      entitlements: { enabledModules: ['pharmacy-reports'] },
+      db: {},
+      requestMeta: { ip: null },
+    });
+    // 1 Aug to 1 Nov spans the October fall-back: 92 days plus one hour in London.
+    const html = renderToStaticMarkup(
+      await Page({
+        searchParams: Promise.resolve({ ...valid, from: '2026-08-01', to: '2026-11-01' }),
+      })
+    );
+    expect(html).toContain('Invalid input is not read or exported');
+    expect(mocks.financialStatements).not.toHaveBeenCalled();
+  });
+
   it.each(['admin:access', 'reports:operational', 'reports:financial'])(
     'denies an ADMIN with a missing %s capability',
     async (denied) => {
