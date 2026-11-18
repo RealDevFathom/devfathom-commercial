@@ -333,6 +333,46 @@ describe('CRM-L01 pharmacy loyalty', () => {
     });
     expect(snapshot.loyaltyActive).toBe(true);
   });
+
+  it('DEV-909: limits the points history to the visible branches, never the shared balance', async () => {
+    const db = {
+      $queryRaw: vi.fn(async () => [{ branchId: null }]),
+      pharmacyCustomer: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'customer-a', creditLimitMinor: 0 }),
+      },
+      pharmacyLoyaltyPointsEntry: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { points: 300 } }),
+        findMany: vi.fn().mockResolvedValue([]),
+        count: vi.fn().mockResolvedValue(0),
+      },
+      pharmacySale: { findMany: vi.fn().mockResolvedValue([]) },
+      pharmacyLoyaltyProgramVersion: earningFixture().pharmacyLoyaltyProgramVersion,
+    };
+    const listed = (extra: object = {}) => ({
+      organizationId: 'org-a',
+      customerId: 'customer-a',
+      ...extra,
+      NOT: { kind: 'EXPIRY', points: 0 },
+    });
+    await expect(
+      readCustomerSnapshot(db as never, scope, 'customer-a', 1, ['branch-a', 'branch-c'])
+    ).resolves.toMatchObject({ pointsBalance: 300 });
+    const mine = { branchId: { in: ['branch-a', 'branch-c'] } };
+    expect(db.pharmacyLoyaltyPointsEntry.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: listed(mine) })
+    );
+    expect(db.pharmacyLoyaltyPointsEntry.count).toHaveBeenCalledWith({ where: listed(mine) });
+    expect(db.pharmacyLoyaltyPointsEntry.aggregate).toHaveBeenCalledWith({
+      where: { organizationId: 'org-a', customerId: 'customer-a' },
+      _sum: { points: true },
+    });
+    // Without a branch list (the owner, or the customer's own portal) every branch is listed.
+    await readCustomerSnapshot(db as never, scope, 'customer-a');
+    expect(db.pharmacyLoyaltyPointsEntry.findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({ where: listed() })
+    );
+    expect(db.pharmacyLoyaltyPointsEntry.count).toHaveBeenLastCalledWith({ where: listed() });
+  });
 });
 
 describe('DEV-764 expiry dates and value-true refund restoration', () => {

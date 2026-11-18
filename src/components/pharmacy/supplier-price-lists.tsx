@@ -36,6 +36,14 @@ function change(minor: number | null, bps: number | null) {
 
 const MATCH_LABEL = { MATCHED: 'Matched', NO_MATCH: 'Not in catalogue', AMBIGUOUS: 'Needs mapping' };
 
+/** The on-page change flag. Both booleans come from the server's SQL. */
+function changeFlag(line: { tradeChanged: boolean; mrpChanged: boolean }) {
+  if (line.tradeChanged && line.mrpChanged) return 'TP and MRP changed';
+  if (line.tradeChanged) return 'TP changed';
+  if (line.mrpChanged) return 'MRP changed';
+  return null;
+}
+
 export function SupplierPriceListsConsole({
   canApprove,
   actorId,
@@ -62,6 +70,7 @@ export function SupplierPriceListsConsole({
   const [notice, setNotice] = useState('');
   const [reading, setReading] = useState(false);
   const [pin, setPin] = useState('');
+  const [flaggedOnly, setFlaggedOnly] = useState(false);
   const busy = reading || upload.isPending || decide.isPending;
   const denied =
     options.error?.data?.code === 'FORBIDDEN' || options.error?.data?.code === 'UNAUTHORIZED';
@@ -140,7 +149,9 @@ export function SupplierPriceListsConsole({
       </SectionCard>
     );
 
-  const lines = review.data?.lines ?? [];
+  const allLines = review.data?.lines ?? [];
+  const flagged = allLines.filter((line) => changeFlag(line) !== null).length;
+  const lines = flaggedOnly ? allLines.filter((line) => changeFlag(line) !== null) : allLines;
   const importedByMe = review.data?.importedById === actorId;
   // Segregation of duties, mirrored from the server: the importer does not
   // approve their own list unless they are a solo owner re-entering a PIN.
@@ -291,6 +302,22 @@ export function SupplierPriceListsConsole({
                 </span>
               </label>
             )}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p role="status" className="text-sm text-text-body">
+                {flagged === 0
+                  ? 'No row changes a trade price or MRP against your records.'
+                  : `${flagged} of ${allLines.length} rows flagged: the trade price or MRP differs from your records.`}
+              </p>
+              <Button
+                variant="secondary"
+                size="touch"
+                aria-pressed={flaggedOnly}
+                disabled={flagged === 0 && !flaggedOnly}
+                onClick={() => setFlaggedOnly((value) => !value)}
+              >
+                {flaggedOnly ? 'Show all rows' : 'Show flagged rows only'}
+              </Button>
+            </div>
             <div className="overflow-x-auto">
               <Table>
                 <caption className="sr-only">
@@ -301,6 +328,7 @@ export function SupplierPriceListsConsole({
                     <TableHead>Row</TableHead>
                     <TableHead>Product</TableHead>
                     <TableHead>Match</TableHead>
+                    <TableHead>Change flag</TableHead>
                     <TableHead className="text-right">List TP</TableHead>
                     <TableHead className="text-right">TP change</TableHead>
                     <TableHead className="text-right">List MRP</TableHead>
@@ -328,6 +356,13 @@ export function SupplierPriceListsConsole({
                           tone={line.matchStatus === 'MATCHED' ? 'success' : 'warning'}
                           label={MATCH_LABEL[line.matchStatus]}
                         />
+                      </TableCell>
+                      <TableCell>
+                        {changeFlag(line) ? (
+                          <StatusPill status="changed" tone="warning" label={changeFlag(line)} />
+                        ) : (
+                          <span className="text-xs text-text-muted">No change</span>
+                        )}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{pkr(line.listTradePriceMinor)}</TableCell>
                       <TableCell className="text-right tabular-nums">

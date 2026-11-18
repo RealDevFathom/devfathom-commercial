@@ -36,6 +36,7 @@ const reads = vi.hoisted(() => {
     findSubstituteProposals: read([]),
     findUpsellSuggestions: read([]),
     authenticatePharmacyPack: read({ status: 'UNVERIFIED' }),
+    lookupCounterVoucher: read({ id: 'voucher-1', status: 'READY' }),
   };
 });
 vi.mock('@/lib/pharmacy/counter', async (original) => ({
@@ -62,6 +63,11 @@ vi.mock('@/lib/pharmacy/substitute-finder', async (original) => ({
 vi.mock('@/lib/pharmacy/upsell-suggestions', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/upsell-suggestions')>()),
   findUpsellSuggestions: reads.findUpsellSuggestions,
+}));
+// DEV-780: the counter's voucher lookup.
+vi.mock('@/lib/pharmacy/vouchers', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/vouchers')>()),
+  lookupCounterVoucher: reads.lookupCounterVoucher,
 }));
 vi.mock('@/lib/pharmacy/pack-authentication-operations', () => ({
   authenticatePharmacyPack: reads.authenticatePharmacyPack,
@@ -135,6 +141,11 @@ const procedures: Array<[string, Read, (caller: Caller, branchId: string) => Pro
     'authenticatePack',
     'authenticatePharmacyPack',
     (c, branchId) => c.authenticatePack({ branchId, payload: '0100' }),
+  ],
+  [
+    'counterVoucher',
+    'lookupCounterVoucher',
+    (c, branchId) => c.counterVoucher({ branchId, code: 'GIFT10' }),
   ],
 ];
 
@@ -247,4 +258,31 @@ describe('counter reads stay inside the cashier’s branch assignment (DEV-876)'
       expect(scopeOf(read)).toMatchObject({ organizationId: 'org-1', branchId: DHA });
     }
   );
+});
+
+describe('the counter customer snapshot limits points history by branch (DEV-909)', () => {
+  /** The branches whose points history the library read was told to list (its fifth argument). */
+  const visibleBranches = () => reads.readCustomerSnapshot.mock.calls[0]?.[4];
+  const snapshot = (c: Caller, branchId: string) =>
+    c.customerSnapshot({ branchId, customerId: 'customer-1' });
+
+  it('shows staff, managers included, the history of their assigned branches only', async () => {
+    await expect(snapshot(caller(), MAIN)).resolves.toBeDefined();
+    expect(visibleBranches()).toEqual([MAIN]);
+    expect(db.pharmacyBranchAssignment.findMany).toHaveBeenLastCalledWith({
+      where: {
+        organizationId: 'org-1',
+        userId: 'cashier-1',
+        active: true,
+        branch: { organizationId: 'org-1', active: true },
+      },
+      select: { branchId: true },
+    });
+  });
+
+  it('shows a session ADMIN of the organization every branch', async () => {
+    await expect(snapshot(caller('ADMIN'), DHA)).resolves.toBeDefined();
+    expect(reads.readCustomerSnapshot.mock.calls[0]).toHaveLength(5);
+    expect(visibleBranches()).toBeUndefined();
+  });
 });

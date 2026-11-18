@@ -77,7 +77,11 @@ import {
 } from '@/lib/pharmacy/controlled-register';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { annotateAudit } from '@/server/audit';
-import { authenticateVoucherCashierPin } from '@/lib/pharmacy/vouchers';
+import {
+  authenticateVoucherCashierPin,
+  counterVoucherInput,
+  lookupCounterVoucher,
+} from '@/lib/pharmacy/vouchers';
 import {
   isLockedOut,
   registerFailedAttempt,
@@ -208,7 +212,7 @@ import {
   actorMayRefund,
   authenticateRefundPin,
   REFUND_FORBIDDEN,
-  REFUND_PIN_POLICY,
+  refundApprovalAudit,
   RETURN_FORBIDDEN,
   RETURN_PIN_BLOCKED,
 } from '@/lib/pharmacy/refund-authorization';
@@ -420,6 +424,29 @@ async function assignedBranchScope(ctx: TRPCContext, branch: string): Promise<Le
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
   return scope;
+}
+
+/**
+ * DEV-909: a customer's detailed points history is shown for every branch only to a session
+ * ADMIN of the organization (the owner). Other staff, branch managers included, see it for the
+ * active branches they are assigned to; the shared points balance is not limited.
+ */
+async function visibleLoyaltyBranches(
+  ctx: TRPCContext,
+  scope: LedgerScope
+): Promise<string[] | undefined> {
+  const user = ctx.session!.user;
+  if (user.role === 'ADMIN' && user.organizationId === scope.organizationId) return undefined;
+  const rows = await ctx.db.pharmacyBranchAssignment.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      userId: user.id,
+      active: true,
+      branch: { organizationId: scope.organizationId, active: true },
+    },
+    select: { branchId: true },
+  });
+  return [...new Set([scope.branchId, ...rows.map((row) => row.branchId)])];
 }
 
 type SaleLineInput = Parameters<typeof addSaleLine>[2];
@@ -1677,11 +1704,13 @@ export const pharmacySalesRouter = router({
     )
     .query(async ({ ctx, input }) => {
       try {
+        const scope = await assignedBranchScope(ctx, input.branchId);
         return await readCustomerSnapshot(
           ctx.db,
-          await assignedBranchScope(ctx, input.branchId),
+          scope,
           input.customerId,
-          input.page
+          input.page,
+          await visibleLoyaltyBranches(ctx, scope)
         );
       } catch (error) {
         fail(error);
@@ -2283,11 +2312,11 @@ export const pharmacySalesRouter = router({
           action: 'pharmacySales.refundTender',
         });
         annotateAudit(ctx, {
-          metadata: {
-            policy: REFUND_PIN_POLICY,
+          metadata: refundApprovalAudit({
+            initiatedById: scope.actorId,
             approverId: scope.actorId,
-            pinVerified: 'verified' in pin,
-          },
+            pin,
+          }),
         });
         if ('blocked' in pin) return pin;
         return await ctx.db.$transaction((tx) =>
@@ -3169,11 +3198,11 @@ export const pharmacySalesRouter = router({
           action: 'pharmacySales.returnLine',
         });
         annotateAudit(ctx, {
-          metadata: {
-            policy: REFUND_PIN_POLICY,
+          metadata: refundApprovalAudit({
+            initiatedById: scope.actorId,
             approverId: scope.actorId,
-            pinVerified: 'verified' in pin,
-          },
+            pin,
+          }),
         });
         if ('blocked' in pin) return { blocked: RETURN_PIN_BLOCKED };
         return await ctx.db.$transaction(async (tx) => {
@@ -3243,11 +3272,11 @@ export const pharmacySalesRouter = router({
           action: 'pharmacySales.returnAndRefund',
         });
         annotateAudit(ctx, {
-          metadata: {
-            policy: REFUND_PIN_POLICY,
+          metadata: refundApprovalAudit({
+            initiatedById: scope.actorId,
             approverId: scope.actorId,
-            pinVerified: 'verified' in pin,
-          },
+            pin,
+          }),
         });
         if ('blocked' in pin) return { blocked: RETURN_PIN_BLOCKED };
         return await ctx.db.$transaction(async (tx) => {
@@ -3991,6 +4020,22 @@ export const pharmacySalesRouter = router({
             limit: input.limit,
           }
         );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  /**
+   * DEV-780: the counter reads a typed or scanned voucher code before applying it to the next
+   * item. Read-only: the voucher is redeemed (and every rule re-checked) only by `addLine`.
+   */
+  counterVoucher: protectedProcedure
+    .input(counterVoucherInput.extend({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        await assignedBranchScope(ctx, input.branchId);
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        return await lookupCounterVoucher(ctx.db as unknown as ScopedDb, scope, input.code);
       } catch (error) {
         fail(error);
       }

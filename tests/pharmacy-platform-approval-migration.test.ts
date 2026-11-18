@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
  * written only by the platform control plane.
  */
 const sql = readFileSync(
-  'prisma/migrations/20261118120000_pharmacy_platform_approval/migration.sql',
+  'prisma/migrations/20261118121000_pharmacy_platform_approval/migration.sql',
   'utf8'
 );
 

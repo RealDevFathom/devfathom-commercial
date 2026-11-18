@@ -48,7 +48,7 @@ real card or wallet, or put credentials into chat, a ticket or a file until the 
 | --- | --- | --- | --- |
 | DVR / cameras (live view) | Pharmacy live view through the shared MediaMTX HLS gateway (DEV-740): configured-gateway registration, diagnostics, short-lived grants and a per-request authorized stream route. Tested with mocks, fixtures and a disposable-database browser run only. | `REAL-INTEGRATION` code (Pharmacy and Restaurant) | UNTESTED on hardware; needs a connected camera and an owner-provisioned gateway |
 | Camera still snapshots (transaction / cold-chain evidence) | Evidence capture works against the simulator. Real DVR snapshots are not wired. | `SIMULATOR` | UNTESTED, BLOCKED by DEV-745 |
-| Thermal 58 / 80 mm — raw ESC/POS | Server builds a validated ESC/POS byte job and returns it as JSON. Nothing dispatches it. | `GENERATED-FILE` | UNTESTED, BLOCKED by DEV-741 |
+| Thermal 58 / 80 mm — raw ESC/POS | The counter sends a settled receipt to a branch print queue; an enrolled print bridge (Pharmacy > Printer settings, administrators) collects it and reports QUEUED, SENDING, SENT_TO_PRINTER, FAILED, UNCONFIRMED or EXPIRED. Retry after FAILED or UNCONFIRMED needs a paper check. `SENT_TO_PRINTER` means the printer accepted the bytes, never that paper came out (DEV-741, DEV-904). | `REAL-INTEGRATION` code | UNTESTED on hardware; needs an enrolled bridge and owner approval (#1698) |
 | Thermal 58 / 80 mm and A4 — browser | Receipt HTML opened in a popup, then `window.print()`. Format choice is not saved. | `BROWSER-OS-DIALOG` | UNTESTED, saved settings BLOCKED by DEV-742 |
 | Barcode / DataMatrix scanner | Scanners are treated as keyboard input. GS1 parsing, goods-in resolution and pack authentication exist. No scanner-specific code. | Keyboard input into `REAL-INTEGRATION`-free parsing code | UNTESTED, config prerequisites below |
 | Card terminal | Card and wallet tenders either use a manual "received externally" record or hit an uncertified-provider refusal. No provider is bound. | `MANUAL-TENDER` (manual); `NOT-IMPLEMENTED` (integrated) | UNTESTED, BLOCKED by DEV-743 |
@@ -124,9 +124,11 @@ real card or wallet, or put credentials into chat, a ticket or a file until the 
   The route runs under an audited procedure; this document did not verify what is recorded.
 - **Bridge:** the Restaurant `scripts/print-bridge.ts` + `src/lib/restaurant/printing/target.ts`
   resolve only explicit targets: `tcp://host:9100`, `queue:///name` (macOS or Windows),
-  or a POSIX `/dev/` character device. Pharmacy does not use it; the job "is never
-  persisted" because `RestaurantPrintJob` references `RestaurantBranch`. Dispatch,
-  acknowledgement, retry and duplicate-print protection for Pharmacy are DEV-741.
+  or a POSIX `/dev/` character device. Pharmacy uses the same script with a `ppb_`
+  credential: an administrator enrols a bridge for one branch under Pharmacy > Printer
+  settings, the credential is shown once, and the bridge reports delivery states to the
+  Pharmacy print queue (DEV-741 server, DEV-904 screens). The script accepts only an `https`
+  application address, so it cannot run against a local `http://localhost` copy.
 - **Browser path** (`BROWSER-OS-DIALOG`): `src/lib/pharmacy/counter-browser-print.ts`
   opens a popup (`window.open`), writes escaped HTML and calls `print()`. Formats: `THERMAL`
   (80 mm), `THERMAL_58`, `A4` (190 mm body, 10 mm margin), `LABEL_50x30`. A blocked pop-up
@@ -185,8 +187,12 @@ real card or wallet, or put credentials into chat, a ticket or a file until the 
   elsewhere (`src/lib/pharmacy/manual-payments.ts`, `MANUAL_TENDER_TYPES`). A manual
   "card received externally" tender is DEV-713 (PR #1363, in review). Both are `MANUAL-TENDER`:
   they say nothing about any terminal and must never be reported as terminal integration.
-- DEV-743 owns the provider-agnostic adapter seam. No provider, SDK or certification may be
-  assumed. Card numbers (PAN) and CVV must never be stored or logged.
+- DEV-743 owns the provider-agnostic adapter seam (`src/lib/pharmacy/card-terminal/`, design in
+  `docs/pharmacy/card-terminal-integration-boundary.md`). It commits one durable payment-attempt
+  record (`pharmacy_card_terminal_attempts`) before a terminal can be asked to charge. Its
+  production admission list is empty and only a fake test terminal exists, so the integrated row
+  stays `NOT-IMPLEMENTED` until a named provider passes a real-device test. No provider, SDK or
+  certification may be assumed. Card numbers (PAN) and CVV must never be stored or logged.
 
 ## 3. Dependencies and owners (Linear state read on 2026-11-04)
 
@@ -332,11 +338,11 @@ What the code supports at `11660b3`, so nobody assumes more:
 - The app has **no** WebUSB, Web Serial or Web Bluetooth code. Browser printing can reach a USB
   printer only through an OS-installed queue and driver. Bluetooth works the same way, only if the
   OS pairs the printer and exposes a queue. Which OS and browser can do that is unverified.
-- The raw ESC/POS job is not dispatched at all today (DEV-741). The Restaurant bridge parser accepts
+- The raw ESC/POS receipt is dispatched through an enrolled print bridge (DEV-741, DEV-904). The bridge parser accepts
   `tcp://host:9100`, `queue:///name` (macOS/Windows) and POSIX `/dev/` character devices
   (`src/lib/restaurant/printing/target.ts`). A USB printer would reach the bridge as an OS queue
   or a `/dev/` device, a LAN printer as `tcp://`. **There is no Bluetooth target form.**
-  This is bridge parsing only; the bridge is not wired to Pharmacy and was not run.
+  This is bridge parsing only; the bridge has not been run against a real printer.
 - Compatibility of any printer, OS, browser, driver or connection type is **unverified** until a
   user-authorized real test records an evidence pack (section 9).
 
@@ -345,7 +351,7 @@ What the code supports at `11660b3`, so nobody assumes more:
 | HW-USB-01 | Identify the thermal printer exactly | Read label and driver page; record model, paper width, cutter, interface | Complete section 4.2 row; Epson brand not assumed | Photo of label, driver page | Owner access | UNTESTED |
 | HW-USB-02 | OS sees the USB printer and a named queue | Host OS printer list | Queue present with vendor driver | Screenshot | HW-USB-01; install only with approval | UNTESTED |
 | HW-USB-03 | Browser dialog print, 80 mm or 58 mm to the USB queue | Counter -> Print receipt -> pick the queue | Correct width, no clipping | Photo of paper | HW-USB-02 | UNTESTED |
-| HW-USB-04 | Raw ESC/POS over USB (queue or device) | Bridge hand-off of the generated job | Prints; app shows an honest delivery state | Photo + app state | [BLOCKED: DEV-741] | UNTESTED |
+| HW-USB-04 | Raw ESC/POS over USB (queue or device) | Counter -> Send to thermal printer through an enrolled bridge | Prints; app shows an honest delivery state | Photo + app state | Enrolled bridge (Pharmacy > Printer settings); owner approval | UNTESTED |
 | HW-USB-05 | Unplug, replug, sleep and wake the host | Disturb the connection | Visible error, safe retry, no duplicate paper | Capture | HW-USB-03 | UNTESTED |
 | HW-A4-01 | Record the Canon PIXMA G3416 setup | Host OS, driver, connection, browser | Complete row | Sheet | Owner access | UNTESTED |
 | HW-A4-02 | A4 receipt and Z-report to the Canon | Counter -> A4; Z-report | Fits page, 10 mm margins, readable | Photo of page | HW-A4-01 | UNTESTED |
@@ -366,15 +372,15 @@ Split by path so a browser pass is never reported as a raw-ESC/POS pass.
 | HW-PRN-01 | Record printer identity, driver, OS queue | Section 4.2 sheet | Complete row | Sheet | Operator | UNTESTED |
 | HW-PRN-02 | Browser print, 80 mm English cash receipt | Counter -> Print receipt -> choose the 80 mm queue | Whole receipt on 80 mm paper, no clipped columns | Photo of paper | OS queue + driver | UNTESTED |
 | HW-PRN-03 | Browser print, 58 mm English cash receipt | Same with `THERMAL_58` | No clipping | Photo | 58 mm queue | UNTESTED |
-| HW-PRN-04 | Raw-path column width | Print a 48-char and a 32-char ruler line | Ruler fits the stated width | Photo; note real columns | [BLOCKED: DEV-741] | UNTESTED |
+| HW-PRN-04 | Raw-path column width | Print a 48-char and a 32-char ruler line | Ruler fits the stated width | Photo; note real columns | Enrolled bridge; no raw ruler page yet, use a receipt with a full-width line | UNTESTED |
 | HW-PRN-05 | A4 receipt / report on a normal printer | Counter -> A4; Z-report | Fits page, 10 mm margins | Photo of page | A4 queue | UNTESTED |
 | HW-PRN-06 | Urdu receipt, browser path | Switch locale to Urdu, print | Correct shaping, right-to-left, digits | Photo | Urdu font on host | UNTESTED |
 | HW-PRN-07 | Urdu on raw path | Request Urdu job | Refused with browser fallback, no garbage | API result 422 + UI state | none | UNTESTED |
 | HW-PRN-08 | Medicine names with non-ASCII characters | Print on both paths | Raw refuses; browser prints | Results | none | UNTESTED |
-| HW-PRN-09 | Cutter and paper-out | Paper out / cover open | Honest app state; no silent success | Photo, UI state | [BLOCKED: DEV-741] | UNTESTED |
+| HW-PRN-09 | Cutter and paper-out | Paper out / cover open | Honest app state; no silent success | Photo, UI state | Enrolled bridge; owner approval | UNTESTED |
 | HW-PRN-10 | Cancel the OS dialog | Cancel | App must not claim paper was printed | UI state | none | UNTESTED |
 | HW-PRN-11 | Pop-up blocked | Block pop-ups, print | "Allow pop-ups" guidance and retry works | UI state | none | UNTESTED |
-| HW-PRN-12 | Duplicate-print protection | Double-click, retry after timeout, reload mid-print | One original; repeats are marked REPRINT; no new receipt number | Paper + audit | [BLOCKED: DEV-741, DEV-195] | UNTESTED |
+| HW-PRN-12 | Duplicate-print protection | Double-click, retry after timeout, reload mid-print | One original; repeats are marked REPRINT; no new receipt number | Paper + audit | Enrolled bridge; [BLOCKED: DEV-195] for the reprint policy | UNTESTED |
 | HW-PRN-13 | Reprint marking cannot be bypassed by editing the URL query | Call the print API with `reprint=0` for an old sale | Policy decided and enforced | Result | [BLOCKED: DEV-195] | UNTESTED |
 | HW-PRN-14 | Role access: who may print / reprint | Each role | Matches policy | Per-role result | DEV-742 | UNTESTED |
 | HW-PRN-15 | Receipt content correctness | Compare paper to sale | Totals, tender, batch/expiry correct; address/licence per DEV-636 | Photo + sale record | DEV-636 merged | UNTESTED |

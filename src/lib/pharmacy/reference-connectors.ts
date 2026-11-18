@@ -160,7 +160,9 @@ function normalizeReferenceRows(
 
     const blockingIssues: NormalizedMedicineReferenceRow['blockingIssues'] = [];
     if (!values.productName) blockingIssues.push('MISSING_PRODUCT_NAME');
-    if (!values.strength) blockingIssues.push('MISSING_STRENGTH');
+    // DEV-852: legacy imports carry no strength; it is stored as not recorded, not blocked.
+    if (!values.strength && options.sourceType !== 'IMPORT')
+      blockingIssues.push('MISSING_STRENGTH');
     if (!values.dosageForm) blockingIssues.push('MISSING_DOSAGE_FORM');
     if (!values.pack) blockingIssues.push('MISSING_PACK');
     if (invalidSchedule) blockingIssues.push('INVALID_SCHEDULE_CLASSIFICATION');

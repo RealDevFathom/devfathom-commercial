@@ -12,7 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 const url = process.env.CONTROLLED_TEST_DATABASE_URL ?? process.env.OWNER_DATABASE_URL;
 const schema = `platform_approval_${randomUUID().replaceAll('-', '')}`;
 const migration = readFileSync(
-  'prisma/migrations/20261118120000_pharmacy_platform_approval/migration.sql',
+  'prisma/migrations/20261118121000_pharmacy_platform_approval/migration.sql',
   'utf8'
 );
 
