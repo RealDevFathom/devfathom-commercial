@@ -29,10 +29,13 @@ import { parseDelimitedRecords, parseDelimitedText } from './source-values';
 
 const FIXTURE_DIR = join(process.cwd(), 'src/lib/pharmacy/migration/fixtures');
 const SYNTHETIC = readFileSync(join(FIXTURE_DIR, 'marg-batch-stock-synthetic.csv'), 'utf8');
+/** A fixed "now", so fixture expiries never drift into the past. */
+const AS_OF = new Date('2026-11-18T06:00:00Z');
 
 function profileText(text: string): ProfileResult {
   return profileTable(margBatchStockProfiler, parseMargBatchStockText(text).table, {
     quantityUnit: 'PACKS',
+    asOf: AS_OF,
   });
 }
 
@@ -163,12 +166,8 @@ describe('Marg values flow through the shared exception pass', () => {
       mrpMinor: null,
       quantityCanonical: null,
     });
-    expect(bucketsOf(result)).toEqual([
-      'MISSING_BATCH',
-      'MISSING_EXPIRY',
-      'MISSING_MRP',
-      'UNIT_AMBIGUOUS',
-    ]);
+    // DEV-927: a blank batch or expiry is "not recorded", not an exception.
+    expect(bucketsOf(result)).toEqual(['MISSING_MRP', 'UNIT_AMBIGUOUS']);
   });
 
   it('allows two batches of one item but flags a repeated batch', () => {
@@ -203,6 +202,64 @@ describe('Marg values flow through the shared exception pass', () => {
     expect(margBatchStockProfiler.kind).toBe('MARG_EXCEL');
     expect(margBatchStockProfiler.version).toBe(MARG_PROFILER_VERSION);
     expect(excelCsvProfiler.kind).toBe('EXCEL_CSV');
+  });
+});
+
+describe('DEV-927 — Marg stock with no batch or expiry is "not recorded", not blocking', () => {
+  const header = 'Item Name,Pack,Batch,Exp,Qty,MRP,Rate';
+
+  it('imports rows with no batch and no expiry with no exception, stored as not recorded', () => {
+    const result = profileText(
+      [
+        header,
+        'Panadol,10x10,,,5,250.00,200.00',
+        'Brufen,20,,06/28,10,50.00,40.00',
+        'Flagyl,10x10,F1,,3,120.00,90.00',
+      ].join('\n')
+    );
+
+    expect(result.rows.map((row) => [row.batchNumber, row.expiryDate])).toEqual([
+      [null, null],
+      [null, new Date(Date.UTC(2028, 5, 30))],
+      ['F1', null],
+    ]);
+    expect(result.exceptions).toEqual([]);
+  });
+
+  it('still refuses a row whose known expiry has passed, as BLOCKING', () => {
+    const result = profileText(
+      [header, 'Panadol,10x10,P1,10/26,5,250.00,200.00', 'Panadol,10x10,P2,11/26,5,250.00,200.00'].join(
+        '\n'
+      )
+    );
+
+    expect(result.exceptions).toEqual([
+      {
+        rowIndex: 0,
+        bucket: 'EXPIRED_STOCK',
+        severity: 'BLOCKING',
+        detail: 'Expiry "10/26" for source key row:1 has passed; expired stock cannot be imported.',
+      },
+    ]);
+  });
+
+  it('still raises MISSING_EXPIRY for an expiry that is present but unreadable', () => {
+    const result = profileText([header, 'Panadol,10x10,P1,soon,5,250.00,200.00'].join('\n'));
+
+    expect(result.exceptions).toMatchObject([{ bucket: 'MISSING_EXPIRY', severity: 'BLOCKING' }]);
+  });
+
+  it('tells two unrecorded-batch lots of one item apart by their expiry', () => {
+    const result = profileText(
+      [
+        header,
+        'Panadol,10x10,,03/27,1,250.00,200.00',
+        'Panadol,10x10,,09/27,1,250.00,200.00',
+        'Panadol,10x10,,09/27,1,250.00,200.00',
+      ].join('\n')
+    );
+
+    expect(result.exceptions).toMatchObject([{ rowIndex: 2, bucket: 'DUPLICATE_PRODUCT' }]);
   });
 });
 

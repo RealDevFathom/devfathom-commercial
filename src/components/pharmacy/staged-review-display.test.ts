@@ -26,6 +26,7 @@ describe('staged review display helpers', () => {
     );
     expect(STAGED_COLUMN_HEADINGS.join(' ')).not.toMatch(/source|saleprice|purprice/i);
     expect(plainExceptionLabel('MISSING_BATCH')).toBe('No batch or expiry recorded');
+    expect(plainExceptionLabel('EXPIRED_STOCK')).toBe('Expiry has passed');
     expect(STAGED_LIST_INTRO).toMatch(/cannot be sold/);
   });
 });
