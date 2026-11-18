@@ -24,12 +24,14 @@ export const NEAR_EXPIRY_DAYS = 90;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Whole days until `expiresAt` when under {@link NEAR_EXPIRY_DAYS}; otherwise null. */
-export function nearExpiryDays(expiresAt: string, now: Date): number | null {
+export function nearExpiryDays(expiresAt: string | null, now: Date): number | null {
+  // DEV-853: an expiry that was never recorded is never "near".
+  if (expiresAt === null) return null;
   const days = Math.floor((new Date(expiresAt).getTime() - now.getTime()) / DAY_MS);
   return days >= 0 && days < NEAR_EXPIRY_DAYS ? days : null;
 }
 
-function NearExpiryPill({ expiresAt, now }: { expiresAt: string; now: Date }) {
+function NearExpiryPill({ expiresAt, now }: { expiresAt: string | null; now: Date }) {
   const days = nearExpiryDays(expiresAt, now);
   return days === null ? null : (
     <StatusPill status="near-expiry" tone="warning" label={`Near expiry · ${days} d`} />
@@ -201,7 +203,7 @@ export function CounterCartPanel({
                       >
                         <div className="flex flex-wrap gap-x-2 font-mono tabular-nums">
                           <span className="font-semibold text-text-strong">
-                            Batch {allocation.batchNumber}
+                            Batch {allocation.batchNumber ?? 'not recorded'}
                           </span>
                           <span>{formatShortExpiry(allocation.expiresAt)}</span>
                         </div>
@@ -287,8 +289,10 @@ export function CounterCartPanel({
 /** One lot a counter batch override may choose, as `counterLotOptions` returns it. */
 export type CounterLotOption = {
   inventoryLotId: string;
-  batchNumber: string;
-  expiresAt: string;
+  /** DEV-853: null when the batch number was never recorded. */
+  batchNumber: string | null;
+  /** DEV-853: null when the expiry was never recorded. */
+  expiresAt: string | null;
   sellableUnits: number;
   blockedBy: string | null;
 };
@@ -374,7 +378,8 @@ export function CounterLotOverride({
     return (
       <div className="space-y-2" role="status" data-testid="counter-lot-override-applied">
         <p className="text-sm font-semibold text-text-strong">
-          Batch {chosenLot.batchNumber} will be sold on this line (not the earliest-expiry batch).
+          Batch {chosenLot.batchNumber ?? 'not recorded'} will be sold on this line (not the
+          earliest-expiry batch).
         </p>
         <p className="text-xs text-text-muted">Reason: {value.reason.trim()}</p>
         <div className="flex flex-wrap gap-2">
@@ -441,7 +446,7 @@ export function CounterLotOverride({
                     onChange({ ...value, inventoryLotId: fefo ? null : lot.inventoryLotId })
                   }
                 />
-                <span>Batch {lot.batchNumber}</span>
+                <span>Batch {lot.batchNumber ?? 'not recorded'}</span>
                 <span>{formatShortExpiry(lot.expiresAt)}</span>
                 <span>{lot.sellableUnits} units</span>
                 {fefo ? <StatusPill status="fefo" tone="neutral" label="Earliest expiry" /> : null}

@@ -51,8 +51,11 @@ export type CounterReceiptLine = {
   strength: string | null;
   presentation: string;
   batchNumber: string;
-  /** ISO date of the dispensed batch's expiry. */
-  expiresAt: string;
+  /**
+   * ISO date of the dispensed batch's expiry. DEV-853: null when the one
+   * dispensed lot never had its expiry recorded.
+   */
+  expiresAt: string | null;
   saleUnit: SaleUnitKind;
   quantity: number;
   canonicalUnits: number;
@@ -111,6 +114,10 @@ type Strings = {
   expiry: string;
   /** QA-3: printed in place of an expiry date for a non-drug item with none. */
   noExpiry: string;
+  /** DEV-853: printed when legacy opening stock never recorded a batch number. */
+  batchNotRecorded: string;
+  /** DEV-853: printed when legacy opening stock never recorded an expiry. */
+  expiryNotRecorded: string;
   quantity: string;
   unitPrice: string;
   lineTotal: string;
@@ -148,6 +155,8 @@ export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Stri
     batch: 'Batch',
     expiry: 'Expiry',
     noExpiry: 'No expiry',
+    batchNotRecorded: 'Batch not recorded',
+    expiryNotRecorded: 'Expiry not recorded',
     quantity: 'Qty',
     unitPrice: 'Unit price',
     lineTotal: 'Amount',
@@ -189,6 +198,8 @@ export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Stri
     batch: 'بیچ',
     expiry: 'میعاد',
     noExpiry: 'کوئی میعاد نہیں',
+    batchNotRecorded: 'بیچ درج نہیں',
+    expiryNotRecorded: 'میعاد درج نہیں',
     quantity: 'مقدار',
     unitPrice: 'فی یونٹ قیمت',
     lineTotal: 'رقم',
@@ -286,8 +297,12 @@ export function formatReceiptExpiry(
     : formatReceiptDate(value);
 }
 
-/** The compact "Exp 2027-01-31" a counter screen shows, or "No expiry" (QA-3). */
+/**
+ * The compact "Exp 2027-01-31" a counter screen shows, or "No expiry" (QA-3),
+ * or (DEV-853) "Expiry not recorded" for legacy stock that never had one.
+ */
 export function formatShortExpiry(value: string | null): string {
+  if (value === null) return COUNTER_RECEIPT_STRINGS.en.expiryNotRecorded;
   return isNoExpiryDate(value)
     ? COUNTER_RECEIPT_STRINGS.en.noExpiry
     : `Exp ${formatReceiptDate(value)}`;
@@ -313,9 +328,11 @@ export function receiptLineLabel(line: CounterReceiptLine, locale: CounterReceip
   const identity = [line.medicineName, line.strength].filter(Boolean).join(' ');
   const tail = [
     `${strings.batch} ${line.batchNumber}`,
-    isNoExpiryDate(line.expiresAt)
-      ? strings.noExpiry
-      : `${strings.expiry} ${formatReceiptDate(line.expiresAt)}`,
+    line.expiresAt === null
+      ? strings.expiryNotRecorded
+      : isNoExpiryDate(line.expiresAt)
+        ? strings.noExpiry
+        : `${strings.expiry} ${formatReceiptDate(line.expiresAt)}`,
     `${line.quantity} ${strings.saleUnit[line.saleUnit]}`,
     formatMinor(line.lineTotalMinor, locale),
   ].join(' · ');

@@ -943,7 +943,7 @@ export function ReturnForm({
                   </option>
                   {line?.lots.map((lot) => (
                     <option key={lot.lotId} value={lot.lotId} disabled={lot.returnableUnits <= 0}>
-                      Batch {lot.batchNumber}
+                      Batch {lot.batchNumber ?? 'not recorded'}
                       {lot.expiresAt
                         ? ` · ${formatLotExpiry(lot.expiresAt, (value) => `expires ${value.toISOString().slice(0, 10)}`)}`
                         : ''}{' '}

@@ -98,7 +98,8 @@ describe('AI-05 deterministic substitute finder', () => {
       receivedAt: { not: null },
       batch: {
         state: 'ACTIVE',
-        expiresAt: { gt: new Date('2026-09-05T00:00:00Z') },
+        // DEV-853: an unrecorded expiry is never treated as expired.
+        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date('2026-09-05T00:00:00Z') } }],
         medicine: { saleable: true },
       },
       balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
@@ -312,7 +313,11 @@ describe('#745 same-salt brand margin optimiser', () => {
     expect(args?.where).toMatchObject({
       organizationId: 'org-a',
       branchId: 'branch-a',
-      batch: { state: 'ACTIVE', expiresAt: { gt: at }, medicine: { saleable: true } },
+      batch: {
+        state: 'ACTIVE',
+        OR: [{ expiresAt: null }, { expiresAt: { gt: at } }],
+        medicine: { saleable: true },
+      },
     });
 
     // The gain threshold is configurable, never a hardcoded figure.

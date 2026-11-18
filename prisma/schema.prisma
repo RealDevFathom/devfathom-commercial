@@ -2625,8 +2625,12 @@ model PharmacyManufacturingBatch {
   id              String                  @id @default(cuid())
   organizationId  String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   medicineId      String
-  batchNumber     String
-  expiresAt       DateTime
+  /// DEV-853: null when the batch number was never recorded (legacy opening
+  /// stock). Shown as "Batch not recorded"; never invented.
+  batchNumber     String?
+  /// DEV-853: null when the expiry was never recorded. An unknown expiry is
+  /// never treated as expired and never blocks a sale; FEFO picks it last.
+  expiresAt       DateTime?
   expiryPrecision PharmacyExpiryPrecision @default(DAY)
   state           PharmacyBatchState      @default(ACTIVE)
   stateReason     String?
@@ -2659,8 +2663,10 @@ model PharmacyInventoryLot {
   supplierInvoiceRef      String
   unitCostMinor           Int
   printedMrpMinor         Int
-  receivedExpiresAt       DateTime
-  receivedExpiryPrecision PharmacyExpiryPrecision
+  /// DEV-853: both null when the expiry was not recorded at receipt (legacy
+  /// opening stock). Staff can record it later.
+  receivedExpiresAt       DateTime?
+  receivedExpiryPrecision PharmacyExpiryPrecision?
   receivedAt              DateTime?
   /// DEV-90: immutable numeric alias encoded in the internal shelf-label Code128.
   shelfLabelNumber        Int                     @unique @default(autoincrement())

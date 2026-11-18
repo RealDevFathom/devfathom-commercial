@@ -136,7 +136,7 @@ export async function completePaidPharmacySale(
             allocationId: allocation.id,
             inventoryLotId: allocation.inventoryLotId,
             batchNumber: batch.batchNumber,
-            expiresAt: batch.expiresAt.toISOString(),
+            expiresAt: batch.expiresAt?.toISOString() ?? null,
             canonicalUnits: allocation.canonicalUnits,
           };
         }),

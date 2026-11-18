@@ -106,7 +106,8 @@ export async function findSubstituteProposals(
       batch: {
         medicineId: { not: input.medicineId },
         state: 'ACTIVE',
-        expiresAt: { gt: at },
+        // DEV-853: an unrecorded expiry is never treated as expired.
+        OR: [{ expiresAt: null }, { expiresAt: { gt: at } }],
         medicine: { saleable: true },
       },
       balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
@@ -226,7 +227,12 @@ function saleableLotWhere(scope: { organizationId: string; branchId: string }, a
     organizationId: scope.organizationId,
     branchId: scope.branchId,
     receivedAt: { not: null },
-    batch: { state: 'ACTIVE', expiresAt: { gt: at }, medicine: { saleable: true } },
+    batch: {
+      state: 'ACTIVE',
+      // DEV-853: an unrecorded expiry is never treated as expired.
+      OR: [{ expiresAt: null }, { expiresAt: { gt: at } }],
+      medicine: { saleable: true },
+    },
     balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
   } satisfies Prisma.PharmacyInventoryLotWhereInput;
 }

@@ -35,6 +35,7 @@ import { mrpRoundingIncrementForLot, normalizeMedicineText } from './medicine';
 import { readReceiptIdentity } from './receipt-identity';
 import { parseShelfLabelCode } from './shelf-label-code';
 import type { LedgerScope } from './stock-ledger';
+import { compareKnownExpiryFirst } from './unrecorded-batch';
 
 export class PharmacyCounterError extends Error {
   constructor(readonly reason: 'NOT_FOUND' | 'CROSS_BRANCH_REFERENCE' | 'INVALID_QUERY') {
@@ -67,8 +68,12 @@ export type CounterCatalogRow = {
   unitsPerPack: number | null;
   printedMrpMinor: number | null;
   roundingIncrementMinor: number;
+  /** DEV-853: also null when the shown lot's batch number was never recorded. */
   batchNumber: string | null;
-  /** ISO instant of the nearest SAFE expiry; null when nothing is sellable. */
+  /**
+   * ISO instant of the nearest SAFE expiry; null when nothing is sellable or
+   * (DEV-853) when the shown lot's expiry was never recorded.
+   */
   nearestSafeExpiry: string | null;
   /** Safe canonical units on hand for this branch (blocked stock excluded). */
   onHandUnits: number;
@@ -121,8 +126,10 @@ export type CounterCatalogRow = {
 
 export type CounterLabelLot = {
   inventoryLotId: string;
-  batchNumber: string;
-  expiresAt: string;
+  /** DEV-853: null when the batch number was never recorded. */
+  batchNumber: string | null;
+  /** DEV-853: null when the expiry was never recorded. */
+  expiresAt: string | null;
   printedMrpMinor: number;
   /** Safe canonical units of this lot alone. */
   sellableUnits: number;
@@ -147,7 +154,7 @@ type LotRow = {
   unitsPerPack: number;
   printedMrpMinor: number;
   receivedAt: Date | null;
-  batch: { batchNumber: string; expiresAt: Date; state: string; medicineId: string };
+  batch: { batchNumber: string | null; expiresAt: Date | null; state: string; medicineId: string };
 };
 
 type BalanceRow = {
@@ -431,7 +438,8 @@ export async function searchCounterCatalog(
             batches: {
               some: {
                 state: 'ACTIVE',
-                expiresAt: { gt: at },
+                // DEV-853: an unrecorded expiry is never treated as expired.
+                OR: [{ expiresAt: null }, { expiresAt: { gt: at } }],
                 lots: {
                   some: {
                     branchId: scope.branchId,
@@ -513,7 +521,7 @@ export async function searchCounterCatalog(
  */
 function fefoBefore(lot: LotRow, best: LotRow) {
   return (
-    (lot.batch.expiresAt.getTime() - best.batch.expiresAt.getTime() ||
+    (compareKnownExpiryFirst(lot.batch.expiresAt, best.batch.expiresAt) ||
       (lot.receivedAt?.getTime() ?? 0) - (best.receivedAt?.getTime() ?? 0) ||
       lot.id.localeCompare(best.id)) < 0
   );
@@ -569,7 +577,8 @@ function comparePerUnitPrice(left: CounterSearchRow, right: CounterSearchRow) {
 
 function compareStockAlternatives(left: CounterSearchRow, right: CounterSearchRow) {
   return (
-    (left.nearestSafeExpiry ?? '').localeCompare(right.nearestSafeExpiry ?? '') ||
+    // DEV-853: an unrecorded expiry sorts after every known one.
+    (left.nearestSafeExpiry ?? '\uffff').localeCompare(right.nearestSafeExpiry ?? '\uffff') ||
     comparePerUnitPrice(left, right) ||
     left.displayName.localeCompare(right.displayName) ||
     left.presentationId.localeCompare(right.presentationId)
@@ -704,7 +713,7 @@ async function hydrateCounterRows(
         labelLot = {
           inventoryLotId: lot.id,
           batchNumber: lot.batch.batchNumber,
-          expiresAt: lot.batch.expiresAt.toISOString(),
+          expiresAt: lot.batch.expiresAt?.toISOString() ?? null,
           printedMrpMinor: lot.printedMrpMinor,
           sellableUnits: 0,
           blockedBy: null,
@@ -827,7 +836,7 @@ async function hydrateCounterRows(
       printedMrpMinor: priced?.printedMrpMinor ?? null,
       roundingIncrementMinor,
       batchNumber: shown?.lot.batch.batchNumber ?? null,
-      nearestSafeExpiry: shown?.lot.batch.expiresAt.toISOString() ?? null,
+      nearestSafeExpiry: shown?.lot.batch.expiresAt?.toISOString() ?? null,
       onHandUnits: availableUnits,
       ...(labelLotId ? { medicineOnHandUnits: onHandUnits } : {}),
       saleableUnits,
@@ -897,8 +906,10 @@ export type CounterCartLine = {
   /** What FEFO actually took, batch by batch (POS-03: cart shows allocation). */
   allocations: Array<{
     inventoryLotId: string;
-    batchNumber: string;
-    expiresAt: string;
+    /** DEV-853: null when the batch number was never recorded. */
+    batchNumber: string | null;
+    /** DEV-853: null when the expiry was never recorded. */
+    expiresAt: string | null;
     canonicalUnits: number;
     stockLocationCode: string | null;
     /** True when this lot is not the one FEFO recommended first. */
@@ -996,13 +1007,13 @@ export async function readCounterCart(
   const lines: CounterCartLine[] = sale.lines.map((line) => {
     // The earliest expiry among this line's own allocations is what FEFO would
     // have taken first; anything later on the same line was a batch override.
-    const earliest = line.allocations.reduce<Date | null>(
-      (best, allocation) =>
-        best === null || allocation.lot.batch.expiresAt.getTime() < best.getTime()
-          ? allocation.lot.batch.expiresAt
-          : best,
-      null
-    );
+    // DEV-853: only known expiries take part; an unrecorded one is never an override.
+    const earliest = line.allocations.reduce<Date | null>((best, allocation) => {
+      const expiresAt = allocation.lot.batch.expiresAt;
+      return expiresAt !== null && (best === null || expiresAt.getTime() < best.getTime())
+        ? expiresAt
+        : best;
+    }, null);
     return {
       saleLineId: line.id,
       medicineId: line.medicineId,
@@ -1036,11 +1047,13 @@ export async function readCounterCart(
       allocations: line.allocations.map((allocation) => ({
         inventoryLotId: allocation.inventoryLotId,
         batchNumber: allocation.lot.batch.batchNumber,
-        expiresAt: allocation.lot.batch.expiresAt.toISOString(),
+        expiresAt: allocation.lot.batch.expiresAt?.toISOString() ?? null,
         canonicalUnits: allocation.canonicalUnits,
         stockLocationCode: locationById.get(allocation.stockLocationId) ?? null,
         overridden:
-          earliest !== null && allocation.lot.batch.expiresAt.getTime() > earliest.getTime(),
+          earliest !== null &&
+          allocation.lot.batch.expiresAt !== null &&
+          allocation.lot.batch.expiresAt.getTime() > earliest.getTime(),
       })),
     };
   });
@@ -1137,7 +1150,8 @@ export async function readCounterReceipt(
       // Compatibility fields never associate the first lot with the entire line.
       batchNumber:
         identity?.allocations
-          .map((row) => `${row.batchNumber} (${row.canonicalUnits} units)`)
+          // DEV-853: printed after "Batch", so an unrecorded one reads "Batch not recorded".
+          .map((row) => `${row.batchNumber ?? 'not recorded'} (${row.canonicalUnits} units)`)
           .join('; ') ?? 'Historical batches unavailable',
       expiresAt: identity?.allocations.length === 1 ? identity.allocations[0]!.expiresAt : '',
       saleUnit: line.saleUnit as SaleUnitKind,

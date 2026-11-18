@@ -23,7 +23,13 @@ import 'server-only';
  * nullable columns receive `null`, and the matching exception row is written in
  * the SAME transaction. There is no code path in this module that invents a
  * batch number, an expiry, an MRP, a cost, a location or a source ref. The
- * database backs it up — a line cannot reach POSTED while any of them is null.
+ * database backs it up — a line cannot reach POSTED while a required one is null.
+ *
+ * DEV-853 (owner decision): legacy stock often has no batch number and no
+ * expiry. Those two are NOT required: the lot posts with them stored as null
+ * (never invented), stays sellable, and staff record the real values later.
+ * The line still needs a manufacturing batch row to hang the lot on — the
+ * importer creates one whose number and expiry are null.
  */
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -99,8 +105,11 @@ export function missingAttributes(
 ): OpeningExceptionBucket[] {
   const gaps: OpeningExceptionBucket[] = [];
   if (line.sourceRef === null || line.sourceRef.trim() === '') gaps.push('MISSING_SOURCE_REF');
-  if (line.manufacturingBatchId === null || line.batchNumber === null) gaps.push('MISSING_BATCH');
-  if (line.expiryDate === null || line.expiryPrecision === null) gaps.push('MISSING_EXPIRY');
+  // DEV-853: a batch NUMBER and an expiry are optional — legacy stock posts
+  // without them. Only a missing batch ROW (nothing to hang the lot on) or a
+  // half-stated expiry (a date without its precision, or the reverse) is a gap.
+  if (line.manufacturingBatchId === null) gaps.push('MISSING_BATCH');
+  if ((line.expiryDate === null) !== (line.expiryPrecision === null)) gaps.push('MISSING_EXPIRY');
   if (line.printedMrpMinor === null) gaps.push('MISSING_MRP');
   if (line.unitCostMinor === null) gaps.push('MISSING_COST');
   if (line.stockLocationId === null || line.packLevelId === null || line.unitsPerPack === null) {
@@ -112,8 +121,8 @@ export function missingAttributes(
 
 const BUCKET_DETAIL: Record<OpeningExceptionBucket, string> = {
   MISSING_SOURCE_REF: 'The incumbent row supplied no source reference for this opening lot.',
-  MISSING_BATCH: 'The incumbent row supplied no batch number, so no manufacturing batch resolved.',
-  MISSING_EXPIRY: 'The incumbent row supplied no printed expiry.',
+  MISSING_BATCH: 'No manufacturing batch was resolved for this opening lot.',
+  MISSING_EXPIRY: 'The expiry was stated without its precision (or the precision without a date).',
   MISSING_MRP: 'The incumbent row supplied no printed MRP.',
   MISSING_COST: 'The incumbent row supplied no unit cost.',
   MISSING_LOCATION: 'No stock location or pack level was resolved for this opening lot.',
@@ -337,10 +346,13 @@ export async function postOpeningSession(
     // this predicate, and the lot about to be created cannot be built from nulls.
     if (missingAttributes(line).length > 0) throw new PharmacyOpeningError('INCOMPLETE_LINE');
 
-    const expiresAt = expiryInstant(
-      line.expiryDate as Date,
-      line.expiryPrecision as 'DAY' | 'MONTH'
-    );
+    // DEV-853: an expiry the old system never had stays null — never invented.
+    const expiryPrecision =
+      line.expiryDate === null ? null : (line.expiryPrecision as 'DAY' | 'MONTH');
+    const expiresAt =
+      line.expiryDate === null || expiryPrecision === null
+        ? null
+        : expiryInstant(line.expiryDate, expiryPrecision);
     const batch = await db.pharmacyManufacturingBatch.findFirst({
       where: {
         id: line.manufacturingBatchId as string,
@@ -349,9 +361,13 @@ export async function postOpeningSession(
       select: { expiresAt: true },
     });
     if (!batch) throw new PharmacyOpeningError('NOT_FOUND');
+    // A line that states an expiry must agree with its batch. A line with no
+    // expiry may hang off a batch whose expiry is already known.
     if (
-      normalizeExpiryBoundary(batch.expiresAt).getTime() !==
-      normalizeExpiryBoundary(expiresAt).getTime()
+      expiresAt !== null &&
+      (batch.expiresAt === null ||
+        normalizeExpiryBoundary(batch.expiresAt).getTime() !==
+          normalizeExpiryBoundary(expiresAt).getTime())
     ) {
       throw new PharmacyOpeningError('BATCH_EXPIRY_CONFLICT');
     }
@@ -376,7 +392,7 @@ export async function postOpeningSession(
         unitCostMinor: line.unitCostMinor as number,
         printedMrpMinor: line.printedMrpMinor as number,
         receivedExpiresAt: expiresAt,
-        receivedExpiryPrecision: line.expiryPrecision as 'DAY' | 'MONTH',
+        receivedExpiryPrecision: expiresAt === null ? null : expiryPrecision,
         receivedAt: session.openingAt,
       },
     });

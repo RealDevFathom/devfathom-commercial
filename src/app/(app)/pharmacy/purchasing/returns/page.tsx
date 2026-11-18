@@ -450,7 +450,8 @@ export default async function PharmacyReturnsPage({
                     .filter((line) => line.windowState !== 'OPEN')
                     .map((line) => (
                       <li className="text-xs text-text-muted" key={line.id}>
-                        {line.lot.batch.medicine.productName} · batch {line.lot.batch.batchNumber} ·{' '}
+                        {line.lot.batch.medicine.productName} · batch{' '}
+                        {line.lot.batch.batchNumber ?? 'not recorded'} ·{' '}
                         {line.windowState === 'CLOSED'
                           ? `window closed ${Math.abs(line.daysToWindowEnd)} days ago — this line can no longer be dispatched for credit`
                           : `window closes in ${line.daysToWindowEnd} days (${dateOnly(line.returnWindowEndsAt)})`}
@@ -583,7 +584,7 @@ export default async function PharmacyReturnsPage({
                         notice={notice}
                         options={lots.map((balance) => ({
                           value: `${balance.lot.id}|${balance.location.id}`,
-                          label: `${balance.lot.batch.medicine.productName} · batch ${balance.lot.batch.batchNumber} · ${formatLotExpiry(balance.lot.batch.expiresAt, (value) => `expires ${dateOnly(value)}`)} · ${balance.onHandUnits} available in ${balance.location.name}`,
+                          label: `${balance.lot.batch.medicine.productName} · batch ${balance.lot.batch.batchNumber ?? 'not recorded'} · ${formatLotExpiry(balance.lot.batch.expiresAt, (value) => `expires ${dateOnly(value)}`)} · ${balance.onHandUnits} available in ${balance.location.name}`,
                         }))}
                         placeholder="Skip this line"
                       />
@@ -856,7 +857,7 @@ function ReturnDetail({
               />
             </div>
             <p className="mt-1 text-xs text-text-muted">
-              Batch {line.lot.batch.batchNumber} ·{' '}
+              Batch {line.lot.batch.batchNumber ?? 'not recorded'} ·{' '}
               {formatLotExpiry(line.lot.batch.expiresAt, (value) => `expires ${dateOnly(value)}`)} ·{' '}
               {units(line.quantityUnits)} from {line.location.name} · expects{' '}
               {money(line.expectedCreditMinor)} · {line.reason}

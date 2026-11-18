@@ -425,13 +425,16 @@ it.each(['batch', 'expiry'])('keeps known metadata when only %s is missing', (mi
     />
   );
   const medicine = screen.getByRole('button', { name: /Paracetamol/ });
-  expect(medicine).not.toHaveTextContent(/Batch —|Exp —/);
+  expect(medicine).not.toHaveTextContent(/Batch —|Exp —|MISSING_|null/);
+  // DEV-853: a sellable lot whose batch or expiry was never recorded says so
+  // in plain words instead of leaving the field out.
   if (missing === 'batch') {
-    expect(medicine).not.toHaveTextContent('Batch');
+    expect(medicine).toHaveTextContent('Batch not recorded');
     expect(medicine).toHaveTextContent('Exp 2028-06-30');
   } else {
     expect(medicine).toHaveTextContent('Batch B-1044');
-    expect(medicine).not.toHaveTextContent('Exp');
+    expect(medicine).toHaveTextContent('Expiry not recorded');
+    expect(medicine).not.toHaveTextContent(/Exp \d/);
   }
 });
 

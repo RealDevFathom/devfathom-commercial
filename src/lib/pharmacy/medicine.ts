@@ -150,8 +150,10 @@ export function deriveLooseUnitPrice(input: {
  */
 export function mrpRoundingIncrementForLot(
   rules: readonly { packLevelId: string; batchReference: string; roundingIncrementMinor: number }[],
-  lot: { packLevelId: string; batchNumber: string }
+  lot: { packLevelId: string; batchNumber: string | null }
 ): number {
+  // DEV-853: a lot with no recorded batch has no batch-specific rule.
+  if (lot.batchNumber === null) return 1;
   const rule = rules.find(
     (entry) => entry.packLevelId === lot.packLevelId && entry.batchReference === lot.batchNumber
   );

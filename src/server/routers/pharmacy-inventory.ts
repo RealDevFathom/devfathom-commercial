@@ -74,6 +74,11 @@ import {
   supplierReturnDates,
 } from '@/lib/pharmacy/expiry-growth';
 import { EXPIRY_CLAIM_MAX_POSITIONS } from '@/lib/pharmacy/expiry-claim';
+import {
+  PharmacyUnrecordedBatchError,
+  recordUnrecordedBatch,
+  UNRECORDED_BATCH_MESSAGES,
+} from '@/lib/pharmacy/record-unrecorded-batch';
 import { createPurchaseReturn } from '@/lib/pharmacy/supplier-returns-operations';
 import {
   acknowledgeSignal,
@@ -434,7 +439,8 @@ export const MARKDOWN_DRAFT_PREFIX = 'DRAFT mark-down ';
 export type ExpiryMarkdownDraft = {
   inventoryLotId: string;
   stockLocationId: string;
-  batchNumber: string;
+  /** DEV-853: null when the batch number was never recorded. */
+  batchNumber: string | null;
   markdownPercent: number;
   printedMrpMinor: number;
   proposedPackPriceMinor: number;
@@ -537,7 +543,16 @@ async function lockExpiringLot(db: ScopedDb, scope: LedgerScope, inventoryLotId:
     },
   });
   if (!lot) throw new TRPCError({ code: 'FORBIDDEN', message: 'Lot is outside this branch.' });
-  return lot;
+  // DEV-853: a lot whose expiry was never recorded is not on the near-expiry
+  // board, so no expiry action applies until staff record its real expiry.
+  const expiresAt = lot.batch.expiresAt;
+  if (expiresAt === null) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Expiry not recorded for this lot. Record its batch and expiry first.',
+    });
+  }
+  return { ...lot, batch: { ...lot.batch, expiresAt } };
 }
 
 function assertOnBoard(expiresAt: Date, at: Date) {
@@ -2235,6 +2250,8 @@ export const pharmacyInventoryRouter = router({
             ...tenant,
             disposition: 'AVAILABLE',
             onHandUnits: { gt: 0 },
+            // DEV-853: a null expiry never matches; those lots are listed in
+            // their own "Expiry not recorded" group below.
             lot: { batch: { expiresAt: { lte: horizon } } },
           },
           select: {
@@ -2289,7 +2306,13 @@ export const pharmacyInventoryRouter = router({
           },
         }),
       ]);
-      const lotIds = [...new Set(balances.map((row) => row.inventoryLotId))];
+      const datedBalances = balances.flatMap((row) => {
+        const expiresAt = row.lot.batch.expiresAt;
+        return expiresAt === null
+          ? []
+          : [{ ...row, lot: { ...row.lot, batch: { ...row.lot.batch, expiresAt } } }];
+      });
+      const lotIds = [...new Set(datedBalances.map((row) => row.inventoryLotId))];
       const [held, claims, returnLines, markdownEvents] = lotIds.length
         ? await Promise.all([
             ctx.db.pharmacyStockBalance.findMany({
@@ -2370,12 +2393,12 @@ export const pharmacyInventoryRouter = router({
       );
 
       const riskBuckets = expiryRiskBuckets(
-        balances.map((row) => ({
+        datedBalances.map((row) => ({
           daysLeft: Math.ceil((row.lot.batch.expiresAt.getTime() - at.getTime()) / DAY_MS),
           valueAtRiskMinor: row.onHandUnits * row.lot.unitCostMinor,
         }))
       );
-      const rows = balances
+      const rows = datedBalances
         .map((row) => {
           const { lot } = row;
           const expiresAt = lot.batch.expiresAt;
@@ -2424,6 +2447,55 @@ export const pharmacyInventoryRouter = router({
             (costVisible ? (right.valueAtRiskMinor ?? 0) - (left.valueAtRiskMinor ?? 0) : 0) ||
             left.key.localeCompare(right.key)
         );
+      // DEV-853: lots whose expiry was never recorded (legacy opening stock).
+      // They are never expired and stay sellable; the board lists them in their
+      // own group so staff can record the real batch and expiry later.
+      const unrecordedExpiryRows = (
+        await ctx.db.pharmacyStockBalance.findMany({
+          where: {
+            ...tenant,
+            disposition: 'AVAILABLE',
+            onHandUnits: { gt: 0 },
+            lot: { batch: { expiresAt: null } },
+          },
+          orderBy: [{ inventoryLotId: 'asc' }, { stockLocationId: 'asc' }],
+          take: 500,
+          select: {
+            inventoryLotId: true,
+            stockLocationId: true,
+            onHandUnits: true,
+            location: { select: { name: true } },
+            lot: {
+              select: {
+                supplierName: true,
+                unitsPerPack: true,
+                printedMrpMinor: true,
+                batch: {
+                  select: {
+                    batchNumber: true,
+                    medicine: { select: { productName: true, brandName: true } },
+                  },
+                },
+              },
+            },
+          },
+        })
+      )
+        .map((row) => ({
+          key: `${row.inventoryLotId}:${row.stockLocationId}`,
+          inventoryLotId: row.inventoryLotId,
+          stockLocationId: row.stockLocationId,
+          locationName: row.location.name,
+          medicineName: row.lot.batch.medicine.brandName ?? row.lot.batch.medicine.productName,
+          batchNumber: row.lot.batch.batchNumber,
+          onHandUnits: row.onHandUnits,
+          unitsPerPack: row.lot.unitsPerPack,
+          printedMrpMinor: row.lot.printedMrpMinor,
+        }))
+        .sort(
+          (left, right) =>
+            left.medicineName.localeCompare(right.medicineName) || left.key.localeCompare(right.key)
+        );
       if (!costVisible) {
         return {
           generatedAt: at,
@@ -2431,10 +2503,19 @@ export const pharmacyInventoryRouter = router({
           costVisible,
           riskBuckets: [] as typeof riskBuckets,
           rows: rows.map((row) => ({ ...row, valueAtRiskMinor: null })),
+          unrecordedExpiryRows,
           suppliers,
         };
       }
-      return { generatedAt: at, withinDays, costVisible, riskBuckets, rows, suppliers };
+      return {
+        generatedAt: at,
+        withinDays,
+        costVisible,
+        riskBuckets,
+        rows,
+        unrecordedExpiryRows,
+        suppliers,
+      };
     }),
 
   /**
@@ -2654,7 +2735,8 @@ export const pharmacyInventoryRouter = router({
           const created = await createPurchaseReturn(tx, scope, {
             supplierId: supplier.id,
             kind: 'EXPIRY_CLAIM',
-            reference: `EXP-${stamp}-${lot.batch.batchNumber.slice(0, 24)}-${at.getTime().toString(36).toUpperCase()}`,
+            // DEV-853: a lot with no recorded batch simply leaves the batch out.
+            reference: `EXP-${stamp}-${lot.batch.batchNumber === null ? '' : `${lot.batch.batchNumber.slice(0, 24)}-`}${at.getTime().toString(36).toUpperCase()}`,
             note: 'Drafted from the near-expiry board. A draft reserves nothing; submit it to hold the stock for the supplier.',
             lines: [
               {
@@ -2901,6 +2983,51 @@ export const pharmacyInventoryRouter = router({
         });
       } catch (error) {
         expiryError(error);
+      }
+    }),
+  /**
+   * DEV-853: record the real batch number and/or expiry of a lot that came in
+   * without them (legacy opening stock). One-way — a recorded value is never
+   * rewritten here — and server-enforced; the request itself is audited.
+   */
+  recordUnrecordedBatch: inventoryControl
+    .input(
+      z
+        .object({
+          branchId,
+          inventoryLotId: z.string().min(1).max(128),
+          batchNumber: z.string().trim().min(1).max(160).optional(),
+          printedExpiry: z.date().optional(),
+          expiryPrecision: expiryPrecision.optional(),
+        })
+        .strict()
+        .refine((value) => value.batchNumber !== undefined || value.printedExpiry !== undefined, {
+          message: 'Enter the batch number, the expiry, or both.',
+        })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await admittedScopeFor(ctx, input.branchId);
+      try {
+        return await ctx.db.$transaction(async (transaction) => {
+          const tx = txDb(transaction);
+          await assertBranch(tx, scope);
+          return recordUnrecordedBatch(tx, scope, {
+            inventoryLotId: input.inventoryLotId,
+            batchNumber: input.batchNumber ?? null,
+            expiry:
+              input.printedExpiry === undefined
+                ? null
+                : { printedExpiry: input.printedExpiry, precision: input.expiryPrecision ?? 'DAY' },
+          });
+        });
+      } catch (error) {
+        if (error instanceof PharmacyUnrecordedBatchError) {
+          throw new TRPCError({
+            code: error.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST',
+            message: UNRECORDED_BATCH_MESSAGES[error.reason],
+          });
+        }
+        throw error;
       }
     }),
   /** WHA-1603 INV-07 console: both directions for one branch, slip-ready. */

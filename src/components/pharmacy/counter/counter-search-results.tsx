@@ -10,6 +10,7 @@ import {
   counterMedicineGenericName,
 } from '@/lib/pharmacy/counter-display-name';
 import { formatMinor, formatShortExpiry } from '@/lib/pharmacy/counter-receipt';
+import { BATCH_NOT_RECORDED } from '@/lib/pharmacy/unrecorded-batch';
 import { formatStockBreakdown } from '@/lib/pharmacy/stock-breakdown';
 
 export type CounterSearchResultsProps = {
@@ -252,8 +253,15 @@ export function CounterSearchResults({
                     <span>Stock:</span>{' '}
                     {formatStockBreakdown(row.onHandUnits, row.saleableUnits, row.dosageForm)}
                   </span>
-                  {row.batchNumber ? ` · Batch ${row.batchNumber}` : ''}
-                  {row.nearestSafeExpiry ? ` · ${formatShortExpiry(row.nearestSafeExpiry)}` : ''}
+                  {row.batchNumber
+                    ? ` · Batch ${row.batchNumber}`
+                    : row.recommendedLotId
+                      ? ` · ${BATCH_NOT_RECORDED}`
+                      : ''}
+                  {/* DEV-853: a sellable lot with no expiry says "Expiry not recorded". */}
+                  {row.nearestSafeExpiry || row.recommendedLotId
+                    ? ` · ${formatShortExpiry(row.nearestSafeExpiry)}`
+                    : ''}
                   {notes.length ? ` · ${notes.join(' · ')}` : ''}
                   {` · ${MATCH_LABEL[row.matchedOn]}`}
                 </span>

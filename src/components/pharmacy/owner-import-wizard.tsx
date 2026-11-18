@@ -6,6 +6,7 @@ import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { trpc } from '@/lib/trpc';
 import { IMPORT_FIELDS, IMPORT_MAX_BYTES, IMPORT_MAX_ROWS, OPENING_TEMPLATE, type ImportMapping } from '@/lib/pharmacy/migration/owner-import-input';
+import { BATCH_NOT_RECORDED, EXPIRY_NOT_RECORDED } from '@/lib/pharmacy/unrecorded-batch';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
@@ -154,8 +155,8 @@ export function OwnerImportWizard() {
               </TableRow></TableHeader>
               <TableBody>{preview.lines.map((line) => <TableRow key={line.rowNumber}>
                 <TableCell className="max-w-48 whitespace-normal break-words">{line.rowNumber} · {line.sourceRef || 'Missing reference'}</TableCell>
-                <TableCell className="min-w-48 max-w-72 whitespace-normal break-words">{line.medicineName || 'Unmatched medicine'}<br />{line.packReference} · {line.batchNumber}<br />{line.unitsPerPack === null ? 'Unknown conversion' : `${line.unitsPerPack} single units per pack`}</TableCell>
-                <TableCell>{line.expiryDate ? new Date(line.expiryDate).toISOString().slice(0, line.expiryPrecision === 'MONTH' ? 7 : 10) : 'Missing'}</TableCell>
+                <TableCell className="min-w-48 max-w-72 whitespace-normal break-words">{line.medicineName || 'Unmatched medicine'}<br />{line.packReference} · {line.batchNumber || BATCH_NOT_RECORDED}<br />{line.unitsPerPack === null ? 'Unknown conversion' : `${line.unitsPerPack} single units per pack`}</TableCell>
+                <TableCell>{line.expiryDate ? new Date(line.expiryDate).toISOString().slice(0, line.expiryPrecision === 'MONTH' ? 7 : 10) : EXPIRY_NOT_RECORDED}</TableCell>
                 <TableCell numeric>{line.currentUnits}</TableCell><TableCell numeric>{line.expectedUnits ?? 'Invalid'}</TableCell><TableCell numeric>{line.countedUnits ?? 'Invalid'}</TableCell><TableCell numeric>{line.proposedUnits ?? 'Unknown'}</TableCell><TableCell numeric>{line.varianceUnits ?? 'Unknown'}</TableCell>
                 <TableCell className="min-w-64 max-w-96 whitespace-normal">
                   {line.errors.length ? <ul className="list-disc space-y-1 pl-4 text-destructive">{line.errors.map((message) => <li key={message}>{message}</li>)}</ul> : <><StatusPill status={line.warnings?.length ? "warning" : "success"} tone={line.warnings?.length ? "warning" : undefined} label={line.warnings?.length ? "Review cost basis" : "Ready"} /><p className="mt-2 text-xs">MRP {money(String(line.printedMrpMinor))} per pack · Cost {money(String(line.unitCostMinor))} per tablet/unit</p></>}

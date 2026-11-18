@@ -693,7 +693,7 @@ export function simulateReplenishmentDecision(
         lots.push(pending.shift()!.lot);
       let expired = 0;
       for (const lot of lots) {
-        if (lot.expiresAt.getTime() <= at) {
+        if (lot.expiresAt !== null && lot.expiresAt.getTime() <= at) {
           expired = safeDemandTotal([expired, lot.availableUnits]);
           lot.availableUnits = 0;
         }

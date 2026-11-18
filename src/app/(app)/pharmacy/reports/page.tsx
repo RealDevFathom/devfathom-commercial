@@ -814,7 +814,7 @@ export default async function PharmacyReportsPage({
                           <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-2 font-mono text-xs text-text-muted tabular-nums">
                             <div>
                               <dt className="inline font-semibold text-text-body">Batch: </dt>
-                              <dd className="inline">{item.batchNumber}</dd>
+                              <dd className="inline">{item.batchNumber ?? 'not recorded'}</dd>
                             </div>
                             <div>
                               <dt className="inline font-semibold text-text-body">On hand: </dt>

@@ -80,7 +80,7 @@ export function packingSlipFor(transfer: TransferBoardRow): PackingSlip {
     lines: transfer.lines.map((line) => ({
       medicineName: line.medicineName,
       batchNumber: line.batchNumber,
-      expiresAt: new Date(line.expiresAt).toISOString(),
+      expiresAt: line.expiresAt === null ? null : new Date(line.expiresAt).toISOString(),
       sourceLocation: line.sourceLocation?.name ?? 'Unknown location',
       destinationLocation: line.destinationLocation?.name ?? 'Unknown location',
       quantityUnits: line.quantityUnits,

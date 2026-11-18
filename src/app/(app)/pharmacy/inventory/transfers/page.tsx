@@ -196,7 +196,7 @@ export default async function PharmacyTransfersPage({
   const branchNames = new Map(branches.map((item) => [item.id, item.name]));
   const stock = balances.map((balance) => ({
     value: `${balance.inventoryLotId}:${balance.stockLocationId}`,
-    label: `${balance.lot.batch.medicine.brandName ?? balance.lot.batch.medicine.productName} · batch ${balance.lot.batch.batchNumber} · ${balance.location.name} · ${balance.onHandUnits} units`,
+    label: `${balance.lot.batch.medicine.brandName ?? balance.lot.batch.medicine.productName} · batch ${balance.lot.batch.batchNumber ?? 'not recorded'} · ${balance.location.name} · ${balance.onHandUnits} units`,
   }));
   const destinations = destinationLocations
     .filter((location) => branchNames.has(location.branchId))

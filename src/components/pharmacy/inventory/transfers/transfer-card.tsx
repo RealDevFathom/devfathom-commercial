@@ -96,7 +96,9 @@ export function TransferCard({
               <TableRow key={line.id}>
                 <TableCell>
                   <span className="font-medium text-text-strong">{line.medicineName}</span>
-                  <span className="block text-xs text-text-muted">Batch {line.batchNumber}</span>
+                  <span className="block text-xs text-text-muted">
+                    Batch {line.batchNumber ?? 'not recorded'}
+                  </span>
                 </TableCell>
                 <TableCell>{formatLotExpiry(line.expiresAt, when)}</TableCell>
                 <TableCell className="text-sm">

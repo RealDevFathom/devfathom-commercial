@@ -104,7 +104,7 @@ function MatchSummary({ item }: { item: QueueItem }) {
         <ul className="mt-2 space-y-1">
           {item.batches.map((batch) => (
             <li key={batch.id} className="flex justify-between gap-4 tabular-nums">
-              <span>Batch {batch.batchNumber}</span>
+              <span>Batch {batch.batchNumber ?? 'not recorded'}</span>
               <span>{batch.availableUnits} units available</span>
             </li>
           ))}

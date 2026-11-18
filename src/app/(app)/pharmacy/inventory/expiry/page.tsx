@@ -5,11 +5,13 @@ import { redirect } from 'next/navigation';
 
 import { BranchAssignmentRequired } from '@/components/pharmacy/inventory/branch-assignment-required';
 import { ExpiryBoard, type ExpiryBoardRow } from '@/components/pharmacy/inventory/expiry-board';
+import { UnrecordedExpiryGroup } from '@/components/pharmacy/inventory/unrecorded-expiry-group';
 import { UrlFilterForm } from '@/components/ui/url-filter-form';
 import { buttonVariants } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { hasModule } from '@/lib/entitlements';
+import { readExpiryMonth } from '@/lib/pharmacy/unrecorded-batch';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import {
   admittedInventoryBranchIds,
@@ -173,15 +175,30 @@ export default async function PharmacyExpiryBoardPage({
       };
       const action = field(data, 'action');
       let text: string;
-      if (action === 'markdown') {
+      const batchOf = (batchNumber: string | null) =>
+        batchNumber === null ? 'this lot (batch not recorded)' : `batch ${batchNumber}`;
+      if (action === 'record') {
+        // DEV-853: record the real batch and/or expiry of a legacy lot.
+        const batchNumber = field(data, 'batchNumber');
+        const expiryMonth = field(data, 'expiryMonth');
+        const printedExpiry = expiryMonth ? readExpiryMonth(expiryMonth) : null;
+        if (expiryMonth && !printedExpiry) throw new Error('Enter the expiry as a month and year.');
+        const result = await caller.recordUnrecordedBatch({
+          branchId: params.branch,
+          inventoryLotId: field(data, 'inventoryLotId'),
+          ...(batchNumber ? { batchNumber } : {}),
+          ...(printedExpiry ? { printedExpiry, expiryPrecision: 'MONTH' as const } : {}),
+        });
+        text = `Recorded for ${batchOf(result.batchNumber)}${result.expiresAt ? '; its expiry now counts on this board and at the counter.' : '. The expiry is still not recorded.'}`;
+      } else if (action === 'markdown') {
         const result = await caller.draftExpiryMarkdown({
           ...position,
           markdownPercent: number(data, 'markdownPercent'),
           reason: field(data, 'reason'),
         });
         text = result.created
-          ? `Mark-down draft recorded for batch ${result.draft.batchNumber}: ${pkr(result.draft.printedMrpMinor)} → ${pkr(result.draft.proposedPackPriceMinor)} per pack (${result.draft.markdownPercent}% off). The counter still sells at the printed MRP until pricing applies it.`
-          : `That mark-down draft already exists for batch ${result.draft.batchNumber} — nothing new was recorded.`;
+          ? `Mark-down draft recorded for ${batchOf(result.draft.batchNumber)}: ${pkr(result.draft.printedMrpMinor)} → ${pkr(result.draft.proposedPackPriceMinor)} per pack (${result.draft.markdownPercent}% off). The counter still sells at the printed MRP until pricing applies it.`
+          : `That mark-down draft already exists for ${batchOf(result.draft.batchNumber)} — nothing new was recorded.`;
       } else if (action === 'return') {
         const result = await caller.draftExpiryReturn({
           ...position,
@@ -292,6 +309,12 @@ export default async function PharmacyExpiryBoardPage({
         rows={rows}
         suppliers={board.suppliers}
         view={view}
+        withinDays={withinDays}
+      />
+      <UnrecordedExpiryGroup
+        action={perform}
+        branchId={branch.id}
+        rows={board.unrecordedExpiryRows}
         withinDays={withinDays}
       />
     </div>

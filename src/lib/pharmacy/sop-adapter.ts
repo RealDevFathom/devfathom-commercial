@@ -1251,7 +1251,7 @@ function registerDetail(row: RegisterDetailRow): PharmacySopRecordDetail {
       `Register entry ${row.serial}`,
       kind,
       row.medicine?.productName,
-      `batch ${row.batchNumber}`,
+      `batch ${row.batchNumber ?? 'not recorded'}`,
       `balance ${row.runningBalance}`
     ),
     value: `Balance ${row.runningBalance}`,
@@ -1277,7 +1277,7 @@ function receiptDetail(row: ReceiptDetailRow): PharmacySopRecordDetail {
 function batchDetail(row: BatchDetailRow, timeZone: string): PharmacySopRecordDetail {
   return {
     kind: 'MANUFACTURING_BATCH',
-    label: joinLabel(`Batch ${row.batchNumber}`, row.medicine?.productName),
+    label: joinLabel(`Batch ${row.batchNumber ?? 'not recorded'}`, row.medicine?.productName),
     value: formatLotExpiry(row.expiresAt, (value) => `Expires ${localDate(value, timeZone)}`),
     location: null,
     recordedAt: null,

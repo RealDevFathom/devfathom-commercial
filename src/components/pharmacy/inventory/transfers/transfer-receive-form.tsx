@@ -39,7 +39,7 @@ export function TransferReceiveForm({
       <input name="transferId" type="hidden" value={transfer.id} />
       {open.map((line) => (
         <label className="text-sm" key={line.id}>
-          Received units — {line.medicineName} · batch {line.batchNumber}
+          Received units — {line.medicineName} · batch {line.batchNumber ?? 'not recorded'}
           <Input
             className="mt-1"
             defaultValue={line.quantityUnits - line.receivedUnits}

@@ -50,7 +50,17 @@ const UNAVAILABLE: Record<BlockReason, string> = {
 };
 
 /** Pharmacy expiry is a Pakistan calendar date; `expiresAt` is its exclusive end. */
-export function printedExpiryLabel(expiresAt: Date, precision: 'DAY' | 'MONTH'): string {
+export function printedExpiryLabel(expiresAt: Date, precision: 'DAY' | 'MONTH'): string;
+export function printedExpiryLabel(
+  expiresAt: Date | null,
+  precision: 'DAY' | 'MONTH'
+): string | null;
+export function printedExpiryLabel(
+  expiresAt: Date | null,
+  precision: 'DAY' | 'MONTH'
+): string | null {
+  // DEV-853: an expiry that was never recorded has no printed label.
+  if (expiresAt === null) return null;
   const boundary = normalizeExpiryBoundary(expiresAt);
   const lastValidPkt = new Date(boundary.getTime() - 1 + 5 * 60 * 60 * 1000).toISOString();
   return precision === 'MONTH' ? lastValidPkt.slice(0, 7) : lastValidPkt.slice(0, 10);
@@ -150,10 +160,12 @@ async function rowsForLots(
     db.medicinePackMrp.findMany({
       where: {
         organizationId: scope.organizationId,
-        OR: lots.map((lot) => ({
-          packLevelId: lot.packLevelId,
-          batchReference: lot.batch.batchNumber,
-        })),
+        // DEV-853: a lot with no recorded batch has no batch-specific rule.
+        OR: lots.flatMap((lot) =>
+          lot.batch.batchNumber === null
+            ? []
+            : [{ packLevelId: lot.packLevelId, batchReference: lot.batch.batchNumber }]
+        ),
       },
       select: { packLevelId: true, batchReference: true, roundingIncrementMinor: true },
     }),

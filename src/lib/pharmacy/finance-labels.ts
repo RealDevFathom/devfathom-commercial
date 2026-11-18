@@ -32,9 +32,11 @@ export const EMPTY_LEDGER_LABELS: LedgerLabels = {
   locations: {},
 };
 
-/** "Panadol 500mg · batch B123", or whichever part is known. */
-export function batchLabel(batch: { batchNumber: string; medicineName?: string | null }) {
-  return batch.medicineName
-    ? `${batch.medicineName} · batch ${batch.batchNumber}`
-    : `Batch ${batch.batchNumber}`;
+/**
+ * "Panadol 500mg · batch B123", or whichever part is known. DEV-853: a batch
+ * whose number was never recorded reads "batch not recorded".
+ */
+export function batchLabel(batch: { batchNumber: string | null; medicineName?: string | null }) {
+  const number = batch.batchNumber ?? 'not recorded';
+  return batch.medicineName ? `${batch.medicineName} · batch ${number}` : `Batch ${number}`;
 }

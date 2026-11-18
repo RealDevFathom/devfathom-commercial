@@ -114,9 +114,19 @@ export function counterLinePresentation(line: CounterReceiptLine, locale: Counte
       ? [line.medicineName, line.strength, line.presentation].filter(Boolean).join(' · ')
       : text.unavailable,
     allocations: (line.allocations ?? []).map((allocation) => {
-      const batch = issued ? allocation.batchNumber : null;
-      const expiry = issued ? allocation.expiresAt : null;
-      return `${strings.batch}: ${batch ?? text.unknown} · ${strings.expiry}: ${expiry ? formatReceiptExpiry(expiry, locale) : text.unknown} · ${text.units}: ${allocation.canonicalUnits}`;
+      // DEV-853: an issued line whose lot never recorded a batch or expiry says
+      // so in plain words; "Unavailable" is kept for unissued identity only.
+      const batch = !issued
+        ? `${strings.batch}: ${text.unknown}`
+        : allocation.batchNumber === null
+          ? strings.batchNotRecorded
+          : `${strings.batch}: ${allocation.batchNumber}`;
+      const expiry = !issued
+        ? `${strings.expiry}: ${text.unknown}`
+        : allocation.expiresAt === null
+          ? strings.expiryNotRecorded
+          : `${strings.expiry}: ${formatReceiptExpiry(allocation.expiresAt, locale)}`;
+      return `${batch} · ${expiry} · ${text.units}: ${allocation.canonicalUnits}`;
     }),
   };
 }

@@ -5,8 +5,9 @@ export const IMPORT_MAX_ROWS = 250;
 export const IMPORT_FIELDS = [
   ['sourceRef', 'Source reference', true],
   ['pack', 'Pack barcode or pack ID', true],
-  ['batch', 'Manufacturing batch', true],
-  ['expiry', 'Expiry (YYYY-MM or YYYY-MM-DD)', true],
+  // DEV-853: legacy stock often has neither; a blank cell is "not recorded".
+  ['batch', 'Manufacturing batch', false],
+  ['expiry', 'Expiry (YYYY-MM or YYYY-MM-DD)', false],
   ['mrp', 'Printed MRP per pack (PKR)', true],
   ['cost', 'Cost per base unit (PKR)', true],
   ['expected', 'Exported base units', true],
@@ -46,7 +47,7 @@ export function suggestImportMapping(headers: readonly string[]): ImportMapping 
     sourceRef: ['sourcereference', 'sourceref', 'id', 'code'],
     pack: ['packbarcodeorpackid', 'barcode', 'packid', 'packlevelid'],
     batch: ['manufacturingbatch', 'batch', 'batchnumber', 'batchno'],
-    expiry: ['expiry', 'expirydate'], mrp: ['mrp', 'printedmrp', 'printedmrpperpack'], cost: ['cost', 'unitcost', 'costpertabletunit', 'costperbaseunit', 'costpertabletunitpkr', 'costperbaseunitpkr'],
+    expiry: ['expiry', 'expirydate'], mrp: ['mrp', 'printedmrp', 'printedmrpperpack', 'saleprice', 'sourcesaleprice'], cost: ['cost', 'unitcost', 'costpertabletunit', 'costperbaseunit', 'costpertabletunitpkr', 'costperbaseunitpkr'],
     expected: ['exportedbaseunits', 'expected', 'exported', 'qty'],
     counted: ['physicallycountedbaseunits', 'counted', 'physicalcount'],
     varianceNote: ['varianceexplanation', 'variancenote'],

@@ -37,13 +37,13 @@ export function counterLabelScanDecision(
   if (lot.blockedBy !== null || lot.sellableUnits <= 0) {
     return {
       kind: 'BLOCKED',
-      message: `Batch ${lot.batchNumber} on this shelf label cannot be sold: ${BLOCKED_LABEL[lot.blockedBy ?? 'EMPTY'] ?? 'it is not sellable'}. Remove the sticker and check the shelf.`,
+      message: `Batch ${lot.batchNumber ?? 'not recorded'} on this shelf label cannot be sold: ${BLOCKED_LABEL[lot.blockedBy ?? 'EMPTY'] ?? 'it is not sellable'}. Remove the sticker and check the shelf.`,
     };
   }
   if (lot.inventoryLotId === row.recommendedLotId) return { kind: 'FEFO' };
   return {
     kind: 'OVERRIDE',
     inventoryLotId: lot.inventoryLotId,
-    message: `Shelf label batch ${lot.batchNumber} is not the batch FEFO sells first. Enter a reason to sell it, or choose a different batch.`,
+    message: `Shelf label batch ${lot.batchNumber ?? 'not recorded'} is not the batch FEFO sells first. Enter a reason to sell it, or choose a different batch.`,
   };
 }

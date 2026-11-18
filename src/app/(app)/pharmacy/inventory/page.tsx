@@ -40,6 +40,8 @@ import {
 import { renderStockComposition } from '@/lib/pharmacy/counter';
 import { createTRPCContext } from '@/server/trpc';
 
+import { BATCH_NOT_RECORDED, batchNumberLabel } from '@/lib/pharmacy/unrecorded-batch';
+
 import { BreakPackForm } from './break-pack-form';
 
 export const metadata: Metadata = { title: 'Pharmacy inventory' };
@@ -706,7 +708,10 @@ export default async function PharmacyInventoryPage({
                         </span>
                       ) : null}
                       <span className="block text-xs text-text-muted">
-                        Batch {lot.batch.batchNumber} · {lot.supplierName}
+                        {lot.batch.batchNumber === null
+                          ? BATCH_NOT_RECORDED
+                          : `Batch ${lot.batch.batchNumber ?? 'not recorded'}`}{' '}
+                        · {lot.supplierName}
                       </span>
                       <Link
                         className={buttonVariants({ variant: 'ghost', size: 'sm' })}
@@ -748,7 +753,7 @@ export default async function PharmacyInventoryPage({
                         looseUnits={balance.looseUnits}
                         unitsPerPack={lot.unitsPerPack}
                         onHandUnits={balance.onHandUnits}
-                        expiresAt={lot.batch.expiresAt.toISOString()}
+                        expiresAt={lot.batch.expiresAt?.toISOString() ?? null}
                         observedAt={observedAt}
                         unavailableReason={
                           breakPackPermission ??
@@ -929,7 +934,7 @@ export default async function PharmacyInventoryPage({
                       key={`${lot.id}:${balance.stockLocationId}`}
                       value={`${lot.id}:${balance.stockLocationId}`}
                     >
-                      {lotProductLabel(lot)} · batch {lot.batch.batchNumber} ·{' '}
+                      {lotProductLabel(lot)} · batch {lot.batch.batchNumber ?? 'not recorded'} ·{' '}
                       {balance.location.name}
                     </option>
                   ))}
@@ -1072,7 +1077,8 @@ export default async function PharmacyInventoryPage({
                             </span>
                           ) : null}
                           <span className="block text-xs text-text-muted">
-                            batch {item.batchNumber} · {item.unitsPerPack} per pack
+                            batch {item.batchNumber ?? 'not recorded'} · {item.unitsPerPack} per
+                            pack
                           </span>
                         </TableCell>
                         <TableCell>{item.locationName}</TableCell>
@@ -1089,7 +1095,7 @@ export default async function PharmacyInventoryPage({
                         </TableCell>
                         <TableCell className="text-right">
                           <Input
-                            aria-label={`Counted sealed packs, ${item.medicineName} batch ${item.batchNumber} at ${item.locationName}`}
+                            aria-label={`Counted sealed packs, ${item.medicineName} batch ${item.batchNumber ?? 'not recorded'} at ${item.locationName}`}
                             className="ml-auto w-24"
                             min="0"
                             name="cycleSealed"
@@ -1099,7 +1105,7 @@ export default async function PharmacyInventoryPage({
                         </TableCell>
                         <TableCell className="text-right">
                           <Input
-                            aria-label={`Counted loose units, ${item.medicineName} batch ${item.batchNumber} at ${item.locationName}`}
+                            aria-label={`Counted loose units, ${item.medicineName} batch ${item.batchNumber ?? 'not recorded'} at ${item.locationName}`}
                             className="ml-auto w-24"
                             min="0"
                             name="cycleLoose"
@@ -1150,8 +1156,8 @@ export default async function PharmacyInventoryPage({
                     key={`${lot.id}:${balance.stockLocationId}:${balance.disposition}`}
                     value={`${lot.id}:${balance.stockLocationId}:${balance.disposition}`}
                   >
-                    {lotProductLabel(lot)} · {lot.batch.batchNumber} · {balance.location.name} ·{' '}
-                    {label(balance.disposition)}
+                    {lotProductLabel(lot)} · {batchNumberLabel(lot.batch.batchNumber)} ·{' '}
+                    {balance.location.name} · {label(balance.disposition)}
                   </option>
                 ))}
               </select>
@@ -1228,7 +1234,8 @@ export default async function PharmacyInventoryPage({
                     key={`${lot.id}:${balance.stockLocationId}`}
                     value={`${lot.id}:${balance.stockLocationId}`}
                   >
-                    {lotProductLabel(lot)} · {lot.batch.batchNumber} · {balance.location.name}
+                    {lotProductLabel(lot)} · {batchNumberLabel(lot.batch.batchNumber)} ·{' '}
+                    {balance.location.name}
                   </option>
                 ))}
               </select>
@@ -1267,7 +1274,8 @@ export default async function PharmacyInventoryPage({
                     key={`${lot.id}:${balance.stockLocationId}`}
                     value={`${lot.id}:${balance.stockLocationId}`}
                   >
-                    {lotProductLabel(lot)} · {lot.batch.batchNumber} · {balance.location.name}
+                    {lotProductLabel(lot)} · {batchNumberLabel(lot.batch.batchNumber)} ·{' '}
+                    {balance.location.name}
                   </option>
                 ))}
               </select>
@@ -1371,7 +1379,7 @@ export default async function PharmacyInventoryPage({
                 <select className={inputClass} name="batchId">
                   {lots.map((lot) => (
                     <option key={lot.batch.id} value={lot.batch.id}>
-                      {lotProductLabel(lot)} · batch {lot.batch.batchNumber}
+                      {lotProductLabel(lot)} · batch {lot.batch.batchNumber ?? 'not recorded'}
                     </option>
                   ))}
                 </select>

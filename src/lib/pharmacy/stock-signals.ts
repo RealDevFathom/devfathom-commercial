@@ -51,8 +51,11 @@ export type LotFact = {
   inventoryLotId: string;
   medicineId: string;
   stockLocationId: string;
-  /** The batch's printed expiry, normalised to the instant it becomes expired. */
-  expiresAt: Date;
+  /**
+   * The batch's printed expiry, normalised to the instant it becomes expired.
+   * DEV-853: null when it was never recorded; such a lot is never expired.
+   */
+  expiresAt: Date | null;
   receivedAt: Date | null;
   disposition:
     'AVAILABLE' | 'QUARANTINE' | 'DAMAGED' | 'DESTROYED' | 'IN_TRANSIT' | 'RETURN_TO_SUPPLIER';
@@ -219,7 +222,7 @@ function saleableUnits(lot: LotFact, at: Date): number {
   if (lot.batchState !== 'ACTIVE') return 0;
   if (lot.recallReference !== null) return 0;
   if (lot.receivedAt === null || lot.receivedAt.getTime() > at.getTime()) return 0;
-  if (lot.expiresAt.getTime() <= at.getTime()) return 0;
+  if (lot.expiresAt !== null && lot.expiresAt.getTime() <= at.getTime()) return 0;
   return Math.max(0, lot.onHandUnits - lot.reservedUnits);
 }
 
@@ -331,7 +334,9 @@ export function evaluateStockSignals(
       const horizon = addDays(at, safety.coverageDays);
       const expiring = lots.reduce(
         (total, lot) =>
-          lot.expiresAt.getTime() <= horizon.getTime() ? total + saleableUnits(lot, at) : total,
+          lot.expiresAt !== null && lot.expiresAt.getTime() <= horizon.getTime()
+            ? total + saleableUnits(lot, at)
+            : total,
         0
       );
       const afterExpiry = available - expiring;
@@ -450,12 +455,14 @@ export function evaluateStockSignals(
       );
     }
 
+    const expiresAt = lot.expiresAt;
     if (
       lot.disposition === 'AVAILABLE' &&
-      lot.expiresAt.getTime() > at.getTime() &&
-      lot.expiresAt.getTime() <= addDays(at, policy.nearExpiryDays).getTime()
+      expiresAt !== null &&
+      expiresAt.getTime() > at.getTime() &&
+      expiresAt.getTime() <= addDays(at, policy.nearExpiryDays).getTime()
     ) {
-      const days = Math.ceil((lot.expiresAt.getTime() - at.getTime()) / DAY_MS);
+      const days = Math.ceil((expiresAt.getTime() - at.getTime()) / DAY_MS);
       signals.push(
         build(context, {
           kind: 'NEAR_EXPIRY',

@@ -1158,7 +1158,9 @@ function ScopedPharmacyCounterConsole({
             }
           : null,
         requestedCanonicalUnits: line.canonicalUnits,
-        nearestSafeExpiry: line.allocations[0] ? new Date(line.allocations[0].expiresAt) : null,
+        nearestSafeExpiry: line.allocations[0]?.expiresAt
+          ? new Date(line.allocations[0].expiresAt)
+          : null,
         discountMinor: line.discountMinor,
       };
     });
@@ -3940,8 +3942,12 @@ function ScopedPharmacyCounterConsole({
                       {[
                         activeRow.presentation,
                         activeRow.dosageForm,
-                        activeRow.batchNumber ? `Batch ${activeRow.batchNumber}` : null,
-                        activeRow.nearestSafeExpiry
+                        activeRow.batchNumber
+                          ? `Batch ${activeRow.batchNumber}`
+                          : activeRow.recommendedLotId
+                            ? 'Batch not recorded'
+                            : null,
+                        activeRow.nearestSafeExpiry || activeRow.recommendedLotId
                           ? formatShortExpiry(activeRow.nearestSafeExpiry)
                           : null,
                         locationLabel,
@@ -4019,7 +4025,7 @@ function ScopedPharmacyCounterConsole({
                     {lotOverride?.inventoryLotId
                       ? `Selected batch ${lotOptionsQuery.data?.find((lot) => lot.inventoryLotId === lotOverride.inventoryLotId)?.batchNumber ?? 'override'} will be used with a recorded reason.`
                       : activeRow.recommendedLotId && activeRow.batchNumber
-                        ? `Earliest-expiry batch ${activeRow.batchNumber} is used; more batches are added if needed.`
+                        ? `Earliest-expiry batch${activeRow.batchNumber ? ` ${activeRow.batchNumber}` : ''} is used; more batches are added if needed.`
                         : activeRow.onHandUnits === 0 && activeRow.blocked.length === 0
                           ? 'No batch of this medicine is in stock here.'
                           : 'No batch can be sold here right now.'}
