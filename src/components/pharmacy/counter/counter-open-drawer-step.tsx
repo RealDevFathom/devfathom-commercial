@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { parseAmountMinor } from './counter-tender-panel';
+import { amountInputError, amountInputToMinor } from '@/lib/money-input';
 import { COUNTER_NATIVE_SELECT_CLASS, type CounterCashier } from './counter-drawer-operator';
 
 export type CounterOpenDrawerStepProps = {
@@ -72,7 +72,9 @@ export function CounterOpenDrawerStep({
   const chooseCashier = canDeclareFloat && Boolean(cashiers?.length);
   // One rule on any connection: the count is always typed (a typed 0 is allowed).
   // The server still refuses a float above 0 from anyone but a manager or owner.
-  const openingFloatMinor = parseAmountMinor(openingCash);
+  // DEV-939: the shared typed-amount reader, the same rules as the payment box.
+  const typedFloat = amountInputToMinor(openingCash);
+  const openingFloatMinor = typedFloat.status === 'OK' ? typedFloat.minor : null;
   const reason = waiting
     ? deviceUnavailable
       ? 'Allow site storage for this site, then reload before opening the drawer.'
@@ -248,6 +250,7 @@ export function CounterOpenDrawerStep({
       {invalid ? (
         <p id="counter-opening-cash-error" role="alert" className="text-sm text-destructive">
           Enter the opening cash, for example 5000 or 0 for an empty drawer.
+          {typedFloat.status === 'INVALID' ? ` ${amountInputError(typedFloat.reason)}` : null}
         </p>
       ) : null}
     </form>
