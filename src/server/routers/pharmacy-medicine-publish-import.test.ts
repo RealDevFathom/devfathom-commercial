@@ -67,6 +67,7 @@ function makeStore(values: Record<string, string>) {
       saleable: false,
       coldChain: false,
       drapRegistrationNumber: null,
+      updatedAt: new Date('2026-01-01'),
     },
   ];
   const provenance: Row[] = Object.entries(values).map(([field, value]) => ({
@@ -78,6 +79,7 @@ function makeStore(values: Record<string, string>) {
     supersedesId: null,
     assertedValue: envelope(value),
   }));
+  const edits: Row[] = [];
   const presentations: Row[] = [];
   const packLevels: Row[] = [];
   const barcodes: Row[] = [];
@@ -108,7 +110,44 @@ function makeStore(values: Record<string, string>) {
       create: vi.fn(async () => ({ id: 'publication_1', status: 'DRAFT' })),
       update: vi.fn(async ({ data }: { data: object }) => ({ id: 'publication_1', ...data })),
     },
+    auditLog: { create: vi.fn(async () => ({ id: 'audit' })) },
+    pharmacyCatalogueEdit: {
+      create: vi.fn(async ({ data }: { data: object }) => {
+        const edit = { id: next('edit'), status: 'PENDING', ...data };
+        edits.push(edit);
+        return edit;
+      }),
+      findFirst: vi.fn(async ({ where }: { where: { id: string } }) =>
+        edits.find((row) => row.id === where.id)
+      ),
+      count: vi.fn(
+        async ({ where }: { where: { medicineId: string; status: string; id: { not: string } } }) =>
+          edits.filter(
+            (row) =>
+              (row as { medicineId?: string }).medicineId === where.medicineId &&
+              row.status === where.status &&
+              row.id !== where.id.not
+          ).length
+      ),
+      updateMany: vi.fn(
+        async ({ where, data }: { where: { id: string; status: string }; data: object }) => {
+          const edit = edits.find((row) => row.id === where.id && row.status === where.status);
+          if (!edit) return { count: 0 };
+          Object.assign(edit, data);
+          return { count: 1 };
+        }
+      ),
+    },
     medicine: {
+      findFirst: vi.fn(async ({ where }: { where: { id: string } }) => medicineOf(where.id)),
+      updateMany: vi.fn(
+        async ({ where, data }: { where: { id: string; updatedAt: Date }; data: object }) => {
+          const medicine = medicineOf(where.id);
+          if (medicine.updatedAt !== where.updatedAt) return { count: 0 };
+          Object.assign(medicine, data);
+          return { count: 1 };
+        }
+      ),
       findUniqueOrThrow: vi.fn(async ({ where }: { where: { id: string } }) =>
         medicineOf(where.id)
       ),
@@ -182,13 +221,13 @@ function makeStore(values: Record<string, string>) {
   };
   return Object.assign(db, {
     $transaction: vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db)),
-    rows: { medicines, presentations, packLevels, barcodes, created },
+    rows: { medicines, presentations, packLevels, barcodes, created, edits },
   });
 }
 
 type Store = ReturnType<typeof makeStore>;
 
-function caller(store: Store) {
+function caller(store: Store, actorId = 'admin') {
   return pharmacyMedicineRouter.createCaller({
     db: store,
     entitlements: {
@@ -199,7 +238,10 @@ function caller(store: Store) {
       modules: [],
       limits: {},
     },
-    session: { expires: 'later', user: { id: 'admin', role: 'ADMIN', status: 'ACTIVE' } },
+    session: {
+      expires: 'later',
+      user: { id: actorId, role: 'ADMIN', status: 'ACTIVE', organizationId: ORG },
+    },
     organization: null,
     support: null,
     requestMeta: { ip: null, userAgent: null },
@@ -421,7 +463,13 @@ describe('setPackBarcode', () => {
   it('attaches a barcode to a published pack so the import matches it', async () => {
     const { store, pack } = await publishedWithout();
     expect(store.rows.barcodes).toHaveLength(0);
-    await caller(store).setPackBarcode({ packLevelId: pack.id, code: ' 5012345678900 ' });
+    const edit = await caller(store).setPackBarcode({
+      packLevelId: pack.id,
+      code: ' 5012345678900 ',
+    });
+    expect(edit).toMatchObject({ status: 'PENDING' });
+    expect(store.rows.barcodes).toHaveLength(0);
+    await caller(store, 'reviewer').decideCatalogueEdit({ editId: edit.id, decision: 'APPROVE' });
     expect(store.rows.barcodes).toEqual([
       expect.objectContaining({ code: '5012345678900', packLevelId: pack.id }),
     ]);
@@ -523,18 +571,26 @@ describe('pack chains built after publication, then imported', () => {
 
   it('imports flat packs created side by side when their totals divide evenly', async () => {
     const { store, box } = await publishedBox();
-    const flat = async (level: 'STRIP' | 'UNIT', unitsPerParent: number) =>
-      caller(store).createPackLevel({
+    const flat = async (level: 'STRIP' | 'UNIT', unitsPerParent: number) => {
+      const edit = await caller(store).createPackLevel({
         presentationId: box.presentationId as string,
         versionGroupId: `${level}-group`,
         level,
         unitsPerParent,
         effectiveFrom: new Date('2020-01-01'),
       });
+      expect(edit).toMatchObject({ status: 'PENDING' });
+      await caller(store, 'reviewer').decideCatalogueEdit({ editId: edit.id, decision: 'APPROVE' });
+      return store.rows.packLevels.at(-1)!;
+    };
     const strip = await flat('STRIP', 10);
     const unit = await flat('UNIT', 1);
     expect(store.rows.packLevels.every((item) => item.parentPackLevelId === null)).toBe(true);
-    await caller(store).setPackBarcode({ packLevelId: strip.id, code: '5012345678900' });
+    const edit = await caller(store).setPackBarcode({
+      packLevelId: strip.id,
+      code: '5012345678900',
+    });
+    await caller(store, 'reviewer').decideCatalogueEdit({ editId: edit.id, decision: 'APPROVE' });
 
     expect(await unitsFor(store, BARCODE)).toMatchObject({
       packLevelId: box.id,
@@ -553,9 +609,35 @@ describe('pack chains built after publication, then imported', () => {
     });
   });
 
+  it('reports a second pending edit on the same item as stale once the first is approved', async () => {
+    const { store, box } = await publishedBox();
+    const queue = (level: 'STRIP' | 'UNIT', unitsPerParent: number) =>
+      caller(store).createPackLevel({
+        presentationId: box.presentationId as string,
+        versionGroupId: `${level}-group`,
+        level,
+        unitsPerParent,
+        effectiveFrom: new Date('2020-01-01'),
+      });
+    const first = await queue('STRIP', 10);
+    const second = await queue('UNIT', 1);
+    const packs = store.rows.packLevels.length;
+
+    await expect(
+      caller(store, 'reviewer').decideCatalogueEdit({ editId: first.id, decision: 'APPROVE' })
+    ).resolves.toEqual({ id: first.id, status: 'APPROVED', staleEdits: 1 });
+    expect(store.rows.packLevels).toHaveLength(packs + 1);
+
+    await expect(
+      caller(store, 'reviewer').decideCatalogueEdit({ editId: second.id, decision: 'APPROVE' })
+    ).rejects.toMatchObject({ code: 'CONFLICT', message: /out of date/ });
+    // The refused approval created nothing; the database rolls back its claim.
+    expect(store.rows.packLevels).toHaveLength(packs + 1);
+  });
+
   it('imports independent side-by-side packs on their own totals even when they do not divide', async () => {
     const { store, box } = await publishedBox();
-    const other = await caller(store).createPackLevel({
+    const edit = await caller(store).createPackLevel({
       presentationId: box.presentationId as string,
       versionGroupId: 'box-30-group',
       level: 'BOX',
@@ -567,10 +649,42 @@ describe('pack chains built after publication, then imported', () => {
       unitsPerPack: 100,
       errors: [],
     });
+    await caller(store, 'reviewer').decideCatalogueEdit({ editId: edit.id, decision: 'APPROVE' });
+    const other = store.rows.packLevels.at(-1)!;
     expect(await unitsFor(store, other.id)).toMatchObject({
       packLevelId: other.id,
       unitsPerPack: 30,
       errors: [],
     });
+  });
+});
+
+describe('DEV-766 front-shop publication', () => {
+  it('publishes a reviewed front-shop item without fabricating strength or ingredients', async () => {
+    const values = { productName: 'Baby lotion', dosageForm: 'Bottle', pack: '200 ml bottle' };
+    const store = makeStore(values);
+    store.rows.medicines[0]!.productFamily = 'FRONT_SHOP';
+    await caller(store).publishAssertions({
+      assertionIds: Object.keys(values).map((field) => `assertion_${field}`),
+    });
+    expect(store.rows.medicines[0]).toMatchObject({ saleable: true, productName: 'Baby lotion' });
+    expect(store.medicineStrengthComponent.create).not.toHaveBeenCalled();
+    expect(store.ingredient.upsert).not.toHaveBeenCalled();
+    expect(store.rows.packLevels).toEqual([expect.objectContaining({ unitsPerParent: 1 })]);
+  });
+  it('still requires strength for medicines', async () => {
+    const values = {
+      productName: 'Amoxil',
+      dosageForm: 'Capsule',
+      pack: '10 capsules',
+      drapRegistrationNumber: '012345',
+    };
+    const store = makeStore(values);
+    await expect(
+      caller(store).publishAssertions({
+        assertionIds: Object.keys(values).map((field) => `assertion_${field}`),
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'Publication requires strength.' });
+    expect(store.rows.medicines[0]).toMatchObject({ saleable: false });
   });
 });

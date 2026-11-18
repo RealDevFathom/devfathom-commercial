@@ -3,6 +3,18 @@ import { hashSync } from 'bcryptjs';
 import type { Prisma } from '@/generated/prisma/client';
 import type { TRPCContext } from '../trpc';
 
+// DEV-879: these fixtures model an approver with no approval authenticator, so the PIN is
+// checked exactly as before. approval-authenticator.test.ts covers the authenticator path.
+vi.mock('@/lib/approval-authenticator', async () => {
+  const { verifyOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
+  return {
+    verifyApprovalSecret: async (
+      _db: unknown,
+      input: { secret: string; credentialHash: string }
+    ) =>
+      (await verifyOperatorCredential('PIN', input.secret, input.credentialHash)) ? 'PIN' : null,
+  };
+});
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({

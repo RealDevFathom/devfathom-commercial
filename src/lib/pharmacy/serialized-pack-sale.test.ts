@@ -179,6 +179,7 @@ function saleDb(
     },
     medicinePackMrp: { findMany: vi.fn(async () => []) },
     pharmacySaleLine: {
+      findFirst: vi.fn(async () => null),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
         id: `sale-line-${++lineCount}`,
         ...data,
@@ -196,7 +197,14 @@ function saleDb(
   return { db, claims };
 }
 
-function bottleLine(payload = SYRUP_BOTTLE, key = 'line-a') {
+/** The server-verified manager PIN approval the router attaches to an out-of-order scan. */
+const MANAGER_APPROVAL = 'MANAGER_PIN:manager-a';
+
+function bottleLine(
+  payload = SYRUP_BOTTLE,
+  key = 'line-a',
+  fefoApprovalPolicy: string | null = MANAGER_APPROVAL
+) {
   return {
     saleId: 'sale-a',
     medicineId: 'medicine-syrup',
@@ -205,7 +213,7 @@ function bottleLine(payload = SYRUP_BOTTLE, key = 'line-a') {
     saleUnit: 'PACK' as const,
     quantity: 1,
     canonicalUnitsPerSaleUnit: 1,
-    scannedPack: { payload },
+    scannedPack: { payload, ...(fefoApprovalPolicy ? { fefoApprovalPolicy } : {}) },
     idempotencyKey: key,
   };
 }
@@ -355,12 +363,13 @@ describe('DEV-92 counter sale of a serialized primary pack', () => {
     expect(allocation.allocations).toEqual([
       expect.objectContaining({ inventoryLotId: 'lot-scanned', units: 1 }),
     ]);
-    // Not FEFO's choice, so the pinned lot carries override evidence naming the serial.
+    // Not FEFO's choice, so the pinned lot carries override evidence naming the serial
+    // and the approval that allowed it (DEV-843).
     expect(db.pharmacyAllocationOverride.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         selectedLotId: 'lot-scanned',
         recommendedLotId: 'lot-fefo',
-        approvalPolicy: SERIALIZED_PACK_APPROVAL_POLICY,
+        approvalPolicy: `${SERIALIZED_PACK_APPROVAL_POLICY}:${MANAGER_APPROVAL}`,
         reason: expect.stringContaining('A1B2C3D4E5F6'),
       }),
     });
@@ -378,6 +387,51 @@ describe('DEV-92 counter sale of a serialized primary pack', () => {
         releasedAt: null,
       }),
     ]);
+  });
+
+  // DEV-843: scanning a pack is not an approval to sell out of FEFO order.
+  it('refuses an unapproved scan of a pack that is not from the earliest-expiry lot', async () => {
+    const { db, claims } = saleDb();
+    await expect(
+      addSaleLine(db as never, scope, bottleLine(SYRUP_BOTTLE, 'line-a', null))
+    ).rejects.toMatchObject({ reason: 'SERIAL_FEFO_APPROVAL_REQUIRED' });
+    // Nothing past the allocation runs; the sale transaction rolls the allocation back.
+    expect(db.pharmacySaleLine.create).not.toHaveBeenCalled();
+    expect(db.pharmacySoldPackSerial.create).not.toHaveBeenCalled();
+    expect(claims).toEqual([]);
+  });
+
+  it('sells an unapproved scan of a pack from the earliest-expiry lot with no override', async () => {
+    const { db, claims } = saleDb({
+      received: { branchId: scope.branchId, inventoryLotId: 'lot-fefo' },
+    });
+    const { allocation } = await addSaleLine(
+      db as never,
+      scope,
+      bottleLine(SYRUP_BOTTLE, 'line-a', null)
+    );
+    expect(allocation.allocations).toEqual([
+      expect.objectContaining({ inventoryLotId: 'lot-fefo', units: 1 }),
+    ]);
+    expect(allocation.overrideId).toBeNull();
+    expect(db.pharmacyAllocationOverride.create).not.toHaveBeenCalled();
+    expect(claims).toEqual([expect.objectContaining({ inventoryLotId: 'lot-fefo' })]);
+  });
+
+  it('does not let a pharmacist-approved batch override stand in for the manager PIN', async () => {
+    const { db } = saleDb();
+    await expect(
+      addSaleLine(db as never, scope, {
+        ...bottleLine(SYRUP_BOTTLE, 'line-a', null),
+        override: {
+          inventoryLotId: 'lot-scanned',
+          reason: 'Customer asked',
+          approvalPolicy: 'PHARMACIST_ON_DUTY',
+        },
+      })
+    ).rejects.toMatchObject({ reason: 'SERIAL_FEFO_APPROVAL_REQUIRED' });
+    expect(db.pharmacySaleLine.create).not.toHaveBeenCalled();
+    expect(db.pharmacySoldPackSerial.create).not.toHaveBeenCalled();
   });
 
   it('refuses a second sale of the same serial before any stock moves', async () => {

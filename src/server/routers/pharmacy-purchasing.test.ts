@@ -8,6 +8,18 @@ const mocks = vi.hoisted(() => {
   hasModule.mockReturnValue(true);
   return { hasModule, can: vi.fn() };
 });
+// DEV-879: these fixtures model an approver with no approval authenticator, so the PIN is
+// checked exactly as before. approval-authenticator.test.ts covers the authenticator path.
+vi.mock('@/lib/approval-authenticator', async () => {
+  const { verifyOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
+  return {
+    verifyApprovalSecret: async (
+      _db: unknown,
+      input: { secret: string; credentialHash: string }
+    ) =>
+      (await verifyOperatorCredential('PIN', input.secret, input.credentialHash)) ? 'PIN' : null,
+  };
+});
 vi.mock('@/lib/abac', () => ({ can: mocks.can, subjectFromSession: (user: unknown) => user }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
@@ -19,6 +31,15 @@ vi.mock('@/lib/entitlements', () => ({
   hasModule: mocks.hasModule,
   resolveOrganizationEntitlements: vi.fn(async () => ({ enabledModules: [] })),
 }));
+// DEV-877: the posting itself is the real function unless a case overrides it.
+vi.mock('@/lib/pharmacy/goods-receipt', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pharmacy/goods-receipt')>();
+  return {
+    ...actual,
+    postGoodsReceipt: vi.fn(actual.postGoodsReceipt),
+    verifyControlledPurchaseWitness: vi.fn(actual.verifyControlledPurchaseWitness),
+  };
+});
 vi.mock('@/server/audit', () => ({
   annotateAudit: vi.fn(),
   ipFromHeaders: vi.fn(() => null),
@@ -29,6 +50,8 @@ vi.mock('@/server/audit', () => ({
 import { pharmacyPurchasingRouter } from './pharmacy-purchasing';
 import { REORDER_MAX_DRAFT_LINES } from '@/lib/pharmacy/reorder-drafts';
 import { matchReceiptLine } from '@/lib/pharmacy/receiving';
+import { postGoodsReceipt, verifyControlledPurchaseWitness } from '@/lib/pharmacy/goods-receipt';
+import { FinancePostingError } from '@/lib/finance/journal';
 import type { TRPCContext } from '../trpc';
 import { moduleForProcedure } from '@/lib/module-catalog';
 
@@ -1293,6 +1316,17 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     permissionOverrides: [],
   };
 
+  it('DEV-877 refuses a delivery posted into a closed accounting period with PERIOD_CLOSED', async () => {
+    db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ id: 'assignment_a', branchId: 'branch_a' });
+    db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_a' });
+    vi.mocked(verifyControlledPurchaseWitness).mockResolvedValueOnce({} as never);
+    vi.mocked(postGoodsReceipt).mockRejectedValueOnce(new FinancePostingError('PERIOD_CLOSED'));
+    await expect(
+      caller().postGoodsReceipt({ branchId: 'branch_a', goodsReceiptId: 'receipt_a' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'PERIOD_CLOSED' });
+    expect(postGoodsReceipt).toHaveBeenCalledOnce();
+  });
+
   it('refuses to draft a receipt at an unassigned branch', async () => {
     db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
     db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'other_branch' }]);
@@ -1337,9 +1371,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
         message: 'Branch is outside your scope.',
       });
       const locked = db.$queryRaw.mock.calls.some(([sql]) =>
-        String((sql as TemplateStringsArray).join?.('?') ?? '').includes(
-          'pharmacy_purchase_orders'
-        )
+        String((sql as TemplateStringsArray).join?.('?') ?? '').includes('pharmacy_purchase_orders')
       );
       expect(locked).toBe(false);
       expect(db.pharmacyRequisition.findFirst).not.toHaveBeenCalled();
@@ -3396,6 +3428,8 @@ const readActions = {
   returnableLots: () => caller().returnableLots({ branchId: 'branch_a' }),
   resolveScan: () => caller().resolveScan({ term: 'scan' }),
   centralDemand: () => caller().centralDemand({}),
+  lostDemandAdvice: () => caller().lostDemandAdvice({ branchId: 'branch_a' }),
+  lostDemandTriggerSettings: () => caller().lostDemandTriggerSettings({ branchId: 'branch_a' }),
   reorderDrafts: () => caller().reorderDrafts({ branchId: 'branch_a' }),
 };
 describe('every purchasing read boundary', () => {

@@ -24,6 +24,8 @@ import {
 } from '@/server/audit';
 import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/tenancy/demo-isolation';
 import { isPrismaError, mapPrismaError } from '@/server/trpc-database-errors';
+import { mapAccountingPeriodError } from '@/server/trpc-period-errors';
+import { refusalReasonOf } from '@/server/refusal-reason';
 
 /**
  * The fetch adapter passes `{ req }` to createContext; the RSC SSR helper calls
@@ -144,7 +146,14 @@ const t = initTRPC
       // Never publish the server stack. tRPC attaches `data.stack` outside
       // production, which leaks file paths and bundle chunk names onto ordinary
       // client errors (e.g. an intentional 403). Drop it for every error code.
-      const data = { ...shape.data, validation: validation?.fields ?? null };
+      // DEV-860: a deliberate refusal may name its reason (`RefusalReason`) next to its
+      // words, so the client can say what is missing. Absent on every other error.
+      const reason = refusalReasonOf(error.cause);
+      const data = {
+        ...shape.data,
+        validation: validation?.fields ?? null,
+        ...(reason ? { reason } : {}),
+      };
       delete data.stack;
       return {
         ...shape,
@@ -161,11 +170,13 @@ export const router = t.router;
  * escaped a resolver (a stale-record update or delete, a unique or foreign-key
  * violation) becomes a typed error with user-facing words — NOT_FOUND, CONFLICT
  * or BAD_REQUEST — instead of a 500 carrying Prisma's own message (#318).
+ * DEV-877: a posting refused because its accounting period is closed becomes
+ * BAD_REQUEST `PERIOD_CLOSED` on every router that can post a journal entry.
  */
 const mapDatabaseErrors = t.middleware(async ({ next }) => {
   const result = await next();
   if (result.ok) return result;
-  const mapped = mapPrismaError(result.error);
+  const mapped = mapAccountingPeriodError(result.error) ?? mapPrismaError(result.error);
   if (mapped) throw mapped;
   return result;
 });

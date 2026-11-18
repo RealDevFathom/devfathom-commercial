@@ -1,6 +1,7 @@
 import type { FinanceSourceKind } from '@/generated/prisma/client';
 
 const FINANCE_SOURCE_LABELS = {
+  PHARMACY_PREPAID: 'Customer prepaid payment',
   PHARMACY_GOODS_RECEIPT: 'Goods received',
   PHARMACY_SALE_LINE: 'Sale',
   PHARMACY_SALE_RETURN_LINE: 'Sale return',

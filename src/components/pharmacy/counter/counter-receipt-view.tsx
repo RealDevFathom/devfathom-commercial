@@ -1,4 +1,5 @@
 'use client';
+import { receiptTierLines } from '@/lib/pharmacy/counter-receipt';
 
 import { useEffect, useRef, useState } from 'react';
 
@@ -19,6 +20,7 @@ import {
   COUNTER_RECEIPT_STRINGS,
   formatMinor,
   formatReceiptDate,
+  formatReceiptIssuedAt,
   receiptCashReceived,
   receiptPromotionLabel,
   receiptTitle,
@@ -239,7 +241,13 @@ function CounterReceiptEvidence({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm font-semibold text-text-strong">Camera evidence</p>
         {onRefresh && (error || pending) ? (
-          <Button type="button" variant="secondary" disabled={refreshing} onClick={onRefresh}>
+          <Button
+            size="touch"
+            type="button"
+            variant="secondary"
+            disabled={refreshing}
+            onClick={onRefresh}
+          >
             {refreshing ? 'Refreshing evidence…' : 'Refresh evidence'}
           </Button>
         ) : null}
@@ -604,8 +612,16 @@ export function CounterReceiptView({
             {strings.branch}: {receipt.branchName}
           </p>
           <p className="text-text-muted">
-            {strings.date}: {receipt.businessDate ?? formatReceiptDate(receipt.completedAt)}
+            {strings.date}:{' '}
+            {receipt.completedAt
+              ? formatReceiptIssuedAt(receipt.completedAt)
+              : (receipt.businessDate ?? formatReceiptDate(receipt.completedAt))}
           </p>
+          {receipt.cashierName ? (
+            <p className="text-text-muted">
+              {strings.cashier}: {receipt.cashierName}
+            </p>
+          ) : null}
           {receipt.receiptNumber === null ? (
             <p className="text-warning">{strings.noReceiptNumber}</p>
           ) : null}
@@ -685,6 +701,11 @@ export function CounterReceiptView({
           })}
         </ul>
 
+        {receiptTierLines(receipt, locale).map((text) => (
+          <p key={text} className="text-sm">
+            {text}
+          </p>
+        ))}
         <dl className="space-y-1 border-t border-border-subtle pt-3">
           {(
             [

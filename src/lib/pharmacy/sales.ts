@@ -1,8 +1,9 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { PREPAID_PROVIDER } from './prepaid-tiers';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { packLevelCanonicalUnits } from './counter-pricing';
+import { legacyStripOption, packLevelCanonicalUnits } from './counter-pricing';
 import { mrpRoundingIncrementForLot, priceFromLot } from './medicine';
 import {
   branchUnknownLossProbability,
@@ -313,10 +314,80 @@ type AddSaleLineInput = {
   approvedByUserId?: string;
   approvalPolicy?: string;
   override?: { inventoryLotId: string; reason: string; approvalPolicy: string };
-  /** DEV-92: the GS1 DataMatrix scanned off the one serialized pack this line sells. */
-  scannedPack?: { payload: string };
+  /**
+   * DEV-92: the GS1 DataMatrix scanned off the one serialized pack this line sells.
+   * DEV-843: `fefoApprovalPolicy` is set only by the server from a verified manager or owner
+   * PIN; without it a pack whose lot is not the earliest-expiry one is refused.
+   */
+  scannedPack?: { payload: string; fefoApprovalPolicy?: string };
+  /** Exact lot selected by a shelf sticker; allocation still enforces FEFO approval. */
+  shelfLabelLotId?: string;
   idempotencyKey: string;
 };
+
+/** Take the organization-wide request lock before any prescription, register or stock lock.
+ * Multi-line offline commands hold all their line keys before preparing stock. */
+export async function lockSaleLineKey(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId'>,
+  idempotencyKey: string
+) {
+  await db.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(
+    hashtextextended(${scope.organizationId + ':sale-line:' + idempotencyKey}, 0))`;
+}
+
+/** Read committed line evidence without dispensing or consuming a voucher again. */
+export async function replaySaleLine(db: ScopedDb, scope: LedgerScope, input: AddSaleLineInput) {
+  await lockSaleLineKey(db, scope, input.idempotencyKey);
+  const previous = await db.pharmacySaleLine.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      idempotencyKey: input.idempotencyKey,
+    },
+    include: { allocations: { orderBy: { stockMovementId: 'asc' } } },
+  });
+  if (!previous) return null;
+  // Saved lines are never re-priced, so an omitted manual discount means none. Only a
+  // voucher or automatic promotion priced the line itself, and either needs no manual discount.
+  const manualDiscountRequested = Boolean(input.discountKind || input.discountMinor);
+  const discountChanged = previous.voucherId
+    ? false
+    : previous.promotionId
+      ? manualDiscountRequested
+      : previous.discountKind !== (input.discountKind ?? null) ||
+        previous.discountMinor !== (input.discountMinor ?? 0);
+  // Never return another branch's line or let a key silently change its target or quantity.
+  if (
+    previous.branchId !== scope.branchId ||
+    previous.saleId !== input.saleId ||
+    previous.medicineId !== input.medicineId ||
+    previous.presentationId !== input.presentationId ||
+    previous.packLevelId !== input.packLevelId ||
+    previous.saleUnit !== input.saleUnit ||
+    previous.quantity !== input.quantity ||
+    previous.canonicalUnitsPerSaleUnit !== input.canonicalUnitsPerSaleUnit ||
+    previous.voucherId !== (input.voucherId ?? null) ||
+    discountChanged
+  )
+    throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+  const { allocations, ...line } = previous;
+  return {
+    line,
+    allocation: {
+      allocations: allocations.map((part) => ({
+        inventoryLotId: part.inventoryLotId,
+        stockLocationId: part.stockLocationId,
+        units: part.canonicalUnits,
+      })),
+      movementIds: allocations.map((part) => part.stockMovementId),
+      recommendedLotId: null,
+      blocked: [],
+      overrideId: null,
+      discrepancyId: null,
+    },
+    replayed: true,
+  };
+}
 
 /**
  * DEV-830 (F05): the canonical units in one sale unit come from the stored medicine,
@@ -349,6 +420,7 @@ export async function assertSaleUnitConversion(
       effectiveFrom: true,
       effectiveTo: true,
       versionGroupId: true,
+      presentation: { select: { presentation: true, dosageForm: true } },
     },
   });
   if (!packLevels.some((level) => level.id === input.packLevelId))
@@ -361,6 +433,19 @@ export async function assertSaleUnitConversion(
     packLevelCanonicalUnits({ packLevels, packLevelId: input.packLevelId, at }).includes(
       input.canonicalUnitsPerSaleUnit
     )
+  )
+    return;
+  // Legacy strips are accepted only at the multiplier derived from this tenant's
+  // stored, reviewed box wording. PACK and UNIT retain their existing checks.
+  const pack = packLevels.find((level) => level.id === input.packLevelId)!;
+  if (
+    input.saleUnit === 'STRIP' &&
+    legacyStripOption({
+      packLevels,
+      packLevelId: input.packLevelId,
+      presentation: pack.presentation?.presentation,
+      dosageForm: pack.presentation?.dosageForm ?? null,
+    })?.canonicalUnitsPerSaleUnit === input.canonicalUnitsPerSaleUnit
   )
     return;
   const received = await db.pharmacyInventoryLot.findFirst({
@@ -520,6 +605,8 @@ async function addSaleLineWithAllocation(
   await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
     name: 'pharmacy.sale.dispense',
   });
+  const replay = !reservation ? await replaySaleLine(db, scope, input) : null;
+  if (replay) return replay;
   const sale = await saleInScope(db, scope, input.saleId);
   if (sale.status !== 'OPEN') throw new PharmacySaleError('INVALID_STATE');
   // Lock the sale row before allocating stock. At PostgreSQL READ COMMITTED,
@@ -573,10 +660,15 @@ async function addSaleLineWithAllocation(
     });
     if (override && override.inventoryLotId !== pack.inventoryLotId)
       throw new PharmacySerializedPackError('SERIAL_LOT_UNAVAILABLE');
-    override ??= {
+    // The pack's own evidence is always what is recorded: its serial, and the manager or owner
+    // approval that let it leave FEFO order. A batch override's approval does not stand in.
+    const packApproval = input.scannedPack.fefoApprovalPolicy;
+    override = {
       inventoryLotId: pack.inventoryLotId,
       reason: serializedPackOverrideReason(pack.serialNumber),
-      approvalPolicy: SERIALIZED_PACK_APPROVAL_POLICY,
+      approvalPolicy: packApproval
+        ? `${SERIALIZED_PACK_APPROVAL_POLICY}:${packApproval}`
+        : SERIALIZED_PACK_APPROVAL_POLICY,
     };
   }
   // DEV-27: a voucher is a stored record. Its eligible-category allowlist is
@@ -585,6 +677,7 @@ async function addSaleLineWithAllocation(
   const voucher = input.voucherId ? await voucherForRedemption(db, scope, input, medicine) : null;
   const allocationInput = {
     medicineId: input.medicineId,
+    ...(input.shelfLabelLotId ? { expectedInventoryLotId: input.shelfLabelLotId } : {}),
     requiredUnits: canonicalUnits,
     at: new Date(),
     idempotencyKeyPrefix: `sale:${input.idempotencyKey}`,
@@ -613,6 +706,11 @@ async function addSaleLineWithAllocation(
       )
     )
       throw new PharmacySerializedPackError('SERIAL_LOT_UNAVAILABLE');
+    // DEV-843: a scanned pack is not an approval. When its lot is not FEFO's choice the
+    // allocation records an override, and that needs a verified manager or owner PIN.
+    // The sale transaction rolls back everything allocated above.
+    if (allocation.overrideId && !input.scannedPack?.fefoApprovalPolicy)
+      throw new PharmacySerializedPackError('SERIAL_FEFO_APPROVAL_REQUIRED');
   }
   // MED-08: price each lot with the rounding increment of its own
   // (pack level, batch) MRP rule, exactly as the counter quoted it.
@@ -757,7 +855,7 @@ async function addSaleLineWithAllocation(
         }
       : {}),
   });
-  return { line, allocation };
+  return { line, allocation, replayed: false };
 }
 
 /**
@@ -955,7 +1053,7 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
         include: {
           medicine: { select: { productName: true, controlled: true } },
           // DEV-638: the pack level actually sold, so a standalone strip is not called a box.
-          packLevel: { select: { level: true } },
+          packLevel: { select: { level: true, parentPackLevelId: true } },
           returnLines: true,
           unidentifiedReturnHolds: true,
           allocations: { include: { lot: { include: { batch: true } } } },
@@ -1007,7 +1105,12 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
       // Controlled restorations need a fresh independent pharmacist witness PIN.
       controlled: line.medicine.controlled,
       saleUnit: line.saleUnit,
-      levelLabel: line.packLevel?.level ?? null,
+      // DEV-705: a strip cut from a standalone legacy box is stored on the box level;
+      // a hierarchy strip never sits on a top level, so name the strip, not the box.
+      levelLabel:
+        line.saleUnit === 'STRIP' && line.packLevel?.parentPackLevelId === null
+          ? 'STRIP'
+          : (line.packLevel?.level ?? null),
       quantity: line.quantity,
       canonicalUnitsPerSaleUnit: line.canonicalUnitsPerSaleUnit,
       canonicalUnits: line.canonicalUnits,
@@ -1021,6 +1124,8 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
   const tenders = sale.tenders.map((tender) => ({
     id: tender.id,
     type: tender.type,
+    // DEV-863: a prepaid wallet tender is restored to the customer's balance, never paid in cash.
+    prepaid: tender.provider === PREPAID_PROVIDER,
     amountMinor: tender.amountMinor,
     refundedMinor: tender.refunds.reduce((n, row) => n + row.amountMinor, 0),
     refunds: tender.refunds.map((row) => ({
@@ -1896,7 +2001,10 @@ export async function recoverRestockInterest(
       branchId: scope.branchId,
       status: { in: ['OPEN', 'NOTIFIED'] },
     },
-    include: { demandEvent: true },
+    include: {
+      demandEvent: true,
+      notifications: { where: { status: 'CAPTURED' }, select: { id: true } },
+    },
   });
   if (interest?.orderLineId || isRefillCycleCampaignKey(interest?.campaignKey))
     throw new PharmacySaleError('INVALID_STATE');
@@ -1912,6 +2020,25 @@ export async function recoverRestockInterest(
     line.sale.receiptNumber === null
   )
     throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+  // Recovery credit starts only when the back-in-stock notice was actually
+  // sent (provider accepted it); a sale completed before that is not credited.
+  // The log's updatedAt is the PENDING->SENT write; createdAt is only the claim.
+  const noticeKeys = interest.notifications.map((notice) => `back-in-stock:${notice.id}`);
+  const sentLogs = noticeKeys.length
+    ? await db.pharmacyMessageLog.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          kind: 'BACK_IN_STOCK',
+          status: 'SENT',
+          dedupeKey: { in: noticeKeys },
+        },
+        select: { updatedAt: true },
+      })
+    : [];
+  const firstSentAt = sentLogs.map((log) => log.updatedAt.getTime()).sort((x, y) => x - y)[0];
+  const soldAt = line.sale.completedAt;
+  if (firstSentAt === undefined || !soldAt || soldAt.getTime() <= firstSentAt)
+    throw new PharmacySaleError('INVALID_STATE');
   const recoveredAt = new Date();
   await db.unfulfilledDemandEvent.update({
     where: {
@@ -1997,10 +2124,10 @@ export async function linkRestockRecoveries(
           status: 'SENT',
           dedupeKey: { in: noticeKeys },
         },
-        select: { dedupeKey: true, createdAt: true },
+        select: { dedupeKey: true, updatedAt: true },
       })
     : [];
-  const sentAt = new Map(sent.map((log) => [log.dedupeKey, log.createdAt]));
+  const sentAt = new Map(sent.map((log) => [log.dedupeKey, log.updatedAt]));
   const pending = interests
     .map((interest) => ({
       id: interest.id,

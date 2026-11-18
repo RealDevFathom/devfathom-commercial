@@ -1,4 +1,5 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { isAccountingPeriodClosedError } from '@/server/trpc-period-errors';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
@@ -41,6 +42,7 @@ import {
   validateLeasedReceiptReplay,
   createSale,
   addSaleLine,
+  lockSaleLineKey,
   assertSaleUnitConversion,
   PharmacySaleError,
 } from '@/lib/pharmacy/sales';
@@ -367,6 +369,10 @@ export async function replayCounterCommand(
     select: { id: true },
   });
   if (earlier) throw new CounterTransportError('earlier_command_pending', 409);
+  // addSaleLine re-enters these request locks after the command's stock locks.
+  // Hold every line key up front so a concurrent online retry cannot invert that order.
+  for (let index = 0; index < command.lines.length; index += 1)
+    await lockSaleLineKey(db, scope, `${command.idempotencyKey}:${index}`);
   const sale = await createSale(db, scope);
   // DEV-825: one transaction adds every line and then tenders, so take the stock
   // locks for all of them up front in the global order (stock-lock-order.ts):
@@ -839,6 +845,10 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
     } catch (error) {
       if (error instanceof CounterTransportError)
         return Response.json({ error: error.code }, { status: error.status });
+      // DEV-877: the replay rolled back and its command stays PENDING; the
+      // posting date is the server's replay time, whose period is closed.
+      if (isAccountingPeriodClosedError(error))
+        return Response.json({ error: 'PERIOD_CLOSED' }, { status: 409 });
       if (error instanceof BranchOperationDeniedError)
         return Response.json({ error: error.reason }, { status: 403 });
       if (error instanceof z.ZodError || error instanceof SyntaxError)

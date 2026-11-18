@@ -54,6 +54,16 @@ describe('apAgingWindow', () => {
     });
   });
 
+  it('ends the as-of day at the organization day boundary, and its today is the local day', () => {
+    // 20:00 UTC on 15 Nov is already 16 Nov in Karachi, so the 16th is not in the future there.
+    const late = d('2026-11-15T20:00:00.000Z');
+    expect(apAgingWindow('2026-11-16', late, 'Asia/Karachi')).toEqual({
+      day: d('2026-11-16T00:00:00.000Z'),
+      cutoff: d('2026-11-16T19:00:00.000Z'),
+    });
+    expect(() => apAgingWindow('2026-11-16', late)).toThrow('INVALID_DATE');
+  });
+
   it('refuses malformed, impossible, too-early or future days', () => {
     for (const bad of ['2026-11-16', '2026-02-30', '1999-12-31', '15-11-2026', '']) {
       expect(() => apAgingWindow(bad, NOW), bad).toThrow('INVALID_DATE');

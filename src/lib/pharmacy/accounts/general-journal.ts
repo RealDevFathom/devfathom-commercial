@@ -401,7 +401,11 @@ export async function postJournalVoucher(
     });
   } catch (error) {
     if (error instanceof FinancePostingError) {
-      fail(error.reason === 'IDEMPOTENCY_CONFLICT' ? 'IDEMPOTENCY_CONFLICT' : 'UNBALANCED');
+      fail(
+        error.reason === 'PERIOD_CLOSED' || error.reason === 'IDEMPOTENCY_CONFLICT'
+          ? error.reason
+          : 'UNBALANCED'
+      );
     }
     throw error;
   }

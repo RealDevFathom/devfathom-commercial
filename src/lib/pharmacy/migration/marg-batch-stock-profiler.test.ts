@@ -31,7 +31,9 @@ const FIXTURE_DIR = join(process.cwd(), 'src/lib/pharmacy/migration/fixtures');
 const SYNTHETIC = readFileSync(join(FIXTURE_DIR, 'marg-batch-stock-synthetic.csv'), 'utf8');
 
 function profileText(text: string): ProfileResult {
-  return profileTable(margBatchStockProfiler, parseMargBatchStockText(text).table);
+  return profileTable(margBatchStockProfiler, parseMargBatchStockText(text).table, {
+    quantityUnit: 'PACKS',
+  });
 }
 
 function bucketsOf(result: ProfileResult): string[] {
@@ -86,7 +88,7 @@ describe('Marg synthetic Batch Stock file — acceptance', () => {
       batchNumber: 'B2411',
       mrpMinor: BigInt(25000),
       costMinor: BigInt(21250),
-      quantityCanonical: BigInt(120),
+      quantityCanonical: BigInt(12000),
     });
     expect(panadol!.expiryDate?.toISOString()).toBe('2027-03-31T00:00:00.000Z');
     // The item code repeats per batch, so it is evidence, not the source key.
@@ -238,4 +240,10 @@ describe('parseDelimitedRecords', () => {
       ['1', '2', '3'],
     ]);
   });
+});
+
+it('leaves Marg Qty unresolved until its pack meaning is explicitly chosen', () => {
+  const result = profileTable(margBatchStockProfiler, parseMargBatchStockText(SYNTHETIC).table);
+  expect(result.rows[0]!.quantityCanonical).toBeNull();
+  expect(bucketsOf(result)).toContain('UNIT_AMBIGUOUS');
 });

@@ -13,6 +13,11 @@
 
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
+import {
+  COUNTER_SETUP_GUIDANCE,
+  counterSetupReason,
+  type CounterSetupReason,
+} from './counter-setup';
 
 /** The refusal the server sends when the actor may not sell a prescription-only line. */
 const RX_SALE_DENIED_SERVER_MESSAGE =
@@ -50,6 +55,9 @@ export const COUNTER_PAYMENT_NEEDS_COUNTER_ACCESS_MESSAGE = `Your role does not 
 /** The server's generic capability refusal (no `pharmacy:counter` for payment and drawer). */
 const NO_PERMISSION_SERVER_MESSAGE = 'You do not have permission for this action.';
 
+/** DEV-712: the refusal a payment gets when a supervisor discarded its attempt. */
+export const TENDER_ATTEMPT_DISCARDED = 'TENDER_ATTEMPT_DISCARDED';
+
 export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // Inventory (INV) — arrangement, stock and safety.
   // Raised in BOTH directions — too few loose units for a strip sale, and a
@@ -59,6 +67,8 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   INVALID_ARRANGEMENT:
     'This quantity does not match how the batch sits on the shelf. Sell the open loose units first, or break a pack in Inventory before selling strips or loose units.',
   INSUFFICIENT_STOCK: 'There is not enough safe stock on hand for this quantity.',
+  LABEL_LOT_MISMATCH:
+    "This shelf label's batch can no longer cover this line. Rescan the label or choose another batch.",
   BLOCKED_STOCK:
     'This batch cannot be dispensed — it is expired, quarantined or recalled. Choose another batch.',
   // #659: a batch on the bill changed after its line was added; payment is refused.
@@ -91,6 +101,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   CONSENT_REQUIRED: 'Recorded patient consent is required before dispensing this medicine.',
   LOYALTY_CONSENT_REQUIRED:
     'Loyalty consent is required before linking this customer or redeeming loyalty points.',
+  // DEV-748: unknown, revoked and other-organization cards are refused alike.
+  LOYALTY_CARD_NOT_RECOGNISED:
+    'That loyalty card is not recognised or has been replaced. Ask the customer for their current card, or link them by name.',
   // DEV-712: the bill was paid, voided or held. A scan opens the next bill by
   // itself, so the sentence never sends the operator to refresh.
   INVALID_STATE:
@@ -109,6 +122,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     'This 2D code has no readable pack serial. Search the medicine by name instead.',
   SERIAL_LOT_UNAVAILABLE:
     'The batch this pack came from cannot be sold from this counter. Check the pack against stock in Inventory.',
+  // DEV-843: a scanned pack from a later-expiry batch is a batch override like any other.
+  SERIAL_FEFO_APPROVAL_REQUIRED:
+    'This pack is not from the earliest-expiry batch. Sell an earliest-expiry pack, or have a manager or owner approve this one with their PIN.',
   // Scope and lookup.
   NOT_FOUND: 'That record is no longer available. Refresh the counter and try again.',
   CROSS_BRANCH_REFERENCE: 'That record belongs to a different branch.',
@@ -147,9 +163,15 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   REFUND_EXCEEDS_TENDER: 'That refund is larger than the amount taken on this bill.',
   IDEMPOTENCY_CONFLICT:
     'That payment was already recorded with different details. Refresh the counter and check the bill.',
+  // DEV-712: a supervisor discarded this payment attempt; the next one gets a new key.
+  [TENDER_ATTEMPT_DISCARDED]:
+    'A supervisor discarded that payment attempt, so it was not recorded. Take the payment again.',
   UNCERTIFIED_PROVIDER: 'This tender needs a connected provider. Take another tender.',
   INVALID_MANUAL_CAPTURE:
     'Check the payment reference and approval code, or confirm this tender is enabled at this branch.',
+  // DEV-863: prepaid money goes back to the customer's prepaid balance, never as cash.
+  PREPAID_REFUND_RESTORES_BALANCE:
+    'This payment came from the customer’s prepaid balance. The refund goes back to that balance; do not give cash.',
   MOCK_PROVIDER_IN_RELEASE:
     'Card payments are not configured on this deployment. Take another tender.',
   REOPEN_REASON_REQUIRED: 'Reopening a closed drawer needs a recorded reason.',
@@ -166,6 +188,13 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // DEV-622: the server's Rx sale refusal (a default Cashier on a prescription line, at
   // add-line or at payment) names who can finish the bill.
   [RX_SALE_DENIED_SERVER_MESSAGE]: COUNTER_RX_NEEDS_PHARMACIST_MESSAGE,
+  // DEV-860: a sale or line refused for a setup gap names what is missing instead of
+  // "Refresh and try again". The drawer keeps its own sentence above.
+  ...Object.fromEntries(
+    (Object.keys(COUNTER_SETUP_GUIDANCE) as CounterSetupReason[])
+      .filter((reason) => reason !== 'DRAWER_NOT_OPEN')
+      .map((reason) => [reason, COUNTER_SETUP_GUIDANCE[reason].message])
+  ),
 };
 
 /**
@@ -202,8 +231,13 @@ const COUNTER_DANGER_REASONS = new Set([
   'IDEMPOTENCY_CONFLICT',
 ]);
 
+/** DEV-860: a declared setup reason (`data.reason`) wins over the refusal's words. */
+function counterReason(error: unknown): string {
+  return counterSetupReason(error) ?? (error instanceof Error ? error.message : '');
+}
+
 export function counterErrorTone(error: unknown): CounterNoticeTone {
-  const reason = error instanceof Error ? error.message : '';
+  const reason = counterReason(error);
   if (COUNTER_INFO_REASONS.has(reason)) return 'info';
   if (COUNTER_DANGER_REASONS.has(reason)) return 'danger';
   return COUNTER_ERROR_MESSAGES[reason] ? 'warning' : 'danger';
@@ -250,18 +284,62 @@ export const COUNTER_GENERIC_ERROR_MESSAGE = 'Request failed.';
  */
 export function counterErrorMessage(error: unknown): string {
   if (!(error instanceof Error) || !error.message) return COUNTER_GENERIC_ERROR_MESSAGE;
-  const mapped = COUNTER_ERROR_MESSAGES[error.message];
+  const mapped = COUNTER_ERROR_MESSAGES[counterReason(error)];
   if (mapped) return mapped;
   if (RAW_REASON_CODE.test(error.message)) return COUNTER_UNKNOWN_ERROR_MESSAGE;
   return error.message;
 }
 
-function isForbidden(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null || !('data' in error)) return false;
+/**
+ * The tRPC codes a procedure throws on purpose, with words written for the operator
+ * (a FEFO batch that needs a pharmacist's PIN, a prescription reference that does not
+ * match). An unexpected failure arrives as INTERNAL_SERVER_ERROR or as no tRPC error
+ * at all (a network or client fault), and its text is never shown.
+ */
+const DELIBERATE_REFUSAL_CODES = new Set([
+  'BAD_REQUEST',
+  'UNAUTHORIZED',
+  'FORBIDDEN',
+  'NOT_FOUND',
+  'CONFLICT',
+  'PRECONDITION_FAILED',
+  'UNPROCESSABLE_CONTENT',
+  'TOO_MANY_REQUESTS',
+]);
+
+function trpcErrorCode(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null || !('data' in error)) return null;
   const data = (error as { data?: unknown }).data;
-  return (
-    typeof data === 'object' && data !== null && (data as { code?: unknown }).code === 'FORBIDDEN'
-  );
+  if (typeof data !== 'object' || data === null) return null;
+  const code = (data as { code?: unknown }).code;
+  return typeof code === 'string' ? code : null;
+}
+
+/**
+ * DEV-860: opening a bill or adding a line. A mapped reason shows its copy; a deliberate
+ * server refusal keeps its own operator-facing words; anything else (an internal
+ * failure, a network or client fault, serialized validation output, an unmapped code)
+ * shows the generic counter sentence, so unexpected text never reaches the screen.
+ */
+export function counterSaleErrorMessage(error: unknown): string {
+  const reason = counterReason(error);
+  if (Object.hasOwn(COUNTER_ERROR_MESSAGES, reason)) return COUNTER_ERROR_MESSAGES[reason]!;
+  if (!(error instanceof Error) || !error.message) return COUNTER_UNKNOWN_ERROR_MESSAGE;
+  const code = trpcErrorCode(error);
+  const message = error.message.trim();
+  if (
+    code &&
+    DELIBERATE_REFUSAL_CODES.has(code) &&
+    message &&
+    !RAW_REASON_CODE.test(message) &&
+    !/^[[{]/.test(message)
+  )
+    return error.message;
+  return COUNTER_UNKNOWN_ERROR_MESSAGE;
+}
+
+function isForbidden(error: unknown): boolean {
+  return trpcErrorCode(error) === 'FORBIDDEN';
 }
 
 /**
@@ -276,5 +354,27 @@ export function counterPaymentErrorMessage(error: unknown): string {
     error.message === NO_PERMISSION_SERVER_MESSAGE
   )
     return COUNTER_PAYMENT_NEEDS_COUNTER_ACCESS_MESSAGE;
+  return counterErrorMessage(error);
+}
+
+/**
+ * Drawer operations have different gates: only opening an empty till for yourself
+ * uses payment access. A float or another cashier requires manager access. Match
+ * only the generic capability refusal; preserve scope and other specific errors.
+ */
+export function counterDrawerErrorMessage(
+  error: unknown,
+  action: 'open' | 'open-with-float' | 'assign-cashier' | 'handover'
+): string {
+  if (action === 'open') return counterPaymentErrorMessage(error);
+  if (
+    isForbidden(error) &&
+    error instanceof Error &&
+    error.message === NO_PERMISSION_SERVER_MESSAGE
+  ) {
+    return action === 'open-with-float'
+      ? 'Only a manager or owner can open with a float. Open with 0 if the drawer is empty, or ask a manager.'
+      : 'Only a manager or owner can assign the till to another cashier. Ask a manager.';
+  }
   return counterErrorMessage(error);
 }

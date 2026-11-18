@@ -41,6 +41,18 @@ const mocks = vi.hoisted(() => ({
   windowDeleteMany: vi.fn(),
   saleFindMany: vi.fn(),
 }));
+// DEV-879: these fixtures model an approver with no approval authenticator, so the PIN is
+// checked exactly as before. approval-authenticator.test.ts covers the authenticator path.
+vi.mock('@/lib/approval-authenticator', async () => {
+  const { verifyOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
+  return {
+    verifyApprovalSecret: async (
+      _db: unknown,
+      input: { secret: string; credentialHash: string }
+    ) =>
+      (await verifyOperatorCredential('PIN', input.secret, input.credentialHash)) ? 'PIN' : null,
+  };
+});
 vi.mock('@/lib/pharmacy/branch-comparison', () => ({
   readPharmacyBranchComparison: mocks.comparisonRead,
 }));
@@ -1252,10 +1264,15 @@ describe('repeat purchasing authorization', () => {
     expect(mocks.branchFindMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { organizationId: 'org_1', active: true } })
     );
-    expect(mocks.repeatRead).toHaveBeenCalledWith(expect.anything(), 'org_1', {
-      ...input,
-      branchIds: ['branch_1'],
-    });
+    expect(mocks.repeatRead).toHaveBeenCalledWith(
+      expect.anything(),
+      'org_1',
+      {
+        ...input,
+        branchIds: ['branch_1'],
+      },
+      undefined
+    );
   });
   it('rejects future cutoff and irrelevant item filters', async () => {
     await expect(

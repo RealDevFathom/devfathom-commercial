@@ -28,6 +28,7 @@ import {
 } from '@/lib/pharmacy/drap-monitoring';
 import {
   acknowledgeRecall,
+  allocateRequestedTransfer,
   allocateTransfer,
   approveCount,
   approveTransfer,
@@ -64,6 +65,8 @@ import {
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { lockStockBalances, lockStockRowsFrom } from '@/lib/pharmacy/stock-lock-order';
 import { PharmacyStockSignalError } from '@/lib/pharmacy/stock-signals';
+import { PharmacyCounterError } from '@/lib/pharmacy/counter';
+import { readShelfLabelSheet, ShelfLabelSourceError } from '@/lib/pharmacy/shelf-label-source';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
 import {
   expiryRiskBuckets,
@@ -129,6 +132,8 @@ const regulatory = capabilityProcedure('pharmacy:safety');
 const inventoryControl = capabilityProcedure('pharmacy:inventory');
 const SOLO_COUNT_APPROVAL_REFUSED =
   'Only the pharmacy owner who works alone can approve their own count, with their current PIN.';
+const SOLO_TRANSFER_APPROVAL_REFUSED =
+  'Only the pharmacy owner who works alone can approve their own transfer, with their current PIN.';
 const drapNotice = z.discriminatedUnion('kind', [
   z
     .object({
@@ -1665,15 +1670,88 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  approveTransfer: inventoryControl
+  /**
+   * DEV-80: the source branch takes up a DRAFT transfer request another branch
+   * raised. It becomes an ordinary ALLOCATED transfer that still needs a second
+   * person's approval (or a solo owner's fresh PIN) before anything is dispatched.
+   */
+  allocateRequestedTransfer: inventoryControl
     .input(z.object({ branchId, transferId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
-        return await approveTransfer(
-          ctx.db,
-          await admittedScopeFor(ctx, input.branchId),
-          input.transferId
+        const scope = await admittedScopeFor(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) =>
+          allocateRequestedTransfer(txDb(tx), scope, input.transferId)
         );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  approveTransfer: inventoryControl
+    .input(
+      z
+        .object({
+          branchId,
+          transferId: z.string().min(1),
+          // Solo-pharmacy rule: a sole owner approves their own allocation with a
+          // fresh PIN instead of a second person; the approval is audited.
+          soloPin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const scope = await admittedScopeFor(ctx, input.branchId);
+        if (input.soloPin === undefined)
+          return await approveTransfer(ctx.db, scope, input.transferId);
+        const soloPin = input.soloPin;
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          if (
+            !(await soloOwnerApprovalAllowed(
+              db,
+              scope.organizationId,
+              scope.actorId,
+              scope.branchId
+            ))
+          )
+            throw new TRPCError({ code: 'FORBIDDEN', message: SOLO_TRANSFER_APPROVAL_REFUSED });
+          const pin = await verifyPurchaseApprover(db, {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            approverId: scope.actorId,
+            pin: soloPin,
+          });
+          if ('blocked' in pin)
+            throw new TRPCError({ code: 'FORBIDDEN', message: SOLO_TRANSFER_APPROVAL_REFUSED });
+          const approved = await approveTransfer(db, scope, input.transferId, {
+            soloSelfApproval: true,
+          });
+          await db.auditLog.create({
+            data: {
+              organizationId: scope.organizationId,
+              actorId: scope.actorId,
+              actorType: 'USER',
+              source: 'TRPC',
+              category: 'PHARMACY_INVENTORY',
+              operation: 'OTHER',
+              action: 'pharmacy.transferSoloApproval',
+              targetType: 'PharmacyInterbranchTransfer',
+              targetId: input.transferId,
+              metadata: {
+                branchId: scope.branchId,
+                approverId: scope.actorId,
+                pinVerified: true,
+                policy: SOLO_OWNER_POLICY,
+              },
+            },
+          });
+          return approved;
+        });
       } catch (error) {
         domainError(error);
       }
@@ -1803,6 +1881,58 @@ export const pharmacyInventoryRouter = router({
         );
       } catch (error) {
         domainError(error);
+      }
+    }),
+
+  /**
+   * DEV-90: shelf and price sticker content for one branch, from a posted goods
+   * receipt, a medicine list, or a search. Prices and lot codes come only from
+   * here; the operator chooses how many to print.
+   */
+  shelfLabels: inventoryControl
+    .input(
+      z
+        .object({
+          branchId,
+          source: z.discriminatedUnion('kind', [
+            z
+              .object({ kind: z.literal('RECEIPT'), goodsReceiptId: z.string().min(1).max(128) })
+              .strict(),
+            z
+              .object({
+                kind: z.literal('MEDICINES'),
+                medicineIds: z.array(z.string().min(1).max(128)).min(1).max(100),
+              })
+              .strict(),
+            z
+              .object({ kind: z.literal('SEARCH'), query: z.string().trim().min(2).max(120) })
+              .strict(),
+          ]),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = await admittedScopeFor(ctx, input.branchId);
+      try {
+        return await readShelfLabelSheet(
+          ctx.db,
+          { organizationId: scope.organizationId, branchId: scope.branchId },
+          input.source
+        );
+      } catch (error) {
+        if (error instanceof ShelfLabelSourceError) {
+          throw new TRPCError({
+            code: error.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST',
+            message:
+              error.reason === 'NOT_FOUND'
+                ? 'Goods receipt not found in this branch.'
+                : 'Only a posted goods receipt has lots to label.',
+          });
+        }
+        if (error instanceof PharmacyCounterError) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Type at least two characters.' });
+        }
+        throw error;
       }
     }),
 

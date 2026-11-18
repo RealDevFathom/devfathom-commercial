@@ -31,6 +31,16 @@ import {
   LOYALTY_POINT_VALUE_MINOR,
   type LoyaltyEarnRule,
 } from '@/lib/commerce/loyalty-arithmetic';
+import {
+  issueLoyaltyCard,
+  readActiveLoyaltyCard,
+  revokeLoyaltyCard,
+} from '@/lib/pharmacy/loyalty-card';
+import {
+  LOYALTY_MEMBERSHIP_REASON_MAX,
+  LOYALTY_MEMBERSHIP_REASON_MIN,
+  setLoyaltyMembership,
+} from '@/lib/pharmacy/loyalty-membership';
 import { annotateAudit } from '@/server/audit';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { requireDrawerManagerAccess } from '@/server/routers/pharmacy-sales';
@@ -90,6 +100,14 @@ export const adjustPointsInput = branchInput
   })
   .strict();
 
+export const membershipInput = branchInput
+  .extend({
+    customerId: z.string().trim().min(1).max(128),
+    active: z.boolean(),
+    reason: z.string().trim().min(LOYALTY_MEMBERSHIP_REASON_MIN).max(LOYALTY_MEMBERSHIP_REASON_MAX),
+  })
+  .strict();
+
 /**
  * DEV-764: an owner (session administrator of this organization) or a manager actively
  * assigned to the branch, through the same manager gate as drawer cash movements. A cashier
@@ -107,6 +125,32 @@ async function requireAdjustAccess(ctx: TRPCContext, branchId: string) {
   if (managed.organizationId !== scope.organizationId || managed.branchId !== branchId)
     throw new TRPCError({ code: 'FORBIDDEN' });
   return { scope, authority: 'MANAGER' as const };
+}
+
+const cardInput = branchInput.extend({ customerId: z.string().trim().min(1).max(128) });
+
+/** DEV-748: card domain refusals as the console shows them. */
+async function cardWrite<T>(write: () => Promise<T>) {
+  try {
+    return await write();
+  } catch (error) {
+    if (error instanceof PharmacyLoyaltyError) {
+      if (error.reason === 'CUSTOMER_NOT_FOUND')
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch or customer unavailable.' });
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message:
+          error.reason === 'LOYALTY_CONSENT_REQUIRED'
+            ? 'This customer has not given loyalty consent. Record consent before issuing a card.'
+            : error.reason === 'LOYALTY_CARD_NOT_ACTIVE'
+              ? 'This customer has no working card.'
+              : error.reason === 'LOYALTY_CARD_REASON_REQUIRED'
+                ? 'Give a reason of 3 to 200 characters, such as "Card lost".'
+                : 'The card was changed at the same time. Reload and try again.',
+      });
+    }
+    throw error;
+  }
 }
 
 export const LOYALTY_EARN_OPTIONS: [string, ...string[]] = [
@@ -354,7 +398,9 @@ export const pharmacyLoyaltyRouter = router({
               ? 'A removal cannot take the balance below zero.'
               : error.reason === 'IDEMPOTENCY_CONFLICT'
                 ? 'This adjustment was already recorded with different details.'
-                : 'Enter a whole number of points (not 0) and a reason of at least 3 characters.',
+                : error.reason === 'LOYALTY_INACTIVE'
+                  ? 'This member is deactivated. Re-enrol them before adjusting their points.'
+                  : 'Enter a whole number of points (not 0) and a reason of at least 3 characters.',
         });
       }
       throw error;
@@ -385,6 +431,120 @@ export const pharmacyLoyaltyRouter = router({
       replayed: result.replayed,
     };
   }),
+  // DEV-764: enrol (re-enrol) or deactivate a loyalty member, with a written reason. The same
+  // owner-or-branch-manager gate as adjustments; a cashier is refused before any write.
+  setMembership: protectedProcedure.input(membershipInput).mutation(async ({ ctx, input }) => {
+    const { scope, authority } = await requireAdjustAccess(ctx, input.branchId);
+    let result: Awaited<ReturnType<typeof setLoyaltyMembership>>;
+    try {
+      result = await ctx.db.$transaction((tx) =>
+        setLoyaltyMembership(txDb(tx), scope, {
+          customerId: input.customerId,
+          active: input.active,
+          reason: input.reason,
+        })
+      );
+    } catch (error) {
+      if (error instanceof PharmacyLoyaltyError) {
+        if (error.reason === 'CUSTOMER_NOT_FOUND')
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch or customer unavailable.' });
+        throw new TRPCError({
+          code: error.reason === 'LOYALTY_CONSENT_REQUIRED' ? 'PRECONDITION_FAILED' : 'BAD_REQUEST',
+          message:
+            error.reason === 'LOYALTY_CONSENT_REQUIRED'
+              ? 'The customer has not given current loyalty consent. Record consent at the counter, then enrol them.'
+              : 'Give a reason of at least 3 characters.',
+        });
+      }
+      throw error;
+    }
+    annotateAudit(ctx, {
+      category: 'PHARMACY',
+      operation: 'UPDATE',
+      action: input.active ? 'pharmacyLoyalty.enrolMember' : 'pharmacyLoyalty.deactivateMember',
+      targetType: 'PharmacyCustomer',
+      targetId: result.customer.id,
+      changes: { loyaltyActive: { before: result.before, after: result.after } },
+      metadata: {
+        branchId: input.branchId,
+        reason: input.reason,
+        pointsBalance: result.pointsBalance,
+        authority,
+        changed: result.changed,
+      },
+    });
+    return { loyaltyActive: result.after, changed: result.changed };
+  }),
+  // DEV-748: the customer's working physical card, if any. Never the code or its hash.
+  card: adminProcedure
+    .input(branchInput.extend({ customerId: z.string().trim().min(1).max(128) }).strict())
+    .query(({ ctx, input }) =>
+      readActiveLoyaltyCard(ctx.db, scopeFor(ctx, input.branchId).organizationId, input.customerId)
+    ),
+  // DEV-748: an owner or branch manager issues a physical card, or replaces a lost one. The code
+  // is returned once, for printing; only its hash is kept. A replacement revokes the old card.
+  issueCard: protectedProcedure
+    .input(cardInput.extend({ reason: z.string().trim().max(200).optional() }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const { scope, authority } = await requireAdjustAccess(ctx, input.branchId);
+      const issued = await cardWrite(() =>
+        ctx.db.$transaction((tx) =>
+          issueLoyaltyCard(txDb(tx), scope, {
+            customerId: input.customerId,
+            ...(input.reason ? { reason: input.reason } : {}),
+          })
+        )
+      );
+      annotateAudit(ctx, {
+        category: 'PHARMACY',
+        operation: 'CREATE',
+        action: issued.replacedCardId ? 'pharmacyLoyalty.replaceCard' : 'pharmacyLoyalty.issueCard',
+        targetType: 'PharmacyLoyaltyCard',
+        targetId: issued.card.id,
+        // Never the card code: it is a bearer token.
+        metadata: {
+          branchId: input.branchId,
+          customerId: input.customerId,
+          replacedCardId: issued.replacedCardId,
+          reason: issued.replacedReason,
+          authority,
+        },
+      });
+      return {
+        cardId: issued.card.id,
+        issuedAt: issued.card.issuedAt,
+        code: issued.code,
+        replaced: issued.replacedCardId !== null,
+      };
+    }),
+  // DEV-748: an owner or branch manager stops a card working (lost, stolen) without a new one.
+  revokeCard: protectedProcedure
+    .input(cardInput.extend({ reason: z.string().trim().min(3).max(200) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const { scope, authority } = await requireAdjustAccess(ctx, input.branchId);
+      const revoked = await cardWrite(() =>
+        ctx.db.$transaction((tx) =>
+          revokeLoyaltyCard(txDb(tx), scope, {
+            customerId: input.customerId,
+            reason: input.reason,
+          })
+        )
+      );
+      annotateAudit(ctx, {
+        category: 'PHARMACY',
+        operation: 'UPDATE',
+        action: 'pharmacyLoyalty.revokeCard',
+        targetType: 'PharmacyLoyaltyCard',
+        targetId: revoked.cardId,
+        metadata: {
+          branchId: input.branchId,
+          customerId: input.customerId,
+          reason: revoked.reason,
+          authority,
+        },
+      });
+      return { cardId: revoked.cardId };
+    }),
   branches: adminProcedure.query(({ ctx }) => {
     const scope = scopeFor(ctx);
     return ctx.db.pharmacyBranch.findMany({

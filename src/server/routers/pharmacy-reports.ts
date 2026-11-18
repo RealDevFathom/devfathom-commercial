@@ -17,8 +17,8 @@ import {
   clearLockout,
   isLockedOut,
   registerFailedAttempt,
-  verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
+import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { hasModule } from '@/lib/entitlements';
 import { can, subjectFromSession } from '@/lib/abac';
@@ -496,7 +496,17 @@ export const pharmacyReportsRouter = router({
           const now = new Date();
           if (!credential || isLockedOut(credential, now))
             return { blocked: 'Owner PIN reauthentication is required.' };
-          if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
+          if (
+            !(await verifyApprovalSecret(db, {
+              organizationId,
+              approverUserId: actorId,
+              credentialHash: credential.credentialHash,
+              secret: input.pin,
+              action: 'pharmacyReports.transitionPharmacovigilanceReport',
+              requestedById: actorId,
+              now,
+            }))
+          ) {
             await db.restaurantOperatorCredential.update({
               where: { id: credential.id },
               data: registerFailedAttempt(credential, now),
@@ -701,42 +711,47 @@ export const pharmacyReportsRouter = router({
       select: { id: true, name: true },
     });
   }),
-  replenishment: branchReports.input(pharmacyReplenishmentReportInput).query(async ({ ctx, input }) => {
-    // Existing capability middleware denies before report reads; scope enforces licensing.
-    const available = await reportScope(ctx, ctx.reportBranches);
-    if (!available.branches.some((branch) => branch.id === input.branchId))
-      throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
-    const financial =
-      ctx.session!.user.role === 'ADMIN' &&
-      (await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
-        db: ctx.db,
-        source: 'TRPC',
-        ip: ctx.requestMeta.ip,
-      }));
-    const readAt = new Date();
-    try {
-      validatePharmacyReplenishmentReportInput(input, readAt);
-    } catch {
-      throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid replenishment report inputs.' });
-    }
-    try {
-      return await readPharmacyReplenishmentReport(
-        ctx.db,
-        {
-          ...input,
-          organizationId: available.organizationId,
-          authorizedBranchIds: available.branches.map((branch) => branch.id),
-          financial,
-        },
-        readAt
-      );
-    } catch {
-      throw new TRPCError({
-        code: 'BAD_REQUEST',
-        message: 'Replenishment evidence is unavailable for this scope or scenario.',
-      });
-    }
-  }),
+  replenishment: branchReports
+    .input(pharmacyReplenishmentReportInput)
+    .query(async ({ ctx, input }) => {
+      // Existing capability middleware denies before report reads; scope enforces licensing.
+      const available = await reportScope(ctx, ctx.reportBranches);
+      if (!available.branches.some((branch) => branch.id === input.branchId))
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
+      const financial =
+        ctx.session!.user.role === 'ADMIN' &&
+        (await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
+          db: ctx.db,
+          source: 'TRPC',
+          ip: ctx.requestMeta.ip,
+        }));
+      const readAt = new Date();
+      try {
+        validatePharmacyReplenishmentReportInput(input, readAt);
+      } catch {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Invalid replenishment report inputs.',
+        });
+      }
+      try {
+        return await readPharmacyReplenishmentReport(
+          ctx.db,
+          {
+            ...input,
+            organizationId: available.organizationId,
+            authorizedBranchIds: available.branches.map((branch) => branch.id),
+            financial,
+          },
+          readAt
+        );
+      } catch {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Replenishment evidence is unavailable for this scope or scenario.',
+        });
+      }
+    }),
   seasonalCalendar: reports.input(seasonalBranch).query(async ({ ctx, input }) => {
     const branchScope = await requireReportBranch(ctx, input.branchId);
     return {
@@ -934,14 +949,19 @@ export const pharmacyReportsRouter = router({
     .query(async ({ ctx, input }) => {
       const scoped = { ...(await ownerFilters(ctx, input)), asOf: input.asOf };
       try {
-        validateRepeatFilters(scoped);
+        validateRepeatFilters(scoped, new Date(), ctx.organization?.timezone);
       } catch (error) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
           message: error instanceof Error ? error.message : 'Invalid cohort window.',
         });
       }
-      return readRepeatPurchasing(ctx.db, ctx.entitlements.organizationId, scoped);
+      return readRepeatPurchasing(
+        ctx.db,
+        ctx.entitlements.organizationId,
+        scoped,
+        ctx.organization?.timezone
+      );
     }),
   commandCentre: branchReports.input(filters).query(async ({ ctx, input }) => {
     const available = await reportScope(ctx, ctx.reportBranches);
@@ -989,8 +1009,7 @@ export const pharmacyReportsRouter = router({
         permissions: { operational: true, financial },
         // DEV-505: the safety queue is counted across the whole organization, so a
         // branch-scoped reader (a Manager) is not shown other branches' activity.
-        metrics:
-          ctx.reportBranches === 'ALL' ? metrics : { ...metrics, safetyQueue: null },
+        metrics: ctx.reportBranches === 'ALL' ? metrics : { ...metrics, safetyQueue: null },
       };
     } catch (error) {
       throw new TRPCError({

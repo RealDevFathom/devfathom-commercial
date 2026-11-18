@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { refundReferenceProblem } from './refund-reference';
 import { createHash } from 'node:crypto';
 
 import { Prisma } from '@/generated/prisma/client';
@@ -93,6 +94,7 @@ export type RefundTenderInput = {
   /** Defaults to REFUND. VOID_REVERSAL is only valid for a same-day FULL reversal. */
   kind?: RefundKind;
   reason: string;
+  cardMachineRefundReference?: string;
   /** Authenticated device branch; direct engine callers fall back to actor device lookup. */
   branchId?: string;
   /** The manager co-authorizing the refund (must differ from the actor, C6). */
@@ -133,6 +135,7 @@ type LoadedTender = {
     branchId: string;
     serviceChargeTotal: Prisma.Decimal;
     deliveryFeeTotal: Prisma.Decimal;
+    roundingAdjustment: Prisma.Decimal;
     tenders: { id: string; amount: Prisma.Decimal }[];
   };
 };
@@ -162,6 +165,11 @@ export async function refundTender(
   const kind: RefundKind = input.kind ?? 'REFUND';
   return runMoneyTransaction(db, async (tx) => {
     const reason = requireReason(input.reason);
+    const cardMachineRefundReference = input.cardMachineRefundReference?.trim() || null;
+    const referenceProblem = cardMachineRefundReference
+      ? refundReferenceProblem(cardMachineRefundReference)
+      : null;
+    if (referenceProblem) throw new RefundError(referenceProblem, 'INVALID');
     const amount = money(input.amount);
     const tipRefundAmount =
       input.tipRefundAmount === undefined ? ZERO : money(input.tipRefundAmount);
@@ -190,7 +198,14 @@ export async function refundTender(
     // callers and test doubles free of misleading residue.
     const cardPayment =
       tender.type === 'CARD' ? await requireRefundableCardPayment(tx, tender.paymentId) : null;
+    if (cardMachineRefundReference && cardPayment?.provider !== 'MANUAL') {
+      throw new RefundError(
+        'A card machine refund reference requires a MANUAL card payment.',
+        'INVALID'
+      );
+    }
     const canonicalBytes = JSON.stringify({
+      ...(cardMachineRefundReference ? { cardMachineRefundReference } : {}),
       originalTenderId: tender.id,
       amount: amount.toString(),
       tipRefundAmount: tipRefundAmount.toString(),
@@ -261,6 +276,26 @@ export async function refundTender(
       ? tenderDeliveryTotal
       : roundMoney(tenderDeliveryTotal.mul(cumulativePrincipal).div(tender.amount));
     const deliveryFeeRefundAmount = sub(cumulativeDelivery, priorDeliveryRefund);
+    // A fractional bill's largest-remainder cent is an untaxed rounding adjustment
+    // that settlement never reports as gross sales. Its share of the refund is its
+    // own component, so a full refund nets sales back to exactly zero (DEV-773).
+    const roundingShares = allocate(
+      tender.bill.roundingAdjustment,
+      tender.bill.tenders.map((row) => row.amount.mul(100).toNumber())
+    );
+    const tenderRoundingTotal = roundingShares[tenderIndex] ?? ZERO;
+    const priorRoundingRefund = money(
+      (
+        await tx.restaurantRefund.aggregate({
+          where: { originalTenderId: tender.id },
+          _sum: { roundingRefundAmount: true },
+        })
+      )._sum.roundingRefundAmount ?? ZERO
+    );
+    const cumulativeRounding = equals(cumulativePrincipal, tender.amount)
+      ? tenderRoundingTotal
+      : roundMoney(tenderRoundingTotal.mul(cumulativePrincipal).div(tender.amount));
+    const roundingIncrement = sub(cumulativeRounding, priorRoundingRefund);
 
     const frozenTaxAllocations = (
       await tx.restaurantTaxTenderAllocationSnapshot.findMany({
@@ -319,6 +354,18 @@ export async function refundTender(
     const taxRefundAmount = new Prisma.Decimal(
       taxRefundRows.reduce((total, row) => total + row.cents, 0)
     ).div(100);
+    // Tax and rounding round independently, so on a tiny partial refund both can
+    // step by a cent at once. Rounding takes only what this refund has left after
+    // tax, service and delivery; a deferred cent is caught up by a later refund,
+    // because each refund books the cumulative share minus what was already refunded.
+    const unclassifiedPrincipal = sub(
+      sub(sub(amount, taxRefundAmount), serviceChargeRefundAmount),
+      deliveryFeeRefundAmount
+    );
+    const roundingRefundAmount = Prisma.Decimal.max(
+      ZERO,
+      Prisma.Decimal.min(roundingIncrement, unclassifiedPrincipal)
+    );
 
     // Processing business date (C7): the register's CURRENT business date.
     const branch = await tx.restaurantBranch.findUnique({
@@ -367,12 +414,14 @@ export async function refundTender(
 
     const refund = await tx.restaurantRefund.create({
       data: {
+        cardMachineRefundReference,
         originalTenderId: tender.id,
         billId: tender.billId,
         amount,
         tipRefundAmount,
         serviceChargeRefundAmount,
         deliveryFeeRefundAmount,
+        roundingRefundAmount,
         taxRefundAmount,
         kind,
         businessDate,
@@ -420,6 +469,7 @@ export async function refundTender(
     if (cardPayment) {
       paymentStatus = await applyCardRefund(tx, {
         payment: cardPayment,
+        cardMachineRefundReference,
         kind,
         amount,
         tipRefundAmount,
@@ -484,6 +534,7 @@ async function loadTender(tx: ScopedDb, tenderId: string, branchId: string): Pro
           branchId: true,
           serviceChargeTotal: true,
           deliveryFeeTotal: true,
+          roundingAdjustment: true,
           tenders: {
             orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
             select: { id: true, amount: true },
@@ -556,6 +607,7 @@ async function applyCardRefund(
   tx: ScopedDb,
   input: {
     payment: RefundableCardPayment;
+    cardMachineRefundReference: string | null;
     kind: RefundKind;
     amount: Prisma.Decimal;
     tipRefundAmount: Prisma.Decimal;
@@ -582,6 +634,7 @@ async function applyCardRefund(
             providerRef: input.payment.providerRef,
             payload: {
               provider: 'MANUAL',
+              cardMachineRefundReference: input.cardMachineRefundReference,
               manuallyConfirmed: true,
               capability,
               amount: input.amount.toString(),

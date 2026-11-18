@@ -1,3 +1,5 @@
+import { readPrepaidAccount } from './prepaid-tiers';
+import { pricePrepaidSale } from './prepaid-discount';
 /**
  * PH-POS — the counter's read side (POS-02 search, the FEFO cart, POS-08
  * receipts).
@@ -31,6 +33,7 @@ import {
 import { counterReceiptTotals, type CounterReceipt } from './counter-receipt';
 import { mrpRoundingIncrementForLot, normalizeMedicineText } from './medicine';
 import { readReceiptIdentity } from './receipt-identity';
+import { parseShelfLabelCode } from './shelf-label-code';
 import type { LedgerScope } from './stock-ledger';
 
 export class PharmacyCounterError extends Error {
@@ -44,13 +47,15 @@ export type CounterScope = Pick<LedgerScope, 'organizationId' | 'branchId'>;
 /** How a row was reached, so the operator can trust an unfamiliar match. */
 export type CounterMatchKind = 'BARCODE' | 'ALIAS' | 'NAME' | 'INGREDIENT' | 'PRESENTATION';
 
-export type CounterSearchRow = {
+export type CounterCatalogRow = {
   medicineId: string;
   displayName: string;
   brandName: string | null;
   manufacturer: string | null;
   /** Rendered strength components, for example `500 mg + 30 mg`. */
   strength: string | null;
+  /** DEV-862: salt and strength, e.g. `paracetamol 500 mg`; null when none recorded. */
+  composition?: string | null;
   presentationId: string;
   presentation: string;
   dosageForm: string | null;
@@ -67,6 +72,11 @@ export type CounterSearchRow = {
   nearestSafeExpiry: string | null;
   /** Safe canonical units on hand for this branch (blocked stock excluded). */
   onHandUnits: number;
+  /**
+   * DEV-90: set only on a shelf-label scan, where `onHandUnits` is that lot's own
+   * units. The medicine-wide safe total, for shortage capture and substitutes.
+   */
+  medicineOnHandUnits?: number;
   /** The saleable arrangement, per available sale unit (POS-02). */
   saleableUnits: Array<{
     kind: SaleUnitKind;
@@ -101,6 +111,34 @@ export type CounterSearchRow = {
   };
   /** Why otherwise-present stock cannot be sold, deduplicated (INV-03). */
   blocked: BlockReason[];
+  /**
+   * DEV-90: the exact lot a scanned shelf sticker names. Set only when the query
+   * was a shelf-label code of this branch. When it differs from
+   * `recommendedLotId`, selling it is a FEFO override like any other.
+   */
+  labelLot?: CounterLabelLot | null;
+};
+
+export type CounterLabelLot = {
+  inventoryLotId: string;
+  batchNumber: string;
+  expiresAt: string;
+  printedMrpMinor: number;
+  /** Safe canonical units of this lot alone. */
+  sellableUnits: number;
+  /** Why the lot cannot be sold; null when it can. */
+  blockedBy: BlockReason | null;
+};
+
+export type CounterSearchRow = CounterCatalogRow & {
+  /** DEV-878: server-resolved suggestions for an unavailable search match. */
+  stockAlternatives?: {
+    ingredientRecorded: boolean;
+    exact: CounterCatalogRow[];
+    other: CounterCatalogRow[];
+    /** More same-ingredient brands may be in stock than were checked. */
+    truncated: boolean;
+  };
 };
 
 type LotRow = {
@@ -121,6 +159,8 @@ type BalanceRow = {
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
+/** DEV-878: bound on same-ingredient candidates checked per distinct ingredient set. */
+const MAX_ALTERNATIVE_CANDIDATES = 20;
 
 /**
  * A strength component as a counter reads it: `500 mg`, `2.5 mg`, `500 mg + 30 mg`.
@@ -134,10 +174,26 @@ export function renderStrengthValue(value: unknown): string {
   return raw.includes('.') ? raw.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '') : raw;
 }
 
-function renderStrength(components: readonly { value: unknown; unit: string }[]): string | null {
+export function renderStrength(
+  components: readonly { value: unknown; unit: string }[]
+): string | null {
   if (components.length === 0) return null;
   return components
     .map((component) => `${renderStrengthValue(component.value)} ${component.unit}`)
+    .join(' + ');
+}
+
+/**
+ * DEV-862: the salt and strength a stock list shows under the product name,
+ * for example `paracetamol 500 mg` or `paracetamol 500 mg + caffeine 30 mg`.
+ * Returns null when nothing is recorded, so the caller renders nothing extra.
+ */
+export function renderStockComposition(
+  components: readonly { value: unknown; unit: string; ingredient: { name: string } }[]
+): string | null {
+  if (components.length === 0) return null;
+  return components
+    .map((c) => `${c.ingredient.name.trim()} ${renderStrengthValue(c.value)} ${c.unit}`.trim())
     .join(' + ');
 }
 
@@ -154,13 +210,17 @@ async function matchMedicineIds(
   scope: CounterScope,
   query: string,
   limit: number
-): Promise<Map<string, CounterMatchKind>> {
+): Promise<{
+  matches: Map<string, { kind: CounterMatchKind; rank: number }>;
+  labelLotId: string | null;
+}> {
   const trimmed = query.trim();
   if (trimmed.length < 2) throw new PharmacyCounterError('INVALID_QUERY');
   const normalized = normalizeMedicineText(trimmed);
-  const matches = new Map<string, CounterMatchKind>();
-  const remember = (medicineId: string, kind: CounterMatchKind) => {
-    if (!matches.has(medicineId)) matches.set(medicineId, kind);
+  const matches = new Map<string, { kind: CounterMatchKind; rank: number }>();
+  const remember = (medicineId: string, kind: CounterMatchKind, rank: number) => {
+    const existing = matches.get(medicineId);
+    if (!existing || rank < existing.rank) matches.set(medicineId, { kind, rank });
   };
 
   const barcode = normalized
@@ -177,13 +237,85 @@ async function matchMedicineIds(
     // DEV-575: a scanned code that resolves exactly is the answer. Skipping the
     // fuzzy lookups keeps scan-to-cart to one indexed read, and a lone row lets
     // the scanner path add it without a pick list.
-    remember(barcode.presentation.medicineId, 'BARCODE');
-    return matches;
+    remember(barcode.presentation.medicineId, 'BARCODE', 0);
+    return { matches, labelLotId: null };
   }
 
-  // The fuzzy lookups are independent, so they run together; matches are still
-  // remembered in alias, name, ingredient, presentation order.
-  const [aliases, byName, byIngredient, byPresentation] = await Promise.all([
+  // A shelf code resolves only inside this organization and branch. Invalid
+  // internal codes also fail closed instead of entering fuzzy catalogue search.
+  if (/^71\d{14}$/.test(trimmed)) {
+    const labelNumber = parseShelfLabelCode(trimmed);
+    const lot =
+      labelNumber === null
+        ? null
+        : await db.pharmacyInventoryLot.findFirst({
+            where: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              shelfLabelNumber: labelNumber,
+            },
+            select: { id: true, batch: { select: { medicineId: true } } },
+          });
+    if (lot) remember(lot.batch.medicineId, 'BARCODE', 0);
+    return { matches, labelLotId: lot?.id ?? null };
+  }
+
+  // Read prefixes before substrings so a limited alphabetical substring read
+  // cannot discard the relevant medicine. Each stage remains bounded and its
+  // independent reads run together (DEV-575).
+  const textMatches = async (operator: 'startsWith' | 'contains') => {
+    const text = { [operator]: trimmed, mode: 'insensitive' as const };
+    return Promise.all([
+      db.medicine.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          saleable: true,
+          OR: [{ productName: text }, { brandName: text }],
+        },
+        select: { id: true },
+        orderBy: [{ productName: 'asc' }, { id: 'asc' }],
+        take: limit + 1,
+      }),
+      db.medicineStrengthComponent.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          medicine: { saleable: true },
+          OR: [{ ingredient: { name: text } }, { unit: text }],
+        },
+        select: { medicineId: true },
+        orderBy: [{ medicineId: 'asc' }, { id: 'asc' }],
+        take: limit + 1,
+      }),
+      db.presentation.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          medicine: { saleable: true },
+          OR: [{ presentation: text }, { dosageForm: text }, { route: text }],
+        },
+        select: { medicineId: true },
+        orderBy: [{ medicineId: 'asc' }, { id: 'asc' }],
+        take: limit + 1,
+      }),
+    ]);
+  };
+  // Manufacturer and registration number are weaker signals than a name, brand
+  // or alias. They are read in the later stage, so they can never displace a
+  // brand alias from the bounded first-stage candidates.
+  const producerMatches = (operator: 'startsWith' | 'contains') =>
+    db.medicine.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        saleable: true,
+        OR: [
+          { manufacturer: { [operator]: trimmed, mode: 'insensitive' as const } },
+          { drapRegistrationNumber: { [operator]: trimmed, mode: 'insensitive' as const } },
+        ],
+      },
+      select: { id: true },
+      orderBy: [{ productName: 'asc' }, { id: 'asc' }],
+      take: limit + 1,
+    });
+  const [aliases, prefixes] = await Promise.all([
     normalized
       ? db.medicineAlias.findMany({
           where: {
@@ -192,57 +324,35 @@ async function matchMedicineIds(
             medicine: { saleable: true },
           },
           select: { medicineId: true },
-          orderBy: { normalizedValue: 'asc' },
-          take: limit,
+          orderBy: [{ normalizedValue: 'asc' }, { medicineId: 'asc' }],
+          take: limit + 1,
         })
       : Promise.resolve([] as { medicineId: string }[]),
-    db.medicine.findMany({
-      where: {
-        organizationId: scope.organizationId,
-        saleable: true,
-        OR: [
-          { productName: { contains: trimmed, mode: 'insensitive' } },
-          { brandName: { contains: trimmed, mode: 'insensitive' } },
-          { manufacturer: { contains: trimmed, mode: 'insensitive' } },
-          { drapRegistrationNumber: { contains: trimmed, mode: 'insensitive' } },
-        ],
-      },
-      select: { id: true },
-      orderBy: { productName: 'asc' },
-      take: limit,
-    }),
-    db.medicineStrengthComponent.findMany({
-      where: {
-        organizationId: scope.organizationId,
-        medicine: { saleable: true },
-        OR: [
-          { ingredient: { name: { contains: trimmed, mode: 'insensitive' } } },
-          { unit: { contains: trimmed, mode: 'insensitive' } },
-        ],
-      },
-      select: { medicineId: true },
-      take: limit,
-    }),
-    db.presentation.findMany({
-      where: {
-        organizationId: scope.organizationId,
-        medicine: { saleable: true },
-        OR: [
-          { presentation: { contains: trimmed, mode: 'insensitive' } },
-          { dosageForm: { contains: trimmed, mode: 'insensitive' } },
-          { route: { contains: trimmed, mode: 'insensitive' } },
-        ],
-      },
-      select: { medicineId: true },
-      take: limit,
-    }),
+    textMatches('startsWith'),
   ]);
-  for (const alias of aliases) remember(alias.medicineId, 'ALIAS');
-  for (const medicine of byName) remember(medicine.id, 'NAME');
-  for (const component of byIngredient) remember(component.medicineId, 'INGREDIENT');
-  for (const presentation of byPresentation) remember(presentation.medicineId, 'PRESENTATION');
+  for (const alias of aliases) remember(alias.medicineId, 'ALIAS', 2);
+  const rememberText = (
+    [byName, byIngredient, byPresentation]: Awaited<ReturnType<typeof textMatches>>,
+    ranks: readonly [number, number, number]
+  ) => {
+    for (const medicine of byName) remember(medicine.id, 'NAME', ranks[0]);
+    for (const component of byIngredient) remember(component.medicineId, 'INGREDIENT', ranks[1]);
+    for (const presentation of byPresentation)
+      remember(presentation.medicineId, 'PRESENTATION', ranks[2]);
+  };
+  rememberText(prefixes, [1, 3, 4]);
+  if (matches.size <= limit) {
+    const [producerPrefixes, producerContains, contains] = await Promise.all([
+      producerMatches('startsWith'),
+      producerMatches('contains'),
+      textMatches('contains'),
+    ]);
+    for (const medicine of producerPrefixes) remember(medicine.id, 'NAME', 2.5);
+    rememberText(contains, [5, 6, 7]);
+    for (const medicine of producerContains) remember(medicine.id, 'NAME', 5.5);
+  }
 
-  return matches;
+  return { matches, labelLotId: null };
 }
 
 function candidateFrom(scope: CounterScope, lot: LotRow, balance: BalanceRow): AllocationCandidate {
@@ -274,10 +384,208 @@ export async function searchCounterCatalog(
 ): Promise<{ rows: CounterSearchRow[]; truncated: boolean }> {
   const limit = Math.min(Math.max(input.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
   const at = input.at ?? new Date();
-  const matches = await matchMedicineIds(db, scope, input.query, limit);
-  const medicineIds = [...matches.keys()].slice(0, limit);
+  const { matches, labelLotId } = await matchMedicineIds(db, scope, input.query, limit);
+  const medicineIds = [...matches.keys()];
+  if (medicineIds.length > limit) {
+    // Relevance must decide admission too, before hydration. Keep the original
+    // read order when all candidates fit; it has no bearing on displayed rank.
+    medicineIds.sort((left, right) => matches.get(left)!.rank - matches.get(right)!.rank);
+    medicineIds.length = limit;
+  }
   if (medicineIds.length === 0) return { rows: [], truncated: false };
 
+  const { rows, medicines } = await hydrateCounterRows(
+    db,
+    scope,
+    matches,
+    medicineIds,
+    at,
+    labelLotId
+  );
+  const unavailable = rows.filter((row) => !hasSellableUnit(row));
+  const sourceById = new Map(medicines.map((medicine) => [medicine.id, medicine]));
+  const ingredientSets = unavailable.flatMap((row) => {
+    const source = sourceById.get(row.medicineId)!;
+    const ids = [...new Set(source.strengths.map((component) => component.ingredientId))];
+    return ids.length ? [ids] : [];
+  });
+  // Query only this tenant's ingredient graph. No brand dictionary or historical
+  // price is needed, and equal or more expensive brands remain eligible. Each
+  // distinct ingredient set has its own bound, so one common ingredient cannot
+  // crowd out the suggestions for another unavailable match.
+  const distinctSets = [
+    ...new Map(ingredientSets.map((ids) => [JSON.stringify([...ids].sort()), ids])),
+  ];
+  const candidatesBySet = new Map(
+    await Promise.all(
+      distinctSets.map(async ([key, ids]) => {
+        const found = await db.medicine.findMany({
+          where: {
+            organizationId: scope.organizationId,
+            saleable: true,
+            strengths: { every: { ingredientId: { in: ids } } },
+            AND: ids.map((ingredientId) => ({ strengths: { some: { ingredientId } } })),
+            // Only medicines that can have sellable stock at this branch, so the
+            // bound is spent on in-stock brands. The row kernel still applies the
+            // full sellability rules to each lot.
+            batches: {
+              some: {
+                state: 'ACTIVE',
+                expiresAt: { gt: at },
+                lots: {
+                  some: {
+                    branchId: scope.branchId,
+                    receivedAt: { not: null, lte: at },
+                    balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
+                  },
+                },
+              },
+            },
+          },
+          select: { id: true },
+          orderBy: { id: 'asc' },
+          // One extra row tells us the bound was reached.
+          take: MAX_ALTERNATIVE_CANDIDATES + 1,
+        });
+        return [
+          key,
+          {
+            ids: found.slice(0, MAX_ALTERNATIVE_CANDIDATES).map((medicine) => medicine.id),
+            truncated: found.length > MAX_ALTERNATIVE_CANDIDATES,
+          },
+        ] as const;
+      })
+    )
+  );
+  const candidateIds = [...new Set([...candidatesBySet.values()].flatMap((entry) => entry.ids))];
+  const alternatives = candidateIds.length
+    ? await hydrateCounterRows(
+        db,
+        scope,
+        // An alternative is reached through the stored ingredient graph.
+        new Map(candidateIds.map((id) => [id, { kind: 'INGREDIENT' as const, rank: 0 }])),
+        candidateIds,
+        at
+      )
+    : { rows: [], medicines: [] };
+  const alternativeById = new Map(
+    alternatives.medicines.map((medicine) => [medicine.id, medicine])
+  );
+  for (const row of unavailable) {
+    const source = sourceById.get(row.medicineId)!;
+    const ingredientRecorded = source.strengths.length > 0;
+    const exact: CounterSearchRow[] = [];
+    const other: CounterSearchRow[] = [];
+    for (const candidate of alternatives.rows) {
+      const medicine = alternativeById.get(candidate.medicineId)!;
+      if (
+        !ingredientRecorded ||
+        candidate.medicineId === row.medicineId ||
+        !hasSellableUnit(candidate) ||
+        ingredientSetKey(source.strengths) !== ingredientSetKey(medicine.strengths)
+      )
+        continue;
+      // The sale writer allocates FEFO across every presentation of a medicine, so
+      // the quoted row is medicine-wide. A medicine is an exact equivalent only when
+      // every presentation of both the requested and the candidate medicine has one
+      // recorded dosage form and the same route; a requested medicine with several
+      // forms cannot say which one was asked for, so its suggestions stay under other.
+      const same =
+        strengthComponentKey(source.strengths) === strengthComponentKey(medicine.strengths) &&
+        normalizedForm(row.dosageForm) !== '' &&
+        hasOnlyPresentation(source.presentations, row) &&
+        hasOnlyPresentation(medicine.presentations, row);
+      (same ? exact : other).push(candidate);
+    }
+    row.stockAlternatives = {
+      ingredientRecorded,
+      exact: exact.sort(compareStockAlternatives),
+      other: other.sort(compareStockAlternatives),
+      truncated: candidatesBySet.get(ingredientSetKey(source.strengths))?.truncated ?? false,
+    };
+  }
+  return { rows, truncated: matches.size > medicineIds.length };
+}
+
+/**
+ * The sale allocator's FEFO order (`byFefo` in inventory.ts): expiry, then the
+ * oldest receipt, then lot id, so the quoted lot is the lot the sale charges.
+ */
+function fefoBefore(lot: LotRow, best: LotRow) {
+  return (
+    (lot.batch.expiresAt.getTime() - best.batch.expiresAt.getTime() ||
+      (lot.receivedAt?.getTime() ?? 0) - (best.receivedAt?.getTime() ?? 0) ||
+      lot.id.localeCompare(best.id)) < 0
+  );
+}
+
+function hasSellableUnit(row: CounterSearchRow) {
+  return row.onHandUnits > 0 && row.saleableUnits.some((unit) => unit.wholeUnits > 0);
+}
+
+function hasOnlyPresentation(
+  presentations: readonly { dosageForm: string | null; route: string | null }[],
+  form: { dosageForm: string | null; route: string | null }
+) {
+  return (
+    presentations.length > 0 &&
+    presentations.every(
+      (presentation) =>
+        normalizedForm(presentation.dosageForm) === normalizedForm(form.dosageForm) &&
+        normalizedForm(presentation.route) === normalizedForm(form.route)
+    )
+  );
+}
+
+function normalizedForm(value: string | null) {
+  return value?.trim().toLowerCase() ?? '';
+}
+
+type StrengthComponent = { ingredientId: string; value: unknown; unit: string };
+
+function ingredientSetKey(strengths: readonly StrengthComponent[]) {
+  return JSON.stringify([...new Set(strengths.map((component) => component.ingredientId))].sort());
+}
+
+function strengthComponentKey(strengths: readonly StrengthComponent[]) {
+  return JSON.stringify(
+    strengths
+      .map((component) => [
+        component.ingredientId,
+        renderStrengthValue(component.value),
+        component.unit.trim().toLowerCase(),
+      ])
+      .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
+  );
+}
+
+/** Price per canonical unit, compared exactly by cross-multiplying pack MRP and size. */
+function comparePerUnitPrice(left: CounterSearchRow, right: CounterSearchRow) {
+  return (
+    (left.printedMrpMinor ?? 0) * (right.unitsPerPack ?? 1) -
+    (right.printedMrpMinor ?? 0) * (left.unitsPerPack ?? 1)
+  );
+}
+
+function compareStockAlternatives(left: CounterSearchRow, right: CounterSearchRow) {
+  return (
+    (left.nearestSafeExpiry ?? '').localeCompare(right.nearestSafeExpiry ?? '') ||
+    comparePerUnitPrice(left, right) ||
+    left.displayName.localeCompare(right.displayName) ||
+    left.presentationId.localeCompare(right.presentationId)
+  );
+}
+
+/** Shared stock, pack and pricing read; suggestions use the same kernels as search. */
+async function hydrateCounterRows(
+  db: ScopedDb,
+  scope: CounterScope,
+  matches: ReadonlyMap<string, { kind: CounterMatchKind; rank: number }>,
+  medicineIds: string[],
+  at: Date,
+  // DEV-90: the lot a scanned shelf sticker names; alternatives never carry one.
+  labelLotId: string | null = null
+) {
   const [medicines, lots, packLevels, mrps] = await Promise.all([
     db.medicine.findMany({
       where: { organizationId: scope.organizationId, id: { in: medicineIds }, saleable: true },
@@ -385,30 +693,59 @@ export async function searchCounterCatalog(
     let onHandUnits = 0;
     const blocked = new Set<BlockReason>();
     let best: { lot: LotRow; locationId: string } | null = null;
+    let labelLot: CounterLabelLot | null = null;
+    let labelLotRow: LotRow | null = null;
+    let labelLotLocationId: string | null = null;
     const sellableLots = new Map<string, LotRow>();
 
     for (const lot of medicineLots) {
+      if (lot.id === labelLotId) {
+        labelLotRow = lot;
+        labelLot = {
+          inventoryLotId: lot.id,
+          batchNumber: lot.batch.batchNumber,
+          expiresAt: lot.batch.expiresAt.toISOString(),
+          printedMrpMinor: lot.printedMrpMinor,
+          sellableUnits: 0,
+          blockedBy: null,
+        };
+      }
+      let lotBlockedBy: BlockReason | null = null;
       for (const balance of balancesByLot.get(lot.id) ?? []) {
         const candidate = candidateFrom(scope, lot, balance);
         const reason = blockReasonFor(candidate, scope_);
         if (reason !== null) {
+          if (lotBlockedBy === null || lotBlockedBy === 'EMPTY') lotBlockedBy = reason;
           // EMPTY is an exhausted bucket, not a condition an operator acts on.
           if (reason !== 'EMPTY') blocked.add(reason);
           continue;
         }
+        if (labelLot?.inventoryLotId === lot.id) {
+          labelLot.sellableUnits += balance.onHandUnits;
+          labelLotLocationId ??= balance.stockLocationId;
+        }
         onHandUnits += balance.onHandUnits;
         sellableLots.set(lot.id, lot);
-        const better =
-          best === null ||
-          lot.batch.expiresAt.getTime() < best.lot.batch.expiresAt.getTime() ||
-          (lot.batch.expiresAt.getTime() === best.lot.batch.expiresAt.getTime() &&
-            lot.id.localeCompare(best.lot.id) < 0);
+        const better = best === null || fefoBefore(lot, best.lot);
         if (better) best = { lot, locationId: balance.stockLocationId };
+      }
+      if (labelLot?.inventoryLotId === lot.id && labelLot.sellableUnits === 0) {
+        labelLot.blockedBy = lotBlockedBy ?? 'EMPTY';
       }
     }
 
+    // A lot disappearing between the exact lookup and catalogue read is not a
+    // licence to return an ordinary medicine row and bill a different lot.
+    if (labelLotId && !labelLot) continue;
+    const availableUnits = labelLot ? labelLot.sellableUnits : onHandUnits;
+
+    // DEV-90: a sellable shelf-label lot is the one being sold, so its own pack
+    // conversion and price drive the sale units, even when it is not FEFO's lot.
+    const priced: LotRow | null =
+      labelLotRow && labelLot?.blockedBy === null ? labelLotRow : (best?.lot ?? null);
+
     const presentationId =
-      (best && presentationByPackLevel.get(best.lot.packLevelId)) ??
+      (priced && presentationByPackLevel.get(priced.packLevelId)) ??
       medicine.presentations[0]?.id ??
       null;
     if (!presentationId) continue;
@@ -418,73 +755,81 @@ export async function searchCounterCatalog(
 
     let saleUnits: SaleUnitOption[] = [];
     let packMismatch: CounterPackMismatch | null = null;
-    if (best) {
+    if (priced) {
       // A lot whose received pack disagrees with the medicine's pack setup is
       // still sold through that setup, priced from the same lot exactly as the
       // server prices the line; only a setup that cannot price it reports why.
       ({ saleUnits, packMismatch } = resolveCounterSaleUnits({
         packLevels: packLevelsByPresentation.get(presentationId) ?? [],
-        lotPackLevelId: best.lot.packLevelId,
-        lotPackLevelLabel: levelLabelByPackLevel.get(best.lot.packLevelId) ?? null,
-        lotUnitsPerPack: best.lot.unitsPerPack,
-        otherLotUnitsPerPack: [...sellableLots.values()]
-          .filter((lot) => lot.id !== best!.lot.id)
+        lotPackLevelId: priced.packLevelId,
+        lotPackLevelLabel: levelLabelByPackLevel.get(priced.packLevelId) ?? null,
+        lotUnitsPerPack: priced.unitsPerPack,
+        otherLotUnitsPerPack: (labelLotId ? [] : [...sellableLots.values()])
+          .filter((lot) => lot.id !== priced!.id)
           .map((lot) => lot.unitsPerPack),
         dosageForm: presentation.dosageForm,
+        presentation: presentation.presentation,
         at,
       }));
     }
 
     // The same (pack level, batch) lookup the sale writer uses, so the quoted
     // price is the charged price even when batches carry different increments.
-    const roundingIncrementMinor = best
+    const roundingIncrementMinor = priced
       ? mrpRoundingIncrementForLot(mrps, {
-          packLevelId: best.lot.packLevelId,
-          batchNumber: best.lot.batch.batchNumber,
+          packLevelId: priced.packLevelId,
+          batchNumber: priced.batch.batchNumber,
         })
       : 1;
 
-    const saleableUnits = best
+    const saleableUnits = priced
       ? saleUnits.map((option) => {
           const preview = previewSaleLine({
             option,
             quantity: 1,
-            printedMrpMinor: best!.lot.printedMrpMinor,
-            unitsPerPack: best!.lot.unitsPerPack,
+            printedMrpMinor: priced!.printedMrpMinor,
+            unitsPerPack: priced!.unitsPerPack,
             roundingIncrementMinor,
-            availableUnits: onHandUnits,
+            availableUnits,
           });
           return {
             kind: option.kind,
             levelLabel: option.levelLabel,
             canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
-            wholeUnits: Math.floor(onHandUnits / option.canonicalUnitsPerSaleUnit),
+            wholeUnits: Math.floor(availableUnits / option.canonicalUnitsPerSaleUnit),
             unitPriceMinor: preview.unitPriceMinor,
             proRataCeilingMinor: preview.proRataCeilingMinor,
           };
         })
       : [];
 
-    const location = best ? locationById.get(best.locationId) : undefined;
+    // A sellable scanned lot is shown as itself: its batch, expiry and shelf.
+    const shown: { lot: LotRow; locationId: string | null } | null =
+      labelLotRow && labelLot?.blockedBy === null
+        ? { lot: labelLotRow, locationId: labelLotLocationId }
+        : best;
+    const location = shown?.locationId ? locationById.get(shown.locationId) : undefined;
     rows.push({
       medicineId: medicine.id,
       displayName: medicine.productName,
       brandName: medicine.brandName,
       manufacturer: medicine.manufacturer,
       strength: renderStrength(medicine.strengths),
+      composition: renderStockComposition(medicine.strengths),
       presentationId,
       presentation: presentation.presentation,
       dosageForm: presentation.dosageForm,
       route: presentation.route,
-      matchedOn: matches.get(medicine.id) ?? 'NAME',
+      matchedOn: matches.get(medicine.id)?.kind ?? 'NAME',
       recommendedLotId: best?.lot.id ?? null,
-      packLevelId: best?.lot.packLevelId ?? null,
-      unitsPerPack: best?.lot.unitsPerPack ?? null,
-      printedMrpMinor: best?.lot.printedMrpMinor ?? null,
+      packLevelId: priced?.packLevelId ?? null,
+      unitsPerPack: priced?.unitsPerPack ?? null,
+      printedMrpMinor: priced?.printedMrpMinor ?? null,
       roundingIncrementMinor,
-      batchNumber: best?.lot.batch.batchNumber ?? null,
-      nearestSafeExpiry: best?.lot.batch.expiresAt.toISOString() ?? null,
-      onHandUnits,
+      batchNumber: shown?.lot.batch.batchNumber ?? null,
+      nearestSafeExpiry: shown?.lot.batch.expiresAt.toISOString() ?? null,
+      onHandUnits: availableUnits,
+      ...(labelLotId ? { medicineOnHandUnits: onHandUnits } : {}),
       saleableUnits,
       saleUnits,
       packMismatch,
@@ -503,15 +848,18 @@ export async function searchCounterCatalog(
         locationName: location?.name ?? null,
       },
       blocked: [...blocked].sort(),
+      ...(labelLotId ? { labelLot } : {}),
     });
   }
 
   rows.sort(
     (left, right) =>
+      (matches.get(left.medicineId)?.rank ?? 8) - (matches.get(right.medicineId)?.rank ?? 8) ||
       Number(right.onHandUnits > 0) - Number(left.onHandUnits > 0) ||
-      left.displayName.localeCompare(right.displayName)
+      left.displayName.localeCompare(right.displayName) ||
+      left.medicineId.localeCompare(right.medicineId)
   );
-  return { rows, truncated: matches.size > medicineIds.length };
+  return { rows, medicines };
 }
 
 export type CounterCartLine = {
@@ -520,12 +868,15 @@ export type CounterCartLine = {
   medicineName: string;
   strength: string | null;
   presentation: string;
+  dosageForm?: string | null;
   saleUnit: SaleUnitKind;
   quantity: number;
   canonicalUnits: number;
   unitPriceMinor: number;
   proRataCeilingMinor: number;
   discountMinor: number;
+  tierDiscountMinor?: number;
+  tierName?: string | null;
   /** #727: the automatic promotion that priced this line, as issued. */
   promotionName?: string | null;
   lineTotalMinor: number;
@@ -563,6 +914,7 @@ export type CounterCartTender = {
 };
 
 export type CounterCart = {
+  prepaidBalanceMinor?: number;
   saleId: string;
   status: string;
   receiptNumber: number | null;
@@ -604,7 +956,7 @@ export async function readCounterCart(
   scope: CounterScope,
   saleId: string
 ): Promise<CounterCart> {
-  const sale = await saleInScope(db, scope, saleId);
+  const sale = await pricePrepaidSale(db, await saleInScope(db, scope, saleId));
   const locationIds = [
     ...new Set(sale.lines.flatMap((line) => line.allocations.map((a) => a.stockLocationId))),
   ];
@@ -657,12 +1009,15 @@ export async function readCounterCart(
       medicineName: line.medicine.productName,
       strength: renderStrength(line.medicine.strengths),
       presentation: line.presentation.presentation,
+      dosageForm: line.presentation.dosageForm,
       saleUnit: line.saleUnit as SaleUnitKind,
       quantity: line.quantity,
       canonicalUnits: line.canonicalUnits,
       unitPriceMinor: line.unitPriceMinor,
       proRataCeilingMinor: line.proRataCeilingMinor,
       discountMinor: line.discountMinor,
+      tierDiscountMinor: line.tierDiscountMinor,
+      tierName: line.tierName,
       promotionName: line.promotionName,
       lineTotalMinor: line.grossMinor - line.discountMinor,
       rx: line.medicine.rx,
@@ -693,6 +1048,9 @@ export async function readCounterCart(
   const grossMinor = sale.lines.reduce((total, line) => total + line.grossMinor, 0);
   const discountMinor = lines.reduce((total, line) => total + line.discountMinor, 0);
   return {
+    prepaidBalanceMinor: sale.customerId
+      ? ((await readPrepaidAccount(db, scope.organizationId, sale.customerId))?.balanceMinor ?? 0)
+      : 0,
     saleId: sale.id,
     status: sale.status,
     receiptNumber: sale.receiptNumber,
@@ -787,6 +1145,8 @@ export async function readCounterReceipt(
       canonicalUnits: line.canonicalUnits,
       unitPriceMinor: line.unitPriceMinor,
       discountMinor: line.discountMinor,
+      tierDiscountMinor: line.tierDiscountMinor,
+      tierName: line.tierName,
       promotionName: line.promotionName,
       lineTotalMinor: line.grossMinor - line.discountMinor,
     };

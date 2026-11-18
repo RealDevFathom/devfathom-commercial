@@ -16,7 +16,7 @@ import {
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyApInvoicesRouter } from '@/server/routers/pharmacy-ap-invoices';
 import { createTRPCContext } from '@/server/trpc';
-import { formatUtcInstant } from '@/lib/utc-instant';
+import { formatWorkspaceDateTime, workspaceZoneLabel } from '@/lib/timezone';
 import { ExportCsv } from './export-csv';
 import { parseAgingQuery, type AgingQuery as Query } from './query';
 
@@ -35,7 +35,7 @@ function minor(value: number): string {
   return `${negative ? '-' : ''}${Math.trunc(absolute / 100)}.${String(absolute % 100).padStart(2, '0')}`;
 }
 
-function QueryForm({ branchId, asOf }: { branchId?: string; asOf: string }) {
+function QueryForm({ branchId, asOf, zone }: { branchId?: string; asOf: string; zone: string }) {
   return (
     <SectionCard title="Branch and date" titleLevel={2}>
       <form method="get" className="grid gap-4 md:grid-cols-[1fr_1fr_auto] md:items-end">
@@ -51,7 +51,7 @@ function QueryForm({ branchId, asOf }: { branchId?: string; asOf: string }) {
           />
         </label>
         <label className="grid gap-2 text-sm">
-          As of (UTC day)
+          As of ({zone} day)
           <Input className="min-h-11" type="date" name="asOf" defaultValue={asOf} required />
         </label>
         <Button type="submit" className="min-h-11">
@@ -196,12 +196,17 @@ function Rows({ view }: { view: ApAgingView }) {
 
 export default async function ApAgingPage({ searchParams }: { searchParams: Promise<Query> }) {
   const query = await searchParams;
+  // The organization zone is known only after the actor resolves; before any read the
+  // form names it generically.
+  let timeZone: string | null | undefined;
+  // The pre-read check uses the UTC day; the router checks again on the organization's day.
   const parsed = parseAgingQuery(query, new Date());
   let state: State = parsed.invalid ? { kind: 'invalid' } : { kind: 'initial' };
 
   if (parsed.branchId && !parsed.invalid) {
     try {
       const actor = await resolveTenantActor();
+      timeZone = actor?.organization?.timezone ?? 'UTC';
       if (!actor) {
         state = { kind: 'denied' };
       } else {
@@ -234,6 +239,7 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
     }
   }
 
+  const zone = timeZone ? workspaceZoneLabel(timeZone) : 'workspace timezone';
   return (
     <div className="min-w-0 space-y-6">
       <PageHeader
@@ -252,14 +258,16 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
       <QueryForm
         branchId={typeof query.branch === 'string' ? query.branch : undefined}
         asOf={parsed.asOf}
+        zone={zone}
       />
       {state.kind === 'loaded' ? (
         <>
           <SectionCard title="View limits" titleLevel={2}>
             <p role="status" className="text-sm text-text-muted">
-              As of the end of {state.view.asOf} (UTC). Retrieved{' '}
-              {formatUtcInstant(state.retrievedAt)}. Only supplier expense invoices recorded here
-              and payments made against them count; other money movements never settle them.{' '}
+              As of the end of {state.view.asOf} ({zone}). Retrieved{' '}
+              {formatWorkspaceDateTime(state.retrievedAt, timeZone)}. Only supplier expense invoices
+              recorded here and payments made against them count; other money movements never settle
+              them.{' '}
               {state.view.complete
                 ? `${state.view.scannedInvoices} invoices read.`
                 : `Read capped at ${AP_AGING_MAX_INVOICES} invoices; this view is incomplete.`}

@@ -12,12 +12,15 @@ import {
 } from './customer-loyalty';
 
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'manager-a' };
+/** No branch bound: ledger reads see every branch of the tenant as they are. */
+const unbound = () => vi.fn(async () => [{ branchId: null }]);
 
 function fixture(balance: number | null = 30) {
   const created: Record<string, unknown>[] = [];
   return {
     created,
     db: {
+      $queryRaw: unbound(),
       pharmacyBranch: { findFirst: vi.fn().mockResolvedValue({ id: 'branch-a' }) },
       pharmacyCustomer: { findFirst: vi.fn().mockResolvedValue({ id: 'customer-a' }) },
       pharmacyLoyaltyPointsEntry: {
@@ -70,8 +73,9 @@ describe('DEV-764 manual points adjustment', () => {
     expect(vi.mocked(lockCustomerConsent).mock.invocationCallOrder[0]).toBeLessThan(
       db.pharmacyLoyaltyPointsEntry.aggregate.mock.invocationCallOrder[0]!
     );
+    // DEV-764: one balance across branches; the entry is still posted at this branch.
     expect(db.pharmacyLoyaltyPointsEntry.aggregate).toHaveBeenCalledWith({
-      where: { organizationId: 'org-a', branchId: 'branch-a', customerId: 'customer-a' },
+      where: { organizationId: 'org-a', customerId: 'customer-a' },
       _sum: { points: true },
     });
   });
@@ -117,6 +121,25 @@ describe('DEV-764 manual points adjustment', () => {
     expect(lockCustomerConsent).not.toHaveBeenCalled();
   });
 
+  it('refuses to adjust a deactivated member, reading the status under the customer lock (DEV-764)', async () => {
+    const { db, created } = fixture();
+    // Active when first read; deactivated by a change that committed while this waited.
+    db.pharmacyCustomer.findFirst
+      .mockResolvedValueOnce({ id: 'customer-a' })
+      .mockResolvedValueOnce({ loyaltyActive: false });
+    await expect(
+      adjustLoyaltyPoints(db as never, scope, { ...adjustment, points: 5 })
+    ).rejects.toThrow('LOYALTY_INACTIVE');
+    expect(vi.mocked(lockCustomerConsent).mock.invocationCallOrder[0]).toBeLessThan(
+      db.pharmacyCustomer.findFirst.mock.invocationCallOrder[1]!
+    );
+    expect(db.pharmacyCustomer.findFirst).toHaveBeenLastCalledWith({
+      where: { id: 'customer-a', organizationId: 'org-a', active: true },
+      select: { loyaltyActive: true },
+    });
+    expect(created).toEqual([]);
+  });
+
   it('records a replay once and refuses the same key with different details', async () => {
     const { db, created } = fixture(30);
     await adjustLoyaltyPoints(db as never, scope, { ...adjustment, points: 5 });
@@ -131,8 +154,9 @@ describe('DEV-764 manual points adjustment', () => {
 });
 
 describe('DEV-764 liability and redemption history', () => {
-  it('values every positive branch balance at the current redemption value', async () => {
+  it("values each customer's one balance across branches at the current redemption value", async () => {
     const db = {
+      $queryRaw: unbound(),
       pharmacyLoyaltyPointsEntry: {
         // No lot is past expiry and unswept.
         findMany: vi.fn().mockResolvedValue([]),
@@ -150,7 +174,8 @@ describe('DEV-764 liability and redemption history', () => {
     expect(await readLoyaltyLiability(db as never, 'org-a')).toEqual({
       pointValueMinor: 250,
       points: 140,
-      customers: 2,
+      // c1 holds points at two branches: one balance, one customer.
+      customers: 1,
       liabilityMinor: 35_000,
       branches: [
         { branchId: 'branch-a', points: 100, customers: 1, liabilityMinor: 25_000 },
@@ -326,6 +351,7 @@ describe('DEV-764 refund restoration under the customer lock', () => {
       },
     ];
     const db = {
+      $queryRaw: unbound(),
       pharmacyLoyaltyPointsEntry: {
         findUnique: vi.fn().mockResolvedValue(null),
         findFirst: vi.fn().mockResolvedValue({ points: -20, tender: { amountMinor: 2_000 } }),
@@ -386,14 +412,17 @@ describe('DEV-764 liability leaves out points already past expiry', () => {
       reversesEntryId: null,
       expiresAt: new Date(Date.now() - 86_400_000),
       occurredAt: new Date(Date.now() - 40 * 86_400_000),
+      branchId: 'branch-a',
+      branchLocal: false,
     };
     const findMany = vi
       .fn()
       // The customers with a due, unswept lot.
-      .mockResolvedValueOnce([{ branchId: 'branch-a', customerId: 'c1' }])
+      .mockResolvedValueOnce([{ customerId: 'c1' }])
       // That customer's ledger, read to value the expired lot.
       .mockResolvedValueOnce([lot]);
     const db = {
+      $queryRaw: unbound(),
       pharmacyLoyaltyPointsEntry: {
         findMany,
         count: vi.fn().mockResolvedValue(1),
@@ -415,7 +444,7 @@ describe('DEV-764 liability leaves out points already past expiry', () => {
         kind: { in: ['EARN', 'KHATA_EARN'] },
         closedBy: { none: { kind: 'EXPIRY' } },
       },
-      distinct: ['branchId', 'customerId'],
+      distinct: ['customerId'],
     });
   });
 });
@@ -528,6 +557,30 @@ describe('DEV-881 manager ceiling applies to the day total per customer', () => 
     expect(created).toHaveLength(1);
     for (const [query] of db.pharmacyLoyaltyPointsEntry.aggregate.mock.calls)
       if (query.where.kind === 'ADJUSTMENT') expect(query.where).not.toHaveProperty('branchId');
+  });
+
+  it('still counts every branch when the transaction is bound to one branch', async () => {
+    const { db, created } = ledger([{ points: 400, occurredAt: now, branchId: 'branch-b' }]);
+    // Row-level security shows only the bound branch's entries while a branch is bound.
+    let bound: string | null = 'branch-a';
+    db.$queryRaw = vi.fn(async (query: { strings: readonly string[]; values: unknown[] }) => {
+      const text = query.strings.join('?');
+      if (text.includes('current_setting')) return [{ branchId: bound }];
+      if (text.includes('set_config')) bound = (query.values[0] as string | undefined) || null;
+      return [];
+    }) as never;
+    const visible = db.pharmacyLoyaltyPointsEntry.aggregate.getMockImplementation()!;
+    db.pharmacyLoyaltyPointsEntry.aggregate.mockImplementation(async (args) =>
+      visible(bound ? { ...args, where: { ...args.where, branchId: bound } } : args)
+    );
+    await expect(
+      adjustLoyaltyPoints(db as never, scope, grant('bound-branch', 101), {
+        managerLimit: 500,
+        now,
+      })
+    ).rejects.toThrow('MANAGER_ADJUSTMENT_LIMIT');
+    expect(created).toHaveLength(1);
+    expect(bound).toBe('branch-a');
   });
 
   it('starts a fresh allowance at midnight Pakistan time', async () => {

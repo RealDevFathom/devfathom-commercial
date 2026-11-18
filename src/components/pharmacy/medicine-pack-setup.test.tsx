@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
   barcodeMutation: { mutate: vi.fn(), reset: vi.fn(), isPending: false, error: null as unknown },
   onBarcodeSaved: undefined as ((row: { code: string }) => Promise<void>) | undefined,
   invalidateMedicine: vi.fn(),
-  onSuccess: undefined as (() => Promise<void>) | undefined,
+  onSuccess: undefined as ((row: { id: string; status?: string }) => Promise<void>) | undefined,
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
@@ -29,7 +29,9 @@ vi.mock('@/lib/trpc', () => ({
       search: { useQuery: () => mocks.search },
       get: { useQuery: () => mocks.medicine },
       createPackLevel: {
-        useMutation: (options: { onSuccess: () => Promise<void> }) => {
+        useMutation: (options: {
+          onSuccess: (row: { id: string; status?: string }) => Promise<void>;
+        }) => {
           mocks.onSuccess = options.onSuccess;
           return mocks.mutation;
         },
@@ -105,7 +107,7 @@ describe('medicine pack setup', () => {
       presentationId: 'presentation-secret',
       level: 'STRIP',
       unitsPerParent: 10,
-      effectiveFrom: new Date('2026-09-06T00:00:00Z'),
+      effectiveFrom: new Date('2026-09-06T00:00:00+05:00'),
       versionGroupId: expect.any(String),
     });
     expect(screen.queryByText(/presentation-secret|medicine-secret/)).not.toBeInTheDocument();
@@ -152,7 +154,7 @@ describe('medicine pack setup', () => {
     view.rerender(<MedicinePackSetup />);
     expect(screen.getByRole('button', { name: 'Creating pack…' })).toBeDisabled();
     expect(screen.getByLabelText('Medicine')).toBeDisabled();
-    await mocks.onSuccess?.();
+    await mocks.onSuccess?.({ id: 'pack-created' });
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Pack created'));
     expect(mocks.invalidateMedicine).toHaveBeenCalledWith({ id: 'medicine-secret' });
   });
@@ -334,7 +336,7 @@ describe('medicine pack setup', () => {
       presentationId: 'presentation-secret',
       level: 'STRIP',
       unitsPerParent: 10,
-      effectiveFrom: new Date('2026-09-06T00:00:00Z'),
+      effectiveFrom: new Date('2026-09-06T00:00:00+05:00'),
       versionGroupId: expect.any(String),
     });
   });

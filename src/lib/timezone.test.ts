@@ -102,3 +102,32 @@ describe('workspace time zones', () => {
     expect(workspaceZoneLabel('Europe/London')).toBe('Europe/London');
   });
 });
+
+describe('workspace picker instants', () => {
+  it('reads a datetime-local value on the workspace clock and writes it back', async () => {
+    const { workspaceInstantFromInput, workspaceMinuteInput } = await import('./timezone');
+    expect(workspaceInstantFromInput('2026-05-01T01:30', 'Asia/Karachi')).toBe(
+      '2026-04-30T20:30:00Z'
+    );
+    expect(workspaceMinuteInput('2026-04-30T20:30:00Z', 'Asia/Karachi')).toBe('2026-05-01T01:30');
+    expect(workspaceInstantFromInput('2026-05-01T09:30', undefined)).toBe('2026-05-01T09:30:00Z');
+    expect(workspaceInstantFromInput('2026-07-01T12:00', 'Europe/London')).toBe(
+      '2026-07-01T11:00:00Z'
+    );
+    expect(workspaceInstantFromInput('2026-05-01T09:30:00Z', 'Asia/Karachi')).toBe(
+      '2026-05-01T09:30:00Z'
+    );
+  });
+});
+
+describe('workspaceDateOffset', () => {
+  it('counts calendar days on the workspace clock, across a daylight-saving change', async () => {
+    const { workspaceDateOffset } = await import('./timezone');
+    // 23:30 UTC on 27 Jun is already 28 Jun in London (BST).
+    const now = new Date('2026-06-27T23:30:00Z');
+    expect(workspaceDateOffset('Europe/London', 0, now)).toBe('2026-06-28');
+    expect(workspaceDateOffset('Europe/London', -179, now)).toBe('2025-12-31');
+    expect(workspaceDateOffset('Europe/London', -90, now)).toBe('2026-03-30');
+    expect(workspaceDateOffset(undefined, 1, now)).toBe('2026-06-28');
+  });
+});

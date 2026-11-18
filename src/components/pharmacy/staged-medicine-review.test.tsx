@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   detail: vi.fn(),
   context: vi.fn(),
 }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
 vi.mock('@/server/routers/pharmacy-staged-review', () => ({
   pharmacyStagedReviewRouter: {
@@ -24,6 +25,9 @@ vi.mock('@/server/routers/pharmacy-staged-review', () => ({
 }));
 vi.mock('@/components/pharmacy/medicine-reference-workbench', () => ({
   MedicineReferenceWorkbench: () => <div>Existing workbench</div>,
+}));
+vi.mock('@/components/pharmacy/catalogue-approval-queue', () => ({
+  CatalogueApprovalQueue: () => <div>Catalogue approval queue</div>,
 }));
 import MedicinePage from '@/app/(app)/pharmacy/medicines/page';
 import Page from '@/app/(app)/pharmacy/medicines/staged/page';
@@ -51,6 +55,7 @@ describe('staged medicine review UI', () => {
     expect(screen.getByRole('heading', { name: 'Medicine catalogue', level: 1 })).toBeTruthy();
     expect(mocks.batches).toHaveBeenCalledWith({ branchId: 'branch_a', page: 1 });
     expect(screen.getByText('Existing workbench')).toBeTruthy();
+    expect(screen.getByText('Catalogue approval queue')).toBeVisible();
   });
   it('builds the request context once and starts explicit-selection loads concurrently', async () => {
     let releaseBranches: (value: unknown) => void = () => undefined;
@@ -125,6 +130,7 @@ describe('staged medicine review UI', () => {
     );
     expect(screen.getByText('Source SHA256 recorded on row')).toBeTruthy();
     expect(screen.getByText('Unrecorded source checksum')).toBeTruthy();
+    expect(screen.getByText('not recorded (staged as raw count)')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'All open exceptions in this batch' })).toBeTruthy();
     expect(screen.getAllByText('1.0000').length).toBeGreaterThan(0);
     expect(screen.getAllByText('1.000000').length).toBeGreaterThan(0);

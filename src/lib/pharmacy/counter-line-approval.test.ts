@@ -11,6 +11,18 @@ import { can } from '@/lib/abac';
 import { isLockedOut, verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 
+// DEV-879: these fixtures model an approver with no approval authenticator, so the PIN is
+// checked exactly as before. approval-authenticator.test.ts covers the authenticator path.
+vi.mock('@/lib/approval-authenticator', async () => {
+  const { verifyOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
+  return {
+    verifyApprovalSecret: async (
+      _db: unknown,
+      input: { secret: string; credentialHash: string }
+    ) =>
+      (await verifyOperatorCredential('PIN', input.secret, input.credentialHash)) ? 'PIN' : null,
+  };
+});
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: vi.fn() }));
 vi.mock('@/lib/abac', () => ({ can: vi.fn() }));
 vi.mock('bcryptjs', () => ({ hash: vi.fn(async () => 'dummy-hash') }));
@@ -205,6 +217,85 @@ describe('counter discount approval (#520)', () => {
     await expect(
       authorizeCounterApproval(db as never, scope, 'DISCOUNT', pin)
     ).rejects.toBeInstanceOf(CounterApprovalDenied);
+  });
+});
+
+describe('counter scanned-pack FEFO approval (DEV-843)', () => {
+  it('has no on-duty default: even an approver needs their PIN', async () => {
+    const db = fixture(manager, ['cashier']);
+    await expect(
+      authorizeCounterApproval(db as never, scope, 'SCANNED_PACK_FEFO')
+    ).rejects.toBeInstanceOf(CounterApprovalDenied);
+    expect(db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('accepts a manager PIN checked against the manager capability', async () => {
+    const db = fixture();
+    await expect(
+      authorizeCounterApproval(db as never, scope, 'SCANNED_PACK_FEFO', pin)
+    ).resolves.toEqual({
+      approvedByUserId: 'manager',
+      approvalPolicy: 'MANAGER_PIN',
+      selfApproved: false,
+      credentialId: 'cred',
+    });
+    expect(can).toHaveBeenCalledWith(manager, 'pharmacy:manage', undefined, expect.anything());
+    expect(can).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'pharmacy:dispense',
+      undefined,
+      expect.anything()
+    );
+  });
+
+  it('refuses a pharmacist PIN from someone who is not a manager or owner', async () => {
+    const pharmacist = { ...manager, id: 'pharmacist' };
+    const db = fixture(pharmacist, []);
+    await expect(
+      authorizeCounterApproval(db as never, scope, 'SCANNED_PACK_FEFO', pin)
+    ).rejects.toBeInstanceOf(CounterApprovalDenied);
+    expectDummyCompareOnly(db);
+  });
+
+  it('counts a wrong manager PIN toward lockout and refuses', async () => {
+    const db = fixture();
+    vi.mocked(verifyOperatorCredential).mockResolvedValue(false);
+    await expect(
+      authorizeCounterApproval(db as never, scope, 'SCANNED_PACK_FEFO', pin)
+    ).rejects.toBeInstanceOf(CounterApprovalDenied);
+    expect(db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
+      where: { id: 'cred' },
+      data: { failedAttempts: 1 },
+    });
+    // Committed in its own tenant transaction, so the strike survives the refused sale. This is
+    // shown here with mocks only, like the discount case above; the router resolves the approval
+    // before the sale transaction opens.
+    expect(withTenantDb).toHaveBeenCalledWith('org', expect.any(Function), {
+      userId: 'cashier',
+      skipDrain: true,
+    });
+  });
+
+  it('refuses a pharmacist on duty who self-approves while a manager can approve', async () => {
+    const self = { ...actor };
+    const db = fixture(self, ['cashier', 'manager'], [manager]);
+    await expect(
+      authorizeCounterApproval(db as never, scope, 'SCANNED_PACK_FEFO', pin)
+    ).rejects.toBeInstanceOf(CounterApprovalDenied);
+    expectDummyCompareOnly(db);
+  });
+
+  it('lets a solo owner self-approve with a fresh PIN, recorded as self-approved', async () => {
+    const self = { ...actor };
+    const db = fixture(self, ['cashier'], []);
+    await expect(
+      authorizeCounterApproval(db as never, scope, 'SCANNED_PACK_FEFO', pin)
+    ).resolves.toEqual({
+      approvedByUserId: 'cashier',
+      approvalPolicy: 'SOLE_APPROVER_PIN_REAUTH',
+      selfApproved: true,
+      credentialId: 'cred',
+    });
   });
 });
 
@@ -582,5 +673,50 @@ describe('DEV-806: one shared approver check for the PIN and password routes', (
     await expect(listCounterApprovers(db as never, scope, 'KHATA_OVER_LIMIT')).resolves.toEqual([
       { id: 'staff-manager', name: 'Manager Sana', self: false },
     ]);
+  });
+});
+
+describe('DEV-712: discarding an unknown payment attempt', () => {
+  it('needs a manager or owner (pharmacy:manage) PIN and records it as a manager approval', async () => {
+    const db = fixture();
+    await expect(
+      authorizeCounterApproval(db as never, scope, 'TENDER_DISCARD', pin)
+    ).resolves.toEqual({
+      approvedByUserId: 'manager',
+      approvalPolicy: 'MANAGER_PIN',
+      selfApproved: false,
+      credentialId: 'cred',
+    });
+    expect(can).toHaveBeenCalledWith(manager, 'pharmacy:manage', undefined, expect.anything());
+  });
+
+  it('refuses without a PIN, and refuses a cashier who cannot manage', async () => {
+    const db = fixture(manager, []);
+    await expect(authorizeCounterApproval(db as never, scope, 'TENDER_DISCARD')).rejects.toThrow(
+      'Discarding a payment attempt needs a manager or owner to approve it with their PIN.'
+    );
+    await expect(
+      authorizeCounterApproval(db as never, scope, 'TENDER_DISCARD', pin)
+    ).rejects.toBeInstanceOf(CounterApprovalDenied);
+    expectDummyCompareOnly(db);
+  });
+
+  it('refuses self-approval while another manager could approve', async () => {
+    const db = fixture({ ...actor }, ['cashier', 'manager'], [manager]);
+    await expect(
+      authorizeCounterApproval(db as never, scope, 'TENDER_DISCARD', pin)
+    ).rejects.toBeInstanceOf(CounterApprovalDenied);
+    expectDummyCompareOnly(db);
+  });
+
+  it('lets a solo owner self-approve with a fresh PIN', async () => {
+    const db = fixture({ ...actor }, ['cashier'], []);
+    await expect(
+      authorizeCounterApproval(db as never, scope, 'TENDER_DISCARD', pin)
+    ).resolves.toMatchObject({
+      approvedByUserId: 'cashier',
+      approvalPolicy: 'SOLE_APPROVER_PIN_REAUTH',
+      selfApproved: true,
+    });
   });
 });

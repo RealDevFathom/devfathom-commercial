@@ -3,8 +3,8 @@ import {
   clearLockout,
   isLockedOut,
   registerFailedAttempt,
-  verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
+import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
 /**
@@ -40,7 +40,7 @@ export function actorMayRefund(
  */
 export async function verifyRefundPin(
   db: ScopedDb,
-  input: { organizationId: string; actorId: string; pin: string },
+  input: { organizationId: string; actorId: string; pin: string; action?: string },
   now = new Date()
 ): Promise<{ verified: true } | { blocked: string }> {
   const { organizationId, actorId, pin } = input;
@@ -63,7 +63,17 @@ export async function verifyRefundPin(
     orderBy: { id: 'asc' },
   });
   if (!credential || isLockedOut(credential, now)) return { blocked: REFUND_PIN_BLOCKED };
-  if (!(await verifyOperatorCredential('PIN', pin, credential.credentialHash))) {
+  if (
+    !(await verifyApprovalSecret(db, {
+      organizationId,
+      approverUserId: actorId,
+      credentialHash: credential.credentialHash,
+      secret: pin,
+      action: input.action ?? 'pharmacy.refund',
+      requestedById: actorId,
+      now,
+    }))
+  ) {
     await db.restaurantOperatorCredential.update({
       where: { id: credential.id },
       data: registerFailedAttempt(credential, now),

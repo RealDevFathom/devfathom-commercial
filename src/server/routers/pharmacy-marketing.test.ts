@@ -234,7 +234,22 @@ describe('marketing workflow authorization', () => {
     await caller().assist({ ...input, occasion: 'WELCOME', tone: 'FRIENDLY' });
     expect(mocks.assist).toHaveBeenCalledWith(
       { occasion: 'WELCOME', tone: 'FRIENDLY' },
-      { organizationId: 'org-a', branchId: 'branch-a' }
+      { organizationId: 'org-a', branchId: 'branch-a', locale: 'en' }
+    );
+  });
+  it('passes the stored Urdu workspace locale to the draft generator', async () => {
+    mocks.settings.mockResolvedValue({ askFathomEnabled: true });
+    mocks.organization.mockResolvedValue({
+      id: 'org-a',
+      status: 'ACTIVE',
+      vertical: 'PHARMACY',
+      timezone: 'Asia/Karachi',
+      locale: 'ur-PK',
+    });
+    await caller().assist({ ...input, occasion: 'WELCOME', tone: 'FRIENDLY' });
+    expect(mocks.assist).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ locale: 'ur' })
     );
   });
 });

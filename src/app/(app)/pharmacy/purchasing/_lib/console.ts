@@ -2,7 +2,7 @@ import { APPROVAL_BLOCKED } from '@/lib/pharmacy/purchase-approval';
 import { ZodError } from 'zod';
 
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
-import { workspaceToday } from '@/lib/timezone';
+import { formatWorkspaceDateTime, workspaceToday } from '@/lib/timezone';
 import { pharmacyPurchasingRouter } from '@/server/routers/pharmacy-purchasing';
 import { createTRPCContext } from '@/server/trpc';
 
@@ -472,11 +472,13 @@ export function dateOnly(value: Date | string | null | undefined): string {
   );
 }
 
-export function dateTime(value: Date | string | null | undefined): string {
+/** An instant on the workspace clock with the zone named: "3 Nov 2026, 6:24 PM PKT". */
+export function dateTime(
+  value: Date | string | null | undefined,
+  timeZone?: string | null
+): string {
   if (!value) return '—';
-  return new Intl.DateTimeFormat('en-PK', { dateStyle: 'medium', timeStyle: 'short' }).format(
-    new Date(value)
-  );
+  return formatWorkspaceDateTime(value, timeZone);
 }
 
 /** `YYYY-MM-DD` for a `defaultValue` on `<input type="date">`. */

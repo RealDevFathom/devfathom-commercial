@@ -58,7 +58,7 @@ describe('TrialBalanceControlPage', () => {
     const output = await html({});
     expect(output).toContain('No financial source has been read');
     expect(output).toContain('name="branch"');
-    expect(output).toContain('To, exclusive (UTC)');
+    expect(output).toContain('To, exclusive (workspace timezone)');
     expect(mocks.resolveTenantActor).not.toHaveBeenCalled();
     expect(mocks.financialStatements).not.toHaveBeenCalled();
   });
@@ -226,5 +226,29 @@ describe('TrialBalanceControlPage', () => {
     const output = await html({ branch: 'branch-1', from: '2026-01-01', to: '2026-02-01' });
     expect(output).toContain('Trial-balance source unavailable');
     expect(output).not.toContain('All account rows');
+  });
+
+  it('reads the picked days on the organization clock and names the zone', async () => {
+    mocks.resolveTenantActor.mockResolvedValue({
+      ...actor,
+      organization: { id: 'org-1', timezone: 'Asia/Karachi' },
+    });
+    mocks.financialStatements.mockResolvedValue(
+      Object.assign(report(), {
+        from: new Date('2025-12-31T19:00:00.000Z'),
+        to: new Date('2026-01-31T19:00:00.000Z'),
+      })
+    );
+    const output = await html({ branch: 'branch-1', from: '2026-01-01', to: '2026-02-01' });
+    // 1 Jan 00:00 PKT is 31 Dec 19:00 UTC.
+    expect(mocks.financialStatements).toHaveBeenCalledWith({
+      branchId: 'branch-1',
+      from: '2025-12-31T19:00:00.000Z',
+      to: '2026-01-31T19:00:00.000Z',
+      page: 1,
+    });
+    expect(output).toContain('From (PKT)');
+    expect(output).toContain('To, exclusive (PKT)');
+    expect(output).toContain('Retrieved 2 Feb 2026, 8:04 AM PKT');
   });
 });

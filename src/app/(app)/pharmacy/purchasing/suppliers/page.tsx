@@ -30,7 +30,7 @@ import {
   purchasingOutcome,
   PurchasingValidationError,
   dateField,
-  dateInputValue,
+  today,
   destination,
   field,
   money,
@@ -363,6 +363,7 @@ export default async function PharmacySuppliersPage({
         notice={notice}
         onSetPolicy={setSupplierCompliance}
         read={policyRead}
+        timeZone={ctx.organization?.timezone}
       />
 
       {loadError || !suppliers ? (
@@ -444,6 +445,7 @@ export default async function PharmacySuppliersPage({
                 canAuthorize={canAuthorize}
                 currentUserId={ctx.session.user.id}
                 soloOwner={soloOwner}
+                timeZone={ctx.organization?.timezone}
                 notice={notice}
                 onRecordLicence={recordLicence}
                 onSetAuthorization={setAuthorization}
@@ -525,6 +527,7 @@ function SupplierDetail({
   canAuthorize,
   currentUserId,
   soloOwner,
+  timeZone,
   onRecordLicence,
   onSetAuthorization,
   onVerifyLicence,
@@ -536,6 +539,7 @@ function SupplierDetail({
   currentUserId: string;
   /** The workspace's only active member, who may verify their own filing. */
   soloOwner: boolean;
+  timeZone?: string | null;
   onRecordLicence: (form: FormData) => Promise<string>;
   onSetAuthorization: (form: FormData) => Promise<string>;
   onVerifyLicence: (form: FormData) => Promise<string>;
@@ -602,7 +606,7 @@ function SupplierDetail({
               </SubmitButton>
             </PurchasingActionForm>
           )}
-          <SupplierComplianceSkipList skips={skips} />
+          <SupplierComplianceSkipList skips={skips} timeZone={timeZone} />
         </div>
       </SectionCard>
 
@@ -711,7 +715,7 @@ function SupplierDetail({
             required
           />
           <TextField
-            defaultValue={dateInputValue(new Date())}
+            defaultValue={today(timeZone)}
             label="Issued on"
             name="issuedAt"
             notice={notice}

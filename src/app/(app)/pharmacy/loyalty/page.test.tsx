@@ -1,10 +1,11 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TRPCError } from '@trpc/server';
 const mocks = vi.hoisted(() => ({
   branches: vi.fn(),
   customers: vi.fn(),
   history: vi.fn(),
+  card: vi.fn(),
   setReminderLanguage: vi.fn(),
   earnRate: vi.fn(),
   liability: vi.fn(),
@@ -22,6 +23,8 @@ import LoyaltyLoading from './loading';
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.branches.mockResolvedValue([{ id: 'branch-a', name: 'Main' }]);
+  // DEV-748: no physical loyalty card issued yet.
+  mocks.card.mockResolvedValue(null);
   mocks.earnRate.mockResolvedValue({ current: null, versions: [] });
   mocks.liability.mockResolvedValue({
     pointValueMinor: 100,
@@ -44,6 +47,7 @@ beforeEach(() => {
       preferredLanguage: 'ur',
     },
     pointsBalance: 14,
+    reconciliation: [],
     total: 26,
     page: 1,
     pageCount: 2,
@@ -180,6 +184,7 @@ describe('ordinary loyalty history page', () => {
     mocks.history.mockResolvedValue({
       customer: { displayName: 'Retail customer', preferredLanguage: 'en' },
       pointsBalance: 0,
+      reconciliation: [],
       total: 0,
       page: 1,
       pageCount: 1,
@@ -326,6 +331,7 @@ describe('DEV-764 loyalty owner console', () => {
     mocks.history.mockResolvedValue({
       customer: { id: 'customer-a', displayName: 'Retail customer', preferredLanguage: 'en' },
       pointsBalance: 5,
+      reconciliation: [],
       total: 2,
       page: 1,
       pageCount: 1,
@@ -368,5 +374,153 @@ describe('DEV-764 loyalty owner console', () => {
       'type',
       'submit'
     );
+  });
+
+  it('offers to issue a loyalty card, and to replace or revoke a working one (DEV-748)', async () => {
+    await show({ customerId: 'customer-a' });
+    expect(mocks.card).toHaveBeenCalledWith({ branchId: 'branch-a', customerId: 'customer-a' });
+    expect(screen.getByRole('heading', { name: 'Loyalty card' })).toBeInTheDocument();
+    expect(screen.getByText('No card')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Issue card' })).toHaveAttribute('type', 'submit');
+    expect(screen.queryByRole('button', { name: 'Replace card' })).not.toBeInTheDocument();
+    cleanup();
+
+    mocks.card.mockResolvedValue({ id: 'card-a', issuedAt: new Date('2026-11-01T09:00:00Z') });
+    await show({ customerId: 'customer-a' });
+    expect(screen.getByText('Card active')).toBeInTheDocument();
+    expect(screen.getByText('Issued 2026-11-01 (UTC)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Reason for replacing or revoking the card')).toBeRequired();
+    expect(screen.getByRole('button', { name: 'Replace card' })).toHaveAttribute('value', 'issue');
+    expect(screen.getByRole('button', { name: 'Revoke without replacing' })).toHaveAttribute(
+      'value',
+      'revoke'
+    );
+    // The page never has the card code: only the hash is stored, and it is shown once on issue.
+    expect(document.body.textContent).not.toMatch(/DFLC/);
+  });
+});
+
+describe('DEV-764 one balance across branches and membership', () => {
+  const historyFor = (customer: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
+    customer: {
+      id: 'customer-a',
+      displayName: 'Retail customer',
+      preferredLanguage: 'en',
+      loyaltyActive: true,
+      loyaltyStatusChangedAt: null,
+      loyaltyStatusReason: null,
+      ...customer,
+    },
+    pointsBalance: 140,
+    reconciliation: [],
+    total: 1,
+    page: 1,
+    pageCount: 1,
+    hasNext: false,
+    entries: [
+      {
+        id: 'earn-b',
+        kind: 'EARN',
+        points: 40,
+        occurredAt: new Date('2026-11-14T10:00:00Z'),
+        saleId: 'sale-b',
+        tenderId: null,
+        refundId: null,
+        reason: null,
+        expiresAt: null,
+        branchId: 'branch-b',
+        sale: { receiptNumber: 9, receiptDeviceId: null },
+      },
+    ],
+    ...extra,
+  });
+
+  beforeEach(() => {
+    mocks.branches.mockResolvedValue([
+      { id: 'branch-a', name: 'Main' },
+      { id: 'branch-b', name: 'Gulberg' },
+    ]);
+  });
+
+  it('shows the branch each entry was recorded at and the merged branch balances', async () => {
+    mocks.history.mockResolvedValue(
+      historyFor(
+        {},
+        {
+          reconciliation: [
+            {
+              branchId: 'branch-a',
+              points: 100,
+              entries: 3,
+              reconciledAt: new Date('2026-11-17T09:06:00Z'),
+            },
+            {
+              branchId: 'branch-b',
+              points: 40,
+              entries: 1,
+              reconciledAt: new Date('2026-11-17T09:06:00Z'),
+            },
+          ],
+        }
+      )
+    );
+    await show({ customerId: 'customer-a' });
+    expect(screen.getByText(/One balance across all branches, all time/)).toBeInTheDocument();
+    const ledger = screen.getByRole('region', { name: 'Loyalty history' });
+    expect(within(ledger).getByRole('columnheader', { name: 'Branch' })).toBeInTheDocument();
+    expect(ledger).toHaveTextContent('Gulberg');
+    const merged = screen.getByRole('region', { name: 'Branch balances merged' });
+    const rows = within(merged).getAllByRole('row').slice(1);
+    expect(rows.map((row) => row.textContent)).toEqual(['Main3100', 'Gulberg140']);
+    expect(screen.getByText(/Nothing was added or removed/)).toBeInTheDocument();
+  });
+
+  it('shows no merge record for a customer who only ever had one branch balance', async () => {
+    mocks.history.mockResolvedValue(historyFor({}));
+    await show({ customerId: 'customer-a' });
+    expect(screen.queryByRole('region', { name: 'Branch balances merged' })).toBeNull();
+  });
+
+  it('offers to deactivate an enrolled member, with a reason, next to the adjustment', async () => {
+    mocks.history.mockResolvedValue(historyFor({}));
+    await show({ customerId: 'customer-a' });
+    expect(screen.getAllByText('Member').length).toBeGreaterThan(0);
+    expect(screen.getByLabelText('Reason for deactivating')).toBeRequired();
+    expect(screen.getByRole('button', { name: 'Deactivate member' })).toHaveAttribute(
+      'type',
+      'submit'
+    );
+    expect(screen.getByRole('button', { name: 'Record adjustment' })).toBeInTheDocument();
+  });
+
+  it('marks a deactivated member, offers re-enrolment and withholds adjustment', async () => {
+    mocks.customers.mockResolvedValue({
+      customers: [
+        {
+          id: 'customer-a',
+          displayName: 'Retail customer',
+          phoneLast4: '1234',
+          pointsBalance: 140,
+          loyaltyActive: false,
+        },
+      ],
+      hasMore: false,
+    });
+    mocks.history.mockResolvedValue(
+      historyFor({
+        loyaltyActive: false,
+        loyaltyStatusChangedAt: new Date('2026-11-16T08:00:00Z'),
+        loyaltyStatusReason: 'Asked to leave the programme',
+      })
+    );
+    await show({ customerId: 'customer-a' });
+    const directory = screen.getByRole('region', { name: 'Loyalty customers' });
+    expect(directory).toHaveTextContent('Deactivated');
+    expect(screen.getByText(/Asked to leave the programme/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Re-enrol member' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Record adjustment' })).toBeNull();
+    expect(
+      screen.getByText(/Points cannot be adjusted while the member is deactivated/)
+    ).toBeInTheDocument();
   });
 });

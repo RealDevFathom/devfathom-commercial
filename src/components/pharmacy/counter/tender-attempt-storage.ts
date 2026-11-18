@@ -1,10 +1,12 @@
+import { browserUuid } from '@/lib/browser-uuid';
 import { z } from '@/lib/zod-csp';
 import type { inferRouterInputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import {
   isManualTender,
   MANUAL_CARD_APPROVAL_CODE,
-  MANUAL_CARD_REFERENCE,
+  BANK_TRANSFER_REFERENCE_MAX_LENGTH,
+  hasValidTenderProviderReference,
   manualCardCaptureSchema,
   manualTenderCaptureSchema,
 } from '@/lib/pharmacy/manual-payments';
@@ -43,12 +45,13 @@ const storedSchema = z
         familyAccountId: id.optional(),
         ownerOverride: z.boolean().optional(),
         overrideReason: z.string().trim().min(1).max(500).optional(),
-        providerRef: z.string().regex(MANUAL_CARD_REFERENCE).optional(),
+        providerRef: z.string().max(BANK_TRANSFER_REFERENCE_MAX_LENGTH).optional(),
         payerName: z.string().trim().min(1).max(100).optional(),
         referenceSkipped: z.boolean().optional(),
         approvalCode: z.string().regex(MANUAL_CARD_APPROVAL_CODE).optional(),
       })
-      .strict(),
+      .strict()
+      .refine(hasValidTenderProviderReference, { path: ['providerRef'], message: 'Invalid payment reference.' }),
     draft: z.object({ amount: amountText, cashReceived: amountText }).strict(),
   })
   .strict();
@@ -95,6 +98,10 @@ function decode(raw: string, scope: TenderAttemptScope): TenderAttempt {
     if (input.payerName !== undefined || input.referenceSkipped !== undefined)
       throw new Error(TENDER_STORAGE_MESSAGE);
     manualCardCaptureSchema.parse({ providerRef: input.providerRef, approvalCode: input.approvalCode });
+  } else if (input.type === 'BANK_TRANSFER') {
+    // Old uncertain transfers without references still need outcome recovery.
+    if (input.approvalCode !== undefined || input.payerName !== undefined || input.referenceSkipped !== undefined)
+      throw new Error(TENDER_STORAGE_MESSAGE);
   } else if (input.approvalCode !== undefined || input.providerRef !== undefined || input.payerName !== undefined || input.referenceSkipped !== undefined) {
     throw new Error(TENDER_STORAGE_MESSAGE);
   }
@@ -140,6 +147,16 @@ export function persistTenderAttempt(attempt: TenderAttempt): void {
   if (window.localStorage.getItem(key) !== null) throw new Error(TENDER_STORAGE_MESSAGE);
   window.localStorage.setItem(key, raw);
   if (window.localStorage.getItem(key) !== raw) throw new Error(TENDER_STORAGE_MESSAGE);
+}
+
+/**
+ * DEV-712: a supervisor's discard claims its attempt's key for good. The counter's amount-based
+ * key would come out the same for the next payment of that amount on that bill, so a
+ * discarded key gets a fresh attempt suffix; any other key is kept, so a double tap replays.
+ */
+export function freshTenderKey(key: string, discarded: ReadonlySet<string>): string {
+  if (!discarded.has(key)) return key;
+  return `${key}:retry:${browserUuid()}`;
 }
 
 /** Only call after server acceptance or a proven transactional rejection. */

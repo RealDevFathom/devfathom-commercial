@@ -9,6 +9,18 @@ import { TRPCError } from '@trpc/server';
 // verification by a second person.
 
 const mocks = vi.hoisted(() => ({ annotateAudit: vi.fn() }));
+// DEV-879: these fixtures model an approver with no approval authenticator, so the PIN is
+// checked exactly as before. approval-authenticator.test.ts covers the authenticator path.
+vi.mock('@/lib/approval-authenticator', async () => {
+  const { verifyOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
+  return {
+    verifyApprovalSecret: async (
+      _db: unknown,
+      input: { secret: string; credentialHash: string }
+    ) =>
+      (await verifyOperatorCredential('PIN', input.secret, input.credentialHash)) ? 'PIN' : null,
+  };
+});
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   createTenantDb: vi.fn(() => ({})),
@@ -466,6 +478,30 @@ const CALLS = {
         },
       ],
     }),
+  lostDemandAdvice: (c: Caller) => c.lostDemandAdvice({ branchId: 'branch_a' }),
+  lostDemandTriggerSettings: (c: Caller) => c.lostDemandTriggerSettings({ branchId: 'branch_a' }),
+  setLostDemandTriggerSettings: (c: Caller) =>
+    c.setLostDemandTriggerSettings({
+      branchId: 'branch_a',
+      settings: {
+        requestCountThreshold: 3,
+        requestWindowDays: 7,
+        estimatedLossThresholdMinor: 1_000_000,
+        lossWindowDays: 30,
+        walkOutRateThresholdBps: 1_000,
+        forecastWindowDays: 30,
+        safetyStockDays: 7,
+        defaultLeadTimeDays: 3,
+      },
+    }),
+  ignoreLostDemandAdvice: (c: Caller) =>
+    c.ignoreLostDemandAdvice({ branchId: 'branch_a', demandKey: 'sku:medicine_a' }),
+  requestLostDemandTransfer: (c: Caller) =>
+    c.requestLostDemandTransfer({
+      branchId: 'branch_a',
+      demandKey: 'sku:medicine_a',
+      fromBranchId: 'branch_b',
+    }),
 } satisfies Record<string, (c: Caller) => Promise<unknown>>;
 
 type ProcedureName = keyof typeof CALLS;
@@ -526,6 +562,11 @@ const EXPECTED_CAPABILITIES: Record<ProcedureName, string[]> = {
   reorderDrafts: PROCUREMENT,
   createCentralPurchaseOrder: PROCUREMENT,
   allocateCentralReceipt: PROCUREMENT,
+  lostDemandAdvice: PROCUREMENT,
+  lostDemandTriggerSettings: PROCUREMENT,
+  setLostDemandTriggerSettings: APPROVAL,
+  ignoreLostDemandAdvice: PROCUREMENT,
+  requestLostDemandTransfer: PROCUREMENT,
 };
 
 const PROCEDURES = Object.keys(CALLS) as ProcedureName[];
@@ -555,6 +596,10 @@ const BRANCH_SCOPED: ProcedureName[] = [
   'returnableLots',
   'authenticatePack',
   'supplierCredits',
+  'lostDemandAdvice',
+  'lostDemandTriggerSettings',
+  'ignoreLostDemandAdvice',
+  'requestLostDemandTransfer',
   'reorderDrafts',
 ];
 const ORDER_SCOPED: ProcedureName[] = [
@@ -1192,6 +1237,14 @@ describe('a procurement member acts only at branches they are assigned to', () =
     } finally {
       PEOPLE.buyer = { role: 'EMPLOYEE', grants: template('procurement') };
     }
+  });
+
+  it('setLostDemandTriggerSettings refuses an approver at an unassigned branch', async () => {
+    await expect(CALLS.setLostDemandTriggerSettings(caller('manager_a'))).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: OUTSIDE_BRANCH,
+    });
+    expect(m('pharmacyLostDemandTriggerSetting').upsert).not.toHaveBeenCalled();
   });
 
   it.each(ORDER_SCOPED)('%s refuses an order at an unassigned branch', async (name) => {

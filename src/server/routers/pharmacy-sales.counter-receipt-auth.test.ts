@@ -36,6 +36,7 @@ vi.mock('@/lib/pharmacy/counter', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/counter')>()),
   readCounterReceipt: vi.fn(),
   readCounterCart: vi.fn(async () => ({ saleId: 'sale-a', lines: [] })),
+  searchCounterCatalog: vi.fn(async () => ({ rows: [], truncated: false })),
 }));
 vi.mock('@/lib/pharmacy/sales', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/sales')>()),
@@ -92,7 +93,7 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
 
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { hasModule } from '@/lib/entitlements';
-import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
+import { readCounterCart, readCounterReceipt, searchCounterCatalog } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { HostedReceiptError } from '@/lib/pharmacy/hosted-receipt';
 import { sendWhatsAppReceiptLink } from '@/lib/pharmacy/hosted-receipt-service';
@@ -884,6 +885,7 @@ describe('counter receipt authorization', () => {
           branchId: 'branch-a',
           saleLineId: 'line-1',
           canonicalUnits: 1,
+          disposition: 'QUARANTINE',
           reason: 'Returned medicine',
           integrityDecision: 'Sealed pack',
           idempotencyKey: 'return-1',
@@ -898,6 +900,7 @@ describe('counter receipt authorization', () => {
           branchId: 'branch-a',
           saleLineId: 'line-1',
           canonicalUnits: 1,
+          disposition: 'QUARANTINE',
           reason: 'Returned medicine',
           integrityDecision: 'Sealed pack',
           idempotencyKey: 'return-1',
@@ -1610,5 +1613,55 @@ describe('DEV-16 WhatsApp receipt request', () => {
         .caller()
         .counterReceiptWhatsApp({ branchId: 'branch-a', saleId: 'sale-a', customerRequested: true })
     ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+  });
+});
+
+describe('DEV-878 counter search suggestion access', () => {
+  it('allows an assigned cashier and passes only the authenticated scope to search', async () => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().counterSearch({ branchId: 'branch-a', query: 'Nalbin' })
+    ).resolves.toEqual({ rows: [], truncated: false });
+    expect(searchCounterCatalog).toHaveBeenCalledExactlyOnceWith(
+      f.db,
+      { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
+      { query: 'Nalbin', limit: undefined }
+    );
+  });
+
+  it.each([
+    'no-grant',
+    'explicit-deny',
+    'other-branch',
+    'unassigned',
+    'foreign-branch',
+    'tenant-mismatch',
+    'inactive',
+    'module-off',
+  ])('refuses %s before catalogue or alternative reads', async (kind) => {
+    const f = fixture(
+      kind === 'no-grant' ? [] : [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+      'EMPLOYEE',
+      kind === 'explicit-deny' ? [{ capability: 'pharmacy.receipt', effect: 'DENY' }] : []
+    );
+    if (kind !== 'unassigned') assign(f, ['branch-a']);
+    if (kind === 'tenant-mismatch') f.user.organizationId = 'org-b';
+    if (kind === 'inactive') f.user.status = 'INACTIVE';
+    if (kind === 'module-off') vi.mocked(hasModule).mockReturnValue(false);
+    const branchId =
+      kind === 'other-branch'
+        ? 'branch-b'
+        : kind === 'foreign-branch'
+          ? 'foreign-branch'
+          : 'branch-a';
+    // A branch outside the workspace keeps DEV-876's workspace refusal; every other
+    // case is refused by the branch assignment or the counter grant.
+    await expect(f.caller().counterSearch({ branchId, query: 'Nalbin' })).rejects.toMatchObject(
+      kind === 'foreign-branch'
+        ? { code: 'BAD_REQUEST', message: 'That record is not in this workspace.' }
+        : { code: 'FORBIDDEN' }
+    );
+    expect(searchCounterCatalog).not.toHaveBeenCalled();
   });
 });
