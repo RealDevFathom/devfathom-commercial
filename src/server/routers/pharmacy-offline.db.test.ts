@@ -908,9 +908,14 @@ describeIfDatabase('offline transport authorization and conflicts', () => {
     expect((await f.call('establish')).status).toBe(401);
     vi.mocked(hasModule).mockReturnValueOnce(false);
     expect((await f.call('establish')).status).toBe(403);
-    vi.mocked(can).mockResolvedValueOnce(false);
+    // DEV-767: a lease is refused once neither the manager grant nor the
+    // counter operator's orders grant allows it.
+    vi.mocked(can).mockResolvedValueOnce(false).mockResolvedValueOnce(false);
     expect((await f.call('lease', { size: 1 })).status).toBe(403);
-    expect(vi.mocked(can).mock.calls.at(-1)?.[1]).toBe('admin:access');
+    expect(vi.mocked(can).mock.calls.slice(-2).map((args) => args[1])).toEqual([
+      'admin:access',
+      'pharmacy:orders',
+    ]);
     expect((await f.call('snapshot', {}, { origin: 'https://other.test' })).status).toBe(403);
     expect((await f.call('snapshot', {}, { 'x-terminal-session': 'bad' })).status).toBe(401);
   });

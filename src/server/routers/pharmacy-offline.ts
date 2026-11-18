@@ -23,6 +23,7 @@ import {
 } from '@/lib/pharmacy/offline-snapshots';
 import { checkEnvelope } from '@/lib/pharmacy/offline-snapshot-envelope';
 import { checkSafetyLease } from '@/lib/pharmacy/offline-safety-lease';
+import { COUNTER_LEASE_RENEWAL_SIZE } from '@/lib/pharmacy/counter-offline-runtime';
 import {
   reserveReceiptNumberBlock,
   MAX_RECEIPT_LEASE_SIZE,
@@ -575,15 +576,19 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           )
         )
           throw new CounterTransportError('module_disabled', 403);
-        const manager = operation === 'lease' || operation === 'quota' || operation === 'reject';
-        if (
-          !(await can(
-            subjectFromSession(actor.session.user),
-            manager ? 'admin:access' : 'pharmacy:orders',
-            undefined,
-            { db, source: 'REST', ip: clientIp(request) }
-          ))
-        )
+        const allows = (action: 'admin:access' | 'pharmacy:orders') =>
+          can(subjectFromSession(actor.session.user), action, undefined, {
+            db,
+            source: 'REST',
+            ip: clientIp(request),
+          });
+        // DEV-767: a manager leases on `admin:access`; a cashier may still renew
+        // their own terminal's receipt runway through the counter operator gate
+        // below (live counter grant and assignment to this terminal's branch),
+        // capped at one renewal block. Quota and reject stay manager-only.
+        const leasingManager = operation === 'lease' && (await allows('admin:access'));
+        const manager = leasingManager || operation === 'quota' || operation === 'reject';
+        if (!leasingManager && !(await allows(manager ? 'admin:access' : 'pharmacy:orders')))
           throw new CounterTransportError('forbidden', 403);
         const device = await resolvePharmacyCounterBySecret(db, secret);
         if (!device || device.status !== 'ACTIVE' || device.revokedAt)
@@ -637,7 +642,13 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
         verifyToken(request.headers.get('x-terminal-session') ?? '', ctx);
         if (operation === 'lease') {
           const input = z
-            .object({ size: z.number().int().positive().max(MAX_RECEIPT_LEASE_SIZE) })
+            .object({
+              size: z
+                .number()
+                .int()
+                .positive()
+                .max(manager ? MAX_RECEIPT_LEASE_SIZE : COUNTER_LEASE_RENEWAL_SIZE),
+            })
             .strict()
             .parse(body);
           return reserveReceiptNumberBlock(db, ctx.scope, {
