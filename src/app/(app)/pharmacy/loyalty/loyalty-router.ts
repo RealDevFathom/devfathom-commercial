@@ -36,6 +36,7 @@ import {
   readActiveLoyaltyCard,
   revokeLoyaltyCard,
 } from '@/lib/pharmacy/loyalty-card';
+import { issuePharmacyWalletTestPasses } from '@/lib/pharmacy/loyalty-wallet-pass';
 import {
   LOYALTY_MEMBERSHIP_REASON_MAX,
   LOYALTY_MEMBERSHIP_REASON_MIN,
@@ -444,12 +445,20 @@ export const pharmacyLoyaltyRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { scope, authority } = await requireAdjustAccess(ctx, input.branchId);
       const issued = await cardWrite(() =>
-        ctx.db.$transaction((tx) =>
-          issueLoyaltyCard(txDb(tx), scope, {
+        ctx.db.$transaction(async (tx) => {
+          const card = await issueLoyaltyCard(txDb(tx), scope, {
             customerId: input.customerId,
             ...(input.reason ? { reason: input.reason } : {}),
-          })
-        )
+          });
+          // DEV-747: the same card as Apple and Google Wallet TEST passes, with the ledger
+          // balance as of this issue. Built here because the code exists only now.
+          const walletTestPasses = await issuePharmacyWalletTestPasses(
+            txDb(tx),
+            scope.organizationId,
+            { customerId: input.customerId, code: card.code }
+          );
+          return { ...card, walletTestPasses };
+        })
       );
       annotateAudit(ctx, {
         category: 'PHARMACY',
@@ -471,6 +480,7 @@ export const pharmacyLoyaltyRouter = router({
         issuedAt: issued.card.issuedAt,
         code: issued.code,
         replaced: issued.replacedCardId !== null,
+        walletTestPasses: issued.walletTestPasses,
       };
     }),
   // DEV-748: an owner or branch manager stops a card working (lost, stolen) without a new one.
