@@ -7,7 +7,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 const tenancy = vi.hoisted(() => ({
-  withTenantDb: vi.fn(async (_org: string, work: (db: unknown) => unknown) => work({})),
+  withTenantDb: vi.fn(
+    async (_org: string, work: (db: unknown) => unknown, _options?: { userId?: string }) => work({})
+  ),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   createTenantDb: vi.fn(),
