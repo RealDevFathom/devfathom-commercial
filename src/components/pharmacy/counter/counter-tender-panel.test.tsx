@@ -791,6 +791,11 @@ describe('family Khata tender', () => {
     fireEvent.click(override);
     fireEvent.click(override);
     await screen.findByText(/No manager or owner has an active staff PIN/);
+    // DEV-931: the notice says where a manager or owner creates their own PIN.
+    expect(screen.getByRole('link', { name: 'Set up your PIN' })).toHaveAttribute(
+      'href',
+      '/pharmacy/settings/pin'
+    );
     expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
   });
   it('allows an exact-limit charge and requests only the selected statement', async () => {

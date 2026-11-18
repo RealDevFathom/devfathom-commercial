@@ -7,6 +7,7 @@ import type { Prisma } from '@/generated/prisma/client';
 import { PharmacyProductClassError, validateRetailFields } from './product-class';
 import { isSoloPharmacyOwner } from './solo-owner';
 import { verifyOwnerExportPin } from './owner-data-export-pin';
+import { NO_PIN_SET_MESSAGE } from './own-pin-policy';
 import { actorIsPharmacyOwner } from './procurement-access';
 import { can, subjectFromSession, ACTIVE_STATUSES } from '@/lib/abac';
 import type { AuthzDb } from '@/lib/authz';
@@ -126,16 +127,16 @@ export async function requireIndependentCatalogueReviewer(
     });
   }
   // A separate transaction commits failed guesses and their durable lockout.
-  if (
-    (await verifyOwnerExportPin({
-      organizationId: scope.organizationId,
-      userId: scope.actorId,
-      pin: soloPin,
-    })) !== 'OK'
-  ) {
+  const verified = await verifyOwnerExportPin({
+    organizationId: scope.organizationId,
+    userId: scope.actorId,
+    pin: soloPin,
+  });
+  if (verified !== 'OK') {
     throw new TRPCError({
       code: 'FORBIDDEN',
-      message: 'Fresh owner PIN verification failed.',
+      // DEV-931: an owner who has not created a PIN yet is sent to "Your PIN".
+      message: verified === 'NO_PIN' ? NO_PIN_SET_MESSAGE : 'Fresh owner PIN verification failed.',
     });
   }
   return true;

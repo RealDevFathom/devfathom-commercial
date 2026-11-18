@@ -51,6 +51,7 @@ export class PharmacySettlementError extends Error {
       | 'INVALID_AMOUNT'
       | 'OVER_TENDER'
       | 'DRAWER_NOT_OPEN'
+      | 'DRAWER_FROM_EARLIER_DAY'
       | 'DRAWER_NOT_YOURS'
       | 'CASHIER_NOT_ASSIGNED'
       | 'REFUND_EXCEEDS_TENDER'
@@ -415,6 +416,26 @@ export async function requireCurrentPharmacyBusinessDate(
   });
   if (date.toISOString().slice(0, 10) !== workspaceToday(organization?.timezone, now))
     throw new PharmacySettlementError('BUSINESS_DATE_NOT_CURRENT');
+}
+
+/**
+ * DEV-769: a counter bill starts only on a drawer opened for today's business day. Cash
+ * goes only into today's drawer ({@link resolveOperatingPharmacyDrawer}), so a bill started
+ * on a drawer left open from an earlier day could never be paid in cash.
+ */
+export async function requireTodaysPharmacyDrawer(
+  db: ScopedDb,
+  scope: { organizationId: string },
+  drawer: { businessDate: Date },
+  now: Date = new Date()
+) {
+  const organization = await db.organization.findUnique({
+    where: { id: scope.organizationId },
+    select: { timezone: true },
+  });
+  const today = workspaceToday(organization?.timezone, now);
+  if (drawer.businessDate.toISOString().slice(0, 10) !== today)
+    throw new PharmacySettlementError('DRAWER_FROM_EARLIER_DAY');
 }
 
 /**

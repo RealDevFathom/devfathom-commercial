@@ -8,6 +8,7 @@ import { assertInOrganization } from '../org-refs';
 import { annotateAudit } from '../audit';
 import { requireRestaurantBranchScope } from '../restaurant-branch-scope';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
+import { add, multiply, roundMoney, sum as sumMoney } from '@/lib/restaurant/money-arithmetic';
 import { CoAuthorizationError } from '@/lib/restaurant/co-authorization';
 import {
   APPROVER_REFUSED_MESSAGE,
@@ -883,6 +884,16 @@ async function getOrder(db: ScopedDb, orderId: string) {
           items: { select: { orderItemId: true, quantity: true } },
         },
       },
+      // DEV-769: the service rate pinned when the order opened, and what live bills froze.
+      serviceChargePolicyVersion: { select: { rate: true } },
+      bills: {
+        where: { status: { not: 'VOID' } },
+        select: {
+          serviceChargeTotal: true,
+          splitKind: true,
+          lines: { select: { orderItemId: true } },
+        },
+      },
     },
   });
   if (!order) {
@@ -893,6 +904,23 @@ async function getOrder(db: ScopedDb, orderId: string) {
   // the guest's payable subtotal.
   const purchasedItems = order.items.filter(
     (item) => item.status !== 'VOIDED' && item.remakeOfItemId === null
+  );
+  // DEV-769: service runs in the order's total from the first item, not only once a bill is
+  // cut. A live bill keeps the service it froze; items on no live bill take the pinned rate,
+  // rounded as a bill rounds it. Fractional bills each cover the whole order.
+  const billedItemIds = new Set(
+    order.bills.flatMap((bill) => bill.lines.map((line) => line.orderItemId))
+  );
+  const fractional =
+    order.bills.length > 0 && order.bills.every((bill) => bill.splitKind === 'FRACTIONAL');
+  const unbilledItems = fractional
+    ? []
+    : purchasedItems.filter((item) => !billedItemIds.has(item.id));
+  const serviceCharge = add(
+    sumMoney(order.bills.map((bill) => bill.serviceChargeTotal)),
+    order.serviceChargePolicyVersion
+      ? roundMoney(multiply(deriveSubtotal(unbilledItems), order.serviceChargePolicyVersion.rate))
+      : 0
   );
   return {
     id: order.id,
@@ -947,7 +975,7 @@ async function getOrder(db: ScopedDb, orderId: string) {
     totals: {
       subtotal: money(deriveSubtotal(purchasedItems)),
       tax: money(new Prisma.Decimal(0)),
-      serviceCharge: money(new Prisma.Decimal(0)),
+      serviceCharge: serviceCharge.toString(),
     },
   };
 }

@@ -13,6 +13,7 @@
  * revenue.** A free pack costs nothing, so it is absent from every money term
  * below and present in every quantity term.
  */
+import { workspaceToday } from '@/lib/timezone';
 
 export class PharmacyPurchasingError extends Error {
   constructor(
@@ -551,8 +552,14 @@ export function compareQuotes(input: {
   at: Date;
   /** DEV-753: the owner's supplier-compliance policy, resolved on the server. */
   policy: SupplierCompliancePolicy;
+  /**
+   * DEV-769: the organisation's zone. A quote is valid through its 'valid until' day as
+   * that day falls there. Missing means UTC.
+   */
+  timeZone?: string | null;
 }): readonly QuoteComparisonRow[] {
   const { requiredPacks, candidates, at, policy } = input;
+  const today = workspaceToday(input.timeZone, at);
   if (!Number.isSafeInteger(requiredPacks) || requiredPacks <= 0) {
     throw new PharmacyPurchasingError('INVALID_QUANTITY');
   }
@@ -577,7 +584,8 @@ export function compareQuotes(input: {
           : 'Supplier has no unexpired verified licence on file.'
       );
     }
-    if (candidate.validUntil.getTime() < at.getTime()) {
+    // DEV-769: 'valid until' is a calendar day stored as its UTC midnight, valid all that day.
+    if (candidate.validUntil.toISOString().slice(0, 10) < today) {
       comparable = false;
       reasons.push('Quote validity has lapsed.');
     }

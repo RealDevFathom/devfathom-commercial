@@ -35,6 +35,9 @@ vi.mock('./loyalty/loyalty-router', () => ({
   pharmacyLoyaltyRouter: { createCaller: () => ({ earnRate: vi.fn().mockResolvedValue(null) }) },
 }));
 vi.mock('./loyalty/earn-rate-actions', () => ({ saveEarnRate: vi.fn() }));
+vi.mock('@/server/routers/pharmacy-pin', () => ({
+  pharmacyPinRouter: { createCaller: () => ({ status: vi.fn().mockResolvedValue(null) }) },
+}));
 vi.mock('@/server/routers/pharmacy-access', () => ({
   pharmacyAccessRouter: { createCaller: () => ({ navigation: mocks.navigation }) },
 }));

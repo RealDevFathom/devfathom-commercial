@@ -93,6 +93,8 @@ describe('counterErrorMessage', () => {
       'INVALID_AMOUNT',
       'OVER_TENDER',
       'DRAWER_NOT_OPEN',
+      // DEV-769: a drawer still open from an earlier business day.
+      'DRAWER_FROM_EARLIER_DAY',
       'REFUND_EXCEEDS_TENDER',
       'IDEMPOTENCY_CONFLICT',
       'UNCERTIFIED_PROVIDER',

@@ -307,6 +307,8 @@ describe('read model (C10)', () => {
       orderTables: [],
       events: [],
       kitchenTickets: [],
+      serviceChargePolicyVersion: null,
+      bills: [],
     });
     const order = await caller().getOrder({ orderId: 'o1' });
     expect(order.items[0].unitPrice).toBe('10');
@@ -314,6 +316,74 @@ describe('read model (C10)', () => {
     expect(order.items.map((item) => item.remakeOfItemId)).toEqual([null, 'i1', 'i1-remake-1']);
     expect(order.totals.subtotal).toBe('11.5');
     expect(order.totals.tax).toBe('0');
+  });
+
+  it('DEV-769: carries the pinned service charge in the order total before and after a bill is cut', async () => {
+    const item = (id: string, unitPrice: string) => ({
+      id,
+      course: 1,
+      seatNumber: null,
+      productId: 'p1',
+      variantId: null,
+      name: id,
+      unitPrice: D(unitPrice),
+      quantity: 1,
+      taxAmount: D('0'),
+      serviceChargeAmount: D('0'),
+      status: 'SENT',
+      remakeOfItemId: null,
+      voidedPostPrep: false,
+      wastageDisposition: null,
+      voidReason: null,
+      modifiers: [],
+    });
+    const order = (bills: unknown[]) => ({
+      id: 'o1',
+      branchId: 'b1',
+      orderNumber: 7,
+      businessDate: new Date('2026-08-19T00:00:00.000Z'),
+      status: 'SENT',
+      channel: 'DINE_IN',
+      coverCount: null,
+      sectionId: null,
+      serverStaffProfileId: null,
+      staffProfileId: 'staff_1',
+      deviceId: 'dev_1',
+      publicationId: null,
+      priceListVersionId: null,
+      openedAt: new Date(),
+      closedAt: null,
+      cancelledAt: null,
+      items: [item('burger', '10.05'), item('fries', '4.00')],
+      orderTables: [],
+      events: [],
+      kitchenTickets: [],
+      serviceChargePolicyVersion: { rate: D('0.10') },
+      bills,
+    });
+
+    // No bill yet: 10% of 14.05 rounds half-up to 1.41, as a cut bill would charge it.
+    mocks.orderFindUnique.mockResolvedValueOnce(order([]));
+    expect((await caller().getOrder({ orderId: 'o1' })).totals).toMatchObject({
+      subtotal: '14.05',
+      serviceCharge: '1.41',
+    });
+
+    // The burger is on a live bill that froze 0.90 of service (after a comp); the fries are
+    // on no bill and still carry 10% of 4.00.
+    mocks.orderFindUnique.mockResolvedValueOnce(
+      order([
+        { serviceChargeTotal: D('0.90'), splitKind: 'BY_ITEM', lines: [{ orderItemId: 'burger' }] },
+      ])
+    );
+    expect((await caller().getOrder({ orderId: 'o1' })).totals.serviceCharge).toBe('1.3');
+    expect(mocks.orderFindUnique).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({
+          bills: expect.objectContaining({ where: { status: { not: 'VOID' } } }),
+        }),
+      })
+    );
   });
 
   it('throws NOT_FOUND for a missing order', async () => {

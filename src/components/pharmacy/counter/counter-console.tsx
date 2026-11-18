@@ -16,6 +16,7 @@ import {
 } from 'react';
 import { Dialog as DialogPrimitive } from '@base-ui/react/dialog';
 import Link from 'next/link';
+import { flushSync } from 'react-dom';
 import { ShieldCheck, Star, UserRound } from 'lucide-react';
 import { signIn, useSession } from 'next-auth/react';
 import { useEntitlements } from '@/components/entitlements-provider';
@@ -1637,7 +1638,14 @@ function ScopedPharmacyCounterConsole({
   }, []);
 
   const openPayment = useCallback(() => {
-    if (canSettlePayments) setPaymentOpen(true);
+    if (!canSettlePayments) return;
+    // DEV-931: F9 arrives on a window keydown listener, outside React's event system, so a
+    // plain state update opened the dialog only after the key event ended, and the dialog
+    // moved focus in on a later frame. A cashier's (or a scanner's) next key landed outside
+    // the payment: a payment method could not take focus, and Enter never took the payment.
+    // Open it now and put focus in it now.
+    flushSync(() => setPaymentOpen(true));
+    tenderRef.current?.focus({ preventScroll: true });
   }, [canSettlePayments]);
 
   // Leave the settled bill and everything tied to its patient behind.
@@ -5127,7 +5135,16 @@ function CounterOverlay({
         <DialogOverlay hidden={!open} className="bg-foreground/40 backdrop-blur-none" />
         <DialogPrimitive.Popup
           hidden={!open}
-          initialFocus={initialFocus}
+          // Focus already inside the initial target (moved there when it opened, or by the
+          // cashier since) stays where it is; the dialog's queued initial focus never takes it back.
+          initialFocus={
+            initialFocus
+              ? () =>
+                  initialFocus.current?.contains(document.activeElement)
+                    ? false
+                    : initialFocus.current
+              : undefined
+          }
           finalFocus={finalFocus}
           onKeyDown={onKeyDown}
           className={`pharmacy-workspace pos-calm fixed z-50 flex flex-col overflow-hidden border border-border-subtle bg-surface-card text-text-strong outline-none [&_:is([data-slot=button],[data-slot=dialog-close]):not(.rounded-full)]:rounded-[var(--radius-sm)] ${drawer ? 'inset-y-0 right-0 w-full lg:max-w-[30rem]' : 'top-1/2 left-1/2 max-h-[90dvh] w-[calc(100%-2rem)] max-w-[38.75rem] -translate-x-1/2 -translate-y-1/2 rounded-xl'}`}

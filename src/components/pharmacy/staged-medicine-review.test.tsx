@@ -29,6 +29,9 @@ vi.mock('@/components/pharmacy/staged-medicine-creation-actions', () => ({
   requestStagedMedicineCreation: vi.fn(),
   runStagedMedicineCreationStep: vi.fn(),
 }));
+vi.mock('@/components/pharmacy/staged-medicine-creation', () => ({
+  StagedMedicineCreation: () => <div>Creation controls</div>,
+}));
 vi.mock('@/components/pharmacy/medicine-reference-workbench', () => ({
   MedicineReferenceWorkbench: () => <div>Existing workbench</div>,
 }));
@@ -158,6 +161,11 @@ describe('staged medicine review UI', () => {
     expect(screen.getAllByText('Staged — unverified').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Not reviewed yet').length).toBeGreaterThan(0);
     expect(screen.getByText(/waiting for review/)).toBeTruthy();
+    expect(screen.getByText(/done by a catalogue editor or reviewer/)).toBeTruthy();
+    expect(screen.queryByText(/use “Create medicines” below/)).toBeNull();
+    expect(screen.queryByText(/not available on this screen yet/)).toBeNull();
+    expect(screen.getByText('MRP (the sale price printed on the pack)')).toBeTruthy();
+    expect(screen.getByText('Purchase price (the price you pay the distributor)')).toBeTruthy();
     const heads = screen.getAllByRole('columnheader').map((h) => h.textContent);
     expect(heads).toContain('Purchase price (from distributor)');
     expect(heads).toContain('MRP');
@@ -165,6 +173,63 @@ describe('staged medicine review UI', () => {
     const listCells = within(screen.getAllByRole('table')[0]!).getAllByRole('cell');
     expect(listCells.map((c) => c.textContent)).toContain('1');
     expect(within(screen.getAllByRole('table')[0]!).queryByText('1.0000')).toBeNull();
+  });
+  it('tells a catalogue editor to create medicines and shows plain words, never raw codes', async () => {
+    mocks.creation.mockResolvedValue({ data: { candidates: 1 } });
+    const row = stagedReference(
+      {
+        id: 'row_a',
+        sourceKey: 'key',
+        rowNumber: 1,
+        productName: 'Example',
+        packLabel: null,
+        quantityCanonical: null,
+        rawPayload: { QTY: '1', __review_flags: 'NORMALIZED_NAME_COLLISION_NO_MERGE' },
+        exceptions: [
+          { bucket: 'MISSING_BATCH', status: 'OPEN', severity: 'WARNING' },
+          { bucket: 'MISSING_MRP', status: 'SIGNED_OFF', severity: 'BLOCKING' },
+        ],
+      },
+      { id: 'source_a', contentHash: 'a'.repeat(64) },
+      'batch_a'
+    );
+    mocks.detail.mockResolvedValue(row);
+    mocks.rows.mockResolvedValue({
+      candidateCount: 1,
+      total: 1,
+      page: 1,
+      pageSize: 25,
+      rows: [row],
+      exceptions: [{ bucket: 'MISSING_BATCH', workflow: 'Opening stock', count: 1 }],
+    });
+    const { container } = render(
+      await Page({
+        searchParams: Promise.resolve({
+          branchId: 'branch_a',
+          sourceId: 'source_a',
+          batchId: 'batch_a',
+          rowId: 'row_a',
+        }),
+      })
+    );
+    expect(screen.getByText(/use “Create medicines” below/)).toBeTruthy();
+    expect(screen.getByText(/before you create catalogue medicines/)).toBeTruthy();
+    expect(
+      screen.getByText('Another medicine has almost the same name: kept separate')
+    ).toBeTruthy();
+    expect(screen.getByText(/Signed off · Needs your attention/)).toBeTruthy();
+    expect(screen.getByText(/Open · Information only/)).toBeTruthy();
+    const visible = container.textContent ?? '';
+    for (const code of [
+      'MISSING_BATCH',
+      'MISSING_MRP',
+      'NORMALIZED_NAME_COLLISION_NO_MERGE',
+      'SIGNED_OFF',
+      'BLOCKING',
+      'WARNING',
+    ])
+      expect(visible).not.toContain(code);
+    expect(visible).not.toMatch(/\bOPEN\b/);
   });
   it('renders permission denial without candidate content', async () => {
     mocks.branches.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN' }));

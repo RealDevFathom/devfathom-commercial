@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // DEV-725: opening the drawer is the first step of the shift. The counter used to
 // let a cashier build a whole bill on a device with no OPEN drawer and only refused
@@ -89,6 +89,13 @@ const drawer = { id: 'drawer-1', businessDate: new Date('2026-11-15T00:00:00.000
 
 beforeEach(() => {
   vi.mocked(assertStoredPharmacyMayOperate).mockReset().mockResolvedValue(undefined);
+  // The fixture drawer was opened on today's business day (the workspace zone is UTC).
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-11-15T10:00:00.000Z'));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('pharmacySales.create drawer gate (DEV-725)', () => {
@@ -154,6 +161,26 @@ describe('pharmacySales.create drawer gate (DEV-725)', () => {
       select: { id: true },
     });
     expect(f.db.pharmacySale.create).not.toHaveBeenCalled();
+  });
+
+  it('DEV-769: refuses a counter bill on a drawer left open from an earlier business day', async () => {
+    // Cash is only taken into today's drawer, so a bill started on yesterday's could not be paid.
+    const f = fixture({ id: 'drawer-1', businessDate: new Date('2026-11-14T00:00:00.000Z') });
+    await expect(
+      f.caller.create({ branchId: 'branch-1', quotation: false, deviceId: 'counter-device' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'DRAWER_FROM_EARLIER_DAY' });
+    expect(f.db.pharmacySale.create).not.toHaveBeenCalled();
+    expect(f.db.pharmacySaleEvent.create).not.toHaveBeenCalled();
+  });
+
+  it("DEV-769: reads 'today' for the drawer in the workspace zone, not UTC", async () => {
+    // 20:00 UTC on 14 Nov is already 15 Nov in Karachi: a drawer opened for the 15th is today's.
+    vi.setSystemTime(new Date('2026-11-14T20:00:00.000Z'));
+    const f = fixture(drawer);
+    f.db.organization.findUnique.mockResolvedValue({ timezone: 'Asia/Karachi' });
+    await expect(
+      f.caller.create({ branchId: 'branch-1', quotation: false, deviceId: 'counter-device' })
+    ).resolves.toMatchObject({ id: 'sale-new', status: 'OPEN' });
   });
 
   it('keeps quotations free of the drawer: they take no payment', async () => {

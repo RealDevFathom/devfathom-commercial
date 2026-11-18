@@ -120,6 +120,7 @@ import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
 import { prescriptionIsCurrent } from '@/lib/pharmacy/prescription-calendar';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { TRPCError } from '@trpc/server';
+import { NO_PIN_SET_MESSAGE } from '@/lib/pharmacy/own-pin-policy';
 import { z } from 'zod';
 import { saleVoidReasonSchema, saleVoidReasonText } from '@/lib/pharmacy/sale-void-reasons';
 import { Prisma } from '@/generated/prisma/client';
@@ -220,6 +221,7 @@ import {
   openPharmacyDrawer,
   pharmacyDayClosedForTrading,
   readOpenPharmacyDrawer,
+  requireTodaysPharmacyDrawer,
   requirePharmacyTodayOpenForTrading,
   PharmacySettlementError,
   readPharmacyTenderOutcome,
@@ -1480,10 +1482,7 @@ export const pharmacySalesRouter = router({
         action: 'pharmacy.maxDiscount',
       });
       if (pin === 'NO_PIN')
-        throw new TRPCError({
-          code: 'PRECONDITION_FAILED',
-          message: 'Set up your own staff PIN first, then try again.',
-        });
+        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: NO_PIN_SET_MESSAGE });
       if (pin === 'LOCKED')
         throw new TRPCError({
           code: 'TOO_MANY_REQUESTS',
@@ -2630,7 +2629,9 @@ export const pharmacySalesRouter = router({
             await requirePharmacyTodayOpenForTrading(db, scope);
             if (!takesPayment) return;
             if (!input.deviceId) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
-            await lockOpenPharmacyDrawer(db, scope, input.deviceId);
+            const drawer = await lockOpenPharmacyDrawer(db, scope, input.deviceId);
+            // DEV-769: cash is refused on a drawer from an earlier day, so the bill is too.
+            await requireTodaysPharmacyDrawer(db, scope, drawer);
           });
         });
       } catch (error) {

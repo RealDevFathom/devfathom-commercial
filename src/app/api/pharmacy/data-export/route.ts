@@ -21,6 +21,7 @@ import {
   verifyOwnerExportPin,
   type OwnerExportPinResult,
 } from '@/lib/pharmacy/owner-data-export-pin';
+import { NO_PIN_SET_MESSAGE } from '@/lib/pharmacy/own-pin-policy';
 import { rateLimit } from '@/lib/rate-limit';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
@@ -58,7 +59,7 @@ const json = (status: number, body: unknown, headers: Record<string, string> = {
 const PIN_REFUSAL: Record<Exclude<OwnerExportPinResult, 'OK'>, () => Response> = {
   NO_PIN: () =>
     json(403, {
-      error: 'Set a personal PIN on your staff profile before exporting data.',
+      error: NO_PIN_SET_MESSAGE,
       code: 'PIN_NOT_SET',
     }),
   REJECTED: () => json(401, { error: 'That PIN is not correct.', code: 'PIN_REJECTED' }),

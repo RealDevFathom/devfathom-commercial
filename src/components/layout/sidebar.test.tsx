@@ -817,18 +817,28 @@ describe('Pharmacy grouped top navigation (DEV-497)', () => {
     expect(nav).toHaveClass('flex-wrap');
   });
 
-  it('offers a cashier only pages a cashier can open, with no menus to dig through', () => {
+  it('offers a cashier only pages a cashier can open, with Your PIN beside Settings', () => {
     const nav = renderBar({
       role: 'MEMBER',
       capabilities: ['pharmacy:counter', 'pharmacy:orders'],
       granted: ['pharmacy-core', 'pharmacy-counter', 'pharmacy-procurement', 'pharmacy-finance'],
     });
-    expect(within(nav).queryAllByRole('button')).toEqual([]);
+    // DEV-931: a cashier confirms vouchers with their own PIN, so "Your PIN" is theirs too;
+    // it joins Settings in the one menu a cashier has.
+    expect(
+      within(nav)
+        .getAllByRole('button')
+        .map((button) => button.textContent)
+    ).toEqual(['Settings']);
     expect(
       within(nav)
         .getAllByRole('link')
         .map((link) => link.getAttribute('href'))
-    ).toEqual(['/dashboard', '/pharmacy/counter', '/settings']);
+    ).toEqual(['/dashboard', '/pharmacy/counter', '/pharmacy/settings/pin', '/settings']);
+    expect(within(panel('Settings')).getByRole('link', { name: 'Your PIN' })).toHaveAttribute(
+      'href',
+      '/pharmacy/settings/pin'
+    );
   });
 
   it('opens one menu at a time and closes it on Escape, outside press and navigation', () => {

@@ -13,6 +13,7 @@ import {
   type PharmacistCheckPolicyView,
 } from '@/lib/pharmacy/pharmacist-check';
 import { trpc } from '@/lib/trpc';
+import { PinAwareMessage } from '@/components/pharmacy/pin-aware-message';
 
 type Notice = { tone: 'status' | 'alert'; text: string };
 
@@ -208,7 +209,7 @@ export function PharmacistCheckSetting({
                 notice.tone === 'alert' ? 'text-sm text-destructive' : 'text-sm text-text-body'
               }
             >
-              {notice.text}
+              <PinAwareMessage message={notice.text} />
             </p>
           ) : null}
         </div>

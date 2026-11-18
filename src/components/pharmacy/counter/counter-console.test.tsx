@@ -2229,6 +2229,27 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     );
   });
 
+  it('DEV-931: F9 opens payment and focuses it before the key event ends', async () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => screen.getByLabelText('Opening cash').blur());
+    // A real keydown on the window listener, outside act(): React would otherwise open the
+    // dialog only after the event, and the cashier's next key would land outside it.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F9', bubbles: true }));
+    const payment = screen.getByRole('dialog', { name: 'Payment' });
+    expect(payment).toContainElement(document.activeElement as HTMLElement);
+    // A payment method the cashier moves to straight away keeps focus: the dialog's queued
+    // initial focus does not take it back.
+    const card = within(payment)
+      .getByRole('group', { name: 'Payment method' })
+      .querySelectorAll('button')[1]!;
+    card.focus();
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    });
+    expect(card).toHaveFocus();
+  });
+
   it('DEV-714: re-reads the drawer status each time payment opens', () => {
     const drawerStatus = query({ openDrawer: null });
     mocks.queries.drawerStatus = drawerStatus;
@@ -3984,6 +4005,11 @@ describe('PharmacyCounterConsole barcode safety', () => {
       expect(within(dialog).getByRole('button', { name: 'Approve pack' })).toBeDisabled();
       fireEvent.click(within(dialog).getByRole('button', { name: 'Retry' }));
       await within(dialog).findByText(/No manager or owner has an active staff PIN/);
+      // DEV-931: the notice says where a manager or owner creates their own PIN.
+      expect(within(dialog).getByRole('link', { name: 'Set up your PIN' })).toHaveAttribute(
+        'href',
+        '/pharmacy/settings/pin'
+      );
       expect(within(dialog).getByRole('button', { name: 'Approve pack' })).toBeDisabled();
       expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
     });

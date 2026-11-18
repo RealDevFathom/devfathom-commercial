@@ -1,5 +1,6 @@
 'use client';
 
+import { OwnPinLink } from '@/components/pharmacy/pin-aware-message';
 import { PHARMACY_COPY as copy } from '@/lib/pharmacy/plain-language';
 import { forwardRef, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Check } from 'lucide-react';
@@ -1303,8 +1304,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                           <p role="status">Loading approvers…</p>
                         ) : approvers.length === 0 ? (
                           <p role="status">
-                            No manager or owner has an active staff PIN. Ask your administrator to
-                            set one up.
+                            No manager or owner has an active staff PIN. A manager or owner creates
+                            their own under Settings, Your PIN. <OwnPinLink />
                           </p>
                         ) : null}
                         <Label htmlFor="khata-approver-pin">Approver PIN</Label>

@@ -400,6 +400,14 @@ export async function postGoodsReceipt(
     }
   }
 
+  // DEV-769: the scheme check reads the arrival as a day in the organisation's zone. Read once,
+  // and only when a line carries a scheme.
+  let timeZone: Promise<string | null> | undefined;
+  const organizationTimeZone = () =>
+    (timeZone ??= db.organization
+      .findUnique({ where: { id: scope.organizationId }, select: { timezone: true } })
+      .then((organization) => organization?.timezone ?? null));
+
   const controlledMedicines = await db.medicine.findMany({
     where: {
       organizationId: scope.organizationId,
@@ -619,6 +627,7 @@ export async function postGoodsReceipt(
         invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
         bonusCanonicalUnits: line.bonusCanonicalUnits,
         receivedAt: receipt.receivedAt,
+        timeZone: terms?.schemeValidUntil ? await organizationTimeZone() : null,
         receivedPacks: line.receivedPacks,
         batchNumber: line.batchNumber,
         printedExpiry: line.printedExpiry,
