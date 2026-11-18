@@ -445,7 +445,6 @@ export async function readPharmacyApprovalStatus(
     where: { id: organizationId },
     select: {
       status: true,
-      activatedAt: true,
       vertical: true,
       packageId: true,
       platformApprovedAt: true,
@@ -453,9 +452,12 @@ export async function readPharmacyApprovalStatus(
   });
   if (!organization) return null;
   if (organization.status !== 'ONBOARDING') {
+    // Only the super admin's approval fact dates an approval. A pharmacy whose approval
+    // was withdrawn stays ACTIVE, and its activation time must not keep announcing it as
+    // approved while the restored gates refuse its sales.
     return pharmacyApprovalStatus({
       status: organization.status,
-      activatedAt: organization.platformApprovedAt ?? organization.activatedAt,
+      activatedAt: organization.platformApprovedAt,
     });
   }
   const readiness = reconcileTenantPackageGate(

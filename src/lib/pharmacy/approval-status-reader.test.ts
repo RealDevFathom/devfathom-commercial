@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 vi.mock('@/server/audit', () => ({ recordAudit: vi.fn() }));
 
+import { showsPharmacyApprovalNotice } from './approval-status';
 import { readPharmacyApprovalStatus } from './onboarding';
 
 // DEV-905: the owner sees when DevFathom approved the pharmacy, read live on a tenant
@@ -30,18 +31,18 @@ describe('readPharmacyApprovalStatus', () => {
     });
   });
 
-  it('falls back to the activation time for a pharmacy activated before approvals existed', async () => {
+  it('announces no approval once it is withdrawn, though the pharmacy stays active', async () => {
     const db = tenantDb({
       status: 'ACTIVE',
-      activatedAt: new Date('2026-10-01T10:00:00.000Z'),
+      activatedAt: new Date(),
       platformApprovedAt: null,
       vertical: 'PHARMACY',
       packageId: 'pkg',
     });
-    await expect(readPharmacyApprovalStatus(db as never, 'org-a')).resolves.toEqual({
-      state: 'APPROVED',
-      approvedAt: '2026-10-01T10:00:00.000Z',
-    });
+    const status = await readPharmacyApprovalStatus(db as never, 'org-a');
+    expect(status).toEqual({ state: 'APPROVED', approvedAt: null });
+    // No dated approval, so the dashboard shows no "approved, can sell" notice.
+    expect(showsPharmacyApprovalNotice(status, new Date())).toBe(false);
   });
 
   it('answers nothing for an organization it cannot see', async () => {
