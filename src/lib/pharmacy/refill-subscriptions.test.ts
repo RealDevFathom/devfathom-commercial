@@ -129,6 +129,7 @@ function fakeDb(
     creditLimitMinor?: number;
     cycle?: Record<string, unknown> | null;
     rxLine?: ReturnType<typeof rxLine> | null;
+    dayClose?: { id: string; reopen: { id: string } | null } | null;
   } = {}
 ) {
   const writes: Array<[string, unknown]> = [];
@@ -146,6 +147,9 @@ function fakeDb(
     medicine: {
       findFirst: async () => (options.medicine === undefined ? medicine() : options.medicine),
     },
+    // DEV-631: today's business day, and whether its latest close still stands.
+    organization: { findUnique: async () => ({ timezone: 'UTC' }) },
+    pharmacyDailyClose: { findFirst: vi.fn(async () => options.dayClose ?? null) },
     pharmacyCustomer: {
       findFirst: async () => ({
         id: 'cust-1',
@@ -170,7 +174,6 @@ function fakeDb(
         }
       ),
     },
-    organization: { findUnique: async () => ({ timezone: 'Asia/Karachi' }) },
     pharmacySaleLine: { updateMany: record('saleLine.updateMany', { count: 1 }) },
     pharmacyPharmacistReviewItem: { create: record('reviewItem.create') },
     pharmacyRefillSubscription: {
@@ -452,6 +455,49 @@ describe('DEV-73 Rx cycle pharmacist approval', () => {
         COVERING
       )
     ).rejects.toBeInstanceOf(RefillCycleApprovalDenied);
+  });
+
+  it("DEV-631: refuses checkout while today's business day is closed, before any hold is consumed", async () => {
+    vi.mocked(can).mockResolvedValue(true);
+    const approved = {
+      ...awaiting,
+      status: 'RESERVED',
+      approvedByUserId: 'pharmacist',
+      approvedAt: new Date(),
+      prescriptionLineId: 'rx-line-1',
+    };
+    const { db, writes } = fakeDb({
+      cycle: approved,
+      medicine: medicine({ rx: true }),
+      dayClose: { id: 'close-1', reopen: null },
+    });
+    await expect(startRefillCycleCheckout(db as never, scope, 'cycle-1')).rejects.toMatchObject({
+      reason: 'DAY_CLOSED',
+    });
+    expect(createSale).not.toHaveBeenCalled();
+    expect(addReservedSaleLine).not.toHaveBeenCalled();
+    expect(writes.some(([name]) => name === 'reservation.updateMany')).toBe(false);
+    expect(writes.some(([name]) => name === 'cycle.update')).toBe(false);
+  });
+
+  it('DEV-631: checks out a cycle again once the day is reopened for trading', async () => {
+    vi.mocked(can).mockResolvedValue(true);
+    const approved = {
+      ...awaiting,
+      status: 'RESERVED',
+      approvedByUserId: 'pharmacist',
+      approvedAt: new Date(),
+      prescriptionLineId: 'rx-line-1',
+    };
+    const { db } = fakeDb({
+      cycle: approved,
+      medicine: medicine({ rx: true }),
+      dayClose: { id: 'close-1', reopen: { id: 'reopen-1' } },
+    });
+    await expect(startRefillCycleCheckout(db as never, scope, 'cycle-1')).resolves.toMatchObject({
+      saleId: 'sale-1',
+      replayed: false,
+    });
   });
 
   it('hands an approved cycle to the counter with exactly the lots it holds', async () => {

@@ -27,7 +27,12 @@ import {
   type SmsConfig,
   type SmsProvider,
 } from '../sms/provider';
-import { claimMessageLogInTransaction, sendClaimedMessage } from './message-log';
+import {
+  claimMessageLogWithAliasesInTransaction,
+  DEDUPE_ALIAS_ERROR,
+  sendClaimedMessage,
+  type MessageLogAliases,
+} from './message-log';
 import { isUtilityReminderQuietHour, reminderLocalHour } from './reminder-quiet-hours';
 import { canMessageCustomer, normalizeWhatsAppNumber, phoneLast4 } from './messages';
 import {
@@ -350,6 +355,8 @@ export async function processDueWhatsAppKhataReminders(
     }
 
     let dedupeKey = plan.dedupeKey;
+    // The pre-DEV-316 weekly key, claimed with the new one (mixed-version rollout).
+    let aliases: MessageLogAliases | null = null;
     const recipient = await withTenantDb<KhataRecipientResult | null>(
       account.organizationId,
       async (db) => {
@@ -424,6 +431,15 @@ export async function processDueWhatsAppKhataReminders(
         });
         if (cadenceDaysOrDefault(account.cadenceDays) === 7) {
           const week = reminderWeek(now, timeZone);
+          // An older worker still running claims the UTC epoch week of `now`; this
+          // claim takes that key too, in the same transaction, on either channel,
+          // so whichever worker claims first blocks the other (DEV-899).
+          aliases = {
+            dedupeKeys: [
+              `khata:${account.familyAccountId}:w${Math.floor(now.getTime() / WEEK_MS)}`,
+            ],
+            since: week.start,
+          };
           // Keep persisted claims effective across the namespace change, on both
           // channels. The consent lock serializes this check with other sends.
           // Include FAILED claims: the old unique key also prevented their replay.
@@ -439,6 +455,8 @@ export async function processDueWhatsAppKhataReminders(
                 ]),
               },
               createdAt: { gte: week.start, lt: week.end },
+              // A placeholder row is this version's own claim, governed by its new key.
+              OR: [{ error: null }, { error: { not: DEDUPE_ALIAS_ERROR } }],
             },
             select: { id: true },
           });
@@ -496,20 +514,24 @@ export async function processDueWhatsAppKhataReminders(
           month: '2-digit',
           day: '2-digit',
         }).format(now);
-        const logId = await claimMessageLogInTransaction(db, {
-          organizationId: account.organizationId,
-          direction: 'OUTBOUND',
-          status: 'PENDING',
-          kind: 'KHATA_REMINDER',
-          dedupeKey,
-          customerDayKey: `khata:${customer.id}:${day}`,
-          branchId: account.branchId,
-          customerId: customer.id,
-          patientId: customer.patientId,
-          phoneLast4: phoneLast4(to),
-          templateName: config.khataTemplates[language],
-          dueDate: plan.dueDate,
-        });
+        const logId = await claimMessageLogWithAliasesInTransaction(
+          db,
+          {
+            organizationId: account.organizationId,
+            direction: 'OUTBOUND',
+            status: 'PENDING',
+            kind: 'KHATA_REMINDER',
+            dedupeKey,
+            customerDayKey: `khata:${customer.id}:${day}`,
+            branchId: account.branchId,
+            customerId: customer.id,
+            patientId: customer.patientId,
+            phoneLast4: phoneLast4(to),
+            templateName: config.khataTemplates[language],
+            dueDate: plan.dueDate,
+          },
+          aliases
+        );
         return {
           kind: 'recipient',
           customerId: customer.id,
@@ -541,6 +563,7 @@ export async function processDueWhatsAppKhataReminders(
           branchId: account.branchId,
           customerId,
           dedupeKey,
+          aliases,
           content: {
             kind: 'KHATA_REMINDER',
             balance: formatMinor(balanceMinor),
@@ -716,6 +739,7 @@ export async function readDueKhataAccounts(
         WHERE ml."organizationId" = acct."organizationId"
           AND ml."direction" = 'OUTBOUND' AND ml."kind" = 'KHATA_REMINDER'
           AND ml."status" <> 'FAILED'
+          AND ml."error" IS DISTINCT FROM ${DEDUPE_ALIAS_ERROR}
           AND (starts_with(ml."dedupeKey", 'khata:' || acct."id" || ':')
             OR starts_with(ml."dedupeKey", 'sms:khata:' || acct."id" || ':'))
           AND ml."createdAt" + make_interval(days => br."khataReminderCadenceDays") > ${now}

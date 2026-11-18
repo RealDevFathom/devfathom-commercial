@@ -114,6 +114,10 @@ const MINOR_UNIT_DIGITS: ReadonlyMap<string, number> = new Map([
   ['USD', 2],
 ]);
 
+export function hasChequeAmountScale(currency: string | null): boolean {
+  return currency !== null && MINOR_UNIT_DIGITS.has(currency);
+}
+
 /**
  * Display a recorded minor-unit amount in major units using the recorded currency's
  * minor-unit scale. Unrecognised currencies are labelled as raw minor units rather than

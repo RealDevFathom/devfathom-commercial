@@ -69,17 +69,34 @@ export function AdjustPointsForm({
             className="min-h-11"
           />
         </label>
+        <label className="grid w-full gap-2 text-sm sm:w-40">
+          Your manager PIN
+          <Input
+            name="managerPin"
+            type="password"
+            inputMode="numeric"
+            autoComplete="off"
+            pattern="[0-9]{4,8}"
+            maxLength={8}
+            aria-describedby="adjust-points-pin-help"
+            aria-invalid={invalid || undefined}
+            className="min-h-11"
+          />
+        </label>
         <Button type="submit" className="min-h-11" disabled={pending}>
           {pending ? 'Saving…' : 'Record adjustment'}
         </Button>
       </div>
+      <p id="adjust-points-pin-help" className="text-sm text-text-muted">
+        Managers re-enter their own PIN for every adjustment. Owners can leave it blank.
+      </p>
       <p
         id="adjust-points-status"
         aria-live="polite"
         className={`text-sm ${invalid ? 'text-destructive' : 'text-text-muted'}`}
       >
         {state.message ||
-          'Owners, and managers up to the limit the owner sets. Each adjustment is kept in the ledger and the audit log with your name and reason; a removal cannot take more than the points that can still be spent.'}
+          'Owners, and managers up to the limit the owner sets for each customer per day. Each adjustment is kept in the ledger and the audit log with your name and reason; a removal cannot take more than the points that can still be spent.'}
       </p>
     </form>
   );

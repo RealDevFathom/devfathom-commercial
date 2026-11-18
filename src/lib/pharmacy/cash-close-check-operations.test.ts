@@ -151,6 +151,25 @@ describe('readPharmacyCashCloseCheck (#728)', () => {
     expect(check.findings.map((finding) => finding.explanation).join(' ')).not.toContain('PKR');
   });
 
+  it('DEV-631: does not check a close reopened for trading as the standing close', async () => {
+    const { db, scoped } = fixture();
+    db.pharmacyDailyClose.findFirst.mockResolvedValue({
+      id: 'close_1',
+      sequence: 1,
+      cashExpectedMinor: 5_000_000,
+      cashCountedMinor: 4_700_000,
+      cashVarianceMinor: -300_000,
+      reason: 'Short at close',
+      reopen: { id: 'reopen_1' },
+    });
+    const check = await readPharmacyCashCloseCheck(scoped, scope, businessDate);
+    expect(db.pharmacyDailyClose.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ include: { reopen: { select: { id: true } } } })
+    );
+    expect(check).toMatchObject({ closed: false, closeId: null });
+    expect(check.narrative).not.toContain('(closed)');
+  });
+
   it('aliases staff before constructing AI prose while preserving owner names and rule evidence', async () => {
     const { db, scoped } = fixture();
     db.pharmacyDrawerSession.findMany.mockResolvedValue([

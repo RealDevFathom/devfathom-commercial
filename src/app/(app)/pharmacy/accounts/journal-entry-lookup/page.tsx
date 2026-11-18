@@ -1,3 +1,4 @@
+import { ReportDetails } from '@/components/pharmacy/report-details';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { TRPCError } from '@trpc/server';
@@ -16,8 +17,7 @@ import { createTRPCContext } from '@/server/trpc';
 export const metadata: Metadata = { title: 'Journal entry lookup · Pharmacy accounts' };
 type Query = Record<string, string | string[] | undefined>;
 type ViewState =
-  | JournalEntryLookupResult
-  | { status: 'INITIAL' | 'INVALID' | 'DENIED' | 'FAILURE' };
+  JournalEntryLookupResult | { status: 'INITIAL' | 'INVALID' | 'DENIED' | 'FAILURE' };
 const scalar = (value: string | string[] | undefined) => (typeof value === 'string' ? value : null);
 const pageInput = z
   .object({
@@ -106,13 +106,13 @@ export default async function JournalEntryLookupPage({
     }
   }
   const message: Partial<Record<ViewState['status'], string>> = {
-    INITIAL: 'Enter an exact posted journal ID, active branch, and UTC window.',
+    INITIAL: 'Enter the journal entry ID, the branch and the dates to search.',
     INVALID:
-      'Provide each field once. Use nonempty IDs and RFC3339 instants in a window of no more than 92 days.',
+      'Enter each field once, with an ID and dates no more than 92 days apart.',
     DENIED: 'You do not have access to this financial report scope.',
     FAILURE: 'The journal lookup is unavailable. Retry; no stale details are shown.',
     NOT_FOUND: 'No journal entry was found in this exact branch and window.',
-    INVALID_SOURCE: 'The posted source failed validation. No partial details or totals are shown.',
+    INVALID_SOURCE: 'The records could not be checked, so no details or totals are shown.',
     TRUNCATED: 'This branch slice exceeds 200 lines. No partial details or totals are shown.',
   };
   return (
@@ -120,7 +120,7 @@ export default async function JournalEntryLookupPage({
       <PageHeader
         eyebrow="Pharmacy accounts"
         heading="Journal entry lookup"
-        description="Inspect one posted journal entry within an authorized branch and bounded UTC window."
+        description="Look up one journal entry for a branch and a date range."
       />
       <Link
         className="text-sm underline focus-visible:outline-2 focus-visible:outline-ring"
@@ -197,10 +197,12 @@ function EntryDetail({
   const { entry } = result;
   return (
     <SectionCard title="Authorized branch slice" titleLevel={2}>
-      <p className="mb-4 text-sm text-text-muted">
-        This is only the selected branch slice, not a complete journal or global-balance assertion.
-        A nonzero difference can be legitimate for an interbranch entry.
-      </p>
+      <ReportDetails>
+        <p className="mb-4 text-sm text-text-muted">
+          This is only the selected branch slice, not a complete journal or global-balance
+          assertion. A nonzero difference can be legitimate for an interbranch entry.
+        </p>
+      </ReportDetails>
       <dl className="mb-5 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
         <div>
           <dt className="font-mono text-xs uppercase text-text-muted">Entry</dt>

@@ -1,3 +1,6 @@
+import { PHARMACY_COPY } from '@/lib/pharmacy/plain-language';
+import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/screen-copy';
+import { ReportDetails } from '@/components/pharmacy/report-details';
 import type { Metadata } from 'next';
 import { TRPCError } from '@trpc/server';
 import { unstable_rethrow } from 'next/navigation';
@@ -19,7 +22,7 @@ import {
   workspaceZoneLabel,
 } from '@/lib/timezone';
 
-export const metadata: Metadata = { title: 'Classified cash-flow projection' };
+export const metadata: Metadata = { title: screenCopy.cashFlow.cashFlow };
 
 const EVIDENCE_PAGE_SIZE = 50;
 
@@ -133,21 +136,23 @@ export default async function CashFlowPage({
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Pharmacy accounts"
-        heading="Classified cash-flow projection"
-        description="A conservative posted-ledger projection with transfer netting and visible unclassified evidence."
+        eyebrow={screenCopy.cashFlow.pharmacyAccounts}
+        heading={screenCopy.cashFlow.cashFlow}
+        description={screenCopy.cashFlow.cashComingInAndGoingOutGroupedBy}
       />
-      <SectionCard title={`Scope and period (${zone})`}>
+      <SectionCard title={`${screenCopy.dateWindow.scopeAndPeriod} (${zone})`}>
         <form className="flex flex-wrap items-end gap-3">
           <label className="grid min-w-64 gap-2 text-sm">
-            Active branch
+            {screenCopy.cashFlow.activeBranch}
             <select
               className="min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               name="branch"
               defaultValue={query.branch ?? branches[0]?.id ?? ''}
               required
             >
-              {!branches.length ? <option value="">No active branches available</option> : null}
+              {!branches.length ? (
+                <option value="">{screenCopy.cashFlow.noActiveBranchesAvailable}</option>
+              ) : null}
               {branches.map((branch) => (
                 <option value={branch.id} key={branch.id}>
                   {branch.name}
@@ -156,34 +161,36 @@ export default async function CashFlowPage({
             </select>
           </label>
           <label className="grid gap-2 text-sm">
-            From (inclusive)
+            {screenCopy.dateWindow.from} ({zone})
             <Input type="date" name="from" defaultValue={from} required />
           </label>
           <label className="grid gap-2 text-sm">
-            To (exclusive)
+            {screenCopy.dateWindow.toExclusive} ({zone})
             <Input type="date" name="to" defaultValue={to} required />
           </label>
           <Button type="submit" className="min-h-11">
-            Read projection
+            {screenCopy.cashFlow.showCashFlow}
           </Button>
         </form>
       </SectionCard>
       {!projection ? (
-        <SectionCard title="Projection unavailable">
+        <SectionCard title={screenCopy.cashFlow.projectionUnavailable}>
           <p role="alert" className="text-sm text-text-muted">
-            {message} No financial data is shown.
+            {message}
+            {screenCopy.cashFlow.noFinancialDataIsShown}
           </p>
         </SectionCard>
       ) : (
         <>
-          <SectionCard title="Opening-to-closing reconciliation">
-            <p className="text-sm text-text-muted">
-              Recorded currency minor-unit totals from every scoped posted cash/bank line. Retrieved{' '}
-              {formatWorkspaceDateTime(projection.metadata.retrievedAt, timeZone)}. Completeness:
-              unknown — {projection.metadata.completenessReason} Discrepancy is canonical CASH plus
-              BANK account closing from the financial statements, read in the same snapshot, minus
-              the projected closing.
-            </p>
+          <SectionCard title={screenCopy.cashFlow.openingAndClosingCash}>
+            <ReportDetails>
+              <p className="text-sm text-text-muted">
+                {screenCopy.cashFlow.recordedCurrencyMinorUnitTotalsFromEveryScoped}{' '}
+                {formatWorkspaceDateTime(projection.metadata.retrievedAt, timeZone)}
+                {screenCopy.cashFlow.completenessUnknown} {projection.metadata.completenessReason}
+                {screenCopy.cashFlow.discrepancyIsCanonicalCashPlusBankAccountClosing}
+              </p>
+            </ReportDetails>
             <div className="overflow-x-auto">
               <table className="mt-4 w-full text-sm">
                 <thead className="font-mono text-xs uppercase">
@@ -197,7 +204,7 @@ export default async function CashFlowPage({
                       'Unclassified',
                       'Net movement',
                       'Closing',
-                      'Canonical closing',
+                      'Accounts closing',
                       'Discrepancy',
                     ].map((x) => (
                       <th className="p-3 text-left" key={x}>
@@ -232,33 +239,46 @@ export default async function CashFlowPage({
             </div>
             {!projection.totals.length && (
               <p className="mt-4 text-sm">
-                No scoped cash postings; this does not prove zero activity.
+                {screenCopy.cashFlow.noScopedCashPostingsThisDoesNotProve}
               </p>
             )}
           </SectionCard>
-          <SectionCard title="Source and reversal evidence">
-            <p className="text-sm text-text-muted">
-              Classification requires supported source and counterpart evidence. Ambiguous, mixed,
-              and future policies remain unclassified; this is not a statutory or audited statement.
-            </p>
+          <SectionCard title={screenCopy.cashFlow.paymentsAndReversals}>
+            <ReportDetails>
+              <p className="text-sm text-text-muted">
+                {
+                  screenCopy.cashFlow
+                    .classificationRequiresSupportedSourceAndCounterpartEvidenceAmbiguous
+                }
+              </p>
+            </ReportDetails>
             <p className="mt-2 text-sm text-text-muted">
-              Showing {evidenceRange.first}–{evidenceRange.last} of {projection.evidence.length}{' '}
-              cash-moving entries; totals above include every entry in the period.
+              {screenCopy.cashFlow.showing}
+              {evidenceRange.first}–{evidenceRange.last}
+              {screenCopy.cashFlow.of}
+              {projection.evidence.length}{' '}
+              {screenCopy.cashFlow.cashMovingEntriesTotalsAboveIncludeEveryEntry}
             </p>
             {evidencePage.map((entry) => (
               <details className="mt-3 rounded-sm border border-border-default p-3" key={entry.id}>
                 <summary className="min-h-11 cursor-pointer">
-                  {formatWorkspaceDateTime(entry.occurredAt, timeZone)} · {entry.classification} ·{' '}
-                  {entry.currency} {money(entry.netMinor)} ·{' '}
-                  {financeEntryDescription(entry.description)}
+                  {formatWorkspaceDateTime(entry.occurredAt, timeZone)} ·{' '}
+                  {PHARMACY_COPY.account.cashFlowClasses[entry.classification]} · {entry.currency}{' '}
+                  {money(entry.netMinor)} · {financeEntryDescription(entry.description)}
                 </summary>
                 <p className="break-all text-xs text-text-muted">
-                  Entry {entry.id} · source {entry.sourceKind}/{entry.sourceId}
+                  {screenCopy.cashFlow.entry}
+                  {entry.id}
+                  {screenCopy.cashFlow.sourceLabel}
+                  {entry.sourceKind}/{entry.sourceId}
                   {entry.sourceDetail ? `/${entry.sourceDetail}` : ''}
                   {entry.reversesEntryId ? ` · reverses ${entry.reversesEntryId}` : ''} ·{' '}
                   {entry.reason}
                 </p>
-                <ul aria-label="Classification journal lines" className="mt-3 space-y-1 text-sm">
+                <ul
+                  aria-label={screenCopy.cashFlow.classificationJournalLines}
+                  className="mt-3 space-y-1 text-sm"
+                >
                   {entry.lines.map((line, index) => (
                     <li key={`${line.accountCode}:${line.side}:${index}`} className="font-mono">
                       {line.accountCode} · {line.side} · {entry.currency} {money(line.amountMinor)}
@@ -268,13 +288,16 @@ export default async function CashFlowPage({
               </details>
             ))}
             {evidenceRange.pages > 1 && (
-              <nav aria-label="Evidence pages" className="mt-4 flex flex-wrap gap-3">
+              <nav
+                aria-label={screenCopy.cashFlow.evidencePages}
+                className="mt-4 flex flex-wrap gap-3"
+              >
                 {evidenceRange.page > 1 && (
                   <Link
                     className={buttonVariants({ variant: 'secondary', className: 'min-h-11' })}
                     href={pageHref(evidenceRange.page - 1)}
                   >
-                    Previous evidence
+                    {screenCopy.cashFlow.previousEvidence}
                   </Link>
                 )}
                 {evidenceRange.page < evidenceRange.pages && (
@@ -282,7 +305,7 @@ export default async function CashFlowPage({
                     className={buttonVariants({ variant: 'secondary', className: 'min-h-11' })}
                     href={pageHref(evidenceRange.page + 1)}
                   >
-                    Next evidence
+                    {screenCopy.cashFlow.nextEvidence}
                   </Link>
                 )}
               </nav>
