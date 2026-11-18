@@ -217,6 +217,18 @@ export function pharmacistPresentAt(pharmacistCoverageRule: unknown, at: Date): 
 }
 
 /**
+ * DEV-846: whether the live-sale hours check is on for a rule set — the same
+ * test {@link pharmacistPresentAt} applies before it restricts anything. Hours
+ * an owner records on a branch never turn it on; only published rules do.
+ */
+export function presenceHoursCheckEnabled(pharmacistCoverageRule: unknown): boolean {
+  const values = ruleField(pharmacistCoverageRule).values;
+  return Boolean(
+    values && typeof values === 'object' && !Array.isArray(values) && 'presenceHours' in values
+  );
+}
+
+/**
  * PLAT-02 fail-closed primitive. Every denial is typed and audited before it is
  * thrown; callers cannot downgrade it to a warning by inspecting a boolean.
  */

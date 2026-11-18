@@ -210,6 +210,11 @@ model PharmacyBranch {
   khataReminderCadenceDays        Int                          @default(7)
   khataReminderMinBalanceMinor    Int                          @default(10000)
   khataReminderRevision           Int                          @default(0)
+  /// DEV-846: the owner's record of pharmacist coverage hours for this branch,
+  /// `{ timeZone, windows }` (the rule-set `presenceHours` shape). A record only:
+  /// the live-sale hours check reads the jurisdiction rule set, never this.
+  pharmacistCoverageHours         Json?
+  pharmacistCoverageRevision      Int                          @default(0)
   id                              String                       @id @default(cuid())
   organizationId                  String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   code                            String

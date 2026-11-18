@@ -108,7 +108,11 @@ describe('DEV-647 delivery physical-return refunds', () => {
       message: REFUND_PIN_BLOCKED,
     });
     expect(authenticateRefundPin).not.toHaveBeenCalled();
-    expect(f.audit.detail.metadata).toMatchObject({ pinVerified: false });
+    expect(f.audit.detail.metadata).toMatchObject({
+      pinVerified: false,
+      selfApproved: false,
+      approvedAt: null,
+    });
   });
 
   it('refuses a manager whose PIN is refused', async () => {
@@ -134,6 +138,10 @@ describe('DEV-647 delivery physical-return refunds', () => {
       policy: 'PHARMACY_REFUND_MANAGER_PIN',
       approverId: 'user-a',
       pinVerified: true,
+      // DEV-32: the manager who started the refund approved it with their own PIN.
+      initiatedById: 'user-a',
+      selfApproved: true,
+      approvedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
     });
   });
 });
