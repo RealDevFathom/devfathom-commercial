@@ -33,7 +33,7 @@ const HEADER_SYNONYMS: Readonly<Record<SourceField, readonly string[]>> = {
   batch: ['batch', 'batchno', 'batchnumber', 'lot', 'lotno', 'lotnumber'],
   expiry: ['expiry', 'expirydate', 'exp', 'expdate', 'expdt', 'expiredate'],
   mrp: ['mrp', 'retailprice', 'saleprice', 'sellingprice', 'rate'],
-  cost: ['cost', 'costprice', 'tradeprice', 'tp', 'purchaseprice', 'purchaserate'],
+  cost: ['cost', 'costprice', 'tradeprice', 'tp', 'purchaseprice', 'purchaserate', 'purprice'],
   quantity: ['qty', 'quantity', 'stock', 'stockqty', 'onhand', 'balanceqty', 'closingqty'],
   supplier: ['supplier', 'vendor', 'distributor', 'suppliername'],
   customer: ['customer', 'client', 'customername', 'account'],

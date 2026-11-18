@@ -1,0 +1,270 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`#708 Sindh cash memo mode > leaves the Punjab ESC/POS thermal job unchanged 1`] = `
+{
+  "businessName": "Saddar Branch",
+  "invoiceLabel": "Receipt",
+  "invoiceNumber": "42",
+  "issuedAt": "Date: 2026-11-14 14:30 PKT
+Cashier: Cashier One",
+  "lines": [
+    "Paracetamol - 500 mg - Tablet
+strip: 2 x 20.00
+Batch: B-001 | Expiry: 2027-06-30 | Tablets/units: 20
+Amount: 40.00",
+  ],
+  "payments": [
+    "Cash: 40.00",
+  ],
+  "taxBreakdown": "UNAVAILABLE",
+  "taxLines": [
+    "12 Mall Road, Lahore",
+    "Phone: 042-1234567",
+    "Drug-sale licence: DSL-PB-42",
+    "NTN: NTN-1",
+  ],
+  "totals": [
+    "PKR",
+    "Gross: 40.00",
+    "Discount: 0.00",
+    "Total: 40.00",
+    "Tendered: 50.00",
+    "Cash received: 50.00",
+    "Change: 10.00",
+  ],
+}
+`;
+
+exports[`#708 Sindh cash memo mode > leaves the Punjab en A4 receipt unchanged 1`] = `
+"<!doctype html><html lang="en" dir="ltr"><head>
+<meta charset="utf-8"><title>Receipt 42</title>
+<style>@page { size: A4; margin: 10mm; }
+* { box-sizing: border-box; } body { margin: 0; width: 190mm; max-width: 100%; padding: 3mm; font: 12px monospace; color: black; background: white; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }</style>
+</head><body><pre>Saddar Branch
+Receipt: 42
+Date: 2026-11-14 14:30 PKT
+Cashier: Cashier One
+------------------------------------------------
+Paracetamol · 500 mg · Tablet
+strip: 2 × 20.00
+Batch: B-001 · Expiry: 2027-06-30 · Tablets/units: 20
+Amount: 40.00
+------------------------------------------------
+12 Mall Road, Lahore
+Phone: 042-1234567
+Drug-sale licence: DSL-PB-42
+NTN: NTN-1
+PKR
+Gross: 40.00
+Discount: 0.00
+Total: 40.00
+Tendered: 50.00
+Cash received: 50.00
+Change: 10.00
+------------------------------------------------
+Cash: 40.00</pre></body></html>"
+`;
+
+exports[`#708 Sindh cash memo mode > leaves the Punjab en THERMAL receipt unchanged 1`] = `
+"<!doctype html><html lang="en" dir="ltr"><head>
+<meta charset="utf-8"><title>Receipt 42</title>
+<style>@page { size: auto; margin: 0; }
+* { box-sizing: border-box; } body { margin: 0; width: 80mm; max-width: 100%; padding: 3mm; font: 12px monospace; color: black; background: white; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }</style>
+</head><body><pre>Saddar Branch
+Receipt: 42
+Date: 2026-11-14 14:30 PKT
+Cashier: Cashier One
+------------------------------------------------
+Paracetamol · 500 mg · Tablet
+strip: 2 × 20.00
+Batch: B-001 · Expiry: 2027-06-30 · Tablets/units: 20
+Amount: 40.00
+------------------------------------------------
+12 Mall Road, Lahore
+Phone: 042-1234567
+Drug-sale licence: DSL-PB-42
+NTN: NTN-1
+PKR
+Gross: 40.00
+Discount: 0.00
+Total: 40.00
+Tendered: 50.00
+Cash received: 50.00
+Change: 10.00
+------------------------------------------------
+Cash: 40.00</pre></body></html>"
+`;
+
+exports[`#708 Sindh cash memo mode > leaves the Punjab ur THERMAL receipt unchanged 1`] = `
+"<!doctype html><html lang="ur" dir="rtl"><head>
+<meta charset="utf-8"><title>رسید 42</title>
+<style>@page { size: auto; margin: 0; }
+* { box-sizing: border-box; } body { margin: 0; width: 80mm; max-width: 100%; padding: 3mm; font: 12px monospace; color: black; background: white; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }</style>
+</head><body><pre><bdi dir="ltr">Saddar Branch</bdi>
+رسید: <bdi dir="ltr">42</bdi>
+تاریخ: <bdi dir="ltr">2026-11-14 14:30 PKT</bdi>
+کیشیئر: <bdi dir="ltr">Cashier One</bdi>
+------------------------------------------------
+<bdi dir="ltr">Paracetamol </bdi>· <bdi dir="ltr">500 mg </bdi>· <bdi dir="ltr">Tablet</bdi>
+پتّا: <bdi dir="ltr">2 </bdi>× ۲۰٫۰۰
+بیچ: <bdi dir="ltr">B-001 </bdi>· میعاد: <bdi dir="ltr">2027-06-30 </bdi>· گولیاں/یونٹس: <bdi dir="ltr">20</bdi>
+رقم: ۴۰٫۰۰
+------------------------------------------------
+<bdi dir="ltr">12 Mall Road, Lahore</bdi>
+فون: <bdi dir="ltr">042-1234567</bdi>
+ادویات فروشی لائسنس: <bdi dir="ltr">DSL-PB-42</bdi>
+<bdi dir="ltr">NTN: NTN-1</bdi>
+پاکستانی روپے
+کل رقم: ۴۰٫۰۰
+رعایت: ۰٫۰۰
+قابلِ ادائیگی: ۴۰٫۰۰
+ادا شدہ: ۵۰٫۰۰
+نقد ادا شدہ: ۵۰٫۰۰
+واپسی: ۱۰٫۰۰
+------------------------------------------------
+نقد: ۴۰٫۰۰</pre></body></html>"
+`;
+
+exports[`#708 Sindh cash memo mode > prints every r.18 field on the Sindh A4 receipt 1`] = `
+"<!doctype html><html lang="en" dir="ltr"><head>
+<meta charset="utf-8"><title>Receipt 42</title>
+<style>@page { size: A4; margin: 10mm; }
+* { box-sizing: border-box; } body { margin: 0; width: 190mm; max-width: 100%; padding: 3mm; font: 12px monospace; color: black; background: white; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }</style>
+</head><body><pre>Saddar Branch
+Sindh cash memo: 42
+Drug-sale licence: DSL-SD-77 (valid 2026-01-01
+to 2027-12-31)
+Pharmacist registration: PCP-9001
+Buyer: Ayesha Khan
+Date: 2026-11-14 14:30 PKT
+Cashier: Cashier One
+------------------------------------------------
+Paracetamol · 500 mg · Tablet
+Manufacturer: GSK Pakistan
+Qty × Unit price: strip: 2 × 20.00
+Batch: B-001 · Expiry: 2027-06-30 · Tablets/units: 20
+Amount: 40.00
+------------------------------------------------
+7 Zaibunnisa Street, Karachi
+Phone: 042-1234567
+NTN: NTN-1
+PKR
+Gross: 40.00
+Discount: 0.00
+Total: 40.00
+Tendered: 50.00
+Cash received: 50.00
+Change: 10.00
+------------------------------------------------
+Cash: 40.00
+
+Signature of qualified person: ________________</pre></body></html>"
+`;
+
+exports[`#708 Sindh cash memo mode > prints every r.18 field on the Sindh ESC/POS thermal job 1`] = `
+{
+  "businessName": "Saddar Branch",
+  "invoiceLabel": "Sindh cash memo",
+  "invoiceNumber": "42",
+  "issuedAt": "Drug-sale licence: DSL-SD-77 (valid 2026-01-01 to 2027-12-31)
+Pharmacist registration: PCP-9001
+Buyer: Ayesha Khan
+Date: 2026-11-14 14:30 PKT
+Cashier: Cashier One
+REPRINT - not a new sale",
+  "lines": [
+    "Paracetamol - 500 mg - Tablet
+Manufacturer: GSK Pakistan
+Qty x Unit price: strip: 2 x 20.00
+Batch: B-001 | Expiry: 2027-06-30 | Tablets/units: 20
+Amount: 40.00",
+  ],
+  "payments": [
+    "Cash: 40.00",
+    "
+Signature of qualified person: ________________",
+  ],
+  "taxBreakdown": "UNAVAILABLE",
+  "taxLines": [
+    "7 Zaibunnisa Street, Karachi",
+    "Phone: 042-1234567",
+    "NTN: NTN-1",
+  ],
+  "totals": [
+    "PKR",
+    "Gross: 40.00",
+    "Discount: 0.00",
+    "Total: 40.00",
+    "Tendered: 50.00",
+    "Cash received: 50.00",
+    "Change: 10.00",
+  ],
+}
+`;
+
+exports[`#708 Sindh cash memo mode > prints every r.18 field on the Sindh Urdu receipt 1`] = `
+"Saddar Branch
+سندھ کیش میمو: 42
+ادویات فروشی لائسنس: DSL-SD-77 (کارآمد 2026-01-01 تا 2027-12-31)
+فارماسسٹ رجسٹریشن: PCP-9001
+خریدار: Ayesha Khan
+تاریخ: 2026-11-14 14:30 PKT
+کیشیئر: Cashier One
+------------------------------------------------
+Paracetamol · 500 mg · Tablet
+تیار کنندہ: GSK Pakistan
+مقدار × فی یونٹ قیمت: پتّا: 2 × ۲۰٫۰۰
+بیچ: B-001 · میعاد: 2027-06-30 · گولیاں/یونٹس: 20
+رقم: ۴۰٫۰۰
+------------------------------------------------
+7 Zaibunnisa Street, Karachi
+فون: 042-1234567
+NTN: NTN-1
+پاکستانی روپے
+کل رقم: ۴۰٫۰۰
+رعایت: ۰٫۰۰
+قابلِ ادائیگی: ۴۰٫۰۰
+ادا شدہ: ۵۰٫۰۰
+نقد ادا شدہ: ۵۰٫۰۰
+واپسی: ۱۰٫۰۰
+------------------------------------------------
+نقد: ۴۰٫۰۰
+
+مستند شخص کے دستخط: ________________"
+`;
+
+exports[`#708 Sindh cash memo mode > prints every r.18 field on the Sindh thermal 80 mm receipt 1`] = `
+"Saddar Branch
+Sindh cash memo: 42
+Drug-sale licence: DSL-SD-77 (valid 2026-01-01
+to 2027-12-31)
+Pharmacist registration: PCP-9001
+Buyer: Ayesha Khan
+Date: 2026-11-14 14:30 PKT
+Cashier: Cashier One
+------------------------------------------------
+Paracetamol · 500 mg · Tablet
+Manufacturer: GSK Pakistan
+Qty × Unit price: strip: 2 × 20.00
+Batch: B-001 · Expiry: 2027-06-30 · Tablets/units: 20
+Amount: 40.00
+------------------------------------------------
+7 Zaibunnisa Street, Karachi
+Phone: 042-1234567
+NTN: NTN-1
+PKR
+Gross: 40.00
+Discount: 0.00
+Total: 40.00
+Tendered: 50.00
+Cash received: 50.00
+Change: 10.00
+------------------------------------------------
+Cash: 40.00
+
+Signature of qualified person: ________________"
+`;

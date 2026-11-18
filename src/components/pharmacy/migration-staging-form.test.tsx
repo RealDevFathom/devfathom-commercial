@@ -26,7 +26,14 @@ beforeEach(() => {
     },
   });
   mocks.stage.mockResolvedValue({
-    data: { sourceId: 'source_a', batchId: 'batch_a', rowCount: 1, exceptionCount: 0 },
+    data: {
+      sourceId: 'source_a',
+      batchId: 'batch_a',
+      rowCount: 1,
+      exceptionCount: 0,
+      controlledFromClass: 0,
+      controlledMedicinesFlagged: 0,
+    },
   });
 });
 async function upload() {
@@ -66,6 +73,29 @@ describe('staging column mapping', () => {
       );
     }
   );
+  it('shows how many rows the legacy NARCOTICS class set as controlled', async () => {
+    mocks.stage.mockResolvedValue({
+      data: {
+        sourceId: 'source_a',
+        batchId: 'batch_a',
+        rowCount: 4,
+        exceptionCount: 0,
+        controlledFromClass: 3,
+        controlledMedicinesFlagged: 1,
+      },
+    });
+    render(<MigrationStagingForm branchId="branch_a" route="/pharmacy/medicines/staged" />);
+    await upload();
+    fireEvent.change(screen.getByLabelText('Quantity column counts'), {
+      target: { value: 'UNITS' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Stage for review' }));
+    expect(
+      await screen.findByText(
+        /3 set as controlled from legacy class NARCOTICS \(1 catalogue medicine flagged\)/
+      )
+    ).toBeInTheDocument();
+  });
   it('clears the file input after a refused read so the same file can be chosen again', async () => {
     mocks.read.mockResolvedValue({ error: 'The file could not be staged. Try again.' });
     render(<MigrationStagingForm branchId="branch_a" route="/pharmacy/medicines/staged" />);
