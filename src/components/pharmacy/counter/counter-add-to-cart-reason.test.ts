@@ -7,7 +7,7 @@ import { counterAddToCartBlockReason } from './counter-console';
 
 const unit = { kind: 'PACK' } as CounterSearchRow['saleUnits'][number];
 const row = (over: Partial<CounterSearchRow>) =>
-  ({ printedMrpMinor: 5000, saleUnits: [unit], ...over }) as CounterSearchRow;
+  ({ printedMrpMinor: 5000, saleUnits: [unit], onHandUnits: 10, ...over }) as CounterSearchRow;
 
 describe('counterAddToCartBlockReason (DEV-921)', () => {
   it('names a missing MRP first, even with no sale unit and a bad quantity', () => {
@@ -30,5 +30,15 @@ describe('counterAddToCartBlockReason (DEV-921)', () => {
     expect(counterAddToCartBlockReason(row({}), unit, null)).toBe(
       'Enter a valid quantity to add this item.'
     );
+  });
+
+  it('reports no stock, not a missing MRP, when nothing sellable is on hand', () => {
+    const msg = counterAddToCartBlockReason(
+      row({ printedMrpMinor: null, saleUnits: [], onHandUnits: 0 }),
+      null,
+      null
+    );
+    expect(msg).toMatch(/Receive stock/);
+    expect(msg).not.toMatch(/MRP|sale unit/);
   });
 });

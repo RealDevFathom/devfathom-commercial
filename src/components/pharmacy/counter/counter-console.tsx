@@ -387,6 +387,11 @@ export function counterAddToCartBlockReason(
   option: CounterSearchRow['saleUnits'][number] | null,
   quantity: number | null
 ): string {
+  // No sellable stock also leaves MRP and sale units empty; that is a stock
+  // problem, not a pricing setup problem (see CounterUnsellableMessage).
+  if (row && row.onHandUnits === 0) {
+    return 'Nothing can be sold from stock here right now. Receive stock or record the shortage.';
+  }
   if (row && row.printedMrpMinor === null) {
     return 'This medicine has no MRP set, so it cannot be priced. Ask the owner to add the MRP in Medicines.';
   }
