@@ -364,9 +364,10 @@ export async function readPosState<Q>(
  */
 export async function writePosState<Q>(
   driver: PosStorageDriver,
-  state: PosPersistedState<Q>
-): Promise<void> {
-  await writeTerminalState(driver, state, POS_STORE_SCHEMA_VERSION);
+  state: PosPersistedState<Q>,
+  expectedRevision?: number
+): Promise<number> {
+  return writeTerminalState(driver, state, POS_STORE_SCHEMA_VERSION, expectedRevision);
 }
 
 /**
