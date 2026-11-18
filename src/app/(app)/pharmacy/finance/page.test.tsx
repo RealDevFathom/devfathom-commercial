@@ -6,6 +6,7 @@ import { MarginComparisonSection } from './margin-comparison';
 import { LedgerReportsSection } from './ledger-reports';
 import { FinancialStatements } from './financial-statements';
 import { PageHeader } from '@/components/ui/page-header';
+import { createTRPCContext } from '@/server/trpc';
 
 vi.mock('@/components/pharmacy/counter/manual-payment-settings-panel', () => ({
   ManualPaymentSettingsPanel: () => null,
@@ -305,5 +306,80 @@ describe('DEV-103 native AP payments in recent transactions', () => {
     expect(generic).toContain('value="txn_generic"');
     expect(native).not.toContain('value="txn_native"');
     expect(native).toContain('reverse it through the invoice settlement');
+  });
+});
+
+describe('Finance posting window on the organisation clock (DEV-722)', () => {
+  it('defaults to the Karachi days at 00:30 local and passes the zone to every section', async () => {
+    // 00:30 on 1 Aug in Karachi is 19:30 UTC on 31 Jul: the default window ends after 1 Aug.
+    vi.setSystemTime(new Date('2026-07-31T19:30:00Z'));
+    vi.mocked(createTRPCContext).mockImplementationOnce(
+      async () =>
+        ({
+          session: { user: { role: 'ADMIN' } },
+          entitlements: { organizationId: 'organization_1' },
+          organization: { timezone: 'Asia/Karachi' },
+          db: { pharmacyBranch: { findMany: mocks.branches } },
+        }) as never
+    );
+    // One settlement candidate, so the settlement form (with its business date) renders.
+    mocks.workspace.mockResolvedValue({
+      settlementCandidates: [
+        {
+          id: 'tender_1',
+          type: 'CARD',
+          provider: 'Bank',
+          amountMinor: 1000,
+          payerName: null,
+          providerRef: 'REF-1',
+          referenceSkipped: false,
+          sale: { receiptNumber: 12 },
+        },
+      ],
+      settlementBatches: [],
+      transactions: [],
+      bankLines: [],
+      taxProfiles: [],
+      periods: [],
+    });
+    const tree = await PharmacyFinancePage({ searchParams: Promise.resolve({}) });
+    const statements = sectionProps(tree, FinancialStatements);
+    const ledger = sectionProps(tree, LedgerReportsSection);
+    const comparison = sectionProps(tree, MarginComparisonSection);
+    expect({ from: statements.from, to: statements.to }).toEqual({
+      from: '2026-07-02',
+      to: '2026-08-02',
+    });
+    expect({ from: ledger.from, to: ledger.to }).toEqual({ from: '2026-07-02', to: '2026-08-02' });
+    for (const props of [statements, ledger, comparison])
+      expect(props.timeZone).toBe('Asia/Karachi');
+    const posting = new Date('2026-07-31T19:30:00Z');
+    const windows: { from: string; to: string }[] = [];
+    const capture = async (window: { from: string; to: string }) => {
+      windows.push(window);
+      throw new Error('Fixture boundary captured');
+    };
+    mocks.financialStatements.mockImplementation(capture);
+    mocks.grossMargin.mockImplementation(capture);
+    await FinancialStatements(statements);
+    await LedgerReportsSection(ledger);
+    expect(windows.map(({ from, to }) => [from, to])).toEqual([
+      ['2026-07-01T19:00:00Z', '2026-08-01T19:00:00Z'],
+      ['2026-07-01T19:00:00.000Z', '2026-08-01T19:00:00.000Z'],
+    ]);
+    for (const window of windows)
+      expect(posting >= new Date(window.from) && posting < new Date(window.to)).toBe(true);
+    // The business and posting dates default to the Karachi today, not the UTC one (31 Jul).
+    const defaults: Record<string, unknown> = {};
+    const visit = (node: ReactNode) =>
+      Children.forEach(node, (child) => {
+        if (!isValidElement<{ children?: ReactNode; name?: string; defaultValue?: unknown }>(child))
+          return;
+        if (child.props.name === 'businessDate' || child.props.name === 'occurredAt')
+          defaults[child.props.name] = child.props.defaultValue;
+        visit(child.props.children);
+      });
+    visit(tree);
+    expect(defaults).toEqual({ businessDate: '2026-08-01', occurredAt: '2026-08-01' });
   });
 });

@@ -1,6 +1,7 @@
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import type { readLostSalesRecovery } from '@/lib/pharmacy/lost-sales-recovery-report';
+import { formatShopPeriod } from '@/lib/pharmacy/plain-language';
 
 type Report = Awaited<ReturnType<typeof readLostSalesRecovery>>;
 type Group = Report['byBranch'][number];
@@ -89,8 +90,8 @@ export function LostSalesRecovery({
       ) : (
         <div className="space-y-5 text-sm">
           <p className="text-text-muted">
-            Estimates for {report.period.from}–{report.period.to} (UTC dates). Recovery counts a
-            receipted sale of the requested item at the branch within{' '}
+            Estimates for {formatShopPeriod(report.period.from, report.period.to)}. Recovery counts
+            a receipted sale of the requested item at the branch within{' '}
             {report.policy.recoveryWindowDays} days of the back-in-stock notice; waiting requests
             expire after {report.policy.requestExpiryDays} days. Supplier, ingredient and batch
             filters do not apply.

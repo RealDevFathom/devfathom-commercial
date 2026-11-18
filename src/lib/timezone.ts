@@ -75,6 +75,25 @@ export function formatWorkspaceDateTime(
 }
 
 /**
+ * The calendar date of an instant on the workspace's wall clock, as the owner
+ * reads it: "1 Nov 2026". 00:30 in Karachi on 1 Nov (19:30 UTC on 31 Oct) is
+ * 1 Nov. An invalid value reads as an em dash rather than throwing.
+ */
+export function formatWorkspaceDate(
+  value: Date | string,
+  timeZone: string | null | undefined
+): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '—';
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: workspaceTimezone(timeZone),
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  }).format(date);
+}
+
+/**
  * The workspace zone as the owner reads it beside a date range: "PKT" for
  * Asia/Karachi, as {@link formatWorkspaceDateTime} names it; any other zone by
  * its IANA name ("UTC", "Europe/London"), which, unlike a seasonal abbreviation

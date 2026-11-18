@@ -166,12 +166,12 @@ const EVIDENCE_STATUS: Record<CounterEvidenceView['status'], string> = {
   PURGED: 'Still removed under the camera retention period.',
 };
 
-function evidenceTime(value: string | null): string {
-  if (!value) return '—';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? '—'
-    : `${date.toISOString().slice(0, 10)} ${date.toISOString().slice(11, 16)} UTC`;
+/**
+ * Evidence times read on the same shop clock as the receipt's own sale time: the
+ * organisation zone the receipt carries (DEV-943).
+ */
+function evidenceTime(value: string | null, timeZone: string | null | undefined): string {
+  return formatReceiptIssuedAt(value, timeZone);
 }
 
 /** Operator-only evidence stills; kept outside the receipt document on purpose. */
@@ -180,8 +180,11 @@ function CounterReceiptEvidence({
   error = false,
   refreshing = false,
   onRefresh,
+  timeZone,
 }: {
   evidence: readonly CounterEvidenceView[];
+  /** The receipt's organisation zone; absent only for a legacy in-memory receipt. */
+  timeZone?: string | null;
   error?: boolean;
   refreshing?: boolean;
   onRefresh?: () => void;
@@ -220,7 +223,7 @@ function CounterReceiptEvidence({
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={item.image}
-                alt={`Camera still at ${EVIDENCE_KIND[item.kind].toLowerCase()}, ${evidenceTime(item.capturedAt)}`}
+                alt={`Camera still at ${EVIDENCE_KIND[item.kind].toLowerCase()}, ${evidenceTime(item.capturedAt, timeZone)}`}
                 className="w-full rounded border border-border-subtle"
               />
             ) : (
@@ -228,8 +231,8 @@ function CounterReceiptEvidence({
             )}
             <p className="text-xs text-text-muted">
               {item.capturedAt
-                ? `Captured ${evidenceTime(item.capturedAt)}`
-                : `Requested ${evidenceTime(item.requestedAt)}`}
+                ? `Captured ${evidenceTime(item.capturedAt, timeZone)}`
+                : `Requested ${evidenceTime(item.requestedAt, timeZone)}`}
             </p>
           </li>
         ))}
@@ -685,6 +688,7 @@ export function CounterReceiptView({
       {evidenceError || (evidence && evidence.length > 0) ? (
         <CounterReceiptEvidence
           evidence={evidenceError ? [] : (evidence ?? [])}
+          timeZone={receipt?.timeZone}
           error={evidenceError}
           refreshing={evidenceRefreshing}
           onRefresh={onEvidenceRefresh}

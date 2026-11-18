@@ -27,6 +27,7 @@ async function renderJournal(change: Record<string, unknown> = {}, journalLabels
       branchId: 'branch',
       from: '2026-11-03',
       to: '2026-11-05',
+      timeZone: 'Asia/Karachi',
       caller: {
         financialStatements: async () => ({
           accounts: [],
@@ -57,7 +58,7 @@ describe('accounting journal presentation', () => {
   ])('shows local time, bill, money and user for %s', async (sourceKind, label) => {
     const container = await renderJournal({ sourceKind });
     const summary = container.querySelector('summary')!;
-    expect(summary.textContent).toContain('2026-11-04 02:15 PKT');
+    expect(summary.textContent).toContain('4 Nov 2026, 2:15 AM PKT');
     expect(summary.textContent).toContain(label);
     expect(summary.textContent).toContain('Bill 42');
     expect(summary.textContent).toContain('User: Saad');
