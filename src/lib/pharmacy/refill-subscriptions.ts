@@ -575,7 +575,12 @@ export async function approveRefillCycle(
     cycle.status === 'RESERVED' &&
     !cycle.approvedAt &&
     (await subscribableMedicine(db, scope.organizationId, cycle.subscription)).rx;
-  if (!awaiting && !reclassified) throw new RefillSubscriptionError('INVALID_STATE');
+  // An approved Rx cycle not yet at the counter may take a fresh PIN approval that
+  // replaces its prescription, e.g. once another sale used up the one it relied on.
+  const replacing = cycle.status === 'RESERVED' && cycle.requiresPharmacist && !!cycle.approvedAt;
+  if (!awaiting && !reclassified && !replacing) {
+    throw new RefillSubscriptionError('INVALID_STATE');
+  }
   const approver = (await db.user.findFirst({
     where: {
       id: approval.approvedByUserId,

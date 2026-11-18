@@ -17,11 +17,33 @@ DO $$ BEGIN
   ALTER TABLE "pharmacy_refill_subscription_cycles" ADD CONSTRAINT "pharmacy_refill_subscription_cycles_prescription_line_fkey" FOREIGN KEY ("organizationId", "prescriptionLineId") REFERENCES "pharmacy_prescription_lines"("organizationId", "id") ON DELETE RESTRICT ON UPDATE CASCADE;
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
-UPDATE "pharmacy_refill_subscription_cycles"
-SET "status" = 'AWAITING_PHARMACIST'
-WHERE "requiresPharmacist"
-  AND "status" = 'RESERVED'
-  AND "prescriptionLineId" IS NULL;
+-- The platform-admin policy only reads across tenants; an UPDATE still needs
+-- the row's organization and branch, so re-hold one tenant branch at a time.
+DO $$
+DECLARE
+  target RECORD;
+BEGIN
+  FOR target IN
+    SELECT DISTINCT "organizationId", "branchId"
+    FROM "pharmacy_refill_subscription_cycles"
+    WHERE "requiresPharmacist"
+      AND "status" = 'RESERVED'
+      AND "prescriptionLineId" IS NULL
+    ORDER BY "organizationId", "branchId"
+  LOOP
+    PERFORM set_config('app.current_organization_id', target."organizationId", true);
+    PERFORM set_config('app.current_branch_id', target."branchId", true);
+    UPDATE "pharmacy_refill_subscription_cycles"
+    SET "status" = 'AWAITING_PHARMACIST'
+    WHERE "organizationId" = target."organizationId"
+      AND "branchId" = target."branchId"
+      AND "requiresPharmacist"
+      AND "status" = 'RESERVED'
+      AND "prescriptionLineId" IS NULL;
+  END LOOP;
+  PERFORM set_config('app.current_organization_id', '', true);
+  PERFORM set_config('app.current_branch_id', '', true);
+END $$;
 
 -- NOT VALID: a legacy cycle already handed to the counter keeps its history; the
 -- counter sale itself still needs a prescription before it can complete.

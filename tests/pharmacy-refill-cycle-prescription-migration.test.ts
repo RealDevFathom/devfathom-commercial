@@ -27,7 +27,16 @@ describe('DEV-73 refill cycle prescription database contract', () => {
 
   it('puts earlier approvals without a prescription back on hold', () => {
     expect(migration).toMatch(
-      /SET "status" = 'AWAITING_PHARMACIST'\s+WHERE "requiresPharmacist"\s+AND "status" = 'RESERVED'\s+AND "prescriptionLineId" IS NULL/
+      /SET "status" = 'AWAITING_PHARMACIST'\s+WHERE "organizationId" = target\."organizationId"\s+AND "branchId" = target\."branchId"\s+AND "requiresPharmacist"\s+AND "status" = 'RESERVED'\s+AND "prescriptionLineId" IS NULL/
+    );
+  });
+
+  it('re-holds under each tenant branch, since the platform-admin policy only reads', () => {
+    expect(migration).toContain(
+      'PERFORM set_config(\'app.current_organization_id\', target."organizationId", true)'
+    );
+    expect(migration).toContain(
+      'PERFORM set_config(\'app.current_branch_id\', target."branchId", true)'
     );
   });
 

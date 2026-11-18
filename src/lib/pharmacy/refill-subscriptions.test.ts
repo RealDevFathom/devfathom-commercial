@@ -686,6 +686,39 @@ describe('DEV-73 an Rx cycle is held until a valid prescription covers it and a 
     expect(createSale).not.toHaveBeenCalled();
   });
 
+  it('lets a fresh PIN approval replace the prescription of an approved cycle not yet collected', async () => {
+    const { db, writes } = fakeDb({
+      cycle: {
+        ...awaiting,
+        status: 'RESERVED',
+        approvedByUserId: 'pharmacist',
+        approvedAt: new Date(),
+        prescriptionLineId: 'rx-line-old',
+      },
+    });
+    await expect(
+      approveRefillCycle(db as never, scope, 'cycle-1', approval, COVERING)
+    ).resolves.toMatchObject({ status: 'RESERVED', prescriptionLineId: 'rx-line-1' });
+    expect(writes.some(([name]) => name === 'audit.create')).toBe(true);
+  });
+
+  it('refuses to re-approve a cycle already handed to the counter', async () => {
+    await refusedApproval(
+      {
+        cycle: {
+          ...awaiting,
+          status: 'CHECKOUT_STARTED',
+          approvedByUserId: 'pharmacist',
+          approvedAt: new Date(),
+          prescriptionLineId: 'rx-line-1',
+          counterSaleId: 'sale-1',
+        },
+      },
+      'rx-line-1',
+      'INVALID_STATE'
+    );
+  });
+
   it('refuses checkout once the approved prescription has run out', async () => {
     const { db } = fakeDb({
       cycle: {
