@@ -219,6 +219,12 @@ describe('RPT-03 owner digest', () => {
       to: '2026-09-04',
       timeZone: 'Asia/Karachi',
     });
+    expect(mocks.readPharmacyAnomalySignals).toHaveBeenCalledWith(expect.anything(), {
+      branchIds: ['branch_1'],
+      from: '2026-09-04',
+      to: '2026-09-04',
+      timeZone: 'Asia/Karachi',
+    });
   });
 
   it('includes explainable anomaly events in the existing owner digest', async () => {
