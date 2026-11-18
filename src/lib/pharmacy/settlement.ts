@@ -1,3 +1,5 @@
+import { pricePrepaidSale } from './prepaid-discount';
+import { assertPrepaidPin, movePrepaid, PREPAID_PROVIDER } from './prepaid-tiers';
 import { requestCounterEvidence } from './counter-evidence';
 import 'server-only';
 
@@ -7,6 +9,7 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceToday } from '@/lib/timezone';
+import { assertPostingPeriodsOpen } from '@/lib/finance/journal';
 
 import { reverseRefundedEarnedPoints } from './customer-loyalty-earned-reversal';
 import { accrueSalePoints, restoreRefundedLoyaltyPoints } from './customer-loyalty';
@@ -56,6 +59,7 @@ export class PharmacySettlementError extends Error {
       | 'OPEN_DRAWER'
       | 'REOPEN_REASON_REQUIRED'
       | 'INVALID_MANUAL_CAPTURE'
+      | 'PREPAID_REFUND_RESTORES_BALANCE'
       | 'TENDER_ATTEMPT_DISCARDED'
   ) {
     super(reason);
@@ -393,6 +397,16 @@ export type PharmacySettlementOptions = {
   requireCurrentBusinessDate?: boolean;
   /** Omitted: the caller is treated as a counter user who is not a manager. */
   drawerOperator?: PharmacyDrawerOperator;
+  /**
+   * DEV-863: the customer's own prepaid spend PIN. One-time evidence: never part of the
+   * idempotent payload. A prepaid WALLET payment without the right PIN is refused.
+   */
+  prepaidPin?: string;
+  /**
+   * DEV-863: the bill's prepaid tier prices were frozen earlier (a COD rider's first
+   * collection), so this payment must settle that same total and never reprice it.
+   */
+  prepaidPricingFrozen?: boolean;
 };
 
 /** The cashier who runs a drawer. Drawers opened before DEV-821 are run by their opener. */
@@ -507,7 +521,7 @@ export async function applyPharmacyTender(
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_sales WHERE id = ${input.saleId} AND "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId} FOR UPDATE`
   );
-  const sale = await db.pharmacySale.findFirst({
+  let sale = await db.pharmacySale.findFirst({
     where: { id: input.saleId, organizationId: scope.organizationId, branchId: scope.branchId },
     include: completionSaleInclude,
   });
@@ -534,6 +548,7 @@ export async function applyPharmacyTender(
   // #659: before any lease, provider charge, tender or posting. A batch recalled,
   // quarantined or expired since add-to-cart refuses the payment.
   await assertSaleBatchesSellable(db, scope, sale.id);
+  if (!options.prepaidPricingFrozen) sale = await pricePrepaidSale(db, sale, true);
   const totalMinor = saleTotalMinor(sale.lines);
   const tenderedMinor = sale.tenders.reduce((sum, tender) => sum + tender.amountMinor, 0);
   if (input.amountMinor > totalMinor - tenderedMinor)
@@ -576,6 +591,7 @@ export async function applyPharmacyTender(
   let changeGivenMinor: number | undefined;
   let provider: string | undefined;
   let providerRef: string | undefined;
+  let providerPostingAt: Date | undefined;
   let payerName: string | undefined;
   let referenceSkipped: boolean | undefined;
   let approvalCode: string | undefined;
@@ -637,6 +653,12 @@ export async function applyPharmacyTender(
     approvalCode = capture.data.approvalCode;
     // The signed-in cashier attests the terminal slip shows an approval.
     confirmedById = scope.actorId;
+  } else if (input.type === 'WALLET' && !input.adapter) {
+    // DEV-863: an adapter-less wallet tender spends the linked customer's prepaid balance,
+    // and only with that customer's own spend PIN.
+    if (!sale.customerId) throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
+    await assertPrepaidPin(db, scope.organizationId, sale.customerId, options.prepaidPin);
+    provider = PREPAID_PROVIDER;
   } else if (bankTransfer) {
     const capture = bankTransferCaptureSchema.safeParse({ providerRef: input.providerRef });
     if (!capture.success) throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
@@ -646,6 +668,10 @@ export async function applyPharmacyTender(
   } else if (input.type === 'CARD' || input.type === 'WALLET') {
     if (!input.adapter) throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
     const adapter = requireReleaseSafeAdapter(input.adapter);
+    // Refuse before a provider can move money outside the database transaction.
+    // Use the same instant for the persisted posting, including across midnight.
+    providerPostingAt = new Date();
+    await assertPostingPeriodsOpen(db, scope.organizationId, providerPostingAt, scope.branchId);
     const result = await adapter.execute({
       capability: 'SALE',
       amountMinor: input.amountMinor,
@@ -672,11 +698,20 @@ export async function applyPharmacyTender(
       referenceSkipped,
       approvalCode,
       confirmedById,
+      createdAt: providerPostingAt,
       businessDate: input.businessDate,
       actorId: scope.actorId,
       deviceId: input.deviceId,
     },
   });
+  if (provider === PREPAID_PROVIDER)
+    await movePrepaid(db, scope, {
+      customerId: sale.customerId!,
+      kind: 'SPEND',
+      amountMinor: input.amountMinor,
+      tenderId: tender.id,
+      idempotencyKey: `prepaid:spend:${tender.id}`,
+    });
   await postTenderEntry(db, scope, { tenderId: tender.id, at: tender.createdAt });
   if (drawerSessionId)
     await db.pharmacyDrawerMovement.create({
@@ -692,7 +727,14 @@ export async function applyPharmacyTender(
   if (settled) {
     // F2: a leased offline receipt number was consumed above in this transaction; online
     // sales (receiptNumber still null) draw the next number from the device sequence.
-    receiptNumber = await completePaidPharmacySale(db, scope, sale, input, receiptNumber);
+    receiptNumber = await completePaidPharmacySale(
+      db,
+      scope,
+      sale,
+      input,
+      receiptNumber,
+      providerPostingAt
+    );
     if (sale.customerId) await accrueSalePoints(db, scope, sale.id);
   }
   await requestCounterEvidence(db, scope, { kind: 'TENDER', subjectId: tender.id });
@@ -825,7 +867,12 @@ export async function refundPharmacyTender(
     )
       throw new PharmacySettlementError('REFUND_EXCEEDS_TENDER');
   }
+  // DEV-863: a prepaid tender is always restored to the customer's prepaid balance. Cash is
+  // never paid out for it, so a manual cash fallback is refused rather than ignored.
+  if (tender.provider === PREPAID_PROVIDER && input.manualCashFallback === true)
+    throw new PharmacySettlementError('PREPAID_REFUND_RESTORES_BALANCE');
   const manualReversalRequired =
+    tender.provider !== PREPAID_PROVIDER &&
     (tender.type === 'CARD' || tender.type === 'WALLET') &&
     !input.adapter &&
     input.manualCashFallback === true;
@@ -833,11 +880,18 @@ export async function refundPharmacyTender(
     ? `[CASH; MANUAL REVERSAL REQUIRED] ${input.reason.trim()}`
     : input.reason.trim();
   let providerRef: string | undefined;
+  let providerPostingAt: Date | undefined;
   let drawerSessionId: string | undefined;
-  if ((tender.type === 'CARD' || tender.type === 'WALLET') && !manualReversalRequired) {
+  if (tender.provider === PREPAID_PROVIDER) {
+    if (!tender.sale.customerId) throw new PharmacySettlementError('INVALID_AMOUNT');
+  } else if ((tender.type === 'CARD' || tender.type === 'WALLET') && !manualReversalRequired) {
     if (!input.adapter || !tender.providerRef)
       throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
     const adapter = requireReleaseSafeAdapter(input.adapter);
+    // Refuse before a provider can move money outside the database transaction.
+    // Use the same instant for the persisted posting, including across midnight.
+    providerPostingAt = new Date();
+    await assertPostingPeriodsOpen(db, scope.organizationId, providerPostingAt, scope.branchId);
     const result = await adapter.execute({
       capability: 'REFUND',
       amountMinor: input.amountMinor,
@@ -861,6 +915,7 @@ export async function refundPharmacyTender(
       branchId: scope.branchId,
       saleId: tender.saleId,
       originalTenderId: tender.id,
+      createdAt: providerPostingAt,
       amountMinor: input.amountMinor,
       providerRef,
       drawerSessionId,
@@ -869,6 +924,15 @@ export async function refundPharmacyTender(
       actorId: scope.actorId,
     },
   });
+  if (tender.provider === PREPAID_PROVIDER)
+    await movePrepaid(db, scope, {
+      customerId: tender.sale.customerId!,
+      kind: 'RESTORE',
+      amountMinor: input.amountMinor,
+      tenderId: tender.id,
+      refundId: refund.id,
+      idempotencyKey: `prepaid:restore:${refund.id}`,
+    });
   await postTenderRefundEntry(db, scope, { refundId: refund.id, at: refund.createdAt });
   if (tender.type === 'LOYALTY' && tender.sale.customerId) {
     await restoreRefundedLoyaltyPoints(db, scope, {

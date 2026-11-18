@@ -35,6 +35,7 @@ export const GET = moneyReadRoute({
       select: {
         id: true,
         type: true,
+        payment: { select: { provider: true } },
         amount: true,
         tipAmount: true,
         createdAt: true,
@@ -58,6 +59,7 @@ export const GET = moneyReadRoute({
           orderNumber: tender.bill.order.orderNumber,
           receiptNumber: tender.bill.receiptNumber,
           type: tender.type,
+          paymentProvider: tender.payment?.provider ?? null,
           paidAmount: money(tender.amount),
           refundedAmount: money(refunded),
           remainingAmount: money(tender.amount.minus(refunded)),
@@ -90,6 +92,7 @@ export const POST = moneyMutationRoute({
     return serializeRefundResult(
       await refundTender(ctx.db, {
         originalTenderId: data.originalTenderId,
+        cardMachineRefundReference: data.cardMachineRefundReference,
         amount: data.amount,
         tipRefundAmount: data.tipRefundAmount,
         kind: data.kind,

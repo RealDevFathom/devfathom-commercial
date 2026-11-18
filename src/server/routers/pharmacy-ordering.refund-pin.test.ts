@@ -24,6 +24,7 @@ vi.mock('@/lib/pharmacy/refund-authorization', async (original) => ({
   authenticateRefundPin: vi.fn(),
 }));
 
+import { FinancePostingError } from '@/lib/finance/journal';
 import { recordDeliveryCommand } from '@/lib/pharmacy/customer-delivery';
 import { authenticateRefundPin, REFUND_PIN_BLOCKED } from '@/lib/pharmacy/refund-authorization';
 import { router, type TRPCContext } from '../trpc';
@@ -134,5 +135,17 @@ describe('DEV-647 delivery physical-return refunds', () => {
       approverId: 'user-a',
       pinVerified: true,
     });
+  });
+});
+
+describe('DEV-877 delivery postings inside a closed accounting period', () => {
+  it('returns a typed PERIOD_CLOSED refusal when the delivery refund cannot post', async () => {
+    vi.mocked(recordDeliveryCommand).mockRejectedValueOnce(
+      new FinancePostingError('PERIOD_CLOSED')
+    );
+    const f = fixture(MANAGER);
+    await expect(
+      f.caller.deliveryCommand({ ...physicalReturn, managerPin: '7391' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'PERIOD_CLOSED' });
   });
 });

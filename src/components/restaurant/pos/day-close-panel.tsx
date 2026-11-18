@@ -1,6 +1,8 @@
 'use client';
 
 import Link from 'next/link';
+import { ManualCardBreakdown } from '@/components/restaurant/manual-card-breakdown';
+import type { ManualCardSummary } from '@/lib/restaurant/manual-card-summary';
 import { type FormEvent, useState } from 'react';
 
 import {
@@ -25,6 +27,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import type { TerminalRequest } from './checkout-panel';
 
 type Preview = {
+  manualCardSummary?: ManualCardSummary | null;
   businessDate: string;
   readiness: { openBillCount: number; unresolvedOrderCount: number; openDrawerCount: number };
   existingCloseId: string | null;
@@ -254,6 +257,7 @@ export function DayClosePanel({
                 <dd className="font-mono tabular-nums">{preview.totals.cashVariance}</dd>
               </div>
             </dl>
+            <ManualCardBreakdown summary={preview.manualCardSummary} staff={operators} />
             {!ready ? (
               <p className="mt-3 text-sm text-warning">
                 Resolve {preview.readiness.unresolvedOrderCount} active order(s),{' '}
@@ -310,6 +314,7 @@ export function DayClosePanel({
             {preview.existingCloseId ? (
               <Button
                 render={<Link href="/restaurant/money?tab=daily-close" />}
+                nativeButton={false}
                 variant="link"
                 className="mt-3 px-0"
               >

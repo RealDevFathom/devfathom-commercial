@@ -17,6 +17,13 @@ import {
   type MoneyActor,
 } from './drawer-sessions';
 import { sub, sum, ZERO } from './money';
+import {
+  computeManualCardSummary,
+  manualCardSummarySchema,
+  type ManualCardSummary,
+  type CardCollection,
+  type CardReturn,
+} from './manual-card-summary';
 import { enqueueInsightRollup } from './insight-rollups';
 import { lockMoneyDay } from './money-day';
 
@@ -83,12 +90,12 @@ export type AggregateBill = {
   discountTotal: Prisma.Decimal;
   grandTotal: Prisma.Decimal;
 };
-export type AggregateTender = {
+export type AggregateTender = CardCollection & {
   type: TenderType;
   amount: Prisma.Decimal;
   tipAmount: Prisma.Decimal;
 };
-export type AggregateRefund = {
+export type AggregateRefund = CardReturn & {
   amount: Prisma.Decimal;
   taxRefundAmount: Prisma.Decimal;
   serviceChargeRefundAmount: Prisma.Decimal;
@@ -126,7 +133,10 @@ export type CloseTotals = {
   cashVariance: Prisma.Decimal;
 };
 
-export type CloseAggregate = CloseTotals & { tenderTotals: TenderTypeTotal[] };
+export type CloseAggregate = CloseTotals & {
+  tenderTotals: TenderTypeTotal[];
+  manualCardSummary: ManualCardSummary;
+};
 
 export type AggregateInputs = {
   bills: readonly AggregateBill[];
@@ -204,6 +214,7 @@ export function computeCloseAggregate(inputs: AggregateInputs): CloseAggregate {
     cashCounted,
     cashVariance,
     tenderTotals,
+    manualCardSummary: computeManualCardSummary(inputs.tenders, inputs.refunds),
   };
 }
 
@@ -264,12 +275,28 @@ async function loadCloseInputs(
   });
   const tenders = await db.restaurantTender.findMany({
     where: { businessDate, bill: { branchId } },
-    select: { type: true, amount: true, tipAmount: true },
+    select: {
+      type: true,
+      amount: true,
+      tipAmount: true,
+      staffProfileId: true,
+      staff: { select: { displayName: true } },
+      payment: { select: { provider: true } },
+    },
   });
   const refunds = await db.restaurantRefund.findMany({
     where: { businessDate, bill: { branchId } },
     select: {
       amount: true,
+      tipRefundAmount: true,
+      originalTender: {
+        select: {
+          type: true,
+          staffProfileId: true,
+          staff: { select: { displayName: true } },
+          payment: { select: { provider: true } },
+        },
+      },
       taxRefundAmount: true,
       serviceChargeRefundAmount: true,
       deliveryFeeRefundAmount: true,
@@ -372,6 +399,7 @@ async function persistClose(
       coAuthorizationId: args.coAuthorizationId ?? null,
       cutByStaffProfileId: args.cutByStaffProfileId,
       deviceId: args.deviceId,
+      manualCardSummary: aggregate.manualCardSummary,
       grossSales: aggregate.grossSales,
       netSales: aggregate.netSales,
       deliveryFeeSales: aggregate.deliveryFeeSales,
@@ -435,6 +463,7 @@ export type CutCloseResult = {
   dailyCloseId: string;
   totals: CloseTotals;
   tenderTotals: TenderTypeTotal[];
+  manualCardSummary?: ManualCardSummary | null;
   replayed: boolean;
 };
 
@@ -640,6 +669,7 @@ function freezeCloseResult(result: CorrectCloseResult | CutCloseResult): Prisma.
     totals: Object.fromEntries(
       Object.entries(result.totals).map(([key, value]) => [key, value.toString()])
     ),
+    manualCardSummary: result.manualCardSummary ?? null,
     tenderTotals: result.tenderTotals.map((total) => ({
       tenderType: total.tenderType,
       amount: total.amount.toString(),
@@ -662,6 +692,10 @@ function decodeFrozenCloseResult(payload: Prisma.JsonValue | null | undefined): 
   ) as Partial<CloseTotals>;
   return {
     dailyCloseId: String(value.dailyCloseId),
+    manualCardSummary:
+      value.manualCardSummary == null
+        ? null
+        : manualCardSummarySchema.parse(value.manualCardSummary),
     totals: {
       ...decodedTotals,
       // Money command receipts created before WHA-1040 remain replayable. Their
@@ -694,7 +728,8 @@ function decodeFrozenCorrectCloseResult(
 function splitAggregate(aggregate: CloseAggregate): {
   totals: CloseTotals;
   tenderTotals: TenderTypeTotal[];
+  manualCardSummary: ManualCardSummary;
 } {
-  const { tenderTotals, ...totals } = aggregate;
-  return { totals, tenderTotals };
+  const { tenderTotals, manualCardSummary, ...totals } = aggregate;
+  return { totals, tenderTotals, manualCardSummary };
 }

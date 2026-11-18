@@ -1,3 +1,4 @@
+import { receiptTierLines } from './counter-receipt';
 import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
 import { tenderTotalsSchema } from './manual-payments';
 import { buildReceiptPreview } from '@/lib/receipts/preview';
@@ -174,6 +175,7 @@ export function buildCounterReceiptPreview(
         locale === 'ur' && receipt.currency === 'PKR' ? 'پاکستانی روپے' : receipt.currency,
         `${strings.gross}: ${formatMinor(receipt.totals.grossMinor, locale)}`,
         `${strings.discount}: ${formatMinor(receipt.totals.discountMinor, locale)}`,
+        ...receiptTierLines(receipt, locale),
         `${strings.net}: ${formatMinor(receipt.totals.netMinor, locale)}`,
         `${strings.tendered}: ${formatMinor(receipt.totals.tenderedMinor, locale)}`,
         ...(cashReceived !== null

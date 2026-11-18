@@ -48,6 +48,7 @@ import {
   readPharmacyTenderOutcome,
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
+import { FinancePostingError } from '@/lib/finance/journal';
 import { FamilyKhataError } from '@/lib/pharmacy/family-khata';
 import {
   authorizeCounterApproval,
@@ -1552,5 +1553,16 @@ describe('DEV-821 the drawer operator decision', () => {
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(applyPharmacyTender).not.toHaveBeenCalled();
     expect(recordKhataRepayment).not.toHaveBeenCalled();
+  });
+});
+
+// DEV-877: the shared tRPC middleware maps the journal's closed-period refusal.
+describe('DEV-877 counter period refusal', () => {
+  it('returns a typed PERIOD_CLOSED refusal for a new tender', async () => {
+    const f = fixture();
+    vi.mocked(applyPharmacyTender).mockRejectedValueOnce(new FinancePostingError('PERIOD_CLOSED'));
+    await expect(
+      f.caller().tender({ ...input, type: 'CASH', familyAccountId: undefined })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'PERIOD_CLOSED' });
   });
 });

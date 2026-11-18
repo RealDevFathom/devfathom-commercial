@@ -187,6 +187,8 @@ vi.mock('@/lib/trpc', async () => {
         'setDemandOutcome',
         'declineSubstitute',
         'linkCustomer',
+        // DEV-748: a scanned loyalty card links its customer.
+        'scanLoyaltyCard',
         'khataSignup',
         'redeemPoints',
         'authenticatePack',
@@ -546,6 +548,7 @@ beforeEach(() => {
     'setDemandOutcome',
     'declineSubstitute',
     'linkCustomer',
+    'scanLoyaltyCard',
     'khataSignup',
     'redeemPoints',
     'authenticatePack',
@@ -2349,6 +2352,38 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     });
   });
 
+  it('links a scanned loyalty card to the bill instead of searching for it (DEV-748)', async () => {
+    openTheDrawer();
+    mocks.mutations.create!.mockResolvedValue({ id: 'sale-new' });
+    mocks.mutations.scanLoyaltyCard!.mockResolvedValue({
+      id: 'customer-a',
+      displayName: 'Ayesha',
+    });
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    // A scanner with caps lock off types the code in lower case.
+    fireEvent.change(search, { target: { value: 'dflcabcdefghijklmnopqrstuvwxyz' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await waitFor(() => expect(mocks.mutations.scanLoyaltyCard).toHaveBeenCalledTimes(1));
+    expect(mocks.mutations.scanLoyaltyCard).toHaveBeenCalledWith({
+      branchId: 'branch-a',
+      saleId: 'sale-new',
+      cardToken: 'DFLCABCDEFGHIJKLMNOPQRSTUVWXYZ',
+    });
+    expect(
+      await screen.findByText('Loyalty card: Ayesha linked to this bill.')
+    ).toBeInTheDocument();
+    expect(search).toHaveValue('');
+    // The card code is never sent to the medicine search.
+    expect(mocks.searchQuery).not.toHaveBeenCalled();
+    expect(
+      mocks.queryInputs.mock.calls.filter(([, input]) =>
+        JSON.stringify(input ?? '').includes('DFLC')
+      )
+    ).toEqual([]);
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+
   it.each([
     // 16:30 UTC on the 21st is already the 22nd in Tokyo, still the 21st on the device.
     ['the workspace zone', 'Asia/Tokyo', '2026-10-21T16:30:00.000Z', '2026-10-22'],
@@ -3768,6 +3803,60 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     expect(screen.queryByText(/Refresh the counter/)).not.toBeInTheDocument();
   });
 
+  it('links a loyalty card scanned after payment to a new bill, not the paid one (DEV-748)', async () => {
+    openTheDrawer();
+    Object.assign(mocks.queries.counterCart!, { data: settled(), isSuccess: true });
+    mocks.mutations.scanLoyaltyCard!.mockResolvedValue({ id: 'customer-a', displayName: 'Ayesha' });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+    scan('DFLCABCDEFGHIJKLMNOPQRSTUVWXYZ');
+
+    await screen.findByText('Loyalty card: Ayesha linked to this bill.');
+    expect(mocks.mutations.create).toHaveBeenCalledTimes(1);
+    expect(mocks.mutations.scanLoyaltyCard).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        branchId: 'branch-a',
+        saleId: 'sale-b',
+        cardToken: 'DFLCABCDEFGHIJKLMNOPQRSTUVWXYZ',
+      })
+    );
+  });
+
+  it('re-reads a bill paid on another screen and links the card to a new bill (DEV-748)', async () => {
+    openTheDrawer();
+    mocks.mutations
+      .scanLoyaltyCard!.mockRejectedValueOnce(refused('BAD_REQUEST', 'SALE_NOT_OPEN'))
+      .mockResolvedValueOnce({ id: 'customer-a', displayName: 'Ayesha' });
+    mocks.refetch.mockImplementationOnce(async () => {
+      Object.assign(mocks.queries.counterCart!, { data: settled(), isSuccess: true });
+      return mocks.queries.counterCart;
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+    scan('DFLCABCDEFGHIJKLMNOPQRSTUVWXYZ');
+
+    await screen.findByText('Loyalty card: Ayesha linked to this bill.');
+    expect(mocks.refetch).toHaveBeenCalled();
+    expect(mocks.mutations.create).toHaveBeenCalledTimes(1);
+    expect(mocks.mutations.scanLoyaltyCard.mock.calls.map(([input]) => input.saleId)).toEqual([
+      'sale-a',
+      'sale-b',
+    ]);
+  });
+
+  it('keeps the card on its bill when the re-read still finds it open (DEV-748)', async () => {
+    openTheDrawer();
+    mocks.mutations.scanLoyaltyCard!.mockRejectedValueOnce(refused('BAD_REQUEST', 'SALE_NOT_OPEN'));
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+    scan('DFLCABCDEFGHIJKLMNOPQRSTUVWXYZ');
+
+    await waitFor(() => expect(mocks.mutations.scanLoyaltyCard).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mocks.refetch).toHaveBeenCalled());
+    expect(mocks.mutations.create).not.toHaveBeenCalled();
+    expect(mocks.mutations.scanLoyaltyCard).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the bill and shows a neutral notice when the re-read still finds it open', async () => {
     mocks.mutations.addLine!.mockRejectedValueOnce(refused('BAD_REQUEST', 'INVALID_STATE'));
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
@@ -4455,6 +4544,20 @@ describe('PharmacyCounterConsole search latency (DEV-575)', () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     });
     expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
+  });
+
+  it('never sends a typed loyalty card code to the medicine search, even after the debounce (DEV-748)', () => {
+    vi.useFakeTimers();
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Scan or search'), {
+      target: { value: 'DFLCABCDEFGHIJKLMNOPQRSTUVWXYZ' },
+    });
+    act(() => vi.advanceTimersByTime(1000));
+    expect(
+      mocks.queryInputs.mock.calls.filter(([, input]) =>
+        JSON.stringify(input ?? '').includes('DFLC')
+      )
+    ).toEqual([]);
   });
 
   it('re-runs a completed name search on the newly selected branch', () => {

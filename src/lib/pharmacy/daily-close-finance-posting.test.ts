@@ -25,6 +25,7 @@ function fixture(drawer: { openingFloatMinor: number; countedCashMinor: number }
     Object.entries(where).every(([key, value]) => (row[key] ?? null) === value);
 
   const db = {
+    pharmacyAccountingPeriod: { findFirst: vi.fn().mockResolvedValue(null) },
     $queryRaw: vi.fn().mockResolvedValue([]),
     pharmacyDrawerSession: {
       count: vi.fn().mockResolvedValue(0),
