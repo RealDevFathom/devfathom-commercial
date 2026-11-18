@@ -636,7 +636,7 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
           branchId: branchReview,
           attemptKey: review.attemptKey,
           outcome: 'REVERSED',
-          reason,
+          resolutionReason: reason,
           slipRef: `RRN-${run}-6`,
           managerPin,
         })
@@ -703,7 +703,7 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
       branchId: branchMain,
       attemptKey: review.attemptKey,
       outcome: 'REVERSED' as const,
-      reason: 'Customer was charged',
+      resolutionReason: 'Customer was charged',
       slipRef: `RRN-${run}-7`,
       managerPin,
     };

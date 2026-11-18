@@ -347,7 +347,7 @@ describe('DEV-743 card-terminal router', () => {
       branchId: 'branch-a',
       attemptKey,
       outcome,
-      reason: 'Slip shows the card was declined',
+      resolutionReason: 'Slip shows the card was declined',
       slipRef: 'SLIP-0042',
       managerPin: '2468',
     });
@@ -434,7 +434,7 @@ describe('DEV-743 card-terminal router', () => {
       await expect(
         caller().resolveReview({
           ...resolution(attemptKey, 'REVERSED'),
-          reason: 'Customer charged',
+          resolutionReason: 'Customer charged',
         })
       ).resolves.toMatchObject({ phase: 'REVERSED', open: false });
       expect(store.all()[0]).toMatchObject({ status: 'REVERSED', providerRef: 'SLIP-0042' });
@@ -447,7 +447,7 @@ describe('DEV-743 card-terminal router', () => {
     it('validates the reason, slip reference and PIN shape before anything runs', async () => {
       const attemptKey = await underReview();
       refundAuth.actorMayRefund.mockResolvedValue(true);
-      for (const patch of [{ reason: 'no' }, { slipRef: '' }, { managerPin: '12' }])
+      for (const patch of [{ resolutionReason: 'no' }, { slipRef: '' }, { managerPin: '12' }])
         await expect(
           caller().resolveReview({ ...resolution(attemptKey), ...patch })
         ).rejects.toBeInstanceOf(TRPCError);

@@ -58,7 +58,7 @@ export function CounterCardTerminalReview({ branchId, view, onResolved }: Props)
         branchId,
         attemptKey: view.attemptKey,
         outcome,
-        reason: trimmedReason,
+        resolutionReason: trimmedReason,
         slipRef: slipRef.trim(),
         managerPin: pin,
       });

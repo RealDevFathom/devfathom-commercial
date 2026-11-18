@@ -199,7 +199,7 @@ describe('DEV-743 counter card-terminal panel', () => {
       branchId: 'branch-1',
       attemptKey: 'card-terminal:key-1',
       outcome: 'DECLINED',
-      reason: 'Slip shows declined',
+      resolutionReason: 'Slip shows declined',
       slipRef: 'SLIP-0042',
       managerPin: '2468',
     });

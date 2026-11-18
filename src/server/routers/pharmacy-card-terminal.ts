@@ -201,7 +201,9 @@ export const pharmacyCardTerminalRouter = router({
           branchId,
           attemptKey,
           outcome: z.enum(['DECLINED', 'REVERSED']),
-          reason: z.string().trim().min(3).max(200),
+          // Both are typed by hand, so the request audit redacts them by key (a card number may be
+          // typed by mistake); the attempt's own audit entry records them card-number masked.
+          resolutionReason: z.string().trim().min(3).max(200),
           slipRef: z.string().trim().min(1).max(64),
           // The signed-in manager's or owner's own PIN, re-entered for every resolution.
           managerPin: z.string().regex(/^\d{4,8}$/),
@@ -214,7 +216,7 @@ export const pharmacyCardTerminalRouter = router({
         // The refund rule: cashiers cannot resolve; a manager or owner re-enters their PIN.
         if (!(await actorMayRefund(ctx.db, ctx.session!.user)))
           throw new TRPCError({ code: 'FORBIDDEN', message: CARD_TERMINAL_REVIEW_FORBIDDEN });
-        const { managerPin, ...resolution } = input;
+        const { managerPin, resolutionReason, ...resolution } = input;
         // An independent transaction, so a refused PIN commits its lockout strike and its
         // FAILURE audit row even though this request answers with a refusal.
         const pin = await authenticateRefundPin({
@@ -239,7 +241,7 @@ export const pharmacyCardTerminalRouter = router({
         const resolved = await resolveCardTerminalReview(
           { store: storeFor(scope) },
           scope,
-          resolution,
+          { ...resolution, reason: resolutionReason },
           approval
         );
         return cardTerminalCounterView(resolved);
