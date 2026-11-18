@@ -139,14 +139,36 @@ with coral merely because it needs attention.
 Shadows should be soft and nearly invisible at rest. A border plus tonal surface change is the
 default separation model.
 
-Controls keep the crisp 3px corner the product ships: the shared `Button`, hand-built buttons and
-action links, skip links, keycaps, the inline alerts and inputs on the auth and platform forms, and
-the platform inverse panels all take `rounded-control` (`--radius-control`). Surfaces (cards,
-panels, chips, menus) use the 8–24px steps. A filled primary action takes its lift from
-`shadow-control` (shared `Button`) or `shadow-control-ink` (hand-built ink actions on the platform
-and platform sign-in). Do not hardcode a radius or shadow (`rounded-[3px]`, `shadow-[…rgba(…)]`)
-on a control: every control reads these tokens, so changing the scale here changes the whole
-product consistently.
+Control corners as they ship today. Most controls use one of two corner sizes:
+
+- **3px, `rounded-control` (`--radius-control`).** This is the default control corner. It covers the
+  shared `Button` base, the hand-built actions, inline alerts and inverse panels in the platform
+  console, the platform sign-in form (inputs, alert and submit), skip links, and keycaps.
+- **12px, `--radius-sm`.** Several existing surfaces round their controls to 12px instead:
+  - Tenant authentication screens. Inside `.studio-auth`, `globals.css` rounds inputs, selects and
+    every `Button` to 12px. The login, register, forgot-password, reset-password and invite forms
+    also hand-build 12px fields, alerts and submits.
+  - Platform console form fields. `.platform-workspace` rounds inputs, selects and textareas to
+    12px.
+  - Hand-built controls, and some small panels, written as `rounded-[var(--radius-sm)]` in 64
+    product files: 42 pharmacy files (purchasing, inventory, accounts, finance, counter and
+    pharmacist queue), 11 restaurant files, 7 tenant auth files, the `PasswordInput` reveal button,
+    two camera screens and the settings approval-authenticator section. Inside these screens the
+    shared `Button` keeps its 3px base unless the screen passes `rounded-[var(--radius-sm)]` to it,
+    as some pharmacy counter actions do.
+
+The shadcn field primitives keep their own steps: `Input` and the `Select` trigger use
+`rounded-md`, and `Textarea` uses `rounded-lg`. The `Checkbox` primitive and the
+`.platform-workspace` checkbox rule use a fixed 4px corner.
+
+New controls take `rounded-control`. Moving the 12px controls listed above to 3px is a visible
+change and needs its own decision. Surfaces (cards, panels, chips, menus) use the 8–24px steps.
+
+A filled primary action takes its lift from one of two tokens. The shared `Button` uses
+`shadow-control`, and hand-built ink actions on the platform and platform sign-in use
+`shadow-control-ink`. Do not add a hardcoded radius or shadow (`rounded-[3px]`,
+`shadow-[…rgba(…)]`) to a control. Controls read these tokens, so changing the scale here changes
+every control that uses it.
 
 `globals.css` holds exactly one `:root` block and one `[data-theme='dark']` block, inside the
 DevFathom Studio section. Add new primitives and semantic tokens there; never add a second token
@@ -240,8 +262,9 @@ should represent a real content group, not wrap every sentence or field.
 
 - Use ink for the primary action and neutral paper surfaces for secondary actions.
 - The destructive variant must use the destructive semantic token.
-- Buttons and action links take the 3px control corner (`rounded-control`); never round a button
-  with a surface step or an arbitrary value.
+- New buttons and action links take the 3px control corner (`rounded-control`). The 12px controls
+  that ship today are listed in §3 under control corners. Do not add new ones, and do not round a
+  control with an arbitrary value.
 - Controls should be at least 44px tall for primary forms and touch-heavy contexts.
 - Every interactive element needs hover, focus-visible, active, disabled, and loading behavior
   where applicable.
@@ -340,7 +363,9 @@ another animation runtime for ordinary product interactions.
 - No return to the old teal/brass “Abyss” palette or Oxanium heading system.
 - No legacy palette utility (`abyss-*`, `paper-*`, `brass-*`); those scales and their aliases have
   been removed from the token source. Use the Studio semantic tokens.
-- No arbitrary radius or shadow values on controls; use the `--radius-*` and `--shadow-*` scale.
+- No new arbitrary radius or shadow values on controls; use the `--radius-*` and `--shadow-*`
+  scale. The one shipped exception is the 4px checkbox (`Checkbox` primitive and the
+  `.platform-workspace` checkbox rule).
 - No hardcoded component colors, new fonts, or isolated dark-mode branches.
 - No excessive pill-shaped cards.
 - No emoji as interface iconography; use the existing Lucide/Fathom icon language.

@@ -56,6 +56,17 @@ describe('Studio token source (DEV-351)', () => {
     expect(contract).not.toMatch(/\| Control\s+\| `--radius-sm/);
   });
 
+  it('documents the 12px controls that still ship instead of claiming every control is 3px', () => {
+    const twelvePxControlFiles = productSources().filter(({ source }) =>
+      source.includes('rounded-[var(--radius-sm)]')
+    );
+    if (twelvePxControlFiles.length > 0) {
+      expect(contract).toContain('`rounded-[var(--radius-sm)]`');
+      expect(contract).toContain('`.studio-auth`');
+    }
+    expect(contract).not.toMatch(/never round a button\s+with a surface step/);
+  });
+
   it('exposes the control radius and shadows as Tailwind theme tokens', () => {
     expect(globals).toContain('--radius-control: var(--radius-control);');
     expect(globals).toContain('--shadow-control: var(--shadow-control);');
