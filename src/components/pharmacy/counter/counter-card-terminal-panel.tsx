@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { StatusPill, type StatusTone } from '@/components/ui/status-pill';
@@ -80,7 +80,13 @@ const COPY: Record<CardTerminalCounterPhase, { label: string; tone: StatusTone; 
   },
 };
 
-export function CounterCardTerminalPanel({
+export function CounterCardTerminalPanel(props: Props) {
+  // The payment overlay stays mounted across bills: each bill gets its own panel state, so one
+  // bill's result never shows on, holds or checks another bill.
+  return <CardTerminalPanelForSale key={`${props.branchId}:${props.saleId ?? ''}`} {...props} />;
+}
+
+function CardTerminalPanelForSale({
   branchId,
   saleId,
   deviceId,
@@ -104,6 +110,14 @@ export function CounterCardTerminalPanel({
   const [result, setResult] = useState<CardTerminalCounterView | null>(null);
   const [error, setError] = useState('');
   const inFlight = useRef(false);
+  // An answer for this bill that arrives after the counter moved to another bill is dropped.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   if (!available || !saleId) return null;
 
@@ -121,9 +135,10 @@ export function CounterCardTerminalPanel({
     !disabled && !busy && !held && balanceMinor !== null && balanceMinor > 0 && Boolean(deviceId);
 
   async function settle(next: CardTerminalCounterView) {
+    if (!mounted.current) return;
     setResult(next);
     await latest.refetch();
-    if (next.phase === 'PAID') onSettled();
+    if (mounted.current && next.phase === 'PAID') onSettled();
   }
 
   async function startCharge() {

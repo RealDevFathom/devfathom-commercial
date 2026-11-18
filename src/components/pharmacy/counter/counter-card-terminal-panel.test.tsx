@@ -191,4 +191,29 @@ describe('DEV-743 counter card-terminal panel', () => {
     renderPanel({ disabled: true });
     expect(screen.getByRole('button', { name: 'Charge Rs 1500.00 on terminal' })).toBeDisabled();
   });
+
+  it("never carries one bill's terminal result onto the next bill", async () => {
+    mocks.charge.mockImplementation(async () => {
+      mocks.latest = view({ phase: 'UNKNOWN', open: true, canCheckStatus: true });
+      return mocks.latest;
+    });
+    const { rerender, onSettled } = renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Charge Rs 1500.00 on terminal' }));
+    await screen.findByRole('button', { name: 'Check status' });
+    // The overlay stays mounted while the counter moves to another bill with no attempt.
+    mocks.latest = null;
+    rerender(
+      <CounterCardTerminalPanel
+        branchId="branch-1"
+        saleId="sale-2"
+        deviceId="counter-device-1"
+        balanceMinor={150_000}
+        businessDate={() => new Date('2026-11-18T00:00:00.000Z')}
+        onSettled={onSettled}
+      />
+    );
+    expect(screen.queryByText(/the customer may have been charged/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Check status' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Charge Rs 1500.00 on terminal' })).toBeEnabled();
+  });
 });
