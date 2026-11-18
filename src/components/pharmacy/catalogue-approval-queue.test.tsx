@@ -12,8 +12,9 @@ const m = vi.hoisted(() => ({
     error: null,
   },
   access: {
-    data: { canEdit: true, canDecide: true, soloOwner: false } as
-      undefined | { canEdit: boolean; canDecide: boolean; soloOwner: boolean },
+    data: { canEdit: true, canDecide: true, ownerPinApproval: false, isOwner: false } as
+      | undefined
+      | { canEdit: boolean; canDecide: boolean; ownerPinApproval: boolean; isOwner: boolean },
   },
   decide: { mutate: vi.fn(), isPending: false, error: null },
   propose: { mutate: vi.fn(), isPending: false, error: null, isSuccess: false },
@@ -52,7 +53,7 @@ beforeEach(() => {
   m.queue.isPending = false;
   m.queue.error = null;
   m.decide.isPending = false;
-  m.access.data = { canEdit: true, canDecide: true, soloOwner: false };
+  m.access.data = { canEdit: true, canDecide: true, ownerPinApproval: false, isOwner: false };
   m.queue.data = [
     {
       id: 'edit',
@@ -66,7 +67,7 @@ beforeEach(() => {
 });
 describe('DEV-19 catalogue queue permissions', () => {
   it('hides the decision controls from an editor without the review permission and says why', () => {
-    m.access.data = { canEdit: true, canDecide: false, soloOwner: false };
+    m.access.data = { canEdit: true, canDecide: false, ownerPinApproval: false, isOwner: false };
     render(<CatalogueApprovalQueue />);
     expect(screen.getByRole('heading', { name: 'Fixture lotion' })).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Approve edit' })).toBeNull();
@@ -75,8 +76,16 @@ describe('DEV-19 catalogue queue permissions', () => {
     expect(screen.getByRole('note')).toHaveTextContent('needs the catalogue review permission');
     expect(screen.getByRole('button', { name: 'Submit edit for review' })).toBeVisible();
   });
+  it('does not tell the owner to ask the owner when another member reviews', () => {
+    m.access.data = { canEdit: true, canDecide: false, ownerPinApproval: false, isOwner: true };
+    render(<CatalogueApprovalQueue />);
+    const note = screen.getByRole('note');
+    expect(note).toHaveTextContent('Another member holds the catalogue review permission');
+    expect(note).not.toHaveTextContent('Ask the owner');
+    expect(screen.queryByRole('button', { name: 'Approve edit' })).toBeNull();
+  });
   it('lets a reviewer who cannot edit decide without offering the edit form', () => {
-    m.access.data = { canEdit: false, canDecide: true, soloOwner: false };
+    m.access.data = { canEdit: false, canDecide: true, ownerPinApproval: false, isOwner: false };
     render(<CatalogueApprovalQueue />);
     expect(screen.getByRole('button', { name: 'Approve edit' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Reject edit' })).toBeEnabled();

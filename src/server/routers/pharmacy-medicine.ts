@@ -4,6 +4,7 @@ import {
   catalogueChanges,
   submitCatalogueEdit,
   decideCatalogueEdit,
+  isOwnerWithoutOtherReviewer,
   requireIndependentCatalogueReviewer,
   recordCatalogueApproval,
   listPendingCatalogueEdits,
@@ -48,7 +49,7 @@ import {
   type ConnectorRights,
 } from '@/lib/pharmacy/reference-connectors';
 import { isEffective } from '@/lib/pharmacy/pack-conversion';
-import { isSoloPharmacyOwner } from '@/lib/pharmacy/solo-owner';
+import { actorIsPharmacyOwner } from '@/lib/pharmacy/procurement-access';
 import { can, subjectFromSession, type Action } from '@/lib/abac';
 import { annotateAudit } from '../audit';
 import {
@@ -346,7 +347,7 @@ const isCatalogueReplay = (ctx: TRPCContext) => Array.isArray(replayAuthority(ct
 // by default) on top of tenant administration; an explicit DENY refuses an admin.
 const CATALOGUE_EDIT_ACTIONS = ['admin:access', 'pharmacy:catalogue-edit'] as const;
 const REVIEWER_AUTHORITY = ['pharmacy:catalogue-review'] as const;
-// A solo owner approving without the review grant is held to the editor's own
+// An owner approving without the review grant (no other reviewer) is held to the editor's own
 // capabilities; their fresh PIN was verified before the replay.
 const SOLO_OWNER_AUTHORITY = CATALOGUE_EDIT_ACTIONS;
 const catalogueEditProcedure = contextualCapabilityProcedure(() => CATALOGUE_EDIT_ACTIONS);
@@ -359,9 +360,9 @@ const catalogueCommandProcedure = contextualCapabilityProcedure(
 
 /**
  * Who may see and decide the catalogue queue. A reviewer holds the exact
- * pharmacy:catalogue-review grant. A solo pharmacy owner (the only active member,
- * with live owner authority and no DENY) may decide without it, but approves only
- * with a fresh PIN. An editor may see the queue they submit to.
+ * pharmacy:catalogue-review grant. A pharmacy owner (live owner authority, no
+ * DENY) may decide without it while no other active member holds it, but approves
+ * only with a fresh PIN. An editor may see the queue they submit to.
  */
 async function catalogueAccess(ctx: TRPCContext) {
   const user = ctx.session!.user;
@@ -373,15 +374,15 @@ async function catalogueAccess(ctx: TRPCContext) {
   };
   const reviewer = await allowed(REVIEWER_AUTHORITY);
   const editor = await allowed(CATALOGUE_EDIT_ACTIONS);
-  const soloOwner =
-    !reviewer &&
-    editor &&
-    (await isSoloPharmacyOwner(ctx.db, {
-      organizationId: ctx.entitlements.organizationId,
-      actorId: user.id,
-      actorOrganizationId: user.organizationId,
-    }));
-  return { reviewer, editor, soloOwner };
+  const scope = {
+    organizationId: ctx.entitlements.organizationId,
+    actorId: user.id,
+    actorOrganizationId: user.organizationId,
+  };
+  const ownerFallback = !reviewer && editor && (await isOwnerWithoutOtherReviewer(ctx.db, scope));
+  const owner =
+    ownerFallback || (await actorIsPharmacyOwner(ctx.db, scope.organizationId, user.id));
+  return { reviewer, editor, ownerFallback, owner };
 }
 const catalogueCommands = [
   'createIngredient',
@@ -445,7 +446,7 @@ const DUPLICATE_PACK_MESSAGE =
   'This pack already exists for this medicine. Use the existing pack instead of adding it again.';
 
 export const pharmacyMedicineRouter = router({
-  // DEV-19: reviewers and the solo owner read the queue they decide; editors read
+  // DEV-19: reviewers and the owner with no other reviewer read the queue they decide; editors read
   // the queue they submit to. Everyone else is refused.
   catalogueEdits: auditedProtectedProcedure.query(async ({ ctx }) => {
     const access = await catalogueAccess(ctx);
@@ -461,8 +462,10 @@ export const pharmacyMedicineRouter = router({
     const access = await catalogueAccess(ctx);
     return {
       canEdit: access.editor,
-      canDecide: access.reviewer || access.soloOwner,
-      soloOwner: access.soloOwner,
+      canDecide: access.reviewer || access.ownerFallback,
+      // The owner approves with their own fresh PIN because nobody else can review.
+      ownerPinApproval: access.ownerFallback,
+      isOwner: access.owner,
     };
   }),
   proposeCatalogueEdit: catalogueEditProcedure
@@ -480,7 +483,8 @@ export const pharmacyMedicineRouter = router({
     ),
   // DEV-19: a decision needs the pharmacist review capability, decided by the ABAC
   // engine like connector proposals: an explicit DENY refuses even an administrator.
-  // The one exception is the solo pharmacy owner, who approves with a fresh PIN.
+  // The one exception is an owner while no other active member can review: they
+  // approve with a fresh PIN.
   decideCatalogueEdit: auditedProtectedProcedure
     .input(
       z
@@ -493,7 +497,7 @@ export const pharmacyMedicineRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const access = await catalogueAccess(ctx);
-      if (!access.reviewer && !access.soloOwner)
+      if (!access.reviewer && !access.ownerFallback)
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: 'Approving catalogue edits needs the catalogue review permission.',
@@ -508,7 +512,7 @@ export const pharmacyMedicineRouter = router({
         },
         input,
         (tx, operation, payload) => applyCatalogueCommand(ctx, tx, operation, payload, authority),
-        { soloOwnerAuthority: !access.reviewer }
+        { soloOwnerAuthority: !access.reviewer, ownerWithoutOtherReviewer: true }
       );
     }),
   priceNotices: capabilityProcedure('pharmacy:safety').query(({ ctx }) =>

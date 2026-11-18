@@ -456,7 +456,12 @@ describe('catalogue-edit capability, queue access and solo owner (DEV-19)', () =
     ).resolves.toEqual([]);
     await expect(
       caller(['pharmacy-core'], 'EMPLOYEE', 'pharmacist_b').catalogueQueueAccess()
-    ).resolves.toEqual({ canEdit: false, canDecide: true, soloOwner: false });
+    ).resolves.toEqual({
+      canEdit: false,
+      canDecide: true,
+      ownerPinApproval: false,
+      isOwner: false,
+    });
     db.pharmacyCatalogueEdit.findMany.mockClear();
 
     db.user.findUnique.mockResolvedValue({
@@ -473,11 +478,12 @@ describe('catalogue-edit capability, queue access and solo owner (DEV-19)', () =
     await expect(caller().catalogueQueueAccess()).resolves.toEqual({
       canEdit: true,
       canDecide: false,
-      soloOwner: false,
+      ownerPinApproval: false,
+      isOwner: false,
     });
   });
 
-  describe('solo owner on the default Owner template', () => {
+  describe('owner on the default Owner template with no other reviewer', () => {
     const owner = {
       role: 'ADMIN',
       status: 'ACTIVE',
@@ -488,7 +494,33 @@ describe('catalogue-edit capability, queue access and solo owner (DEV-19)', () =
       },
       permissionOverrides: [] as { capability: string; effect: string }[],
     };
-    function soloCaller() {
+    const cashier = {
+      role: 'EMPLOYEE',
+      organizationRole: {
+        key: 'cashier',
+        isSystem: true,
+        permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+      },
+      permissionOverrides: [],
+    };
+    const pharmacist = {
+      role: 'EMPLOYEE',
+      organizationRole: {
+        key: 'pharmacist',
+        isSystem: true,
+        permissions: [
+          { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+          { capability: 'pharmacy:catalogue-review', effect: 'ALLOW' },
+        ],
+      },
+      permissionOverrides: [],
+    };
+    type Member = { id: string; status: string; record: { role: string } };
+    let members: Member[];
+    function addMember(id: string, record: { role: string }, status = 'ACTIVE') {
+      members.push({ id, status, record });
+    }
+    function soloCaller(id = 'owner_a', role = 'ADMIN') {
       return pharmacyMedicineRouter.createCaller({
         db,
         entitlements: {
@@ -501,7 +533,7 @@ describe('catalogue-edit capability, queue access and solo owner (DEV-19)', () =
         },
         session: {
           expires: 'later',
-          user: { id: 'owner_a', role: 'ADMIN', status: 'ACTIVE', organizationId: 'org_a' },
+          user: { id, role, status: 'ACTIVE', organizationId: 'org_a' },
         },
         organization: null,
         support: null,
@@ -510,8 +542,23 @@ describe('catalogue-edit capability, queue access and solo owner (DEV-19)', () =
       } as unknown as TRPCContext);
     }
     beforeEach(() => {
-      db.user.findUnique.mockResolvedValue(owner);
-      db.user.findMany.mockResolvedValue([{ id: 'owner_a' }]);
+      members = [{ id: 'owner_a', status: 'ACTIVE', record: owner }];
+      db.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => {
+        const member = members.find((item) => item.id === where.id);
+        return member ? { ...member.record, status: member.status } : null;
+      });
+      db.user.findMany.mockImplementation(
+        async ({ where }: { where: { id?: { not?: string }; status?: { in?: string[] } } }) =>
+          members
+            .filter((item) => item.id !== where.id?.not)
+            .filter((item) => !where.status?.in || where.status.in.includes(item.status))
+            .map((item) => ({
+              id: item.id,
+              role: item.record.role,
+              status: item.status,
+              department: null,
+            }))
+      );
       db.medicine.findFirst.mockResolvedValue({
         id: 'medicine_a',
         saleable: false,
@@ -529,7 +576,8 @@ describe('catalogue-edit capability, queue access and solo owner (DEV-19)', () =
       await expect(soloCaller().catalogueQueueAccess()).resolves.toEqual({
         canEdit: true,
         canDecide: true,
-        soloOwner: true,
+        ownerPinApproval: true,
+        isOwner: true,
       });
 
       await expect(
@@ -562,7 +610,7 @@ describe('catalogue-edit capability, queue access and solo owner (DEV-19)', () =
         expect.objectContaining({
           data: expect.objectContaining({
             action: 'pharmacy.catalogueSoloOwnerApproval',
-            metadata: { soloOwner: true, pinVerified: true },
+            metadata: { soloOwner: true, pinVerified: true, reason: 'no other reviewer' },
           }),
         })
       );
@@ -584,13 +632,108 @@ describe('catalogue-edit capability, queue access and solo owner (DEV-19)', () =
       expect(db.medicine.updateMany).not.toHaveBeenCalled();
     });
 
-    it('loses the exception once a second member is active', async () => {
-      db.user.findMany.mockResolvedValue([{ id: 'owner_a' }, { id: 'staff_b' }]);
+    async function queueOwnerAlias() {
+      const proposal = await soloCaller().addAlias({
+        medicineId: 'medicine_a',
+        type: 'BRAND',
+        value: 'Panadol',
+      });
+      db.pharmacyCatalogueEdit.findFirst.mockResolvedValue(proposal);
+      return proposal;
+    }
+
+    it('Owner + Cashier: the owner approves with a fresh PIN, audited as no other reviewer', async () => {
+      addMember('cashier_b', cashier);
+      const proposal = await queueOwnerAlias();
       await expect(
-        soloCaller().decideCatalogueEdit({ editId: 'edit', decision: 'APPROVE', soloPin: '2468' })
+        soloCaller().decideCatalogueEdit({ editId: proposal.id, decision: 'APPROVE' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(
+        soloCaller().decideCatalogueEdit({
+          editId: proposal.id,
+          decision: 'APPROVE',
+          soloPin: '2468',
+        })
+      ).resolves.toMatchObject({ status: 'APPROVED' });
+      expect(db.medicineAlias.create).toHaveBeenCalledOnce();
+      expect(db.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            action: 'pharmacy.catalogueSoloOwnerApproval',
+            actorId: 'owner_a',
+            metadata: { soloOwner: true, pinVerified: true, reason: 'no other reviewer' },
+          }),
+        })
+      );
+    });
+
+    it('Owner + Pharmacist: the owner is refused and the pharmacist approves', async () => {
+      addMember('pharmacist_c', pharmacist);
+      const proposal = await queueOwnerAlias();
+      await expect(soloCaller().catalogueQueueAccess()).resolves.toEqual({
+        canEdit: true,
+        canDecide: false,
+        ownerPinApproval: false,
+        isOwner: true,
+      });
+      await expect(
+        soloCaller().decideCatalogueEdit({
+          editId: proposal.id,
+          decision: 'APPROVE',
+          soloPin: '2468',
+        })
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
       expect(db.$transaction).not.toHaveBeenCalled();
       expect(mocks.verifyPin).not.toHaveBeenCalled();
+
+      await expect(
+        soloCaller('pharmacist_c', 'EMPLOYEE').decideCatalogueEdit({
+          editId: proposal.id,
+          decision: 'APPROVE',
+        })
+      ).resolves.toMatchObject({ status: 'APPROVED' });
+      expect(mocks.verifyPin).not.toHaveBeenCalled();
+      expect(db.medicineAlias.create).toHaveBeenCalledOnce();
+      expect(db.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            action: 'pharmacy.catalogueApproval',
+            actorId: 'pharmacist_c',
+          }),
+        })
+      );
+    });
+
+    it('falls back to the owner with a PIN once the only other reviewer is deactivated', async () => {
+      addMember('pharmacist_c', pharmacist, 'DEACTIVATED');
+      addMember('cashier_b', cashier);
+      const proposal = await queueOwnerAlias();
+      await expect(
+        soloCaller().decideCatalogueEdit({
+          editId: proposal.id,
+          decision: 'APPROVE',
+          soloPin: '2468',
+        })
+      ).resolves.toMatchObject({ status: 'APPROVED' });
+      expect(mocks.verifyPin).toHaveBeenCalledOnce();
+      expect(db.medicineAlias.create).toHaveBeenCalledOnce();
+    });
+
+    it('keeps a reviewer who is also the owner from approving their own edit while another reviewer exists', async () => {
+      members[0]!.record = {
+        ...owner,
+        permissionOverrides: [{ capability: 'pharmacy:catalogue-review', effect: 'ALLOW' }],
+      };
+      addMember('pharmacist_c', pharmacist);
+      const proposal = await queueOwnerAlias();
+      await expect(
+        soloCaller().decideCatalogueEdit({
+          editId: proposal.id,
+          decision: 'APPROVE',
+          soloPin: '2468',
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.medicineAlias.create).not.toHaveBeenCalled();
     });
 
     it('is refused when catalogue review is explicitly denied', async () => {

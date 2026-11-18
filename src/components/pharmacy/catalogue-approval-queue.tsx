@@ -115,8 +115,9 @@ export function CatalogueApprovalQueue() {
       </p>
       {canEdit && !canDecide ? (
         <p role="note" className="mb-4 text-sm">
-          You can submit edits, but approving or rejecting them needs the catalogue review
-          permission. Ask the owner to give you the Pharmacist role or that permission.
+          {access.data?.isOwner
+            ? 'Another member holds the catalogue review permission, so they approve or reject these edits. To decide them yourself, give your own role that permission.'
+            : 'You can submit edits, but approving or rejecting them needs the catalogue review permission. Ask the owner to give you the Pharmacist role or that permission.'}
         </p>
       ) : null}
       {canEdit ? (

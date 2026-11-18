@@ -377,6 +377,11 @@ vi.mock('@/server/audit', async () => {
           `INSERT INTO users (id,"organizationId",name,email,department,title,"updatedAt") VALUES ($1,$2,$1,$1,'Pharmacy','Staff',now())`,
           [id('member_solo'), id('solo')]
         );
+        // DEV-19: the exception ends once another active member can review.
+        await c.query(
+          `INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"updatedAt") VALUES ($1,$2,$3,'pharmacy:catalogue-review','ALLOW','fixture',now())`,
+          [id('review_member_solo'), id('solo'), id('member_solo')]
+        );
         await refusal(
           solo.decideCatalogueEdit({ editId: se2.id, decision: 'APPROVE', soloPin: '2468' }),
           'FORBIDDEN'
@@ -387,7 +392,7 @@ vi.mock('@/server/audit', async () => {
           }),
           0
         );
-        checks.push('a true owner with another active member cannot self approve');
+        checks.push('a true owner with another active reviewer cannot self approve');
 
         const values = {
           productName: 'Fixture soap',

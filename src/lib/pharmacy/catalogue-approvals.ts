@@ -7,6 +7,9 @@ import type { Prisma } from '@/generated/prisma/client';
 import { PharmacyProductClassError, validateRetailFields } from './product-class';
 import { isSoloPharmacyOwner } from './solo-owner';
 import { verifyOwnerExportPin } from './owner-data-export-pin';
+import { actorIsPharmacyOwner } from './procurement-access';
+import { can, subjectFromSession, ACTIVE_STATUSES } from '@/lib/abac';
+import type { AuthzDb } from '@/lib/authz';
 
 const nullableText = (max: number) => z.string().trim().max(max).nullable().optional();
 // Neither product family nor saleability can be changed here. Publication retains
@@ -41,25 +44,61 @@ type Scope = {
   actorOrganizationId?: string | null;
 };
 
+/** The reason recorded on an owner's PIN approval when nobody else can review. */
+export const NO_OTHER_REVIEWER = 'no other reviewer';
+
+/**
+ * DEV-19 solo-pharmacy rule for catalogue edits: a live pharmacy owner (owner
+ * authority, no DENY) in an organization where no OTHER active member holds
+ * pharmacy:catalogue-review. Evaluated at approval time: once another active
+ * reviewer exists, a different reviewer is required again; when that reviewer is
+ * deactivated, the owner may approve with a fresh PIN once more.
+ */
+export async function isOwnerWithoutOtherReviewer(db: ScopedDb, scope: Scope): Promise<boolean> {
+  if (scope.actorOrganizationId !== scope.organizationId) return false;
+  if (!(await actorIsPharmacyOwner(db, scope.organizationId, scope.actorId))) return false;
+  const others = await db.user.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      id: { not: scope.actorId },
+      status: { in: [...ACTIVE_STATUSES] as Array<'ACTIVE' | 'ON_LEAVE'> },
+    },
+    select: { id: true, role: true, department: true, status: true },
+  });
+  for (const member of others) {
+    if (
+      await can(subjectFromSession(member), 'pharmacy:catalogue-review', undefined, {
+        db: db as unknown as AuthzDb,
+        source: 'TRPC',
+      })
+    )
+      return false;
+  }
+  return true;
+}
+
 export async function requireIndependentCatalogueReviewer(
   db: ScopedDb,
   scope: Scope,
   editorIds: Array<string | null>,
-  soloPin?: string
+  soloPin?: string,
+  /** Catalogue edits: an owner with no other active reviewer counts as solo. */
+  options: { ownerWithoutOtherReviewer?: boolean } = {}
 ): Promise<boolean> {
   if (!editorIds.includes(scope.actorId)) return false;
-  if (
-    !soloPin ||
-    !(await isSoloPharmacyOwner(db, {
-      organizationId: scope.organizationId,
-      actorId: scope.actorId,
-      actorOrganizationId: scope.actorOrganizationId,
-    }))
-  ) {
+  const eligible = options.ownerWithoutOtherReviewer
+    ? isOwnerWithoutOtherReviewer(db, scope)
+    : isSoloPharmacyOwner(db, {
+        organizationId: scope.organizationId,
+        actorId: scope.actorId,
+        actorOrganizationId: scope.actorOrganizationId,
+      });
+  if (!soloPin || !(await eligible)) {
     throw new TRPCError({
       code: 'FORBIDDEN',
-      message:
-        'Another reviewer must approve this edit. A solo owner may enter their own fresh PIN.',
+      message: options.ownerWithoutOtherReviewer
+        ? 'Another reviewer must approve this edit. When nobody else can review, the owner may enter their own fresh PIN.'
+        : 'Another reviewer must approve this edit. A solo owner may enter their own fresh PIN.',
     });
   }
   // A separate transaction commits failed guesses and their durable lockout.
@@ -83,7 +122,8 @@ export async function recordCatalogueApproval(
   scope: Scope,
   targetId: string,
   solo: boolean,
-  targetType = 'PharmacyCatalogueEdit'
+  targetType = 'PharmacyCatalogueEdit',
+  reason?: string
 ) {
   await db.auditLog.create({
     data: {
@@ -96,7 +136,7 @@ export async function recordCatalogueApproval(
       action: solo ? 'pharmacy.catalogueSoloOwnerApproval' : 'pharmacy.catalogueApproval',
       targetType,
       targetId,
-      metadata: { soloOwner: solo, pinVerified: solo },
+      metadata: { soloOwner: solo, pinVerified: solo, ...(reason ? { reason } : {}) },
     },
   });
 }
@@ -250,12 +290,16 @@ export async function decideCatalogueEdit(
   scope: Scope,
   input: { editId: string; decision: 'APPROVE' | 'REJECT'; soloPin?: string },
   applyCommand?: (tx: ScopedDb, operation: string, payload: Prisma.JsonValue) => Promise<unknown>,
-  /**
-   * DEV-19: the actor decides as the solo pharmacy owner rather than through the
-   * review grant. Every approval then needs their fresh PIN and the solo audit,
-   * whoever submitted the edit.
-   */
-  options: { soloOwnerAuthority?: boolean } = {}
+  options: {
+    /**
+     * DEV-19: the actor decides as the owner with no other reviewer rather than
+     * through the review grant. Every approval then needs their fresh PIN and the
+     * owner audit, whoever submitted the edit.
+     */
+    soloOwnerAuthority?: boolean;
+    /** DEV-19: an owner with no other active reviewer may self-approve with a PIN. */
+    ownerWithoutOtherReviewer?: boolean;
+  } = {}
 ) {
   return db.$transaction(async (tx) => {
     const scoped = tx as ScopedDb;
@@ -280,8 +324,11 @@ export async function decideCatalogueEdit(
         // Naming the actor as an editor routes a solo-owner approval through the
         // solo-owner and fresh-PIN checks even when someone else submitted it.
         options.soloOwnerAuthority ? [scope.actorId] : [proposal.editorId],
-        input.soloPin
+        input.soloPin,
+        { ownerWithoutOtherReviewer: options.ownerWithoutOtherReviewer }
       ));
+    const approvalReason =
+      solo && options.ownerWithoutOtherReviewer ? NO_OTHER_REVIEWER : undefined;
     const at = new Date();
     if (solo)
       await tx.$queryRaw`SELECT set_config('app.pharmacy_catalogue_solo_pin_user_id', ${scope.actorId}, true)`;
@@ -311,7 +358,14 @@ export async function decideCatalogueEdit(
           message: 'Unsupported catalogue edit.',
         });
       await applyCommand(scoped, proposal.operation, proposal.changes);
-      await recordCatalogueApproval(scoped, scope, proposal.id, solo);
+      await recordCatalogueApproval(
+        scoped,
+        scope,
+        proposal.id,
+        solo,
+        'PharmacyCatalogueEdit',
+        approvalReason
+      );
     } else if (input.decision === 'APPROVE' && medicineId !== null) {
       const medicine = await tx.medicine.findFirst({
         where: { id: medicineId },
@@ -343,7 +397,14 @@ export async function decideCatalogueEdit(
           });
         await applyCommand(scoped, proposal.operation, proposal.changes);
       }
-      await recordCatalogueApproval(scoped, scope, proposal.id, solo);
+      await recordCatalogueApproval(
+        scoped,
+        scope,
+        proposal.id,
+        solo,
+        'PharmacyCatalogueEdit',
+        approvalReason
+      );
       // Every other pending edit on this item was submitted against the version
       // this approval just replaced, so none of them can be approved any more.
       staleEdits = await tx.pharmacyCatalogueEdit.count({
