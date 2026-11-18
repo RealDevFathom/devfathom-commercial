@@ -17,6 +17,7 @@ import { decideCatalogueEdit, submitCatalogueEdit } from '../catalogue-approvals
 import {
   applyLegacyControlledClass,
   applyLegacyControlledToMedicine,
+  hasControlledCorrection,
   hasStagedLegacyControlledRow,
 } from './legacy-controlled';
 
@@ -215,6 +216,16 @@ suite('DEV-925 legacy NARCOTICS class on PostgreSQL', () => {
       [medicine.hypnotic, medicine.sedative],
     ]);
     expect(await controlled(orgA, medicine.opioid)).toBe(false);
+
+    const correction = (medicineId: string) =>
+      tenant(orgA, (tx) => hasControlledCorrection(tx, orgA, medicineId));
+    expect(await correction(medicine.opioid)).toBe(true);
+    expect(await correction(medicine.hypnotic)).toBe(false);
+    expect(await correction(medicine.sedative)).toBe(false);
+    // Tenant-scoped: another organization cannot read this tenant's correction.
+    expect(await tenant(orgB, (tx) => hasControlledCorrection(tx, orgB, medicine.opioid))).toBe(
+      false
+    );
 
     const again = await stage();
     // Both rows naming the corrected opioid are skipped and counted; the others flag again.

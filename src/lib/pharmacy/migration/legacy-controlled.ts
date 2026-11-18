@@ -107,6 +107,21 @@ export async function applyLegacyControlledClass(
 }
 
 /**
+ * DEV-925: true when a person's latest approved catalogue edit set this medicine to "not
+ * controlled". An import (the manual file connector) checks it before writing a class-derived
+ * controlled flag onto an existing medicine.
+ */
+export async function hasControlledCorrection(
+  db: Db,
+  organizationId: string,
+  medicineId: string
+): Promise<boolean> {
+  const rows = await db.$queryRaw<{ corrected: boolean }[]>`
+    SELECT ${correctedNotControlled(organizationId, Prisma.sql`${medicineId}`)} AS "corrected"`;
+  return Boolean(rows[0]?.corrected);
+}
+
+/**
  * True when this organization has staged a NARCOTICS-class legacy row with this product name.
  * With `medicineId`, also false when a person has corrected that medicine to "not controlled".
  */
