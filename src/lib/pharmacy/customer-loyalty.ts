@@ -610,11 +610,17 @@ export async function listLoyaltyCustomers(db: ScopedDb, scope: LedgerScope, que
   };
 }
 
+/**
+ * DEV-909: `visibleBranchIds` limits the detailed history (entries and the per-branch merge
+ * record) to those branches, for a branch manager. The points balance stays the one shared,
+ * organization-wide balance. Omitted, as for the owner, every branch is shown.
+ */
 export async function readLoyaltyHistory(
   db: ScopedDb,
   scope: LedgerScope,
   customerId: string,
-  page = 1
+  page = 1,
+  visibleBranchIds?: readonly string[]
 ) {
   if (!Number.isInteger(page) || page < 1 || page > LOYALTY_HISTORY_MAX_PAGE)
     throw new RangeError('INVALID_HISTORY_PAGE');
@@ -634,12 +640,13 @@ export async function readLoyaltyHistory(
   if (!customer) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
   // DEV-764: one balance across branches; each entry still shows the branch it was posted at.
   const where = { organizationId: scope.organizationId, customerId };
-  const listed = { ...where, NOT: CLOSED_LOT_WITHOUT_POINTS };
+  const branchScope = visibleBranchIds ? { branchId: { in: [...visibleBranchIds] } } : {};
+  const listed = { ...where, ...branchScope, NOT: CLOSED_LOT_WITHOUT_POINTS };
   const [balance, total, reconciliation] = await Promise.all([
     db.pharmacyLoyaltyPointsEntry.aggregate({ where, _sum: { points: true } }),
     db.pharmacyLoyaltyPointsEntry.count({ where: listed }),
     db.pharmacyLoyaltyBalanceReconciliation.findMany({
-      where,
+      where: { ...where, ...branchScope },
       orderBy: [{ branchId: 'asc' }],
       select: { branchId: true, points: true, entries: true, reconciledAt: true },
     }),

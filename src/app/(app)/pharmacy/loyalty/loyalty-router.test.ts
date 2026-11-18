@@ -74,7 +74,9 @@ describe('ordinary loyalty router visibility', () => {
       expect.anything(),
       { organizationId: 'org-a', actorId: 'owner-a', branchId: 'branch-a' },
       'customer-a',
-      2
+      2,
+      // DEV-909: the owner's history is not limited to any branch.
+      undefined
     );
   });
   it('lists only current tenant active branches', async () => {
