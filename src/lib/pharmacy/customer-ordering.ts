@@ -65,7 +65,7 @@ type ReservationCandidate = {
   batchState: 'ACTIVE' | 'RECALLED' | 'QUARANTINED';
   disposition:
     'AVAILABLE' | 'QUARANTINE' | 'DAMAGED' | 'DESTROYED' | 'IN_TRANSIT' | 'RETURN_TO_SUPPLIER';
-  expiresAt: Date;
+  expiresAt: Date | null;
   receivedAt: Date | null;
   packLevelId: string;
   availableUnits: number;
@@ -134,7 +134,8 @@ export async function listStorefrontCatalog(
         AND balance."disposition" = 'AVAILABLE'
         AND lot."receivedAt" IS NOT NULL
         AND batch."state" = 'ACTIVE'
-        AND batch."expiresAt" > CURRENT_TIMESTAMP
+        -- DEV-853: an unrecorded expiry is never treated as expired.
+        AND (batch."expiresAt" IS NULL OR batch."expiresAt" > CURRENT_TIMESTAMP)
     ), catalog AS (
       SELECT medicine."id" AS "medicineId", medicine."productName", medicine."brandName",
              presentation."id" AS "presentationId", presentation."presentation",
@@ -146,7 +147,7 @@ export async function listStorefrontCatalog(
              )::integer AS "totalAvailableUnits",
              ROW_NUMBER() OVER (
                PARTITION BY medicine."id", presentation."id", pack."id"
-               ORDER BY stock."expiresAt", stock."receivedAt" NULLS FIRST, stock."inventoryLotId"
+               ORDER BY stock."expiresAt" NULLS LAST, stock."receivedAt" NULLS FIRST, stock."inventoryLotId"
              ) AS price_rank
       FROM safe_stock stock
       JOIN "pharmacy_medicines" medicine
@@ -227,7 +228,7 @@ export async function reservationCandidates(
                    AND reservation."stockLocationId" = balance."stockLocationId"
                    AND reservation."status" = 'RESERVED'), 0))::integer AS "availableUnits"
     ${candidates}
-    ORDER BY batch."expiresAt", lot."receivedAt" NULLS FIRST,
+    ORDER BY batch."expiresAt" NULLS LAST, lot."receivedAt" NULLS FIRST,
              balance."inventoryLotId", balance."stockLocationId"
   `);
 }

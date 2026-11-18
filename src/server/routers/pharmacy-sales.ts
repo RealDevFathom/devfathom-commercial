@@ -23,6 +23,8 @@ import {
   type CounterApprovalPin,
 } from '@/lib/pharmacy/counter-line-approval';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
+import { readPharmacistCheckPolicy } from '@/lib/pharmacy/pharmacist-check-policy';
+import { pharmacistCheckOffSignature } from '@/lib/pharmacy/pharmacist-check';
 import { PharmacyDispensingError } from '@/lib/pharmacy/dispensing';
 import {
   PharmacyRxReferenceError,
@@ -55,7 +57,7 @@ import {
 import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission';
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
-import { BRANCH_NOT_ASSIGNED } from '@/lib/pharmacy/counter-setup';
+import { BRANCH_NOT_ASSIGNED, NO_INDEPENDENT_PHARMACIST } from '@/lib/pharmacy/counter-setup';
 import { readPharmacyApprovalStatus } from '@/lib/pharmacy/onboarding';
 import { RefusalReason } from '@/server/refusal-reason';
 import {
@@ -2389,7 +2391,22 @@ export const pharmacySalesRouter = router({
             scope.organizationId
           ).catch(() => null)
         : null;
-      return { ...readiness, canFixSetup: orgAdmin, ...(approval ? { approval } : {}) };
+      // DEV-911: the counter shows the owner's switch; the gates read it again themselves.
+      // Only an explicit stored OFF is reported, so a missing or unreadable setting means on.
+      const pharmacistCheck = await readPharmacistCheckPolicy(
+        ctx.db as unknown as ScopedDb,
+        scope.organizationId
+      );
+      if (pharmacistCheck.enabled)
+        return { ...readiness, canFixSetup: orgAdmin, ...(approval ? { approval } : {}) };
+      return {
+        ...readiness,
+        // Nobody needs to countersign while the check is off.
+        warnings: readiness.warnings.filter((warning) => warning !== NO_INDEPENDENT_PHARMACIST),
+        canFixSetup: orgAdmin,
+        ...(approval ? { approval } : {}),
+        pharmacistCheckOff: true as const,
+      };
     }),
   create: protectedProcedure
     .input(
@@ -2632,17 +2649,66 @@ export const pharmacySalesRouter = router({
           // #518: a controlled line takes its prescription only through controlledAuthorization.
           if (input.prescription)
             throw new PharmacyRxReferenceError('CONTROLLED_PRESCRIPTION_IN_AUTHORIZATION');
-          if (
-            !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
-              db,
-            }))
-          ) {
+          const mayDispense = await can(
+            subjectFromSession(ctx.session!.user),
+            'pharmacy:dispense',
+            undefined,
+            { db }
+          );
+          const authorization = input.controlledAuthorization;
+          // DEV-911: the pharmacist check at each sale is on unless the owner switched it off.
+          // It is read only where today's gate would refuse (no dispense grant, or no
+          // pharmacist authorization), so with the check on nothing below changes. While it is
+          // off the line sells like any other item, and the controlled register still gets its
+          // entry, marked as written with the check switched off by the owner.
+          if (!mayDispense || !authorization) {
+            const pharmacistCheck = await readPharmacistCheckPolicy(db, scope.organizationId);
+            if (!pharmacistCheck.enabled) {
+              await requirePharmacyTodayOpenForTrading(db, scope);
+              const replay = await replaySaleLine(db, scope, lineInput);
+              if (replay) return replay;
+              for (const { kind, approval } of approvals)
+                await confirmCounterApproval(db, scope, kind, approval);
+              // DEV-825: the sale row is a document lock, so it precedes the register lock.
+              await lockSaleForControlledLine(db, scope, input.saleId);
+              await lockRegister(db, scope.organizationId, scope.branchId);
+              const result = await addSaleLine(db, scope, lineInput, COUNTER_LINE_PRICING);
+              await appendControlledSaleEntries(db, {
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+                movementIds: result.allocation.movementIds,
+                patientId: null,
+                patientAddress: null,
+                medicineId: medicine.id,
+                manufacturer: medicine.manufacturer,
+                prescriberId: null,
+                prescriberName: null,
+                prescriberRegNo: null,
+                prescriptionId: null,
+                prescriptionLineId: null,
+                emergency: false,
+                rxSerialWritten: false,
+                refEntryId: null,
+                recordedByUserId: scope.actorId,
+                witnessedByUserId: scope.actorId,
+                signatureRef: pharmacistCheckOffSignature(pharmacistCheck.version),
+              });
+              annotateAudit(ctx, {
+                metadata: {
+                  pharmacistCheck: 'SWITCHED_OFF_BY_OWNER',
+                  pharmacistCheckPolicyVersion: pharmacistCheck.version,
+                  controlledSaleLineId: result.line.id,
+                },
+              });
+              return result;
+            }
+          }
+          if (!mayDispense) {
             throw new TRPCError({
               code: 'FORBIDDEN',
               message: 'You do not have permission to dispense a controlled medicine.',
             });
           }
-          const authorization = input.controlledAuthorization;
           const blocked = {
             blocked:
               'Controlled medicine requires the patient address, an independent pharmacist PIN, and either a valid prescription or an emergency supply with the prescriber name.',
@@ -3168,7 +3234,16 @@ export const pharmacySalesRouter = router({
     .query(async ({ ctx, input }) => {
       try {
         const scope = await requireCounterReceiptAccess(ctx, input.branchId);
-        return await readReturnHistory(ctx.db, scope, input.saleId);
+        const history = await readReturnHistory(ctx.db, scope, input.saleId);
+        // DEV-911: the return panel asks for no pharmacist witness while the owner has the
+        // check off. The server reads the setting again when the return is recorded.
+        const pharmacistCheck = await readPharmacistCheckPolicy(
+          ctx.db as unknown as ScopedDb,
+          scope.organizationId
+        );
+        return pharmacistCheck.enabled
+          ? history
+          : { ...history, pharmacistCheckOff: true as const };
       } catch (error) {
         fail(error);
       }
@@ -4110,7 +4185,7 @@ export const pharmacySalesRouter = router({
           {
             inventoryLotId,
             batchNumber: lot.batch.batchNumber,
-            expiresAt: lot.batch.expiresAt.toISOString(),
+            expiresAt: lot.batch.expiresAt?.toISOString() ?? null,
             sellableUnits,
             blockedBy:
               sellableUnits > 0

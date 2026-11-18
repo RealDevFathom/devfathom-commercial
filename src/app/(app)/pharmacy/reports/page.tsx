@@ -35,6 +35,7 @@ import { StaffingSuggestions } from './staffing-suggestions';
 import { ReportCsvButton } from './report-csv-button';
 import { ReportPrintButton } from './report-print-button';
 import { DEFAULT_STAFFING_CONFIG } from '@/lib/pharmacy/staffing-suggestions';
+import { BATCH_NOT_RECORDED } from '@/lib/pharmacy/unrecorded-batch';
 
 export const metadata: Metadata = { title: screenCopy.reports.pharmacyReports };
 
@@ -847,10 +848,21 @@ export default async function PharmacyReportsPage({
                           </p>
                           <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-2 font-mono text-xs text-text-muted tabular-nums">
                             <div>
-                              <dt className="inline font-semibold text-text-body">
-                                {screenCopy.reports.batch}
-                              </dt>
-                              <dd className="inline">{item.batchNumber}</dd>
+                              {item.batchNumber === null ? (
+                                // DEV-853: the same plain words as every other screen;
+                                // the term stays for assistive technology.
+                                <>
+                                  <dt className="sr-only">{screenCopy.reports.batch}</dt>
+                                  <dd className="inline">{BATCH_NOT_RECORDED}</dd>
+                                </>
+                              ) : (
+                                <>
+                                  <dt className="inline font-semibold text-text-body">
+                                    {screenCopy.reports.batch}
+                                  </dt>
+                                  <dd className="inline">{item.batchNumber}</dd>
+                                </>
+                              )}
                             </div>
                             <div>
                               <dt className="inline font-semibold text-text-body">

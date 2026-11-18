@@ -2701,8 +2701,12 @@ model PharmacyManufacturingBatch {
   id              String                  @id @default(cuid())
   organizationId  String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   medicineId      String
-  batchNumber     String
-  expiresAt       DateTime
+  /// DEV-853: null when the batch number was never recorded (legacy opening
+  /// stock). Shown as "Batch not recorded"; never invented.
+  batchNumber     String?
+  /// DEV-853: null when the expiry was never recorded. An unknown expiry is
+  /// never treated as expired and never blocks a sale; FEFO picks it last.
+  expiresAt       DateTime?
   expiryPrecision PharmacyExpiryPrecision @default(DAY)
   state           PharmacyBatchState      @default(ACTIVE)
   stateReason     String?
@@ -2735,8 +2739,10 @@ model PharmacyInventoryLot {
   supplierInvoiceRef      String
   unitCostMinor           Int
   printedMrpMinor         Int
-  receivedExpiresAt       DateTime
-  receivedExpiryPrecision PharmacyExpiryPrecision
+  /// DEV-853: both null when the expiry was not recorded at receipt (legacy
+  /// opening stock). Staff can record it later.
+  receivedExpiresAt       DateTime?
+  receivedExpiryPrecision PharmacyExpiryPrecision?
   receivedAt              DateTime?
   /// DEV-90: immutable numeric alias encoded in the internal shelf-label Code128.
   shelfLabelNumber        Int                     @unique @default(autoincrement())
@@ -13864,7 +13870,8 @@ model PharmacyControlledRegisterEntry {
   manufacturer           String?
   inventoryLotId         String
   stockMovementId        String?
-  batchNumber            String
+  /// DEV-853: null when the lot's batch number was never recorded.
+  batchNumber            String?
   quantityCanonicalUnits Int
   /// Signed change in the sellable balance. Sales store the units removed,
   /// purchases store the units accepted, and a correction stores the
@@ -15174,6 +15181,26 @@ model PharmacyDeviceLotQuota {
   @@unique([organizationId, id], map: "pharmacy_device_lot_quotas_org_id_key")
   @@index([organizationId, inventoryLotId, stockLocationId], map: "pharmacy_device_lot_quotas_bucket_idx")
   @@map("pharmacy_device_lot_quotas")
+}
+
+/// #518 / DEV-753 / DEV-911 — one owner-policy row per pharmacy organization. The table and
+/// its guard and audit triggers are created by migrations; application writes go through
+/// raw SQL so the triggers stamp the actor, version and audit row. This model exists so the
+/// policy readers can use an ordinary typed read. A missing row means every default below.
+model PharmacyOwnerPolicy {
+  organizationId                    String   @id @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  allowCashierRxSale                Boolean  @default(false)
+  updatedByUserId                   String?
+  updatedAt                         DateTime @default(now())
+  supplierComplianceChecksEnabled   Boolean  @default(true)
+  supplierCompliancePolicyVersion   Int      @default(0)
+  supplierComplianceAcknowledgement String?
+  /// DEV-911: the pharmacist check and prescription record at each sale. ON by default.
+  pharmacistCheckEnabled            Boolean  @default(true)
+  pharmacistCheckPolicyVersion      Int      @default(0)
+  pharmacistCheckAcknowledgement    String?
+
+  @@map("pharmacy_owner_policies")
 }
 
 /// RPT-03 — one owner's explicit daily digest opt-in for one active branch.

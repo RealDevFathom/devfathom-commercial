@@ -10,6 +10,7 @@ import {
 import { arrangementFor, PharmacyInventoryError } from './inventory';
 import type { LedgerScope } from './stock-ledger';
 import { lockStockBalances, lockStockRowsFrom } from './stock-lock-order';
+import { hasKnownExpiryPassed } from './unrecorded-batch';
 
 /** Serialize recall-authority decisions that can overlap at batch or medicine scope. */
 export async function lockRecallAuthority(db: ScopedDb, organizationId: string) {
@@ -207,7 +208,8 @@ export type DailyCycleCountItem = {
   inventoryLotId: string;
   stockLocationId: string;
   medicineName: string;
-  batchNumber: string;
+  /** DEV-853: null when the batch number was never recorded. */
+  batchNumber: string | null;
   locationName: string;
   unitsPerPack: number;
   /** Canonical units sold from this position in the sales window. */
@@ -221,7 +223,8 @@ type DailyCycleCountRow = {
   inventoryLotId: string;
   stockLocationId: string;
   medicineName: string;
-  batchNumber: string;
+  /** DEV-853: null when the batch number was never recorded. */
+  batchNumber: string | null;
   locationName: string;
   unitsPerPack: number;
   soldUnits: number | bigint;
@@ -915,14 +918,15 @@ export async function dispatchTransfer(
   );
   for (const [i, line] of transfer.lines.entries()) {
     const balances = await db.$queryRaw<
-      Array<{ onHandUnits: number; unitsPerPack: number; state: string; expiresAt: Date }>
+      Array<{ onHandUnits: number; unitsPerPack: number; state: string; expiresAt: Date | null }>
     >(
       Prisma.sql`SELECT (b."onHandUnits"-COALESCE((SELECT SUM(c."reservedUnits") FROM "pharmacy_supplier_claims" c WHERE c."organizationId"=b."organizationId" AND c."inventoryLotId"=b."inventoryLotId" AND c.status='RESERVED'),0))::int AS "onHandUnits",l."unitsPerPack",mb.state::text,mb."expiresAt" FROM "pharmacy_stock_balances" b JOIN "pharmacy_inventory_lots" l ON l.id=b."inventoryLotId" JOIN "pharmacy_manufacturing_batches" mb ON mb.id=l."manufacturingBatchId" WHERE b."organizationId"=${scope.organizationId} AND b."branchId"=${scope.branchId} AND b."inventoryLotId"=${line.sourceLotId} AND b."stockLocationId"=${line.sourceStockLocationId} AND b."disposition"='AVAILABLE'`
     );
     const balance = balances[0];
     if (!balance || Number(balance.onHandUnits) < line.quantityUnits)
       throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
-    if (balance.state !== 'ACTIVE' || balance.expiresAt <= new Date())
+    // DEV-853: an unrecorded expiry is never treated as expired.
+    if (balance.state !== 'ACTIVE' || hasKnownExpiryPassed(balance.expiresAt, new Date()))
       throw new PharmacyInventoryError('BLOCKED_STOCK');
     const a = arrangementFor(line.quantityUnits, balance.unitsPerPack);
     const common = {
