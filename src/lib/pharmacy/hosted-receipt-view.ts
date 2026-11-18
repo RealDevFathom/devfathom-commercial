@@ -1,4 +1,4 @@
-import { COUNTER_RECEIPT_STRINGS, type CounterReceipt } from './counter-receipt';
+import { receiptTierLines, COUNTER_RECEIPT_STRINGS, type CounterReceipt } from './counter-receipt';
 
 /**
  * DEV-16: what a hosted receipt page shows to the link holder: every purchased
@@ -6,6 +6,7 @@ import { COUNTER_RECEIPT_STRINGS, type CounterReceipt } from './counter-receipt'
  * identity, batch and allocation detail.
  */
 export type HostedReceiptView = {
+  tierDiscountLines?: string[];
   branchName: string;
   receiptNumber: number;
   completedAt: string | null;
@@ -26,6 +27,9 @@ export function hostedReceiptView(receipt: CounterReceipt): HostedReceiptView | 
   if (receipt.receiptNumber === null || !receipt.completedAt) return null;
   const strings = COUNTER_RECEIPT_STRINGS.en;
   return {
+    ...(receiptTierLines(receipt, 'en').length
+      ? { tierDiscountLines: receiptTierLines(receipt, 'en') }
+      : {}),
     branchName: receipt.branchName,
     receiptNumber: receipt.receiptNumber,
     completedAt: receipt.completedAt,

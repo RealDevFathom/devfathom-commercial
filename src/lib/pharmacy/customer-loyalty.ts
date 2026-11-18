@@ -1,3 +1,4 @@
+import { pricePrepaidSale } from './prepaid-discount';
 import 'server-only';
 
 import { assertSaleBatchesSellable } from './sale-batch-safety';
@@ -56,6 +57,10 @@ export class PharmacyLoyaltyError extends Error {
       | 'ADJUSTMENT_EXCEEDS_BALANCE'
       | 'LOYALTY_INACTIVE'
       | 'INVALID_MEMBERSHIP_CHANGE'
+      // DEV-748: physical loyalty cards.
+      | 'LOYALTY_CARD_NOT_RECOGNISED'
+      | 'LOYALTY_CARD_NOT_ACTIVE'
+      | 'LOYALTY_CARD_REASON_REQUIRED'
   ) {
     super(reason);
   }
@@ -102,8 +107,9 @@ export async function linkCustomerToSale(
       branchId: scope.branchId,
       status: 'OPEN',
     },
+    include: { tenders: { select: { id: true } } },
   });
-  if (!sale) throw new PharmacyLoyaltyError('SALE_NOT_OPEN');
+  if (!sale || sale.tenders?.length) throw new PharmacyLoyaltyError('SALE_NOT_OPEN');
   const referencedLine = await db.pharmacySaleLine.findFirst({
     where: {
       organizationId: scope.organizationId,
@@ -221,7 +227,7 @@ export async function redeemSalePoints(
   await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
     name: 'pharmacy.sale.tender',
   });
-  const sale = await db.pharmacySale.findFirst({
+  let sale = await db.pharmacySale.findFirst({
     where: {
       id: input.saleId,
       organizationId: scope.organizationId,
@@ -251,6 +257,8 @@ export async function redeemSalePoints(
   );
   // #659: a points tender is a tender: refuse it while any batch on the bill is unsafe.
   await assertSaleBatchesSellable(db, scope, sale.id);
+  sale = await pricePrepaidSale(db, sale, true);
+  if (!sale.customerId) throw new PharmacyLoyaltyError('SALE_NOT_LINKED');
   // DEV-764: lock order on every path is program, then customer. The redemption value is read
   // under the program lock so an owner save cannot change it under this redemption.
   const program = await lockedLoyaltyProgram(db, scope.organizationId);

@@ -6,7 +6,8 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 vi.mock('./insight-rollups', () => ({ enqueueInsightRollup: vi.fn() }));
 
-import { cutClose } from './daily-close';
+import { cutClose, correctClose, closePreview } from './daily-close';
+import { Prisma } from '@/generated/prisma/client';
 
 const input = {
   branchId: 'branch-1',
@@ -40,17 +41,27 @@ function closeDb() {
     restaurantMoneyIdempotencyKey: {
       findUnique: vi.fn().mockResolvedValue(null),
       create: vi.fn().mockResolvedValue({}),
-      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      updateMany: vi
+        .fn<(input: { data: { resultPayload: Prisma.JsonValue } }) => Promise<{ count: number }>>()
+        .mockResolvedValue({ count: 1 }),
     },
     restaurantDailyClose: {
       count: vi.fn().mockResolvedValue(0),
       create: vi.fn().mockResolvedValue({ id: 'close-1' }),
     },
-    restaurantBill: { findMany: vi.fn().mockResolvedValue([]) },
+    restaurantBill: {
+      findMany: vi.fn<(...args: unknown[]) => Promise<unknown[]>>().mockResolvedValue([]),
+    },
     restaurantOrder: { count: vi.fn().mockResolvedValue(0) },
-    restaurantTender: { findMany: vi.fn().mockResolvedValue([]) },
-    restaurantRefund: { findMany: vi.fn().mockResolvedValue([]) },
-    restaurantDrawerSession: { findMany: vi.fn().mockResolvedValue([]) },
+    restaurantTender: {
+      findMany: vi.fn<(...args: unknown[]) => Promise<unknown[]>>().mockResolvedValue([]),
+    },
+    restaurantRefund: {
+      findMany: vi.fn<(...args: unknown[]) => Promise<unknown[]>>().mockResolvedValue([]),
+    },
+    restaurantDrawerSession: {
+      findMany: vi.fn<(...args: unknown[]) => Promise<unknown[]>>().mockResolvedValue([]),
+    },
   };
   const db = {
     $transaction: (work: (scoped: ScopedDb) => Promise<unknown>) => work(tx as unknown as ScopedDb),
@@ -147,4 +158,71 @@ describe('daily-close server clock', () => {
     expect(tx.restaurantMoneyIdempotencyKey.create).not.toHaveBeenCalled();
     expect(tx.restaurantDailyClose.create).not.toHaveBeenCalled();
   });
+});
+
+it('snapshots the same manual card breakdown in preview, cut, correction and idempotent replay', async () => {
+  const { db, tx } = closeDb();
+  const tender = {
+    type: 'CARD',
+    amount: new Prisma.Decimal('10.10'),
+    tipAmount: new Prisma.Decimal('1.00'),
+    staffProfileId: 'staff-1',
+    payment: { provider: 'MANUAL' },
+  };
+  tx.restaurantTender.findMany.mockResolvedValue([tender]);
+  const findMany = vi.fn<(...args: unknown[]) => Promise<unknown[]>>().mockResolvedValue([]);
+  const correctionCoauth = { create: vi.fn().mockResolvedValue({ id: 'approval-1' }) };
+  Object.assign(tx.restaurantDailyClose, { findMany });
+  Object.assign(tx, {
+    restaurantCoAuthorization: correctionCoauth,
+    restaurantDailyCloseTenderTotal: { create: vi.fn().mockResolvedValue({ id: 'total-1' }) },
+  });
+  const preview = await closePreview(tx as unknown as ScopedDb, input);
+  expect(preview.manualCardSummary).toMatchObject({
+    count: 1,
+    amount: '10.10',
+    cashiers: [{ staffProfileId: 'staff-1', count: 1, amount: '10.10' }],
+  });
+  expect(tx.restaurantTender.findMany).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: { businessDate: new Date('2026-01-15'), bill: { branchId: 'branch-1' } },
+      select: expect.objectContaining({
+        payment: { select: { provider: true } },
+        staffProfileId: true,
+      }),
+    })
+  );
+  expect(tx.restaurantRefund.findMany).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: { businessDate: new Date('2026-01-15'), bill: { branchId: 'branch-1' } },
+      select: expect.objectContaining({ originalTender: expect.anything() }),
+    })
+  );
+  const cut = await cutClose(db, input, atCutoff);
+  expect(cut.manualCardSummary).toEqual(preview.manualCardSummary);
+  expect(tx.restaurantDailyClose.create).toHaveBeenCalledWith(
+    expect.objectContaining({
+      data: expect.objectContaining({ manualCardSummary: preview.manualCardSummary }),
+    })
+  );
+  const receipt = tx.restaurantMoneyIdempotencyKey.updateMany.mock.calls[0]![0].data.resultPayload;
+  findMany.mockResolvedValue([{ id: 'close-1', supersedesCloseId: null }]);
+  const corrected = await correctClose(db, {
+    ...input,
+    supersedesCloseId: 'close-1',
+    reason: 'Recount',
+    approvingStaffProfileId: 'manager-1',
+    actor: { ...input.actor, idempotencyKey: 'correction-1' },
+  });
+  expect(corrected.manualCardSummary).toEqual(preview.manualCardSummary);
+  tx.restaurantMoneyIdempotencyKey.findUnique.mockResolvedValue({
+    commandType: 'cash.day_close',
+    canonicalPayloadHash: canonicalHash,
+    resultRef: 'close-1',
+    resultPayload: receipt,
+    completedAt: atCutoff,
+  });
+  const replay = await cutClose(db, input, atCutoff);
+  expect(replay.manualCardSummary).toEqual(cut.manualCardSummary);
+  expect(replay.replayed).toBe(true);
 });

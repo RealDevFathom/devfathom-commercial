@@ -69,6 +69,8 @@ export type KhataSignupInput =
   | { patientId: string; displayName: string; consentGranted: true }
   | { displayName: string; phone: string; consentGranted: true };
 export type CounterTenderPanelProps = {
+  /** DEV-863: the linked customer's prepaid balance, spent through the Wallet tender. */
+  prepaidBalanceMinor?: number;
   /** #722: payments already recorded on this bill, in the order taken. */
   tenders?: readonly CounterCartTender[];
   /** Receipt total retained after the parent has verified this bill's settlement. */
@@ -124,6 +126,8 @@ export type CounterTenderPanelProps = {
       ownerOverride?: boolean;
       overrideReason?: string;
       overLimitApproval?: { staffProfileId: string; pin: string };
+      /** DEV-863: the customer's own prepaid PIN, for this request only. */
+      prepaidPin?: string;
       providerRef?: string;
       payerName?: string;
       referenceSkipped?: boolean;
@@ -163,6 +167,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
   function CounterTenderPanel(
     {
       balanceMinor,
+      prepaidBalanceMinor = 0,
       tenders = [],
       confirmedChangeMinor,
       state,
@@ -220,6 +225,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       initialDraft?.referenceSkipped ?? false
     );
     const [approvalCode, setApprovalCode] = useState(initialDraft?.approvalCode ?? '');
+    // DEV-863: typed by the customer; single-use, never kept in a draft or recovery attempt.
+    const [prepaidPin, setPrepaidPin] = useState('');
     const [type, setType] = useState<CounterTenderType>(initialDraft?.type ?? 'CASH');
     const [amount, setAmount] = useState(initialDraft?.amount ?? '');
     // DEV-499: null means the cashier has not typed Cash received, so it follows
@@ -246,9 +253,22 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       balanceMinor !== null && Number.isSafeInteger(balanceMinor) && balanceMinor >= 0;
     const editable = state === 'ready' && balanceKnown && !disabled && !takingPayment && !unknown;
 
-    const amountMinor = amount.trim() === '' ? balanceMinor : parseAmountMinor(amount);
+    const prepaidWallet = type === 'WALLET' && prepaidBalanceMinor > 0;
+    // DEV-863: an untouched prepaid amount is what the balance can cover; never more than it holds.
+    const amountMinor =
+      amount.trim() === ''
+        ? prepaidWallet && balanceMinor !== null
+          ? Math.min(balanceMinor, prepaidBalanceMinor)
+          : balanceMinor
+        : parseAmountMinor(amount);
+    const prepaidShort =
+      type === 'WALLET' && amountMinor !== null && amountMinor > prepaidBalanceMinor;
     const amountValid =
-      balanceKnown && amountMinor !== null && amountMinor > 0 && amountMinor <= balanceMinor;
+      balanceKnown &&
+      amountMinor !== null &&
+      amountMinor > 0 &&
+      amountMinor <= balanceMinor &&
+      !prepaidShort;
     // Prefilled only while the bill can take payment, so a settled or locked
     // panel never shows a cash figure the cashier did not enter.
     const cashText =
@@ -269,6 +289,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       (entry) =>
         entry.value === type ||
         entry.offer === 'always' ||
+        (entry.value === 'WALLET' && prepaidBalanceMinor > 0) ||
         (entry.offer === 'configured' &&
           !manualSettingsLoading &&
           !manualSettingsError &&
@@ -402,6 +423,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       amountValid &&
       !cashShort &&
       !cashInvalid &&
+      (type !== 'WALLET' || APPROVER_PIN.test(prepaidPin)) &&
       (!manual ||
         (!manualSettingsLoading &&
           !manualSettingsError &&
@@ -443,32 +465,36 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                         ? 'Resolve the safety block in the prescription panel before taking payment.'
                         : type === 'CASH' && cashDrawerClosed
                           ? null // The Cash button already shows and describes the drawer reason.
-                          : !amountValid
-                            ? 'Enter an amount between 0.01 and the balance due.'
-                            : cashInvalid
-                              ? 'Enter a valid cash amount with at most two decimal places.'
-                              : cashShort
-                                ? copy.tender.cashShort
-                                : manual && manualSettingsLoading
-                                  ? 'Loading merchant details…'
-                                  : manual && (manualSettingsError || !merchant)
-                                    ? 'Reload merchant details before taking payment.'
-                                    : manual &&
-                                        (!capture?.success ||
-                                          (referenceSkipped && !merchant?.allowReferenceSkip))
-                                      ? 'Enter the payer’s name and 4–6 transaction ID digits, or use the allowed reference skip.'
-                                      : bankTransfer && !transferCapture?.success
-                                        ? providerRef.trim() !== '' &&
-                                          looksLikeCardNumber(providerRef)
-                                          ? 'This looks like a card number. Enter the bank’s transfer reference instead.'
-                                          : 'Enter the bank transfer reference before taking payment.'
-                                        : manualCard && !cardCapture?.success
-                                          ? 'Enter the card reference and approval code from the terminal slip.'
-                                          : khataLoading
-                                            ? 'Loading Khata accounts…'
-                                            : isKhata && !account
-                                              ? 'Choose a family Khata account before taking payment.'
-                                              : 'A manager or owner must approve the credit limit increase first.';
+                          : prepaidShort
+                            ? 'That is more than the customer’s prepaid balance.'
+                            : !amountValid
+                              ? 'Enter an amount between 0.01 and the balance due.'
+                              : type === 'WALLET' && !APPROVER_PIN.test(prepaidPin)
+                                ? 'Ask the customer to enter their prepaid PIN.'
+                                : cashInvalid
+                                  ? 'Enter a valid cash amount with at most two decimal places.'
+                                  : cashShort
+                                    ? copy.tender.cashShort
+                                    : manual && manualSettingsLoading
+                                      ? 'Loading merchant details…'
+                                      : manual && (manualSettingsError || !merchant)
+                                        ? 'Reload merchant details before taking payment.'
+                                        : manual &&
+                                            (!capture?.success ||
+                                              (referenceSkipped && !merchant?.allowReferenceSkip))
+                                          ? 'Enter the payer’s name and 4–6 transaction ID digits, or use the allowed reference skip.'
+                                          : bankTransfer && !transferCapture?.success
+                                            ? providerRef.trim() !== '' &&
+                                              looksLikeCardNumber(providerRef)
+                                              ? 'This looks like a card number. Enter the bank’s transfer reference instead.'
+                                              : 'Enter the bank transfer reference before taking payment.'
+                                            : manualCard && !cardCapture?.success
+                                              ? 'Enter the card reference and approval code from the terminal slip.'
+                                              : khataLoading
+                                                ? 'Loading Khata accounts…'
+                                                : isKhata && !account
+                                                  ? 'Choose a family Khata account before taking payment.'
+                                                  : 'A manager or owner must approve the credit limit increase first.';
 
     async function submitTender() {
       if (!submittable || amountMinor === null || submissionRef.current) return;
@@ -482,6 +508,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             : undefined;
         // The PIN is single-use evidence for this attempt: clear it whatever the outcome.
         setApproverPin('');
+        const customerPin = type === 'WALLET' ? prepaidPin : undefined;
+        setPrepaidPin('');
         if (isKhata && overLimit && !pinApproval) {
           try {
             await reauthenticateOwner!(password, totp);
@@ -524,6 +552,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               : {}),
             ...(manualCard && cardCapture?.success ? cardCapture.data : {}),
             ...(bankTransfer && transferCapture?.success ? transferCapture.data : {}),
+            ...(customerPin ? { prepaidPin: customerPin } : {}),
           },
           { amount, cashReceived: type === 'CASH' ? (cashReceived ?? '') : '' }
         );
@@ -827,7 +856,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               ) : null}
             </div>
           ) : null}
-          {selected.requiresAdapter ? (
+          {selected.requiresAdapter && !prepaidWallet ? (
             <p className="text-sm text-text-muted">
               A payment provider must be connected before you can use this method. Ask your manager
               if it is unavailable.
@@ -835,13 +864,40 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           ) : null}
         </div>
 
+        {prepaidWallet && (
+          <div className="space-y-1.5">
+            <p className="text-sm">
+              Prepaid balance: PKR {formatMinor(prepaidBalanceMinor)}. Pay the rest with another
+              tender.
+            </p>
+            <Label htmlFor="tender-prepaid-pin">Customer’s prepaid PIN</Label>
+            <Input
+              id="tender-prepaid-pin"
+              type="password"
+              inputMode="numeric"
+              autoComplete="off"
+              maxLength={8}
+              value={prepaidPin}
+              onChange={(event) => setPrepaidPin(event.target.value.replace(/\D/g, ''))}
+              disabled={!editable}
+              className="h-11"
+            />
+            <p className="text-sm text-text-muted">The customer types their PIN themselves.</p>
+          </div>
+        )}
         <div className="space-y-1.5">
           <Label htmlFor="tender-amount">Amount</Label>
           <Input
             id="tender-amount"
             inputMode="decimal"
             autoComplete="off"
-            placeholder={balanceKnown ? formatMinor(balanceMinor) : undefined}
+            placeholder={
+              balanceKnown
+                ? formatMinor(
+                    prepaidWallet ? Math.min(balanceMinor, prepaidBalanceMinor) : balanceMinor
+                  )
+                : undefined
+            }
             value={amount}
             disabled={!editable}
             aria-invalid={state === 'ready' && amount.trim() !== '' && !amountValid}
