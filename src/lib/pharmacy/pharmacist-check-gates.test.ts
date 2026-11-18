@@ -126,6 +126,70 @@ describe('assertRxLinesPrescribed reads the owner setting', () => {
   });
 });
 
+describe('a controlled line added while the check was off', () => {
+  const CONTROLLED = { rx: false, restricted: false, controlled: true };
+  const lines = [
+    {
+      id: 'line-c',
+      prescriptionLineId: null,
+      medicine: CONTROLLED,
+      allocations: [{ stockMovementId: 'movement-1' }, { stockMovementId: 'movement-2' }],
+    },
+  ];
+  function registerDb(stored: Stored, marked: boolean) {
+    const findFirst = vi.fn(async () => (marked ? { id: 'entry-1' } : null));
+    const { db } = dbWith(stored, { pharmacyControlledRegisterEntry: { findFirst } });
+    return { db, findFirst };
+  }
+
+  it.each<Stored>(['ON', 'MISSING', 'UNREADABLE'])(
+    'is refused at tender and completion once the setting is %s again',
+    async (stored) => {
+      const { db, findFirst } = registerDb(stored, true);
+      await expect(assertRxLinesPrescribed(db, lines, CASHIER)).rejects.toMatchObject({
+        reason: 'CONTROLLED_LINE_UNCHECKED',
+      });
+      expect(findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            organizationId: 'org-1',
+            entryKind: 'SALE',
+            stockMovementId: { in: ['movement-1', 'movement-2'] },
+            signatureRef: { startsWith: 'pharmacist-check-off:' },
+          }),
+        })
+      );
+    }
+  );
+
+  it('is paid as recorded while the check is still off', async () => {
+    const { db } = registerDb('OFF', true);
+    await expect(assertRxLinesPrescribed(db, lines, CASHIER)).resolves.toBeUndefined();
+  });
+
+  it('leaves a controlled line a pharmacist authorized untouched', async () => {
+    const { db } = registerDb('ON', false);
+    await expect(assertRxLinesPrescribed(db, lines, CASHIER)).resolves.toBeUndefined();
+  });
+
+  it('reads nothing for a bill with no controlled line', async () => {
+    const { db, findFirst } = registerDb('ON', true);
+    await assertRxLinesPrescribed(
+      db,
+      [
+        {
+          id: 'line-o',
+          prescriptionLineId: null,
+          medicine: OTC,
+          allocations: [{ stockMovementId: 'm' }],
+        },
+      ],
+      CASHIER
+    );
+    expect(findFirst).not.toHaveBeenCalled();
+  });
+});
+
 describe('counter alerts follow the owner setting', () => {
   const line = (medicine: Partial<CounterAlertLine['medicine']>): CounterAlertLine => ({
     ref: 'line-1',
