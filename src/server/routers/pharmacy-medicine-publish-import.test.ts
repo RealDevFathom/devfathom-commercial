@@ -92,10 +92,11 @@ function makeStore(values: Record<string, string>, sourceType?: 'IMPORT' | 'REGU
   const db = {
     user: {
       // The reviewer holds the exact grant that catalogue approval requires (DEV-19).
+      // Publishing is reviewer work too, so the publishing administrator holds it (DEV-923).
       findUnique: vi.fn(async ({ where }: { where: { id: string } }) => ({
         organizationRole: null,
         permissionOverrides:
-          where.id === 'reviewer'
+          where.id === 'reviewer' || where.id === 'admin'
             ? [{ capability: 'pharmacy:catalogue-review', effect: 'ALLOW' }]
             : [],
       })),
