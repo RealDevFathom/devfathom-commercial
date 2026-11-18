@@ -24,16 +24,32 @@ import type { SourceTable } from './source-values';
  * and from common retail abbreviations, not from a corpus of real customer
  * files. Extend it from the first real handovers; an unmatched header costs a
  * mapping, never a wrong mapping.
+ *
+ * DEV-851 adds the headers of the legacy desktop catalogue export seen in the
+ * first real handover (18,933 products): `Name`, `PackUnits` and `purprice`
+ * (`saleprice` and `QTY` were already known). Its `aliasname` legacy code is
+ * deliberately left unmapped: it is not guaranteed unique, and it is kept
+ * verbatim in every row's source evidence, where the review screen shows and
+ * searches it.
  */
 const HEADER_SYNONYMS: Readonly<Record<SourceField, readonly string[]>> = {
   sourceKey: ['id', 'code', 'itemcode', 'productcode', 'sr', 'srno', 'serial', 'sno'],
-  product: ['product', 'productname', 'item', 'itemname', 'description', 'medicine', 'drug'],
-  pack: ['pack', 'packsize', 'packing', 'uom', 'unit', 'unitofmeasure'],
+  product: [
+    'product',
+    'productname',
+    'item',
+    'itemname',
+    'description',
+    'medicine',
+    'drug',
+    'name',
+  ],
+  pack: ['pack', 'packsize', 'packing', 'packunits', 'uom', 'unit', 'unitofmeasure'],
   barcode: ['barcode', 'ean', 'ean13', 'upc', 'gtin'],
   batch: ['batch', 'batchno', 'batchnumber', 'lot', 'lotno', 'lotnumber'],
   expiry: ['expiry', 'expirydate', 'exp', 'expdate', 'expdt', 'expiredate'],
   mrp: ['mrp', 'retailprice', 'saleprice', 'sellingprice', 'rate'],
-  cost: ['cost', 'costprice', 'tradeprice', 'tp', 'purchaseprice', 'purchaserate'],
+  cost: ['cost', 'costprice', 'tradeprice', 'tp', 'purchaseprice', 'purchaserate', 'purprice'],
   quantity: ['qty', 'quantity', 'stock', 'stockqty', 'onhand', 'balanceqty', 'closingqty'],
   supplier: ['supplier', 'vendor', 'distributor', 'suppliername'],
   customer: ['customer', 'client', 'customername', 'account'],

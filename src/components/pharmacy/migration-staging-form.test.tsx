@@ -102,4 +102,42 @@ describe('staging column mapping', () => {
     expect(screen.getByLabelText('Quantity')).toHaveValue('2');
     expect(mocks.push).not.toHaveBeenCalled();
   });
+  it('accepts a catalogue-sized file and reports a replayed batch without a duplicate', async () => {
+    mocks.stage.mockResolvedValue({
+      data: {
+        sourceId: 'source_a',
+        batchId: 'batch_a',
+        rowCount: 18_933,
+        exceptionCount: 37_866,
+        replayed: true,
+      },
+    });
+    render(<MigrationStagingForm branchId="branch_a" route="/pharmacy/medicines/staged" />);
+    const text = `Product,Pack,Qty\n${'Example,30,29\n'.repeat(80_000)}`;
+    const file = new File([text], 'catalogue.csv', { type: 'text/csv' });
+    expect(file.size).toBeGreaterThan(1024 * 1024);
+    Object.defineProperty(file, 'arrayBuffer', {
+      value: async () => new TextEncoder().encode(text).buffer,
+    });
+    fireEvent.change(screen.getByLabelText('Source file'), { target: { files: [file] } });
+    await screen.findByLabelText('Quantity column counts');
+    expect(mocks.read).toHaveBeenCalledWith(
+      expect.objectContaining({ fileName: 'catalogue.csv', branchId: 'branch_a' })
+    );
+    fireEvent.change(screen.getByLabelText('Quantity column counts'), {
+      target: { value: 'PACKS' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Stage for review' }));
+    expect(
+      await screen.findByText(/already staged with the same columns: 18,933 rows/)
+    ).toBeInTheDocument();
+  });
+  it('refuses a file above the staging limit before reading it', async () => {
+    render(<MigrationStagingForm branchId="branch_a" route="/pharmacy/medicines/staged" />);
+    const file = new File(['x'], 'huge.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'size', { value: 8 * 1024 * 1024 + 1 });
+    fireEvent.change(screen.getByLabelText('Source file'), { target: { files: [file] } });
+    expect(await screen.findByRole('alert')).toHaveTextContent('up to 8 MiB');
+    expect(mocks.read).not.toHaveBeenCalled();
+  });
 });

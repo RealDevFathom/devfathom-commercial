@@ -5,11 +5,29 @@ import { IMPORT_MAX_BYTES, IMPORT_MAX_ROWS } from './owner-import-input';
 import type { SourceTable } from './source-values';
 
 export class OwnerImportError extends Error {}
-const MAX_EXPANDED = 8 * 1024 * 1024;
+
+/** Bounds for one parsed upload. The defaults are the opening-stock wizard's. */
+export type UploadLimits = {
+  /** Largest accepted file, in bytes, before any XLSX decompression. */
+  maxBytes: number;
+  /** Largest number of data rows (the header row is not counted). */
+  maxRows: number;
+  /** Largest total size an XLSX archive may expand to. */
+  maxExpanded: number;
+};
+export const OWNER_UPLOAD_LIMITS: UploadLimits = {
+  maxBytes: IMPORT_MAX_BYTES,
+  maxRows: IMPORT_MAX_ROWS,
+  maxExpanded: 8 * 1024 * 1024,
+};
+
+function mebibytes(bytes: number) {
+  return `${Number((bytes / (1024 * 1024)).toFixed(1))} MiB`;
+}
 
 // Check actual decompression before handing a workbook to ExcelJS/JSZip. A
 // compressed-size limit alone does not bound an XLSX zip bomb's memory use.
-function boundedWorkbook(bytes: Buffer) {
+function boundedWorkbook(bytes: Buffer, maxExpanded: number) {
   const end = bytes.length - 22;
   if (end < 0 || bytes.readUInt32LE(end) !== 0x06054b50 ||
       bytes.readUInt16LE(end + 4) !== 0 || bytes.readUInt16LE(end + 6) !== 0 ||
@@ -33,7 +51,7 @@ function boundedWorkbook(bytes: Buffer) {
     const commentLength = bytes.readUInt16LE(cursor + 32);
     const local = bytes.readUInt32LE(cursor + 42);
     const name = bytes.toString('utf8', cursor + 46, cursor + 46 + nameLength);
-    if ((flags & 1) || ![0, 8].includes(method) || expanded > MAX_EXPANDED - total ||
+    if ((flags & 1) || ![0, 8].includes(method) || expanded > maxExpanded - total ||
         names.has(name) || /(^\/|\\|(^|\/)\.\.(\/|$))/.test(name) ||
         local + 30 > bytes.readUInt32LE(end + 16) || bytes.readUInt32LE(local) !== 0x04034b50 ||
         bytes.readUInt16LE(local + 8) !== method) throw new OwnerImportError('Unsupported or oversized XLSX archive.');
@@ -41,15 +59,15 @@ function boundedWorkbook(bytes: Buffer) {
     const start = local + 30 + bytes.readUInt16LE(local + 26) + bytes.readUInt16LE(local + 28);
     if (start + compressed > bytes.readUInt32LE(end + 16)) throw new OwnerImportError('Invalid XLSX entry.');
     const data = bytes.subarray(start, start + compressed);
-    const actual = method === 0 ? data.length : inflateRawSync(data, { maxOutputLength: MAX_EXPANDED - total + 1 }).length;
-    if (actual !== expanded || actual > MAX_EXPANDED - total) throw new OwnerImportError('Workbook expands beyond the size limit.');
+    const actual = method === 0 ? data.length : inflateRawSync(data, { maxOutputLength: maxExpanded - total + 1 }).length;
+    if (actual !== expanded || actual > maxExpanded - total) throw new OwnerImportError('Workbook expands beyond the size limit.');
     total += actual;
     cursor += 46 + nameLength + extraLength + commentLength;
   }
   if (cursor !== directoryEnd) throw new OwnerImportError('Invalid XLSX directory size.');
 }
 
-function csvRecords(text: string): string[][] {
+function csvRecords(text: string, maxRows: number): string[][] {
   const records: string[][] = [];
   let row: string[] = [], cell = '', quoted = false, closed = false;
   const finishCell = () => { row.push(cell.trim()); cell = ''; closed = false; };
@@ -57,7 +75,7 @@ function csvRecords(text: string): string[][] {
     finishCell();
     if (row.some(Boolean)) records.push(row);
     row = [];
-    if (records.length > IMPORT_MAX_ROWS + 1) throw new OwnerImportError(`Use at most ${IMPORT_MAX_ROWS} data rows per file.`);
+    if (records.length > maxRows + 1) throw new OwnerImportError(`Use at most ${maxRows} data rows per file.`);
   };
   for (let i = 0; i < text.length; i++) {
     const char = text[i];
@@ -92,25 +110,30 @@ export function excelShowsDay(numFmt: string | undefined | null): boolean {
   return !/[ym]/.test(tokens) || /d/.test(tokens);
 }
 
-export async function parseOwnerUpload(fileName: string, bytes: Buffer): Promise<SourceTable> {
-  if (!bytes.length || bytes.length > IMPORT_MAX_BYTES) throw new OwnerImportError('Upload a nonempty CSV or XLSX file up to 1 MiB.');
+export async function parseOwnerUpload(
+  fileName: string,
+  bytes: Buffer,
+  limits: UploadLimits = OWNER_UPLOAD_LIMITS
+): Promise<SourceTable> {
+  const maxRows = limits.maxRows;
+  if (!bytes.length || bytes.length > limits.maxBytes) throw new OwnerImportError(`Upload a nonempty CSV or XLSX file up to ${mebibytes(limits.maxBytes)}.`);
   let records: string[][];
   if (/\.csv$/i.test(fileName)) {
     let text: string;
     try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
     catch { throw new OwnerImportError('Save the CSV using UTF-8 encoding.'); }
     if (text.includes('\0')) throw new OwnerImportError('The CSV contains binary data.');
-    records = csvRecords(text.replace(/^\uFEFF/, ''));
+    records = csvRecords(text.replace(/^\uFEFF/, ''), maxRows);
   } else if (/\.xlsx$/i.test(fileName)) {
     try {
-      boundedWorkbook(bytes);
+      boundedWorkbook(bytes, limits.maxExpanded);
       const { default: ExcelJS } = await import('exceljs');
       const workbook = new ExcelJS.Workbook();
       await workbook.xlsx.load(new Uint8Array(bytes).buffer);
       const sheets = workbook.worksheets.filter((sheet) => sheet.actualRowCount > 0);
       if (sheets.length !== 1) throw new OwnerImportError('Upload exactly one populated worksheet.');
       const sheet = sheets[0]!;
-      if (sheet.rowCount > IMPORT_MAX_ROWS + 1 || sheet.columnCount > 40) throw new OwnerImportError(`Use at most ${IMPORT_MAX_ROWS} rows and 40 columns.`);
+      if (sheet.rowCount > maxRows + 1 || sheet.columnCount > 40) throw new OwnerImportError(`Use at most ${maxRows} rows and 40 columns.`);
       records = [];
       sheet.eachRow((row) => {
         const values: string[] = [];
@@ -133,6 +156,6 @@ export async function parseOwnerUpload(fileName: string, bytes: Buffer): Promise
   if (!headers?.length || !rows.length) throw new OwnerImportError('Include a header row and at least one stock row.');
   if (headers.length > 40 || headers.some((header) => !header || header.length > 100) ||
       new Set(headers.map((header) => header.toLowerCase())).size !== headers.length) throw new OwnerImportError('Use up to 40 unique, nonempty column headers.');
-  if (rows.length > IMPORT_MAX_ROWS || rows.some((row) => row.length !== headers.length || row.some((cell) => cell.length > 500))) throw new OwnerImportError('Each row must match the headers and contain at most 500 characters per cell.');
+  if (rows.length > maxRows || rows.some((row) => row.length !== headers.length || row.some((cell) => cell.length > 500))) throw new OwnerImportError('Each row must match the headers and contain at most 500 characters per cell.');
   return { headers, rows };
 }
