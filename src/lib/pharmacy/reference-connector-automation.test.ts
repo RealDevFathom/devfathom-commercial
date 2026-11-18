@@ -235,6 +235,59 @@ describe('manual reference connector automation', () => {
     });
   });
 
+  it('DEV-854: holds a NARCOTICS-class row for pharmacist classification without proposing a flag', async () => {
+    const result = await runManualReferenceConnector(
+      fixture.db,
+      runInput([
+        row(
+          'legacy-1',
+          { productName: 'Sedex 5mg', strength: '5 mg', dosageForm: 'tablet', pack: '10 tablets' },
+          { legacyClass: 'NARCOTICS', legacyCategory: 'Tablts' }
+        ),
+        row('legacy-2', { productName: 'Amoxil' }, { legacyClass: 'Muller & Phipps' }),
+      ])
+    );
+
+    expect(result).toMatchObject({ proposalRows: 2 });
+    const [held, plain] = fixture.proposals as Array<
+      StoredProposal & { payload: { controlledReview?: unknown } }
+    >;
+    expect(held!.payload.controlledReview).toEqual({
+      cues: ['LEGACY_CLASS_NARCOTICS'],
+      legacyClass: 'NARCOTICS',
+      legacyCategory: 'Tablts',
+    });
+    // The legacy class is a review cue only; it never becomes a controlled value.
+    expect(held!.payload.values).not.toHaveProperty('controlled');
+    expect(plain!.payload.controlledReview).toBeUndefined();
+  });
+
+  it('DEV-854: proposes classification for an unchanged existing medicine with a legacy cue', async () => {
+    fixture.target.productName = 'Tramadol 50mg';
+    const result = await runManualReferenceConnector(
+      fixture.db,
+      runInput([row('legacy-3', {}, { targetMedicineId: 'medicine-a' })])
+    );
+    expect(result).toMatchObject({ proposalRows: 1, rowsSkipped: 0 });
+    expect(fixture.proposals[0]).toMatchObject({
+      targetMedicineId: 'medicine-a',
+      payload: { values: {}, controlledReview: { cues: ['NAME_SUGGESTS_CONTROLLED_SUBSTANCE'] } },
+    });
+  });
+
+  it('DEV-854: a mapped legacy class changes the input digest; an unmapped one does not', () => {
+    const plain = [row('a', { productName: 'X' })];
+    expect(manualConnectorInputDigest({ fileName: 'f.csv', rows: plain })).toBe(
+      manualConnectorInputDigest({ fileName: 'f.csv', rows: [{ ...plain[0]! }] })
+    );
+    expect(manualConnectorInputDigest({ fileName: 'f.csv', rows: plain })).not.toBe(
+      manualConnectorInputDigest({
+        fileName: 'f.csv',
+        rows: [{ ...plain[0]!, legacyClass: 'NARCOTICS' }],
+      })
+    );
+  });
+
   it('records a second identical input as a no-op', async () => {
     const input = runInput([
       row('new-1', {

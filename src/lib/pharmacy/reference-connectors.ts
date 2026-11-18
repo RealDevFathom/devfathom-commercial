@@ -58,6 +58,12 @@ export interface NormalizedMedicineReferenceRow {
     | 'MISSING_PACK'
     | 'INVALID_SCHEDULE_CLASSIFICATION'
   >;
+  /**
+   * DEV-854: the legacy export's free-text class and category. Review cues only:
+   * never asserted and never mapped to a controlled flag.
+   */
+  legacyClass?: string;
+  legacyCategory?: string;
 }
 
 export type ConnectorSchedule =
@@ -86,8 +92,12 @@ export interface MedicineReferenceConnector<TInput = unknown> {
   fetch(input: TInput, cursor?: number): Promise<MedicineReferenceFetchResult>;
 }
 
+/** Legacy grouping columns read as pharmacist review cues (DEV-854), never as flags. */
+export const LEGACY_CUE_FIELDS = ['legacyClass', 'legacyCategory'] as const;
+export type LegacyCueField = (typeof LEGACY_CUE_FIELDS)[number];
+
 export type ManualMappingTemplate = Partial<
-  Record<MedicineReferenceField | 'rowSourceKey' | 'targetMedicineId', string>
+  Record<MedicineReferenceField | LegacyCueField | 'rowSourceKey' | 'targetMedicineId', string>
 >;
 
 export interface ManualFileInput {
@@ -165,10 +175,17 @@ function normalizeReferenceRows(
     if (!values.pack) blockingIssues.push('MISSING_PACK');
     if (invalidSchedule) blockingIssues.push('INVALID_SCHEDULE_CLASSIFICATION');
 
+    const legacy: Partial<Record<LegacyCueField, string>> = {};
+    for (const field of LEGACY_CUE_FIELDS) {
+      const raw = cell(sourceRow, input.mapping[field]);
+      if (raw) legacy[field] = raw.slice(0, 200);
+    }
+
     return {
       batchId: input.batchId,
       rowSourceKey,
       ...(targetMedicineId ? { targetMedicineId } : {}),
+      ...legacy,
       values,
       assertions,
       blockingIssues,

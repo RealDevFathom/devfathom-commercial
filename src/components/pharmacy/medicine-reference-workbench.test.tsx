@@ -437,3 +437,29 @@ it('names the source of each proposal', () => {
   render(<MedicineReferenceWorkbench health={[]} />);
   expect(screen.getByText('Source: DRAP registry file')).toBeVisible();
 });
+it('DEV-854: requires the pharmacist to classify a legacy NARCOTICS item before confirming', () => {
+  mocks.proposals.data = [
+    {
+      id: 'held',
+      payload: {
+        values: { productName: 'Sedex 5mg' },
+        controlledReview: { cues: ['LEGACY_CLASS_NARCOTICS'], legacyClass: 'NARCOTICS' },
+      },
+      targetMedicine: null,
+    },
+  ];
+  render(<MedicineReferenceWorkbench health={[]} />);
+  const group = screen.getByRole('group', { name: 'Controlled-drug classification' });
+  expect(group).toHaveTextContent('Legacy class is NARCOTICS');
+  expect(group).toHaveTextContent('cannot be sold until a registered pharmacist confirms');
+  const confirm = screen.getByRole('button', { name: 'Confirm reference proposal' });
+  expect(confirm).toBeDisabled();
+  fireEvent.click(within(group).getByRole('radio', { name: 'Not a controlled drug' }));
+  expect(confirm).toBeEnabled();
+  fireEvent.click(confirm);
+  expect(mocks.confirm).toHaveBeenCalledWith({
+    proposalId: 'held',
+    decision: 'CONFIRM',
+    controlledClassification: 'NOT_CONTROLLED',
+  });
+});

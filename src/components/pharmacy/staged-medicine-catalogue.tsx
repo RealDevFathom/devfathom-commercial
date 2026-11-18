@@ -28,7 +28,7 @@ async function loadReview(
       ...selected,
       query: text('query'),
       page: Number(text('page') || '1'),
-      filter: (text('filter') || 'all') as 'all' | 'stock' | 'price' | 'collision',
+      filter: (text('filter') || 'all') as 'all' | 'stock' | 'price' | 'collision' | 'controlled',
     });
     const explicit = {
       branchId: text('branchId'),
@@ -246,6 +246,7 @@ export async function StagedMedicineCatalogue({
                 <option value="stock">Open batch / expiry gaps</option>
                 <option value="price">Open verified price gaps</option>
                 <option value="collision">Name collisions</option>
+                <option value="controlled">Held for pharmacist classification</option>
               </select>
             </label>
             <Button type="submit" className="min-h-11">
@@ -303,6 +304,13 @@ export async function StagedMedicineCatalogue({
                         Row {row.rowNumber}
                         {row.collision ? ' · Name collision — keep separate' : ''}
                       </p>
+                      {row.controlledReview ? (
+                        <StatusPill
+                          className="mt-1"
+                          status="warning"
+                          label={row.controlledReview.label}
+                        />
+                      ) : null}
                     </td>
                     {(['QTY', 'saleprice', 'purprice', 'UnitPrice', 'PackUnits'] as const).map(
                       (key) => (
@@ -361,6 +369,10 @@ export async function StagedMedicineCatalogue({
               'Quantity column counts': detail.quantityReview.choiceLabel,
               'Staged quantity — not stock': detail.quantityReview.label,
               'Stored staged quantity — not stock': detail.canonicalQuantity,
+              'Controlled-drug classification': detail.controlledReview
+                ? `${detail.controlledReview.label} (${detail.controlledReview.cues.join(', ')})`
+                : 'No legacy controlled cue',
+              'Source prices': detail.priceStatus,
             }).map(([key, value]) => (
               <div key={key} className="min-w-0">
                 <dt className="text-text-muted">{key}</dt>
@@ -381,8 +393,11 @@ export async function StagedMedicineCatalogue({
           </dl>
           <p className="mt-4 text-sm text-text-muted">
             Name is the source product name. Lowercase name, classname and Category are unverified
-            legacy groupings. aliasname is a legacy code, not a verified barcode. All price columns
-            remain references; no MRP or cost conversion is applied.
+            legacy groupings. A NARCOTICS class or other controlled cue only holds the item for a
+            registered pharmacist to classify; it never marks the item controlled, and the item
+            cannot be sold until the pharmacist confirms. aliasname is a legacy code, not a verified
+            barcode. All price columns remain suggestions for the owner to confirm against the pack;
+            no MRP or cost conversion is applied.
           </p>
           <h3 className="mt-6 font-semibold">Retained review flags and exceptions</h3>
           <ul className="mt-3 space-y-1 break-words text-sm">

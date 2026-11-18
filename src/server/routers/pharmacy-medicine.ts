@@ -197,6 +197,15 @@ const connectorProposalPayload = z
         rights: connectorRights,
       })
       .strict(),
+    // DEV-854: present when a legacy class/category or name suggests a controlled drug.
+    controlledReview: z
+      .object({
+        cues: z.array(z.string().min(1).max(100)).min(1).max(10),
+        legacyClass: z.string().max(200).optional(),
+        legacyCategory: z.string().max(200).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -584,6 +593,9 @@ export const pharmacyMedicineRouter = router({
                   batchId: z.string().trim().min(1).max(200),
                   rowSourceKey: z.string().trim().min(1).max(300),
                   targetMedicineId: z.string().trim().min(1).max(200).optional(),
+                  // DEV-854: legacy grouping text, a pharmacist review cue only.
+                  legacyClass: z.string().trim().min(1).max(200).optional(),
+                  legacyCategory: z.string().trim().min(1).max(200).optional(),
                   values: z
                     .record(z.string().min(1).max(100), z.string().trim().min(1).max(1_000))
                     .refine(
@@ -694,6 +706,8 @@ export const pharmacyMedicineRouter = router({
           proposalId: z.string().trim().min(1).max(200),
           decision: z.enum(['CONFIRM', 'REJECT']),
           soloPin: soloPinInput,
+          // DEV-854: the pharmacist's own classification of a proposal held for review.
+          controlledClassification: z.enum(['CONTROLLED', 'NOT_CONTROLLED']).optional(),
         })
         .strict()
     )
@@ -728,6 +742,22 @@ export const pharmacyMedicineRouter = router({
           return { id: proposal.id, ...data };
         }
 
+        const payload = connectorProposalPayload.parse(proposal.payload);
+        // DEV-854: a legacy NARCOTICS class or other controlled cue holds the item until
+        // a pharmacist classifies it. The cue itself never becomes the controlled flag.
+        const controlledReview = payload.controlledReview;
+        if (controlledReview && !input.controlledClassification)
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message:
+              'This item is held for pharmacist classification. Confirm whether it is a controlled drug before confirming the proposal; the legacy class is only a review cue.',
+          });
+        if (!controlledReview && input.controlledClassification)
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'This proposal is not held for controlled-drug classification.',
+          });
+
         const scope = {
           organizationId: ctx.entitlements.organizationId,
           actorId: ctx.session.user.id,
@@ -753,8 +783,9 @@ export const pharmacyMedicineRouter = router({
             'PharmacyReferenceConnectorProposal'
           );
 
-        const payload = connectorProposalPayload.parse(proposal.payload);
-        const values = payload.values;
+        const values = { ...payload.values };
+        if (controlledReview)
+          values.controlled = input.controlledClassification === 'CONTROLLED' ? 'true' : 'false';
         const source = REFERENCE_CONNECTORS[payload.source.connectorId];
         let medicine = proposal.targetMedicineId
           ? await tx.medicine.findFirst({ where: { id: proposal.targetMedicineId } })
@@ -799,21 +830,27 @@ export const pharmacyMedicineRouter = router({
 
         const assertions = [];
         for (const [field, value] of Object.entries(values)) {
+          // The classification is the pharmacist's own assertion, not the import's.
+          const classified = field === 'controlled' && Boolean(controlledReview);
           assertions.push(
             await tx.medicineProvenance.create({
               data: {
                 medicineId: medicine.id,
                 editorId: proposal.run.triggeredBy,
                 field,
-                source: `${source.key}:${proposal.inputDigest}:${proposal.rowSourceKey}`,
-                sourceType: source.sourceType,
+                source: classified
+                  ? `pharmacist-classification:${proposal.id}`
+                  : `${source.key}:${proposal.inputDigest}:${proposal.rowSourceKey}`,
+                sourceType: classified ? 'USER' : source.sourceType,
                 retrievedAt: decidedAt,
                 reviewer: ctx.session.user.id,
                 status: 'ACCEPTED',
                 assertedValue: {
                   value,
                   connectorId: payload.source.connectorId,
-                  sourceLabel: payload.source.fileName,
+                  sourceLabel: classified
+                    ? `Pharmacist classification (legacy cue: ${controlledReview!.cues.join(', ')})`
+                    : payload.source.fileName,
                   batchId: payload.source.batchId,
                   rowSourceKey: payload.source.rowSourceKey,
                   rights: jsonConnectorRights(source.rights),
@@ -848,6 +885,19 @@ export const pharmacyMedicineRouter = router({
           throw new TRPCError({
             code: 'CONFLICT',
             message: 'Connector proposal already has a pharmacist decision.',
+          });
+        if (controlledReview)
+          annotateAudit(ctx, {
+            targetType: 'Medicine',
+            targetId: medicine.id,
+            description: 'Pharmacist controlled-drug classification of an imported item',
+            metadata: {
+              proposalId: proposal.id,
+              controlledClassification: input.controlledClassification,
+              cues: controlledReview.cues,
+              legacyClass: controlledReview.legacyClass ?? null,
+              legacyCategory: controlledReview.legacyCategory ?? null,
+            },
           });
         return { id: proposal.id, ...data };
       })

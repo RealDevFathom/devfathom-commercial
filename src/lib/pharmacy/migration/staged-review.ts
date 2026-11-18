@@ -2,6 +2,7 @@
 import type { Prisma } from '@/generated/prisma/client';
 import { naturalKey, MIGRATION_TARGET_KEYS } from './mapping-targets';
 import type { ExceptionBucket } from './profiler';
+import { CONTROLLED_REVIEW_FLAG } from '../controlled-review-cue';
 
 export const SOURCE_REFERENCE_COLUMNS = [
   'Name',
@@ -129,6 +130,15 @@ export function stagedReference(
     draftStatus: 'No linked draft established' as const,
     verified: false as const,
     sellable: false as const,
+    /** DEV-854: the legacy class is a review cue; only a pharmacist sets the controlled flag. */
+    controlledReview: flags.includes(CONTROLLED_REVIEW_FLAG)
+      ? {
+          label: 'Held for pharmacist classification' as const,
+          cues: flags.filter((flag) => flag !== CONTROLLED_REVIEW_FLAG),
+        }
+      : null,
+    /** Source prices are suggestions until the owner confirms them against the pack. */
+    priceStatus: 'Suggested — owner confirms against the pack' as const,
     collision:
       flags.includes('NORMALIZED_NAME_COLLISION_NO_MERGE') ||
       row.exceptions.some((e) => e.bucket === 'DUPLICATE_PRODUCT'),

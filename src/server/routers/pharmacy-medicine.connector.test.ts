@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   can: vi.fn(async () => true),
   hasModule: vi.fn(() => true),
+  annotateAudit: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -24,6 +25,7 @@ vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => true),
   recordTrpcAudit: vi.fn(),
+  annotateAudit: mocks.annotateAudit,
 }));
 
 import { DRAP_REGISTRY_RIGHTS, MANUAL_FILE_RIGHTS } from '@/lib/pharmacy/reference-connectors';
@@ -54,6 +56,7 @@ function caller(db: object) {
 }
 
 beforeEach(() => {
+  mocks.annotateAudit.mockClear();
   mocks.can.mockClear();
   mocks.hasModule.mockClear();
 });
@@ -243,5 +246,145 @@ describe('MED-06 connector router boundary', () => {
         assertedValue: expect.objectContaining({ rights: DRAP_REGISTRY_RIGHTS }),
       });
     }
+  });
+
+  describe('DEV-854 legacy controlled-drug classification', () => {
+    function heldProposalTx(controlledReview?: Record<string, unknown>) {
+      const created: Array<Record<string, unknown>> = [];
+      const tx = {
+        pharmacyReferenceConnectorProposal: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'proposal-n',
+            run: { triggeredBy: 'editor-1' },
+            status: 'PENDING',
+            targetMedicineId: null,
+            inputDigest: 'digest',
+            rowSourceKey: 'legacy-1',
+            payload: {
+              values: { productName: 'Sedex 5mg' },
+              source: {
+                connectorId: 'manual-file',
+                label: 'Manual CSV / Excel',
+                fileName: 'legacy.csv',
+                batchId: 'batch-l',
+                rowSourceKey: 'legacy-1',
+                rights: MANUAL_FILE_RIGHTS,
+              },
+              ...(controlledReview ? { controlledReview } : {}),
+            },
+          }),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        medicine: {
+          findFirst: vi.fn(),
+          create: vi.fn().mockResolvedValue({ id: 'medicine-n' }),
+        },
+        medicineProvenance: {
+          create: vi.fn().mockImplementation(async ({ data }) => {
+            created.push(data);
+            return { id: `assertion-${created.length}` };
+          }),
+        },
+        medicineReviewDecision: { create: vi.fn() },
+      };
+      const db = { $transaction: (run: (client: typeof tx) => unknown) => run(tx) };
+      return { tx, db, created };
+    }
+    const cue = { cues: ['LEGACY_CLASS_NARCOTICS'], legacyClass: 'NARCOTICS' };
+
+    it('refuses to confirm a held item until the pharmacist classifies it, writing nothing', async () => {
+      const { tx, db } = heldProposalTx(cue);
+      await expect(
+        caller(db).decideReferenceConnectorProposal({
+          proposalId: 'proposal-n',
+          decision: 'CONFIRM',
+        })
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: expect.stringContaining('held for pharmacist classification'),
+      });
+      expect(tx.medicine.create).not.toHaveBeenCalled();
+      expect(tx.medicineProvenance.create).not.toHaveBeenCalled();
+      expect(tx.pharmacyReferenceConnectorProposal.updateMany).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['NOT_CONTROLLED', false],
+      ['CONTROLLED', true],
+    ] as const)(
+      'records the pharmacist %s classification, not the legacy class',
+      async (controlledClassification, controlled) => {
+        const { tx, db, created } = heldProposalTx(cue);
+        await caller(db).decideReferenceConnectorProposal({
+          proposalId: 'proposal-n',
+          decision: 'CONFIRM',
+          controlledClassification,
+        });
+        expect(tx.medicine.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({ productName: 'Sedex 5mg', controlled, saleable: false }),
+        });
+        expect(created.find((assertion) => assertion.field === 'controlled')).toMatchObject({
+          sourceType: 'USER',
+          source: 'pharmacist-classification:proposal-n',
+          reviewer: 'pharmacist-a',
+          status: 'ACCEPTED',
+          assertedValue: expect.objectContaining({ value: String(controlled) }),
+        });
+        expect(mocks.annotateAudit).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            targetId: 'medicine-n',
+            metadata: expect.objectContaining({
+              controlledClassification,
+              cues: ['LEGACY_CLASS_NARCOTICS'],
+            }),
+          })
+        );
+      }
+    );
+
+    it('refuses a classification on a proposal that is not held for review', async () => {
+      const { tx, db } = heldProposalTx();
+      await expect(
+        caller(db).decideReferenceConnectorProposal({
+          proposalId: 'proposal-n',
+          decision: 'CONFIRM',
+          controlledClassification: 'CONTROLLED',
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(tx.medicine.create).not.toHaveBeenCalled();
+    });
+
+    it('accepts legacy class and category text on an uploaded row', async () => {
+      const transaction = vi.fn().mockResolvedValue({ status: 'COMPLETED' });
+      await caller({ $transaction: transaction }).runReferenceConnectorNow({
+        connectorId: 'manual-file',
+        batchId: 'batch-l',
+        fileName: 'legacy.csv',
+        rows: [
+          {
+            batchId: 'batch-l',
+            rowSourceKey: 'legacy-1',
+            legacyClass: 'NARCOTICS',
+            legacyCategory: 'Tablts',
+            values: { productName: 'Sedex 5mg' },
+            assertions: [
+              {
+                field: 'productName',
+                value: 'Sedex 5mg',
+                source: 'legacy.csv',
+                sourceType: 'IMPORT',
+                retrievedAt: '2030-01-01T00:00:00.000Z',
+                batchId: 'batch-l',
+                rowSourceKey: 'legacy-1',
+                rights: MANUAL_FILE_RIGHTS,
+              },
+            ],
+            blockingIssues: [],
+          },
+        ],
+      });
+      expect(transaction).toHaveBeenCalledOnce();
+    });
   });
 });

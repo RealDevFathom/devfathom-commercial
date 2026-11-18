@@ -265,6 +265,63 @@ describe('production batch staging', () => {
       expect(db.pharmacyMigrationBatch.create).not.toHaveBeenCalled();
     }
   );
+  it('DEV-854: flags NARCOTICS-class rows for pharmacist review without inferring a controlled flag', async () => {
+    await caller().stageBatch({
+      ...staging,
+      content: Buffer.from(
+        'Product,Pack,Qty,classname,Category\nSedex,10,2,NARCOTICS,Tablets\nAmoxil,10,3,Muller & Phipps,Antibiotcs'
+      ).toString('base64'),
+    });
+    const [[{ data }]] = db.pharmacyMigrationRow.createMany.mock.calls as unknown as [
+      [{ data: Array<{ rawPayload: Record<string, string> }> }],
+    ];
+    expect(data[0]!.rawPayload.__review_flags).toBe(
+      'SUSPECTED_CONTROLLED_PHARMACIST_REVIEW;LEGACY_CLASS_NARCOTICS'
+    );
+    expect(data[0]!.rawPayload.classname).toBe('NARCOTICS');
+    expect(data[1]!.rawPayload.__review_flags).toBeUndefined();
+    for (const row of data) expect(row).not.toHaveProperty('controlled');
+  });
+  it('DEV-854: lists only rows held for pharmacist classification and labels them', async () => {
+    db.pharmacyMigrationRow.findMany.mockResolvedValue([
+      {
+        id: 'row_c',
+        productName: 'Sedex',
+        packLabel: null,
+        sourceKey: 'key',
+        rowNumber: 1,
+        rawPayload: {
+          classname: 'NARCOTICS',
+          __review_flags: 'SUSPECTED_CONTROLLED_PHARMACIST_REVIEW;LEGACY_CLASS_NARCOTICS',
+        },
+        quantityCanonical: null,
+        exceptions: [],
+      },
+    ]);
+    const listed = await caller().stagedRows({ ...scope, filter: 'controlled' });
+    expect(db.pharmacyMigrationRow.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          AND: [
+            {
+              rawPayload: {
+                path: ['__review_flags'],
+                string_contains: 'SUSPECTED_CONTROLLED_PHARMACIST_REVIEW',
+              },
+            },
+          ],
+        }),
+      })
+    );
+    expect(listed.rows[0]).toMatchObject({
+      sellable: false,
+      controlledReview: {
+        label: 'Held for pharmacist classification',
+        cues: ['LEGACY_CLASS_NARCOTICS'],
+      },
+      priceStatus: 'Suggested — owner confirms against the pack',
+    });
+  });
   it('never invents a pack factor', async () => {
     await caller().stageBatch({
       ...staging,

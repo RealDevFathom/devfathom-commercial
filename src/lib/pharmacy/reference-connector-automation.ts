@@ -15,6 +15,7 @@ import {
   type MedicineReferenceField,
   type NormalizedMedicineReferenceRow,
 } from './reference-connectors';
+import { controlledReviewCues } from './controlled-review-cue';
 
 export const MAX_CONNECTOR_ROWS_PER_CALL = 100;
 
@@ -92,6 +93,9 @@ export function manualConnectorInputDigest(
       targetMedicineId: row.targetMedicineId ?? null,
       values: sortedValues(row.values),
       blockingIssues: [...row.blockingIssues].sort(),
+      // Only present when mapped, so digests of files without legacy columns are unchanged.
+      ...(row.legacyClass !== undefined ? { legacyClass: row.legacyClass } : {}),
+      ...(row.legacyCategory !== undefined ? { legacyCategory: row.legacyCategory } : {}),
     })),
   };
   return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
@@ -327,6 +331,17 @@ export async function runManualReferenceConnector(
       target = matches[0] ?? null;
     }
 
+    // DEV-854: a legacy NARCOTICS class or other controlled cue never sets a flag; it
+    // holds the row as a proposal until a pharmacist classifies it. Official
+    // registry rows carry the regulator's own schedule instead.
+    const controlledCues = descriptor.official
+      ? []
+      : controlledReviewCues({
+          legacyClass: row.legacyClass,
+          legacyCategory: row.legacyCategory,
+          productName: row.values.productName ?? target?.productName,
+          alias: row.values.alias,
+        });
     const proposed = regulatedChanges(row, target);
     for (const field of DIRECT_REFERENCE_FIELDS) {
       const value = row.values[field];
@@ -334,7 +349,7 @@ export async function runManualReferenceConnector(
       // Descriptive edits also wait for an independent catalogue review (DEV-766).
       if (!target || target[field] !== value) proposed[field] = value;
     }
-    if (Object.keys(proposed).length) {
+    if (Object.keys(proposed).length || controlledCues.length) {
       await db.pharmacyReferenceConnectorProposal.create({
         data: {
           runId: run.id,
@@ -352,6 +367,15 @@ export async function runManualReferenceConnector(
               rowSourceKey: row.rowSourceKey,
               rights: descriptor.rights,
             },
+            ...(controlledCues.length
+              ? {
+                  controlledReview: {
+                    cues: controlledCues,
+                    ...(row.legacyClass ? { legacyClass: row.legacyClass } : {}),
+                    ...(row.legacyCategory ? { legacyCategory: row.legacyCategory } : {}),
+                  },
+                }
+              : {}),
           }),
         },
       });

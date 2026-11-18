@@ -7,6 +7,12 @@ import {
 import { OwnerImportError, parseOwnerUpload } from '@/lib/pharmacy/migration/owner-import-upload';
 import { excelCsvProfiler } from '@/lib/pharmacy/migration/excel-csv-profiler';
 import { profileTable } from '@/lib/pharmacy/migration/profiler';
+import { MIGRATION_TARGET_KEYS } from '@/lib/pharmacy/migration/mapping-targets';
+import {
+  CONTROLLED_REVIEW_FLAG,
+  controlledReviewCues,
+  legacyGroupingCells,
+} from '@/lib/pharmacy/controlled-review-cue';
 import { recordSource, persistProfile } from '@/lib/pharmacy/migration/workbench';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
@@ -101,6 +107,15 @@ export const pharmacyStagedReviewRouter = router({
           row.sourceKey = `sha256:${source.contentHash}:row:${row.rowNumber}`;
           row.rawPayload.__source_sha256 = source.contentHash;
           row.rawPayload.__source_row = String(row.rowNumber);
+          // DEV-854: a NARCOTICS class or other controlled cue holds the row for a
+          // pharmacist. It is a review flag only; no controlled flag is inferred.
+          if (row.targetModelKey !== MIGRATION_TARGET_KEYS.PRODUCT) continue;
+          const cues = controlledReviewCues({
+            ...legacyGroupingCells(row.rawPayload),
+            productName: row.productName,
+          });
+          if (cues.length)
+            row.rawPayload.__review_flags = [CONTROLLED_REVIEW_FLAG, ...cues].join(';');
         }
         return {
           sourceId: source.id,

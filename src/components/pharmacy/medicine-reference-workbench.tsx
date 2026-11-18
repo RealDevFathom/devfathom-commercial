@@ -18,6 +18,7 @@ import {
   DrapRegistryFileConnector,
   drapRegistryMapping,
   formulaSafeCell,
+  LEGACY_CUE_FIELDS,
   ManualFileConnector,
   MEDICINE_REFERENCE_FIELDS,
   REFERENCE_BATCH_MAX_ROWS,
@@ -153,6 +154,8 @@ function guessedMapping(headers: string[]): ManualMappingTemplate {
     rx: ['rx', 'prescriptiononly'],
     restricted: ['restricted'],
     controlled: ['controlled'],
+    legacyClass: ['classname', 'class'],
+    legacyCategory: ['category', 'categoryname'],
     rowSourceKey: ['rowsourcekey', 'sourcekey', 'id', 'code'],
     targetMedicineId: ['targetmedicineid', 'medicineid'],
   };
@@ -212,6 +215,24 @@ function referenceProposalSourceLabel(payload: unknown): string | null {
   return typeof source.label === 'string' ? source.label : null;
 }
 
+/** DEV-854: legacy cues that hold a proposal for pharmacist classification, if any. */
+function referenceProposalControlledCues(payload: unknown): string[] | null {
+  if (!payload || typeof payload !== 'object' || !('controlledReview' in payload)) return null;
+  const review = payload.controlledReview;
+  if (!review || typeof review !== 'object' || !('cues' in review)) return null;
+  const cues = Array.isArray(review.cues)
+    ? review.cues.filter((cue): cue is string => typeof cue === 'string')
+    : [];
+  return cues.length ? cues : null;
+}
+
+const CONTROLLED_CUE_LABELS: Record<string, string> = {
+  LEGACY_CLASS_NARCOTICS: 'Legacy class is NARCOTICS',
+  LEGACY_CLASS_CONTROLLED_TERM: 'Legacy class names a controlled group',
+  LEGACY_CATEGORY_CONTROLLED_TERM: 'Legacy category names a controlled group',
+  NAME_SUGGESTS_CONTROLLED_SUBSTANCE: 'Name suggests a controlled substance',
+};
+
 function referenceProposalValues(payload: unknown): Record<string, string> {
   if (!payload || typeof payload !== 'object' || !('values' in payload)) return {};
   const values = payload.values;
@@ -259,6 +280,9 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
   const publishing = usePendingKeys();
   const utils = trpc.useUtils();
   const [soloReviewPin, setSoloReviewPin] = useState('');
+  const [classifications, setClassifications] = useState<
+    Record<string, 'CONTROLLED' | 'NOT_CONTROLLED'>
+  >({});
   const candidates = trpc.pharmacyMedicine.referenceCandidates.useQuery(undefined, {
     retry: false,
   });
@@ -546,11 +570,14 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
               <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                 {[
                   ...MEDICINE_REFERENCE_FIELDS,
+                  ...(source === 'manual-file' ? LEGACY_CUE_FIELDS : []),
                   'rowSourceKey' as const,
                   'targetMedicineId' as const,
                 ].map((field) => (
                   <label key={field} className="text-xs font-medium text-text-body">
-                    {field}
+                    {(LEGACY_CUE_FIELDS as readonly string[]).includes(field)
+                      ? `${field} (review cue only)`
+                      : field}
                     <select
                       className="mt-1 min-h-11 w-full rounded-sm border border-border-default bg-surface-raised px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       value={mapping[field] ?? ''}
@@ -674,6 +701,8 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
               values.productName ?? proposal.targetMedicine?.productName ?? 'Reference update';
             const isConfirming = confirming.has(proposal.id);
             const sourceLabel = referenceProposalSourceLabel(proposal.payload);
+            const controlledCues = referenceProposalControlledCues(proposal.payload);
+            const classification = classifications[proposal.id];
             return (
               <article
                 key={proposal.id}
@@ -689,7 +718,12 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                       </p>
                     ) : null}
                   </div>
-                  <StatusPill status="Pending confirmation" tone="warning" />
+                  <StatusPill
+                    status={
+                      controlledCues ? 'Held for pharmacist classification' : 'Pending confirmation'
+                    }
+                    tone="warning"
+                  />
                 </div>
                 <dl className="grid min-w-0 gap-3 sm:grid-cols-2">
                   {Object.entries(values).map(([field, value]) => (
@@ -701,15 +735,58 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                     </div>
                   ))}
                 </dl>
+                {controlledCues ? (
+                  <fieldset className="min-w-0 space-y-2 rounded-sm border border-border-subtle p-3">
+                    <legend className="px-1 text-sm font-semibold text-text-strong">
+                      Controlled-drug classification
+                    </legend>
+                    <p className="text-sm text-text-muted">
+                      {controlledCues.map((cue) => CONTROLLED_CUE_LABELS[cue] ?? cue).join('; ')}.
+                      This is a review cue only. The item cannot be sold until a registered
+                      pharmacist confirms its classification.
+                    </p>
+                    <div className="flex flex-wrap gap-4">
+                      {(
+                        [
+                          ['CONTROLLED', 'Controlled drug'],
+                          ['NOT_CONTROLLED', 'Not a controlled drug'],
+                        ] as const
+                      ).map(([value, label]) => (
+                        <label
+                          key={value}
+                          className="flex min-h-11 items-center gap-2 text-sm text-text-body"
+                        >
+                          <input
+                            type="radio"
+                            className="size-4 accent-primary focus-visible:outline-2 focus-visible:outline-ring"
+                            name={`classification-${proposal.id}`}
+                            value={value}
+                            checked={classification === value}
+                            onChange={() =>
+                              setClassifications((current) => ({
+                                ...current,
+                                [proposal.id]: value,
+                              }))
+                            }
+                          />
+                          {label}
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+                ) : null}
                 <Button
                   className="min-h-11"
-                  disabled={isConfirming}
+                  disabled={isConfirming || (controlledCues !== null && !classification)}
                   onClick={() =>
                     void confirming.run(proposal.id, () =>
                       decideProposal.mutateAsync({
                         proposalId: proposal.id,
                         decision: 'CONFIRM',
                         soloPin: soloReviewPin || undefined,
+                        ...(controlledCues && classification
+                          ? { controlledClassification: classification }
+                          : {}),
                       })
                     )
                   }

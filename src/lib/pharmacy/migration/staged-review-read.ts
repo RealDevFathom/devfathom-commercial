@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { stagedReference, exceptionWorkflow } from './staged-review';
+import { CONTROLLED_REVIEW_FLAG } from '../controlled-review-cue';
 
 const id = z.string().trim().min(1).max(128);
 export const reviewScopeInput = z.object({ branchId: id }).strict();
@@ -12,7 +13,7 @@ export const reviewListInput = reviewBatchInput
   .extend({
     query: z.string().trim().max(120).default(''),
     page: z.number().int().min(1).max(10000).default(1),
-    filter: z.enum(['all', 'stock', 'price', 'collision']).default('all'),
+    filter: z.enum(['all', 'stock', 'price', 'collision', 'controlled']).default('all'),
   })
   .strict();
 export const REVIEW_PAGE_SIZE = 25;
@@ -87,6 +88,10 @@ export async function listStagedMedicines(
           },
         ],
       },
+    ];
+  if (input.filter === 'controlled')
+    where.AND = [
+      { rawPayload: { path: ['__review_flags'], string_contains: CONTROLLED_REVIEW_FLAG } },
     ];
   if (input.filter === 'stock' || input.filter === 'price')
     where.exceptions = {
