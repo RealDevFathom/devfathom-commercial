@@ -645,7 +645,7 @@ function ScenarioWorkspace({
                     Leave optional cost, budget, capacity, arrival and expiry blank when unknown. An
                     explicit 0 is a supplied assumption. Enter money in the scenario currency with
                     up to 2 decimals, for example 125.50. Arrival and expiry are on your
-                    organisation's clock ({workspaceZoneLabel(timeZone)}).
+                    organisation&apos;s clock ({workspaceZoneLabel(timeZone)}).
                   </p>
                   <div className="grid gap-4 md:grid-cols-2">
                     {field('planningOrigin', 'Scenario starts on (a future day)', 'date')}
