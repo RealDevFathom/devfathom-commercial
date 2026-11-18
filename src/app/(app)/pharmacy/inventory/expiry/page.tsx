@@ -11,7 +11,7 @@ import { buttonVariants } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { hasModule } from '@/lib/entitlements';
-import { readExpiryMonth } from '@/lib/pharmacy/unrecorded-batch';
+import { readPrintedExpiry } from '@/lib/pharmacy/unrecorded-batch';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import {
   admittedInventoryBranchIds,
@@ -180,14 +180,19 @@ export default async function PharmacyExpiryBoardPage({
       if (action === 'record') {
         // DEV-853: record the real batch and/or expiry of a legacy lot.
         const batchNumber = field(data, 'batchNumber');
-        const expiryMonth = field(data, 'expiryMonth');
-        const printedExpiry = expiryMonth ? readExpiryMonth(expiryMonth) : null;
-        if (expiryMonth && !printedExpiry) throw new Error('Enter the expiry as a month and year.');
+        // Exactly as printed: a day-printed pack keeps DAY precision.
+        const expiryText = field(data, 'expiry');
+        const expiry = expiryText ? readPrintedExpiry(expiryText) : null;
+        if (expiryText && !expiry) {
+          throw new Error('Enter the expiry as printed: YYYY-MM, or YYYY-MM-DD for a day.');
+        }
         const result = await caller.recordUnrecordedBatch({
           branchId: params.branch,
           inventoryLotId: field(data, 'inventoryLotId'),
           ...(batchNumber ? { batchNumber } : {}),
-          ...(printedExpiry ? { printedExpiry, expiryPrecision: 'MONTH' as const } : {}),
+          ...(expiry
+            ? { printedExpiry: expiry.printedExpiry, expiryPrecision: expiry.precision }
+            : {}),
         });
         text = `Recorded for ${batchOf(result.batchNumber)}${result.expiresAt ? '; its expiry now counts on this board and at the counter.' : '. The expiry is still not recorded.'}`;
       } else if (action === 'markdown') {

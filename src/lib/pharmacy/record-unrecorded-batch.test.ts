@@ -26,6 +26,7 @@ type Batch = {
   batchNumber: string | null;
   expiresAt: Date | null;
   expiryPrecision: 'DAY' | 'MONTH';
+  state?: 'ACTIVE' | 'RECALLED' | 'QUARANTINED';
 };
 
 function makeDb(own: Partial<Batch> = {}, existing: Batch | null = null) {
@@ -36,6 +37,7 @@ function makeDb(own: Partial<Batch> = {}, existing: Batch | null = null) {
     batchNumber: null,
     expiresAt: null,
     expiryPrecision: 'DAY',
+    state: 'ACTIVE',
     ...own,
   };
   batches.set(ownBatch.id, ownBatch);
@@ -173,6 +175,23 @@ describe('DEV-853 record batch and expiry for a legacy lot', () => {
       })
     ).rejects.toMatchObject({ reason: 'BATCH_EXPIRY_CONFLICT' });
     expect(lot.manufacturingBatchId).toBe('batch_own');
+  });
+
+  it('never moves a recalled or quarantined lot onto another batch', async () => {
+    const existing: Batch = {
+      id: 'batch_known',
+      medicineId: 'medicine',
+      batchNumber: 'B-9',
+      expiresAt: JUNE_2027_END,
+      expiryPrecision: 'MONTH',
+      state: 'ACTIVE',
+    };
+    const { db, lot, models } = makeDb({ state: 'RECALLED' }, existing);
+    await expect(
+      recordUnrecordedBatch(db, SCOPE, { inventoryLotId: 'lot', batchNumber: 'B-9' })
+    ).rejects.toMatchObject({ reason: 'BATCH_BLOCKED' });
+    expect(lot.manufacturingBatchId).toBe('batch_own');
+    expect(models.pharmacyInventoryLot.update).not.toHaveBeenCalled();
   });
 
   it('refuses an empty request and a lot outside the branch', async () => {

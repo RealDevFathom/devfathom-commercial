@@ -29,7 +29,7 @@ import {
   compareKnownExpiryFirst,
   EXPIRY_NOT_RECORDED,
   hasKnownExpiryPassed,
-  readExpiryMonth,
+  readPrintedExpiry,
 } from './unrecorded-batch';
 
 const AT = new Date('2026-11-18T09:00:00.000Z');
@@ -79,10 +79,18 @@ describe('DEV-853 plain-words helpers', () => {
     expect(sorted).toEqual([early, late, null, null]);
   });
 
-  it('reads a month picker value as the printed month', () => {
-    expect(readExpiryMonth('2027-06')).toEqual(new Date('2027-06-01T00:00:00.000Z'));
-    expect(readExpiryMonth('2027-13')).toBeNull();
-    expect(readExpiryMonth('June 2027')).toBeNull();
+  it('reads the expiry exactly as printed, keeping a printed day', () => {
+    expect(readPrintedExpiry('2027-06')).toEqual({
+      printedExpiry: new Date('2027-06-01T00:00:00.000Z'),
+      precision: 'MONTH',
+    });
+    expect(readPrintedExpiry(' 2027-06-10 ')).toEqual({
+      printedExpiry: new Date('2027-06-10T00:00:00.000Z'),
+      precision: 'DAY',
+    });
+    expect(readPrintedExpiry('2027-13')).toBeNull();
+    expect(readPrintedExpiry('2027-02-30')).toBeNull();
+    expect(readPrintedExpiry('June 2027')).toBeNull();
   });
 });
 

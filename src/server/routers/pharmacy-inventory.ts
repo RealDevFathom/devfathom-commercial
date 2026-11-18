@@ -66,7 +66,11 @@ import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { lockStockBalances, lockStockRowsFrom } from '@/lib/pharmacy/stock-lock-order';
 import { PharmacyStockSignalError } from '@/lib/pharmacy/stock-signals';
 import { PharmacyCounterError } from '@/lib/pharmacy/counter';
-import { readShelfLabelSheet, ShelfLabelSourceError } from '@/lib/pharmacy/shelf-label-source';
+import {
+  printedExpiryLabel,
+  readShelfLabelSheet,
+  ShelfLabelSourceError,
+} from '@/lib/pharmacy/shelf-label-source';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
 import {
   expiryRiskBuckets,
@@ -2447,16 +2451,18 @@ export const pharmacyInventoryRouter = router({
             (costVisible ? (right.valueAtRiskMinor ?? 0) - (left.valueAtRiskMinor ?? 0) : 0) ||
             left.key.localeCompare(right.key)
         );
-      // DEV-853: lots whose expiry was never recorded (legacy opening stock).
-      // They are never expired and stay sellable; the board lists them in their
-      // own group so staff can record the real batch and expiry later.
+      // DEV-853: lots whose expiry and/or batch number was never recorded
+      // (legacy opening stock). They are never expired and stay sellable; the
+      // board lists them in their own group so staff can record the real batch
+      // and expiry later. A lot with a known expiry but no batch number is also
+      // on the dated list above; it is listed here too so its batch can be fixed.
       const unrecordedExpiryRows = (
         await ctx.db.pharmacyStockBalance.findMany({
           where: {
             ...tenant,
             disposition: 'AVAILABLE',
             onHandUnits: { gt: 0 },
-            lot: { batch: { expiresAt: null } },
+            lot: { batch: { OR: [{ expiresAt: null }, { batchNumber: null }] } },
           },
           orderBy: [{ inventoryLotId: 'asc' }, { stockLocationId: 'asc' }],
           take: 500,
@@ -2473,6 +2479,8 @@ export const pharmacyInventoryRouter = router({
                 batch: {
                   select: {
                     batchNumber: true,
+                    expiresAt: true,
+                    expiryPrecision: true,
                     medicine: { select: { productName: true, brandName: true } },
                   },
                 },
@@ -2488,6 +2496,8 @@ export const pharmacyInventoryRouter = router({
           locationName: row.location.name,
           medicineName: row.lot.batch.medicine.brandName ?? row.lot.batch.medicine.productName,
           batchNumber: row.lot.batch.batchNumber,
+          /** `YYYY-MM` or `YYYY-MM-DD`; null when the expiry was never recorded. */
+          printedExpiry: printedExpiryLabel(row.lot.batch.expiresAt, row.lot.batch.expiryPrecision),
           onHandUnits: row.onHandUnits,
           unitsPerPack: row.lot.unitsPerPack,
           printedMrpMinor: row.lot.printedMrpMinor,

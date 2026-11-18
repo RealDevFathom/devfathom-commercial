@@ -32,6 +32,7 @@ export class PharmacyUnrecordedBatchError extends Error {
       | 'BATCH_ALREADY_RECORDED'
       | 'EXPIRY_ALREADY_RECORDED'
       | 'BATCH_EXPIRY_CONFLICT'
+      | 'BATCH_BLOCKED'
   ) {
     super(reason);
     this.name = 'PharmacyUnrecordedBatchError';
@@ -46,6 +47,8 @@ export const UNRECORDED_BATCH_MESSAGES: Record<PharmacyUnrecordedBatchError['rea
   EXPIRY_ALREADY_RECORDED: 'This lot already has an expiry recorded.',
   BATCH_EXPIRY_CONFLICT:
     'A batch with that number is already recorded with a different expiry. Check the pack.',
+  BATCH_BLOCKED:
+    'This lot is recalled or quarantined. Release it before recording its batch number.',
 };
 
 export type RecordUnrecordedBatchInput = {
@@ -124,6 +127,7 @@ export async function recordUnrecordedBatch(
           batchNumber: true,
           expiresAt: true,
           expiryPrecision: true,
+          state: true,
         },
       },
     },
@@ -148,6 +152,9 @@ export async function recordUnrecordedBatch(
       throw new PharmacyUnrecordedBatchError('BATCH_EXPIRY_CONFLICT');
     }
     if (existing) {
+      // A recall or quarantine lives on the batch. Moving a blocked lot onto
+      // another batch would silently drop that block, so it is refused.
+      if (lot.batch.state !== 'ACTIVE') throw new PharmacyUnrecordedBatchError('BATCH_BLOCKED');
       // The lot is unrecorded on at least the batch number, so its own expiry
       // (if any) must agree with the recorded batch it joins.
       const ownExpiry = expiresAt ?? lot.batch.expiresAt;

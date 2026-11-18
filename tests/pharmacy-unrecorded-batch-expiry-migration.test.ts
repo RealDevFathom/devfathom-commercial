@@ -57,6 +57,13 @@ describe('unrecorded batch and expiry storage', () => {
     expect(check).toContain('("expiryDate" IS NULL) = ("expiryPrecision" IS NULL)');
   });
 
+  it('records a controlled sale of an unrecorded batch as NULL, never a label', () => {
+    expect(sql).toContain(
+      'ALTER TABLE "pharmacy_controlled_register_entries" ALTER COLUMN "batchNumber" DROP NOT NULL'
+    );
+    expect(sql).not.toContain("'Batch not recorded'");
+  });
+
   it('lets a restock reservation hold unrecorded-expiry stock but never expired stock', () => {
     expect(sql).toContain(
       'AND (batch."expiresAt" IS NULL OR batch."expiresAt" > CURRENT_TIMESTAMP)'

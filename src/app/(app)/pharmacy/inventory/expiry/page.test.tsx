@@ -357,6 +357,7 @@ it('DEV-853: lists unrecorded-expiry lots and records the real batch and expiry'
         locationName: 'Main shelf',
         medicineName: 'Legacy Panadol',
         batchNumber: null,
+        printedExpiry: null,
         onHandUnits: 40,
         unitsPerPack: 10,
         printedMrpMinor: 2500,
@@ -371,7 +372,7 @@ it('DEV-853: lists unrecorded-expiry lots and records the real batch and expiry'
     expiryPrecision: 'MONTH',
   });
   render(await Page({ searchParams: Promise.resolve({ branch: 'branch_a', within: '90' }) }));
-  expect(screen.getByRole('heading', { name: 'Expiry not recorded' })).toBeVisible();
+  expect(screen.getByRole('heading', { name: 'Batch or expiry not recorded' })).toBeVisible();
   expect(screen.getByText(/Batch not recorded · Expiry not recorded/)).toBeVisible();
 
   const { action } = mocks.board.mock.calls[0]![0] as ExpiryBoardProps;
@@ -381,15 +382,16 @@ it('DEV-853: lists unrecorded-expiry lots and records the real batch and expiry'
   data.set('within', '90');
   data.set('inventoryLotId', 'lot_9');
   data.set('batchNumber', 'B-REAL');
-  data.set('expiryMonth', '2027-06');
+  // A day-printed pack keeps its day (never widened to the month's end).
+  data.set('expiry', '2027-06-10');
   await action(data);
 
   expect(mocks.record).toHaveBeenCalledExactlyOnceWith({
     branchId: 'branch_a',
     inventoryLotId: 'lot_9',
     batchNumber: 'B-REAL',
-    printedExpiry: new Date('2027-06-01T00:00:00.000Z'),
-    expiryPrecision: 'MONTH',
+    printedExpiry: new Date('2027-06-10T00:00:00.000Z'),
+    expiryPrecision: 'DAY',
   });
   const destination = new URL(String(mocks.redirect.mock.calls[0]![0]), 'https://app.invalid');
   expect(destination.searchParams.get('kind')).toBe('success');

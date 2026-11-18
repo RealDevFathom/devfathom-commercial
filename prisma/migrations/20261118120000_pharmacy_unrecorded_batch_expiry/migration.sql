@@ -46,6 +46,12 @@ ALTER TABLE "pharmacy_opening_stock_lines"
       AND "postedLotId" IS NOT NULL
       AND "postedMovementId" IS NOT NULL));
 
+-- A controlled-register entry for a lot with no recorded batch number stores
+-- NULL, never a label. The reconcile trigger compares the entry with the lot's
+-- batch using IS DISTINCT FROM, so NULL matches NULL and any other mismatch is
+-- still refused. Screens print "Batch not recorded".
+ALTER TABLE "pharmacy_controlled_register_entries" ALTER COLUMN "batchNumber" DROP NOT NULL;
+
 -- A restock reservation may hold stock whose expiry was never recorded: it is
 -- sellable stock. Stock whose known expiry has passed stays refused.
 CREATE OR REPLACE FUNCTION pharmacy_validate_restock_reservation() RETURNS trigger LANGUAGE plpgsql AS $$

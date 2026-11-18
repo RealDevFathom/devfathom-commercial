@@ -3,7 +3,6 @@ import { z } from 'zod';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { can } from '@/lib/abac';
 import { lockControlledRegister } from './stock-lock-order';
-import { BATCH_NOT_RECORDED } from './unrecorded-batch';
 
 /** Running balance after applying a signed delta. Null when the result is not a safe non-negative integer. */
 export function registerBalanceAfter(previous: number, delta: number): number | null {
@@ -229,8 +228,9 @@ export async function appendControlledSaleEntries(db: ScopedDb, input: SaleRegis
       manufacturer: input.manufacturer,
       inventoryLotId: lot.id,
       stockMovementId: movement.id,
-      // DEV-853: the register says so in plain words rather than inventing one.
-      batchNumber: lot.batch.batchNumber ?? BATCH_NOT_RECORDED,
+      // DEV-853: NULL when the lot's batch was never recorded (never a label);
+      // the register trigger matches it against the lot's own NULL batch.
+      batchNumber: lot.batch.batchNumber,
       quantityCanonicalUnits,
       balanceDelta,
       runningBalance,

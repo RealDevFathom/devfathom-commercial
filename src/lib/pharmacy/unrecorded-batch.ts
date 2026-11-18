@@ -32,11 +32,22 @@ export function compareKnownExpiryFirst(
 }
 
 /**
- * A `YYYY-MM` value from a month picker as the printed month (UTC first day),
- * or null when it is not a real month. Used with MONTH expiry precision.
+ * The expiry exactly as printed on the pack: `YYYY-MM` (month precision) or
+ * `YYYY-MM-DD` (day precision). Null when it is not a real date. A day-printed
+ * pack keeps its day, so it is never sold past the printed date.
  */
-export function readExpiryMonth(value: string): Date | null {
-  const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(value.trim());
+export function readPrintedExpiry(
+  value: string
+): { printedExpiry: Date; precision: 'DAY' | 'MONTH' } | null {
+  const match = /^(\d{4})-(0[1-9]|1[0-2])(?:-(\d{2}))?$/.exec(value.trim());
   if (!match) return null;
-  return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, 1));
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  if (match[3] === undefined) {
+    return { printedExpiry: new Date(Date.UTC(year, month, 1)), precision: 'MONTH' };
+  }
+  const day = Number(match[3]);
+  const printedExpiry = new Date(Date.UTC(year, month, day));
+  if (printedExpiry.getUTCMonth() !== month || printedExpiry.getUTCDate() !== day) return null;
+  return { printedExpiry, precision: 'DAY' };
 }
