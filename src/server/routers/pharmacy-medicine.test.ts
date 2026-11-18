@@ -515,9 +515,10 @@ describe('catalogue-edit capability, queue access and solo owner (DEV-19)', () =
       },
       permissionOverrides: [],
     };
-    type Member = { id: string; status: string; record: { role: string } };
+    type MemberRecord = { role: string; [field: string]: unknown };
+    type Member = { id: string; status: string; record: MemberRecord };
     let members: Member[];
-    function addMember(id: string, record: { role: string }, status = 'ACTIVE') {
+    function addMember(id: string, record: MemberRecord, status = 'ACTIVE') {
       members.push({ id, status, record });
     }
     function soloCaller(id = 'owner_a', role = 'ADMIN') {
