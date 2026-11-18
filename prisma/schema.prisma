@@ -2262,7 +2262,8 @@ enum PharmacyRefillCycleStatus {
 
 /// DEV-73: a chronic-medicine monthly pack subscription. Each cycle holds stock
 /// through DEM-03 reservations; prescription-only cycles stay blocked until a
-/// pharmacist approves that cycle with a fresh PIN.
+/// valid prescription covers that cycle and a pharmacist approves it with a
+/// fresh PIN.
 model PharmacyRefillSubscription {
   id               String                            @id @default(cuid())
   organizationId   String                            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -2306,6 +2307,8 @@ model PharmacyRefillSubscriptionCycle {
   approvalCredentialId String?
   selfApproved         Boolean                    @default(false)
   approvedAt           DateTime?
+  /// The prescription line the approving pharmacist confirmed covers this cycle.
+  prescriptionLineId   String?
   counterSaleId        String?
   releasedAt           DateTime?
   createdAt            DateTime                   @default(now())
