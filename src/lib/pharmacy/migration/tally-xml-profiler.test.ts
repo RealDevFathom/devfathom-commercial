@@ -34,8 +34,14 @@ function envelope(messages: string): string {
   return `<ENVELOPE><BODY><IMPORTDATA><REQUESTDATA>${messages}</REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>`;
 }
 
+/** A fixed "now", so fixture expiries never drift into the past. */
+const AS_OF = new Date('2026-11-18T06:00:00Z');
+
 function profile(xml: string): ProfileResult {
-  return profileTable(tallyXmlProfiler, flattenTallyXml(xml).table, { quantityUnit: 'UNITS' });
+  return profileTable(tallyXmlProfiler, flattenTallyXml(xml).table, {
+    quantityUnit: 'UNITS',
+    asOf: AS_OF,
+  });
 }
 
 function bucketsOf(result: ProfileResult): string[] {
@@ -131,7 +137,7 @@ describe('Tally sample XML — acceptance', () => {
 describe('Tally flattening never guesses', () => {
   const unit = `<TALLYMESSAGE><UNIT NAME="Nos"><ISSIMPLEUNIT>Yes</ISSIMPLEUNIT><DECIMALPLACES>0</DECIMALPLACES></UNIT></TALLYMESSAGE>`;
 
-  it('raises MISSING_BATCH and MISSING_EXPIRY for an item without allocations', () => {
+  it('stores an item without allocations as batch and expiry not recorded, with no exception', () => {
     const xml = envelope(
       `${unit}<TALLYMESSAGE><STOCKITEM NAME="Cotton Roll"><BASEUNITS>Nos</BASEUNITS>
         <OPENINGBALANCE> 10 Nos</OPENINGBALANCE><OPENINGRATE>40.00/Nos</OPENINGRATE>
@@ -147,10 +153,11 @@ describe('Tally flattening never guesses', () => {
       expiryDate: null,
       quantityCanonical: BigInt(10),
     });
-    expect(bucketsOf(result)).toEqual(['MISSING_BATCH', 'MISSING_EXPIRY']);
+    // DEV-927: missing batch and expiry are "not recorded", not blocking.
+    expect(result.exceptions).toEqual([]);
   });
 
-  it('treats Tally’s "Primary Batch" placeholder as a missing batch', () => {
+  it('treats Tally’s "Primary Batch" placeholder as batch not recorded', () => {
     const xml = envelope(
       `${unit}<TALLYMESSAGE><STOCKITEM NAME="Gauze"><BASEUNITS>Nos</BASEUNITS>
         <MRPDETAILS.LIST><FROMDATE>20260101</FROMDATE><MRPRATEDETAILS.LIST>
@@ -164,7 +171,27 @@ describe('Tally flattening never guesses', () => {
 
     expect(result.rows[0]!.batchNumber).toBeNull();
     expect(result.rows[0]!.rawPayload['Tally Batch Name']).toBe('Primary Batch');
-    expect(bucketsOf(result)).toEqual(['MISSING_BATCH']);
+    expect(result.exceptions).toEqual([]);
+  });
+
+  it('still refuses a batch whose known expiry has passed, as BLOCKING (DEV-927)', () => {
+    const xml = envelope(
+      `${unit}<TALLYMESSAGE><STOCKITEM NAME="Gauze"><BASEUNITS>Nos</BASEUNITS>
+        <MRPDETAILS.LIST><FROMDATE>20260101</FROMDATE><MRPRATEDETAILS.LIST>
+        <STATENAME>Any</STATENAME><MRPRATE>30.00/Nos</MRPRATE></MRPRATEDETAILS.LIST></MRPDETAILS.LIST>
+        <BATCHALLOCATIONS.LIST><BATCHNAME>G1</BATCHNAME>
+          <OPENINGBALANCE> 5 Nos</OPENINGBALANCE><OPENINGRATE>20.00/Nos</OPENINGRATE>
+          <EXPIRYPERIOD>17-Nov-2026</EXPIRYPERIOD></BATCHALLOCATIONS.LIST>
+        <BATCHALLOCATIONS.LIST><BATCHNAME>G2</BATCHNAME>
+          <OPENINGBALANCE> 5 Nos</OPENINGBALANCE><OPENINGRATE>20.00/Nos</OPENINGRATE>
+          <EXPIRYPERIOD>18-Nov-2026</EXPIRYPERIOD></BATCHALLOCATIONS.LIST>
+       </STOCKITEM></TALLYMESSAGE>`
+    );
+    const result = profile(xml);
+
+    expect(result.exceptions).toMatchObject([
+      { rowIndex: 0, bucket: 'EXPIRED_STOCK', severity: 'BLOCKING' },
+    ]);
   });
 
   it('passes a rate quoted per another unit through raw, so it is reported', () => {

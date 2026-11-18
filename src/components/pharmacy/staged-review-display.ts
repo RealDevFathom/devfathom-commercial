@@ -24,6 +24,7 @@ export const STAGED_STATUS_LABEL = 'Not reviewed yet';
 const EXCEPTION_LABELS: Record<string, string> = {
   MISSING_BATCH: 'No batch or expiry recorded',
   MISSING_EXPIRY: 'No batch or expiry recorded',
+  EXPIRED_STOCK: 'Expiry has passed',
   MISSING_MRP: 'MRP not confirmed',
   UNIT_AMBIGUOUS: 'Pack or unit not clear',
   DUPLICATE_PRODUCT: 'Same name as another medicine',

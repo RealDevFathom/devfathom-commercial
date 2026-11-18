@@ -3,6 +3,7 @@ import type { Prisma } from '@/generated/prisma/client';
 import { naturalKey, MIGRATION_TARGET_KEYS } from './mapping-targets';
 import type { ExceptionBucket } from './profiler';
 import { isLegacyControlledRow, legacyClassValue } from './legacy-class';
+import { batchNumberLabel, EXPIRY_NOT_RECORDED } from '../unrecorded-batch';
 
 export const SOURCE_REFERENCE_COLUMNS = [
   'Name',
@@ -21,7 +22,8 @@ export const SOURCE_REFERENCE_COLUMNS = [
 ] as const;
 
 export function exceptionWorkflow(bucket: ExceptionBucket) {
-  if (bucket === 'MISSING_BATCH' || bucket === 'MISSING_EXPIRY') return 'Opening stock';
+  if (bucket === 'MISSING_BATCH' || bucket === 'MISSING_EXPIRY' || bucket === 'EXPIRED_STOCK')
+    return 'Opening stock';
   if (bucket === 'MISSING_MRP') return 'Verified price';
   if (bucket === 'UNIT_AMBIGUOUS') return 'Pack / unit review';
   if (bucket === 'DUPLICATE_PRODUCT') return 'Identity review';
@@ -36,6 +38,9 @@ export type ReviewRow = {
   packLabel: string | null;
   packFactor?: bigint | null;
   quantityCanonical: bigint | null;
+  /** DEV-927: absent or null means the old system did not record it. */
+  batchNumber?: string | null;
+  expiryDate?: Date | null;
   rawPayload: Prisma.JsonValue;
   exceptions: { bucket: ExceptionBucket; status: string; severity: string }[];
 };
@@ -125,6 +130,14 @@ export function stagedReference(
       ? naturalKey(MIGRATION_TARGET_KEYS.PRODUCT, row.productName)
       : null,
     canonicalQuantity: row.quantityCanonical?.toString() ?? null,
+    /**
+     * DEV-927: information, never an exception. A batch or expiry the old system
+     * did not record reads "Batch not recorded" / "Expiry not recorded".
+     */
+    batchLabel: batchNumberLabel(row.batchNumber),
+    expiryLabel: row.expiryDate ? row.expiryDate.toISOString().slice(0, 10) : EXPIRY_NOT_RECORDED,
+    batchNotRecorded: !row.batchNumber?.trim(),
+    expiryNotRecorded: !row.expiryDate,
     legacyClass,
     /** DEV-854: a NARCOTICS-class row is imported as a controlled medicine, with no review hold. */
     controlled: isLegacyControlledRow(raw),

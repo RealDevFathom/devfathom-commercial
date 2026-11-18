@@ -306,6 +306,8 @@ export async function StagedMedicineCatalogue({
                         Row {row.rowNumber}
                         {row.collision ? ' · Name collision — keep separate' : ''}
                         {row.controlled ? ' · Controlled medicine (legacy class NARCOTICS)' : ''}
+                        {row.batchNotRecorded ? ` · ${row.batchLabel}` : ''}
+                        {row.expiryNotRecorded ? ` · ${row.expiryLabel}` : ''}
                       </p>
                     </td>
                     {(['QTY', 'saleprice', 'purprice', 'UnitPrice', 'PackUnits'] as const).map(
@@ -371,6 +373,8 @@ export async function StagedMedicineCatalogue({
               'Quantity column counts': detail.quantityReview.choiceLabel,
               'Staged quantity — not stock': detail.quantityReview.label,
               'Stored staged quantity — not stock': detail.canonicalQuantity,
+              'Batch number': detail.batchLabel,
+              'Expiry date': detail.expiryLabel,
             }).map(([key, value]) => (
               <div key={key} className="min-w-0">
                 <dt className="text-text-muted">{key}</dt>

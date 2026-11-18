@@ -35,6 +35,7 @@ export type CounterApproval = {
  * - DISCOUNT needs a different active member holding `pharmacy:manage`, proven by their PIN.
  *   Solo rule: when nobody else active in the organization holds that capability, the actor
  *   may approve their own discount by re-entering their own PIN (recorded as self-approved).
+ *   DEV-66: an actor the owner granted `pharmacy:discount` gives it without a PIN.
  * - FEFO_OVERRIDE is a pharmacist's decision: an actor holding `pharmacy:dispense` approves it
  *   as the pharmacist on duty; anyone else needs an active pharmacist's PIN.
  * - KHATA_OVER_LIMIT (DEV-290): charging a family Khata past its credit limit is approved at
@@ -68,6 +69,26 @@ export async function mayApproveCounterLine(
   options: { now?: Date; source?: Environment['source'] } = {}
 ): Promise<boolean> {
   return can(subject, COUNTER_APPROVAL_CAPABILITY[kind], undefined, {
+    db,
+    now: options.now,
+    source: options.source,
+  });
+}
+
+/**
+ * DEV-66: the approval policy recorded when the operator holds `pharmacy:discount`, the
+ * right the owner grants by name to a role so it may give discounts (up to the owner's
+ * maximum, above the minimum margin) without a manager's PIN. Nobody holds it by default.
+ */
+export const DISCOUNT_RIGHT_APPROVAL_POLICY = 'DISCOUNT_RIGHT';
+
+/** DEV-66: whether `subject` may give a discount without a manager's approval. */
+export async function mayDiscountWithoutApproval(
+  db: ScopedDb,
+  subject: Subject,
+  options: { now?: Date; source?: Environment['source'] } = {}
+): Promise<boolean> {
+  return can(subject, 'pharmacy:discount', undefined, {
     db,
     now: options.now,
     source: options.source,
@@ -127,6 +148,16 @@ export async function authorizeCounterApproval(
       credentialId: null,
     };
   }
+  // DEV-66: a discount without a manager's PIN only when the owner granted this operator's
+  // role (or this operator) the discount right. A PIN, when given, is always verified.
+  if (kind === 'DISCOUNT' && !input && (await mayDiscountWithoutApproval(db, actor))) {
+    return {
+      approvedByUserId: actor.id,
+      approvalPolicy: DISCOUNT_RIGHT_APPROVAL_POLICY,
+      selfApproved: false,
+      credentialId: null,
+    };
+  }
   if (!input) throw new CounterApprovalDenied(kind);
   const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
   const approval = await withTenantDb(
@@ -157,6 +188,18 @@ export async function confirmCounterApproval(
       status: 'ACTIVE',
     },
   })) as ActiveUser | null;
+  if (approval.approvalPolicy === DISCOUNT_RIGHT_APPROVAL_POLICY) {
+    // DEV-66: the discount right is the operator's own, still held at the sale, never a PIN.
+    if (
+      kind !== 'DISCOUNT' ||
+      approval.credentialId !== null ||
+      approval.approvedByUserId !== scope.actorId ||
+      !approver ||
+      !(await mayDiscountWithoutApproval(db, approver))
+    )
+      throw new CounterApprovalDenied(kind);
+    return;
+  }
   if (!approver || !(await mayApproveCounterLine(db, approver, kind))) {
     throw new CounterApprovalDenied(kind);
   }

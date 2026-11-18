@@ -273,6 +273,7 @@ describe('Bucket severity is a property of the bucket', () => {
       DUPLICATE_PRODUCT: 'BLOCKING',
       PARTY_UNMATCHED: 'WARNING',
       BALANCE_MISMATCH: 'BLOCKING',
+      EXPIRED_STOCK: 'BLOCKING',
     });
   });
 });

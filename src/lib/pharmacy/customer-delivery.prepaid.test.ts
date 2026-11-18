@@ -72,6 +72,9 @@ function fixture(
       }),
     },
     pharmacyPrepaidTierVersion: { findFirst: vi.fn().mockResolvedValue({ actorId: 'owner-a' }) },
+    // DEV-66: the owner has set a 10% maximum discount; no branch policy.
+    organization: { findFirst: vi.fn().mockResolvedValue({ pharmacyMaxDiscountBps: 1_000 }) },
+    pharmacyBranch: { findFirst: vi.fn().mockResolvedValue({ discountPolicy: null }) },
     pharmacySaleLine: { update: vi.fn() },
     pharmacyStockMovement: { findFirst: vi.fn().mockResolvedValue({ stockLocationId: 'store' }) },
     pharmacyOrderDeliveryEvidence: {

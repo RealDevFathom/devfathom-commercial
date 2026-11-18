@@ -87,6 +87,8 @@ export const ALL_ACTIONS = [
   // barcodes, aliases) to the review queue. Deny by default.
   'pharmacy:catalogue-edit',
   'pharmacy:orders', // MKT-03/05: staff acceptance and fulfilment of customer proposals
+  // DEV-66: give a counter discount (up to the owner's maximum) without a manager's PIN.
+  'pharmacy:discount',
   // H1-01: hospitality capabilities use explicit organization-role grants.
   // Property scope is enforced separately by the consuming procedures.
   'hotel:reservations',
@@ -285,6 +287,10 @@ export const POLICIES: Record<Action, Policy[]> = {
   // Operator template grant it; every other role is refused unless granted.
   'pharmacy:catalogue-edit': [isAdmin],
   'pharmacy:orders': [],
+  // DEV-66: by default a discount needs a manager's PIN. The owner may grant this to any
+  // role (the Cashier included) by its exact name; no wildcard and no static policy
+  // grants it, so nobody skips the manager's approval unless the owner chose them.
+  'pharmacy:discount': [],
 
   // H1-01: no static agency-role policy grants hospitality capabilities.
   // Explicit capabilities and wildcards use the existing customDecision path.

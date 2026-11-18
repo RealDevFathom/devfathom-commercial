@@ -3185,6 +3185,17 @@ describe('PharmacyCounterConsole barcode safety', () => {
     );
   });
 
+  it("DEV-66: tells the cashier when the owner's maximum skipped a promotion", async () => {
+    mocks.mutations.addLine!.mockResolvedValue({ promotionNotice: 'PROMOTION_ABOVE_MAXIMUM' });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    scan();
+    const notice = await screen.findByText(
+      "1 × Paracetamol added. This promotion is above the owner's maximum discount, so the item was added at full price."
+    );
+    // A warning the cashier sees, not the usual green "added" toast.
+    expect(notice.closest('[role="alert"]')).toHaveClass('bg-warning/10');
+  });
+
   it('DEV-780: sends a checked voucher and the cashier PIN with the next item, then drops it', async () => {
     mocks.voucherFetch.mockResolvedValue({
       id: 'voucher-a',

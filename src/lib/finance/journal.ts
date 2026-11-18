@@ -75,6 +75,7 @@ export const ACCOUNT_NORMAL_SIDE: Readonly<Record<FinanceAccountCode, JournalSid
 export const REPLAY_IDENTITY_CHECKED_SOURCES: ReadonlySet<FinanceSourceKind> = new Set([
   'PHARMACY_JOURNAL_VOUCHER',
   'PHARMACY_AP_INVOICE',
+  'PHARMACY_AP_CREDIT_SET_OFF',
 ]);
 
 export type JournalScope = {
