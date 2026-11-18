@@ -392,7 +392,14 @@ export async function searchCounterCatalog(
   }
   if (medicineIds.length === 0) return { rows: [], truncated: false };
 
-  const { rows, medicines } = await hydrateCounterRows(db, scope, matches, medicineIds, at);
+  const { rows, medicines } = await hydrateCounterRows(
+    db,
+    scope,
+    matches,
+    medicineIds,
+    at,
+    labelLotId
+  );
   const unavailable = rows.filter((row) => !hasSellableUnit(row));
   const sourceById = new Map(medicines.map((medicine) => [medicine.id, medicine]));
   const ingredientSets = unavailable.flatMap((row) => {
@@ -573,7 +580,9 @@ async function hydrateCounterRows(
   scope: CounterScope,
   matches: ReadonlyMap<string, { kind: CounterMatchKind; rank: number }>,
   medicineIds: string[],
-  at: Date
+  at: Date,
+  // DEV-90: the lot a scanned shelf sticker names; alternatives never carry one.
+  labelLotId: string | null = null
 ) {
   const [medicines, lots, packLevels, mrps] = await Promise.all([
     db.medicine.findMany({
