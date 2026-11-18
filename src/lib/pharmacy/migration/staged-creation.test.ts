@@ -109,6 +109,11 @@ describe('DEV-912 planStagedMedicine', () => {
     expect([strength?.unitsPerPack, strength?.packLevels]).toEqual([null, []]);
     const bottle = planStagedMedicine(row({ packLabel: '100ML', packFactor: BigInt(100) }));
     expect(bottle?.packLevels).toEqual([{ level: 'UNIT', unitsPerParent: 1 }]);
+    for (const packLabel of ['10 strips', '2 boxes', '10 strip'])
+      expect(
+        planStagedMedicine(row({ packLabel, packFactor: BigInt(10) }))?.unitsPerPack,
+        packLabel
+      ).toBeNull();
     const tablets = planStagedMedicine(row({ packLabel: '20 Tabs', packFactor: BigInt(20) }));
     expect(tablets?.packLevels).toEqual([{ level: 'BOX', unitsPerParent: 20 }]);
   });

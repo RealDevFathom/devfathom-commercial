@@ -51,6 +51,7 @@ function namedLevel(rawPayload: unknown): PlannedPackLevel['level'] | null {
   return null;
 }
 
+const COUNTED_PACKS = /\d+\s*(?:strip|blister|box|boxe|carton|pack|packet)s?\b/i;
 const VOLUME = /\d\s*(?:ml|mls|l|ltr|litre|liter)(?![a-z])/i;
 
 /**
@@ -62,6 +63,10 @@ function unitsInPack(row: StagedRowForCreation): number | null {
   const label = row.packLabel ?? undefined;
   if (label && VOLUME.test(label)) return parseDefaultPackSize(label)?.unitsPerParent ?? null;
   if (isStrengthPackLabel(label)) return null;
+  // "10 strips" or "2 boxes" counts packs, not units: what each holds is unknown, and the
+  // publication path refuses the same labels. Only a label it can structure is kept.
+  if (label && COUNTED_PACKS.test(label))
+    return parseDefaultPackSize(label)?.unitsPerParent ?? null;
   return boundedInt(row.packFactor, 1);
 }
 
