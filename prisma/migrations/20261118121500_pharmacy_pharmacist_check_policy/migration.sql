@@ -320,6 +320,13 @@ BEGIN
   IF COALESCE(NEW."approvalPolicy", '') NOT LIKE 'pharmacist-check-off:%' THEN
     RETURN NEW;
   END IF;
+  -- A cycle readied while the check was off cannot reach the counter once it is back on.
+  IF TG_OP = 'UPDATE'
+     AND NEW."status" = 'CHECKOUT_STARTED'
+     AND OLD."status" IS DISTINCT FROM 'CHECKOUT_STARTED'
+     AND pharmacy_pharmacist_check_enforced(NEW."organizationId") THEN
+    RAISE EXCEPTION 'pharmacist check is on again; this refill cycle needs a pharmacist' USING ERRCODE = '23514';
+  END IF;
   IF TG_OP = 'UPDATE'
      AND NEW."approvalPolicy" IS NOT DISTINCT FROM OLD."approvalPolicy"
      AND NEW."approvedAt" IS NOT DISTINCT FROM OLD."approvedAt" THEN

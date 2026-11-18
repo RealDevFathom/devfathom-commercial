@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 // DEV-911: the owner setting for the pharmacist check at each sale, in the database.
-const NAME = '20261118120800_pharmacy_pharmacist_check_policy';
+const NAME = '20261118121500_pharmacy_pharmacist_check_policy';
 const sql = readFileSync(`prisma/migrations/${NAME}/migration.sql`, 'utf8');
 
 function section(start: string, end: string): string {
@@ -98,6 +98,8 @@ describe('pharmacist check policy migration', () => {
     expect(guard).toContain('pharmacy_pharmacist_check_enforced(NEW."organizationId")');
     expect(guard).toContain(`'pharmacist-check-off:v' || current_version::text`);
     expect(sql).toContain('BEFORE INSERT OR UPDATE ON "pharmacy_refill_subscription_cycles"');
+    // Once the check is back on, a cycle readied while it was off cannot start checkout.
+    expect(guard).toContain(`NEW."status" = 'CHECKOUT_STARTED'`);
     // The refill approval CHECK itself is kept, not dropped.
     expect(sql).not.toContain('pharmacy_refill_cycles_rx_approval_ck');
   });
