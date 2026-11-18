@@ -2,10 +2,10 @@
  * FIN-01 / §8A invariant 15 — the shared double-entry journal primitive.
  *
  * This is the ONE write path into `finance_journal_entries` /
- * `finance_journal_lines`, and it is deliberately vertical-agnostic: it knows
- * about debits, credits, source references and reversals, and nothing about
- * pharmacies, restaurants or agencies. A vertical composes it through an
- * adapter (see `src/lib/pharmacy/finance-postings.ts`) rather than growing its
+ * `finance_journal_lines`. It enforces balanced postings and the pharmacy
+ * accounting-period policy (the only period model currently supported).
+ * A vertical composes it through an adapter (see
+ * `src/lib/pharmacy/finance-postings.ts`) rather than growing its
  * own ledger, so "balanced" means the same thing everywhere.
  *
  * WHAT THIS MODULE DOES NOT DECIDE. Balance, append-only, at-most-one-reversal
@@ -20,11 +20,13 @@
  * accounts for, so an event and its posting are never half-recorded.
  */
 import type { Currency, FinanceAccountCode, FinanceSourceKind } from '@/generated/prisma/client';
+import { lockPharmacyLedgerScope } from '@/lib/pharmacy/ledger-lock';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 export type JournalSide = 'DEBIT' | 'CREDIT';
 
 export type FinancePostingErrorReason =
+  | 'PERIOD_CLOSED'
   | 'EMPTY_ENTRY'
   | 'UNBALANCED'
   | 'INVALID_AMOUNT'
@@ -144,6 +146,42 @@ export function signedMinor(line: {
 }
 
 /**
+ * Pharmacy periods are per branch and half open [startsAt, endsAt). Transfers
+ * affect more than the header branch. Lock every affected ledger in stable
+ * order before reading any period. The lock is SHARED: postings never wait for
+ * each other (so it cannot deadlock with customer, drawer or stock locks), but
+ * they do wait for an exclusive close/reopen. The database triggers backstop
+ * writers that bypass this primitive.
+ */
+export async function assertPostingPeriodsOpen(
+  db: ScopedDb,
+  organizationId: string,
+  at: Date,
+  branchId: string | null | undefined,
+  lines: readonly { branchId?: string | null }[] = []
+) {
+  const branches = [...new Set([branchId, ...lines.map((line) => line.branchId)])]
+    .filter((id): id is string => id != null)
+    .sort();
+  for (const id of branches) {
+    await lockPharmacyLedgerScope(db, { organizationId, branchId: id }, 'shared');
+  }
+  for (const id of branches) {
+    const closed = await db.pharmacyAccountingPeriod.findFirst({
+      where: {
+        organizationId,
+        branchId: id,
+        status: 'CLOSED',
+        startsAt: { lte: at },
+        endsAt: { gt: at },
+      },
+      select: { id: true },
+    });
+    if (closed) throw new FinancePostingError('PERIOD_CLOSED');
+  }
+}
+
+/**
  * Post one balanced entry. Must run inside the caller's transaction.
  *
  * Returns the existing entry unchanged when `idempotencyKey` has already been
@@ -174,6 +212,14 @@ export async function postJournalEntry(
     }
     return existing;
   }
+
+  await assertPostingPeriodsOpen(
+    db,
+    scope.organizationId,
+    input.occurredAt,
+    input.branchId,
+    input.lines
+  );
 
   const entry = await db.financeJournalEntry.create({
     data: {
@@ -252,6 +298,14 @@ export async function reverseJournalEntry(
     include: { lines: true },
   });
   if (existing) return existing;
+
+  await assertPostingPeriodsOpen(
+    db,
+    scope.organizationId,
+    input.at,
+    original.branchId,
+    original.lines
+  );
 
   const reversal = await db.financeJournalEntry.create({
     data: {

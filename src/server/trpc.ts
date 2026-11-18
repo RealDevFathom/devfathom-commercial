@@ -24,6 +24,7 @@ import {
 } from '@/server/audit';
 import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/tenancy/demo-isolation';
 import { isPrismaError, mapPrismaError } from '@/server/trpc-database-errors';
+import { mapAccountingPeriodError } from '@/server/trpc-period-errors';
 import { refusalReasonOf } from '@/server/refusal-reason';
 
 /**
@@ -169,11 +170,13 @@ export const router = t.router;
  * escaped a resolver (a stale-record update or delete, a unique or foreign-key
  * violation) becomes a typed error with user-facing words — NOT_FOUND, CONFLICT
  * or BAD_REQUEST — instead of a 500 carrying Prisma's own message (#318).
+ * DEV-877: a posting refused because its accounting period is closed becomes
+ * BAD_REQUEST `PERIOD_CLOSED` on every router that can post a journal entry.
  */
 const mapDatabaseErrors = t.middleware(async ({ next }) => {
   const result = await next();
   if (result.ok) return result;
-  const mapped = mapPrismaError(result.error);
+  const mapped = mapAccountingPeriodError(result.error) ?? mapPrismaError(result.error);
   if (mapped) throw mapped;
   return result;
 });

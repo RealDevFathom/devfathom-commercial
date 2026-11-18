@@ -283,7 +283,8 @@ export async function recordApInvoice(
       ],
     });
   } catch (error) {
-    if (error instanceof FinancePostingError) fail('IDEMPOTENCY_CONFLICT');
+    if (error instanceof FinancePostingError)
+      fail(error.reason === 'PERIOD_CLOSED' ? 'PERIOD_CLOSED' : 'IDEMPOTENCY_CONFLICT');
     throw error;
   }
   if (

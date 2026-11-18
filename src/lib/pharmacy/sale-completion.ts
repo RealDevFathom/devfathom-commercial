@@ -30,7 +30,9 @@ export async function completePaidPharmacySale(
   sale: Prisma.PharmacySaleGetPayload<{ include: typeof completionSaleInclude }>,
   input: { deviceId: string; businessDate: Date },
   /** F2: a leased offline receipt number the caller already consumed in this transaction. */
-  leasedReceiptNumber: number | null = null
+  leasedReceiptNumber: number | null = null,
+  /** Provider-backed settlement keeps the instant checked before charging. */
+  issuedAt: Date = new Date()
 ) {
   // #518: every completion path re-checks who may sell Rx/restricted non-controlled lines.
   await assertRxSaleAllowed(
@@ -54,7 +56,6 @@ export async function completePaidPharmacySale(
       RETURNING "nextNumber" - 1 AS receipt_number`);
     receiptNumber = rows[0]!.receipt_number;
   }
-  const issuedAt = new Date();
   await db.pharmacySale.update({
     where: { organizationId_id: { organizationId: scope.organizationId, id: sale.id } },
     data: {

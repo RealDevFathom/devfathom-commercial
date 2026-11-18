@@ -237,26 +237,32 @@ export async function recordKhataRepayment(
   // DEV-746: khata sales earn loyalty points when their debt is paid. Earned once, here,
   // from the payments just written; a retried submit replays above and never reaches this.
   await earnKhataCollectionPoints(db, scope, settlement.allocations);
-  await postBookkeepingTransaction(db, scope, {
-    reference: identity.receiptReference,
-    kind: 'CUSTOMER_RECEIPT',
-    amountMinor: input.amountMinor,
-    occurredAt: recordedAt,
-    idempotencyKey: identity.idempotencyKey,
-    currency,
-    counterpartyName: account.displayName,
-    memo,
-    bankReference: payerReference,
-    fundingAccount: input.tender === 'CASH' ? 'CASH' : 'BANK',
-    allocations: [
-      {
-        sourceKind: 'CUSTOMER_KHATA',
-        sourceId: account.id,
-        sourceReference: account.displayName.slice(0, 160),
-        amountMinor: input.amountMinor,
-      },
-    ],
-  });
+  await postBookkeepingTransaction(
+    db,
+    scope,
+    {
+      reference: identity.receiptReference,
+      kind: 'CUSTOMER_RECEIPT',
+      amountMinor: input.amountMinor,
+      occurredAt: recordedAt,
+      idempotencyKey: identity.idempotencyKey,
+      currency,
+      counterpartyName: account.displayName,
+      memo,
+      bankReference: payerReference,
+      fundingAccount: input.tender === 'CASH' ? 'CASH' : 'BANK',
+      allocations: [
+        {
+          sourceKind: 'CUSTOMER_KHATA',
+          sourceId: account.id,
+          sourceReference: account.displayName.slice(0, 160),
+          amountMinor: input.amountMinor,
+        },
+      ],
+    },
+    // Serialized by the family account lock above; see OperationalPostingOption.
+    { sharedLedgerLock: true }
+  );
 
   return {
     receiptReference: identity.receiptReference,
