@@ -71,6 +71,7 @@ import {
   voucherIssueInput,
   voucherRevokeInput,
 } from '@/lib/pharmacy/vouchers';
+import { listCounterApprovers } from '@/lib/pharmacy/counter-line-approval';
 import { protectedProcedure, router, type TRPCContext } from '../trpc';
 
 type MarketingAccessContext = Pick<TRPCContext, 'session' | 'entitlements' | 'audit'> & {
@@ -364,6 +365,13 @@ export const pharmacyMarketingRouter = router({
   vouchers: protectedProcedure
     .input(marketingScopeInput)
     .query(({ ctx, input }) => execute(ctx, input.branchId, listVouchers)),
+  // DEV-780: the managers or owners who may approve a voucher above the value cap with their
+  // PIN; a solo owner is offered their own profile and re-enters their own PIN.
+  voucherApprovers: protectedProcedure
+    .input(marketingScopeInput)
+    .query(({ ctx, input }) =>
+      execute(ctx, input.branchId, (db, scope) => listCounterApprovers(db, scope, 'DISCOUNT'))
+    ),
   // DEV-819: above the value cap a second approver's PIN (or the solo owner's own fresh PIN)
   // is verified before the issue transaction; `issueVoucher` re-checks it inside.
   issueVoucher: protectedProcedure.input(voucherIssueInput).mutation(({ ctx, input }) => {

@@ -1,3 +1,5 @@
+import { ReportDetails } from '@/components/pharmacy/report-details';
+import { PHARMACY_COPY } from '@/lib/pharmacy/plain-language';
 import type { Metadata } from 'next';
 import { TRPCError } from '@trpc/server';
 
@@ -155,25 +157,27 @@ function Results({
 }) {
   const { controls } = state;
   const status = controls.empty
-    ? 'No matching posted account rows'
+    ? PHARMACY_COPY.account.noTotals
     : controls.inconsistent
-      ? 'Source algebra is inconsistent'
+      ? PHARMACY_COPY.account.totalsMismatch
       : controls.allZero
-        ? 'All supplied account values are zero'
-        : 'Account controls calculated';
+        ? PHARMACY_COPY.account.allZero
+        : PHARMACY_COPY.account.totalsChecked;
   return (
     <SectionCard title={status} titleLevel={2}>
-      <p className="text-sm text-text-muted">
-        Posted branch journal lines only; coverage and completeness remain unknown. Window{' '}
-        {formatWorkspaceDateTime(state.from, timeZone)} to{' '}
-        {formatWorkspaceDateTime(state.to, timeZone)} (end exclusive). Source: posted accounts.
-        Retrieved {formatWorkspaceDateTime(state.retrievedAt, timeZone)}.
-      </p>
-      <p className="mt-2 text-sm text-text-muted">
-        A nonzero control may be legitimate for an interbranch scope. Zero is not evidence of
-        completeness, statutory compliance, reconciliation or an adapter pass. Row and bridge
-        differences are source-algebra consistency checks, not independent checks.
-      </p>
+      <ReportDetails>
+        <p className="text-sm text-text-muted">
+          Posted branch journal lines only; coverage and completeness remain unknown. Window{' '}
+          {formatWorkspaceDateTime(state.from, timeZone)} to{' '}
+          {formatWorkspaceDateTime(state.to, timeZone)} (end exclusive). Source: posted accounts.
+          Retrieved {formatWorkspaceDateTime(state.retrievedAt, timeZone)}.
+        </p>
+        <p className="mt-2 text-sm text-text-muted">
+          A nonzero control may be legitimate for an interbranch scope. Zero is not evidence of
+          completeness, statutory compliance, reconciliation or an adapter pass. Row and bridge
+          differences are source-algebra consistency checks, not independent checks.
+        </p>
+      </ReportDetails>
       {controls.empty ? (
         <p className="mt-4 text-sm">
           No matching postings were returned; this does not prove zero activity.

@@ -2,6 +2,7 @@ import { browserUuid } from '@/lib/browser-uuid';
 import { GrowthPanel } from './growth-panel';
 import { BasketPanel } from './basket-panel';
 import { ProfilePanel } from './profile-panel';
+import { VoucherPanel } from './voucher-panel';
 import Link from 'next/link';
 import { TRPCError } from '@trpc/server';
 import { Button } from '@/components/ui/button';
@@ -47,10 +48,25 @@ async function loadWorkspace(params: Record<string, string | string[] | undefine
   } catch {
     basketsUnavailable = true;
   }
+  // DEV-780: vouchers and the approvers offered for one above the value cap.
+  let vouchers = null;
+  let voucherApprovers: Awaited<ReturnType<typeof caller.voucherApprovers>> = [];
+  let vouchersUnavailable = false;
+  try {
+    [vouchers, voucherApprovers] = await Promise.all([
+      caller.vouchers({ branchId }),
+      caller.voucherApprovers({ branchId }),
+    ]);
+  } catch {
+    vouchersUnavailable = true;
+  }
   return {
     branches,
     branchId,
     history,
+    vouchers,
+    voucherApprovers,
+    vouchersUnavailable,
     review,
     delivery,
     growth,
@@ -137,6 +153,9 @@ export default async function PharmacyMarketingPage({
     growthUnavailable,
     baskets,
     basketsUnavailable,
+    vouchers,
+    voucherApprovers,
+    vouchersUnavailable,
   } = workspace;
   const zone = history.timezone;
   const zoneLabel = timeZoneLabel(zone);
@@ -201,6 +220,13 @@ export default async function PharmacyMarketingPage({
         branchId={branchId}
         history={baskets}
         unavailable={basketsUnavailable}
+        timeZone={zone}
+      />
+      <VoucherPanel
+        branchId={branchId}
+        vouchers={vouchers}
+        approvers={voucherApprovers}
+        unavailable={vouchersUnavailable}
         timeZone={zone}
       />
       <ProfilePanel branchId={branchId} />

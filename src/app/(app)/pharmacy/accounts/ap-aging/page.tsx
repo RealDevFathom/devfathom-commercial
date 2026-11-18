@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Metadata } from 'next';
 import { TRPCError } from '@trpc/server';
 
@@ -16,7 +17,13 @@ import {
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyApInvoicesRouter } from '@/server/routers/pharmacy-ap-invoices';
 import { createTRPCContext } from '@/server/trpc';
-import { formatWorkspaceDateTime, workspaceZoneLabel } from '@/lib/timezone';
+import {
+  formatWorkspaceDateTime,
+  workspaceMinuteInput,
+  workspaceToday,
+  workspaceZoneLabel,
+} from '@/lib/timezone';
+import { PayApInvoiceForm, RecordApInvoiceForm } from './ap-entry-forms';
 import { ExportCsv } from './export-csv';
 import { parseAgingQuery, type AgingQuery as Query } from './query';
 
@@ -194,6 +201,59 @@ function Rows({ view }: { view: ApAgingView }) {
   );
 }
 
+/**
+ * DEV-103: the entry forms appear only after the router has authorized and read
+ * this branch. They send to the same router, which authorizes and validates
+ * every command again; the forms grant nothing.
+ */
+function EntryForms({
+  branchId,
+  view,
+  timeZone,
+}: {
+  branchId: string;
+  view: ApAgingView;
+  timeZone: string | null | undefined;
+}) {
+  const now = new Date();
+  const payable = view.rows
+    .filter((row) => row.outstandingMinor > 0)
+    .map((row) => ({
+      invoiceId: row.invoiceId,
+      reference: row.reference,
+      payeeName: row.payeeName,
+      supplierInvoiceRef: row.supplierInvoiceRef,
+      currency: row.currency,
+      outstanding: minor(row.outstandingMinor),
+    }));
+  return (
+    <>
+      <SectionCard title="Record a supplier expense invoice" titleLevel={2}>
+        <RecordApInvoiceForm
+          branchId={branchId}
+          initialKey={`ap-invoice:${randomUUID()}`}
+          today={workspaceToday(timeZone, now)}
+        />
+      </SectionCard>
+      <SectionCard title="Record a payment" titleLevel={2}>
+        {payable.length ? (
+          <PayApInvoiceForm
+            branchId={branchId}
+            initialKey={`ap-payment:${randomUUID()}`}
+            now={workspaceMinuteInput(now, timeZone)}
+            invoices={payable}
+          />
+        ) : (
+          <p className="text-sm text-text-muted">
+            Payments are made against an open invoice shown in this view. Record the invoice first,
+            or show a day on which it was outstanding.
+          </p>
+        )}
+      </SectionCard>
+    </>
+  );
+}
+
 export default async function ApAgingPage({ searchParams }: { searchParams: Promise<Query> }) {
   const query = await searchParams;
   // The organization zone is known only after the actor resolves; before any read the
@@ -245,7 +305,7 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
       <PageHeader
         eyebrow="Pharmacy accounts"
         heading="Supplier expense invoice aging"
-        description="Outstanding non-stock supplier expense invoices for one branch, aged by due date as of one day."
+        description="Record non-stock supplier expense invoices and their payments, and age what is outstanding for one branch by due date as of one day."
         actions={
           state.kind === 'loaded' && state.view.rows.length ? (
             <ExportCsv
@@ -296,6 +356,7 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
               <Rows view={state.view} />
             </>
           )}
+          <EntryForms branchId={state.branchId} view={state.view} timeZone={timeZone} />
         </>
       ) : (
         <Notice state={state} />

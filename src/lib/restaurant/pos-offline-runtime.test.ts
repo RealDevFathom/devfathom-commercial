@@ -526,6 +526,79 @@ describe('PosOfflineRuntime across tabs of one terminal', () => {
     expect(refused).toMatchObject({ ok: false, reason: 'DEVICE_REVOKED' });
     expect(await driver.read(posScopeKey(scope))).toBeUndefined();
   });
+
+  describe('where the browser has no Web Locks, so no lock spans tabs', () => {
+    // Each tab is its own realm: its in-process lock cannot see the other tab's.
+    const tabLocalLock = <T>(_name: string, run: () => Promise<T>) => run();
+
+    /** Every read yields to the event loop, so both tabs read before either writes. */
+    function slowReads(backing: ReturnType<typeof createMemoryDriver>) {
+      return {
+        ...backing,
+        read: async (key: string) => {
+          const value = await backing.read(key);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          return value;
+        },
+      };
+    }
+
+    it('keeps both drafts when two tabs save at the same moment', async () => {
+      const driver = createMemoryDriver();
+      const shared = slowReads(driver);
+      const tabA = new PosOfflineRuntime(scope, shared, tabLocalLock);
+      const tabB = new PosOfflineRuntime(scope, shared, tabLocalLock);
+      await tabA.hydrate();
+      await tabB.hydrate();
+
+      const [savedA, savedB] = await Promise.all([tabA.enqueue(input), tabB.enqueue(draftB)]);
+      expect(savedA.ok).toBe(true);
+      expect(savedB.ok).toBe(true);
+
+      const drafts = await persistedDrafts(driver);
+      expect(drafts).toHaveLength(2);
+      expect(itemsOf(drafts).sort()).toEqual([['menu-item-1'], ['menu-item-2']]);
+      expect(new Set(drafts.map((draft) => draft.sequence)).size).toBe(2);
+    });
+
+    it('does not let a concurrent catalog refresh drop a draft another tab saved', async () => {
+      const driver = createMemoryDriver();
+      const shared = slowReads(driver);
+      const stale = new PosOfflineRuntime(scope, shared, tabLocalLock);
+      const writer = new PosOfflineRuntime(scope, shared, tabLocalLock);
+      await stale.hydrate();
+      await writer.hydrate();
+
+      const [saved] = await Promise.all([
+        writer.enqueue(input),
+        stale.cacheCatalog(catalogPayload, '2026-11-15T00:00:00.000Z'),
+      ]);
+      expect(saved.ok).toBe(true);
+
+      const read = await readPosState<PosQueueSnapshot>(driver, scope);
+      expect(read.status).toBe('ok');
+      if (read.status !== 'ok') return;
+      expect(read.state.catalog?.version).toBe('catalog-2');
+      expect(read.state.queue?.drafts).toHaveLength(1);
+    });
+
+    it('reports a failed save, never a phantom one, when another tab keeps winning the write', async () => {
+      const driver = createMemoryDriver();
+      const other = new PosOfflineRuntime(scope, driver, tabLocalLock);
+      await other.hydrate();
+      expect((await other.enqueue(input)).ok).toBe(true);
+      const losing = new PosOfflineRuntime(
+        scope,
+        { ...driver, writeIfRevision: async () => false },
+        tabLocalLock
+      );
+      await losing.hydrate().catch(() => undefined);
+
+      await expect(losing.enqueue(draftB)).rejects.toMatchObject({ reason: 'WRITE_CONFLICT' });
+      expect(itemsOf(losing.snapshot().queue!.drafts)).toEqual([['menu-item-1']]);
+      expect(itemsOf(await persistedDrafts(driver))).toEqual([['menu-item-1']]);
+    });
+  });
 });
 
 describe('persisted server review creation', () => {

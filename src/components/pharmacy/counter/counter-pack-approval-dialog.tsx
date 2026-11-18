@@ -12,6 +12,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import type { CounterApprovalPin } from '@/lib/pharmacy/counter-line-approval';
+import { COUNTER_APPROVAL_CODE_HINT } from './counter-approval-copy';
 
 type Approver = { id: string; name: string; self: boolean };
 
@@ -124,10 +125,14 @@ export function CounterPackApprovalDialog({
               autoComplete="off"
               maxLength={8}
               className="h-11"
+              aria-describedby="pack-approver-pin-hint"
               value={pin}
               disabled={!eligible}
               onChange={(event) => setPin(event.target.value.replace(/\D/g, ''))}
             />
+            <p id="pack-approver-pin-hint" className="text-sm text-text-muted">
+              {COUNTER_APPROVAL_CODE_HINT}
+            </p>
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" className="h-11" onClick={onCancel}>

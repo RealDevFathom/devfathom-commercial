@@ -85,3 +85,30 @@ describe('DEV-764 adjust points form action', () => {
     });
   });
 });
+
+describe('DEV-881 manager PIN on the adjust points form', () => {
+  it('sends the PIN exactly as typed, and refuses a malformed one before the server', async () => {
+    await adjustPoints(idle, form({ managerPin: '2468' }));
+    expect(mocks.adjustPoints).toHaveBeenLastCalledWith(
+      expect.objectContaining({ managerPin: '2468' })
+    );
+    mocks.adjustPoints.mockClear();
+    await expect(adjustPoints(idle, form({ managerPin: '12a' }))).resolves.toEqual({
+      status: 'error',
+      message: 'Enter your 4 to 8 digit PIN.',
+    });
+    expect(mocks.adjustPoints).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'Adjustment not recorded. Enter your manager PIN.',
+    'Adjustments above 500 points need the owner.',
+    'A manager can adjust up to 1,000 points for a customer in one day. Larger totals need the owner.',
+  ])('shows the refusal %j as written', async (message) => {
+    mocks.adjustPoints.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN', message }));
+    await expect(adjustPoints(idle, form({ managerPin: '2468' }))).resolves.toEqual({
+      status: 'error',
+      message,
+    });
+  });
+});
