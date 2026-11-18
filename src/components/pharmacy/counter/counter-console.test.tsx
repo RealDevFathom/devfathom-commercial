@@ -6598,6 +6598,27 @@ describe('DEV-705 keyboard loose sale', () => {
     expect(payment).toContainElement(document.activeElement as HTMLElement);
     expect(screen.getByLabelText('Scan or search')).not.toHaveFocus();
   });
+
+  it('DEV-930 leaves focus on a control the cashier moved to while an add is still settling', async () => {
+    let settle!: () => void;
+    const { controlledRegister } = (
+      trpc.useUtils as unknown as () => {
+        pharmacySafety: { controlledRegister: { invalidate: ReturnType<typeof vi.fn> } };
+      }
+    )().pharmacySafety;
+    controlledRegister.invalidate.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (settle = resolve))
+    );
+    mocks.mutations.addLine!.mockResolvedValue({ saleLineId: 'loose-line' });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(looseRow()));
+    fireEvent.keyDown(screen.getByLabelText('Quantity'), { key: 'Enter' });
+    await waitFor(() => expect(controlledRegister.invalidate).toHaveBeenCalled());
+    const patient = screen.getByRole('button', { name: /^Patient/ });
+    act(() => patient.focus());
+    await act(async () => settle());
+    expect(patient).toHaveFocus();
+  });
   it('shows every unit with its price and lets the operator switch to the strip', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(looseRow()));

@@ -1846,6 +1846,8 @@ function ScopedPharmacyCounterConsole({
         });
         return;
       }
+      // DEV-930: where focus was when the add began, so it is only restored from there.
+      const focusAtAdd = document.activeElement;
       setPending('addToCart');
       lastAddOutcome.current = 'pending';
       setNotice(null);
@@ -2128,9 +2130,12 @@ function ScopedPharmacyCounterConsole({
         // A focused field may already hold the next scan's digits; selecting them
         // would let the scanner's next digit replace them. A field that lost focus
         // (disabled while adding, or an add from a button) gets it back once enabled.
-        // DEV-930: never from a dialog opened meanwhile (F9 payment), or its Enter is lost.
+        // DEV-930: never from a control the cashier moved to meanwhile (the Patient button,
+        // or the F9 payment dialog), or their next Enter lands in search and is lost.
+        const focused = document.activeElement;
         if (
-          document.activeElement !== searchRef.current &&
+          focused !== searchRef.current &&
+          (focused === null || focused === document.body || focused === focusAtAdd) &&
           document.querySelector('[role="dialog"]:not([hidden])') === null
         ) {
           restoreSearchAfterAdd.current = true;
