@@ -159,6 +159,8 @@ import { trpc } from '@/lib/trpc';
 type Notice = {
   tone: 'success' | 'info' | 'warning' | 'danger' | 'neutral';
   message: string;
+  /** DEV-910: stays on screen until the cashier dismisses it. */
+  persistent?: boolean;
   inventoryBranchId?: string;
   /** DEV-860: a sale refused for a setup gap carries its fix link or whom to ask. */
   setup?: CounterSetupAdvice;
@@ -623,7 +625,8 @@ function ScopedPharmacyCounterConsole({
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   useEffect(() => {
-    if (!notice || (notice.tone !== 'success' && notice.tone !== 'info')) return;
+    if (!notice || notice.persistent) return;
+    if (notice.tone !== 'success' && notice.tone !== 'info') return;
     const timer = window.setTimeout(() => setNotice(null), 5000);
     return () => window.clearTimeout(timer);
   }, [notice]);
@@ -3046,6 +3049,7 @@ function ScopedPharmacyCounterConsole({
       setReceiptReprint(allocation.reprint);
       setNotice({
         tone: 'success',
+        persistent: true,
         message:
           'Browser print dialog requested. Select the matching paper size and OS printer. Physical printing is not confirmed.',
       });
@@ -3650,6 +3654,16 @@ function ScopedPharmacyCounterConsole({
                       </Link>
                     ) : null}
                   </div>
+                  {notice.persistent ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="ml-auto min-h-11 min-w-11 shrink-0"
+                      onClick={() => setNotice(null)}
+                    >
+                      Dismiss
+                    </Button>
+                  ) : null}
                 </div>
               ) : null}
               {lostSaleCapture && lostSaleCapture.branchId === branchId ? (
@@ -4043,12 +4057,22 @@ function ScopedPharmacyCounterConsole({
                     type="button"
                     className="min-h-12 rounded-[var(--radius-sm)]"
                     disabled={busy || !preview?.sufficient}
+                    aria-describedby={
+                      !busy && !preview?.sufficient ? 'counter-add-to-cart-reason' : undefined
+                    }
                     onClick={() => void addToCart()}
                   >
                     {pending === 'addToCart'
                       ? 'Adding…'
                       : `Add to cart · ${formatBinding(keymap.bindings.addToCart)}`}
                   </Button>
+                  {!busy && !preview?.sufficient ? (
+                    <p id="counter-add-to-cart-reason" className="text-xs text-text-muted">
+                      {preview
+                        ? 'Not enough stock for this quantity. Reduce it or record the shortage.'
+                        : 'Enter a valid quantity to add this item.'}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-text-muted">
                   <span>

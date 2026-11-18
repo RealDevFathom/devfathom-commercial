@@ -366,6 +366,7 @@ export default async function PharmacyFinancePage({
           ledgerAt={query.ledgerAt}
           ledgerBy={query.ledgerBy}
           profitBy={query.profitBy}
+          timeZone={ctx.organization?.timezone}
         />
       </Suspense>
       {query.notice ? (

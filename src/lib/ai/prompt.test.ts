@@ -7,11 +7,25 @@ it.each(['2026-11-02T19:00:00Z', '2026-11-02T23:59:59Z', '2026-11-03T00:00:00Z']
   (instant) => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(instant));
-    expect(assistantSystemPrompt({ vertical: 'PHARMACY' })).toContain(
+    expect(assistantSystemPrompt({ vertical: 'PHARMACY', timeZone: 'Asia/Karachi' })).toContain(
       'Today is 2026-11-03 in Asia/Karachi (PKT)'
     );
   }
 );
+
+it('resolves today in the workspace zone, not a fixed Pakistan clock (DEV-902)', () => {
+  vi.useFakeTimers();
+  // 00:30 on 3 Nov in Karachi, but still 2 Nov in Chicago.
+  vi.setSystemTime(new Date('2026-11-02T19:30:00Z'));
+  const chicago = assistantSystemPrompt({ vertical: 'PHARMACY', timeZone: 'America/Chicago' });
+  expect(chicago).toContain('Today is 2026-11-02 in America/Chicago.');
+  expect(chicago).not.toContain('Asia/Karachi');
+  expect(chicago).not.toContain('PKT');
+  // A missing or unusable zone falls back to UTC, as every other workspace screen does.
+  expect(assistantSystemPrompt({ vertical: 'PHARMACY', timeZone: 'PKT' })).toContain(
+    'Today is 2026-11-02 in UTC.'
+  );
+});
 
 it('detects Urdu script and instructs an Urdu reply for every tool', async () => {
   const { detectReplyLocale } = await import('./prompt');

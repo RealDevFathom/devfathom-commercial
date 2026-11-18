@@ -422,6 +422,29 @@ async function assignedBranchScope(ctx: TRPCContext, branch: string): Promise<Le
   return scope;
 }
 
+/**
+ * DEV-909: a customer's detailed points history is shown for every branch only to a session
+ * ADMIN of the organization (the owner). Other staff, branch managers included, see it for the
+ * active branches they are assigned to; the shared points balance is not limited.
+ */
+async function visibleLoyaltyBranches(
+  ctx: TRPCContext,
+  scope: LedgerScope
+): Promise<string[] | undefined> {
+  const user = ctx.session!.user;
+  if (user.role === 'ADMIN' && user.organizationId === scope.organizationId) return undefined;
+  const rows = await ctx.db.pharmacyBranchAssignment.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      userId: user.id,
+      active: true,
+      branch: { organizationId: scope.organizationId, active: true },
+    },
+    select: { branchId: true },
+  });
+  return [...new Set([scope.branchId, ...rows.map((row) => row.branchId)])];
+}
+
 type SaleLineInput = Parameters<typeof addSaleLine>[2];
 /** #727: the online counter prices each line against the branch's live promotions. */
 const COUNTER_LINE_PRICING = { applyCounterPromotions: true } as const;
@@ -1677,11 +1700,13 @@ export const pharmacySalesRouter = router({
     )
     .query(async ({ ctx, input }) => {
       try {
+        const scope = await assignedBranchScope(ctx, input.branchId);
         return await readCustomerSnapshot(
           ctx.db,
-          await assignedBranchScope(ctx, input.branchId),
+          scope,
           input.customerId,
-          input.page
+          input.page,
+          await visibleLoyaltyBranches(ctx, scope)
         );
       } catch (error) {
         fail(error);
