@@ -7,8 +7,10 @@
  *      same recordSource → profileTable → persistProfile path an upload takes.
  *
  * Every name, code and price is generated: no real customer or product data.
- * Refuses any database the pharmacy E2E guard would refuse (disposable name,
- * isolated port, never staging or production). Idempotent: a re-run adds nothing.
+ * Runs only against a disposable pharmacy E2E database on this machine: it refuses
+ * staging-demo mode, requires PHARMACY_E2E=1, a loopback host, an isolated port and a
+ * disposable database name, and DATABASE_URL equal to the guarded URL
+ * (scripts/dev503-local-database.ts). Idempotent: a re-run adds nothing.
  *
  *   PHARMACY_E2E=1 PHARMACY_E2E_DATABASE_URL=… DATABASE_URL=<same> \
  *   PHARMACY_E2E_ADMIN_EMAIL=… PHARMACY_E2E_ADMIN_PASSWORD=… \
@@ -21,10 +23,10 @@ import { profileTable } from '../src/lib/pharmacy/migration/profiler';
 import { persistProfile, recordSource } from '../src/lib/pharmacy/migration/workbench';
 import { withTenantDb } from '../src/lib/tenancy/scoped-db';
 import { PHARMACY_E2E } from '../tests/e2e/pharmacy-counter-fixture';
-import { pharmacyE2eEnvironment } from './pharmacy-e2e-environment';
+import { dev503MeasurementEnvironment } from './dev503-local-database';
 
-// Throws unless DATABASE_URL is the guarded, disposable pharmacy E2E database.
-pharmacyE2eEnvironment();
+// Throws unless DATABASE_URL is the guarded, disposable pharmacy E2E database on loopback.
+dev503MeasurementEnvironment();
 
 const ORG = PHARMACY_E2E.organizationId;
 const COUNT = 19_000;

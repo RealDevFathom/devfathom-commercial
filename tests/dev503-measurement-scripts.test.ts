@@ -4,6 +4,8 @@ import { resolve } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, test } from 'vitest';
 
+import { dev503MeasurementEnvironment } from '../scripts/dev503-local-database';
+
 const read = (path: string) => readFileSync(resolve(process.cwd(), path), 'utf8');
 const SCRIPTS = ['scripts/dev503-synthetic-medicines.ts', 'scripts/dev503-measure-page-loads.ts'];
 
@@ -31,14 +33,65 @@ describe('DEV-503 measurement tooling', () => {
       const text = read(path);
       const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
       expect(text).toMatch(
-        /import \{ pharmacyE2eEnvironment \} from '\.\/pharmacy-e2e-environment';/
+        /import \{ dev503MeasurementEnvironment \} from '\.\/dev503-local-database';/
       );
-      const guard = topLevelCallIndex(source, 'pharmacyE2eEnvironment');
+      const guard = topLevelCallIndex(source, 'dev503MeasurementEnvironment');
       expect(guard).toBeGreaterThanOrEqual(0);
       // The guard runs before the script's work is defined or started.
       expect(guard).toBeLessThan(topLevelCallIndex(source, 'main'));
     });
   }
+
+  const LOCAL = 'postgresql://gate_runtime:local@127.0.0.1:55676/pharmacy_e2e_dev';
+  const local = (overrides: Record<string, string | undefined> = {}) => ({
+    PHARMACY_E2E: '1',
+    PHARMACY_E2E_DATABASE_URL: LOCAL,
+    DATABASE_URL: LOCAL,
+    PHARMACY_E2E_ADMIN_EMAIL: 'admin@pharmacy-e2e.test',
+    PHARMACY_E2E_ADMIN_PASSWORD: 'local-only',
+    ...overrides,
+  });
+
+  test('accepts only the guarded loopback database, which DATABASE_URL must name', () => {
+    expect(dev503MeasurementEnvironment(local()).DATABASE_URL).toBe(new URL(LOCAL).href);
+  });
+
+  test('refuses staging-demo mode, even with a staging endpoint the shared guard accepts', () => {
+    const staging =
+      'postgresql://demo:x@devfathom-staging.abc123.ap-southeast-1.rds.amazonaws.com:5432/app';
+    expect(() =>
+      dev503MeasurementEnvironment({
+        STAGING_DEMO_SEED: '1',
+        DEPLOY_ENV: 'staging',
+        STAGING_DB_ENDPOINT: 'devfathom-staging.abc123.ap-southeast-1.rds.amazonaws.com',
+        STAGING_DEMO_DATABASE_URL: staging,
+        DATABASE_URL: staging,
+        PHARMACY_E2E_ADMIN_EMAIL: 'admin@pharmacy-e2e.test',
+        PHARMACY_E2E_ADMIN_PASSWORD: 'local-only',
+      })
+    ).toThrow(/STAGING_DEMO_SEED is set/);
+    expect(() => dev503MeasurementEnvironment(local({ DEPLOY_ENV: 'staging' }))).toThrow(
+      /DEPLOY_ENV is set/
+    );
+  });
+
+  test('refuses a database host that is not loopback', () => {
+    const remote = 'postgresql://gate_runtime:local@db.example.test:55676/pharmacy_e2e_dev';
+    expect(() =>
+      dev503MeasurementEnvironment(
+        local({ PHARMACY_E2E_DATABASE_URL: remote, DATABASE_URL: remote })
+      )
+    ).toThrow(/must be loopback/);
+  });
+
+  test('requires the E2E opt-in and DATABASE_URL equal to the guarded URL', () => {
+    expect(() => dev503MeasurementEnvironment(local({ PHARMACY_E2E: undefined }))).toThrow(
+      /PHARMACY_E2E=1/
+    );
+    expect(() => dev503MeasurementEnvironment(local({ DATABASE_URL: undefined }))).toThrow(
+      /DATABASE_URL must equal/
+    );
+  });
 
   test('the report labels its figures as local synthetic data', () => {
     const report = read('docs/qa/dev-503/performance.md');

@@ -11,15 +11,20 @@ before/after load times and profiling of the server components on develop.
 
 ## Summary
 
+**Conclusion:** on local synthetic data no measurable improvement is attributable to
+ed23e6695; both commits are equally fast once the server is up, and the cold cost is the
+server's start-up route preloading (about 2.3 s).
+
 - On a started server, both pages are usable in about **0.5 s (medicines)** and **0.65 s
   (counter)**, cold browser cache or warm, on both the parent of ed23e6695 and develop
   (local, synthetic data, not staging).
-- The 3.2 s / 3.8 s figures in the issue match the **first request after `next start`**: about
-  3.3 s for medicines and 5.5 s for the counter here, on both commits. That cost is the Next.js
-  server preloading every route module at start-up (about 2.3 s), then one-off runtime
-  warm-up, not these pages' queries.
+- Only the **first request after `next start`** is slow: about 3.3 s for medicines and
+  5.4–5.6 s for the counter here, on both commits. The issue's 3.2 s for medicines is close to
+  the medicines figure; its 3.8 s for the counter is not reproduced (5.4–5.6 s cold, 0.6–0.7 s
+  on a started server). Most of the cold time is the Next.js server preloading every route
+  module at start-up (about 2.3 s), then one-off runtime warm-up, not these pages' queries.
 - develop and the parent of ed23e6695 differ by tens of milliseconds, not seconds. On a
-  started server, develop's medicines page is usable about 30–35 ms later (it ships about
+  started server, develop's medicines page is usable 24–36 ms later (it ships about
   80 KiB more JavaScript, mainly the catalogue approval queue that (a) did not have), and the
   counter about 40–50 ms earlier (ranges overlap). ed23e6695's parallel path only applies when
   the URL already names branch, source and batch; with 25-row pages and local latency its
@@ -57,8 +62,11 @@ migrations, runtime grants, `prisma db seed`, then `scripts/seed-pharmacy-e2e.ts
   `recordSource → profileTable → persistProfile` path an upload takes, with generated gaps
   (1,117 missing batch, 826 missing expiry, 655 missing MRP: 2,598 open exceptions).
 
-All names, codes and prices are generated. No real customer or product data is used. The
-script refuses any database the pharmacy E2E guard refuses. Both databases received
+All names, codes and prices are generated. No real customer or product data is used. Both
+DEV-503 scripts run only against a disposable database on this machine
+(`scripts/dev503-local-database.ts`): they refuse staging-demo mode (`STAGING_DEMO_SEED` or
+`DEPLOY_ENV` set), require `PHARMACY_E2E=1`, a loopback host and the pharmacy E2E guard's
+disposable name and isolated port, and require `DATABASE_URL` to equal the guarded URL. Both databases received
 byte-identical source content (same content hash); the headers are ones both commits' profilers
 recognise.
 
@@ -138,7 +146,11 @@ queue, which (a) did not have.
 
 Raw samples: `docs/qa/dev-503/results/base-dd75b2e4.json`,
 `docs/qa/dev-503/results/develop-064e8ba0.json` and
-`docs/qa/dev-503/results/experiment-counter-prefetch.json`.
+`docs/qa/dev-503/results/experiment-counter-prefetch.json`, in the shape
+`scripts/dev503-measure-page-loads.ts` writes (`label`, `note`, `next`, `runs`, `summary`,
+`results`). They were recorded with an earlier, uncommitted draft of that harness using the
+same method. A one-run check of the committed harness on develop fell inside every recorded
+range except one cold reading, which was 2 ms above its range.
 
 ## Profiling notes (develop)
 
@@ -235,12 +247,12 @@ staging timings, which wait for the infrastructure hold.
 
 ## Acceptance criteria status
 
-| Criterion (issue #1276)                           | Status                                                                                                                                                                                 |
-| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Profiling notes identifying the main costs        | This document: start-up route preload (cold), client JavaScript and hydration (warm), small serial SQL on medicines, one branch-keyed round trip on the counter                        |
-| Medicines catalogue is paginated                  | On develop (25 rows per page, ed23e6695 and earlier)                                                                                                                                   |
-| Counter shell renders before secondary data loads | On develop: `counter/loading.tsx` renders `CounterSkeleton` of the real layout (DEV-514)                                                                                               |
-| Measurable improvement vs. 3.2 s / 3.8 s          | On a started server develop is usable at about 0.5 s / 0.65 s (local, synthetic data, not staging), but so was the parent commit; the 3.2 s / 3.8 s match the start-up cost both share |
+| Criterion (issue #1276)                           | Status                                                                                                                                                                                                                                                     |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Profiling notes identifying the main costs        | This document: start-up route preload (cold), client JavaScript and hydration (warm), small serial SQL on medicines, one branch-keyed round trip on the counter                                                                                            |
+| Medicines catalogue is paginated                  | On develop (25 rows per page, ed23e6695 and earlier)                                                                                                                                                                                                       |
+| Counter shell renders before secondary data loads | On develop: `counter/loading.tsx` renders `CounterSkeleton` of the real layout (DEV-514)                                                                                                                                                                   |
+| Measurable improvement vs. 3.2 s / 3.8 s          | Not shown for ed23e6695: on a started server both commits are usable at about 0.5 s / 0.65 s (local, synthetic data, not staging). Cold, medicines is about 3.3 s (issue: 3.2 s) and the counter 5.4–5.6 s (issue: 3.8 s, not reproduced), on both commits |
 
 ## Reproduce
 

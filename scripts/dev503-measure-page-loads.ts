@@ -25,9 +25,9 @@ import { chromium, type Browser, type BrowserContext } from '@playwright/test';
 import pg from 'pg';
 
 import { PHARMACY_E2E } from '../tests/e2e/pharmacy-counter-fixture';
-import { pharmacyE2eEnvironment } from './pharmacy-e2e-environment';
+import { dev503MeasurementEnvironment } from './dev503-local-database';
 
-const env = pharmacyE2eEnvironment();
+const env = dev503MeasurementEnvironment();
 const [label = 'run', checkout = '.', portArg = '4400', runsArg = '7', outJson = 'dev503.json'] =
   process.argv.slice(2);
 const port = Number(portArg);
@@ -78,6 +78,9 @@ async function latestBatch() {
   }
 }
 
+/** Servers this run started and has not stopped; stopped on any failure as well. */
+const liveServers = new Set<ChildProcess>();
+
 async function startServer() {
   if (await portBusy()) throw new Error(`Port ${port} is already in use.`);
   const child = spawn(
@@ -98,6 +101,16 @@ async function startServer() {
       },
     }
   );
+  liveServers.add(child);
+  try {
+    return await awaitReady(child);
+  } catch (error) {
+    await stopServer(child);
+    throw error;
+  }
+}
+
+async function awaitReady(child: ChildProcess) {
   let log = '';
   child.stdout?.on('data', (chunk) => (log += chunk));
   child.stderr?.on('data', (chunk) => (log += chunk));
@@ -116,6 +129,7 @@ async function startServer() {
 }
 
 async function stopServer(child: ChildProcess) {
+  liveServers.delete(child);
   try {
     process.kill(-child.pid!, 'SIGTERM');
   } catch {}
@@ -299,8 +313,10 @@ async function main() {
 
 main().then(
   () => process.exit(0),
-  (error: unknown) => {
+  async (error: unknown) => {
     console.error(error);
+    // A failed sign-in or navigation must not leave a detached `next start` on the port.
+    for (const child of [...liveServers]) await stopServer(child).catch(() => undefined);
     process.exit(1);
   }
 );
