@@ -3864,14 +3864,18 @@ export const pharmacySalesRouter = router({
         // DEV-876's branch-assignment read scope first (its refusals stay as they
         // are), then DEV-878's counter grant before any catalogue or alternative read.
         await assignedBranchScope(ctx, input.branchId);
-        return await searchCounterCatalog(
-          ctx.db,
-          await requireCounterReceiptAccess(ctx, input.branchId),
-          {
-            query: input.query,
-            limit: input.limit,
-          }
-        );
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        // DEV-907: the owner's switch decides whether the other-branch line is
+        // computed at all; the client cannot ask for it.
+        const organization = await ctx.db.organization.findUnique({
+          where: { id: scope.organizationId },
+          select: { pharmacyOtherBranchAvailability: true },
+        });
+        return await searchCounterCatalog(ctx.db, scope, {
+          query: input.query,
+          limit: input.limit,
+          otherBranchAvailability: organization?.pharmacyOtherBranchAvailability === true,
+        });
       } catch (error) {
         fail(error);
       }

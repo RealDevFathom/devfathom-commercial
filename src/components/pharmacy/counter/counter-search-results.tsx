@@ -47,6 +47,20 @@ const MATCH_LABEL: Record<CounterSearchRow['matchedOn'], string> = {
 };
 
 /**
+ * DEV-907: "Gulberg", "Gulberg and DHA", "Gulberg, DHA and other branches".
+ * The server sends branch names only; nothing else about the other branch.
+ */
+export function otherBranchAvailabilityText(
+  availability: NonNullable<CounterSearchRow['otherBranchAvailability']>
+): string {
+  const names = availability.more
+    ? [...availability.branchNames, 'other branches']
+    : availability.branchNames;
+  if (names.length <= 1) return names[0] ?? '';
+  return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+}
+
+/**
  * POS-02 result rows.
  *
  * Every field the requirement names is on the row itself — presentation,
@@ -276,6 +290,18 @@ export function CounterSearchResults({
                   </span>
                 ) : null}
               </button>
+              {row.otherBranchAvailability?.branchNames.length ? (
+                <p className="border-t border-border-subtle px-4 py-2 text-sm text-text-body">
+                  Also in stock at{' '}
+                  <bdi dir="auto" className="font-semibold text-text-strong">
+                    {otherBranchAvailabilityText(row.otherBranchAvailability)}
+                  </bdi>
+                  .{' '}
+                  <span className="text-text-muted">
+                    The customer buys and collects it at that branch.
+                  </span>
+                </p>
+              ) : null}
               {row.stockAlternatives ? (
                 <section
                   aria-label={`Alternatives for ${counterMedicineDisplayName(row)}`}
