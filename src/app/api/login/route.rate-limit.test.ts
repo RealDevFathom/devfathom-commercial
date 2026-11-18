@@ -447,6 +447,31 @@ describe('shared-host login from one shared address', () => {
     expect(mocks.verifyTotp).toHaveBeenCalledTimes(SELECT_LIMIT);
   });
 
+  it('does not let successful selections wipe failed second-factor codes from the address', async () => {
+    // A successful selection refunds only its own unit. Were it to clear the
+    // selection bucket, colleagues signing in would keep resetting it and the
+    // codes could be ground without limit from one address.
+    mocks.findUniqueUser.mockImplementation(async ({ where }: { where: { id: string } }) => {
+      if (where.id === 'user_alex') {
+        return tenantUser({ twoFactorEnabledAt: new Date(), twoFactorSecret: 'totp-secret' });
+      }
+      const staff = STAFF.find((email) => userIdFor(email) === where.id);
+      return staff ? tenantUser({ id: where.id, email: staff, name: staff }) : null;
+    });
+    const step1 = await credentialCheck(PASSWORD);
+    expect(step1.status).toBe(200);
+
+    // 30 failed codes, with a colleague signing in after each of the first 29.
+    for (let i = 0; i < SELECT_LIMIT; i += 1) {
+      expect(await selectWorkspace(step1, '000000')).toMatchObject({ code: '2fa_invalid' });
+      if (i < SELECT_LIMIT - 1) await signInAs(STAFF[i]!);
+    }
+
+    // The 31st failed selection is refused before the code is even checked.
+    expect(await selectWorkspace(step1, '000000')).toBeNull();
+    expect(mocks.verifyTotp).toHaveBeenCalledTimes(SELECT_LIMIT);
+  });
+
   it('refunds only the address the attempt was spent at', async () => {
     // The password is proven from another address, the workspace chosen from
     // this one: this address never spent a unit, so it must not get one back —
