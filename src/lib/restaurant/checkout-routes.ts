@@ -30,6 +30,7 @@ import {
   type OpenDrawerSessionResult,
 } from './drawer-sessions';
 import { PaymentAdapterError } from './payment-adapter';
+import { refundReferenceProblem } from './refund-reference';
 import { RefundError, type RefundTenderResult } from './refunds';
 import { quoteOpenBillSettlement, TenderError, type ApplyTenderResult } from './tenders';
 import { TaxConfigurationError, TaxProfileResolutionError } from './tax-calculator';
@@ -155,7 +156,10 @@ const CASH_TENDER = z
  * full card number) is refused. */
 const MANUAL_CARD_CONFIRMATION = z
   .object({
-    approvalCode: z.string().trim().regex(/^[A-Za-z0-9]{2,12}$/),
+    approvalCode: z
+      .string()
+      .trim()
+      .regex(/^[A-Za-z0-9]{2,12}$/),
     reference: z
       .string()
       .trim()
@@ -184,6 +188,14 @@ export const tenderBody = z
 export const refundBody = z
   .object({
     originalTenderId: ID,
+    cardMachineRefundReference: z
+      .string()
+      .trim()
+      .superRefine((value, ctx) => {
+        const problem = refundReferenceProblem(value);
+        if (problem) ctx.addIssue({ code: 'custom', message: problem });
+      })
+      .optional(),
     amount: MONEY,
     tipRefundAmount: MONEY.optional(),
     kind: z.enum(['REFUND', 'VOID_REVERSAL']).optional(),
@@ -1009,6 +1021,7 @@ export function serializeClosePreview(preview: ClosePreview) {
     businessDate: preview.businessDate.toISOString().slice(0, 10),
     totals: serializeCloseTotals(preview),
     tenderTotals: serializeTenderTotals(preview.tenderTotals),
+    manualCardSummary: preview.manualCardSummary,
     readiness: preview.readiness,
     existingCloseId: preview.existingCloseId,
   };
@@ -1019,6 +1032,7 @@ export function serializeCutCloseResult(result: CutCloseResult) {
     dailyCloseId: result.dailyCloseId,
     totals: serializeCloseTotals(result.totals),
     tenderTotals: serializeTenderTotals(result.tenderTotals),
+    manualCardSummary: result.manualCardSummary ?? null,
     replayed: result.replayed,
   };
 }

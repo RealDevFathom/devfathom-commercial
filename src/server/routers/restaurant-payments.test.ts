@@ -165,6 +165,7 @@ describe('refund reads (C12)', () => {
       taxRefundAmount: D('0.75'),
       businessDate: new Date('2026-08-20T00:00:00.000Z'),
       reason: 'return',
+      cardMachineRefundReference: 'BANK-REF-42',
       coAuthorizationId: 'coauth_1',
       drawerSessionId: null,
       paymentId: 'pay_1',
@@ -179,6 +180,7 @@ describe('refund reads (C12)', () => {
     expect(result.refunds[0].serviceChargeRefundAmount).toBe('1.25');
     expect(result.refunds[0].taxRefundAmount).toBe('0.75');
     expect(result.refunds[0].kind).toBe('REFUND');
+    expect(result.refunds[0].cardMachineRefundReference).toBe('BANK-REF-42');
     expect(result.refunds[0].businessDate).toBe('2026-08-20');
     expect(result.nextCursor).toBe('r1');
   });

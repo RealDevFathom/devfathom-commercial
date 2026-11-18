@@ -280,6 +280,20 @@ describe('daily close reads (C12)', () => {
     expect(chain.closes[1].refundTotal).toBe('12.00');
   });
 
+  const manualCardFixture = (() => {
+    const row = {
+      count: 2,
+      amount: '41.00',
+      tipAmount: '0.00',
+      refundCount: 0,
+      refundAmount: '0.00',
+      tipRefundAmount: '0.00',
+      netAmount: '41.00',
+      netTipAmount: '0.00',
+    };
+    return { ...row, cashiers: [{ ...row, staffProfileId: 'st1', displayName: 'Amina' }] };
+  })();
+
   it('serializes every close total as a string with tender totals and drawer variances', async () => {
     mocks.closeFindUnique.mockResolvedValue({
       id: 'c1',
@@ -303,6 +317,7 @@ describe('daily close reads (C12)', () => {
       cashExpected: D('300.00'),
       cashCounted: D('299.00'),
       cashVariance: D('-1.00'),
+      manualCardSummary: manualCardFixture,
       tenderTotals: [
         { tenderType: 'CASH', amount: D('200.00'), tipAmount: D('5.00'), count: 3 },
         { tenderType: 'CARD', amount: D('280.00'), tipAmount: D('10.00'), count: 4 },
@@ -336,6 +351,7 @@ describe('daily close reads (C12)', () => {
     expect(result.close.totals.voidTotal).toBe('7.50');
     expect(result.close.totals.cashVariance).toBe('-1.00');
     expect(result.close.isTip).toBe(true);
+    expect(result.manualCardSummary).toEqual(manualCardFixture);
     expect(result.tenderTotals).toHaveLength(2);
     expect(result.tenderTotals[0]).toMatchObject({
       tenderType: 'CASH',

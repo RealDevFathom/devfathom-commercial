@@ -63,6 +63,11 @@ export function HostedReceiptCard({ receipt }: { receipt: HostedReceiptView }) {
           </tbody>
         </table>
       </div>
+      {receipt.tierDiscountLines?.map((text) => (
+        <p key={text} className="text-sm">
+          {text}
+        </p>
+      ))}
       <dl className="space-y-2 text-sm">
         {receipt.totals.discountMinor > 0 ? (
           <>

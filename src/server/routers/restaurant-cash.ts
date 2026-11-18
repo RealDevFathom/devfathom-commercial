@@ -7,6 +7,7 @@ import { router, capabilityProcedure } from '../trpc';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import { foldExpectedCash, type FoldableMovement } from '@/lib/restaurant/drawer-sessions';
 import { resolveChainTip } from '@/lib/restaurant/daily-close';
+import { manualCardSummarySchema } from '@/lib/restaurant/manual-card-summary';
 import { formatMoney } from '@/lib/restaurant/money';
 import { requireRestaurantBranchScope } from '@/server/restaurant-branch-scope';
 
@@ -310,6 +311,7 @@ async function getDailyClose(db: ScopedDb, dailyCloseId: string) {
       cashExpected: true,
       cashCounted: true,
       cashVariance: true,
+      manualCardSummary: true,
       tenderTotals: {
         orderBy: { tenderType: 'asc' },
         select: { tenderType: true, amount: true, tipAmount: true, count: true },
@@ -378,6 +380,10 @@ async function getDailyClose(db: ScopedDb, dailyCloseId: string) {
         cashVariance: money(close.cashVariance),
       },
     },
+    manualCardSummary:
+      close.manualCardSummary == null
+        ? null
+        : manualCardSummarySchema.parse(close.manualCardSummary),
     tenderTotals: close.tenderTotals.map((total) => ({
       tenderType: total.tenderType,
       amount: money(total.amount),

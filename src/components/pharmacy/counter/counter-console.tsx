@@ -2338,6 +2338,7 @@ function ScopedPharmacyCounterConsole({
         ownerOverride?: boolean;
         overrideReason?: string;
         overLimitApproval?: { staffProfileId: string; pin: string };
+        prepaidPin?: string;
         providerRef?: string;
         payerName?: string;
         referenceSkipped?: boolean;
@@ -2431,11 +2432,12 @@ function ScopedPharmacyCounterConsole({
         dispatched = true;
         // DEV-290: the approver's PIN goes with this one request only; it is never persisted
         // with the recovery attempt, so a recovery check never carries or replays it.
-        const result = await tender.mutateAsync(
-          input.overLimitApproval
-            ? { ...payload, overLimitApproval: input.overLimitApproval }
-            : payload
-        );
+        // DEV-863: so is the customer's prepaid PIN.
+        const result = await tender.mutateAsync({
+          ...payload,
+          ...(input.overLimitApproval ? { overLimitApproval: input.overLimitApproval } : {}),
+          ...(input.prepaidPin ? { prepaidPin: input.prepaidPin } : {}),
+        });
         outcome = tenderAcknowledgement(result)
           ? { status: 'accepted', message: 'Payment recorded.' }
           : { status: 'unknown', message: UNKNOWN_TENDER_MESSAGE };
@@ -4297,6 +4299,7 @@ function ScopedPharmacyCounterConsole({
         <CounterTenderPanel
           key={`${branchId}:${saleId ?? 'none'}:${restoredAttempt?.input.idempotencyKey ?? ''}`}
           ref={tenderRef}
+          prepaidBalanceMinor={currentBill ? cart.prepaidBalanceMinor : undefined}
           confirmedChangeMinor={confirmedChangeMinor}
           manualSettings={manualSettings.data?.settings}
           drawerOpen={drawerQuery.isSuccess ? Boolean(openDrawerSession) : undefined}

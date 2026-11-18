@@ -178,6 +178,9 @@ export default async function LoyaltyPage({
   return (
     <div className="min-w-0 space-y-6">
       {header}
+      <Link className={linkClass} href="/pharmacy/loyalty/prepaid">
+        Manage prepaid tiers
+      </Link>
       <SectionCard title="Earning rate" titleLevel={2}>
         {current ? (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -415,6 +418,12 @@ export default async function LoyaltyPage({
             Used for approved WhatsApp Khata reminder templates. A reminder is not sent when its
             language template is not configured.
           </p>
+          <Link
+            className={linkClass}
+            href={`/pharmacy/loyalty/prepaid?customerId=${encodeURIComponent(customerId)}`}
+          >
+            Prepaid balance and ledger
+          </Link>
           <Stat label="Points available" value={`${history.pointsBalance} points available`} />
           <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
             <MembershipPill active={history.customer.loyaltyActive !== false} />

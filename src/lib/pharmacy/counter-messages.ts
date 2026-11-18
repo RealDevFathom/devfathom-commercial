@@ -167,6 +167,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   UNCERTIFIED_PROVIDER: 'This tender needs a connected provider. Take another tender.',
   INVALID_MANUAL_CAPTURE:
     'Check the payment reference and approval code, or confirm this tender is enabled at this branch.',
+  // DEV-863: prepaid money goes back to the customer's prepaid balance, never as cash.
+  PREPAID_REFUND_RESTORES_BALANCE:
+    'This payment came from the customer’s prepaid balance. The refund goes back to that balance; do not give cash.',
   MOCK_PROVIDER_IN_RELEASE:
     'Card payments are not configured on this deployment. Take another tender.',
   REOPEN_REASON_REQUIRED: 'Reopening a closed drawer needs a recorded reason.',
