@@ -8,7 +8,28 @@ import {
 import { sharedDeploymentUrl, unmetActivationGates } from '@/lib/platform/activation-gates';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { SupportAccessForm } from '@/components/platform/support-access-form';
+import {
+  PharmacyApprovalForm,
+  PharmacyApprovalWithdrawForm,
+} from '@/components/platform/pharmacy-approval-form';
 import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
+import {
+  platformApprovalInEffect,
+  readPlatformApprovalChecks,
+} from '@/lib/pharmacy/platform-approval';
+import { pharmacyApprovalChecks } from '@/lib/platform/pharmacy-approval-queue';
+import { StatusPill } from '@/components/ui/status-pill';
+
+const approvalTimeFormat = new Intl.DateTimeFormat('en', {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+  timeZone: 'UTC',
+});
+
+/** DEV-905: the approval time, in UTC so every operator reads the same instant. */
+function formatDateTime(value: Date): string {
+  return `${approvalTimeFormat.format(value)} UTC`;
+}
 import { verticalForModuleKey } from '@/lib/module-catalog';
 import { resolveEntitlementLimit, SOP_TEMPLATES_LIMIT } from '@/lib/entitlement-limits';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
@@ -166,8 +187,16 @@ export default async function OrganizationDetailPage({
     ]);
     const pharmacyReadiness =
       organization?.vertical === 'PHARMACY' ? await evaluatePharmacyReadiness(db, id, now) : null;
+    // DEV-905: who approved this pharmacy, for the approval record.
+    const approver = organization?.platformApprovedById
+      ? await db.platformUser.findUnique({
+          where: { id: organization.platformApprovedById },
+          select: { name: true, email: true },
+        })
+      : null;
     return {
       pharmacyReadiness,
+      approver,
       organization,
       modules,
       packages,
@@ -581,6 +610,125 @@ export default async function OrganizationDetailPage({
                   ))}
                 </ul>
               </div>
+            ) : null}
+            {/*
+              DEV-905 — the super admin's manual approval of a pharmacy (owner decision,
+              18 Nov). It may be given whatever the pharmacy's state: unmet checks are
+              shown and must be confirmed by name. While it is in effect the standing
+              organization and branch gates do not refuse the pharmacy; per-sale rules
+              still apply. Withdrawing it restores every normal check.
+            */}
+            {vertical === 'PHARMACY' ? (
+              <section
+                className="border-b border-border-subtle p-5"
+                data-pharmacy-approval=""
+                aria-labelledby="pharmacy-approval-title"
+              >
+                {organization.platformApprovedAt ? (
+                  <>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <h3 id="pharmacy-approval-title" className="text-sm font-semibold">
+                        Pharmacy approval
+                      </h3>
+                      <StatusPill
+                        status={
+                          platformApprovalInEffect(organization) ? 'approved' : 'not-in-effect'
+                        }
+                        tone={platformApprovalInEffect(organization) ? 'success' : 'warning'}
+                        label={
+                          platformApprovalInEffect(organization)
+                            ? 'Approved'
+                            : `Approved, not in effect while ${organization.status.toLowerCase()}`
+                        }
+                      />
+                    </div>
+                    <dl
+                      className="mt-3 grid gap-x-6 gap-y-2 text-xs sm:grid-cols-[max-content_minmax(0,1fr)]"
+                      data-pharmacy-approval-record=""
+                    >
+                      <dt className="text-text-muted">Approved by</dt>
+                      <dd className="text-text-body">
+                        {data.approver
+                          ? `${data.approver.name} (${data.approver.email})`
+                          : organization.platformApprovedById}
+                      </dd>
+                      <dt className="text-text-muted">Approved at</dt>
+                      <dd className="text-text-body">
+                        {formatDateTime(organization.platformApprovedAt)}
+                      </dd>
+                      <dt className="text-text-muted">Note</dt>
+                      <dd className="text-text-body">
+                        {organization.platformApprovalNote ?? 'No note'}
+                      </dd>
+                      <dt className="text-text-muted">Checks not met at approval</dt>
+                      <dd className="text-text-body">
+                        {readPlatformApprovalChecks(organization.platformApprovalUnmetChecks)
+                          .length ? (
+                          <ul className="list-disc space-y-1 pl-4">
+                            {readPlatformApprovalChecks(
+                              organization.platformApprovalUnmetChecks
+                            ).map((check) => (
+                              <li key={check.key}>{check.label}</li>
+                            ))}
+                          </ul>
+                        ) : (
+                          'None. Every check had passed.'
+                        )}
+                      </dd>
+                    </dl>
+                    <p className="mt-3 text-xs text-text-muted">
+                      While approved, the organization, regulatory profile, qualified person and
+                      onboarding checks do not stop this pharmacy. Prescription,
+                      controlled-medicine, refund, discount, stock, tax and money rules still apply
+                      to every sale.
+                    </p>
+                    <div className="mt-4 border-t border-border-subtle pt-4">
+                      <PharmacyApprovalWithdrawForm
+                        organizationId={organization.id}
+                        organizationName={organization.displayName}
+                      />
+                    </div>
+                  </>
+                ) : ['ONBOARDING', 'ACTIVE', 'GRACE'].includes(organization.status) ? (
+                  <>
+                    <h3 id="pharmacy-approval-title" className="text-sm font-semibold">
+                      Approve pharmacy
+                    </h3>
+                    <p className="mt-1 text-xs text-text-muted">
+                      {pharmacyApprovalChecks(
+                        organization.id,
+                        activationGates,
+                        data.pharmacyReadiness
+                      ).length
+                        ? 'Approval is a manual decision. You can approve this pharmacy past the checks it does not meet after confirming them.'
+                        : 'Every activation and onboarding check has passed.'}{' '}
+                      {organization.status === 'ONBOARDING'
+                        ? 'Approving makes it active so it can sell.'
+                        : 'Approving lets it keep running if a regulatory or onboarding check stops passing.'}
+                    </p>
+                    <div className="mt-3">
+                      <PharmacyApprovalForm
+                        organizationId={organization.id}
+                        organizationName={organization.displayName}
+                        unmetChecks={pharmacyApprovalChecks(
+                          organization.id,
+                          activationGates,
+                          data.pharmacyReadiness
+                        ).map(({ key, label }) => ({ key, label }))}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <h3 id="pharmacy-approval-title" className="text-sm font-semibold">
+                      Pharmacy approval
+                    </h3>
+                    <p className="mt-1 text-xs text-text-muted">
+                      A {organization.status.toLowerCase()} pharmacy cannot be approved.
+                    </p>
+                  </>
+                )}
+              </section>
             ) : null}
             {targets.length ? (
               <div className="p-5">

@@ -6006,6 +6006,15 @@ model Organization {
   lastDemoResetAt               DateTime?
   gracePeriodDays               Int                            @default(0)
   activatedAt                   DateTime?
+  /// DEV-905: the super admin's manual approval of a pharmacy. While set (and the
+  /// organization is ONBOARDING, ACTIVE or GRACE), the standing organization- and
+  /// branch-level gates do not refuse it (src/lib/pharmacy/platform-approval.ts).
+  /// Only the platform control plane may write these four columns (database trigger).
+  platformApprovedAt            DateTime?
+  platformApprovedById          String?
+  platformApprovalNote          String?
+  /// The checks that were not met when the pharmacy was approved: [{ key, label }].
+  platformApprovalUnmetChecks   Json?
   suspendedAt                   DateTime?
   terminatedAt                  DateTime?
   purgeScheduledAt              DateTime?
