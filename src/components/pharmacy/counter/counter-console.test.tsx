@@ -4420,6 +4420,24 @@ describe('PharmacyCounterConsole browser print audit', () => {
     }
   );
 
+  it('keeps the unconfirmed-printing notice until dismissed (DEV-910)', async () => {
+    mocks.mutations.counterReceiptBrowserPrint!.mockResolvedValue({ copyNumber: 1, reprint: false });
+    const onPrint = renderSettledReceipt();
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        expect(await onPrint()).toBe(true);
+      });
+      expect(screen.getByText(/Physical printing is not confirmed/)).toBeInTheDocument();
+      await act(async () => vi.advanceTimersByTime(6000));
+      expect(screen.getByText(/Physical printing is not confirmed/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+      expect(screen.queryByText(/Physical printing is not confirmed/)).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('audits invalid receipt rendering without allocating a copy', async () => {
     const onPrint = renderSettledReceipt();
     // The same source is read by the print callback; make it non-dispatchable.
