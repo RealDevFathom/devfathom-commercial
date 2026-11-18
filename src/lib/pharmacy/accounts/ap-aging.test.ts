@@ -230,6 +230,62 @@ describe('computeApAging', () => {
   });
 });
 
+describe('computeApAging — DEV-694 credit-note set-offs', () => {
+  it('reduces the bill by approved set-offs from their approval instant, apart from payments', () => {
+    const input = invoice({
+      settlements: [
+        {
+          amountMinor: 10_000,
+          paidAt: d('2026-09-01T00:00:00Z'),
+          status: 'ACTIVE',
+          reversedAt: null,
+        },
+      ],
+      creditSetOffs: [{ amountMinor: 25_000, decidedAt: d('2026-11-10T09:00:00Z') }],
+    });
+    const after = computeApAging([input], apAgingWindow('2026-11-15', NOW), true);
+    expect(after.rows).toMatchObject([
+      { paidMinor: 10_000, setOffMinor: 25_000, outstandingMinor: 65_000 },
+    ]);
+    expect(after.totals[0]!.TOTAL).toBe(65_000);
+    const before = computeApAging([input], apAgingWindow('2026-11-09', NOW), true);
+    expect(before.rows).toMatchObject([
+      { paidMinor: 10_000, setOffMinor: 0, outstandingMinor: 90_000 },
+    ]);
+  });
+
+  it('omits a bill that payments and set-offs clear together', () => {
+    const view = computeApAging(
+      [
+        invoice({
+          settlements: [
+            {
+              amountMinor: 60_000,
+              paidAt: d('2026-09-01T00:00:00Z'),
+              status: 'ACTIVE',
+              reversedAt: null,
+            },
+          ],
+          creditSetOffs: [{ amountMinor: 40_000, decidedAt: d('2026-11-01T00:00:00Z') }],
+        }),
+      ],
+      apAgingWindow('2026-11-15', NOW),
+      true
+    );
+    expect(view.rows).toEqual([]);
+  });
+
+  it('reads only approved set-offs decided before the as-of cutoff', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const db = { pharmacyApInvoice: { findMany } } as unknown as ScopedDb;
+    await readApAging(db, { organizationId: 'org_1', branchId: 'branch_1' }, '2026-11-15', NOW);
+    expect(findMany.mock.calls[0]![0].select.creditSetOffs.where).toEqual({
+      status: 'APPROVED',
+      decidedAt: { lt: d('2026-11-16T00:00:00.000Z') },
+    });
+  });
+});
+
 describe('readApAging', () => {
   it('reads only native invoices in the scoped branch with a bounded, eligibility-filtered query', async () => {
     const findMany = vi.fn().mockResolvedValue([invoice()]);
@@ -294,7 +350,7 @@ describe('apAgingCsv', () => {
     const lines = apAgingCsv(view, 'branch_1').split('\r\n');
     expect(lines).toHaveLength(2);
     expect(lines[0]).toBe(
-      '"branch_id","as_of_date","view_complete","reference","payee","supplier_invoice_ref","invoice_date","due_date","days_past_due","bucket","currency","invoice_amount_minor","paid_minor","outstanding_minor"'
+      '"branch_id","as_of_date","view_complete","reference","payee","supplier_invoice_ref","invoice_date","due_date","days_past_due","bucket","currency","invoice_amount_minor","paid_minor","outstanding_minor","set_off_minor"'
     );
     expect(lines[1]).toContain('"branch_1","2026-11-15","false","AP-0001"');
     expect(lines[1]).not.toContain('"=HYPERLINK');

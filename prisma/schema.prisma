@@ -3276,6 +3276,8 @@ enum FinanceSourceKind {
   PHARMACY_JOURNAL_VOUCHER
   /// DEV-103: a native non-stock supplier operating-expense invoice.
   PHARMACY_AP_INVOICE
+  /// DEV-694: a manager-approved set-off of a supplier credit note against an AP invoice.
+  PHARMACY_AP_CREDIT_SET_OFF
 }
 
 /// CEO-JVCORE-20261025: the only journal-voucher purpose the pharmacy general
@@ -3406,7 +3408,8 @@ model PharmacyApInvoice {
   createdAt          DateTime                @default(now())
   updatedAt          DateTime                @updatedAt
 
-  settlements PharmacyApInvoiceSettlement[]
+  settlements   PharmacyApInvoiceSettlement[]
+  creditSetOffs PharmacyApCreditSetOff[]
 
   @@unique([organizationId, id], map: "pharmacy_ap_invoices_org_id_key")
   @@unique([organizationId, branchId, id], map: "pharmacy_ap_invoices_org_branch_id_key")
@@ -3452,6 +3455,52 @@ model PharmacyApInvoiceSettlement {
   @@unique([organizationId, reverseCommandKey], map: "pharmacy_ap_settlements_org_reverse_command_key")
   @@index([organizationId, branchId, invoiceId, status], map: "pharmacy_ap_settlements_org_branch_invoice_idx")
   @@map("pharmacy_ap_invoice_settlements")
+}
+
+enum PharmacyApCreditSetOffStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// DEV-694: staff choose the AP invoice a supplier credit note is set off
+/// against (PENDING); the payable reduces only when a manager approves it with
+/// their own fresh PIN (APPROVED), which posts Dr ACCOUNTS_PAYABLE /
+/// Cr SUPPLIER_CLAIM_RECEIVABLE. A rejected request changes no money.
+model PharmacyApCreditSetOff {
+  id                 String                       @id @default(cuid())
+  organizationId     String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  invoiceId          String
+  supplierCreditId   String
+  amountMinor        Int
+  currency           Currency                     @default(PKR)
+  status             PharmacyApCreditSetOffStatus @default(PENDING)
+  note               String?
+  requestKey         String
+  requestPayloadHash String
+  requestedByUserId  String
+  requestedAt        DateTime                     @default(now())
+  decisionKey        String?
+  decidedByUserId    String?
+  decidedAt          DateTime?
+  approvalPolicy     String?
+  rejectionReason    String?
+  journalEntryId     String?
+  createdAt          DateTime                     @default(now())
+  updatedAt          DateTime                     @updatedAt
+
+  invoice PharmacyApInvoice      @relation(fields: [organizationId, branchId, invoiceId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_ap_credit_set_offs_invoice_fkey")
+  credit  PharmacySupplierCredit @relation(fields: [organizationId, supplierCreditId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_ap_credit_set_offs_credit_fkey")
+
+  @@unique([organizationId, id], map: "pharmacy_ap_credit_set_offs_org_id_key")
+  @@unique([organizationId, requestKey], map: "pharmacy_ap_credit_set_offs_org_request_key")
+  @@unique([organizationId, decisionKey], map: "pharmacy_ap_credit_set_offs_org_decision_key")
+  @@unique([organizationId, journalEntryId], map: "pharmacy_ap_credit_set_offs_org_entry_key")
+  @@index([organizationId, branchId, status], map: "pharmacy_ap_credit_set_offs_org_branch_status_idx")
+  @@index([organizationId, supplierCreditId, status], map: "pharmacy_ap_credit_set_offs_org_credit_status_idx")
+  @@index([organizationId, branchId, invoiceId, status], map: "pharmacy_ap_credit_set_offs_org_invoice_status_idx")
+  @@map("pharmacy_ap_credit_set_offs")
 }
 
 enum PharmacyBookkeepingKind {
@@ -14279,6 +14328,7 @@ model PharmacySupplierCredit {
 
   supplier    PharmacySupplier                   @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict)
   allocations PharmacySupplierCreditAllocation[]
+  apSetOffs   PharmacyApCreditSetOff[]
 
   @@unique([organizationId, id], map: "pharmacy_supplier_credits_org_id_key")
   @@unique([organizationId, supplierId, reference], map: "pharmacy_supplier_credits_org_supplier_reference_key")

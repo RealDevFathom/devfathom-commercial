@@ -6,14 +6,31 @@ const mocks = vi.hoisted(() => ({
   pay: vi.fn(),
   revalidatePath: vi.fn(),
   createTRPCContext: vi.fn(),
+  requestSetOff: vi.fn(),
+  approveSetOff: vi.fn(),
+  rejectSetOff: vi.fn(),
 }));
 vi.mock('next/cache', () => ({ revalidatePath: mocks.revalidatePath }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.createTRPCContext }));
 vi.mock('@/server/routers/pharmacy-ap-invoices', () => ({
-  pharmacyApInvoicesRouter: { createCaller: () => ({ record: mocks.record, pay: mocks.pay }) },
+  pharmacyApInvoicesRouter: {
+    createCaller: () => ({
+      record: mocks.record,
+      pay: mocks.pay,
+      requestCreditSetOff: mocks.requestSetOff,
+      approveCreditSetOff: mocks.approveSetOff,
+      rejectCreditSetOff: mocks.rejectSetOff,
+    }),
+  },
 }));
 
-import { payApInvoiceFromForm, recordApInvoiceFromForm } from './ap-entry-actions';
+import {
+  approveCreditSetOffFromForm,
+  payApInvoiceFromForm,
+  recordApInvoiceFromForm,
+  rejectCreditSetOffFromForm,
+  requestCreditSetOffFromForm,
+} from './ap-entry-actions';
 
 const idle = { status: 'idle' as const, message: '' };
 
@@ -187,5 +204,90 @@ describe('DEV-103 pay supplier expense invoice form action', () => {
     mocks.pay.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN' }));
     const result = await payApInvoiceFromForm(idle, paymentForm());
     expect(result.message).toContain('Only an owner with Pharmacy Finance access');
+  });
+});
+
+describe('DEV-694 credit-note set-off actions', () => {
+  const requestForm = (fields: Record<string, string> = {}) =>
+    form({
+      branchId: 'branch_1',
+      requestKey: 'ap-set-off:key-0001',
+      invoiceId: 'inv_1',
+      supplierCreditId: 'cr_1',
+      amount: '250.50',
+      note: '',
+      ...fields,
+    });
+  const decideForm = (fields: Record<string, string> = {}) =>
+    form({
+      branchId: 'branch_1',
+      setOffId: 'so_1',
+      decisionKey: 'ap-set-off-ok:key-0001',
+      ...fields,
+    });
+
+  it('sends the chosen bill, credit and amount in minor units', async () => {
+    mocks.requestSetOff.mockResolvedValue({ id: 'so_1' });
+    const result = await requestCreditSetOffFromForm(idle, requestForm());
+    expect(mocks.requestSetOff).toHaveBeenCalledWith({
+      branchId: 'branch_1',
+      invoiceId: 'inv_1',
+      supplierCreditId: 'cr_1',
+      requestKey: 'ap-set-off:key-0001',
+      amountMinor: 25_050,
+    });
+    expect(result).toEqual({
+      status: 'saved',
+      message: 'Set-off requested. The bill is unchanged until a manager approves it.',
+    });
+    expect(mocks.revalidatePath).toHaveBeenCalledWith('/pharmacy/accounts/ap-aging');
+  });
+
+  it('refuses a bad amount before calling the server and explains a refused request', async () => {
+    expect((await requestCreditSetOffFromForm(idle, requestForm({ amount: '-1' }))).status).toBe(
+      'error'
+    );
+    expect(mocks.requestSetOff).not.toHaveBeenCalled();
+    mocks.requestSetOff.mockRejectedValue(
+      new TRPCError({ code: 'CONFLICT', message: 'SET_OFF_EXCEEDS_BILL' })
+    );
+    expect((await requestCreditSetOffFromForm(idle, requestForm())).message).toContain(
+      'more than the bill still owes'
+    );
+  });
+
+  it('approves only with a well-formed PIN and passes the refusal message through', async () => {
+    expect((await approveCreditSetOffFromForm(idle, decideForm({ pin: '12' }))).status).toBe(
+      'error'
+    );
+    expect(mocks.approveSetOff).not.toHaveBeenCalled();
+    mocks.approveSetOff.mockRejectedValue(
+      new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'Set-off not approved. Enter your manager or owner PIN.',
+      })
+    );
+    const refused = await approveCreditSetOffFromForm(idle, decideForm({ pin: '2468' }));
+    expect(refused).toEqual({
+      status: 'error',
+      message: 'Set-off not approved. Enter your manager or owner PIN.',
+    });
+    expect(mocks.approveSetOff).toHaveBeenCalledWith({
+      branchId: 'branch_1',
+      setOffId: 'so_1',
+      decisionKey: 'ap-set-off-ok:key-0001',
+      pin: '2468',
+    });
+    expect(JSON.stringify(refused)).not.toContain('2468');
+  });
+
+  it('rejects with a reason', async () => {
+    expect((await rejectCreditSetOffFromForm(idle, decideForm())).status).toBe('error');
+    mocks.rejectSetOff.mockResolvedValue({ id: 'so_1' });
+    const result = await rejectCreditSetOffFromForm(idle, decideForm({ reason: 'Wrong bill' }));
+    expect(result.status).toBe('saved');
+    expect(mocks.rejectSetOff).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'Wrong bill' })
+    );
   });
 });

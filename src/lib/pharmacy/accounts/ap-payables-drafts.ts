@@ -13,7 +13,8 @@ import { normalizePayeeKey } from './ap-invoices';
 export const DUE_SOON_DAYS = 7;
 /** Supplier credits carry no currency; they are PKR-denominated (schema default). */
 export const SUPPLIER_CREDIT_CURRENCY = 'PKR';
-export const SUPPLIER_CREDIT_MAX_ROWS = 5_000;
+/** Owner decision: supplier credits are read 5,000 rows per page, every page before a total. */
+export const SUPPLIER_CREDIT_PAGE_ROWS = 5_000;
 
 export type DueBillReminder = {
   payeeKey: string;

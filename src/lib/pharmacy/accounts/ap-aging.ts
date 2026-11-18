@@ -6,6 +6,9 @@
  * counted, so the view cannot be inflated or settled from outside the AP
  * commands.
  *
+ * DEV-694: a manager-approved supplier credit-note set-off reduces the bill
+ * from its approval instant; a pending or rejected request never does.
+ *
  * Historical eligibility uses two business clocks and an inclusive as-of day:
  *   - the invoice clock: an invoice counts once its invoice date is on or
  *     before the as-of day, and stops counting once its reversal date is;
@@ -83,6 +86,8 @@ export type ApAgingInvoiceInput = {
     status: string;
     reversedAt: Date | null;
   }>;
+  /** DEV-694: approved credit-note set-offs; each reduces the bill from its approval instant. */
+  creditSetOffs?: ReadonlyArray<{ amountMinor: number; decidedAt: Date | null }>;
 };
 
 export type ApAgingRow = {
@@ -95,6 +100,8 @@ export type ApAgingRow = {
   currency: string;
   amountMinor: number;
   paidMinor: number;
+  /** DEV-694: approved supplier credit-note set-offs, never counted as payments. */
+  setOffMinor: number;
   outstandingMinor: number;
   daysPastDue: number;
   bucket: ApAgingBucket;
@@ -129,7 +136,10 @@ export function computeApAging(
           !(settlement.status === 'REVERSED' && before(settlement.reversedAt, window.cutoff))
       )
       .reduce((sum, settlement) => sum + settlement.amountMinor, 0);
-    const outstandingMinor = invoice.amountMinor - paidMinor;
+    const setOffMinor = (invoice.creditSetOffs ?? [])
+      .filter((setOff) => before(setOff.decidedAt, window.cutoff))
+      .reduce((sum, setOff) => sum + setOff.amountMinor, 0);
+    const outstandingMinor = invoice.amountMinor - paidMinor - setOffMinor;
     if (outstandingMinor <= 0) continue;
     const daysPastDue = Math.floor((window.day.getTime() - invoice.dueDate.getTime()) / DAY_MS);
     rows.push({
@@ -142,6 +152,7 @@ export function computeApAging(
       currency: invoice.currency,
       amountMinor: invoice.amountMinor,
       paidMinor,
+      setOffMinor,
       outstandingMinor,
       daysPastDue,
       bucket: agingBucket(daysPastDue),
@@ -210,6 +221,10 @@ export async function readApAging(
         where: { paidAt: { lt: window.cutoff } },
         select: { amountMinor: true, paidAt: true, status: true, reversedAt: true },
       },
+      creditSetOffs: {
+        where: { status: 'APPROVED', decidedAt: { lt: window.cutoff } },
+        select: { amountMinor: true, decidedAt: true },
+      },
     },
     orderBy: [{ dueDate: 'asc' }, { id: 'asc' }],
     take: AP_AGING_MAX_INVOICES + 1,
@@ -242,6 +257,7 @@ export function apAgingCsv(view: ApAgingView, branchId: string) {
     'invoice_amount_minor',
     'paid_minor',
     'outstanding_minor',
+    'set_off_minor',
   ];
   return [
     header,
@@ -260,6 +276,7 @@ export function apAgingCsv(view: ApAgingView, branchId: string) {
       row.amountMinor,
       row.paidMinor,
       row.outstandingMinor,
+      row.setOffMinor,
     ]),
   ]
     .map((line) => line.map(csvCell).join(','))

@@ -6,12 +6,20 @@ const mocks = vi.hoisted(() => ({
   resolveTenantActor: vi.fn(),
   createTRPCContext: vi.fn(),
   aging: vi.fn(),
+  payablesDrafts: vi.fn(),
+  creditSetOffs: vi.fn(),
 }));
 
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.resolveTenantActor }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.createTRPCContext }));
 vi.mock('@/server/routers/pharmacy-ap-invoices', () => ({
-  pharmacyApInvoicesRouter: { createCaller: () => ({ aging: mocks.aging }) },
+  pharmacyApInvoicesRouter: {
+    createCaller: () => ({
+      aging: mocks.aging,
+      payablesDrafts: mocks.payablesDrafts,
+      creditSetOffs: mocks.creditSetOffs,
+    }),
+  },
 }));
 
 import { apAgingWindow, computeApAging } from '@/lib/pharmacy/accounts/ap-aging';
@@ -52,6 +60,19 @@ const view = computeApAging(
   true
 );
 
+const scope = { organizationId: 'org_1', branchId: 'branch_1' };
+const emptyDrafts = {
+  scope,
+  draftOnly: true,
+  reminders: [],
+  paymentDraft: null,
+  setOffDraft: { lines: [], totalSetOffMinor: 0, unmatchedCreditMinor: 0 },
+  openCredits: [],
+  viewComplete: true,
+  creditsComplete: true,
+  retrievedAt: NOW,
+};
+
 async function html(query: Record<string, string | string[] | undefined>) {
   return renderToStaticMarkup(await ApAgingPage({ searchParams: Promise.resolve(query) }));
 }
@@ -89,6 +110,8 @@ describe('ApAgingPage', () => {
       view,
       retrievedAt: new Date('2026-11-15T12:00:00.000Z'),
     });
+    mocks.payablesDrafts.mockResolvedValue(emptyDrafts);
+    mocks.creditSetOffs.mockResolvedValue({ scope, setOffs: [], retrievedAt: NOW });
   });
 
   afterEach(() => {
@@ -203,5 +226,148 @@ describe('ApAgingPage', () => {
     const output = await html({ branch: 'branch_1' });
     expect(output).toContain('could not be loaded');
     expect(output).not.toContain('AP-0001');
+  });
+
+  describe('DEV-694 reminders, payment draft and credit-note set-off', () => {
+    const drafts = {
+      ...emptyDrafts,
+      reminders: [
+        {
+          payeeKey: 'k-electric',
+          payeeName: 'K-Electric',
+          currency: 'PKR',
+          overdueMinor: 100_000,
+          overdueCount: 1,
+          dueSoonMinor: 0,
+          dueSoonCount: 0,
+          oldestDueDate: '2026-08-31',
+          maxDaysPastDue: 76,
+        },
+      ],
+      setOffDraft: {
+        lines: [
+          {
+            creditId: 'cr_1',
+            creditReference: 'CN-77',
+            invoiceId: 'inv_1',
+            invoiceReference: 'AP-0001',
+            dueDate: '2026-08-31',
+            setOffMinor: 25_000,
+          },
+        ],
+        totalSetOffMinor: 25_000,
+        unmatchedCreditMinor: 0,
+      },
+      openCredits: [
+        {
+          creditId: 'cr_1',
+          reference: 'CN-77',
+          supplierName: 'K-Electric',
+          remainingMinor: 25_000,
+        },
+      ],
+    };
+    const pending = {
+      id: 'so_1',
+      status: 'PENDING',
+      amountMinor: 25_000,
+      currency: 'PKR',
+      note: null,
+      requestedByUserId: 'clerk_1',
+      requestedAt: NOW,
+      decidedByUserId: null,
+      decidedAt: null,
+      rejectionReason: null,
+      invoice: {
+        id: 'inv_1',
+        reference: 'AP-0001',
+        payeeName: 'K-Electric',
+        supplierInvoiceRef: 'KE-11',
+      },
+      credit: { id: 'cr_1', reference: 'CN-77', supplier: { name: 'K-Electric' } },
+    };
+
+    it('reads the drafts for the authorized branch and day and shows reminders', async () => {
+      mocks.payablesDrafts.mockResolvedValue(drafts);
+      const output = await html({ branch: 'branch_1', asOf: '2026-11-15' });
+      expect(mocks.payablesDrafts).toHaveBeenCalledWith({
+        branchId: 'branch_1',
+        asOf: '2026-11-15',
+      });
+      expect(mocks.creditSetOffs).toHaveBeenCalledWith({ branchId: 'branch_1', status: 'PENDING' });
+      expect(output).toContain('Due-bill reminders');
+      expect(output).toContain('Overdue');
+      expect(output).toContain('PKR 1000.00 (1)');
+      expect(output).toContain('Credit set off');
+    });
+
+    it('asks the server for a payment draft only for a valid payee and budget', async () => {
+      await html({ branch: 'branch_1', payee: 'K-Electric', budget: 'abc' });
+      expect(mocks.payablesDrafts).toHaveBeenLastCalledWith({
+        branchId: 'branch_1',
+        asOf: '2026-11-15',
+      });
+      mocks.payablesDrafts.mockResolvedValue({
+        ...drafts,
+        paymentDraft: {
+          payeeKey: 'k-electric',
+          currency: 'PKR',
+          budgetMinor: 50_000,
+          allocatedMinor: 50_000,
+          remainingBudgetMinor: 0,
+          lines: [
+            {
+              invoiceId: 'inv_1',
+              reference: 'AP-0001',
+              dueDate: '2026-08-31',
+              currency: 'PKR',
+              outstandingMinor: 100_000,
+              payMinor: 50_000,
+            },
+          ],
+        },
+      });
+      const output = await html({ branch: 'branch_1', payee: 'K-Electric', budget: '500' });
+      expect(mocks.payablesDrafts).toHaveBeenLastCalledWith({
+        branchId: 'branch_1',
+        asOf: '2026-11-15',
+        payee: { name: 'K-Electric', currency: 'PKR', budgetMinor: 50_000 },
+      });
+      expect(output).toContain('Payment draft');
+      expect(output).toContain('PKR 500.00 of 500.00 drafted');
+    });
+
+    it('lets staff choose the bill and shows requests awaiting a manager PIN', async () => {
+      mocks.payablesDrafts.mockResolvedValue(drafts);
+      mocks.creditSetOffs.mockResolvedValue({ scope, setOffs: [pending], retrievedAt: NOW });
+      const output = await html({ branch: 'branch_1', asOf: '2026-11-15' });
+      expect(output).toContain('Suggested, oldest credit against oldest due bill');
+      expect(output).toContain('Request set-off');
+      expect(output).toMatch(/name="requestKey" value="ap-set-off:[0-9a-f-]{36}"/);
+      expect(output).toContain('CN-77 · K-Electric · PKR 250.00 left');
+      expect(output).toContain('Set-offs awaiting approval');
+      expect(output).toContain('CN-77 against AP-0001');
+      expect(output).toContain('Your manager or owner PIN');
+      expect(output).toMatch(/<input[^>]*name="pin"[^>]*>/);
+      expect(output.match(/<input[^>]*name="pin"[^>]*>/)![0]).toContain('type="password"');
+      expect(output).toContain('Approve set-off');
+      expect(output).toContain('Reason to reject');
+    });
+
+    it('keeps the aging when the drafts cannot be read, and says so', async () => {
+      mocks.payablesDrafts.mockRejectedValue(new Error('boom'));
+      const output = await html({ branch: 'branch_1' });
+      expect(output).toContain('AP-0001');
+      expect(output).toContain('Reminders and drafts could not be loaded');
+      expect(output).not.toContain('Request set-off');
+    });
+
+    it('refuses drafts scoped to another branch', async () => {
+      mocks.payablesDrafts.mockResolvedValue({ ...drafts, scope: { ...scope, branchId: 'b2' } });
+      const output = await html({ branch: 'branch_1' });
+      expect(output).toContain('Reminders and drafts could not be loaded');
+      expect(output).not.toContain('Oldest due');
+      expect(output).not.toContain('Request set-off');
+    });
   });
 });

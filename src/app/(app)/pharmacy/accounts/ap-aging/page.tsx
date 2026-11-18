@@ -23,8 +23,17 @@ import {
   workspaceToday,
   workspaceZoneLabel,
 } from '@/lib/timezone';
+import { parseMajorToMinor } from '@/lib/pharmacy/khata-payment-slip';
 import { PayApInvoiceForm, RecordApInvoiceForm } from './ap-entry-forms';
 import { ExportCsv } from './export-csv';
+import {
+  CreditSetOff,
+  DueBillReminders,
+  minor,
+  PaymentDraft,
+  type PayablesDrafts,
+  type PendingSetOffs,
+} from './payables-panels';
 import { parseAgingQuery, type AgingQuery as Query } from './query';
 
 export const metadata: Metadata = { title: 'Supplier expense invoice aging · Pharmacy accounts' };
@@ -36,10 +45,23 @@ type State =
   | { kind: 'failure' }
   | { kind: 'loaded'; branchId: string; view: ApAgingView; retrievedAt: Date };
 
-function minor(value: number): string {
-  const negative = value < 0;
-  const absolute = Math.abs(value);
-  return `${negative ? '-' : ''}${Math.trunc(absolute / 100)}.${String(absolute % 100).padStart(2, '0')}`;
+/** DEV-694: the payables drafts load separately, so their failure never hides the aging. */
+type Payables =
+  | { kind: 'none' }
+  | { kind: 'failure' }
+  | { kind: 'loaded'; drafts: PayablesDrafts; pending: PendingSetOffs };
+
+/** DEV-694: the optional payment-draft request (payee, currency, budget in major units). */
+function paymentDraftQuery(query: Query) {
+  const single = (value: unknown) => (typeof value === 'string' ? value.trim() : undefined);
+  const payee = single(query.payee);
+  const currency = single(query.currency) === 'USD' ? 'USD' : 'PKR';
+  const budget = single(query.budget);
+  const budgetMinor = budget ? parseMajorToMinor(budget) : 0;
+  if (!payee || payee.length > 200 || budgetMinor <= 0 || budgetMinor > 2_000_000_000) {
+    return { currency, payee, budget };
+  }
+  return { currency, payee, budget, request: { name: payee, currency, budgetMinor } };
 }
 
 function QueryForm({ branchId, asOf, zone }: { branchId?: string; asOf: string; zone: string }) {
@@ -161,7 +183,7 @@ function Rows({ view }: { view: ApAgingView }) {
                   </th>
                 )
               )}
-              {['Invoice', 'Paid', 'Outstanding'].map((label) => (
+              {['Invoice', 'Paid', 'Credit set off', 'Outstanding'].map((label) => (
                 <th key={label} scope="col" className="p-3 text-right">
                   {label}
                 </th>
@@ -189,6 +211,7 @@ function Rows({ view }: { view: ApAgingView }) {
                   {row.currency} {minor(row.amountMinor)}
                 </td>
                 <td className="p-3 text-right font-mono">{minor(row.paidMinor)}</td>
+                <td className="p-3 text-right font-mono">{minor(row.setOffMinor)}</td>
                 <td className="p-3 text-right font-mono font-semibold">
                   {minor(row.outstandingMinor)}
                 </td>
@@ -262,6 +285,8 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
   // The pre-read check uses the UTC day; the router checks again on the organization's day.
   const parsed = parseAgingQuery(query, new Date());
   let state: State = parsed.invalid ? { kind: 'invalid' } : { kind: 'initial' };
+  let payables: Payables = { kind: 'none' };
+  const draftQuery = paymentDraftQuery(query);
 
   if (parsed.branchId && !parsed.invalid) {
     try {
@@ -290,6 +315,28 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
           view: result.view,
           retrievedAt: result.retrievedAt,
         };
+        try {
+          const caller = pharmacyApInvoicesRouter.createCaller(ctx);
+          const [drafts, setOffs] = await Promise.all([
+            caller.payablesDrafts({
+              branchId: parsed.branchId,
+              asOf: parsed.asOf,
+              ...(draftQuery.request ? { payee: draftQuery.request } : {}),
+            }),
+            caller.creditSetOffs({ branchId: parsed.branchId, status: 'PENDING' }),
+          ]);
+          if (
+            drafts.scope.organizationId !== actor.organization.id ||
+            drafts.scope.branchId !== parsed.branchId ||
+            setOffs.scope.organizationId !== actor.organization.id ||
+            setOffs.scope.branchId !== parsed.branchId
+          ) {
+            throw new Error('Payables scope mismatch.');
+          }
+          payables = { kind: 'loaded', drafts, pending: setOffs.setOffs };
+        } catch {
+          payables = { kind: 'failure' };
+        }
       }
     } catch (error) {
       state =
@@ -356,6 +403,35 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
               <Rows view={state.view} />
             </>
           )}
+          {payables.kind === 'loaded' ? (
+            <>
+              <DueBillReminders drafts={payables.drafts} />
+              {state.view.rows.length ? (
+                <PaymentDraft
+                  drafts={payables.drafts}
+                  branchId={state.branchId}
+                  asOf={state.view.asOf}
+                  payees={[...new Set(state.view.rows.map((row) => row.payeeName))].sort()}
+                  payee={draftQuery.payee}
+                  currency={draftQuery.currency}
+                  budget={draftQuery.budget}
+                />
+              ) : null}
+              <CreditSetOff
+                drafts={payables.drafts}
+                pending={payables.pending}
+                branchId={state.branchId}
+                bills={state.view.rows.filter((row) => row.currency === 'PKR')}
+              />
+            </>
+          ) : payables.kind === 'failure' ? (
+            <SectionCard title="Reminders and drafts could not be loaded" titleLevel={2}>
+              <p role="alert" className="text-sm text-text-muted">
+                Due-bill reminders, the payment draft and credit-note set-offs could not be read.
+                The aging above is unaffected; retry the request.
+              </p>
+            </SectionCard>
+          ) : null}
           <EntryForms branchId={state.branchId} view={state.view} timeZone={timeZone} />
         </>
       ) : (

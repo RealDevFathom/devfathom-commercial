@@ -7,10 +7,12 @@ import {
 } from '@/lib/pharmacy/bookkeeping';
 import {
   apSettlementPaymentKey,
+  invoiceSettlementClocks,
   normalizeApInvoice,
   normalizePayeeKey,
   outstandingMinor,
   parseCalendarDate,
+  payableMinorFrom,
   payApInvoice,
   recordApInvoice,
   reverseApInvoice,
@@ -719,5 +721,79 @@ describe('historical settlement timeline (two clocks)', () => {
       NOW
     );
     expect(result.invoice.status).toBe('REVERSED');
+  });
+});
+
+describe('DEV-694: approved credit-note set-offs settle the bill', () => {
+  const at = new Date('2026-11-15T00:00:00.000Z');
+  const setOffInvoice = {
+    id: 'inv_9',
+    branchId: 'branch_1',
+    reference: 'AP-9',
+    status: 'POSTED',
+    amountMinor: 100,
+    invoiceDate: new Date('2026-11-01T00:00:00.000Z'),
+    journalEntryId: 'entry_9',
+    settlements: [],
+    creditSetOffs: [{ amountMinor: 40, decidedAt: new Date('2026-11-10T00:00:00.000Z') }],
+  };
+  const lockedDb = () =>
+    ({
+      $queryRaw: vi.fn(async () => []),
+      pharmacyApInvoice: {
+        // The command-key replay lookup finds nothing; the locked read finds the bill.
+        findFirst: vi.fn(async (args: { where: Record<string, unknown> }) =>
+          'reverseCommandKey' in args.where ? null : setOffInvoice
+        ),
+      },
+      pharmacyApInvoiceSettlement: { findFirst: vi.fn(async () => null) },
+    }) as unknown as ScopedDb;
+
+  it('counts them as active settlement clocks from their approval instant', () => {
+    const clocks = invoiceSettlementClocks(setOffInvoice);
+    expect(payableMinorFrom({ amountMinor: 100, settlements: clocks }, at)).toBe(60);
+    // A payment backdated before the set-off still cannot over-settle the bill.
+    expect(
+      payableMinorFrom(
+        { amountMinor: 100, settlements: clocks },
+        new Date('2026-11-05T00:00:00.000Z')
+      )
+    ).toBe(60);
+  });
+
+  it('refuses a payment above what the set-off left owing', async () => {
+    await expect(
+      payApInvoice(
+        lockedDb(),
+        scope,
+        {
+          branchId: 'branch_1',
+          invoiceId: 'inv_9',
+          commandKey: 'pay-key-0009',
+          reference: 'PAY-9',
+          amountMinor: 61,
+          paidAt: '2026-11-15T00:00:00.000Z',
+          fundingAccount: 'CASH',
+        },
+        NOW
+      )
+    ).rejects.toMatchObject({ reason: 'OVERPAYMENT' });
+  });
+
+  it('refuses to reverse a bill a credit note was set off against', async () => {
+    await expect(
+      reverseApInvoice(
+        lockedDb(),
+        scope,
+        {
+          branchId: 'branch_1',
+          invoiceId: 'inv_9',
+          commandKey: 'rev-inv-0009',
+          reason: 'Duplicate',
+          at: '2026-11-15T00:00:00.000Z',
+        },
+        NOW
+      )
+    ).rejects.toMatchObject({ reason: 'ACTIVE_SETTLEMENTS' });
   });
 });

@@ -13,6 +13,13 @@ const mocks = vi.hoisted(() => ({
   list: vi.fn(),
   aging: vi.fn(),
   creditFindMany: vi.fn(),
+  mayManage: vi.fn(),
+  pin: vi.fn(),
+  requestSetOff: vi.fn(),
+  approveSetOff: vi.fn(),
+  rejectSetOff: vi.fn(),
+  listSetOffs: vi.fn(),
+  soleApprover: vi.fn(),
 }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -40,6 +47,20 @@ vi.mock('@/lib/pharmacy/accounts/ap-invoices', async () => ({
   reverseApSettlement: mocks.reverseSettlement,
   reverseApInvoice: mocks.reverseInvoice,
   listApInvoices: mocks.list,
+}));
+vi.mock('@/lib/pharmacy/refund-authorization', () => ({
+  actorMayRefund: mocks.mayManage,
+  authenticateRefundPin: mocks.pin,
+}));
+vi.mock('@/lib/pharmacy/accounts/ap-credit-set-off', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/pharmacy/accounts/ap-credit-set-off')>(
+    '@/lib/pharmacy/accounts/ap-credit-set-off'
+  )),
+  requestApCreditSetOff: mocks.requestSetOff,
+  approveApCreditSetOff: mocks.approveSetOff,
+  rejectApCreditSetOff: mocks.rejectSetOff,
+  listApCreditSetOffs: mocks.listSetOffs,
+  isSoleSetOffApprover: mocks.soleApprover,
 }));
 vi.mock('@/lib/pharmacy/accounts/ap-aging', async () => ({
   ...(await vi.importActual<typeof import('@/lib/pharmacy/accounts/ap-aging')>(
@@ -407,5 +428,218 @@ describe('pharmacyApInvoices router — payablesDrafts', () => {
         caller().payablesDrafts({ ...draftsInput, asOf: '2026-11-16' })
       ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     });
+  });
+});
+
+describe('pharmacyApInvoices router — payablesDrafts credit paging', () => {
+  const draftsInput = { branchId: 'branch_1', asOf: '2026-11-15' };
+  const credit = (n: number) => ({
+    id: `cr_${n}`,
+    reference: `CN-${n}`,
+    amountMinor: 100,
+    receivedAt: new Date('2026-11-01T00:00:00.000Z'),
+    supplier: { name: 'Al-Shifa' },
+    allocations: [],
+    apSetOffs: n === 1 ? [{ amountMinor: 40 }] : [],
+  });
+
+  it('reads 5,000 credits per page and every page before reporting', async () => {
+    const first = Array.from({ length: 5_000 }, (_, i) => credit(i + 1));
+    mocks.creditFindMany.mockResolvedValueOnce(first).mockResolvedValueOnce([credit(5_001)]);
+    const result = await caller().payablesDrafts(draftsInput);
+    expect(mocks.creditFindMany).toHaveBeenCalledTimes(2);
+    expect(mocks.creditFindMany.mock.calls[0]![0]).toMatchObject({ take: 5_000 });
+    expect(mocks.creditFindMany.mock.calls[0]![0].cursor).toBeUndefined();
+    expect(mocks.creditFindMany.mock.calls[1]![0]).toMatchObject({
+      take: 5_000,
+      cursor: { id: 'cr_5000' },
+      skip: 1,
+    });
+    expect(result.openCredits).toHaveLength(5_001);
+    expect(result.creditsComplete).toBe(true);
+    // Approved and pending set-offs already claim part of a credit.
+    expect(result.openCredits[0]).toMatchObject({ creditId: 'cr_1', remainingMinor: 60 });
+  });
+});
+
+describe('pharmacyApInvoices router — credit set-off', () => {
+  const requestInput = {
+    branchId: 'branch_1',
+    invoiceId: 'inv_1',
+    supplierCreditId: 'cr_1',
+    requestKey: 'ap-set-off:0001',
+    amountMinor: 2_500,
+  };
+  const approveInput = {
+    branchId: 'branch_1',
+    setOffId: 'so_1',
+    decisionKey: 'ap-set-off-ok:0001',
+    pin: '2468',
+  };
+  const pending = {
+    id: 'so_1',
+    status: 'PENDING',
+    invoiceId: 'inv_1',
+    supplierCreditId: 'cr_1',
+    amountMinor: 2_500,
+    requestedByUserId: 'clerk_1',
+  };
+  const approved = {
+    ...pending,
+    status: 'APPROVED',
+    decidedByUserId: 'owner_1',
+    decidedAt: new Date('2026-11-18T10:00:00.000Z'),
+    approvalPolicy: 'PHARMACY_AP_SET_OFF_MANAGER_PIN',
+    journalEntryId: 'entry_9',
+  };
+
+  beforeEach(() => {
+    mocks.mayManage.mockResolvedValue(true);
+    mocks.pin.mockResolvedValue({ verified: true });
+    mocks.requestSetOff.mockResolvedValue({ setOff: pending, replayed: false });
+    mocks.approveSetOff.mockResolvedValue({ setOff: approved, replayed: false });
+    mocks.rejectSetOff.mockResolvedValue({
+      setOff: { ...pending, status: 'REJECTED' },
+      replayed: false,
+    });
+    mocks.listSetOffs.mockResolvedValue([]);
+  });
+
+  it('is mounted on the root router', async () => {
+    const { appRouter } = await import('./_app');
+    expect(Object.keys(appRouter._def.procedures)).toEqual(
+      expect.arrayContaining([
+        'pharmacyApInvoices.creditSetOffs',
+        'pharmacyApInvoices.requestCreditSetOff',
+        'pharmacyApInvoices.approveCreditSetOff',
+        'pharmacyApInvoices.rejectCreditSetOff',
+      ])
+    );
+  }, 60_000);
+
+  it('records a request in one audited transaction without posting money', async () => {
+    await expect(caller().requestCreditSetOff(requestInput)).resolves.toMatchObject({
+      status: 'PENDING',
+    });
+    expect(mocks.requestSetOff).toHaveBeenCalledWith(TX, scope, requestInput);
+    expect(mocks.pin).not.toHaveBeenCalled();
+    expect(mocks.recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'pharmacyApInvoices.requestCreditSetOff',
+        targetType: 'PharmacyApCreditSetOff',
+      }),
+      TX
+    );
+  });
+
+  it('refuses every set-off command without Pharmacy Finance access', async () => {
+    mocks.hasModule.mockReturnValue(false);
+    await expect(caller().requestCreditSetOff(requestInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(caller().approveCreditSetOff(approveInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(caller().creditSetOffs({ branchId: 'branch_1' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.requestSetOff).not.toHaveBeenCalled();
+    expect(mocks.approveSetOff).not.toHaveBeenCalled();
+    expect(mocks.listSetOffs).not.toHaveBeenCalled();
+    expect(mocks.pin).not.toHaveBeenCalled();
+  });
+
+  it('refuses approval or rejection by someone who is not a manager or owner', async () => {
+    mocks.mayManage.mockResolvedValue(false);
+    await expect(caller().approveCreditSetOff(approveInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Only a manager or owner can approve or reject a set-off.',
+    });
+    await expect(
+      caller().rejectCreditSetOff({
+        branchId: 'branch_1',
+        setOffId: 'so_1',
+        decisionKey: 'ap-set-off-no:0001',
+        reason: 'Wrong bill',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.pin).not.toHaveBeenCalled();
+    expect(mocks.approveSetOff).not.toHaveBeenCalled();
+    expect(mocks.rejectSetOff).not.toHaveBeenCalled();
+  });
+
+  it('refuses approval when the PIN is refused, before any money moves', async () => {
+    mocks.pin.mockResolvedValue({ blocked: 'nope' });
+    await expect(caller().approveCreditSetOff(approveInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Set-off not approved. Enter your manager or owner PIN.',
+    });
+    expect(mocks.pin).toHaveBeenCalledWith({
+      organizationId: 'org_1',
+      actorId: 'owner_1',
+      pin: '2468',
+      action: 'pharmacyApInvoices.approveCreditSetOff',
+      policy: 'PHARMACY_AP_SET_OFF_MANAGER_PIN',
+      errorCode: 'AP_SET_OFF_PIN_REFUSED',
+    });
+    expect(mocks.transaction).not.toHaveBeenCalled();
+    expect(mocks.approveSetOff).not.toHaveBeenCalled();
+  });
+
+  it('approves with a verified PIN and audits who requested and who approved', async () => {
+    mocks.soleApprover.mockResolvedValue(false);
+    await expect(caller().approveCreditSetOff(approveInput)).resolves.toMatchObject({
+      status: 'APPROVED',
+    });
+    expect(mocks.approveSetOff).toHaveBeenCalledWith(
+      TX,
+      scope,
+      approveInput,
+      expect.objectContaining({ soleApprover: expect.any(Function) })
+    );
+    const options = mocks.approveSetOff.mock.calls[0]![3];
+    await options.soleApprover();
+    expect(mocks.soleApprover).toHaveBeenCalledWith(TX, 'org_1', 'owner_1');
+    expect(mocks.recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'pharmacyApInvoices.approveCreditSetOff',
+        operation: 'EXECUTE',
+        result: expect.objectContaining({ status: 'APPROVED', entryId: 'entry_9' }),
+        metadata: expect.objectContaining({
+          policy: 'PHARMACY_AP_SET_OFF_MANAGER_PIN',
+          approverId: 'owner_1',
+          initiatedById: 'clerk_1',
+          pinVerified: true,
+          selfApproved: false,
+        }),
+      }),
+      TX
+    );
+  });
+
+  it('maps a refused self-approval to FORBIDDEN', async () => {
+    mocks.approveSetOff.mockRejectedValue(new PharmacyApInvoiceError('SELF_APPROVAL'));
+    await expect(caller().approveCreditSetOff(approveInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Another manager or owner must approve a set-off you requested.',
+    });
+  });
+
+  it.each(['SET_OFF_EXCEEDS_CREDIT', 'SET_OFF_EXCEEDS_BILL', 'ALREADY_DECIDED'] as const)(
+    'maps %s to CONFLICT',
+    async (reason) => {
+      mocks.approveSetOff.mockRejectedValue(new PharmacyApInvoiceError(reason));
+      await expect(caller().approveCreditSetOff(approveInput)).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: reason,
+      });
+    }
+  );
+
+  it('rejects a PIN that is not 4 to 8 digits at the wire', async () => {
+    await expect(
+      caller().approveCreditSetOff({ ...approveInput, pin: '12a4' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.pin).not.toHaveBeenCalled();
   });
 });

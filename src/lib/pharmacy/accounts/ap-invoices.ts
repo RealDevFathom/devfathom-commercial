@@ -53,7 +53,13 @@ export type ApInvoiceErrorReason =
   | 'PERIOD_CLOSED'
   | 'DUPLICATE_REFERENCE'
   | 'DUPLICATE_INVOICE'
-  | 'IDEMPOTENCY_CONFLICT';
+  | 'IDEMPOTENCY_CONFLICT'
+  // DEV-694: supplier credit-note set-off.
+  | 'SET_OFF_EXCEEDS_CREDIT'
+  | 'SET_OFF_EXCEEDS_BILL'
+  | 'SUPPLIER_MISMATCH'
+  | 'ALREADY_DECIDED'
+  | 'SELF_APPROVAL';
 
 export class PharmacyApInvoiceError extends Error {
   constructor(readonly reason: ApInvoiceErrorReason) {
@@ -132,7 +138,11 @@ async function assertOpenPeriod(db: ScopedDb, scope: ApInvoiceScope, at: Date) {
   }
 }
 
-async function lockInvoice(db: ScopedDb, scope: ApInvoiceScope, invoiceId: string) {
+export async function lockInvoice(
+  db: ScopedDb,
+  scope: Pick<ApInvoiceScope, 'organizationId' | 'branchId'>,
+  invoiceId: string
+) {
   await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_ap_invoices
     WHERE id=${invoiceId} AND "organizationId"=${scope.organizationId}
       AND "branchId"=${scope.branchId} FOR UPDATE`);
@@ -140,10 +150,37 @@ async function lockInvoice(db: ScopedDb, scope: ApInvoiceScope, invoiceId: strin
     where: { organizationId: scope.organizationId, branchId: scope.branchId, id: invoiceId },
     // Every settlement, reversed ones included: the payment and reversal
     // checks validate the whole historical timeline, not only today's state.
-    include: { settlements: true },
+    // DEV-694: approved credit-note set-offs reduce the payable like payments.
+    include: {
+      settlements: true,
+      creditSetOffs: {
+        where: { status: 'APPROVED' },
+        select: { amountMinor: true, decidedAt: true },
+      },
+    },
   });
   if (!invoice) fail('NOT_FOUND');
   return invoice;
+}
+
+/**
+ * DEV-694: an invoice's settlement clocks — its payments plus every approved
+ * credit-note set-off, which reduces the payable from its approval instant and
+ * is never reversed.
+ */
+export function invoiceSettlementClocks(invoice: {
+  settlements: readonly SettlementClock[];
+  creditSetOffs?: readonly { amountMinor: number; decidedAt: Date | null }[];
+}): SettlementClock[] {
+  return [
+    ...invoice.settlements,
+    ...(invoice.creditSetOffs ?? []).map((setOff) => ({
+      amountMinor: setOff.amountMinor,
+      paidAt: setOff.decidedAt ?? new Date(0),
+      status: 'ACTIVE',
+      reversedAt: null,
+    })),
+  ];
 }
 
 async function lockSettlement(db: ScopedDb, scope: ApInvoiceScope, settlementId: string) {
@@ -408,7 +445,8 @@ export async function payApInvoice(
   const invoice = await lockInvoice(db, scope, input.invoiceId);
   if (invoice.status !== 'POSTED') fail('INVALID_STATE');
   if (paidAt < invoice.invoiceDate) fail('INVALID_DATE');
-  if (input.amountMinor > payableMinorFrom(invoice, paidAt)) fail('OVERPAYMENT');
+  const clocks = { amountMinor: invoice.amountMinor, settlements: invoiceSettlementClocks(invoice) };
+  if (input.amountMinor > payableMinorFrom(clocks, paidAt)) fail('OVERPAYMENT');
 
   let transaction;
   try {
@@ -573,7 +611,10 @@ export async function reverseApInvoice(
 
   const invoice = await lockInvoice(db, scope, input.invoiceId);
   if (invoice.status === 'REVERSED') fail('ALREADY_REVERSED');
-  if (invoice.settlements.some((settlement) => settlement.status === 'ACTIVE')) {
+  if (
+    invoice.settlements.some((settlement) => settlement.status === 'ACTIVE') ||
+    (invoice.creditSetOffs ?? []).length > 0
+  ) {
     fail('ACTIVE_SETTLEMENTS');
   }
   if (at < invoice.invoiceDate) fail('INVALID_DATE');
