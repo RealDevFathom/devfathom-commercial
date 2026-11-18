@@ -5,7 +5,6 @@ vi.mock('./owner-data-export-pin', () => ({
   verifyOwnerExportPin: guards.pin,
 }));
 import {
-  CONTROLLED_REVIEW_MESSAGE,
   decideCatalogueEdit,
   listPendingCatalogueEdits,
   requireIndependentCatalogueReviewer,
@@ -121,30 +120,10 @@ describe('DEV-766 durable catalogue approvals', () => {
     });
     expect(guards.pin).not.toHaveBeenCalled();
   });
-  it('refuses to approve a controlled-flag change without the catalogue review grant (DEV-925)', async () => {
-    for (const grant of [undefined, async () => false]) {
-      const f = fixture();
-      f.proposal.changes = { controlled: false } as unknown as typeof f.proposal.changes;
-      await expect(
-        decideCatalogueEdit(f.db, scope, { editId: 'edit', decision: 'APPROVE' }, undefined, grant)
-      ).rejects.toMatchObject({ code: 'FORBIDDEN', message: CONTROLLED_REVIEW_MESSAGE });
-      expect(f.raw.pharmacyCatalogueEdit.updateMany).not.toHaveBeenCalled();
-      expect(f.raw.medicine.updateMany).not.toHaveBeenCalled();
-      expect(f.raw.auditLog.create).not.toHaveBeenCalled();
-    }
-  });
-  it('records a controlled-flag change approved under the grant, and rejects without it (DEV-925)', async () => {
+  it('marks an approved controlled-flag change in its audit record (DEV-925)', async () => {
     const f = fixture();
     f.proposal.changes = { controlled: false } as unknown as typeof f.proposal.changes;
-    const grant = vi.fn(async () => true);
-    await decideCatalogueEdit(
-      f.db,
-      scope,
-      { editId: 'edit', decision: 'APPROVE' },
-      undefined,
-      grant
-    );
-    expect(grant).toHaveBeenCalledOnce();
+    await decideCatalogueEdit(f.db, scope, { editId: 'edit', decision: 'APPROVE' });
     expect(f.raw.medicine.updateMany).toHaveBeenCalledWith({
       where: { id: 'medicine', updatedAt: timestamp },
       data: { controlled: false, updatedAt: expect.any(Date) },
@@ -155,25 +134,23 @@ describe('DEV-766 durable catalogue approvals', () => {
         metadata: { soloOwner: false, pinVerified: false, controlledReviewed: true },
       }),
     });
-    // A rejection, or an edit that leaves the flag alone, never asks for the grant.
-    const other = fixture();
-    other.proposal.changes = { controlled: false } as unknown as typeof other.proposal.changes;
-    const unused = vi.fn(async () => false);
-    await decideCatalogueEdit(
-      other.db,
-      scope,
-      { editId: 'edit', decision: 'REJECT' },
-      undefined,
-      unused
-    );
-    await decideCatalogueEdit(
-      fixture().db,
-      scope,
-      { editId: 'edit', decision: 'APPROVE' },
-      undefined,
-      unused
-    );
-    expect(unused).not.toHaveBeenCalled();
+  });
+  it("marks a solo owner's PIN approval of a controlled-flag change too (DEV-925)", async () => {
+    guards.solo.mockResolvedValue(true);
+    const f = fixture('reviewer');
+    f.proposal.changes = { controlled: false } as unknown as typeof f.proposal.changes;
+    await decideCatalogueEdit(f.db, scope, {
+      editId: 'edit',
+      decision: 'APPROVE',
+      soloPin: '2468',
+    });
+    expect(guards.pin).toHaveBeenCalledOnce();
+    expect(f.raw.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'pharmacy.catalogueSoloOwnerApproval',
+        metadata: { soloOwner: true, pinVerified: true, controlledReviewed: true },
+      }),
+    });
   });
   it.each([undefined, '1234'])(
     'blocks editor self-approval without the solo-owner rule (PIN %s)',

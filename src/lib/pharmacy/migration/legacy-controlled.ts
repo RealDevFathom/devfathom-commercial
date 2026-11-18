@@ -24,8 +24,10 @@ const nameKey = (column: Prisma.Sql) => Prisma.sql`lower(${normalizedText(column
  * DEV-925: true when a person's latest approved catalogue edit of this medicine's controlled
  * flag set it to "not controlled". Approved catalogue edits are retained and immutable, so the
  * correction is remembered and the legacy NARCOTICS class never sets the flag back. Only an
- * approval made under the catalogue review grant counts: its append-only audit record says
- * `controlledReviewed`. Any other approval is ignored, so the import flags the medicine again.
+ * approval whose append-only audit record says `controlledReviewed` counts: since DEV-19 every
+ * approval needs the catalogue review grant, or the owner with no other reviewer and a fresh
+ * PIN. An older approval, made when any administrator could approve, has no mark and is
+ * ignored, so the import flags the medicine again.
  */
 const correctedNotControlled = (organizationId: string, medicineId: Prisma.Sql) => Prisma.sql`
   COALESCE((

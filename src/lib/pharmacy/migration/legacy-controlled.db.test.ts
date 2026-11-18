@@ -10,9 +10,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PrismaClient } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import type { TRPCContext } from '@/server/trpc';
 import { decideCatalogueEdit, submitCatalogueEdit } from '../catalogue-approvals';
 import {
   applyLegacyControlledClass,
@@ -24,11 +25,21 @@ import {
 const runtimeUrl = process.env.TEST_DATABASE_URL;
 const ownerUrl = process.env.PHARMACY_TEST_OWNER_DATABASE_URL;
 const suite = runtimeUrl && ownerUrl ? describe : describe.skip;
+// The router path (solo-owner PIN approval) opens its own tenant transactions on DATABASE_URL.
+if (runtimeUrl && ownerUrl) process.env.DATABASE_URL = runtimeUrl;
+// Only the automatic request log is suppressed; the approval audit is written for real.
+vi.mock('@/server/audit', async () => {
+  const actual = await vi.importActual<typeof import('@/server/audit')>('@/server/audit');
+  return { ...actual, recordTrpcAudit: vi.fn() };
+});
 
 const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
 const id = (label: string) => `lc_${label}_${suffix}`;
 const orgA = id('org_a');
 const orgB = id('org_b');
+const orgSolo = id('org_solo');
+const soloOwnerId = id('solo_owner');
+const soloOpioid = id('med_solo_opioid');
 const editorId = id('editor');
 const reviewerId = id('reviewer');
 const medicine = {
@@ -82,8 +93,7 @@ suite('DEV-925 legacy NARCOTICS class on PostgreSQL', () => {
   const edit = async (
     medicineId: string,
     changes: Record<string, unknown>,
-    decision: 'APPROVE' | 'REJECT' = 'APPROVE',
-    canReviewControlled = async () => true
+    decision: 'APPROVE' | 'REJECT' = 'APPROVE'
   ) => {
     const proposal = await tenant(orgA, (tx) =>
       submitCatalogueEdit(tx, { organizationId: orgA, actorId: editorId }, medicineId, changes)
@@ -92,9 +102,7 @@ suite('DEV-925 legacy NARCOTICS class on PostgreSQL', () => {
       decideCatalogueEdit(
         joined(tx),
         { organizationId: orgA, actorId: reviewerId, actorOrganizationId: orgA },
-        { editId: proposal.id, decision },
-        undefined,
-        canReviewControlled
+        { editId: proposal.id, decision }
       )
     );
   };
@@ -209,16 +217,12 @@ suite('DEV-925 legacy NARCOTICS class on PostgreSQL', () => {
   it("keeps a person's correction to not controlled when the same file is loaded again", async () => {
     await edit(medicine.opioid, { controlled: false });
     // Not corrections: an edit that never touches the flag, a rejected correction, an approval
-    // without the catalogue review grant, and a correction a later approved edit reversed.
+    // with no DEV-925 audit mark, and a correction a later approved edit reversed.
     await edit(medicine.hypnotic, { brandName: 'Synthetic brand' });
     await edit(medicine.hypnotic, { controlled: false }, 'REJECT');
     await edit(medicine.sedative, { controlled: false });
     await edit(medicine.sedative, { controlled: true });
-    // Without the catalogue review grant the approval is refused (SECURITY.md)...
-    await expect(
-      edit(medicine.hypnotic, { controlled: false }, 'APPROVE', async () => false)
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    // ...and an approval with no record of that grant (made before DEV-925) is ignored.
+    // An approval recorded before DEV-925 (before DEV-19 any admin could approve) has no mark.
     const ungranted = id('edit_ungranted');
     await owner.query(
       `INSERT INTO pharmacy_catalogue_edits
@@ -291,5 +295,113 @@ suite('DEV-925 legacy NARCOTICS class on PostgreSQL', () => {
     });
     expect(created.set).toBe(true);
     expect(await controlled(orgA, created.id)).toBe(true);
+  });
+  it("remembers a solo owner's PIN-approved correction when the file is staged again", async () => {
+    const { pharmacyMedicineRouter } = await import('@/server/routers/pharmacy-medicine');
+    const { createTenantDb } = await import('@/lib/tenancy/scoped-db');
+    const { hashOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
+    // An owner-only pharmacy: nobody else can review, so the owner approves with a fresh PIN.
+    await owner.query(
+      `INSERT INTO organizations (id, slug, "legalName", "displayName", status, "updatedAt")
+       VALUES ($1, $1, 'Legacy class fixture', 'Legacy class fixture', 'ACTIVE', now())`,
+      [orgSolo]
+    );
+    await owner.query(
+      `INSERT INTO organization_departments (id, "organizationId", key, name, "updatedAt")
+       VALUES ($1, $2, 'Pharmacy', 'Pharmacy', now())`,
+      [id('solo_department'), orgSolo]
+    );
+    await owner.query(
+      `INSERT INTO organization_roles (id, "organizationId", key, name, "isSystem", "updatedAt")
+       VALUES ($1, $2, 'owner', 'Owner', true, now())`,
+      [id('solo_owner_role'), orgSolo]
+    );
+    await owner.query(
+      `INSERT INTO organization_role_permissions (id, "organizationId", "organizationRoleId", capability, effect)
+       VALUES ($1, $2, $3, '*', 'ALLOW')`,
+      [id('solo_owner_perm'), orgSolo, id('solo_owner_role')]
+    );
+    await owner.query(
+      `INSERT INTO users (id, "organizationId", "organizationRoleId", name, email, department, title, role, "updatedAt")
+       VALUES ($1, $2, $3, 'Owner', $4, 'Pharmacy', 'Owner', 'ADMIN', now())`,
+      [soloOwnerId, orgSolo, id('solo_owner_role'), `${soloOwnerId}@legacy-class.test`]
+    );
+    await owner.query(
+      `INSERT INTO restaurant_staff_profiles (id, "organizationId", "userId", "displayName", status, "updatedAt")
+       VALUES ($1, $2, $3, 'Owner', 'ACTIVE', now())`,
+      [id('solo_staff'), orgSolo, soloOwnerId]
+    );
+    await owner.query(
+      `INSERT INTO restaurant_operator_credentials (id, "organizationId", "staffProfileId", type, "credentialHash", "updatedAt")
+       VALUES ($1, $2, $3, 'PIN', $4, now())`,
+      [id('solo_pin'), orgSolo, id('solo_staff'), await hashOperatorCredential('PIN', '2468')]
+    );
+    await owner.query(
+      `INSERT INTO pharmacy_medicines (id, "organizationId", "productName", "productFamily", "updatedAt")
+       VALUES ($1, $2, 'Synthetic Opioid 50mg', 'PHARMACEUTICAL', now())`,
+      [soloOpioid, orgSolo]
+    );
+    const stageSolo = () =>
+      tenant(orgSolo, (tx) => applyLegacyControlledClass(tx, orgSolo, legacyRows));
+    expect((await stageSolo()).medicineIds).toEqual([soloOpioid]);
+    expect(await controlled(orgSolo, soloOpioid)).toBe(true);
+
+    const soloOwner = pharmacyMedicineRouter.createCaller({
+      db: createTenantDb(orgSolo, soloOwnerId),
+      entitlements: {
+        organizationId: orgSolo,
+        enabledModules: ['pharmacy-core'],
+        activeSeats: 1,
+        seatLimit: 10,
+        modules: [],
+        limits: {},
+      },
+      session: {
+        expires: 'later',
+        user: { id: soloOwnerId, organizationId: orgSolo, role: 'ADMIN', status: 'ACTIVE' },
+      },
+      organization: null,
+      support: null,
+      requestMeta: { ip: null, userAgent: null },
+      audit: { detail: {} },
+    } as unknown as TRPCContext);
+    const correction = await soloOwner.proposeCatalogueEdit({
+      medicineId: soloOpioid,
+      changes: { controlled: false },
+    });
+    // Without the fresh PIN the owner cannot approve their own correction.
+    await expect(
+      soloOwner.decideCatalogueEdit({ editId: correction.id, decision: 'APPROVE' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await soloOwner.decideCatalogueEdit({
+      editId: correction.id,
+      decision: 'APPROVE',
+      soloPin: '2468',
+    });
+    expect(await controlled(orgSolo, soloOpioid)).toBe(false);
+    const audit = await tenant(orgSolo, (tx) =>
+      tx.auditLog.findMany({
+        where: { targetType: 'PharmacyCatalogueEdit', targetId: correction.id },
+      })
+    );
+    expect(audit.map((row) => [row.action, row.metadata])).toEqual([
+      [
+        'pharmacy.catalogueSoloOwnerApproval',
+        {
+          soloOwner: true,
+          pinVerified: true,
+          reason: 'no other reviewer',
+          controlledReviewed: true,
+        },
+      ],
+    ]);
+
+    // The same file staged again: the medicine stays not controlled and both rows are counted.
+    expect(await stageSolo()).toEqual({
+      controlledRows: 4,
+      medicineIds: [],
+      skippedCorrectedRows: 2,
+    });
+    expect(await controlled(orgSolo, soloOpioid)).toBe(false);
   });
 });

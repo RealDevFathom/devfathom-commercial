@@ -311,60 +311,6 @@ describe('MED-06 connector router boundary', () => {
     }
   });
 
-  it('asks for the catalogue review grant before approving a controlled-flag edit (DEV-925)', async () => {
-    const at = new Date('2026-11-01T00:00:00Z');
-    const tx = {
-      pharmacyCatalogueEdit: {
-        findFirst: vi.fn().mockResolvedValue({
-          id: 'edit-c',
-          editorId: 'editor-1',
-          medicineId: 'medicine-c',
-          operation: 'UPDATE_MEDICINE',
-          changes: { controlled: false },
-          expectedUpdatedAt: at,
-          status: 'PENDING',
-        }),
-        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
-        count: vi.fn().mockResolvedValue(0),
-      },
-      medicine: {
-        findFirst: vi.fn().mockResolvedValue({
-          id: 'medicine-c',
-          updatedAt: at,
-          productFamily: 'PHARMACEUTICAL',
-          saleable: false,
-          drapRegistrationNumber: null,
-        }),
-        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
-      },
-      auditLog: { create: vi.fn() },
-    };
-    const db = { ...tx, $transaction: (run: (client: typeof tx) => unknown) => run(tx) };
-    mocks.can.mockImplementation(
-      async (...args: unknown[]) => args[1] !== 'pharmacy:catalogue-review'
-    );
-    try {
-      await expect(
-        caller(db).decideCatalogueEdit({ editId: 'edit-c', decision: 'APPROVE' })
-      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-      expect(mocks.can).toHaveBeenCalledWith(
-        expect.anything(),
-        'pharmacy:catalogue-review',
-        undefined,
-        expect.anything()
-      );
-      expect(tx.medicine.updateMany).not.toHaveBeenCalled();
-    } finally {
-      mocks.can.mockImplementation(async () => true);
-    }
-    await caller(db).decideCatalogueEdit({ editId: 'edit-c', decision: 'APPROVE' });
-    expect(tx.auditLog.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        metadata: expect.objectContaining({ controlledReviewed: true }),
-      }),
-    });
-  });
-
   it('records confirmed DRAP values as regulator provenance', async () => {
     const created: Array<Record<string, unknown>> = [];
     const tx = {
