@@ -260,6 +260,7 @@ model PharmacyBranch {
   visibilityPharmacyDayReopen              PharmacyDayReopen[]               @relation("PharmacyDayReopenVisibilityAnchor")
   visibilityPharmacyDrawerSession          PharmacyDrawerSession[]           @relation("PharmacyDrawerSessionVisibilityAnchor")
   visibilityPharmacyReceiptNumberSequence  PharmacyReceiptNumberSequence[]   @relation("PharmacyReceiptNumberSequenceVisibilityAnchor")
+  visibilityPharmacyBranchReceiptSequence  PharmacyBranchReceiptSequence[]   @relation("PharmacyBranchReceiptSequenceVisibilityAnchor")
   visibilityPharmacySale                   PharmacySale[]                    @relation("PharmacySaleVisibilityAnchor")
   visibilityPharmacySettlementBatch        PharmacySettlementBatch[]         @relation("PharmacySettlementBatchVisibilityAnchor")
   visibilityPharmacyTaxProfileVersion      PharmacyTaxProfileVersion[]       @relation("PharmacyTaxProfileVersionVisibilityAnchor")
@@ -1345,6 +1346,9 @@ model PharmacySale {
   completedAt               DateTime?
   receiptNumber             Int?
   receiptDeviceId           String?
+  /// DEV-637: set by the database when a receipt is numbered from the branch-wide sequence;
+  /// those numbers are unique per branch. Receipts numbered before that keep false.
+  receiptNumberBranchUnique Boolean                      @default(false)
   businessDate              DateTime?                    @db.Date
   customerId                String?
   createdAt                 DateTime                     @default(now())
@@ -1910,6 +1914,23 @@ model PharmacyReceiptNumberSequence {
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, deviceId])
   @@map("pharmacy_receipt_number_sequences")
+}
+
+/// DEV-637: the one receipt-number sequence of a branch. Online sales draw one number and
+/// offline counters lease blocks from it (`pharmacy_allocate_branch_receipt_numbers`), so no
+/// two receipts of a branch share a number whichever counter issued them.
+/// `PharmacyReceiptNumberSequence` (per device) is kept only as a historical record.
+model PharmacyBranchReceiptSequence {
+  id               String         @id @default(cuid())
+  organizationId   String         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  nextNumber       Int
+  updatedAt        DateTime       @default(now()) @updatedAt
+  visibilityAnchor PharmacyBranch @relation("PharmacyBranchReceiptSequenceVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_branch_receipt_sequences_visibility_fkey")
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, branchId])
+  @@map("pharmacy_branch_receipt_sequences")
 }
 
 /// Durable authority for original-versus-reprint receipt dispatches.

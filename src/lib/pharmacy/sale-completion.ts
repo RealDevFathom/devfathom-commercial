@@ -1,5 +1,4 @@
 import 'server-only';
-import { randomUUID } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { LedgerScope } from './stock-ledger';
@@ -9,6 +8,7 @@ import { PharmacyReceiptIdentityError, validateReceiptIdentity } from './receipt
 import { assertRxSaleAllowed } from './rx-sale-gate';
 import { readPharmacyReceiptTaxIdentity } from './receipt-print';
 import { sindhCashMemoSelected } from './counter-receipt';
+import { allocateBranchReceiptNumbers } from './branch-receipt-sequence';
 import {
   assertRxLinesPrescribed,
   recordCompletedPrescriptionReference,
@@ -63,17 +63,10 @@ export async function completePaidPharmacySale(
   // #659: re-check every batch under lock before a receipt number is drawn. The receipt
   // snapshot below records these checked facts, not the ones loaded with the sale.
   const checkedBatches = await assertSaleBatchesSellable(db, scope, sale.id);
-  let receiptNumber = leasedReceiptNumber;
-  if (receiptNumber === null) {
-    // Reserved (leased) numbers never return to this online sequence.
-    const rows = await db.$queryRaw<Array<{ receipt_number: number }>>(Prisma.sql`
-      INSERT INTO pharmacy_receipt_number_sequences (id, "organizationId", "branchId", "deviceId", "nextNumber", "updatedAt")
-      VALUES (${randomUUID()}, ${scope.organizationId}, ${scope.branchId}, ${input.deviceId}, 2, now())
-      ON CONFLICT ("organizationId", "branchId", "deviceId")
-      DO UPDATE SET "nextNumber" = pharmacy_receipt_number_sequences."nextNumber" + 1, "updatedAt" = now()
-      RETURNING "nextNumber" - 1 AS receipt_number`);
-    receiptNumber = rows[0]!.receipt_number;
-  }
+  // DEV-637: one sequence per branch, whichever counter completes the sale, so a branch
+  // never holds two receipts with the same number. Leased (offline) blocks are carved out
+  // of the same sequence and never return to it.
+  const receiptNumber = leasedReceiptNumber ?? (await allocateBranchReceiptNumbers(db, scope, 1));
   await db.pharmacySale.update({
     where: { organizationId_id: { organizationId: scope.organizationId, id: sale.id } },
     data: {
