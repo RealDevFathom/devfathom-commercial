@@ -242,7 +242,7 @@ describe('DEV-908 owner switch', () => {
     const migration = readFileSync(
       path.join(
         process.cwd(),
-        'prisma/migrations/20261118030000_pharmacy_branch_transfer_policy/migration.sql'
+        'prisma/migrations/20261118120600_pharmacy_branch_transfer_policy/migration.sql'
       ),
       'utf8'
     );

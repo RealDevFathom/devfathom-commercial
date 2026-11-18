@@ -1,4 +1,12 @@
+import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/screen-copy';
 import Link from 'next/link';
+import {
+  PHARMACY_COPY as copy,
+  formatShopTime,
+  formatShopPeriod,
+  workPackStateLabel,
+  plainCopy,
+} from '@/lib/pharmacy/plain-language';
 
 import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
@@ -13,6 +21,7 @@ export type DailyWorkPackProps = {
   filters: Omit<Parameters<Reader>[0], 'asOf'>;
   branches: { id: string; name: string }[];
   refreshFields: Record<string, string>;
+  timeZone?: string | null;
 };
 
 const sourceAnchor = (id: string) => `work-pack-source-${id}`;
@@ -23,13 +32,7 @@ const fieldLabel = (key: string) =>
     .replace(/^./, (letter) => letter.toUpperCase());
 const linkClass =
   'inline-flex min-h-11 items-center break-all text-sm underline focus-visible:outline-2 focus-visible:outline-ring';
-const sourceNames: Record<WorkPack['sources'][number]['kind'], string> = {
-  'stock-dashboard': 'Stock dashboard',
-  'stock-digest': 'Your stock digest',
-  anomalies: 'Recorded anomalies',
-  expiry: 'Expiry advice',
-  'supplier-credit': 'Supplier credit',
-};
+const sourceNames = copy.workPack.sourceNames;
 
 function Refresh({ fields, retry = false }: { fields: Record<string, string>; retry?: boolean }) {
   return (
@@ -38,7 +41,7 @@ function Refresh({ fields, retry = false }: { fields: Record<string, string>; re
         <input key={name} type="hidden" name={name} value={value} />
       ))}
       <Button variant="outline" className="min-h-11" type="submit">
-        {retry ? 'Retry daily work pack' : 'Refresh daily work pack'}
+        {retry ? copy.workPack.retry : copy.workPack.refresh}
       </Button>
     </form>
   );
@@ -46,12 +49,12 @@ function Refresh({ fields, retry = false }: { fields: Record<string, string>; re
 
 export function DailyWorkPackLoading() {
   return (
-    <SectionCard id="daily-work-pack" title="Daily work pack" titleLevel={2} aria-busy="true">
+    <SectionCard id="daily-work-pack" title={copy.workPack.title} titleLevel={2} aria-busy="true">
       <p role="status" className="mb-4 text-sm text-text-muted">
-        Reading permitted work-pack sources. Other reports remain available.
+        {copy.workPack.loading}
       </p>
       <Button variant="outline" className="min-h-11" disabled>
-        Refresh daily work pack
+        {copy.workPack.refresh}
       </Button>
     </SectionCard>
   );
@@ -63,7 +66,10 @@ export async function DailyWorkPack({
   filters,
   branches,
   refreshFields,
+  timeZone,
 }: DailyWorkPackProps) {
+  const shopTime = (value: string | Date | null | undefined) =>
+    formatShopTime(value, timeZone ?? 'Asia/Karachi');
   let pack: WorkPack | null = null;
   try {
     // Generate as-of on every server read, including GET refresh; never trust a URL timestamp.
@@ -73,25 +79,27 @@ export async function DailyWorkPack({
   }
   if (!pack) {
     return (
-      <SectionCard id="daily-work-pack" title="Daily work pack" titleLevel={2}>
+      <SectionCard id="daily-work-pack" title={copy.workPack.title} titleLevel={2}>
         <p role="alert" className="mb-4 text-sm text-text-muted">
-          Daily work pack could not load. Source data or report access may be unavailable. Retry
-          this read, or ask your workspace administrator to check access. No data was changed.
+          {copy.workPack.failed}
         </p>
         <Refresh fields={refreshFields} retry />
       </SectionCard>
     );
   }
-  const branchName = (id: string) => branches.find((branch) => branch.id === id)?.name ?? id;
+  const branchName = (id: string) =>
+    branches.find((branch) => branch.id === id)?.name ?? copy.selectedBranch;
   const missingSources = pack.sources
     .filter((source) => source.status === 'unavailable')
     .map((source) => sourceNames[source.kind].toLowerCase());
-  const tasks = pack.groups.flatMap((group) => group.tasks).filter((task) => task.evidence.length);
+  const tasks = pack.groups
+    .flatMap((group) => group.tasks.map((task) => ({ ...task, group: group.key })))
+    .filter((task) => task.evidence.length);
   return (
     <SectionCard
       id="daily-work-pack"
-      eyebrow="Read-only preparation"
-      title="Daily work pack"
+      eyebrow={copy.workPack.preparation}
+      title={copy.workPack.title}
       titleLevel={2}
     >
       <div className="mb-4 flex flex-wrap items-center gap-3">
@@ -99,30 +107,30 @@ export async function DailyWorkPack({
       </div>
       {missingSources.length ? (
         <p role="status" className="mb-4 text-sm text-text-body">
-          Could not check {missingSources.join(' or ')} just now. Refresh to try again; the rest of
-          this list is still good to use.
+          {screenCopy.workPack.couldNotCheck}
+          {missingSources.join(' or ')}
+          {screenCopy.workPack.justNowRefreshToTryAgainTheRest}
         </p>
       ) : null}
       {!pack.permissions.financial ? (
-        <p className="mb-4 text-sm text-text-muted">
-          Money-related checks are not shown for your role.
-        </p>
+        <p className="mb-4 text-sm text-text-muted">{copy.workPack.moneyHidden}</p>
       ) : null}
       <details className="mb-2 text-sm text-text-muted">
         <summary className="min-h-11 cursor-pointer py-3 font-medium focus-visible:outline-2 focus-visible:outline-ring">
-          How this list was prepared
+          {copy.workPack.prepared}
         </summary>
         <div className="space-y-2">
           <p>
-            Period: {pack.period.from} to {pack.period.to}. Branches:{' '}
-            {pack.scope.branchIds.map(branchName).join(', ')}.
+            {screenCopy.workPack.period}
+            {formatShopPeriod(pack.period.from, pack.period.to)}
+            {screenCopy.workPack.branches} {pack.scope.branchIds.map(branchName).join(', ')}.
           </p>
-          <p className="break-words">Prepared at {pack.readAt}.</p>
-          <p>
-            This list only reads your records; it does not change stock or create drafts. Supplier,
-            ingredient and batch filters do not apply. Amounts are shown to two decimal places; a
-            dash means the figure was not available, not zero.
+          <p className="break-words">
+            {screenCopy.workPack.preparedAt}
+            {shopTime(pack.readAt)}.
           </p>
+          <p>{copy.workPack.explanation}</p>
+          <p>{copy.workPack.completeness}</p>
         </div>
       </details>
       {tasks.length ? (
@@ -132,8 +140,9 @@ export async function DailyWorkPack({
               <h3 className="font-semibold text-text-strong">
                 {task.title} · {branchName(task.branchId)}
               </h3>
+              <p className="mt-1 text-sm text-text-body">{copy.workPack.results[task.group]}</p>
               <div className="flex flex-wrap gap-x-4">
-                {task.nextActions.map((action) => (
+                {task.nextActions.slice(0, 1).map((action) => (
                   <Link key={action.href} href={action.href} prefetch={false} className={linkClass}>
                     {action.label}
                   </Link>
@@ -141,7 +150,7 @@ export async function DailyWorkPack({
               </div>
               <details className="mt-2">
                 <summary className="min-h-11 cursor-pointer py-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
-                  Details
+                  {copy.details}
                 </summary>
                 <ul className="space-y-4 text-sm text-text-body">
                   {task.evidence.map((evidence) => (
@@ -152,13 +161,17 @@ export async function DailyWorkPack({
                       <p className="break-all">
                         {evidence.reference.kind}: {evidence.reference.id}
                       </p>
-                      <StatusPill status={evidence.state} tone="neutral" />
+                      <StatusPill
+                        status={evidence.state}
+                        label={workPackStateLabel(evidence.state)}
+                        tone="neutral"
+                      />
                       <div>
                         <a
                           href={`#${encodeURIComponent(sourceAnchor(evidence.sourceId))}`}
                           className={linkClass}
                         >
-                          Source:{' '}
+                          {screenCopy.workPack.sourceLabel}{' '}
                           {
                             sourceNames[
                               pack.sources.find((source) => source.id === evidence.sourceId)!.kind
@@ -178,7 +191,7 @@ export async function DailyWorkPack({
                             <dt className="break-all">{fieldLabel(amount.key)}</dt>
                             <dd className="break-words font-mono tabular-nums">
                               {Number.isSafeInteger(amount.value)
-                                ? `${formatMinor(amount.value)} (currency unknown)`
+                                ? `${formatMinor(amount.value)} (currency not confirmed)`
                                 : '—'}
                             </dd>
                             <dd className="text-text-muted">{amount.definition}</dd>
@@ -186,10 +199,12 @@ export async function DailyWorkPack({
                         ))}
                       </dl>
                       <p className="break-words text-text-muted">
-                        Observed: {evidence.observedAt ?? 'Unavailable'}. Computed:{' '}
-                        {evidence.computedAt ?? 'Unavailable'}. Source freshness seconds:{' '}
-                        {evidence.freshnessSeconds ?? 'Unavailable'}. Source due/expiry time:{' '}
-                        {evidence.dueAt ?? 'Unavailable'}.
+                        {screenCopy.workPack.observed}
+                        {shopTime(evidence.observedAt)}
+                        {screenCopy.workPack.computed} {shopTime(evidence.computedAt)}
+                        {screenCopy.workPack.secondsSinceLastCheck}{' '}
+                        {evidence.freshnessSeconds ?? 'Unavailable'}
+                        {screenCopy.workPack.dueOrExpiryTime} {shopTime(evidence.dueAt)}.
                       </p>
                       {evidence.missingInputs.map((reason) => (
                         <p key={reason} className="text-text-muted">
@@ -210,12 +225,10 @@ export async function DailyWorkPack({
         </ol>
       ) : (
         <p role="status" className="mt-5 text-sm text-text-muted">
-          {missingSources.length
-            ? 'Nothing to do from the checks that loaded.'
-            : 'Nothing needs your attention right now.'}
+          {missingSources.length ? copy.workPack.partialEmpty : copy.workPack.nothing}
         </p>
       )}
-      <h3 className="mt-6 font-semibold text-text-strong">What was checked</h3>
+      <h3 className="mt-6 font-semibold text-text-strong">{screenCopy.workPack.whatWasChecked}</h3>
       <ul className="mt-3 divide-y divide-border-subtle">
         {pack.sources.map((source) => (
           <li
@@ -237,61 +250,86 @@ export async function DailyWorkPack({
                       : source.returnedRows === 0
                         ? 'No eligible stock'
                         : 'Advice ready'
-                    : undefined
+                    : source.status === 'unavailable'
+                      ? copy.unavailable
+                      : source.returnedRows === 0
+                        ? copy.workPack.checked
+                        : copy.workPack.reviewItems
                 }
-                tone={source.status === 'unavailable' ? 'danger' : 'neutral'}
+                tone={source.status === 'unavailable' ? 'warning' : 'neutral'}
               />
             </div>
             {source.kind === 'expiry' &&
             source.status === 'available' &&
             source.returnedRows === 0 ? (
               <p role="status" className="text-text-muted">
-                No available, unexpired stock was found for expiry advice in this branch. This does
-                not assess expired or quarantined stock. Refresh daily work pack after stock is
-                received or updated.
+                {screenCopy.workPack.noAvailableUnexpiredStockWasFoundForExpiry}
+              </p>
+            ) : null}
+            {source.kind !== 'expiry' ? (
+              <p role="status" className="text-text-muted">
+                {source.status === 'unavailable'
+                  ? copy.workPack.couldNotCheck
+                  : source.returnedRows === 0
+                    ? copy.workPack.nothingToActOn
+                    : copy.workPack.reviewItems}
+              </p>
+            ) : null}
+            {source.kind === 'expiry' && source.status === 'unavailable' ? (
+              <p role="alert" className="text-text-muted">
+                {copy.workPack.expiryFailure}
               </p>
             ) : null}
             <details className="text-text-muted">
               <summary className="min-h-11 cursor-pointer py-3 font-medium focus-visible:outline-2 focus-visible:outline-ring">
-                Technical details
+                {copy.details}
               </summary>
+              <StatusPill
+                status={source.coverage}
+                label={
+                  source.coverage === 'partial'
+                    ? plainCopy['workPack.badge.partial']
+                    : plainCopy['workPack.badge.unknown']
+                }
+                tone="warning"
+              />
+              {source.kind === 'expiry' && source.status === 'unavailable' ? (
+                <p className="text-text-muted">{copy.workPack.expiryFailureDetail}</p>
+              ) : null}
               <p className="text-text-muted">{source.timeBasis}</p>
               <p className="text-text-muted">
-                Returned rows: {source.returnedRows ?? 'Unavailable'}. Row limit:{' '}
-                {source.rowLimit ?? 'Not established'}.{' '}
-                {source.limitReached ? 'Source cap reached; records may be omitted.' : ''}
+                {screenCopy.workPack.itemsReturned}
+                {source.returnedRows ?? 'Unavailable'}
+                {screenCopy.workPack.maximumItems} {source.rowLimit ?? 'Not confirmed'}.{' '}
+                {source.limitReached ? screenCopy.workPack.limitReached : ''}
               </p>
               <p className="break-words text-text-muted">
-                Window:{' '}
+                {screenCopy.workPack.window}{' '}
                 {source.window
-                  ? `${source.window.from} to ${source.window.toExclusive} (exclusive end)`
-                  : 'Not period-bounded'}
-                . Evaluated as of: {source.evaluatedAsOf ?? 'Unavailable'}. Read at: {source.readAt}
-                . Freshness:{' '}
+                  ? `${shopTime(source.window.from)} to ${shopTime(source.window.toExclusive)}${screenCopy.workPack.endNotIncluded}`
+                  : screenCopy.workPack.selectedDatesNotApplied}
+                {screenCopy.workPack.evaluatedAsOf}
+                {shopTime(source.evaluatedAsOf)}
+                {screenCopy.workPack.readAt}
+                {shopTime(source.readAt)}
+                {screenCopy.workPack.lastCheck}{' '}
                 {source.freshness === 'persisted-unverified'
-                  ? 'Persisted; freshness unverified'
-                  : 'Live inputs; not historical'}
-                .
+                  ? copy.workPack.savedCheck
+                  : copy.workPack.currentCheck}
               </p>
+              {Array.from(
+                new Set([
+                  ...source.missingInputs,
+                  ...pack.missingInputs
+                    .filter((item) => item.sourceId === source.id)
+                    .map((item) => item.reason),
+                ])
+              ).map((reason) => (
+                <p key={reason} className="text-text-muted">
+                  {reason}
+                </p>
+              ))}
             </details>
-            {Array.from(
-              new Set([
-                ...source.missingInputs,
-                ...pack.missingInputs
-                  .filter((item) => item.sourceId === source.id)
-                  .map((item) => item.reason),
-              ])
-            ).map((reason) => (
-              <p
-                key={reason}
-                role={
-                  source.kind === 'expiry' && source.status === 'unavailable' ? 'alert' : undefined
-                }
-                className="text-text-muted"
-              >
-                {reason}
-              </p>
-            ))}
           </li>
         ))}
       </ul>

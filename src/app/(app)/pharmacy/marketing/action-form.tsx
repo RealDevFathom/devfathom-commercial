@@ -64,7 +64,13 @@ export function MarketingActionForm({
         {children}
         <Button
           type="submit"
-          variant={operation === 'preview' || operation === 'sandbox' ? 'outline' : 'default'}
+          variant={
+            operation === 'voucher-revoke'
+              ? 'destructive'
+              : operation === 'preview' || operation === 'sandbox'
+                ? 'outline'
+                : 'default'
+          }
           className="min-h-11"
           disabled={pending || disabled}
         >

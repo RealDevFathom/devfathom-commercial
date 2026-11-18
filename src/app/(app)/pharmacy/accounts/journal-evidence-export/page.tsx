@@ -1,3 +1,5 @@
+import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/screen-copy';
+import { ReportDetails } from '@/components/pharmacy/report-details';
 import type { Metadata } from 'next';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
@@ -15,7 +17,9 @@ import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext, type TRPCContext } from '@/server/trpc';
 import { JournalEvidenceExportButton } from './export-button';
 
-export const metadata: Metadata = { title: 'Journal evidence export · Pharmacy accounts' };
+export const metadata: Metadata = {
+  title: screenCopy.journalExport.journalEvidenceExportPharmacyAccounts,
+};
 const ROUTE = '/pharmacy/accounts/journal-evidence-export';
 type Query = Partial<Record<'branch' | 'from' | 'to' | 'page', string | string[]>>;
 
@@ -56,13 +60,12 @@ export default async function JournalEvidenceExportPage({
     return (
       <div className="min-w-0 space-y-6">
         <PageHeader
-          eyebrow="Pharmacy / accounts"
-          heading="Journal evidence export"
-          description="Export only one authorized journal page with explicit coverage limits."
+          eyebrow={screenCopy.journalExport.pharmacyAccounts}
+          heading={screenCopy.journalExport.journalEvidenceExport}
+          description={screenCopy.journalExport.downloadTheEntriesOnOnePageForThe}
         />
-        <State title="Evidence could not be read">
-          Access could not be verified. No CSV is available; retry or ask your workspace
-          administrator.
+        <State title={screenCopy.journalExport.evidenceCouldNotBeRead}>
+          {screenCopy.journalExport.accessCouldNotBeVerifiedNoCsvIs}
         </State>
       </div>
     );
@@ -84,13 +87,12 @@ export default async function JournalEvidenceExportPage({
     return (
       <div className="min-w-0 space-y-6">
         <PageHeader
-          eyebrow="Pharmacy / accounts"
-          heading="Journal evidence export"
-          description="Export only one authorized journal page with explicit coverage limits."
+          eyebrow={screenCopy.journalExport.pharmacyAccounts}
+          heading={screenCopy.journalExport.journalEvidenceExport}
+          description={screenCopy.journalExport.downloadTheEntriesOnOnePageForThe}
         />
-        <State title="Permission required">
-          Owner financial-report permission and Pharmacy Reports access are required. No CSV is
-          available.
+        <State title={screenCopy.journalExport.permissionRequired}>
+          {screenCopy.journalExport.ownerFinancialReportPermissionAndPharmacyReportsAccess}
         </State>
       </div>
     );
@@ -154,14 +156,14 @@ export default async function JournalEvidenceExportPage({
   return (
     <div className="min-w-0 space-y-6">
       <PageHeader
-        eyebrow="Pharmacy / accounts"
-        heading="Journal evidence export"
-        description="Export only the authorized journal entries on this page—not a replacement statement or complete ledger."
+        eyebrow={screenCopy.journalExport.pharmacyAccounts}
+        heading={screenCopy.journalExport.journalEvidenceExport}
+        description={screenCopy.journalExport.downloadTheEntriesOnThisPageOtherEntries}
       />
-      <SectionCard title="Evidence window">
+      <SectionCard title={screenCopy.journalExport.evidenceWindow}>
         <form action={ROUTE} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <label className="grid gap-2 text-sm">
-            Branch
+            {screenCopy.journalExport.branch}
             <select
               name="branch"
               defaultValue={branches.some((branch) => branch.id === branchId) ? branchId : ''}
@@ -169,7 +171,7 @@ export default async function JournalEvidenceExportPage({
               required
               disabled={!branches.length}
             >
-              <option value="">Choose a branch</option>
+              <option value="">{screenCopy.journalExport.chooseABranch}</option>
               {branches.map((branch) => (
                 <option key={branch.id} value={branch.id}>
                   {branch.name}
@@ -178,56 +180,63 @@ export default async function JournalEvidenceExportPage({
             </select>
           </label>
           <label className="grid gap-2 text-sm">
-            From (UTC)
+            {screenCopy.journalExport.from500AmPkt}
             <Input type="date" name="from" defaultValue={fromText} required className="min-h-11" />
           </label>
           <label className="grid gap-2 text-sm">
-            To, exclusive (UTC)
+            {screenCopy.journalExport.until500AmPktNotIncluded}
             <Input type="date" name="to" defaultValue={toText} required className="min-h-11" />
           </label>
           <label className="grid gap-2 text-sm">
-            Page
-            <Input type="number" min="1" max="10000" name="page" defaultValue={pageText} required className="min-h-11" />
+            {screenCopy.journalExport.page}
+            <Input
+              type="number"
+              min="1"
+              max="10000"
+              name="page"
+              defaultValue={pageText}
+              required
+              className="min-h-11"
+            />
           </label>
           <Button
             type="submit"
             disabled={!branches.length}
             className="min-h-11 sm:col-span-2 lg:col-span-4 lg:justify-self-start"
           >
-            Read authorized page
+            {screenCopy.journalExport.readAuthorizedPage}
           </Button>
         </form>
       </SectionCard>
       {!valid && !readFailed ? (
-        <State title="Choose a valid evidence window">
-          Choose an authorized branch, a UTC date window of at most 92 days, and a page from 1 to
-          10,000. Invalid input is not read or exported.
+        <State title={screenCopy.journalExport.chooseAValidEvidenceWindow}>
+          {screenCopy.journalExport.chooseAnAuthorizedBranchAUtcDateWindow}
         </State>
       ) : null}
       {readFailed ? (
-        <State title="Evidence could not be read">
-          Access may be denied or the read failed. No CSV is available; retry or ask your workspace
-          administrator.
+        <State title={screenCopy.journalExport.evidenceCouldNotBeRead}>
+          {screenCopy.journalExport.accessMayBeDeniedOrTheReadFailed}
         </State>
       ) : null}
       {evidence && coverage ? (
-        <SectionCard title="Page-bounded evidence">
+        <SectionCard title={screenCopy.journalExport.entriesOnThisPage}>
           <div className="space-y-3 text-sm">
             <p role="status" className="font-semibold text-text-strong">
-              {coverage.pageCoverage === 'partial'
-                ? 'Partial page coverage'
-                : 'Requested page returned'}{' '}
-              · Coverage unknown beyond posted journal evidence
+              {coverage.pageCoverage === 'partial' ? 'Some entries are missing' : 'Page ready'}{' '}
+              {screenCopy.journalExport.otherActivityMayNotBeIncluded}
             </p>
-            <p className="text-text-muted">
-              Page {coverage.page} · {coverage.rowsOnPage} entries returned · page cap{' '}
-              {coverage.pageCap} · {coverage.totalEntryCount} entries counted in the window.
-            </p>
-            <p className="text-text-muted">
-              The CSV contains only this page DTO. It is not a complete-ledger export, is not an
-              atomic snapshot, and cannot establish unposted activity. Entry currency, source and
-              reversal IDs, and exact integer minor-unit strings are retained.
-            </p>
+            <ReportDetails>
+              <p className="text-text-muted">
+                {screenCopy.journalExport.page2}
+                {coverage.page} · {coverage.rowsOnPage}
+                {screenCopy.journalExport.entriesReturnedPageCap} {coverage.pageCap} ·{' '}
+                {coverage.totalEntryCount}
+                {screenCopy.journalExport.entriesCountedInTheWindow}
+              </p>
+              <p className="text-text-muted">
+                {screenCopy.journalExport.theCsvContainsOnlyThisPageDtoIt}
+              </p>
+            </ReportDetails>
             <JournalEvidenceExportButton evidence={evidence} />
           </div>
         </SectionCard>
