@@ -20,10 +20,7 @@ import {
   RESTAURANT_ROLE_TEMPLATES,
   roleTemplatesForVertical,
 } from '@/lib/vertical-catalog';
-import {
-  evaluatePharmacyReadiness,
-  PHARMACY_ONBOARDING_STEPS,
-} from '@/lib/pharmacy/onboarding';
+import { evaluatePharmacyReadiness, PHARMACY_ONBOARDING_STEPS } from '@/lib/pharmacy/onboarding';
 
 const mocks = vi.hoisted(() => ({
   pkgFindUnique: vi.fn(),
@@ -201,6 +198,8 @@ const platformDb = {
 
 import { executePlatformCommand } from './commands';
 import { PlatformSecurityError } from './security';
+import { assertPlatformCapability } from '@/lib/platform/auth';
+import { pharmacyApprovalCommand, PHARMACY_APPROVAL_REASON } from './pharmacy-approval';
 
 const actor = { id: 'op_1', role: 'SUPER_ADMIN' } as never;
 const request = new Request('https://admin.devfathom.com/api/platform/control', { method: 'POST' });
@@ -1378,6 +1377,110 @@ describe('pharmacy activation preflight', () => {
       })
     ).resolves.toBeDefined();
     expect(mocks.orgUpdate).toHaveBeenCalledOnce();
+  });
+});
+
+// DEV-905: the super admin's "Approve pharmacy" is the same lifecycle transition, so the
+// preflight above decides it; these tests run the exact command the approval form sends.
+describe('pharmacy approval after onboarding (DEV-905)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('approves a ready pharmacy and records the approver, the time and the note', async () => {
+    mocks.orgFindUnique.mockResolvedValue(pharmacyOrg());
+    mocks.orgUpdate.mockResolvedValue({ id: 'org_p', status: 'ACTIVE' });
+    mocks.regulatoryProfileFindFirst.mockResolvedValue(VALID_PROFILE);
+    allGatesClaimedPassed();
+    allReadinessEvidence();
+    const command = pharmacyApprovalCommand('org_p', '  Licence and stock reviewed on call.  ');
+
+    await expect(run(command.action, command.payload)).resolves.toBeDefined();
+
+    expect(mocks.orgUpdate).toHaveBeenCalledOnce();
+    expect(mocks.orgUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'org_p' },
+        data: expect.objectContaining({ status: 'ACTIVE', activatedAt: expect.any(Date) }),
+      })
+    );
+    const reason = `${PHARMACY_APPROVAL_REASON} Note: Licence and stock reviewed on call.`;
+    expect(platformDb.organizationLifecycleEvent.create).toHaveBeenCalledWith({
+      data: {
+        organizationId: 'org_p',
+        action: 'ACTIVATED',
+        fromStatus: 'ONBOARDING',
+        toStatus: 'ACTIVE',
+        reason,
+        actorId: 'op_1',
+      },
+    });
+    // The platform audit ledger keeps the operator, the transition and the note too.
+    expect(mocks.auditCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          actorPlatformUserId: 'op_1',
+          action: 'organization.transition',
+          reason,
+          after: expect.objectContaining({ status: 'ACTIVE', reason }),
+        }),
+      })
+    );
+  });
+
+  it('approves without a note using the fixed approval reason', async () => {
+    mocks.orgFindUnique.mockResolvedValue(pharmacyOrg());
+    mocks.orgUpdate.mockResolvedValue({ id: 'org_p', status: 'ACTIVE' });
+    mocks.regulatoryProfileFindFirst.mockResolvedValue(VALID_PROFILE);
+    allGatesClaimedPassed();
+    allReadinessEvidence();
+    const command = pharmacyApprovalCommand('org_p');
+
+    await expect(run(command.action, command.payload)).resolves.toBeDefined();
+    expect(platformDb.organizationLifecycleEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ reason: PHARMACY_APPROVAL_REASON, actorId: 'op_1' }),
+    });
+  });
+
+  it('refuses a pharmacy still onboarding and names the blocking gates', async () => {
+    mocks.orgFindUnique.mockResolvedValue(pharmacyOrg());
+    mocks.regulatoryProfileFindFirst.mockResolvedValue(VALID_PROFILE);
+    allGatesClaimedPassed();
+    allReadinessEvidence();
+    mocks.supplierCount.mockResolvedValue(0);
+    const command = pharmacyApprovalCommand('org_p', 'Approving early');
+
+    const error = await run(command.action, command.payload).catch((thrown: Error) => thrown);
+
+    expect(error).toBeInstanceOf(PlatformSecurityError);
+    expect((error as Error).message).toMatch(
+      /onboarding gates not passed \(PARTIES_AND_BALANCES\)/
+    );
+    expect(mocks.orgUpdate).not.toHaveBeenCalled();
+    expect(platformDb.organizationLifecycleEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses an operator without the lifecycle permission before any approval work', async () => {
+    vi.mocked(assertPlatformCapability).mockImplementationOnce(() => {
+      throw new PlatformSecurityError('You do not have permission for this action.', 403);
+    });
+    mocks.orgFindUnique.mockResolvedValue(pharmacyOrg());
+    const command = pharmacyApprovalCommand('org_p');
+
+    await expect(
+      executePlatformCommand(
+        { id: 'op_2', role: 'OPERATIONS' } as never,
+        command.action,
+        command.payload,
+        request
+      )
+    ).rejects.toMatchObject({ status: 403 });
+    expect(assertPlatformCapability).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'OPERATIONS' }),
+      'organizations:security:write'
+    );
+    expect(mocks.orgFindUnique).not.toHaveBeenCalled();
+    expect(mocks.orgUpdate).not.toHaveBeenCalled();
   });
 });
 

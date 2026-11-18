@@ -23,6 +23,7 @@ const routes = [
   '/platform/jobs',
   '/platform/health',
   '/platform/catalog',
+  '/platform/approvals',
 ] as const satisfies readonly PlatformReadHref[];
 
 const expected: Record<PlatformRole, readonly PlatformReadHref[]> = {
@@ -63,6 +64,14 @@ const expected: Record<PlatformRole, readonly PlatformReadHref[]> = {
 };
 
 describe('platform read route policy', () => {
+  // DEV-905: approval is the lifecycle transition, which only the super admin's
+  // `organizations:security:write` may run, so no other role is shown the queue.
+  it('shows the pharmacy approval queue only to the role that may approve', () => {
+    for (const role of roles) {
+      expect(canReadPlatformRoute(role, '/platform/approvals'), role).toBe(role === 'SUPER_ADMIN');
+    }
+  });
+
   it('gates health before invoking its shared data reader', () => {
     const source = readFileSync('src/app/platform/(console)/health/page.tsx', 'utf8');
     const gate = "await requirePlatformRead('/platform/health')";
@@ -75,6 +84,7 @@ describe('platform read route policy', () => {
     ['/platform/organizations', '/platform/organizations'],
     ['/platform/organizations/org-1', '/platform/organizations'],
     ['/platform/health', '/platform/health'],
+    ['/platform/approvals', '/platform/approvals'],
     ['/platform/login', null],
     ['/platform/not-a-declared-route', null],
   ] as const)('maps %s to its declared read route', (pathname, href) => {
@@ -118,6 +128,7 @@ describe('platform read route policy', () => {
     ['src/app/platform/(console)/deployments/page.tsx', '/platform/deployments'],
     ['src/app/platform/(console)/jobs/page.tsx', '/platform/jobs'],
     ['src/app/platform/(console)/catalog/page.tsx', '/platform/catalog'],
+    ['src/app/platform/(console)/approvals/page.tsx', '/platform/approvals'],
   ] as const)('%s enforces read access before querying platform data', (file, href) => {
     const source = readFileSync(file, 'utf8');
     const gate = `await requirePlatformRead('${href}')`;

@@ -16,6 +16,15 @@ export const PLATFORM_READ_ROUTES = [
     capability: 'organizations:read',
     group: 'Operations',
   },
+  // DEV-905: the super admin's pharmacy approval queue. Approval is the lifecycle
+  // transition to ACTIVE, which only `organizations:security:write` may run, so the
+  // queue is shown only to those who can act on it.
+  {
+    label: 'Pharmacy approvals',
+    href: '/platform/approvals',
+    capability: 'organizations:security:write',
+    group: 'Operations',
+  },
   {
     label: 'Deployments',
     href: '/platform/deployments',

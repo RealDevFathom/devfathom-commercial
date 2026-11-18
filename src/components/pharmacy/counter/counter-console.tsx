@@ -913,14 +913,22 @@ function ScopedPharmacyCounterConsole({
   const canFixSetup =
     saleReadiness.data?.canFixSetup === true || branchesQuery.data?.canFixSetup === true;
   const refetchSaleReadiness = saleReadiness.refetch;
+  // DEV-905: a refusal for a workspace waiting on approval says so, like the panel does.
+  const organizationApproval = saleReadiness.data?.approval ?? null;
   const setupNotice = useCallback(
     (error: unknown): { setup?: CounterSetupAdvice } => {
       const reason = counterSetupReason(error);
       // The drawer has its own step on the counter; nobody else is asked to open it.
       if (!reason || reason === 'DRAWER_NOT_OPEN') return {};
-      return { setup: counterSetupAdvice(reason, { canFixSetup, branchId }) };
+      return {
+        setup: counterSetupAdvice(reason, {
+          canFixSetup,
+          branchId,
+          approval: organizationApproval,
+        }),
+      };
     },
-    [branchId, canFixSetup]
+    [organizationApproval, branchId, canFixSetup]
   );
   // Read at call time: a scan or shortcut can finish after the drawer closed.
   const drawerRequiredRef = useRef(drawerRequired);

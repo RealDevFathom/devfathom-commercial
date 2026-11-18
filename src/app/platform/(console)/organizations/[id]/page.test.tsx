@@ -734,6 +734,57 @@ describe('vertical readiness parity', () => {
   });
 });
 
+// DEV-905: the organization page carries the same "Approve pharmacy" action as the queue.
+describe('OrganizationDetailPage pharmacy approval', () => {
+  const ready = { ready: true, blocking: [], gates: [] };
+
+  it('offers Approve pharmacy with an optional note to an onboarding pharmacy', async () => {
+    mocks.pharmacyReadiness.mockResolvedValue(ready);
+    await renderDetail({ org: organization({ vertical: 'PHARMACY' }) });
+    const section = screen.getByRole('region', { name: 'Approve pharmacy' });
+    expect(within(section).getByLabelText('Approval note (optional)')).not.toBeRequired();
+    expect(within(section).getByRole('button', { name: 'Approve pharmacy' })).toBeEnabled();
+    // The default fixture still misses base gates, so the page says approval is refused.
+    expect(section).toHaveTextContent('Approval is refused until every gate above');
+  });
+
+  it('runs the existing lifecycle transition and shows a refusal naming the gates', async () => {
+    mocks.pharmacyReadiness.mockResolvedValue(ready);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      json: async () => ({
+        error: 'Activation preflight failed: add ready production deployment.',
+        gates: [{ message: 'Add a ready production deployment.' }],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await renderDetail({ org: organization({ vertical: 'PHARMACY' }) });
+      const section = screen.getByRole('region', { name: 'Approve pharmacy' });
+      fireEvent.click(within(section).getByRole('button', { name: 'Approve pharmacy' }));
+
+      const alert = await within(section).findByRole('alert');
+      expect(alert).toHaveTextContent('Activation preflight failed');
+      expect(within(alert).getByText('Add a ready production deployment.')).toBeInTheDocument();
+      expect(JSON.parse(fetchMock.mock.calls[0]![1].body)).toMatchObject({
+        action: 'organization.transition',
+        payload: { id: 'org_1', status: 'ACTIVE' },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each([
+    ['an active pharmacy', { vertical: 'PHARMACY', status: 'ACTIVE' }],
+    ['a restaurant', { vertical: 'RESTAURANT', status: 'ONBOARDING' }],
+  ])('offers no pharmacy approval for %s', async (_case, overrides) => {
+    mocks.pharmacyReadiness.mockResolvedValue(ready);
+    await renderDetail({ org: organization(overrides) });
+    expect(screen.queryByRole('region', { name: 'Approve pharmacy' })).toBeNull();
+  });
+});
+
 describe('pharmacy domain validation', () => {
   it.each(['Hub.Customer.com', ' Hub.Customer.com '])(
     'accepts hostname %s for server normalization',
@@ -762,29 +813,32 @@ describe('pharmacy domain validation', () => {
     }
   );
 
-  it.each(['Hub_Customer.com', '-Hub.Customer.com', 'Hub..com', 'Hub.123', `${'a'.repeat(64)}.com`])(
-    'rejects malformed pharmacy hostname %s before submitting',
-    async (value) => {
-      const fetchMock = vi.fn();
-      vi.stubGlobal('fetch', fetchMock);
-      mocks.pharmacyReadiness.mockResolvedValue({ ready: false, gates: [] });
-      try {
-        await renderDetail({ org: organization({ vertical: 'PHARMACY' }) });
-        const form = screen.getByRole('button', { name: 'Add domain' }).closest('form')!;
-        const host = within(form).getByLabelText('Hostname');
-        fireEvent.change(host, { target: { value } });
+  it.each([
+    'Hub_Customer.com',
+    '-Hub.Customer.com',
+    'Hub..com',
+    'Hub.123',
+    `${'a'.repeat(64)}.com`,
+  ])('rejects malformed pharmacy hostname %s before submitting', async (value) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    mocks.pharmacyReadiness.mockResolvedValue({ ready: false, gates: [] });
+    try {
+      await renderDetail({ org: organization({ vertical: 'PHARMACY' }) });
+      const form = screen.getByRole('button', { name: 'Add domain' }).closest('form')!;
+      const host = within(form).getByLabelText('Hostname');
+      fireEvent.change(host, { target: { value } });
 
-        expect(host).toBeInvalid();
-        fireEvent.submit(form);
+      expect(host).toBeInvalid();
+      fireEvent.submit(form);
 
-        expect(fetchMock).not.toHaveBeenCalled();
-        expect(host).toHaveFocus();
-        expect(host).toHaveAccessibleDescription('Hostname has an invalid format.');
-      } finally {
-        vi.unstubAllGlobals();
-      }
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(host).toHaveFocus();
+      expect(host).toHaveAccessibleDescription('Hostname has an invalid format.');
+    } finally {
+      vi.unstubAllGlobals();
     }
-  );
+  });
 });
 
 describe('permission override validation', () => {

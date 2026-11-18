@@ -8,6 +8,7 @@ import {
 import { sharedDeploymentUrl, unmetActivationGates } from '@/lib/platform/activation-gates';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { SupportAccessForm } from '@/components/platform/support-access-form';
+import { PharmacyApprovalForm } from '@/components/platform/pharmacy-approval-form';
 import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
 import { verticalForModuleKey } from '@/lib/module-catalog';
 import { resolveEntitlementLimit, SOP_TEMPLATES_LIMIT } from '@/lib/entitlement-limits';
@@ -581,6 +582,33 @@ export default async function OrganizationDetailPage({
                   ))}
                 </ul>
               </div>
+            ) : null}
+            {/*
+              DEV-905 — the manual approval of a pharmacy after onboarding. It runs the
+              same transition to ACTIVE as the form below, so the server re-checks the
+              regulatory profile and every onboarding gate and names any that block it.
+            */}
+            {vertical === 'PHARMACY' && organization.status === 'ONBOARDING' ? (
+              <section
+                className="border-b border-border-subtle p-5"
+                data-pharmacy-approval=""
+                aria-labelledby="pharmacy-approval-title"
+              >
+                <h3 id="pharmacy-approval-title" className="text-sm font-semibold">
+                  Approve pharmacy
+                </h3>
+                <p className="mt-1 text-xs text-text-muted">
+                  {activationGates.length === 0 && data.pharmacyReadiness?.ready
+                    ? 'Every activation gate has passed. Approving makes this pharmacy active so it can sell.'
+                    : 'Approval is refused until every gate above and every pharmacy onboarding gate has passed.'}
+                </p>
+                <div className="mt-3">
+                  <PharmacyApprovalForm
+                    organizationId={organization.id}
+                    organizationName={organization.displayName}
+                  />
+                </div>
+              </section>
             ) : null}
             {targets.length ? (
               <div className="p-5">

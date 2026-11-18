@@ -56,6 +56,7 @@ import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
 import { BRANCH_NOT_ASSIGNED } from '@/lib/pharmacy/counter-setup';
+import { readPharmacyApprovalStatus } from '@/lib/pharmacy/onboarding';
 import { RefusalReason } from '@/server/refusal-reason';
 import {
   evaluateCounterSaleReadiness,
@@ -284,7 +285,10 @@ const tenderInput = z
     prepaidPin: prepaidPin.optional(),
   })
   .strict()
-  .refine(hasValidTenderProviderReference, { path: ['providerRef'], message: 'Invalid payment reference.' });
+  .refine(hasValidTenderProviderReference, {
+    path: ['providerRef'],
+    message: 'Invalid payment reference.',
+  });
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
 const demandReason = z.enum([
   'STOCKOUT',
@@ -2331,7 +2335,16 @@ export const pharmacySalesRouter = router({
         deviceId: input.deviceId ?? null,
         takesPayment,
       });
-      return { ...readiness, canFixSetup: orgAdmin };
+      // DEV-905: a workspace that is not active may simply be waiting for DevFathom
+      // approval, or still have onboarding steps open. Say which, instead of the generic
+      // "not active". The read is additive: if it fails, the generic message stays.
+      const approval = readiness.blockers.includes('ORGANIZATION_NOT_ACTIVE')
+        ? await readPharmacyApprovalStatus(
+            ctx.db as unknown as ScopedDb,
+            scope.organizationId
+          ).catch(() => null)
+        : null;
+      return { ...readiness, canFixSetup: orgAdmin, ...(approval ? { approval } : {}) };
     }),
   create: protectedProcedure
     .input(
