@@ -101,6 +101,8 @@ function makeDb() {
     $queryRaw: vi.fn().mockResolvedValue([]),
     medicineBarcode: model(),
     pharmacyStockLocation: model(),
+    // DEV-769: quote validity reads the organisation's zone (none stored here: UTC).
+    organization: model(),
   };
   return Object.assign(db, {
     $queryRaw: vi.fn().mockResolvedValue([{ id: 'po_a' }]),

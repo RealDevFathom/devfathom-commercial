@@ -979,6 +979,11 @@ const purchasingRouter = router({
           quoteLines.flatMap((line) => line.quote.supplier.licences.map((licence) => licence.id))
         );
         const policy = await readSupplierCompliancePolicy(ctx.db, organizationId);
+        // DEV-769: quote validity is judged by the organisation's own day.
+        const organization = await ctx.db.organization.findUnique({
+          where: { id: organizationId },
+          select: { timezone: true },
+        });
         const candidates: QuoteCandidate[] = quoteLines.map((line) => ({
           quoteId: line.quoteId,
           supplierId: line.quote.supplierId,
@@ -1007,6 +1012,7 @@ const purchasingRouter = router({
             candidates,
             at,
             policy,
+            timeZone: organization?.timezone,
           }),
           supplierChecksEnabled: policy.checksEnabled,
         };
