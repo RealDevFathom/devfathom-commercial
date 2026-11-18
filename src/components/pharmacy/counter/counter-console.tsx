@@ -870,6 +870,14 @@ function ScopedPharmacyCounterConsole({
       trpc: { abortOnUnmount: true },
     }
   );
+  const searchState =
+    !branchAuthorized || trimmedQuery.length < 2 || (scannerQuery && !searchCurrent)
+      ? 'idle'
+      : !searchCurrent || searchQuery.isFetching || searchQuery.isPlaceholderData
+        ? 'loading'
+        : searchQuery.isError
+          ? 'error'
+          : 'ready';
 
   const cartQuery = trpc.pharmacySales.counterCart.useQuery(
     { branchId, saleId: saleId ?? '' },
@@ -3910,7 +3918,15 @@ function ScopedPharmacyCounterConsole({
                           if (first) stageRow(first);
                           else void searchAndStage(trimmed);
                         }}
-                        className="h-12"
+                        // DEV-44: the field is focused on load, and the coral focus ring read as
+                        // an error before anything was typed. It stays neutral until a search
+                        // actually fails, then carries the destructive state and aria-invalid.
+                        aria-invalid={searchState === 'error' || undefined}
+                        className={
+                          searchState === 'error'
+                            ? 'h-12 [--ring:var(--destructive)]'
+                            : 'h-12 [--ring:var(--text-muted)]'
+                        }
                       />
                       <p id="counter-search-help" className="text-xs text-text-muted">
                         {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
@@ -3942,17 +3958,7 @@ function ScopedPharmacyCounterConsole({
                         ? (searchQuery.data?.rows ?? [])
                         : []
                     }
-                    state={
-                      !branchAuthorized ||
-                      trimmedQuery.length < 2 ||
-                      (scannerQuery && !searchCurrent)
-                        ? 'idle'
-                        : !searchCurrent || searchQuery.isFetching || searchQuery.isPlaceholderData
-                          ? 'loading'
-                          : searchQuery.isError
-                            ? 'error'
-                            : 'ready'
-                    }
+                    state={searchState}
                     query={trimmedQuery}
                     disabled={busy || !branchAuthorized}
                     disabledReasonId={branchControlReason ? 'counter-branch-reason' : undefined}
