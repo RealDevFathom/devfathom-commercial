@@ -266,6 +266,48 @@ describe('DEV-853 screens and receipts say "not recorded"', () => {
     expect(label).not.toMatch(/MISSING_|null/);
   });
 
+  it('names each lot on a multi-lot receipt line, never "Batch Batch not recorded"', () => {
+    const base = {
+      saleLineId: 'line',
+      identityStatus: 'ISSUED',
+      medicineName: 'Panadol',
+      strength: '500 mg',
+      presentation: 'Tablet',
+      expiresAt: '',
+      saleUnit: 'TABLET',
+      quantity: 15,
+      canonicalUnits: 15,
+      unitPriceMinor: 100,
+      discountMinor: 0,
+      lineTotalMinor: 1500,
+    };
+    const allocation = (id: string, batchNumber: string | null, units: number) => ({
+      allocationId: id,
+      inventoryLotId: `lot-${id}`,
+      batchNumber,
+      expiresAt: null,
+      canonicalUnits: units,
+    });
+    const bothUnrecorded = {
+      ...base,
+      allocations: [allocation('a1', null, 10), allocation('a2', null, 5)],
+      batchNumber: 'Batch not recorded (10 units); Batch not recorded (5 units)',
+    } as unknown as CounterReceiptLine;
+    const label = receiptLineLabel(bothUnrecorded, 'en');
+    expect(label).toContain('Batch not recorded (10 units); Batch not recorded (5 units)');
+    expect(label).not.toContain('Batch Batch');
+
+    const mixed = {
+      ...base,
+      allocations: [allocation('a1', 'B-17', 10), allocation('a2', null, 5)],
+      batchNumber: 'B-17 (10 units); Batch not recorded (5 units)',
+    } as unknown as CounterReceiptLine;
+    const mixedLabel = receiptLineLabel(mixed, 'en');
+    expect(mixedLabel).toContain('Batch B-17 (10 units); Batch not recorded (5 units)');
+    expect(mixedLabel).not.toContain('Batch Batch');
+    expect(receiptLineLabel(mixed, 'ur')).toContain('بیچ B-17 (10 units); بیچ درج نہیں (5 units)');
+  });
+
   it('accepts a receipt identity whose dispensed lot has no recorded batch or expiry', () => {
     const date = new Date('2026-11-18T00:00:00.000Z');
     const snapshot = validateReceiptIdentity(

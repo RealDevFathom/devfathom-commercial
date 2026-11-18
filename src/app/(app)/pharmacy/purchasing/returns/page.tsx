@@ -451,7 +451,7 @@ export default async function PharmacyReturnsPage({
                     .filter((line) => line.windowState !== 'OPEN')
                     .map((line) => (
                       <li className="text-xs text-text-muted" key={line.id}>
-                        {line.lot.batch.medicine.productName} ·
+                        {line.lot.batch.medicine.productName} ·{' '}
                         {batchPhrase(line.lot.batch.batchNumber, 'batch')} ·{' '}
                         {line.windowState === 'CLOSED'
                           ? `window closed ${Math.abs(line.daysToWindowEnd)} days ago — this line can no longer be dispatched for credit`

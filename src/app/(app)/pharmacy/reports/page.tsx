@@ -849,8 +849,12 @@ export default async function PharmacyReportsPage({
                           <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-2 font-mono text-xs text-text-muted tabular-nums">
                             <div>
                               {item.batchNumber === null ? (
-                                // DEV-853: the same plain words as every other screen.
-                                <dd className="inline">{BATCH_NOT_RECORDED}</dd>
+                                // DEV-853: the same plain words as every other screen;
+                                // the term stays for assistive technology.
+                                <>
+                                  <dt className="sr-only">{screenCopy.reports.batch}</dt>
+                                  <dd className="inline">{BATCH_NOT_RECORDED}</dd>
+                                </>
                               ) : (
                                 <>
                                   <dt className="inline font-semibold text-text-body">
