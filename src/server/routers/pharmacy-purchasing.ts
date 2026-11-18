@@ -2862,6 +2862,9 @@ const purchasingRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       annotateAuditBranch(ctx, input.receivingBranchId);
+      // DEV-936: an organization-wide central grant says *what*; the receiving
+      // branch still needs an assignment (or the live owner exception).
+      await assertProcurementBranch(ctx, input.receivingBranchId);
       try {
         return await createCentralPurchaseOrder(
           ctx.db,
@@ -2907,16 +2910,31 @@ const purchasingRouter = router({
           select: { branchId: true },
         });
         annotateAuditBranch(ctx, receipt?.branchId);
-        return await ctx.db.$transaction((tx) =>
-          allocateCentralReceipt(
-            txDb(tx),
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const { organizationId } = tenantScope(ctx);
+          // DEV-936: the branch the stock leaves (the receipt's branch), read on the
+          // transaction client, and every destination branch are checked before
+          // anything is written. Any posted receipt may be allocated (INV-10 keeps no
+          // central-order marker), so the source branch is the boundary.
+          const source = await db.pharmacyGoodsReceipt.findFirst({
+            where: { id: input.goodsReceiptId, organizationId },
+            select: { branchId: true },
+          });
+          if (source) await assertProcurementBranch(ctx, source.branchId, db);
+          const destinations = new Set(input.allocations.map((a) => a.destinationBranchId));
+          for (const destination of destinations) {
+            await assertProcurementBranch(ctx, destination, db);
+          }
+          return allocateCentralReceipt(
+            db,
             {
-              organizationId: tenantScope(ctx).organizationId,
+              organizationId,
               actorId: ctx.session.user.id,
             },
             input
-          )
-        );
+          );
+        });
       } catch (error) {
         domainError(error);
       }

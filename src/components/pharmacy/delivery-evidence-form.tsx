@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label';
 import { trpc } from '@/lib/trpc';
 import type { z } from 'zod';
 import type { deliveryCommandInput } from '@/lib/pharmacy/customer-delivery';
+import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 type Action = z.infer<typeof deliveryCommandInput>['action'];
 
 export function DeliveryEvidenceForm({ branchId, orderId }: { branchId: string; orderId: string }) {
@@ -58,7 +59,7 @@ export function DeliveryEvidenceForm({ branchId, orderId }: { branchId: string; 
               ...(pin ? { managerPin: pin } : {}),
             });
             setNotice(
-              `${result.replayed ? 'Already recorded' : 'Recorded'}; collected ${result.totals.collectedMinor}, remitted ${result.totals.remittedMinor}, cash still with runner ${result.totals.custodyMinor} minor units.`
+              `${result.replayed ? 'Already recorded' : 'Recorded'}; collected ${formatMinor(result.totals.collectedMinor)}, remitted ${formatMinor(result.totals.remittedMinor)}, cash still with runner ${formatMinor(result.totals.custodyMinor)}.`
             );
             await Promise.all([
               utils.pharmacyOrdering.mine.invalidate(),
@@ -91,7 +92,7 @@ export function DeliveryEvidenceForm({ branchId, orderId }: { branchId: string; 
         </Label>
         {moneyAction ? (
           <Label className="grid gap-1">
-            Actual amount in minor units
+            Actual amount (in paisa, 100 paisa = 1 rupee)
             <Input
               required
               type="number"

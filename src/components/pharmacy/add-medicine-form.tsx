@@ -162,7 +162,7 @@ export function AddMedicineForm() {
     submitted && typeof draft[field] === 'string' && !(draft[field] as string).trim();
 
   const textFields: Array<{ field: keyof Draft; label: string; hint?: string }> = [
-    { field: 'productName', label: 'Medicine name' },
+    { field: 'productName', label: 'New medicine name' },
     { field: 'strength', label: 'Strength', hint: 'For example 500 mg' },
     { field: 'dosageForm', label: 'Dosage form', hint: 'For example Tablet' },
     {

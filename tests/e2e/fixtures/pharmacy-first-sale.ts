@@ -558,10 +558,8 @@ export async function freshPharmacyFirstSale(
     ).toBeEnabled();
     await click(candidate.getByRole('button', { name: 'Publish assertions', exact: true }));
     await expect(candidate).toHaveCount(0);
-    // DEV-683 adds a second "Medicine name" field (adding a medicine); this one finds it.
-    const findMedicine = formFor(page, 'Find medicine');
-    await findMedicine.getByLabel('Medicine name', { exact: true }).fill(medicineName);
-    await click(findMedicine.getByRole('button', { name: 'Find medicine', exact: true }));
+    await page.getByLabel('Find a medicine', { exact: true }).fill(medicineName);
+    await click(page.getByRole('button', { name: 'Find medicine', exact: true }));
     await choose(page.getByRole('combobox', { name: 'Medicine', exact: true }), medicineName);
     await choose(page.getByRole('combobox', { name: 'Presentation', exact: true }), '10 tablets');
     // Publication creates the default pack from the reviewed pack size and puts
