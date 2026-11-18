@@ -143,15 +143,36 @@ describe('ApAgingPage', () => {
     expect(output).toContain('Totals cover every eligible');
   });
 
-  it('labels an incomplete bounded view as partial', async () => {
+  it('never shows a partial total, list or export above the ceiling', async () => {
     mocks.aging.mockResolvedValue({
       scope: { organizationId: 'org_1', branchId: 'branch_1' },
       view: { ...view, complete: false },
       retrievedAt: new Date(),
     });
     const output = await html({ branch: 'branch_1' });
-    expect(output).toContain('these totals are partial');
-    expect(output).toContain('this view is incomplete');
+    expect(output).toContain('Too many invoices to total');
+    expect(output).toContain('no total is shown rather than a partial one');
+    expect(output).toContain('Enter one payee');
+    expect(output).not.toContain('partial.');
+    expect(output).not.toContain('Outstanding by age');
+    expect(output).not.toContain('AP-0001');
+    expect(output).not.toContain('Export aging CSV');
+    expect(output).not.toContain('Record payment');
+    expect(output).not.toContain('Due-bill reminders');
+  });
+
+  it('narrows both reads to one payee when asked', async () => {
+    await html({ branch: 'branch_1', payeeFilter: ' K-Electric ' });
+    expect(mocks.aging).toHaveBeenCalledWith({
+      branchId: 'branch_1',
+      asOf: '2026-11-15',
+      payeeFilter: 'K-Electric',
+    });
+    expect(mocks.payablesDrafts).toHaveBeenCalledWith({
+      branchId: 'branch_1',
+      asOf: '2026-11-15',
+      payeeFilter: 'K-Electric',
+    });
   });
 
   it('explains an empty view and offers no export', async () => {
@@ -165,15 +186,15 @@ describe('ApAgingPage', () => {
     expect(output).not.toContain('Export aging CSV');
   });
 
-  it('never declares the branch clear when a capped read found nothing open', async () => {
+  it('never declares the branch clear when the view was refused for size', async () => {
     mocks.aging.mockResolvedValue({
       scope: { organizationId: 'org_1', branchId: 'branch_1' },
-      view: { ...view, complete: false, scannedInvoices: 1000, rows: [], totals: [] },
+      view: { ...view, complete: false, scannedInvoices: 10_001, rows: [], totals: [] },
       retrievedAt: new Date(),
     });
     const output = await html({ branch: 'branch_1' });
-    expect(output).toContain('Nothing outstanding in the invoices read');
-    expect(output).toContain('later-due invoices may still be');
+    expect(output).toContain('Too many invoices to total');
+    expect(output).not.toContain('Nothing outstanding');
     expect(output).not.toContain('No supplier expense invoice for this branch was open');
     expect(output).not.toContain('Export aging CSV');
   });

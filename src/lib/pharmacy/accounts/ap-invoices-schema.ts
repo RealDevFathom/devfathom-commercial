@@ -79,7 +79,14 @@ export const listApInvoicesSchema = z
   })
   .strict();
 
-export const apAgingSchema = z.object({ branchId: id, asOf: calendarDate }).strict();
+export const apAgingSchema = z
+  .object({
+    branchId: id,
+    asOf: calendarDate,
+    /** DEV-694: narrow the view to one payee when a branch has too many bills. */
+    payeeFilter: z.string().trim().min(1).max(160).optional(),
+  })
+  .strict();
 
 /** DEV-694: staff choose the bill a supplier credit note is set off against. */
 export const requestApCreditSetOffSchema = z

@@ -378,7 +378,7 @@ describe('pharmacyApInvoices router — payablesDrafts', () => {
       '2026-11-15',
       expect.any(Date),
       undefined,
-      { allPages: true }
+      {}
     );
     expect(mocks.creditFindMany.mock.calls[0]![0].where).toMatchObject({
       organizationId: 'org_1',
@@ -418,7 +418,7 @@ describe('pharmacyApInvoices router — payablesDrafts', () => {
         '2026-11-16',
         expect.any(Date),
         'Asia/Karachi',
-        { allPages: true }
+        {}
       );
       const where = mocks.creditFindMany.mock.calls[0]![0].where;
       expect(where.receivedAt.lt).toEqual(new Date('2026-11-16T19:00:00.000Z'));
@@ -817,5 +817,21 @@ describe('pharmacyApInvoices router — credit set-off reversal', () => {
   ] as const)('maps %s to %s', async (reason, code) => {
     mocks.reverseSetOff.mockRejectedValue(new PharmacyApInvoiceError(reason));
     await expect(caller().reverseCreditSetOff(reverseInput)).rejects.toMatchObject({ code });
+  });
+});
+
+describe('pharmacyApInvoices router — aging payee filter', () => {
+  it('passes the one-payee filter to both the aging read and the drafts read', async () => {
+    mocks.creditFindMany.mockResolvedValue([]);
+    await caller().aging({ branchId: 'branch_1', asOf: '2026-11-15', payeeFilter: 'K-Electric' });
+    await caller().payablesDrafts({
+      branchId: 'branch_1',
+      asOf: '2026-11-15',
+      payeeFilter: 'K-Electric',
+    });
+    for (const call of mocks.aging.mock.calls) {
+      expect(call[5]).toEqual({ payeeName: 'K-Electric' });
+    }
+    expect(mocks.aging).toHaveBeenCalledTimes(2);
   });
 });

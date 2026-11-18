@@ -8,6 +8,8 @@ export type AgingQuery = {
   payee?: string | string[];
   currency?: string | string[];
   budget?: string | string[];
+  /** DEV-694: narrow the view to one payee. */
+  payeeFilter?: string | string[];
 };
 
 

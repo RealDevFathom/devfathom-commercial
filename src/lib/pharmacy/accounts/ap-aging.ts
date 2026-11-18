@@ -17,16 +17,20 @@
  *     instant is on or before the as-of day, and stops once its reversal is.
  * Days past due are measured from the due date to the as-of day.
  *
- * The read is bounded: at most AP_AGING_MAX_INVOICES eligible invoices are
- * scanned (oldest due first). A larger branch is reported as an incomplete
- * view, never as complete totals. The page and its CSV render the same view.
+ * DEV-694 owner decision: the read fetches every eligible invoice in pages of
+ * AP_PAYABLES_PAGE_ROWS before any total is reported. It is bounded by a
+ * ceiling, AP_AGING_MAX_INVOICES: a branch (or payee) above it is reported as
+ * an incomplete view with NO rows and NO totals, never as a partial figure, and
+ * the reader is asked to narrow the view by payee. The page, its CSV and the
+ * payables drafts render the same view.
  */
 import { workspaceDateRange, workspaceToday } from '@/lib/timezone';
 import { formulaSafeCell } from '@/lib/pharmacy/reference-connectors';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { PharmacyApInvoiceError } from './ap-invoices';
+import { normalizePayeeKey, PharmacyApInvoiceError } from './ap-invoices';
 
-export const AP_AGING_MAX_INVOICES = 1_000;
+/** Most invoices one view ages; above it the view is refused, never partial. */
+export const AP_AGING_MAX_INVOICES = 10_000;
 const DAY_MS = 86_400_000;
 const EARLIEST = new Date('2000-01-01T00:00:00.000Z');
 
@@ -200,16 +204,13 @@ export function computeApAging(
   };
 }
 
-/**
- * DEV-694 owner decision: reminders and drafts read every eligible invoice,
- * 5,000 rows per page, fetching each later page before any total is reported.
- */
+/** DEV-694 owner decision: 5,000 rows per page, every page before a total. */
 export const AP_PAYABLES_PAGE_ROWS = 5_000;
 
 /**
- * Reads at most AP_AGING_MAX_INVOICES eligible native invoices and ages them.
- * With `allPages`, reads every eligible invoice in pages of AP_PAYABLES_PAGE_ROWS
- * instead, so the view is always complete.
+ * Reads every eligible native invoice, page by page, and ages them. Above
+ * AP_AGING_MAX_INVOICES the view is incomplete and empty: no partial totals.
+ * `payeeName` narrows the view to one payee (normalized name).
  */
 export async function readApAging(
   db: ScopedDb,
@@ -217,7 +218,7 @@ export async function readApAging(
   asOf: string,
   now: Date = new Date(),
   timeZone?: string | null,
-  options: { allPages?: boolean } = {}
+  options: { payeeName?: string } = {}
 ): Promise<ApAgingView> {
   const window = apAgingWindow(asOf, now, timeZone);
   const query = {
@@ -225,6 +226,7 @@ export async function readApAging(
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       invoiceDate: { lt: window.cutoff },
+      ...(options.payeeName ? { payeeKey: normalizePayeeKey(options.payeeName) } : {}),
       OR: [{ status: 'POSTED' as const }, { reversedAt: { gte: window.cutoff } }],
     },
     select: {
@@ -252,26 +254,28 @@ export async function readApAging(
     },
     orderBy: [{ dueDate: 'asc' as const }, { id: 'asc' as const }],
   };
-  if (options.allPages) {
-    const invoices = [];
-    for (let cursor: string | undefined; ;) {
-      const page = await db.pharmacyApInvoice.findMany({
-        ...query,
-        take: AP_PAYABLES_PAGE_ROWS,
-        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-      });
-      invoices.push(...page);
-      if (page.length < AP_PAYABLES_PAGE_ROWS) break;
-      cursor = page[page.length - 1]!.id;
+  const invoices = [];
+  for (let cursor: string | undefined; ;) {
+    const page = await db.pharmacyApInvoice.findMany({
+      ...query,
+      take: AP_PAYABLES_PAGE_ROWS,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    });
+    invoices.push(...page);
+    if (invoices.length > AP_AGING_MAX_INVOICES) {
+      // Refused, not truncated: an incomplete view carries no rows or totals.
+      return {
+        asOf: window.day.toISOString().slice(0, 10),
+        complete: false,
+        scannedInvoices: invoices.length,
+        rows: [],
+        totals: [],
+      };
     }
-    return computeApAging(invoices, window, true);
+    if (page.length < AP_PAYABLES_PAGE_ROWS) break;
+    cursor = page[page.length - 1]!.id;
   }
-  const invoices = await db.pharmacyApInvoice.findMany({
-    ...query,
-    take: AP_AGING_MAX_INVOICES + 1,
-  });
-  const complete = invoices.length <= AP_AGING_MAX_INVOICES;
-  return computeApAging(invoices.slice(0, AP_AGING_MAX_INVOICES), window, complete);
+  return computeApAging(invoices, window, true);
 }
 
 function csvCell(value: unknown) {

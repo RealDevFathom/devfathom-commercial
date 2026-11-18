@@ -189,7 +189,14 @@ export const pharmacyApInvoicesRouter = router({
     try {
       return {
         scope: { organizationId: scope.organizationId, branchId: scope.branchId },
-        view: await readApAging(ctx.db, scope, input.asOf, new Date(), ctx.organization?.timezone),
+        view: await readApAging(
+          ctx.db,
+          scope,
+          input.asOf,
+          new Date(),
+          ctx.organization?.timezone,
+          input.payeeFilter ? { payeeName: input.payeeFilter } : {}
+        ),
         retrievedAt: new Date(),
       };
     } catch (error) {
@@ -219,9 +226,14 @@ export const pharmacyApInvoicesRouter = router({
         const now = new Date();
         const timeZone = ctx.organization?.timezone;
         // Owner decision: every bill, 5,000 per page, before any total or draft.
-        const view = await readApAging(ctx.db, scope, input.asOf, now, timeZone, {
-          allPages: true,
-        });
+        const view = await readApAging(
+          ctx.db,
+          scope,
+          input.asOf,
+          now,
+          timeZone,
+          input.payeeFilter ? { payeeName: input.payeeFilter } : {}
+        );
         const { cutoff } = apAgingWindow(input.asOf, now, timeZone);
         // Owner decision: read supplier credits in pages of 5,000 and fetch every
         // page before any total or set-off draft is reported.

@@ -307,7 +307,7 @@ describe('computeApAging — DEV-694 credit-note set-offs', () => {
     });
   });
 
-  it('reads every invoice in pages of 5,000 for the payables drafts', async () => {
+  it('reads every invoice in pages of 5,000 before ageing them', async () => {
     const first = Array.from({ length: AP_PAYABLES_PAGE_ROWS }, (_, index) =>
       invoice({ id: `inv_${index}`, reference: `AP-${String(index).padStart(5, '0')}` })
     );
@@ -321,8 +321,7 @@ describe('computeApAging — DEV-694 credit-note set-offs', () => {
       { organizationId: 'org_1', branchId: 'branch_1' },
       '2026-11-15',
       NOW,
-      null,
-      { allPages: true }
+      null
     );
     expect(findMany).toHaveBeenCalledTimes(2);
     expect(findMany.mock.calls[0]![0]).toMatchObject({ take: 5_000 });
@@ -356,29 +355,48 @@ describe('readApAging', () => {
           invoiceDate: { lt: cutoff },
           OR: [{ status: 'POSTED' }, { reversedAt: { gte: cutoff } }],
         },
-        take: AP_AGING_MAX_INVOICES + 1,
+        take: AP_PAYABLES_PAGE_ROWS,
       })
     );
     expect(findMany.mock.calls[0]![0].select.settlements.where).toEqual({ paidAt: { lt: cutoff } });
     expect(view).toMatchObject({ complete: true, scannedInvoices: 1 });
   });
 
-  it('reports an incomplete view when the bound is exceeded and never ages past it', async () => {
-    const rows = Array.from({ length: AP_AGING_MAX_INVOICES + 1 }, (_, index) =>
-      invoice({ id: `inv_${index}`, reference: `AP-${String(index).padStart(5, '0')}` })
-    );
-    const db = {
-      pharmacyApInvoice: { findMany: vi.fn().mockResolvedValue(rows) },
-    } as unknown as ScopedDb;
+  it('refuses a view above the ceiling with no rows and no totals, never a partial one', async () => {
+    const page = (start: number) =>
+      Array.from({ length: AP_PAYABLES_PAGE_ROWS }, (_, index) =>
+        invoice({ id: `inv_${start + index}`, reference: `AP-${start + index}` })
+      );
+    const findMany = vi
+      .fn()
+      .mockResolvedValueOnce(page(0))
+      .mockResolvedValueOnce(page(AP_PAYABLES_PAGE_ROWS))
+      .mockResolvedValueOnce([invoice({ id: 'inv_over', reference: 'AP-over' })]);
+    const db = { pharmacyApInvoice: { findMany } } as unknown as ScopedDb;
     const view = await readApAging(
       db,
       { organizationId: 'org_1', branchId: 'branch_1' },
       '2026-11-15',
       NOW
     );
-    expect(view.complete).toBe(false);
-    expect(view.scannedInvoices).toBe(AP_AGING_MAX_INVOICES);
-    expect(view.rows).toHaveLength(AP_AGING_MAX_INVOICES);
+    expect(AP_AGING_MAX_INVOICES).toBe(2 * AP_PAYABLES_PAGE_ROWS);
+    expect(findMany).toHaveBeenCalledTimes(3);
+    expect(view).toMatchObject({ complete: false, rows: [], totals: [] });
+    expect(view.scannedInvoices).toBe(AP_AGING_MAX_INVOICES + 1);
+  });
+
+  it('narrows the read to one payee by its normalized key', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const db = { pharmacyApInvoice: { findMany } } as unknown as ScopedDb;
+    await readApAging(
+      db,
+      { organizationId: 'org_1', branchId: 'branch_1' },
+      '2026-11-15',
+      NOW,
+      null,
+      { payeeName: '  K-Electric   LTD ' }
+    );
+    expect(findMany.mock.calls[0]![0].where.payeeKey).toBe('k-electric ltd');
   });
 
   it('refuses a future as-of day before reading', async () => {

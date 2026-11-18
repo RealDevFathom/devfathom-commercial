@@ -35,7 +35,6 @@ export function DueBillReminders({ drafts }: { drafts: PayablesDrafts }) {
     <SectionCard title="Due-bill reminders" titleLevel={2}>
       <p className="text-sm text-text-muted">
         Bills already overdue, and bills falling due within {DUE_SOON_DAYS} days, grouped by payee.
-        {drafts.viewComplete ? '' : ' The aging read was capped, so this list may be partial.'}
       </p>
       {drafts.reminders.length === 0 ? (
         <p className="mt-3 text-sm text-text-muted">

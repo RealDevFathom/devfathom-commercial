@@ -64,10 +64,26 @@ function paymentDraftQuery(query: Query) {
   return { currency, payee, budget, request: { name: payee, currency, budgetMinor } };
 }
 
-function QueryForm({ branchId, asOf, zone }: { branchId?: string; asOf: string; zone: string }) {
+/** DEV-694: the optional one-payee filter that narrows a view above the ceiling. */
+function payeeFilterQuery(query: Query) {
+  const value = typeof query.payeeFilter === 'string' ? query.payeeFilter.trim() : '';
+  return value && value.length <= 160 ? value : undefined;
+}
+
+function QueryForm({
+  branchId,
+  asOf,
+  zone,
+  payeeFilter,
+}: {
+  branchId?: string;
+  asOf: string;
+  zone: string;
+  payeeFilter?: string;
+}) {
   return (
     <SectionCard title="Branch and date" titleLevel={2}>
-      <form method="get" className="grid gap-4 md:grid-cols-[1fr_1fr_auto] md:items-end">
+      <form method="get" className="grid gap-4 md:grid-cols-[1fr_1fr_1fr_auto] md:items-end">
         <label className="grid gap-2 text-sm">
           Branch ID
           <Input
@@ -82,6 +98,15 @@ function QueryForm({ branchId, asOf, zone }: { branchId?: string; asOf: string; 
         <label className="grid gap-2 text-sm">
           As of ({zone} day)
           <Input className="min-h-11" type="date" name="asOf" defaultValue={asOf} required />
+        </label>
+        <label className="grid gap-2 text-sm">
+          Payee (optional)
+          <Input
+            className="min-h-11"
+            name="payeeFilter"
+            defaultValue={payeeFilter}
+            maxLength={160}
+          />
         </label>
         <Button type="submit" className="min-h-11">
           Show aging
@@ -126,10 +151,8 @@ function Totals({ view }: { view: ApAgingView }) {
   return (
     <SectionCard title="Outstanding by age" titleLevel={2}>
       <p className="text-sm text-text-muted">
-        {view.complete
-          ? 'Totals cover every eligible supplier expense invoice for this branch.'
-          : `Only the ${AP_AGING_MAX_INVOICES} invoices due earliest were read; these totals are partial.`}{' '}
-        Currencies are never added together.
+        Totals cover every eligible supplier expense invoice in this view. Currencies are never
+        added together.
       </p>
       <div className="overflow-x-auto">
         <table className="mt-3 w-full min-w-max text-sm tabular-nums">
@@ -239,7 +262,8 @@ function EntryForms({
   timeZone: string | null | undefined;
 }) {
   const now = new Date();
-  const payable = view.rows
+  // An incomplete view never offers a partial list of bills.
+  const payable = (view.complete ? view.rows : [])
     .filter((row) => row.outstandingMinor > 0)
     .map((row) => ({
       invoiceId: row.invoiceId,
@@ -287,6 +311,8 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
   let state: State = parsed.invalid ? { kind: 'invalid' } : { kind: 'initial' };
   let payables: Payables = { kind: 'none' };
   const draftQuery = paymentDraftQuery(query);
+  const payeeFilter = payeeFilterQuery(query);
+  const narrow = payeeFilter ? { payeeFilter } : {};
 
   if (parsed.branchId && !parsed.invalid) {
     try {
@@ -302,7 +328,7 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
         });
         const result = await pharmacyApInvoicesRouter
           .createCaller(ctx)
-          .aging({ branchId: parsed.branchId, asOf: parsed.asOf });
+          .aging({ branchId: parsed.branchId, asOf: parsed.asOf, ...narrow });
         if (
           result.scope.organizationId !== actor.organization.id ||
           result.scope.branchId !== parsed.branchId
@@ -321,6 +347,7 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
             caller.payablesDrafts({
               branchId: parsed.branchId,
               asOf: parsed.asOf,
+              ...narrow,
               ...(draftQuery.request ? { payee: draftQuery.request } : {}),
             }),
             caller.creditSetOffs({ branchId: parsed.branchId, status: 'PENDING' }),
@@ -362,7 +389,7 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
         heading="Supplier expense invoice aging"
         description="Record non-stock supplier expense invoices and their payments, and age what is outstanding for one branch by due date as of one day."
         actions={
-          state.kind === 'loaded' && state.view.rows.length ? (
+          state.kind === 'loaded' && state.view.complete && state.view.rows.length ? (
             <ExportCsv
               csv={apAgingCsv(state.view, state.branchId)}
               fileName={`supplier-expense-aging-${state.view.asOf}.csv`}
@@ -374,6 +401,7 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
         branchId={typeof query.branch === 'string' ? query.branch : undefined}
         asOf={parsed.asOf}
         zone={zone}
+        payeeFilter={payeeFilter}
       />
       {state.kind === 'loaded' ? (
         <>
@@ -382,36 +410,32 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
               As of the end of {state.view.asOf} ({zone}). Retrieved{' '}
               {formatWorkspaceDateTime(state.retrievedAt, timeZone)}. Only supplier expense invoices
               recorded here and payments made against them count; other money movements never settle
-              them.{' '}
-              {state.view.complete
-                ? `${state.view.scannedInvoices} invoices read.`
-                : `Read capped at ${AP_AGING_MAX_INVOICES} invoices; this view is incomplete.`}
+              them. {payeeFilter ? `Showing payee ${payeeFilter} only. ` : ''}
+              {state.view.complete ? `${state.view.scannedInvoices} invoices read.` : ''}
             </p>
           </SectionCard>
-          {state.view.rows.length === 0 ? (
-            state.view.complete ? (
-              <SectionCard title="Nothing outstanding" titleLevel={2}>
-                <p className="text-sm text-text-muted">
-                  No supplier expense invoice for this branch was open at the end of{' '}
-                  {state.view.asOf}.
-                </p>
-              </SectionCard>
-            ) : (
-              <SectionCard title="Nothing outstanding in the invoices read" titleLevel={2}>
-                <p role="alert" className="text-sm text-text-muted">
-                  None of the {state.view.scannedInvoices} invoices read was open at the end of{' '}
-                  {state.view.asOf}, but the read was capped, so later-due invoices may still be
-                  outstanding. This does not show the branch as clear.
-                </p>
-              </SectionCard>
-            )
+          {!state.view.complete ? (
+            <SectionCard title="Too many invoices to total" titleLevel={2}>
+              <p role="alert" className="text-sm text-text-muted">
+                More than {AP_AGING_MAX_INVOICES.toLocaleString('en-US')} supplier expense invoices
+                are in this view, so no total is shown rather than a partial one. Enter one payee
+                above, or choose an earlier as-of day, to narrow it.
+              </p>
+            </SectionCard>
+          ) : state.view.rows.length === 0 ? (
+            <SectionCard title="Nothing outstanding" titleLevel={2}>
+              <p className="text-sm text-text-muted">
+                No supplier expense invoice {payeeFilter ? 'for this payee ' : 'for this branch '}
+                was open at the end of {state.view.asOf}.
+              </p>
+            </SectionCard>
           ) : (
             <>
               <Totals view={state.view} />
               <Rows view={state.view} />
             </>
           )}
-          {payables.kind === 'loaded' ? (
+          {!state.view.complete ? null : payables.kind === 'loaded' ? (
             <>
               <DueBillReminders drafts={payables.drafts} />
               {state.view.rows.length ? (
