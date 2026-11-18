@@ -2,6 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ASK_OWNER_OR_MANAGER, COUNTER_SETUP_GUIDANCE } from '@/lib/pharmacy/counter-setup';
+import { PHARMACY_AWAITING_APPROVAL_MESSAGE } from '@/lib/pharmacy/approval-status';
 import { CounterSaleReadiness, CounterSetupNextStep } from './counter-sale-readiness';
 
 /** DEV-860: the counter lists missing setup before the first scan. */
@@ -94,6 +95,70 @@ describe('CounterSetupNextStep', () => {
     const { container } = render(
       <CounterSetupNextStep
         advice={{ reason: 'DRAWER_NOT_OPEN', message: 'x', nextStep: null, link: null }}
+      />
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+
+/** DEV-905: a pharmacy still in onboarding says why it cannot sell, not "not active". */
+describe('CounterSaleReadiness for a pharmacy awaiting approval', () => {
+  const notActive = {
+    ready: false,
+    blockers: ['ORGANIZATION_NOT_ACTIVE'],
+    warnings: [],
+    canFixSetup: true,
+  };
+
+  it('says onboarding is complete and the pharmacy is waiting for DevFathom approval', () => {
+    const onCheckAgain = vi.fn();
+    render(
+      <CounterSaleReadiness
+        readiness={{ ...notActive, approval: { state: 'AWAITING_APPROVAL' } }}
+        branchId="branch-1"
+        onCheckAgain={onCheckAgain}
+      />
+    );
+    const panel = screen.getByRole('region', { name: 'This counter cannot sell yet' });
+    expect(within(panel).getByText(PHARMACY_AWAITING_APPROVAL_MESSAGE)).toBeVisible();
+    expect(panel).not.toHaveTextContent(COUNTER_SETUP_GUIDANCE.ORGANIZATION_NOT_ACTIVE.message);
+    expect(panel).not.toHaveTextContent('reactivate');
+    // Once DevFathom approves, "Check again" re-reads the server's answer.
+    fireEvent.click(within(panel).getByRole('button', { name: 'Check again' }));
+    expect(onCheckAgain).toHaveBeenCalledOnce();
+  });
+
+  it('names the onboarding steps still open and links the owner to finish them', () => {
+    render(
+      <CounterSaleReadiness
+        readiness={{
+          ...notActive,
+          approval: {
+            state: 'ONBOARDING_OPEN',
+            openSteps: ['Legal business', 'Parties and balances'],
+          },
+        }}
+        branchId="branch-1"
+        onCheckAgain={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByText(
+        'This pharmacy is still onboarding, so it cannot sell yet. These onboarding steps are still open: Legal business and Parties and balances.'
+      )
+    ).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Finish the onboarding steps' })).toHaveAttribute(
+      'href',
+      '/pharmacy'
+    );
+  });
+
+  it('shows nothing once the approved pharmacy is ready to sell', () => {
+    const { container } = render(
+      <CounterSaleReadiness
+        readiness={{ ready: true, blockers: [], warnings: [], canFixSetup: true }}
+        branchId="branch-1"
+        onCheckAgain={vi.fn()}
       />
     );
     expect(container).toBeEmptyDOMElement();

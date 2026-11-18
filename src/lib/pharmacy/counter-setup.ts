@@ -11,6 +11,12 @@
  * Pure and database-free, so the counter and its tests share one mapping.
  */
 
+import {
+  PHARMACY_AWAITING_APPROVAL_MESSAGE,
+  PHARMACY_ONBOARDING_HREF,
+  pharmacyOnboardingOpenMessage,
+  type PharmacyApprovalStatus,
+} from './approval-status';
 import type { BranchOperationDenialReason } from './regulatory';
 
 /** A refusal the operator's own account causes: they are not assigned to the branch. */
@@ -145,8 +151,17 @@ export type CounterSetupAdvice = {
  */
 export function counterSetupAdvice(
   reason: CounterSetupReason,
-  options: { canFixSetup: boolean; branchId: string }
+  options: {
+    canFixSetup: boolean;
+    branchId: string;
+    /** DEV-905: the server's approval answer, read when the workspace is not active. */
+    approval?: PharmacyApprovalStatus | null;
+  }
 ): CounterSetupAdvice {
+  if (reason === 'ORGANIZATION_NOT_ACTIVE' && options.approval) {
+    const waiting = approvalAdvice(options.approval, options.canFixSetup);
+    if (waiting) return waiting;
+  }
   const guidance = COUNTER_SETUP_GUIDANCE[reason];
   if (guidance.selfService) {
     return { reason, message: guidance.message, nextStep: null, link: null };
@@ -156,4 +171,38 @@ export function counterSetupAdvice(
   }
   const link = guidance.fix?.(options.branchId) ?? null;
   return { reason, message: guidance.message, nextStep: guidance.fixerNote ?? null, link };
+}
+
+/** Shown under the waiting message: approval is DevFathom's step, so nobody here acts. */
+export const AWAITING_APPROVAL_NEXT_STEP =
+  'Nothing is needed from you. Select Check again once DevFathom has approved the pharmacy.';
+
+/**
+ * DEV-905: a pharmacy still in onboarding is "not active" too, but "contact support to
+ * reactivate" is wrong for it. It is either waiting for DevFathom approval, or it has
+ * onboarding steps open, which the owner finishes on the onboarding page.
+ */
+function approvalAdvice(
+  approval: PharmacyApprovalStatus,
+  canFixSetup: boolean
+): CounterSetupAdvice | null {
+  if (approval.state === 'AWAITING_APPROVAL') {
+    return {
+      reason: 'ORGANIZATION_NOT_ACTIVE',
+      message: PHARMACY_AWAITING_APPROVAL_MESSAGE,
+      nextStep: AWAITING_APPROVAL_NEXT_STEP,
+      link: null,
+    };
+  }
+  if (approval.state === 'ONBOARDING_OPEN') {
+    return {
+      reason: 'ORGANIZATION_NOT_ACTIVE',
+      message: pharmacyOnboardingOpenMessage(approval.openSteps),
+      nextStep: canFixSetup ? null : ASK_OWNER_OR_MANAGER,
+      link: canFixSetup
+        ? { href: PHARMACY_ONBOARDING_HREF, label: 'Finish the onboarding steps' }
+        : null,
+    };
+  }
+  return null;
 }

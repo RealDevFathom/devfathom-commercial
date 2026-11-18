@@ -23,6 +23,7 @@ import {
   type ReadinessChecklistRow,
 } from '@/components/onboarding/readiness-checklist';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { PHARMACY_AWAITING_APPROVAL_MESSAGE } from '@/lib/pharmacy/approval-status';
 import type { PharmacyOnboardingGate } from '@/lib/pharmacy/onboarding';
 import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
@@ -33,8 +34,7 @@ import type { AppRouter } from '@/server/routers/_app';
 
 type Overview = inferRouterOutputs<AppRouter>['pharmacyOnboarding']['overview'];
 
-const labelClass =
-  'block font-mono text-xs font-semibold uppercase tracking-wide text-text-muted';
+const labelClass = 'block font-mono text-xs font-semibold uppercase tracking-wide text-text-muted';
 
 export function PharmacyOnboardingConsole({ initial }: { initial: Overview }) {
   const [overview, setOverview] = useState<Overview>(initial);
@@ -191,8 +191,10 @@ export function PharmacyOnboardingConsole({ initial }: { initial: Overview }) {
         <p className="text-sm text-text-body">{overview.activationSummary}</p>
         <p className="mt-2 text-sm text-text-muted">
           {overview.organization.status === 'ACTIVE'
-            ? `${overview.organization.displayName} is active. These steps stay visible so you can see what your activation rests on.`
-            : `${overview.organization.displayName} is not activated yet. DevFathom activates a pharmacy once every step below is done — nobody can wave it through.`}
+            ? `DevFathom has approved ${overview.organization.displayName}. It can sell now. These steps stay visible so you can see what your approval rests on.`
+            : overview.organization.status === 'ONBOARDING' && overview.ready
+              ? PHARMACY_AWAITING_APPROVAL_MESSAGE
+              : `${overview.organization.displayName} is not approved yet. DevFathom approves a pharmacy by hand once every step below is done — nobody can wave it through.`}
         </p>
         {overview.blocking.length > 0 ? (
           <ul className="mt-4 space-y-2">

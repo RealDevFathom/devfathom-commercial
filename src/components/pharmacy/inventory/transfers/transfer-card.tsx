@@ -71,7 +71,13 @@ export function TransferCard({
             {transfer.approvedByName ? ` · approved by ${transfer.approvedByName}` : ''}
             {transfer.dispatchedAt ? ` · dispatched ${when(transfer.dispatchedAt)}` : ''}
             {transfer.receivedAt ? ` · closed ${when(transfer.receivedAt)}` : ''}
+            {transfer.receivedByName ? ` by ${transfer.receivedByName}` : ''}
           </p>
+          {transfer.fromLicenceNumber && transfer.toLicenceNumber ? (
+            <p className="mt-1 font-mono text-xs text-text-muted">
+              Licence {transfer.fromLicenceNumber} → {transfer.toLicenceNumber}
+            </p>
+          ) : null}
         </div>
         <StatusPill
           label={transferStatusLabel(transfer)}

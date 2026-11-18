@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-const name = '20261118120900_pharmacy_unrecorded_batch_expiry';
+const name = '20261118121600_pharmacy_unrecorded_batch_expiry';
 const sql = readFileSync(`prisma/migrations/${name}/migration.sql`, 'utf8');
 
 /** DEV-853 — legacy opening stock with no batch number and/or no expiry. */
@@ -17,11 +17,17 @@ describe('unrecorded batch and expiry storage', () => {
       'DROP CONSTRAINT IF EXISTS "pharmacy_opening_stock_lines_complete_before_post_check"'
     );
     expect(sql).toContain('CREATE OR REPLACE FUNCTION pharmacy_validate_restock_reservation()');
-    const order = readFileSync('tests/fixtures/new-migration-order.txt', 'utf8').trim().split('\n');
-    expect(order.filter((entry) => entry === name)).toHaveLength(1);
-    const index = order.indexOf(name);
-    expect(order.slice(0, index).every((entry) => entry < name)).toBe(true);
-    expect(order.slice(index + 1).every((entry) => entry > name)).toBe(true);
+    const ledger = readFileSync('tests/fixtures/new-migration-order.txt', 'utf8')
+      .trim()
+      .split('\n');
+    // Recorded once, in its place: every earlier entry is stamped before it and
+    // every later entry after it (migration-timestamp-order.test.ts enforces both).
+    expect(ledger.filter((entry) => entry === name)).toHaveLength(1);
+    const position = ledger.indexOf(name);
+    for (const earlier of ledger.slice(0, position))
+      expect(earlier.slice(0, 14) < name.slice(0, 14)).toBe(true);
+    for (const later of ledger.slice(position + 1))
+      expect(later.slice(0, 14) > name.slice(0, 14)).toBe(true);
   });
 
   it('stores an unrecorded batch number and expiry as NULL, never a default', () => {

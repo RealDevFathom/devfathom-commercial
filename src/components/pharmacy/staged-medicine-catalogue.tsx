@@ -7,6 +7,15 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { StagedMedicineExport } from '@/components/pharmacy/staged-medicine-export';
+import {
+  STAGED_COLUMN_HEADINGS,
+  STAGED_LIST_INTRO,
+  STAGED_NOT_SUPPLIED,
+  STAGED_STATUS_LABEL,
+  formatStagedPrice,
+  formatStagedQuantity,
+  plainExceptionLabel,
+} from '@/components/pharmacy/staged-review-display';
 import { SOURCE_REFERENCE_COLUMNS } from '@/lib/pharmacy/migration/staged-review';
 import { createTRPCContext } from '@/server/trpc';
 import { pharmacyStagedReviewRouter } from '@/server/routers/pharmacy-staged-review';
@@ -215,6 +224,7 @@ export async function StagedMedicineCatalogue({
       </SectionCard>
       {result && (
         <SectionCard title="Candidates and source quantities" titleLevel={2}>
+          <p className="mb-2 text-sm font-medium text-text-strong">{STAGED_LIST_INTRO}</p>
           <p className="mb-4 text-sm">
             {result.candidateCount.toLocaleString('en-US')} staged product candidates available for
             review. {result.total.toLocaleString('en-US')} match this search. Source quantities are
@@ -257,7 +267,7 @@ export async function StagedMedicineCatalogue({
           <ul className="mb-4 space-y-1 text-sm text-text-muted">
             {result.exceptions.map((e) => (
               <li key={e.bucket}>
-                {e.workflow}: {e.bucket} — {e.count} open
+                {e.workflow}: {plainExceptionLabel(e.bucket)} — {e.count} open
               </li>
             ))}
           </ul>
@@ -273,16 +283,7 @@ export async function StagedMedicineCatalogue({
               </caption>
               <thead className="font-mono text-xs uppercase">
                 <tr>
-                  {[
-                    'Medicine',
-                    'Source QTY',
-                    'Source saleprice',
-                    'Source purprice',
-                    'Source UnitPrice',
-                    'Source PackUnits',
-                    'Staged quantity',
-                    'Review',
-                  ].map((label) => (
+                  {STAGED_COLUMN_HEADINGS.map((label) => (
                     <th className="px-3 py-3 text-left" key={label} scope="col">
                       {label}
                     </th>
@@ -308,15 +309,17 @@ export async function StagedMedicineCatalogue({
                     {(['QTY', 'saleprice', 'purprice', 'UnitPrice', 'PackUnits'] as const).map(
                       (key) => (
                         <td key={key} className="px-3 py-3 text-right font-mono tabular-nums">
-                          {row.references[key] ?? 'Not supplied as text'}
+                          {key === 'QTY' || key === 'PackUnits'
+                            ? formatStagedQuantity(row.references[key])
+                            : formatStagedPrice(row.references[key])}
                         </td>
                       )
                     )}
                     <td className="px-3 py-3 text-right font-mono tabular-nums">
-                      {row.quantityReview.label ?? 'Not supplied'}
+                      {row.quantityReview.label ?? STAGED_NOT_SUPPLIED}
                     </td>
                     <td className="px-3 py-3">
-                      <StatusPill status="pending" label={row.status} />
+                      <StatusPill status="pending" label={STAGED_STATUS_LABEL} />
                     </td>
                   </tr>
                 ))}
@@ -343,9 +346,10 @@ export async function StagedMedicineCatalogue({
       )}
       {detail && (
         <SectionCard title={detail.productName || 'Candidate detail'} titleLevel={2}>
-          <StatusPill status="pending" label={detail.status} />
+          <StatusPill status="pending" label={STAGED_STATUS_LABEL} />
           <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
             {Object.entries({
+              'Original status': detail.status,
               Catalogue: detail.catalogueStatus,
               'Controlled medicine': detail.controlled
                 ? 'Yes — set from legacy class NARCOTICS'
@@ -397,7 +401,8 @@ export async function StagedMedicineCatalogue({
             ))}
             {detail.exceptions.map((e, i) => (
               <li key={`${e.bucket}-${i}`}>
-                {e.bucket} · {e.workflow} · {e.status} · {e.severity}
+                {plainExceptionLabel(e.bucket)} ({e.bucket}) · {e.workflow} · {e.status} ·{' '}
+                {e.severity}
               </li>
             ))}
           </ul>

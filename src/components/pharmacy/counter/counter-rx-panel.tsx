@@ -14,6 +14,7 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
+import { COUNTER_APPROVAL_CODE_HINT } from './counter-approval-copy';
 import { CounterDuplicateSaltAcknowledge } from './counter-duplicate-salt-acknowledge';
 import type { CounterAlert } from '@/lib/pharmacy/counter-alerts';
 import type { CounterPatientPanel } from '@/lib/pharmacy/counter-prescriptions';
@@ -1022,10 +1023,14 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
               autoComplete="off"
               maxLength={8}
               className="h-11"
+              aria-describedby="controlled-pin-hint"
               disabled={disabled || !controlled.staffProfileId}
               value={controlled.pin}
               onChange={(event) => controlled.onChange('pin', event.target.value)}
             />
+            <p id="controlled-pin-hint" className="text-xs text-text-muted">
+              {COUNTER_APPROVAL_CODE_HINT}
+            </p>
             <label
               className="flex min-h-11 items-center gap-2 text-sm text-text-body"
               htmlFor="controlled-rx-serial"

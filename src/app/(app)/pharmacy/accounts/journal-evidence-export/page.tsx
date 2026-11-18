@@ -15,6 +15,7 @@ import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext, type TRPCContext } from '@/server/trpc';
+import { workspaceDateRange, workspaceZoneLabel } from '@/lib/timezone';
 import { JournalEvidenceExportButton } from './export-button';
 
 export const metadata: Metadata = {
@@ -112,16 +113,24 @@ export default async function JournalEvidenceExportPage({
   const toText = value(query.to);
   const from = dateOnly(fromText);
   const to = dateOnly(toText);
+  // Picked days run midnight to midnight in the organisation's zone, like cash flow and margin comparison.
+  const timeZone = ctx.organization?.timezone;
+  const zone = workspaceZoneLabel(timeZone);
   const pageText = value(query.page) ?? '1';
   const page = /^\d+$/.test(pageText) ? Number(pageText) : 0;
+  const fromInstant = from ? workspaceDateRange(fromText!, fromText!, timeZone).from : null;
+  const toInstant = to ? workspaceDateRange(toText!, toText!, timeZone).from : null;
   const valid =
     !!branchId &&
     branchId.length <= 128 &&
     branches.some((branch) => branch.id === branchId) &&
     !!from &&
     !!to &&
+    !!fromInstant &&
+    !!toInstant &&
     to > from &&
-    to.getTime() - from.getTime() <= 92 * 86_400_000 &&
+    // The server limit applies to the converted instants, which a daylight-saving change can stretch.
+    toInstant.getTime() - fromInstant.getTime() <= 92 * 86_400_000 &&
     Number.isSafeInteger(page) &&
     page >= 1 &&
     page <= 10_000;
@@ -131,8 +140,8 @@ export default async function JournalEvidenceExportPage({
     try {
       const result = await pharmacyFinanceRouter.createCaller(ctx).financialStatements({
         branchId,
-        from: from.toISOString(),
-        to: to.toISOString(),
+        from: fromInstant.toISOString(),
+        to: toInstant.toISOString(),
         page,
       });
       // Prisma Int journal amounts are exact; serialize them without currency conversion.
@@ -180,11 +189,15 @@ export default async function JournalEvidenceExportPage({
             </select>
           </label>
           <label className="grid gap-2 text-sm">
-            {screenCopy.journalExport.from500AmPkt}
+            {screenCopy.journalExport.fromMidnight}
+            {zone}
+            {screenCopy.journalExport.closeZone}
             <Input type="date" name="from" defaultValue={fromText} required className="min-h-11" />
           </label>
           <label className="grid gap-2 text-sm">
-            {screenCopy.journalExport.until500AmPktNotIncluded}
+            {screenCopy.journalExport.untilMidnight}
+            {zone}
+            {screenCopy.journalExport.closeZoneNotIncluded}
             <Input type="date" name="to" defaultValue={toText} required className="min-h-11" />
           </label>
           <label className="grid gap-2 text-sm">
