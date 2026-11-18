@@ -12,13 +12,15 @@ import { cn } from '@/lib/utils';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { isModuleGranted, moduleDefinitionForKey, moduleForPath } from '@/lib/module-catalog';
 import type { EntitlementView } from '@/lib/module-catalog';
-import { Box, Loader2, ShieldAlert } from 'lucide-react';
+import { Box, Loader2, ShieldAlert, X } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 import Link from 'next/link';
 import { useTheme } from '@/components/theme-provider';
 import { isTenantIdentityMismatch, tenantBrandTokens, type TenantBrand } from '@/lib/tenant-brand';
 import { AdministratorStaffProfileCallout } from '@/components/restaurant/administrator-staff-profile-callout';
 import { toast } from 'sonner';
+import { Button } from '@/components/ui/button';
+import { dismissedNoticeKey, useDismissedNotice } from './use-dismissed-notice';
 
 // Lazy-load the assistant panel so @ai-sdk/react + ai stay out of the global
 // chunk; only fetched once the user first opens the assistant.
@@ -149,7 +151,7 @@ function WorkspaceIdentityMismatch() {
         <button
           type="button"
           onClick={() => window.location.reload()}
-          className="mt-6 inline-flex h-10 items-center bg-abyss-900 px-4 text-xs font-semibold text-paper-white"
+          className="mt-6 inline-flex h-10 items-center rounded-control bg-primary px-4 text-xs font-semibold text-primary-foreground"
         >
           Reload this workspace
         </button>
@@ -174,7 +176,49 @@ export function isPathModuleEnabled(
   entitlements: Pick<EntitlementView, 'enabledModules' | 'vertical'>
 ) {
   const moduleKey = moduleForPath(pathname, entitlements.vertical);
-  return !moduleKey || isModuleGranted(moduleKey, entitlements.enabledModules);
+  return (
+    !moduleKey || isModuleGranted(moduleKey, entitlements.enabledModules, entitlements.vertical)
+  );
+}
+
+/**
+ * DEV-44: the placeholder-licence warning is an onboarding reminder, not a page
+ * error, so the member can dismiss it instead of seeing it above every page. It
+ * stays on the onboarding and regulatory pages, where the licence is replaced,
+ * whether or not it was dismissed.
+ */
+function PharmacyPlaceholderNotice({ pathname }: { pathname: string }) {
+  const { data: session } = useSession();
+  const [dismissed, dismiss] = useDismissedNotice(
+    dismissedNoticeKey(
+      'pharmacy-placeholder-licence',
+      session?.user?.organizationId,
+      session?.user?.id
+    )
+  );
+  const licencePage = pathname === '/pharmacy' || /^\/pharmacy\/regulatory(\/|$)/.test(pathname);
+  if (dismissed && !licencePage) return null;
+  return (
+    <div
+      role="alert"
+      className="flex min-h-10 items-center justify-center gap-2 border-b border-warning/40 bg-warning/10 px-4 py-1 text-center text-xs font-semibold text-foreground"
+    >
+      <span>Licence details are PLACEHOLDER – not a real licence</span>
+      {licencePage || !session?.user?.id ? null : (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label="Dismiss licence placeholder notice"
+          onClick={dismiss}
+          // The Studio touch target is at least 44px; the icon size alone is 32px.
+          className="min-h-11 min-w-11 shrink-0"
+        >
+          <X aria-hidden="true" />
+        </Button>
+      )}
+    </div>
+  );
 }
 
 export function AppShell({
@@ -195,7 +239,8 @@ export function AppShell({
   const entitlements = useEntitlements();
   const currentModule = moduleForPath(pathname, entitlements.vertical);
   const moduleEnabled =
-    !currentModule || isModuleGranted(currentModule, entitlements.enabledModules);
+    !currentModule ||
+    isModuleGranted(currentModule, entitlements.enabledModules, entitlements.vertical);
   const counterPos = pathname === '/pharmacy/counter';
   const immersive =
     counterPos || pathname === '/chat' || /^\/meetings\/[^/]+\/call$/.test(pathname);
@@ -310,14 +355,7 @@ export function AppShell({
         inert={mobileMenuOpen}
         className="studio-shell flex h-full min-w-0 flex-1 flex-col overflow-hidden"
       >
-        {pharmacyPlaceholder ? (
-          <div
-            role="alert"
-            className="min-h-10 border-b border-warning/40 bg-warning/10 px-4 py-2 text-center text-xs font-semibold text-foreground"
-          >
-            Licence details are PLACEHOLDER – not a real licence
-          </div>
-        ) : null}
+        {pharmacyPlaceholder ? <PharmacyPlaceholderNotice pathname={pathname} /> : null}
         {session?.user.isSupportSession ? (
           <div className="flex min-h-10 items-center justify-between gap-3 border-b border-warning/40 bg-warning/10 px-4 py-2 text-xs text-foreground">
             <span className="flex items-center gap-2">
@@ -370,7 +408,7 @@ export function AppShell({
                 </p>
                 <Link
                   href="/organization"
-                  className="mt-6 inline-flex h-10 items-center bg-abyss-900 px-4 text-xs font-semibold text-paper-white"
+                  className="mt-6 inline-flex h-10 items-center rounded-control bg-primary px-4 text-xs font-semibold text-primary-foreground"
                 >
                   Open organization settings
                 </Link>

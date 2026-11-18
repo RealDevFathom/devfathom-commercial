@@ -95,6 +95,7 @@ const db = {
   pharmacyInventoryLot: {
     findMany: vi.fn(async () => [{ id: 'lot_1', batch: { state: 'ACTIVE' } }]),
   },
+  auditLog: { create: vi.fn(async () => ({})) },
 };
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: vi.fn(async (_org: string, work: (tx: unknown) => unknown) => work(db)),

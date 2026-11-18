@@ -130,7 +130,8 @@ export async function composeOwnerDigest(
   };
   const [report, anomalies, renewals] = await Promise.all([
     readPharmacyOwnerCommandCentre(db, { ...filters, timeZone: input.timeZone }),
-    readPharmacyAnomalySignals(db, filters),
+    // The same workspace-day window the scheduled refresh stored the signals under.
+    readPharmacyAnomalySignals(db, { ...filters, timeZone: input.timeZone }),
     // Additive line: an unreadable reminder never blocks the digest itself.
     readLicenceRenewalReminders(db, {
       organizationId: input.organizationId,
@@ -371,7 +372,12 @@ export async function processDueOwnerDigests(now = new Date(), limit = 25) {
       if (existing) return false;
       await refreshPharmacyAnomalySignals(
         db,
-        { branchIds: [authorized.branchId], from: businessDate, to: businessDate },
+        {
+          branchIds: [authorized.branchId],
+          from: businessDate,
+          to: businessDate,
+          timeZone: authorized.organization.timezone,
+        },
         'system:owner-digest',
         new Date()
       );

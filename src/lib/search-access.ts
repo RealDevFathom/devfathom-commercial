@@ -7,7 +7,8 @@ export function getSearchCategoryAccess({
   const allowed = (moduleKey: string) => {
     const moduleVertical = verticalForModuleKey(moduleKey);
     return (
-      isModuleGranted(moduleKey, enabledModules) && (!moduleVertical || moduleVertical === vertical)
+      isModuleGranted(moduleKey, enabledModules, vertical) &&
+      (!moduleVertical || moduleVertical === vertical)
     );
   };
   const projects = allowed('projects');

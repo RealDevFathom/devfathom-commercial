@@ -12,7 +12,9 @@ import {
   counterSetupAdvice,
   counterSetupReason,
   type CounterSetupReason,
+  AWAITING_APPROVAL_NEXT_STEP,
 } from './counter-setup';
+import { PHARMACY_AWAITING_APPROVAL_MESSAGE } from './approval-status';
 import { BranchOperationDeniedError, type BranchOperationDenialReason } from './regulatory';
 
 /**
@@ -153,5 +155,74 @@ describe('counter setup reasons (DEV-860)', () => {
         link: null,
       });
     }
+  });
+});
+
+// DEV-905: a workspace that is not active because it is still onboarding says so plainly,
+// instead of "contact support to reactivate".
+describe('counter advice for a pharmacy awaiting approval (DEV-905)', () => {
+  it('tells everyone a complete pharmacy is waiting for DevFathom approval', () => {
+    for (const canFixSetup of [true, false]) {
+      expect(
+        counterSetupAdvice('ORGANIZATION_NOT_ACTIVE', {
+          canFixSetup,
+          branchId: 'branch-1',
+          approval: { state: 'AWAITING_APPROVAL' },
+        })
+      ).toEqual({
+        reason: 'ORGANIZATION_NOT_ACTIVE',
+        message: PHARMACY_AWAITING_APPROVAL_MESSAGE,
+        nextStep: AWAITING_APPROVAL_NEXT_STEP,
+        link: null,
+      });
+    }
+  });
+
+  it('names the open onboarding steps, with the onboarding page for the owner', () => {
+    const approval = { state: 'ONBOARDING_OPEN' as const, openSteps: ['Legal business'] };
+    expect(
+      counterSetupAdvice('ORGANIZATION_NOT_ACTIVE', {
+        canFixSetup: true,
+        branchId: 'branch-1',
+        approval,
+      })
+    ).toEqual({
+      reason: 'ORGANIZATION_NOT_ACTIVE',
+      message:
+        'This pharmacy is still onboarding, so it cannot sell yet. This onboarding step is still open: Legal business.',
+      nextStep: null,
+      link: { href: '/pharmacy', label: 'Finish the onboarding steps' },
+    });
+    expect(
+      counterSetupAdvice('ORGANIZATION_NOT_ACTIVE', {
+        canFixSetup: false,
+        branchId: 'branch-1',
+        approval,
+      })
+    ).toMatchObject({ nextStep: ASK_OWNER_OR_MANAGER, link: null });
+  });
+
+  it('keeps the reactivation advice for a workspace that is not onboarding', () => {
+    expect(
+      counterSetupAdvice('ORGANIZATION_NOT_ACTIVE', {
+        canFixSetup: true,
+        branchId: 'branch-1',
+        approval: { state: 'NOT_ACTIVE' },
+      })
+    ).toEqual(counterSetupAdvice('ORGANIZATION_NOT_ACTIVE', { canFixSetup: true, branchId: 'b' }));
+    expect(
+      counterSetupAdvice('ORGANIZATION_NOT_ACTIVE', { canFixSetup: true, branchId: 'branch-1' })
+        .message
+    ).toBe('This workspace is not active, so the counter cannot sell.');
+  });
+
+  it('only changes the advice for an inactive workspace', () => {
+    expect(
+      counterSetupAdvice('PROFILE_MISSING', {
+        canFixSetup: true,
+        branchId: 'branch-1',
+        approval: { state: 'AWAITING_APPROVAL' },
+      }).message
+    ).toBe(COUNTER_SETUP_GUIDANCE.PROFILE_MISSING.message);
   });
 });

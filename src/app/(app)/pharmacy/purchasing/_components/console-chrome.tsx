@@ -6,6 +6,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { cn } from '@/lib/utils';
 import { PURCHASING_TABS, type Notice } from '../_lib/console';
+import { TabRail } from './tab-rail';
 
 /**
  * The chrome every PH-PUR surface shares: one header, one tab rail, one place a
@@ -40,7 +41,7 @@ export function PurchasingHeader({
  */
 export function PurchasingTabs({ active }: { active: string }) {
   return (
-    <nav aria-label="Purchasing surfaces" className="-mx-1 overflow-x-auto">
+    <TabRail label="Purchasing surfaces">
       <ul className="flex min-w-max items-center gap-1 px-1">
         {PURCHASING_TABS.map((tab) => {
           const current = tab.href === active;
@@ -63,7 +64,7 @@ export function PurchasingTabs({ active }: { active: string }) {
           );
         })}
       </ul>
-    </nav>
+    </TabRail>
   );
 }
 

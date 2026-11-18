@@ -28,6 +28,7 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import {
   assertSaleable,
+  isImportedIdentity,
   deriveLooseUnitPrice,
   medicineDuplicateKey,
   normalizeMedicineText,
@@ -48,6 +49,7 @@ import {
   type ConnectorRights,
 } from '@/lib/pharmacy/reference-connectors';
 import { isEffective } from '@/lib/pharmacy/pack-conversion';
+import { applyLegacyControlledToMedicine } from '@/lib/pharmacy/migration/legacy-controlled';
 import { annotateAudit } from '../audit';
 import { adminProcedure, auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
 
@@ -796,6 +798,13 @@ export const pharmacyMedicineRouter = router({
             },
           });
         }
+
+        // DEV-854: a staged NARCOTICS-class legacy row makes this medicine controlled, no hold.
+        await applyLegacyControlledToMedicine(
+          tx as typeof ctx.db,
+          ctx.entitlements.organizationId,
+          medicine
+        );
 
         const assertions = [];
         for (const [field, value] of Object.entries(values)) {
@@ -1616,8 +1625,11 @@ export const pharmacyMedicineRouter = router({
         const medicine = await tx.medicine.findUniqueOrThrow({
           where: { id: medicineId },
         });
+        // DEV-852: a medicine whose identity came from a legacy import may lack strength and
+        // registration; both are then stored as not recorded. Every other check still applies.
+        const imported = isImportedIdentity(selected);
         const required =
-          medicine.productFamily === 'FRONT_SHOP'
+          medicine.productFamily === 'FRONT_SHOP' || imported
             ? ['productName', 'dosageForm', 'pack']
             : ['productName', 'strength', 'dosageForm', 'pack'];
         for (const field of required) {
@@ -1711,6 +1723,7 @@ export const pharmacyMedicineRouter = router({
             values.get('drapRegistrationNumber') ?? medicine.drapRegistrationNumber
           ),
           provenanceFields: new Set(selected.map((assertion) => assertion.field)),
+          imported,
         });
         for (const field of ['rx', 'restricted', 'controlled'] as const) {
           const value = values.get(field);

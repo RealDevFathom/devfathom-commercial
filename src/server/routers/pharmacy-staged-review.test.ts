@@ -65,6 +65,7 @@ function makeDb() {
       createMany: vi.fn().mockResolvedValue({}),
       groupBy: vi.fn().mockResolvedValue([]),
     },
+    $queryRaw: vi.fn().mockResolvedValue([]),
   };
 }
 let db = makeDb();
@@ -221,6 +222,45 @@ const staging = {
   quantityUnit: 'PACKS' as const,
 };
 describe('production batch staging', () => {
+  it('imports a NARCOTICS-class row as controlled with no review hold (DEV-854)', async () => {
+    const csv = [
+      'Name,classname,saleprice,purprice,QTY',
+      'Synthetic Opioid 50mg, narcotics ,450.00,380.50,12',
+      'Synthetic Paracetamol,Example Distributors,35.00,28.00,120',
+    ].join('\n');
+    db.$queryRaw.mockResolvedValue([{ id: 'med_opioid' }]);
+    const saved = await caller().stageBatch({
+      ...staging,
+      content: Buffer.from(csv).toString('base64'),
+      mapping: { product: 0, mrp: 2, cost: 3, quantity: 4 },
+      quantityUnit: 'UNITS',
+    });
+    expect(saved).toMatchObject({ controlledFromClass: 1, controlledMedicinesFlagged: 1 });
+    // One tenant-scoped update, keyed only by the NARCOTICS row's normalized name.
+    expect(db.$queryRaw).toHaveBeenCalledOnce();
+    const [, ...params] = db.$queryRaw.mock.calls[0]!;
+    expect(params).toContain('org_a');
+    expect(JSON.stringify(params)).toContain('"synthetic opioid 50mg"');
+    expect(JSON.stringify(params)).not.toContain('paracetamol');
+    // Prices are imported as values, not held for confirmation.
+    expect(db.pharmacyMigrationRow.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({ mrpMinor: BigInt(45000), costMinor: BigInt(38050) }),
+        expect.objectContaining({ mrpMinor: BigInt(3500), costMinor: BigInt(2800) }),
+      ],
+    });
+    // Nothing is held: no exception is raised for the controlled class or its prices.
+    const held = JSON.stringify(
+      db.pharmacyMigrationException.createMany.mock.calls,
+      (_key, value) => (typeof value === 'bigint' ? value.toString() : value)
+    );
+    expect(held).not.toMatch(/MISSING_MRP|controlled|narcotic/i);
+  });
+  it('flags nothing when no row is in the NARCOTICS class', async () => {
+    const saved = await caller().stageBatch(staging);
+    expect(saved).toMatchObject({ controlledFromClass: 0, controlledMedicinesFlagged: 0 });
+    expect(db.$queryRaw).not.toHaveBeenCalled();
+  });
   it.each(['PACKS', 'UNITS'] as const)(
     'persists the explicit %s choice on the batch',
     async (quantityUnit) => {

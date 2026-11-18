@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   assertSaleable,
+  isImportedIdentity,
+  notRecordedFields,
+  REGISTRATION_NOT_RECORDED,
+  STRENGTH_NOT_RECORDED,
   canonicalUnits,
   deriveLooseUnitPrice,
   medicineDuplicateKey,
@@ -123,6 +127,70 @@ describe('pharmacy medicine invariants', () => {
         provenanceFields: new Set(),
       })
     ).not.toThrow();
+  });
+
+  it('DEV-852: lets an imported medicine without strength or registration become saleable', () => {
+    const imported = {
+      productFamily: 'PHARMACEUTICAL' as const,
+      hasPresentation: true,
+      hasStrength: false,
+      hasRegistration: false,
+      provenanceFields: new Set(['productName', 'dosageForm', 'pack']),
+      imported: true,
+    };
+    expect(() => assertSaleable(imported)).not.toThrow();
+    expect(() => assertSaleable({ ...imported, hasStrength: true })).not.toThrow();
+    // A present registration still needs its own reviewed provenance, as before.
+    expect(() => assertSaleable({ ...imported, hasRegistration: true })).toThrow('NOT_SALEABLE');
+    expect(() =>
+      assertSaleable({
+        ...imported,
+        hasRegistration: true,
+        provenanceFields: new Set([...imported.provenanceFields, 'drapRegistrationNumber']),
+      })
+    ).not.toThrow();
+    // Presentation is still required for an imported medicine.
+    expect(() => assertSaleable({ ...imported, hasPresentation: false })).toThrow('NOT_SALEABLE');
+  });
+
+  it('DEV-852: still requires strength and registration for a medicine that was not imported', () => {
+    const base = {
+      productFamily: 'PHARMACEUTICAL' as const,
+      hasPresentation: true,
+      hasStrength: true,
+      hasRegistration: true,
+      provenanceFields: new Set(['drapRegistrationNumber']),
+    };
+    expect(() => assertSaleable(base)).not.toThrow();
+    expect(() => assertSaleable({ ...base, hasStrength: false })).toThrow('NOT_SALEABLE');
+    expect(() => assertSaleable({ ...base, hasRegistration: false })).toThrow('NOT_SALEABLE');
+    expect(() => assertSaleable({ ...base, imported: false, hasStrength: false })).toThrow(
+      'NOT_SALEABLE'
+    );
+  });
+
+  it('DEV-852: names what an imported medicine lacks in plain words', () => {
+    const importedName = { field: 'productName', sourceType: 'IMPORT' };
+    expect(isImportedIdentity([importedName])).toBe(true);
+    expect(isImportedIdentity([{ field: 'productName', sourceType: 'REGULATOR' }])).toBe(false);
+    expect(notRecordedFields({ provenance: [importedName] })).toEqual([
+      STRENGTH_NOT_RECORDED,
+      REGISTRATION_NOT_RECORDED,
+    ]);
+    expect(STRENGTH_NOT_RECORDED).toBe('Strength not recorded');
+    expect(REGISTRATION_NOT_RECORDED).toBe('Registration number not recorded');
+    expect(
+      notRecordedFields({
+        drapRegistrationNumber: '012345',
+        provenance: [importedName, { field: 'strength', sourceType: 'IMPORT' }],
+      })
+    ).toEqual([]);
+    expect(
+      notRecordedFields({ provenance: [{ field: 'productName', sourceType: 'REGULATOR' }] })
+    ).toEqual([]);
+    expect(notRecordedFields({ productFamily: 'FRONT_SHOP', provenance: [importedName] })).toEqual(
+      []
+    );
   });
 
   it('normalizes scan codes and preserves Urdu letters in aliases', () => {

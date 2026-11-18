@@ -728,3 +728,22 @@ it('separates strength, form and stock into labeled lines below the medicine ide
   expect(within(result).getByText('Form:').parentElement).toHaveTextContent('Tablet');
   expect(within(result).getByText('Stock:').parentElement).toHaveTextContent('240 tabs');
 });
+
+it('DEV-852: shows a missing strength in plain words, not as an error', () => {
+  render(
+    <CounterSearchResults
+      rows={[{ ...row, brandName: 'Panadol', strength: null }]}
+      state="ready"
+      query="panadol"
+      activeMedicineId={null}
+      onSelect={vi.fn()}
+      onCaptureDemand={vi.fn()}
+      onRetry={vi.fn()}
+    />
+  );
+  const result = screen.getByRole('button', { name: /Panadol.*Paracetamol/ });
+  expect(within(result).getByText('Strength not recorded')).toBeInTheDocument();
+  expect(within(result).queryByText('Strength:')).not.toBeInTheDocument();
+  expect(within(result).queryByText(/Unavailable/)).not.toBeInTheDocument();
+  expect(within(result).queryByRole('alert')).not.toBeInTheDocument();
+});

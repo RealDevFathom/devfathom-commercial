@@ -140,6 +140,7 @@ import {
 import {
   formatMinor,
   formatShortExpiry,
+  sindhCashMemoSelected,
   type CounterReceipt,
   type CounterReceiptLocale,
 } from '@/lib/pharmacy/counter-receipt';
@@ -159,6 +160,8 @@ import { trpc } from '@/lib/trpc';
 type Notice = {
   tone: 'success' | 'info' | 'warning' | 'danger' | 'neutral';
   message: string;
+  /** DEV-910: stays on screen until the cashier dismisses it. */
+  persistent?: boolean;
   inventoryBranchId?: string;
   /** DEV-860: a sale refused for a setup gap carries its fix link or whom to ask. */
   setup?: CounterSetupAdvice;
@@ -623,7 +626,8 @@ function ScopedPharmacyCounterConsole({
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   useEffect(() => {
-    if (!notice || (notice.tone !== 'success' && notice.tone !== 'info')) return;
+    if (!notice || notice.persistent) return;
+    if (notice.tone !== 'success' && notice.tone !== 'info') return;
     const timer = window.setTimeout(() => setNotice(null), 5000);
     return () => window.clearTimeout(timer);
   }, [notice]);
@@ -867,6 +871,14 @@ function ScopedPharmacyCounterConsole({
       trpc: { abortOnUnmount: true },
     }
   );
+  const searchState =
+    !branchAuthorized || trimmedQuery.length < 2 || (scannerQuery && !searchCurrent)
+      ? 'idle'
+      : !searchCurrent || searchQuery.isFetching || searchQuery.isPlaceholderData
+        ? 'loading'
+        : searchQuery.isError
+          ? 'error'
+          : 'ready';
 
   const cartQuery = trpc.pharmacySales.counterCart.useQuery(
     { branchId, saleId: saleId ?? '' },
@@ -922,14 +934,22 @@ function ScopedPharmacyCounterConsole({
   const canFixSetup =
     saleReadiness.data?.canFixSetup === true || branchesQuery.data?.canFixSetup === true;
   const refetchSaleReadiness = saleReadiness.refetch;
+  // DEV-905: a refusal for a workspace waiting on approval says so, like the panel does.
+  const organizationApproval = saleReadiness.data?.approval ?? null;
   const setupNotice = useCallback(
     (error: unknown): { setup?: CounterSetupAdvice } => {
       const reason = counterSetupReason(error);
       // The drawer has its own step on the counter; nobody else is asked to open it.
       if (!reason || reason === 'DRAWER_NOT_OPEN') return {};
-      return { setup: counterSetupAdvice(reason, { canFixSetup, branchId }) };
+      return {
+        setup: counterSetupAdvice(reason, {
+          canFixSetup,
+          branchId,
+          approval: organizationApproval,
+        }),
+      };
     },
-    [branchId, canFixSetup]
+    [organizationApproval, branchId, canFixSetup]
   );
   // Read at call time: a scan or shortcut can finish after the drawer closed.
   const drawerRequiredRef = useRef(drawerRequired);
@@ -2404,6 +2424,7 @@ function ScopedPharmacyCounterConsole({
         payerName?: string;
         referenceSkipped?: boolean;
         approvalCode?: string;
+        buyerName?: string;
       },
       draft: TenderDraft
     ): Promise<CounterTenderResult> => {
@@ -2448,6 +2469,8 @@ function ScopedPharmacyCounterConsole({
             : {}),
           // #722: equal split rows (Rs 500 + Rs 500) are distinct payments at
           // different paid balances; a double tap at the same balance still replays.
+          // #708: a cash-memo buyer keeps this key; a changed buyer conflicts on the
+          // payload hash rather than recording the same payment twice.
           idempotencyKey:
             input.familyAccountId ||
             input.payerName !== undefined ||
@@ -2474,6 +2497,7 @@ function ScopedPharmacyCounterConsole({
             ? { referenceSkipped: input.referenceSkipped }
             : {}),
           ...(input.approvalCode !== undefined ? { approvalCode: input.approvalCode } : {}),
+          ...(input.buyerName !== undefined ? { buyerName: input.buyerName } : {}),
         };
         sentKey = payload.idempotencyKey;
         const original: TenderAttempt = { version: 1, scope: recoveryScope, input: payload, draft };
@@ -3046,6 +3070,7 @@ function ScopedPharmacyCounterConsole({
       setReceiptReprint(allocation.reprint);
       setNotice({
         tone: 'success',
+        persistent: true,
         message:
           'Browser print dialog requested. Select the matching paper size and OS printer. Physical printing is not confirmed.',
       });
@@ -3650,6 +3675,16 @@ function ScopedPharmacyCounterConsole({
                       </Link>
                     ) : null}
                   </div>
+                  {notice.persistent ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="ml-auto min-h-11 min-w-11 shrink-0"
+                      onClick={() => setNotice(null)}
+                    >
+                      Dismiss
+                    </Button>
+                  ) : null}
                 </div>
               ) : null}
               {lostSaleCapture && lostSaleCapture.branchId === branchId ? (
@@ -3896,7 +3931,15 @@ function ScopedPharmacyCounterConsole({
                           if (first) stageRow(first);
                           else void searchAndStage(trimmed);
                         }}
-                        className="h-12"
+                        // DEV-44: the field is focused on load, and the coral focus ring read as
+                        // an error before anything was typed. It stays neutral until a search
+                        // actually fails, then carries the destructive state and aria-invalid.
+                        aria-invalid={searchState === 'error' || undefined}
+                        className={
+                          searchState === 'error'
+                            ? 'h-12 [--ring:var(--destructive)]'
+                            : 'h-12 [--ring:var(--text-muted)]'
+                        }
                       />
                       <p id="counter-search-help" className="text-xs text-text-muted">
                         {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
@@ -3928,17 +3971,7 @@ function ScopedPharmacyCounterConsole({
                         ? (searchQuery.data?.rows ?? [])
                         : []
                     }
-                    state={
-                      !branchAuthorized ||
-                      trimmedQuery.length < 2 ||
-                      (scannerQuery && !searchCurrent)
-                        ? 'idle'
-                        : !searchCurrent || searchQuery.isFetching || searchQuery.isPlaceholderData
-                          ? 'loading'
-                          : searchQuery.isError
-                            ? 'error'
-                            : 'ready'
-                    }
+                    state={searchState}
                     query={trimmedQuery}
                     disabled={busy || !branchAuthorized}
                     disabledReasonId={branchControlReason ? 'counter-branch-reason' : undefined}
@@ -4043,12 +4076,22 @@ function ScopedPharmacyCounterConsole({
                     type="button"
                     className="min-h-12 rounded-[var(--radius-sm)]"
                     disabled={busy || !preview?.sufficient}
+                    aria-describedby={
+                      !busy && !preview?.sufficient ? 'counter-add-to-cart-reason' : undefined
+                    }
                     onClick={() => void addToCart()}
                   >
                     {pending === 'addToCart'
                       ? 'Adding…'
                       : `Add to cart · ${formatBinding(keymap.bindings.addToCart)}`}
                   </Button>
+                  {!busy && !preview?.sufficient ? (
+                    <p id="counter-add-to-cart-reason" className="text-xs text-text-muted">
+                      {preview
+                        ? 'Not enough stock for this quantity. Reduce it or record the shortage.'
+                        : 'Enter a valid quantity to add this item.'}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-text-muted">
                   <span>
@@ -4449,9 +4492,13 @@ function ScopedPharmacyCounterConsole({
                   providerRef: restoredAttempt.input.providerRef,
                   referenceSkipped: restoredAttempt.input.referenceSkipped,
                   approvalCode: restoredAttempt.input.approvalCode,
+                  buyerName: restoredAttempt.input.buyerName,
                 }
               : undefined
           }
+          cashMemo={sindhCashMemoSelected(
+            branches.find((branch) => branch.id === branchId)?.provinceCode
+          )}
           recoveryOutcome={tenderOutcome}
           checkingOutcome={checkingOutcome}
           onCheckOutcome={

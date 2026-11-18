@@ -55,7 +55,7 @@ function envelope(value: string) {
   };
 }
 
-function makeStore(values: Record<string, string>) {
+function makeStore(values: Record<string, string>, sourceType?: 'IMPORT' | 'REGULATOR') {
   let sequence = 0;
   const next = (prefix: string) => `${prefix}_${++sequence}`;
   const medicines: Row[] = [
@@ -78,6 +78,7 @@ function makeStore(values: Record<string, string>) {
     reviewer: 'pharmacist',
     supersedesId: null,
     assertedValue: envelope(value),
+    ...(sourceType ? { sourceType } : {}),
   }));
   const edits: Row[] = [];
   const presentations: Row[] = [];
@@ -686,5 +687,88 @@ describe('DEV-766 front-shop publication', () => {
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'Publication requires strength.' });
     expect(store.rows.medicines[0]).toMatchObject({ saleable: false });
+  });
+});
+
+describe('DEV-852 imported medicines without strength or registration', () => {
+  const legacy = { productName: 'Amoxil', dosageForm: 'Capsule', pack: '10 capsules' };
+  const publish = (store: Store, values: Record<string, string>) =>
+    caller(store).publishAssertions({
+      assertionIds: Object.keys(values).map((field) => `assertion_${field}`),
+    });
+
+  it('publishes an imported medicine with neither value, leaving both not recorded', async () => {
+    const store = makeStore(legacy, 'IMPORT');
+    await publish(store, legacy);
+    expect(store.rows.medicines[0]).toMatchObject({ saleable: true });
+    // Prisma leaves an undefined column unchanged, so the registration stays null.
+    expect(store.rows.medicines[0]!.drapRegistrationNumber ?? null).toBeNull();
+    expect(store.medicineStrengthComponent.create).not.toHaveBeenCalled();
+    expect(store.rows.packLevels).toEqual([expect.objectContaining({ unitsPerParent: 10 })]);
+  });
+
+  it('publishes an imported medicine missing only one of the two values', async () => {
+    const withStrength = { ...legacy, strength: '500 mg' };
+    const store = makeStore(withStrength, 'IMPORT');
+    await publish(store, withStrength);
+    expect(store.rows.medicines[0]).toMatchObject({ saleable: true });
+    expect(store.rows.medicines[0]!.drapRegistrationNumber ?? null).toBeNull();
+    expect(store.medicineStrengthComponent.create).toHaveBeenCalledTimes(1);
+
+    const withRegistration = { ...legacy, drapRegistrationNumber: '012345' };
+    const other = makeStore(withRegistration, 'IMPORT');
+    await publish(other, withRegistration);
+    expect(other.rows.medicines[0]).toMatchObject({
+      saleable: true,
+      drapRegistrationNumber: '012345',
+    });
+    expect(other.medicineStrengthComponent.create).not.toHaveBeenCalled();
+  });
+
+  it('publishes an imported medicine that has both values exactly as before', async () => {
+    const values = { ...legacy, strength: '500 mg', drapRegistrationNumber: '012345' };
+    const store = makeStore(values, 'IMPORT');
+    await publish(store, values);
+    expect(store.rows.medicines[0]).toMatchObject({
+      saleable: true,
+      drapRegistrationNumber: '012345',
+    });
+    expect(store.medicineStrengthComponent.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the schedule flags of an imported controlled, prescription-only medicine', async () => {
+    const values = { ...legacy, rx: 'true', controlled: 'true' };
+    const store = makeStore(values, 'IMPORT');
+    await publish(store, values);
+    expect(store.rows.medicines[0]).toMatchObject({ saleable: true, rx: true, controlled: true });
+  });
+
+  it('still blocks an imported medicine with no dosage form, pack or an unreadable strength', async () => {
+    const noForm = { productName: 'Amoxil', pack: '10 capsules' };
+    const store = makeStore(noForm, 'IMPORT');
+    await expect(publish(store, noForm)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Publication requires dosageForm.',
+    });
+    const badStrength = { ...legacy, strength: 'strong' };
+    const other = makeStore(badStrength, 'IMPORT');
+    await expect(publish(other, badStrength)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: /Strength cannot be safely structured/,
+    });
+    expect(store.rows.medicines[0]).toMatchObject({ saleable: false });
+    expect(other.rows.medicines[0]).toMatchObject({ saleable: false });
+  });
+
+  it('still requires strength and registration when the identity came from the regulator', async () => {
+    const store = makeStore(legacy, 'REGULATOR');
+    await expect(publish(store, legacy)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Publication requires strength.',
+    });
+    const noRegistration = { ...legacy, strength: '500 mg' };
+    const other = makeStore(noRegistration, 'REGULATOR');
+    await expect(publish(other, noRegistration)).rejects.toThrow();
+    expect(other.rows.medicines[0]).toMatchObject({ saleable: false });
   });
 });

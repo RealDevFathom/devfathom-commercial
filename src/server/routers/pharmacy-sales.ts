@@ -56,6 +56,7 @@ import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
 import { BRANCH_NOT_ASSIGNED } from '@/lib/pharmacy/counter-setup';
+import { readPharmacyApprovalStatus } from '@/lib/pharmacy/onboarding';
 import { RefusalReason } from '@/server/refusal-reason';
 import {
   evaluateCounterSaleReadiness,
@@ -286,9 +287,20 @@ const tenderInput = z
      * server; never stored, hashed into the payment or replayed.
      */
     prepaidPin: prepaidPin.optional(),
+    // #708: the buyer the Sindh cash memo names. Last, so existing payload hashes hold.
+    buyerName: z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .regex(/^[^\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069<>]*$/u, 'Use a plain name.')
+      .optional(),
   })
   .strict()
-  .refine(hasValidTenderProviderReference, { path: ['providerRef'], message: 'Invalid payment reference.' });
+  .refine(hasValidTenderProviderReference, {
+    path: ['providerRef'],
+    message: 'Invalid payment reference.',
+  });
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
 const demandReason = z.enum([
   'STOCKOUT',
@@ -420,6 +432,29 @@ async function assignedBranchScope(ctx: TRPCContext, branch: string): Promise<Le
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
   return scope;
+}
+
+/**
+ * DEV-909: a customer's detailed points history is shown for every branch only to a session
+ * ADMIN of the organization (the owner). Other staff, branch managers included, see it for the
+ * active branches they are assigned to; the shared points balance is not limited.
+ */
+async function visibleLoyaltyBranches(
+  ctx: TRPCContext,
+  scope: LedgerScope
+): Promise<string[] | undefined> {
+  const user = ctx.session!.user;
+  if (user.role === 'ADMIN' && user.organizationId === scope.organizationId) return undefined;
+  const rows = await ctx.db.pharmacyBranchAssignment.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      userId: user.id,
+      active: true,
+      branch: { organizationId: scope.organizationId, active: true },
+    },
+    select: { branchId: true },
+  });
+  return [...new Set([scope.branchId, ...rows.map((row) => row.branchId)])];
 }
 
 type SaleLineInput = Parameters<typeof addSaleLine>[2];
@@ -1677,11 +1712,13 @@ export const pharmacySalesRouter = router({
     )
     .query(async ({ ctx, input }) => {
       try {
+        const scope = await assignedBranchScope(ctx, input.branchId);
         return await readCustomerSnapshot(
           ctx.db,
-          await assignedBranchScope(ctx, input.branchId),
+          scope,
           input.customerId,
-          input.page
+          input.page,
+          await visibleLoyaltyBranches(ctx, scope)
         );
       } catch (error) {
         fail(error);
@@ -1979,7 +2016,11 @@ export const pharmacySalesRouter = router({
       }
     }),
   tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
-    if (isManualTender(input.type) || input.approvalCode !== undefined)
+    if (
+      isManualTender(input.type) ||
+      input.approvalCode !== undefined ||
+      input.buyerName !== undefined
+    )
       annotateAudit(ctx, { skipInput: true });
     const scope =
       input.type === 'KHATA' || input.type === 'CREDIT' || input.familyAccountId
@@ -2062,7 +2103,11 @@ export const pharmacySalesRouter = router({
       }
     }),
   tender: protectedProcedure.input(tenderInput).mutation(async ({ ctx, input }) => {
-    if (isManualTender(input.type) || input.approvalCode !== undefined)
+    if (
+      isManualTender(input.type) ||
+      input.approvalCode !== undefined ||
+      input.buyerName !== undefined
+    )
       annotateAudit(ctx, { skipInput: true });
     try {
       if (input.type !== 'KHATA' && input.type !== 'CREDIT') {
@@ -2335,7 +2380,16 @@ export const pharmacySalesRouter = router({
         deviceId: input.deviceId ?? null,
         takesPayment,
       });
-      return { ...readiness, canFixSetup: orgAdmin };
+      // DEV-905: a workspace that is not active may simply be waiting for DevFathom
+      // approval, or still have onboarding steps open. Say which, instead of the generic
+      // "not active". The read is additive: if it fails, the generic message stays.
+      const approval = readiness.blockers.includes('ORGANIZATION_NOT_ACTIVE')
+        ? await readPharmacyApprovalStatus(
+            ctx.db as unknown as ScopedDb,
+            scope.organizationId
+          ).catch(() => null)
+        : null;
+      return { ...readiness, canFixSetup: orgAdmin, ...(approval ? { approval } : {}) };
     }),
   create: protectedProcedure
     .input(
@@ -3897,7 +3951,7 @@ export const pharmacySalesRouter = router({
                 },
               }),
         },
-        select: { id: true, code: true, name: true, city: true },
+        select: { id: true, code: true, name: true, city: true, provinceCode: true },
         orderBy: [{ name: 'asc' }, { id: 'asc' }],
       }),
       ctx.db.organization.findUnique({

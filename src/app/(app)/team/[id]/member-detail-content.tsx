@@ -33,6 +33,7 @@ import {
   Trash2,
   Send,
   Gauge,
+  ScrollText,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -49,6 +50,7 @@ import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { Textarea } from '@/components/ui/textarea';
 import { useEntitlements } from '@/components/entitlements-provider';
+import { isModuleGranted } from '@/lib/module-catalog';
 import { trpc } from '@/lib/trpc';
 import { inviteCopyForVertical } from '@/lib/team/invite-copy';
 import { useBreadcrumbLabel } from '@/lib/breadcrumb-store';
@@ -222,17 +224,26 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
             </span>
           }
           actions={
-            isAdmin && memberId !== session?.user?.id ? (
+            isAdmin ? (
               <>
-                <Button variant="outline" size="lg" onClick={() => setIsEditing(true)}>
-                  <Pencil className="h-3.5 w-3.5" /> Edit
-                </Button>
-                <Button variant="outline" size="lg" onClick={() => setShowResetPw(!showResetPw)}>
-                  <Lock className="h-3.5 w-3.5" /> Reset Password
-                </Button>
-                <Button variant="destructive" size="lg" onClick={() => setShowLayOff(true)}>
-                  <UserX className="h-3.5 w-3.5" /> Lay off
-                </Button>
+                <MemberAuditLink memberId={memberId} />
+                {memberId !== session?.user?.id && (
+                  <>
+                    <Button variant="outline" size="lg" onClick={() => setIsEditing(true)}>
+                      <Pencil className="h-3.5 w-3.5" /> Edit
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="lg"
+                      onClick={() => setShowResetPw(!showResetPw)}
+                    >
+                      <Lock className="h-3.5 w-3.5" /> Reset Password
+                    </Button>
+                    <Button variant="destructive" size="lg" onClick={() => setShowLayOff(true)}>
+                      <UserX className="h-3.5 w-3.5" /> Lay off
+                    </Button>
+                  </>
+                )}
               </>
             ) : undefined
           }
@@ -1307,5 +1318,25 @@ function StatTile({
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * DEV-913: an administrator opens this person's actions in the audit log, on
+ * any workspace that has it (every pharmacy does).
+ */
+function MemberAuditLink({ memberId }: { memberId: string }) {
+  const entitlements = useEntitlements();
+  if (!isModuleGranted('audit', entitlements.enabledModules, entitlements.vertical)) return null;
+  return (
+    <Button
+      variant="outline"
+      size="lg"
+      nativeButton={false}
+      role="link"
+      render={<Link href={`/audit-logs?${new URLSearchParams({ actorId: memberId })}`} />}
+    >
+      <ScrollText className="h-3.5 w-3.5" /> See their actions
+    </Button>
   );
 }

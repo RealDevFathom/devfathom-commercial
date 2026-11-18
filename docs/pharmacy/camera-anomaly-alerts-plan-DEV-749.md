@@ -121,8 +121,8 @@ that the design is lawful anywhere.
 ## 10. Questions for the owner (decide before implementation)
 
 1. Which use cases from section 3, if any? (**SIGN-OFF REQUIRED**)
-2. How many cameras and which areas? Which hours are monitored?
-3. Alert recipients and delivery channel.
+2. How many cameras and which areas? Which hours are monitored? (**SIGN-OFF REQUIRED**)
+3. Alert recipients and delivery channel. (**SIGN-OFF REQUIRED**)
 4. Monthly budget per camera and overall. (**SIGN-OFF REQUIRED**)
 5. Retention (section 8) and provider/region (section 9).
 

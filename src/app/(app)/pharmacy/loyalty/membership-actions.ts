@@ -10,7 +10,10 @@ export type MembershipFormState = { status: 'idle' | 'saved' | 'error'; message:
 
 const text = (form: FormData, name: string) => String(form.get(name) ?? '').trim();
 
-/** DEV-764: an owner or manager enrols or deactivates a loyalty member; the server decides. */
+/**
+ * DEV-764: an owner or manager enrols a loyalty member; DEV-909: only the owner deactivates one,
+ * for the whole organisation. The server decides.
+ */
 export async function changeMembership(
   _previous: MembershipFormState,
   form: FormData
@@ -44,7 +47,9 @@ export async function changeMembership(
       if (['FORBIDDEN', 'UNAUTHORIZED'].includes(error.code))
         return {
           status: 'error',
-          message: 'Only an owner or a manager of this branch can change a membership.',
+          message: active
+            ? 'Only an owner or a manager of this branch can enrol a member.'
+            : 'Only the owner may deactivate a member for the whole organisation.',
         };
       if (['BAD_REQUEST', 'PRECONDITION_FAILED', 'NOT_FOUND'].includes(error.code))
         return {
