@@ -443,6 +443,8 @@ describe('pharmacySales.addLine discount approval (#520)', () => {
 
   it('refuses a discount with no manager PIN approval', async () => {
     const f = fixture();
+    // DEV-66: by default nobody holds the owner-granted discount right.
+    vi.mocked(can).mockImplementation(async (_subject, action) => action !== 'pharmacy:discount');
     await expect(
       f.caller.addLine({ ...line, discountKind: 'DISCOUNT', discountMinor: 1 })
     ).rejects.toMatchObject({
@@ -450,6 +452,23 @@ describe('pharmacySales.addLine discount approval (#520)', () => {
       message: 'A discount needs a manager to approve it with their PIN.',
     });
     expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('DEV-66: lets an operator the owner granted the discount right discount without a PIN', async () => {
+    const f = fixture();
+    vi.mocked(addSaleLine).mockResolvedValue({
+      line: { id: 'line-1' },
+      allocation: { overrideId: null, recommendedLotId: 'lot-fefo' },
+    } as never);
+    await f.caller.addLine({ ...line, discountKind: 'DISCOUNT', discountMinor: 1 });
+    const [, , input] = vi.mocked(addSaleLine).mock.calls[0]!;
+    expect(input).toMatchObject({ approvedByUserId: 'actor-1', approvalPolicy: 'DISCOUNT_RIGHT' });
+    expect(can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'actor-1' }),
+      'pharmacy:discount',
+      undefined,
+      expect.anything()
+    );
   });
 
   it('adds an undiscounted line with no approver recorded', async () => {
