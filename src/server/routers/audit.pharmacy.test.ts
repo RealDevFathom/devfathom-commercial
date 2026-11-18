@@ -76,7 +76,10 @@ const ROW = {
   input: { saleId: 'sale_1', approval: { pin: '[REDACTED]' } },
   changes: null,
   result: null,
-  metadata: { branchId: 'branch_north', refundApproval: { approvedByUserId: 'owner' } },
+  metadata: {
+    branchId: 'branch_north',
+    refundApproval: { approvedByUserId: 'owner' },
+  } as Record<string, unknown>,
   outcome: 'SUCCESS',
 };
 
