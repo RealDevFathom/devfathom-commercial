@@ -22,6 +22,7 @@ import {
   exactReceiptPriceBreakdown,
 } from './counter-receipt-presentation';
 import { buildPharmacyReceiptPrintDocument } from './receipt-print';
+import { hostedReceiptView } from './hosted-receipt-view';
 
 function receiptLine(overrides: Partial<CounterReceiptLine> = {}): CounterReceiptLine {
   return {
@@ -403,8 +404,49 @@ describe('promotion receipt line (#727)', () => {
   });
 });
 
+describe('DEV-637 issuing counter and offline reference on every receipt form', () => {
+  const issued = () =>
+    receipt({ counterLabel: 'Front till', offlineReference: 7, receiptNumber: 1043 });
+  const printJob = (source: CounterReceipt, reprint = false) =>
+    buildPharmacyReceiptPrintDocument(source, 'en', {
+      layout: DEFAULT_RECEIPT_LAYOUT,
+      taxIdentity: { ntn: null, strn: null },
+      reprint,
+    }).receiptSnapshot!.facts.issuedAt;
+
+  it('prints the counter on the ESC/POS job sent to the print bridge, original and reprint', () => {
+    expect(printJob(receipt({ counterLabel: 'Front till' }))).toContain('\nFront till');
+    expect(printJob(receipt({ counterLabel: 'Front till' }), true)).toContain('\nFront till');
+    expect(printJob(receipt())).not.toContain('Front till');
+  });
+
+  it('prints the number printed offline on the ESC/POS job and browser receipt', () => {
+    expect(printJob(issued(), true)).toContain('Printed offline as receipt 7');
+    expect(buildCounterReceiptPreview(issued(), 'en', 80)).toContain(
+      'Printed offline as receipt 7'
+    );
+    expect(buildCounterReceiptPreview(issued(), 'ur', 80)).toContain(
+      `${COUNTER_RECEIPT_STRINGS.ur.offlineReference} ${localizeReceiptNumber('7', 'ur')}`
+    );
+    expect(printJob(receipt())).not.toContain('Printed offline');
+    expect(buildCounterReceiptPreview(receipt(), 'en', 80)).not.toContain('Printed offline');
+  });
+
+  it('carries the counter and offline reference to the hosted receipt', () => {
+    expect(hostedReceiptView(issued())).toMatchObject({
+      receiptNumber: 1043,
+      counterLabel: 'Front till',
+      offlineReference: 'Printed offline as receipt 7',
+    });
+    expect(hostedReceiptView(receipt())).toMatchObject({
+      counterLabel: null,
+      offlineReference: null,
+    });
+  });
+});
+
 describe('receiptTitle', () => {
-  it('names the issuing counter because numbers restart per counter', () => {
+  it('names the issuing counter', () => {
     expect(receiptTitle({ ...receipt(), counterLabel: 'Front till' }, 'en')).toBe(
       'Receipt 12 · Front till'
     );

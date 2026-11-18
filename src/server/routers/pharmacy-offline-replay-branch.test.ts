@@ -96,6 +96,10 @@ const db = {
     findMany: vi.fn(async () => [{ id: 'lot_1', batch: { state: 'ACTIVE' } }]),
   },
   auditLog: { create: vi.fn(async () => ({})) },
+  // DEV-637: a retry answers with the number the sale was issued.
+  pharmacySale: {
+    findFirst: vi.fn(async () => ({ receiptNumber: 900, offlineReceiptReference: null })),
+  },
 };
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: vi.fn(async (_org: string, work: (tx: unknown) => unknown) => work(db)),

@@ -197,6 +197,32 @@ describe('DEV-766 catalogue approval queue', () => {
     expect(screen.getByText('5012345678900')).toBeVisible();
     expect(screen.queryByText('pack_strip')).not.toBeInTheDocument();
   });
+  it('shows a queued pack price with its MRP, selling price and branch (DEV-923)', () => {
+    m.queue.data = [
+      {
+        id: 'price-edit',
+        operation: 'setPackPrice',
+        medicine: { productName: 'Fixture tablets' },
+        editor: { name: 'Editor' },
+        changes: {
+          json: { packLevelId: 'pack_strip', mrpMinor: 50000, sellingPriceMinor: null },
+        },
+        stale: false,
+        targets: [
+          { label: 'Pack', value: 'STRIP (10 per pack), 3 x 10 tablets' },
+          { label: 'Applies to', value: 'All branches' },
+        ],
+      },
+    ];
+    render(<CatalogueApprovalQueue />);
+    expect(screen.getByText('Set pack price')).toBeVisible();
+    expect(screen.getByText('MRP (minor units)')).toBeVisible();
+    expect(screen.getByText('50000')).toBeVisible();
+    expect(screen.getByText('Selling price (minor units)')).toBeVisible();
+    expect(screen.getByText('Sell at MRP')).toBeVisible();
+    expect(screen.getByText('All branches')).toBeVisible();
+    expect(screen.queryByText('pack_strip')).not.toBeInTheDocument();
+  });
   it('says how many other pending edits an approval made stale', async () => {
     render(<CatalogueApprovalQueue />);
     await act(async () => {

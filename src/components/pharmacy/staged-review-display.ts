@@ -51,3 +51,35 @@ export function formatStagedQuantity(value: string | null | undefined): string {
   if (!text) return NOT_SUPPLIED_AS_TEXT;
   return NUMERIC.test(text) ? text.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '') : text;
 }
+
+const BATCH_STATUS_LABELS: Record<string, string> = {
+  PROFILING: 'Being read',
+  PROFILED: 'Ready to review',
+  FAILED: 'Could not be read',
+};
+
+/** Plain words for a batch status code (display only). */
+export function plainBatchStatus(status: string): string {
+  return BATCH_STATUS_LABELS[status] ?? 'Needs review';
+}
+
+interface QuantityReviewLike {
+  unit: string | null;
+  packs: string | null;
+  units: string | null;
+  unitsPerPack: string | null;
+  label: string | null;
+}
+
+/** Plain-words version of the counted quantity: no trailing zeros, no internal wording. */
+export function formatStagedQuantityReview(review: QuantityReviewLike): string | null {
+  if (review.label === null) return null;
+  if (review.units === null)
+    return review.label.replace(/\d+\.\d*0+(?!\d)/g, (m) => formatStagedQuantity(m));
+  const units = formatStagedQuantity(review.units);
+  if (review.unit === 'PACKS' && review.packs && review.unitsPerPack) {
+    return `${formatStagedQuantity(review.packs)} packs × ${formatStagedQuantity(review.unitsPerPack)} = ${units} units`;
+  }
+  if (review.unit === 'UNITS') return `${units} units`;
+  return `${units} (unit not chosen yet)`;
+}

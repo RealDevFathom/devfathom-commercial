@@ -8,6 +8,7 @@ import {
   requireIndependentCatalogueReviewer,
   recordCatalogueApproval,
   listPendingCatalogueEdits,
+  NO_OTHER_REVIEWER,
 } from '@/lib/pharmacy/catalogue-approvals';
 import {
   confirmPriceChanges,
@@ -52,7 +53,10 @@ import {
 import { isEffective } from '@/lib/pharmacy/pack-conversion';
 import { actorIsPharmacyOwner } from '@/lib/pharmacy/procurement-access';
 import { can, subjectFromSession, type Action } from '@/lib/abac';
-import { applyLegacyControlledToMedicine } from '@/lib/pharmacy/migration/legacy-controlled';
+import {
+  applyLegacyControlledToMedicine,
+  hasControlledCorrection,
+} from '@/lib/pharmacy/migration/legacy-controlled';
 import { annotateAudit } from '../audit';
 import {
   adminProcedure,
@@ -387,6 +391,7 @@ async function catalogueAccess(ctx: TRPCContext) {
   return { reviewer, editor, ownerFallback, owner };
 }
 const catalogueCommands = [
+  'setPackPrice',
   'createIngredient',
   'createPackLevel',
   'revisePackLevel',
@@ -442,6 +447,24 @@ async function applyCatalogueCommand(
     superjson.deserialize(payload as unknown as Parameters<typeof superjson.deserialize>[0])
   );
 }
+
+/**
+ * DEV-923: recording a review decision, publishing reviewed assertions and reversing a
+ * publication are reviewer work. They need the exact pharmacy:catalogue-review grant,
+ * resolved by the ABAC engine (an explicit DENY refuses anyone), with no tenant-admin
+ * requirement, so a Pharmacist reviews. The one exception is DEV-19's owner fallback: an
+ * owner (live owner authority, no DENY) while no other active member can review; their
+ * acceptances then need a fresh PIN.
+ */
+const reviewerProcedure = auditedProtectedProcedure.use(async ({ ctx, next }) => {
+  const access = await catalogueAccess(ctx);
+  if (!access.reviewer && !access.ownerFallback)
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Reviewing and publishing catalogue changes needs the catalogue review permission.',
+    });
+  return next({ ctx: { catalogueOwnerFallback: !access.reviewer } });
+});
 
 const DUPLICATE_INGREDIENT_MESSAGE = 'This ingredient already exists. Use the existing one.';
 const DUPLICATE_PACK_MESSAGE =
@@ -598,7 +621,7 @@ export const pharmacyMedicineRouter = router({
         throw error;
       }
     }),
-  setPackPrice: adminProcedure
+  setPackPrice: catalogueCommandProcedure
     .input(
       z
         .object({
@@ -610,13 +633,30 @@ export const pharmacyMedicineRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) =>
-      setManualPackPrice(
+    // DEV-923: a pack price is what the counter charges, so it is a reviewed catalogue
+    // edit. It is queued and written only when another reviewer approves it (or a solo
+    // owner with their fresh PIN), with the same approval audit as every catalogue edit.
+    .mutation(async ({ ctx, input }) => {
+      if (input.sellingPriceMinor !== null && input.sellingPriceMinor > input.mrpMinor)
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Selling price cannot exceed MRP' });
+      const pack = await ctx.db.packLevel.findFirst({
+        where: { id: input.packLevelId },
+        include: { presentation: true },
+      });
+      if (!pack) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pack not found.' });
+      const queued = await queueCatalogueCommand(
+        ctx,
+        pack.presentation.medicineId,
+        'setPackPrice',
+        input
+      );
+      if (queued) return queued;
+      return setManualPackPrice(
         ctx.db,
         { organizationId: ctx.entitlements.organizationId, actorId: ctx.session.user.id },
         input
-      )
-    ),
+      );
+    }),
   priceOverrides: adminProcedure
     .input(z.object({ branchId: z.string().min(1).max(200).optional() }).strict())
     .query(({ ctx, input }) =>
@@ -851,6 +891,7 @@ export const pharmacyMedicineRouter = router({
         let medicine = proposal.targetMedicineId
           ? await tx.medicine.findFirst({ where: { id: proposal.targetMedicineId } })
           : null;
+        let keptCorrection = false;
         if (proposal.targetMedicineId && !medicine) {
           throw new TRPCError({ code: 'NOT_FOUND', message: 'Target medicine not found.' });
         }
@@ -875,6 +916,16 @@ export const pharmacyMedicineRouter = router({
             },
           });
         } else {
+          // DEV-925: an import never sets back a person's correction to "not controlled".
+          keptCorrection =
+            source.sourceType === 'IMPORT' &&
+            !medicine.controlled &&
+            proposedBoolean(values.controlled) === true &&
+            (await hasControlledCorrection(
+              tx as typeof ctx.db,
+              ctx.entitlements.organizationId,
+              medicine.id
+            ));
           medicine = await tx.medicine.update({
             where: { id: medicine.id },
             data: {
@@ -884,7 +935,7 @@ export const pharmacyMedicineRouter = router({
               drapRegistrationNumber: values.drapRegistrationNumber,
               rx: proposedBoolean(values.rx),
               restricted: proposedBoolean(values.restricted),
-              controlled: proposedBoolean(values.controlled),
+              controlled: keptCorrection ? undefined : proposedBoolean(values.controlled),
             },
           });
         }
@@ -898,6 +949,8 @@ export const pharmacyMedicineRouter = router({
 
         const assertions = [];
         for (const [field, value] of Object.entries(values)) {
+          // The import's controlled value was not applied, so it is not recorded as accepted.
+          if (keptCorrection && field === 'controlled') continue;
           assertions.push(
             await tx.medicineProvenance.create({
               data: {
@@ -1541,7 +1594,9 @@ export const pharmacyMedicineRouter = router({
       .map(([duplicateKey, candidates]) => ({ duplicateKey, candidates }));
   }),
 
-  recordReviewDecision: adminProcedure.input(reviewDecisionInput).mutation(({ ctx, input }) =>
+  // DEV-923: this is the review step itself: the reviewer must differ from each
+  // assertion's editor (or be a solo owner with a fresh PIN), so it is not queued again.
+  recordReviewDecision: reviewerProcedure.input(reviewDecisionInput).mutation(({ ctx, input }) =>
     ctx.db.$transaction(async (tx) => {
       const medicineIds = [...new Set(input.medicineIds)];
       const assertionIds = [...new Set(input.payload.assertionIds)];
@@ -1596,21 +1651,27 @@ export const pharmacyMedicineRouter = router({
           code: 'BAD_REQUEST',
           message: 'Resubmit assertions with editor evidence before approval.',
         });
+      const editorIds = assertions.map((assertion) => assertion.editorId);
       const solo =
         (input.action === 'ACCEPT' || input.action === 'CORRECT') &&
         (await requireIndependentCatalogueReviewer(
           tx as typeof ctx.db,
           scope,
-          assertions.map((assertion) => assertion.editorId),
-          input.soloPin
+          // DEV-923: an owner deciding without the review grant (DEV-19 owner fallback)
+          // goes through the fresh-PIN check on every acceptance, whoever the editor was.
+          ctx.catalogueOwnerFallback ? [scope.actorId] : editorIds,
+          input.soloPin,
+          { ownerWithoutOtherReviewer: true, selfApproval: editorIds.includes(scope.actorId) }
         ));
-      if (solo)
+      // DEV-923: every acceptance carries the catalogue approval audit, not only a solo one.
+      if (input.action === 'ACCEPT' || input.action === 'CORRECT')
         await recordCatalogueApproval(
           tx as typeof ctx.db,
           scope,
           assertions[0]!.id,
-          true,
-          'MedicineProvenance'
+          solo,
+          'MedicineProvenance',
+          solo ? NO_OTHER_REVIEWER : undefined
         );
       let reviewedAssertionIds = assertionIds;
       if (input.action !== 'DEFER') {
@@ -1674,7 +1735,10 @@ export const pharmacyMedicineRouter = router({
     })
   ),
 
-  publishAssertions: adminProcedure.input(assertionIdsPayload).mutation(async ({ ctx, input }) =>
+  // DEV-923: publication applies only assertions another reviewer already accepted (checked
+  // below against the review decision evidence), so it is not queued again; releasing them
+  // for sale is reviewer work, gated on the catalogue review permission.
+  publishAssertions: reviewerProcedure.input(assertionIdsPayload).mutation(async ({ ctx, input }) =>
     ctx.db.$transaction(async (tx) => {
       const assertionIds = [...new Set(input.assertionIds)];
       const assertions = await tx.medicineProvenance.findMany({
@@ -1874,7 +1938,11 @@ export const pharmacyMedicineRouter = router({
     })
   ),
 
-  supersedePublication: adminProcedure
+  // DEV-923: a reversal writes no new value: it restores assertions a reviewer accepted
+  // before and leaves the medicine, its prices and saleability unchanged. The restored
+  // assertions carry no review decision, so they cannot be published again without a new
+  // independent review. It stamps the actor as reviewer, so it needs the review permission.
+  supersedePublication: reviewerProcedure
     .input(z.object({ batchId: z.string().min(1).max(200) }).strict())
     .mutation(async ({ ctx, input }) =>
       ctx.db.$transaction(async (tx) => {

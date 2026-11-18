@@ -418,7 +418,7 @@ async function verifyIntegrated(base: PharmacyDraftRequest) {
   );
   await check('integrated changed generated receipt sequence refuses without writes', async () => {
     sql(
-      `UPDATE pharmacy_receipt_number_sequences SET "nextNumber"="nextNumber"+1 WHERE "branchId"='wha1388_happy';`
+      `UPDATE pharmacy_branch_receipt_sequences SET "nextNumber"="nextNumber"+1 WHERE "branchId"='wha1388_happy';`
     );
     const before = snapshot();
     const history = await readFile(pharmacyHistoryPath(target, happy));
@@ -434,7 +434,7 @@ async function verifyIntegrated(base: PharmacyDraftRequest) {
     const plan = await runDisposablePharmacyDraft(target, req);
     await runDisposablePharmacyDraft(target, req, confirm(plan.planDigest));
     // Simulate deleted history in this TEST database, without a trigger bypass.
-    sql(`DELETE FROM pharmacy_receipt_number_sequences WHERE "branchId"='wha1388_removed';`);
+    sql(`DELETE FROM pharmacy_branch_receipt_sequences WHERE "branchId"='wha1388_removed';`);
     const before = snapshot();
     await assert.rejects(
       runDisposablePharmacyDraft(target, req),

@@ -210,10 +210,17 @@ describe('R1 receipt identity carries every batch fact', () => {
     for (const [, , entry] of mocks.post.mock.calls) expect(entry.at).toBe(event.data.occurredAt);
   });
 
-  it('numbers receipts per organisation, scope branch and device, never from sale data', async () => {
+  it('numbers receipts from the scope branch sequence, never from sale data or the device (DEV-637)', async () => {
     await complete(sale());
-    const sql = db.$queryRaw.mock.calls[0]![0] as unknown as { values: unknown[] };
-    expect(sql.values.slice(1)).toEqual(['org_a', 'branch_a', 'counter-a']);
+    const sql = db.$queryRaw.mock.calls[0]![0] as unknown as {
+      strings: string[];
+      values: unknown[];
+    };
+    // One sequence per branch: the counter device does not key the draw, so a second
+    // counter of the branch continues the same numbering instead of restarting at 1.
+    expect(sql.strings.join('?')).toContain('pharmacy_allocate_branch_receipt_numbers(');
+    expect(sql.values).toEqual(['org_a', 'branch_a', 1]);
+    expect(sql.values).not.toContain('counter-a');
     expect(db.pharmacySale.update).toHaveBeenCalledWith({
       where: { organizationId_id: { organizationId: 'org_a', id: 'sale_1' } },
       data: expect.objectContaining({

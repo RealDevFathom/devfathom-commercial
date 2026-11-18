@@ -14,6 +14,8 @@ import {
   STAGED_STATUS_LABEL,
   formatStagedPrice,
   formatStagedQuantity,
+  formatStagedQuantityReview,
+  plainBatchStatus,
   plainExceptionLabel,
 } from '@/components/pharmacy/staged-review-display';
 import { SOURCE_REFERENCE_COLUMNS } from '@/lib/pharmacy/migration/staged-review';
@@ -203,7 +205,7 @@ export async function StagedMedicineCatalogue({
                 >
                   {batch.label} · {batch.source.fileName}
                 </Link>
-                <StatusPill status={batch.status} />
+                <StatusPill status={batch.status} label={plainBatchStatus(batch.status)} />
                 <span className="text-sm text-text-muted">{batch.rowCount} recorded rows</span>
               </div>
             ))}
@@ -318,7 +320,7 @@ export async function StagedMedicineCatalogue({
                       )
                     )}
                     <td className="px-3 py-3 text-right font-mono tabular-nums">
-                      {row.quantityReview.label ?? STAGED_NOT_SUPPLIED}
+                      {formatStagedQuantityReview(row.quantityReview) ?? STAGED_NOT_SUPPLIED}
                     </td>
                     <td className="px-3 py-3">
                       <StatusPill status="pending" label={STAGED_STATUS_LABEL} />

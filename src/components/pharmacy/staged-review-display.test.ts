@@ -4,6 +4,8 @@ import {
   STAGED_LIST_INTRO,
   formatStagedPrice,
   formatStagedQuantity,
+  formatStagedQuantityReview,
+  plainBatchStatus,
   plainExceptionLabel,
 } from './staged-review-display';
 
@@ -28,5 +30,35 @@ describe('staged review display helpers', () => {
     expect(plainExceptionLabel('MISSING_BATCH')).toBe('No batch or expiry recorded');
     expect(plainExceptionLabel('EXPIRED_STOCK')).toBe('Expiry has passed');
     expect(STAGED_LIST_INTRO).toMatch(/cannot be sold/);
+  });
+  it('shows the counted quantity in plain words without trailing zeros', () => {
+    const base = {
+      unit: null,
+      packs: null,
+      units: '29',
+      unitsPerPack: null,
+      label: '29 (staged as raw count)',
+    } as const;
+    expect(formatStagedQuantityReview(base)).toBe('29 (unit not chosen yet)');
+    expect(formatStagedQuantityReview({ ...base, unit: 'UNITS' })).toBe('29 units');
+    expect(
+      formatStagedQuantityReview({
+        unit: 'PACKS',
+        packs: '2.5000',
+        units: '25.0000',
+        unitsPerPack: '10.0000',
+        label: 'x',
+      })
+    ).toBe('2.5 packs × 10 = 25 units');
+    expect(formatStagedQuantityReview({ ...base, units: null, label: null })).toBeNull();
+    expect(
+      formatStagedQuantityReview({ ...base, units: null, label: 'Unresolved: "2.50" units' })
+    ).toBe('Unresolved: "2.5" units');
+  });
+  it('uses plain words for batch status codes', () => {
+    expect(plainBatchStatus('PROFILED')).toBe('Ready to review');
+    expect(plainBatchStatus('PROFILING')).toBe('Being read');
+    expect(plainBatchStatus('FAILED')).toBe('Could not be read');
+    expect(plainBatchStatus('SOMETHING')).not.toMatch(/[A-Z]{4}/);
   });
 });
