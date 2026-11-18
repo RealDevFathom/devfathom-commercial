@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { trpc } from '@/lib/trpc';
+import { PinAwareMessage } from '@/components/pharmacy/pin-aware-message';
 import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { Input } from '@/components/ui/input';
@@ -228,7 +229,7 @@ export function CatalogueApprovalQueue() {
       ) : null}
       {decide.error ? (
         <p role="alert" className="mb-4 text-destructive">
-          {decide.error.message}
+          <PinAwareMessage message={decide.error.message} />
         </p>
       ) : null}
       {decisionNotice && !decide.error ? (

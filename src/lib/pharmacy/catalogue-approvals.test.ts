@@ -11,6 +11,7 @@ import {
   submitCatalogueEdit,
 } from './catalogue-approvals';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { NO_PIN_SET_MESSAGE } from './own-pin-policy';
 
 const scope = {
   organizationId: 'org_a',
@@ -220,6 +221,18 @@ describe('DEV-766 durable catalogue approvals', () => {
       expect(f.raw.medicine.updateMany).not.toHaveBeenCalled();
     }
   );
+  it('sends a solo owner who has not created a PIN to Your PIN (DEV-931)', async () => {
+    guards.solo.mockResolvedValue(true);
+    guards.pin.mockResolvedValue('NO_PIN');
+    const f = fixture('reviewer');
+    await expect(
+      decideCatalogueEdit(f.db, scope, { editId: 'edit', decision: 'APPROVE', soloPin: '2468' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: NO_PIN_SET_MESSAGE });
+    guards.pin.mockResolvedValue('REJECTED');
+    await expect(
+      decideCatalogueEdit(f.db, scope, { editId: 'edit', decision: 'APPROVE', soloPin: '2468' })
+    ).rejects.toMatchObject({ message: 'Fresh owner PIN verification failed.' });
+  });
   it('rejects stale edits instead of overwriting a later catalogue change', async () => {
     const f = fixture();
     f.raw.medicine.updateMany.mockResolvedValue({ count: 0 });

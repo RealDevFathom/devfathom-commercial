@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   fbrTier1Status: vi.fn(),
   licenceRenewals: vi.fn(),
   earnRate: vi.fn(),
+  pinStatus: vi.fn(),
 }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: vi.fn().mockResolvedValue({}) }));
 vi.mock('@/server/routers/pharmacy-onboarding', () => ({
@@ -15,6 +16,9 @@ vi.mock('./loyalty/loyalty-router', () => ({
   pharmacyLoyaltyRouter: { createCaller: () => ({ earnRate: mocks.earnRate }) },
 }));
 vi.mock('./loyalty/earn-rate-actions', () => ({ saveEarnRate: vi.fn() }));
+vi.mock('@/server/routers/pharmacy-pin', () => ({
+  pharmacyPinRouter: { createCaller: () => ({ status: mocks.pinStatus }) },
+}));
 // DEV-497: read only when onboarding is refused; page.landing.test.tsx covers it.
 vi.mock('@/server/routers/pharmacy-access', () => ({
   pharmacyAccessRouter: { createCaller: () => ({ navigation: vi.fn() }) },
@@ -39,6 +43,7 @@ beforeEach(() => {
   mocks.fbrTier1Status.mockResolvedValue(null);
   mocks.licenceRenewals.mockResolvedValue([]);
   mocks.earnRate.mockResolvedValue({ current: null, versions: [] });
+  mocks.pinStatus.mockResolvedValue({ state: 'SET', supportSession: false });
 });
 afterEach(cleanup);
 
@@ -70,6 +75,43 @@ describe('DEV-814 loyalty question during onboarding', () => {
     mocks.earnRate.mockRejectedValue(new Error('FORBIDDEN'));
     await show();
     expect(step()).toBeNull();
+    expect(screen.getByText('checklist')).toBeTruthy();
+  });
+});
+
+describe('DEV-931 the owner is asked to create his PIN during onboarding', () => {
+  const prompt = () => screen.queryByRole('heading', { name: 'Create your PIN' });
+
+  it('asks a member with no PIN to create it, linking to Your PIN, before the checklist', async () => {
+    mocks.pinStatus.mockResolvedValue({ state: 'NOT_SET', supportSession: false });
+    const { container } = await show();
+    expect(prompt()).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Create your PIN' })).toHaveAttribute(
+      'href',
+      '/pharmacy/settings/pin'
+    );
+    const text = container.textContent ?? '';
+    expect(text.indexOf('Create your PIN')).toBeLessThan(text.indexOf('checklist'));
+  });
+
+  it('asks again after a manager reset the PIN', async () => {
+    mocks.pinStatus.mockResolvedValue({ state: 'RESET', supportSession: false });
+    await show();
+    expect(prompt()).toBeTruthy();
+    expect(screen.getByText(/Your PIN was reset/)).toBeTruthy();
+  });
+
+  it('does not ask once the PIN is set, in a support session, or when the state cannot be read', async () => {
+    await show();
+    expect(prompt()).toBeNull();
+    cleanup();
+    mocks.pinStatus.mockResolvedValue({ state: 'NOT_SET', supportSession: true });
+    await show();
+    expect(prompt()).toBeNull();
+    cleanup();
+    mocks.pinStatus.mockRejectedValue(new Error('FORBIDDEN'));
+    await show();
+    expect(prompt()).toBeNull();
     expect(screen.getByText('checklist')).toBeTruthy();
   });
 });

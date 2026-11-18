@@ -1,3 +1,8 @@
+import {
+  currentPasswordInput,
+  requirePasswordReauthentication,
+} from '@/lib/password-reauthentication';
+import { ownPinProblem } from '@/lib/pharmacy/own-pin-policy';
 import { findDuplicateSupplierInvoice } from '@/lib/pharmacy/supplier-invoice-duplicate';
 import { Prisma } from '@/generated/prisma/client';
 import {
@@ -580,7 +585,11 @@ const purchasingRouter = router({
   /** Pharmacy-only tenants can establish their own approval PIN without restaurant modules. */
   provisionMyPurchasePin: purchasing
     .meta(PROCUREMENT_AND_APPROVAL)
-    .input(z.object({ pin: z.string().regex(/^\d{4,8}$/) }).strict())
+    .input(
+      z
+        .object({ pin: z.string().regex(/^\d{4,8}$/), currentPassword: currentPasswordInput })
+        .strict()
+    )
     .mutation(async ({ ctx, input }) => {
       ctx.audit.detail.skipInput = true;
       if (!hasModule(ctx.entitlements, 'pharmacy-procurement')) {
@@ -588,6 +597,27 @@ const purchasingRouter = router({
       }
       const { organizationId } = tenantScope(ctx);
       const userId = ctx.session.user.id;
+      // DEV-931: the same gate as "Your PIN" (src/lib/pharmacy/own-pin.ts): no support
+      // session, the one PIN rule (easy PINs and the person's own phone number refused), and
+      // the account password re-entered and checked on the server, rate limited, before any
+      // write. A stolen session alone cannot create a PIN.
+      if (ctx.support || ctx.session.user.isSupportSession)
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'A support session cannot set or reset a PIN.',
+        });
+      const person = await ctx.db.user.findFirst({
+        where: { id: userId, organizationId },
+        select: { phone: true },
+      });
+      const problem = ownPinProblem(input.pin, input.pin, { phone: person?.phone });
+      if (problem) throw new TRPCError({ code: 'BAD_REQUEST', message: problem });
+      await requirePasswordReauthentication(ctx.db, {
+        organizationId,
+        userId,
+        password: input.currentPassword,
+        purpose: 'pharmacy-pin',
+      });
       return ctx.db.$transaction(async (tx) => {
         // Serialize initial profile/credential creation for this person.
         await tx.$queryRaw`SELECT id FROM users WHERE id=${userId} AND "organizationId"=${organizationId} FOR UPDATE`;

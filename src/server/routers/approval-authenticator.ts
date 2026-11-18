@@ -1,4 +1,3 @@
-import { compare } from 'bcryptjs';
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../trpc';
@@ -9,6 +8,10 @@ import {
   approvalAuthenticatorPartySelect,
   approvalAuthenticatorResetDenial,
 } from '@/lib/approval-authenticator';
+import {
+  currentPasswordInput,
+  requirePasswordReauthentication as requireAccountPassword,
+} from '@/lib/password-reauthentication';
 import { rateLimit } from '@/lib/rate-limit';
 import { decryptSecret, encryptionConfigured, encryptSecret } from '@/lib/secret-crypto';
 import { generateTotpSecret, matchTotpStep, totpAuthUri } from '@/lib/totp';
@@ -53,8 +56,7 @@ async function requireManager(ctx: Ctx, organizationId: string) {
   return actor;
 }
 
-/** The signed-in member's current password, typed again. */
-const reauthentication = z.string().min(1).max(200);
+const reauthentication = currentPasswordInput;
 
 /**
  * Starting an enrolment or resetting an authenticator changes which factor approves money,
@@ -63,15 +65,12 @@ const reauthentication = z.string().min(1).max(200);
  * Attempts are rate limited per member.
  */
 async function requirePasswordReauthentication(ctx: Ctx, organizationId: string, password: string) {
-  const userId = ctx.session.user.id;
-  if (!(await rateLimit(`approval-authenticator-reauth:${userId}`, 5, 15 * 60_000)).ok)
-    throw new TRPCError({ code: 'TOO_MANY_REQUESTS', message: 'Too many attempts. Try later.' });
-  const user = await ctx.db.user.findFirst({
-    where: { id: userId, organizationId, status: 'ACTIVE' },
-    select: { password: true },
+  await requireAccountPassword(ctx.db, {
+    organizationId,
+    userId: ctx.session.user.id,
+    password,
+    purpose: 'approval-authenticator',
   });
-  if (!user?.password || !(await compare(password, user.password)))
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Your current password is incorrect.' });
 }
 
 export const approvalAuthenticatorRouter = router({

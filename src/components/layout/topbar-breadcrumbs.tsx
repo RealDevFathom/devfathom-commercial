@@ -66,6 +66,7 @@ export const routeLabels: Record<string, string> = {
   '/pharmacy/controlled-register': 'Controlled register',
   '/pharmacy/regulatory': 'Regulatory profile',
   '/pharmacy/settings/branches': 'Branch assignments',
+  '/pharmacy/settings/pin': 'Your PIN',
   '/pharmacy/settings/printers': 'Printer settings',
 };
 

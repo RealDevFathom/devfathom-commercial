@@ -1,4 +1,4 @@
-import { Download, ShieldCheck } from 'lucide-react';
+import { Download, KeyRound, ShieldCheck } from 'lucide-react';
 import { TRPCError } from '@trpc/server';
 import type { Metadata } from 'next';
 import Link from 'next/link';
@@ -13,6 +13,8 @@ import { buttonVariants } from '@/components/ui/button';
 import { pharmacyLandingPath } from '@/lib/pharmacy/landing';
 import { isLiveOrganizationOwner } from '@/lib/pharmacy/owner-data-export';
 import { LOYALTY_EARN_PRESETS } from '@/lib/pharmacy/loyalty-program';
+import { OWN_PIN_PATH } from '@/lib/pharmacy/own-pin-policy';
+import { pharmacyPinRouter } from '@/server/routers/pharmacy-pin';
 import { pharmacyAccessRouter } from '@/server/routers/pharmacy-access';
 import { pharmacyLoyaltyRouter } from './loyalty/loyalty-router';
 import { OnboardingLoyaltyStep } from './loyalty/onboarding-loyalty-step';
@@ -72,7 +74,10 @@ export default async function PharmacyOnboardingPage() {
   // DEV-814 — the optional loyalty question, also additive. It reads the rate through the
   // loyalty router, so only a user who may set the rate is asked; a pharmacy already active
   // or with a rate set keeps the loyalty page's own notice instead.
-  const [fbrTier1, renewals, earnRate] = await Promise.all([
+  // DEV-931 — additive like the prompts above: approvals during onboarding (confirming the
+  // medicine import first) ask for the person's own PIN, so a member without one is asked
+  // to create it before the step that needs it.
+  const [fbrTier1, renewals, earnRate, ownPin] = await Promise.all([
     caller.fbrTier1Status().catch(() => null),
     caller.licenceRenewals().catch(() => []),
     overview.organization.status === 'ACTIVE'
@@ -81,7 +86,12 @@ export default async function PharmacyOnboardingPage() {
           .createCaller(ctx)
           .earnRate()
           .catch(() => null),
+    pharmacyPinRouter
+      .createCaller(ctx)
+      .status()
+      .catch(() => null),
   ]);
+  const askPin = !!ownPin && !ownPin.supportSession && ownPin.state !== 'SET';
   const askLoyalty = !!earnRate && !earnRate.current;
   // DEV-93 — the owner's "no lock-in" export, offered only to the live owner.
   const userId = ctx.session?.user?.id;
@@ -118,6 +128,24 @@ export default async function PharmacyOnboardingPage() {
         }
       />
       <LicenceRenewalBanner reminders={renewals} />
+      {askPin ? (
+        <SectionCard
+          eyebrow="Before you continue"
+          title="Create your PIN"
+          titleLevel={2}
+          actions={
+            <Link href={OWN_PIN_PATH} className={buttonVariants({ className: 'min-h-11' })}>
+              <KeyRound aria-hidden /> Create your PIN
+            </Link>
+          }
+        >
+          <p className="text-sm text-text-muted">
+            {ownPin?.state === 'RESET'
+              ? 'Your PIN was reset. Create a new one before you approve anything.'
+              : 'Several steps ask you to approve with your own PIN, starting with confirming your medicine import. Create it now so they do not stop you.'}
+          </p>
+        </SectionCard>
+      ) : null}
       <PharmacyOnboardingConsole initial={overview} />
       {askLoyalty ? (
         <OnboardingLoyaltyStep
