@@ -12,6 +12,7 @@ import {
 } from './contract';
 import {
   CardTerminalError,
+  PHARMACY_TERMINAL_CURRENCY,
   type CardTerminalAttempt,
   type CardTerminalAttemptPatch,
   type CardTerminalAttemptStore,
@@ -109,7 +110,8 @@ export async function beginCardTerminalCharge(
   if (
     !ATTEMPT_KEY.test(input.attemptKey) ||
     !TERMINAL_ID.test(input.terminalId) ||
-    !/^[A-Z]{3}$/.test(input.currency) ||
+    // Settlement posts in the pharmacy currency only; see PHARMACY_TERMINAL_CURRENCY.
+    input.currency !== PHARMACY_TERMINAL_CURRENCY ||
     !Number.isSafeInteger(input.amountMinor) ||
     input.amountMinor <= 0 ||
     !input.saleId ||

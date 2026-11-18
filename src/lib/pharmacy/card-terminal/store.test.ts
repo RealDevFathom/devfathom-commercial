@@ -189,17 +189,23 @@ describe('DEV-743 durable attempt store', () => {
     });
   });
 
-  it('returns the recorded tender for a settled attempt and refuses one not approved', async () => {
+  it('returns the recorded tender for a settled attempt and refuses one not approved or not in PKR', async () => {
     const db = fakeDb();
     db.pharmacyCardTerminalAttempt.findFirst
       .mockResolvedValueOnce({ saleId: 'sale-1' })
       .mockResolvedValueOnce(attempt({ status: 'SETTLED', tenderId: 'tender-1' }))
       .mockResolvedValueOnce({ saleId: 'sale-1' })
-      .mockResolvedValueOnce(attempt({ status: 'UNKNOWN', providerRef: null }));
+      .mockResolvedValueOnce(attempt({ status: 'UNKNOWN', providerRef: null }))
+      .mockResolvedValueOnce({ saleId: 'sale-1' })
+      .mockResolvedValueOnce(attempt({ currency: 'USD' }));
     await expect(runner(db).settle(scope, 'attempt-1')).resolves.toEqual({
       tenderId: 'tender-1',
       replayed: true,
     });
+    await expect(runner(db).settle(scope, 'attempt-1')).rejects.toMatchObject({
+      reason: 'INVALID_STATE',
+    });
+    // Tenders post in PKR with no conversion: a charge in another currency never becomes one.
     await expect(runner(db).settle(scope, 'attempt-1')).rejects.toMatchObject({
       reason: 'INVALID_STATE',
     });

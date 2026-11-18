@@ -333,6 +333,7 @@ describe('DEV-743 card terminal around one durable attempt (mocked end to end)',
     { amountMinor: 0 },
     { amountMinor: 1.5 },
     { currency: 'pkr' },
+    { currency: 'USD' },
     { terminalId: '4111111111111111' },
   ])('refuses invalid input %j before writing anything', async (patch) => {
     const { store, deps } = setup();

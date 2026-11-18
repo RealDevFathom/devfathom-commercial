@@ -44,7 +44,9 @@ CREATE TABLE IF NOT EXISTS "pharmacy_card_terminal_attempts" (
   CONSTRAINT "pharmacy_card_terminal_attempts_pkey" PRIMARY KEY ("id"),
   CONSTRAINT "pharmacy_card_terminal_attempts_amount_check" CHECK ("amountMinor" > 0),
   CONSTRAINT "pharmacy_card_terminal_attempts_status_checks_check" CHECK ("statusChecks" >= 0),
-  CONSTRAINT "pharmacy_card_terminal_attempts_currency_check" CHECK ("currency" ~ '^[A-Z]{3}$'),
+  -- Pharmacy tenders post to the journal in PKR with no conversion, so a terminal may charge only
+  -- in PKR: a charge in another currency would otherwise clear a PKR sale at face value.
+  CONSTRAINT "pharmacy_card_terminal_attempts_currency_check" CHECK ("currency" = 'PKR'),
   CONSTRAINT "pharmacy_card_terminal_attempts_key_check"
     CHECK ("attemptKey" ~ '^[A-Za-z0-9:_-]{8,128}$'),
   -- A terminal provider never reuses a manual, sandbox, prepaid or mock provider name, so a

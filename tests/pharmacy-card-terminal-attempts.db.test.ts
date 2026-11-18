@@ -146,6 +146,17 @@ describeIfDatabase('pharmacy card-terminal attempts PostgreSQL RLS and guards (D
     await expectPgCode('23514', () =>
       insertAttempt('pan', 'org-a-attempt-4', saleA2, { terminalId: '4111111111111111' })
     );
+    // Tenders post in PKR with no conversion, so no other charge currency is stored.
+    await expectPgCode('23514', () =>
+      client.query(
+        `INSERT INTO pharmacy_card_terminal_attempts
+          (id,"branchId","saleId","deviceId","terminalId",provider,"attemptKey","amountMinor",
+           currency,"businessDate","actorId","updatedAt")
+         VALUES ('usd',$1,$2,'device-1','counter-1','FAKE_TERMINAL','org-a-attempt-8',1000,
+           'USD','2026-11-18','cashier',now())`,
+        [branchA, saleA2]
+      )
+    );
     await expectPgCode('55000', () =>
       client.query(
         `INSERT INTO pharmacy_card_terminal_attempts

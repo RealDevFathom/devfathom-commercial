@@ -18,6 +18,13 @@ import type { LedgerScope } from '../stock-ledger';
 export type CardTerminalAttempt = Omit<PharmacyCardTerminalAttempt, 'updatedAt'>;
 export type CardTerminalAttemptStatus = PharmacyCardTerminalAttemptStatus;
 
+/**
+ * The only currency a terminal attempt may charge in. Pharmacy tenders post to the journal with no
+ * currency of their own (the journal defaults to PKR), so a charge in any other currency would
+ * clear a PKR sale with no conversion. The migration's currency check holds the same value.
+ */
+export const PHARMACY_TERMINAL_CURRENCY = 'PKR';
+
 /** States that hold the sale: no second terminal charge or other tender may start. */
 export const OPEN_ATTEMPT_STATUSES: readonly CardTerminalAttemptStatus[] = Object.freeze([
   'CREATED',
@@ -272,7 +279,11 @@ export function prismaCardTerminalAttemptStore(run: TenantRunner): CardTerminalA
         if (!attempt) throw new CardTerminalError('ATTEMPT_NOT_FOUND');
         if (attempt.status === 'SETTLED' && attempt.tenderId)
           return { tenderId: attempt.tenderId, replayed: true };
-        if (attempt.status !== 'APPROVED' || !attempt.providerRef)
+        if (
+          attempt.status !== 'APPROVED' ||
+          !attempt.providerRef ||
+          attempt.currency !== PHARMACY_TERMINAL_CURRENCY
+        )
           throw new CardTerminalError('INVALID_STATE');
         const result = (await applyPharmacyTender(db, scope, {
           saleId: attempt.saleId,

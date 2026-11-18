@@ -46,6 +46,8 @@ describe('DEV-743 card-terminal attempt migration contract', () => {
 
   it('stores no card number and never a manual, sandbox, prepaid or mock provider name', () => {
     expect(sql).toContain(`"cardLast4" ~ '^[0-9]{4}$'`);
+    // Tenders post in PKR with no conversion: no other charge currency is ever stored.
+    expect(sql).toContain(`CHECK ("currency" = 'PKR')`);
     expect(sql).toContain(`!~ '[0-9]{13,}'`);
     for (const name of [
       'MOCK',
