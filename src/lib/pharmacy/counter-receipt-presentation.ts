@@ -1,3 +1,4 @@
+import { receiptTierLines } from './counter-receipt';
 import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
 import { tenderTotalsSchema } from './manual-payments';
 import { buildReceiptPreview } from '@/lib/receipts/preview';
@@ -18,13 +19,13 @@ import {
 
 const labels = {
   en: {
-    unavailable: 'Historical identity unavailable',
+    unavailable: 'Original item details unavailable',
     unknown: 'Unavailable',
     units: 'Tablets/units',
     payments: 'Payment details unavailable',
   },
   ur: {
-    unavailable: 'تاریخی شناخت دستیاب نہیں',
+    unavailable: 'اصل آئٹم کی تفصیل دستیاب نہیں',
     unknown: 'دستیاب نہیں',
     units: 'گولیاں/یونٹس',
     payments: 'ادائیگی کی تفصیل دستیاب نہیں',
@@ -174,6 +175,7 @@ export function buildCounterReceiptPreview(
         locale === 'ur' && receipt.currency === 'PKR' ? 'پاکستانی روپے' : receipt.currency,
         `${strings.gross}: ${formatMinor(receipt.totals.grossMinor, locale)}`,
         `${strings.discount}: ${formatMinor(receipt.totals.discountMinor, locale)}`,
+        ...receiptTierLines(receipt, locale),
         `${strings.net}: ${formatMinor(receipt.totals.netMinor, locale)}`,
         `${strings.tendered}: ${formatMinor(receipt.totals.tenderedMinor, locale)}`,
         ...(cashReceived !== null

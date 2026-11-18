@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
   pausedMutations: new Set<string>(),
   refetch: vi.fn(),
   searchFetch: vi.fn(),
+  voucherFetch: vi.fn(),
   cancel: vi.fn(),
   receiptInvalidate: vi.fn(),
   mutationOptions: vi.fn(),
@@ -150,8 +151,10 @@ vi.mock('@/lib/trpc', async () => {
       counterCart: { cancel: mocks.cancel, invalidate: vi.fn() },
       counterReceipt: { invalidate: mocks.receiptInvalidate },
       counterEvidence: { reset: vi.fn() },
+      tradingDayStatus: { invalidate: vi.fn() },
       drawerStatus: { invalidate: mocks.drawerStatusInvalidate },
       counterKeymap: { setData: mocks.keymapSetData, invalidate: vi.fn() },
+      counterVoucher: { fetch: (...args: unknown[]) => mocks.voucherFetch(...args) },
     },
     pharmacyPrescriptions: { counterPatientPanel: { invalidate: vi.fn() } },
     pharmacySafety: { controlledRegister: { invalidate: vi.fn() } },
@@ -173,6 +176,7 @@ vi.mock('@/lib/trpc', async () => {
         'counterLotOptions',
         'counterEvidence',
         'customerSnapshot',
+        'tradingDayStatus',
         'drawerStatus',
         'create',
         'addLine',
@@ -187,6 +191,8 @@ vi.mock('@/lib/trpc', async () => {
         'setDemandOutcome',
         'declineSubstitute',
         'linkCustomer',
+        // DEV-748: a scanned loyalty card links its customer.
+        'scanLoyaltyCard',
         'khataSignup',
         'redeemPoints',
         'authenticatePack',
@@ -526,6 +532,7 @@ beforeEach(() => {
     organizationId: 'org-a',
   });
   // A counter taking cash has an open drawer; tests about a closed drawer say so.
+  mocks.queries.tradingDayStatus = query({ dayClosed: false });
   mocks.queries.drawerStatus = query({ openDrawer: { id: 'drawer-default' } });
   mocks.queries.counterBranches = query({
     branches: [{ id: 'branch-a', name: 'Synthetic branch', code: 'MT1' }],
@@ -546,6 +553,7 @@ beforeEach(() => {
     'setDemandOutcome',
     'declineSubstitute',
     'linkCustomer',
+    'scanLoyaltyCard',
     'khataSignup',
     'redeemPoints',
     'authenticatePack',
@@ -837,7 +845,9 @@ describe('PharmacyCounterConsole split tender (#722)', () => {
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.00' } });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
-    await waitFor(() => expect(screen.getByLabelText('Recorded tenders').children).toHaveLength(1));
+    await waitFor(() =>
+      expect(screen.getByLabelText('Recorded payments').children).toHaveLength(1)
+    );
     expect(screen.queryByText('Settled')).not.toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeEnabled()
@@ -850,7 +860,9 @@ describe('PharmacyCounterConsole split tender (#722)', () => {
       'counter-tender:sale-a:CASH:12500:after:12500',
     ]);
     // The settled receipt drawer hides the panel from assistive tech; the rows remain.
-    await waitFor(() => expect(screen.getByLabelText('Recorded tenders').children).toHaveLength(2));
+    await waitFor(() =>
+      expect(screen.getByLabelText('Recorded payments').children).toHaveLength(2)
+    );
   });
 });
 
@@ -2184,6 +2196,27 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     expect(screen.getByText('Drawer open')).toBeInTheDocument();
   });
 
+  it('DEV-631: says the business day is closed before a bill is built, with no scan or drawer step', () => {
+    const drawerStatus = query({ dayClosed: true });
+    mocks.queries.tradingDayStatus = drawerStatus;
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    expect(screen.getByRole('status', { name: 'Business day closed' })).toHaveTextContent(
+      /New bills, payments and drawer changes are blocked\. The owner or a manager can reopen today for trading on Day close/
+    );
+    expect(screen.getByText('Day closed')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Scan or search')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open drawer' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    expect(drawerStatus.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('DEV-631: an open business day keeps the scan field', () => {
+    openTheDrawer();
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    expect(screen.queryByRole('status', { name: 'Business day closed' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Scan or search')).toBeInTheDocument();
+  });
+
   it('withholds the button until the drawer status is known', () => {
     mocks.queries.drawerStatus = { ...query(), isSuccess: false, isLoading: true };
     render(<PharmacyCounterConsole initialBranchId="branch-a" />);
@@ -2347,6 +2380,38 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
       quotation: false,
       deviceId,
     });
+  });
+
+  it('links a scanned loyalty card to the bill instead of searching for it (DEV-748)', async () => {
+    openTheDrawer();
+    mocks.mutations.create!.mockResolvedValue({ id: 'sale-new' });
+    mocks.mutations.scanLoyaltyCard!.mockResolvedValue({
+      id: 'customer-a',
+      displayName: 'Ayesha',
+    });
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    // A scanner with caps lock off types the code in lower case.
+    fireEvent.change(search, { target: { value: 'dflcabcdefghijklmnopqrstuvwxyz' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await waitFor(() => expect(mocks.mutations.scanLoyaltyCard).toHaveBeenCalledTimes(1));
+    expect(mocks.mutations.scanLoyaltyCard).toHaveBeenCalledWith({
+      branchId: 'branch-a',
+      saleId: 'sale-new',
+      cardToken: 'DFLCABCDEFGHIJKLMNOPQRSTUVWXYZ',
+    });
+    expect(
+      await screen.findByText('Loyalty card: Ayesha linked to this bill.')
+    ).toBeInTheDocument();
+    expect(search).toHaveValue('');
+    // The card code is never sent to the medicine search.
+    expect(mocks.searchQuery).not.toHaveBeenCalled();
+    expect(
+      mocks.queryInputs.mock.calls.filter(([, input]) =>
+        JSON.stringify(input ?? '').includes('DFLC')
+      )
+    ).toEqual([]);
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -3065,6 +3130,121 @@ describe('PharmacyCounterConsole barcode safety', () => {
     );
   });
 
+  it('DEV-780: sends a checked voucher and the cashier PIN with the next item, then drops it', async () => {
+    mocks.voucherFetch.mockResolvedValue({
+      id: 'voucher-a',
+      code: 'SAVE-100',
+      name: 'Front shop offer',
+      discountMinor: 10_000,
+      usesLeft: 2,
+      maxUses: 3,
+      validUntil: new Date('2031-01-01T00:00:00.000Z'),
+      status: 'READY',
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.click(screen.getByText('Voucher'));
+    fireEvent.change(screen.getByLabelText('Voucher code'), { target: { value: 'save-100' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Check voucher' }));
+    await screen.findByText(/2 of 3 uses left/);
+    expect(mocks.voucherFetch).toHaveBeenCalledWith({ branchId: 'branch-a', code: 'save-100' });
+    fireEvent.change(screen.getByLabelText('Your PIN'), { target: { value: '4321' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Use on next item' }));
+    await screen.findByText(/takes Rs 100\.00 off the next non-drug item/);
+    scan();
+    await screen.findByText('1 × Paracetamol added with voucher SAVE-100.');
+    expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ voucherId: 'voucher-a', voucherPin: '4321' })
+    );
+    // The voucher and its PIN belong to that one add.
+    expect(screen.queryByRole('button', { name: 'Remove voucher' })).not.toBeInTheDocument();
+    mocks.mutations.addLine!.mockClear();
+    scan();
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    expect(mocks.mutations.addLine).toHaveBeenCalledWith(
+      expect.not.objectContaining({ voucherId: expect.anything() })
+    );
+  });
+
+  async function holdVoucher() {
+    mocks.voucherFetch.mockResolvedValue({
+      id: 'voucher-a',
+      code: 'SAVE-100',
+      name: 'Front shop offer',
+      discountMinor: 10_000,
+      usesLeft: 2,
+      maxUses: 3,
+      validUntil: new Date('2031-01-01T00:00:00.000Z'),
+      status: 'READY',
+    });
+    fireEvent.click(screen.getByText('Voucher'));
+    fireEvent.change(screen.getByLabelText('Voucher code'), { target: { value: 'SAVE-100' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Check voucher' }));
+    fireEvent.change(await screen.findByLabelText('Your PIN'), { target: { value: '4321' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Use on next item' }));
+    await screen.findByRole('button', { name: 'Remove voucher' });
+  }
+
+  it('DEV-780: a voucher held at one branch is discarded, not hidden, when the branch changes', async () => {
+    mocks.queries.counterBranches = query({
+      branches: [
+        { id: 'branch-a', name: 'A' },
+        { id: 'branch-b', name: 'B' },
+      ],
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    await holdVoucher();
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch-b' } });
+    expect(screen.queryByRole('button', { name: 'Remove voucher' })).not.toBeInTheDocument();
+    // Switching back does not restore the earlier customer's voucher or the cashier PIN.
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch-a' } });
+    expect(screen.queryByRole('button', { name: 'Remove voucher' })).not.toBeInTheDocument();
+    expect(screen.getByText('Voucher')).toBeInTheDocument();
+  });
+
+  it('DEV-780: a retry after a lost voucher add reuses its key, so it cannot add the item twice', async () => {
+    mocks.mutations.addLine!.mockRejectedValueOnce(new Error('Synthetic network failure'));
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    await holdVoucher();
+    scan();
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    // The voucher and its PIN are dropped after the uncertain add.
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Remove voucher' })).not.toBeInTheDocument()
+    );
+    scan();
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(2));
+    const [first, retry] = mocks.mutations.addLine!.mock.calls.map(
+      ([input]) => input as { idempotencyKey: string; voucherId?: string }
+    );
+    expect(first).toMatchObject({ voucherId: 'voucher-a', voucherPin: '4321' });
+    expect(retry!.voucherId).toBeUndefined();
+    // Same key: the server replays a committed line or refuses the changed voucher.
+    expect(retry!.idempotencyKey).toBe(first!.idempotencyKey);
+  });
+
+  it('DEV-780: refuses to hold a voucher that reached its use limit', async () => {
+    mocks.voucherFetch.mockResolvedValue({
+      id: 'voucher-a',
+      code: 'SAVE-100',
+      name: 'Front shop offer',
+      discountMinor: 10_000,
+      usesLeft: 0,
+      maxUses: 3,
+      validUntil: new Date('2031-01-01T00:00:00.000Z'),
+      status: 'USED_UP',
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.click(screen.getByText('Voucher'));
+    fireEvent.change(screen.getByLabelText('Voucher code'), { target: { value: 'SAVE-100' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Check voucher' }));
+    expect(await screen.findByText('This voucher has reached its use limit.')).toHaveAttribute(
+      'role',
+      'alert'
+    );
+    expect(screen.queryByLabelText('Your PIN')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Use on next item' })).not.toBeInTheDocument();
+  });
+
   it('reads the scanner Enter value even before a change render commits', async () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     fireEvent.keyDown(screen.getByLabelText('Scan or search'), {
@@ -3078,6 +3258,160 @@ describe('PharmacyCounterConsole barcode safety', () => {
         query: '123456',
       },
       { staleTime: 10_000 }
+    );
+  });
+
+  // DEV-90: shelf stickers name one lot; a scan never bills a different batch silently.
+  const labelLot = (overrides: Partial<NonNullable<CounterSearchRow['labelLot']>> = {}) => ({
+    inventoryLotId: 'lot-label',
+    batchNumber: 'B-LABEL',
+    expiresAt: '2027-01-01T00:00:00.000Z',
+    printedMrpMinor: 10000,
+    sellableUnits: 10,
+    blockedBy: null,
+    ...overrides,
+  });
+
+  it('clears the selection and adds nothing when the shelf-label batch cannot be sold', async () => {
+    mocks.searchQuery.mockResolvedValue({
+      rows: [barcodeRow({ labelLot: labelLot({ sellableUnits: 0, blockedBy: 'RECALLED' }) })],
+      truncated: false,
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    scan('7100000000000411');
+    await screen.findByText(/Batch B-LABEL on this shelf label cannot be sold: it is recalled/);
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /Add to cart/ })).not.toBeInTheDocument();
+  });
+
+  it('stages a non-FEFO shelf-label batch as an override and waits for a reason', async () => {
+    mocks.searchQuery.mockResolvedValue({
+      rows: [barcodeRow({ labelLot: labelLot() })],
+      truncated: false,
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    scan('7100000000000411');
+    await screen.findByText(/Shelf label batch B-LABEL is not the batch FEFO sells first/);
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Add to cart/ })).toBeInTheDocument();
+  });
+
+  it('adds a shelf-label scan straight away when its batch is the FEFO batch', async () => {
+    mocks.searchQuery.mockResolvedValue({
+      rows: [barcodeRow({ labelLot: labelLot({ inventoryLotId: 'lot-a', batchNumber: 'B-1' }) })],
+      truncated: false,
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    scan('7100000000000411');
+    await screen.findByText('1 × Paracetamol added.');
+    expect(mocks.mutations.addLine).toHaveBeenCalledWith(
+      expect.objectContaining({ shelfLabelLotId: 'lot-a' })
+    );
+    expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+      expect.not.objectContaining({ override: expect.anything() })
+    );
+  });
+
+  it('drops the shelf-label lot pin when the operator picks another batch', async () => {
+    mocks.queries.counterLotOptions = query([
+      {
+        inventoryLotId: 'lot-a',
+        batchNumber: 'B-1',
+        expiresAt: '2028-01-01',
+        sellableUnits: 10,
+        blockedBy: null,
+      },
+      {
+        inventoryLotId: 'lot-b',
+        batchNumber: 'B-2',
+        expiresAt: '2028-06-01',
+        sellableUnits: 10,
+        blockedBy: null,
+      },
+    ]);
+    mocks.searchQuery.mockResolvedValue({
+      rows: [barcodeRow({ labelLot: labelLot() })],
+      truncated: false,
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    scan('7100000000000411');
+    await screen.findByText(/Shelf label batch B-LABEL is not the batch FEFO sells first/);
+    fireEvent.click(screen.getByRole('radio', { name: /Batch B-2/ }));
+    fireEvent.change(screen.getByLabelText('Override reason'), {
+      target: { value: 'Patient request' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    const line = mocks.mutations.addLine!.mock.calls[0]![0];
+    expect(line).not.toHaveProperty('shelfLabelLotId');
+    expect(line.override).toEqual(expect.objectContaining({ inventoryLotId: 'lot-b' }));
+  });
+
+  it('keeps the shelf-label lot pin while the batch picker is merely opened', async () => {
+    const pinned = barcodeRow({
+      labelLot: labelLot({ inventoryLotId: 'lot-a', batchNumber: 'B-1' }),
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.lastCall![0].onSelect(pinned));
+    fireEvent.click(screen.getByRole('button', { name: 'Sell a different batch' }));
+    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '1' } });
+    fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
+    await screen.findByText('1 × Paracetamol added.');
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    expect(mocks.mutations.addLine!.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({ shelfLabelLotId: 'lot-a' })
+    );
+  });
+
+  it('drops the shelf-label lot pin when the operator picks another batch', async () => {
+    mocks.queries.counterLotOptions = query([
+      {
+        inventoryLotId: 'lot-a',
+        batchNumber: 'B-1',
+        expiresAt: '2028-01-01',
+        sellableUnits: 10,
+        blockedBy: null,
+      },
+      {
+        inventoryLotId: 'lot-b',
+        batchNumber: 'B-2',
+        expiresAt: '2028-06-01',
+        sellableUnits: 10,
+        blockedBy: null,
+      },
+    ]);
+    mocks.searchQuery.mockResolvedValue({
+      rows: [barcodeRow({ labelLot: labelLot() })],
+      truncated: false,
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    scan('7100000000000411');
+    await screen.findByText(/Shelf label batch B-LABEL is not the batch FEFO sells first/);
+    fireEvent.click(screen.getByRole('radio', { name: /Batch B-2/ }));
+    fireEvent.change(screen.getByLabelText('Override reason'), {
+      target: { value: 'Patient request' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    const line = mocks.mutations.addLine!.mock.calls[0]![0];
+    expect(line).not.toHaveProperty('shelfLabelLotId');
+    expect(line.override).toEqual(expect.objectContaining({ inventoryLotId: 'lot-b' }));
+  });
+
+  it('does not carry a staged shelf-label lot into the next product-barcode scan', async () => {
+    mocks.searchQuery
+      .mockResolvedValueOnce({ rows: [barcodeRow({ labelLot: labelLot() })], truncated: false })
+      .mockResolvedValueOnce({ rows: [barcodeRow()], truncated: false });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    scan('7100000000000411');
+    await screen.findByText(/Shelf label batch B-LABEL is not the batch FEFO sells first/);
+    scan('8964000000012');
+    await screen.findByText('1 × Paracetamol added.');
+    expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+      expect.not.objectContaining({ shelfLabelLotId: expect.anything() })
+    );
+    expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+      expect.not.objectContaining({ override: expect.anything() })
     );
   });
 
@@ -3612,6 +3946,60 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
       'sale-b',
     ]);
     expect(screen.queryByText(/Refresh the counter/)).not.toBeInTheDocument();
+  });
+
+  it('links a loyalty card scanned after payment to a new bill, not the paid one (DEV-748)', async () => {
+    openTheDrawer();
+    Object.assign(mocks.queries.counterCart!, { data: settled(), isSuccess: true });
+    mocks.mutations.scanLoyaltyCard!.mockResolvedValue({ id: 'customer-a', displayName: 'Ayesha' });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+    scan('DFLCABCDEFGHIJKLMNOPQRSTUVWXYZ');
+
+    await screen.findByText('Loyalty card: Ayesha linked to this bill.');
+    expect(mocks.mutations.create).toHaveBeenCalledTimes(1);
+    expect(mocks.mutations.scanLoyaltyCard).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        branchId: 'branch-a',
+        saleId: 'sale-b',
+        cardToken: 'DFLCABCDEFGHIJKLMNOPQRSTUVWXYZ',
+      })
+    );
+  });
+
+  it('re-reads a bill paid on another screen and links the card to a new bill (DEV-748)', async () => {
+    openTheDrawer();
+    mocks.mutations
+      .scanLoyaltyCard!.mockRejectedValueOnce(refused('BAD_REQUEST', 'SALE_NOT_OPEN'))
+      .mockResolvedValueOnce({ id: 'customer-a', displayName: 'Ayesha' });
+    mocks.refetch.mockImplementationOnce(async () => {
+      Object.assign(mocks.queries.counterCart!, { data: settled(), isSuccess: true });
+      return mocks.queries.counterCart;
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+    scan('DFLCABCDEFGHIJKLMNOPQRSTUVWXYZ');
+
+    await screen.findByText('Loyalty card: Ayesha linked to this bill.');
+    expect(mocks.refetch).toHaveBeenCalled();
+    expect(mocks.mutations.create).toHaveBeenCalledTimes(1);
+    expect(mocks.mutations.scanLoyaltyCard.mock.calls.map(([input]) => input.saleId)).toEqual([
+      'sale-a',
+      'sale-b',
+    ]);
+  });
+
+  it('keeps the card on its bill when the re-read still finds it open (DEV-748)', async () => {
+    openTheDrawer();
+    mocks.mutations.scanLoyaltyCard!.mockRejectedValueOnce(refused('BAD_REQUEST', 'SALE_NOT_OPEN'));
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+    scan('DFLCABCDEFGHIJKLMNOPQRSTUVWXYZ');
+
+    await waitFor(() => expect(mocks.mutations.scanLoyaltyCard).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mocks.refetch).toHaveBeenCalled());
+    expect(mocks.mutations.create).not.toHaveBeenCalled();
+    expect(mocks.mutations.scanLoyaltyCard).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the bill and shows a neutral notice when the re-read still finds it open', async () => {
@@ -4301,6 +4689,20 @@ describe('PharmacyCounterConsole search latency (DEV-575)', () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     });
     expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
+  });
+
+  it('never sends a typed loyalty card code to the medicine search, even after the debounce (DEV-748)', () => {
+    vi.useFakeTimers();
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Scan or search'), {
+      target: { value: 'DFLCABCDEFGHIJKLMNOPQRSTUVWXYZ' },
+    });
+    act(() => vi.advanceTimersByTime(1000));
+    expect(
+      mocks.queryInputs.mock.calls.filter(([, input]) =>
+        JSON.stringify(input ?? '').includes('DFLC')
+      )
+    ).toEqual([]);
   });
 
   it('re-runs a completed name search on the newly selected branch', () => {

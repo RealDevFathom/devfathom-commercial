@@ -128,6 +128,28 @@ describe('AI-04 invariant 29 operation boundary', () => {
   });
 });
 
+describe('DEV-631 a reopened close is not the standing close', () => {
+  it('leaves a close reopened for trading out of the cash variance and tender mismatch reads', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([]);
+    const db: Record<string, unknown> = {
+      $queryRaw: queryRaw,
+      pharmacyAnomalySignal: { findFirst: vi.fn().mockResolvedValue(null), create: vi.fn() },
+      pharmacyAnomalySignalEvent: { create: vi.fn() },
+    };
+    db.$transaction = vi.fn(async (run: (tx: unknown) => Promise<unknown>) => run(db));
+    await refreshPharmacyAnomalySignals(db as never, filters, 'owner_1', NOW);
+    const closeReads = queryRaw.mock.calls
+      .map(([query]) => (query as { sql: string }).sql)
+      .filter((sql) => sql.includes('FROM "pharmacy_daily_closes" c'));
+    // Cash variance and tender mismatch: both skip a close the owner reopened.
+    expect(closeReads).toHaveLength(2);
+    for (const sql of closeReads)
+      expect(sql).toContain(
+        'NOT EXISTS (SELECT 1 FROM "pharmacy_day_reopens" reopen WHERE reopen."organizationId"=c."organizationId" AND reopen."closeId"=c."id")'
+      );
+  });
+});
+
 describe('anomaly signals on the workspace day (DEV-902)', () => {
   // 4 Sep in Karachi runs from 3 Sep 19:00 UTC to 4 Sep 19:00 UTC.
   const karachi = { ...filters, timeZone: 'Asia/Karachi' };

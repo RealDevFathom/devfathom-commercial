@@ -7,6 +7,10 @@ const store = vi.hoisted(() => ({
   customers: [] as Array<Record<string, unknown>>,
   consents: [] as Array<Record<string, unknown>>,
   logs: [] as LogRow[],
+  /** DEDUPE_ALIAS placeholder rows: another key format's claim, never a message. */
+  aliases: [] as LogRow[],
+  /** Runs once, just before the next claim: another worker's insert landing first. */
+  beforeClaim: null as (() => void) | null,
   catalog: [] as string[],
   audits: [] as Array<Record<string, unknown>>,
   /** The workspace zone the organization row holds. */
@@ -68,10 +72,12 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         where: {
           organizationId: string;
           dedupeKey: { in: string[] };
-          createdAt: { gte: Date; lt: Date };
+          createdAt: { gte: Date; lt?: Date };
+          OR?: unknown;
         };
       }) =>
-        store.logs.find(
+        // The legacy-claim read excludes placeholder rows; the alias lookup reads them.
+        (where.OR ? store.logs : [...store.logs, ...store.aliases]).find(
           (log) =>
             log.organizationId === where.organizationId &&
             log.kind === 'KHATA_REMINDER' &&
@@ -79,23 +85,36 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
             where.dedupeKey.in.includes(log.dedupeKey) &&
             log.createdAt instanceof Date &&
             log.createdAt >= where.createdAt.gte &&
-            log.createdAt < where.createdAt.lt
+            (!where.createdAt.lt || log.createdAt < where.createdAt.lt)
         ) ?? null,
       count: async () => store.logs.length,
       createManyAndReturn: async ({ data }: { data: Array<Omit<LogRow, 'id'>> }) => {
-        const row = data[0]!;
-        if (
-          store.logs.some(
-            (log) =>
-              log.organizationId === row.organizationId &&
-              (log.dedupeKey === row.dedupeKey ||
-                (row.customerDayKey && log.customerDayKey === row.customerDayKey))
+        const racing = store.beforeClaim;
+        store.beforeClaim = null;
+        racing?.();
+        const created: Array<{ id: string; dedupeKey: string }> = [];
+        for (const row of data) {
+          if (
+            [...store.logs, ...store.aliases].some(
+              (log) =>
+                log.organizationId === row.organizationId &&
+                (log.dedupeKey === row.dedupeKey ||
+                  (row.customerDayKey && log.customerDayKey === row.customerDayKey))
+            )
           )
-        )
-          return [];
-        const created = { ...row, id: `log-${store.logs.length + 1}` } as LogRow;
-        store.logs.push(created);
-        return [{ id: created.id }];
+            continue;
+          const target = row.error === 'DEDUPE_ALIAS' ? store.aliases : store.logs;
+          const id = `log-${store.logs.length + store.aliases.length + 1}`;
+          target.push({ ...row, id } as LogRow);
+          created.push({ id, dedupeKey: row.dedupeKey as string });
+        }
+        return created;
+      },
+      deleteMany: async ({ where }: { where: { id: { in: string[] } } }) => {
+        const before = store.logs.length + store.aliases.length;
+        store.logs = store.logs.filter((log) => !where.id.in.includes(log.id));
+        store.aliases = store.aliases.filter((log) => !where.id.in.includes(log.id));
+        return { count: before - store.logs.length - store.aliases.length };
       },
       update: async ({ where, data }: { where: { id: string }; data: object }) => {
         const log = store.logs.find((row) => row.id === where.id)!;
@@ -154,6 +173,8 @@ beforeEach(() => {
   store.customers = [];
   store.consents = [];
   store.logs = [];
+  store.aliases = [];
+  store.beforeClaim = null;
   store.catalog = [];
   store.audits = [];
   store.timezone = 'Asia/Karachi';
@@ -283,6 +304,82 @@ describe('processDueWhatsAppKhataReminders', () => {
       expect(store.logs).toHaveLength(1);
     }
   );
+
+  describe('DEV-899 mixed-version rollout', () => {
+    // An older worker computes the UTC epoch week of the same instant.
+    const OLD_KEY = `khata:family-1:w${Math.floor(NOW.getTime() / (7 * 86_400_000))}`;
+    const oldWorkerClaim = (overrides: Partial<LogRow> = {}): LogRow => ({
+      id: 'old-worker',
+      organizationId: 'org_a',
+      kind: 'KHATA_REMINDER',
+      direction: 'OUTBOUND',
+      status: 'PENDING',
+      createdAt: NOW,
+      dedupeKey: OLD_KEY,
+      customerId: 'customer-2',
+      ...overrides,
+    });
+
+    beforeEach(() => {
+      store.accounts = [account()];
+      store.customers = [customer(true)];
+      store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    });
+
+    it('claims the old-format weekly key with the new one, so an older worker cannot send it again', async () => {
+      const provider = new MockWhatsAppProvider(config);
+      const result = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+
+      expect(result).toMatchObject({ prepared: 1, duplicate: 0 });
+      expect(store.logs).toHaveLength(1);
+      expect(store.logs[0]).toMatchObject({ dedupeKey: 'khata:family-1:w2026-43' });
+      expect(store.aliases).toEqual([
+        expect.objectContaining({
+          organizationId: 'org_a',
+          kind: 'KHATA_REMINDER',
+          direction: 'OUTBOUND',
+          status: 'IGNORED',
+          error: 'DEDUPE_ALIAS',
+          dedupeKey: OLD_KEY,
+          branchId: 'branch-1',
+        }),
+      ]);
+      // No customer on the placeholder: it never counts toward a customer's anti-nag limit.
+      expect(store.aliases[0]).not.toHaveProperty('customerId');
+    });
+
+    it('sends nothing when an older worker claims the old-format key after the legacy read', async () => {
+      // The payer changed between the two scans: the older worker held another patient's lock.
+      store.beforeClaim = () => store.logs.push(oldWorkerClaim());
+      const provider = new MockWhatsAppProvider(config);
+
+      const result = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+
+      expect(result).toMatchObject({ prepared: 0, sent: 0, duplicate: 1 });
+      expect(provider.calls).toEqual([]);
+      // The new-format claim was released with the alias attempt: only the older claim remains.
+      expect(store.logs.map((log) => log.id)).toEqual(['old-worker']);
+      expect(store.aliases).toEqual([]);
+    });
+
+    it('also yields to a failed old-format claim from this week, as the old unique key did', async () => {
+      store.beforeClaim = () => store.logs.push(oldWorkerClaim({ status: 'FAILED' }));
+      const provider = new MockWhatsAppProvider(config);
+
+      const result = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+
+      expect(result).toMatchObject({ prepared: 0, duplicate: 1 });
+      expect(provider.calls).toEqual([]);
+    });
+
+    it('keeps placeholder rows out of the recent-reminder scan and the legacy-claim read', async () => {
+      const provider = new MockWhatsAppProvider(config);
+      await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+
+      // A failed new-format send stays retryable next week; its placeholder does not hide it.
+      expect(store.scanSql.at(-1)).toMatch(/ml\."error" IS DISTINCT FROM/);
+    });
+  });
 
   it('claims the weekly key on the workspace week, not the Karachi week', async () => {
     store.timezone = 'America/New_York';

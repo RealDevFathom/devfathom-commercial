@@ -1,4 +1,5 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { PREPAID_PROVIDER } from './prepaid-tiers';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -319,6 +320,8 @@ type AddSaleLineInput = {
    * PIN; without it a pack whose lot is not the earliest-expiry one is refused.
    */
   scannedPack?: { payload: string; fefoApprovalPolicy?: string };
+  /** Exact lot selected by a shelf sticker; allocation still enforces FEFO approval. */
+  shelfLabelLotId?: string;
   idempotencyKey: string;
 };
 
@@ -674,6 +677,7 @@ async function addSaleLineWithAllocation(
   const voucher = input.voucherId ? await voucherForRedemption(db, scope, input, medicine) : null;
   const allocationInput = {
     medicineId: input.medicineId,
+    ...(input.shelfLabelLotId ? { expectedInventoryLotId: input.shelfLabelLotId } : {}),
     requiredUnits: canonicalUnits,
     at: new Date(),
     idempotencyKeyPrefix: `sale:${input.idempotencyKey}`,
@@ -1120,6 +1124,8 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
   const tenders = sale.tenders.map((tender) => ({
     id: tender.id,
     type: tender.type,
+    // DEV-863: a prepaid wallet tender is restored to the customer's balance, never paid in cash.
+    prepaid: tender.provider === PREPAID_PROVIDER,
     amountMinor: tender.amountMinor,
     refundedMinor: tender.refunds.reduce((n, row) => n + row.amountMinor, 0),
     refunds: tender.refunds.map((row) => ({

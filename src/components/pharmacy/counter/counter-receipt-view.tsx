@@ -1,10 +1,11 @@
 'use client';
+import { receiptTierLines } from '@/lib/pharmacy/counter-receipt';
 
 import { useEffect, useRef, useState } from 'react';
 
 import { buildDispensingLabels, type DispensingLabelSource } from '@/lib/pharmacy/dispensing-label';
 import type { CounterEvidenceView } from '@/lib/pharmacy/counter-evidence';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -33,6 +34,8 @@ import {
   counterLinePricing,
   receiptCashReceivedLabel,
 } from '@/lib/pharmacy/counter-receipt-presentation';
+
+import { CounterThermalPrint } from './counter-thermal-print';
 
 export type CounterReceiptSettlement =
   | { status: 'pending' | 'unknown' }
@@ -148,56 +151,6 @@ function CounterWhatsAppReceipt({
   );
 }
 
-type ThermalJob =
-  | { state: 'sending' }
-  | { state: 'ready'; byteCount: number; paperWidth: number; data: string; reprint: boolean }
-  | { state: 'fallback' }
-  | { state: 'error'; message: string };
-
-/** Asks the Pharmacy print bridge for the ESC/POS job; never queues or confirms paper. */
-async function requestThermalJob(input: {
-  branchId: string;
-  saleId: string;
-  locale: CounterReceiptLocale;
-}): Promise<ThermalJob> {
-  try {
-    const response = await fetch('/api/pharmacy/print', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        branchId: input.branchId,
-        saleId: input.saleId,
-        locale: input.locale,
-      }),
-      cache: 'no-store',
-      credentials: 'same-origin',
-    });
-    const body = await response.json().catch(() => null);
-    if (response.ok && body?.escPos?.encoding === 'base64') {
-      return {
-        state: 'ready',
-        byteCount: body.escPos.byteCount,
-        paperWidth: body.paperWidth,
-        data: body.escPos.data,
-        reprint: body.reprint === true,
-      };
-    }
-    if (response.status === 422 && body?.fallback === 'BROWSER_OS') return { state: 'fallback' };
-    return {
-      state: 'error',
-      message:
-        typeof body?.error === 'string'
-          ? body.error
-          : 'The thermal print job could not be prepared. Retry, or use Print receipt.',
-    };
-  } catch {
-    return {
-      state: 'error',
-      message: 'The thermal print job could not be requested. Check the connection and retry.',
-    };
-  }
-}
-
 const EVIDENCE_KIND: Record<CounterEvidenceView['kind'], string> = {
   TENDER: 'Tender',
   REFUND: 'Refund',
@@ -307,8 +260,6 @@ export function CounterReceiptView({
   onSendWhatsApp,
 }: CounterReceiptViewProps) {
   const [labelError, setLabelError] = useState<{ saleId: string; message: string } | null>(null);
-  const [thermal, setThermal] = useState<{ key: string; job: ThermalJob } | null>(null);
-  const [thermalPrinted, setThermalPrinted] = useState<ReadonlySet<string>>(new Set());
   const receiptRegion = useRef<HTMLElement>(null);
   const presentedReceipts = useRef(new Set<string>());
   const [presentation, setPresentation] = useState<
@@ -415,18 +366,6 @@ export function CounterReceiptView({
   }
 
   const settled = receipt.receiptNumber !== null && Boolean(receipt.completedAt);
-  const thermalKey = `${receipt.saleId}:${locale}`;
-  const thermalJob = thermal?.key === thermalKey ? thermal.job : null;
-  const thermalReprint = reprint || thermalPrinted.has(receipt.saleId);
-  const printThermal = async () => {
-    if (!branchId) return;
-    const saleId = receipt.saleId;
-    setThermal({ key: thermalKey, job: { state: 'sending' } });
-    const job = await requestThermalJob({ branchId, saleId, locale });
-    setThermal({ key: thermalKey, job });
-    if (job.state === 'ready') setThermalPrinted((prior) => new Set(prior).add(saleId));
-  };
-
   return (
     <div className="space-y-4">
       {settled && document !== null ? (
@@ -501,21 +440,6 @@ export function CounterReceiptView({
         >
           {printing ? 'Loading receipt…' : reprint ? 'Reprint receipt' : 'Print receipt'}
         </Button>
-        {branchId ? (
-          <Button
-            type="button"
-            variant="outline"
-            className="h-11"
-            disabled={printing || !settled || thermalJob?.state === 'sending'}
-            onClick={() => void printThermal()}
-          >
-            {thermalJob?.state === 'sending'
-              ? 'Preparing thermal job…'
-              : thermalReprint
-                ? 'Reprint to thermal (ESC/POS)'
-                : 'Print to thermal (ESC/POS)'}
-          </Button>
-        ) : null}
         {receipt.receiptNumber === null ? (
           <StatusPill
             status="unissued"
@@ -528,6 +452,17 @@ export function CounterReceiptView({
           <StatusPill status="settled" tone="success" label={`#${receipt.receiptNumber}`} />
         )}
       </div>
+
+      {branchId && settled ? (
+        <CounterThermalPrint
+          key={receipt.saleId}
+          branchId={branchId}
+          saleId={receipt.saleId}
+          locale={locale}
+          format={format}
+          disabled={printing}
+        />
+      ) : null}
 
       {onSendWhatsApp && settled ? (
         <CounterWhatsAppReceipt saleId={receipt.saleId} onSend={onSendWhatsApp} />
@@ -551,32 +486,6 @@ export function CounterReceiptView({
           className="text-sm text-text-muted"
         >
           {presentation.message}
-        </p>
-      ) : null}
-
-      {thermalJob?.state === 'ready' ? (
-        <div className="flex flex-wrap items-center gap-3" role="status">
-          <p className="text-sm text-text-muted">
-            ESC/POS job ready: {thermalJob.byteCount} bytes, {thermalJob.paperWidth} mm branch
-            format{thermalJob.reprint ? ', marked as a reprint' : ''}. Send it through your local
-            print bridge; paper delivery cannot be confirmed here.
-          </p>
-          <a
-            className={buttonVariants({ variant: 'outline', className: 'h-11' })}
-            download={`receipt-${receipt.receiptNumber}${thermalJob.reprint ? '-reprint' : ''}.bin`}
-            href={`data:application/octet-stream;base64,${thermalJob.data}`}
-          >
-            Save ESC/POS job
-          </a>
-        </div>
-      ) : thermalJob?.state === 'fallback' ? (
-        <p className="text-sm text-warning" role="alert">
-          The thermal printer cannot print this receipt&apos;s text (Urdu or other non-Latin
-          characters). Use Print receipt for the browser / OS receipt.
-        </p>
-      ) : thermalJob?.state === 'error' ? (
-        <p className="text-sm text-destructive" role="alert">
-          {thermalJob.message}
         </p>
       ) : null}
 
@@ -700,6 +609,11 @@ export function CounterReceiptView({
           })}
         </ul>
 
+        {receiptTierLines(receipt, locale).map((text) => (
+          <p key={text} className="text-sm">
+            {text}
+          </p>
+        ))}
         <dl className="space-y-1 border-t border-border-subtle pt-3">
           {(
             [

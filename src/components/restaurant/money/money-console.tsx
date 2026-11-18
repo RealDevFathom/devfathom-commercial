@@ -1,5 +1,7 @@
 'use client';
 
+import { ManualCardBreakdown } from '@/components/restaurant/manual-card-breakdown';
+
 import { useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import Link from 'next/link';
 import type { inferRouterOutputs } from '@trpc/server';
@@ -1051,7 +1053,14 @@ function BillRefundTable({ bill }: { bill: BillDetail }) {
                   <TableCell>{label(refund.kind)}</TableCell>
                   <TableCell numeric>{refund.amount}</TableCell>
                   <TableCell numeric>{refund.tipRefundAmount}</TableCell>
-                  <TableCell>{refund.reason}</TableCell>
+                  <TableCell>
+                    {refund.reason}
+                    {refund.cardMachineRefundReference ? (
+                      <p className="break-all text-xs text-text-muted">
+                        Card machine refund reference: {refund.cardMachineRefundReference}
+                      </p>
+                    ) : null}
+                  </TableCell>
                   <TableCell>{refund.businessDate}</TableCell>
                 </TableRow>
               ))}
@@ -1240,7 +1249,14 @@ function PaymentsLedger({
                           <TableCell>{label(refund.kind)}</TableCell>
                           <TableCell numeric>{refund.amount}</TableCell>
                           <TableCell numeric>{refund.tipRefundAmount}</TableCell>
-                          <TableCell>{refund.reason}</TableCell>
+                          <TableCell>
+                            {refund.reason}
+                            {refund.cardMachineRefundReference ? (
+                              <p className="break-all text-xs text-text-muted">
+                                Card machine refund reference: {refund.cardMachineRefundReference}
+                              </p>
+                            ) : null}
+                          </TableCell>
                           <TableCell>{refund.businessDate}</TableCell>
                         </TableRow>
                       ))}
@@ -1665,6 +1681,8 @@ function DailyCloseDetailPanel({
         <Stat label="Cash counted" value={totals.cashCounted} />
         <Stat label="Cash variance" value={totals.cashVariance} />
       </div>
+
+      <ManualCardBreakdown summary={detail.manualCardSummary} staff={staff} />
 
       <section aria-labelledby="close-tenders-heading">
         <h3 id="close-tenders-heading" className="mb-3 font-semibold text-text-strong">

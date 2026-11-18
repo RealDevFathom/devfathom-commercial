@@ -12,6 +12,7 @@ export type BalanceSheetSection = 'assets' | 'liabilities' | 'openingEquity' | '
 type Classification = { section: BalanceSheetSection; normalSide: 'DEBIT' | 'CREDIT' };
 
 const CLASSIFICATIONS: Record<string, Classification> = {
+  CUSTOMER_PREPAID: { section: 'liabilities', normalSide: 'CREDIT' },
   CASH: { section: 'assets', normalSide: 'DEBIT' },
   BANK: { section: 'assets', normalSide: 'DEBIT' },
   INVENTORY: { section: 'assets', normalSide: 'DEBIT' },

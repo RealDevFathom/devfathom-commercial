@@ -17,6 +17,8 @@ const store = vi.hoisted(() => ({
   customers: [] as Array<Record<string, unknown>>,
   consents: [] as ConsentRow[],
   logs: [] as LogRow[],
+  /** Runs once, just before the next claim: another worker's insert landing first. */
+  beforeClaim: null as (() => void) | null,
 }));
 
 vi.mock('@/lib/entitlements', () => ({
@@ -99,18 +101,18 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
           direction: string;
           kind: string;
           dedupeKey: { in: string[] };
-          createdAt: { gte: Date; lt: Date };
+          createdAt: { gte: Date; lt?: Date };
         };
       }) =>
         store.logs.find(
           (log) =>
             log.organizationId === where.organizationId &&
-            log.direction === where.direction &&
-            log.kind === where.kind &&
+            (!where.direction || log.direction === where.direction) &&
+            (!where.kind || log.kind === where.kind) &&
             where.dedupeKey.in.includes(log.dedupeKey) &&
             log.createdAt instanceof Date &&
             log.createdAt >= where.createdAt.gte &&
-            log.createdAt < where.createdAt.lt
+            (!where.createdAt.lt || log.createdAt < where.createdAt.lt)
         ) ?? null,
       // All fixture logs fall inside the 24-hour window.
       count: async ({
@@ -126,19 +128,30 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
             (!where.status || log.status !== where.status.not)
         ).length,
       createManyAndReturn: async ({ data }: { data: Array<Omit<LogRow, 'id'>> }) => {
-        const row = data[0]!;
-        if (
-          store.logs.some(
-            (log) =>
-              log.organizationId === row.organizationId &&
-              (log.dedupeKey === row.dedupeKey ||
-                (row.customerDayKey && log.customerDayKey === row.customerDayKey))
+        const racing = store.beforeClaim;
+        store.beforeClaim = null;
+        racing?.();
+        const created: Array<{ id: string; dedupeKey: string }> = [];
+        for (const row of data) {
+          if (
+            store.logs.some(
+              (log) =>
+                log.organizationId === row.organizationId &&
+                (log.dedupeKey === row.dedupeKey ||
+                  (row.customerDayKey && log.customerDayKey === row.customerDayKey))
+            )
           )
-        )
-          return [];
-        const created = { ...row, id: `log-${store.logs.length + 1}` } as LogRow;
-        store.logs.push(created);
-        return [{ id: created.id }];
+            continue;
+          const id = `log-${store.logs.length + 1}`;
+          store.logs.push({ ...row, id } as LogRow);
+          created.push({ id, dedupeKey: row.dedupeKey as string });
+        }
+        return created;
+      },
+      deleteMany: async ({ where }: { where: { id: { in: string[] } } }) => {
+        const before = store.logs.length;
+        store.logs = store.logs.filter((log) => !where.id.in.includes(log.id));
+        return { count: before - store.logs.length };
       },
       update: async ({ where, data }: { where: { id: string }; data: object }) => {
         const log = store.logs.find((row) => row.id === where.id)!;
@@ -454,6 +467,80 @@ describe('khata reminders with SMS fallback', () => {
     expect(sms.calls[0]!.body).toContain('2500.00');
     expect(sms.calls[0]!.body).toContain('بند کرنے کے لیے STOP لکھیں۔');
     expect(store.logs[0]).toMatchObject({ channel: 'SMS', kind: 'KHATA_REMINDER' });
+  });
+});
+
+describe('DEV-899 khata SMS during a mixed-version rollout', () => {
+  // An older worker computes the UTC epoch week of the same instant.
+  const OLD_SMS_KEY = `sms:khata:family-1:w${Math.floor(NOW.getTime() / (7 * 86_400_000))}`;
+
+  beforeEach(() => {
+    store.captures = [];
+    store.logs = [];
+    store.beforeClaim = null;
+    store.accounts = [
+      {
+        familyAccountId: 'family-1',
+        organizationId: 'org_a',
+        branchId: 'branch-1',
+        displayName: 'Khan family',
+        payerCustomerId: 'customer-1',
+        balanceMinor: 250_000,
+        oldestOverdueAt: EARLIER,
+      },
+    ];
+    store.customers = [customer(null)];
+    store.consents = [consent('SMS')];
+  });
+
+  const run = (sms: MockSmsProvider) =>
+    processDueWhatsAppKhataReminders({
+      now: NOW,
+      config: whatsappConfig,
+      provider: new MockWhatsAppProvider(whatsappConfig),
+      smsConfig,
+      smsProvider: sms,
+    });
+
+  it('claims the old-format SMS key with the new one', async () => {
+    const sms = new MockSmsProvider(smsConfig);
+    await expect(run(sms)).resolves.toMatchObject({ sms: { prepared: 1 } });
+    expect(sms.calls).toHaveLength(1);
+    expect(store.logs.map((log) => log.dedupeKey)).toEqual([
+      'sms:khata:family-1:w2026-40',
+      OLD_SMS_KEY,
+    ]);
+    expect(store.logs[0]).toMatchObject({ channel: 'SMS', customerId: 'customer-1' });
+    expect(store.logs[0]!.error).not.toBe('DEDUPE_ALIAS');
+    expect(store.logs[1]).toMatchObject({
+      channel: 'SMS',
+      direction: 'OUTBOUND',
+      kind: 'KHATA_REMINDER',
+      status: 'IGNORED',
+      error: 'DEDUPE_ALIAS',
+    });
+    expect(store.logs[1]).not.toHaveProperty('customerId');
+  });
+
+  it('sends no SMS when an older worker claims the old-format key after the legacy read', async () => {
+    // The payer changed between the two scans, so the older worker locked another patient.
+    store.beforeClaim = () =>
+      store.logs.push({
+        id: 'old-worker',
+        organizationId: 'org_a',
+        channel: 'SMS',
+        direction: 'OUTBOUND',
+        kind: 'KHATA_REMINDER',
+        status: 'PENDING',
+        customerId: 'customer-2',
+        createdAt: NOW,
+        dedupeKey: OLD_SMS_KEY,
+      });
+    const sms = new MockSmsProvider(smsConfig);
+
+    await expect(run(sms)).resolves.toMatchObject({ sms: { prepared: 0, duplicate: 1 } });
+    expect(sms.calls).toEqual([]);
+    expect(store.logs.map((log) => log.id)).toEqual(['old-worker']);
   });
 });
 

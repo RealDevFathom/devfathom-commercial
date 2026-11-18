@@ -17,6 +17,7 @@ import {
   authorizeVoucherIssue,
   issueVoucher,
   listVouchers,
+  lookupCounterVoucher,
   revokeVoucher,
   VoucherApprovalRequired,
   voucherIssueInput,
@@ -286,5 +287,69 @@ describe('DEV-819 voucher revocation', () => {
         reason: 'Code leaked',
       })
     ).rejects.toThrow(MarketingWorkflowError);
+  });
+});
+
+describe('DEV-780 counter voucher lookup', () => {
+  const now = new Date('2026-11-18T10:00:00.000Z');
+  const stored = {
+    id: 'voucher-a',
+    code: 'GIFT10',
+    name: 'Gift sets',
+    discountMinor: 10_000,
+    maxUses: 3,
+    usedCount: 1,
+    validUntil: new Date('2026-12-01T00:00:00.000Z'),
+    active: true,
+    revokedAt: null as Date | null,
+  };
+  const lookupDb = (row: typeof stored | null) => {
+    const findFirst = vi.fn(async () => row);
+    return { findFirst, pharmacyVoucher: { findFirst } };
+  };
+
+  it('finds the voucher by its upper-cased code in this branch only, and reports uses left', async () => {
+    const found = lookupDb(stored);
+    await expect(lookupCounterVoucher(found as never, scope, ' gift10 ', now)).resolves.toEqual({
+      id: 'voucher-a',
+      code: 'GIFT10',
+      name: 'Gift sets',
+      discountMinor: 10_000,
+      usesLeft: 2,
+      maxUses: 3,
+      validUntil: stored.validUntil,
+      status: 'READY',
+    });
+    expect(found.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org-a', branchId: 'branch-a', code: 'GIFT10' },
+      })
+    );
+  });
+
+  it('reports a used-up, expired or revoked voucher instead of offering it', async () => {
+    const cases: Array<[typeof stored, string]> = [
+      [{ ...stored, usedCount: 3 }, 'USED_UP'],
+      [{ ...stored, validUntil: now }, 'EXPIRED'],
+      [{ ...stored, active: false, revokedAt: now }, 'REVOKED'],
+    ];
+    for (const [row, status] of cases)
+      await expect(
+        lookupCounterVoucher(lookupDb(row) as never, scope, 'GIFT10', now)
+      ).resolves.toMatchObject({ status });
+    await expect(
+      lookupCounterVoucher(lookupDb({ ...stored, usedCount: 3 }) as never, scope, 'GIFT10', now)
+    ).resolves.toMatchObject({ usesLeft: 0 });
+  });
+
+  it('returns nothing for an unknown code and refuses a malformed one before reading', async () => {
+    await expect(lookupCounterVoucher(lookupDb(null) as never, scope, 'NOPE', now)).resolves.toBe(
+      null
+    );
+    const malformed = lookupDb(stored);
+    await expect(
+      lookupCounterVoucher(malformed as never, scope, "x' OR 1=1", now)
+    ).rejects.toThrow();
+    expect(malformed.findFirst).not.toHaveBeenCalled();
   });
 });

@@ -73,6 +73,9 @@ function fixture() {
   const transaction = vi.fn(async (callback: (tx: unknown) => unknown) => callback(db));
   const lotRead = vi.fn();
   const db = {
+    // DEV-631: a counter bill or line is refused while today's business day is closed.
+    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'UTC' }) },
+    pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacySaleLine: { findFirst: vi.fn(async () => null) },
     $transaction: transaction,
     $queryRaw: vi.fn(async () => []),
@@ -132,6 +135,16 @@ beforeEach(() => {
 });
 
 describe('pharmacySales.addLine batch override (PH-A4)', () => {
+  it('preserves the shelf-label lot constraint without granting an override', async () => {
+    const f = fixture();
+    vi.mocked(addSaleLine).mockResolvedValue({ line: { id: 'line-1' }, allocation: {} } as never);
+    await f.caller.addLine({ ...line, shelfLabelLotId: 'lot-fefo' });
+    expect(vi.mocked(addSaleLine).mock.calls[0]?.[2]).toMatchObject({
+      shelfLabelLotId: 'lot-fefo',
+    });
+    expect(vi.mocked(addSaleLine).mock.calls[0]?.[2].override).toBeUndefined();
+  });
+
   it('passes the override to the domain and labels the audit row with the override id', async () => {
     const f = fixture();
     vi.mocked(addSaleLine).mockResolvedValue({
@@ -637,5 +650,31 @@ describe('pharmacySales.counterLotOptions (PH-A4)', () => {
         .pharmacySales.counterLotOptions({ branchId: 'branch-1', medicineId: 'medicine-1' })
     ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
     expect(onHand).not.toHaveBeenCalled();
+  });
+});
+
+describe('pharmacySales.addLine closed business day (DEV-631)', () => {
+  it('refuses a line while today is closed, before any stock is allocated', async () => {
+    const f = fixture();
+    const db = f.context.db as unknown as {
+      pharmacyDailyClose: { findFirst: ReturnType<typeof vi.fn> };
+    };
+    db.pharmacyDailyClose.findFirst.mockResolvedValue({ id: 'close-1', reopen: null });
+    await expect(f.caller.addLine(line)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'DAY_CLOSED',
+    });
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('adds the line once the owner reopened the day for trading', async () => {
+    const f = fixture();
+    const db = f.context.db as unknown as {
+      pharmacyDailyClose: { findFirst: ReturnType<typeof vi.fn> };
+    };
+    db.pharmacyDailyClose.findFirst.mockResolvedValue({ id: 'close-1', reopen: { id: 'r-1' } });
+    vi.mocked(addSaleLine).mockResolvedValue({ line: { id: 'line-1' }, allocation: {} } as never);
+    await f.caller.addLine(line);
+    expect(addSaleLine).toHaveBeenCalledOnce();
   });
 });
