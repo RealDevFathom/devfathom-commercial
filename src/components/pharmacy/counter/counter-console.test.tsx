@@ -3116,6 +3116,160 @@ describe('PharmacyCounterConsole barcode safety', () => {
     );
   });
 
+  // DEV-90: shelf stickers name one lot; a scan never bills a different batch silently.
+  const labelLot = (overrides: Partial<NonNullable<CounterSearchRow['labelLot']>> = {}) => ({
+    inventoryLotId: 'lot-label',
+    batchNumber: 'B-LABEL',
+    expiresAt: '2027-01-01T00:00:00.000Z',
+    printedMrpMinor: 10000,
+    sellableUnits: 10,
+    blockedBy: null,
+    ...overrides,
+  });
+
+  it('clears the selection and adds nothing when the shelf-label batch cannot be sold', async () => {
+    mocks.searchQuery.mockResolvedValue({
+      rows: [barcodeRow({ labelLot: labelLot({ sellableUnits: 0, blockedBy: 'RECALLED' }) })],
+      truncated: false,
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    scan('7100000000000411');
+    await screen.findByText(/Batch B-LABEL on this shelf label cannot be sold: it is recalled/);
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /Add to cart/ })).not.toBeInTheDocument();
+  });
+
+  it('stages a non-FEFO shelf-label batch as an override and waits for a reason', async () => {
+    mocks.searchQuery.mockResolvedValue({
+      rows: [barcodeRow({ labelLot: labelLot() })],
+      truncated: false,
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    scan('7100000000000411');
+    await screen.findByText(/Shelf label batch B-LABEL is not the batch FEFO sells first/);
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Add to cart/ })).toBeInTheDocument();
+  });
+
+  it('adds a shelf-label scan straight away when its batch is the FEFO batch', async () => {
+    mocks.searchQuery.mockResolvedValue({
+      rows: [barcodeRow({ labelLot: labelLot({ inventoryLotId: 'lot-a', batchNumber: 'B-1' }) })],
+      truncated: false,
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    scan('7100000000000411');
+    await screen.findByText('1 × Paracetamol added.');
+    expect(mocks.mutations.addLine).toHaveBeenCalledWith(
+      expect.objectContaining({ shelfLabelLotId: 'lot-a' })
+    );
+    expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+      expect.not.objectContaining({ override: expect.anything() })
+    );
+  });
+
+  it('drops the shelf-label lot pin when the operator picks another batch', async () => {
+    mocks.queries.counterLotOptions = query([
+      {
+        inventoryLotId: 'lot-a',
+        batchNumber: 'B-1',
+        expiresAt: '2028-01-01',
+        sellableUnits: 10,
+        blockedBy: null,
+      },
+      {
+        inventoryLotId: 'lot-b',
+        batchNumber: 'B-2',
+        expiresAt: '2028-06-01',
+        sellableUnits: 10,
+        blockedBy: null,
+      },
+    ]);
+    mocks.searchQuery.mockResolvedValue({
+      rows: [barcodeRow({ labelLot: labelLot() })],
+      truncated: false,
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    scan('7100000000000411');
+    await screen.findByText(/Shelf label batch B-LABEL is not the batch FEFO sells first/);
+    fireEvent.click(screen.getByRole('radio', { name: /Batch B-2/ }));
+    fireEvent.change(screen.getByLabelText('Override reason'), {
+      target: { value: 'Patient request' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    const line = mocks.mutations.addLine!.mock.calls[0]![0];
+    expect(line).not.toHaveProperty('shelfLabelLotId');
+    expect(line.override).toEqual(expect.objectContaining({ inventoryLotId: 'lot-b' }));
+  });
+
+  it('keeps the shelf-label lot pin while the batch picker is merely opened', async () => {
+    const pinned = barcodeRow({
+      labelLot: labelLot({ inventoryLotId: 'lot-a', batchNumber: 'B-1' }),
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.lastCall![0].onSelect(pinned));
+    fireEvent.click(screen.getByRole('button', { name: 'Sell a different batch' }));
+    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '1' } });
+    fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
+    await screen.findByText('1 × Paracetamol added.');
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    expect(mocks.mutations.addLine!.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({ shelfLabelLotId: 'lot-a' })
+    );
+  });
+
+  it('drops the shelf-label lot pin when the operator picks another batch', async () => {
+    mocks.queries.counterLotOptions = query([
+      {
+        inventoryLotId: 'lot-a',
+        batchNumber: 'B-1',
+        expiresAt: '2028-01-01',
+        sellableUnits: 10,
+        blockedBy: null,
+      },
+      {
+        inventoryLotId: 'lot-b',
+        batchNumber: 'B-2',
+        expiresAt: '2028-06-01',
+        sellableUnits: 10,
+        blockedBy: null,
+      },
+    ]);
+    mocks.searchQuery.mockResolvedValue({
+      rows: [barcodeRow({ labelLot: labelLot() })],
+      truncated: false,
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    scan('7100000000000411');
+    await screen.findByText(/Shelf label batch B-LABEL is not the batch FEFO sells first/);
+    fireEvent.click(screen.getByRole('radio', { name: /Batch B-2/ }));
+    fireEvent.change(screen.getByLabelText('Override reason'), {
+      target: { value: 'Patient request' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    const line = mocks.mutations.addLine!.mock.calls[0]![0];
+    expect(line).not.toHaveProperty('shelfLabelLotId');
+    expect(line.override).toEqual(expect.objectContaining({ inventoryLotId: 'lot-b' }));
+  });
+
+  it('does not carry a staged shelf-label lot into the next product-barcode scan', async () => {
+    mocks.searchQuery
+      .mockResolvedValueOnce({ rows: [barcodeRow({ labelLot: labelLot() })], truncated: false })
+      .mockResolvedValueOnce({ rows: [barcodeRow()], truncated: false });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    scan('7100000000000411');
+    await screen.findByText(/Shelf label batch B-LABEL is not the batch FEFO sells first/);
+    scan('8964000000012');
+    await screen.findByText('1 × Paracetamol added.');
+    expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+      expect.not.objectContaining({ shelfLabelLotId: expect.anything() })
+    );
+    expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+      expect.not.objectContaining({ override: expect.anything() })
+    );
+  });
+
   it.each(['complete', 'missing reason'])(
     'does not reuse a previous batch override with a %s reason',
     async (reason) => {

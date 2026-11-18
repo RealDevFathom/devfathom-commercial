@@ -17,3 +17,4 @@
 20261117235454_pharmacy_prepaid_tiers
 20261117235457_restaurant_manual_card_day_close
 20261117235501_pharmacy_loyalty_cards
+20261118001402_pharmacy_shelf_label_number

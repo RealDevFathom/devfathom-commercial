@@ -2636,6 +2636,8 @@ model PharmacyInventoryLot {
   receivedExpiresAt       DateTime
   receivedExpiryPrecision PharmacyExpiryPrecision
   receivedAt              DateTime?
+  /// DEV-90: immutable numeric alias encoded in the internal shelf-label Code128.
+  shelfLabelNumber        Int                     @unique @default(autoincrement())
   createdAt               DateTime                @default(now())
   updatedAt               DateTime                @updatedAt
 

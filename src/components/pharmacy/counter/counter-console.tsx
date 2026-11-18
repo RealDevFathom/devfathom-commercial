@@ -84,6 +84,7 @@ import {
   DialogClose,
 } from '@/components/ui/dialog';
 import type { CounterCart, CounterSearchRow } from '@/lib/pharmacy/counter';
+import { counterLabelScanDecision } from '@/lib/pharmacy/counter-label-scan';
 import {
   counterMedicineDisplayName,
   counterMedicineGenericName,
@@ -1070,13 +1071,16 @@ function ScopedPharmacyCounterConsole({
     requestedCanonicalUnits !== null &&
     Number.isSafeInteger(requestedCanonicalUnits) &&
     requestedCanonicalUnits > 0
-      ? Math.max(0, requestedCanonicalUnits - activeRow.onHandUnits)
+      ? Math.max(
+          0,
+          requestedCanonicalUnits - (activeRow.medicineOnHandUnits ?? activeRow.onHandUnits)
+        )
       : 0;
   const substituteInput =
     activeRow &&
     selectedOption &&
     requestedCanonicalUnits !== null &&
-    activeRow.onHandUnits < requestedCanonicalUnits
+    (activeRow.medicineOnHandUnits ?? activeRow.onHandUnits) < requestedCanonicalUnits
       ? {
           branchId,
           medicineId: activeRow.medicineId,
@@ -1620,12 +1624,23 @@ function ScopedPharmacyCounterConsole({
   );
 
   const stageRow = useCallback((row: CounterSearchRow, focusQuantity = true) => {
+    const label = counterLabelScanDecision(row);
+    if (label.kind === 'BLOCKED') {
+      setActiveRow(null);
+      setQuantityText('');
+      setSaleUnit(null);
+      setLotOverride(null);
+      setNotice({ tone: 'danger', message: label.message });
+      return;
+    }
     focusQuantityOnStage.current = focusQuantity;
     quantityReviewed.current = false;
     setActiveRow(row);
     setQuantityText('1');
     setSaleUnit(preferredSaleUnitOption(row.saleUnits, row.dosageForm)?.kind ?? null);
-    setLotOverride(null);
+    setLotOverride(
+      label.kind === 'OVERRIDE' ? { inventoryLotId: label.inventoryLotId, reason: '' } : null
+    );
   }, []);
 
   const changeQuantity = useCallback((text: string) => {
@@ -1799,6 +1814,7 @@ function ScopedPharmacyCounterConsole({
             option.kind,
             units,
             overrideLotId,
+            row.labelLot?.inventoryLotId,
             scannedPack?.serial.toUpperCase(),
           ]);
           let key = lineAttempts.current.get(selection);
@@ -1839,6 +1855,7 @@ function ScopedPharmacyCounterConsole({
             saleUnit: option.kind,
             quantity: units,
             canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
+            ...(row.labelLot ? { shelfLabelLotId: row.labelLot.inventoryLotId } : {}),
             // Retries keep the key until a confirmed add; the next completed
             // scanner gesture must allocate another item, even for the same code.
             idempotencyKey: key,
@@ -2028,12 +2045,22 @@ function ScopedPharmacyCounterConsole({
         const row = result.rows[0]!;
         if (!cached && !search.serializedPack) catalogueCache.put(branchId, search.query, row);
         const serialized = search.serializedPack;
+        const label = counterLabelScanDecision(row);
+        if (label.kind === 'BLOCKED') {
+          stageRow(row);
+          return;
+        }
         // Use this lookup's restrictions/availability even when the medicine ID
         // matches the previous selection. A server refusal can refresh its rules.
         stageRow(row, false);
         setSaleUnit(row.saleUnits[0]?.kind ?? null);
         // Barcode entry keeps its one-item default; manual selection starts empty.
         setQuantityText('1');
+        if (label.kind === 'OVERRIDE') {
+          // A non-FEFO sticker waits for the existing reason and pharmacist approval.
+          setNotice({ tone: 'warning', message: label.message });
+          return;
+        }
         const scanPreview = counterSelectionPreview(row, row.saleUnits[0] ?? null, 1);
         if (serialized) {
           // The server pins the scanned pack's own lot and refuses a pack already sold.
@@ -2795,7 +2822,7 @@ function ScopedPharmacyCounterConsole({
           canonicalUnitsPerSaleUnit: selectedOption?.canonicalUnitsPerSaleUnit ?? 1,
           requestedCanonicalUnits: requestedCanonicalUnits ?? quantity,
           shortfallCanonicalUnits: capturedUnits,
-          onHandUnits: activeRow?.onHandUnits ?? 0,
+          onHandUnits: activeRow?.medicineOnHandUnits ?? activeRow?.onHandUnits ?? 0,
           blocked: activeRow?.blocked ?? [],
           capturedAt: new Date().toISOString(),
         },
@@ -3963,7 +3990,19 @@ function ScopedPharmacyCounterConsole({
                     }
                     error={lotOptionsQuery.error ? messageFrom(lotOptionsQuery.error) : null}
                     disabled={busy}
-                    onChange={setLotOverride}
+                    onChange={(next) => {
+                      // An explicit batch choice replaces the scanned sticker's lot pin;
+                      // otherwise the server refuses the chosen batch as a mismatch.
+                      // Merely opening the picker (lotOverride still null) keeps the pin.
+                      setActiveRow((current) =>
+                        lotOverride !== null &&
+                        current?.labelLot &&
+                        next?.inventoryLotId !== current.labelLot.inventoryLotId
+                          ? { ...current, labelLot: null }
+                          : current
+                      );
+                      setLotOverride(next);
+                    }}
                     onRetry={() => void lotOptionsQuery.refetch()}
                   />
                 </div>

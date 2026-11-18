@@ -320,6 +320,8 @@ type AddSaleLineInput = {
    * PIN; without it a pack whose lot is not the earliest-expiry one is refused.
    */
   scannedPack?: { payload: string; fefoApprovalPolicy?: string };
+  /** Exact lot selected by a shelf sticker; allocation still enforces FEFO approval. */
+  shelfLabelLotId?: string;
   idempotencyKey: string;
 };
 
@@ -675,6 +677,7 @@ async function addSaleLineWithAllocation(
   const voucher = input.voucherId ? await voucherForRedemption(db, scope, input, medicine) : null;
   const allocationInput = {
     medicineId: input.medicineId,
+    ...(input.shelfLabelLotId ? { expectedInventoryLotId: input.shelfLabelLotId } : {}),
     requiredUnits: canonicalUnits,
     at: new Date(),
     idempotencyKeyPrefix: `sale:${input.idempotencyKey}`,

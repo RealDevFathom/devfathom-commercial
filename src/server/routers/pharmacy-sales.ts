@@ -492,6 +492,7 @@ async function approvedLineInput(
   const approvals: Array<{ kind: CounterApprovalKind; approval: CounterApproval }> = [];
   const lineInput: SaleLineInput = {
     saleId: input.saleId,
+    ...(input.shelfLabelLotId ? { shelfLabelLotId: input.shelfLabelLotId } : {}),
     medicineId: input.medicineId,
     presentationId: input.presentationId,
     packLevelId: input.packLevelId,
@@ -2361,6 +2362,8 @@ export const pharmacySalesRouter = router({
             })
             .strict()
             .optional(),
+          // DEV-90: a constraint only; it cannot authorize a batch override.
+          shelfLabelLotId: z.string().trim().min(1).max(128).optional(),
           // DEV-92: the raw DataMatrix of one serialized pack; the server re-reads it.
           scannedPack: z
             .object({
