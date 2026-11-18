@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { explainGrossMargin, marginComparisonPeriods } from '@/lib/pharmacy/finance-reports';
 import { MarginComparisonLedger, MarginComparisonSection } from './margin-comparison';
 
@@ -60,4 +60,65 @@ describe('gross-margin comparison UI', () => {
       });
     }
   );
+
+  describe('on the workspace clock (DEV-902)', () => {
+    afterEach(() => vi.useRealTimers());
+    const section = (marginComparison: ReturnType<typeof vi.fn>, dates: object = {}) =>
+      MarginComparisonSection({
+        caller: { marginComparison } as unknown as Parameters<
+          typeof MarginComparisonSection
+        >[0]['caller'],
+        branch: { id: 'branch_1', name: 'Main' },
+        timeZone: 'Asia/Karachi',
+        ...dates,
+      });
+
+    it('splits picked days at the workspace midnight, not UTC midnight', async () => {
+      const marginComparison = vi.fn().mockRejectedValue({ code: 'FORBIDDEN' });
+      const html = renderToStaticMarkup(
+        await section(marginComparison, { from: '2026-09-01', to: '2026-09-03' })
+      );
+      expect(marginComparison).toHaveBeenCalledWith({
+        branchId: 'branch_1',
+        from: '2026-08-31T19:00:00Z',
+        to: '2026-09-02T19:00:00Z',
+      });
+      expect(html).toContain('From (midnight, PKT)');
+      expect(html).toContain('Until (midnight, PKT, not included)');
+      expect(html).not.toContain('5:00 AM PKT');
+      expect(html).not.toContain('UTC');
+    });
+
+    it('ends the default period on the workspace today, so a 00:30 local sale is current', async () => {
+      vi.useFakeTimers();
+      // 00:30 on 18 Nov in Karachi; UTC is still on 17 Nov.
+      vi.setSystemTime(new Date('2026-11-17T19:30:00Z'));
+      const marginComparison = vi.fn().mockRejectedValue({ code: 'FORBIDDEN' });
+      const html = renderToStaticMarkup(await section(marginComparison));
+      expect(html).toContain('value="2026-11-18"');
+      expect(html).toContain('value="2026-10-19"');
+      expect(marginComparison).toHaveBeenCalledWith({
+        branchId: 'branch_1',
+        from: '2026-10-18T19:00:00Z',
+        to: '2026-11-17T19:00:00Z',
+      });
+    });
+
+    it('shows period boundaries in the workspace zone', () => {
+      const report = {
+        branchId: 'branch_1',
+        timezone: 'UTC' as const,
+        periods: marginComparisonPeriods(
+          new Date('2026-08-31T19:00:00Z'),
+          new Date('2026-09-02T19:00:00Z')
+        ),
+        ...explainGrossMargin(undefined, undefined),
+      };
+      const html = renderToStaticMarkup(
+        <MarginComparisonLedger report={report} timeZone="Asia/Karachi" />
+      );
+      expect(html).toContain('Previous: 30 Aug 2026, 12:00 AM PKT to 1 Sep 2026, 12:00 AM PKT');
+      expect(html).toContain('Current: 1 Sep 2026, 12:00 AM PKT to 3 Sep 2026, 12:00 AM PKT');
+    });
+  });
 });

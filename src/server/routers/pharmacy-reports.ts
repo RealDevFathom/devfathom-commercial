@@ -839,6 +839,7 @@ export const pharmacyReportsRouter = router({
         organizationId: available.organizationId,
         actorId: ctx.session!.user.id,
         financial,
+        timeZone: ctx.organization?.timezone,
       };
       const readAt = new Date();
       try {
@@ -1020,7 +1021,10 @@ export const pharmacyReportsRouter = router({
   }),
   anomalySignals: reports.input(filters).query(async ({ ctx, input }) => {
     const bounded = await ownerFilters(ctx, input);
-    return readPharmacyAnomalySignals(ctx.db, bounded);
+    return readPharmacyAnomalySignals(ctx.db, {
+      ...bounded,
+      timeZone: ctx.organization?.timezone,
+    });
   }),
   expiryAdvice: reports.input(filters).query(async ({ ctx, input }) => {
     const bounded = await ownerFilters(ctx, input);
@@ -1075,7 +1079,11 @@ export const pharmacyReportsRouter = router({
     }),
   refreshAnomalies: reports.input(filters).mutation(async ({ ctx, input }) => {
     const bounded = await ownerFilters(ctx, input);
-    return refreshPharmacyAnomalySignals(ctx.db, bounded, ctx.session!.user.id);
+    return refreshPharmacyAnomalySignals(
+      ctx.db,
+      { ...bounded, timeZone: ctx.organization?.timezone },
+      ctx.session!.user.id
+    );
   }),
   acknowledgeAnomaly: reports.input(anomalyDecision).mutation(async ({ ctx, input }) => {
     await requireFinancialReports(ctx);
