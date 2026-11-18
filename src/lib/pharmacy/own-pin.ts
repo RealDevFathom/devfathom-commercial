@@ -1,16 +1,19 @@
 import 'server-only';
 
+import { TRPCError } from '@trpc/server';
+
 import type { AuthzDb } from '@/lib/authz';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
 import type { ApprovalAuthenticatorParty } from '@/lib/approval-authenticator';
-import { ensureAdministratorStaffProfile } from '@/lib/restaurant/administrator-staff-profile';
 import {
   issueOperatorCredential,
   revokeOperatorCredential,
   rotateOperatorCredential,
 } from '@/lib/restaurant/credential-lifecycle';
 import { isLockedOut } from '@/lib/restaurant/operator-credentials';
+import { requirePasswordReauthentication } from '@/lib/password-reauthentication';
+import { ownPinProblem } from '@/lib/pharmacy/own-pin-policy';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 /**
@@ -91,8 +94,8 @@ export async function saveOwnPin(
   input: { organizationId: string; userId: string; pin: string }
 ): Promise<{ action: 'created' | 'changed'; credentialId: string; staffProfileId: string }> {
   const { organizationId, userId } = input;
-  const user = await db.$queryRaw<Array<{ name: string | null; email: string | null }>>`
-    SELECT name, email FROM users WHERE id=${userId} AND "organizationId"=${organizationId} FOR UPDATE`;
+  const user = await db.$queryRaw<Array<{ name: string | null }>>`
+    SELECT name FROM users WHERE id=${userId} AND "organizationId"=${organizationId} FOR UPDATE`;
   if (!user[0]) throw new OwnPinError('Your account was not found.', 'NOT_FOUND');
   const current = await db.restaurantOperatorCredential.findFirst({
     where: activePin(organizationId, userId),
@@ -111,31 +114,69 @@ export async function saveOwnPin(
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     select: { id: true },
   });
-  const profile = activeProfile
-    ? { staffProfileId: activeProfile.id }
-    : await ensureAdministratorStaffProfile(db, {
+  let staffProfileId = activeProfile?.id;
+  if (!staffProfileId) {
+    // A suspended or archived profile is a decision someone made; never work around it.
+    if (await db.restaurantStaffProfile.findFirst({ where: { organizationId, userId } }))
+      throw new OwnPinError(
+        'Your staff profile is not active. Ask the owner or a manager to restore it.',
+        'PROFILE_INACTIVE'
+      );
+    // No primary branch: restaurant terminal sign-in only admits an operator whose primary
+    // branch is the terminal's branch (`authenticateOperator`), so a PIN created here can
+    // approve pharmacy actions but can never unlock a restaurant terminal. No role, no grant.
+    const created = await db.restaurantStaffProfile.create({
+      data: {
         organizationId,
         userId,
-        displayName: user[0].name,
-        email: user[0].email,
-      });
-  const live = activeProfile
-    ? { status: 'ACTIVE' }
-    : await db.restaurantStaffProfile.findFirst({
-        where: { id: profile.staffProfileId, organizationId, userId },
-        select: { status: true },
-      });
-  if (live?.status !== 'ACTIVE')
-    throw new OwnPinError(
-      'Your staff profile is not active. Ask the owner or a manager to restore it.',
-      'PROFILE_INACTIVE'
-    );
+        displayName: user[0].name?.trim() || 'Pharmacy staff',
+        primaryBranchId: null,
+        status: 'ACTIVE',
+      },
+      select: { id: true },
+    });
+    staffProfileId = created.id;
+  }
   const issued = await issueOperatorCredential(db, {
-    staffProfileId: profile.staffProfileId,
+    staffProfileId,
     type: 'PIN',
     secret: input.pin,
   });
-  return { action: 'created', credentialId: issued.id, staffProfileId: profile.staffProfileId };
+  return { action: 'created', credentialId: issued.id, staffProfileId };
+}
+
+/**
+ * The one way a person sets their own PIN, for every screen that offers it ("Your PIN", the
+ * purchasing approval-PIN step): the PIN rules first (format, easy PINs, their own phone
+ * number), then their account password checked on the server and rate limited, then the
+ * save in its own transaction. The caller refuses support sessions and skips audit input.
+ */
+export async function setOwnPinWithPassword(
+  db: ScopedDb,
+  input: {
+    organizationId: string;
+    userId: string;
+    currentPassword: string;
+    pin: string;
+    confirmPin: string;
+  }
+): Promise<{ action: 'created' | 'changed'; credentialId: string; staffProfileId: string }> {
+  const { organizationId, userId } = input;
+  const person = await db.user.findFirst({
+    where: { id: userId, organizationId },
+    select: { phone: true },
+  });
+  const problem = ownPinProblem(input.pin, input.confirmPin, { phone: person?.phone });
+  if (problem) throw new TRPCError({ code: 'BAD_REQUEST', message: problem });
+  await requirePasswordReauthentication(db, {
+    organizationId,
+    userId,
+    password: input.currentPassword,
+    purpose: 'pharmacy-pin',
+  });
+  return db.$transaction((tx) =>
+    saveOwnPin(tx as unknown as ScopedDb, { organizationId, userId, pin: input.pin })
+  );
 }
 
 /**

@@ -12,9 +12,9 @@ import {
   pinResetDenial,
   readOwnPinState,
   resetMemberPin,
-  saveOwnPin,
+  setOwnPinWithPassword,
 } from '@/lib/pharmacy/own-pin';
-import { OWN_PIN_MAX_LENGTH, ownPinProblem } from '@/lib/pharmacy/own-pin-policy';
+import { OWN_PIN_MAX_LENGTH } from '@/lib/pharmacy/own-pin-policy';
 import { CredentialLifecycleError } from '@/lib/restaurant/credential-lifecycle';
 import { CredentialPolicyError } from '@/lib/restaurant/operator-credentials';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -100,18 +100,14 @@ export const pharmacyPinRouter = router({
       const { organizationId, userId } = actor(ctx);
       annotateAudit(ctx, { targetId: userId });
       if (supportSession(ctx)) throw new TRPCError({ code: 'FORBIDDEN', message: SUPPORT_REFUSED });
-      const problem = ownPinProblem(input.pin, input.confirmPin);
-      if (problem) throw new TRPCError({ code: 'BAD_REQUEST', message: problem });
-      await requirePasswordReauthentication(ctx.db, {
-        organizationId,
-        userId,
-        password: input.currentPassword,
-        purpose: 'pharmacy-pin',
-      });
       try {
-        const saved = await ctx.db.$transaction((tx) =>
-          saveOwnPin(tx as unknown as ScopedDb, { organizationId, userId, pin: input.pin })
-        );
+        const saved = await setOwnPinWithPassword(ctx.db, {
+          organizationId,
+          userId,
+          currentPassword: input.currentPassword,
+          pin: input.pin,
+          confirmPin: input.confirmPin,
+        });
         annotateAudit(ctx, {
           skipInput: true,
           operation: saved.action === 'created' ? 'CREATE' : 'UPDATE',

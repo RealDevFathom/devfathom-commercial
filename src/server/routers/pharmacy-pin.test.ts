@@ -33,6 +33,8 @@ vi.mock('@/lib/abac', async (importOriginal) => {
 
 import { compareSync, hashSync } from 'bcryptjs';
 import { rateLimit } from '@/lib/rate-limit';
+import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacyPinRouter } from './pharmacy-pin';
 
@@ -50,6 +52,7 @@ type Member = {
   status: string;
   department: string | null;
   password: string;
+  phone: string | null;
   organizationRole: { key: string; isSystem: boolean; permissions: [] } | null;
   permissionOverrides: [];
 };
@@ -67,6 +70,7 @@ const member = (
   status: 'ACTIVE',
   department: null,
   password: PASSWORD_HASH,
+  phone: null,
   organizationRole: roleKey ? { key: roleKey, isSystem: true, permissions: [] } : null,
   permissionOverrides: [],
 });
@@ -175,7 +179,14 @@ function world() {
           )
       ),
     },
-    restaurantBranch: { findFirst: vi.fn(async () => null) },
+    restaurantBranch: {
+      // The organization also runs a restaurant branch, its default one.
+      findFirst: vi.fn(async () => ({ id: 'restaurant-branch-1' })),
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => ({
+        id: where.id,
+        shiftSignInEnforced: false,
+      })),
+    },
     restaurantStaffProfile: {
       findFirst: vi.fn(async ({ where }: { where: Where }) => {
         const rows = profiles.filter(
@@ -418,6 +429,50 @@ describe('pharmacyPin.setMine', () => {
   });
 });
 
+describe('pharmacyPin.setMine rules and reach', () => {
+  it.each(['1990', '2024'])('refuses the year-like PIN %s', async (pin) => {
+    const w = world();
+    await expect(w.caller('owner').setMine(save(pin))).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'That PIN is too easy to guess. Choose a different one.',
+    });
+    expect(w.credentials).toHaveLength(0);
+  });
+
+  it("refuses the end of the person's own phone number, read on the server", async () => {
+    const w = world();
+    w.users.get('owner')!.phone = '+92 300 1583917';
+    await expect(w.caller('owner').setMine(save('583917'))).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'That PIN is the end of your phone number. Choose a different one.',
+    });
+    expect(w.credentials).toHaveLength(0);
+  });
+
+  it('gives a new profile no branch, so the PIN can never unlock a restaurant terminal', async () => {
+    const w = world();
+    await w.caller('cashier').setMine(save('583917'));
+    const [profile] = w.profiles;
+    expect(profile).toMatchObject({ userId: 'cashier', status: 'ACTIVE', primaryBranchId: null });
+    const signIn = (branchId?: string) =>
+      authenticateOperator(w.db as unknown as ScopedDb, {
+        staffProfileId: profile!.id,
+        deviceId: 'terminal-1',
+        branchId,
+        type: 'PIN',
+        secret: '583917',
+        now: new Date(),
+      });
+    // A terminal always names its branch; no branch matches a profile without one.
+    await expect(signIn('restaurant-branch-1')).resolves.toMatchObject({
+      ok: false,
+      reason: 'INVALID',
+    });
+    // The PIN itself is right: the branch rule is what keeps it off terminals.
+    await expect(signIn(undefined)).resolves.toMatchObject({ ok: true });
+  });
+});
+
 describe('pharmacyPin.resetForMember', () => {
   async function withCashierPin() {
     const w = world();
@@ -501,6 +556,26 @@ describe('pharmacyPin.resetForMember', () => {
       message: 'A support session cannot set or reset a PIN.',
     });
     expect(w.credentials.every((row) => row.revokedAt === null)).toBe(true);
+  });
+
+  it('only revokes: a reset carrying a PIN is refused and sets nothing', async () => {
+    const w = await withCashierPin();
+    const before = w.credentials[0]!.credentialHash;
+    await expect(
+      w.caller('owner').resetForMember({
+        userId: 'cashier',
+        currentPassword: PASSWORD,
+        pin: '2580',
+      } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(w.credentials).toHaveLength(1);
+    expect(w.credentials[0]).toMatchObject({ credentialHash: before, revokedAt: null });
+
+    await w.caller('owner').resetForMember({ userId: 'cashier', currentPassword: PASSWORD });
+    // Nothing new was issued: the cashier has no live PIN until they create one themselves.
+    expect(w.credentials).toHaveLength(1);
+    expect(w.credentials.filter((row) => row.revokedAt === null)).toHaveLength(0);
+    expect(await w.caller('cashier').status()).toMatchObject({ state: 'RESET' });
   });
 
   it('cannot reach a member of another organization', async () => {

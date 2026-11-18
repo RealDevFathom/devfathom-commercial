@@ -312,6 +312,8 @@ export async function freshPharmacyFirstSale(
   // specs sign in many times from one loopback address first, and the shared-host sign-in
   // limiter rightly counts that address as one client; the new owner's and the colleague's
   // browsers are other clients (synthetic TEST-NET-2 addresses; the lane trusts one proxy hop).
+  // Temporary: DEV-932 (#2174) stops successful sign-ins using up that per-address budget;
+  // remove these two addresses once it has landed.
   await page.context().setExtraHTTPHeaders({ 'x-forwarded-for': '198.51.100.91' });
   const platformContext = await browser.newContext();
   const colleagueContext = await browser.newContext({

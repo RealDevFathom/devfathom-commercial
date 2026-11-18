@@ -293,7 +293,8 @@ const RECEIPT_LINE = {
 };
 
 const CALLS = {
-  provisionMyPurchasePin: (c: Caller) => c.provisionMyPurchasePin({ pin: '4821' }),
+  provisionMyPurchasePin: (c: Caller) =>
+    c.provisionMyPurchasePin({ pin: '4821', currentPassword: 'current password' }),
   createSupplier: (c: Caller) => c.createSupplier({ name: 'Karachi Distributors' }),
   recordSupplierLicence: (c: Caller) =>
     c.recordSupplierLicence({
