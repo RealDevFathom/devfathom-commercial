@@ -71,7 +71,10 @@ describe('placeholder licence notice (DEV-44)', () => {
     renderShell('/dashboard');
     expect(screen.getByRole('alert')).toHaveTextContent(WARNING);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Dismiss licence placeholder notice' }));
+    const dismiss = screen.getByRole('button', { name: 'Dismiss licence placeholder notice' });
+    // The Studio contract's 44px minimum touch target.
+    expect(dismiss).toHaveClass('min-h-11', 'min-w-11');
+    fireEvent.click(dismiss);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 
     cleanup();

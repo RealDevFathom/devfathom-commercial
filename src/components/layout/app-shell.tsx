@@ -209,7 +209,8 @@ function PharmacyPlaceholderNotice({ pathname }: { pathname: string }) {
           size="icon"
           aria-label="Dismiss licence placeholder notice"
           onClick={dismiss}
-          className="shrink-0"
+          // The Studio touch target is at least 44px; the icon size alone is 32px.
+          className="min-h-11 min-w-11 shrink-0"
         >
           <X aria-hidden="true" />
         </Button>
