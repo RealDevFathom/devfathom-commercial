@@ -135,12 +135,18 @@ const WORKSPACE_WIDE: ReadonlyArray<{ reason: string; actions: readonly string[]
   },
   {
     reason:
-      "The person's own counter keys, dashboard layout and purchase approval PIN: they follow the person to every branch.",
+      "The person's own counter keys, dashboard layout, purchase approval PIN and approval PIN: they follow the person to every branch.",
     actions: [
+      'pharmacyPin.setMine',
       'pharmacyPurchasing.provisionMyPurchasePin',
       'pharmacyReports.updatePreferences',
       'pharmacySales.counterSaveKeymap',
     ],
+  },
+  {
+    reason:
+      "Resetting another member's approval PIN: the PIN is one per person and valid at every branch, and the right to reset it (owner, administrator or staff:manage) is workspace-wide with no branch check. The entry names the member.",
+    actions: ['pharmacyPin.resetForMember'],
   },
 ];
 
