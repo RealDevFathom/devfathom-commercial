@@ -17,6 +17,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
 const HOST = 'www.devfathom.com';
 const IP = '203.0.113.9';
+const OTHER_IP = '198.51.100.7';
 const EMAIL = 'alex@company.com';
 const PASSWORD = 'correct-horse-battery-staple';
 const IP_KEY = `login:ip:${IP}`;
@@ -26,6 +27,12 @@ const SELECT_KEY = `login:select:${IP}`;
 /** Mirrors the production limits — not a knob for the test to relax. */
 const ACCOUNT_LIMIT = 10;
 const IP_LIMIT = 30;
+/** DEV-932: the per-address cap on failed guesses, across every account. */
+const INTENT_LIMIT = 20;
+const SELECT_LIMIT = 30;
+/** DEV-932: a shop's staff behind one connection — more than every per-address limit. */
+const STAFF = Array.from({ length: 40 }, (_, i) => `staff${i + 1}@company.com`);
+const INTENT_ACCOUNT_KEYS = [EMAIL, ...STAFF].map((email) => `login:intent-account:${IP}:${email}`);
 const WINDOW_MS = 5 * 60_000;
 
 const UNIFORM_FAILURE = {
@@ -38,10 +45,13 @@ type StoredIntent = {
   host: string;
   candidates: { organizationId: string; userId: string }[];
   used: boolean;
+  createdAt: Date;
+  ip?: string | null;
 };
 
 const mocks = vi.hoisted(() => ({
   config: null as Record<string, unknown> | null,
+  ip: '203.0.113.9',
   intents: new Map<string, StoredIntent>(),
   resolveSharedLogin: vi.fn(),
   recordAuthAudit: vi.fn(),
@@ -68,7 +78,7 @@ vi.mock('next-auth/providers/credentials', () => ({
   default: (options: Record<string, unknown>) => options,
 }));
 vi.mock('@/server/audit', () => ({
-  ipFromHeaders: () => IP,
+  ipFromHeaders: () => mocks.ip,
   recordAuthAudit: mocks.recordAuthAudit,
 }));
 vi.mock('@/lib/totp', () => ({
@@ -78,7 +88,16 @@ vi.mock('@/lib/totp', () => ({
 vi.mock('@/lib/sso', () => ({ SSO_TICKET_COOKIE: 'df_sso_ticket' }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: mocks.withTenantDb,
-  withPlatformDb: vi.fn(),
+  // Only the provider's read of the consumed intent's createdAt reaches here.
+  withPlatformDb: async (run: (db: unknown) => unknown) =>
+    run({
+      pendingLoginIntent: {
+        findUnique: async ({ where }: { where: { id: string } }) => {
+          const intent = mocks.intents.get(where.id);
+          return intent ? { createdAt: intent.createdAt, ip: intent.ip ?? null } : null;
+        },
+      },
+    }),
 }));
 vi.mock('@/lib/tenancy/host', async () => {
   const actual = await vi.importActual<typeof import('@/lib/tenancy/host')>('@/lib/tenancy/host');
@@ -92,9 +111,9 @@ vi.mock('@/lib/auth/login-intent', async () => {
     await vi.importActual<typeof import('@/lib/auth/login-intent')>('@/lib/auth/login-intent');
   return {
     ...actual,
-    createLoginIntent: async (input: Omit<StoredIntent, 'used'>) => {
+    createLoginIntent: async (input: Omit<StoredIntent, 'used' | 'createdAt'>) => {
       const token = `intent-${mocks.intents.size}`.padEnd(43, 'x');
-      mocks.intents.set(token, { ...input, used: false });
+      mocks.intents.set(token, { ...input, used: false, createdAt: new Date() });
       return { token, expiresAt: new Date(Date.now() + 300_000) };
     },
     peekLoginIntent: async (token: string | null, host: string) => {
@@ -159,7 +178,7 @@ function tenantUser(overrides: Record<string, unknown> = {}) {
 }
 
 /** Step 1: the shared-host credential check. */
-function credentialCheck(password: string) {
+function credentialCheck(password: string, email = EMAIL) {
   return POST(
     new Request(`https://${HOST}/api/login`, {
       method: 'POST',
@@ -169,7 +188,7 @@ function credentialCheck(password: string) {
         'content-type': 'application/json',
         'x-forwarded-proto': 'https',
       },
-      body: JSON.stringify({ email: EMAIL, password }),
+      body: JSON.stringify({ email, password }),
     })
   );
 }
@@ -196,10 +215,21 @@ async function signIn() {
   expect(await selectWorkspace(step1)).toMatchObject({ id: 'user_alex', email: EMAIL });
 }
 
-async function expectWrongPassword() {
-  const response = await credentialCheck('wrong-password');
+/** Both steps for one member of staff, and both must succeed. */
+async function signInAs(email: string) {
+  const step1 = await credentialCheck(PASSWORD, email);
+  expect(step1.status, `${email} credential check`).toBe(200);
+  expect(await selectWorkspace(step1)).toMatchObject({ id: userIdFor(email), email });
+}
+
+async function expectWrongPassword(email = EMAIL) {
+  const response = await credentialCheck('wrong-password', email);
   expect(response.status).toBe(401);
   expect(await response.json()).toEqual(UNIFORM_FAILURE);
+}
+
+function userIdFor(email: string) {
+  return email === EMAIL ? 'user_alex' : `user_${email.split('@')[0]}`;
 }
 
 beforeEach(async () => {
@@ -207,17 +237,30 @@ beforeEach(async () => {
   process.env.PLATFORM_BASE_DOMAIN = 'devfathom.com';
   mocks.intents.clear();
   // The limiter is real and module-scoped: reset only the keys this flow uses.
-  for (const key of [IP_KEY, ACCOUNT_KEY, INTENT_KEY, SELECT_KEY]) await clearRateLimit(key);
+  mocks.ip = IP;
+  for (const key of [
+    `login:ip:${OTHER_IP}`,
+    `login:intent:${OTHER_IP}`,
+    `login:select:${OTHER_IP}`,
+    `login:intent-account:${OTHER_IP}:${EMAIL}`,
+    IP_KEY,
+    ACCOUNT_KEY,
+    INTENT_KEY,
+    SELECT_KEY,
+    ...STAFF.map((email) => `login:acct:${email}`),
+    ...INTENT_ACCOUNT_KEYS,
+  ])
+    await clearRateLimit(key);
 
-  mocks.resolveSharedLogin.mockImplementation(async (input: { password: string }) =>
+  mocks.resolveSharedLogin.mockImplementation(async (input: { email: string; password: string }) =>
     input.password === PASSWORD
       ? {
           outcome: 'eligible',
-          email: EMAIL,
+          email: input.email,
           organizations: [
             {
               organizationId: organization.id,
-              userId: 'user_alex',
+              userId: userIdFor(input.email),
               slug: organization.slug,
               displayName: organization.displayName,
               ssoEnforced: false,
@@ -228,7 +271,11 @@ beforeEach(async () => {
   );
   mocks.verifyTotp.mockReturnValue(false);
   mocks.resolveById.mockResolvedValue(organization);
-  mocks.findUniqueUser.mockResolvedValue(tenantUser());
+  mocks.findUniqueUser.mockImplementation(async ({ where }: { where: { id: string } }) => {
+    if (where.id === 'user_alex') return tenantUser();
+    const staff = STAFF.find((email) => userIdFor(email) === where.id);
+    return staff ? tenantUser({ id: where.id, email: staff, name: staff }) : null;
+  });
   mocks.withTenantDb.mockImplementation(
     async (_organizationId: string, run: (db: unknown) => unknown) =>
       run({
@@ -317,5 +364,101 @@ describe('shared-host login rate limiting', () => {
     }
 
     expect((await credentialCheck(PASSWORD)).status).toBe(429);
+  });
+});
+
+/**
+ * DEV-932 — a pharmacy's staff share one internet connection, so they share one
+ * address. Successful sign-ins of different people from it must not use up a
+ * shared allowance, while every limit on FAILED attempts stays as strict.
+ */
+describe('shared-host login from one shared address', () => {
+  it('lets more staff sign in from one address than any per-address limit allows', async () => {
+    expect(STAFF.length).toBeGreaterThan(Math.max(INTENT_LIMIT, SELECT_LIMIT, IP_LIMIT));
+
+    for (const email of STAFF) await signInAs(email);
+
+    expect(mocks.resolveSharedLogin).toHaveBeenCalledTimes(STAFF.length);
+  });
+
+  it('still refuses the attempt after 20 failed guesses from the address, across accounts', async () => {
+    // Password spraying: two guesses each at ten accounts stays under every
+    // per-account limit, so only the per-address budget can stop it.
+    for (let i = 0; i < INTENT_LIMIT; i += 1) await expectWrongPassword(STAFF[i % 10]);
+
+    const sprayed = await credentialCheck('wrong-password', STAFF[10]);
+    expect(sprayed.status).toBe(429);
+    expect(await sprayed.json()).toEqual(UNIFORM_FAILURE);
+    // Throttled ahead of discovery and its bcrypt compares.
+    expect(mocks.resolveSharedLogin).toHaveBeenCalledTimes(INTENT_LIMIT);
+    // And a correct password is refused too while the window is open.
+    expect((await credentialCheck(PASSWORD, STAFF[11])).status).toBe(429);
+  });
+
+  it('does not let an own working account wipe the failed guesses from the address', async () => {
+    // A success refunds only its own unit. Were it to clear the bucket, an
+    // attacker with one real account could spray without limit by signing in
+    // between batches of guesses.
+    for (let i = 0; i < INTENT_LIMIT - 1; i += 1) await expectWrongPassword(STAFF[i % 10]);
+    for (let i = 0; i < 5; i += 1) await signIn();
+
+    await expectWrongPassword(STAFF[10]);
+    expect((await credentialCheck('wrong-password', STAFF[11])).status).toBe(429);
+  });
+
+  it('keeps counting staff failures alongside staff successes', async () => {
+    for (let i = 0; i < INTENT_LIMIT - 1; i += 1) {
+      await expectWrongPassword(STAFF[i % 10]);
+      await signInAs(STAFF[20 + (i % 20)]!);
+    }
+
+    await expectWrongPassword(STAFF[10]);
+    expect((await credentialCheck('wrong-password', STAFF[11])).status).toBe(429);
+  });
+
+  it('still caps how many intents one credential can mint from one address', async () => {
+    // Each of these completes, so each refunds the per-address budget — the
+    // per-address-and-account budget is what keeps one valid credential from
+    // filling the intent table.
+    for (let i = 0; i < INTENT_LIMIT; i += 1) await signInAs(STAFF[0]!);
+
+    const throttled = await credentialCheck(PASSWORD, STAFF[0]);
+    expect(throttled.status).toBe(429);
+    expect(await throttled.json()).toEqual(UNIFORM_FAILURE);
+    expect(throttled.headers.get('set-cookie')).toBeNull();
+    // A colleague at the same address is unaffected.
+    await signInAs(STAFF[1]!);
+  });
+
+  it('still counts failed workspace selections from the address', async () => {
+    mocks.findUniqueUser.mockResolvedValue(
+      tenantUser({ twoFactorEnabledAt: new Date(), twoFactorSecret: 'totp-secret' })
+    );
+    const step1 = await credentialCheck(PASSWORD);
+    expect(step1.status).toBe(200);
+
+    for (let i = 0; i < SELECT_LIMIT; i += 1) {
+      expect(await selectWorkspace(step1, '000000')).toMatchObject({ code: '2fa_invalid' });
+    }
+
+    // Over the limit the provider refuses before it even reads the intent.
+    mocks.verifyTotp.mockReturnValue(true);
+    expect(await selectWorkspace(step1, '123456')).toBeNull();
+    expect(mocks.verifyTotp).toHaveBeenCalledTimes(SELECT_LIMIT);
+  });
+
+  it('refunds only the address the attempt was spent at', async () => {
+    // The password is proven from another address, the workspace chosen from
+    // this one: this address never spent a unit, so it must not get one back —
+    // otherwise sign-ins started elsewhere would buy extra guesses here.
+    for (let i = 0; i < INTENT_LIMIT - 1; i += 1) await expectWrongPassword(STAFF[i % 10]);
+    mocks.ip = OTHER_IP;
+    const step1 = await credentialCheck(PASSWORD);
+    expect(step1.status).toBe(200);
+    mocks.ip = IP;
+    expect(await selectWorkspace(step1)).toMatchObject({ id: 'user_alex', email: EMAIL });
+
+    await expectWrongPassword(STAFF[10]);
+    expect((await credentialCheck('wrong-password', STAFF[11])).status).toBe(429);
   });
 });

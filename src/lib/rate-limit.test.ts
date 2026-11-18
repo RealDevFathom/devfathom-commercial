@@ -10,6 +10,7 @@ import {
   rateLimitBackend,
   rateLimitStorageKey,
   rateLimitQuery,
+  refundRateLimit,
 } from '@/lib/rate-limit';
 
 describe('clearRateLimit', () => {
@@ -36,6 +37,109 @@ describe('clearRateLimit', () => {
 
     expect((await rateLimit(firstKey, 1, 60_000)).ok).toBe(true);
     expect((await rateLimit(secondKey, 1, 60_000)).ok).toBe(false);
+  });
+});
+
+describe('refundRateLimit', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    rateLimitQuery.current = null;
+    vi.unstubAllEnvs();
+  });
+
+  it('gives back exactly one unit and keeps every other attempt counted', async () => {
+    const key = `test:refund-one:${crypto.randomUUID()}`;
+    for (let i = 0; i < 3; i += 1) expect((await rateLimit(key, 3, 60_000)).ok).toBe(true);
+    const spentAt = new Date();
+    expect((await rateLimit(key, 3, 60_000)).ok).toBe(false);
+
+    await refundRateLimit(key, 60_000, spentAt);
+
+    expect((await rateLimit(key, 3, 60_000)).ok).toBe(true);
+    expect((await rateLimit(key, 3, 60_000)).ok).toBe(false);
+  });
+
+  it('does not refund into a window that started after the unit was spent', async () => {
+    vi.useFakeTimers();
+    const key = `test:refund-window:${crypto.randomUUID()}`;
+    expect((await rateLimit(key, 1, 60_000)).ok).toBe(true);
+    // Spent one second before the window rolls over.
+    vi.advanceTimersByTime(59_000);
+    const spentAt = new Date();
+
+    vi.advanceTimersByTime(1_001);
+    expect((await rateLimit(key, 1, 60_000)).ok).toBe(true);
+    await refundRateLimit(key, 60_000, spentAt);
+
+    expect((await rateLimit(key, 1, 60_000)).ok).toBe(false);
+  });
+
+  it('refunds the exact window a charge reports, and no later one', async () => {
+    vi.useFakeTimers();
+    const key = `test:refund-exact:${crypto.randomUUID()}`;
+    const charged = await rateLimit(key, 2, 60_000);
+    expect(charged.windowStartedAt).toBeInstanceOf(Date);
+    expect((await rateLimit(key, 2, 60_000)).ok).toBe(true);
+
+    await refundRateLimit(key, 60_000, charged.windowStartedAt!);
+    expect((await rateLimit(key, 2, 60_000)).ok).toBe(true);
+    expect((await rateLimit(key, 2, 60_000)).ok).toBe(false);
+
+    vi.advanceTimersByTime(60_001);
+    const nextWindow = await rateLimit(key, 1, 60_000);
+    expect(nextWindow.windowStartedAt!.getTime()).toBeGreaterThan(
+      charged.windowStartedAt!.getTime()
+    );
+    await refundRateLimit(key, 60_000, charged.windowStartedAt!);
+    expect((await rateLimit(key, 1, 60_000)).ok).toBe(false);
+  });
+
+  it('never drives a bucket below zero', async () => {
+    const key = `test:refund-floor:${crypto.randomUUID()}`;
+    expect((await rateLimit(key, 1, 60_000)).ok).toBe(true);
+    const spentAt = new Date();
+
+    await refundRateLimit(key, 60_000, spentAt);
+    await refundRateLimit(key, 60_000, spentAt);
+
+    expect((await rateLimit(key, 1, 60_000)).ok).toBe(true);
+    expect((await rateLimit(key, 1, 60_000)).ok).toBe(false);
+  });
+
+  it('reports the Postgres window by the store clock, so refunds bind to it', async () => {
+    vi.stubEnv('RATE_LIMIT_STORE', 'postgres');
+    const resetAt = new Date('2026-11-18T12:05:00.000Z');
+    rateLimitQuery.current = vi.fn().mockResolvedValue([{ count: 1, resetAt }]);
+
+    const result = await rateLimit('login:select:203.0.113.9', 30, 300_000);
+
+    expect(result.ok).toBe(true);
+    expect(result.windowStartedAt).toEqual(new Date('2026-11-18T12:00:00.000Z'));
+  });
+
+  it('decrements one row in Postgres, only within the window the unit was spent in', async () => {
+    vi.stubEnv('RATE_LIMIT_STORE', 'postgres');
+    const query = vi.fn().mockResolvedValue([]);
+    rateLimitQuery.current = query;
+    const spentAt = new Date('2026-11-18T12:00:00.000Z');
+
+    await refundRateLimit('login:intent:203.0.113.9', 300_000, spentAt);
+
+    expect(query).toHaveBeenCalledTimes(1);
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toMatch(/UPDATE rate_limit_buckets SET count = count - 1/);
+    expect(sql).toMatch(/count > 0/);
+    expect(sql).toMatch(/"resetAt" > NOW\(\)/);
+    expect(sql).toMatch(
+      /"resetAt" - \(\$2::int \* INTERVAL '1 millisecond'\) <= \$3::timestamptz\n/
+    );
+    expect(sql).not.toMatch(/\$4/);
+    expect(sql).not.toMatch(/DELETE/);
+    expect(params).toEqual([
+      rateLimitStorageKey('login:intent:203.0.113.9'),
+      300_000,
+      spentAt.toISOString(),
+    ]);
   });
 });
 
