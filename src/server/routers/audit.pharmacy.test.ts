@@ -226,6 +226,24 @@ describe('DEV-913 pharmacy audit log access', () => {
     expect(JSON.stringify(entry)).not.toMatch(/"pin":"\d/);
   });
 
+  it('shows no approver when the manager PIN was refused', async () => {
+    db.auditLog.findMany.mockResolvedValueOnce([
+      {
+        ...ROW,
+        action: 'pharmacySales.returnLine',
+        metadata: {
+          branchId: 'branch_north',
+          policy: 'PHARMACY_REFUND_MANAGER_PIN',
+          approverId: 'owner',
+          pinVerified: false,
+        },
+      },
+    ]);
+    const [entry] = (await caller('owner').list({})).items;
+    expect(entry?.approvers).toEqual([]);
+    expect(db.user.findMany).not.toHaveBeenCalled();
+  });
+
   it('offers no way to change or remove an entry', () => {
     const procedures = Object.entries(auditRouter._def.procedures);
     expect(procedures.length).toBeGreaterThan(0);

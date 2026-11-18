@@ -42,16 +42,30 @@ const APPROVER_KEYS = new Set([
 ]);
 
 /**
+ * Markers an approval record carries when the approval was refused: a wrong or
+ * locked-out manager PIN is recorded with `pinVerified: false` beside the PIN
+ * holder's id, and that person approved nothing.
+ */
+const REFUSAL_MARKERS = ['pinVerified', 'verified', 'approved'] as const;
+
+function refusedApproval(record: JsonRecord): boolean {
+  return REFUSAL_MARKERS.some((marker) => record[marker] === false);
+}
+
+/**
  * Everyone recorded as having approved this entry (a manager PIN on a refund
  * or discount, a second person on a write-off), found under the approval keys
  * in the entry's metadata, result or before/after changes. Never the request
- * input: a requested approver is not an approval.
+ * input: a requested approver is not an approval. A failed entry, or an
+ * approval record marked refused (a wrong or locked-out PIN), names no approver.
  */
 export function auditApproverIds(row: {
   metadata?: unknown;
   result?: unknown;
   changes?: unknown;
+  outcome?: string | null;
 }): string[] {
+  if (row.outcome === 'FAILURE') return [];
   const found = new Set<string>();
   const visit = (value: unknown, depth: number) => {
     if (depth > 5 || value === null || typeof value !== 'object') return;
@@ -59,10 +73,15 @@ export function auditApproverIds(row: {
       for (const item of value.slice(0, 50)) visit(item, depth + 1);
       return;
     }
-    for (const [key, child] of Object.entries(value as JsonRecord)) {
-      const id = APPROVER_KEYS.has(key) ? stringValue(child) : null;
-      if (id) found.add(id);
-      else visit(child, depth + 1);
+    const record = value as JsonRecord;
+    const refused = refusedApproval(record);
+    for (const [key, child] of Object.entries(record)) {
+      if (APPROVER_KEYS.has(key)) {
+        const id = stringValue(child);
+        if (id && !refused) found.add(id);
+        if (id) continue;
+      }
+      visit(child, depth + 1);
     }
   };
   visit(row.metadata, 0);

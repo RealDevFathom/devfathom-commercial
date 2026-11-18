@@ -54,4 +54,33 @@ describe('DEV-913 plain-language audit labels', () => {
       } as never)
     ).toEqual([]);
   });
+
+  it('names nobody when the manager PIN was refused or the action failed', () => {
+    // pharmacySales.returnLine / returnAndRefund / refundTender record the PIN
+    // holder beside the verification result, before returning a blocked result.
+    const refused = {
+      metadata: { policy: 'REFUND_PIN', approverId: 'manager_1', pinVerified: false },
+    };
+    expect(auditApproverIds(refused)).toEqual([]);
+    expect(
+      auditApproverIds({
+        metadata: { policy: 'REFUND_PIN', approverId: 'manager_1', pinVerified: true },
+      })
+    ).toEqual(['manager_1']);
+    expect(
+      auditApproverIds({
+        outcome: 'FAILURE',
+        metadata: { discountApproval: { approvedByUserId: 'manager_1' } },
+      })
+    ).toEqual([]);
+    // A refused record nested beside a verified one keeps only the verified approver.
+    expect(
+      auditApproverIds({
+        metadata: {
+          first: { approverId: 'manager_1', pinVerified: false },
+          second: { approvedByUserId: 'owner_1', approvalPolicy: 'PIN' },
+        },
+      })
+    ).toEqual(['owner_1']);
+  });
 });
