@@ -40,7 +40,12 @@ export async function readPharmacyCashCloseCheck(
 
   const where = { organizationId: scope.organizationId, branchId: scope.branchId, businessDate };
   const [close, drawers, sales, refunds, voidEvents] = await Promise.all([
-    db.pharmacyDailyClose.findFirst({ where, orderBy: { sequence: 'desc' } }),
+    db.pharmacyDailyClose.findFirst({
+      where,
+      orderBy: { sequence: 'desc' },
+      // DEV-631: a close the owner or a manager reopened for trading no longer stands.
+      include: { reopen: { select: { id: true } } },
+    }),
     db.pharmacyDrawerSession.findMany({
       where,
       include: { movements: true },
@@ -111,16 +116,19 @@ export async function readPharmacyCashCloseCheck(
     // #487: amounts are stated in the organization's currency, never a fixed PKR;
     // the fallback mirrors the day-close console's `counterBranches` reader.
     currency: organization?.currency ?? 'PKR',
-    close: close
-      ? {
-          id: close.id,
-          sequence: close.sequence,
-          cashExpectedMinor: close.cashExpectedMinor,
-          cashCountedMinor: close.cashCountedMinor,
-          cashVarianceMinor: close.cashVarianceMinor,
-          varianceNote: close.reason,
-        }
-      : null,
+    // DEV-631: a reopened day is trading again; its next close restates the day, so
+    // the reopened close is not checked as the day's standing close.
+    close:
+      close && !close.reopen
+        ? {
+            id: close.id,
+            sequence: close.sequence,
+            cashExpectedMinor: close.cashExpectedMinor,
+            cashCountedMinor: close.cashCountedMinor,
+            cashVarianceMinor: close.cashVarianceMinor,
+            varianceNote: close.reason,
+          }
+        : null,
     // Goods gross from line totals (the stored line gross `grossMinor` − discount),
     // matching the Z-report. Service charge and tax are not included, so against a
     // Z-report gross that carries them the refund rate can read slightly high —

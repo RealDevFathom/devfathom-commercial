@@ -257,6 +257,7 @@ model PharmacyBranch {
   visibilityPharmacyBankStatementLine      PharmacyBankStatementLine[]       @relation("PharmacyBankStatementLineVisibilityAnchor")
   visibilityPharmacyBookkeepingTransaction PharmacyBookkeepingTransaction[]  @relation("PharmacyBookkeepingTransactionVisibilityAnchor")
   visibilityPharmacyDailyClose             PharmacyDailyClose[]              @relation("PharmacyDailyCloseVisibilityAnchor")
+  visibilityPharmacyDayReopen              PharmacyDayReopen[]               @relation("PharmacyDayReopenVisibilityAnchor")
   visibilityPharmacyDrawerSession          PharmacyDrawerSession[]           @relation("PharmacyDrawerSessionVisibilityAnchor")
   visibilityPharmacyReceiptNumberSequence  PharmacyReceiptNumberSequence[]   @relation("PharmacyReceiptNumberSequenceVisibilityAnchor")
   visibilityPharmacySale                   PharmacySale[]                    @relation("PharmacySaleVisibilityAnchor")
@@ -1799,10 +1800,35 @@ model PharmacyDailyClose {
   isFinal             Boolean        @default(false)
   createdAt           DateTime       @default(now())
   visibilityAnchor    PharmacyBranch @relation("PharmacyDailyCloseVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_daily_closes_visibility_fkey")
+  /// DEV-631: the owner or manager's reopen of this close for trading, if any.
+  reopen              PharmacyDayReopen?
 
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, businessDate, sequence])
+  @@unique([organizationId, branchId, businessDate, id], map: "pharmacy_daily_closes_reopen_anchor_key")
   @@map("pharmacy_daily_closes")
+}
+
+/// DEV-631: an owner or manager reopening a closed business day for trading, with a reason.
+/// Append-only. At most one per close: the next close of the day supersedes it,
+/// and the day is closed for trading again until that close is itself reopened.
+model PharmacyDayReopen {
+  id               String             @id @default(cuid())
+  organizationId   String             @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  businessDate     DateTime           @db.Date
+  closeId          String
+  reason           String
+  actorId          String
+  createdAt        DateTime           @default(now())
+  close            PharmacyDailyClose @relation(fields: [organizationId, branchId, businessDate, closeId], references: [organizationId, branchId, businessDate, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_day_reopens_close_fkey")
+  visibilityAnchor PharmacyBranch     @relation("PharmacyDayReopenVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_day_reopens_visibility_fkey")
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, closeId])
+  @@unique([organizationId, branchId, businessDate, closeId], map: "pharmacy_day_reopens_close_scope_key")
+  @@index([organizationId, branchId, businessDate])
+  @@map("pharmacy_day_reopens")
 }
 
 model PharmacyReceiptNumberSequence {
