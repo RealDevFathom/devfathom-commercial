@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
+import Link from 'next/link';
 
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -117,15 +118,34 @@ export function BranchAssignmentsPanel({
               <p className="text-sm text-text-body">
                 {assignment.userName} at {assignment.branchName}
               </p>
-              <Button
-                className="min-h-11"
-                type="button"
-                variant="outline"
-                disabled={pending}
-                onClick={() => onUnassign(assignment.id)}
-              >
-                Unassign
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                {/* DEV-913: this person's actions at this branch, in the audit log. */}
+                <Button
+                  className="min-h-11"
+                  variant="outline"
+                  nativeButton={false}
+                  role="link"
+                  render={
+                    <Link
+                      href={`/audit-logs?${new URLSearchParams({
+                        actorId: assignment.userId,
+                        branchId: assignment.branchId,
+                      })}`}
+                    />
+                  }
+                >
+                  See {assignment.userName}&apos;s actions
+                </Button>
+                <Button
+                  className="min-h-11"
+                  type="button"
+                  variant="outline"
+                  disabled={pending}
+                  onClick={() => onUnassign(assignment.id)}
+                >
+                  Unassign
+                </Button>
+              </div>
             </li>
           ))
         )}

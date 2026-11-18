@@ -128,3 +128,86 @@ describe('baseline entitlement resolution', () => {
     expect(result.modules[0]?.source).toBe('PACKAGE');
   });
 });
+
+describe('DEV-913 pharmacy audit log entitlement', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  function setup(vertical: string, override: 'DISABLED' | null) {
+    const now = new Date('2026-11-18T00:00:00.000Z');
+    const db = {
+      organization: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({ id: 'org_1', seatLimit: 5, packageId: null, vertical }),
+      },
+      organizationModule: {
+        findMany: vi.fn().mockResolvedValue(
+          override
+            ? [
+                {
+                  moduleId: 'mod_audit',
+                  status: override,
+                  seatLimit: null,
+                  startsAt: now,
+                  expiresAt: null,
+                  overrides: null,
+                },
+              ]
+            : []
+        ),
+      },
+      organizationLimit: { findMany: vi.fn().mockResolvedValue([]) },
+      user: { count: vi.fn().mockResolvedValue(1) },
+    };
+    const platformDb = {
+      platformModule: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: 'mod_audit', key: 'audit', name: 'Audit logs', band: 'PLATFORM' },
+          { id: 'mod_hr', key: 'hr', name: 'HR', band: 'PLATFORM' },
+        ]),
+      },
+      platformPackage: { findUnique: vi.fn().mockResolvedValue(null) },
+      platformContract: { findMany: vi.fn().mockResolvedValue([]) },
+    };
+    mocks.withPlatformDb.mockImplementation((run: (client: typeof platformDb) => unknown) =>
+      run(platformDb)
+    );
+    return { db, now };
+  }
+
+  it.each([null, 'DISABLED'] as const)(
+    'enables audit for a pharmacy with no plan grant (override %s)',
+    async (override) => {
+      const { db, now } = setup('PHARMACY', override);
+      const result = await resolveOrganizationEntitlements('org_1', db as never, now);
+      expect(result.enabledModules).toEqual(['audit']);
+      expect(result.modules.find((module) => module.key === 'audit')).toMatchObject({
+        enabled: true,
+        source: 'BASELINE',
+      });
+    }
+  );
+
+  it.each(['AGENCY', 'RESTAURANT', 'HOSPITALITY'])(
+    'leaves audit to the plan for %s',
+    async (vertical) => {
+      const { db, now } = setup(vertical, null);
+      const result = await resolveOrganizationEntitlements('org_1', db as never, now);
+      expect(result.enabledModules).toEqual([]);
+    }
+  );
+
+  it('enables audit for a pharmacy even when the catalog lacks the row', async () => {
+    const { db, now } = setup('PHARMACY', null);
+    const platformDb = {
+      platformModule: { findMany: vi.fn().mockResolvedValue([]) },
+      platformPackage: { findUnique: vi.fn().mockResolvedValue(null) },
+      platformContract: { findMany: vi.fn().mockResolvedValue([]) },
+    };
+    mocks.withPlatformDb.mockImplementation((run: (client: typeof platformDb) => unknown) =>
+      run(platformDb)
+    );
+    const result = await resolveOrganizationEntitlements('org_1', db as never, now);
+    expect(result.enabledModules).toEqual(['audit']);
+  });
+});

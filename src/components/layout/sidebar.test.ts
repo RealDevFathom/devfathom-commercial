@@ -436,3 +436,43 @@ describe('hospitality navigation', () => {
     }
   );
 });
+
+describe('DEV-913 pharmacy audit log navigation', () => {
+  const pharmacy = { vertical: 'PHARMACY' as const, enabledModules: ['pharmacy-core'] };
+
+  it('gives every pharmacy administrator the audit log, with no audit module on the plan', () => {
+    const audit = visibleNavigation(pharmacy, 'ADMIN').find((item) => item.href === '/audit-logs');
+    expect(audit?.label).toBe('Audit log: who did what');
+  });
+
+  it.each(['EMPLOYEE', 'HR', undefined])('hides it from a %s member', (role) => {
+    expect(
+      visibleNavigation(pharmacy, role, [], ['pharmacy:counter', 'pharmacy:dispense']).some(
+        (item) => item.href === '/audit-logs'
+      )
+    ).toBe(false);
+  });
+
+  it('puts it in its own entry of the pharmacy bar, outside the Reports menu', async () => {
+    const { groupPharmacyNavigation } = await import('./sidebar');
+    const sections = groupPharmacyNavigation(
+      visibleNavigation(
+        { ...pharmacy, enabledModules: ['pharmacy-core', 'pharmacy-reports'] },
+        'ADMIN'
+      )
+    );
+    const own = sections.find((section) => section.items.some((i) => i.href === '/audit-logs'));
+    expect(own?.label).toBe('Audit log: who did what');
+    expect(own?.items.map((item) => item.href)).toEqual(['/audit-logs']);
+    expect(own?.items[0]?.label).toBe(own?.label);
+  });
+
+  it('does not widen the audit log for other verticals', () => {
+    for (const vertical of ['AGENCY', 'RESTAURANT', 'HOSPITALITY'] as const) {
+      const visible = visibleNavigation({ vertical, enabledModules: [] }, 'ADMIN');
+      expect(visible.some((item) => item.href === '/audit-logs')).toBe(false);
+    }
+    const licensed = visibleNavigation({ vertical: 'AGENCY', enabledModules: ['audit'] }, 'ADMIN');
+    expect(licensed.find((item) => item.href === '/audit-logs')?.label).toBe('Audit Log');
+  });
+});
