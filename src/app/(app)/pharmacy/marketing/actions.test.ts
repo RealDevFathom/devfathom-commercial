@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   preview: vi.fn(),
   profileHealth: vi.fn(),
   reviewReply: vi.fn(),
+  issueVoucher: vi.fn(),
+  revokeVoucher: vi.fn(),
 }));
 vi.mock('next/cache', () => ({ revalidatePath: mocks.revalidate }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
@@ -296,4 +298,106 @@ it('returns a review reply draft labelled as not posted and sends no review text
   expect(
     await marketingAction(form({ operation: 'review-reply', rating: '4', tone: 'LOUD' }))
   ).toMatchObject({ error: true });
+});
+
+it('DEV-780: issues a voucher with the owner-set use limit, whole-rupee value and local last day', async () => {
+  mocks.issueVoucher.mockResolvedValue({ voucher: { code: 'GIFT10', maxUses: 25 } });
+  const result = await marketingAction(
+    form({
+      operation: 'voucher-issue',
+      timeZone: 'Asia/Karachi',
+      code: 'gift10',
+      name: 'Gift sets',
+      body: 'Rs 150 off gift sets.',
+      discountRupees: '150',
+      maxUses: '25',
+      validUntil: '2026-12-31',
+      approverId: 'staff-b',
+      approverPin: '',
+      reviewed: 'on',
+    })
+  );
+  expect(result).toEqual({
+    error: false,
+    message: 'Voucher GIFT10 issued. It can be used 25 times.',
+    campaignId: undefined,
+  });
+  // The last day is inclusive: the voucher stops at the next local midnight (UTC+5).
+  expect(mocks.issueVoucher).toHaveBeenCalledWith({
+    branchId: 'branch-a',
+    code: 'gift10',
+    name: 'Gift sets',
+    body: 'Rs 150 off gift sets.',
+    discountMinor: 15_000,
+    maxUses: 25,
+    validUntil: new Date('2026-12-31T19:00:00.000Z'),
+    reviewed: true,
+  });
+});
+
+it('DEV-780: sends the second approver PIN only when one is entered', async () => {
+  mocks.issueVoucher.mockResolvedValue({ voucher: { code: 'BIG', maxUses: 1 } });
+  await marketingAction(
+    form({
+      operation: 'voucher-issue',
+      code: 'BIG-1',
+      name: 'Big',
+      body: 'Rs 2000 off.',
+      discountRupees: '2000',
+      maxUses: '1',
+      validUntil: '2026-12-31',
+      approverId: 'staff-b',
+      approverPin: '2468',
+      reviewed: 'on',
+    })
+  );
+  expect(mocks.issueVoucher).toHaveBeenCalledWith(
+    expect.objectContaining({
+      discountMinor: 200_000,
+      approval: { staffProfileId: 'staff-b', pin: '2468' },
+    })
+  );
+});
+
+it('DEV-780: refuses an unreviewed voucher or a missing use limit before calling the server', async () => {
+  const base = {
+    operation: 'voucher-issue',
+    code: 'GIFT10',
+    name: 'Gift sets',
+    body: 'Rs 150 off gift sets.',
+    discountRupees: '150',
+    maxUses: '5',
+    validUntil: '2026-12-31',
+    reviewed: 'on',
+  };
+  for (const values of [
+    { ...base, reviewed: '' },
+    { ...base, maxUses: '0' },
+    { ...base, maxUses: '' },
+    { ...base, discountRupees: '1.5' },
+    { ...base, code: 'x' },
+    { ...base, validUntil: '' },
+  ])
+    expect(await marketingAction(form(values))).toMatchObject({ error: true });
+  expect(mocks.issueVoucher).not.toHaveBeenCalled();
+});
+
+it('DEV-780: revokes a voucher only after confirmation with a reason', async () => {
+  mocks.revokeVoucher.mockResolvedValue({ voucherId: 'voucher-a', revoked: true });
+  expect(
+    await marketingAction(
+      form({ operation: 'voucher-revoke', voucherId: 'voucher-a', reason: 'Lost', confirmed: '' })
+    )
+  ).toMatchObject({ error: true });
+  expect(mocks.revokeVoucher).not.toHaveBeenCalled();
+  expect(
+    await marketingAction(
+      form({ operation: 'voucher-revoke', voucherId: 'voucher-a', reason: 'Lost', confirmed: 'on' })
+    )
+  ).toMatchObject({ error: false, message: 'Voucher revoked. It cannot be redeemed again.' });
+  expect(mocks.revokeVoucher).toHaveBeenCalledWith({
+    branchId: 'branch-a',
+    voucherId: 'voucher-a',
+    reason: 'Lost',
+  });
 });

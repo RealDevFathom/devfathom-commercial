@@ -56,7 +56,7 @@ const ACCOUNTS_SECTIONS: ReadonlyArray<{ title: string; links: readonly Accounts
       {
         href: '/pharmacy/accounts/journal-entry-lookup',
         title: 'Journal entry lookup',
-        detail: 'Inspect one posted journal entry.',
+        detail: 'Look up one journal entry.',
       },
       {
         href: '/pharmacy/accounts/journal-evidence-export',

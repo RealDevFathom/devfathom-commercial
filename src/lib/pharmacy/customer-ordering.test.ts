@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   cancelMyCustomerOrder,
   isCustomerOrderableMedicine,
+  startCustomerOrderCheckout,
   transitionCustomerOrder,
 } from './customer-ordering';
 
@@ -141,5 +142,52 @@ describe('DEV-63 dispatch distance', () => {
       ).rejects.toMatchObject({ reason: 'INVALID_DELIVERY_DISTANCE' });
       expect(updates).toEqual([]);
     }
+  });
+});
+
+describe('DEV-631 customer-order checkout on a closed business day', () => {
+  function checkoutDb(dayClose: { id: string; reopen: { id: string } | null } | null) {
+    const writes: string[] = [];
+    const record = (name: string) => async () => {
+      writes.push(name);
+      return { id: `${name}-1`, count: 1 };
+    };
+    const db = {
+      $queryRaw: vi.fn(async () => []),
+      organization: { findUnique: async () => ({ timezone: 'UTC' }) },
+      pharmacyDailyClose: { findFirst: vi.fn(async () => dayClose) },
+      pharmacyCustomerOrder: {
+        findFirst: async () => ({
+          id: 'order-1',
+          status: 'READY_FOR_COLLECTION',
+          counterSaleId: null,
+          reservationExpiresAt: new Date(Date.now() + 60_000),
+          lines: [],
+          deliveryEvidence: [],
+        }),
+        update: record('order.update'),
+      },
+      pharmacyRestockReservation: {
+        findMany: async () => [],
+        updateMany: record('reservation.updateMany'),
+      },
+      pharmacyRestockInterest: { updateMany: record('interest.updateMany') },
+      pharmacySale: { create: record('sale.create') },
+    };
+    return { db, writes };
+  }
+
+  it("refuses checkout while today's business day is closed, before any hold is released", async () => {
+    const { db, writes } = checkoutDb({ id: 'close-1', reopen: null });
+    const scope = { organizationId: 'org-1', branchId: 'branch-1', actorId: 'cashier-1' };
+    await expect(startCustomerOrderCheckout(db as never, scope, 'order-1')).rejects.toMatchObject({
+      reason: 'DAY_CLOSED',
+    });
+    expect(db.pharmacyDailyClose.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ organizationId: 'org-1', branchId: 'branch-1' }),
+      })
+    );
+    expect(writes).toEqual([]);
   });
 });
