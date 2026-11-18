@@ -14,6 +14,9 @@ vi.mock('@/components/pharmacy/staged-medicine-catalogue', () => ({
 vi.mock('@/components/pharmacy/medicine-reference-workbench', () => ({
   MedicineReferenceWorkbench: () => <div>Existing workbench</div>,
 }));
+vi.mock('@/components/pharmacy/add-medicine-form', () => ({
+  AddMedicineForm: () => <div>Add medicine form</div>,
+}));
 vi.mock('@/components/pharmacy/catalogue-approval-queue', () => ({
   CatalogueApprovalQueue: () => <div>Catalogue approval queue</div>,
 }));
@@ -45,6 +48,7 @@ describe('DEV-19 medicine page access', () => {
     expect(screen.getByRole('heading', { name: 'Catalogue review', level: 1 })).toBeVisible();
     expect(screen.getByText('Catalogue approval queue')).toBeVisible();
     expect(screen.queryByText('Existing workbench')).toBeNull();
+    expect(screen.queryByText('Add medicine form')).toBeNull();
     expect(mocks.staged).not.toHaveBeenCalled();
     expect(mocks.can).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'user_a' }),
@@ -71,6 +75,7 @@ describe('DEV-19 medicine page access', () => {
     expect(screen.getByText('Staged catalogue')).toBeVisible();
     expect(screen.getByText('Catalogue approval queue')).toBeVisible();
     expect(screen.getByText('Existing workbench')).toBeInTheDocument();
+    expect(screen.getByText('Add medicine form')).toBeVisible();
     expect(mocks.can).not.toHaveBeenCalled();
   });
 });
