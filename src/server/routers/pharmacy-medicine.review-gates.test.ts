@@ -302,6 +302,15 @@ describe('DEV-923: a pack price is a reviewed catalogue edit', () => {
       .map((call) => (call as unknown as [{ data: Record<string, unknown> }])[0].data)
       .filter((data) => data.action === 'pharmacyMedicine.setPackPrice');
     expect(priceAudits).toHaveLength(1);
+    // The old price is the one in force at the new price's date, never a later-dated row.
+    expect(db.pharmacyPackPrice.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          packLevelId: 'pack_a',
+          effectiveFrom: { lte: PRICE.effectiveFrom },
+        }),
+      })
+    );
     expect(priceAudits[0]).toMatchObject({
       actorId: 'pharmacist_b',
       changes: {

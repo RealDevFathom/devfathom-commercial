@@ -175,6 +175,8 @@ export async function setManualPackPrice(
         organizationId: scope.organizationId,
         packLevelId: pack.id,
         branchId: input.branchId ?? null,
+        // A price scheduled for later is not the one this price replaces.
+        effectiveFrom: { lte: input.effectiveFrom },
       },
       orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
     });
