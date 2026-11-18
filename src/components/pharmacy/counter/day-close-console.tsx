@@ -19,6 +19,7 @@ import { ShiftHandoverPanel } from './shift-handover-panel';
 import { formatMinor, type CounterReceiptLocale } from '@/lib/pharmacy/counter-receipt';
 import { printCounterBrowserZReport } from '@/lib/pharmacy/counter-browser-print';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
+import { amountInputError, amountInputToMinor } from '@/lib/money-input';
 import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
 import {
   clearDayCloseDraft,
@@ -70,11 +71,22 @@ export function otherOperatorMovementLabel(
   return `${time} · ${kind} · by ${movement.actor ?? 'a former team member'}`;
 }
 
+/** The largest counted cash a drawer close takes, in minor units. */
+const COUNTED_CASH_MAX_MINOR = 2147483647;
+
+/** DEV-939: counted cash read by the shared typed-amount reader, within the close's limit. */
 export function cashMinor(value: string): number | null {
-  if (!/^\d+(?:\.\d{1,2})?$/.test(value)) return null;
-  const [whole, fraction = ''] = value.split('.');
-  const amount = Number(whole) * 100 + Number(fraction.padEnd(2, '0'));
-  return Number.isSafeInteger(amount) && amount <= 2147483647 ? amount : null;
+  const amount = amountInputToMinor(value);
+  return amount.status === 'OK' && amount.minor <= COUNTED_CASH_MAX_MINOR ? amount.minor : null;
+}
+
+/** Why a counted-cash entry is refused, in plain words; null when it is a valid count. */
+export function cashCountError(value: string): string | null {
+  const amount = amountInputToMinor(value);
+  if (amount.status === 'INVALID') return amountInputError(amount.reason);
+  if (amount.status === 'EMPTY')
+    return 'Enter a non-negative amount with at most two decimal places.';
+  return amount.minor > COUNTED_CASH_MAX_MINOR ? amountInputError('TOO_LARGE') : null;
 }
 
 /**
@@ -430,7 +442,10 @@ function DayCloseForm({
                 {formatMinor(row.netMinor)} {currency}
               </p>
               {row.confirmers?.length ? (
-                <ul className="ps-4 text-sm text-text-muted" aria-label={`${row.type} confirmed by`}>
+                <ul
+                  className="ps-4 text-sm text-text-muted"
+                  aria-label={`${row.type} confirmed by`}
+                >
                   {row.confirmers.map((confirmer, index) => (
                     <li key={confirmer.id ?? `${confirmer.name}-${index}`}>
                       Confirmed by {confirmer.name} · {confirmer.count}{' '}
@@ -654,7 +669,7 @@ function DayCloseForm({
                     />
                     {counts[d.id] !== undefined && cashMinor(counts[d.id]) === null && (
                       <span className="text-sm text-destructive">
-                        Enter a non-negative amount with at most two decimal places.
+                        {cashCountError(counts[d.id])}
                       </span>
                     )}
                   </label>
@@ -705,7 +720,9 @@ function DayCloseForm({
             </label>
             {close.error && <p role="alert">{counterErrorMessage(close.error)}</p>}
             {draftWarning && (
-              <p role="alert" className="text-sm text-destructive">{draftWarning}</p>
+              <p role="alert" className="text-sm text-destructive">
+                {draftWarning}
+              </p>
             )}
             <div className="flex flex-wrap gap-3">
               <Button
