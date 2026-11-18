@@ -21,7 +21,8 @@ export function validateMarketingReportFilters(input: MarketingReportFilters) {
     from > to ||
     to.getTime() - from.getTime() >= 90 * DAY
   )
-    throw new Error('Use valid UTC dates spanning at most 90 days and 1–100 authorized branches.');
+    // DEV-943: both callers (campaign results, lost sales) count these as the shop's own days.
+    throw new Error('Use valid dates spanning at most 90 days and 1–100 authorized branches.');
   return { gte: from, lt: new Date(to.getTime() + DAY) };
 }
 

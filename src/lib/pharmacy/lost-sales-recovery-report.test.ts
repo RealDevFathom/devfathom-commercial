@@ -131,7 +131,7 @@ describe('DEV-79 lost-sales recovery report', () => {
         from: '2026-01-01',
         to: '2026-11-15',
       })
-    ).rejects.toThrow('Use valid UTC dates');
+    ).rejects.toThrow('Use valid dates spanning at most 90 days');
   });
 
   describe('DEV-722 window on the organisation clock', () => {

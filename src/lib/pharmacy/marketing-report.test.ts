@@ -30,7 +30,11 @@ describe('marketing report evidence', () => {
     { ...filters, branchIds: [] },
     { ...filters, from: '2026-01-01' },
   ])('rejects invalid or unbounded filters before reading', async (input) => {
-    expect(() => validateMarketingReportFilters(input)).toThrow('valid UTC dates');
+    expect(() => validateMarketingReportFilters(input)).toThrow(
+      'Use valid dates spanning at most 90 days and 1–100 authorized branches.'
+    );
+    // DEV-943: the dates are the organisation's days, so the message names no UTC.
+    expect(() => validateMarketingReportFilters(input)).not.toThrow(/UTC/);
     await expect(readPharmacyMarketingReport({} as ScopedDb, 'org-a', input)).rejects.toThrow();
   });
 
