@@ -8,6 +8,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { PERMISSION_LABELS } from '@/lib/abac/permission-labels';
 import { BPS, NO_MAXIMUM_DISCOUNT_BPS } from '@/lib/pharmacy/smart-discount';
 import { trpc } from '@/lib/trpc';
+import { PinAwareMessage } from '@/components/pharmacy/pin-aware-message';
 
 /** "12.5" → 1250 bps; null unless 0–100 with at most two decimal places. */
 export function percentToBps(text: string): number | null {
@@ -168,7 +169,7 @@ export function DiscountMaximumPanel({ branchId }: { branchId: string }) {
       ) : null}
       {notice ? (
         <p role="status" className="mt-3 text-sm text-text-body">
-          {notice}
+          <PinAwareMessage message={notice} />
         </p>
       ) : null}
     </SectionCard>

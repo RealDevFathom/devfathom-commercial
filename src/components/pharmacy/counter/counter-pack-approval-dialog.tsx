@@ -1,5 +1,6 @@
 'use client';
 
+import { OwnPinLink } from '@/components/pharmacy/pin-aware-message';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
@@ -118,7 +119,8 @@ export function CounterPackApprovalDialog({
               <p role="status">Loading approvers…</p>
             ) : rows.length === 0 ? (
               <p role="status">
-                No manager or owner has an active staff PIN. Ask your administrator to set one up.
+                No manager or owner has an active staff PIN. A manager or owner creates their own
+                under Settings, Your PIN. <OwnPinLink />
               </p>
             ) : null}
             <Label htmlFor="pack-approver-pin">Approver PIN</Label>

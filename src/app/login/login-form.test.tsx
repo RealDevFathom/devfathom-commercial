@@ -1,10 +1,16 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 const m = vi.hoisted(() => ({ signIn: vi.fn(), replace: vi.fn() }));
 vi.mock('next-auth/react', () => ({ signIn: m.signIn }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ replace: m.replace }) }));
 vi.mock('@/components/app-providers', () => ({ AppProviders: () => null }));
 import { LoginForm } from './login-form';
+// DEV-769: a successful sign-in awaits this chunk before router.replace. Its first load goes
+// through the test runner's module loader, which a busy suite delayed past waitFor's
+// one-second budget. Load it once here so every sign-in below awaits only a cached module.
+beforeAll(async () => {
+  await import('@/components/app-providers');
+});
 beforeEach(() => vi.resetAllMocks());
 it('preserves SAML and OIDC entry points and enforced SSO hides credentials', () => {
   render(
@@ -49,11 +55,15 @@ it('retains entered credentials and submits MFA/recovery codes through the exist
   render(<LoginForm callbackUrl="/dashboard" ssoEnforced={false} connections={[]} />);
   fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'owner@example.test' } });
   fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'correct password' } });
-  fireEvent.submit(screen.getByRole('button', { name: 'Sign in' }));
+  await act(async () => {
+    fireEvent.submit(screen.getByRole('button', { name: 'Sign in' }));
+  });
   const code = await screen.findByLabelText('Authentication code');
   expect(screen.getByLabelText('Email')).toHaveValue('owner@example.test');
   fireEvent.change(code, { target: { value: 'recovery-code' } });
-  fireEvent.submit(screen.getByRole('button', { name: 'Sign in' }));
+  await act(async () => {
+    fireEvent.submit(screen.getByRole('button', { name: 'Sign in' }));
+  });
   await waitFor(() => expect(m.replace).toHaveBeenCalledWith('/dashboard'));
   expect(m.signIn).toHaveBeenLastCalledWith('credentials', {
     email: 'owner@example.test',
@@ -79,7 +89,9 @@ it.each([
 
   fireEvent.change(email, { target: { value: 'missing@example.test' } });
   fireEvent.change(password, { target: { value: 'wrong password' } });
-  fireEvent.submit(screen.getByRole('button', { name: 'Sign in' }));
+  await act(async () => {
+    fireEvent.submit(screen.getByRole('button', { name: 'Sign in' }));
+  });
 
   const alert = await screen.findByRole('alert');
   expect(alert).toHaveTextContent(message);
@@ -109,7 +121,9 @@ it('focuses and clears only the authentication-code error through MFA retries', 
   const submit = screen.getByRole('button', { name: 'Sign in' });
   fireEvent.change(email, { target: { value: 'owner@example.test' } });
   fireEvent.change(password, { target: { value: 'correct password' } });
-  fireEvent.submit(submit);
+  await act(async () => {
+    fireEvent.submit(submit);
+  });
 
   const code = await screen.findByLabelText('Authentication code');
   expect(code).toHaveFocus();
@@ -149,7 +163,9 @@ it('focuses and clears only the authentication-code error through MFA retries', 
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   expect(code).not.toHaveAttribute('aria-invalid');
   expect(code).not.toHaveAttribute('aria-describedby');
-  fireEvent.submit(submit);
+  await act(async () => {
+    fireEvent.submit(submit);
+  });
   await waitFor(() => expect(m.replace).toHaveBeenCalledWith('/dashboard'));
 });
 
@@ -184,7 +200,9 @@ it('preserves credentials and describes a network failure until edited', async (
   const password = screen.getByLabelText('Password');
   fireEvent.change(email, { target: { value: 'owner@example.test' } });
   fireEvent.change(password, { target: { value: 'correct password' } });
-  fireEvent.submit(screen.getByRole('button', { name: 'Sign in' }));
+  await act(async () => {
+    fireEvent.submit(screen.getByRole('button', { name: 'Sign in' }));
+  });
   const alert = await screen.findByRole('alert');
   expect(alert).toHaveTextContent(
     'Unable to sign in right now. Please check your connection and try again.'

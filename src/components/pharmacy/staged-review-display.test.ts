@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   STAGED_COLUMN_HEADINGS,
-  STAGED_LIST_INTRO,
+  stagedListIntro,
+  plainExceptionStatus,
+  plainReviewFlag,
+  plainSeverity,
+  STAGED_PRICE_COLUMN_NOTE,
   formatStagedPrice,
   formatStagedQuantity,
   formatStagedQuantityReview,
@@ -29,7 +33,18 @@ describe('staged review display helpers', () => {
     expect(STAGED_COLUMN_HEADINGS.join(' ')).not.toMatch(/source|saleprice|purprice/i);
     expect(plainExceptionLabel('MISSING_BATCH')).toBe('No batch or expiry recorded');
     expect(plainExceptionLabel('EXPIRED_STOCK')).toBe('Expiry has passed');
-    expect(STAGED_LIST_INTRO).toMatch(/cannot be sold/);
+    expect(stagedListIntro(true)).toMatch(/cannot be sold/);
+    expect(stagedListIntro(true)).toMatch(/Create medicines/);
+    expect(stagedListIntro(true)).not.toMatch(/not available on this screen/);
+    expect(stagedListIntro(false)).not.toMatch(/Create medicines/);
+    expect(stagedListIntro(false)).toMatch(/catalogue editor or reviewer/);
+    expect(plainSeverity('BLOCKING')).toBe('Needs your attention');
+    expect(plainSeverity('WARNING')).toBe('Information only');
+    expect(plainExceptionStatus('SIGNED_OFF')).toBe('Signed off');
+    expect(plainExceptionStatus('OPEN')).toBe('Open');
+    expect(plainReviewFlag('NORMALIZED_NAME_COLLISION_NO_MERGE')).toMatch(/kept separate/);
+    expect(STAGED_PRICE_COLUMN_NOTE.saleprice).toMatch(/MRP/);
+    expect(STAGED_PRICE_COLUMN_NOTE.purprice).toMatch(/distributor/);
   });
   it('shows the counted quantity in plain words without trailing zeros', () => {
     const base = {

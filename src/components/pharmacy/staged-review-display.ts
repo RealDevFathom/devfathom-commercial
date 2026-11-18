@@ -3,8 +3,17 @@
  * Nothing here changes stored values, hashes or import logic; raw spellings stay in row detail.
  */
 
-export const STAGED_LIST_INTRO =
-  'These rows come from your old system and are waiting for review. They are not in the medicine catalogue or in stock yet, so they cannot be sold. Next: open a medicine to check its name, quantity and prices against your old records. Approval for the catalogue is not available on this screen yet.';
+const STAGED_LIST_BASE =
+  'These rows come from your old system and are waiting for review. They are not in the medicine catalogue or in stock yet, so they cannot be sold. Next: open a medicine to check its name, quantity and prices against your old records.';
+const STAGED_NEXT_CAN_CREATE =
+  ' When the list looks right, use “Create medicines” below to add them to your catalogue. Stock is not added by this step.';
+const STAGED_NEXT_OTHERS =
+  ' Adding them to the catalogue is done by a catalogue editor or reviewer. Ask one of them to do it. Stock is not added by that step.';
+
+/** Intro for the staged list; the next step depends on who can create medicines. */
+export function stagedListIntro(canCreate: boolean): string {
+  return STAGED_LIST_BASE + (canCreate ? STAGED_NEXT_CAN_CREATE : STAGED_NEXT_OTHERS);
+}
 
 export const STAGED_COLUMN_HEADINGS = [
   'Medicine',
@@ -16,6 +25,12 @@ export const STAGED_COLUMN_HEADINGS = [
   'Quantity counted for review',
   'Status',
 ] as const;
+
+/** Plain names for the two old-system price columns, shown next to the raw column name. */
+export const STAGED_PRICE_COLUMN_NOTE: Record<string, string> = {
+  saleprice: 'MRP (the sale price printed on the pack)',
+  purprice: 'Purchase price (the price you pay the distributor)',
+};
 
 export const STAGED_NOT_SUPPLIED = 'Not supplied';
 const NOT_SUPPLIED_AS_TEXT = 'Not supplied as text';
@@ -34,6 +49,28 @@ const EXCEPTION_LABELS: Record<string, string> = {
 
 export function plainExceptionLabel(bucket: string): string {
   return EXCEPTION_LABELS[bucket] ?? 'Needs review';
+}
+
+const SEVERITY_LABELS: Record<string, string> = {
+  BLOCKING: 'Needs your attention',
+  WARNING: 'Information only',
+};
+const EXCEPTION_STATUS_LABELS: Record<string, string> = {
+  OPEN: 'Open',
+  SIGNED_OFF: 'Signed off',
+};
+const REVIEW_FLAG_LABELS: Record<string, string> = {
+  NORMALIZED_NAME_COLLISION_NO_MERGE: 'Another medicine has almost the same name: kept separate',
+};
+
+export function plainSeverity(severity: string): string {
+  return SEVERITY_LABELS[severity] ?? 'Needs review';
+}
+export function plainExceptionStatus(status: string): string {
+  return EXCEPTION_STATUS_LABELS[status] ?? 'Needs review';
+}
+export function plainReviewFlag(flag: string): string {
+  return REVIEW_FLAG_LABELS[flag] ?? 'Needs review';
 }
 
 const NUMERIC = /^-?\d+(\.\d+)?$/;

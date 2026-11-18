@@ -260,6 +260,8 @@ export async function freshPharmacyFirstSale(
   const colleagueEmail = `approver-${suffix}@${data.emailDomain}`;
   const ownerPassword = `Wha1203!${randomUUID()}`;
   const colleaguePassword = `Wha1203!${randomUUID()}`;
+  // Synthetic, and no easy pattern (DEV-931 refuses 1234, 1111 and the like).
+  const ownerPin = '583917';
   const branchName = `Test branch ${suffix}`;
   const medicineName = `Synthetic OTC ${suffix}`;
   // Digits only: the counter treats a code of six or more digits as a scan (scan-to-add).
@@ -402,6 +404,25 @@ export async function freshPharmacyFirstSale(
       row(page, 'Owner and role templates').getByText('Done', { exact: true })
     ).toBeVisible();
 
+    // DEV-931: onboarding asks the new owner to create his own PIN before the first step
+    // that needs it (confirming his own medicine import). He creates it on "Your PIN" with
+    // his account password, as a real owner would.
+    const pinPrompt = page
+      .locator('[data-slot="section-card"]')
+      .filter({ has: page.getByRole('heading', { name: 'Create your PIN', exact: true }) });
+    await click(pinPrompt.getByRole('link', { name: 'Create your PIN', exact: true }));
+    await expect(page).toHaveURL(new URL('/pharmacy/settings/pin', tenantOrigin).href);
+    await noRawIdEntry(page);
+    await page.getByLabel('Your current password', { exact: true }).fill(rotatedOwnerPassword);
+    await page.getByLabel('PIN', { exact: true }).fill(ownerPin);
+    await page.getByLabel('Type the PIN again', { exact: true }).fill(ownerPin);
+    await click(page.getByRole('button', { name: 'Save PIN', exact: true }));
+    await expect(page.getByText('Your PIN is set.', { exact: false })).toBeVisible();
+    await setup(page);
+    await expect(page.getByRole('heading', { name: 'Create your PIN', exact: true })).toHaveCount(
+      0
+    );
+
     await follow(page, 'Branches and locations', 'Create or review stock locations');
     const location = formFor(page, 'Create location');
     await fill(location, { name: 'Opening stock store', code: 'OPENING' });
@@ -506,6 +527,10 @@ export async function freshPharmacyFirstSale(
         }
       }
     }
+    // The solo owner approves his own import with the PIN he created above.
+    await page
+      .getByLabel('Solo owner PIN for reference self-approval', { exact: true })
+      .fill(ownerPin);
     const confirmation = proposal.getByRole('button', {
       name: 'Confirm reference proposal',
       exact: true,
@@ -533,8 +558,10 @@ export async function freshPharmacyFirstSale(
     ).toBeEnabled();
     await click(candidate.getByRole('button', { name: 'Publish assertions', exact: true }));
     await expect(candidate).toHaveCount(0);
-    await page.getByLabel('Medicine name', { exact: true }).fill(medicineName);
-    await click(page.getByRole('button', { name: 'Find medicine', exact: true }));
+    // DEV-683 adds a second "Medicine name" field (adding a medicine); this one finds it.
+    const findMedicine = formFor(page, 'Find medicine');
+    await findMedicine.getByLabel('Medicine name', { exact: true }).fill(medicineName);
+    await click(findMedicine.getByRole('button', { name: 'Find medicine', exact: true }));
     await choose(page.getByRole('combobox', { name: 'Medicine', exact: true }), medicineName);
     await choose(page.getByRole('combobox', { name: 'Presentation', exact: true }), '10 tablets');
     // Publication creates the default pack from the reviewed pack size and puts
@@ -572,13 +599,23 @@ export async function freshPharmacyFirstSale(
     await setup(page);
 
     await receiving(page);
-    await click(page.getByRole('link', { name: 'Invite a colleague', exact: true }));
+    // DEV-931: with his own PIN the solo owner is now a direct-purchase approver himself, so
+    // receiving no longer stops at "No authorized approver is available". His own purchase
+    // orders still need a second person, so he invites the colleague from Team.
+    await expect(
+      page.getByText('No authorized approver is available', { exact: true })
+    ).toHaveCount(0);
+    await expect(page.getByRole('combobox', { name: 'Approved by', exact: true })).toBeVisible();
+    await page.goto(new URL('/team', tenantOrigin).href);
     await click(page.getByRole('button', { name: 'Add Member', exact: true }));
     await page.getByPlaceholder('Ali Raza', { exact: true }).fill('Test second approver');
     await page.getByPlaceholder('ali@pharmacy.pk', { exact: true }).fill(colleagueEmail);
     await page.getByPlaceholder('Pharmacist', { exact: true }).fill('Purchasing reviewer');
     await choose(page.getByLabel('Department', { exact: true }), 'Counter');
-    await click(page.getByRole('button', { name: 'Admin', exact: true }));
+    // DEV-827: a pharmacy invite grants exactly the chosen role; the Administrator role is
+    // the one whose access level is Admin.
+    await choose(page.getByLabel('Role', { exact: true }), 'Administrator');
+    await expect(page.getByText('Access level: Admin.', { exact: false })).toBeVisible();
     await click(page.getByRole('button', { name: 'Send Invite', exact: true }));
     const invitation = page
       .getByText('Invite link', { exact: true })
@@ -629,10 +666,11 @@ export async function freshPharmacyFirstSale(
         .getByRole('link', { name: /^Requisitions & orders/ })
     );
     const order = formFor(page, 'Draft order');
+    // A line's packs and price appear once its medicine is chosen (progressive lines).
+    await choose(order.locator('[name="orderMedicineId-0"]'), medicineName);
     await fill(order, { reference: orderReference, 'orderedPacks-0': '2', 'listPrice-0': '20.00' });
     await choose(order.locator('[name="supplierId"]'), data.supplier.name);
     await choose(order.locator('[name="branchId"]'), branchName);
-    await choose(order.locator('[name="orderMedicineId-0"]'), medicineName);
     await click(order.getByRole('button', { name: 'Draft order', exact: true }));
     await click(page.getByRole('link', { name: 'View saved record', exact: true }));
     await click(page.getByRole('button', { name: 'Submit for approval', exact: true }));
@@ -667,12 +705,13 @@ export async function freshPharmacyFirstSale(
       supplierInvoiceRef: data.receipt.supplierInvoiceRef,
       warrantyEvidenceRef: data.receipt.warrantyEvidenceRef,
     });
-    await receipt.getByLabel('Batch number', { exact: true }).fill(`B-${suffix}`);
-    await receipt.getByLabel('Printed expiry', { exact: true }).fill(expiry);
-    await receipt.getByLabel('Printed MRP (PKR)', { exact: true }).fill('25.00');
-    await receipt.getByLabel('Packs received', { exact: true }).fill('2');
+    // A line can be received as up to three lots; this journey receives one, the first.
+    await receipt.getByLabel('Batch number', { exact: true }).first().fill(`B-${suffix}`);
+    await receipt.getByLabel('Printed expiry', { exact: true }).first().fill(expiry);
+    await receipt.getByLabel('Printed MRP (PKR)', { exact: true }).first().fill('25.00');
+    await receipt.getByLabel('Packs received', { exact: true }).first().fill('2');
     await choose(
-      receipt.getByRole('combobox', { name: 'Receive into', exact: true }),
+      receipt.getByRole('combobox', { name: 'Receive into', exact: true }).first(),
       'Opening stock store'
     );
     await click(receipt.getByRole('button', { name: 'File receipt (draft)', exact: true }));
@@ -719,7 +758,8 @@ export async function freshPharmacyFirstSale(
     // (scan-to-add), exactly as a cashier's scanner would.
     await page.getByLabel('Scan or search', { exact: true }).fill(barcode);
     await page.getByLabel('Scan or search', { exact: true }).press('Enter');
-    await expect(page.getByRole('list', { name: 'Cart lines' })).toContainText(medicineName);
+    // The cart is a table, as the counter spec reads it.
+    await expect(page.getByRole('table', { name: 'Cart lines' })).toContainText(medicineName);
     await page.keyboard.press('F9');
     const amount = page.getByLabel('Amount', { exact: true });
     await expect(amount).toBeEnabled();

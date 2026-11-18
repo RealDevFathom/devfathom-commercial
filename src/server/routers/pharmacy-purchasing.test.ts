@@ -101,6 +101,8 @@ function makeDb() {
     $queryRaw: vi.fn().mockResolvedValue([]),
     medicineBarcode: model(),
     pharmacyStockLocation: model(),
+    // DEV-769: quote validity reads the organisation's zone (none stored here: UTC).
+    organization: model(),
   };
   return Object.assign(db, {
     $queryRaw: vi.fn().mockResolvedValue([{ id: 'po_a' }]),
@@ -1317,7 +1319,10 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
   };
 
   it('DEV-877 refuses a delivery posted into a closed accounting period with PERIOD_CLOSED', async () => {
-    db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ id: 'assignment_a', branchId: 'branch_a' });
+    db.pharmacyBranchAssignment.findFirst.mockResolvedValue({
+      id: 'assignment_a',
+      branchId: 'branch_a',
+    });
     db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_a' });
     vi.mocked(verifyControlledPurchaseWitness).mockResolvedValueOnce({} as never);
     vi.mocked(postGoodsReceipt).mockRejectedValueOnce(new FinancePostingError('PERIOD_CLOSED'));
@@ -3779,11 +3784,22 @@ describe('purchasing list branch boundaries', () => {
   });
 });
 
+const BUYER_PASSWORD = 'buyer current password';
+/** DEV-931: the buyer's PIN and their account password, re-entered. */
+function ownPin(pin: string, currentPassword = BUYER_PASSWORD) {
+  return { pin, currentPassword };
+}
+/** The signed-in buyer as the password re-entry reads them. */
+function buyerAccount(phone: string | null = null) {
+  db.user.findFirst.mockResolvedValue({ password: hashSync(BUYER_PASSWORD, 4), phone });
+}
+
 describe('pharmacy-only approval PIN provisioning', () => {
+  beforeEach(() => buyerAccount());
   it('issues only the current buyer a hashed PIN with no restaurant entitlement', async () => {
     db.restaurantStaffProfile.create.mockResolvedValue({ id: 'my-profile' });
     db.restaurantStaffProfile.findUnique.mockResolvedValue({ id: 'my-profile', status: 'ACTIVE' });
-    await expect(caller().provisionMyPurchasePin({ pin: '4821' })).resolves.toEqual({
+    await expect(caller().provisionMyPurchasePin(ownPin('4821'))).resolves.toEqual({
       id: 'new',
       staffProfileId: 'my-profile',
     });
@@ -3805,21 +3821,50 @@ describe('pharmacy-only approval PIN provisioning', () => {
     db.restaurantStaffProfile.findFirst.mockResolvedValue({ id: 'my-profile' });
     db.restaurantStaffProfile.findUnique.mockResolvedValue({ id: 'my-profile', status: 'ACTIVE' });
     db.restaurantOperatorCredential.findFirst.mockResolvedValue({ id: 'existing' });
-    await expect(caller().provisionMyPurchasePin({ pin: '4821' })).rejects.toMatchObject({
+    await expect(caller().provisionMyPurchasePin(ownPin('4821'))).rejects.toMatchObject({
       code: 'CONFLICT',
     });
     expect(db.restaurantOperatorCredential.create).not.toHaveBeenCalled();
     expect(db.restaurantOperatorCredential.update).not.toHaveBeenCalled();
   });
   it('rejects users without procurement or the pharmacy module before creating profiles', async () => {
-    await expect(
-      caller('user_a', []).provisionMyPurchasePin({ pin: '4821' })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller('user_a', []).provisionMyPurchasePin(ownPin('4821'))).rejects.toMatchObject(
+      { code: 'FORBIDDEN' }
+    );
     db.user.findUnique.mockResolvedValue(null);
-    await expect(caller().provisionMyPurchasePin({ pin: '4821' })).rejects.toMatchObject({
+    await expect(caller().provisionMyPurchasePin(ownPin('4821'))).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
     expect(db.restaurantStaffProfile.create).not.toHaveBeenCalled();
+  });
+  // DEV-931: the same gate as "Your PIN": a stolen session alone cannot create a PIN.
+  it('refuses a wrong account password and writes nothing', async () => {
+    await expect(
+      caller().provisionMyPurchasePin(ownPin('4821', 'not my password'))
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Your current password is incorrect.' });
+    expect(db.restaurantStaffProfile.create).not.toHaveBeenCalled();
+    expect(db.restaurantOperatorCredential.create).not.toHaveBeenCalled();
+  });
+  it('refuses a call without the account password', async () => {
+    await expect(caller().provisionMyPurchasePin({ pin: '4821' } as never)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(db.restaurantOperatorCredential.create).not.toHaveBeenCalled();
+  });
+  it.each(['1234', '0000', '1212', '1990'])('refuses the easy PIN %s', async (pin) => {
+    await expect(caller().provisionMyPurchasePin(ownPin(pin))).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'That PIN is too easy to guess. Choose a different one.',
+    });
+    expect(db.restaurantOperatorCredential.create).not.toHaveBeenCalled();
+  });
+  it("refuses the end of the buyer's own phone number", async () => {
+    buyerAccount('+92 300 1234821');
+    await expect(caller().provisionMyPurchasePin(ownPin('4821'))).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'That PIN is the end of your phone number. Choose a different one.',
+    });
+    expect(db.restaurantOperatorCredential.create).not.toHaveBeenCalled();
   });
 });
 
@@ -3893,16 +3938,18 @@ it.each(['requisitions', 'purchaseOrders'] as const)(
 );
 
 it('does not let self-provisioning replace a revoked PIN', async () => {
+  buyerAccount();
   db.restaurantOperatorCredential.findFirst.mockResolvedValue({ id: 'revoked', revokedAt: PAST });
-  await expect(caller().provisionMyPurchasePin({ pin: '4821' })).rejects.toMatchObject({
+  await expect(caller().provisionMyPurchasePin(ownPin('4821'))).rejects.toMatchObject({
     code: 'CONFLICT',
   });
   expect(db.restaurantStaffProfile.create).not.toHaveBeenCalled();
   expect(db.restaurantOperatorCredential.create).not.toHaveBeenCalled();
 });
 it('does not let self-provisioning reactivate an archived staff profile', async () => {
+  buyerAccount();
   db.restaurantStaffProfile.findFirst.mockResolvedValue({ id: 'archived', status: 'ARCHIVED' });
-  await expect(caller().provisionMyPurchasePin({ pin: '4821' })).rejects.toMatchObject({
+  await expect(caller().provisionMyPurchasePin(ownPin('4821'))).rejects.toMatchObject({
     code: 'FORBIDDEN',
   });
   expect(db.restaurantStaffProfile.create).not.toHaveBeenCalled();

@@ -5,6 +5,7 @@ import { browserUuid } from '@/lib/browser-uuid';
 import { memo, useRef, useState } from 'react';
 import { Download, FileSpreadsheet, Loader2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
+import { PinAwareMessage } from '@/components/pharmacy/pin-aware-message';
 
 import { MedicinePackSetup } from './medicine-pack-setup';
 
@@ -316,7 +317,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
     },
     onError: (error) => {
       setSoloReviewPin('');
-      toast.error(error.message);
+      toast.error(<PinAwareMessage message={error.message} />);
     },
   });
   const importBatch = trpc.pharmacyMedicine.runReferenceConnectorNow.useMutation();
@@ -328,7 +329,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
     },
     onError: (error) => {
       setSoloReviewPin('');
-      toast.error(error.message);
+      toast.error(<PinAwareMessage message={error.message} />);
     },
   });
   const publish = trpc.pharmacyMedicine.publishAssertions.useMutation({

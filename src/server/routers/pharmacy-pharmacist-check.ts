@@ -1,5 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import { NO_PIN_SET_MESSAGE } from '@/lib/pharmacy/own-pin-policy';
 import {
   PHARMACIST_CHECK_DISCLAIMER,
   type PharmacistCheckPolicyView,
@@ -60,10 +61,7 @@ function policyError(error: unknown): never {
       case 'PIN_REQUIRED':
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Enter your own PIN to confirm.' });
       case 'NO_PIN':
-        throw new TRPCError({
-          code: 'PRECONDITION_FAILED',
-          message: 'Set up your own staff PIN first, then try again.',
-        });
+        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: NO_PIN_SET_MESSAGE });
       case 'PIN_REJECTED':
         throw new TRPCError({ code: 'FORBIDDEN', message: 'That PIN is not correct.' });
       case 'PIN_LOCKED':

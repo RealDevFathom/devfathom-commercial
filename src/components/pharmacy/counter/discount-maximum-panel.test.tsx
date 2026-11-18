@@ -135,3 +135,19 @@ describe("DEV-66 owner's maximum discount", () => {
     expect(mocks.query.refetch).toHaveBeenCalled();
   });
 });
+
+describe('DEV-931 an owner without a PIN', () => {
+  it('is told to set it up, with a link to Your PIN', async () => {
+    const { NO_PIN_SET_MESSAGE } = await import('@/lib/pharmacy/own-pin-policy');
+    mocks.save.mockRejectedValue(new Error(NO_PIN_SET_MESSAGE));
+    render(<DiscountMaximumPanel branchId="branch" />);
+    fireEvent.change(screen.getByLabelText('Maximum discount (%)'), { target: { value: '12.5' } });
+    fireEvent.change(screen.getByLabelText('Your PIN'), { target: { value: '2468' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save maximum discount' }));
+    expect(await screen.findByText(NO_PIN_SET_MESSAGE, { exact: false })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Set up your PIN' })).toHaveAttribute(
+      'href',
+      '/pharmacy/settings/pin'
+    );
+  });
+});
