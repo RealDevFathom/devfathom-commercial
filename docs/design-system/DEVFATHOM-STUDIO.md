@@ -2,7 +2,7 @@
 
 Status: canonical  
 Version: 1.0  
-Last reviewed: 2026-07-28
+Last reviewed: 2026-11-18
 
 This document is the permanent UI/UX source of truth for DevFathom Hub, including the tenant
 workspace, platform control plane, authentication, organization administration, and future
@@ -123,19 +123,34 @@ with coral merely because it needs attention.
 
 ### Geometry and elevation tokens
 
-| Role                      | Token/value                    |
-| ------------------------- | ------------------------------ |
-| Compact surface           | `--radius-xs: 8px`             |
-| Control                   | `--radius-sm: 12px`            |
-| Card                      | `--radius-md: 16px`            |
-| Major panel               | `--radius-lg: 20px`            |
-| Featured panel            | `--radius-xl: 24px`            |
-| Desktop application shell | `36px`                         |
-| Hairline elevation        | `--shadow-xs`                  |
-| Interactive lift          | `--shadow-sm` or `--shadow-md` |
+| Role                      | Token/value                                  |
+| ------------------------- | -------------------------------------------- |
+| Control                   | `--radius-control: 3px`                      |
+| Compact surface           | `--radius-xs: 8px`                           |
+| Small surface             | `--radius-sm: 12px`                          |
+| Card                      | `--radius-md: 16px`                          |
+| Major panel               | `--radius-lg: 20px`                          |
+| Featured panel            | `--radius-xl: 24px`                          |
+| Desktop application shell | `36px`                                       |
+| Hairline elevation        | `--shadow-xs`                                |
+| Interactive lift          | `--shadow-sm` or `--shadow-md`               |
+| Filled action lift        | `--shadow-control` or `--shadow-control-ink` |
 
 Shadows should be soft and nearly invisible at rest. A border plus tonal surface change is the
 default separation model.
+
+Controls keep the crisp 3px corner the product ships: the shared `Button`, hand-built buttons and
+action links, skip links, keycaps, the inline alerts and inputs on the auth and platform forms, and
+the platform inverse panels all take `rounded-control` (`--radius-control`). Surfaces (cards,
+panels, chips, menus) use the 8–24px steps. A filled primary action takes its lift from
+`shadow-control` (shared `Button`) or `shadow-control-ink` (hand-built ink actions on the platform
+and platform sign-in). Do not hardcode a radius or shadow (`rounded-[3px]`, `shadow-[…rgba(…)]`)
+on a control: every control reads these tokens, so changing the scale here changes the whole
+product consistently.
+
+`globals.css` holds exactly one `:root` block and one `[data-theme='dark']` block, inside the
+DevFathom Studio section. Add new primitives and semantic tokens there; never add a second token
+block that relies on cascade order to win.
 
 ### Spacing
 
@@ -225,6 +240,8 @@ should represent a real content group, not wrap every sentence or field.
 
 - Use ink for the primary action and neutral paper surfaces for secondary actions.
 - The destructive variant must use the destructive semantic token.
+- Buttons and action links take the 3px control corner (`rounded-control`); never round a button
+  with a surface step or an arbitrary value.
 - Controls should be at least 44px tall for primary forms and touch-heavy contexts.
 - Every interactive element needs hover, focus-visible, active, disabled, and loading behavior
   where applicable.
@@ -321,8 +338,9 @@ another animation runtime for ordinary product interactions.
 - No gradients, glassmorphism, neon glow, or decorative noise.
 - No generic admin-dashboard sidebar dropped into the platform product.
 - No return to the old teal/brass “Abyss” palette or Oxanium heading system.
-- No raw legacy palette utility in new UI (`abyss-*`, `paper-*`, `brass-*`) when a Studio semantic
-  token exists.
+- No legacy palette utility (`abyss-*`, `paper-*`, `brass-*`); those scales and their aliases have
+  been removed from the token source. Use the Studio semantic tokens.
+- No arbitrary radius or shadow values on controls; use the `--radius-*` and `--shadow-*` scale.
 - No hardcoded component colors, new fonts, or isolated dark-mode branches.
 - No excessive pill-shaped cards.
 - No emoji as interface iconography; use the existing Lucide/Fathom icon language.

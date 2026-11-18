@@ -149,7 +149,7 @@ function WorkspaceIdentityMismatch() {
         <button
           type="button"
           onClick={() => window.location.reload()}
-          className="mt-6 inline-flex h-10 items-center bg-abyss-900 px-4 text-xs font-semibold text-paper-white"
+          className="mt-6 inline-flex h-10 items-center rounded-control bg-primary px-4 text-xs font-semibold text-primary-foreground"
         >
           Reload this workspace
         </button>
@@ -370,7 +370,7 @@ export function AppShell({
                 </p>
                 <Link
                   href="/organization"
-                  className="mt-6 inline-flex h-10 items-center bg-abyss-900 px-4 text-xs font-semibold text-paper-white"
+                  className="mt-6 inline-flex h-10 items-center rounded-control bg-primary px-4 text-xs font-semibold text-primary-foreground"
                 >
                   Open organization settings
                 </Link>
