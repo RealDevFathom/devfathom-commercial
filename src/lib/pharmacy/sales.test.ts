@@ -345,7 +345,13 @@ describe('POS sale voiding', () => {
             saleId: 'sale-a',
             type: { not: 'LOYALTY' },
           },
-          select: { amountMinor: true, refunds: { select: { amountMinor: true } } },
+          select: {
+            id: true,
+            type: true,
+            provider: true,
+            amountMinor: true,
+            refunds: { select: { amountMinor: true } },
+          },
         },
       ]);
       // Refused before any stock is reversed or event recorded; the transaction
@@ -355,6 +361,55 @@ describe('POS sale voiding', () => {
       expect(events).not.toHaveBeenCalled();
     }
   );
+
+  // DEV-743: a card-terminal charge goes back through the provider, so the void says so.
+  it('refuses to void a bill paid on the card terminal, naming the provider refund', async () => {
+    const attemptCounts: unknown[] = [];
+    const allocationReads = vi.fn();
+    const db = {
+      pharmacySale: {
+        findFirst: async () => ({ id: 'sale-a', status: 'OPEN', lines: [] }),
+        updateMany: async () => ({ count: 1 }),
+      },
+      pharmacyTender: {
+        findMany: async () => [
+          // A refunded cash part and a manual card part are never terminal tenders.
+          { id: 'cash-1', type: 'CASH', provider: null, amountMinor: 200, refunds: [] },
+          {
+            id: 'manual-1',
+            type: 'CARD',
+            provider: 'MANUAL_TERMINAL',
+            amountMinor: 100,
+            refunds: [],
+          },
+          {
+            id: 'terminal-1',
+            type: 'CARD',
+            provider: 'FAKE_TERMINAL',
+            amountMinor: 700,
+            refunds: [],
+          },
+        ],
+      },
+      pharmacyCardTerminalAttempt: {
+        count: async (query: unknown) => {
+          attemptCounts.push(query);
+          return 1;
+        },
+      },
+      pharmacySaleLineAllocation: { findMany: allocationReads },
+    };
+
+    await expect(changeSaleStatus(db as never, scope, 'sale-a', 'void', manager)).rejects.toThrow(
+      'BILL_HAS_CARD_TERMINAL_PAYMENT'
+    );
+    expect(attemptCounts).toEqual([
+      {
+        where: { organizationId: 'org-a', branchId: 'branch-a', tenderId: { in: ['terminal-1'] } },
+      },
+    ]);
+    expect(allocationReads).not.toHaveBeenCalled();
+  });
 
   // DEV-821: a void releases the bill's stock, so another counter user cannot do it.
   it.each(['OPEN', 'HELD'])(

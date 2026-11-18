@@ -36,6 +36,11 @@ export type CardTerminalCounterView = {
   cardLast4: string | null;
   declineCode: string | null;
   reviewReason: string | null;
+  /**
+   * The terminal reported a charge reference (never shown). A review of such an attempt cannot be
+   * recorded as "nothing was charged".
+   */
+  chargeReported: boolean;
 };
 
 const PHASES: Record<PharmacyCardTerminalAttemptStatus, CardTerminalCounterPhase> = {
@@ -75,6 +80,7 @@ export function cardTerminalCounterView(attempt: {
   cardLast4: string | null;
   declineCode: string | null;
   reviewReason: string | null;
+  providerRef: string | null;
 }): CardTerminalCounterView {
   return {
     attemptKey: attempt.attemptKey,
@@ -88,5 +94,6 @@ export function cardTerminalCounterView(attempt: {
     cardLast4: attempt.cardLast4,
     declineCode: attempt.declineCode,
     reviewReason: attempt.status === 'MANUAL_REVIEW' ? attempt.reviewReason : null,
+    chargeReported: attempt.providerRef !== null,
   };
 }

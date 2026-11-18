@@ -1,7 +1,8 @@
 # Pharmacy card-terminal integration boundary (DEV-743)
 
-Status: provider-neutral seam, durable record, router, counter states, day-close gate and recovery
-sweep shipped. **No provider, SDK or device is bound.**
+Status: provider-neutral seam, durable record, router, counter states, day-close gate, recovery
+sweep, manual-review resolution, audit trail, one shared timeout and refund/void refusals shipped.
+**No provider, SDK or device is bound.**
 The production admission list is empty, so every integrated terminal path refuses with
 `UNCERTIFIED_PROVIDER`. Only a fake test terminal exists.
 
@@ -38,7 +39,8 @@ recover   UNKNOWN or stale SENT ──► terminal.queryStatus(same operationRef
             still unknown after N checks ──► MANUAL_REVIEW
           APPROVED (settlement failed transiently) ──► retry settlement, never the charge
           stale CREATED ──► ABANDONED                (never sent late)
-review    MANUAL_REVIEW ──► DECLINED (no charge evidence) | REVERSED (who resolved it)
+review    MANUAL_REVIEW ──► DECLINED (no charge evidence) | REVERSED (money taken)
+            manager or owner PIN, reason and terminal-slip reference, exactly once
 ```
 
 ### Guarantees, and where each one is enforced
@@ -90,20 +92,25 @@ terminal, so all of this stays dormant.
   - Every attempt step commits in its own tenant transaction, not in the request's. Each tRPC
     request runs inside one transaction, and a nested `$transaction` would reuse it, leaving
     CREATED and SENT uncommitted while the terminal charges.
+  - `resolveReview` resolves a manual review (see below). A cashier is refused.
   - The counter waits 45 seconds for the terminal, inside the 60-second request transaction.
+    That is `CARD_TERMINAL_TIMEOUT_MS` (`timing.ts`), the one timeout the router, the recovery
+    sweep and the service default all use, so a stale CREATED attempt, an unfinished SENT one and
+    the NOT_FOUND grace (twice the timeout) are judged by the same clock everywhere.
 - **Counter states** (`counter-card-terminal-panel.tsx`, shown in the payment overlay only when
   `availability` is true):
 
-  | State    | Shown when                                                                   |
-  | -------- | ---------------------------------------------------------------------------- |
-  | Sending  | CREATED                                                                      |
-  | Waiting  | SENT, or while the charge request is out                                     |
-  | Unknown  | UNKNOWN. The panel offers **Check status**                                   |
-  | Approved | APPROVED, while the tender is recorded                                       |
-  | Paid     | SETTLED                                                                      |
-  | Declined | DECLINED                                                                     |
-  | Not sent | ABANDONED                                                                    |
-  | Review   | MANUAL_REVIEW. There is no counter action: a manager or owner must review it |
+  | State       | Shown when                                                                 |
+  | ----------- | -------------------------------------------------------------------------- |
+  | Sending     | CREATED                                                                    |
+  | Waiting     | SENT, or while the charge request is out                                   |
+  | Unknown     | UNKNOWN. The panel offers **Check status**                                 |
+  | Approved    | APPROVED, while the tender is recorded                                     |
+  | Paid        | SETTLED                                                                    |
+  | Declined    | DECLINED                                                                   |
+  | Not sent    | ABANDONED                                                                  |
+  | Review      | MANUAL_REVIEW. The only action is the manager review form (below)          |
+  | Money taken | REVERSED: refund it through the card provider, then take the payment again |
 
   The view carries no provider reference and no terminal id: only the brand and the last four
   digits.
@@ -115,11 +122,62 @@ terminal, so all of this stays dormant.
   trigger `pharmacy_daily_closes_card_terminal_guard` refuses the close row itself.
 - **Recovery sweep** (`sweep.ts`, run by `/api/platform/jobs/process` every 5 minutes): finds
   attempts untouched for 2 minutes in CREATED, SENT, UNKNOWN or APPROVED, across tenants, and
-  recovers each one as its own cashier with the counter's status check. Manual review is not
-  swept.
+  recovers each one as its own cashier with the counter's status check and the counter's own
+  timeout. Manual review is not swept.
 - **One approval, one tender**: the unique index `pharmacy_tenders_terminal_provider_ref_key`
   covers terminal CARD tenders on (organization, provider, provider reference). Manual, sandbox,
   prepaid and mock providers are outside it, because their slip references may repeat.
+
+## Resolving a manual review
+
+`pharmacyCardTerminal.resolveReview` and the review form in the counter panel
+(`counter-card-terminal-review.tsx`). The refund rule applies:
+
+- Only a manager or owner (`pharmacy:manage`, the refund check `actorMayRefund`). A cashier is
+  refused before any PIN is asked.
+- The signed-in manager or owner re-enters their own PIN (`authenticateRefundPin`, policy
+  `PHARMACY_CARD_TERMINAL_REVIEW_MANAGER_PIN`). A refused PIN commits its lockout strike and a
+  FAILURE audit row, and changes nothing. A solo owner approves their own resolution with that
+  PIN; the audit entry records `selfApproved: true`.
+- Two outcomes only, each with a reason (3 to 200 characters) and the provider reference printed
+  on the terminal slip:
+  - **DECLINED**, nothing was charged. Refused when the terminal reported a charge reference.
+  - **REVERSED**, money was taken. It is recorded, not made into a tender, and the cashier refunds
+    it through the card provider's own process. The slip reference must match the reference the
+    terminal reported; if the terminal never answered, the slip's reference is recorded as it.
+- Exactly one resolution wins (compare-and-set on MANUAL_REVIEW); a second, even at the same
+  moment, is told the review is no longer open. Once resolved, the sale can take another tender
+  and the business day can close.
+- The database requires it too (migration `20261118124100`): leaving MANUAL_REVIEW needs the
+  resolver, the resolution time, the reason and a well-formed slip reference; a reversal's provider
+  reference equals its slip reference; the resolution fields are written once, only by that step,
+  never on insert, and never hold a card number.
+
+## Audit trail
+
+Every committed attempt change writes one `audit_logs` row (`pharmacyCardTerminal.attempt.*`:
+`created`, `dispatched`, `approved`, `declined`, `unknown`, `manualReview`, `abandoned`,
+`settled`, `reviewResolved`) **in the same transaction as the change**, inside the store's own
+tenant transaction. A request (or a batch sibling) that rolls back afterwards never loses the
+entry of an attempt change that committed, and a change that rolled back leaves none. The counter's
+entries name the signed-in user; the sweep's are `SYSTEM` entries that name the attempt's cashier
+as `onBehalfOfUserId`. Entries carry the state, amount, provider, provider reference, tender,
+reason and resolution, plus the PIN approval for a resolution. Never the card brand, last four
+digits, approval code, terminal id, PIN or a secret, and every value passes the card-number mask.
+
+## Refund and void of a terminal-paid sale
+
+No terminal refund or void is built: both are provider capabilities that wait for a bound
+provider. Until then:
+
+- `refundPharmacyTender` refuses a tender that a settled attempt links to with
+  `CARD_TERMINAL_REFUND_VIA_PROVIDER`, with or without the manual cash fallback. Nothing is paid
+  out of the drawer. The counter says: do not give cash, refund it through the card provider's own
+  refund process, and keep the provider's refund slip with the bill.
+- Voiding a bill that still holds an unrefunded terminal tender is refused with
+  `BILL_HAS_CARD_TERMINAL_PAYMENT`, which says the same, instead of sending the cashier to a refund
+  that would refuse.
+- Manual Card and Wallet tenders are not looked up and keep their own refund path.
 
 ## Deferred, by the owner's decision
 
@@ -127,11 +185,8 @@ Provider and device selection wait for a named proposal and a real-device test. 
 change does not include:
 
 - Any provider SDK, credentials, network access or real device.
-- Resolving a manual review (to DECLINED with no charge evidence, or REVERSED) from a screen. It
-  must use the refund rule: manager or owner PIN, with solo-owner self-approval and an audit
-  record. Until it lands, a review case holds its sale and its business day open.
-- Terminal void and refund of a settled terminal tender. Both are provider capabilities. They
-  will use the same attempt record.
+- Terminal void and refund of a settled terminal tender through the provider. They will use the
+  same attempt record.
 
 Binding a provider means two things in its own reviewed change, with the certification evidence
 and the real-device test linked:
@@ -160,4 +215,14 @@ and the real-device test linked:
   - two racing charges for one sale commit one attempt;
   - the day close is refused while an attempt is open, then succeeds once it is recovered;
   - the sweep settles a stale attempt;
-  - a terminal approval cannot become a second tender.
+  - a terminal approval cannot become a second tender;
+  - two racing review resolutions give exactly one, then the sale takes another attempt and the
+    day closes;
+  - a cashier, a wrong PIN and "not charged" for a reported charge change nothing;
+  - every committed step keeps its audit entry when the request rolls back, and the refund of the
+    terminal-paid tender is refused;
+  - the sweep's audit entries name the system.
+- `tests/pharmacy-card-terminal-review-migration.test.ts`: the resolution migration keeps every
+  earlier guard rule.
+- `src/lib/pharmacy/settlement.card-terminal-refund.test.ts` and `sales.test.ts`: refund and void
+  refusals.

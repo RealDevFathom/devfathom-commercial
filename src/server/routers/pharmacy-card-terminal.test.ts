@@ -41,6 +41,17 @@ vi.mock('./pharmacy-sales', () => ({
   requireCounterReceiptAccess: harness.requireCounterReceiptAccess,
   failPharmacySale: harness.failPharmacySale,
 }));
+const refundAuth = vi.hoisted(() => ({
+  actorMayRefund: vi.fn(async (): Promise<boolean> => false),
+  authenticateRefundPin: vi.fn(async (): Promise<{ verified: true } | { blocked: string }> => ({
+    verified: true,
+  })),
+}));
+vi.mock('@/lib/pharmacy/refund-authorization', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/refund-authorization')>()),
+  actorMayRefund: refundAuth.actorMayRefund,
+  authenticateRefundPin: refundAuth.authenticateRefundPin,
+}));
 vi.mock('@/lib/pharmacy/card-terminal/registry', () => ({
   resolvePharmacyCardTerminal: harness.resolve,
 }));
@@ -65,8 +76,15 @@ import {
   createFakeTerminal,
   type FakeTerminal,
 } from '@/lib/pharmacy/card-terminal/testing/fake-terminal';
+import { CARD_TERMINAL_TIMEOUT_MS } from '@/lib/pharmacy/card-terminal/timing';
+import { annotateAudit } from '@/server/audit';
 import { router, type TRPCContext } from '../trpc';
-import { COUNTER_TERMINAL_TIMEOUT_MS, pharmacyCardTerminalRouter } from './pharmacy-card-terminal';
+import {
+  CARD_TERMINAL_REVIEW_FORBIDDEN,
+  CARD_TERMINAL_REVIEW_PIN_POLICY,
+  COUNTER_TERMINAL_TIMEOUT_MS,
+  pharmacyCardTerminalRouter,
+} from './pharmacy-card-terminal';
 
 const app = router({ pharmacyCardTerminal: pharmacyCardTerminalRouter });
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' };
@@ -299,5 +317,142 @@ describe('DEV-743 card-terminal router', () => {
   it('gives up on the terminal inside the 60-second request transaction', () => {
     expect(COUNTER_TERMINAL_TIMEOUT_MS).toBeLessThan(60_000);
     expect(COUNTER_TERMINAL_TIMEOUT_MS).toBeGreaterThanOrEqual(30_000);
+  });
+
+  it('shares one timeout with the recovery sweep', () => {
+    expect(COUNTER_TERMINAL_TIMEOUT_MS).toBe(CARD_TERMINAL_TIMEOUT_MS);
+  });
+
+  describe('resolveReview', () => {
+    /** An attempt whose outcome stayed unknown until it was handed to a person. */
+    async function underReview(attemptKey = 'card-terminal:k-review') {
+      const { attempt } = await store.create(scope, {
+        saleId: 'sale-1',
+        deviceId: 'counter-device-1',
+        terminalId: 'paired-terminal-1',
+        provider: 'FAKE_TERMINAL',
+        attemptKey,
+        amountMinor: 1500,
+        currency: 'PKR',
+        businessDate,
+      });
+      const sent = await store.transition(scope, attempt, { status: 'SENT', sentAt: new Date() });
+      await store.transition(scope, sent!, {
+        status: 'MANUAL_REVIEW',
+        reviewReason: 'Terminal outcome still unknown after 10 status checks',
+      });
+      return attemptKey;
+    }
+    const resolution = (attemptKey: string, outcome: 'DECLINED' | 'REVERSED' = 'DECLINED') => ({
+      branchId: 'branch-a',
+      attemptKey,
+      outcome,
+      reason: 'Slip shows the card was declined',
+      slipRef: 'SLIP-0042',
+      managerPin: '2468',
+    });
+
+    it('refuses a cashier before any PIN check, and leaves the review open', async () => {
+      const attemptKey = await underReview();
+      refundAuth.actorMayRefund.mockResolvedValue(false);
+      await expect(caller().resolveReview(resolution(attemptKey))).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: CARD_TERMINAL_REVIEW_FORBIDDEN,
+      });
+      expect(refundAuth.authenticateRefundPin).not.toHaveBeenCalled();
+      expect(store.all()[0]).toMatchObject({ status: 'MANUAL_REVIEW', resolvedById: null });
+    });
+
+    it('changes nothing when the manager’s PIN is refused', async () => {
+      const attemptKey = await underReview();
+      refundAuth.actorMayRefund.mockResolvedValue(true);
+      refundAuth.authenticateRefundPin.mockResolvedValueOnce({ blocked: 'Enter your PIN.' });
+      await expect(caller().resolveReview(resolution(attemptKey))).resolves.toEqual({
+        blocked: 'Enter your PIN.',
+      });
+      expect(store.all()[0]).toMatchObject({ status: 'MANUAL_REVIEW' });
+      expect(annotateAudit).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          metadata: expect.objectContaining({ pinVerified: false, approvedAt: null }),
+        })
+      );
+    });
+
+    it('lets a solo owner self-approve with a fresh PIN, audited, with no terminal bound', async () => {
+      const attemptKey = await underReview();
+      // Resolution reads the slip, never the terminal: it works with no provider bound.
+      harness.resolve.mockResolvedValue(null);
+      refundAuth.actorMayRefund.mockResolvedValue(true);
+      const view = await caller().resolveReview(resolution(attemptKey));
+      expect(view).toMatchObject({ phase: 'DECLINED', open: false, canCheckStatus: false });
+      expect(refundAuth.authenticateRefundPin).toHaveBeenCalledWith({
+        organizationId: 'org-a',
+        actorId: 'user-a',
+        pin: '2468',
+        action: 'pharmacyCardTerminal.resolveReview',
+        policy: CARD_TERMINAL_REVIEW_PIN_POLICY,
+        errorCode: 'CARD_TERMINAL_REVIEW_PIN_REFUSED',
+      });
+      const approval = {
+        policy: CARD_TERMINAL_REVIEW_PIN_POLICY,
+        initiatedById: 'user-a',
+        approverId: 'user-a',
+        pinVerified: true,
+        selfApproved: true,
+        approvedAt: expect.any(String),
+      };
+      // The approval rides on the attempt's own committed audit entry, not only the request's.
+      expect(store.audits.at(-1)).toEqual({
+        attemptId: store.all()[0]!.id,
+        from: 'MANUAL_REVIEW',
+        to: 'DECLINED',
+        detail: approval,
+      });
+      expect(store.all()[0]).toMatchObject({
+        status: 'DECLINED',
+        resolvedById: 'user-a',
+        resolutionRef: 'SLIP-0042',
+      });
+      // The PIN never reaches a stored record.
+      expect(JSON.stringify([store.all(), store.audits])).not.toContain('2468');
+      // The sale may take another tender now.
+      terminal.scriptCharge({ kind: 'APPROVED', providerRef: 'RRN-7', amountMinor: 1500 });
+      harness.resolve.mockResolvedValue({
+        adapter: terminal,
+        terminalId: 'paired-terminal-1',
+        admission: { admittedProviders: ['FAKE_TERMINAL'] },
+      });
+      await expect(caller().charge(chargeInput('card-terminal:k-after'))).resolves.toMatchObject({
+        phase: 'PAID',
+      });
+    });
+
+    it('records money taken against the slip, and answers a second resolution plainly', async () => {
+      const attemptKey = await underReview();
+      refundAuth.actorMayRefund.mockResolvedValue(true);
+      await expect(
+        caller().resolveReview({
+          ...resolution(attemptKey, 'REVERSED'),
+          reason: 'Customer charged',
+        })
+      ).resolves.toMatchObject({ phase: 'REVERSED', open: false });
+      expect(store.all()[0]).toMatchObject({ status: 'REVERSED', providerRef: 'SLIP-0042' });
+      await expect(caller().resolveReview(resolution(attemptKey))).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: 'REVIEW_NOT_OPEN',
+      });
+    });
+
+    it('validates the reason, slip reference and PIN shape before anything runs', async () => {
+      const attemptKey = await underReview();
+      refundAuth.actorMayRefund.mockResolvedValue(true);
+      for (const patch of [{ reason: 'no' }, { slipRef: '' }, { managerPin: '12' }])
+        await expect(
+          caller().resolveReview({ ...resolution(attemptKey), ...patch })
+        ).rejects.toBeInstanceOf(TRPCError);
+      expect(refundAuth.authenticateRefundPin).not.toHaveBeenCalled();
+      expect(store.all()[0]).toMatchObject({ status: 'MANUAL_REVIEW' });
+    });
   });
 });

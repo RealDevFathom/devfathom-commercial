@@ -13,6 +13,7 @@ import {
 import {
   chargeCardTerminal,
   recoverCardTerminalAttempt,
+  resolveCardTerminalReview,
   type CardTerminalDeps,
 } from '@/lib/pharmacy/card-terminal/service';
 import {
@@ -21,8 +22,15 @@ import {
   prismaCardTerminalAttemptStore,
   type CardTerminalAttemptStore,
 } from '@/lib/pharmacy/card-terminal/store';
+import { CARD_TERMINAL_TIMEOUT_MS } from '@/lib/pharmacy/card-terminal/timing';
+import {
+  actorMayRefund,
+  authenticateRefundPin,
+  refundApprovalAudit,
+} from '@/lib/pharmacy/refund-authorization';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
+import { annotateAudit } from '@/server/audit';
 
 import { protectedProcedure, router } from '../trpc';
 import { failPharmacySale, requireCounterReceiptAccess } from './pharmacy-sales';
@@ -37,6 +45,10 @@ import { failPharmacySale, requireCounterReceiptAccess } from './pharmacy-sales'
  *   attempt's counter state: paid, declined, or unknown with a status check to make.
  * - `checkStatus` asks the terminal about the same operation again. It never sends a new charge.
  * - `attempt` reads the sale's newest attempt, so a reloaded counter shows where it stands.
+ * - `resolveReview` lets a manager or owner, with their own fresh PIN, resolve an attempt waiting
+ *   for review from the terminal slip: nothing was charged (DECLINED), or the money was taken and
+ *   is refunded through the provider (REVERSED). A cashier cannot. A solo owner approves their
+ *   own resolution with that PIN, and the audit entry records the self-approval.
  *
  * The browser never names the provider, the terminal or the currency: the server resolves the
  * terminal paired with the counter and charges in PKR only. A charge needs the same counter
@@ -44,14 +56,18 @@ import { failPharmacySale, requireCounterReceiptAccess } from './pharmacy-sales'
  */
 
 const branchId = z.string().trim().min(1).max(128);
+
+/** DEV-743: the manager-PIN control for resolving a card-terminal review (the refund rule). */
+export const CARD_TERMINAL_REVIEW_PIN_POLICY = 'PHARMACY_CARD_TERMINAL_REVIEW_MANAGER_PIN';
+export const CARD_TERMINAL_REVIEW_FORBIDDEN =
+  'Only a manager or owner can resolve a card terminal payment under review.';
 const attemptKey = z.string().regex(/^[A-Za-z0-9:_-]{8,128}$/);
 
 /**
- * How long the counter's request waits for the terminal before the outcome counts as UNKNOWN.
- * It stays inside the 60-second request transaction (`src/app/api/trpc/[trpc]/route.ts`), so
- * the counter always gets an answer; an UNKNOWN outcome is resolved by a status check.
+ * How long the counter's request waits for the terminal before the outcome counts as UNKNOWN:
+ * the one timeout the recovery sweep uses too (`card-terminal/timing.ts`).
  */
-export const COUNTER_TERMINAL_TIMEOUT_MS = 45_000;
+export const COUNTER_TERMINAL_TIMEOUT_MS = CARD_TERMINAL_TIMEOUT_MS;
 
 /**
  * Each store call commits in its OWN tenant transaction, independent of the request's. The
@@ -101,6 +117,10 @@ const CARD_TERMINAL_CODES: Record<CardTerminalError['reason'], TRPCError['code']
   ATTEMPT_IN_PROGRESS: 'CONFLICT',
   ATTEMPT_NOT_FOUND: 'NOT_FOUND',
   INVALID_STATE: 'CONFLICT',
+  REVIEW_NOT_OPEN: 'CONFLICT',
+  CHARGE_EVIDENCE_RECORDED: 'CONFLICT',
+  SLIP_REFERENCE_MISMATCH: 'BAD_REQUEST',
+  SLIP_REFERENCE_IN_USE: 'CONFLICT',
 };
 
 function fail(error: unknown): never {
@@ -170,6 +190,59 @@ export const pharmacyCardTerminalRouter = router({
         return cardTerminalCounterView(
           await recoverCardTerminalAttempt({ ...deps, store }, scope, input.attemptKey)
         );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  resolveReview: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          attemptKey,
+          outcome: z.enum(['DECLINED', 'REVERSED']),
+          reason: z.string().trim().min(3).max(200),
+          slipRef: z.string().trim().min(1).max(64),
+          // The signed-in manager's or owner's own PIN, re-entered for every resolution.
+          managerPin: z.string().regex(/^\d{4,8}$/),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        // The refund rule: cashiers cannot resolve; a manager or owner re-enters their PIN.
+        if (!(await actorMayRefund(ctx.db, ctx.session!.user)))
+          throw new TRPCError({ code: 'FORBIDDEN', message: CARD_TERMINAL_REVIEW_FORBIDDEN });
+        const { managerPin, ...resolution } = input;
+        // An independent transaction, so a refused PIN commits its lockout strike and its
+        // FAILURE audit row even though this request answers with a refusal.
+        const pin = await authenticateRefundPin({
+          organizationId: scope.organizationId,
+          actorId: scope.actorId,
+          pin: managerPin,
+          action: 'pharmacyCardTerminal.resolveReview',
+          policy: CARD_TERMINAL_REVIEW_PIN_POLICY,
+          errorCode: 'CARD_TERMINAL_REVIEW_PIN_REFUSED',
+        });
+        const approval = {
+          ...refundApprovalAudit({
+            initiatedById: scope.actorId,
+            approverId: scope.actorId,
+            pin,
+          }),
+          policy: CARD_TERMINAL_REVIEW_PIN_POLICY,
+        };
+        annotateAudit(ctx, { metadata: { ...approval, branchId: scope.branchId } });
+        if ('blocked' in pin) return pin;
+        // Commits in its own tenant transaction with its audit entry, like every attempt step.
+        const resolved = await resolveCardTerminalReview(
+          { store: storeFor(scope) },
+          scope,
+          resolution,
+          approval
+        );
+        return cardTerminalCounterView(resolved);
       } catch (error) {
         fail(error);
       }

@@ -13,6 +13,8 @@ import { counterPaymentErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { trpc } from '@/lib/trpc';
 
+import { CounterCardTerminalReview } from './counter-card-terminal-review';
+
 /**
  * DEV-743: an integrated card-terminal payment at the counter, driven by the one durable
  * attempt record on the server. It renders nothing unless the server says an admitted terminal
@@ -21,7 +23,8 @@ import { trpc } from '@/lib/trpc';
  *
  * Counter states: sending and waiting while the charge is out (dispatch, pending); paid;
  * declined; unknown, with a status check that asks the terminal again and never charges again;
- * and manual review, which waits for a manager or owner.
+ * and manual review, which a manager or owner resolves here from the terminal slip with their
+ * own PIN (`counter-card-terminal-review.tsx`).
  */
 
 type Props = {
@@ -71,12 +74,12 @@ const COPY: Record<CardTerminalCounterPhase, { label: string; tone: StatusTone; 
   MANUAL_REVIEW: {
     label: 'Review',
     tone: 'danger',
-    text: 'A manager or owner must review this card payment before this bill can take another payment.',
+    text: 'A manager or owner must review this card payment before this bill can take another payment. Do not take another payment until it is recorded.',
   },
   REVERSED: {
-    label: 'Reversed',
-    tone: 'neutral',
-    text: 'This card payment was reversed. Take the payment again.',
+    label: 'Money taken',
+    tone: 'warning',
+    text: 'A manager recorded that the terminal took this payment. Refund it to the customer through the card provider’s own refund process, then take the payment again. Do not give cash for it.',
   },
 };
 
@@ -217,6 +220,9 @@ function CardTerminalPanelForSale({
         <p role="alert" className="text-sm text-destructive">
           {error}
         </p>
+      ) : null}
+      {view && phase === 'MANUAL_REVIEW' ? (
+        <CounterCardTerminalReview branchId={branchId} view={view} onResolved={settle} />
       ) : null}
       <div className="flex flex-wrap gap-2">
         {held ? (

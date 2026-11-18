@@ -9,6 +9,7 @@ import {
   type PharmacyPaymentAdapter,
 } from '../settlement';
 import type { LedgerScope } from '../stock-ledger';
+import { redactForLog } from './cardholder-data';
 import { OPEN_ATTEMPT_STATUSES } from './open-attempts';
 
 export { OPEN_ATTEMPT_STATUSES } from './open-attempts';
@@ -57,8 +58,85 @@ export type CardTerminalAttemptPatch = {
     | 'reviewReason'
     | 'sentAt'
     | 'resolvedAt'
+    | 'resolvedById'
+    | 'resolutionReason'
+    | 'resolutionRef'
   >
 >;
+
+/** Extra facts for an attempt's audit entry, such as a manager's PIN approval. Never card data. */
+export type CardTerminalAuditDetail = Record<string, string | number | boolean | null>;
+
+/**
+ * Who an attempt's audit entries name: the signed-in person at the counter (`USER`), or the
+ * scheduled recovery sweep (`SYSTEM`), which acts for the attempt's cashier.
+ */
+export type CardTerminalAuditActor = 'USER' | 'SYSTEM';
+
+const AUDIT_EVENTS: Record<CardTerminalAttemptStatus, string> = {
+  CREATED: 'created',
+  SENT: 'dispatched',
+  UNKNOWN: 'unknown',
+  APPROVED: 'approved',
+  SETTLED: 'settled',
+  DECLINED: 'declined',
+  ABANDONED: 'abandoned',
+  MANUAL_REVIEW: 'manualReview',
+  REVERSED: 'reversed',
+};
+
+/**
+ * DEV-743: the audit entry for one committed attempt change. Every store write adds it in the
+ * SAME transaction as the attempt change, so the entry commits exactly when the change does: a
+ * request (or a batch sibling) that rolls back afterwards never loses it, and a change that
+ * rolled back never leaves one. It carries the attempt's state and references only: no card
+ * brand, last four digits, approval code, terminal id or secret. Exported for tests.
+ */
+export function cardTerminalAuditEntry(
+  attempt: CardTerminalAttempt,
+  from: CardTerminalAttemptStatus | null,
+  actor: CardTerminalAuditActor,
+  scope: LedgerScope,
+  detail: CardTerminalAuditDetail = {}
+): Prisma.AuditLogUncheckedCreateInput {
+  const event =
+    from === 'MANUAL_REVIEW' && attempt.status !== 'MANUAL_REVIEW'
+      ? 'reviewResolved'
+      : AUDIT_EVENTS[attempt.status];
+  const metadata = redactForLog({
+    ...detail,
+    branchId: attempt.branchId,
+    attemptId: attempt.id,
+    attemptKey: attempt.attemptKey,
+    saleId: attempt.saleId,
+    provider: attempt.provider,
+    from,
+    to: attempt.status,
+    amountMinor: attempt.amountMinor,
+    currency: attempt.currency,
+    statusChecks: attempt.statusChecks,
+    providerRef: attempt.providerRef,
+    tenderId: attempt.tenderId,
+    declineCode: attempt.declineCode,
+    reviewReason: attempt.reviewReason,
+    resolvedById: attempt.resolvedById,
+    resolutionReason: attempt.resolutionReason,
+    resolutionRef: attempt.resolutionRef,
+    ...(actor === 'SYSTEM' ? { onBehalfOfUserId: scope.actorId } : {}),
+  }) as Prisma.InputJsonObject;
+  return {
+    organizationId: attempt.organizationId,
+    ...(actor === 'SYSTEM'
+      ? { actorType: 'SYSTEM' as const, source: 'SYSTEM' as const }
+      : { actorType: 'USER' as const, source: 'TRPC' as const, actorId: scope.actorId }),
+    category: 'PHARMACY',
+    operation: from === null ? 'CREATE' : 'UPDATE',
+    action: `pharmacyCardTerminal.attempt.${event}`,
+    targetType: 'PharmacyCardTerminalAttempt',
+    targetId: attempt.id,
+    metadata,
+  };
+}
 
 export class CardTerminalError extends Error {
   constructor(
@@ -69,6 +147,14 @@ export class CardTerminalError extends Error {
       | 'ATTEMPT_IN_PROGRESS'
       | 'ATTEMPT_NOT_FOUND'
       | 'INVALID_STATE'
+      /** A review resolution found the attempt no longer waiting for review. */
+      | 'REVIEW_NOT_OPEN'
+      /** "Nothing was charged" for an attempt that carries the terminal's charge reference. */
+      | 'CHARGE_EVIDENCE_RECORDED'
+      /** The slip reference is not the reference the terminal reported for this charge. */
+      | 'SLIP_REFERENCE_MISMATCH'
+      /** The slip reference is already recorded on another terminal payment. */
+      | 'SLIP_REFERENCE_IN_USE'
   ) {
     super(reason);
     this.name = 'CardTerminalError';
@@ -87,12 +173,13 @@ export interface CardTerminalAttemptStore {
   get(scope: LedgerScope, attemptKey: string): Promise<CardTerminalAttempt | null>;
   /**
    * Compare-and-set against the attempt as read (status and status-check count). Exactly one
-   * writer wins; the loser gets null and must re-read.
+   * writer wins; the loser gets null and must re-read. The winner's audit entry commits with it.
    */
   transition(
     scope: LedgerScope,
     current: CardTerminalAttempt,
-    patch: CardTerminalAttemptPatch
+    patch: CardTerminalAttemptPatch,
+    audit?: CardTerminalAuditDetail
   ): Promise<CardTerminalAttempt | null>;
   /**
    * Turns an APPROVED attempt into exactly one CARD tender and marks it SETTLED in the same
@@ -200,9 +287,20 @@ const lockSale = (db: ScopedDb, scope: LedgerScope, saleId: string) =>
 
 /**
  * The real store. `run` opens one tenant transaction per call (for example
- * `(work) => withTenantDb(organizationId, work, { userId })`), so each step commits on its own.
+ * `(work) => withTenantDb(organizationId, work, { userId })`), so each step commits on its own,
+ * together with its audit entry. `actor` is `SYSTEM` for the recovery sweep.
  */
-export function prismaCardTerminalAttemptStore(run: TenantRunner): CardTerminalAttemptStore {
+export function prismaCardTerminalAttemptStore(
+  run: TenantRunner,
+  actor: CardTerminalAuditActor = 'USER'
+): CardTerminalAttemptStore {
+  const audit = (
+    db: ScopedDb,
+    scope: LedgerScope,
+    attempt: CardTerminalAttempt,
+    from: CardTerminalAttemptStatus | null,
+    detail?: CardTerminalAuditDetail
+  ) => db.auditLog.create({ data: cardTerminalAuditEntry(attempt, from, actor, scope, detail) });
   const scoped = (scope: LedgerScope) => ({
     organizationId: scope.organizationId,
     branchId: scope.branchId,
@@ -238,6 +336,7 @@ export function prismaCardTerminalAttemptStore(run: TenantRunner): CardTerminalA
           const attempt = await db.pharmacyCardTerminalAttempt.create({
             data: { ...scoped(scope), ...draft, actorId: scope.actorId },
           });
+          await audit(db, scope, attempt, null);
           return { created: true, attempt };
         } catch (error) {
           if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
@@ -249,21 +348,35 @@ export function prismaCardTerminalAttemptStore(run: TenantRunner): CardTerminalA
       run((db) =>
         db.pharmacyCardTerminalAttempt.findFirst({ where: { ...scoped(scope), attemptKey } })
       ),
-    transition: (scope, current, patch) =>
+    transition: (scope, current, patch, detail) =>
       run(async (db) => {
-        const { count } = await db.pharmacyCardTerminalAttempt.updateMany({
-          where: {
-            ...scoped(scope),
-            id: current.id,
-            status: current.status,
-            statusChecks: current.statusChecks,
-          },
-          data: patch,
-        });
+        let count: number;
+        try {
+          ({ count } = await db.pharmacyCardTerminalAttempt.updateMany({
+            where: {
+              ...scoped(scope),
+              id: current.id,
+              status: current.status,
+              statusChecks: current.statusChecks,
+            },
+            data: patch,
+          }));
+        } catch (error) {
+          // A reversal writes the slip's reference; one approval is one attempt.
+          if (
+            patch.resolutionRef &&
+            error instanceof Prisma.PrismaClientKnownRequestError &&
+            error.code === 'P2002'
+          )
+            throw new CardTerminalError('SLIP_REFERENCE_IN_USE');
+          throw error;
+        }
         if (count !== 1) return null;
-        return db.pharmacyCardTerminalAttempt.findFirst({
+        const next = await db.pharmacyCardTerminalAttempt.findFirst({
           where: { ...scoped(scope), id: current.id },
         });
+        if (next) await audit(db, scope, next, current.status, detail);
+        return next;
       }),
     settle: (scope, attemptId) =>
       run(async (db) => {
@@ -298,10 +411,11 @@ export function prismaCardTerminalAttemptStore(run: TenantRunner): CardTerminalA
           idempotencyKey: `card-terminal:${attempt.id}`,
           adapter: approvedChargeReplay(attempt),
         })) as { tenderId: string };
-        await db.pharmacyCardTerminalAttempt.update({
+        const settled = await db.pharmacyCardTerminalAttempt.update({
           where: { id: attempt.id },
           data: { status: 'SETTLED', tenderId: result.tenderId, resolvedAt: new Date() },
         });
+        await audit(db, scope, settled, attempt.status);
         return { tenderId: result.tenderId, replayed: false };
       }),
     listOpen: (scope) =>
