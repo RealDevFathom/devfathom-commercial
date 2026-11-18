@@ -550,6 +550,106 @@ async function seedCashier(passwordHash: string) {
   });
 }
 
+/**
+ * DEV-751: the procedures (SOP) team for the browser lane — a manager who sets procedures up and
+ * a pharmacist who does them, each on their own role with explicit grants (never `*`) and an
+ * active assignment to the seeded branch. Nothing about procedures themselves is seeded: the spec
+ * turns them on through the same API the setup screen calls.
+ */
+async function seedSopTeam(passwordHash: string) {
+  const sop = PHARMACY_E2E.sop;
+  await asTenant(async (tx) => {
+    for (const member of [
+      {
+        roleId: sop.managerRoleId,
+        roleKey: 'sop-e2e-manager',
+        roleName: 'Procedures Manager',
+        capabilities: sop.managerCapabilities,
+        userId: sop.managerId,
+        email: sop.managerEmail,
+        name: 'Procedures Manager E2E',
+        assignmentId: sop.managerAssignmentId,
+      },
+      {
+        roleId: sop.pharmacistRoleId,
+        roleKey: 'sop-e2e-pharmacist',
+        roleName: 'Procedures Pharmacist',
+        capabilities: sop.pharmacistCapabilities,
+        userId: sop.pharmacistId,
+        email: sop.pharmacistEmail,
+        name: 'Procedures Pharmacist E2E',
+        assignmentId: sop.pharmacistAssignmentId,
+      },
+    ]) {
+      const role = await tx.organizationRole.upsert({
+        where: {
+          organizationId_key: { organizationId: PHARMACY_E2E.organizationId, key: member.roleKey },
+        },
+        update: { name: member.roleName },
+        create: {
+          id: member.roleId,
+          organizationId: PHARMACY_E2E.organizationId,
+          key: member.roleKey,
+          name: member.roleName,
+          isSystem: false,
+          createdAt: FIXED_AT,
+          updatedAt: FIXED_AT,
+        },
+      });
+      for (const capability of member.capabilities) {
+        await tx.organizationRolePermission.upsert({
+          where: { organizationRoleId_capability: { organizationRoleId: role.id, capability } },
+          update: { effect: 'ALLOW' },
+          create: {
+            organizationId: PHARMACY_E2E.organizationId,
+            organizationRoleId: role.id,
+            capability,
+            effect: 'ALLOW',
+          },
+        });
+      }
+      await tx.organizationRolePermission.deleteMany({
+        where: { organizationRoleId: role.id, capability: { in: ['*', 'pharmacy:*', 'sop:*'] } },
+      });
+      const user = {
+        organizationId: PHARMACY_E2E.organizationId,
+        organizationRoleId: role.id,
+        name: member.name,
+        email: member.email,
+        password: passwordHash,
+        role: 'EMPLOYEE' as const,
+        department: 'LEADERSHIP',
+        title: member.roleName,
+        status: 'ACTIVE' as const,
+      };
+      await tx.user.upsert({
+        where: { id: member.userId },
+        update: user,
+        create: { id: member.userId, ...user, createdAt: FIXED_AT, updatedAt: FIXED_AT },
+      });
+      await tx.pharmacyBranchAssignment.upsert({
+        where: {
+          organizationId_branchId_userId: {
+            organizationId: PHARMACY_E2E.organizationId,
+            branchId: PHARMACY_E2E.branchId,
+            userId: member.userId,
+          },
+        },
+        update: { active: true },
+        create: {
+          id: member.assignmentId,
+          organizationId: PHARMACY_E2E.organizationId,
+          branchId: PHARMACY_E2E.branchId,
+          userId: member.userId,
+          active: true,
+          createdAt: FIXED_AT,
+          updatedAt: FIXED_AT,
+        },
+      });
+    }
+  });
+}
+
 type MedicineSeed = {
   id: string;
   name: string;
@@ -1024,6 +1124,8 @@ async function main() {
     await seedCashier(passwordHash);
     // DEV-497: the browser lane signs in as cashier, pharmacist and owner.
     await seedStagingDemoPharmacist(passwordHash);
+    // DEV-751: the procedures lane signs in as a separate manager and pharmacist.
+    if (!stagingDemo) await seedSopTeam(passwordHash);
     await seedMedicines();
     await seedStock();
     await seedPrescription();
