@@ -5,6 +5,7 @@ import type { CardTerminalCounterView } from '@/lib/pharmacy/card-terminal/count
 
 const mocks = vi.hoisted(() => ({
   available: true,
+  mayResolveReview: true,
   latest: null as CardTerminalCounterView | null,
   availabilityInput: vi.fn(),
   charge: vi.fn(),
@@ -20,7 +21,13 @@ vi.mock('@/lib/trpc', () => ({
         useQuery: (input: unknown, options: { enabled: boolean }) => {
           mocks.availabilityInput(input, options);
           return {
-            data: options.enabled ? { available: mocks.available, currency: 'PKR' } : undefined,
+            data: options.enabled
+              ? {
+                  available: mocks.available,
+                  currency: 'PKR',
+                  mayResolveReview: mocks.mayResolveReview,
+                }
+              : undefined,
           };
         },
       },
@@ -77,6 +84,7 @@ function renderPanel(props: Partial<Parameters<typeof CounterCardTerminalPanel>[
 
 beforeEach(() => {
   mocks.available = true;
+  mocks.mayResolveReview = true;
   mocks.latest = null;
   mocks.chargePending = false;
   mocks.charge.mockReset();
@@ -170,6 +178,17 @@ describe('DEV-743 counter card-terminal panel', () => {
     expect(screen.getByRole('button', { name: 'Record review' })).toBeDisabled();
     expect(mocks.charge).not.toHaveBeenCalled();
     expect(mocks.checkStatus).not.toHaveBeenCalled();
+  });
+
+  it('tells a cashier to call a manager or owner instead of showing the review form', () => {
+    mocks.mayResolveReview = false;
+    mocks.latest = view({ phase: 'MANUAL_REVIEW', open: true });
+    renderPanel();
+    expect(
+      screen.getByText('Call a manager or owner to review this payment against the terminal slip.')
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Your manager or owner PIN')).not.toBeInTheDocument();
   });
 
   function fillReview(outcome: RegExp, pin = '2468') {

@@ -155,6 +155,11 @@ export class CardTerminalError extends Error {
       | 'SLIP_REFERENCE_MISMATCH'
       /** The slip reference is already recorded on another terminal payment. */
       | 'SLIP_REFERENCE_IN_USE'
+      /**
+       * The resolver took this charge, and another manager or owner could resolve it: a second
+       * person must. Only a sole manager or owner may resolve their own charge.
+       */
+      | 'OWN_CHARGE_NEEDS_ANOTHER_APPROVER'
   ) {
     super(reason);
     this.name = 'CardTerminalError';

@@ -103,7 +103,9 @@ BEGIN
     RAISE EXCEPTION 'a pharmacy card-terminal review is resolved once' USING ERRCODE = '55000';
   END IF;
   -- DEV-743 review: a person resolves a manual review, and always says who, why and which slip.
-  -- (A reversal with no resolver at all is refused by the review check constraint.)
+  -- A bare REVERSED with no resolver at all is left to the older CHECK constraint
+  -- "pharmacy_card_terminal_attempts_review_check" (20261118120100), which refuses it.
+  -- The resolution check this migration adds does not cover that case.
   IF OLD."status" = 'MANUAL_REVIEW' AND NOT (NEW."status" = 'REVERSED' AND NEW."resolvedById" IS NULL)
     AND (
       NEW."resolvedById" IS NULL OR NEW."resolvedAt" IS NULL OR

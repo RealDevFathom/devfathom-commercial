@@ -28,8 +28,9 @@ import {
   authenticateRefundPin,
   refundApprovalAudit,
 } from '@/lib/pharmacy/refund-authorization';
+import { isSoleActiveApprover } from '@/lib/pharmacy/counter-line-approval';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
-import { withTenantDb } from '@/lib/tenancy/scoped-db';
+import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { annotateAudit } from '@/server/audit';
 
 import { protectedProcedure, router } from '../trpc';
@@ -47,8 +48,9 @@ import { failPharmacySale, requireCounterReceiptAccess } from './pharmacy-sales'
  * - `attempt` reads the sale's newest attempt, so a reloaded counter shows where it stands.
  * - `resolveReview` lets a manager or owner, with their own fresh PIN, resolve an attempt waiting
  *   for review from the terminal slip: nothing was charged (DECLINED), or the money was taken and
- *   is refunded through the provider (REVERSED). A cashier cannot. A solo owner approves their
- *   own resolution with that PIN, and the audit entry records the self-approval.
+ *   is refunded through the provider (REVERSED). A cashier cannot. Nobody resolves a charge they
+ *   took themselves while another manager or owner could; the sole manager or owner may, with that
+ *   PIN, and the audit entry records the self-approval.
  *
  * The browser never names the provider, the terminal or the currency: the server resolves the
  * terminal paired with the counter and charges in PKR only. A charge needs the same counter
@@ -61,6 +63,8 @@ const branchId = z.string().trim().min(1).max(128);
 export const CARD_TERMINAL_REVIEW_PIN_POLICY = 'PHARMACY_CARD_TERMINAL_REVIEW_MANAGER_PIN';
 export const CARD_TERMINAL_REVIEW_FORBIDDEN =
   'Only a manager or owner can resolve a card terminal payment under review.';
+export const CARD_TERMINAL_REVIEW_OWN_CHARGE =
+  'Another manager or owner must resolve a payment you took.';
 const attemptKey = z.string().regex(/^[A-Za-z0-9:_-]{8,128}$/);
 
 /**
@@ -117,6 +121,7 @@ const CARD_TERMINAL_CODES: Record<CardTerminalError['reason'], TRPCError['code']
   ATTEMPT_IN_PROGRESS: 'CONFLICT',
   ATTEMPT_NOT_FOUND: 'NOT_FOUND',
   INVALID_STATE: 'CONFLICT',
+  OWN_CHARGE_NEEDS_ANOTHER_APPROVER: 'FORBIDDEN',
   REVIEW_NOT_OPEN: 'CONFLICT',
   CHARGE_EVIDENCE_RECORDED: 'CONFLICT',
   SLIP_REFERENCE_MISMATCH: 'BAD_REQUEST',
@@ -137,7 +142,12 @@ export const pharmacyCardTerminalRouter = router({
     .query(async ({ ctx, input }) => {
       const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
       const terminal = await resolvePharmacyCardTerminal(scope, input.deviceId);
-      return { available: admitted(terminal), currency: PHARMACY_TERMINAL_CURRENCY };
+      return {
+        available: admitted(terminal),
+        currency: PHARMACY_TERMINAL_CURRENCY,
+        // Whether this person may resolve a payment under review (the server checks again).
+        mayResolveReview: await actorMayRefund(ctx.db, ctx.session!.user),
+      };
     }),
   attempt: protectedProcedure
     .input(z.object({ branchId, saleId: z.string().min(1).max(128) }).strict())
@@ -217,6 +227,18 @@ export const pharmacyCardTerminalRouter = router({
         if (!(await actorMayRefund(ctx.db, ctx.session!.user)))
           throw new TRPCError({ code: 'FORBIDDEN', message: CARD_TERMINAL_REVIEW_FORBIDDEN });
         const { managerPin, resolutionReason, ...resolution } = input;
+        const store = storeFor(scope);
+        const attempt = await store.get(scope, input.attemptKey);
+        if (!attempt) throw new CardTerminalError('ATTEMPT_NOT_FOUND');
+        // Second person: a charge you took is resolved by another manager or owner, unless no
+        // other active member holds `pharmacy:manage` (the solo-pharmacy rule, as the Khata
+        // over-limit approval applies it). Refused before any PIN is asked.
+        const ownCharge = attempt.actorId === scope.actorId;
+        const soloOwner =
+          ownCharge &&
+          (await isSoleActiveApprover(ctx.db as unknown as ScopedDb, scope, 'KHATA_OVER_LIMIT'));
+        if (ownCharge && !soloOwner)
+          throw new TRPCError({ code: 'FORBIDDEN', message: CARD_TERMINAL_REVIEW_OWN_CHARGE });
         // An independent transaction, so a refused PIN commits its lockout strike and its
         // FAILURE audit row even though this request answers with a refusal.
         const pin = await authenticateRefundPin({
@@ -228,21 +250,25 @@ export const pharmacyCardTerminalRouter = router({
           errorCode: 'CARD_TERMINAL_REVIEW_PIN_REFUSED',
         });
         const approval = {
+          // The cashier who took the charge, and the person who resolves it.
           ...refundApprovalAudit({
-            initiatedById: scope.actorId,
+            initiatedById: attempt.actorId,
             approverId: scope.actorId,
             pin,
           }),
           policy: CARD_TERMINAL_REVIEW_PIN_POLICY,
+          soloOwner,
         };
         annotateAudit(ctx, { metadata: { ...approval, branchId: scope.branchId } });
         if ('blocked' in pin) return pin;
         // Commits in its own tenant transaction with its audit entry, like every attempt step.
         const resolved = await resolveCardTerminalReview(
-          { store: storeFor(scope) },
+          { store },
           scope,
           { ...resolution, reason: resolutionReason },
-          approval
+          approval,
+          // The service checks the attempt again as it reads it to resolve.
+          async () => soloOwner
         );
         return cardTerminalCounterView(resolved);
       } catch (error) {

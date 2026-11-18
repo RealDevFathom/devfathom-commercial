@@ -442,6 +442,27 @@ describe('DEV-743 card terminal around one durable attempt (mocked end to end)',
       ).resolves.toMatchObject({ status: 'REVERSED', providerRef: 'RRN-000111222' });
     });
 
+    it('never lets the person who took the charge resolve it, unless they are the sole approver', async () => {
+      const { store, deps } = await reviewAfterUnknown();
+      const own = {
+        attemptKey: input.attemptKey,
+        outcome: 'DECLINED' as const,
+        reason: 'Slip shows declined',
+        slipRef: 'SLIP-1',
+      };
+      // `scope` is the cashier who started this charge.
+      await expect(resolveCardTerminalReview(deps, scope, own, approval)).rejects.toMatchObject({
+        reason: 'OWN_CHARGE_NEEDS_ANOTHER_APPROVER',
+      });
+      await expect(
+        resolveCardTerminalReview(deps, scope, own, approval, async () => false)
+      ).rejects.toMatchObject({ reason: 'OWN_CHARGE_NEEDS_ANOTHER_APPROVER' });
+      expect(only(store).status).toBe('MANUAL_REVIEW');
+      await expect(
+        resolveCardTerminalReview(deps, scope, own, approval, async () => true)
+      ).resolves.toMatchObject({ status: 'DECLINED', resolvedById: 'cashier-1' });
+    });
+
     it('lets exactly one of two racing resolutions win', async () => {
       const { store, deps } = await reviewAfterUnknown();
       const resolve = (outcome: 'DECLINED' | 'REVERSED') =>

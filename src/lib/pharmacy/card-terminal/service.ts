@@ -407,12 +407,16 @@ export type ResolveCardTerminalReviewInput = {
  * evidence, kept on the audit entry). Exactly one resolution wins: a second one, even at the
  * same moment, finds the review already resolved. Once resolved the attempt no longer holds the
  * sale or its business day. Never calls the terminal, so it needs no admitted provider.
+ *
+ * Second person: the resolver may not resolve a charge they took themselves (the attempt's
+ * `actorId`), unless `soleApprover` says no other active member could (the solo-pharmacy rule).
  */
 export async function resolveCardTerminalReview(
   deps: Pick<CardTerminalDeps, 'store' | 'now'>,
   scope: LedgerScope,
   input: ResolveCardTerminalReviewInput,
-  approval: CardTerminalAuditDetail
+  approval: CardTerminalAuditDetail,
+  soleApprover: () => Promise<boolean> = async () => false
 ) {
   const reason = input.reason.trim();
   const slipRef = input.slipRef.trim();
@@ -431,6 +435,8 @@ export async function resolveCardTerminalReview(
   }
   const attempt = await requireAttempt(deps, scope, input.attemptKey);
   if (attempt.status !== 'MANUAL_REVIEW') throw new CardTerminalError('REVIEW_NOT_OPEN');
+  if (attempt.actorId === scope.actorId && !(await soleApprover()))
+    throw new CardTerminalError('OWN_CHARGE_NEEDS_ANOTHER_APPROVER');
   // The terminal reported a charge reference: it cannot be recorded as "nothing was charged".
   if (input.outcome === 'DECLINED' && attempt.providerRef)
     throw new CardTerminalError('CHARGE_EVIDENCE_RECORDED');

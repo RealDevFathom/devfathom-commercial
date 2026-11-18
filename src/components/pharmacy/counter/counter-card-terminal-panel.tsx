@@ -104,6 +104,8 @@ function CardTerminalPanelForSale({
     { enabled: Boolean(deviceId), staleTime: 60_000 }
   );
   const available = availability.data?.available === true;
+  // The server refuses a cashier; the form is shown only to those it would let resolve.
+  const mayResolveReview = availability.data?.mayResolveReview === true;
   const latest = trpc.pharmacyCardTerminal.attempt.useQuery(
     { branchId, saleId: saleId ?? '' },
     { enabled: available && Boolean(saleId) }
@@ -222,7 +224,13 @@ function CardTerminalPanelForSale({
         </p>
       ) : null}
       {view && phase === 'MANUAL_REVIEW' ? (
-        <CounterCardTerminalReview branchId={branchId} view={view} onResolved={settle} />
+        mayResolveReview ? (
+          <CounterCardTerminalReview branchId={branchId} view={view} onResolved={settle} />
+        ) : (
+          <p className="text-sm text-text-body">
+            Call a manager or owner to review this payment against the terminal slip.
+          </p>
+        )
       ) : null}
       <div className="flex flex-wrap gap-2">
         {held ? (

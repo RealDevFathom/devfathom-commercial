@@ -134,11 +134,18 @@ terminal, so all of this stays dormant.
 (`counter-card-terminal-review.tsx`). The refund rule applies:
 
 - Only a manager or owner (`pharmacy:manage`, the refund check `actorMayRefund`). A cashier is
-  refused before any PIN is asked.
+  refused before any PIN is asked, and the counter shows a cashier no review form, only a line to
+  call a manager or owner.
+- A second person: nobody resolves a charge they took themselves (the attempt's `actorId`) while
+  another active member holds `pharmacy:manage`. They are refused ("Another manager or owner must
+  resolve a payment you took.") before any PIN is asked. The solo rule is `isSoleActiveApprover`,
+  the same check as the Khata over-limit approval: when no other active member holds
+  `pharmacy:manage`, the owner resolves their own charge with their PIN, so a pharmacy with only
+  cashiers can still close its day.
 - The signed-in manager or owner re-enters their own PIN (`authenticateRefundPin`, policy
   `PHARMACY_CARD_TERMINAL_REVIEW_MANAGER_PIN`). A refused PIN commits its lockout strike and a
-  FAILURE audit row, and changes nothing. A solo owner approves their own resolution with that
-  PIN; the audit entry records `selfApproved: true`.
+  FAILURE audit row, and changes nothing. The audit entry records `initiatedById` (who took the
+  charge), `approverId` (who resolved it), `selfApproved` and `soloOwner`.
 - Two outcomes only, each with a reason (3 to 200 characters) and the provider reference printed
   on the terminal slip:
   - **DECLINED**, nothing was charged. Refused when the terminal reported a charge reference.
@@ -187,6 +194,17 @@ change does not include:
 - Any provider SDK, credentials, network access or real device.
 - Terminal void and refund of a settled terminal tender through the provider. They will use the
   same attempt record.
+
+These must also exist before any provider is admitted:
+
+- **A wrong DECLINED cannot be corrected.** A resolution is final. The trail is the resolver, the
+  time, the reason, the slip reference and the audit row.
+- **Money owed back is not in the books.** For a REVERSED attempt, and for a refused refund of a
+  terminal-paid sale, the amount lives only on the attempt row (or the tender). No liability is
+  posted, and there is no list of refunds owed through the provider. A terminal-paid sale cannot
+  be voided.
+- **The timeout must be checked against the real provider.** The shared 45-second timeout gives
+  the sweep a 90-second NOT_FOUND grace (twice the timeout).
 
 Binding a provider means two things in its own reviewed change, with the certification evidence
 and the real-device test linked:
