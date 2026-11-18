@@ -511,6 +511,7 @@ export default async function PharmacyReturnsPage({
               branchId={branchId}
               credits={credits}
               notice={notice}
+              timeZone={ctx.organization?.timezone}
               onAdvance={advanceReturn}
               onAllocate={allocateCredit}
               purchaseReturn={selected}
@@ -790,6 +791,7 @@ function ReturnDetail({
   credits,
   branchId,
   notice,
+  timeZone,
   onAdvance,
   onAllocate,
 }: {
@@ -802,6 +804,7 @@ function ReturnDetail({
   }[];
   branchId: string;
   notice: Notice | null;
+  timeZone?: string | null;
   onAdvance: (form: FormData) => Promise<string>;
   onAllocate: (form: FormData) => Promise<string>;
 }) {
@@ -881,7 +884,7 @@ function ReturnDetail({
                   <StatusPill status={note.position.status} />
                 </div>
                 <p className="mt-1 text-xs text-text-muted">
-                  Issued {dateTime(note.issuedAt)} · expected{' '}
+                  Issued {dateTime(note.issuedAt, timeZone)} · expected{' '}
                   {money(note.position.expectedCreditMinor)} · received{' '}
                   {money(note.position.receivedCreditMinor)} · outstanding{' '}
                   {money(note.position.outstandingMinor)}

@@ -107,6 +107,7 @@ import {
   COUNTER_ERROR_MESSAGES,
   counterBillMovedOn,
   counterErrorMessage,
+  counterDrawerErrorMessage,
   counterErrorTone,
   counterPaymentErrorMessage,
   counterSaleErrorMessage,
@@ -980,7 +981,8 @@ function ScopedPharmacyCounterConsole({
     enabled: branchAuthorized && !settlementDenied,
     retry: false,
   });
-  const actorIsManager = managerAccess.data?.authorized === true;
+  const actorIsManager =
+    managerAccess.isSuccess && !managerAccess.isError && managerAccess.data?.authorized === true;
   const drawerCashiers = trpc.pharmacySales.drawerCashiers.useQuery(
     { branchId },
     { enabled: actorIsManager && Boolean(branchId), retry: false, staleTime: 60_000 }
@@ -3552,6 +3554,7 @@ function ScopedPharmacyCounterConsole({
 
               {drawerRequired ? (
                 <CounterOpenDrawerStep
+                  canDeclareFloat={actorIsManager}
                   disabled={drawerBusy || !drawerStatusKnown || !canSettlePayments}
                   disabledReason={drawerDisabledReason}
                   statusError={drawerQuery.isError}
@@ -3598,7 +3601,17 @@ function ScopedPharmacyCounterConsole({
                         if (rereadBill) void refreshTenderBill();
                       })
                       .catch((error: unknown) =>
-                        setNotice({ tone: 'warning', message: counterPaymentErrorMessage(error) })
+                        setNotice({
+                          tone: 'warning',
+                          message: counterDrawerErrorMessage(
+                            error,
+                            operatingCashierId && operatingCashierId !== accountId
+                              ? 'assign-cashier'
+                              : openingFloatMinor > 0
+                                ? 'open-with-float'
+                                : 'open'
+                          ),
+                        })
                       )
                       // Either way the server now holds the truth about this device's drawer;
                       // stay busy until it is read back, so the step cannot be sent twice.
@@ -3632,7 +3645,7 @@ function ScopedPharmacyCounterConsole({
                           .catch((error: unknown) => {
                             setNotice({
                               tone: 'warning',
-                              message: counterPaymentErrorMessage(error),
+                              message: counterDrawerErrorMessage(error, 'handover'),
                             });
                             throw error;
                           });

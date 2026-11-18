@@ -45,7 +45,7 @@ export type CounterScope = Pick<LedgerScope, 'organizationId' | 'branchId'>;
 /** How a row was reached, so the operator can trust an unfamiliar match. */
 export type CounterMatchKind = 'BARCODE' | 'ALIAS' | 'NAME' | 'INGREDIENT' | 'PRESENTATION';
 
-export type CounterSearchRow = {
+export type CounterCatalogRow = {
   medicineId: string;
   displayName: string;
   brandName: string | null;
@@ -128,6 +128,17 @@ export type CounterLabelLot = {
   blockedBy: BlockReason | null;
 };
 
+export type CounterSearchRow = CounterCatalogRow & {
+  /** DEV-878: server-resolved suggestions for an unavailable search match. */
+  stockAlternatives?: {
+    ingredientRecorded: boolean;
+    exact: CounterCatalogRow[];
+    other: CounterCatalogRow[];
+    /** More same-ingredient brands may be in stock than were checked. */
+    truncated: boolean;
+  };
+};
+
 type LotRow = {
   id: string;
   packLevelId: string;
@@ -146,6 +157,8 @@ type BalanceRow = {
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
+/** DEV-878: bound on same-ingredient candidates checked per distinct ingredient set. */
+const MAX_ALTERNATIVE_CANDIDATES = 20;
 
 /**
  * A strength component as a counter reads it: `500 mg`, `2.5 mg`, `500 mg + 30 mg`.
@@ -379,6 +392,189 @@ export async function searchCounterCatalog(
   }
   if (medicineIds.length === 0) return { rows: [], truncated: false };
 
+  const { rows, medicines } = await hydrateCounterRows(db, scope, matches, medicineIds, at);
+  const unavailable = rows.filter((row) => !hasSellableUnit(row));
+  const sourceById = new Map(medicines.map((medicine) => [medicine.id, medicine]));
+  const ingredientSets = unavailable.flatMap((row) => {
+    const source = sourceById.get(row.medicineId)!;
+    const ids = [...new Set(source.strengths.map((component) => component.ingredientId))];
+    return ids.length ? [ids] : [];
+  });
+  // Query only this tenant's ingredient graph. No brand dictionary or historical
+  // price is needed, and equal or more expensive brands remain eligible. Each
+  // distinct ingredient set has its own bound, so one common ingredient cannot
+  // crowd out the suggestions for another unavailable match.
+  const distinctSets = [
+    ...new Map(ingredientSets.map((ids) => [JSON.stringify([...ids].sort()), ids])),
+  ];
+  const candidatesBySet = new Map(
+    await Promise.all(
+      distinctSets.map(async ([key, ids]) => {
+        const found = await db.medicine.findMany({
+          where: {
+            organizationId: scope.organizationId,
+            saleable: true,
+            strengths: { every: { ingredientId: { in: ids } } },
+            AND: ids.map((ingredientId) => ({ strengths: { some: { ingredientId } } })),
+            // Only medicines that can have sellable stock at this branch, so the
+            // bound is spent on in-stock brands. The row kernel still applies the
+            // full sellability rules to each lot.
+            batches: {
+              some: {
+                state: 'ACTIVE',
+                expiresAt: { gt: at },
+                lots: {
+                  some: {
+                    branchId: scope.branchId,
+                    receivedAt: { not: null, lte: at },
+                    balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
+                  },
+                },
+              },
+            },
+          },
+          select: { id: true },
+          orderBy: { id: 'asc' },
+          // One extra row tells us the bound was reached.
+          take: MAX_ALTERNATIVE_CANDIDATES + 1,
+        });
+        return [
+          key,
+          {
+            ids: found.slice(0, MAX_ALTERNATIVE_CANDIDATES).map((medicine) => medicine.id),
+            truncated: found.length > MAX_ALTERNATIVE_CANDIDATES,
+          },
+        ] as const;
+      })
+    )
+  );
+  const candidateIds = [...new Set([...candidatesBySet.values()].flatMap((entry) => entry.ids))];
+  const alternatives = candidateIds.length
+    ? await hydrateCounterRows(
+        db,
+        scope,
+        // An alternative is reached through the stored ingredient graph.
+        new Map(candidateIds.map((id) => [id, { kind: 'INGREDIENT' as const, rank: 0 }])),
+        candidateIds,
+        at
+      )
+    : { rows: [], medicines: [] };
+  const alternativeById = new Map(
+    alternatives.medicines.map((medicine) => [medicine.id, medicine])
+  );
+  for (const row of unavailable) {
+    const source = sourceById.get(row.medicineId)!;
+    const ingredientRecorded = source.strengths.length > 0;
+    const exact: CounterSearchRow[] = [];
+    const other: CounterSearchRow[] = [];
+    for (const candidate of alternatives.rows) {
+      const medicine = alternativeById.get(candidate.medicineId)!;
+      if (
+        !ingredientRecorded ||
+        candidate.medicineId === row.medicineId ||
+        !hasSellableUnit(candidate) ||
+        ingredientSetKey(source.strengths) !== ingredientSetKey(medicine.strengths)
+      )
+        continue;
+      // The sale writer allocates FEFO across every presentation of a medicine, so
+      // the quoted row is medicine-wide. A medicine is an exact equivalent only when
+      // every presentation of both the requested and the candidate medicine has one
+      // recorded dosage form and the same route; a requested medicine with several
+      // forms cannot say which one was asked for, so its suggestions stay under other.
+      const same =
+        strengthComponentKey(source.strengths) === strengthComponentKey(medicine.strengths) &&
+        normalizedForm(row.dosageForm) !== '' &&
+        hasOnlyPresentation(source.presentations, row) &&
+        hasOnlyPresentation(medicine.presentations, row);
+      (same ? exact : other).push(candidate);
+    }
+    row.stockAlternatives = {
+      ingredientRecorded,
+      exact: exact.sort(compareStockAlternatives),
+      other: other.sort(compareStockAlternatives),
+      truncated: candidatesBySet.get(ingredientSetKey(source.strengths))?.truncated ?? false,
+    };
+  }
+  return { rows, truncated: matches.size > medicineIds.length };
+}
+
+/**
+ * The sale allocator's FEFO order (`byFefo` in inventory.ts): expiry, then the
+ * oldest receipt, then lot id, so the quoted lot is the lot the sale charges.
+ */
+function fefoBefore(lot: LotRow, best: LotRow) {
+  return (
+    (lot.batch.expiresAt.getTime() - best.batch.expiresAt.getTime() ||
+      (lot.receivedAt?.getTime() ?? 0) - (best.receivedAt?.getTime() ?? 0) ||
+      lot.id.localeCompare(best.id)) < 0
+  );
+}
+
+function hasSellableUnit(row: CounterSearchRow) {
+  return row.onHandUnits > 0 && row.saleableUnits.some((unit) => unit.wholeUnits > 0);
+}
+
+function hasOnlyPresentation(
+  presentations: readonly { dosageForm: string | null; route: string | null }[],
+  form: { dosageForm: string | null; route: string | null }
+) {
+  return (
+    presentations.length > 0 &&
+    presentations.every(
+      (presentation) =>
+        normalizedForm(presentation.dosageForm) === normalizedForm(form.dosageForm) &&
+        normalizedForm(presentation.route) === normalizedForm(form.route)
+    )
+  );
+}
+
+function normalizedForm(value: string | null) {
+  return value?.trim().toLowerCase() ?? '';
+}
+
+type StrengthComponent = { ingredientId: string; value: unknown; unit: string };
+
+function ingredientSetKey(strengths: readonly StrengthComponent[]) {
+  return JSON.stringify([...new Set(strengths.map((component) => component.ingredientId))].sort());
+}
+
+function strengthComponentKey(strengths: readonly StrengthComponent[]) {
+  return JSON.stringify(
+    strengths
+      .map((component) => [
+        component.ingredientId,
+        renderStrengthValue(component.value),
+        component.unit.trim().toLowerCase(),
+      ])
+      .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
+  );
+}
+
+/** Price per canonical unit, compared exactly by cross-multiplying pack MRP and size. */
+function comparePerUnitPrice(left: CounterSearchRow, right: CounterSearchRow) {
+  return (
+    (left.printedMrpMinor ?? 0) * (right.unitsPerPack ?? 1) -
+    (right.printedMrpMinor ?? 0) * (left.unitsPerPack ?? 1)
+  );
+}
+
+function compareStockAlternatives(left: CounterSearchRow, right: CounterSearchRow) {
+  return (
+    (left.nearestSafeExpiry ?? '').localeCompare(right.nearestSafeExpiry ?? '') ||
+    comparePerUnitPrice(left, right) ||
+    left.displayName.localeCompare(right.displayName) ||
+    left.presentationId.localeCompare(right.presentationId)
+  );
+}
+
+/** Shared stock, pack and pricing read; suggestions use the same kernels as search. */
+async function hydrateCounterRows(
+  db: ScopedDb,
+  scope: CounterScope,
+  matches: ReadonlyMap<string, { kind: CounterMatchKind; rank: number }>,
+  medicineIds: string[],
+  at: Date
+) {
   const [medicines, lots, packLevels, mrps] = await Promise.all([
     db.medicine.findMany({
       where: { organizationId: scope.organizationId, id: { in: medicineIds }, saleable: true },
@@ -519,11 +715,7 @@ export async function searchCounterCatalog(
         }
         onHandUnits += balance.onHandUnits;
         sellableLots.set(lot.id, lot);
-        const better =
-          best === null ||
-          lot.batch.expiresAt.getTime() < best.lot.batch.expiresAt.getTime() ||
-          (lot.batch.expiresAt.getTime() === best.lot.batch.expiresAt.getTime() &&
-            lot.id.localeCompare(best.lot.id) < 0);
+        const better = best === null || fefoBefore(lot, best.lot);
         if (better) best = { lot, locationId: balance.stockLocationId };
       }
       if (labelLot?.inventoryLotId === lot.id && labelLot.sellableUnits === 0) {
@@ -656,7 +848,7 @@ export async function searchCounterCatalog(
       left.displayName.localeCompare(right.displayName) ||
       left.medicineId.localeCompare(right.medicineId)
   );
-  return { rows, truncated: matches.size > medicineIds.length };
+  return { rows, medicines };
 }
 
 export type CounterCartLine = {

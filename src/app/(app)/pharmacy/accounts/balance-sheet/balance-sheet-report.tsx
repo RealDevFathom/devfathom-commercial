@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/table';
 import { classifyBalanceSheet } from '@/lib/pharmacy/accounts/balance-sheet';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
-import { formatUtcInstant } from '@/lib/utc-instant';
+import { formatWorkspaceDateTime, workspaceDateRange, workspaceZoneLabel } from '@/lib/timezone';
 import { plainReportSource } from '@/lib/pharmacy/report-labels';
 
 const money = (minor: string) => {
@@ -36,13 +36,21 @@ export async function BalanceSheetReport({
   caller,
   branchId,
   cutoff,
+  timeZone,
 }: {
   caller: ReturnType<typeof pharmacyFinanceRouter.createCaller>;
   branchId: string;
   cutoff: string;
+  /** The organization zone the cutoff day is read in. */
+  timeZone?: string | null;
 }) {
-  const to = new Date(`${cutoff}T00:00:00.000Z`);
-  const from = new Date(to.getTime() - 86_400_000);
+  const zone = workspaceZoneLabel(timeZone);
+  // The cutoff is the start of the picked day on the organization's clock.
+  const to = workspaceDateRange(cutoff, cutoff, timeZone).from;
+  const previousDay = new Date(Date.parse(`${cutoff}T00:00:00.000Z`) - 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+  const from = workspaceDateRange(previousDay, previousDay, timeZone).from;
   let result: Awaited<ReturnType<typeof caller.financialStatements>>;
   try {
     result = await caller.financialStatements({
@@ -71,7 +79,7 @@ export async function BalanceSheetReport({
         <form className="flex flex-wrap items-end gap-3">
           <input type="hidden" name="branch" value={branchId} />
           <label className="grid gap-2 text-sm">
-            As of (exclusive cutoff, UTC)
+            As of (exclusive cutoff, {zone})
             <Input type="date" name="cutoff" defaultValue={cutoff} required />
           </label>
           <Button className="min-h-11" type="submit">
@@ -79,7 +87,7 @@ export async function BalanceSheetReport({
           </Button>
         </form>
         <p className="mt-4 text-sm text-text-muted">
-          Posted journal balances before {formatUtcInstant(to)}, grouped by recorded currency. The
+          Posted journal balances before {formatWorkspaceDateTime(to, timeZone)}, grouped by recorded currency. The
           one-day reader window still includes every earlier posting in each closing balance; it is
           not a selected-window earnings calculation.
         </p>
@@ -180,7 +188,7 @@ export async function BalanceSheetReport({
             Source: {plainReportSource(result.source) ?? 'posted accounts'}; {result.coverage.basis}
             . Coverage and completeness remain {result.coverage.completeness}. Before unrecorded
             tax; not statutory or audited. Retrieved{' '}
-            {formatUtcInstant(result.freshness.retrievedAt)}.
+            {formatWorkspaceDateTime(result.freshness.retrievedAt, timeZone)}.
           </p>
         </SectionCard>
       ))}

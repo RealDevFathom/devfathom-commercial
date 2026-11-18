@@ -670,6 +670,7 @@ model Medicine {
   controlledRegisterEntries    PharmacyControlledRegisterEntry[]
   priceChangeProposals         PharmacyPriceChangeProposal[]
   drapPriceAlerts              PharmacyDrapPriceAlert[]
+  catalogueEdits               PharmacyCatalogueEdit[]
   connectorProposals           PharmacyReferenceConnectorProposal[]
   customerOrderLines           PharmacyCustomerOrderLine[]
   promotions                   PharmacyPromotion[]
@@ -677,6 +678,27 @@ model Medicine {
   @@unique([organizationId, id], map: "pharmacy_medicines_org_id_key")
   @@index([organizationId, productName])
   @@map("pharmacy_medicines")
+}
+
+/// DEV-766: immutable proposals; only a reviewed proposal may update a live catalogue item.
+model PharmacyCatalogueEdit {
+  id                String   @id @default(cuid())
+  organizationId    String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  medicineId        String
+  editorId          String
+  editor            User     @relation("CatalogueEditEditor", fields: [organizationId, editorId], references: [organizationId, id], onDelete: Restrict)
+  operation         String   @default("UPDATE_MEDICINE")
+  medicine          Medicine @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
+  changes           Json
+  expectedUpdatedAt DateTime
+  status            String   @default("PENDING")
+  reviewerId        String?
+  reviewedAt        DateTime?
+  soloPinVerifiedAt DateTime?
+  createdAt         DateTime @default(now())
+
+  @@index([organizationId, status, createdAt])
+  @@map("pharmacy_catalogue_edits")
 }
 
 model MedicineStrengthComponent {
@@ -775,6 +797,7 @@ model MedicineProvenance {
   sourceType         MedicineProvenanceSourceType
   retrievedAt        DateTime
   confidence         Decimal?                     @db.Decimal(5, 4)
+  editorId           String?
   reviewer           String?
   status             MedicineProvenanceStatus
   supersedesId       String?
@@ -3675,6 +3698,7 @@ enum MeetingSessionSource {
 // ============================================
 
 model User {
+  catalogueEdits                PharmacyCatalogueEdit[] @relation("CatalogueEditEditor")
   pharmacyPortalLinksCreated    PharmacyCustomerPortalLink[]    @relation("PharmacyPortalLinkCreator")
   pharmacyPortalRequestsDecided PharmacyCustomerPortalRequest[] @relation("PharmacyPortalRequestDecider")
   id                 String     @id @default(cuid())

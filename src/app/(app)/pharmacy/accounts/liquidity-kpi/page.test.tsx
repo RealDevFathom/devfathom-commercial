@@ -185,4 +185,20 @@ describe('LiquidityKpiPage', () => {
     expect(output).toContain('Posted-ledger source unavailable');
     expect(output).not.toContain('Coverage by recorded currency');
   });
+
+  it('reads the cutoff day on the organization clock and names the zone', async () => {
+    mocks.resolveTenantActor.mockResolvedValue({
+      ...actor,
+      organization: { id: 'org-1', timezone: 'Asia/Karachi' },
+    });
+    const output = await html({ branch: 'branch-1', cutoff: '2026-02-01' });
+    // 1 Feb 00:00 PKT is 31 Jan 19:00 UTC; the one-day window starts a PKT day earlier.
+    expect(mocks.financialStatements).toHaveBeenCalledWith({
+      branchId: 'branch-1',
+      from: '2026-01-30T19:00:00.000Z',
+      to: '2026-01-31T19:00:00.000Z',
+      page: 1,
+    });
+    expect(output).toContain('Cutoff, exclusive (PKT)');
+  });
 });
