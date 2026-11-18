@@ -82,6 +82,22 @@ export async function recordSource(
   };
 }
 
+/**
+ * Rows per `createMany` statement. A catalogue export holds about 19,000 rows
+ * of 18 columns each; one statement for all of them would exceed PostgreSQL's
+ * 65,535 bind parameter limit, so the inserts are split, in source order, inside
+ * the caller's single transaction.
+ */
+export const PERSIST_ROW_CHUNK = 1_000;
+export const PERSIST_EXCEPTION_CHUNK = 5_000;
+
+function chunks<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let start = 0; start < items.length; start += size)
+    out.push(items.slice(start, start + size));
+  return out;
+}
+
 export type PersistedProfile = {
   batchId: string;
   rowCount: number;
@@ -121,9 +137,9 @@ export async function persistProfile(
     },
   });
 
-  if (rows.length > 0) {
+  for (const part of chunks(rows, PERSIST_ROW_CHUNK)) {
     await db.pharmacyMigrationRow.createMany({
-      data: rows.map((row) => ({
+      data: part.map((row) => ({
         batchId: batch.id,
         sourceKey: row.sourceKey,
         rowNumber: row.rowNumber,
@@ -155,9 +171,9 @@ export async function persistProfile(
   });
   const rowIdBySourceKey = new Map(persistedRows.map((row) => [row.sourceKey, row.id]));
 
-  if (exceptions.length > 0) {
+  for (const part of chunks(exceptions, PERSIST_EXCEPTION_CHUNK)) {
     await db.pharmacyMigrationException.createMany({
-      data: exceptions.map((exception) => {
+      data: part.map((exception) => {
         const sourceKey = exception.rowIndex === null ? null : rows[exception.rowIndex]?.sourceKey;
         return {
           batchId: batch.id,

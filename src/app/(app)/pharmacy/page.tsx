@@ -1,4 +1,4 @@
-import { Download } from 'lucide-react';
+import { Download, ShieldCheck } from 'lucide-react';
 import { TRPCError } from '@trpc/server';
 import type { Metadata } from 'next';
 import Link from 'next/link';
@@ -100,12 +100,20 @@ export default async function PharmacyOnboardingPage() {
         description="The twelve steps between a new pharmacy workspace and its first legal sale. Each step says what it needs and where to do it."
         actions={
           owner ? (
-            <Link
-              href="/pharmacy/settings/data-export"
-              className={buttonVariants({ variant: 'outline', className: 'min-h-11' })}
-            >
-              <Download aria-hidden /> Download my data
-            </Link>
+            <div className="flex flex-wrap gap-2">
+              <Link
+                href="/pharmacy/settings/pharmacist-check"
+                className={buttonVariants({ variant: 'outline', className: 'min-h-11' })}
+              >
+                <ShieldCheck aria-hidden /> Pharmacist check at each sale
+              </Link>
+              <Link
+                href="/pharmacy/settings/data-export"
+                className={buttonVariants({ variant: 'outline', className: 'min-h-11' })}
+              >
+                <Download aria-hidden /> Download my data
+              </Link>
+            </div>
           ) : null
         }
       />

@@ -356,7 +356,11 @@ export function ReturnForm({
   const tender = data?.tenders.find((row) => row.id === tenderId);
   // A saved return keeps its own line; a fresh one uses the selected line.
   const witnessLineId = attempt && attempt.kind !== 'refund' ? attempt.input.saleLineId : lineId;
-  const witnessRequired = !!data?.lines.find((row) => row.id === witnessLineId)?.controlled;
+  // DEV-911: no pharmacist witness is asked for while the owner has the check switched off.
+  const pharmacistCheckOff =
+    (data as { pharmacistCheckOff?: boolean } | undefined)?.pharmacistCheckOff === true;
+  const witnessRequired =
+    !pharmacistCheckOff && !!data?.lines.find((row) => row.id === witnessLineId)?.controlled;
   const pharmacists = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
     enabled: ready && online && witnessRequired,
     retry: false,
