@@ -92,8 +92,8 @@ export function StagedMedicineCreation({
         )}
         {state.barcodesNotAttached > 0 && (
           <p>
-            {count(state.barcodesNotAttached)} barcodes already belong to another pack, so they were
-            not added. The medicines were still created; open a row to see which barcode.
+            {count(state.barcodesNotAttached)} barcodes were not added: they already belong to
+            another pack, or the medicine already existed. Open a row to see which barcode.
           </p>
         )}
         {status === 'PENDING' && (

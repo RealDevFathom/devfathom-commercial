@@ -385,7 +385,9 @@ export async function StagedMedicineCatalogue({
                 ? null
                 : detail.catalogueMedicine.barcodeAttached
                   ? `${detail.catalogueMedicine.barcode} added to the pack`
-                  : `${detail.catalogueMedicine.barcode} already belongs to another pack, so it was not added`,
+                  : detail.catalogueMedicine.outcome === 'MATCHED'
+                    ? `${detail.catalogueMedicine.barcode} was not added, because the medicine already existed`
+                    : `${detail.catalogueMedicine.barcode} already belongs to another pack, so it was not added`,
               'Controlled medicine': detail.controlled
                 ? 'Yes — set from legacy class NARCOTICS'
                 : 'No — not in the NARCOTICS class',

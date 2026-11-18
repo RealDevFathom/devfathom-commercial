@@ -120,6 +120,8 @@ export type StagedMedicinePlan = {
   legacyCode: string | null;
   /** The barcode printed on the pack, as read; null when the file had none. */
   barcode: string | null;
+  /** The pack cell as read ("10 x 10", "500MG"); null when the file had none. */
+  packLabel: string | null;
   /** The row itself is in the legacy NARCOTICS class (DEV-854). */
   narcoticsClass: boolean;
 };
@@ -177,6 +179,7 @@ export function planStagedMedicine(row: StagedRowForCreation): StagedMedicinePla
     legacyCode: sourceCell(row.rawPayload, LEGACY_CODE_HEADERS)?.slice(0, 200) ?? null,
     barcode:
       row.barcode && normalizeMedicineText(row.barcode) ? row.barcode.trim().slice(0, 64) : null,
+    packLabel: packLabel || null,
     narcoticsClass: isLegacyControlledRow(row.rawPayload),
   };
 }
@@ -265,14 +268,30 @@ type EarlierMedicine = {
   controlled: boolean;
 };
 
-/** Normalised name and pack size: how a row without an old code is recognised again. */
-const nameAndPack = (productName: string, unitsPerPack: number | null) =>
-  `${productName.trim().replace(/\s+/g, ' ').toLowerCase()}|${unitsPerPack ?? ''}`;
+/** The one normalisation rule for match keys: Unicode-compatible, trimmed, one space, lower case. */
+export const normalizeMatchText = (text: string) =>
+  text.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
 
 /**
- * Medicines an earlier staged file of this organization created, by old code and by name plus
- * pack size. A re-exported file of the same catalogue has different bytes, so its rows have new
- * source identities; this is what keeps it from creating every medicine a second time.
+ * How a later file's row is recognised as a medicine an earlier file created: by its old code,
+ * or, with no code, by name AND units per pack AND the pack cell as read, so "500MG" and
+ * "250MG" of one name stay two medicines. A row with neither a pack size nor a pack cell is
+ * never matched by name alone (null): it is created. The key is computed here once and stored
+ * on the link, so the database only compares stored keys and never normalises text itself.
+ */
+export function stagedMatchKey(
+  plan: Pick<StagedMedicinePlan, 'legacyCode' | 'productName' | 'unitsPerPack' | 'packLabel'>
+): string | null {
+  if (plan.legacyCode) return `code:${normalizeMatchText(plan.legacyCode)}`;
+  const label = plan.packLabel ? normalizeMatchText(plan.packLabel) : '';
+  if (plan.unitsPerPack === null && !label) return null;
+  return `name:${normalizeMatchText(plan.productName)}|${plan.unitsPerPack ?? ''}|${label}`;
+}
+
+/**
+ * Medicines an earlier staged file of this organization created, by stored match key. A
+ * re-exported file of the same catalogue has different bytes, so its rows have new source
+ * identities; this is what keeps it from creating every medicine a second time.
  */
 async function earlierMedicines(
   tx: ScopedDb,
@@ -280,43 +299,25 @@ async function earlierMedicines(
   batchId: string,
   plans: readonly StagedMedicinePlan[]
 ) {
-  const codes = [
-    ...new Set(plans.flatMap((plan) => (plan.legacyCode ? [plan.legacyCode.toLowerCase()] : []))),
-  ];
-  const names = [
-    ...new Set(
-      plans.flatMap((plan) =>
-        plan.legacyCode ? [] : [nameAndPack(plan.productName, plan.unitsPerPack)]
-      )
-    ),
-  ];
-  const earlier = (key: Prisma.Sql, keys: string[]) =>
-    keys.length
-      ? tx.$queryRaw<EarlierMedicine[]>`
-          SELECT DISTINCT ON (${key}) ${key} AS "key", l."medicineId", l."packLevelId",
-                 m."productName", m."controlled"
-            FROM "pharmacy_staged_medicine_links" l
-            JOIN "pharmacy_medicines" m
-              ON m."organizationId" = l."organizationId" AND m."id" = l."medicineId"
-           WHERE l."organizationId" = ${organizationId}
-             AND l."batchId" <> ${batchId}
-             AND l."outcome" = 'CREATED'
-             AND ${key} = ANY(${keys}::text[])
-           ORDER BY ${key}, l."createdAt", l."id"`
-      : Promise.resolve([] as EarlierMedicine[]);
-  const [byCode, byName] = await Promise.all([
-    earlier(Prisma.sql`lower(l."legacyCode")`, codes),
-    earlier(
-      Prisma.sql`lower(regexp_replace(btrim(m."productName"), '\\s+', ' ', 'g')) || '|' || COALESCE(l."unitsPerPack"::text, '')`,
-      names
-    ),
-  ]);
-  const code = new Map(byCode.map((row) => [row.key, row]));
-  const name = new Map(byName.map((row) => [row.key, row]));
-  return (plan: StagedMedicinePlan) =>
-    plan.legacyCode
-      ? code.get(plan.legacyCode.toLowerCase())
-      : name.get(nameAndPack(plan.productName, plan.unitsPerPack));
+  const keys = [...new Set(plans.flatMap((plan) => stagedMatchKey(plan) ?? []))];
+  const found = keys.length
+    ? await tx.$queryRaw<EarlierMedicine[]>`
+        SELECT DISTINCT ON (l."matchKey") l."matchKey" AS "key", l."medicineId", l."packLevelId",
+               m."productName", m."controlled"
+          FROM "pharmacy_staged_medicine_links" l
+          JOIN "pharmacy_medicines" m
+            ON m."organizationId" = l."organizationId" AND m."id" = l."medicineId"
+         WHERE l."organizationId" = ${organizationId}
+           AND l."batchId" <> ${batchId}
+           AND l."outcome" = 'CREATED'
+           AND l."matchKey" = ANY(${keys}::text[])
+         ORDER BY l."matchKey", l."createdAt", l."id"`
+    : [];
+  const byKey = new Map(found.map((row) => [row.key, row]));
+  return (plan: StagedMedicinePlan) => {
+    const key = stagedMatchKey(plan);
+    return key ? byKey.get(key) : undefined;
+  };
 }
 
 /** A barcode of 8, 12, 13 or 14 digits is a GTIN; any other printed code is the maker's own. */
@@ -397,16 +398,20 @@ export async function createStagedMedicinesChunk(
       mrpMinor: plan.mrpMinor,
       purchasePriceMinor: plan.purchasePriceMinor,
       legacyCode: plan.legacyCode,
+      matchKey: stagedMatchKey(plan),
       createdById: scope.actorId,
     };
     const existing = earlier(plan);
     if (existing) {
       // The medicine is already in the catalogue from an earlier file: link the row, add nothing.
+      // Its barcode is reported as not added, because the existing medicine is not changed here.
       links.push({
         ...link,
         medicineId: existing.medicineId,
         packLevelId: existing.packLevelId,
         outcome: 'MATCHED',
+        barcode: plan.barcode,
+        barcodeAttached: plan.barcode ? false : null,
       });
       matched.set(existing.medicineId, existing);
       continue;

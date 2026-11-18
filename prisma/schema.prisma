@@ -13045,6 +13045,8 @@ model PharmacyStagedMedicineLink {
   legacyCode         String?
   barcode            String?
   barcodeAttached    Boolean?
+  /// Old code, or name + units per pack + pack cell; computed in the application. Null: never matched.
+  matchKey           String?
   /// CREATED, or MATCHED when an earlier staged file already created this medicine.
   outcome            String   @default("CREATED")
   createdById        String
@@ -13052,6 +13054,7 @@ model PharmacyStagedMedicineLink {
 
   @@unique([organizationId, sourceKey])
   @@index([organizationId, medicineId])
+  @@index([organizationId, matchKey])
   @@index([organizationId, batchId])
   @@map("pharmacy_staged_medicine_links")
 }

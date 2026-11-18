@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  normalizeMatchText,
   planStagedMedicine,
   stagedLevelPrices,
+  stagedMatchKey,
   type StagedRowForCreation,
 } from './staged-creation';
 
@@ -49,6 +51,7 @@ describe('DEV-912 planStagedMedicine', () => {
       genericName: null,
       legacyCode: null,
       barcode: null,
+      packLabel: null,
       narcoticsClass: false,
     });
   });
@@ -182,5 +185,42 @@ describe('DEV-912 stagedLevelPrices', () => {
       stagedLevelPrices({ mrpMinor: null, packLevels: [{ level: 'BOX', unitsPerParent: 3 }] })
     ).toBeNull();
     expect(stagedLevelPrices({ mrpMinor: 500, packLevels: [] })).toBeNull();
+  });
+});
+
+describe('DEV-912 stagedMatchKey', () => {
+  const plan = (over: Partial<StagedRowForCreation>) => planStagedMedicine(row(over))!;
+
+  it('keeps two strengths of one name apart when the strength sits in the pack cell', () => {
+    const strong = stagedMatchKey(plan({ productName: 'Fixture Tab', packLabel: '500MG' }));
+    const weak = stagedMatchKey(plan({ productName: 'Fixture Tab', packLabel: '250MG' }));
+    expect(strong).not.toBeNull();
+    expect(weak).not.toBeNull();
+    expect(strong).not.toBe(weak);
+  });
+
+  it('never matches by name alone', () => {
+    expect(stagedMatchKey(plan({ productName: 'Fixture Syrup' }))).toBeNull();
+  });
+
+  it('matches a re-spaced or re-cased re-export, with the same pack', () => {
+    expect(stagedMatchKey(plan({ productName: ' fixture   TAB ', packLabel: '500  mg' }))).toBe(
+      stagedMatchKey(plan({ productName: 'Fixture Tab', packLabel: '500 MG' }))
+    );
+    expect(
+      stagedMatchKey(plan({ productName: 'Fixture Tab', packLabel: '10', packFactor: BigInt(10) }))
+    ).not.toBe(
+      stagedMatchKey(plan({ productName: 'Fixture Tab', packLabel: '20', packFactor: BigInt(20) }))
+    );
+  });
+
+  it('uses the old code when the row has one, whatever the name', () => {
+    expect(
+      stagedMatchKey(plan({ productName: 'Renamed', rawPayload: { aliasname: ' ab-1 ' } }))
+    ).toBe(stagedMatchKey(plan({ productName: 'Original', rawPayload: { aliasname: 'AB-1' } })));
+  });
+
+  it('has one normalisation rule, applied before the key is stored', () => {
+    expect(normalizeMatchText('  Ｆｉｘｔｕｒｅ\t TAB\u00a0 500mg ')).toBe('fixture tab 500mg');
   });
 });

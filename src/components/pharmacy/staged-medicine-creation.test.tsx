@@ -78,7 +78,7 @@ describe('DEV-912 staged medicine creation panel', () => {
     expect(
       screen.getByText(/10 rows name a medicine an earlier file already created/)
     ).toBeVisible();
-    expect(screen.getByText(/3 barcodes already belong to another pack/)).toBeVisible();
+    expect(screen.getByText(/3 barcodes were not added/)).toBeVisible();
   });
 
   it('stops on a refusal and says why, keeping what was created', async () => {

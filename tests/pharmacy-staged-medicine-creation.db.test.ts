@@ -51,13 +51,22 @@ const soloFirst = [
   'Solo Coded Tablet,S-1,10,100.00,80.00,1,TABLETS,,,',
   'Solo Codeless Syrup,,1,90.00,70.00,1,SYRUPS,,,',
   'Solo Other Capsule,S-3,20,200.00,150.00,1,CAPSULES,,,',
+  // One name, two strengths, the strength in the pack cell and no old code.
+  'Solo Strength Tab,,500MG,30.00,20.00,1,TABLETS,,,',
+  'Solo Strength Tab,,250MG,20.00,15.00,1,TABLETS,,,',
+  // Nothing but a name: never matched by name alone.
+  'Solo Name Only,,,,,,,,,',
 ].join('\n');
+const MATCHED_BARCODE = '0896000000024';
 const soloReexport = [
   HEADER,
   'Solo Coded Tablet 10s,S-1,10,110.00,85.00,4,TABLETS,,,',
   'solo  codeless syrup,,1,95.00,72.00,2,SYRUPS,,,',
-  'Solo Other Capsule,S-3,20,210.00,155.00,3,CAPSULES,,,',
+  `Solo Other Capsule,S-3,20,210.00,155.00,3,CAPSULES,,,${MATCHED_BARCODE}`,
   'Solo New Item,S-9,10,50.00,40.00,1,TABLETS,,,',
+  'Solo Strength Tab,,250MG,21.00,16.00,1,TABLETS,,,',
+  'Solo Strength Tab,,500MG,31.00,21.00,1,TABLETS,,,',
+  'Solo Name Only,,,,,,,,,',
 ].join('\r\n');
 
 (ownerUrl && runtimeUrl ? describe : describe.skip)(
@@ -464,7 +473,7 @@ const soloReexport = [
             1
           );
           const soloStep = await solo.runStagedMedicineCreation({ batchId: soloBatch });
-          assert.deepEqual([soloStep.created, soloStep.matched, soloStep.remaining], [3, 0, 0]);
+          assert.deepEqual([soloStep.created, soloStep.matched, soloStep.remaining], [6, 0, 0]);
 
           // The same catalogue exported again (other bytes): rows matching an earlier file's
           // medicine by old code, or by name and pack size, create no second copy.
@@ -481,14 +490,52 @@ const soloReexport = [
           const reexport = await solo.runStagedMedicineCreation({ batchId: again2 });
           assert.deepEqual(
             [reexport.created, reexport.matched, reexport.matchedEarlier, reexport.remaining],
-            [1, 3, 3, 0]
+            [2, 5, 5, 0]
           );
           assert.deepEqual(
-            (await solodb.medicine.findMany({ orderBy: { productName: 'asc' } })).map(
-              (item) => item.productName
-            ),
-            ['Solo Coded Tablet', 'Solo Codeless Syrup', 'Solo New Item', 'Solo Other Capsule']
+            (await solodb.medicine.findMany({ orderBy: { productName: 'asc' } }))
+              .map((item) => item.productName)
+              .sort(),
+            [
+              'Solo Coded Tablet',
+              'Solo Codeless Syrup',
+              'Solo Name Only',
+              'Solo Name Only',
+              'Solo New Item',
+              'Solo Other Capsule',
+              'Solo Strength Tab',
+              'Solo Strength Tab',
+            ]
           );
+          // Each strength of the re-export is linked to the medicine of that strength: 0 merged.
+          const strengthRows = await solodb.pharmacyMigrationRow.findMany({
+            where: { batchId: again2, productName: 'Solo Strength Tab' },
+          });
+          const strengthLinks = await solodb.pharmacyStagedMedicineLink.findMany({
+            where: { sourceKey: { in: strengthRows.map((item) => item.sourceKey) } },
+          });
+          assert.equal(strengthLinks.length, 2);
+          assert.equal(new Set(strengthLinks.map((item) => item.medicineId)).size, 2);
+          for (const strengthRow of strengthRows) {
+            const strengthLink = strengthLinks.find(
+              (item) => item.sourceKey === strengthRow.sourceKey
+            )!;
+            assert.equal(strengthLink.outcome, 'MATCHED');
+            const presentation = await solodb.presentation.findFirstOrThrow({
+              where: { medicineId: strengthLink.medicineId },
+            });
+            assert.equal(presentation.presentation, strengthRow.packLabel);
+          }
+          // A matched row's barcode is reported, and the existing medicine is not changed.
+          const capsuleLink = await solodb.pharmacyStagedMedicineLink.findFirstOrThrow({
+            where: { batchId: again2, barcode: MATCHED_BARCODE },
+          });
+          assert.deepEqual([capsuleLink.outcome, capsuleLink.barcodeAttached], ['MATCHED', false]);
+          assert.equal(
+            await solodb.medicineBarcode.count({ where: { normalizedCode: MATCHED_BARCODE } }),
+            0
+          );
+          assert.equal(reexport.barcodesNotAttached, 1);
         } finally {
           await c.end();
         }

@@ -8,8 +8,11 @@ BEGIN;
 -- as they were read; a null means the file did not record it (a 0 is never stored).
 -- `outcome` MATCHED: the row names a medicine an earlier staged file already created
 -- (same old code, or same name and pack size), so no second copy was made.
--- `barcodeAttached` false: the row's barcode already belongs to another pack, so it
--- was reported and skipped, never moved.
+-- `barcodeAttached` false: the row's barcode already belongs to another pack, or the row
+-- matched a medicine that already existed, so it was reported and skipped, never moved.
+-- `matchKey` (computed once in the application, never normalised here): the old code, or
+-- name, units per pack and pack cell; null when a row has neither pack size nor pack cell,
+-- so it is never matched by name alone.
 CREATE TABLE IF NOT EXISTS "pharmacy_staged_medicine_links" (
   "id" TEXT PRIMARY KEY,
   "organizationId" TEXT NOT NULL DEFAULT current_setting('app.current_organization_id', true),
@@ -25,6 +28,7 @@ CREATE TABLE IF NOT EXISTS "pharmacy_staged_medicine_links" (
   "legacyCode" TEXT,
   "barcode" TEXT,
   "barcodeAttached" BOOLEAN,
+  "matchKey" TEXT,
   "outcome" TEXT NOT NULL DEFAULT 'CREATED' CHECK ("outcome" IN ('CREATED', 'MATCHED')),
   "createdById" TEXT NOT NULL,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -39,6 +43,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS "pharmacy_staged_medicine_links_organizationId
   ON "pharmacy_staged_medicine_links" ("organizationId", "sourceKey");
 CREATE INDEX IF NOT EXISTS "pharmacy_staged_medicine_links_organizationId_medicineId_idx"
   ON "pharmacy_staged_medicine_links" ("organizationId", "medicineId");
+CREATE INDEX IF NOT EXISTS "pharmacy_staged_medicine_links_organizationId_matchKey_idx"
+  ON "pharmacy_staged_medicine_links" ("organizationId", "matchKey");
 CREATE INDEX IF NOT EXISTS "pharmacy_staged_medicine_links_organizationId_batchId_idx"
   ON "pharmacy_staged_medicine_links" ("organizationId", "batchId");
 
