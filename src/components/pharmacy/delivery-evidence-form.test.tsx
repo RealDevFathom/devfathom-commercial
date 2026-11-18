@@ -103,8 +103,16 @@ it.each([
   fireEvent.submit(
     screen.getByRole('button', { name: 'Record custody evidence' }).closest('form')!
   );
-  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(message));
+  const field = screen.getByLabelText('Actual amount (rupees)');
+  await waitFor(() => expect(field).toHaveAttribute('aria-invalid', 'true'));
+  expect(field).toHaveAttribute('aria-describedby', 'delivery-amount-error');
+  expect(document.getElementById('delivery-amount-error')).toHaveTextContent(message);
+  expect(field).toHaveAccessibleDescription(expect.stringContaining(message));
   expect(mocks.command).not.toHaveBeenCalled();
+  // Correcting the amount clears the field error.
+  fireEvent.change(field, { target: { value: '12.50' } });
+  expect(field).not.toHaveAttribute('aria-invalid');
+  expect(field).not.toHaveAttribute('aria-describedby');
 });
 
 it('shows recorded totals as money and never says paisa or rupees for another currency', async () => {

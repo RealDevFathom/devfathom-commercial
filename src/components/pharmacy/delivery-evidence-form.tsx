@@ -33,6 +33,7 @@ export function DeliveryEvidenceForm({
   const [managerPin, setManagerPin] = useState('');
   const [requestKey, setRequestKey] = useState('');
   const [notice, setNotice] = useState('');
+  const [amountError, setAmountError] = useState('');
   const moneyAction = ['COLLECT', 'REMIT', 'CASH_RETURN'].includes(action);
   return (
     <details className="mt-4 border-t border-border-subtle pt-3">
@@ -49,12 +50,13 @@ export function DeliveryEvidenceForm({
         onSubmit={async (event) => {
           event.preventDefault();
           setNotice('');
+          setAmountError('');
           // The amount is typed as "125.50"; the server still receives integer minor units.
           let amountMinor: number | undefined;
           if (moneyAction) {
             const parsed = amountInputToMinor(amount);
             if (parsed.status !== 'OK' || parsed.minor <= 0) {
-              setNotice(
+              setAmountError(
                 parsed.status === 'INVALID'
                   ? amountInputError(parsed.reason)
                   : 'Enter an amount more than 0, for example 125.50.'
@@ -115,17 +117,29 @@ export function DeliveryEvidenceForm({
           </select>
         </Label>
         {moneyAction ? (
-          <Label className="grid gap-1">
-            {`Actual amount (${amountInputUnit(currency)})`}
-            <Input
-              required
-              type="text"
-              inputMode="decimal"
-              placeholder="125.50"
-              value={amount}
-              onChange={(event) => setAmount(event.target.value)}
-            />
-          </Label>
+          <div className="grid gap-1">
+            <Label className="grid gap-1">
+              {`Actual amount (${amountInputUnit(currency)})`}
+              <Input
+                required
+                type="text"
+                inputMode="decimal"
+                placeholder="125.50"
+                value={amount}
+                aria-invalid={amountError ? true : undefined}
+                aria-describedby={amountError ? 'delivery-amount-error' : undefined}
+                onChange={(event) => {
+                  setAmount(event.target.value);
+                  setAmountError('');
+                }}
+              />
+            </Label>
+            {amountError ? (
+              <span id="delivery-amount-error" className="text-sm text-destructive">
+                {amountError}
+              </span>
+            ) : null}
+          </div>
         ) : null}
         <Label className="grid gap-1">
           Evidence reference
