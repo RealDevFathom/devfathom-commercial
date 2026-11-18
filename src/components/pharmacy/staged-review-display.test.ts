@@ -38,7 +38,8 @@ describe('staged review display helpers', () => {
       unitsPerPack: null,
       label: '29 (staged as raw count)',
     } as const;
-    expect(formatStagedQuantityReview(base)).toBe('29 units');
+    expect(formatStagedQuantityReview(base)).toBe('29 (unit not chosen yet)');
+    expect(formatStagedQuantityReview({ ...base, unit: 'UNITS' })).toBe('29 units');
     expect(
       formatStagedQuantityReview({
         unit: 'PACKS',

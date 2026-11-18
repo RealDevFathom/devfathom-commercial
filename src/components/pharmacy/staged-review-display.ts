@@ -79,5 +79,6 @@ export function formatStagedQuantityReview(review: QuantityReviewLike): string |
   if (review.unit === 'PACKS' && review.packs && review.unitsPerPack) {
     return `${formatStagedQuantity(review.packs)} packs × ${formatStagedQuantity(review.unitsPerPack)} = ${units} units`;
   }
-  return `${units} units`;
+  if (review.unit === 'UNITS') return `${units} units`;
+  return `${units} (unit not chosen yet)`;
 }
