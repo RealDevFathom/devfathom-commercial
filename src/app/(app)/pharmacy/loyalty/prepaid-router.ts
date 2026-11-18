@@ -9,7 +9,7 @@ import { requireDrawerManagerAccess } from '@/server/routers/pharmacy-sales';
 import {
   authenticateRefundPin,
   actorMayRefund,
-  REFUND_PIN_POLICY,
+  refundApprovalAudit,
 } from '@/lib/pharmacy/refund-authorization';
 import {
   lockOpenPharmacyDrawer,
@@ -202,6 +202,7 @@ export const pharmacyPrepaidRouter = router({
       throw new TRPCError({ code: 'FORBIDDEN', message: PREPAID_OWNER_ONLY });
     if (input.kind === 'REFUND' && input.customerPin !== undefined)
       throw new TRPCError({ code: 'BAD_REQUEST', message: 'A refund does not set a PIN.' });
+    let refundApproval: ReturnType<typeof refundApprovalAudit> | undefined;
     if (input.kind === 'REFUND') {
       if (!(await actorMayRefund(ctx.db, ctx.session!.user)))
         throw new TRPCError({ code: 'FORBIDDEN' });
@@ -212,6 +213,12 @@ export const pharmacyPrepaidRouter = router({
       });
       if ('blocked' in verified)
         throw new TRPCError({ code: 'FORBIDDEN', message: verified.blocked });
+      // DEV-32: the approver, approval time and self-approval, taken when the PIN is accepted.
+      refundApproval = refundApprovalAudit({
+        initiatedById: scope.actorId,
+        approverId: scope.actorId,
+        pin: verified,
+      });
     }
     try {
       const entry = await ctx.db.$transaction(async (tx) => {
@@ -259,7 +266,7 @@ export const pharmacyPrepaidRouter = router({
         targetId: entry.id,
         metadata: {
           kind: input.kind,
-          ...(input.kind === 'REFUND' ? { policy: REFUND_PIN_POLICY, pinVerified: true } : {}),
+          ...refundApproval,
         },
       });
       return entry;
