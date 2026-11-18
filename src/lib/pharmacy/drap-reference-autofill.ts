@@ -1,6 +1,7 @@
 import 'server-only';
 
-import type { Prisma } from '@/generated/prisma/client';
+import { Prisma } from '@/generated/prisma/client';
+import { normalizeMedicineText } from './medicine';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   DRAP_REGISTRY_CONNECTOR_ID,
@@ -221,14 +222,76 @@ export async function loadDrapReference(
   return proposal ? referenceRow(proposal) : null;
 }
 
-function registrationFilter(registration: string) {
-  return { path: ['values', 'drapRegistrationNumber'], equals: registration };
+/**
+ * The one registration-number normalisation: trimmed, case-folded, whitespace collapsed. The
+ * lookup of DRAP rows, the duplicate check and the lock key all use it, matching the counter's
+ * case-insensitive registration search.
+ */
+export function normalizeDrapRegistration(registration: string): string {
+  return registration.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+// The same normalisation in SQL: lower-case, collapse whitespace, then trim.
+const normalizedSql = (column: Prisma.Sql) =>
+  Prisma.sql`btrim(regexp_replace(lower(${column}), '[[:space:]]+', ' ', 'g'))`;
+
+/**
+ * Serializes every draft save and DRAP confirmation for one registration number in this
+ * organisation until the transaction ends. Two-key form, so it has its own lock key space.
+ */
+export async function lockDrapRegistration(
+  db: ScopedDb,
+  organizationId: string,
+  registration: string
+): Promise<void> {
+  await db.$queryRawUnsafe(
+    'SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))',
+    'pharmacy-medicine-registration',
+    `${organizationId}:${normalizeDrapRegistration(registration)}`
+  );
+}
+
+/** Catalogue medicines of this organisation carrying a registration number, normalised. */
+export async function findMedicinesByRegistration(
+  db: ScopedDb,
+  organizationId: string,
+  registration: string
+): Promise<string[]> {
+  const rows = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT id FROM pharmacy_medicines
+     WHERE "organizationId" = ${organizationId}
+       AND ${normalizedSql(Prisma.sql`"drapRegistrationNumber"`)} = ${normalizeDrapRegistration(registration)}
+     ORDER BY id LIMIT 2`);
+  return rows.map((row) => row.id);
 }
 
 /**
- * The newest DRAP row this organisation imported for a registration number, whatever its review
- * state. The server applies its stated flags to every draft carrying that number, so the lock does
- * not depend on the form having sent a reference row.
+ * Catalogue medicine ids per normalised registration number, for many numbers in one query.
+ * A number carried by more than one medicine maps to all of them.
+ */
+export async function findMedicinesByRegistrations(
+  db: ScopedDb,
+  organizationId: string,
+  registrations: readonly string[]
+): Promise<Map<string, string[]>> {
+  const normalized = [...new Set(registrations.map(normalizeDrapRegistration))];
+  if (!normalized.length) return new Map();
+  const rows = await db.$queryRaw<Array<{ id: string; registration: string }>>(Prisma.sql`
+    SELECT id, ${normalizedSql(Prisma.sql`"drapRegistrationNumber"`)} AS registration
+      FROM pharmacy_medicines
+     WHERE "organizationId" = ${organizationId}
+       AND ${normalizedSql(Prisma.sql`"drapRegistrationNumber"`)} = ANY(${normalized}::text[])
+     ORDER BY id`);
+  const byRegistration = new Map<string, string[]>();
+  for (const row of rows)
+    byRegistration.set(row.registration, [...(byRegistration.get(row.registration) ?? []), row.id]);
+  return byRegistration;
+}
+
+/**
+ * The newest pending or confirmed DRAP row this organisation imported for a registration number
+ * (normalised). A row a pharmacist rejected does not lock a draft. The server applies the stated
+ * flags of this row to every draft carrying the number, so the lock does not depend on the form.
  */
 export async function findDrapReferenceByRegistration(
   db: ScopedDb,
@@ -237,46 +300,113 @@ export async function findDrapReferenceByRegistration(
 ): Promise<DrapReferenceRow | null> {
   const connectorId = await drapConnectorId(db, organizationId);
   if (!connectorId) return null;
+  const [row] = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT id FROM pharmacy_reference_connector_proposals
+     WHERE "organizationId" = ${organizationId}
+       AND "connectorId" = ${connectorId}
+       AND status IN ('PENDING', 'CONFIRMED')
+       AND ${normalizedSql(Prisma.sql`(payload #>> '{values,drapRegistrationNumber}')`)} = ${normalizeDrapRegistration(registration)}
+     ORDER BY "createdAt" DESC, id DESC LIMIT 1`);
+  if (!row) return null;
   const proposal = await db.pharmacyReferenceConnectorProposal.findFirst({
-    where: { organizationId, connectorId, payload: registrationFilter(registration) },
+    where: { id: row.id, organizationId },
     select: proposalSelect,
-    orderBy: { createdAt: 'desc' },
   });
   return proposal ? referenceRow(proposal) : null;
 }
 
+/** What a reviewer compares a DRAP row with before it updates an existing medicine. */
+export interface CatalogueMedicineSnapshot {
+  id: string;
+  productName: string;
+  strength: string | null;
+  dosageForm: string | null;
+  drapRegistrationNumber: string | null;
+  rx: boolean;
+  controlled: boolean;
+}
+
+function assertedText(value: Prisma.JsonValue | null): string | null {
+  const envelope = record(value);
+  return typeof envelope.value === 'string' ? envelope.value : null;
+}
+
 /**
- * Links the pending DRAP rows a draft was made from to that draft, so confirming one later
- * updates this medicine instead of creating a second one. The chosen row must still be pending
- * and unlinked; other pending rows for the same registration number are linked too.
+ * Current name, strength, form and flags of catalogue medicines. Strength and form come from the
+ * newest current assertion (a draft has no presentation yet), else the published structure.
  */
-export async function linkDrapReferenceRows(
+export async function catalogueMedicineSnapshots(
   db: ScopedDb,
-  organizationId: string,
-  input: { referenceId?: string; registration: string; medicineId: string }
-): Promise<{ referenceLinked: boolean }> {
-  const connectorId = await drapConnectorId(db, organizationId);
-  if (!connectorId) return { referenceLinked: false };
-  const pending = {
-    organizationId,
-    connectorId,
-    status: 'PENDING' as const,
-    targetMedicineId: null,
-  };
-  const data = { targetMedicineId: input.medicineId };
-  let referenceLinked = false;
-  if (input.referenceId) {
-    const linked = await db.pharmacyReferenceConnectorProposal.updateMany({
-      where: { ...pending, id: input.referenceId },
-      data,
-    });
-    referenceLinked = linked.count === 1;
-  }
-  await db.pharmacyReferenceConnectorProposal.updateMany({
-    where: { ...pending, payload: registrationFilter(input.registration) },
-    data,
+  medicineIds: readonly string[]
+): Promise<Map<string, CatalogueMedicineSnapshot>> {
+  if (!medicineIds.length) return new Map();
+  const medicines = await db.medicine.findMany({
+    where: { id: { in: [...medicineIds] } },
+    select: {
+      id: true,
+      productName: true,
+      drapRegistrationNumber: true,
+      rx: true,
+      controlled: true,
+      presentations: { select: { dosageForm: true }, orderBy: { id: 'asc' }, take: 1 },
+      strengths: { select: { value: true, unit: true }, orderBy: { id: 'asc' }, take: 1 },
+      provenance: {
+        where: {
+          field: { in: ['strength', 'dosageForm'] },
+          status: { in: ['UNREVIEWED', 'ACCEPTED', 'CORRECTED'] },
+          supersededBy: { none: {} },
+        },
+        select: { field: true, assertedValue: true },
+        orderBy: { createdAt: 'desc' },
+      },
+    },
   });
-  return { referenceLinked };
+  return new Map(
+    medicines.map((medicine) => {
+      const asserted = (field: string) =>
+        assertedText(
+          medicine.provenance.find((item) => item.field === field)?.assertedValue ?? null
+        );
+      const structured = medicine.strengths[0];
+      return [
+        medicine.id,
+        {
+          id: medicine.id,
+          productName: medicine.productName,
+          strength:
+            asserted('strength') ??
+            (structured ? `${String(structured.value)} ${structured.unit}` : null),
+          dosageForm: asserted('dosageForm') ?? medicine.presentations[0]?.dosageForm ?? null,
+          drapRegistrationNumber: medicine.drapRegistrationNumber,
+          rx: medicine.rx,
+          controlled: medicine.controlled,
+        },
+      ];
+    })
+  );
+}
+
+const IDENTITY_FIELDS = [
+  ['productName', 'name'],
+  ['strength', 'strength'],
+  ['dosageForm', 'form'],
+] as const;
+
+/**
+ * Identity fields where a DRAP row and the catalogue medicine with its registration number name
+ * different products. Compared without case, spacing or punctuation; a value either side leaves
+ * unstated is not a difference.
+ */
+export function registrationIdentityConflicts(
+  values: Partial<Record<string, string>>,
+  medicine: CatalogueMedicineSnapshot
+): string[] {
+  return IDENTITY_FIELDS.flatMap(([field, label]) => {
+    const proposed = values[field];
+    const current = medicine[field];
+    if (!proposed || !current) return [];
+    return normalizeMedicineText(proposed) === normalizeMedicineText(current) ? [] : [label];
+  });
 }
 
 export const ADD_MEDICINE_FORM_SOURCE = 'add-medicine-form';

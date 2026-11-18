@@ -52,9 +52,14 @@ import {
 } from '@/lib/pharmacy/reference-connectors';
 import {
   addMedicineDraftProvenance,
+  catalogueMedicineSnapshots,
   findDrapReferenceByRegistration,
-  linkDrapReferenceRows,
+  findMedicinesByRegistration,
+  findMedicinesByRegistrations,
   loadDrapReference,
+  lockDrapRegistration,
+  normalizeDrapRegistration,
+  registrationIdentityConflicts,
   searchDrapReference,
 } from '@/lib/pharmacy/drap-reference-autofill';
 import { isEffective } from '@/lib/pharmacy/pack-conversion';
@@ -827,13 +832,47 @@ export const pharmacyMedicineRouter = router({
       );
     }),
 
-  referenceConnectorProposals: capabilityProcedure('pharmacy:catalogue-review').query(({ ctx }) =>
-    ctx.db.pharmacyReferenceConnectorProposal.findMany({
-      where: { status: 'PENDING' },
-      include: { run: true, targetMedicine: true },
-      orderBy: { createdAt: 'asc' },
-      take: 250,
-    })
+  referenceConnectorProposals: capabilityProcedure('pharmacy:catalogue-review').query(
+    async ({ ctx }) => {
+      const proposals = await ctx.db.pharmacyReferenceConnectorProposal.findMany({
+        where: { status: 'PENDING' },
+        include: { run: true, targetMedicine: true },
+        orderBy: { createdAt: 'asc' },
+        take: 250,
+      });
+      // DEV-683: the reviewer sees the catalogue medicine a confirmation would update, next to
+      // the proposal: its target, or for an official row the medicine with its registration.
+      const registrations = new Map<string, string>();
+      for (const proposal of proposals) {
+        if (proposal.targetMedicineId) continue;
+        const parsed = connectorProposalPayload.safeParse(proposal.payload);
+        const registration = parsed.success ? parsed.data.values.drapRegistrationNumber : undefined;
+        if (
+          parsed.success &&
+          registration &&
+          REFERENCE_CONNECTORS[parsed.data.source.connectorId].official
+        )
+          registrations.set(proposal.id, normalizeDrapRegistration(registration));
+      }
+      const byRegistration = await findMedicinesByRegistrations(
+        ctx.db,
+        ctx.entitlements.organizationId,
+        [...registrations.values()]
+      );
+      const matchFor = (proposal: (typeof proposals)[number]) => {
+        if (proposal.targetMedicineId) return proposal.targetMedicineId;
+        const ids = byRegistration.get(registrations.get(proposal.id) ?? '') ?? [];
+        return ids.length === 1 ? ids[0]! : null;
+      };
+      const snapshots = await catalogueMedicineSnapshots(
+        ctx.db,
+        proposals.flatMap((proposal) => matchFor(proposal) ?? [])
+      );
+      return proposals.map((proposal) => ({
+        ...proposal,
+        catalogueMatch: snapshots.get(matchFor(proposal) ?? '') ?? null,
+      }));
+    }
   ),
 
   decideReferenceConnectorProposal: capabilityProcedure('pharmacy:catalogue-review')
@@ -912,7 +951,50 @@ export const pharmacyMedicineRouter = router({
         if (proposal.targetMedicineId && !medicine) {
           throw new TRPCError({ code: 'NOT_FOUND', message: 'Target medicine not found.' });
         }
-        if (!medicine) {
+        // DEV-683: an official row whose registration number is already in the catalogue (for
+        // example a draft saved from it) updates that medicine instead of adding a second one,
+        // under the same registration lock as a draft save. Whether the medicine was found now or
+        // when the file was uploaded, a different product under the same number is refused,
+        // never merged, and a stated flag may only raise the medicine.
+        const notApplied = new Set<string>();
+        const registration = values.drapRegistrationNumber ?? medicine?.drapRegistrationNumber;
+        if (source.official && registration) {
+          const db = tx as typeof ctx.db;
+          const organizationId = ctx.entitlements.organizationId;
+          await lockDrapRegistration(db, organizationId, registration);
+          if (!medicine) {
+            const ids = await findMedicinesByRegistration(db, organizationId, registration);
+            if (ids.length > 1)
+              throw new TRPCError({
+                code: 'CONFLICT',
+                message: `More than one catalogue medicine carries DRAP registration number ${registration}. Resolve them before confirming this row.`,
+              });
+            if (ids.length === 1)
+              medicine = await tx.medicine.findFirst({ where: { id: ids[0]! } });
+          }
+        }
+        if (medicine && source.official) {
+          const current = (
+            await catalogueMedicineSnapshots(tx as typeof ctx.db, [medicine.id])
+          ).get(medicine.id);
+          const conflicts = current ? registrationIdentityConflicts(values, current) : [];
+          if (conflicts.length)
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: `This DRAP row does not match ${medicine.productName}, already in the catalogue with registration number ${registration ?? 'none'}: the ${conflicts.join(', ')} differ. Reject the row, or correct the catalogue medicine first.`,
+            });
+          // The same product: descriptive fields are filled in, the name and registration kept.
+          const flags = {} as Partial<Record<'rx' | 'restricted' | 'controlled', true>>;
+          for (const field of ['rx', 'restricted', 'controlled'] as const) {
+            const stated = proposedBoolean(values[field]);
+            if (stated === true && !medicine[field]) flags[field] = true;
+            if (stated === false && medicine[field]) notApplied.add(field);
+          }
+          medicine = await tx.medicine.update({
+            where: { id: medicine.id },
+            data: { brandName: values.brandName, manufacturer: values.manufacturer, ...flags },
+          });
+        } else if (!medicine) {
           if (!values.productName) {
             throw new TRPCError({
               code: 'BAD_REQUEST',
@@ -968,6 +1050,8 @@ export const pharmacyMedicineRouter = router({
         for (const [field, value] of Object.entries(values)) {
           // The import's controlled value was not applied, so it is not recorded as accepted.
           if (keptCorrection && field === 'controlled') continue;
+          // DEV-683: a flag that would have lowered the medicine was not applied either.
+          if (notApplied.has(field)) continue;
           assertions.push(
             await tx.medicineProvenance.create({
               data: {
@@ -1205,8 +1289,8 @@ export const pharmacyMedicineRouter = router({
    * (DEV-19/DEV-923). Whenever the organisation holds a DRAP row for the draft's registration
    * number (or the form used one), the row's stated prescription-only and controlled flags and
    * registration number are enforced here; a flag the row does not state needs the person's
-   * explicit choice. The source row is linked to the draft so confirming it later cannot add a
-   * second medicine. No price is accepted.
+   * explicit choice. Confirming the source row later updates this draft (matched by registration
+   * number) instead of adding a second medicine. No price is accepted.
    */
   addMedicineDraft: catalogueEditProcedure
     .input(
@@ -1239,17 +1323,18 @@ export const pharmacyMedicineRouter = router({
             message: 'This DRAP reference row is no longer available. Search again.',
           });
         const referenceRegistration = reference?.values.drapRegistrationNumber;
-        if (referenceRegistration !== undefined && referenceRegistration !== registration)
+        if (
+          referenceRegistration !== undefined &&
+          normalizeDrapRegistration(referenceRegistration) !==
+            normalizeDrapRegistration(registration)
+        )
           throw new TRPCError({
             code: 'BAD_REQUEST',
             message:
               'The DRAP registration number comes from the reference row. Clear the auto-fill to enter another medicine.',
           });
-        // Serializes concurrent drafts for one registration number until this transaction ends.
-        await db.$queryRawUnsafe(
-          'SELECT pg_advisory_xact_lock(hashtext($1))',
-          `pharmacy-medicine-registration:${organizationId}:${registration}`
-        );
+        // Serializes drafts and DRAP confirmations for one registration number.
+        await lockDrapRegistration(db, organizationId, registration);
         const official =
           reference ?? (await findDrapReferenceByRegistration(db, organizationId, registration));
         const flags = { rx: draft.rx, controlled: draft.controlled };
@@ -1269,16 +1354,14 @@ export const pharmacyMedicineRouter = router({
                 : 'Choose yes or no for prescription-only and controlled.',
             });
         }
-        const duplicate = await db.medicine.findFirst({
-          where: { drapRegistrationNumber: registration },
-          select: { id: true },
-        });
-        if (duplicate)
+        if ((await findMedicinesByRegistration(db, organizationId, registration)).length)
           throw new TRPCError({
             code: 'CONFLICT',
             message: 'A medicine with this DRAP registration number is already in the catalogue.',
           });
         const chosen = { ...draft, rx: flags.rx!, controlled: flags.controlled! };
+        // The DRAP row is left untouched (its guard allows only a decision). Confirming it later
+        // finds this draft by registration number and updates it instead of adding another.
         const medicine = await db.medicine.create({
           data: {
             productName: chosen.productName,
@@ -1298,17 +1381,6 @@ export const pharmacyMedicineRouter = router({
           },
           select: { id: true, productName: true, saleable: true },
         });
-        const { referenceLinked } = await linkDrapReferenceRows(db, organizationId, {
-          referenceId: reference?.referenceId,
-          registration,
-          medicineId: medicine.id,
-        });
-        // A reviewer decided or another draft took the row since it was read: roll back.
-        if (reference && !referenceLinked)
-          throw new TRPCError({
-            code: 'CONFLICT',
-            message: 'This DRAP reference row was just used or decided. Search again.',
-          });
         return medicine;
       })
     ),

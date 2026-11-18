@@ -106,6 +106,9 @@ type Where = Record<string, unknown> & {
   payload?: { path: string[]; equals: string };
 };
 
+const normalized = (value: unknown) =>
+  typeof value === 'string' ? value.trim().toLowerCase().replace(/\s+/g, ' ') : null;
+
 function matches(proposal: Proposal, where: Where) {
   if (where.id !== undefined && proposal.id !== where.id) return false;
   if (where.connectorId !== undefined && proposal.connectorId !== where.connectorId) return false;
@@ -125,12 +128,34 @@ function store(proposals: Proposal[] = [], medicines: Array<Record<string, unkno
     proposals,
     medicines,
     $transaction: (run: (client: unknown) => unknown) => run(db),
-    $queryRawUnsafe: vi.fn(async (_sql: string, key: string) => {
-      calls.push(`lock:${key}`);
+    $queryRawUnsafe: vi.fn(async (_sql: string, space: string, key: string) => {
+      calls.push(`lock:${space}:${key}`);
       return [];
     }),
-    // DEV-854 legacy-controlled lookup during confirmation.
-    $queryRaw: vi.fn(async () => [{ found: false }]),
+    $queryRaw: vi.fn(async (query: unknown) => {
+      const sql = (query as { sql?: unknown }).sql;
+      // DEV-854 legacy-controlled lookup during confirmation (a tagged template).
+      if (typeof sql !== 'string') return [{ found: false }];
+      const values = (query as { values: unknown[] }).values;
+      if (sql.includes('pharmacy_reference_connector_proposals')) {
+        const [, connectorId, registration] = values as string[];
+        return proposals
+          .filter(
+            (proposal) =>
+              proposal.connectorId === connectorId &&
+              ['PENDING', 'CONFIRMED'].includes(proposal.status) &&
+              normalized(proposal.payload.values.drapRegistrationNumber) === registration
+          )
+          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+          .slice(0, 1)
+          .map(({ id }) => ({ id }));
+      }
+      calls.push('duplicate-check');
+      const [, registration] = values as string[];
+      return medicines
+        .filter((medicine) => normalized(medicine.drapRegistrationNumber) === registration)
+        .map(({ id }) => ({ id }));
+    }),
     pharmacyReferenceConnector: { findFirst: vi.fn(async () => ({ id: 'conn-drap' })) },
     pharmacyReferenceConnectorProposal: {
       findFirst: vi.fn(async ({ where }: { where: Where }) => {
@@ -157,7 +182,22 @@ function store(proposals: Proposal[] = [], medicines: Array<Record<string, unkno
           ) ?? null
         );
       }),
-      findMany: vi.fn(async () => []),
+      // Snapshot reads for a confirmation: strength and form from the draft's assertions.
+      findMany: vi.fn(async ({ where }: { where: { id?: { in: string[] } } }) =>
+        medicines
+          .filter((medicine) => where.id?.in.includes(medicine.id as string))
+          .map((medicine) => ({
+            ...medicine,
+            presentations: [],
+            strengths: [],
+            provenance: (
+              ((medicine.provenance as { create?: unknown[] } | undefined)?.create ?? []) as Array<{
+                field: string;
+                assertedValue: unknown;
+              }>
+            ).filter((item) => ['strength', 'dosageForm'].includes(item.field)),
+          }))
+      ),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
         const medicine = { id: `medicine-${medicines.length + 1}`, ...data };
         medicines.push(medicine);
@@ -243,8 +283,9 @@ describe('DEV-683 add-medicine DRAP auto-fill boundary', () => {
       status: 'UNREVIEWED',
     });
     expect(data.provenance.create.every((item) => item.status === 'UNREVIEWED')).toBe(true);
-    // The source row now points at the draft.
-    expect(db.proposals[0]).toMatchObject({ status: 'PENDING', targetMedicineId: 'medicine-1' });
+    // The DRAP row is not written at save time: its guard allows only a decision.
+    expect(db.pharmacyReferenceConnectorProposal.updateMany).not.toHaveBeenCalled();
+    expect(db.proposals[0]).toMatchObject({ status: 'PENDING', targetMedicineId: null });
   });
 
   it('refuses prescription-only or controlled flags that differ from the reference row', async () => {
@@ -288,19 +329,20 @@ describe('DEV-683 add-medicine DRAP auto-fill boundary', () => {
     expect(created(db).provenance.create.find((item) => item.field === 'rx')).toMatchObject({
       sourceType: 'REGULATOR',
     });
-    expect(db.proposals[0]!.targetMedicineId).toBe('medicine-1');
+    expect(db.pharmacyReferenceConnectorProposal.updateMany).not.toHaveBeenCalled();
   });
 
   it('takes a registration lock before the duplicate check', async () => {
     const db = store();
     await caller(db).addMedicineDraft(draft);
     expect(db.calls.slice(0, 2)).toEqual([
-      'lock:pharmacy-medicine-registration:org-a:SYN-0001',
+      'lock:pharmacy-medicine-registration:org-a:syn-0001',
       'duplicate-check',
     ]);
     expect(db.$queryRawUnsafe).toHaveBeenCalledWith(
-      'SELECT pg_advisory_xact_lock(hashtext($1))',
-      'pharmacy-medicine-registration:org-a:SYN-0001'
+      'SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))',
+      'pharmacy-medicine-registration',
+      'org-a:syn-0001'
     );
   });
 
@@ -364,5 +406,47 @@ describe('DEV-683 add-medicine DRAP auto-fill boundary', () => {
       status: 'CONFIRMED',
       targetMedicineId: 'medicine-1',
     });
+  });
+
+  it('applies the stated flags and the duplicate check to a case variant of the number', async () => {
+    const db = store([drapProposal('ref-1', statedRow)]);
+    await expect(
+      caller(db).addMedicineDraft({
+        ...draft,
+        drapRegistrationNumber: ' syn-0001 ',
+        controlled: false,
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await caller(db).addMedicineDraft(draft);
+    await expect(
+      caller(db).addMedicineDraft({ ...draft, drapRegistrationNumber: 'syn-0001' })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(db.medicines).toHaveLength(1);
+  });
+
+  it('does not let a stale rejected row lock a draft', async () => {
+    const db = store([{ ...drapProposal('ref-1', statedRow), status: 'REJECTED' }]);
+    await caller(db).addMedicineDraft({ ...draft, controlled: false });
+    expect(created(db).controlled).toBe(false);
+  });
+
+  it('refuses to merge a different product sharing the registration number', async () => {
+    const db = store([
+      drapProposal('ref-1', statedRow),
+      drapProposal(
+        'ref-2',
+        { ...statedRow, productName: 'Othermed', strength: '250 mg', dosageForm: 'Syrup' },
+        '2030-01-03'
+      ),
+    ]);
+    await caller(db).addMedicineDraft({ ...draft, drapReferenceId: 'ref-1' });
+    await expect(
+      caller(db, 'pharmacist-b').decideReferenceConnectorProposal({
+        proposalId: 'ref-2',
+        decision: 'CONFIRM',
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT', message: expect.stringContaining('name') });
+    expect(db.medicine.update).not.toHaveBeenCalled();
+    expect(db.medicines[0]).toMatchObject({ productName: 'Synthamol', controlled: true });
   });
 });

@@ -6,7 +6,10 @@ import {
   addMedicineDraftProvenance,
   drapAutofillValues,
   findDrapReferenceByRegistration,
-  linkDrapReferenceRows,
+  findMedicinesByRegistration,
+  lockDrapRegistration,
+  normalizeDrapRegistration,
+  registrationIdentityConflicts,
   literalSearchTerm,
   loadDrapReference,
   searchDrapReference,
@@ -230,65 +233,91 @@ describe('DEV-683 literal search terms', () => {
   });
 });
 
-describe('DEV-683 registration lookup and linking', () => {
-  it('finds the newest DRAP row for a registration number in this organisation', async () => {
-    const db = fakeDb({});
-    await findDrapReferenceByRegistration(db as unknown as ScopedDb, 'org-a', 'SYN-0001');
-    expect(db.pharmacyReferenceConnectorProposal.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: {
-          organizationId: 'org-a',
-          connectorId: 'conn-drap',
-          payload: { path: ['values', 'drapRegistrationNumber'], equals: 'SYN-0001' },
-        },
-        orderBy: { createdAt: 'desc' },
-      })
+describe('DEV-683 registration normalisation, lookup and lock', () => {
+  it('normalises a registration number once: trimmed, case-folded, whitespace collapsed', () => {
+    expect(normalizeDrapRegistration('  SYN-0001 ')).toBe('syn-0001');
+    expect(normalizeDrapRegistration('Syn\t 00\n01')).toBe('syn 00 01');
+  });
+
+  it('finds the newest pending or confirmed DRAP row by normalised registration number', async () => {
+    const db = { ...fakeDb({}), $queryRaw: vi.fn(async () => [{ id: 'p-new' }]) };
+    db.pharmacyReferenceConnectorProposal.findFirst.mockResolvedValueOnce(
+      proposal('p-new', { productName: 'Synthamol', drapRegistrationNumber: 'SYN-0001' }) as never
     );
+    await expect(
+      findDrapReferenceByRegistration(db as unknown as ScopedDb, 'org-a', ' syn-0001 ')
+    ).resolves.toMatchObject({ referenceId: 'p-new' });
+    const query = (db.$queryRaw.mock.calls as unknown[][])[0]![0] as {
+      sql: string;
+      values: unknown[];
+    };
+    expect(query.values).toEqual(['org-a', 'conn-drap', 'syn-0001']);
+    // A rejected row does not lock a draft.
+    expect(query.sql).toContain("status IN ('PENDING', 'CONFIRMED')");
+    expect(query.sql).toContain('lower(');
     const none = fakeDb({ connector: null });
     await expect(
       findDrapReferenceByRegistration(none as unknown as ScopedDb, 'org-a', 'SYN-0001')
     ).resolves.toBeNull();
   });
 
-  it('links only pending, unlinked rows of this organisation to the new draft', async () => {
-    const db = fakeDb({});
+  it('checks catalogue duplicates by the same normalised registration number', async () => {
+    const db = { $queryRaw: vi.fn(async () => [{ id: 'medicine-a' }]) };
     await expect(
-      linkDrapReferenceRows(db as unknown as ScopedDb, 'org-a', {
-        referenceId: 'p-new',
-        registration: 'SYN-0001',
-        medicineId: 'medicine-new',
-      })
-    ).resolves.toEqual({ referenceLinked: true });
-    const pending = {
-      organizationId: 'org-a',
-      connectorId: 'conn-drap',
-      status: 'PENDING',
-      targetMedicineId: null,
+      findMedicinesByRegistration(db as unknown as ScopedDb, 'org-a', 'Syn-0001')
+    ).resolves.toEqual(['medicine-a']);
+    const query = (db.$queryRaw.mock.calls as unknown[][])[0]![0] as {
+      sql: string;
+      values: unknown[];
     };
-    expect(db.pharmacyReferenceConnectorProposal.updateMany.mock.calls).toEqual([
-      [{ where: { ...pending, id: 'p-new' }, data: { targetMedicineId: 'medicine-new' } }],
-      [
-        {
-          where: {
-            ...pending,
-            payload: { path: ['values', 'drapRegistrationNumber'], equals: 'SYN-0001' },
-          },
-          data: { targetMedicineId: 'medicine-new' },
-        },
-      ],
-    ]);
+    expect(query.values).toEqual(['org-a', 'syn-0001']);
+    expect(query.sql).toContain('pharmacy_medicines');
   });
 
-  it('reports a chosen row that was decided or used in the meantime', async () => {
-    const db = fakeDb({});
-    db.pharmacyReferenceConnectorProposal.updateMany.mockResolvedValueOnce({ count: 0 });
-    await expect(
-      linkDrapReferenceRows(db as unknown as ScopedDb, 'org-a', {
-        referenceId: 'p-new',
-        registration: 'SYN-0001',
-        medicineId: 'medicine-new',
-      })
-    ).resolves.toEqual({ referenceLinked: false });
+  it('locks a registration number in its own two-key space', async () => {
+    const db = { $queryRawUnsafe: vi.fn(async () => []) };
+    await lockDrapRegistration(db as unknown as ScopedDb, 'org-a', ' SYN-0001');
+    expect(db.$queryRawUnsafe).toHaveBeenCalledWith(
+      'SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))',
+      'pharmacy-medicine-registration',
+      'org-a:syn-0001'
+    );
+  });
+});
+
+describe('DEV-683 registration identity', () => {
+  const medicine = {
+    id: 'medicine-a',
+    productName: 'Synthamol',
+    strength: '500 mg',
+    dosageForm: 'Tablet',
+    drapRegistrationNumber: 'SYN-0001',
+    rx: true,
+    controlled: false,
+  };
+
+  it('treats case, spacing and punctuation as the same product', () => {
+    expect(
+      registrationIdentityConflicts(
+        { productName: 'SYNTHAMOL', strength: '500mg', dosageForm: 'tablet' },
+        medicine
+      )
+    ).toEqual([]);
+  });
+
+  it('names each identity field that differs', () => {
+    expect(
+      registrationIdentityConflicts(
+        { productName: 'Othermed', strength: '250 mg', dosageForm: 'Syrup' },
+        medicine
+      )
+    ).toEqual(['name', 'strength', 'form']);
+  });
+
+  it('does not count a value either side leaves unstated', () => {
+    expect(
+      registrationIdentityConflicts({ productName: 'Synthamol' }, { ...medicine, strength: null })
+    ).toEqual([]);
   });
 });
 
