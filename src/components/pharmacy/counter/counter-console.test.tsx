@@ -98,6 +98,9 @@ vi.mock('@/components/entitlements-provider', () => ({
   useEntitlements: () => mocks.entitlements,
 }));
 
+// DEV-743: the card-terminal panel has its own tests (counter-card-terminal-panel.test.tsx); no
+// terminal is admitted on these counters, and the panel renders nothing then.
+vi.mock('./counter-card-terminal-panel', () => ({ CounterCardTerminalPanel: () => null }));
 vi.mock('@/lib/trpc', async () => {
   const { useState } = await import('react');
   const router = (names: string[]) =>

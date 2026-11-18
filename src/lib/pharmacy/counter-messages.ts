@@ -166,6 +166,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   DRAWER_NOT_OPEN:
     'The cash drawer for this counter is not open. Open it before taking or paying out cash.',
   OPEN_DRAWER: 'A drawer is already open on this counter. Close it before opening another.',
+  // DEV-743: the day cannot close while a terminal payment on it may have charged the customer.
+  CARD_TERMINAL_PAYMENT_OPEN:
+    'A card terminal payment on this day is still open. Check its status on the counter, or have a manager review it, before closing the day.',
   // DEV-821: cash goes only into a till the signed-in user runs.
   DRAWER_NOT_YOURS:
     'Another cashier runs the cash drawer on this counter. Ask a manager or owner to hand it over to you, then take the cash.',

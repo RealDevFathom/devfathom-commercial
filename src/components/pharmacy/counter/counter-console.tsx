@@ -51,6 +51,7 @@ import {
   type CounterReceiptPresentationResult,
   type CounterReceiptSettlement,
 } from './counter-receipt-view';
+import { CounterCardTerminalPanel } from './counter-card-terminal-panel';
 import { CounterKhataPaymentPanel } from './counter-khata-payment-panel';
 import { CounterReturnPanel } from './counter-return-panel';
 import { CounterRxPanel } from './counter-rx-panel';
@@ -4692,6 +4693,16 @@ function ScopedPharmacyCounterConsole({
           }
           onRetry={() => void refreshTenderBill()}
           onTender={takePayment}
+        />
+        {/* DEV-743: shown only where an admitted card terminal serves this counter. */}
+        <CounterCardTerminalPanel
+          branchId={branchId}
+          saleId={currentBill ? saleId : null}
+          deviceId={deviceId}
+          balanceMinor={balanceMinor}
+          disabled={!canSettlePayments || billState !== 'ready' || blocked || busy}
+          businessDate={todayBusinessDate}
+          onSettled={() => void refreshTenderBill('accepted')}
         />
 
         <Button variant="outline" className="h-11" onClick={() => setPaymentOpen(false)}>

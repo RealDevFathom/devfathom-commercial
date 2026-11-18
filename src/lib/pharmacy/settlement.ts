@@ -36,6 +36,7 @@ import {
 } from './manual-payments';
 import { readManualPaymentSettings } from './manual-payment-settings';
 import { counterOperatorDenial } from './counter-capability';
+import { countOpenCardTerminalAttempts } from './card-terminal/open-attempts';
 
 export type PharmacyTenderType = 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET' | 'CREDIT' | ManualTenderType;
 
@@ -63,6 +64,7 @@ export class PharmacySettlementError extends Error {
       | 'REOPEN_NOT_TODAY'
       | 'PREPAID_REFUND_RESTORES_BALANCE'
       | 'TENDER_ATTEMPT_DISCARDED'
+      | 'CARD_TERMINAL_PAYMENT_OPEN'
   ) {
     super(reason);
   }
@@ -1366,6 +1368,10 @@ export async function cutPharmacyDailyClose(
     },
   });
   if (openDrawers > 0) throw new PharmacySettlementError('OPEN_DRAWER');
+  // DEV-743: a terminal payment still open on this day may already have charged the customer, so
+  // the Z report would miss it. Attempts are committed under this same day lock.
+  if ((await countOpenCardTerminalAttempts(db, scope, input.businessDate)) > 0)
+    throw new PharmacySettlementError('CARD_TERMINAL_PAYMENT_OPEN');
   const prior = await db.pharmacyDailyClose.findFirst({
     where: {
       organizationId: scope.organizationId,

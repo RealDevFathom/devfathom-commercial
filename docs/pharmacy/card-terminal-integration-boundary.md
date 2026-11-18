@@ -1,6 +1,7 @@
 # Pharmacy card-terminal integration boundary (DEV-743)
 
-Status: provider-neutral seam and durable record shipped. **No provider, SDK or device is bound.**
+Status: provider-neutral seam, durable record, router, counter states, day-close gate and recovery
+sweep shipped. **No provider, SDK or device is bound.**
 The production admission list is empty, so every integrated terminal path refuses with
 `UNCERTIFIED_PROVIDER`. Only a fake test terminal exists.
 
@@ -72,22 +73,67 @@ reverse it. A transient settlement failure leaves the attempt `APPROVED`, and re
 - Admission: `terminalAdmissionRefusal`. A production process always uses the built-in empty
   list. Reserved names and simulated adapters are refused there.
 
+## Router, counter states, day close and recovery
+
+Built on the attempt record, with the fake terminal only. In production nothing resolves a
+terminal, so all of this stays dormant.
+
+- **Registry** (`registry.ts`): resolves the terminal paired with a counter. It returns nothing for
+  every branch until a provider is bound. The browser never names the provider, terminal or
+  currency.
+- **Router** (`src/server/routers/pharmacy-card-terminal.ts`, `pharmacyCardTerminal.*`), with the
+  same counter access as any tender:
+  - `availability` is false unless an admitted terminal serves this counter.
+  - `charge` commits the attempt, then dispatches one PKR charge for the balance due.
+  - `checkStatus` asks the terminal about the same operation again (never a new charge).
+  - `attempt` reads the sale's newest attempt, so a reloaded counter shows where it stands.
+- **Counter states** (`counter-card-terminal-panel.tsx`, shown in the payment overlay only when
+  `availability` is true):
+
+  | State    | Shown when                                                                   |
+  | -------- | ---------------------------------------------------------------------------- |
+  | Sending  | CREATED                                                                      |
+  | Waiting  | SENT, or while the charge request is out                                     |
+  | Unknown  | UNKNOWN. The panel offers **Check status**                                   |
+  | Approved | APPROVED, while the tender is recorded                                       |
+  | Paid     | SETTLED                                                                      |
+  | Declined | DECLINED                                                                     |
+  | Not sent | ABANDONED                                                                    |
+  | Review   | MANUAL_REVIEW. There is no counter action: a manager or owner must review it |
+
+  The view carries no provider reference and no terminal id: only the brand and the last four
+  digits.
+
+- **Day close**: `cutPharmacyDailyClose` (both the Z report and the counted close) refuses with
+  `CARD_TERMINAL_PAYMENT_OPEN` while any attempt on that business day is open. It checks under the
+  day lock. The attempt is committed under that same lock: `create` takes it again after the
+  preflight savepoint, because rolling a savepoint back releases the locks taken inside it. The
+  trigger `pharmacy_daily_closes_card_terminal_guard` refuses the close row itself.
+- **Recovery sweep** (`sweep.ts`, run by `/api/platform/jobs/process` every 5 minutes): finds
+  attempts untouched for 2 minutes in CREATED, SENT, UNKNOWN or APPROVED, across tenants, and
+  recovers each one as its own cashier with the counter's status check. Manual review is not
+  swept.
+- **One approval, one tender**: the unique index `pharmacy_tenders_terminal_provider_ref_key`
+  covers terminal CARD tenders on (organization, provider, provider reference). Manual, sandbox,
+  prepaid and mock providers are outside it, because their slip references may repeat.
+
 ## Deferred, by the owner's decision
 
 Provider and device selection wait for a named proposal and a real-device test. Until then this
 change does not include:
 
 - Any provider SDK, credentials, network access or real device.
-- A router or counter UI for terminal payments. When it lands it must follow DevFathom Studio,
-  use the tender permission for charges, and use the refund rule (manager or owner PIN, with
-  solo-owner self-approval and an audit record) for review resolution and reversals.
+- Resolving a manual review (to DECLINED with no charge evidence, or REVERSED) from a screen. It
+  must use the refund rule: manager or owner PIN, with solo-owner self-approval and an audit
+  record. Until it lands, a review case holds its sale and its business day open.
 - Terminal void and refund of a settled terminal tender. Both are provider capabilities. They
   will use the same attempt record.
-- A day-close gate and a scheduled recovery sweep over open attempts
-  (`recoverOpenCardTerminalAttempts` is the entry point).
 
-Binding a provider means adding its name to `PRODUCTION_TERMINAL_ADMISSION` in its own reviewed
-change, with the certification evidence and the real-device test linked.
+Binding a provider means two things in its own reviewed change, with the certification evidence
+and the real-device test linked:
+
+- returning its adapter from `resolvePharmacyCardTerminal`;
+- adding its name to `PRODUCTION_TERMINAL_ADMISSION`.
 
 ## Tests
 
@@ -99,3 +145,15 @@ change, with the certification evidence and the real-device test linked.
 - `tests/pharmacy-card-terminal-attempts-migration.test.ts`: migration contract.
 - `tests/pharmacy-card-terminal-attempts.db.test.ts`: RLS, lifecycle, evidence and tender guards
   on PostgreSQL (skipped without a disposable database).
+- `src/server/routers/pharmacy-card-terminal.test.ts`: the router mocked end to end with the fake
+  terminal, covering availability, dispatch, unknown with a status check, manual review, access
+  and server-chosen currency.
+- `src/components/pharmacy/counter/counter-card-terminal-panel.test.tsx`: the counter states.
+- `src/lib/pharmacy/card-terminal/sweep.test.ts` and `day-close-gate.test.ts`.
+- `src/lib/pharmacy/card-terminal/counter.db.test.ts`: on PostgreSQL as the restricted runtime
+  role, through the real store, settlement, close and sweep:
+  - two racing dispatches send exactly one charge;
+  - two racing charges for one sale commit one attempt;
+  - the day close is refused while an attempt is open, then succeeds once it is recovered;
+  - the sweep settles a stale attempt;
+  - a terminal approval cannot become a second tender.
