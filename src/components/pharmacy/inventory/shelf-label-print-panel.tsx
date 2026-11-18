@@ -16,6 +16,11 @@ import {
 } from '@/components/ui/table';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import {
+  batchNumberLabel,
+  EXPIRY_NOT_RECORDED,
+  batchPhrase,
+} from '@/lib/pharmacy/unrecorded-batch';
+import {
   MAX_SHELF_LABELS_PER_PRINT,
   printShelfLabels,
   SHELF_LABEL_FORMATS,
@@ -132,8 +137,10 @@ export function ShelfLabelPrintPanel({
                     ) : null}
                   </TableCell>
                   <TableCell className="font-mono text-xs">
-                    {row.batchNumber}
-                    <div className="text-text-muted">EXP {row.expiry}</div>
+                    {batchNumberLabel(row.batchNumber)}
+                    <div className="text-text-muted">
+                      {row.expiry === null ? EXPIRY_NOT_RECORDED : `EXP ${row.expiry}`}
+                    </div>
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {rupees(row.packMrpMinor)}
@@ -144,7 +151,7 @@ export function ShelfLabelPrintPanel({
                   <TableCell className="font-mono text-xs">{row.code}</TableCell>
                   <TableCell className="text-right">
                     <label className="sr-only" htmlFor={id}>
-                      Labels for {row.name} batch {row.batchNumber}
+                      Labels for {row.name} {batchPhrase(row.batchNumber, 'batch')}
                     </label>
                     <Input
                       id={id}

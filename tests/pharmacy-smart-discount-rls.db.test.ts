@@ -20,7 +20,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const url = process.env.OWNER_DATABASE_URL;
 const migration = readFileSync(
-  'prisma/migrations/20261118121800_pharmacy_smart_discount/migration.sql',
+  'prisma/migrations/20261118122400_pharmacy_smart_discount/migration.sql',
   'utf8'
 );
 const schema = `smart_discount_${randomUUID().replaceAll('-', '')}`;

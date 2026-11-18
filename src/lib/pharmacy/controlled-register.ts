@@ -229,6 +229,8 @@ export async function appendControlledSaleEntries(db: ScopedDb, input: SaleRegis
       manufacturer: input.manufacturer,
       inventoryLotId: lot.id,
       stockMovementId: movement.id,
+      // DEV-853: NULL when the lot's batch was never recorded (never a label);
+      // the register trigger matches it against the lot's own NULL batch.
       batchNumber: lot.batch.batchNumber,
       quantityCanonicalUnits,
       balanceDelta,

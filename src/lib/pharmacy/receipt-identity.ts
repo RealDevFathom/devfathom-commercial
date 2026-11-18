@@ -6,8 +6,10 @@ const allocationSchema = z
   .object({
     allocationId: id,
     inventoryLotId: id,
-    batchNumber: id,
-    expiresAt: z.iso.datetime(),
+    // DEV-853: null when legacy opening stock never recorded it. The receipt
+    // says "Batch not recorded" / "Expiry not recorded" in plain words.
+    batchNumber: id.nullable(),
+    expiresAt: z.iso.datetime().nullable(),
     canonicalUnits: units,
   })
   .strict();

@@ -14,6 +14,7 @@
 
 import { formatMinor } from './counter-receipt';
 import { parseShelfLabelCode, shelfLabelBarcodeSvg } from './shelf-label-code';
+import { BATCH_NOT_RECORDED, EXPIRY_NOT_RECORDED } from './unrecorded-batch';
 
 export type ShelfLabelFormat = '38x25' | '50x25' | 'A4';
 export const SHELF_LABEL_FORMATS: ReadonlyArray<{ value: ShelfLabelFormat; label: string }> = [
@@ -35,9 +36,13 @@ export type ShelfLabelRow = {
   packMrpMinor: number;
   /** The counter's price for one strip of this lot; null when the pack has no strip level. */
   stripMrpMinor: number | null;
-  /** `YYYY-MM` for a month-precision expiry, otherwise `YYYY-MM-DD`. */
-  expiry: string;
-  batchNumber: string;
+  /**
+   * `YYYY-MM` for a month-precision expiry, otherwise `YYYY-MM-DD`. DEV-853:
+   * null when the expiry was never recorded; the label says so in plain words.
+   */
+  expiry: string | null;
+  /** DEV-853: null when the batch number was never recorded. */
+  batchNumber: string | null;
   /** Suggested count: one per received pack for a goods receipt, otherwise one. */
   defaultCount: number;
   /** Set when the lot must not be labelled for sale (expired, recalled, quarantined, empty). */
@@ -82,17 +87,23 @@ function labelHtml(row: ShelfLabelRow, format: ShelfLabelFormat): string {
   if (parseShelfLabelCode(row.code) === null) {
     throw new ShelfLabelError('The label lot code is invalid.');
   }
-  if (!EXPIRY.test(row.expiry)) throw new ShelfLabelError('The label expiry is invalid.');
+  if (row.expiry !== null && !EXPIRY.test(row.expiry)) {
+    throw new ShelfLabelError('The label expiry is invalid.');
+  }
   const name = text(row.name, 'medicine name');
   const strength = row.strength === null ? null : text(row.strength, 'strength');
-  const batch = text(row.batchNumber, 'batch number');
+  const expiry = row.expiry === null ? EXPIRY_NOT_RECORDED : `EXP <strong>${row.expiry}</strong>`;
+  const batch =
+    row.batchNumber === null
+      ? BATCH_NOT_RECORDED
+      : `B <bdi>${text(row.batchNumber, 'batch number')}</bdi>`;
   const pack = money(row.packMrpMinor, 'pack MRP');
   const strip = row.stripMrpMinor === null ? null : money(row.stripMrpMinor, 'strip MRP');
   const barcodeWidth = format === '38x25' ? 34 : 44;
   return `<section class="shelf-label" aria-label="Shelf price label">
 <div class="name"><strong>${name}</strong>${strength ? ` ${strength}` : ''}</div>
 <div>MRP/pack <strong class="price">${pack}</strong>${strip ? ` · strip <strong class="price">${strip}</strong>` : ''}</div>
-<div>EXP <strong>${row.expiry}</strong> · B <bdi>${batch}</bdi></div>
+<div>${expiry} · ${batch}</div>
 ${shelfLabelBarcodeSvg(row.code, barcodeWidth, format === '38x25' ? 5 : 6)}
 <div class="code">${row.code}</div>
 </section>`;
@@ -115,7 +126,8 @@ export function buildShelfLabelSheet(
       throw new ShelfLabelError('Each label count must be a whole number.');
     }
     if (count > 0 && row.unavailableReason) {
-      throw new ShelfLabelError(`Batch ${row.batchNumber}: ${row.unavailableReason}`);
+      const batch = row.batchNumber === null ? BATCH_NOT_RECORDED : `Batch ${row.batchNumber}`;
+      throw new ShelfLabelError(`${batch}: ${row.unavailableReason}`);
     }
   }
   const total = shelfLabelTotal(selection);

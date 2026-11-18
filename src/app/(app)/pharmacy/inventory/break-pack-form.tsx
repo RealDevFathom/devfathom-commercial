@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import type { inferRouterInputs } from '@trpc/server';
 
 import { browserUuid } from '@/lib/browser-uuid';
+import { BATCH_NOT_RECORDED } from '@/lib/pharmacy/unrecorded-batch';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { trpc } from '@/lib/trpc';
@@ -17,13 +18,15 @@ export type BreakPackFormProps = Pick<
   'branchId' | 'inventoryLotId' | 'stockLocationId'
 > & {
   medicineName: string;
-  batchNumber: string;
+  /** DEV-853: null when the batch number was never recorded. */
+  batchNumber: string | null;
   locationName: string;
   sealedPacks: number;
   looseUnits: number;
   unitsPerPack: number;
   onHandUnits: number;
-  expiresAt: string;
+  /** DEV-853: null when the expiry was never recorded; that is never "expired". */
+  expiresAt: string | null;
   observedAt: number;
   unavailableReason: string | null;
 };
@@ -54,8 +57,9 @@ export function BreakPackForm(props: BreakPackFormProps) {
     props.onHandUnits === props.sealedPacks * props.unitsPerPack + props.looseUnits;
   const unavailable =
     props.unavailableReason ??
+    (props.expiresAt !== null &&
     (!Number.isFinite(Date.parse(props.expiresAt)) ||
-    Date.parse(props.expiresAt) <= props.observedAt
+      Date.parse(props.expiresAt) <= props.observedAt)
       ? 'Batch is expired or its expiry is unavailable.'
       : !validArrangement
         ? 'Stock arrangement is unavailable. Refresh Inventory before opening packs.'
@@ -85,7 +89,7 @@ export function BreakPackForm(props: BreakPackFormProps) {
   async function confirm() {
     if (submitted.current || !confirmation || unavailable || changed || stage !== 'confirming')
       return;
-    if (Date.parse(props.expiresAt) <= Date.now()) {
+    if (props.expiresAt !== null && Date.parse(props.expiresAt) <= Date.now()) {
       setMessage('Batch has expired. No pack break submitted.');
       setStage('error');
       return;
@@ -155,7 +159,9 @@ export function BreakPackForm(props: BreakPackFormProps) {
         {stage !== 'closed' ? (
           <div className="space-y-3 rounded-[var(--radius-sm)] border border-border-subtle bg-surface-sunken p-3">
             <p className="text-text-strong">
-              {props.medicineName} · Batch {props.batchNumber} · {props.locationName}
+              {props.medicineName} ·{' '}
+              {props.batchNumber === null ? BATCH_NOT_RECORDED : `Batch ${props.batchNumber}`} ·{' '}
+              {props.locationName}
             </p>
             <p className="tabular-nums text-text-body">
               {props.sealedPacks} sealed + {props.looseUnits} loose · {props.unitsPerPack} units per

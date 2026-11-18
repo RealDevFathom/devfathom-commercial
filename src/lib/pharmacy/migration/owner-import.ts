@@ -87,12 +87,16 @@ export async function previewOwnerImport(db: ScopedDb, scope: LedgerScope, input
     const varianceNote = cell('varianceNote');
     if (!sourceRef || sourceRef.length > 160 || seenRefs.has(sourceRef)) errors.push('Source reference must be nonempty and unique (up to 160 characters).');
     seenRefs.add(sourceRef);
-    if (!batchNumber || batchNumber.length > 160) errors.push('Supply the printed manufacturing batch (up to 160 characters).');
+    // DEV-853: legacy stock often has no batch number and no expiry. A blank
+    // cell is stored as "not recorded" (never invented) and the stock stays
+    // sellable; staff record the real values later. A value that IS given must
+    // still be valid, and a known expiry that has passed is still refused.
+    if (batchNumber.length > 160) errors.push('The manufacturing batch can be up to 160 characters.');
     const expiryText = cell('expiry');
     const expiryDate = /^\d{4}-\d{2}(-\d{2})?$/.test(expiryText) ? readExpiryDate(expiryText) : null;
-    const expiryPrecision = expiryText.length === 7 ? 'MONTH' as const : 'DAY' as const;
-    const expiresAt = expiryDate ? expiryInstant(expiryDate, expiryPrecision) : null;
-    if (!expiryDate || !expiresAt || expiresAt <= now) errors.push('Supply a future expiry as YYYY-MM or YYYY-MM-DD.');
+    const expiryPrecision = !expiryText ? null : expiryText.length === 7 ? 'MONTH' as const : 'DAY' as const;
+    const expiresAt = expiryDate && expiryPrecision ? expiryInstant(expiryDate, expiryPrecision) : null;
+    if (expiryText && (!expiryDate || !expiresAt || expiresAt <= now)) errors.push('Supply a future expiry as YYYY-MM or YYYY-MM-DD, or leave it blank if it is not recorded.');
     const money = (field: 'mrp' | 'cost') => /^\d+(?:\.\d{1,2})?$/.test(cell(field)) ? exactInteger(readMoneyMinor(cell(field))) : null;
     const units = (field: 'expected' | 'counted') => /^\d+(?:\.0+)?$/.test(cell(field)) ? exactInteger(readQuantity(cell(field))) : null;
     const printedMrpMinor = money('mrp');
@@ -129,13 +133,16 @@ export async function previewOwnerImport(db: ScopedDb, scope: LedgerScope, input
     }
     if (pack?.presentation.medicine.coldChain && !location.coldChain) errors.push('This medicine requires a cold-chain stock location.');
     const medicineId = pack?.presentation.medicineId ?? null;
-    const lotKey = JSON.stringify([medicineId, batchNumber, pack?.id]);
+    const expiryKey = JSON.stringify([expiresAt, expiryPrecision]);
+    // Rows with no batch number are told apart by their expiry instead.
+    const lotKey = JSON.stringify([medicineId, batchNumber, batchNumber ? null : expiryKey, pack?.id]);
     if (seenLots.has(lotKey)) errors.push('Duplicate medicine/batch/pack row. Combine its physical count in the source file.');
     seenLots.add(lotKey);
-    const batchKey = JSON.stringify([medicineId, batchNumber]);
-    const expiryKey = JSON.stringify([expiresAt, expiryPrecision]);
-    if (batchExpiries.has(batchKey) && batchExpiries.get(batchKey) !== expiryKey) errors.push('Rows for the same medicine and batch must agree on expiry.');
-    batchExpiries.set(batchKey, expiryKey);
+    if (batchNumber) {
+      const batchKey = JSON.stringify([medicineId, batchNumber]);
+      if (batchExpiries.has(batchKey) && batchExpiries.get(batchKey) !== expiryKey) errors.push('Rows for the same medicine and batch must agree on expiry.');
+      batchExpiries.set(batchKey, expiryKey);
+    }
     const findBatch = (matchedMedicineId: string) => db.pharmacyManufacturingBatch.findFirst({
       where: { organizationId: scope.organizationId, medicineId: matchedMedicineId, batchNumber },
     });
@@ -144,8 +151,10 @@ export async function previewOwnerImport(db: ScopedDb, scope: LedgerScope, input
       await lockStockRowsFrom(db, scope.organizationId, Prisma.sql`SELECT ${batch.id}::text AS "batchId"`, { batch: 'share' });
       batch = await findBatch(medicineId);
     }
-    if (batch && (batch.state !== 'ACTIVE' || batch.expiryPrecision !== expiryPrecision ||
-        !expiresAt || normalizeExpiryBoundary(batch.expiresAt).getTime() !== normalizeExpiryBoundary(expiresAt).getTime())) errors.push('Existing batch is blocked or its expiry conflicts with this row.');
+    // A row without an expiry may join a batch whose expiry is already known.
+    if (batch && (batch.state !== 'ACTIVE' || (expiresAt !== null && (batch.expiresAt === null ||
+        batch.expiryPrecision !== expiryPrecision ||
+        normalizeExpiryBoundary(batch.expiresAt).getTime() !== normalizeExpiryBoundary(expiresAt).getTime())))) errors.push('Existing batch is blocked or its expiry conflicts with this row.');
     const existingLots = batch && pack ? await db.pharmacyInventoryLot.findMany({
       where: { organizationId: scope.organizationId, branchId: scope.branchId, manufacturingBatchId: batch.id, packLevelId: pack.id },
       select: { balances: { select: { onHandUnits: true } } },
@@ -225,17 +234,22 @@ export async function commitOwnerImport(
   } });
   const batchIds = new Map<string, string>();
   for (const line of preview.lines) {
-    // canCommit proved completeness. No missing value is replaced with a default.
-    const batchKey = JSON.stringify([line.medicineId, line.batchNumber]);
-    const knownBatchId = line.manufacturingBatchId ?? batchIds.get(batchKey);
+    // canCommit proved completeness. No missing value is replaced with a default:
+    // DEV-853 a batch number or expiry the old system never had stays null, and
+    // each such row gets its own unrecorded batch so recording one later never
+    // rewrites another row's stock.
+    const batchKey = line.batchNumber ? JSON.stringify([line.medicineId, line.batchNumber]) : null;
+    const knownBatchId = line.manufacturingBatchId ?? (batchKey ? batchIds.get(batchKey) : undefined);
     const batch = knownBatchId ? { id: knownBatchId } : await db.pharmacyManufacturingBatch.create({ data: {
-      organizationId: scope.organizationId, medicineId: line.medicineId!, batchNumber: line.batchNumber,
-      expiresAt: line.expiresAt!, expiryPrecision: line.expiryPrecision,
+      organizationId: scope.organizationId, medicineId: line.medicineId!, batchNumber: line.batchNumber || null,
+      expiresAt: line.expiresAt,
+      // The column is NOT NULL with a DAY default; with no expiry it has no meaning.
+      ...(line.expiryPrecision ? { expiryPrecision: line.expiryPrecision } : {}),
     } });
-    batchIds.set(batchKey, batch.id);
+    if (batchKey) batchIds.set(batchKey, batch.id);
     const drafted = await draftLine(db, scope, {
       sessionId: preview.sessionId, sourceRef: line.sourceRef, manufacturingBatchId: batch.id,
-      batchNumber: line.batchNumber, expiryDate: line.expiryDate, expiryPrecision: line.expiryPrecision,
+      batchNumber: line.batchNumber || null, expiryDate: line.expiryDate, expiryPrecision: line.expiryPrecision,
       printedMrpMinor: line.printedMrpMinor, unitCostMinor: line.unitCostMinor,
       stockLocationId: input.stockLocationId, packLevelId: line.packLevelId, unitsPerPack: line.unitsPerPack,
       expectedUnits: line.expectedUnits, countedUnits: line.countedUnits,

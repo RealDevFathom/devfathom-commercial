@@ -253,7 +253,7 @@ async function seedBranch(organizationId: string, label: string): Promise<Branch
       supplierName,
       locationId: location.id,
       lotId,
-      expiresAt: lot.batch.expiresAt,
+      expiresAt: lot.batch.expiresAt as Date,
     };
   });
 }
