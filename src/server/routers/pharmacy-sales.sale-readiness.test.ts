@@ -47,6 +47,9 @@ function fixture({
 } = {}) {
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
+    // DEV-631: a counter bill is refused while today's business day is closed.
+    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'UTC' }) },
+    pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     user: {
       findUnique: vi.fn().mockResolvedValue({
         status: 'ACTIVE',

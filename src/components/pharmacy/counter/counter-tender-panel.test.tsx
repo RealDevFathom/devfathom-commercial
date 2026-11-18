@@ -743,6 +743,9 @@ describe('family Khata tender', () => {
       target: { value: 'Paying on Friday' },
     });
     expect(screen.getByLabelText('Approver PIN')).toBeDisabled();
+    expect(screen.getByLabelText('Approver PIN')).toHaveAccessibleDescription(
+      /authenticator for approvals, enter its 6-digit code/
+    );
     fireEvent.change(screen.getByLabelText('Approving manager or owner'), {
       target: { value: 'staff-manager' },
     });

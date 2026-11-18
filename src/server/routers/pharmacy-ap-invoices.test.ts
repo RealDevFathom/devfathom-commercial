@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   can: vi.fn(),
@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   reverseInvoice: vi.fn(),
   list: vi.fn(),
   aging: vi.fn(),
+  creditFindMany: vi.fn(),
 }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -59,6 +60,7 @@ function caller(context: Partial<TRPCContext> = {}) {
     db: {
       $transaction: mocks.transaction,
       pharmacyBranch: { findFirst: mocks.branchFindFirst },
+      pharmacySupplierCredit: { findMany: mocks.creditFindMany },
     },
     entitlements: { organizationId: 'org_1', enabledModules: ['pharmacy-finance'], modules: [] },
     session: {
@@ -304,6 +306,106 @@ describe('pharmacyApInvoices router — error mapping', () => {
       caller().aging({ branchId: 'branch_1', asOf: '2026-11-15' })
     ).rejects.toMatchObject({
       code: 'BAD_REQUEST',
+    });
+  });
+});
+
+describe('pharmacyApInvoices router — payablesDrafts', () => {
+  const draftsInput = { branchId: 'branch_1', asOf: '2026-11-15' };
+
+  beforeEach(() => {
+    mocks.creditFindMany.mockResolvedValue([]);
+  });
+
+  it('refuses without the finance licence, permission or an owner role', async () => {
+    mocks.hasModule.mockReturnValue(false);
+    await expect(caller().payablesDrafts(draftsInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    mocks.hasModule.mockReturnValue(true);
+    mocks.can.mockImplementation(
+      async (_subject: unknown, action: string) => action !== 'finance:read'
+    );
+    await expect(caller().payablesDrafts(draftsInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.aging).not.toHaveBeenCalled();
+    expect(mocks.creditFindMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses a branch outside the actor scope before any read', async () => {
+    mocks.branchFindFirst.mockResolvedValue(null);
+    await expect(
+      caller().payablesDrafts({ ...draftsInput, branchId: 'branch_x' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.aging).not.toHaveBeenCalled();
+    expect(mocks.creditFindMany).not.toHaveBeenCalled();
+  });
+
+  it('reads only the authorized organization and branch', async () => {
+    const result = await caller().payablesDrafts(draftsInput);
+    expect(result.scope).toEqual({ organizationId: 'org_1', branchId: 'branch_1' });
+    expect(result.draftOnly).toBe(true);
+    expect(mocks.aging).toHaveBeenCalledWith(
+      expect.anything(),
+      scope,
+      '2026-11-15',
+      expect.any(Date),
+      undefined
+    );
+    expect(mocks.creditFindMany.mock.calls[0]![0].where).toMatchObject({
+      organizationId: 'org_1',
+      branchId: 'branch_1',
+    });
+  });
+
+  it('cuts supplier credits off at the end of the as-of day', async () => {
+    await caller().payablesDrafts(draftsInput);
+    const where = mocks.creditFindMany.mock.calls[0]![0].where;
+    expect(where.receivedAt.lt).toEqual(new Date('2026-11-16T00:00:00.000Z'));
+  });
+
+  it('rejects an invalid as-of day', async () => {
+    await expect(
+      caller().payablesDrafts({ ...draftsInput, asOf: '2026-02-30' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  describe('organization day boundary', () => {
+    beforeEach(() => {
+      // 01:00 on 16 Nov in Karachi, still 15 Nov in UTC.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-11-15T20:00:00.000Z'));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const karachi = { organization: { id: 'org_1', timezone: 'Asia/Karachi' } };
+
+    it("accepts the organization's today and cuts credits off on its clock", async () => {
+      await caller(karachi as never).payablesDrafts({ ...draftsInput, asOf: '2026-11-16' });
+      expect(mocks.aging).toHaveBeenCalledWith(
+        expect.anything(),
+        scope,
+        '2026-11-16',
+        expect.any(Date),
+        'Asia/Karachi'
+      );
+      const where = mocks.creditFindMany.mock.calls[0]![0].where;
+      expect(where.receivedAt.lt).toEqual(new Date('2026-11-16T19:00:00.000Z'));
+    });
+
+    it('rejects a day that is still in the future for the organization', async () => {
+      await expect(
+        caller(karachi as never).payablesDrafts({ ...draftsInput, asOf: '2026-11-17' })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    });
+
+    it('without a zone the UTC day still applies', async () => {
+      await expect(
+        caller().payablesDrafts({ ...draftsInput, asOf: '2026-11-16' })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     });
   });
 });

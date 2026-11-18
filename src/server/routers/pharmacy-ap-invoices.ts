@@ -166,8 +166,10 @@ export const pharmacyApInvoicesRouter = router({
     .query(async ({ ctx, input }) => {
       const scope = await authorizeGeneralJournal(ctx, input.branchId);
       try {
-        const view = await readApAging(ctx.db, scope, input.asOf);
-        const { cutoff } = apAgingWindow(input.asOf, new Date());
+        const now = new Date();
+        const timeZone = ctx.organization?.timezone;
+        const view = await readApAging(ctx.db, scope, input.asOf, now, timeZone);
+        const { cutoff } = apAgingWindow(input.asOf, now, timeZone);
         const credits = await ctx.db.pharmacySupplierCredit.findMany({
           where: {
             organizationId: scope.organizationId,
