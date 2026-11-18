@@ -50,6 +50,11 @@ import {
   REFERENCE_BATCH_MAX_ROWS,
   type ConnectorRights,
 } from '@/lib/pharmacy/reference-connectors';
+import {
+  addMedicineDraftProvenance,
+  loadDrapReference,
+  searchDrapReference,
+} from '@/lib/pharmacy/drap-reference-autofill';
 import { isEffective } from '@/lib/pharmacy/pack-conversion';
 import { actorIsPharmacyOwner } from '@/lib/pharmacy/procurement-access';
 import { can, subjectFromSession, type Action } from '@/lib/abac';
@@ -1179,6 +1184,98 @@ export const pharmacyMedicineRouter = router({
       } catch (error) {
         domainError(error);
       }
+    }),
+
+  /**
+   * DEV-683: searches this organisation's imported DRAP reference rows so the add-medicine form
+   * can pre-fill an unsaved draft. Needs the catalogue-edit capability; reads only this tenant's
+   * rows and never returns a price.
+   */
+  drapReferenceSearch: catalogueEditProcedure
+    .input(z.object({ query: z.string().trim().max(100) }).strict())
+    .query(({ ctx, input }) =>
+      searchDrapReference(ctx.db, ctx.entitlements.organizationId, input.query)
+    ),
+
+  /**
+   * DEV-683: saves the add-medicine form as a non-saleable draft whose every field is an
+   * unreviewed assertion, so it is published only through the independent catalogue review
+   * (DEV-19/DEV-923). A draft pre-filled from a DRAP row keeps that row's prescription-only and
+   * controlled flags and registration number; the server checks them against the stored row.
+   * No price is accepted.
+   */
+  addMedicineDraft: catalogueEditProcedure
+    .input(
+      z
+        .object({
+          productName: z.string().trim().min(1).max(300),
+          strength: z.string().trim().min(1).max(100),
+          dosageForm: z.string().trim().min(1).max(100),
+          pack: z.string().trim().min(1).max(300),
+          drapRegistrationNumber: z.string().trim().min(1).max(100),
+          rx: z.boolean(),
+          controlled: z.boolean(),
+          drapReferenceId: boundedId.optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements.organizationId;
+      const { drapReferenceId, ...draft } = input;
+      const reference = drapReferenceId
+        ? await loadDrapReference(ctx.db, organizationId, drapReferenceId)
+        : null;
+      if (drapReferenceId && !reference)
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'This DRAP reference row is no longer available. Search again.',
+        });
+      if (reference) {
+        for (const field of ['rx', 'controlled'] as const) {
+          const official = reference.values[field];
+          if (official !== undefined && official !== draft[field])
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message:
+                'The prescription-only and controlled flags come from the DRAP reference row and cannot be changed here.',
+            });
+        }
+        const registration = reference.values.drapRegistrationNumber;
+        if (registration !== undefined && registration !== draft.drapRegistrationNumber)
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message:
+              'The DRAP registration number comes from the reference row. Clear the auto-fill to enter another medicine.',
+          });
+      }
+      const duplicate = await ctx.db.medicine.findFirst({
+        where: { drapRegistrationNumber: draft.drapRegistrationNumber },
+        select: { id: true },
+      });
+      if (duplicate)
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'A medicine with this DRAP registration number is already in the catalogue.',
+        });
+      return ctx.db.medicine.create({
+        data: {
+          productName: draft.productName,
+          drapRegistrationNumber: draft.drapRegistrationNumber,
+          rx: draft.rx,
+          controlled: draft.controlled,
+          productFamily: 'PHARMACEUTICAL',
+          // Never saleable on creation: publication follows a recorded review.
+          saleable: false,
+          provenance: {
+            create: addMedicineDraftProvenance(draft, reference, {
+              editorId: ctx.session.user.id,
+              entryId: `add-medicine:${randomUUID()}`,
+              now: new Date(),
+            }),
+          },
+        },
+        select: { id: true, productName: true, saleable: true },
+      });
     }),
 
   /**

@@ -26,6 +26,9 @@ vi.mock('@/server/routers/pharmacy-staged-review', () => ({
 vi.mock('@/components/pharmacy/medicine-reference-workbench', () => ({
   MedicineReferenceWorkbench: () => <div>Existing workbench</div>,
 }));
+vi.mock('@/components/pharmacy/add-medicine-form', () => ({
+  AddMedicineForm: () => <div>Add medicine form</div>,
+}));
 vi.mock('@/components/pharmacy/catalogue-approval-queue', () => ({
   CatalogueApprovalQueue: () => <div>Catalogue approval queue</div>,
 }));
