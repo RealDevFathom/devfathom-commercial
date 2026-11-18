@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceToday } from '@/lib/timezone';
+import { assertPostingPeriodsOpen } from '@/lib/finance/journal';
 
 import { reverseRefundedEarnedPoints } from './customer-loyalty-earned-reversal';
 import { accrueSalePoints, restoreRefundedLoyaltyPoints } from './customer-loyalty';
@@ -576,6 +577,7 @@ export async function applyPharmacyTender(
   let changeGivenMinor: number | undefined;
   let provider: string | undefined;
   let providerRef: string | undefined;
+  let providerPostingAt: Date | undefined;
   let payerName: string | undefined;
   let referenceSkipped: boolean | undefined;
   let approvalCode: string | undefined;
@@ -646,6 +648,10 @@ export async function applyPharmacyTender(
   } else if (input.type === 'CARD' || input.type === 'WALLET') {
     if (!input.adapter) throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
     const adapter = requireReleaseSafeAdapter(input.adapter);
+    // Refuse before a provider can move money outside the database transaction.
+    // Use the same instant for the persisted posting, including across midnight.
+    providerPostingAt = new Date();
+    await assertPostingPeriodsOpen(db, scope.organizationId, providerPostingAt, scope.branchId);
     const result = await adapter.execute({
       capability: 'SALE',
       amountMinor: input.amountMinor,
@@ -672,6 +678,7 @@ export async function applyPharmacyTender(
       referenceSkipped,
       approvalCode,
       confirmedById,
+      createdAt: providerPostingAt,
       businessDate: input.businessDate,
       actorId: scope.actorId,
       deviceId: input.deviceId,
@@ -692,7 +699,14 @@ export async function applyPharmacyTender(
   if (settled) {
     // F2: a leased offline receipt number was consumed above in this transaction; online
     // sales (receiptNumber still null) draw the next number from the device sequence.
-    receiptNumber = await completePaidPharmacySale(db, scope, sale, input, receiptNumber);
+    receiptNumber = await completePaidPharmacySale(
+      db,
+      scope,
+      sale,
+      input,
+      receiptNumber,
+      providerPostingAt
+    );
     if (sale.customerId) await accrueSalePoints(db, scope, sale.id);
   }
   await requestCounterEvidence(db, scope, { kind: 'TENDER', subjectId: tender.id });
@@ -833,11 +847,16 @@ export async function refundPharmacyTender(
     ? `[CASH; MANUAL REVERSAL REQUIRED] ${input.reason.trim()}`
     : input.reason.trim();
   let providerRef: string | undefined;
+  let providerPostingAt: Date | undefined;
   let drawerSessionId: string | undefined;
   if ((tender.type === 'CARD' || tender.type === 'WALLET') && !manualReversalRequired) {
     if (!input.adapter || !tender.providerRef)
       throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
     const adapter = requireReleaseSafeAdapter(input.adapter);
+    // Refuse before a provider can move money outside the database transaction.
+    // Use the same instant for the persisted posting, including across midnight.
+    providerPostingAt = new Date();
+    await assertPostingPeriodsOpen(db, scope.organizationId, providerPostingAt, scope.branchId);
     const result = await adapter.execute({
       capability: 'REFUND',
       amountMinor: input.amountMinor,
@@ -861,6 +880,7 @@ export async function refundPharmacyTender(
       branchId: scope.branchId,
       saleId: tender.saleId,
       originalTenderId: tender.id,
+      createdAt: providerPostingAt,
       amountMinor: input.amountMinor,
       providerRef,
       drawerSessionId,
