@@ -38,7 +38,11 @@ import {
   cancelRefillSubscription,
   createRefillSubscription,
   listDueRefillSubscriptionIds,
+  listRefillCyclePharmacists,
+  listRefillCyclePrescriptionCandidates,
+  listRefillProgram,
   listRefillSubscriptions,
+  listSubscribableItems,
   openRefillCycle,
   RefillCycleApprovalDenied,
   RefillSubscriptionError,
@@ -577,6 +581,48 @@ export const pharmacyOrderingRouter = router({
         listRefillSubscriptions(txDb(tx), await staffScopeFor(ctx, input.branchId))
       )
     ),
+
+  // DEV-73: the refill program screen. The same `pharmacy:orders` grant and branch
+  // assignment as every subscription command; prescriptions need the dispensing grant.
+  refillProgram: staffProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) =>
+        listRefillProgram(txDb(tx), await staffScopeFor(ctx, input.branchId))
+      )
+    ),
+
+  subscriptionCatalog: staffProcedure
+    .input(z.object({ branchId, search: z.string().trim().max(120).optional() }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await staffScopeFor(ctx, input.branchId);
+      return ctx.db.$transaction(async (tx) =>
+        listSubscribableItems(txDb(tx), scope, input.search)
+      );
+    }),
+
+  subscriptionCyclePrescriptions: staffProcedure
+    .input(z.object({ branchId, cycleId }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        const scope = await staffScopeFor(ctx, input.branchId);
+        // Prescription details are clinical: only a dispenser may read them here.
+        if (!(await holds(ctx, 'pharmacy:dispense')))
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'PHARMACIST_APPROVAL_REQUIRED' });
+        return await ctx.db.$transaction(async (tx) =>
+          listRefillCyclePrescriptionCandidates(txDb(tx), scope, input.cycleId)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  subscriptionCycleApprovers: staffProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await staffScopeFor(ctx, input.branchId);
+      return ctx.db.$transaction(async (tx) => listRefillCyclePharmacists(txDb(tx), scope));
+    }),
 
   createSubscription: staffProcedure
     .input(
