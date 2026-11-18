@@ -12948,6 +12948,7 @@ enum PharmacyMigrationExceptionBucket {
   DUPLICATE_PRODUCT
   PARTY_UNMATCHED
   BALANCE_MISMATCH
+  EXPIRED_STOCK
 }
 
 enum PharmacyMigrationExceptionSeverity {

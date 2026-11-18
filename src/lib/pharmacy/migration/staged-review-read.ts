@@ -94,7 +94,10 @@ export async function listStagedMedicines(
         organizationId,
         status: 'OPEN',
         bucket: {
-          in: input.filter === 'stock' ? ['MISSING_BATCH', 'MISSING_EXPIRY'] : ['MISSING_MRP'],
+          in:
+            input.filter === 'stock'
+              ? ['MISSING_BATCH', 'MISSING_EXPIRY', 'EXPIRED_STOCK']
+              : ['MISSING_MRP'],
         },
       },
     };
