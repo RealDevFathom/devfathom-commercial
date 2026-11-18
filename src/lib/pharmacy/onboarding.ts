@@ -24,6 +24,7 @@ import {
   roleTemplatesForVertical,
 } from '@/lib/vertical-catalog';
 
+import { pharmacyApprovalStatus, type PharmacyApprovalStatus } from './approval-status';
 import { assertStoredBranchMayOperate, BranchOperationDeniedError } from './regulatory';
 import { regulatoryProfileInForceWhere } from './regulatory-start';
 import { readSupplierCompliancePolicy } from './supplier-compliance-policy';
@@ -384,4 +385,82 @@ async function branchMayOperate(
     if (error instanceof BranchOperationDeniedError) return false;
     throw error;
   }
+}
+
+/**
+ * Tenant connections only. `evaluatePharmacyReadiness` answers the
+ * commercial-package gate by reading the assigned package's own vertical. `platform_packages` is FORCE row-level
+ * security and carries no tenant policy, so under a *tenant* connection that
+ * read returns nothing and the gate is reported outstanding — while
+ * `assertActivationReady`, which runs on the platform connection, sees it
+ * satisfied and activates. The tenant surface would then be telling the operator
+ * to fix something that is not broken, and naming a step activation does not
+ * hold against them.
+ *
+ * The two facts a tenant CAN see are sufficient to settle it: the organization's
+ * own vertical, and that a package is assigned. A package of another vertical
+ * can never be assigned to this organization — `assertPackageCompatibleWithVertical`
+ * refuses that pairing at creation and at every package change — so a pharmacy
+ * organization with a package has a pharmacy package.
+ *
+ * This only ever moves the tenant surface *towards* the platform's own verdict;
+ * it can never report ready where activation would refuse, because activation
+ * re-evaluates on the connection that can see the package.
+ */
+export function reconcileTenantPackageGate(
+  readiness: PharmacyReadiness,
+  organization: { vertical: string | null; packageId: string | null } | null
+): PharmacyReadiness {
+  const packageAssigned = Boolean(organization?.packageId) && organization?.vertical === 'PHARMACY';
+  const gate = readiness.gates.find((candidate) => candidate.gate === 'COMMERCIAL_PACKAGE');
+  if (!packageAssigned || !gate || gate.status === 'PASSED') return readiness;
+
+  const gates = readiness.gates.map((candidate) =>
+    candidate.gate === 'COMMERCIAL_PACKAGE'
+      ? { ...candidate, status: 'PASSED' as const, downgradeReason: null }
+      : candidate
+  );
+  const blocking = gates
+    .filter((candidate) => candidate.p0 && candidate.status !== 'PASSED')
+    .map((candidate) => candidate.gate);
+  return { ...readiness, gates, blocking, ready: blocking.length === 0 };
+}
+
+/**
+ * DEV-905: where this pharmacy stands with DevFathom approval, read on a tenant
+ * connection for the owner's dashboard and the counter's ready-to-sell check.
+ *
+ * Approval itself is only ever the platform lifecycle transition to ACTIVE, run by a
+ * super admin, which re-runs every activation check. This reader authorizes nothing: it
+ * reads the organization's lifecycle state and, only while it is ONBOARDING, the same
+ * onboarding readiness the onboarding page shows, so it can say "waiting for approval"
+ * or name the steps still open.
+ */
+export async function readPharmacyApprovalStatus(
+  db: PrismaClient,
+  organizationId: string,
+  at: Date = new Date()
+): Promise<PharmacyApprovalStatus | null> {
+  const organization = await db.organization.findFirst({
+    where: { id: organizationId },
+    select: { status: true, activatedAt: true, vertical: true, packageId: true },
+  });
+  if (!organization) return null;
+  if (organization.status !== 'ONBOARDING') {
+    return pharmacyApprovalStatus({
+      status: organization.status,
+      activatedAt: organization.activatedAt,
+    });
+  }
+  const readiness = reconcileTenantPackageGate(
+    await evaluatePharmacyReadiness(db, organizationId, at),
+    organization
+  );
+  return pharmacyApprovalStatus({
+    status: organization.status,
+    readiness: {
+      ready: readiness.ready,
+      openSteps: readiness.blocking.map((gate) => pharmacyOnboardingStep(gate).label),
+    },
+  });
 }

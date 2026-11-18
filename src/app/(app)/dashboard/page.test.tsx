@@ -9,7 +9,11 @@ const mocks = vi.hoisted(() => ({
   createHotelCaller: vi.fn(),
   withTenantDb: vi.fn(),
   loadPharmacyStaffHome: vi.fn(),
+  readPharmacyApprovalStatus: vi.fn(async (): Promise<unknown> => null),
   db: {},
+}));
+vi.mock('@/lib/pharmacy/onboarding', () => ({
+  readPharmacyApprovalStatus: mocks.readPharmacyApprovalStatus,
 }));
 vi.mock('next/navigation', () => ({ redirect: mocks.redirect }));
 vi.mock('@/lib/abac', () => ({ can: mocks.can, subjectFromSession: (user: unknown) => user }));
@@ -53,6 +57,7 @@ import { HotelDashboardContent } from './hotel-dashboard-content';
 import { RestaurantDashboardContent } from './restaurant-dashboard-content';
 import { PharmacistHome } from './pharmacist-home';
 import { PHARMACY_COMMAND_CENTRE_ACTIONS } from '@/lib/pharmacy/staff-home';
+import { PharmacyApprovalNotice } from '@/components/pharmacy/approval-notice';
 
 function helpers() {
   return {
@@ -434,6 +439,66 @@ describe('PHARMACY report access for the dashboard (DEV-602)', () => {
     const page = await DashboardPage({});
     expect(page.props.children.type).toBe(PharmacyDashboardContent);
     expect(page.props.children.props.reportAccess).toBeUndefined();
+    error.mockRestore();
+  });
+});
+
+// DEV-905: a pharmacy waiting for DevFathom approval says so on the dashboard, read live
+// on every load so an approval shows without signing out and in again.
+describe('PHARMACY approval notice on the dashboard (DEV-905)', () => {
+  function ownerSession() {
+    mocks.can.mockResolvedValue(true);
+    mocks.loadSetupChecklist.mockResolvedValue({ complete: false, items: [] });
+    mocks.createSSRHelpers.mockResolvedValue({
+      helpers: helpers(),
+      session: { user: { id: 'owner', role: 'ADMIN', status: 'ACTIVE' } },
+      organization: { id: 'tenant' },
+      entitlements: { vertical: 'PHARMACY', enabledModules: ['pharmacy-reports'] },
+    });
+  }
+
+  it('shows the waiting notice above the owner command centre', async () => {
+    ownerSession();
+    mocks.readPharmacyApprovalStatus.mockResolvedValueOnce({ state: 'AWAITING_APPROVAL' });
+    const page = await DashboardPage({});
+    expect(mocks.readPharmacyApprovalStatus).toHaveBeenCalledWith(mocks.db, 'tenant');
+    const [notice, home] = page.props.children.props.children;
+    expect(notice.type).toBe(PharmacyApprovalNotice);
+    expect(notice.props).toMatchObject({
+      approval: { state: 'AWAITING_APPROVAL' },
+      canFinishOnboarding: true,
+    });
+    expect(home.type).toBe(PharmacyDashboardContent);
+  });
+
+  it('shows the approval once DevFathom has approved the pharmacy', async () => {
+    ownerSession();
+    const approval = { state: 'APPROVED', approvedAt: new Date().toISOString() };
+    mocks.readPharmacyApprovalStatus.mockResolvedValueOnce(approval);
+    const page = await DashboardPage({});
+    const [notice] = page.props.children.props.children;
+    expect(notice.props.approval).toEqual(approval);
+  });
+
+  it('leaves a long-active pharmacy dashboard as it was', async () => {
+    ownerSession();
+    mocks.readPharmacyApprovalStatus.mockResolvedValueOnce({
+      state: 'APPROVED',
+      approvedAt: '2025-01-01T00:00:00.000Z',
+    });
+    const page = await DashboardPage({});
+    expect(page.props.children.type).toBe(PharmacyDashboardContent);
+  });
+
+  it('keeps the dashboard when the approval read fails', async () => {
+    ownerSession();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.readPharmacyApprovalStatus.mockRejectedValueOnce(new TypeError('unavailable'));
+    const page = await DashboardPage({});
+    expect(page.props.children.type).toBe(PharmacyDashboardContent);
+    expect(error).toHaveBeenCalledWith('[dashboard] pharmacy approval status unavailable', {
+      error: 'TypeError',
+    });
     error.mockRestore();
   });
 });
