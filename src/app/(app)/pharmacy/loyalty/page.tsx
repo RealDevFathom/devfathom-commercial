@@ -13,6 +13,7 @@ import { formatUtcInstant } from '@/lib/utc-instant';
 import { LoyaltyCustomerSearch } from './customer-search';
 import { EarnRateForm } from './earn-rate-form';
 import { AdjustPointsForm } from './adjust-points-form';
+import { LoyaltyCardPanel } from './loyalty-card-panel';
 import { MembershipForm } from './membership-form';
 import {
   describeLoyaltyEarnRule,
@@ -62,9 +63,12 @@ async function loadLoyalty(text: (key: string) => string) {
       caller.redemptions({ branchId, page: Number(text('redemptionsPage') || 1) }),
     ]);
     const customerId = text('customerId');
-    const history = customerId
-      ? await caller.history({ branchId, customerId, page: Number(text('page') || 1) })
-      : null;
+    const [history, card] = customerId
+      ? await Promise.all([
+          caller.history({ branchId, customerId, page: Number(text('page') || 1) }),
+          caller.card({ branchId, customerId }),
+        ])
+      : [null, null];
     return {
       state: 'ready' as const,
       branches,
@@ -74,6 +78,7 @@ async function loadLoyalty(text: (key: string) => string) {
       hasMore,
       customerId,
       history,
+      card,
       earnRate,
       liability,
       redemptions,
@@ -148,6 +153,7 @@ export default async function LoyaltyPage({
     hasMore,
     customerId,
     history,
+    card,
     earnRate,
     liability,
     redemptions,
@@ -172,6 +178,9 @@ export default async function LoyaltyPage({
   return (
     <div className="min-w-0 space-y-6">
       {header}
+      <Link className={linkClass} href="/pharmacy/loyalty/prepaid">
+        Manage prepaid tiers
+      </Link>
       <SectionCard title="Earning rate" titleLevel={2}>
         {current ? (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -409,6 +418,12 @@ export default async function LoyaltyPage({
             Used for approved WhatsApp Khata reminder templates. A reminder is not sent when its
             language template is not configured.
           </p>
+          <Link
+            className={linkClass}
+            href={`/pharmacy/loyalty/prepaid?customerId=${encodeURIComponent(customerId)}`}
+          >
+            Prepaid balance and ledger
+          </Link>
           <Stat label="Points available" value={`${history.pointsBalance} points available`} />
           <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
             <MembershipPill active={history.customer.loyaltyActive !== false} />
@@ -497,6 +512,15 @@ export default async function LoyaltyPage({
                 Points cannot be adjusted while the member is deactivated. Re-enrol them first.
               </p>
             )}
+          </div>
+          <div className="mt-5 border-t border-border-subtle pt-5">
+            <h3 className="mb-3 text-sm font-semibold text-text-strong">Loyalty card</h3>
+            <LoyaltyCardPanel
+              key={customerId}
+              branchId={branchId}
+              customerId={customerId}
+              activeCard={card ? { issuedAt: card.issuedAt.toISOString() } : null}
+            />
           </div>
           {history.entries.length ? (
             <div

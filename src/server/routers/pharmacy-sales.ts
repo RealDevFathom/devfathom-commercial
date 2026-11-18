@@ -1,3 +1,10 @@
+import {
+  authenticatePrepaidPin,
+  prepaidPin,
+  PrepaidError,
+  PrepaidPinError,
+  PREPAID_PIN_REFUSED,
+} from '@/lib/pharmacy/prepaid-tiers';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { pharmacyPromotionInput, promotionCreatorMayManage } from '@/lib/pharmacy/promotions';
 import { counterLabel } from '@/lib/pharmacy/counter-label';
@@ -124,6 +131,7 @@ import {
   readCustomerSnapshot,
   redeemSalePoints,
 } from '@/lib/pharmacy/customer-loyalty';
+import { linkLoyaltyCardToSale } from '@/lib/pharmacy/loyalty-card';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import { PharmacySaleBatchError } from '@/lib/pharmacy/sale-batch-safety';
 import {
@@ -269,6 +277,11 @@ const tenderInput = z
     referenceSkipped: z.boolean().optional(),
     /** DEV-713: approval code from a standalone card terminal slip. */
     approvalCode: z.string().regex(MANUAL_CARD_APPROVAL_CODE).optional(),
+    /**
+     * DEV-863: the customer's own prepaid spend PIN, typed by the customer. Verified by the
+     * server; never stored, hashed into the payment or replayed.
+     */
+    prepaidPin: prepaidPin.optional(),
   })
   .strict()
   .refine(hasValidTenderProviderReference, { path: ['providerRef'], message: 'Invalid payment reference.' });
@@ -489,6 +502,7 @@ async function approvedLineInput(
   const approvals: Array<{ kind: CounterApprovalKind; approval: CounterApproval }> = [];
   const lineInput: SaleLineInput = {
     saleId: input.saleId,
+    ...(input.shelfLabelLotId ? { shelfLabelLotId: input.shelfLabelLotId } : {}),
     medicineId: input.medicineId,
     presentationId: input.presentationId,
     packLevelId: input.packLevelId,
@@ -697,8 +711,9 @@ const SOLE_APPROVER_PASSWORD_REAUTH = 'SOLE_APPROVER_PASSWORD_REAUTH';
 
 function ledgerTender(input: z.infer<typeof tenderInput>) {
   // DEV-290: the approver's PIN is one-time evidence, never part of the idempotent payload.
-  const { overLimitApproval, ...tender } = input;
+  const { overLimitApproval, prepaidPin: customerPin, ...tender } = input;
   void overLimitApproval;
+  void customerPin;
   return { ...tender, type: tender.type === 'KHATA' ? ('CREDIT' as const) : tender.type };
 }
 
@@ -713,6 +728,10 @@ const HOSTED_RECEIPT_ERROR_MESSAGES: Record<HostedReceiptError['reason'], string
 };
 
 function fail(error: unknown): never {
+  if (error instanceof PrepaidPinError)
+    throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+  if (error instanceof PrepaidError)
+    throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
   if (error instanceof LostSalesError)
     throw new TRPCError({
       code:
@@ -765,7 +784,7 @@ function fail(error: unknown): never {
   if (error instanceof PharmacyLoyaltyError) {
     throw new TRPCError({
       code:
-        error.reason === 'CUSTOMER_NOT_FOUND'
+        error.reason === 'CUSTOMER_NOT_FOUND' || error.reason === 'LOYALTY_CARD_NOT_RECOGNISED'
           ? 'NOT_FOUND'
           : error.reason === 'LOYALTY_CONSENT_REQUIRED' || error.reason === 'SALE_NOT_LINKED'
             ? 'FORBIDDEN'
@@ -1688,6 +1707,43 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
+  // DEV-748: a scanned (or typed) physical loyalty card links its customer to the open bill,
+  // through the same counter gate and consent checks as linking a customer by name.
+  scanLoyaltyCard: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          // Named so the audit layer redacts it from the recorded input, even on a refusal.
+          cardToken: z.string().trim().min(1).max(64),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        const linked = await ctx.db.$transaction(async (tx) =>
+          linkLoyaltyCardToSale(txDb(tx), scope, { saleId: input.saleId, code: input.cardToken })
+        );
+        // The card code is a bearer token: it is never written to the audit log.
+        annotateAudit(ctx, {
+          category: 'PHARMACY',
+          operation: 'UPDATE',
+          action: 'pharmacyLoyalty.scanCard',
+          targetType: 'PharmacySale',
+          targetId: input.saleId,
+          metadata: {
+            branchId: input.branchId,
+            cardId: linked.cardId,
+            customerId: linked.customerId,
+          },
+        });
+        return { id: linked.customerId, displayName: linked.displayName };
+      } catch (error) {
+        fail(error);
+      }
+    }),
   // Loyalty redemption can complete any sale, including an all-OTC sale, so it
   // always requires the exact dispense capability before entering the domain.
   redeemPoints: capabilityProcedure('pharmacy:dispense')
@@ -2027,12 +2083,50 @@ export const pharmacySalesRouter = router({
             scope.branchId,
             { source: 'TRPC' }
           ));
+        // DEV-863: a counter wallet payment spends the linked customer's prepaid balance. Their
+        // PIN is checked here in its own transaction so a wrong PIN commits its lockout strike,
+        // then re-checked under the customer lock inside the payment.
+        // A recorded payment replays without the PIN: the customer is not asked again.
+        const recorded =
+          input.type === 'WALLET'
+            ? await ctx.db.pharmacyMoneyIdempotencyKey.findUnique({
+                where: {
+                  organizationId_deviceId_key: {
+                    organizationId: scope.organizationId,
+                    deviceId: input.deviceId,
+                    key: input.idempotencyKey,
+                  },
+                },
+                select: { resultPayload: true },
+              })
+            : null;
+        if (input.type === 'WALLET' && !recorded?.resultPayload) {
+          const sale = await ctx.db.pharmacySale.findFirst({
+            where: {
+              id: input.saleId,
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+            },
+            select: { customerId: true },
+          });
+          if (
+            sale?.customerId &&
+            !(await authenticatePrepaidPin({
+              organizationId: scope.organizationId,
+              actorId: scope.actorId,
+              customerId: sale.customerId,
+              pin: input.prepaidPin,
+            }))
+          )
+            throw new TRPCError({ code: 'FORBIDDEN', message: PREPAID_PIN_REFUSED });
+        }
         // applyPharmacyTender enforces the persisted regulatory gate in this transaction.
         // DEV-630: a new counter payment books on today; a recorded retry still replays.
         return await ctx.db.$transaction((tx) =>
           applyPharmacyTender(txDb(tx), scope, ledgerTender(input), undefined, {
             requireCurrentBusinessDate: true,
             drawerOperator: { kind: 'COUNTER', actorIsManager },
+            prepaidPin: input.prepaidPin,
           })
         );
       }
@@ -2351,6 +2445,8 @@ export const pharmacySalesRouter = router({
             })
             .strict()
             .optional(),
+          // DEV-90: a constraint only; it cannot authorize a batch override.
+          shelfLabelLotId: z.string().trim().min(1).max(128).optional(),
           // DEV-92: the raw DataMatrix of one serialized pack; the server re-reads it.
           scannedPack: z
             .object({

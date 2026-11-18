@@ -1,4 +1,5 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { isAccountingPeriodClosedError } from '@/server/trpc-period-errors';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
@@ -849,6 +850,10 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
     } catch (error) {
       if (error instanceof CounterTransportError)
         return Response.json({ error: error.code }, { status: error.status });
+      // DEV-877: the replay rolled back and its command stays PENDING; the
+      // posting date is the server's replay time, whose period is closed.
+      if (isAccountingPeriodClosedError(error))
+        return Response.json({ error: 'PERIOD_CLOSED' }, { status: 409 });
       if (error instanceof BranchOperationDeniedError)
         return Response.json({ error: error.reason }, { status: 403 });
       if (error instanceof z.ZodError || error instanceof SyntaxError)

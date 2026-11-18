@@ -68,6 +68,8 @@ const attemptSchema = z.discriminatedUnion('kind', [
   }),
 ]);
 type Attempt = z.infer<typeof attemptSchema>;
+const PREPAID_REFUND_NOTE =
+  'This refund goes back to the customer’s prepaid balance. Do not give cash.';
 const attemptLabel: Record<Attempt['kind'], string> = {
   return: 'return',
   returnRefund: 'return and refund',
@@ -347,7 +349,9 @@ export function ReturnForm({
       : /^\d+(\.\d{1,2})?$/.test(returnAmount.trim())
         ? Math.round(Number(returnAmount.trim()) * 100)
         : 0;
-  const returnManualRequired = returnTender?.type === 'CARD' || returnTender?.type === 'WALLET';
+  // DEV-863: a prepaid wallet refund goes back to the customer's prepaid balance, never as cash.
+  const returnManualRequired =
+    !returnTender?.prepaid && (returnTender?.type === 'CARD' || returnTender?.type === 'WALLET');
   const tender = data?.tenders.find((row) => row.id === tenderId);
   // A saved return keeps its own line; a fresh one uses the selected line.
   const witnessLineId = attempt && attempt.kind !== 'refund' ? attempt.input.saleLineId : lineId;
@@ -361,7 +365,7 @@ export function ReturnForm({
     witnessRequired && witnessReady
       ? { staffProfileId: witnessStaffId, pin: witnessPin }
       : undefined;
-  const manualRequired = tender?.type === 'CARD' || tender?.type === 'WALLET';
+  const manualRequired = !tender?.prepaid && (tender?.type === 'CARD' || tender?.type === 'WALLET');
   const amountMinor = /^\d+(\.\d{1,2})?$/.test(amount) ? Math.round(Number(amount) * 100) : 0;
   const available = Math.min(
     data?.refundableMinor ?? 0,
@@ -1025,7 +1029,8 @@ export function ReturnForm({
                       value={row.id}
                       disabled={row.refundedMinor >= row.amountMinor}
                     >
-                      {row.type} · PKR {formatMinor(row.amountMinor - row.refundedMinor)} remaining
+                      {row.prepaid ? 'Prepaid balance' : row.type} · PKR{' '}
+                      {formatMinor(row.amountMinor - row.refundedMinor)} remaining
                     </option>
                   ))}
                   <option value="none">No refund now — record the return only</option>
@@ -1067,6 +1072,7 @@ export function ReturnForm({
                         Reprice refund
                       </Button>
                     )}
+                    {returnTender?.prepaid && <p className="text-sm">{PREPAID_REFUND_NOTE}</p>}
                     {returnManualRequired && (
                       <label className="flex min-h-11 items-start gap-2">
                         <input
@@ -1088,7 +1094,7 @@ export function ReturnForm({
                     Choose a stock outcome below to record {quantitySummary} of {line.name} as
                     inspected
                     {returnTender && returnAmountMinor > 0
-                      ? ` and refund PKR ${formatMinor(returnAmountMinor)} to ${returnTender.type}`
+                      ? ` and refund PKR ${formatMinor(returnAmountMinor)} to ${returnTender.prepaid ? 'the prepaid balance' : returnTender.type}`
                       : ''}
                     .
                   </p>
@@ -1148,7 +1154,8 @@ export function ReturnForm({
                     value={row.id}
                     disabled={row.refundedMinor >= row.amountMinor}
                   >
-                    {row.type} · PKR {formatMinor(row.amountMinor - row.refundedMinor)} remaining
+                    {row.prepaid ? 'Prepaid balance' : row.type} · PKR{' '}
+                    {formatMinor(row.amountMinor - row.refundedMinor)} remaining
                   </option>
                 ))}
               </select>
@@ -1164,6 +1171,7 @@ export function ReturnForm({
                 Refund up to PKR {formatMinor(available)} on this tender. Repeat with another
                 original tender for a mixed payment. Loyalty refunds restore redeemed points.
               </p>
+              {tender?.prepaid && <p className="text-sm">{PREPAID_REFUND_NOTE}</p>}
               {manualRequired && (
                 <label className="flex min-h-11 items-start gap-2">
                   <input

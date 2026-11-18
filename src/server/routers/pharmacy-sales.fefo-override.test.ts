@@ -135,6 +135,16 @@ beforeEach(() => {
 });
 
 describe('pharmacySales.addLine batch override (PH-A4)', () => {
+  it('preserves the shelf-label lot constraint without granting an override', async () => {
+    const f = fixture();
+    vi.mocked(addSaleLine).mockResolvedValue({ line: { id: 'line-1' }, allocation: {} } as never);
+    await f.caller.addLine({ ...line, shelfLabelLotId: 'lot-fefo' });
+    expect(vi.mocked(addSaleLine).mock.calls[0]?.[2]).toMatchObject({
+      shelfLabelLotId: 'lot-fefo',
+    });
+    expect(vi.mocked(addSaleLine).mock.calls[0]?.[2].override).toBeUndefined();
+  });
+
   it('passes the override to the domain and labels the audit row with the override id', async () => {
     const f = fixture();
     vi.mocked(addSaleLine).mockResolvedValue({

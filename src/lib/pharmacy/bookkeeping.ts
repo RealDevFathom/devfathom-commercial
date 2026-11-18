@@ -12,6 +12,8 @@ import {
 } from '@/lib/finance/journal';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { Prisma } from '@/generated/prisma/client';
+import { lockPharmacyLedgerScope } from './ledger-lock';
+export { lockPharmacyLedgerScope, pharmacyLedgerLockKey } from './ledger-lock';
 
 export type BookkeepingScope = { organizationId: string; branchId: string; actorId: string };
 
@@ -61,25 +63,6 @@ export class PharmacyBookkeepingError extends Error {
 function positiveMinor(value: number) {
   if (!Number.isSafeInteger(value) || value <= 0)
     throw new PharmacyBookkeepingError('INVALID_AMOUNT');
-}
-
-/**
- * CEO-JVCORE-20261025: one transaction-scoped lock per org+branch ledger, taken
- * FIRST by every command that posts, reverses, closes or reopens. A post can
- * then never pass its open-period check while a concurrent close is committing
- * the period that would have refused it.
- */
-export function pharmacyLedgerLockKey(scope: { organizationId: string; branchId: string }) {
-  return `pharmacy-ledger:${scope.organizationId}:${scope.branchId}`;
-}
-
-export async function lockPharmacyLedgerScope(
-  db: ScopedDb,
-  scope: { organizationId: string; branchId: string }
-) {
-  await db.$queryRaw(
-    Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${pharmacyLedgerLockKey(scope)}, 0))`
-  );
 }
 
 export async function assertPeriodOpen(db: ScopedDb, scope: BookkeepingScope, at: Date) {
@@ -146,16 +129,24 @@ export function isNativeApSettlementTransaction(transaction: { idempotencyKey: s
 /** Internal capability passed only by the native AP settlement commands. */
 export type NativeApSettlementCapability = { nativeApSettlement?: true };
 
+/**
+ * DEV-877: an operational caller that already serializes on its own row lock
+ * (khata repayment, under the family account) posts with the SHARED ledger lock
+ * like every other operational posting. It reaches this call holding drawer and
+ * customer locks, so an exclusive wait here could deadlock with a counter tender.
+ */
+export type OperationalPostingOption = { sharedLedgerLock?: true };
+
 export async function postBookkeepingTransaction(
   db: ScopedDb,
   scope: BookkeepingScope,
   input: PostBookkeepingInput,
-  options: NativeApSettlementCapability = {}
+  options: NativeApSettlementCapability & OperationalPostingOption = {}
 ) {
   if (isNativeApSettlementTransaction(input) && !options.nativeApSettlement)
     throw new PharmacyBookkeepingError('NATIVE_AP_SETTLEMENT');
   positiveMinor(input.amountMinor);
-  await lockPharmacyLedgerScope(db, scope);
+  await lockPharmacyLedgerScope(db, scope, options.sharedLedgerLock ? 'shared' : 'exclusive');
   await assertPeriodOpen(db, scope, input.occurredAt);
   if (input.kind === 'CHEQUE' && !input.chequeNumber?.trim())
     throw new PharmacyBookkeepingError('INVALID_CHEQUE');

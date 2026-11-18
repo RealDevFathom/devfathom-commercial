@@ -434,6 +434,15 @@ describe('DEV-256 supplier, ingredient and batch report filters', () => {
     return { result, queryRaw, counts, query };
   }
 
+  it('DEV-863: subtracts each allocation’s prepaid tier discount from batch and supplier sales', async () => {
+    const { result, query } = run({ batchId: 'batch_1' });
+    await result;
+    const money = query('AS "salesMinor"')!;
+    expect(money.sql).toContain(
+      'SUM(a."grossMinor" - a."discountMinor" - COALESCE((l."tierAllocationDiscounts" ->> a."id")::int, 0))'
+    );
+  });
+
   it('narrows sales, margin, stock, claims and receiving reads to the selected batch and supplier', async () => {
     const { result, counts, query } = run({ supplierId: 'sup_1', batchId: 'batch_1' });
     const report = await result;

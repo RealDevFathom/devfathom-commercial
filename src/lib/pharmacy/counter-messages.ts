@@ -67,6 +67,8 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   INVALID_ARRANGEMENT:
     'This quantity does not match how the batch sits on the shelf. Sell the open loose units first, or break a pack in Inventory before selling strips or loose units.',
   INSUFFICIENT_STOCK: 'There is not enough safe stock on hand for this quantity.',
+  LABEL_LOT_MISMATCH:
+    "This shelf label's batch can no longer cover this line. Rescan the label or choose another batch.",
   BLOCKED_STOCK:
     'This batch cannot be dispensed — it is expired, quarantined or recalled. Choose another batch.',
   // #659: a batch on the bill changed after its line was added; payment is refused.
@@ -99,6 +101,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   CONSENT_REQUIRED: 'Recorded patient consent is required before dispensing this medicine.',
   LOYALTY_CONSENT_REQUIRED:
     'Loyalty consent is required before linking this customer or redeeming loyalty points.',
+  // DEV-748: unknown, revoked and other-organization cards are refused alike.
+  LOYALTY_CARD_NOT_RECOGNISED:
+    'That loyalty card is not recognised or has been replaced. Ask the customer for their current card, or link them by name.',
   // DEV-712: the bill was paid, voided or held. A scan opens the next bill by
   // itself, so the sentence never sends the operator to refresh.
   INVALID_STATE:
@@ -167,6 +172,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   UNCERTIFIED_PROVIDER: 'This tender needs a connected provider. Take another tender.',
   INVALID_MANUAL_CAPTURE:
     'Check the payment reference and approval code, or confirm this tender is enabled at this branch.',
+  // DEV-863: prepaid money goes back to the customer's prepaid balance, never as cash.
+  PREPAID_REFUND_RESTORES_BALANCE:
+    'This payment came from the customer’s prepaid balance. The refund goes back to that balance; do not give cash.',
   MOCK_PROVIDER_IN_RELEASE:
     'Card payments are not configured on this deployment. Take another tender.',
   REOPEN_REASON_REQUIRED: 'Reopening a closed day needs a recorded reason.',

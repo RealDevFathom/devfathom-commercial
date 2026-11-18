@@ -126,7 +126,9 @@ describe('DayClosePanel', () => {
         } as T;
       };
 
-      render(<DayClosePanel request={request} operators={operators} actingOperatorId="operator-1" />);
+      render(
+        <DayClosePanel request={request} operators={operators} actingOperatorId="operator-1" />
+      );
       fireEvent.click(screen.getByRole('button', { name: 'Close day' }));
       const dialog = screen.getByRole('dialog', { name: 'Close business day' });
       await waitFor(() =>
@@ -170,5 +172,73 @@ describe('DayClosePanel', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Day date unavailable.');
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+});
+
+describe('DayClosePanel manual card line', () => {
+  const totals = {
+    grossSales: '10.00',
+    deliveryFeeSales: '0.00',
+    deliveryFeeRefunds: '0.00',
+    netSales: '10.00',
+    refundTotal: '0.00',
+    cashExpected: '0.00',
+    cashCounted: '0.00',
+    cashVariance: '0.00',
+  };
+  const figures = {
+    count: 3,
+    amount: '75.25',
+    tipAmount: '0.00',
+    refundCount: 0,
+    refundAmount: '0.00',
+    tipRefundAmount: '0.00',
+    netAmount: '75.25',
+    netTipAmount: '0.00',
+  };
+  async function openPreview(manualCardSummary: unknown) {
+    const request: TerminalRequest = async <T,>(path: string) => {
+      if (path.endsWith('/current')) return { businessDate: '2026-08-19' } as T;
+      return {
+        businessDate: '2026-08-19',
+        readiness: { openBillCount: 0, unresolvedOrderCount: 0, openDrawerCount: 0 },
+        existingCloseId: null,
+        totals,
+        manualCardSummary,
+      } as T;
+    };
+    render(<DayClosePanel request={request} operators={operators} actingOperatorId="operator-1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Close day' }));
+    const dialog = screen.getByRole('dialog', { name: 'Close business day' });
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText('Business date')).toHaveValue('2026-08-19')
+    );
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Check readiness' }));
+    return dialog;
+  }
+
+  it('shows the Card, confirmed manually line with count, total and cashier rows', async () => {
+    const dialog = await openPreview({
+      ...figures,
+      cashiers: [
+        // Not in the approver-only operators list: the frozen name must still show.
+        { ...figures, staffProfileId: 'cashier-9', displayName: 'Former Cashier' },
+      ],
+    });
+    const region = await within(dialog).findByRole('region', { name: 'Card, confirmed manually' });
+    expect(within(region).getAllByText('75.25').length).toBeGreaterThan(0);
+    expect(within(region).getAllByText('3').length).toBeGreaterThan(0);
+    expect(within(region).getByText('Former Cashier')).toBeVisible();
+    expect(within(region).queryByText('cashier-9')).not.toBeInTheDocument();
+  });
+
+  it('distinguishes a zero-activity day from a close without a recorded breakdown', async () => {
+    const zero = await openPreview({ ...figures, count: 0, amount: '0.00', cashiers: [] });
+    expect(await within(zero).findByText('No manually confirmed card activity.')).toBeVisible();
+  });
+
+  it('says the breakdown was not recorded when the summary is null', async () => {
+    const dialog = await openPreview(null);
+    expect(await within(dialog).findByText(/was not recorded/)).toBeVisible();
   });
 });
