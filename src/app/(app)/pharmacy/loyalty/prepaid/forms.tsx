@@ -30,24 +30,27 @@ export function TierSettingsForm({
     }))
   );
   const [state, action, pending] = useActionState(savePrepaid, initial);
-  const [amountError, setAmountError] = useState('');
+  // DEV-942: the upfront amount is read by the shared exact reader; a refused entry is
+  // explained and the settings are not sent. After a refused save the message follows the
+  // fields, so it clears as soon as the amount is corrected.
+  const [checkAmounts, setCheckAmounts] = useState(false);
   const update = (index: number, key: 'name' | 'amount' | 'percent', value: string) =>
     setRows((old) => old.map((row, i) => (i === index ? { ...row, [key]: value } : row)));
-  // DEV-942: the upfront amount is read by the shared exact reader; a refused entry is
-  // explained and the settings are not sent.
   const amounts = rows.map((row) => amountInputToMinor(row.amount));
+  const refusedIndex = amounts.findIndex((amount) => amount.status !== 'OK');
+  const refused = amounts[refusedIndex];
+  const amountProblem =
+    !refused || refused.status === 'OK'
+      ? ''
+      : `Tier ${refusedIndex + 1} upfront amount: ${
+          refused.status === 'EMPTY'
+            ? 'Enter an amount, for example 5000.'
+            : amountInputError(refused.reason)
+        }`;
+  const amountError = checkAmounts ? amountProblem : '';
   const refuseAmount = (event: { preventDefault(): void }) => {
-    const index = amounts.findIndex((amount) => amount.status !== 'OK');
-    const refused = amounts[index];
-    if (!refused || refused.status === 'OK') return setAmountError('');
-    event.preventDefault();
-    setAmountError(
-      `Tier ${index + 1} upfront amount: ${
-        refused.status === 'EMPTY'
-          ? 'Enter an amount, for example 5000.'
-          : amountInputError(refused.reason)
-      }`
-    );
+    setCheckAmounts(amountProblem !== '');
+    if (amountProblem) event.preventDefault();
   };
   return (
     <form action={action} onSubmit={refuseAmount} className="space-y-4">

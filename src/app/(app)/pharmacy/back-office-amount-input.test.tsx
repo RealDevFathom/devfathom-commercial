@@ -105,6 +105,12 @@ const BANK_LINE: ReadonlyArray<[input: string, before: number | null, now: numbe
   ['+-5', null, 'FORMAT'],
 ];
 
+/** Other number literals the old formula read on the finance page, not in the counter fixtures. */
+const LITERALS: ReadonlyArray<[input: string, before: number]> = [
+  ['0b11', 300],
+  ['0o7', 700],
+];
+
 // What each screen's server took, so "accepted before" means the amount reached the books.
 const financeTook = (minor: number | null) =>
   minor !== null && Number.isInteger(minor) && minor >= 1 && minor <= 999_999_999;
@@ -138,8 +144,18 @@ describe('DEV-942 back-office typed amounts use the shared reader', () => {
     };
     for (const [input, [finance]] of BEFORE)
       expect([input, finance]).toEqual([input, legacy(input.trim())]);
-    for (const [input, before] of BANK_LINE)
+    for (const [input, before] of [...BANK_LINE, ...LITERALS])
       expect([input, before]).toEqual([input, legacy(input.trim())]);
+  });
+
+  it.each(LITERALS)('finance and bank lines refuse the number literal %j', (input) => {
+    expect(readFinance(financeAmountMinor(input))).toBe(`Refused: ${MESSAGES.FORMAT}`);
+    expect(readFinance(bankLineAmountMinor(input))).toBe(`Refused: ${BANK_LINE_FORMAT}`);
+    const form = new FormData();
+    form.set('freight', input);
+    expect(read(() => moneyFieldMinor(form, 'freight', 'Freight'))).toBe(
+      `PurchasingValidationError: Freight: ${MESSAGES.FORMAT}`
+    );
   });
 
   it.each(ROWS)('finance reads %j with the shared reader', (input, _d, _t, shared) => {
@@ -235,12 +251,31 @@ describe('DEV-942 back-office typed amounts use the shared reader', () => {
     }
     for (const [input, before, now] of BANK_LINE)
       if (bankLineTook(before)) check(refusedNow.bankLine, input, before!, now);
+    for (const [input, before] of LITERALS) {
+      if (financeTook(before))
+        check(refusedNow.finance, input, before, readFinance(financeAmountMinor(input)));
+      if (bankLineTook(before))
+        check(refusedNow.bankLine, input, before, readFinance(bankLineAmountMinor(input)));
+    }
     // Every entry whose acceptance changes, as stated in the pull request: shorthand the
-    // shared reader refuses (".5", "5.", "+5", "1e3", "0x10") and a third decimal that the
-    // old formula silently rounded.
+    // shared reader refuses (".5", "5.", "+5", "1e3", "0x10", "0b11", "0o7") and a third
+    // decimal that the old formula silently rounded.
     expect(refusedNow).toEqual({
-      finance: ['.5', '5.', '12.345', '1.005', '+5', '1e3', '0x10'],
-      bankLine: ['.5', '5.', '12.345', '1.005', '+5', '1e3', '0x10', '-.5', '-1e3', '-12.345'],
+      finance: ['.5', '5.', '12.345', '1.005', '+5', '1e3', '0x10', '0b11', '0o7'],
+      bankLine: [
+        '.5',
+        '5.',
+        '12.345',
+        '1.005',
+        '+5',
+        '1e3',
+        '0x10',
+        '-.5',
+        '-1e3',
+        '-12.345',
+        '0b11',
+        '0o7',
+      ],
       prepaid: ['.5', '12.345', '1.005', '1e3'],
       purchasing: [],
     });
@@ -279,6 +314,41 @@ describe('DEV-942 prepaid tier upfront amount', () => {
     expect(JSON.parse(String(form.get('tiers')))).toEqual([
       { name: 'Gold', upfrontMinor: 150050, discountBasisPoints: 500 },
     ]);
+  });
+
+  it('clears the amount alert as soon as the amount is corrected', async () => {
+    typeAmount('12.345');
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      `Tier 1 upfront amount: ${MESSAGES.DECIMALS}`
+    );
+    const amount = screen.getByLabelText('Upfront amount (PKR)');
+    fireEvent.change(amount, { target: { value: '12.34' } });
+    expect(screen.queryByRole('alert')).toBeNull();
+    // Breaking it again after a refused save shows the new reason at once.
+    fireEvent.change(amount, { target: { value: '1e3' } });
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      `Tier 1 upfront amount: ${MESSAGES.FORMAT}`
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(actions.savePrepaid).not.toHaveBeenCalled();
+  });
+
+  it('shows no amount alert before a save is tried', () => {
+    render(
+      <TierSettingsForm
+        tiers={[{ name: 'Gold', upfrontMinor: 500000, discountBasisPoints: 500 }]}
+        refundable={false}
+      />
+    );
+    fireEvent.change(screen.getByLabelText('Upfront amount (PKR)'), { target: { value: '1e3' } });
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it.each(LITERALS)('sends nothing for the number literal %j', async (input) => {
+    typeAmount(input);
+    expect(screen.getByRole('alert')).toHaveTextContent(/^Tier 1 upfront amount: /);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(actions.savePrepaid).not.toHaveBeenCalled();
   });
 
   it.each(ROWS)('reads %j with the shared reader', async (input, _d, _t, shared) => {
