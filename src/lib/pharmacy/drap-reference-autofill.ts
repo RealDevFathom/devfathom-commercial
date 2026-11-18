@@ -392,26 +392,61 @@ const IDENTITY_FIELDS = [
   ['dosageForm', 'form'],
 ] as const;
 
+// Separators kept when they sit between two digits, each held by a placeholder while the rest of
+// the punctuation is removed. A decimal comma reads as a decimal point.
+const DIGIT_SEPARATORS: Record<string, string> = {
+  '.': '\uE000',
+  ',': '\uE000',
+  '/': '\uE001',
+  '+': '\uE002',
+  '-': '\uE003',
+};
+const RESTORED: Record<string, string> = {
+  '\uE000': '.',
+  '\uE001': '/',
+  '\uE002': '+',
+  '\uE003': '-',
+};
+
 /**
  * Text for an identity comparison: case, spacing and punctuation are ignored, but a decimal point
- * or comma between two digits is kept, so "2.5 mg" never equals "25 mg" and "25.0" never "250".
- * (normalizeMedicineText drops it, which is right for search but not for identity.)
+ * or comma, '/', '+' or '-' between two digits is kept, so "2.5 mg" never equals "25 mg", "25.0"
+ * never "250", and "40/12.5 mg" never "401/2.5 mg". (normalizeMedicineText drops them, which is
+ * right for search but not for identity.)
  */
 export function identityText(value: string): string {
   return value
     .trim()
     .toLocaleLowerCase('en')
-    .replace(/(\p{N})[.,](?=\p{N})/gu, '$1\u0000')
-    .replace(/[^\p{L}\p{N}\u0000]+/gu, '')
-    .replace(/\u0000/g, '.');
+    .replace(/(\p{N})\s*([.,/+-])\s*(?=\p{N})/gu, (_, digit: string, separator: string) => {
+      return `${digit}${DIGIT_SEPARATORS[separator]}`;
+    })
+    .replace(/[^\p{L}\p{N}\uE000-\uE003]+/gu, '')
+    .replace(/[\uE000-\uE003]/g, (placeholder) => RESTORED[placeholder]!);
 }
 
-function sameStrength(proposed: string, current: string): boolean {
+function sameStrengthPart(proposed: string, current: string): boolean {
   const left = parseSimpleMedicineStrength(proposed);
   const right = parseSimpleMedicineStrength(current);
   if (left && right)
     return left.value === right.value && left.unit.toLowerCase() === right.unit.toLowerCase();
   return identityText(proposed) === identityText(current);
+}
+
+/**
+ * A combination strength ("500 mg/125 mg", "40/12.5 mg") is split on '/' and '+' and compared part
+ * by part with the numeric rule; a different number of parts is a different strength.
+ */
+function sameStrength(proposed: string, current: string): boolean {
+  const parts = (strength: string) =>
+    strength
+      .split(/[/+]/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+  const left = parts(proposed);
+  const right = parts(current);
+  if (left.length !== right.length) return false;
+  return left.every((part, index) => sameStrengthPart(part, right[index]!));
 }
 
 /**

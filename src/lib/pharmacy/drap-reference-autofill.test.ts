@@ -342,6 +342,24 @@ describe('DEV-683 registration identity', () => {
     expect(identityText('Amoxil 2,5 mg')).toBe('amoxil2.5mg');
   });
 
+  it('compares combination strengths part by part and keeps / + - between digits', () => {
+    const conflict = (proposed: string, current: string) =>
+      registrationIdentityConflicts({ strength: proposed }, { ...medicine, strength: current });
+    expect(conflict('40/12.5 mg', '401/2.5 mg')).toEqual(['strength']);
+    expect(conflict('2/0.5 mg', '20.5 mg')).toEqual(['strength']);
+    expect(conflict('500 mg/125 mg', '500mg / 125mg')).toEqual([]);
+    expect(conflict('500 mg + 125 mg', '500mg+125.0mg')).toEqual([]);
+    expect(conflict('500 mg/125 mg', '500 mg/12.5 mg')).toEqual(['strength']);
+    expect(identityText('40/12.5 mg')).toBe('40/12.5mg');
+    expect(identityText('2-4 mg')).toBe('2-4mg');
+    expect(
+      registrationIdentityConflicts(
+        { productName: 'Synthazide 40/12.5' },
+        { ...medicine, productName: 'Synthazide 401/2.5' }
+      )
+    ).toEqual(['name']);
+  });
+
   it('does not count a value either side leaves unstated', () => {
     expect(
       registrationIdentityConflicts({ productName: 'Synthamol' }, { ...medicine, strength: null })
