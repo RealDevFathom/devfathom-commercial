@@ -82,7 +82,8 @@ suite('DEV-925 legacy NARCOTICS class on PostgreSQL', () => {
   const edit = async (
     medicineId: string,
     changes: Record<string, unknown>,
-    decision: 'APPROVE' | 'REJECT' = 'APPROVE'
+    decision: 'APPROVE' | 'REJECT' = 'APPROVE',
+    canReviewControlled = async () => true
   ) => {
     const proposal = await tenant(orgA, (tx) =>
       submitCatalogueEdit(tx, { organizationId: orgA, actorId: editorId }, medicineId, changes)
@@ -91,7 +92,9 @@ suite('DEV-925 legacy NARCOTICS class on PostgreSQL', () => {
       decideCatalogueEdit(
         joined(tx),
         { organizationId: orgA, actorId: reviewerId, actorOrganizationId: orgA },
-        { editId: proposal.id, decision }
+        { editId: proposal.id, decision },
+        undefined,
+        canReviewControlled
       )
     );
   };
@@ -205,12 +208,39 @@ suite('DEV-925 legacy NARCOTICS class on PostgreSQL', () => {
 
   it("keeps a person's correction to not controlled when the same file is loaded again", async () => {
     await edit(medicine.opioid, { controlled: false });
-    // Not corrections: an edit that never touches the flag, a rejected correction, and a
-    // correction a later approved edit reversed.
+    // Not corrections: an edit that never touches the flag, a rejected correction, an approval
+    // without the catalogue review grant, and a correction a later approved edit reversed.
     await edit(medicine.hypnotic, { brandName: 'Synthetic brand' });
     await edit(medicine.hypnotic, { controlled: false }, 'REJECT');
     await edit(medicine.sedative, { controlled: false });
     await edit(medicine.sedative, { controlled: true });
+    // Without the catalogue review grant the approval is refused (SECURITY.md)...
+    await expect(
+      edit(medicine.hypnotic, { controlled: false }, 'APPROVE', async () => false)
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    // ...and an approval with no record of that grant (made before DEV-925) is ignored.
+    const ungranted = id('edit_ungranted');
+    await owner.query(
+      `INSERT INTO pharmacy_catalogue_edits
+        (id, "organizationId", "medicineId", "editorId", changes, "expectedUpdatedAt")
+       VALUES ($1, $2, $3, $4, '{"controlled": false}'::jsonb, now())`,
+      [ungranted, orgA, medicine.hypnotic, editorId]
+    );
+    await owner.query(
+      `UPDATE pharmacy_catalogue_edits
+          SET status = 'APPROVED', "reviewerId" = $2, "reviewedAt" = now() + interval '1 hour'
+        WHERE id = $1`,
+      [ungranted, reviewerId]
+    );
+    await owner.query(
+      `INSERT INTO audit_logs
+        (id, "organizationId", "actorId", "actorType", source, category, operation, action,
+         "targetType", "targetId", metadata)
+       VALUES ($1, $2, $3, 'USER', 'TRPC', 'PHARMACY_CATALOGUE', 'UPDATE',
+         'pharmacy.catalogueApproval', 'PharmacyCatalogueEdit', $4,
+         '{"soloOwner": false, "pinVerified": false}'::jsonb)`,
+      [id('audit_ungranted'), orgA, reviewerId, ungranted]
+    );
     // Another path (for example a confirmed reference proposal) cleared these two flags.
     await owner.query(`UPDATE pharmacy_medicines SET controlled = false WHERE id = ANY($1)`, [
       [medicine.hypnotic, medicine.sedative],

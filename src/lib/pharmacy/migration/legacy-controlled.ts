@@ -23,7 +23,9 @@ const nameKey = (column: Prisma.Sql) => Prisma.sql`lower(${normalizedText(column
 /**
  * DEV-925: true when a person's latest approved catalogue edit of this medicine's controlled
  * flag set it to "not controlled". Approved catalogue edits are retained and immutable, so the
- * correction is remembered and the legacy NARCOTICS class never sets the flag back.
+ * correction is remembered and the legacy NARCOTICS class never sets the flag back. Only an
+ * approval made under the catalogue review grant counts: its append-only audit record says
+ * `controlledReviewed`. Any other approval is ignored, so the import flags the medicine again.
  */
 const correctedNotControlled = (organizationId: string, medicineId: Prisma.Sql) => Prisma.sql`
   COALESCE((
@@ -34,6 +36,15 @@ const correctedNotControlled = (organizationId: string, medicineId: Prisma.Sql) 
        AND e."status" = 'APPROVED'
        AND e."operation" = 'UPDATE_MEDICINE'
        AND jsonb_typeof(e."changes" -> 'controlled') = 'boolean'
+       AND EXISTS (
+         SELECT 1
+           FROM "audit_logs" a
+          WHERE a."organizationId" = ${organizationId}
+            AND a."targetType" = 'PharmacyCatalogueEdit'
+            AND a."targetId" = e."id"
+            AND a."action" IN ('pharmacy.catalogueApproval', 'pharmacy.catalogueSoloOwnerApproval')
+            AND a."metadata" ->> 'controlledReviewed' = 'true'
+       )
      ORDER BY e."reviewedAt" DESC NULLS LAST, e."createdAt" DESC, e."id" DESC
      LIMIT 1
   ), false)`;

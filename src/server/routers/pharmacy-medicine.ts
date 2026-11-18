@@ -53,6 +53,7 @@ import {
   applyLegacyControlledToMedicine,
   hasControlledCorrection,
 } from '@/lib/pharmacy/migration/legacy-controlled';
+import { can, subjectFromSession } from '@/lib/abac';
 import { annotateAudit } from '../audit';
 import { adminProcedure, auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
 
@@ -427,7 +428,13 @@ export const pharmacyMedicineRouter = router({
           actorOrganizationId: ctx.session.user.organizationId,
         },
         input,
-        (tx, operation, payload) => applyCatalogueCommand(ctx, tx, operation, payload)
+        (tx, operation, payload) => applyCatalogueCommand(ctx, tx, operation, payload),
+        () =>
+          can(subjectFromSession(ctx.session.user), 'pharmacy:catalogue-review', undefined, {
+            db: ctx.db as Prisma.TransactionClient,
+            source: 'TRPC',
+            ip: ctx.requestMeta.ip,
+          })
       )
     ),
   priceNotices: capabilityProcedure('pharmacy:safety').query(({ ctx }) =>

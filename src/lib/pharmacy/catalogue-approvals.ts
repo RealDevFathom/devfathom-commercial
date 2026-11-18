@@ -83,7 +83,8 @@ export async function recordCatalogueApproval(
   scope: Scope,
   targetId: string,
   solo: boolean,
-  targetType = 'PharmacyCatalogueEdit'
+  targetType = 'PharmacyCatalogueEdit',
+  controlledReviewed = false
 ) {
   await db.auditLog.create({
     data: {
@@ -96,7 +97,12 @@ export async function recordCatalogueApproval(
       action: solo ? 'pharmacy.catalogueSoloOwnerApproval' : 'pharmacy.catalogueApproval',
       targetType,
       targetId,
-      metadata: { soloOwner: solo, pinVerified: solo },
+      // DEV-925: marks an approved controlled-flag change made under the catalogue review grant.
+      metadata: {
+        soloOwner: solo,
+        pinVerified: solo,
+        ...(controlledReviewed ? { controlledReviewed: true } : {}),
+      },
     },
   });
 }
@@ -244,11 +250,30 @@ export async function submitCatalogueEdit(
   });
 }
 
+/** True when an UPDATE_MEDICINE edit changes the controlled flag. */
+function changesControlled(operation: string, changes: Prisma.JsonValue): boolean {
+  return (
+    operation === 'UPDATE_MEDICINE' &&
+    !!changes &&
+    typeof changes === 'object' &&
+    !Array.isArray(changes) &&
+    changes.controlled !== undefined
+  );
+}
+
+export const CONTROLLED_REVIEW_MESSAGE =
+  'Approving a change to the controlled flag needs the catalogue review permission.';
+
+/**
+ * `canReviewControlled` answers whether the reviewer holds `pharmacy:catalogue-review`. It is
+ * asked only when an approval changes the controlled flag; without it such an approval is refused.
+ */
 export async function decideCatalogueEdit(
   db: ScopedDb,
   scope: Scope,
   input: { editId: string; decision: 'APPROVE' | 'REJECT'; soloPin?: string },
-  applyCommand?: (tx: ScopedDb, operation: string, payload: Prisma.JsonValue) => Promise<unknown>
+  applyCommand?: (tx: ScopedDb, operation: string, payload: Prisma.JsonValue) => Promise<unknown>,
+  canReviewControlled?: () => Promise<boolean>
 ) {
   return db.$transaction(async (tx) => {
     const scoped = tx as ScopedDb;
@@ -265,6 +290,12 @@ export async function decideCatalogueEdit(
         code: 'CONFLICT',
         message: 'Catalogue edit already reviewed.',
       });
+    // DEV-925: the controlled flag is a regulated catalogue field (SECURITY.md); an approval
+    // that changes it needs an explicit grant, checked before any PIN attempt is spent.
+    const controlledReviewed =
+      input.decision === 'APPROVE' && changesControlled(proposal.operation, proposal.changes);
+    if (controlledReviewed && !(await canReviewControlled?.()))
+      throw new TRPCError({ code: 'FORBIDDEN', message: CONTROLLED_REVIEW_MESSAGE });
     const solo =
       input.decision === 'APPROVE' &&
       (await requireIndependentCatalogueReviewer(
@@ -324,7 +355,14 @@ export async function decideCatalogueEdit(
           });
         await applyCommand(scoped, proposal.operation, proposal.changes);
       }
-      await recordCatalogueApproval(scoped, scope, proposal.id, solo);
+      await recordCatalogueApproval(
+        scoped,
+        scope,
+        proposal.id,
+        solo,
+        'PharmacyCatalogueEdit',
+        controlledReviewed
+      );
       // Every other pending edit on this item was submitted against the version
       // this approval just replaced, so none of them can be approved any more.
       staleEdits = await tx.pharmacyCatalogueEdit.count({
