@@ -3983,3 +3983,153 @@ describe('DEV-693 official price hints at goods-in', () => {
     );
   });
 });
+
+describe('DEV-936 central purchasing honours the branch assignment', () => {
+  const OWNER = {
+    id: 'user_a',
+    role: 'ADMIN',
+    status: 'ACTIVE',
+    organizationRole: { permissions: [{ capability: '*', effect: 'ALLOW' }] },
+    permissionOverrides: [],
+  };
+
+  const createFor = (receivingBranchId: string) =>
+    caller().createCentralPurchaseOrder({
+      reference: 'CPO-DEV-936',
+      supplierId: 'supplier_a',
+      receivingBranchId,
+      lines: [ORDER_LINE],
+    });
+
+  const allocateTo = (...destinations: string[]) =>
+    caller().allocateCentralReceipt({
+      goodsReceiptId: 'receipt_central',
+      allocations: destinations.map((destinationBranchId, index) => ({
+        goodsReceiptLineId: `line_${index}`,
+        destinationBranchId,
+        destinationStockLocationId: `store_${destinationBranchId}`,
+        quantityUnits: 10,
+      })),
+    });
+
+  let allocationEvidence: ReturnType<typeof model> & { count: ReturnType<typeof vi.fn> };
+  let transfers: ReturnType<typeof model> & { findFirstOrThrow: ReturnType<typeof vi.fn> };
+  let transferLines: { createMany: ReturnType<typeof vi.fn> };
+
+  /** Branches the query's organization and active filters would not return. */
+  const UNRESOLVABLE = ['branch_other_org', 'branch_missing', 'branch_inactive'];
+  const receiptAt = (branchId: string) => ({
+    id: 'receipt_central',
+    branchId,
+    lines: [0, 1].map((index) => ({
+      id: `line_${index}`,
+      acceptedCanonicalUnits: 10,
+      inventoryLotId: `lot_${index}`,
+      stockLocationId: 'store_central',
+    })),
+  });
+
+  beforeEach(() => {
+    // An organization-wide central purchaser assigned to branch_a and the central
+    // branch, where the receipt was posted.
+    db.pharmacyCentralPurchasingAccess.findMany.mockResolvedValue([{ branchId: null }]);
+    db.pharmacyBranchAssignment.findFirst.mockImplementation(async ({ where }) =>
+      ['branch_a', 'branch_central'].includes(where.branchId) ? { id: 'assignment' } : null
+    );
+    db.pharmacyBranch.findFirst.mockImplementation(async ({ where }) =>
+      UNRESOLVABLE.includes(where.id) ? null : { id: where.id }
+    );
+    db.$queryRaw.mockResolvedValue([]);
+    orderableSupplier();
+    resolvableCatalog();
+    db.pharmacyGoodsReceipt.findFirst.mockResolvedValue(receiptAt('branch_central'));
+    allocationEvidence = Object.assign(model(), { count: vi.fn().mockResolvedValue(0) });
+    transfers = Object.assign(model(), {
+      findFirstOrThrow: vi.fn(async () => ({ id: 'transfer', lines: [{ id: 'transfer_line' }] })),
+    });
+    transferLines = { createMany: vi.fn(async () => ({ count: 1 })) };
+    Object.assign(db, {
+      pharmacyCentralPurchaseAllocation: allocationEvidence,
+      pharmacyInventoryLot: { findFirst: vi.fn(async () => ({ id: 'lot' })) },
+      pharmacyInterbranchTransfer: transfers,
+      pharmacyInterbranchTransferLine: transferLines,
+    });
+    db.pharmacyStockLocation.findFirst.mockImplementation(async ({ where }) => ({
+      id: where.id,
+      branchId: where.branchId,
+    }));
+  });
+
+  function expectNothingWritten() {
+    expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
+    expect(transfers.create).not.toHaveBeenCalled();
+    expect(transferLines.createMany).not.toHaveBeenCalled();
+    expect(allocationEvidence.create).not.toHaveBeenCalled();
+  }
+
+  it('refuses a central order for a receiving branch the buyer is not assigned to', async () => {
+    await expect(createFor('branch_b')).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    expectNothingWritten();
+  });
+
+  it('refuses an allocation when any destination branch is unassigned', async () => {
+    await expect(allocateTo('branch_a', 'branch_b')).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    expectNothingWritten();
+  });
+
+  it('refuses an allocation out of a receipt posted at a branch the buyer is not assigned to', async () => {
+    db.pharmacyGoodsReceipt.findFirst.mockResolvedValue(receiptAt('branch_south'));
+    await expect(allocateTo('branch_a', 'branch_a')).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    expectNothingWritten();
+    // The receipt's branch is read inside the allocation transaction, in this tenant.
+    expect(db.pharmacyGoodsReceipt.findFirst).toHaveBeenCalledWith({
+      where: { id: 'receipt_central', organizationId: 'org_a' },
+      select: { branchId: true },
+    });
+    expect(allocationEvidence.count).not.toHaveBeenCalled();
+  });
+
+  it.each(['buyer', 'owner'] as const)(
+    'refuses a branch of another organization, a missing branch and an inactive branch for the %s',
+    async (who) => {
+      if (who === 'owner') db.user.findUnique.mockResolvedValue(OWNER);
+      for (const branchId of UNRESOLVABLE) {
+        await expect(createFor(branchId)).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: 'Branch is outside your scope.',
+        });
+        await expect(allocateTo('branch_a', branchId)).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: 'Branch is outside your scope.',
+        });
+        expect(db.pharmacyBranch.findFirst).toHaveBeenCalledWith({
+          where: { id: branchId, organizationId: 'org_a', active: true },
+          select: { id: true },
+        });
+      }
+      expectNothingWritten();
+    }
+  );
+
+  it('still lets the assigned buyer act for their own branch', async () => {
+    await expect(createFor('branch_a')).resolves.toMatchObject({ branchId: 'branch_a' });
+    await expect(allocateTo('branch_a', 'branch_a')).resolves.toHaveLength(2);
+  });
+
+  it('lets the owner order and allocate for a branch without an assignment', async () => {
+    db.user.findUnique.mockResolvedValue(OWNER);
+    db.pharmacyGoodsReceipt.findFirst.mockResolvedValue(receiptAt('branch_south'));
+    await expect(createFor('branch_b')).resolves.toMatchObject({ branchId: 'branch_b' });
+    await expect(allocateTo('branch_b', 'branch_c')).resolves.toHaveLength(2);
+    expect(allocationEvidence.create).toHaveBeenCalledTimes(2);
+  });
+});
