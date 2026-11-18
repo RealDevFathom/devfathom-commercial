@@ -432,3 +432,11 @@ empty schema with no organization, users, or platform operator. Always follow it
 `bun run db:seed`.
 
 Use it only when you are certain the configured database is disposable.
+
+## Runtime-role database test
+
+`tests/prepare-runtime-role.db.test.ts` runs only when `RUNTIME_ROLE_TEST_ADMIN_DATABASE_URL` is set.
+It creates or alters the cluster-wide `devfathom_app` role and sets its password, so point it only at
+a disposable PostgreSQL server (the test refuses non-local hosts). It snapshots the role first and
+restores the previous password and attributes, or drops the role if it did not exist, when it ends.
+A crash mid-run can still leave the role changed; never use your normal development server.

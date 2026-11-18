@@ -4,7 +4,10 @@ import { randomBytes } from 'node:crypto';
 import pg from 'pg';
 import { expect, it } from 'vitest';
 
-// An administrator URL for a disposable local cluster: the script creates a cluster-wide role.
+// An administrator URL for a DISPOSABLE local cluster. The script creates or alters the
+// cluster-wide `devfathom_app` role and this test sets its password. The test snapshots the role
+// first and restores it (or drops it if it did not exist) in `finally`, but a crash can still
+// leave the role changed, so never point this at your normal development server.
 const adminUrl = process.env.RUNTIME_ROLE_TEST_ADMIN_DATABASE_URL;
 
 it.skipIf(!adminUrl)(
@@ -23,6 +26,24 @@ it.skipIf(!adminUrl)(
     let owner: pg.Client | undefined;
     let runtime: pg.Client | undefined;
     await admin.connect();
+    const roleSnapshot = (
+      await admin.query(
+        `SELECT r.rolcanlogin, r.rolsuper, r.rolbypassrls, r.rolcreatedb, r.rolcreaterole,
+                r.rolinherit, a.rolpassword
+           FROM pg_roles r JOIN pg_authid a ON a.oid = r.oid
+          WHERE r.rolname = 'devfathom_app'`
+      )
+    ).rows[0] as
+      | {
+          rolcanlogin: boolean;
+          rolsuper: boolean;
+          rolbypassrls: boolean;
+          rolcreatedb: boolean;
+          rolcreaterole: boolean;
+          rolinherit: boolean;
+          rolpassword: string | null;
+        }
+      | undefined;
     try {
       await admin.query(`CREATE DATABASE ${databaseIdentifier}`);
       databaseCreated = true;
@@ -95,8 +116,29 @@ it.skipIf(!adminUrl)(
     } finally {
       await runtime?.end();
       await owner?.end();
-      if (databaseCreated) await admin.query(`DROP DATABASE ${databaseIdentifier}`);
-      await admin.end();
+      try {
+        if (databaseCreated) await admin.query(`DROP DATABASE ${databaseIdentifier}`);
+      } finally {
+        // Leave the server as found: restore the previous role state, or remove a role we created.
+        if (roleSnapshot) {
+          const flag = (on: boolean, name: string) => (on ? name : `NO${name}`);
+          const password =
+            roleSnapshot.rolpassword === null ? 'NULL' : pg.escapeLiteral(roleSnapshot.rolpassword);
+          await admin.query(
+            `ALTER ROLE devfathom_app ${[
+              flag(roleSnapshot.rolcanlogin, 'LOGIN'),
+              flag(roleSnapshot.rolsuper, 'SUPERUSER'),
+              flag(roleSnapshot.rolbypassrls, 'BYPASSRLS'),
+              flag(roleSnapshot.rolcreatedb, 'CREATEDB'),
+              flag(roleSnapshot.rolcreaterole, 'CREATEROLE'),
+              flag(roleSnapshot.rolinherit, 'INHERIT'),
+            ].join(' ')} PASSWORD ${password}`
+          );
+        } else {
+          await admin.query('DROP ROLE IF EXISTS devfathom_app');
+        }
+        await admin.end();
+      }
     }
   },
   60_000
