@@ -186,7 +186,8 @@ it('records actual remittance through ordinary cash tender before custody eviden
     expect.objectContaining({ type: 'CASH', amountMinor: 300, cashReceivedMinor: 300 }),
     undefined,
     // DEV-821: without a manager decision, the remit goes only into a till the actor runs.
-    { drawerOperator: { kind: 'COUNTER', actorIsManager: false } }
+    // DEV-863: the bill was priced at collection, so the remittance never reprices it.
+    { drawerOperator: { kind: 'COUNTER', actorIsManager: false }, prepaidPricingFrozen: true }
   );
 });
 
