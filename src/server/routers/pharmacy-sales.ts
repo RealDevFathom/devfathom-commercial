@@ -211,7 +211,7 @@ import {
   actorMayRefund,
   authenticateRefundPin,
   REFUND_FORBIDDEN,
-  REFUND_PIN_POLICY,
+  refundApprovalAudit,
   RETURN_FORBIDDEN,
   RETURN_PIN_BLOCKED,
 } from '@/lib/pharmacy/refund-authorization';
@@ -2283,11 +2283,11 @@ export const pharmacySalesRouter = router({
           action: 'pharmacySales.refundTender',
         });
         annotateAudit(ctx, {
-          metadata: {
-            policy: REFUND_PIN_POLICY,
+          metadata: refundApprovalAudit({
+            initiatedById: scope.actorId,
             approverId: scope.actorId,
-            pinVerified: 'verified' in pin,
-          },
+            pin,
+          }),
         });
         if ('blocked' in pin) return pin;
         return await ctx.db.$transaction((tx) =>
@@ -3160,11 +3160,11 @@ export const pharmacySalesRouter = router({
           action: 'pharmacySales.returnLine',
         });
         annotateAudit(ctx, {
-          metadata: {
-            policy: REFUND_PIN_POLICY,
+          metadata: refundApprovalAudit({
+            initiatedById: scope.actorId,
             approverId: scope.actorId,
-            pinVerified: 'verified' in pin,
-          },
+            pin,
+          }),
         });
         if ('blocked' in pin) return { blocked: RETURN_PIN_BLOCKED };
         return await ctx.db.$transaction(async (tx) => {
@@ -3234,11 +3234,11 @@ export const pharmacySalesRouter = router({
           action: 'pharmacySales.returnAndRefund',
         });
         annotateAudit(ctx, {
-          metadata: {
-            policy: REFUND_PIN_POLICY,
+          metadata: refundApprovalAudit({
+            initiatedById: scope.actorId,
             approverId: scope.actorId,
-            pinVerified: 'verified' in pin,
-          },
+            pin,
+          }),
         });
         if ('blocked' in pin) return { blocked: RETURN_PIN_BLOCKED };
         return await ctx.db.$transaction(async (tx) => {
