@@ -399,9 +399,12 @@ describe('DEV-766 durable catalogue approvals', () => {
     await expect(
       decideCatalogueEdit(f.db, scope, { editId: 'edit', decision: 'APPROVE' }, apply)
     ).resolves.toEqual({ id: 'edit', status: 'APPROVED', staleEdits: 0 });
-    expect(apply).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'createIngredient', {
-      json: { name: 'Paracetamol' },
-    });
+    expect(apply).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'createIngredient',
+      { json: { name: 'Paracetamol' } },
+      'editor'
+    );
     expect(f.raw.medicine.findFirst).not.toHaveBeenCalled();
     expect(f.raw.medicine.updateMany).not.toHaveBeenCalled();
     expect(f.raw.auditLog.create).toHaveBeenCalledWith(

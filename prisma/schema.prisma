@@ -17104,6 +17104,8 @@ model PharmacyPackPrice {
   proposalId         String?
   reviewedOrgPriceId String?
   createdById        String
+  /// DEV-928: who proposed the price. createdById is who approved (applied) it.
+  proposedById       String?
   createdAt          DateTime @default(now())
 
   @@unique([organizationId, id])
