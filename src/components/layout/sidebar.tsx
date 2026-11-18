@@ -333,8 +333,8 @@ export const navigation: NavItem[] = [
     group: 'Pharmacy',
     module: 'pharmacy-core',
     exact: true,
-    // The owner's data export is offered from the onboarding page.
-    activePrefixes: ['/pharmacy/settings/data-export'],
+    // The owner's data export and pharmacist-check setting are offered from the onboarding page.
+    activePrefixes: ['/pharmacy/settings/data-export', '/pharmacy/settings/pharmacist-check'],
   },
   {
     label: 'Medicine catalog',

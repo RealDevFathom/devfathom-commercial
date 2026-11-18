@@ -39,10 +39,17 @@ export function readOwnerExportPin(value: unknown): string | null {
 }
 
 export async function verifyOwnerExportPin(
-  input: { organizationId: string; userId: string; pin: string },
+  input: {
+    organizationId: string;
+    userId: string;
+    pin: string;
+    /** The approval action recorded with the PIN check (DEV-911 reuses this owner PIN). */
+    action?: string;
+  },
   now: Date = new Date()
 ): Promise<OwnerExportPinResult> {
   const { organizationId, userId, pin } = input;
+  const action = input.action ?? 'pharmacy.ownerDataExport';
   return withTenantDb(
     organizationId,
     async (tx) => {
@@ -66,7 +73,7 @@ export async function verifyOwnerExportPin(
           approverUserId: userId,
           credentialHash: credential.credentialHash,
           secret: pin,
-          action: 'pharmacy.ownerDataExport',
+          action,
           requestedById: userId,
           now,
         }))
