@@ -12,6 +12,7 @@ import {
   verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
 import { verifyApprovalSecret } from '@/lib/approval-authenticator';
+import { COUNTER_DISCOUNT_APPROVAL_REQUIRED } from './counter-messages';
 
 /** A supervisor's staff profile and PIN, entered at the counter for this one line. */
 export type CounterApprovalPin = { staffProfileId: string; pin: string };
@@ -96,7 +97,7 @@ export async function mayDiscountWithoutApproval(
 }
 
 const DENIED_MESSAGE: Record<CounterApprovalKind, string> = {
-  DISCOUNT: 'A discount needs a manager to approve it with their PIN.',
+  DISCOUNT: COUNTER_DISCOUNT_APPROVAL_REQUIRED,
   FEFO_OVERRIDE: 'A non-FEFO batch needs a pharmacist to approve it with their PIN.',
   KHATA_OVER_LIMIT:
     'Charging over the Khata credit limit needs a manager or owner to approve it with their PIN.',

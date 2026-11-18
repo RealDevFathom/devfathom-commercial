@@ -57,6 +57,12 @@ import { CounterRxPanel } from './counter-rx-panel';
 import { CounterSearchResults } from './counter-search-results';
 import { CounterScanInput } from './counter-scan-input';
 import { CounterVoucherEntry, type CounterHeldVoucher } from './counter-voucher';
+import {
+  CounterDiscountEntry,
+  counterDiscountMinor,
+  describeCounterDiscount,
+  type CounterHeldDiscount,
+} from './counter-discount';
 import { CounterSkeleton } from './counter-skeleton';
 import { CounterSubstituteProposals } from './counter-substitute-proposals';
 import {
@@ -105,6 +111,7 @@ import {
   type CounterKeymapPresetKey,
 } from '@/lib/pharmacy/counter-keymap';
 import {
+  COUNTER_DISCOUNT_APPROVAL_REQUIRED,
   COUNTER_DISCOUNT_NOTICES,
   COUNTER_ERROR_MESSAGES,
   counterBillMovedOn,
@@ -571,7 +578,11 @@ function ScopedPharmacyCounterConsole({
   const lineAttempts = useRef(new Map<string, string>());
   const scannerInFlight = useRef<{ text: string; branchId: string; revision: number } | null>(null);
   const packApprovalResolver = useRef<((approval: CounterApprovalPin | null) => void) | null>(null);
-  const [packApproval, setPackApproval] = useState<{ medicineName: string } | null>(null);
+  // DEV-929: the same dialog approves a manual discount; `discount` describes it.
+  const [packApproval, setPackApproval] = useState<{
+    medicineName: string;
+    discount?: string;
+  } | null>(null);
   const finishPackApproval = useCallback((approval: CounterApprovalPin | null) => {
     const resolve = packApprovalResolver.current;
     packApprovalResolver.current = null;
@@ -591,6 +602,10 @@ function ScopedPharmacyCounterConsole({
   // item added. It is dropped after that add, whatever the outcome, so the PIN is not kept.
   const [voucherHold, setHeldVoucher] = useState<
     (CounterHeldVoucher & { branchId: string }) | null
+  >(null);
+  // DEV-929: a manual discount for the next item added, dropped after that add.
+  const [discountHold, setHeldDiscount] = useState<
+    (CounterHeldDiscount & { branchId: string }) | null
   >(null);
   const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
     enabled: safetyLicensed,
@@ -716,6 +731,7 @@ function ScopedPharmacyCounterConsole({
   );
   // A voucher belongs to the branch it was checked at; switching branch drops it.
   const heldVoucher = voucherHold?.branchId === branchId ? voucherHold : null;
+  const heldDiscount = discountHold?.branchId === branchId ? discountHold : null;
   const branchAuthorized =
     branchesQuery.isSuccess &&
     !branchesQuery.isError &&
@@ -775,6 +791,10 @@ function ScopedPharmacyCounterConsole({
 
   const loadScannedPackApprovers = useCallback(
     () => utils.client.pharmacySales.scannedPackFefoApprovers.query({ branchId }),
+    [branchId, utils]
+  );
+  const loadDiscountApprovers = useCallback(
+    () => utils.client.pharmacySales.discountApprovers.query({ branchId }),
     [branchId, utils]
   );
 
@@ -1813,6 +1833,19 @@ function ScopedPharmacyCounterConsole({
         });
         return;
       }
+      // DEV-929: a manual discount, worked out on this line's price. The server re-checks the
+      // owner's maximum, the cost floor and minimum margin, and who may give it.
+      const manualDiscount = heldDiscount;
+      const discountMinor = manualDiscount
+        ? counterDiscountMinor(manualDiscount, selectionPreview.grossMinor)
+        : 0;
+      if (manualDiscount && discountMinor <= 0) {
+        setNotice({
+          tone: 'warning',
+          message: `A discount of ${describeCounterDiscount(manualDiscount)} comes to nothing on this item. Give a larger discount, or remove it.`,
+        });
+        return;
+      }
       setPending('addToCart');
       lastAddOutcome.current = 'pending';
       setNotice(null);
@@ -1890,6 +1923,7 @@ function ScopedPharmacyCounterConsole({
           : undefined;
         const refSerial = Number(billAuth.refSerial);
         const voucher = heldVoucher;
+        let discountApproval: CounterApprovalPin | undefined;
         const attemptKeys: string[] = [];
         const postLine = (lineSaleId: string, approval?: CounterApprovalPin) => {
           const selection = JSON.stringify([
@@ -1941,6 +1975,14 @@ function ScopedPharmacyCounterConsole({
             medicineId: row.medicineId,
             // DEV-780: the server sets the voucher's amount and re-checks every rule.
             ...(voucher ? { voucherId: voucher.id, voucherPin: voucher.pin } : {}),
+            // DEV-929: the approver is proven by a PIN the server verifies, never named here.
+            ...(discountMinor > 0
+              ? {
+                  discountKind: 'DISCOUNT' as const,
+                  discountMinor,
+                  ...(discountApproval ? { discountApproval } : {}),
+                }
+              : {}),
             presentationId: row.presentationId,
             packLevelId: option.packLevelId,
             saleUnit: option.kind,
@@ -1987,10 +2029,50 @@ function ScopedPharmacyCounterConsole({
             return postLine(lineSaleId, approval);
           }
         };
+        // DEV-929: without the right to discount on their own, the cashier is asked for a
+        // manager's or owner's PIN (a solo owner enters their own), for this one line.
+        const postApprovedLine = async (lineSaleId: string) => {
+          try {
+            return await postScannedLine(lineSaleId);
+          } catch (error) {
+            if (
+              !manualDiscount ||
+              discountApproval ||
+              !(error instanceof Error) ||
+              error.message !== COUNTER_DISCOUNT_APPROVAL_REQUIRED
+            )
+              throw error;
+            if (!scanIsCurrent()) return null;
+            const approval = await new Promise<CounterApprovalPin | null>((resolve) => {
+              packApprovalResolver.current = resolve;
+              setPackApproval({
+                medicineName: row.displayName,
+                discount: `Rs ${formatMinor(discountMinor)}`,
+              });
+            });
+            if (!approval || !scanIsCurrent()) return null;
+            discountApproval = approval;
+            try {
+              return await postScannedLine(lineSaleId);
+            } catch (retryError) {
+              if (
+                !(retryError instanceof Error) ||
+                retryError.message !== COUNTER_DISCOUNT_APPROVAL_REQUIRED
+              )
+                throw retryError;
+              setNotice({
+                tone: 'warning',
+                message:
+                  'That PIN did not approve the discount, so the item was not added. A manager or owner must enter their own PIN.',
+              });
+              return null;
+            }
+          }
+        };
         let startedNextBill = replaceClosedBill;
-        let added: Awaited<ReturnType<typeof postScannedLine>>;
+        let added: Awaited<ReturnType<typeof postApprovedLine>>;
         try {
-          added = await postScannedLine(activeSaleId);
+          added = await postApprovedLine(activeSaleId);
         } catch (error) {
           // DEV-712: the server says this bill already moved on — paid on another
           // screen, or this copy was stale. Re-read it and, once it is confirmed
@@ -2003,6 +2085,7 @@ function ScopedPharmacyCounterConsole({
             freshBill ||
             controlled ||
             packApprovalUsed ||
+            discountApproval ||
             prescriptionLine ||
             attemptRef.current
           )
@@ -2014,7 +2097,7 @@ function ScopedPharmacyCounterConsole({
           startedNextBill = true;
           activeSaleId = await openSale();
           if (!scanIsCurrent()) return;
-          added = await postScannedLine(activeSaleId);
+          added = await postApprovedLine(activeSaleId);
         }
         if (!added) return;
         if ('blocked' in added) {
@@ -2038,7 +2121,7 @@ function ScopedPharmacyCounterConsole({
             : null;
         setNotice({
           tone: discountNotice ? 'warning' : 'success',
-          message: `${startedNextBill ? 'New bill started. ' : ''}${units} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}${voucher ? ` with voucher ${voucher.code}` : ''}.${discountNotice ? ` ${discountNotice}` : ''}`,
+          message: `${startedNextBill ? 'New bill started. ' : ''}${units} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}${voucher ? ` with voucher ${voucher.code}` : ''}${discountMinor > 0 ? ` with a discount of Rs ${formatMinor(discountMinor)}` : ''}.${discountNotice ? ` ${discountNotice}` : ''}`,
         });
         setAddVersion(completedAdds.current);
         setQuery('');
@@ -2072,6 +2155,7 @@ function ScopedPharmacyCounterConsole({
         packApprovalResolver.current = null;
         setControlledAuth((value) => ({ ...value, pin: '' }));
         if (heldVoucher) setHeldVoucher(null);
+        if (manualDiscount) setHeldDiscount(null);
         setPending(null);
       }
     },
@@ -2079,6 +2163,7 @@ function ScopedPharmacyCounterConsole({
       activeRow,
       addLine,
       heldVoucher,
+      heldDiscount,
       catalogueCache,
       cartQuery,
       clearBill,
@@ -3518,6 +3603,7 @@ function ScopedPharmacyCounterConsole({
                 setSelectedBranchId(event.target.value);
                 // A voucher and the cashier PIN held for one branch never carry to another.
                 setHeldVoucher(null);
+                setHeldDiscount(null);
                 setLastReceipt(null);
                 setReceiptReprint(false);
                 setActiveRow(null);
@@ -4001,7 +4087,7 @@ function ScopedPharmacyCounterConsole({
                       <CounterVoucherEntry
                         branchId={branchId}
                         held={heldVoucher}
-                        disabled={busy || !branchAuthorized || !online}
+                        disabled={busy || !branchAuthorized || !online || Boolean(heldDiscount)}
                         onHold={(voucher) => {
                           setHeldVoucher({ ...voucher, branchId });
                           setNotice({
@@ -4011,6 +4097,22 @@ function ScopedPharmacyCounterConsole({
                           focusSearch();
                         }}
                         onClear={() => setHeldVoucher(null)}
+                      />
+                    </div>
+                    <div className="mt-3">
+                      <CounterDiscountEntry
+                        branchId={branchId}
+                        held={heldDiscount}
+                        disabled={busy || !branchAuthorized || !online || Boolean(heldVoucher)}
+                        onHold={(discount) => {
+                          setHeldDiscount({ ...discount, branchId });
+                          setNotice({
+                            tone: 'success',
+                            message: `A discount of ${describeCounterDiscount(discount)} will come off the next item you add.`,
+                          });
+                          focusSearch();
+                        }}
+                        onClear={() => setHeldDiscount(null)}
                       />
                     </div>
                   </div>
@@ -4430,7 +4532,18 @@ function ScopedPharmacyCounterConsole({
             {packApproval ? (
               <CounterPackApprovalDialog
                 medicineName={packApproval.medicineName}
-                loadApprovers={loadScannedPackApprovers}
+                copy={
+                  packApproval.discount
+                    ? {
+                        title: 'Approve this discount?',
+                        description: `${packApproval.medicineName}: a discount of ${packApproval.discount}. A manager or owner must enter a fresh PIN. A solo owner can enter their own PIN. The approval is recorded in the audit.`,
+                        confirm: 'Approve discount',
+                      }
+                    : undefined
+                }
+                loadApprovers={
+                  packApproval.discount ? loadDiscountApprovers : loadScannedPackApprovers
+                }
                 onCancel={() => finishPackApproval(null)}
                 onConfirm={finishPackApproval}
               />
