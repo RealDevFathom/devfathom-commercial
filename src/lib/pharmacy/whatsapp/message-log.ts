@@ -56,6 +56,69 @@ export async function claimMessageLogInTransaction(db: ScopedDb, entry: MessageL
   return created[0]?.id ?? null;
 }
 
+/** Marks a row that only holds another key format's claim; it records no message. */
+export const DEDUPE_ALIAS_ERROR = 'DEDUPE_ALIAS';
+
+/**
+ * Other key formats that name the same message, e.g. the key an older deploy
+ * still computes while two versions run side by side. A taken alias blocks the
+ * claim only when its row was created at or after `since` (this period); an
+ * older row holds it for an earlier period and already blocks the older format.
+ */
+export type MessageLogAliases = { dedupeKeys: string[]; since: Date };
+
+/**
+ * Claims `entry.dedupeKey` and its alias keys in the caller's transaction, all
+ * or none: each alias gets a placeholder row (IGNORED, DEDUPE_ALIAS) that commits
+ * with the claim. A worker claiming any of the keys first, in either format,
+ * blocks the other, since the unique key makes a concurrent insert wait for this
+ * transaction. Returns the claim's log id, or null when any key was taken.
+ */
+export async function claimMessageLogWithAliasesInTransaction(
+  db: ScopedDb,
+  entry: MessageLogClaim,
+  aliases: MessageLogAliases | null
+) {
+  const aliasKeys = [...new Set(aliases?.dedupeKeys ?? [])].filter(
+    (key) => key !== entry.dedupeKey
+  );
+  const logId = await claimMessageLogInTransaction(db, entry);
+  if (!logId || !aliases || aliasKeys.length === 0) return logId;
+  const held = await db.pharmacyMessageLog.createManyAndReturn({
+    data: aliasKeys.map((dedupeKey) => ({
+      organizationId: entry.organizationId,
+      channel: entry.channel,
+      direction: entry.direction,
+      kind: entry.kind,
+      status: 'IGNORED',
+      error: DEDUPE_ALIAS_ERROR,
+      dedupeKey,
+      branchId: entry.branchId,
+    })),
+    skipDuplicates: true,
+    select: { id: true, dedupeKey: true },
+  });
+  const taken = aliasKeys.filter((key) => !held.some((row) => row.dedupeKey === key));
+  if (taken.length === 0) return logId;
+  const blocking = await db.pharmacyMessageLog.findFirst({
+    where: {
+      organizationId: entry.organizationId,
+      dedupeKey: { in: taken },
+      createdAt: { gte: aliases.since },
+    },
+    select: { id: true },
+  });
+  if (!blocking) return logId;
+  // Another worker claimed this message under an alias first: claim nothing.
+  await db.pharmacyMessageLog.deleteMany({
+    where: {
+      organizationId: entry.organizationId,
+      id: { in: [logId, ...held.map((row) => row.id)] },
+    },
+  });
+  return null;
+}
+
 export async function claimMessageLog(entry: MessageLogClaim): Promise<string | null> {
   return withTenantDb(entry.organizationId, (db) => claimMessageLogInTransaction(db, entry));
 }

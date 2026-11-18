@@ -76,18 +76,26 @@ import {
 } from '@/lib/pharmacy/controlled-register';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { annotateAudit } from '@/server/audit';
-import { authenticateVoucherCashierPin } from '@/lib/pharmacy/vouchers';
+import {
+  authenticateVoucherCashierPin,
+  counterVoucherInput,
+  lookupCounterVoucher,
+} from '@/lib/pharmacy/vouchers';
 import {
   isLockedOut,
   registerFailedAttempt,
   clearLockout,
 } from '@/lib/restaurant/operator-credentials';
 import { verifyApprovalSecret } from '@/lib/approval-authenticator';
-import { closePharmacyDay, readPharmacyClose } from '@/lib/pharmacy/day-close';
+import {
+  closePharmacyDay,
+  readPharmacyClose,
+  reopenPharmacyDayForTrading,
+} from '@/lib/pharmacy/day-close';
 import { listOpenBills } from '@/lib/pharmacy/open-bills';
 import { readPharmacyCashCloseCheck } from '@/lib/pharmacy/cash-close-check-operations';
 import { readPharmacyShiftHandover } from '@/lib/pharmacy/shift-handover-operations';
-import { workspaceTimezone } from '@/lib/timezone';
+import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
 import { prescriptionIsCurrent } from '@/lib/pharmacy/prescription-calendar';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { TRPCError } from '@trpc/server';
@@ -189,7 +197,9 @@ import {
   cutPharmacyDailyClose,
   lockOpenPharmacyDrawer,
   openPharmacyDrawer,
+  pharmacyDayClosedForTrading,
   readOpenPharmacyDrawer,
+  requirePharmacyTodayOpenForTrading,
   PharmacySettlementError,
   readPharmacyTenderOutcome,
   discardPharmacyTenderAttempt,
@@ -205,6 +215,10 @@ import {
   RETURN_FORBIDDEN,
   RETURN_PIN_BLOCKED,
 } from '@/lib/pharmacy/refund-authorization';
+import {
+  authenticateDayReopenPin,
+  DAY_REOPEN_PIN_POLICY,
+} from '@/lib/pharmacy/day-reopen-authorization';
 
 import { assertInOrganization } from '../org-refs';
 import { managerBranchIds } from '../pharmacy-manager-branches';
@@ -1574,6 +1588,57 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
+  // DEV-631: the owner or a manager reopens today's closed business day for trading,
+  // with a reason and a fresh re-authentication (their own staff PIN). The DEV-31
+  // manager gate: `pharmacy:manage` (deny wins) on an assigned branch, or the audited
+  // organization-administrator exception; a cashier is refused before any PIN check.
+  // The reopen row records who, when and why; the request is audited.
+  reopenDay: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          businessDate: closeDate,
+          closeId: z.string().min(1).max(128),
+          reason: z.string().trim().min(1).max(1000),
+          // The actor's own staff PIN, re-entered for this reopen (redacted from audit input).
+          ownerPin: z.string().regex(/^\d{4,8}$/),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const scope = await requireDrawerManagerAccess(ctx, input.branchId);
+        // Fresh re-authentication, in its own transaction so a refusal keeps its strike.
+        const pin = await authenticateDayReopenPin({
+          organizationId: scope.organizationId,
+          actorId: scope.actorId,
+          pin: input.ownerPin,
+        });
+        annotateAudit(ctx, {
+          metadata: { policy: DAY_REOPEN_PIN_POLICY, pinVerified: 'verified' in pin },
+        });
+        if ('blocked' in pin) throw new TRPCError({ code: 'FORBIDDEN', message: pin.blocked });
+        const reopen = await ctx.db.$transaction(async (tx) =>
+          reopenPharmacyDayForTrading(txDb(tx), scope, {
+            businessDate: input.businessDate,
+            closeId: input.closeId,
+            reason: input.reason,
+          })
+        );
+        annotateAudit(ctx, {
+          targetType: 'PharmacyDailyClose',
+          targetId: reopen.closeId,
+          metadata: {
+            reopenId: reopen.id,
+            businessDate: input.businessDate.toISOString().slice(0, 10),
+          },
+        });
+        return reopen;
+      } catch (error) {
+        fail(error);
+      }
+    }),
   // #728: the owner's read-only cash-close anomaly check (close variance, refunds,
   // voids) with its narrative. Owner-only like the anomaly signals it sits beside;
   // a query that takes no day lock and writes nothing, so a flag never blocks or
@@ -1719,6 +1784,25 @@ export const pharmacySalesRouter = router({
       } catch (error) {
         fail(error);
       }
+    }),
+  /** Closed-day status is also available to dispensers who do not operate a drawer. */
+  tradingDayStatus: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      const organization = await ctx.db.organization.findUnique({
+        where: { id: scope.organizationId },
+        select: { timezone: true },
+      });
+      const businessDate = workspaceToday(organization?.timezone);
+      return {
+        businessDate,
+        dayClosed: await pharmacyDayClosedForTrading(
+          ctx.db,
+          scope,
+          new Date(`${businessDate}T00:00:00.000Z`)
+        ),
+      };
     }),
   /** The OPEN drawer for this counter device, so the counter never offers a second open. */
   drawerStatus: protectedProcedure
@@ -2305,6 +2389,9 @@ export const pharmacySalesRouter = router({
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           return createSale(db, scope, input.quotation, async () => {
+            if (input.quotation) return;
+            // DEV-631: no counter bill is opened while today's business day is closed.
+            await requirePharmacyTodayOpenForTrading(db, scope);
             if (!takesPayment) return;
             if (!input.deviceId) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
             await lockOpenPharmacyDrawer(db, scope, input.deviceId);
@@ -2450,6 +2537,8 @@ export const pharmacySalesRouter = router({
               throw new PharmacyRxReferenceError('CONTROLLED_AUTHORIZATION_NOT_APPLICABLE');
             // #518: an Rx/restricted line needs the exact dispense grant (DENY wins).
             if (medicine) await assertRxSaleAllowed(db, scope, [medicine]);
+            // No stock is reserved while today's business day is closed.
+            await requirePharmacyTodayOpenForTrading(db, scope);
             const { prescription } = input;
             // Recording a prescription fill is a pharmacist's act, whatever the medicine.
             if (
@@ -2567,6 +2656,9 @@ export const pharmacySalesRouter = router({
             where: { id: credential.id },
             data: clearLockout(),
           });
+          // Check the actor and witness before taking the day lock. The day lock
+          // still precedes document/register locks and every stock allocation.
+          await requirePharmacyTodayOpenForTrading(db, scope);
           // A retry is validated like a new request before replay, so an unknown earlier
           // serial is refused either way.
           const refEntry = await earlierRegisterEntry(db, scope, authorization.refSerial);
@@ -3779,6 +3871,24 @@ export const pharmacySalesRouter = router({
   refundAccess: protectedProcedure.query(async ({ ctx }) => ({
     authorized: await actorMayRefund(ctx.db, ctx.session.user),
   })),
+  /**
+   * DEV-631: whether Day close offers "Reopen day for trading" on this branch: the
+   * same branch-scoped owner-or-manager gate as `reopenDay` (`pharmacy:manage`,
+   * deny wins, an active branch assignment or the audited administrator exception),
+   * so the form is never offered where the reopen would be refused. `reopenDay`
+   * still re-checks all of it and the PIN.
+   */
+  dayReopenAccess: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        await requireDrawerManagerAccess(ctx, input.branchId);
+        return { authorized: true };
+      } catch (error) {
+        if (error instanceof TRPCError && error.code === 'FORBIDDEN') return { authorized: false };
+        throw error;
+      }
+    }),
 
   /**
    * The branches this counter may open a bill against, with the money format.
@@ -3888,6 +3998,22 @@ export const pharmacySalesRouter = router({
             limit: input.limit,
           }
         );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  /**
+   * DEV-780: the counter reads a typed or scanned voucher code before applying it to the next
+   * item. Read-only: the voucher is redeemed (and every rule re-checked) only by `addLine`.
+   */
+  counterVoucher: protectedProcedure
+    .input(counterVoucherInput.extend({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        await assignedBranchScope(ctx, input.branchId);
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        return await lookupCounterVoucher(ctx.db as unknown as ScopedDb, scope, input.code);
       } catch (error) {
         fail(error);
       }

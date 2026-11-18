@@ -164,6 +164,8 @@ export async function readPharmacyAnomalyFacts(
           FROM staff_activity GROUP BY "branchId", "userId"
           ORDER BY MAX("occurredAt") DESC LIMIT 200`);
 
+  // A close that was superseded, or reopened for trading (DEV-631) and so awaiting the
+  // close that restates the day, is not the day's standing close.
   const cashVariance =
     filters.supplierId || filters.ingredientId || filters.batchId
       ? []
@@ -174,6 +176,7 @@ export async function readPharmacyAnomalyFacts(
           WHERE c."branchId" IN (${branches}) AND c."isFinal"=true
             AND c."businessDate">=${window.from} AND c."businessDate"<${window.to}
             AND NOT EXISTS (SELECT 1 FROM "pharmacy_daily_closes" newer WHERE newer."organizationId"=c."organizationId" AND newer."branchId"=c."branchId" AND newer."businessDate"=c."businessDate" AND newer."sequence">c."sequence")
+            AND NOT EXISTS (SELECT 1 FROM "pharmacy_day_reopens" reopen WHERE reopen."organizationId"=c."organizationId" AND reopen."closeId"=c."id")
           ORDER BY c."businessDate" DESC LIMIT 200`);
 
   const tenderMismatch =
@@ -209,6 +212,7 @@ export async function readPharmacyAnomalyFacts(
           WHERE c."branchId" IN (${branches}) AND c."isFinal"=true
             AND c."businessDate">=${window.from} AND c."businessDate"<${window.to}
             AND NOT EXISTS (SELECT 1 FROM "pharmacy_daily_closes" newer WHERE newer."organizationId"=c."organizationId" AND newer."branchId"=c."branchId" AND newer."businessDate"=c."businessDate" AND newer."sequence">c."sequence")
+            AND NOT EXISTS (SELECT 1 FROM "pharmacy_day_reopens" reopen WHERE reopen."organizationId"=c."organizationId" AND reopen."closeId"=c."id")
           ORDER BY c."businessDate" DESC LIMIT 200`);
 
   const supplier = filters.supplierId

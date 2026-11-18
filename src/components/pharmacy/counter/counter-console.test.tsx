@@ -47,6 +47,7 @@ const mocks = vi.hoisted(() => ({
   pausedMutations: new Set<string>(),
   refetch: vi.fn(),
   searchFetch: vi.fn(),
+  voucherFetch: vi.fn(),
   cancel: vi.fn(),
   receiptInvalidate: vi.fn(),
   mutationOptions: vi.fn(),
@@ -162,8 +163,10 @@ vi.mock('@/lib/trpc', async () => {
       counterCart: { cancel: mocks.cancel, invalidate: vi.fn() },
       counterReceipt: { invalidate: mocks.receiptInvalidate },
       counterEvidence: { reset: vi.fn() },
+      tradingDayStatus: { invalidate: vi.fn() },
       drawerStatus: { invalidate: mocks.drawerStatusInvalidate },
       counterKeymap: { setData: mocks.keymapSetData, invalidate: vi.fn() },
+      counterVoucher: { fetch: (...args: unknown[]) => mocks.voucherFetch(...args) },
     },
     pharmacyPrescriptions: { counterPatientPanel: { invalidate: vi.fn() } },
     pharmacySafety: { controlledRegister: { invalidate: vi.fn() } },
@@ -185,6 +188,7 @@ vi.mock('@/lib/trpc', async () => {
         'counterLotOptions',
         'counterEvidence',
         'customerSnapshot',
+        'tradingDayStatus',
         'drawerStatus',
         'create',
         'addLine',
@@ -540,6 +544,7 @@ beforeEach(() => {
     organizationId: 'org-a',
   });
   // A counter taking cash has an open drawer; tests about a closed drawer say so.
+  mocks.queries.tradingDayStatus = query({ dayClosed: false });
   mocks.queries.drawerStatus = query({ openDrawer: { id: 'drawer-default' } });
   mocks.queries.counterBranches = query({
     branches: [{ id: 'branch-a', name: 'Synthetic branch', code: 'MT1' }],
@@ -852,7 +857,9 @@ describe('PharmacyCounterConsole split tender (#722)', () => {
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.00' } });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
-    await waitFor(() => expect(screen.getByLabelText('Recorded tenders').children).toHaveLength(1));
+    await waitFor(() =>
+      expect(screen.getByLabelText('Recorded payments').children).toHaveLength(1)
+    );
     expect(screen.queryByText('Settled')).not.toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeEnabled()
@@ -865,7 +872,9 @@ describe('PharmacyCounterConsole split tender (#722)', () => {
       'counter-tender:sale-a:CASH:12500:after:12500',
     ]);
     // The settled receipt drawer hides the panel from assistive tech; the rows remain.
-    await waitFor(() => expect(screen.getByLabelText('Recorded tenders').children).toHaveLength(2));
+    await waitFor(() =>
+      expect(screen.getByLabelText('Recorded payments').children).toHaveLength(2)
+    );
   });
 });
 
@@ -2242,6 +2251,27 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     expect(screen.getByText('Drawer open')).toBeInTheDocument();
   });
 
+  it('DEV-631: says the business day is closed before a bill is built, with no scan or drawer step', () => {
+    const drawerStatus = query({ dayClosed: true });
+    mocks.queries.tradingDayStatus = drawerStatus;
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    expect(screen.getByRole('status', { name: 'Business day closed' })).toHaveTextContent(
+      /New bills, payments and drawer changes are blocked\. The owner or a manager can reopen today for trading on Day close/
+    );
+    expect(screen.getByText('Day closed')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Scan or search')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open drawer' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    expect(drawerStatus.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('DEV-631: an open business day keeps the scan field', () => {
+    openTheDrawer();
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    expect(screen.queryByRole('status', { name: 'Business day closed' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Scan or search')).toBeInTheDocument();
+  });
+
   it('withholds the button until the drawer status is known', () => {
     mocks.queries.drawerStatus = { ...query(), isSuccess: false, isLoading: true };
     render(<PharmacyCounterConsole initialBranchId="branch-a" />);
@@ -3153,6 +3183,121 @@ describe('PharmacyCounterConsole barcode safety', () => {
     expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ medicineId: 'fresh-medicine', quantity: 1 })
     );
+  });
+
+  it('DEV-780: sends a checked voucher and the cashier PIN with the next item, then drops it', async () => {
+    mocks.voucherFetch.mockResolvedValue({
+      id: 'voucher-a',
+      code: 'SAVE-100',
+      name: 'Front shop offer',
+      discountMinor: 10_000,
+      usesLeft: 2,
+      maxUses: 3,
+      validUntil: new Date('2031-01-01T00:00:00.000Z'),
+      status: 'READY',
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.click(screen.getByText('Voucher'));
+    fireEvent.change(screen.getByLabelText('Voucher code'), { target: { value: 'save-100' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Check voucher' }));
+    await screen.findByText(/2 of 3 uses left/);
+    expect(mocks.voucherFetch).toHaveBeenCalledWith({ branchId: 'branch-a', code: 'save-100' });
+    fireEvent.change(screen.getByLabelText('Your PIN'), { target: { value: '4321' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Use on next item' }));
+    await screen.findByText(/takes Rs 100\.00 off the next non-drug item/);
+    scan();
+    await screen.findByText('1 × Paracetamol added with voucher SAVE-100.');
+    expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ voucherId: 'voucher-a', voucherPin: '4321' })
+    );
+    // The voucher and its PIN belong to that one add.
+    expect(screen.queryByRole('button', { name: 'Remove voucher' })).not.toBeInTheDocument();
+    mocks.mutations.addLine!.mockClear();
+    scan();
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    expect(mocks.mutations.addLine).toHaveBeenCalledWith(
+      expect.not.objectContaining({ voucherId: expect.anything() })
+    );
+  });
+
+  async function holdVoucher() {
+    mocks.voucherFetch.mockResolvedValue({
+      id: 'voucher-a',
+      code: 'SAVE-100',
+      name: 'Front shop offer',
+      discountMinor: 10_000,
+      usesLeft: 2,
+      maxUses: 3,
+      validUntil: new Date('2031-01-01T00:00:00.000Z'),
+      status: 'READY',
+    });
+    fireEvent.click(screen.getByText('Voucher'));
+    fireEvent.change(screen.getByLabelText('Voucher code'), { target: { value: 'SAVE-100' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Check voucher' }));
+    fireEvent.change(await screen.findByLabelText('Your PIN'), { target: { value: '4321' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Use on next item' }));
+    await screen.findByRole('button', { name: 'Remove voucher' });
+  }
+
+  it('DEV-780: a voucher held at one branch is discarded, not hidden, when the branch changes', async () => {
+    mocks.queries.counterBranches = query({
+      branches: [
+        { id: 'branch-a', name: 'A' },
+        { id: 'branch-b', name: 'B' },
+      ],
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    await holdVoucher();
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch-b' } });
+    expect(screen.queryByRole('button', { name: 'Remove voucher' })).not.toBeInTheDocument();
+    // Switching back does not restore the earlier customer's voucher or the cashier PIN.
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch-a' } });
+    expect(screen.queryByRole('button', { name: 'Remove voucher' })).not.toBeInTheDocument();
+    expect(screen.getByText('Voucher')).toBeInTheDocument();
+  });
+
+  it('DEV-780: a retry after a lost voucher add reuses its key, so it cannot add the item twice', async () => {
+    mocks.mutations.addLine!.mockRejectedValueOnce(new Error('Synthetic network failure'));
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    await holdVoucher();
+    scan();
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    // The voucher and its PIN are dropped after the uncertain add.
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Remove voucher' })).not.toBeInTheDocument()
+    );
+    scan();
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(2));
+    const [first, retry] = mocks.mutations.addLine!.mock.calls.map(
+      ([input]) => input as { idempotencyKey: string; voucherId?: string }
+    );
+    expect(first).toMatchObject({ voucherId: 'voucher-a', voucherPin: '4321' });
+    expect(retry!.voucherId).toBeUndefined();
+    // Same key: the server replays a committed line or refuses the changed voucher.
+    expect(retry!.idempotencyKey).toBe(first!.idempotencyKey);
+  });
+
+  it('DEV-780: refuses to hold a voucher that reached its use limit', async () => {
+    mocks.voucherFetch.mockResolvedValue({
+      id: 'voucher-a',
+      code: 'SAVE-100',
+      name: 'Front shop offer',
+      discountMinor: 10_000,
+      usesLeft: 0,
+      maxUses: 3,
+      validUntil: new Date('2031-01-01T00:00:00.000Z'),
+      status: 'USED_UP',
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.click(screen.getByText('Voucher'));
+    fireEvent.change(screen.getByLabelText('Voucher code'), { target: { value: 'SAVE-100' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Check voucher' }));
+    expect(await screen.findByText('This voucher has reached its use limit.')).toHaveAttribute(
+      'role',
+      'alert'
+    );
+    expect(screen.queryByLabelText('Your PIN')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Use on next item' })).not.toBeInTheDocument();
   });
 
   it('reads the scanner Enter value even before a change render commits', async () => {

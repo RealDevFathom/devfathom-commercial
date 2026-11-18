@@ -1,11 +1,13 @@
 'use client';
 
+import { PHARMACY_COPY as copy } from '@/lib/pharmacy/plain-language';
 import { forwardRef, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Check } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { COUNTER_APPROVAL_CODE_HINT } from './counter-approval-copy';
 import { Textarea } from '@/components/ui/textarea';
 import { CounterChangeDue } from './counter-change-due';
 import { CounterTenderDiscard, type CounterTenderDiscardInput } from './counter-tender-discard';
@@ -490,7 +492,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                                   : cashInvalid
                                     ? 'Enter a valid cash amount with at most two decimal places.'
                                     : cashShort
-                                      ? 'Cash received is less than the amount tendered.'
+                                      ? copy.tender.cashShort
                                       : manual && manualSettingsLoading
                                         ? 'Loading merchant details…'
                                         : manual && (manualSettingsError || !merchant)
@@ -713,7 +715,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         <div className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-border-subtle bg-surface-sunken p-4">
           <p className="space-y-2">
             <span className="block font-mono text-xs tracking-wide text-text-muted uppercase">
-              Balance due
+              {copy.tender.balance}
             </span>
             <span className="block text-3xl font-semibold tracking-tight tabular-nums text-text-strong">
               {balanceKnown && (state === 'ready' || state === 'settled') && !unknown
@@ -732,7 +734,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         <CounterChangeDue minor={confirmedChangeMinor ?? recordedChangeMinor} />
 
         {tenders.length > 0 ? (
-          <ol aria-label="Recorded tenders" className="space-y-2">
+          <ol aria-label={copy.tender.payments} className="space-y-2">
             {tenders.map((tender, index) => (
               <li
                 key={tender.tenderId}
@@ -933,8 +935,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           ) : null}
           {editable && amountValid && amountMinor! < balanceMinor! ? (
             <p className="text-sm text-text-body" aria-live="polite">
-              {tenders.length > 0 ? `Tender ${tenders.length + 1}. ` : ''}Remaining after this
-              tender{' '}
+              {tenders.length > 0 ? `${copy.tender.nextPayment} ${tenders.length + 1}. ` : ''}
+              {copy.tender.remaining}{' '}
               <span className="font-mono tabular-nums text-text-strong">
                 {formatMinor(balanceMinor! - amountMinor!)}
               </span>
@@ -1312,6 +1314,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                           inputMode="numeric"
                           autoComplete="off"
                           maxLength={8}
+                          aria-describedby="khata-approver-pin-hint"
                           value={approverPin}
                           disabled={!editable || !approverId}
                           onChange={(event) =>
@@ -1319,6 +1322,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                           }
                           className="h-11 rounded-sm"
                         />
+                        <p id="khata-approver-pin-hint" className="text-sm text-text-muted">
+                          {COUNTER_APPROVAL_CODE_HINT}
+                        </p>
                       </>
                     ) : (
                       <>
@@ -1415,7 +1421,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               </p>
             ) : cashShort ? (
               <p id="tender-cash-error" className="text-sm text-destructive" role="alert">
-                Cash received is less than the amount tendered.
+                {copy.tender.cashShort}
               </p>
             ) : changeMinor !== null ? (
               <p
