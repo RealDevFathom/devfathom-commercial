@@ -4,7 +4,8 @@ import { workspaceTimezone } from '@/lib/timezone';
 
 import type { LedgerScope } from './stock-ledger';
 import { prescriptionIsCurrent } from './prescription-calendar';
-import { assertPharmacistApproved } from './dispensing';
+import { assertPharmacistApproved, PharmacyDispensingError } from './dispensing';
+import { pharmacistCheckAtSaleEnabled } from './pharmacist-check-policy';
 import { needsRxSaleGrant } from './rx-sale-gate';
 
 const REASONS = {
@@ -46,6 +47,10 @@ export class PharmacyRxReferenceError extends Error {
  * pharmacist may sign their own review through the audited pharmacist queue. Controlled lines
  * keep their own register gate (prescription or witnessed emergency supply), so they are not
  * judged here.
+ *
+ * DEV-911: when the owner has switched the pharmacist check at each sale off, neither the
+ * prescription nor the signed review is demanded. The setting is read only when this gate is
+ * about to refuse, so with the check on (or the setting missing or unreadable) nothing changes.
  */
 export async function assertRxLinesPrescribed(
   db: ScopedDb,
@@ -53,12 +58,22 @@ export async function assertRxLinesPrescribed(
     id: string;
     prescriptionLineId: string | null;
     medicine: { rx: boolean; restricted: boolean; controlled: boolean } | null | undefined;
-  }>
+  }>,
+  scope?: { organizationId: string }
 ): Promise<void> {
   const regulated = lines.filter((line) => needsRxSaleGrant(line.medicine));
-  if (regulated.some((line) => !line.prescriptionLineId))
-    throw new PharmacyRxReferenceError('PRESCRIPTION_REQUIRED');
-  for (const line of regulated) await assertPharmacistApproved(db, line.id);
+  try {
+    if (regulated.some((line) => !line.prescriptionLineId))
+      throw new PharmacyRxReferenceError('PRESCRIPTION_REQUIRED');
+    for (const line of regulated) await assertPharmacistApproved(db, line.id);
+  } catch (error) {
+    if (
+      (error instanceof PharmacyRxReferenceError || error instanceof PharmacyDispensingError) &&
+      !(await pharmacistCheckAtSaleEnabled(db, scope?.organizationId))
+    )
+      return;
+    throw error;
+  }
 }
 
 export type PrescriptionReference = { prescriptionLineId: string; patientId: string };

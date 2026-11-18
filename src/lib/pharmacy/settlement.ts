@@ -575,7 +575,7 @@ export async function applyPharmacyTender(
   );
   // DEV-629: an Rx/restricted line is never paid for without a pharmacist-attached prescription
   // and a pharmacist's signed review of that line.
-  await assertRxLinesPrescribed(db, sale.lines);
+  await assertRxLinesPrescribed(db, sale.lines, scope);
   // #659: before any lease, provider charge, tender or posting. A batch recalled,
   // quarantined or expired since add-to-cart refuses the payment.
   await assertSaleBatchesSellable(db, scope, sale.id);

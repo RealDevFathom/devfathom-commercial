@@ -1,5 +1,6 @@
 import { can } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { pharmacistCheckAtSaleEnabled } from './pharmacist-check-policy';
 
 /** #518: refused because the actor may not sell this prescription-only line. */
 export class PharmacyRxSaleDenied extends Error {
@@ -23,16 +24,19 @@ export function needsRxSaleGrant(
 /**
  * #518: only someone central ABAC allows the exact pharmacy:dispense grant may sell an Rx or
  * restricted, non-controlled line: persisted role and user overrides, an explicit DENY wins, and
- * wildcards never qualify. There is deliberately no other way through (no owner policy, session
- * role or setting).
+ * wildcards never qualify. No session role or other setting opens it. The one exception is
+ * DEV-911: when the organization's owner has switched the pharmacist check at each sale off
+ * (`pharmacistCheckAtSaleEnabled`), these lines sell like any other item. A missing or
+ * unreadable setting keeps the gate on.
  */
 export async function assertRxSaleAllowed(
   db: ScopedDb,
-  scope: { actorId: string },
+  scope: { actorId: string; organizationId?: string },
   medicines: ReadonlyArray<{ rx: boolean; restricted: boolean; controlled: boolean } | undefined>
 ): Promise<void> {
   if (!medicines.some(needsRxSaleGrant)) return;
   if (await can({ id: scope.actorId, role: 'EMPLOYEE' }, 'pharmacy:dispense', undefined, { db }))
     return;
+  if (!(await pharmacistCheckAtSaleEnabled(db, scope.organizationId))) return;
   throw new PharmacyRxSaleDenied();
 }
