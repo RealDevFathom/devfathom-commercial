@@ -2,6 +2,7 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { workspaceDateRange } from '@/lib/timezone';
 import {
   detectPharmacyAnomalies,
   type AnomalyCandidate,
@@ -92,6 +93,9 @@ export async function readPharmacyAnomalyFacts(
   observedAt = new Date()
 ): Promise<{ facts: AnomalyFactSet; windowStart: Date; windowEnd: Date }> {
   const window = validatePharmacyReportFilters(filters);
+  // Business-date columns compare against `window`; event timestamps (count approvals, sale
+  // events, receipt postings) use the workspace day, so 00:30 in Karachi counts on that date.
+  const events = workspaceDateRange(filters.from, filters.to, filters.timeZone);
   const branches = Prisma.join(filters.branchIds);
   const ingredient = medicineFilter(filters.ingredientId);
   const batch = filters.batchId
@@ -112,7 +116,7 @@ export async function readPharmacyAnomalyFacts(
           JOIN "pharmacy_manufacturing_batches" mb ON mb."organizationId"=il."organizationId" AND mb."id"=il."manufacturingBatchId"
         ) lot ON lot."organizationId"=cl."organizationId" AND lot."branchId"=cl."branchId" AND lot."id"=cl."inventoryLotId"
         WHERE cl."branchId" IN (${branches}) AND c."status"='APPROVED' AND cl."varianceUnits" IS NOT NULL
-          AND c."approvedAt">=${window.from} AND c."approvedAt"<${window.to} ${ingredient} ${batch}
+          AND c."approvedAt">=${events.from} AND c."approvedAt"<${events.to} ${ingredient} ${batch}
         ORDER BY c."approvedAt" DESC LIMIT 500`);
 
   const discountOverride =
@@ -150,7 +154,7 @@ export async function readPharmacyAnomalyFacts(
                    COUNT(*) FILTER (WHERE e."kind"='VOIDED')::int AS "voidEvents",
                    0::int AS "completedSales", MAX(e."occurredAt") AS "occurredAt"
             FROM "pharmacy_sale_events" e
-            WHERE e."branchId" IN (${branches}) AND e."occurredAt">=${window.from} AND e."occurredAt"<${window.to}
+            WHERE e."branchId" IN (${branches}) AND e."occurredAt">=${events.from} AND e."occurredAt"<${events.to}
             GROUP BY e."branchId", e."actorId"
             UNION ALL
             SELECT s."branchId", s."createdByUserId", 0::int, COUNT(*)::int, MAX(s."completedAt")
@@ -239,14 +243,14 @@ export async function readPharmacyAnomalyFacts(
         AND previous_gr."postedAt">=gr."postedAt"-interval '30 days'
     ) baseline ON baseline."comparisonReceipts">0
     WHERE line."branchId" IN (${branches}) AND gr."status"='POSTED'
-      AND gr."postedAt">=${window.from} AND gr."postedAt"<${window.to} ${supplier} ${ingredient} ${batch}
+      AND gr."postedAt">=${events.from} AND gr."postedAt"<${events.to} ${supplier} ${ingredient} ${batch}
     ORDER BY gr."postedAt" DESC LIMIT 500`);
 
   const stamp = <T extends object>(rows: T[]) =>
     rows.map((row) => ({ ...row, sourceObservedAt: observedAt }));
   return {
-    windowStart: window.from,
-    windowEnd: window.to,
+    windowStart: events.from,
+    windowEnd: events.to,
     facts: {
       shrinkage: stamp(shrinkage),
       discountOverride: stamp(discountOverride),
@@ -283,7 +287,9 @@ function scopeMatches(
 }
 
 export async function readPharmacyAnomalySignals(db: ScopedDb, filters: PharmacyReportFilters) {
-  const window = validatePharmacyReportFilters(filters);
+  validatePharmacyReportFilters(filters);
+  // Signals are stored with the workspace-day window refresh evaluated (readPharmacyAnomalyFacts).
+  const window = workspaceDateRange(filters.from, filters.to, filters.timeZone);
   const [rows, ingredientMedicines] = await Promise.all([
     db.pharmacyAnomalySignal.findMany({
       where: {

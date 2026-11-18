@@ -846,16 +846,34 @@ describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
     const f = await setup();
     const before = await f.counts();
     const { resolveTenantActor } = await import('@/lib/tenancy/tenant-actor');
+    const managerId = tag('removed-manager');
     const missingActor = {
       organization: { id: ORG_A },
-      session: { user: { id: tag('missing-manager'), role: 'ADMIN' } },
+      session: { user: { id: managerId, role: 'ADMIN' } },
     } as Awaited<ReturnType<typeof resolveTenantActor>>;
-    // Establish a token for an actor with no User FK target. The recovery audit
-    // must fail in PostgreSQL, rolling back the rejection and cursor with it.
+    // DEV-831: establishment only issues a terminal session to a live member
+    // holding the counter grant, so the manager exists when the session opens.
+    await inOrg(ORG_A, async (db) => {
+      await db.user.create({
+        data: { id: managerId, name: 'Removed manager', email: `${managerId}@example.test`,
+          department: 'PHARMACY', title: 'Manager', role: 'ADMIN' },
+      });
+      await db.userPermissionOverride.create({
+        data: { userId: managerId, capability: 'pharmacy:counter', effect: 'ALLOW', reason: 'Offline counter test operator' },
+      });
+    });
     vi.mocked(resolveTenantActor).mockResolvedValueOnce(missingActor);
     const established = await f.call('establish');
     expect(established.status).toBe(201);
     const { sessionToken } = await established.json();
+    // Remove the manager's User row while the session is live, so the recovery
+    // audit has no User FK target. It must fail in PostgreSQL, rolling back the
+    // rejection and cursor with it.
+    await inOrg(ORG_A, async (db) => {
+      await db.userPermissionOverride.deleteMany({ where: { userId: managerId } });
+      await db.user.delete({ where: { id: managerId } });
+    });
+    expect(await inOrg(ORG_A, (db) => db.user.count({ where: { id: managerId } }))).toBe(0);
     vi.mocked(resolveTenantActor).mockResolvedValueOnce(missingActor);
     const rejected = await f.reject(f.command, { 'x-terminal-session': sessionToken });
     expect(rejected.status).toBe(500);

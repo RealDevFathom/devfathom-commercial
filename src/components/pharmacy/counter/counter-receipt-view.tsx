@@ -16,8 +16,10 @@ import {
   type CounterReceiptFormat,
 } from '@/lib/pharmacy/counter-browser-print';
 import {
+  cashMemoManufacturer,
   COUNTER_RECEIPT_DIRECTION,
   COUNTER_RECEIPT_STRINGS,
+  counterReceiptCashMemo,
   formatMinor,
   formatReceiptDate,
   formatReceiptIssuedAt,
@@ -348,6 +350,8 @@ export function CounterReceiptView({
   const strings = COUNTER_RECEIPT_STRINGS[locale];
   const direction = COUNTER_RECEIPT_DIRECTION[locale];
   const language = locale === 'ur' ? 'ur-PK' : 'en';
+  // #708: Sindh branches show the r.18 cash memo facts; other branches are unchanged.
+  const cashMemo = counterReceiptCashMemo(receipt, receipt.taxIdentity, locale);
 
   let document: string | null = null;
   let documentError: string | null = null;
@@ -530,6 +534,17 @@ export function CounterReceiptView({
               {strings.cashier}: {receipt.cashierName}
             </p>
           ) : null}
+          {cashMemo ? (
+            <>
+              <p className="font-semibold text-text-strong">{cashMemo.title}</p>
+              {cashMemo.licence.map((fact) => (
+                <p key={fact} className="text-text-muted">
+                  {fact}
+                </p>
+              ))}
+              <p className="text-text-strong">{cashMemo.buyer}</p>
+            </>
+          ) : null}
           {receipt.receiptNumber === null ? (
             <p className="text-warning">{strings.noReceiptNumber}</p>
           ) : null}
@@ -558,6 +573,9 @@ export function CounterReceiptView({
                     {formatMinor(line.lineTotalMinor, locale)}
                   </span>
                 </div>
+                {cashMemo ? (
+                  <p className="text-text-muted">{cashMemoManufacturer(line, locale)}</p>
+                ) : null}
                 <p className="text-text-muted">{counterLinePricing(line, locale)}</p>
                 {receiptPromotionLabel(line, locale) ? (
                   <p className="break-words tabular-nums text-text-muted">
@@ -646,6 +664,11 @@ export function CounterReceiptView({
               </div>
             ))}
           </div>
+        ) : null}
+        {cashMemo ? (
+          <p className="border-t border-border-subtle pt-6 text-text-strong">
+            {cashMemo.signature}
+          </p>
         ) : null}
       </section>
 

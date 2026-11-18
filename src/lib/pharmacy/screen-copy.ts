@@ -43,8 +43,8 @@ export const SHOP_SCREEN_COPY = {
     selectedPeriodAtAGlance: 'Selected period at a glance',
     amountsUseThePharmacyMinorUnitScaleShown:
       'Amounts use the pharmacy minor-unit scale, shown to two decimal places. — means unavailable, not zero. Sales, gross margin, cash, cash variance and refunds cover the selected period. Stock signals, recommended orders and expiry exposure are current snapshots; expiry exposure is not realized loss. Gross margin is not cash flow. Gross margin uses the same exact posted journal as Finance, including returns and reversals, on postings from the start of the first selected date to the start of the day after the last, in ',
-    financeAposSMarginComparisonStillSplitsDays:
-      ". Finance's margin comparison still splits days at midnight UTC, so its totals can differ for the same dates. It may differ from sales grouped by business date. Missing journal evidence is unavailable; posted totals do not establish complete source or cost coverage. Supplier, ingredient and batch filters narrow sales, gross margin, stock signals, recommended orders and expiry exposure to the matching stock lots and products. Cash, cash variance and refunds cannot be traced to a supplier, ingredient or batch, so they show — while one is selected. The daily work pack and observed demand use branch/date scope only.",
+    financeAposSMarginComparisonSplitsDaysTheSameWay:
+      ". Finance's margin comparison splits days the same way. It may differ from sales grouped by business date. Missing journal evidence is unavailable; posted totals do not establish complete source or cost coverage. Supplier, ingredient and batch filters narrow sales, gross margin, stock signals, recommended orders and expiry exposure to the matching stock lots and products. Cash, cash variance and refunds cannot be traced to a supplier, ingredient or batch, so they show — while one is selected. The daily work pack and observed demand use branch/date scope only.",
     theSelectedBranchDoesNotApplyToThis:
       'The selected branch does not apply to this queue. Date, supplier, ingredient and batch filters do not apply either. Unsigned pharmacist review items plus open controlled-register incidents, from pharmacist review and controlled-register records at read time.',
     advisoryOnly: 'Advisory only',
@@ -238,8 +238,11 @@ export const SHOP_SCREEN_COPY = {
     branch: 'Branch: ',
     compareUpTo92DaysWithTheImmediately:
       '. Compare up to 92 days with the immediately preceding equal-length period.',
-    from500AmPkt: 'From (5:00 AM PKT)',
-    until500AmPktNotIncluded: 'Until (5:00 AM PKT, not included)',
+    // Picked dates start at the workspace's midnight; the zone label follows.
+    fromMidnight: 'From (midnight, ',
+    untilMidnight: 'Until (midnight, ',
+    closeZone: ')',
+    closeZoneNotIncluded: ', not included)',
     comparePeriods: 'Compare periods',
   },
   cashFlow: {
@@ -289,13 +292,16 @@ export const SHOP_SCREEN_COPY = {
     evidenceWindow: 'Branch and dates',
     branch: 'Branch',
     chooseABranch: 'Choose a branch',
-    from500AmPkt: 'From (5:00 AM PKT)',
-    until500AmPktNotIncluded: 'Until (5:00 AM PKT, not included)',
+    // Picked dates start at the workspace's midnight; the zone label follows.
+    fromMidnight: 'From (midnight, ',
+    untilMidnight: 'Until (midnight, ',
+    closeZone: ')',
+    closeZoneNotIncluded: ', not included)',
     page: 'Page',
     readAuthorizedPage: 'Read authorized page',
     chooseAValidEvidenceWindow: 'Choose valid dates',
     chooseAnAuthorizedBranchAUtcDateWindow:
-      'Choose an authorized branch, a UTC date window of at most 92 days, and a page from 1 to 10,000. Invalid input is not read or exported.',
+      'Choose an authorized branch, a date window of at most 92 days, and a page from 1 to 10,000. Invalid input is not read or exported.',
     accessMayBeDeniedOrTheReadFailed:
       'Access may be denied or the read failed. No CSV is available; retry or ask your workspace administrator.',
     entriesOnThisPage: 'Entries on this page',
@@ -325,8 +331,6 @@ export const SHOP_SCREEN_COPY = {
       'Isolate one posted account and recorded currency from financial-statement aggregates.',
     chooseAnAccount: 'Choose an account',
     branch: 'Branch',
-    from500AmPkt: 'From (5:00 AM PKT)',
-    until500AmPktNotIncluded: 'Until (5:00 AM PKT, not included)',
     accountCurrency: 'Account / currency',
     chooseAnAccountCurrency: 'Choose an account / currency',
     readBridge: 'Read bridge',

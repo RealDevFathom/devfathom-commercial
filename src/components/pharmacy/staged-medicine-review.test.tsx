@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TRPCError } from '@trpc/server';
 const mocks = vi.hoisted(() => ({
@@ -144,6 +144,15 @@ describe('staged medicine review UI', () => {
       expect.stringContaining('page=2')
     );
     expect(screen.getAllByText('Staged — unverified').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Not reviewed yet').length).toBeGreaterThan(0);
+    expect(screen.getByText(/waiting for review/)).toBeTruthy();
+    const heads = screen.getAllByRole('columnheader').map((h) => h.textContent);
+    expect(heads).toContain('Purchase price (from distributor)');
+    expect(heads).toContain('MRP');
+    expect(heads.join(' ')).not.toMatch(/Source|saleprice|purprice/i);
+    const listCells = within(screen.getAllByRole('table')[0]!).getAllByRole('cell');
+    expect(listCells.map((c) => c.textContent)).toContain('1');
+    expect(within(screen.getAllByRole('table')[0]!).queryByText('1.0000')).toBeNull();
   });
   it('renders permission denial without candidate content', async () => {
     mocks.branches.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN' }));

@@ -63,6 +63,14 @@ beforeEach(() => {
 });
 
 describe('transaction-bound seed audits', () => {
+  it('redacts cash-memo buyer names, including rejected nested inputs, without hiding sale identity', () => {
+    expect(
+      toAuditJson({ saleId: 'synthetic-sale', input: { buyerName: '<invalid buyer>' } })
+    ).toEqual({
+      saleId: 'synthetic-sale',
+      input: { buyerName: '[REDACTED]' },
+    });
+  });
   it.each(['1234', '0000', 'invalid'])(
     'redacts witness PIN %s before auditing success or refusal',
     async (pin) => {

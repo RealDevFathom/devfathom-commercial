@@ -1231,6 +1231,7 @@ export async function readCounterReceipt(
       saleLineId: line.id,
       identityStatus: identity ? ('ISSUED' as const) : ('UNAVAILABLE' as const),
       medicineName: identity?.medicineName ?? 'Original item details unavailable',
+      manufacturer: identity?.manufacturer ?? null,
       strength: identity?.strength ?? null,
       presentation: identity?.presentation ?? 'Original item details unavailable',
       allocations,
@@ -1277,6 +1278,10 @@ export async function readCounterReceipt(
     businessDate: sale.businessDate ? sale.businessDate.toISOString().slice(0, 10) : null,
     completedAt: sale.completedAt ? sale.completedAt.toISOString() : null,
     cashierName: cashier?.name ?? null,
+    buyerName: snapshot?.buyerName ?? null,
+    ...(snapshot?.cashMemoIdentity !== undefined
+      ? { cashMemoIdentity: snapshot.cashMemoIdentity }
+      : {}),
     currency: branch.currency,
     lines,
     tenders,

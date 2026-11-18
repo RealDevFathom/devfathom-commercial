@@ -437,3 +437,19 @@ it('names the source of each proposal', () => {
   render(<MedicineReferenceWorkbench health={[]} />);
   expect(screen.getByText('Source: DRAP registry file')).toBeVisible();
 });
+it('DEV-852: names an imported candidate’s missing strength and registration in plain words', () => {
+  const imported = candidate('legacy', ['ACCEPTED']);
+  mocks.candidates.data = [
+    {
+      ...imported,
+      provenance: imported.provenance.map((item) => ({ ...item, sourceType: 'IMPORT' })),
+    },
+    candidate('regulator', ['ACCEPTED']),
+  ];
+  render(<MedicineReferenceWorkbench health={[]} />);
+  const [legacyCard, regulatorCard] = screen.getAllByRole('article');
+  expect(legacyCard).toHaveTextContent('Strength not recorded · Registration number not recorded');
+  expect(within(legacyCard!).queryByRole('alert')).not.toBeInTheDocument();
+  expect(within(legacyCard!).getByRole('button', { name: 'Publish assertions' })).toBeEnabled();
+  expect(regulatorCard).not.toHaveTextContent('not recorded');
+});

@@ -52,7 +52,13 @@ import {
   loyaltyAdjustDailyLimitMessage,
   loyaltyAdjustLimitMessage,
 } from './adjust-points-messages';
-import { adminProcedure, protectedProcedure, router, type TRPCContext } from '@/server/trpc';
+import {
+  adminProcedure,
+  auditedProtectedProcedure,
+  protectedProcedure,
+  router,
+  type TRPCContext,
+} from '@/server/trpc';
 
 const txDb = (tx: unknown) => tx as ScopedDb;
 
@@ -114,18 +120,55 @@ export const membershipInput = branchInput
  * assigned to the branch, through the same manager gate as drawer cash movements. A cashier
  * is refused before any lock or write.
  */
-async function requireAdjustAccess(ctx: TRPCContext, branchId: string) {
-  const scope = scopeFor(ctx, branchId);
+async function isOwner(ctx: TRPCContext) {
   const user = ctx.session!.user;
-  if (
+  return (
     user.role === 'ADMIN' &&
     (await can(subjectFromSession(user), 'admin:access', undefined, { db: ctx.db }))
-  )
-    return { scope, authority: 'OWNER' as const };
+  );
+}
+
+async function requireAdjustAccess(ctx: TRPCContext, branchId: string) {
+  const scope = scopeFor(ctx, branchId);
+  if (await isOwner(ctx)) return { scope, authority: 'OWNER' as const };
   const managed = await requireDrawerManagerAccess(ctx, branchId);
   if (managed.organizationId !== scope.organizationId || managed.branchId !== branchId)
     throw new TRPCError({ code: 'FORBIDDEN' });
   return { scope, authority: 'MANAGER' as const };
+}
+
+/**
+ * DEV-909: deactivating a member stops them earning and redeeming at every branch, so only the
+ * owner may do it. A branch manager is refused before the manager gate, any lock or any write.
+ */
+async function requireOwnerAccess(ctx: TRPCContext, branchId: string) {
+  const scope = scopeFor(ctx, branchId);
+  if (!(await isOwner(ctx)))
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Only the owner may deactivate a member for the whole organisation.',
+    });
+  return { scope, authority: 'OWNER' as const };
+}
+
+/**
+ * DEV-909: the owner reads every branch's history. A manager of the requested branch reads the
+ * shared balance, with detailed history limited to the active branches they are assigned to.
+ */
+async function requireHistoryAccess(ctx: TRPCContext, branchId: string) {
+  const { scope, authority } = await requireAdjustAccess(ctx, branchId);
+  if (authority === 'OWNER') return { scope, visibleBranchIds: undefined };
+  const assigned = await ctx.db.pharmacyBranchAssignment.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      userId: scope.actorId,
+      active: true,
+      branch: { organizationId: scope.organizationId, active: true },
+    },
+    select: { branchId: true },
+  });
+  const visibleBranchIds = [...new Set([branchId, ...assigned.map((row) => row.branchId)])];
+  return { scope, visibleBranchIds };
 }
 
 const cardInput = branchInput.extend({ customerId: z.string().trim().min(1).max(128) });
@@ -432,10 +475,13 @@ export const pharmacyLoyaltyRouter = router({
       replayed: result.replayed,
     };
   }),
-  // DEV-764: enrol (re-enrol) or deactivate a loyalty member, with a written reason. The same
-  // owner-or-branch-manager gate as adjustments; a cashier is refused before any write.
+  // DEV-764: enrol (re-enrol) or deactivate a loyalty member, with a written reason. Enrolling
+  // uses the same owner-or-branch-manager gate as adjustments; a cashier is refused before any
+  // write. DEV-909: deactivating applies to the whole organisation, so only the owner may.
   setMembership: protectedProcedure.input(membershipInput).mutation(async ({ ctx, input }) => {
-    const { scope, authority } = await requireAdjustAccess(ctx, input.branchId);
+    const { scope, authority } = input.active
+      ? await requireAdjustAccess(ctx, input.branchId)
+      : await requireOwnerAccess(ctx, input.branchId);
     let result: Awaited<ReturnType<typeof setLoyaltyMembership>>;
     try {
       result = await ctx.db.$transaction((tx) =>
@@ -568,7 +614,8 @@ export const pharmacyLoyaltyRouter = router({
     .query(({ ctx, input }) =>
       historyRead(() => listLoyaltyCustomers(ctx.db, scopeFor(ctx, input.branchId), input.query))
     ),
-  history: adminProcedure
+  // DEV-909: the owner, or a manager of this branch (history scoped to their branches).
+  history: auditedProtectedProcedure
     .input(
       branchInput
         .extend({
@@ -577,11 +624,12 @@ export const pharmacyLoyaltyRouter = router({
         })
         .strict()
     )
-    .query(({ ctx, input }) =>
-      historyRead(() =>
-        readLoyaltyHistory(ctx.db, scopeFor(ctx, input.branchId), input.customerId, input.page)
-      )
-    ),
+    .query(async ({ ctx, input }) => {
+      const { scope, visibleBranchIds } = await requireHistoryAccess(ctx, input.branchId);
+      return historyRead(() =>
+        readLoyaltyHistory(ctx.db, scope, input.customerId, input.page, visibleBranchIds)
+      );
+    }),
   setReminderLanguage: adminProcedure
     .input(
       branchInput

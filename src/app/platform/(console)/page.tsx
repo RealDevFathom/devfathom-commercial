@@ -136,7 +136,7 @@ export default async function PlatformOverviewPage() {
         action={
           <Link
             href="/platform/organizations/new"
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-[3px] bg-primary px-4 text-xs font-semibold text-primary-foreground shadow-[0_8px_18px_-13px_rgba(17,17,16,0.72)] transition-all hover:-translate-y-px hover:bg-primary-hover"
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-control bg-primary px-4 text-xs font-semibold text-primary-foreground shadow-control-ink transition-all hover:-translate-y-px hover:bg-primary-hover"
           >
             Onboard organization
             <ArrowUpRight className="size-3.5" aria-hidden="true" />

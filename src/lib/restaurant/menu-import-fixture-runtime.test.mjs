@@ -64,6 +64,21 @@ function setup(node = 'test', selected = 'FIXTURE') {
     toString() {
       return this.value;
     }
+    // Mirrors Prisma.Decimal.equals: numeric (not string) equality, so '1.50' equals '1.5'.
+    equals(other) {
+      const normalize = (v) => {
+        const [int, frac = ''] = String(v instanceof Decimal ? v.value : v)
+          .trim()
+          .replace(/^\+/, '')
+          .split('.');
+        const neg = int.startsWith('-');
+        const digits = (neg ? int.slice(1) : int).replace(/^0+(?=\d)/, '');
+        const fraction = frac.replace(/0+$/, '');
+        const zero = /^0*$/.test(digits) && fraction === '';
+        return `${neg && !zero ? '-' : ''}${digits || '0'}${fraction ? `.${fraction}` : ''}`;
+      };
+      return normalize(this) === normalize(other);
+    }
   }
   const boundaries = {
     'server-only': {},

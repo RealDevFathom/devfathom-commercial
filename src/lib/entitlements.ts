@@ -1,7 +1,12 @@
 import 'server-only';
 
 import type { Prisma } from '@/generated/prisma/client';
-import type { EntitlementView } from '@/lib/module-catalog';
+import {
+  isVerticalBaselineModule,
+  moduleDefinitionForKey,
+  verticalBaselineModules,
+  type EntitlementView,
+} from '@/lib/module-catalog';
 import { withPlatformDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
 type ModuleState = EntitlementView['modules'][number] & {
@@ -123,11 +128,28 @@ export async function resolveOrganizationEntitlements(
 
   const states = new Map<string, ModuleState>();
   for (const catalogModule of catalog) {
+    // DEV-913: a vertical's core shared modules (the pharmacy audit log) are
+    // baseline for that vertical, so no package, contract or override drops them.
+    const baseline =
+      catalogModule.band === 'BASELINE' ||
+      isVerticalBaselineModule(organization.vertical, catalogModule.key);
     states.set(catalogModule.id, {
       key: catalogModule.key,
       name: catalogModule.name,
-      enabled: catalogModule.band === 'BASELINE',
-      source: catalogModule.band === 'BASELINE' ? 'BASELINE' : 'NONE',
+      enabled: baseline,
+      source: baseline ? 'BASELINE' : 'NONE',
+      seatLimit: null,
+      expiresAt: null,
+      limits: {},
+    });
+  }
+  for (const key of verticalBaselineModules(organization.vertical)) {
+    if ([...states.values()].some((state) => state.key === key)) continue;
+    states.set(`vertical-baseline:${key}`, {
+      key,
+      name: moduleDefinitionForKey(key)?.name ?? key,
+      enabled: true,
+      source: 'BASELINE',
       seatLimit: null,
       expiresAt: null,
       limits: {},
