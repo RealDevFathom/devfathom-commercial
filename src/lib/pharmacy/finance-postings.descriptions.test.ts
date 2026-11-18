@@ -11,6 +11,8 @@ function fakeDb(rows: { tender?: unknown; refund?: unknown }) {
     ...data,
   }));
   const db = {
+    pharmacyAccountingPeriod: { findFirst: vi.fn().mockResolvedValue(null) },
+    $queryRaw: vi.fn().mockResolvedValue([]),
     pharmacyTender: { findFirst: vi.fn().mockResolvedValue(rows.tender ?? null) },
     pharmacyRefund: { findFirst: vi.fn().mockResolvedValue(rows.refund ?? null) },
     financeJournalEntry: {
