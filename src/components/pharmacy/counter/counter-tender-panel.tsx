@@ -276,26 +276,22 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       balanceMinor !== null && Number.isSafeInteger(balanceMinor) && balanceMinor >= 0;
     const editable = state === 'ready' && balanceKnown && !disabled && !takingPayment && !unknown;
     // DEV-931: a background re-read of the bill briefly disables these controls, and the
-    // browser drops focus from a control that becomes disabled. A cashier who had just moved
-    // to a payment method (keyboard only) would be left with nothing focused. Remember the
-    // focused control as the panel locks, and give focus back when it unlocks, unless the
-    // cashier or the panel moved focus somewhere else meanwhile.
+    // browser drops focus from a control the moment it becomes disabled. A cashier who had
+    // just moved to a payment method (keyboard only) would be left with nothing focused, or
+    // with the dialog's own initial focus on the panel. The panel remembers the last control
+    // focused inside it and, when it unlocks, gives focus back to that control, unless the
+    // cashier moved focus somewhere else meanwhile.
     const rootRef = useRef<HTMLDivElement | null>(null);
-    const focusBeforeLock = useRef<HTMLElement | null>(null);
+    const lastFocused = useRef<HTMLElement | null>(null);
+    const wasLocked = useRef(false);
     useLayoutEffect(() => {
-      if (editable) return;
-      const active = document.activeElement;
-      if (
-        active instanceof HTMLElement &&
-        active !== rootRef.current &&
-        rootRef.current?.contains(active)
-      )
-        focusBeforeLock.current = active;
-    }, [editable]);
-    useEffect(() => {
-      if (!editable) return;
-      const target = focusBeforeLock.current;
-      focusBeforeLock.current = null;
+      if (!editable) {
+        wasLocked.current = true;
+        return;
+      }
+      if (!wasLocked.current) return;
+      wasLocked.current = false;
+      const target = lastFocused.current;
       if (!target?.isConnected || target.matches(':disabled')) return;
       const active = document.activeElement;
       // Lost means nowhere, or only on a container of the control (the dialog or this panel).
@@ -751,6 +747,10 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           else if (ref) ref.current = node;
         }}
         tabIndex={-1}
+        onFocus={(event) => {
+          if (event.target !== event.currentTarget && event.target instanceof HTMLElement)
+            lastFocused.current = event.target;
+        }}
         className="min-w-0 space-y-5 focus-visible:outline-none"
         onKeyDown={takePaymentOnEnter}
       >
