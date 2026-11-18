@@ -17,6 +17,20 @@ export function HostedReceiptCard({ receipt }: { receipt: HostedReceiptView }) {
             {formatReceiptIssuedAt(receipt.completedAt)}
           </dd>
         </div>
+        {receipt.counterLabel ? (
+          <div>
+            <dt className="font-mono text-xs tracking-wider text-text-muted uppercase">Counter</dt>
+            <dd className="mt-1 text-text-strong">{receipt.counterLabel}</dd>
+          </div>
+        ) : null}
+        {receipt.offlineReference ? (
+          <div>
+            <dt className="font-mono text-xs tracking-wider text-text-muted uppercase">
+              Offline copy
+            </dt>
+            <dd className="mt-1 text-text-strong tabular-nums">{receipt.offlineReference}</dd>
+          </div>
+        ) : null}
       </dl>
       <div className="overflow-x-auto rounded-md border border-border-subtle">
         <table className="w-full min-w-[20rem] text-sm">

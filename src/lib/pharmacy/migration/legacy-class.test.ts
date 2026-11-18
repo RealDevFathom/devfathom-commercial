@@ -3,7 +3,14 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { applyLegacyControlledClass, applyLegacyControlledToMedicine } from './legacy-controlled';
 import { ManualFileConnector } from '../reference-connectors';
-import { isLegacyControlledClass, isLegacyControlledRow, legacyClassValue } from './legacy-class';
+import {
+  LEGACY_WHITESPACE_RUN,
+  isLegacyControlledClass,
+  isLegacyControlledRow,
+  legacyClassValue,
+  legacyProductNameKey,
+  normalizeLegacyText,
+} from './legacy-class';
 import { excelCsvProfiler } from './excel-csv-profiler';
 import { profileTable } from './profiler';
 import { parseDelimitedText } from './source-values';
@@ -64,7 +71,11 @@ describe('DEV-854 legacy NARCOTICS class', () => {
       { productName: 'Synthetic Paracetamol', rawPayload: { classname: 'Example Distributors' } },
       { productName: 'Synthetic Opioid Drops', rawPayload: { classname: 'NARCOTIC' } },
     ]);
-    expect(result).toEqual({ controlledRows: 1, medicineIds: ['med_opioid'] });
+    expect(result).toEqual({
+      controlledRows: 1,
+      medicineIds: ['med_opioid'],
+      skippedCorrectedRows: 0,
+    });
     expect(db.$queryRaw).toHaveBeenCalledOnce();
     const [strings, ...params] = db.$queryRaw.mock.calls[0]!;
     const sql = (strings as string[]).join('?');
@@ -73,7 +84,46 @@ describe('DEV-854 legacy NARCOTICS class', () => {
     expect(sql).toContain('"controlled" = false');
     expect(params).toContain('org_a');
     expect(params).toContainEqual(['synthetic opioid 50mg']);
-    expect(JSON.stringify(params)).toContain('regexp_replace(lower(btrim(');
+    // DEV-925: the database uses the code's whitespace rule, not btrim's spaces-only rule.
+    expect(JSON.stringify(params)).toContain('lower(btrim(regexp_replace(');
+    expect(JSON.stringify(params)).toContain(JSON.stringify(LEGACY_WHITESPACE_RUN));
+    // A person's correction to "not controlled" through the catalogue edit path is respected.
+    expect(JSON.stringify(params)).toContain('pharmacy_catalogue_edits');
+  });
+
+  it('skips and counts rows naming a medicine a person corrected to not controlled (DEV-925)', async () => {
+    const db = {
+      $queryRaw: vi.fn().mockResolvedValue([
+        { id: 'med_sedative', correctedKey: null },
+        { id: 'med_opioid', correctedKey: 'synthetic opioid 50mg' },
+      ]),
+    };
+    const result = await applyLegacyControlledClass(db as never, 'org_a', [
+      { productName: 'Synthetic Opioid 50mg', rawPayload: { classname: 'NARCOTICS' } },
+      { productName: ' synthetic  opioid 50MG', rawPayload: { CLASS: 'narcotics' } },
+      { productName: 'Synthetic Sedative 10mg', rawPayload: { classname: 'NARCOTICS' } },
+      { productName: 'Synthetic Paracetamol', rawPayload: { classname: 'Example Distributors' } },
+    ]);
+    expect(result).toEqual({
+      controlledRows: 3,
+      medicineIds: ['med_sedative'],
+      skippedCorrectedRows: 2,
+    });
+    const [strings] = db.$queryRaw.mock.calls[0]!;
+    const sql = (strings as string[]).join('?');
+    expect(sql).toContain('AND NOT matched."corrected"');
+  });
+
+  it('uses one trimming rule: the code and the SQL pattern remove the same characters (DEV-925)', () => {
+    const whitespace = new RegExp(`^${LEGACY_WHITESPACE_RUN}$`);
+    for (let code = 0; code <= 0xffff; code += 1) {
+      const char = String.fromCharCode(code);
+      expect(whitespace.test(char), `U+${code.toString(16)}`).toBe(/^\s$/.test(char));
+    }
+    for (const value of ['\tNARCOTICS\r\n', '\u00a0narcotics\u2003', '\nNarcotics\v'])
+      expect(isLegacyControlledClass(value)).toBe(true);
+    expect(normalizeLegacyText('\t Synthetic\n\u00a0Opioid  ')).toBe('Synthetic Opioid');
+    expect(legacyProductNameKey('\tSynthetic \r\n Opioid 50MG ')).toBe('synthetic opioid 50mg');
   });
 
   it('writes nothing when no row is in the NARCOTICS class', async () => {
@@ -81,7 +131,7 @@ describe('DEV-854 legacy NARCOTICS class', () => {
     const result = await applyLegacyControlledClass(db as never, 'org_a', [
       { productName: 'Synthetic Paracetamol', rawPayload: { classname: 'Example Distributors' } },
     ]);
-    expect(result).toEqual({ controlledRows: 0, medicineIds: [] });
+    expect(result).toEqual({ controlledRows: 0, medicineIds: [], skippedCorrectedRows: 0 });
     expect(db.$queryRaw).not.toHaveBeenCalled();
   });
 
@@ -97,6 +147,9 @@ describe('DEV-854 legacy NARCOTICS class', () => {
     const [strings, ...params] = db.$queryRaw.mock.calls[0]!;
     expect((strings as string[]).join('?')).toContain('pharmacy_migration_rows');
     expect(params).toEqual(expect.arrayContaining(['org_a', 'synthetic opioid 50mg', 'NARCOTICS']));
+    // DEV-925: the same query refuses when a person corrected this medicine to not controlled.
+    expect(JSON.stringify(params)).toContain('pharmacy_catalogue_edits');
+    expect(JSON.stringify(params)).toContain('med_new');
     expect(db.medicine.update).toHaveBeenCalledWith({
       where: { id: 'med_new' },
       data: { controlled: true },

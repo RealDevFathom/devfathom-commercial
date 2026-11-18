@@ -595,6 +595,7 @@ export async function applyPharmacyTender(
   // the cursor, so a second command cannot consume the same number. Reserved
   // numbers never return to the online sequence, including on rejection.
   let receiptNumber: number | null = null;
+  let printedReceiptNumber: number | null = null;
   if (input.leasedReceipt) {
     const { leaseId, receiptNumber: leasedNumber } = input.leasedReceipt;
     const consumed = await db.$queryRaw<Array<{ receipt_number: number }>>(Prisma.sql`
@@ -617,6 +618,7 @@ export async function applyPharmacyTender(
       RETURNING lease."nextNumber" - 1 AS receipt_number`);
     if (!consumed[0]) throw new PharmacySettlementError('INVALID_RECEIPT_LEASE');
     receiptNumber = consumed[0].receipt_number;
+    printedReceiptNumber = receiptNumber;
   }
 
   let drawerSessionId: string | undefined;
@@ -775,6 +777,10 @@ export async function applyPharmacyTender(
     tenderId: tender.id,
     settled,
     receiptNumber,
+    // DEV-637: the number printed offline, when the sale had to take a fresh branch number.
+    ...(printedReceiptNumber !== null && receiptNumber !== printedReceiptNumber
+      ? { offlineReference: printedReceiptNumber }
+      : {}),
     remainingMinor: totalMinor - tenderedMinor - input.amountMinor,
   };
   await db.pharmacyMoneyIdempotencyKey.update({

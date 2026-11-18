@@ -13,9 +13,20 @@ import {
   buildPaymentDraft,
   buildSetOffDraft,
   SUPPLIER_CREDIT_CURRENCY,
-  SUPPLIER_CREDIT_MAX_ROWS,
+  SUPPLIER_CREDIT_PAGE_ROWS,
   computeDueBillReminders,
 } from '@/lib/pharmacy/accounts/ap-payables-drafts';
+import {
+  AP_SET_OFF_SEGREGATED_POLICY,
+  approveApCreditSetOff,
+  isSoleSetOffApprover,
+  listApCreditSetOffs,
+  AP_SET_OFF_REVERSAL_POLICY,
+  rejectApCreditSetOff,
+  requestApCreditSetOff,
+  reverseApCreditSetOff,
+} from '@/lib/pharmacy/accounts/ap-credit-set-off';
+import { actorMayRefund, authenticateRefundPin } from '@/lib/pharmacy/refund-authorization';
 import { z } from 'zod';
 import {
   listApInvoices,
@@ -27,6 +38,11 @@ import {
 } from '@/lib/pharmacy/accounts/ap-invoices';
 import {
   apAgingSchema,
+  approveApCreditSetOffSchema,
+  listApCreditSetOffsSchema,
+  rejectApCreditSetOffSchema,
+  requestApCreditSetOffSchema,
+  reverseApCreditSetOffSchema,
   listApInvoicesSchema,
   payApInvoiceSchema,
   recordApInvoiceSchema,
@@ -50,10 +66,25 @@ const CONFLICT_REASONS = new Set([
   'DUPLICATE_INVOICE',
   'IDEMPOTENCY_CONFLICT',
   'INVALID_STATE',
+  'SET_OFF_EXCEEDS_CREDIT',
+  'SET_OFF_EXCEEDS_BILL',
+  'ALREADY_DECIDED',
 ]);
+
+/** DEV-694: the manager's own fresh PIN approves a set-off; this names the policy. */
+export const AP_SET_OFF_PIN_BLOCKED = 'Set-off not approved. Enter your manager or owner PIN.';
+export const AP_SET_OFF_FORBIDDEN =
+  'Only a manager or owner can approve, reject or reverse a set-off.';
+export const AP_SET_OFF_REVERSAL_PIN_BLOCKED =
+  'Set-off not reversed. Enter your manager or owner PIN.';
+export const AP_SET_OFF_SELF_APPROVAL =
+  'Another manager or owner must approve a set-off you requested.';
 
 function fail(error: unknown): never {
   if (error instanceof PharmacyApInvoiceError) {
+    if (error.reason === 'SELF_APPROVAL') {
+      throw new TRPCError({ code: 'FORBIDDEN', message: AP_SET_OFF_SELF_APPROVAL });
+    }
     throw new TRPCError({
       code:
         error.reason === 'NOT_FOUND'
@@ -65,6 +96,20 @@ function fail(error: unknown): never {
     });
   }
   throw error;
+}
+
+/**
+ * DEV-694: a set-off holds credit at `cutoff` when it was requested before it
+ * and had not been released before it, by a rejection or by a reversal.
+ */
+function setOffHeldAt(cutoff: Date) {
+  return {
+    requestedAt: { lt: cutoff },
+    NOT: [
+      { status: 'REJECTED' as const, decidedAt: { lt: cutoff } },
+      { status: 'REVERSED' as const, reversedAt: { lt: cutoff } },
+    ],
+  };
 }
 
 function txDb(tx: unknown) {
@@ -79,7 +124,11 @@ type ApAuditAction =
   | 'pharmacyApInvoices.record'
   | 'pharmacyApInvoices.pay'
   | 'pharmacyApInvoices.reverseSettlement'
-  | 'pharmacyApInvoices.reverseInvoice';
+  | 'pharmacyApInvoices.reverseInvoice'
+  | 'pharmacyApInvoices.requestCreditSetOff'
+  | 'pharmacyApInvoices.approveCreditSetOff'
+  | 'pharmacyApInvoices.rejectCreditSetOff'
+  | 'pharmacyApInvoices.reverseCreditSetOff';
 
 async function recordApAudit(
   tx: ScopedDb,
@@ -88,12 +137,13 @@ async function recordApAudit(
   audit: {
     action: ApAuditAction;
     description: string;
-    targetType: 'PharmacyApInvoice' | 'PharmacyApInvoiceSettlement';
+    targetType: 'PharmacyApInvoice' | 'PharmacyApInvoiceSettlement' | 'PharmacyApCreditSetOff';
     targetId: string;
     targetLabel: string;
     commandKey: string;
     replayed: boolean;
     result: Record<string, string | number | null>;
+    metadata?: Record<string, string | boolean | null>;
   }
 ) {
   const user = ctx.session.user;
@@ -114,7 +164,7 @@ async function recordApAudit(
       targetId: audit.targetId,
       targetLabel: audit.targetLabel,
       result: { ...audit.result, replayed: audit.replayed },
-      metadata: { branchId: scope.branchId, commandKey: audit.commandKey },
+      metadata: { ...audit.metadata, branchId: scope.branchId, commandKey: audit.commandKey },
       ip: ctx.requestMeta?.ip ?? null,
       userAgent: ctx.requestMeta?.userAgent ?? null,
       path: audit.action,
@@ -139,7 +189,14 @@ export const pharmacyApInvoicesRouter = router({
     try {
       return {
         scope: { organizationId: scope.organizationId, branchId: scope.branchId },
-        view: await readApAging(ctx.db, scope, input.asOf, new Date(), ctx.organization?.timezone),
+        view: await readApAging(
+          ctx.db,
+          scope,
+          input.asOf,
+          new Date(),
+          ctx.organization?.timezone,
+          input.payeeFilter ? { payeeName: input.payeeFilter } : {}
+        ),
         retrievedAt: new Date(),
       };
     } catch (error) {
@@ -168,29 +225,88 @@ export const pharmacyApInvoicesRouter = router({
       try {
         const now = new Date();
         const timeZone = ctx.organization?.timezone;
-        const view = await readApAging(ctx.db, scope, input.asOf, now, timeZone);
+        // Owner decision: every bill, 5,000 per page, before any total or draft.
+        const view = await readApAging(
+          ctx.db,
+          scope,
+          input.asOf,
+          now,
+          timeZone,
+          input.payeeFilter ? { payeeName: input.payeeFilter } : {}
+        );
         const { cutoff } = apAgingWindow(input.asOf, now, timeZone);
-        const credits = await ctx.db.pharmacySupplierCredit.findMany({
+        // Owner decision: read supplier credits in pages of 5,000 and fetch every
+        // page before any total or set-off draft is reported.
+        const credits = [];
+        for (let cursor: string | undefined; ;) {
+          const page = await ctx.db.pharmacySupplierCredit.findMany({
+            where: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              receivedAt: { lt: cutoff },
+            },
+            select: {
+              id: true,
+              reference: true,
+              amountMinor: true,
+              receivedAt: true,
+              supplier: { select: { name: true } },
+              allocations: {
+                where: { createdAt: { lt: cutoff } },
+                select: { amountMinor: true },
+              },
+              // DEV-694: credit set off, or reserved by a request, at the cutoff:
+              // requested before it and not rejected before it.
+              apSetOffs: {
+                where: setOffHeldAt(cutoff),
+                select: { amountMinor: true },
+              },
+            },
+            orderBy: [{ receivedAt: 'asc' }, { id: 'asc' }],
+            take: SUPPLIER_CREDIT_PAGE_ROWS,
+            ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+          });
+          credits.push(...page);
+          if (page.length < SUPPLIER_CREDIT_PAGE_ROWS) break;
+          cursor = page[page.length - 1]!.id;
+        }
+        const openCredits = credits
+          .map((c) => ({
+            creditId: c.id,
+            reference: c.reference,
+            supplierName: c.supplier.name,
+            receivedAt: c.receivedAt,
+            amountMinor: c.amountMinor,
+            allocatedMinor:
+              (c.allocations ?? []).reduce((s, a) => s + a.amountMinor, 0) +
+              (c.apSetOffs ?? []).reduce((s, a) => s + a.amountMinor, 0),
+          }))
+          .filter((c) => c.amountMinor > c.allocatedMinor);
+        // Requests still awaiting a decision at the cutoff reserve part of their bill
+        // without settling it, so the suggestion never offers that part again. The
+        // aging itself is unchanged: only approved set-offs reduce the payable.
+        const reserved = await ctx.db.pharmacyApCreditSetOff.groupBy({
+          by: ['invoiceId'],
           where: {
             organizationId: scope.organizationId,
             branchId: scope.branchId,
-            receivedAt: { lt: cutoff },
+            requestedAt: { lt: cutoff },
+            OR: [{ status: 'PENDING' }, { decidedAt: { gte: cutoff } }],
           },
-          select: {
-            id: true,
-            reference: true,
-            amountMinor: true,
-            receivedAt: true,
-            supplier: { select: { name: true } },
-            allocations: {
-              where: { createdAt: { lt: cutoff } },
-              select: { amountMinor: true },
-            },
-          },
-          orderBy: [{ receivedAt: 'asc' }, { id: 'asc' }],
-          take: SUPPLIER_CREDIT_MAX_ROWS + 1,
+          _sum: { amountMinor: true },
         });
-        const creditsComplete = credits.length <= SUPPLIER_CREDIT_MAX_ROWS;
+        const reservedByInvoice = new Map(
+          reserved.map((r) => [r.invoiceId, r._sum.amountMinor ?? 0])
+        );
+        const draftView = {
+          ...view,
+          rows: view.rows
+            .map((row) => ({
+              ...row,
+              outstandingMinor: row.outstandingMinor - (reservedByInvoice.get(row.invoiceId) ?? 0),
+            }))
+            .filter((row) => row.outstandingMinor > 0),
+        };
         const currency = input.payee?.currency ?? view.totals[0]?.currency ?? 'PKR';
         return {
           scope: { organizationId: scope.organizationId, branchId: scope.branchId },
@@ -203,22 +319,205 @@ export const pharmacyApInvoicesRouter = router({
                 budgetMinor: input.payee.budgetMinor,
               })
             : null,
-          setOffDraft: buildSetOffDraft(
-            view,
-            credits.slice(0, SUPPLIER_CREDIT_MAX_ROWS).map((c) => ({
-              creditId: c.id,
-              reference: c.reference,
-              supplierName: c.supplier.name,
-              receivedAt: c.receivedAt,
-              amountMinor: c.amountMinor,
-              allocatedMinor: c.allocations.reduce((s, a) => s + a.amountMinor, 0),
-            })),
-            SUPPLIER_CREDIT_CURRENCY
-          ),
-          viewComplete: view.complete && creditsComplete,
-          creditsComplete,
+          setOffDraft: buildSetOffDraft(draftView, openCredits, SUPPLIER_CREDIT_CURRENCY),
+          openCredits: openCredits.map((c) => ({
+            creditId: c.creditId,
+            reference: c.reference,
+            supplierName: c.supplierName,
+            remainingMinor: c.amountMinor - c.allocatedMinor,
+          })),
+          viewComplete: view.complete,
+          creditsComplete: true as const,
           retrievedAt: new Date(),
         };
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  /** DEV-694: set-off requests for one branch, oldest first. */
+  creditSetOffs: adminProcedure.input(listApCreditSetOffsSchema).query(async ({ ctx, input }) => {
+    const scope = await authorizeGeneralJournal(ctx, input.branchId);
+    return {
+      scope: { organizationId: scope.organizationId, branchId: scope.branchId },
+      setOffs: await listApCreditSetOffs(ctx.db, scope, input),
+      retrievedAt: new Date(),
+    };
+  }),
+
+  /** DEV-694: staff choose the bill; this records a PENDING request and moves no money. */
+  requestCreditSetOff: adminProcedure
+    .input(requestApCreditSetOffSchema)
+    .mutation(async ({ ctx, input }) => {
+      const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      try {
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const result = await requestApCreditSetOff(db, scope, input);
+          await recordApAudit(db, ctx, scope, {
+            action: 'pharmacyApInvoices.requestCreditSetOff',
+            description: `Requested a supplier credit set-off against invoice ${result.setOff.invoiceId}`,
+            targetType: 'PharmacyApCreditSetOff',
+            targetId: result.setOff.id,
+            targetLabel: result.setOff.id,
+            commandKey: input.requestKey,
+            replayed: result.replayed,
+            result: {
+              status: result.setOff.status,
+              invoiceId: result.setOff.invoiceId,
+              supplierCreditId: result.setOff.supplierCreditId,
+              amountMinor: result.setOff.amountMinor,
+            },
+          });
+          return result.setOff;
+        });
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  /**
+   * DEV-694: the payable reduces only here. A manager or owner re-enters their
+   * own PIN (checked in its own transaction so a refusal keeps its lockout
+   * strike); a different person must have requested the set-off, unless the
+   * approver is the organization's only owner-level user.
+   */
+  approveCreditSetOff: adminProcedure
+    .input(approveApCreditSetOffSchema)
+    .mutation(async ({ ctx, input }) => {
+      const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      if (!(await actorMayRefund(ctx.db, ctx.session.user)))
+        throw new TRPCError({ code: 'FORBIDDEN', message: AP_SET_OFF_FORBIDDEN });
+      const pin = await authenticateRefundPin({
+        organizationId: scope.organizationId,
+        actorId: scope.actorId,
+        pin: input.pin,
+        action: 'pharmacyApInvoices.approveCreditSetOff',
+        policy: AP_SET_OFF_SEGREGATED_POLICY,
+        errorCode: 'AP_SET_OFF_PIN_REFUSED',
+      });
+      if ('blocked' in pin)
+        throw new TRPCError({ code: 'FORBIDDEN', message: AP_SET_OFF_PIN_BLOCKED });
+      try {
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const result = await approveApCreditSetOff(db, scope, input, {
+            soleApprover: () => isSoleSetOffApprover(db, scope.organizationId, scope.actorId),
+          });
+          const setOff = result.setOff;
+          await recordApAudit(db, ctx, scope, {
+            action: 'pharmacyApInvoices.approveCreditSetOff',
+            description: `Approved a supplier credit set-off against invoice ${setOff.invoiceId}`,
+            targetType: 'PharmacyApCreditSetOff',
+            targetId: setOff.id,
+            targetLabel: setOff.id,
+            commandKey: input.decisionKey,
+            replayed: result.replayed,
+            result: {
+              status: setOff.status,
+              invoiceId: setOff.invoiceId,
+              supplierCreditId: setOff.supplierCreditId,
+              amountMinor: setOff.amountMinor,
+              entryId: setOff.journalEntryId,
+            },
+            metadata: {
+              policy: setOff.approvalPolicy,
+              approverId: setOff.decidedByUserId,
+              initiatedById: setOff.requestedByUserId,
+              pinVerified: true,
+              selfApproved: setOff.decidedByUserId === setOff.requestedByUserId,
+              approvedAt: setOff.decidedAt?.toISOString() ?? null,
+            },
+          });
+          return setOff;
+        });
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  /** DEV-694: a manager or owner closes a request without touching money. */
+  rejectCreditSetOff: adminProcedure
+    .input(rejectApCreditSetOffSchema)
+    .mutation(async ({ ctx, input }) => {
+      const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      if (!(await actorMayRefund(ctx.db, ctx.session.user)))
+        throw new TRPCError({ code: 'FORBIDDEN', message: AP_SET_OFF_FORBIDDEN });
+      try {
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const result = await rejectApCreditSetOff(db, scope, input);
+          await recordApAudit(db, ctx, scope, {
+            action: 'pharmacyApInvoices.rejectCreditSetOff',
+            description: `Rejected a supplier credit set-off against invoice ${result.setOff.invoiceId}`,
+            targetType: 'PharmacyApCreditSetOff',
+            targetId: result.setOff.id,
+            targetLabel: result.setOff.id,
+            commandKey: input.decisionKey,
+            replayed: result.replayed,
+            result: { status: result.setOff.status, invoiceId: result.setOff.invoiceId },
+          });
+          return result.setOff;
+        });
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  /**
+   * DEV-694: undo an approved set-off with the mirror entry. Same gate as
+   * approval: a manager or owner, their own fresh PIN, and not the requester
+   * unless they are the only owner-level user.
+   */
+  reverseCreditSetOff: adminProcedure
+    .input(reverseApCreditSetOffSchema)
+    .mutation(async ({ ctx, input }) => {
+      const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      if (!(await actorMayRefund(ctx.db, ctx.session.user)))
+        throw new TRPCError({ code: 'FORBIDDEN', message: AP_SET_OFF_FORBIDDEN });
+      const pin = await authenticateRefundPin({
+        organizationId: scope.organizationId,
+        actorId: scope.actorId,
+        pin: input.pin,
+        action: 'pharmacyApInvoices.reverseCreditSetOff',
+        policy: AP_SET_OFF_REVERSAL_POLICY,
+        errorCode: 'AP_SET_OFF_REVERSAL_PIN_REFUSED',
+      });
+      if ('blocked' in pin)
+        throw new TRPCError({ code: 'FORBIDDEN', message: AP_SET_OFF_REVERSAL_PIN_BLOCKED });
+      try {
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const result = await reverseApCreditSetOff(db, scope, input, {
+            soleApprover: () => isSoleSetOffApprover(db, scope.organizationId, scope.actorId),
+          });
+          const setOff = result.setOff;
+          await recordApAudit(db, ctx, scope, {
+            action: 'pharmacyApInvoices.reverseCreditSetOff',
+            description: `Reversed a supplier credit set-off against invoice ${setOff.invoiceId}`,
+            targetType: 'PharmacyApCreditSetOff',
+            targetId: setOff.id,
+            targetLabel: setOff.id,
+            commandKey: input.commandKey,
+            replayed: result.replayed,
+            result: {
+              status: setOff.status,
+              invoiceId: setOff.invoiceId,
+              supplierCreditId: setOff.supplierCreditId,
+              amountMinor: setOff.amountMinor,
+              reversalEntryId: setOff.reversalEntryId,
+            },
+            metadata: {
+              policy: setOff.reversalPolicy,
+              reversedById: setOff.reversedByUserId,
+              initiatedById: setOff.requestedByUserId,
+              pinVerified: true,
+              selfApproved: setOff.reversedByUserId === setOff.requestedByUserId,
+              reversedAt: setOff.reversedAt?.toISOString() ?? null,
+            },
+          });
+          return setOff;
+        });
       } catch (error) {
         fail(error);
       }

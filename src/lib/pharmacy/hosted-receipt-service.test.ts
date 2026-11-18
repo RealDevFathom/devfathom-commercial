@@ -476,6 +476,8 @@ describe('DEV-16 hosted receipt access', () => {
   const fullReceipt = {
     branchName: 'Gulberg Branch',
     receiptNumber: 1042,
+    counterLabel: null,
+    offlineReference: null,
     completedAt: '2026-11-15T07:00:00.000Z',
     currency: 'PKR',
     lines: [

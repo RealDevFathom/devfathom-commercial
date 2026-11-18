@@ -7,12 +7,32 @@
  * verification per sale, controlled register). A pharmacist or owner corrects a wrong flag
  * through the existing catalogue edit path.
  *
- * Matching rule: the class value, trimmed and compared case-insensitively, equals "NARCOTICS".
+ * Matching rule: the class value, trimmed (`normalizeLegacyText`) and compared
+ * case-insensitively, equals "NARCOTICS".
  * Nothing else matches: a close spelling such as "NARCOTIC" or "NARCOTICS DRUGS" is a different
  * class and is left unflagged rather than guessed.
  */
 
 export const LEGACY_CONTROLLED_CLASS = 'NARCOTICS';
+
+/**
+ * DEV-925: the one whitespace rule for legacy class values and product names, shared by this
+ * code and the database lookups in `legacy-controlled.ts` (passed to PostgreSQL `regexp_replace`).
+ * It is the set JavaScript's `trim()` and `\s` use: tabs, line breaks, no-break spaces and the
+ * other Unicode spaces, written out so PostgreSQL does not fall back to its own, narrower rule.
+ */
+export const LEGACY_WHITESPACE_RUN =
+  '[\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+';
+
+const WHITESPACE_RUN = new RegExp(LEGACY_WHITESPACE_RUN, 'g');
+
+/**
+ * Every whitespace run becomes one space, then the leading and trailing space is removed.
+ * The SQL twin is `btrim(regexp_replace(value, LEGACY_WHITESPACE_RUN, ' ', 'g'), ' ')`.
+ */
+export function normalizeLegacyText(value: string): string {
+  return value.replace(WHITESPACE_RUN, ' ').replace(/^ | $/g, '');
+}
 
 /** Normalized header spellings of the legacy class column (`classname`, `Class Name`, `CLASS`). */
 const CLASS_HEADERS: readonly string[] = ['classname', 'class'];
@@ -23,7 +43,10 @@ function normalizeHeader(header: string): string {
 
 /** True only when the legacy class is NARCOTICS, ignoring case and surrounding whitespace. */
 export function isLegacyControlledClass(value: string | null | undefined): boolean {
-  return typeof value === 'string' && value.trim().toUpperCase() === LEGACY_CONTROLLED_CLASS;
+  return (
+    typeof value === 'string' &&
+    normalizeLegacyText(value).toUpperCase() === LEGACY_CONTROLLED_CLASS
+  );
 }
 
 /** The class value of one source row, read from its original header. */
@@ -50,5 +73,5 @@ export function isLegacyControlledRow(rawPayload: unknown): boolean {
 
 /** Catalogue product-name comparison key: trimmed, inner whitespace collapsed, case-folded. */
 export function legacyProductNameKey(name: string): string {
-  return name.trim().replace(/\s+/g, ' ').toLowerCase();
+  return normalizeLegacyText(name).toLowerCase();
 }
