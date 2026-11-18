@@ -1,9 +1,9 @@
 import 'server-only';
 
-import { randomUUID } from 'node:crypto';
-
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+
+import { allocateBranchReceiptNumbers } from './branch-receipt-sequence';
 
 /**
  * PH-OFF / OFF-01 and §8A invariant 16 — pre-allocated receipt-number leases.
@@ -11,9 +11,9 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  * "Reconnect never renumbers an issued receipt" is not a property of the replay
  * code; it is a property of WHERE the numbers came from. A counter that is about
  * to lose connectivity RESERVES a block of numbers up front, out of the SAME
- * per-device sequence (`pharmacy_receipt_number_sequences`) that the connected
- * settlement path draws from. Two consequences follow, and they are the whole
- * point:
+ * branch-wide sequence (`pharmacy_branch_receipt_sequences`, DEV-637) that the
+ * connected settlement path of every counter draws from. Two consequences follow,
+ * and they are the whole point:
  *
  *  - while the counter is offline, the numbers it prints are already its own, so
  *    replay records them rather than assigning new ones;
@@ -23,7 +23,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  *
  * The reservation and the block insert share one transaction, and the database
  * guard re-checks both facts (the block is below the sequence's high-water mark,
- * and it overlaps no other lease of this counter) so a caller that skips this
+ * and it overlaps no other lease of the branch) so a caller that skips this
  * module still cannot hand two counters the same number.
  *
  * A lease is never rewound and never deleted: `nextNumber` only advances, and
@@ -77,9 +77,9 @@ export function nextLeasedNumber(leases: readonly ReceiptLease[]): number | null
 /**
  * Reserve `size` consecutive receipt numbers for one counter.
  *
- * The sequence row is advanced by `size` in a single statement, so a concurrent
- * online settlement or a second reservation cannot observe the same high-water
- * mark. The returned block is `[high - size, high - 1]` — strictly below the new
+ * The branch sequence row is advanced by `size` under its row lock, so a concurrent
+ * online settlement or a second reservation (from any counter of the branch) cannot
+ * observe the same high-water mark. The returned block lies strictly below the new
  * high-water mark, which is exactly the condition the database guard enforces.
  */
 export async function reserveReceiptNumberBlock(
@@ -103,20 +103,11 @@ export async function reserveReceiptNumberBlock(
     throw new PharmacyReceiptLeaseError('DEVICE_NOT_USABLE');
   }
 
-  // One statement: create the sequence at `1 + size` or advance it by `size`,
-  // and return the new high-water mark. `ON CONFLICT DO UPDATE` takes the row
-  // lock, so a racing reservation waits here rather than reading a stale value.
-  const rows = await db.$queryRaw<Array<{ high_water: number }>>(Prisma.sql`
-    INSERT INTO pharmacy_receipt_number_sequences
-      (id, "organizationId", "branchId", "deviceId", "nextNumber", "updatedAt")
-    VALUES (${randomUUID()}, ${scope.organizationId}, ${scope.branchId}, ${input.deviceId}, ${1 + input.size}, now())
-    ON CONFLICT ("organizationId", "branchId", "deviceId")
-    DO UPDATE SET "nextNumber" = pharmacy_receipt_number_sequences."nextNumber" + ${input.size},
-                  "updatedAt" = now()
-    RETURNING "nextNumber" AS high_water`);
-  const highWater = rows[0]!.high_water;
-  const blockStart = highWater - input.size;
-  const blockEnd = highWater - 1;
+  // DEV-637: the block is carved out of the BRANCH sequence that online sales also draw
+  // from, under its row lock, so a concurrent sale or another counter's reservation can
+  // never be handed a number inside this block.
+  const blockStart = await allocateBranchReceiptNumbers(db, scope, input.size);
+  const blockEnd = blockStart + input.size - 1;
 
   const lease = await db.pharmacyReceiptNumberLease.create({
     data: {

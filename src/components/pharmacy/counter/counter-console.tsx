@@ -176,12 +176,12 @@ type ReceiptIntent = {
 };
 
 /**
- * A stable per-browser identifier for the drawer session and receipt sequence.
+ * A stable per-browser identifier for the drawer session and the counter label.
  *
  * The counter is a workspace page rather than an enrolled terminal, so there is
- * no device record to borrow. Receipt numbers are per (branch, device), so the
- * id must survive a reload — a fresh id every load would restart the sequence
- * and hand two bills the same receipt number.
+ * no device record to borrow. Receipt numbers come from one sequence per branch
+ * (DEV-637), so this id never decides a number; it must still survive a reload so
+ * the drawer session and the counter printed on the receipt stay the same.
  *
  * Read on demand rather than held in state: `localStorage` does not exist
  * during the server render, and mirroring it into React state would only add a

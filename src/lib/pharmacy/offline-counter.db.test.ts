@@ -55,6 +55,8 @@ const ORG_B = `org_wha1191_b_${suffix}`;
 const BRANCH_A = `branch_a_${suffix}`;
 const BRANCH_A_TWO = `branch_a_two_${suffix}`;
 const BRANCH_B = `branch_b_${suffix}`;
+/** DEV-637: receipt numbers are sequenced per branch, so a numbering test owns its branch. */
+const ownBranch = (label: string) => `${BRANCH_A}_${label.replace(/[^a-z0-9]/g, '_')}`;
 const ACTOR = 'user_pharmacist';
 
 const NOW = new Date('2026-09-02T09:00:00.000Z');
@@ -69,6 +71,7 @@ type Deps = {
   leases: typeof import('./offline-receipt-leases');
   quotas: typeof import('./offline-quotas');
   log: typeof import('./offline-command-log');
+  receipts: typeof import('./branch-receipt-sequence');
 };
 let deps: Deps;
 
@@ -248,7 +251,15 @@ beforeAll(async () => {
     import('./offline-command-log'),
     import('@/lib/testing/rls-role-guard'),
   ]);
-  deps = { withTenantDb: scopedDb.withTenantDb, devices, snapshots, leases, quotas, log };
+  deps = {
+    withTenantDb: scopedDb.withTenantDb,
+    devices,
+    snapshots,
+    leases,
+    quotas,
+    log,
+    receipts: await import('./branch-receipt-sequence'),
+  };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
   // Integrated tip (20261012120000_visibility_context_anchors): tenant rows must reference an
   // existing organization, so anchor this suite's synthetic tenants before any test runs.
@@ -507,7 +518,7 @@ describeIfDatabase('PH-OFF OFF-01 — signed snapshots', () => {
 
 describeIfDatabase('PH-OFF OFF-01 — pre-allocated receipt leases (§8A invariant 16)', () => {
   it('reserves a block below the sequence high-water mark and issues from it', async () => {
-    const fixture = await scenario(ORG_A, BRANCH_A, 'lease');
+    const fixture = await scenario(ORG_A, ownBranch('lease'), 'lease');
     const outcome = await inOrg(ORG_A, async (db) => {
       const lease = await deps.leases.reserveReceiptNumberBlock(db, scopeOf(fixture), {
         deviceId: fixture.deviceId,
@@ -522,8 +533,8 @@ describeIfDatabase('PH-OFF OFF-01 — pre-allocated receipt leases (§8A invaria
         .issueLeasedReceiptNumber(db, scopeOf(fixture), fixture.deviceId)
         .then(() => 'ACCEPTED')
         .catch((error: Error) => error.message);
-      const sequence = await db.pharmacyReceiptNumberSequence.findFirstOrThrow({
-        where: { organizationId: ORG_A, branchId: BRANCH_A, deviceId: fixture.deviceId },
+      const sequence = await db.pharmacyBranchReceiptSequence.findFirstOrThrow({
+        where: { organizationId: ORG_A, branchId: fixture.branchId },
       });
       return { lease, issued: issued.map((row) => row.receiptNumber), exhausted, sequence };
     });
@@ -537,7 +548,7 @@ describeIfDatabase('PH-OFF OFF-01 — pre-allocated receipt leases (§8A invaria
   });
 
   it('a second reservation never overlaps the first', async () => {
-    const fixture = await scenario(ORG_A, BRANCH_A, 'lease-two');
+    const fixture = await scenario(ORG_A, ownBranch('lease-two'), 'lease-two');
     const blocks = await inOrg(ORG_A, async (db) => [
       await deps.leases.reserveReceiptNumberBlock(db, scopeOf(fixture), {
         deviceId: fixture.deviceId,
@@ -553,7 +564,7 @@ describeIfDatabase('PH-OFF OFF-01 — pre-allocated receipt leases (§8A invaria
   });
 
   it('the database refuses a hand-written block that overlaps a reserved one', async () => {
-    const fixture = await scenario(ORG_A, BRANCH_A, 'lease-overlap');
+    const fixture = await scenario(ORG_A, ownBranch('lease-overlap'), 'lease-overlap');
     await inOrg(ORG_A, (db) =>
       deps.leases.reserveReceiptNumberBlock(db, scopeOf(fixture), {
         deviceId: fixture.deviceId,
@@ -564,7 +575,7 @@ describeIfDatabase('PH-OFF OFF-01 — pre-allocated receipt leases (§8A invaria
       db.pharmacyReceiptNumberLease.create({
         data: {
           organizationId: ORG_A,
-          branchId: BRANCH_A,
+          branchId: fixture.branchId,
           deviceId: fixture.deviceId,
           blockStart: 5,
           blockEnd: 8,
@@ -577,7 +588,7 @@ describeIfDatabase('PH-OFF OFF-01 — pre-allocated receipt leases (§8A invaria
   });
 
   it('the database refuses a block the sequence has not reserved', async () => {
-    const fixture = await scenario(ORG_A, BRANCH_A, 'lease-unreserved');
+    const fixture = await scenario(ORG_A, ownBranch('lease-unreserved'), 'lease-unreserved');
     await inOrg(ORG_A, (db) =>
       deps.leases.reserveReceiptNumberBlock(db, scopeOf(fixture), {
         deviceId: fixture.deviceId,
@@ -589,7 +600,7 @@ describeIfDatabase('PH-OFF OFF-01 — pre-allocated receipt leases (§8A invaria
       db.pharmacyReceiptNumberLease.create({
         data: {
           organizationId: ORG_A,
-          branchId: BRANCH_A,
+          branchId: fixture.branchId,
           deviceId: fixture.deviceId,
           blockStart: 4,
           blockEnd: 6,
@@ -602,7 +613,7 @@ describeIfDatabase('PH-OFF OFF-01 — pre-allocated receipt leases (§8A invaria
   });
 
   it('a lease cursor never rewinds and its block is never rewritten', async () => {
-    const fixture = await scenario(ORG_A, BRANCH_A, 'lease-immutable');
+    const fixture = await scenario(ORG_A, ownBranch('lease-immutable'), 'lease-immutable');
     const lease = await inOrg(ORG_A, async (db) => {
       const reserved = await deps.leases.reserveReceiptNumberBlock(db, scopeOf(fixture), {
         deviceId: fixture.deviceId,
@@ -644,7 +655,7 @@ describeIfDatabase('PH-OFF OFF-01 — pre-allocated receipt leases (§8A invaria
   });
 
   it('two counters of one branch are never handed the same number', async () => {
-    const first = await scenario(ORG_A, BRANCH_A, 'lease-counter-a');
+    const first = await scenario(ORG_A, ownBranch('lease-counter-a'), 'lease-counter-a');
     const second = await inOrg(ORG_A, async (db) => {
       const enrolled = await deps.devices.enrollPharmacyCounter(db, scopeOf(first), {
         name: `Counter ${tag('lease-counter-b')}`,
@@ -663,11 +674,184 @@ describeIfDatabase('PH-OFF OFF-01 — pre-allocated receipt leases (§8A invaria
       }),
     }));
 
-    // Sequences are per DEVICE, so the two counters number independently and a
-    // collision is impossible by construction rather than by convention.
+    // DEV-637: one sequence per BRANCH, so the second counter continues the branch's
+    // numbering instead of starting again at 1.
     expect(blocks.a).toMatchObject({ blockStart: 1, blockEnd: 5 });
-    expect(blocks.b).toMatchObject({ blockStart: 1, blockEnd: 5 });
+    expect(blocks.b).toMatchObject({ blockStart: 6, blockEnd: 10 });
     expect(blocks.a.deviceId).not.toBe(blocks.b.deviceId);
+  });
+
+  it('refuses a hand-written block that overlaps another counter of the branch', async () => {
+    const first = await scenario(ORG_A, ownBranch('lease-cross-a'), 'lease-cross-a');
+    const second = await inOrg(ORG_A, async (db) => {
+      const enrolled = await deps.devices.enrollPharmacyCounter(db, scopeOf(first), {
+        name: `Counter ${tag('lease-cross-b')}`,
+      });
+      await deps.leases.reserveReceiptNumberBlock(db, scopeOf(first), {
+        deviceId: first.deviceId,
+        size: 10,
+      });
+      // Move the sequence on, so the block below is "reserved" and only overlap can refuse it.
+      await deps.receipts.allocateBranchReceiptNumbers(db, first, 10);
+      return enrolled.device.id;
+    });
+    const message = await refusal(ORG_A, (db) =>
+      db.pharmacyReceiptNumberLease.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: first.branchId,
+          deviceId: second,
+          blockStart: 8,
+          blockEnd: 12,
+          nextNumber: 8,
+          issuedToActorId: ACTOR,
+        },
+      })
+    );
+    expect(message).toContain('RECEIPT_LEASE_OVERLAP');
+  });
+});
+
+// ── DEV-637 — one receipt sequence per branch ───────────────────────────────
+
+describeIfDatabase('DEV-637 — receipt numbers are unique per branch', () => {
+  it('gives 60 concurrent draws over five connections distinct numbers, branch by branch', async () => {
+    const { Client } = await import('pg');
+    const first = ownBranch('connections-one');
+    const second = ownBranch('connections-two');
+    await inOrg(ORG_A, async (db) => {
+      await ensureBranch(db, ORG_A, first);
+      await ensureBranch(db, ORG_A, second);
+    });
+    const clients = Array.from(
+      { length: 5 },
+      () => new Client({ connectionString: TEST_DATABASE_URL })
+    );
+    await Promise.all(clients.map((client) => client.connect()));
+    try {
+      // The runtime role: row-level security applies, nothing is bypassed.
+      const role = await clients[0]!.query<{ rolsuper: boolean; rolbypassrls: boolean }>(
+        'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user'
+      );
+      expect(role.rows[0]).toEqual({ rolsuper: false, rolbypassrls: false });
+
+      const draw = async (client: InstanceType<typeof Client>, branchId: string) => {
+        await client.query('BEGIN');
+        try {
+          await client.query(`SELECT set_config('app.current_organization_id', $1, true)`, [ORG_A]);
+          const row = await client.query<{ n: number }>(
+            'SELECT pharmacy_allocate_branch_receipt_numbers($1, $2, 1) AS n',
+            [ORG_A, branchId]
+          );
+          // Hold the row lock a moment so the other connections queue behind it.
+          await client.query('SELECT pg_sleep(0.002)');
+          await client.query('COMMIT');
+          return row.rows[0]!.n;
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        }
+      };
+      const drawn = await Promise.all(
+        clients.map(async (client, index) => {
+          const numbers = { first: [] as number[], second: [] as number[] };
+          for (let i = 0; i < 12; i += 1) {
+            numbers.first.push(await draw(client, first));
+            if ((i + index) % 3 === 0) numbers.second.push(await draw(client, second));
+          }
+          return numbers;
+        })
+      );
+      const firstNumbers = drawn.flatMap((d) => d.first).sort((a, b) => a - b);
+      const secondNumbers = drawn.flatMap((d) => d.second).sort((a, b) => a - b);
+      expect(firstNumbers).toHaveLength(60);
+      expect(new Set(firstNumbers).size).toBe(60);
+      expect(firstNumbers).toEqual(Array.from({ length: 60 }, (_, i) => i + 1));
+      // A second branch keeps its own sequence, starting at 1, unaffected by the first.
+      expect(new Set(secondNumbers).size).toBe(secondNumbers.length);
+      expect(secondNumbers).toEqual(Array.from({ length: secondNumbers.length }, (_, i) => i + 1));
+    } finally {
+      await Promise.all(clients.map((client) => client.end()));
+    }
+  });
+
+  it('hands concurrent sales and leases from several counters distinct, gap-free numbers', async () => {
+    const fixture = await scenario(ORG_A, ownBranch('concurrent'), 'concurrent');
+    const counters = [fixture.deviceId];
+    for (const label of ['concurrent-b', 'concurrent-c'])
+      counters.push(
+        await inOrg(ORG_A, async (db) => {
+          const enrolled = await deps.devices.enrollPharmacyCounter(db, scopeOf(fixture), {
+            name: `Counter ${tag(label)}`,
+          });
+          return enrolled.device.id;
+        })
+      );
+
+    // Every draw is its own transaction, all in flight together, as from separate counters.
+    const online = Array.from({ length: 12 }, () =>
+      inOrg(ORG_A, (db) => deps.receipts.allocateBranchReceiptNumbers(db, fixture, 1))
+    );
+    const leased = counters.map((deviceId) =>
+      inOrg(ORG_A, (db) =>
+        deps.leases.reserveReceiptNumberBlock(db, scopeOf(fixture), { deviceId, size: 4 })
+      )
+    );
+    const [singles, blocks] = await Promise.all([Promise.all(online), Promise.all(leased)]);
+
+    const issued = [
+      ...singles,
+      ...blocks.flatMap((block) =>
+        Array.from(
+          { length: block.blockEnd - block.blockStart + 1 },
+          (_, i) => block.blockStart + i
+        )
+      ),
+    ].sort((a, b) => a - b);
+    expect(issued).toEqual(Array.from({ length: 24 }, (_, i) => i + 1));
+  });
+
+  it('refuses a second receipt of the branch with the same number, whatever the counter', async () => {
+    const fixture = await scenario(ORG_A, ownBranch('unique-sale'), 'unique-sale');
+    const other = await scenario(ORG_A, ownBranch('unique-sale-other'), 'unique-sale-other');
+    const completed = (branchId: string, deviceId: string, receiptNumber: number) => ({
+      organizationId: ORG_A,
+      branchId,
+      status: 'COMPLETED' as const,
+      createdByUserId: ACTOR,
+      receiptNumber,
+      receiptDeviceId: deviceId,
+      // The caller cannot opt a new receipt out of the branch-wide rule.
+      receiptNumberBranchUnique: false,
+      businessDate: new Date('2026-09-02T00:00:00.000Z'),
+      completedAt: NOW,
+    });
+
+    const first = await inOrg(ORG_A, (db) =>
+      db.pharmacySale.create({ data: completed(fixture.branchId, fixture.deviceId, 7) })
+    );
+    expect(first.receiptNumberBranchUnique).toBe(true);
+
+    const duplicate = await refusal(ORG_A, (db) =>
+      db.pharmacySale.create({ data: completed(fixture.branchId, 'counter-other-browser', 7) })
+    );
+    // A different counter, so only the branch-wide index can refuse it.
+    expect(duplicate).toContain('Unique constraint failed');
+
+    // Another branch keeps its own numbering.
+    const elsewhere = await inOrg(ORG_A, (db) =>
+      db.pharmacySale.create({ data: completed(other.branchId, other.deviceId, 7) })
+    );
+    expect(elsewhere.receiptNumber).toBe(7);
+
+    // An issued receipt's flag never changes.
+    const flipped = await inOrg(ORG_A, (db) =>
+      db.pharmacySale.update({
+        where: { organizationId_id: { organizationId: ORG_A, id: first.id } },
+        data: { receiptNumberBranchUnique: false },
+      })
+    );
+    expect(flipped.receiptNumberBranchUnique).toBe(true);
   });
 });
 
@@ -1182,11 +1366,19 @@ describeIfDatabase('leased receipt settlement', () => {
     await retirePharmacyRegulatoryRules(withPlatformDb, ruleSetIds);
   });
 
-  async function setup() {
+  async function setup(
+    leaseFor?: (
+      db: ScopedDb,
+      scope: ReturnType<typeof scopeOf>,
+      deviceId: string
+    ) => Promise<{ id: string; blockStart: number }>
+  ) {
     const fixture = await scenario(ORG_A, BRANCH_A, 'leased-settlement');
     const scope = scopeOf(fixture);
     const lease = await inOrg(ORG_A, (db) =>
-      deps.leases.reserveReceiptNumberBlock(db, scope, { deviceId: fixture.deviceId, size: 2 })
+      leaseFor
+        ? leaseFor(db, scope, fixture.deviceId)
+        : deps.leases.reserveReceiptNumberBlock(db, scope, { deviceId: fixture.deviceId, size: 2 })
     );
     const originalSaleAt = new Date().toISOString();
     const signed = await inOrg(ORG_A, (db) =>
@@ -1282,6 +1474,95 @@ describeIfDatabase('leased receipt settlement', () => {
         ),
     };
   }
+
+  it('DEV-637 records an offline sale whose old-range number repeats a branch receipt, under a fresh number', async () => {
+    // A block leased before branch-wide numbering came from the counter's own range, so a
+    // number it printed can already belong to another counter's receipt in the branch.
+    const f = await setup(async (db, scope, deviceId) => {
+      const taken = await deps.receipts.allocateBranchReceiptNumbers(db, scope, 4);
+      await db.pharmacySale.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: BRANCH_A,
+          status: 'COMPLETED',
+          createdByUserId: ACTOR,
+          receiptNumber: taken,
+          receiptDeviceId: 'counter-other-browser',
+          businessDate: new Date('2026-09-02T00:00:00.000Z'),
+          completedAt: NOW,
+        },
+      });
+      return db.pharmacyReceiptNumberLease.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: BRANCH_A,
+          deviceId,
+          blockStart: taken,
+          blockEnd: taken + 1,
+          nextNumber: taken,
+          issuedToActorId: ACTOR,
+        },
+      });
+    });
+    const printed = f.lease.blockStart;
+
+    const result = await f.apply();
+    expect(result).toMatchObject({ settled: true, offlineReference: printed, replayed: false });
+    const issued = (result as { receiptNumber: number }).receiptNumber;
+    expect(issued).toBeGreaterThan(printed + 3);
+
+    await inOrg(ORG_A, async (db) => {
+      const sale = await db.pharmacySale.findFirstOrThrow({ where: { id: f.input.saleId } });
+      expect(sale).toMatchObject({
+        status: 'COMPLETED',
+        receiptNumber: issued,
+        offlineReceiptReference: printed,
+        receiptNumberBranchUnique: true,
+      });
+      // The printed number stays with the receipt it already belonged to; no duplicate.
+      expect(
+        await db.pharmacySale.count({ where: { branchId: BRANCH_A, receiptNumber: printed } })
+      ).toBe(1);
+      expect(
+        await db.pharmacySale.count({ where: { branchId: BRANCH_A, receiptNumber: issued } })
+      ).toBe(1);
+      // The printed number is used up on the lease, never handed out again.
+      const [lease] = await deps.leases.listReceiptLeases(
+        db,
+        scopeOf(f.fixture),
+        f.fixture.deviceId
+      );
+      expect(lease!.nextNumber).toBe(printed + 1);
+      // The audit entry (the issued receipt's snapshot) names both numbers.
+      const completed = await db.pharmacySaleEvent.findFirstOrThrow({
+        where: { saleId: f.input.saleId, kind: 'COMPLETED' },
+      });
+      expect(completed.payload).toMatchObject({ receiptNumber: issued, offlineReference: printed });
+      // A reprint shows the number the customer holds on paper.
+      const { readCounterReceipt } = await import('./counter');
+      const receipt = await readCounterReceipt(db, scopeOf(f.fixture), f.input.saleId, {
+        name: 'Branch',
+        currency: 'PKR',
+      });
+      expect(receipt).toMatchObject({ receiptNumber: issued, offlineReference: printed });
+      // The reference is fixed once issued.
+      const rewrite = await db.pharmacySale
+        .update({
+          where: { organizationId_id: { organizationId: ORG_A, id: f.input.saleId } },
+          data: { offlineReceiptReference: printed + 1 },
+        })
+        .then(() => 'ACCEPTED')
+        .catch((error: Error) => error.message);
+      expect(rewrite).toContain('ISSUED_RECEIPT_IMMUTABLE');
+    });
+
+    // A retry of the same command answers with the same issued number.
+    await expect(f.apply()).resolves.toMatchObject({
+      receiptNumber: issued,
+      offlineReference: printed,
+      replayed: true,
+    });
+  });
 
   it('serializes identical retries into one tender and immutable receipt', async () => {
     const f = await setup();

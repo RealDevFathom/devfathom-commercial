@@ -794,7 +794,7 @@ export function ReturnForm({
       {!unparsed && !!lookup.data?.length && (
         <div className="space-y-2">
           {lookup.data.length > 1 && (
-            <p>Choose the matching date and counter. Receipt numbers can repeat.</p>
+            <p>Choose the matching date and counter. Older receipts can share a number.</p>
           )}
           {lookup.data.map((row) => (
             <Button

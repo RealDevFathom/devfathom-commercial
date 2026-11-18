@@ -39,6 +39,7 @@ import {
   formatReceiptExpiry,
   formatReceiptIssuedAt,
   receiptCashReceived,
+  receiptOfflineReferenceLine,
   receiptPromotionLabel,
   type CounterReceipt,
   type CounterReceiptLocale,
@@ -94,11 +95,14 @@ function escPosFacts(
     throw new RawPrintValidationError('INVALID_PRINT_DOCUMENT');
   }
   const memo = counterReceiptCashMemo(receipt, taxIdentity, 'en');
+  // DEV-637: the issuing counter, and the number printed offline when replay renumbered
+  // the sale, exactly as the browser receipt prints them.
+  const offlineReference = receiptOfflineReferenceLine(receipt, 'en');
   return {
     businessName: receipt.branchName,
     invoiceNumber: String(receipt.receiptNumber),
     invoiceLabel: memo ? memo.title : strings.invoice,
-    issuedAt: `${memo ? `${memo.licence.join('\n')}\n${memo.buyer}\n` : ''}${date}${receipt.cashierName ? `\n${strings.cashier}: ${receipt.cashierName}` : ''}${reprint ? `\n${REPRINT_MARKER}` : ''}`,
+    issuedAt: `${memo ? `${memo.licence.join('\n')}\n${memo.buyer}\n` : ''}${date}${receipt.counterLabel ? `\n${receipt.counterLabel}` : ''}${offlineReference ? `\n${offlineReference}` : ''}${receipt.cashierName ? `\n${strings.cashier}: ${receipt.cashierName}` : ''}${reprint ? `\n${REPRINT_MARKER}` : ''}`,
     lines: receipt.lines.map((line) => {
       const issued = line.identityStatus === 'ISSUED';
       const promotion = receiptPromotionLabel(line, 'en');

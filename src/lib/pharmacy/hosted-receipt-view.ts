@@ -1,4 +1,9 @@
-import { receiptTierLines, COUNTER_RECEIPT_STRINGS, type CounterReceipt } from './counter-receipt';
+import {
+  receiptOfflineReferenceLine,
+  receiptTierLines,
+  COUNTER_RECEIPT_STRINGS,
+  type CounterReceipt,
+} from './counter-receipt';
 
 /**
  * DEV-16: what a hosted receipt page shows to the link holder: every purchased
@@ -9,6 +14,10 @@ export type HostedReceiptView = {
   tierDiscountLines?: string[];
   branchName: string;
   receiptNumber: number;
+  /** DEV-637: the counter that issued the receipt. */
+  counterLabel: string | null;
+  /** DEV-637: "Printed offline as receipt 12" when replay renumbered the sale. */
+  offlineReference: string | null;
   completedAt: string | null;
   currency: string;
   lines: {
@@ -32,6 +41,8 @@ export function hostedReceiptView(receipt: CounterReceipt): HostedReceiptView | 
       : {}),
     branchName: receipt.branchName,
     receiptNumber: receipt.receiptNumber,
+    counterLabel: receipt.counterLabel ?? null,
+    offlineReference: receiptOfflineReferenceLine(receipt, 'en'),
     completedAt: receipt.completedAt,
     currency: receipt.currency,
     lines: receipt.lines.map((line) => ({

@@ -540,6 +540,7 @@ export const INTEGRATED_TABLES = [
   'pharmacy_drawer_movements',
   'pharmacy_money_idempotency_keys',
   'pharmacy_receipt_number_sequences',
+  'pharmacy_branch_receipt_sequences',
   'finance_journal_entries',
   'finance_journal_lines',
 ] as const;
