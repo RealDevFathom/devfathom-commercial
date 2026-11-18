@@ -5,6 +5,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { evaluateOrderSettlement } from './bills';
 import {
+  refundBody,
   buildReceiptForBranch,
   getOrderSettlementForBranch,
   moneyErrorResponse,
@@ -408,5 +409,45 @@ describe('tenderBody manual card confirmation', () => {
       tender: { ...base.tender, manualConfirmation: { reference: '4242' } },
     });
     expect(noCode.success).toBe(false);
+  });
+});
+
+describe('manual card refund reference validation', () => {
+  const body = {
+    originalTenderId: 'tender-1',
+    amount: '1.00',
+    reason: 'Return',
+    approving: { staffProfileId: 'manager', type: 'PIN', secret: '1234' },
+  };
+  it('accepts absent, empty and length-limited references and trims them', () => {
+    expect(refundBody.parse(body).cardMachineRefundReference).toBeUndefined();
+    expect(
+      refundBody.parse({ ...body, cardMachineRefundReference: '' }).cardMachineRefundReference
+    ).toBe('');
+    expect(
+      refundBody.parse({ ...body, cardMachineRefundReference: ' REF-42 ' })
+        .cardMachineRefundReference
+    ).toBe('REF-42');
+    expect(
+      refundBody.parse({ ...body, cardMachineRefundReference: 'x'.repeat(40) })
+        .cardMachineRefundReference
+    ).toHaveLength(40);
+    expect(
+      refundBody.safeParse({ ...body, cardMachineRefundReference: 'x'.repeat(41) }).success
+    ).toBe(false);
+  });
+  it('rejects card-number-shaped and malformed references at the request boundary', () => {
+    for (const bad of [
+      '4111111111111111',
+      '4111-1111-1111-1111',
+      '4111/1111/1111/1111',
+      '4111.1111.1111.1111',
+      '\u0664\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661',
+      'REF 42',
+    ]) {
+      expect(refundBody.safeParse({ ...body, cardMachineRefundReference: bad }).success).toBe(
+        false
+      );
+    }
   });
 });

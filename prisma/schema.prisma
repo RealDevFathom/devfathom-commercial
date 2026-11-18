@@ -8439,6 +8439,7 @@ model RestaurantRefund {
   paymentId                 String?
   staffProfileId            String
   deviceId                  String
+  cardMachineRefundReference String?             @db.VarChar(120)
   fullReversalSnapshotId    String?              @unique
   createdAt                 DateTime             @default(now())
 
@@ -8588,6 +8589,7 @@ model RestaurantDailyClose {
   supersedesCloseId   String?
   correctionReason    String?
   coAuthorizationId   String?
+  manualCardSummary   Json?
   cutByStaffProfileId String
   deviceId            String?
   grossSales          Decimal  @default(0) @db.Decimal(12, 2)

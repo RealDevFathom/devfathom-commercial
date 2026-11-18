@@ -1035,3 +1035,108 @@ describeIfDatabase('daily close (real DB)', () => {
 function cutKeyFor(date: string): string {
   return `cut_${suffix}_${date}`;
 }
+
+describe('manual card day-close reconciliation', () => {
+  const tender = (provider: string, staffProfileId: string, amount: string, tip = '0') => ({
+    type: 'CARD' as const,
+    payment: { provider },
+    staffProfileId,
+    amount: D(amount),
+    tipAmount: D(tip),
+  });
+  const refund = (originalTender: ReturnType<typeof tender>, amount: string, tip = '0') => ({
+    originalTender,
+    amount: D(amount),
+    tipRefundAmount: D(tip),
+    taxRefundAmount: D('0'),
+    serviceChargeRefundAmount: D('0'),
+    deliveryFeeRefundAmount: D('0'),
+  });
+  it('reports a subset of CARD with exact cashier sums and nets partial refunds and full void reversals once', () => {
+    const a = tender('MANUAL', 'cashier-a', '10.10', '1.01');
+    const b = tender('MANUAL', 'cashier-b', '20.20', '2.02');
+    const terminal = tender('TERMINAL', 'cashier-a', '30.30');
+    const mock = tender('MOCK', 'cashier-a', '40.40');
+    const aggregate = computeCloseAggregate({
+      bills: [],
+      drawers: [],
+      tenders: [a, b, terminal, mock],
+      refunds: [refund(a, '0.10', '0.01'), refund(b, '20.20', '2.02'), refund(terminal, '1.00')],
+    });
+    expect(aggregate.tenderTotals[0].amount.toFixed(2)).toBe('101.00');
+    expect(aggregate.tenderTotals[0].count).toBe(4);
+    expect(aggregate.manualCardSummary).toMatchObject({
+      count: 2,
+      amount: '30.30',
+      tipAmount: '3.03',
+      refundCount: 2,
+      refundAmount: '20.30',
+      tipRefundAmount: '2.03',
+      netAmount: '10.00',
+      netTipAmount: '1.00',
+      cashiers: [
+        {
+          staffProfileId: 'cashier-a',
+          count: 1,
+          amount: '10.10',
+          refundAmount: '0.10',
+          netAmount: '10.00',
+        },
+        {
+          staffProfileId: 'cashier-b',
+          count: 1,
+          amount: '20.20',
+          refundAmount: '20.20',
+          netAmount: '0.00',
+        },
+      ],
+    });
+    expect(D(aggregate.manualCardSummary.amount).plus('70.70').toFixed(2)).toBe(
+      aggregate.tenderTotals[0].amount.toFixed(2)
+    );
+  });
+  it('puts a prior-date tender refund on the processing day without fabricating a collection or changing the prior close', () => {
+    const original = tender('MANUAL', 'original-cashier', '12.50', '1.00');
+    const before = computeCloseAggregate({
+      bills: [],
+      drawers: [],
+      tenders: [original],
+      refunds: [],
+    });
+    const frozen = JSON.stringify(before);
+    const today = computeCloseAggregate({
+      bills: [],
+      drawers: [],
+      tenders: [],
+      refunds: [refund(original, '5.00', '0.50')],
+    });
+    expect(today.manualCardSummary).toMatchObject({
+      count: 0,
+      amount: '0.00',
+      refundCount: 1,
+      netAmount: '-5.00',
+      netTipAmount: '-0.50',
+      cashiers: [{ staffProfileId: 'original-cashier', count: 0, netAmount: '-5.00' }],
+    });
+    expect(JSON.stringify(before)).toBe(frozen);
+  });
+  it('returns explicit zero totals with no manual cards and excludes cash even if it has a manual payment attachment', () => {
+    const result = computeCloseAggregate({
+      bills: [],
+      drawers: [],
+      refunds: [],
+      tenders: [{ ...tender('MANUAL', 'cashier', '5'), type: 'CASH' }],
+    });
+    expect(result.manualCardSummary).toEqual({
+      count: 0,
+      amount: '0.00',
+      tipAmount: '0.00',
+      refundCount: 0,
+      refundAmount: '0.00',
+      tipRefundAmount: '0.00',
+      netAmount: '0.00',
+      netTipAmount: '0.00',
+      cashiers: [],
+    });
+  });
+});
