@@ -413,20 +413,31 @@ it('shows the refund still beside the receipt, outside the printable document', 
   );
   const evidence = within(screen.getByRole('region', { name: 'Camera evidence' }));
   const image = evidence.getByRole('img', {
-    name: 'Camera still at refund, 2026-09-06 08:31 UTC',
+    name: 'Camera still at refund, 2026-09-06 13:31 PKT',
   });
   expect(image).toHaveAttribute('src', still);
   expect(evidence.getByText('Still removed under the camera retention period.')).toBeTruthy();
-  expect(evidence.getByText('Captured 2026-09-06 08:31 UTC')).toBeTruthy();
+  expect(evidence.getByText('Captured 2026-09-06 13:31 PKT')).toBeTruthy();
   const receipt = screen.getByRole('region', { name: 'Receipt 12' });
   expect(within(receipt).queryByRole('img')).toBeNull();
   expect(container.querySelector('pre')?.textContent ?? '').not.toContain('Camera');
 });
 
 it.each([
-  ['PENDING', 'Still pending capture.', 'Requested 2026-09-06 08:30 UTC'],
-  ['FAILED', 'No still was captured.', 'Requested 2026-09-06 08:30 UTC'],
-] as const)('explains %s evidence without an image', (status, message, time) => {
+  // 00:30 on 6 Sep in Karachi is 19:30 UTC on 5 Sep: the shop clock's date is shown.
+  [
+    'PENDING',
+    'Still pending capture.',
+    'Requested 2026-09-06 00:30 PKT',
+    '2026-09-05T19:30:00.000Z',
+  ],
+  [
+    'FAILED',
+    'No still was captured.',
+    'Requested 2026-09-06 13:30 PKT',
+    '2026-09-06T08:30:00.000Z',
+  ],
+] as const)('explains %s evidence without an image', (status, message, time, requestedAt) => {
   render(
     <CounterReceiptView
       {...props({
@@ -435,7 +446,7 @@ it.each([
             id: 'e',
             kind: 'REFUND',
             status,
-            requestedAt: '2026-09-06T08:30:00.000Z',
+            requestedAt,
             capturedAt: null,
             image: null,
           },
@@ -447,6 +458,9 @@ it.each([
   expect(evidence.getByText(message)).toBeTruthy();
   expect(evidence.getByText(time)).toBeTruthy();
   expect(evidence.queryByRole('img')).toBeNull();
+  expect(screen.getByRole('region', { name: 'Camera evidence' }).textContent).not.toMatch(
+    /\bUTC\b/
+  );
 });
 
 it.each([undefined, null, []])('renders no evidence section for %j', (evidence) => {

@@ -9,7 +9,7 @@ import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import { createTRPCContext } from '@/server/trpc';
 import { pharmacyLoyaltyRouter } from './loyalty-router';
-import { formatUtcInstant } from '@/lib/utc-instant';
+import { formatWorkspaceDate, formatWorkspaceDateTime } from '@/lib/timezone';
 import { LoyaltyCustomerSearch } from './customer-search';
 import { EarnRateForm } from './earn-rate-form';
 import { AdjustPointsForm } from './adjust-points-form';
@@ -49,7 +49,10 @@ const rupeesInput = (minor: number) =>
 
 async function loadLoyalty(text: (key: string) => string) {
   try {
-    const caller = pharmacyLoyaltyRouter.createCaller(await createTRPCContext());
+    const ctx = await createTRPCContext();
+    const caller = pharmacyLoyaltyRouter.createCaller(ctx);
+    // Times show on the organisation's clock (UTC when it has no zone).
+    const timeZone = ctx.organization?.timezone ?? null;
     const branches = await caller.branches();
     if (!branches.length) return { state: 'empty' as const };
     const branchId = text('branchId') || branches[0]!.id;
@@ -82,6 +85,7 @@ async function loadLoyalty(text: (key: string) => string) {
       earnRate,
       liability,
       redemptions,
+      timeZone,
     };
   } catch (error) {
     unstable_rethrow(error);
@@ -157,7 +161,9 @@ export default async function LoyaltyPage({
     earnRate,
     liability,
     redemptions,
+    timeZone,
   } = data;
+  const shopTime = (value: Date) => formatWorkspaceDateTime(value, timeZone);
   const href = (id: string, page = 1) =>
     `/pharmacy/loyalty?${new URLSearchParams({ branchId, customerId: id, query, page: String(page) })}`;
   const redemptionsHref = (page: number) =>
@@ -206,7 +212,7 @@ export default async function LoyaltyPage({
         )}
         <p className="mt-2 mb-5 text-sm text-text-muted">
           {current
-            ? `Version ${current.version}, in effect since ${current.effectiveFrom.toISOString().slice(0, 10)} (UTC). `
+            ? `Version ${current.version}, in effect since ${formatWorkspaceDate(current.effectiveFrom, timeZone)}. `
             : ''}
           Every purchase earns, including khata purchases once the customer pays them off when that
           is switched on. Points tenders never earn. Every save is a new dated version: it applies
@@ -233,7 +239,7 @@ export default async function LoyaltyPage({
               <caption className="sr-only">Earning rate history</caption>
               <thead className="font-mono text-xs uppercase">
                 <tr>
-                  {['Version', 'Rate', 'Point value', 'Expiry', 'Khata', 'From (UTC)'].map((t) => (
+                  {['Version', 'Rate', 'Point value', 'Expiry', 'Khata', 'From'].map((t) => (
                     <th key={t} scope="col" className="p-3 text-left">
                       {t}
                     </th>
@@ -253,7 +259,7 @@ export default async function LoyaltyPage({
                     <td className="p-3">{version.khataEarns === false ? 'Off' : 'On'}</td>
                     <td className="whitespace-nowrap p-3">
                       <time dateTime={version.effectiveFrom.toISOString()}>
-                        {formatUtcInstant(version.effectiveFrom)}
+                        {shopTime(version.effectiveFrom)}
                       </time>
                     </td>
                   </tr>
@@ -431,7 +437,7 @@ export default async function LoyaltyPage({
               <span className="text-text-muted">
                 {history.customer.loyaltyActive !== false ? 'Re-enrolled' : 'Deactivated'}{' '}
                 <time dateTime={history.customer.loyaltyStatusChangedAt.toISOString()}>
-                  {formatUtcInstant(history.customer.loyaltyStatusChangedAt)}
+                  {shopTime(history.customer.loyaltyStatusChangedAt)}
                 </time>
                 {history.customer.loyaltyStatusReason
                   ? ` · ${history.customer.loyaltyStatusReason}`
@@ -453,7 +459,7 @@ export default async function LoyaltyPage({
                 This customer held points at more than one branch before balances became one. These
                 were the branch balances on{' '}
                 <time dateTime={history.reconciliation[0]!.reconciledAt.toISOString()}>
-                  {formatUtcInstant(history.reconciliation[0]!.reconciledAt)}
+                  {shopTime(history.reconciliation[0]!.reconciledAt)}
                 </time>
                 ; together they make the balance above. Nothing was added or removed.
               </p>
@@ -520,6 +526,7 @@ export default async function LoyaltyPage({
               branchId={branchId}
               customerId={customerId}
               activeCard={card ? { issuedAt: card.issuedAt.toISOString() } : null}
+              timeZone={timeZone}
             />
           </div>
           {history.entries.length ? (
@@ -535,7 +542,7 @@ export default async function LoyaltyPage({
                 </caption>
                 <thead className="font-mono text-xs uppercase">
                   <tr>
-                    {['Time (UTC)', 'Event', 'Branch', 'Source receipt', 'Points'].map((t) => (
+                    {['Time', 'Event', 'Branch', 'Source receipt', 'Points'].map((t) => (
                       <th
                         key={t}
                         scope="col"
@@ -553,9 +560,7 @@ export default async function LoyaltyPage({
                       className="border-t border-border-subtle hover:bg-surface-sunken"
                     >
                       <td className="whitespace-nowrap p-3">
-                        <time dateTime={e.occurredAt.toISOString()}>
-                          {formatUtcInstant(e.occurredAt)}
-                        </time>
+                        <time dateTime={e.occurredAt.toISOString()}>{shopTime(e.occurredAt)}</time>
                       </td>
                       <td className="p-3">
                         {eventLabels[e.kind] ?? e.kind}
@@ -571,7 +576,7 @@ export default async function LoyaltyPage({
                         )}
                         {e.expiresAt && (
                           <span className="mt-1 block text-xs text-text-muted">
-                            Expires {e.expiresAt.toISOString().slice(0, 10)}
+                            Expires {formatWorkspaceDate(e.expiresAt, timeZone)}
                           </span>
                         )}
                       </td>
@@ -664,7 +669,7 @@ export default async function LoyaltyPage({
               <caption className="sr-only">Points redemptions at {branchName}</caption>
               <thead className="font-mono text-xs uppercase">
                 <tr>
-                  {['Time (UTC)', 'Customer', 'Receipt', 'Points', 'Value', 'Returned'].map((t) => (
+                  {['Time', 'Customer', 'Receipt', 'Points', 'Value', 'Returned'].map((t) => (
                     <th
                       key={t}
                       scope="col"
@@ -679,9 +684,7 @@ export default async function LoyaltyPage({
                 {redemptions.redemptions.map((r) => (
                   <tr key={r.id} className="border-t border-border-subtle hover:bg-surface-sunken">
                     <td className="whitespace-nowrap p-3">
-                      <time dateTime={r.occurredAt.toISOString()}>
-                        {formatUtcInstant(r.occurredAt)}
-                      </time>
+                      <time dateTime={r.occurredAt.toISOString()}>{shopTime(r.occurredAt)}</time>
                     </td>
                     <td className="p-3">
                       <Link

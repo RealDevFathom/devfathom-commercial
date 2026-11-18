@@ -52,19 +52,10 @@ const COPY_ALLOWLIST: Record<string, { term: string; reason: string }> = {
 };
 /**
  * Screens that still show "UTC" outside Details and are not yet converted to the organisation's
- * clock (DEV-722 follow-up), with their current match counts. Counts may only fall: fix a screen,
- * lower or delete its entry. A screen that gains a match fails.
+ * clock, with their match counts. All eight DEV-722 screens are converted, so the list is empty
+ * and may not regain an entry: a screen that gains a match fails.
  */
-const TIME_REMAINING: Record<string, number> = {
-  'src/app/(app)/pharmacy/finance/ledger-reports.tsx :: bare UTC': 6,
-  'src/app/(app)/pharmacy/finance/financial-statements.tsx :: bare UTC': 2,
-  'src/app/(app)/pharmacy/loyalty/page.tsx :: bare UTC': 4,
-  'src/app/(app)/pharmacy/loyalty/loyalty-card-panel.tsx :: bare UTC': 1,
-  'src/app/(app)/pharmacy/reports/lost-sales-recovery.tsx :: bare UTC': 1,
-  'src/app/(app)/pharmacy/accounts/fiscal-exceptions/query.ts :: bare UTC': 1,
-  'src/app/(app)/pharmacy/accounts/fiscal-exceptions/page.tsx :: bare UTC': 5,
-  'src/components/pharmacy/counter/counter-receipt-view.tsx :: bare UTC': 1,
-};
+const TIME_REMAINING: Record<string, number> = {};
 
 const countMatches = (pattern: RegExp, text: string) =>
   (text.match(new RegExp(pattern.source, pattern.flags.replace('g', '') + 'g')) ?? []).length;
@@ -174,20 +165,27 @@ describe('plain-language sweep', () => {
     expect(catalogueTimeHits(catalogueCopy(), readFileSync(CATALOGUE, 'utf8'))).toEqual([]);
   });
 
-  it('fails when a catalogue entry or a remaining screen gains UTC text (self-test)', () => {
+  it('fails when a catalogue entry or a converted screen gains UTC text (self-test)', () => {
     const injected: [string, string] = ['SHOP_SCREEN_COPY.cheques.dueDateUtc', 'Due date (UTC)'];
     const fileText = `${readFileSync(CATALOGUE, 'utf8')}\n  dueDateUtc: 'Due date (UTC)',\n`;
     expect(catalogueTimeHits([...catalogueCopy(), injected], fileText)).toEqual([
       'SHOP_SCREEN_COPY.cheques.dueDateUtc :: bare UTC',
       `${CATALOGUE} :: bare UTC (found 2, allowed 1)`,
     ]);
-    const remaining = 'src/app/(app)/pharmacy/loyalty/loyalty-card-panel.tsx';
+    const converted = 'src/app/(app)/pharmacy/loyalty/loyalty-card-panel.tsx';
     const grown = screenFiles().map((file) =>
-      file.path === remaining
+      file.path === converted
         ? { ...file, text: `${file.text}\nconst label = 'Time UTC now';\n` }
         : file
     );
-    expect(screenTimeHits(grown)).toEqual([`${remaining} :: bare UTC (found 2, allowed 1)`]);
+    expect(screenTimeHits(grown)).toEqual([`${converted} :: bare UTC (found 1, allowed 0)`]);
+    // UTC wording inside a Details disclosure stays allowed.
+    const detailed = screenFiles().map((file) =>
+      file.path === converted
+        ? { ...file, text: `${file.text}\n<ReportDetails>Dates are UTC days.</ReportDetails>\n` }
+        : file
+    );
+    expect(screenTimeHits(detailed)).toEqual([]);
   });
 
   it('keeps every allowlist entry reasoned and the remaining list small', () => {
@@ -204,6 +202,6 @@ describe('plain-language sweep', () => {
     expect(
       Object.keys(TIME_ALLOWLIST).length + Object.keys(COPY_ALLOWLIST).length
     ).toBeLessThanOrEqual(2);
-    expect(Object.keys(TIME_REMAINING).length).toBeLessThanOrEqual(8);
+    expect(Object.keys(TIME_REMAINING).length).toBeLessThanOrEqual(0);
   });
 });
