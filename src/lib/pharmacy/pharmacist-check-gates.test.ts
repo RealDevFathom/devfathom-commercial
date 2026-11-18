@@ -248,7 +248,8 @@ describe('counter alerts follow the owner setting', () => {
  */
 describe('every pharmacist-verification gate consults the owner setting', () => {
   const ROOT = join(process.cwd(), 'src');
-  const READERS = /\b(pharmacistCheckAtSaleEnabled|readPharmacistCheckPolicy)\(/;
+  const READERS =
+    /\b(pharmacistCheckAtSaleEnabled|readPharmacistCheckPolicy|pharmacistCheckOffMarker)\(/;
   const REFUSALS: Array<[label: string, pattern: RegExp]> = [
     ['Rx sale grant refusal', /new PharmacyRxSaleDenied\(/],
     ['missing prescription refusal', /PharmacyRxReferenceError\('PRESCRIPTION_REQUIRED'\)/],
@@ -258,6 +259,8 @@ describe('every pharmacist-verification gate consults the owner setting', () => 
       'controlled authorization refusal',
       /independent pharmacist PIN, and either a valid prescription/,
     ],
+    ['refill pharmacist hold', /RefillSubscriptionError\('PHARMACIST_APPROVAL_REQUIRED'\)/],
+    ['refill cycle held for a pharmacist', /'AWAITING_PHARMACIST' : 'RESERVED'/],
   ];
 
   function sources(dir: string): string[] {
@@ -282,6 +285,38 @@ describe('every pharmacist-verification gate consults the owner setting', () => 
         `${site.path.replace(ROOT, 'src')} refuses a sale without reading the owner setting`
       ).toBe(true);
     }
+  });
+
+  function body(path: string[], name: string): string {
+    const text = files.find((file) => file.path.endsWith(join(...path)))!.text;
+    const start = text.indexOf(`export async function ${name}(`);
+    expect(start, `${name} not found`).toBeGreaterThanOrEqual(0);
+    const next = text.indexOf('\nexport ', start + 1);
+    return text.slice(start, next < 0 ? undefined : next);
+  }
+
+  it.each(['openRefillCycle', 'startRefillCycleCheckout'])(
+    'the refill path %s reads the setting',
+    (name) => {
+      expect(READERS.test(body(['pharmacy', 'refill-subscriptions.ts'], name))).toBe(true);
+    }
+  );
+
+  it.each(['changeSaleStatus', 'returnSaleLine'])(
+    'the controlled void/return path %s takes its witness through the setting-aware helper',
+    (name) => {
+      const text = body(['pharmacy', 'sales.ts'], name);
+      expect(text).toContain('controlledSaleRestorationWitness(');
+      expect(text).not.toMatch(/\bauthorizeControlledRestoration\(/);
+    }
+  );
+
+  it('the only direct counter-restoration witness call is inside the setting-aware helper', () => {
+    const sales = files.find((file) => file.path.endsWith(join('pharmacy', 'sales.ts')))!.text;
+    expect(sales.match(/\bawait authorizeControlledRestoration\(/g)).toHaveLength(1);
+    expect(READERS.test(body(['pharmacy', 'sales.ts'], 'controlledSaleRestorationWitness'))).toBe(
+      true
+    );
   });
 
   it('the controlled sale path reads the setting before it refuses a cashier', () => {

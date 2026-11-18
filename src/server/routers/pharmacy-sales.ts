@@ -3178,7 +3178,16 @@ export const pharmacySalesRouter = router({
     .query(async ({ ctx, input }) => {
       try {
         const scope = await requireCounterReceiptAccess(ctx, input.branchId);
-        return await readReturnHistory(ctx.db, scope, input.saleId);
+        const history = await readReturnHistory(ctx.db, scope, input.saleId);
+        // DEV-911: the return panel asks for no pharmacist witness while the owner has the
+        // check off. The server reads the setting again when the return is recorded.
+        const pharmacistCheck = await readPharmacistCheckPolicy(
+          ctx.db as unknown as ScopedDb,
+          scope.organizationId
+        );
+        return pharmacistCheck.enabled
+          ? history
+          : { ...history, pharmacistCheckOff: true as const };
       } catch (error) {
         fail(error);
       }

@@ -22,6 +22,11 @@ import {
 } from './refill-subscription-rules';
 
 import { assertRxSaleAllowed } from './rx-sale-gate';
+import {
+  isPharmacistCheckOffMarker,
+  pharmacistCheckAtSaleEnabled,
+  pharmacistCheckOffMarker,
+} from './pharmacist-check-policy';
 import { requirePharmacyTodayOpenForTrading } from './settlement';
 import { addReservedSaleLine, createSale } from './sales';
 import type { LedgerScope } from './stock-ledger';
@@ -347,6 +352,10 @@ export async function openRefillCycle(db: ScopedDb, scope: LedgerScope, subscrip
   if (!Number.isSafeInteger(canonicalUnits)) {
     throw new RefillSubscriptionError('ITEM_NOT_SUBSCRIBABLE');
   }
+  // DEV-911: while the owner has the pharmacist check switched off, an Rx cycle is not held
+  // for a pharmacist. It opens ready, its approval recorded as the owner-switched-off marker
+  // (accepted by the database only while the setting is off at that version).
+  const checkOff = medicine.rx ? await pharmacistCheckOffMarker(db, scope.organizationId) : null;
   const cycle = await db.pharmacyRefillSubscriptionCycle.create({
     data: {
       organizationId: scope.organizationId,
@@ -357,8 +366,11 @@ export async function openRefillCycle(db: ScopedDb, scope: LedgerScope, subscrip
       // Snapshot of the medicine's schedule now: an Rx item needs a pharmacist
       // every cycle, even if the catalogue flag changes before checkout.
       requiresPharmacist: medicine.rx,
-      status: medicine.rx ? 'AWAITING_PHARMACIST' : 'RESERVED',
+      status: medicine.rx && !checkOff ? 'AWAITING_PHARMACIST' : 'RESERVED',
       openedByUserId: scope.actorId,
+      ...(checkOff
+        ? { approvedByUserId: scope.actorId, approvalPolicy: checkOff, approvedAt: new Date() }
+        : {}),
     },
   });
   await reserveCycleStock(db, scope, {
@@ -496,7 +508,11 @@ export async function approveRefillCycle(
     cycle.status === 'RESERVED' &&
     !cycle.approvedAt &&
     (await subscribableMedicine(db, scope.organizationId, cycle.subscription)).rx;
-  if (!awaiting && !reclassified) throw new RefillSubscriptionError('INVALID_STATE');
+  // DEV-911: a cycle readied while the pharmacist check was off can still take a real
+  // pharmacist approval, which is what it needs once the owner turns the check back on.
+  const checkedOff =
+    cycle.status === 'RESERVED' && isPharmacistCheckOffMarker(cycle.approvalPolicy);
+  if (!awaiting && !reclassified && !checkedOff) throw new RefillSubscriptionError('INVALID_STATE');
   const approver = (await db.user.findFirst({
     where: {
       id: approval.approvedByUserId,
@@ -623,10 +639,12 @@ export async function startRefillCycleCheckout(db: ScopedDb, scope: LedgerScope,
       paymentMode: cycle.subscription.paymentMode,
     };
   }
+  // DEV-911: the pharmacist hold gives way only while the owner has the check switched off.
+  let checkOff: string | null = null;
   if (cycle.status === 'AWAITING_PHARMACIST') {
-    throw new RefillSubscriptionError('PHARMACIST_APPROVAL_REQUIRED');
-  }
-  if (cycle.status !== 'RESERVED') throw new RefillSubscriptionError('INVALID_STATE');
+    checkOff = await pharmacistCheckOffMarker(db, scope.organizationId);
+    if (!checkOff) throw new RefillSubscriptionError('PHARMACIST_APPROVAL_REQUIRED');
+  } else if (cycle.status !== 'RESERVED') throw new RefillSubscriptionError('INVALID_STATE');
   // DEV-631: no counter bill is opened, and no hold is consumed into one, while today's
   // business day is closed for trading. Takes the day lock before any stock lock.
   await requirePharmacyTodayOpenForTrading(db, scope);
@@ -635,8 +653,31 @@ export async function startRefillCycleCheckout(db: ScopedDb, scope: LedgerScope,
   // Both the flag snapshotted at opening and the medicine's current schedule count:
   // a medicine reclassified as prescription-only since still needs its pharmacist.
   const prescriptionOnly = cycle.requiresPharmacist || medicine.rx;
-  if (prescriptionOnly && (!cycle.approvedByUserId || !cycle.approvedAt)) {
-    throw new RefillSubscriptionError('PHARMACIST_APPROVAL_REQUIRED');
+  // A cycle readied while the check was off is no longer approved once it is back on.
+  const approved =
+    Boolean(cycle.approvedByUserId && cycle.approvedAt) &&
+    !(
+      isPharmacistCheckOffMarker(cycle.approvalPolicy) &&
+      (await pharmacistCheckAtSaleEnabled(db, scope.organizationId))
+    );
+  if (prescriptionOnly && !approved) {
+    checkOff ??= await pharmacistCheckOffMarker(db, scope.organizationId);
+    if (!checkOff) throw new RefillSubscriptionError('PHARMACIST_APPROVAL_REQUIRED');
+  }
+  if (checkOff) {
+    // Recorded on the cycle before checkout, so the database CHECK behind the pharmacist
+    // approval still holds, with the owner-switched-off marker as the approval policy.
+    await db.pharmacyRefillSubscriptionCycle.update({
+      where: { organizationId_id: { organizationId: scope.organizationId, id: cycle.id } },
+      data: {
+        status: 'RESERVED',
+        approvedByUserId: scope.actorId,
+        approvalPolicy: checkOff,
+        approvalCredentialId: null,
+        selfApproved: false,
+        approvedAt: new Date(),
+      },
+    });
   }
   // The counter's own Rx gate (#518): only a dispenser may put an Rx line on a sale.
   await assertRxSaleAllowed(db, scope, [medicine]);

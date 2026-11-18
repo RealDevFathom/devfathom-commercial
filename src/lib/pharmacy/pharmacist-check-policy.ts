@@ -1,6 +1,11 @@
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { PHARMACIST_CHECK_DISCLAIMER, pharmacistCheckDisclaimerRecord } from './pharmacist-check';
+import {
+  PHARMACIST_CHECK_DISCLAIMER,
+  PHARMACIST_CHECK_OFF_SIGNATURE_PREFIX,
+  pharmacistCheckDisclaimerRecord,
+  pharmacistCheckOffSignature,
+} from './pharmacist-check';
 
 /**
  * DEV-911 — the owner switch for the pharmacist check and prescription record at each sale,
@@ -103,6 +108,24 @@ export async function pharmacistCheckAtSaleEnabled(
   organizationId: string | null | undefined
 ): Promise<boolean> {
   return (await readPharmacistCheckPolicy(db, organizationId)).enabled;
+}
+
+/**
+ * The marker a record written without a pharmacist's check carries while the owner has the
+ * check off (`pharmacist-check-off:v<version>`), or null while the check is on, missing or
+ * unreadable. The database accepts the marker only while the stored setting is off at that
+ * version, so it cannot be written once the owner turns the check back on.
+ */
+export async function pharmacistCheckOffMarker(
+  db: ScopedDb,
+  organizationId: string | null | undefined
+): Promise<string | null> {
+  const policy = await readPharmacistCheckPolicy(db, organizationId);
+  return policy.enabled ? null : pharmacistCheckOffSignature(policy.version);
+}
+
+export function isPharmacistCheckOffMarker(value: string | null | undefined): boolean {
+  return typeof value === 'string' && value.startsWith(PHARMACIST_CHECK_OFF_SIGNATURE_PREFIX);
 }
 
 /** A live DENY on any of these takes the authority away, from the role or a user override. */

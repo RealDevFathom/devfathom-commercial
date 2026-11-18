@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 // DEV-911: the owner setting for the pharmacist check at each sale, in the database.
-const NAME = '20261118130000_pharmacy_pharmacist_check_policy';
+const NAME = '20261118120800_pharmacy_pharmacist_check_policy';
 const sql = readFileSync(`prisma/migrations/${NAME}/migration.sql`, 'utf8');
 
 function section(start: string, end: string): string {
@@ -76,6 +76,30 @@ describe('pharmacist check policy migration', () => {
     expect(shape).toContain(`"entryKind" = 'PURCHASE'`);
     expect(shape).toContain(`"entryKind" = 'CORRECTION'`);
     expect(shape).toContain(`COALESCE("signatureRef", '') LIKE 'pharmacist-check-off:%'`);
+  });
+
+  it('accepts the marker on a void or return correction only when it is stock-backed', () => {
+    const check = section(
+      'ADD CONSTRAINT "pharmacy_controlled_register_independent_witness"',
+      ');\n  END IF;'
+    );
+    expect(check).toContain(`"entryKind" = 'CORRECTION' AND "restorationMovementId" IS NOT NULL`);
+    const guard = section(
+      'FUNCTION pharmacy_controlled_register_pharmacist_check_off_guard',
+      'END $$;'
+    );
+    expect(guard).toContain(
+      `NEW."entryKind" = 'CORRECTION' AND NEW."restorationMovementId" IS NOT NULL`
+    );
+  });
+
+  it('accepts a refill approval marker only while the setting is off at that version', () => {
+    const guard = section('FUNCTION pharmacy_refill_cycle_pharmacist_check_off_guard', 'END $$;');
+    expect(guard).toContain('pharmacy_pharmacist_check_enforced(NEW."organizationId")');
+    expect(guard).toContain(`'pharmacist-check-off:v' || current_version::text`);
+    expect(sql).toContain('BEFORE INSERT OR UPDATE ON "pharmacy_refill_subscription_cycles"');
+    // The refill approval CHECK itself is kept, not dropped.
+    expect(sql).not.toContain('pharmacy_refill_cycles_rx_approval_ck');
   });
 
   it('does not touch row-level security', () => {

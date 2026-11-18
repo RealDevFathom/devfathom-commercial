@@ -11,10 +11,11 @@ BEGIN;
 -- system `owner` role) can turn it off, with the accepted disclaimer recorded. The
 -- application decides this first; the database refuses any other writer too.
 --
--- While it is off, a controlled sale still writes its controlled register entry. That
--- entry has no independent pharmacist witness, so it carries the marker
+-- While it is off, a controlled sale, void or return still writes its controlled register
+-- entry. That entry has no independent pharmacist witness, so it carries the marker
 -- 'pharmacist-check-off:v<policy version>' and the database accepts it only while the
--- stored setting really is off at that version.
+-- stored setting really is off at that version. A prescription-only refill cycle readied
+-- without a pharmacist carries the same marker as its approval policy, under the same rule.
 
 ALTER TABLE "pharmacy_owner_policies"
   ADD COLUMN IF NOT EXISTS "pharmacistCheckEnabled" BOOLEAN NOT NULL DEFAULT true,
@@ -172,8 +173,9 @@ BEGIN
 END $$;
 
 -- The controlled register keeps its independent-witness check. Besides the solo
--- restoration (DEV-293), the one other exception is a SALE row marked as written while the
--- owner had the pharmacist check switched off; the trigger below proves that marker.
+-- restoration (DEV-293), the one other exception is a SALE row, or the stock-backed
+-- CORRECTION of a void or return, marked as written while the owner had the pharmacist check
+-- switched off; the trigger below proves that marker.
 DO $$
 BEGIN
   IF EXISTS (
@@ -201,8 +203,11 @@ BEGIN
           AND COALESCE("signatureRef", '') LIKE 'solo-pin:%'
         )
         OR (
-          "entryKind" = 'SALE'
-          AND COALESCE("signatureRef", '') LIKE 'pharmacist-check-off:%'
+          COALESCE("signatureRef", '') LIKE 'pharmacist-check-off:%'
+          AND (
+            "entryKind" = 'SALE'
+            OR ("entryKind" = 'CORRECTION' AND "restorationMovementId" IS NOT NULL)
+          )
         )
       );
   END IF;
@@ -272,8 +277,9 @@ BEGIN
 END;
 $$;
 
--- A 'pharmacist-check-off:' marker is accepted only on a SALE row, only while the stored
--- setting for that organization is off, and only naming the policy version in force.
+-- A 'pharmacist-check-off:' marker is accepted only on a SALE row or a stock-backed
+-- CORRECTION (void or return), only while the stored setting for that organization is off,
+-- and only naming the policy version in force.
 CREATE OR REPLACE FUNCTION pharmacy_controlled_register_pharmacist_check_off_guard() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE current_version integer;
@@ -281,7 +287,10 @@ BEGIN
   IF COALESCE(NEW."signatureRef", '') NOT LIKE 'pharmacist-check-off:%' THEN
     RETURN NEW;
   END IF;
-  IF NEW."entryKind" IS DISTINCT FROM 'SALE'
+  IF NOT (
+       NEW."entryKind" = 'SALE'
+       OR (NEW."entryKind" = 'CORRECTION' AND NEW."restorationMovementId" IS NOT NULL)
+     )
      OR pharmacy_pharmacist_check_enforced(NEW."organizationId") THEN
     RAISE EXCEPTION 'pharmacist check is not switched off for this pharmacy' USING ERRCODE = '23514';
   END IF;
@@ -299,5 +308,39 @@ DROP TRIGGER IF EXISTS pharmacy_controlled_register_pharmacist_check_off_guard
 CREATE TRIGGER pharmacy_controlled_register_pharmacist_check_off_guard
   BEFORE INSERT OR UPDATE ON "pharmacy_controlled_register_entries"
   FOR EACH ROW EXECUTE FUNCTION pharmacy_controlled_register_pharmacist_check_off_guard();
+
+-- A refill cycle keeps its CHECK that a prescription-only cycle past AWAITING_PHARMACIST
+-- carries an approval. While the owner has the check off, that approval may be the
+-- owner-switched-off marker instead of a pharmacist's; it is accepted only when written while
+-- the stored setting is off and only naming the policy version in force.
+CREATE OR REPLACE FUNCTION pharmacy_refill_cycle_pharmacist_check_off_guard() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE current_version integer;
+BEGIN
+  IF COALESCE(NEW."approvalPolicy", '') NOT LIKE 'pharmacist-check-off:%' THEN
+    RETURN NEW;
+  END IF;
+  IF TG_OP = 'UPDATE'
+     AND NEW."approvalPolicy" IS NOT DISTINCT FROM OLD."approvalPolicy"
+     AND NEW."approvedAt" IS NOT DISTINCT FROM OLD."approvedAt" THEN
+    RETURN NEW;
+  END IF;
+  IF pharmacy_pharmacist_check_enforced(NEW."organizationId") THEN
+    RAISE EXCEPTION 'pharmacist check is not switched off for this pharmacy' USING ERRCODE = '23514';
+  END IF;
+  SELECT "pharmacistCheckPolicyVersion" INTO current_version
+    FROM "pharmacy_owner_policies"
+   WHERE "organizationId" = NEW."organizationId";
+  IF NEW."approvalPolicy" IS DISTINCT FROM ('pharmacist-check-off:v' || current_version::text) THEN
+    RAISE EXCEPTION 'pharmacist check marker does not match the policy in force' USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS pharmacy_refill_cycle_pharmacist_check_off_guard
+  ON "pharmacy_refill_subscription_cycles";
+CREATE TRIGGER pharmacy_refill_cycle_pharmacist_check_off_guard
+  BEFORE INSERT OR UPDATE ON "pharmacy_refill_subscription_cycles"
+  FOR EACH ROW EXECUTE FUNCTION pharmacy_refill_cycle_pharmacist_check_off_guard();
 
 COMMIT;
