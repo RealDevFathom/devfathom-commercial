@@ -98,6 +98,8 @@ export type StagedRowForCreation = {
   packFactor: bigint | null;
   mrpMinor: bigint | null;
   costMinor: bigint | null;
+  /** The staged barcode cell; absent on rows read before DEV-912. */
+  barcode?: string | null;
   rawPayload: unknown;
 };
 
@@ -116,6 +118,8 @@ export type StagedMedicinePlan = {
   purchasePriceMinor: number | null;
   genericName: string | null;
   legacyCode: string | null;
+  /** The barcode printed on the pack, as read; null when the file had none. */
+  barcode: string | null;
   /** The row itself is in the legacy NARCOTICS class (DEV-854). */
   narcoticsClass: boolean;
 };
@@ -166,10 +170,13 @@ export function planStagedMedicine(row: StagedRowForCreation): StagedMedicinePla
         : 'Pack size not recorded'),
     packLevels,
     unitsPerPack,
-    mrpMinor: boundedInt(row.mrpMinor, 0),
-    purchasePriceMinor: boundedInt(row.costMinor, 0),
+    // A price of 0 is an empty cell in most legacy exports: stored as not recorded, never as 0.
+    mrpMinor: boundedInt(row.mrpMinor, 1),
+    purchasePriceMinor: boundedInt(row.costMinor, 1),
     genericName: sourceCell(row.rawPayload, GENERIC_HEADERS)?.slice(0, 300) ?? null,
     legacyCode: sourceCell(row.rawPayload, LEGACY_CODE_HEADERS)?.slice(0, 200) ?? null,
+    barcode:
+      row.barcode && normalizeMedicineText(row.barcode) ? row.barcode.trim().slice(0, 64) : null,
     narcoticsClass: isLegacyControlledRow(row.rawPayload),
   };
 }
@@ -208,11 +215,15 @@ const linked = (organizationId: string, alias: string) => Prisma.sql`EXISTS (
 export type StagedCreationProgress = {
   /** Named product rows that become medicines. */
   candidates: number;
-  /** Of those, rows that already have a catalogue medicine. */
+  /** Of those, rows already done: a medicine created, or matched to one from an earlier file. */
   done: number;
   remaining: number;
   /** Rows with no medicine name; nothing is created for them. */
   unnamed: number;
+  /** Done rows that named a medicine an earlier staged file already created; no copy was made. */
+  matchedEarlier: number;
+  /** Rows whose barcode already belonged to another pack: reported, not attached, never moved. */
+  barcodesNotAttached: number;
 };
 
 export async function stagedCreationProgress(
@@ -227,10 +238,90 @@ export async function stagedCreationProgress(
            count(*) FILTER (WHERE NOT (${candidate('r')})) AS "unnamed"
       FROM "pharmacy_migration_rows" r
      WHERE r."organizationId" = ${organizationId} AND r."batchId" = ${batchId}`;
+  const [outcomes] = await db.$queryRaw<{ matched: bigint; barcodes: bigint }[]>`
+    SELECT count(*) FILTER (WHERE l."outcome" = 'MATCHED') AS "matched",
+           count(*) FILTER (WHERE l."barcodeAttached" = false) AS "barcodes"
+      FROM "pharmacy_staged_medicine_links" l
+      JOIN "pharmacy_migration_rows" r
+        ON r."organizationId" = l."organizationId" AND r."sourceKey" = l."sourceKey"
+     WHERE l."organizationId" = ${organizationId} AND r."batchId" = ${batchId}`;
   const candidates = Number(counts?.candidates ?? 0);
   const done = Number(counts?.done ?? 0);
-  return { candidates, done, remaining: candidates - done, unnamed: Number(counts?.unnamed ?? 0) };
+  return {
+    candidates,
+    done,
+    remaining: candidates - done,
+    unnamed: Number(counts?.unnamed ?? 0),
+    matchedEarlier: Number(outcomes?.matched ?? 0),
+    barcodesNotAttached: Number(outcomes?.barcodes ?? 0),
+  };
 }
+
+type EarlierMedicine = {
+  key: string;
+  medicineId: string;
+  packLevelId: string | null;
+  productName: string;
+  controlled: boolean;
+};
+
+/** Normalised name and pack size: how a row without an old code is recognised again. */
+const nameAndPack = (productName: string, unitsPerPack: number | null) =>
+  `${productName.trim().replace(/\s+/g, ' ').toLowerCase()}|${unitsPerPack ?? ''}`;
+
+/**
+ * Medicines an earlier staged file of this organization created, by old code and by name plus
+ * pack size. A re-exported file of the same catalogue has different bytes, so its rows have new
+ * source identities; this is what keeps it from creating every medicine a second time.
+ */
+async function earlierMedicines(
+  tx: ScopedDb,
+  organizationId: string,
+  batchId: string,
+  plans: readonly StagedMedicinePlan[]
+) {
+  const codes = [
+    ...new Set(plans.flatMap((plan) => (plan.legacyCode ? [plan.legacyCode.toLowerCase()] : []))),
+  ];
+  const names = [
+    ...new Set(
+      plans.flatMap((plan) =>
+        plan.legacyCode ? [] : [nameAndPack(plan.productName, plan.unitsPerPack)]
+      )
+    ),
+  ];
+  const earlier = (key: Prisma.Sql, keys: string[]) =>
+    keys.length
+      ? tx.$queryRaw<EarlierMedicine[]>`
+          SELECT DISTINCT ON (${key}) ${key} AS "key", l."medicineId", l."packLevelId",
+                 m."productName", m."controlled"
+            FROM "pharmacy_staged_medicine_links" l
+            JOIN "pharmacy_medicines" m
+              ON m."organizationId" = l."organizationId" AND m."id" = l."medicineId"
+           WHERE l."organizationId" = ${organizationId}
+             AND l."batchId" <> ${batchId}
+             AND l."outcome" = 'CREATED'
+             AND ${key} = ANY(${keys}::text[])
+           ORDER BY ${key}, l."createdAt", l."id"`
+      : Promise.resolve([] as EarlierMedicine[]);
+  const [byCode, byName] = await Promise.all([
+    earlier(Prisma.sql`lower(l."legacyCode")`, codes),
+    earlier(
+      Prisma.sql`lower(regexp_replace(btrim(m."productName"), '\\s+', ' ', 'g')) || '|' || COALESCE(l."unitsPerPack"::text, '')`,
+      names
+    ),
+  ]);
+  const code = new Map(byCode.map((row) => [row.key, row]));
+  const name = new Map(byName.map((row) => [row.key, row]));
+  return (plan: StagedMedicinePlan) =>
+    plan.legacyCode
+      ? code.get(plan.legacyCode.toLowerCase())
+      : name.get(nameAndPack(plan.productName, plan.unitsPerPack));
+}
+
+/** A barcode of 8, 12, 13 or 14 digits is a GTIN; any other printed code is the maker's own. */
+const barcodeType = (code: string) =>
+  /^(?:\d{8}|\d{12,14})$/.test(code) ? 'GTIN' : 'MANUFACTURER';
 
 /**
  * Create the next chunk of medicines for an approved request. Call inside one transaction; the
@@ -247,7 +338,7 @@ export async function createStagedMedicinesChunk(
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`pharmacy-staged-medicine-create:${organizationId}`}, 0))`;
   const rows = await tx.$queryRaw<StagedRowForCreation[]>`
     SELECT r."id", r."sourceKey", r."rowNumber", r."productName", r."packLabel", r."packFactor",
-           r."mrpMinor", r."costMinor", r."rawPayload"
+           r."mrpMinor", r."costMinor", r."barcode", r."rawPayload"
       FROM "pharmacy_migration_rows" r
      WHERE r."organizationId" = ${organizationId}
        AND r."batchId" = ${request.batchId}
@@ -255,6 +346,33 @@ export async function createStagedMedicinesChunk(
        AND NOT ${linked(organizationId, 'r')}
      ORDER BY r."rowNumber", r."id"
      LIMIT ${limit}`;
+  const planned = rows.flatMap((row) => {
+    const plan = planStagedMedicine(row);
+    return plan ? [{ row, plan }] : [];
+  });
+  const earlier = await earlierMedicines(
+    tx,
+    organizationId,
+    request.batchId,
+    planned.map((item) => item.plan)
+  );
+  // A barcode is unique in the organization: one already on another pack is skipped and
+  // reported on the row's link, never moved; within this chunk the first row keeps it.
+  const wanted = [
+    ...new Set(
+      planned.flatMap(({ plan }) => (plan.barcode ? [normalizeMedicineText(plan.barcode)] : []))
+    ),
+  ];
+  const taken = new Set(
+    wanted.length
+      ? (
+          await tx.medicineBarcode.findMany({
+            where: { normalizedCode: { in: wanted } },
+            select: { normalizedCode: true },
+          })
+        ).map((barcode) => barcode.normalizedCode)
+      : []
+  );
   const now = new Date();
   const medicines: Prisma.MedicineCreateManyInput[] = [];
   const presentations: Prisma.PresentationCreateManyInput[] = [];
@@ -262,12 +380,37 @@ export async function createStagedMedicinesChunk(
   const innerLevels: Prisma.PackLevelCreateManyInput[] = [];
   const prices: Prisma.PharmacyPackPriceCreateManyInput[] = [];
   const aliases: Prisma.MedicineAliasCreateManyInput[] = [];
+  const barcodes: Prisma.MedicineBarcodeCreateManyInput[] = [];
   const provenance: Prisma.MedicineProvenanceCreateManyInput[] = [];
   const links: Prisma.PharmacyStagedMedicineLinkCreateManyInput[] = [];
+  // The barcode each created row asked for, by its link, to confirm it was attached.
+  const barcodeOfLink = new Map<Prisma.PharmacyStagedMedicineLinkCreateManyInput, string>();
   const created: { id: string; productName: string }[] = [];
-  for (const row of rows) {
-    const plan = planStagedMedicine(row);
-    if (!plan) continue;
+  const matched = new Map<string, EarlierMedicine>();
+  for (const { row, plan } of planned) {
+    const link = {
+      sourceKey: row.sourceKey,
+      batchId: request.batchId,
+      rowId: row.id,
+      editId: request.editId,
+      unitsPerPack: plan.unitsPerPack,
+      mrpMinor: plan.mrpMinor,
+      purchasePriceMinor: plan.purchasePriceMinor,
+      legacyCode: plan.legacyCode,
+      createdById: scope.actorId,
+    };
+    const existing = earlier(plan);
+    if (existing) {
+      // The medicine is already in the catalogue from an earlier file: link the row, add nothing.
+      links.push({
+        ...link,
+        medicineId: existing.medicineId,
+        packLevelId: existing.packLevelId,
+        outcome: 'MATCHED',
+      });
+      matched.set(existing.medicineId, existing);
+      continue;
+    }
     const medicineId = randomUUID();
     const presentationId = randomUUID();
     medicines.push({
@@ -313,6 +456,22 @@ export async function createStagedMedicinesChunk(
     ] as const)
       if (value)
         aliases.push({ medicineId, type, value, normalizedValue: normalizeMedicineText(value) });
+    let barcodeId: string | undefined;
+    if (plan.barcode) {
+      const normalizedCode = normalizeMedicineText(plan.barcode);
+      if (!taken.has(normalizedCode)) {
+        taken.add(normalizedCode);
+        barcodeId = randomUUID();
+        barcodes.push({
+          id: barcodeId,
+          presentationId,
+          packLevelId: outerId,
+          type: barcodeType(plan.barcode),
+          code: plan.barcode,
+          normalizedCode,
+        });
+      }
+    }
     const evidence = {
       batchId: request.batchId,
       rowSourceKey: row.sourceKey,
@@ -326,6 +485,7 @@ export async function createStagedMedicinesChunk(
       ['purchasePriceMinor', plan.purchasePriceMinor],
       ['alias', plan.genericName],
       ['legacyCode', plan.legacyCode],
+      ['barcode', barcodeId ? plan.barcode : null],
     ];
     for (const [field, value] of asserted)
       if (value !== null)
@@ -341,18 +501,13 @@ export async function createStagedMedicinesChunk(
           assertedValue: { value, ...evidence },
         });
     links.push({
-      sourceKey: row.sourceKey,
-      batchId: request.batchId,
-      rowId: row.id,
-      editId: request.editId,
+      ...link,
       medicineId,
       packLevelId: outerId,
-      unitsPerPack: plan.unitsPerPack,
-      mrpMinor: plan.mrpMinor,
-      purchasePriceMinor: plan.purchasePriceMinor,
-      legacyCode: plan.legacyCode,
-      createdById: scope.actorId,
+      barcode: plan.barcode,
+      barcodeAttached: plan.barcode ? Boolean(barcodeId) : null,
     });
+    if (barcodeId) barcodeOfLink.set(links.at(-1)!, barcodeId);
     created.push({ id: medicineId, productName: plan.productName });
   }
   if (medicines.length) {
@@ -363,18 +518,33 @@ export async function createStagedMedicinesChunk(
     if (innerLevels.length) await tx.packLevel.createMany({ data: innerLevels });
     if (aliases.length) await tx.medicineAlias.createMany({ data: aliases, skipDuplicates: true });
     await tx.medicineProvenance.createMany({ data: provenance });
-    await tx.pharmacyStagedMedicineLink.createMany({ data: links });
   }
-  // DEV-854: the shared legacy NARCOTICS rule, for every medicine this step creates.
+  if (barcodes.length) {
+    // A barcode another person added since it was checked is skipped too, and reported.
+    await tx.medicineBarcode.createMany({ data: barcodes, skipDuplicates: true });
+    const attached = new Set(
+      (
+        await tx.medicineBarcode.findMany({
+          where: { id: { in: barcodes.map((barcode) => barcode.id!) } },
+          select: { id: true },
+        })
+      ).map((barcode) => barcode.id)
+    );
+    for (const [link, barcodeId] of barcodeOfLink)
+      if (!attached.has(barcodeId)) link.barcodeAttached = false;
+  }
+  if (links.length) await tx.pharmacyStagedMedicineLink.createMany({ data: links });
+  // DEV-854: the shared legacy NARCOTICS rule, for every medicine this step creates or matches.
   let controlled = 0;
-  for (const medicine of created)
-    if (
-      await applyLegacyControlledToMedicine(tx, organizationId, {
-        ...medicine,
-        controlled: false,
-      })
-    )
-      controlled += 1;
+  for (const medicine of [
+    ...created.map((item) => ({ ...item, controlled: false })),
+    ...[...matched.values()].map((item) => ({
+      id: item.medicineId,
+      productName: item.productName,
+      controlled: item.controlled,
+    })),
+  ])
+    if (await applyLegacyControlledToMedicine(tx, organizationId, medicine)) controlled += 1;
   if (prices.length) {
     // Pack prices are written under the organization's price lock, as every price write is.
     // Taken last, so the lock is held only while this chunk commits.
@@ -383,6 +553,7 @@ export async function createStagedMedicinesChunk(
   }
   return {
     created: created.length,
+    matched: links.filter((link) => link.outcome === 'MATCHED').length,
     controlled,
     medicineIds: created.map((medicine) => medicine.id),
     ...(await stagedCreationProgress(tx, organizationId, request.batchId)),

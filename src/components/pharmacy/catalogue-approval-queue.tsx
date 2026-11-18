@@ -36,9 +36,11 @@ const editLabels: Record<string, string> = {
   value: 'Alias',
   name: 'Ingredient',
   fileName: 'File',
-  sourceSha256: 'File SHA-256',
+  uploadedAt: 'Uploaded',
   medicines: 'Medicines to create',
 };
+/** Checked on the server only; a file hash means nothing to the person approving. */
+const HIDDEN_FIELDS = new Set(['sourceSha256']);
 const operationLabels: Record<string, string> = {
   UPDATE_MEDICINE: 'Product details',
   setPackPrice: 'Set pack price',
@@ -56,7 +58,7 @@ function displayChange(field: string, value: unknown): string {
   // A pack price without a selling price sells at the MRP.
   if (value === null) return field === 'sellingPriceMinor' ? 'Sell at MRP' : 'Clear value';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
-  if (field === 'effectiveFrom' && typeof value === 'string') {
+  if ((field === 'effectiveFrom' || field === 'uploadedAt') && typeof value === 'string') {
     const date = new Date(value);
     if (Number.isFinite(date.getTime()))
       return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(
@@ -268,7 +270,9 @@ export function CatalogueApprovalQueue() {
                   ? edit.changes
                   : (edit.changes as { json: unknown }).json) as Record<string, unknown>
               )
-                .filter(([field]) => field !== 'id' && !field.endsWith('Id'))
+                .filter(
+                  ([field]) => field !== 'id' && !field.endsWith('Id') && !HIDDEN_FIELDS.has(field)
+                )
                 .map(([field, value]) => (
                   <div key={field} className="flex min-w-0 flex-wrap gap-2">
                     <dt className="font-semibold">{editLabels[field] ?? field}</dt>

@@ -17,6 +17,8 @@ const base: StagedCreationState = {
   done: 0,
   remaining: 500,
   unnamed: 2,
+  matchedEarlier: 0,
+  barcodesNotAttached: 0,
 };
 
 afterEach(cleanup);
@@ -43,8 +45,26 @@ describe('DEV-912 staged medicine creation panel', () => {
 
   it('creates an approved file step by step until nothing remains', async () => {
     mocks.run
-      .mockResolvedValueOnce({ data: { created: 250, done: 250, remaining: 250 } })
-      .mockResolvedValueOnce({ data: { created: 250, done: 500, remaining: 0 } });
+      .mockResolvedValueOnce({
+        data: {
+          created: 250,
+          matched: 0,
+          done: 250,
+          remaining: 250,
+          matchedEarlier: 0,
+          barcodesNotAttached: 0,
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          created: 240,
+          matched: 10,
+          done: 500,
+          remaining: 0,
+          matchedEarlier: 10,
+          barcodesNotAttached: 3,
+        },
+      });
     render(
       <StagedMedicineCreation
         batchId="batch_1"
@@ -55,6 +75,10 @@ describe('DEV-912 staged medicine creation panel', () => {
     expect(await screen.findByText('All medicines created')).toBeVisible();
     expect(mocks.run).toHaveBeenCalledTimes(2);
     expect(screen.getByText(/500 created · 0 still to create/)).toBeVisible();
+    expect(
+      screen.getByText(/10 rows name a medicine an earlier file already created/)
+    ).toBeVisible();
+    expect(screen.getByText(/3 barcodes already belong to another pack/)).toBeVisible();
   });
 
   it('stops on a refusal and says why, keeping what was created', async () => {

@@ -1084,6 +1084,8 @@ export const pharmacyMedicineRouter = router({
           batchId: boundedId,
           // Filled in by the server when the request is made, so the reviewer sees what they approve.
           fileName: z.string().max(255).optional(),
+          uploadedAt: z.string().max(40).optional(),
+          // Checked again on approval; never shown to the reviewer.
           sourceSha256: z.string().max(64).optional(),
           medicines: z.number().int().min(1).max(STAGING_MAX_ROWS).optional(),
         })
@@ -1100,6 +1102,7 @@ export const pharmacyMedicineRouter = router({
           },
           select: {
             id: true,
+            createdAt: true,
             updatedAt: true,
             source: { select: { fileName: true, contentHash: true } },
           },
@@ -1113,6 +1116,7 @@ export const pharmacyMedicineRouter = router({
         const request = {
           batchId: batch.id,
           fileName: batch.source.fileName.slice(0, 255),
+          uploadedAt: batch.createdAt.toISOString(),
           sourceSha256: batch.source.contentHash,
           medicines: progress.candidates,
         };
@@ -1120,6 +1124,7 @@ export const pharmacyMedicineRouter = router({
           // The approval names exactly the batch and file the editor asked for.
           if (
             input.fileName !== request.fileName ||
+            input.uploadedAt !== request.uploadedAt ||
             input.sourceSha256 !== request.sourceSha256 ||
             input.medicines !== request.medicines
           )

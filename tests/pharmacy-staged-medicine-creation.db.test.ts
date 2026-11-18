@@ -22,22 +22,43 @@ vi.mock('@/server/audit', async () => {
 
 const ROWS = 19_000;
 
-/** A legacy export in the old desktop system's headers, plus a generic-name column. */
+const HEADER =
+  'Name,aliasname,PackUnits,saleprice,purprice,QTY,classname,Generic Name,Pack Type,Barcode';
+const BARCODE = '0896000000017';
+
+/** A legacy export in the old desktop system's headers, plus generic-name and barcode columns. */
 function legacyFile() {
-  const lines = [
-    'Name,aliasname,PackUnits,saleprice,purprice,QTY,classname,Generic Name,Pack Type',
-  ];
-  lines.push('Fixture Box Of Strips,LC-1,10 x 10,1000.00,800.00,3,TABLETS,Fixture Salt,');
-  lines.push('Fixture Box Tablet,LC-2,100,500.00,420.00,1,TABLETS,,Box');
-  lines.push('Fixture Strip Tablet,LC-3,10,120.00,96.00,4,TABLETS,,Strip');
-  lines.push('Fixture Single Tablet,LC-4,1,15.00,11.50,9,TABLETS,,');
-  lines.push('Fixture Name Only Syrup,,,,,,,,');
-  lines.push('Fixture Opioid 10mg,LC-6,10,250.00,200.00,2,NARCOTICS,,');
-  lines.push(',LC-7,10,10.00,8.00,5,TABLETS,,');
+  const lines = [HEADER];
+  lines.push(
+    `Fixture Box Of Strips,LC-1,10 x 10,1000.00,800.00,3,TABLETS,Fixture Salt,,${BARCODE}`
+  );
+  // The same barcode again: reported and skipped, the medicine still created.
+  lines.push(`Fixture Box Tablet,LC-2,100,500.00,420.00,1,TABLETS,,Box,${BARCODE}`);
+  lines.push('Fixture Strip Tablet,LC-3,10,120.00,96.00,4,TABLETS,,Strip,');
+  lines.push('Fixture Single Tablet,LC-4,1,15.00,11.50,9,TABLETS,,,');
+  lines.push('Fixture Name Only Syrup,,,,,,,,,');
+  lines.push('Fixture Opioid 10mg,LC-6,10,250.00,200.00,2,NARCOTICS,,,');
+  lines.push(',LC-7,10,10.00,8.00,5,TABLETS,,,');
+  lines.push('Fixture Zero Price,LC-8,10,0.00,0.00,1,TABLETS,,,');
   for (let n = lines.length; n <= ROWS; n += 1)
-    lines.push(`Fixture Bulk Item ${n},B${n},10,50.00,40.00,${n % 7},GENERAL,,`);
+    lines.push(`Fixture Bulk Item ${n},B${n},10,50.00,40.00,${n % 7},GENERAL,,,`);
   return lines.join('\n') + '\n';
 }
+
+/** A small catalogue, and the same catalogue exported again: other bytes, one new item. */
+const soloFirst = [
+  HEADER,
+  'Solo Coded Tablet,S-1,10,100.00,80.00,1,TABLETS,,,',
+  'Solo Codeless Syrup,,1,90.00,70.00,1,SYRUPS,,,',
+  'Solo Other Capsule,S-3,20,200.00,150.00,1,CAPSULES,,,',
+].join('\n');
+const soloReexport = [
+  HEADER,
+  'Solo Coded Tablet 10s,S-1,10,110.00,85.00,4,TABLETS,,,',
+  'solo  codeless syrup,,1,95.00,72.00,2,SYRUPS,,,',
+  'Solo Other Capsule,S-3,20,210.00,155.00,3,CAPSULES,,,',
+  'Solo New Item,S-9,10,50.00,40.00,1,TABLETS,,,',
+].join('\r\n');
 
 (ownerUrl && runtimeUrl ? describe : describe.skip)(
   'DEV-912 staged medicine creation under restricted PostgreSQL runtime',
@@ -148,10 +169,10 @@ function legacyFile() {
             );
           }
           const file = legacyFile();
-          async function stage(org: string, fileName = 'abuzar-products.csv') {
+          async function stage(org: string, fileName = 'abuzar-products.csv', text = file) {
             const upload = {
               fileName,
-              content: Buffer.from(file).toString('base64'),
+              content: Buffer.from(text).toString('base64'),
               branchId: id('branch_' + org),
             };
             const read = await staging(org).stagingUpload(upload);
@@ -333,13 +354,36 @@ function legacyFile() {
             mrpMinor: 100_000,
             purchasePriceMinor: 80_000,
             unitsPerPack: 100,
+            outcome: 'CREATED',
+            barcode: BARCODE,
+            barcodeAttached: true,
           });
+          // The barcode is on the box, and only once in the organization.
+          const barcodes = await runtime.medicineBarcode.findMany({
+            where: { normalizedCode: BARCODE },
+          });
+          assert.deepEqual(
+            barcodes.map((barcode) => [barcode.presentationId, barcode.packLevelId, barcode.type]),
+            [[box.found.presentations[0]!.id, box.levels[0]!.id, 'GTIN']]
+          );
 
           const plainBox = await created1('Fixture Box Tablet');
           assert.deepEqual(
             plainBox.levels.map((level) => [level.level, level.unitsPerParent]),
             [['BOX', 100]]
           );
+          // Its barcode already belonged to the box of strips: reported, not moved, not added.
+          assert.deepEqual(
+            [plainBox.link.barcode, plainBox.link.barcodeAttached, plainBox.found.saleable],
+            [BARCODE, false, true]
+          );
+          const finished = await editor.stagedMedicineCreation({ batchId });
+          assert.deepEqual([finished.barcodesNotAttached, finished.matchedEarlier], [1, 0]);
+
+          // A price of 0 is stored as not recorded, never as 0.
+          const zero = await created1('Fixture Zero Price');
+          assert.deepEqual(zero.prices, []);
+          assert.deepEqual([zero.link.mrpMinor, zero.link.purchasePriceMinor], [null, null]);
           const strip = await created1('Fixture Strip Tablet');
           assert.deepEqual(
             strip.levels.map((level) => [level.level, level.unitsPerParent]),
@@ -393,7 +437,7 @@ function legacyFile() {
 
           // Solo owner: asks, then approves their own request only with a fresh PIN.
           const solo = medicine('solo', 'owner');
-          const soloBatch = (await stage('solo', 'solo-products.csv')).batchId;
+          const soloBatch = (await stage('solo', 'solo-products.csv', soloFirst)).batchId;
           const soloRequest = (await solo.createStagedMedicines({ batchId: soloBatch })) as {
             id: string;
           };
@@ -414,8 +458,31 @@ function legacyFile() {
             1
           );
           const soloStep = await solo.runStagedMedicineCreation({ batchId: soloBatch });
-          assert.ok(soloStep.created > 0);
-          assert.equal(soloStep.remaining, ROWS - 1 - soloStep.created);
+          assert.deepEqual([soloStep.created, soloStep.matched, soloStep.remaining], [3, 0, 0]);
+
+          // The same catalogue exported again (other bytes): rows matching an earlier file's
+          // medicine by old code, or by name and pack size, create no second copy.
+          const again2 = (await stage('solo', 'solo-products-reexport.csv', soloReexport)).batchId;
+          assert.notEqual(again2, soloBatch);
+          const reexportRequest = (await solo.createStagedMedicines({ batchId: again2 })) as {
+            id: string;
+          };
+          await solo.decideCatalogueEdit({
+            editId: reexportRequest.id,
+            decision: 'APPROVE',
+            soloPin: '2468',
+          });
+          const reexport = await solo.runStagedMedicineCreation({ batchId: again2 });
+          assert.deepEqual(
+            [reexport.created, reexport.matched, reexport.matchedEarlier, reexport.remaining],
+            [1, 3, 3, 0]
+          );
+          assert.deepEqual(
+            (await solodb.medicine.findMany({ orderBy: { productName: 'asc' } })).map(
+              (item) => item.productName
+            ),
+            ['Solo Coded Tablet', 'Solo Codeless Syrup', 'Solo New Item', 'Solo Other Capsule']
+          );
         } finally {
           await c.end();
         }

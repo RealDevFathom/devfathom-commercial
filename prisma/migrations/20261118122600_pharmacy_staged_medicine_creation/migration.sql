@@ -5,7 +5,11 @@ BEGIN;
 -- bytes' SHA-256 and the row number) is unique per organization, so running the
 -- creation again for the same file, even from a second batch of the same bytes,
 -- creates nothing twice. The record keeps the imported pack MRP and purchase price
--- as they were read; a null means the file did not record it.
+-- as they were read; a null means the file did not record it (a 0 is never stored).
+-- `outcome` MATCHED: the row names a medicine an earlier staged file already created
+-- (same old code, or same name and pack size), so no second copy was made.
+-- `barcodeAttached` false: the row's barcode already belongs to another pack, so it
+-- was reported and skipped, never moved.
 CREATE TABLE IF NOT EXISTS "pharmacy_staged_medicine_links" (
   "id" TEXT PRIMARY KEY,
   "organizationId" TEXT NOT NULL DEFAULT current_setting('app.current_organization_id', true),
@@ -16,20 +20,24 @@ CREATE TABLE IF NOT EXISTS "pharmacy_staged_medicine_links" (
   "medicineId" TEXT NOT NULL,
   "packLevelId" TEXT,
   "unitsPerPack" INTEGER CHECK ("unitsPerPack" IS NULL OR "unitsPerPack" > 0),
-  "mrpMinor" INTEGER CHECK ("mrpMinor" IS NULL OR "mrpMinor" >= 0),
-  "purchasePriceMinor" INTEGER CHECK ("purchasePriceMinor" IS NULL OR "purchasePriceMinor" >= 0),
+  "mrpMinor" INTEGER CHECK ("mrpMinor" IS NULL OR "mrpMinor" > 0),
+  "purchasePriceMinor" INTEGER CHECK ("purchasePriceMinor" IS NULL OR "purchasePriceMinor" > 0),
   "legacyCode" TEXT,
+  "barcode" TEXT,
+  "barcodeAttached" BOOLEAN,
+  "outcome" TEXT NOT NULL DEFAULT 'CREATED' CHECK ("outcome" IN ('CREATED', 'MATCHED')),
   "createdById" TEXT NOT NULL,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY ("organizationId", "batchId") REFERENCES "pharmacy_migration_batches"("organizationId", "id") ON DELETE RESTRICT,
   FOREIGN KEY ("organizationId", "rowId") REFERENCES "pharmacy_migration_rows"("organizationId", "id") ON DELETE RESTRICT,
   FOREIGN KEY ("organizationId", "medicineId") REFERENCES "pharmacy_medicines"("organizationId", "id") ON DELETE RESTRICT,
   FOREIGN KEY ("organizationId", "packLevelId") REFERENCES "pharmacy_pack_levels"("organizationId", "id") ON DELETE RESTRICT,
-  FOREIGN KEY ("organizationId", "createdById") REFERENCES "users"("organizationId", "id") ON DELETE RESTRICT
+  FOREIGN KEY ("organizationId", "createdById") REFERENCES "users"("organizationId", "id") ON DELETE RESTRICT,
+  CHECK (("barcode" IS NULL) = ("barcodeAttached" IS NULL))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "pharmacy_staged_medicine_links_organizationId_sourceKey_key"
   ON "pharmacy_staged_medicine_links" ("organizationId", "sourceKey");
-CREATE UNIQUE INDEX IF NOT EXISTS "pharmacy_staged_medicine_links_organizationId_medicineId_key"
+CREATE INDEX IF NOT EXISTS "pharmacy_staged_medicine_links_organizationId_medicineId_idx"
   ON "pharmacy_staged_medicine_links" ("organizationId", "medicineId");
 CREATE INDEX IF NOT EXISTS "pharmacy_staged_medicine_links_organizationId_batchId_idx"
   ON "pharmacy_staged_medicine_links" ("organizationId", "batchId");

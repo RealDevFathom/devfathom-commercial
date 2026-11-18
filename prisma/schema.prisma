@@ -13018,7 +13018,8 @@ model PharmacyMigrationBatch {
 /// the batch's bulk creation was approved (`editId`). `sourceKey` (uploaded bytes'
 /// SHA-256 plus the row number) is unique per organization, so a re-run creates
 /// nothing twice. Imported pack MRP and purchase price are kept as read; null means
-/// the file did not record them. Read and insert only; foreign keys are migration
+/// the file did not record them. A re-exported file's row that names a medicine an
+/// earlier file created is linked to it as MATCHED instead of creating a copy. Read and insert only; foreign keys are migration
 /// enforced.
 model PharmacyStagedMedicineLink {
   id                 String   @id @default(cuid())
@@ -13033,11 +13034,15 @@ model PharmacyStagedMedicineLink {
   mrpMinor           Int?
   purchasePriceMinor Int?
   legacyCode         String?
+  barcode            String?
+  barcodeAttached    Boolean?
+  /// CREATED, or MATCHED when an earlier staged file already created this medicine.
+  outcome            String   @default("CREATED")
   createdById        String
   createdAt          DateTime @default(now())
 
   @@unique([organizationId, sourceKey])
-  @@unique([organizationId, medicineId])
+  @@index([organizationId, medicineId])
   @@index([organizationId, batchId])
   @@map("pharmacy_staged_medicine_links")
 }

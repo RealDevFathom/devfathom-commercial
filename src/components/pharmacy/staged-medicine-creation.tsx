@@ -16,6 +16,8 @@ export type StagedCreationState = {
   done: number;
   remaining: number;
   unnamed: number;
+  matchedEarlier: number;
+  barcodesNotAttached: number;
 };
 
 const count = (value: number) => value.toLocaleString('en-US');
@@ -57,8 +59,14 @@ export function StagedMedicineCreation({
         break;
       }
       const step = result.data;
-      setState((current) => ({ ...current, done: step.done, remaining: step.remaining }));
-      if (step.remaining === 0 || step.created === 0) break;
+      setState((current) => ({
+        ...current,
+        done: step.done,
+        remaining: step.remaining,
+        matchedEarlier: step.matchedEarlier,
+        barcodesNotAttached: step.barcodesNotAttached,
+      }));
+      if (step.remaining === 0 || step.created + step.matched === 0) break;
     }
     setBusy(null);
   }
@@ -76,6 +84,18 @@ export function StagedMedicineCreation({
           {count(state.remaining)} still to create
           {state.unnamed ? ` · ${count(state.unnamed)} rows have no name and are skipped` : ''}
         </p>
+        {state.matchedEarlier > 0 && (
+          <p>
+            {count(state.matchedEarlier)} rows name a medicine an earlier file already created, so
+            no second copy was made.
+          </p>
+        )}
+        {state.barcodesNotAttached > 0 && (
+          <p>
+            {count(state.barcodesNotAttached)} barcodes already belong to another pack, so they were
+            not added. The medicines were still created; open a row to see which barcode.
+          </p>
+        )}
         {status === 'PENDING' && (
           <>
             <StatusPill status="pending" label="Waiting for approval" />

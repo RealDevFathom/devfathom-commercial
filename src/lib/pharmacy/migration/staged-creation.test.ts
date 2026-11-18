@@ -48,6 +48,7 @@ describe('DEV-912 planStagedMedicine', () => {
       purchasePriceMinor: null,
       genericName: null,
       legacyCode: null,
+      barcode: null,
       narcoticsClass: false,
     });
   });
@@ -116,6 +117,20 @@ describe('DEV-912 planStagedMedicine', () => {
       ).toBeNull();
     const tablets = planStagedMedicine(row({ packLabel: '20 Tabs', packFactor: BigInt(20) }));
     expect(tablets?.packLevels).toEqual([{ level: 'BOX', unitsPerParent: 20 }]);
+  });
+
+  it('stores a price of 0 as not recorded, never as 0', () => {
+    const plan = planStagedMedicine(row({ mrpMinor: BigInt(0), costMinor: BigInt(0) }));
+    expect([plan?.mrpMinor, plan?.purchasePriceMinor]).toEqual([null, null]);
+    expect(
+      stagedLevelPrices({ ...plan!, packLevels: [{ level: 'UNIT', unitsPerParent: 1 }] })
+    ).toBeNull();
+  });
+
+  it('keeps the barcode printed on the pack, and nothing for a blank one', () => {
+    expect(planStagedMedicine(row({ barcode: ' 0896000000017 ' }))?.barcode).toBe('0896000000017');
+    expect(planStagedMedicine(row({ barcode: '  ' }))?.barcode).toBeNull();
+    expect(planStagedMedicine(row())?.barcode).toBeNull();
   });
 
   it('treats a negative or oversized amount as not recorded', () => {
