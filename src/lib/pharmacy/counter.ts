@@ -579,7 +579,8 @@ export async function readOtherBranchAvailability(
       organizationId: scope.organizationId,
       medicineId: { in: [...medicineIds] },
       state: 'ACTIVE' as const,
-      expiresAt: { gt: at },
+      // DEV-853: an unrecorded expiry is never treated as expired.
+      OR: [{ expiresAt: null }, { expiresAt: { gt: at } }],
       medicine: { organizationId: scope.organizationId, controlled: false },
     },
     balances: {
