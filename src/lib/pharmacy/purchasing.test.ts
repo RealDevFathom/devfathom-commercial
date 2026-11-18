@@ -586,6 +586,35 @@ describe('PUR-02 quote comparison', () => {
     expect(ranking[1]!.reasons).toContainEqual('Quote validity has lapsed.');
   });
 
+  it("DEV-769: keeps a quote and its scheme usable through its last day in the organisation's zone", () => {
+    // 'Valid until' 1 Oct is stored as that day's UTC midnight.
+    const lastDay = (at: Date) =>
+      compareQuotes({
+        policy: ON,
+        requiredPacks: 10,
+        at,
+        timeZone: 'Asia/Karachi',
+        candidates: [
+          {
+            quoteId: 'q_scheme',
+            ...supplier('s_1', 'Scheme quote'),
+            ...base,
+            schemeBuyPacks: 10,
+            schemeFreePacks: 1,
+            pricePerPackMinor: 1_000,
+          },
+        ],
+      })[0]!;
+    // 3 PM in Karachi on 1 Oct: still the last valid day.
+    const onLastDay = lastDay(new Date('2026-10-01T10:00:00.000Z'));
+    expect(onLastDay.comparable).toBe(true);
+    expect(onLastDay.reasons).not.toContainEqual('Quote validity has lapsed.');
+    // 1 AM in Karachi on 2 Oct (still 1 Oct in UTC): the quote has lapsed.
+    const nextDay = lastDay(new Date('2026-10-01T20:00:00.000Z'));
+    expect(nextDay.comparable).toBe(false);
+    expect(nextDay.reasons).toContainEqual('Quote validity has lapsed.');
+  });
+
   it('costs an MOQ that overshoots the requirement and flags it', () => {
     const [row] = compareQuotes({
       policy: ON,
