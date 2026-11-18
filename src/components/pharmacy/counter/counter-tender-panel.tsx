@@ -14,6 +14,7 @@ import { CounterChangeDue } from './counter-change-due';
 import { CounterTenderDiscard, type CounterTenderDiscardInput } from './counter-tender-discard';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { amountInputError, amountInputToMinor } from '@/lib/money-input';
 import type { TenderDraft } from './tender-attempt-storage';
 import {
   isManualTender,
@@ -150,16 +151,6 @@ export type CounterTenderPanelProps = {
 export type KhataApprover = { id: string; name: string; self: boolean };
 const APPROVER_PIN = /^\d{4,8}$/;
 
-/** A typed money amount (up to two decimals) in minor units, or null when it is not one. */
-export function parseAmountMinor(value: string): number | null {
-  const match = /^(\d{1,12})(?:\.(\d{1,2}))?$/.exec(value.trim());
-  if (!match) return null;
-  const major = Number.parseInt(match[1]!, 10);
-  const fraction = Number.parseInt((match[2] ?? '0').padEnd(2, '0'), 10);
-  const minor = major * 100 + fraction;
-  return Number.isSafeInteger(minor) ? minor : null;
-}
-
 /**
  * POS-05 tenders, from the counter.
  *
@@ -271,12 +262,16 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
     const prepaidWallet = type === 'WALLET' && prepaidBalanceMinor > 0;
     // DEV-863: an untouched prepaid amount is what the balance can cover; never more than it holds.
+    // DEV-939: typed amounts go through the shared reader (string and BigInt, no floats).
+    const typedAmount = amountInputToMinor(amount);
     const amountMinor =
-      amount.trim() === ''
+      typedAmount.status === 'EMPTY'
         ? prepaidWallet && balanceMinor !== null
           ? Math.min(balanceMinor, prepaidBalanceMinor)
           : balanceMinor
-        : parseAmountMinor(amount);
+        : typedAmount.status === 'OK'
+          ? typedAmount.minor
+          : null;
     const prepaidShort =
       type === 'WALLET' && amountMinor !== null && amountMinor > prepaidBalanceMinor;
     const amountValid =
@@ -285,12 +280,18 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       amountMinor > 0 &&
       amountMinor <= balanceMinor &&
       !prepaidShort;
+    const amountError =
+      typedAmount.status === 'INVALID'
+        ? amountInputError(typedAmount.reason)
+        : 'Enter an amount between 0.01 and the balance due.';
     // Prefilled only while the bill can take payment, so a settled or locked
     // panel never shows a cash figure the cashier did not enter.
     const cashText =
       cashReceived ?? (type === 'CASH' && editable && amountValid ? formatMinor(amountMinor!) : '');
-    const cashReceivedMinor = cashText.trim() === '' ? null : parseAmountMinor(cashText);
-    const cashInvalid = type === 'CASH' && cashText.trim() !== '' && cashReceivedMinor === null;
+    const typedCash = amountInputToMinor(cashText);
+    const cashReceivedMinor = typedCash.status === 'OK' ? typedCash.minor : null;
+    const cashInvalid = type === 'CASH' && typedCash.status === 'INVALID';
+    const cashError = typedCash.status === 'INVALID' ? amountInputError(typedCash.reason) : null;
     const cashShort =
       type === 'CASH' &&
       cashReceivedMinor !== null &&
@@ -487,11 +488,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                             : prepaidShort
                               ? 'That is more than the customer’s prepaid balance.'
                               : !amountValid
-                                ? 'Enter an amount between 0.01 and the balance due.'
+                                ? amountError
                                 : type === 'WALLET' && !APPROVER_PIN.test(prepaidPin)
                                   ? 'Ask the customer to enter their prepaid PIN.'
                                   : cashInvalid
-                                    ? 'Enter a valid cash amount with at most two decimal places.'
+                                    ? cashError
                                     : cashShort
                                       ? copy.tender.cashShort
                                       : manual && manualSettingsLoading
@@ -931,7 +932,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           </p>
           {state === 'ready' && amount.trim() !== '' && !amountValid ? (
             <p id="tender-amount-error" className="text-sm text-destructive" role="alert">
-              Enter an amount between 0.01 and the balance due.
+              {amountError}
             </p>
           ) : null}
           {editable && amountValid && amountMinor! < balanceMinor! ? (
@@ -1418,7 +1419,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             </div>
             {cashInvalid ? (
               <p id="tender-cash-error" className="text-sm text-destructive" role="alert">
-                Enter a valid cash amount with at most two decimal places.
+                {cashError}
               </p>
             ) : cashShort ? (
               <p id="tender-cash-error" className="text-sm text-destructive" role="alert">

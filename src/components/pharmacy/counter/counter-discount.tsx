@@ -4,6 +4,7 @@ import { useId, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { amountInputError, amountInputToMinor } from '@/lib/money-input';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { BPS, NO_MAXIMUM_DISCOUNT_BPS } from '@/lib/pharmacy/smart-discount';
@@ -13,16 +14,6 @@ import { percentToBps } from './discount-maximum-panel';
 /** DEV-929: a manual discount the cashier set for the next item, as a share or an amount. */
 export type CounterHeldDiscount =
   { kind: 'PERCENT'; bps: number } | { kind: 'AMOUNT'; minor: number };
-
-const AMOUNT = /^\d{1,7}(\.\d{1,2})?$/;
-
-/** "12.50" → 1250 minor units; null unless a positive amount with at most two decimals. */
-export function amountToMinor(text: string): number | null {
-  const trimmed = text.trim();
-  if (!AMOUNT.test(trimmed)) return null;
-  const minor = Math.round(Number(trimmed) * 100);
-  return minor > 0 ? minor : null;
-}
 
 /**
  * The discount, in minor units, the counter sends for a line of `grossMinor`. A percentage
@@ -97,12 +88,17 @@ export function CounterDiscountEntry({
           event.preventDefault();
           if (disabled) return;
           if (kind === 'AMOUNT') {
-            const minor = amountToMinor(value);
-            if (minor === null) {
+            // DEV-939: the shared typed-amount reader, so "12.50" is 1250 exactly, never via a float.
+            const amount = amountInputToMinor(value);
+            if (amount.status === 'INVALID') {
+              setError(amountInputError(amount.reason));
+              return;
+            }
+            if (amount.status === 'EMPTY' || amount.minor === 0) {
               setError('Enter an amount in rupees above 0, with at most two decimal places.');
               return;
             }
-            onHold({ kind, minor });
+            onHold({ kind, minor: amount.minor });
           } else {
             const bps = percentToBps(value);
             if (bps === null || bps === 0) {
