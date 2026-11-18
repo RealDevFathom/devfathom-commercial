@@ -19,10 +19,34 @@ import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hotelPropertyRouter } from '@/server/routers/hotel-property';
 import { canOpenPharmacyCommandCentre, loadPharmacyStaffHome } from '@/lib/pharmacy/staff-home';
+import { readPharmacyApprovalStatus } from '@/lib/pharmacy/onboarding';
+import { PharmacyApprovalNotice } from '@/components/pharmacy/approval-notice';
+import {
+  showsPharmacyApprovalNotice,
+  type PharmacyApprovalStatus,
+} from '@/lib/pharmacy/approval-status';
 
 export const metadata: Metadata = {
   title: 'Dashboard',
 };
+
+/**
+ * DEV-905: a pharmacy waiting for (or just given) DevFathom approval sees a notice above
+ * its home. Without one, the home is returned as it is.
+ */
+function withPharmacyApprovalNotice(
+  home: React.ReactElement,
+  approval: PharmacyApprovalStatus | null,
+  canFinishOnboarding: boolean
+): React.ReactElement {
+  if (!showsPharmacyApprovalNotice(approval, new Date())) return home;
+  return (
+    <div className="min-w-0 space-y-6">
+      <PharmacyApprovalNotice approval={approval} canFinishOnboarding={canFinishOnboarding} />
+      {home}
+    </div>
+  );
+}
 
 export default async function DashboardPage({
   searchParams,
@@ -130,6 +154,21 @@ export default async function DashboardPage({
         })
       : null;
 
+  // DEV-905: whether DevFathom has approved this pharmacy, read on every load so the
+  // notice changes the moment a super admin approves it, with no sign-out. Additive: a
+  // failed read hides the notice and leaves the rest of the dashboard as it was.
+  const pharmacyApproval =
+    pharmacy && organizationId && user
+      ? await withTenantDb(organizationId, (db) =>
+          readPharmacyApprovalStatus(db, organizationId)
+        ).catch((error: unknown) => {
+          console.error('[dashboard] pharmacy approval status unavailable', {
+            error: error instanceof Error ? error.name : 'Error',
+          });
+          return null;
+        })
+      : null;
+
   // Prefetch above-the-fold data on the server so it arrives hydrated. The
   // client QueryClient has staleTime 60s, so hydrated data is "fresh" and the
   // `useQuery` calls in DashboardContent serve it from cache on mount instead
@@ -169,12 +208,18 @@ export default async function DashboardPage({
           organizationName={ssr.organization?.displayName ?? 'Your properties'}
           isAdmin={ssr.session?.user?.role === 'ADMIN'}
         />
-      ) : pharmacy && pharmacist ? (
-        <PharmacistHome tools={pharmacist.tools} />
-      ) : pharmacyStaffHome ? (
-        <PharmacyStaffHome home={pharmacyStaffHome} />
       ) : pharmacy ? (
-        <PharmacyDashboardContent role={ssr.session?.user?.role} reportAccess={reportAccess} />
+        withPharmacyApprovalNotice(
+          pharmacist ? (
+            <PharmacistHome tools={pharmacist.tools} />
+          ) : pharmacyStaffHome ? (
+            <PharmacyStaffHome home={pharmacyStaffHome} />
+          ) : (
+            <PharmacyDashboardContent role={ssr.session?.user?.role} reportAccess={reportAccess} />
+          ),
+          pharmacyApproval,
+          checklist !== null
+        )
       ) : restaurant ? (
         <RestaurantDashboardContent
           enabledModules={ssr.entitlements.enabledModules}

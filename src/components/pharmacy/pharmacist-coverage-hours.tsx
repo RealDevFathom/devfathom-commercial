@@ -42,9 +42,10 @@ export function PharmacistCoverageHoursPanel({ branchId }: { branchId: string })
   const [draftRevision, setDraftRevision] = useState<number | null>(null);
   const [notice, setNotice] = useState('');
   const [invalid, setInvalid] = useState<Invalid>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const loaded = query.data ? toDraft(query.data.windows) : null;
   const windows = draft ?? loaded;
-  const disabled = query.isLoading || query.isError || save.isPending || !windows;
+  const disabled = query.isLoading || query.isError || save.isPending || refreshing || !windows;
   const liveCheck = query.data?.liveSaleHoursCheck === true;
 
   function change(next: DraftWindow[]) {
@@ -77,8 +78,14 @@ export function PharmacistCoverageHoursPanel({ branchId }: { branchId: string })
       }
       return;
     }
+    setRefreshing(true);
     try {
-      await save.mutateAsync({ branchId, revision: draftRevision, windows: parsed.data });
+      await save.mutateAsync({
+        branchId,
+        revision: draftRevision,
+        windows: parsed.data,
+        ...(query.data?.timeZone ? { timeZone: query.data.timeZone } : {}),
+      });
       const refreshed = await query.refetch();
       if (refreshed.error) {
         setNotice('Saved. Reload the coverage hours before making further changes.');
@@ -91,6 +98,8 @@ export function PharmacistCoverageHoursPanel({ branchId }: { branchId: string })
       setNotice(
         'Could not save. Reload the coverage hours to check access and concurrent changes.'
       );
+    } finally {
+      setRefreshing(false);
     }
   }
 
@@ -244,7 +253,7 @@ export function PharmacistCoverageHoursPanel({ branchId }: { branchId: string })
         </Button>
         <Button
           className="min-h-11"
-          disabled={query.isLoading || save.isPending}
+          disabled={query.isLoading || save.isPending || refreshing}
           onClick={async () => {
             const refreshed = await query.refetch();
             if (refreshed.error) {

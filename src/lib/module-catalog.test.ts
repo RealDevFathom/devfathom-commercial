@@ -539,3 +539,27 @@ describe('SOP depth denial messages', () => {
     expect(message).toMatch(/sop\.evidenceRetentionDays of at least 365 \(granted 90\)/);
   });
 });
+
+describe('DEV-913 pharmacy audit log is part of the pharmacy core', () => {
+  it('grants the audit module to every pharmacy workspace whatever its plan', async () => {
+    const { isModuleGranted, isVerticalBaselineModule } = await import('./module-catalog');
+    expect(isVerticalBaselineModule('PHARMACY', 'audit')).toBe(true);
+    expect(isModuleGranted('audit', [], 'PHARMACY')).toBe(true);
+  });
+
+  it.each(['AGENCY', 'RESTAURANT', 'HOSPITALITY', null, undefined] as const)(
+    'still sells it separately to %s',
+    async (vertical) => {
+      const { isModuleGranted, isVerticalBaselineModule } = await import('./module-catalog');
+      expect(isVerticalBaselineModule(vertical, 'audit')).toBe(false);
+      expect(isModuleGranted('audit', [], vertical)).toBe(false);
+      expect(isModuleGranted('audit', ['audit'], vertical)).toBe(true);
+    }
+  );
+
+  it('widens nothing else for a pharmacy', async () => {
+    const { isModuleGranted } = await import('./module-catalog');
+    for (const key of ['hr', 'notes', 'webhooks', 'pharmacy-finance', 'pharmacy-reports'])
+      expect(isModuleGranted(key, [], 'PHARMACY')).toBe(false);
+  });
+});

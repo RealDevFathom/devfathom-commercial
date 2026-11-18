@@ -100,6 +100,9 @@ const actions = [
   'organization.identity.test',
   'organization.identity.remove',
   'organization.transition',
+  // DEV-905: approving a pharmacy past its checks, and withdrawing that approval.
+  'organization.pharmacy.approve',
+  'organization.pharmacy.approval.withdraw',
 ];
 beforeEach(() => {
   vi.clearAllMocks();
@@ -230,6 +233,61 @@ describe('pharmacy placeholder commands', () => {
       actorId: 'actor_1',
       metadata: { placeholder: true, operation: 'LOCKED' },
     });
+  });
+
+  // DEV-905: the lock stops the pharmacy, so it also withdraws a super admin's approval,
+  // which would otherwise let the pharmacy keep running without a regulatory profile.
+  it('withdraws a platform approval when it locks the placeholder', async () => {
+    state.organization = {
+      id: 'org_1',
+      vertical: 'PHARMACY',
+      status: 'ACTIVE',
+      platformApprovedAt: new Date('2026-11-18T09:00:00.000Z'),
+      platformApprovedById: 'actor_1',
+    };
+    state.placeholderActive = true;
+
+    await execute('organization.pharmacy.placeholder.lock', {
+      organizationId: 'org_1',
+      reason,
+      authenticationCode: '123456',
+    });
+
+    expect(db.organization.update).toHaveBeenCalledWith({
+      where: { id: 'org_1' },
+      data: expect.objectContaining({
+        status: 'ONBOARDING',
+        activatedAt: null,
+        platformApprovedAt: null,
+        platformApprovedById: null,
+        platformApprovalNote: null,
+      }),
+    });
+    expect(state.organization.platformApprovedAt).toBeNull();
+    expect(state.audits.at(-1)).toMatchObject({
+      after: expect.objectContaining({ platformApprovalWithdrawn: true }),
+    });
+  });
+
+  it('withdraws an approval on an onboarding pharmacy with nothing else to lock', async () => {
+    state.organization = {
+      id: 'org_1',
+      vertical: 'PHARMACY',
+      status: 'ONBOARDING',
+      platformApprovedAt: new Date('2026-11-18T09:00:00.000Z'),
+    };
+
+    await execute('organization.pharmacy.placeholder.lock', {
+      organizationId: 'org_1',
+      reason,
+      authenticationCode: '123456',
+    });
+
+    expect(db.organization.update).toHaveBeenCalledWith({
+      where: { id: 'org_1' },
+      data: expect.objectContaining({ platformApprovedAt: null }),
+    });
+    expect(db.organization.update.mock.calls[0]![0].data).not.toHaveProperty('status');
   });
 
   it.each(['organization.pharmacy.placeholder.apply', 'organization.pharmacy.placeholder.lock'])(

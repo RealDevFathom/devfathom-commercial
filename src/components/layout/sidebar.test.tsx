@@ -418,6 +418,20 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     );
   });
 
+  it('offers a catalogue reviewer the Medicine catalog destination, and a cashier not (DEV-19)', () => {
+    renderNavigation({
+      role: 'MEMBER',
+      capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
+    });
+    expect(screen.getByRole('link', { name: /Medicine catalog$/ })).toHaveAttribute(
+      'href',
+      '/pharmacy/medicines'
+    );
+    cleanup();
+    renderNavigation({ role: 'MEMBER', capabilities: ['pharmacy:counter', 'pharmacy:orders'] });
+    expect(screen.queryByRole('link', { name: /Medicine catalog$/ })).not.toBeInTheDocument();
+  });
+
   // #979, PR J: the rail answer is the ABAC-resolved capability list. No role
   // that does no procurement work is offered the Purchasing destination.
   it.each([
@@ -747,8 +761,13 @@ describe('Pharmacy grouped top navigation (DEV-497)', () => {
       Array.from(nav.children)
         .filter((child) => child.tagName === 'A')
         .map((link) => link.getAttribute('href'))
-    ).toEqual(['/dashboard', '/pharmacy/purchasing', '/pharmacy/finance']);
-    expect(nav.children).toHaveLength(9);
+    ).toEqual(['/dashboard', '/pharmacy/purchasing', '/audit-logs', '/pharmacy/finance']);
+    // DEV-913: the audit log is the owner's own entry, whatever the plan.
+    expect(within(nav).getByRole('link', { name: 'Audit log: who did what' })).toHaveAttribute(
+      'href',
+      '/audit-logs'
+    );
+    expect(nav.children).toHaveLength(10);
     expect(nav).toHaveClass('flex-wrap');
     expect(nav).not.toHaveClass('overflow-x-auto');
     expect(

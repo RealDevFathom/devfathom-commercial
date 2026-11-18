@@ -3,19 +3,19 @@
  * price or publish catalogue content alone.
  *
  * - setPackPrice is a reviewed catalogue edit: queued, and written only when a
- *   different reviewer approves it, or a solo owner approves with a fresh PIN.
+ *   different reviewer approves it, or DEV-19's owner fallback (an owner while no
+ *   other active member can review) approves with a fresh PIN.
  * - recordReviewDecision, publishAssertions and supersedePublication are reviewer
- *   work: tenant administration alone is not enough, they need the exact
- *   pharmacy:catalogue-review grant, except for a solo owner.
+ *   work: they need the exact pharmacy:catalogue-review grant (no tenant-admin
+ *   requirement, so a Pharmacist can do them) or that owner fallback.
  *
- * The ABAC engine is real; only the solo-owner lookup and the PIN check are stubbed.
+ * The ABAC engine and the DEV-19 helpers are real; only the PIN check is stubbed.
+ * Members use the shipped role shapes: the system Owner role (pharmacy:*) paired with
+ * ADMIN, and the Pharmacist and Cashier roles paired with EMPLOYEE.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const guards = vi.hoisted(() => ({
-  solo: vi.fn(async () => false),
-  pin: vi.fn(async () => 'OK'),
-}));
+const guards = vi.hoisted(() => ({ pin: vi.fn(async () => 'OK') }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -29,19 +29,60 @@ vi.mock('@/server/audit', () => ({
   isAuditExcludedPath: vi.fn(() => true),
   recordTrpcAudit: vi.fn(),
 }));
-vi.mock('@/lib/pharmacy/solo-owner', () => ({ isSoloPharmacyOwner: guards.solo }));
 vi.mock('@/lib/pharmacy/owner-data-export-pin', () => ({ verifyOwnerExportPin: guards.pin }));
 
 import { pharmacyMedicineRouter } from './pharmacy-medicine';
 import type { TRPCContext } from '../trpc';
 
 type Rule = { capability: string; effect: 'ALLOW' | 'DENY' };
+type MemberRecord = {
+  role: 'ADMIN' | 'EMPLOYEE';
+  organizationRole: { key: string; isSystem: boolean; permissions: Rule[] } | null;
+  permissionOverrides: Rule[];
+};
 
-const REVIEW_GRANT: Rule[] = [{ capability: 'pharmacy:catalogue-review', effect: 'ALLOW' }];
-const REVIEW_DENY: Rule[] = [
-  ...REVIEW_GRANT,
-  { capability: 'pharmacy:catalogue-review', effect: 'DENY' },
-];
+const owner = (): MemberRecord => ({
+  role: 'ADMIN',
+  organizationRole: {
+    key: 'owner',
+    isSystem: true,
+    permissions: [{ capability: 'pharmacy:*', effect: 'ALLOW' }],
+  },
+  permissionOverrides: [],
+});
+const pharmacist = (): MemberRecord => ({
+  role: 'EMPLOYEE',
+  organizationRole: {
+    key: 'pharmacist',
+    isSystem: true,
+    permissions: [
+      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+      { capability: 'pharmacy:catalogue-review', effect: 'ALLOW' },
+      { capability: 'pharmacy:close', effect: 'ALLOW' },
+    ],
+  },
+  permissionOverrides: [],
+});
+const cashier = (): MemberRecord => ({
+  role: 'EMPLOYEE',
+  organizationRole: {
+    key: 'cashier',
+    isSystem: true,
+    permissions: [
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+      { capability: 'pharmacy:orders', effect: 'ALLOW' },
+    ],
+  },
+  permissionOverrides: [],
+});
+// An administrator with no organization role: holds admin access and catalogue editing
+// through the admin fallback, but neither the review grant nor owner authority.
+const admin = (): MemberRecord => ({
+  role: 'ADMIN',
+  organizationRole: null,
+  permissionOverrides: [],
+});
+const REVIEW_DENY: Rule = { capability: 'pharmacy:catalogue-review', effect: 'DENY' };
 
 const PRICE = {
   packLevelId: 'pack_a',
@@ -51,16 +92,21 @@ const PRICE = {
 };
 
 function makeDb() {
-  const grants = new Map<string, Rule[]>();
+  const members = new Map<string, MemberRecord>();
   const edits: Array<Record<string, unknown> & { id: string }> = [];
   const db = {
-    grants,
+    members,
     edits,
     user: {
-      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => ({
-        organizationRole: null,
-        permissionOverrides: grants.get(where.id) ?? [],
-      })),
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => {
+        const member = members.get(where.id);
+        return member ? { ...member, status: 'ACTIVE' } : null;
+      }),
+      findMany: vi.fn(async ({ where }: { where: { id?: { not?: string } } }) =>
+        [...members.entries()]
+          .filter(([id]) => id !== where.id?.not)
+          .map(([id, member]) => ({ id, role: member.role, status: 'ACTIVE', department: null }))
+      ),
     },
     $queryRaw: vi.fn(async () => []),
     medicine: {
@@ -129,21 +175,25 @@ function makeDb() {
 
 let db = makeDb();
 
-function caller(actorId = 'editor', grants: Rule[] = []) {
-  db.grants.set(actorId, grants);
+function shop(members: Record<string, MemberRecord>) {
+  for (const [id, record] of Object.entries(members)) db.members.set(id, record);
+}
+
+function caller(actorId: string) {
+  const member = db.members.get(actorId)!;
   return pharmacyMedicineRouter.createCaller({
     db,
     entitlements: {
       organizationId: 'org_a',
       enabledModules: ['pharmacy-core'],
-      activeSeats: 2,
+      activeSeats: db.members.size,
       seatLimit: 10,
       modules: [],
       limits: {},
     },
     session: {
       expires: 'later',
-      user: { id: actorId, role: 'ADMIN', status: 'ACTIVE', organizationId: 'org_a' },
+      user: { id: actorId, role: member.role, status: 'ACTIVE', organizationId: 'org_a' },
     },
     organization: null,
     support: null,
@@ -160,59 +210,58 @@ function auditActions() {
 
 beforeEach(() => {
   db = makeDb();
-  guards.solo.mockReset().mockResolvedValue(false);
   guards.pin.mockReset().mockResolvedValue('OK');
 });
 
 describe('DEV-923: a pack price is a reviewed catalogue edit', () => {
-  it('queues an administrator’s pack price and writes no price', async () => {
-    const edit = await caller().setPackPrice(PRICE);
+  it('queues an owner’s pack price and writes no price', async () => {
+    shop({ owner_a: owner(), pharmacist_b: pharmacist() });
+    const edit = await caller('owner_a').setPackPrice(PRICE);
 
     expect(edit).toMatchObject({
       status: 'PENDING',
       operation: 'setPackPrice',
       medicineId: 'medicine_a',
-      editorId: 'editor',
+      editorId: 'owner_a',
     });
     expect(db.pharmacyPackPrice.create).not.toHaveBeenCalled();
     expect(db.$queryRaw).not.toHaveBeenCalled();
   });
 
-  it('refuses a selling price above the MRP before queueing it', async () => {
+  it('refuses a selling price above the MRP, or a pack outside this workspace, before queueing', async () => {
+    shop({ owner_a: owner() });
     await expect(
-      caller().setPackPrice({ ...PRICE, sellingPriceMinor: PRICE.mrpMinor + 1 })
+      caller('owner_a').setPackPrice({ ...PRICE, sellingPriceMinor: PRICE.mrpMinor + 1 })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    expect(db.pharmacyCatalogueEdit.create).not.toHaveBeenCalled();
-  });
-
-  it('refuses a pack outside this workspace before queueing it', async () => {
     db.packLevel.findFirst.mockResolvedValueOnce(null as never);
-    await expect(caller().setPackPrice(PRICE)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(caller('owner_a').setPackPrice(PRICE)).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
     expect(db.pharmacyCatalogueEdit.create).not.toHaveBeenCalled();
   });
 
-  it('does not let the administrator who set the price approve it alone', async () => {
-    const edit = await caller().setPackPrice(PRICE);
+  it('refuses a pharmacist or cashier submitting a price', async () => {
+    shop({ owner_a: owner(), pharmacist_b: pharmacist(), cashier_c: cashier() });
+    for (const id of ['pharmacist_b', 'cashier_c'])
+      await expect(caller(id).setPackPrice(PRICE)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyCatalogueEdit.create).not.toHaveBeenCalled();
+  });
+
+  it('Owner + Pharmacist: the owner cannot approve their own price; the pharmacist applies it', async () => {
+    shop({ owner_a: owner(), pharmacist_b: pharmacist() });
+    const edit = await caller('owner_a').setPackPrice({ ...PRICE, branchId: 'branch_a' });
 
     await expect(
-      caller().decideCatalogueEdit({ editId: edit.id, decision: 'APPROVE' })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    // A PIN does not help an administrator who is not a solo owner.
-    await expect(
-      caller().decideCatalogueEdit({ editId: edit.id, decision: 'APPROVE', soloPin: '2468' })
+      caller('owner_a').decideCatalogueEdit({ editId: edit.id, decision: 'APPROVE', soloPin: '1' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(guards.pin).not.toHaveBeenCalled();
     expect(db.pharmacyPackPrice.create).not.toHaveBeenCalled();
-    expect(db.edits[0]).toMatchObject({ status: 'PENDING' });
-  });
 
-  it('writes the price only when a different reviewer approves, and audits the approval', async () => {
-    const edit = await caller().setPackPrice({ ...PRICE, branchId: 'branch_a' });
-
+    // The pharmacist is not a tenant administrator: the replay runs under their own review
+    // authority and still writes the price.
     await expect(
-      caller('reviewer').decideCatalogueEdit({ editId: edit.id, decision: 'APPROVE' })
+      caller('pharmacist_b').decideCatalogueEdit({ editId: edit.id, decision: 'APPROVE' })
     ).resolves.toMatchObject({ status: 'APPROVED' });
-
     expect(db.pharmacyPackPrice.create).toHaveBeenCalledOnce();
     expect(db.pharmacyPackPrice.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -226,8 +275,8 @@ describe('DEV-923: a pack price is a reviewed catalogue edit', () => {
     });
     expect(db.edits[0]).toMatchObject({
       status: 'APPROVED',
-      editorId: 'editor',
-      reviewerId: 'reviewer',
+      editorId: 'owner_a',
+      reviewerId: 'pharmacist_b',
       soloPinVerifiedAt: null,
     });
     expect(auditActions()).toEqual(
@@ -236,26 +285,27 @@ describe('DEV-923: a pack price is a reviewed catalogue edit', () => {
   });
 
   it('writes no price when the reviewer rejects it', async () => {
-    const edit = await caller().setPackPrice(PRICE);
-    await caller('reviewer').decideCatalogueEdit({ editId: edit.id, decision: 'REJECT' });
+    shop({ owner_a: owner(), pharmacist_b: pharmacist() });
+    const edit = await caller('owner_a').setPackPrice(PRICE);
+    await caller('pharmacist_b').decideCatalogueEdit({ editId: edit.id, decision: 'REJECT' });
     expect(db.pharmacyPackPrice.create).not.toHaveBeenCalled();
     expect(db.edits[0]).toMatchObject({ status: 'REJECTED' });
   });
 
-  it('lets a solo owner approve their own price only with a fresh PIN, audited', async () => {
-    guards.solo.mockResolvedValue(true);
-    const edit = await caller('owner').setPackPrice(PRICE);
+  it('Owner + Cashier: the owner approves their own price only with a fresh PIN, audited', async () => {
+    shop({ owner_a: owner(), cashier_c: cashier() });
+    const edit = await caller('owner_a').setPackPrice(PRICE);
 
     await expect(
-      caller('owner').decideCatalogueEdit({ editId: edit.id, decision: 'APPROVE' })
+      caller('owner_a').decideCatalogueEdit({ editId: edit.id, decision: 'APPROVE' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     guards.pin.mockResolvedValueOnce('INVALID');
     await expect(
-      caller('owner').decideCatalogueEdit({ editId: edit.id, decision: 'APPROVE', soloPin: '0000' })
+      caller('owner_a').decideCatalogueEdit({ editId: edit.id, decision: 'APPROVE', soloPin: '0' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(db.pharmacyPackPrice.create).not.toHaveBeenCalled();
 
-    await caller('owner').decideCatalogueEdit({
+    await caller('owner_a').decideCatalogueEdit({
       editId: edit.id,
       decision: 'APPROVE',
       soloPin: '2468',
@@ -263,18 +313,41 @@ describe('DEV-923: a pack price is a reviewed catalogue edit', () => {
     expect(db.pharmacyPackPrice.create).toHaveBeenCalledOnce();
     expect(db.edits[0]).toMatchObject({
       status: 'APPROVED',
-      reviewerId: 'owner',
+      reviewerId: 'owner_a',
       soloPinVerifiedAt: expect.any(Date),
     });
     expect(auditActions()).toContain('pharmacy.catalogueSoloOwnerApproval');
   });
+
+  it('Owner + Owner: neither approves their own price, but the other owner does with a PIN', async () => {
+    shop({ owner_a: owner(), owner_b: owner() });
+    const edit = await caller('owner_a').setPackPrice(PRICE);
+
+    await expect(
+      caller('owner_a').decideCatalogueEdit({ editId: edit.id, decision: 'APPROVE', soloPin: '1' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyPackPrice.create).not.toHaveBeenCalled();
+
+    await caller('owner_b').decideCatalogueEdit({
+      editId: edit.id,
+      decision: 'APPROVE',
+      soloPin: '1357',
+    });
+    expect(guards.pin).toHaveBeenCalledExactlyOnceWith({
+      organizationId: 'org_a',
+      userId: 'owner_b',
+      pin: '1357',
+    });
+    expect(db.pharmacyPackPrice.create).toHaveBeenCalledOnce();
+    expect(db.edits[0]).toMatchObject({ status: 'APPROVED', reviewerId: 'owner_b' });
+  });
 });
 
 describe('DEV-923: reviewing and publishing need the catalogue review permission', () => {
-  const unreviewed = {
+  const unreviewed = (editorId: string) => ({
     id: 'assertion',
     medicineId: 'medicine_a',
-    editorId: 'editor',
+    editorId,
     supersededBy: [],
     supersedesId: null,
     field: 'productName',
@@ -285,83 +358,138 @@ describe('DEV-923: reviewing and publishing need the catalogue review permission
     confidence: null,
     reviewer: null,
     assertedValue: { value: 'Amoxil' },
-  };
+  });
   const review = {
     duplicateKey: 'fixture',
     action: 'ACCEPT' as const,
     medicineIds: ['medicine_a'],
     payload: { assertionIds: ['assertion'] },
   };
+  type Caller = ReturnType<typeof caller>;
   const procedures = [
-    ['recordReviewDecision', (c: ReturnType<typeof caller>) => c.recordReviewDecision(review)],
-    [
-      'publishAssertions',
-      (c: ReturnType<typeof caller>) => c.publishAssertions({ assertionIds: ['assertion'] }),
-    ],
-    [
-      'supersedePublication',
-      (c: ReturnType<typeof caller>) => c.supersedePublication({ batchId: 'batch' }),
-    ],
+    ['recordReviewDecision', (c: Caller) => c.recordReviewDecision(review)],
+    ['publishAssertions', (c: Caller) => c.publishAssertions({ assertionIds: ['assertion'] })],
+    ['supersedePublication', (c: Caller) => c.supersedePublication({ batchId: 'batch' })],
   ] as const;
 
   it.each(procedures)(
-    'refuses %s to an administrator without the review permission',
+    'Owner + Pharmacist: refuses %s to the owner, lets the pharmacist through',
     async (_name, run) => {
-      await expect(run(caller('reviewer'))).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      shop({ owner_a: owner(), pharmacist_b: pharmacist() });
+      db.medicineProvenance.findMany.mockResolvedValue([unreviewed('owner_a')]);
+      await expect(run(caller('owner_a'))).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.$transaction).not.toHaveBeenCalled();
+      await run(caller('pharmacist_b')).catch(() => undefined);
+      expect(db.$transaction).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each(procedures)(
+    'Owner + Cashier: lets the owner reach %s, refuses the cashier',
+    async (_name, run) => {
+      shop({ owner_a: owner(), cashier_c: cashier() });
+      db.medicineProvenance.findMany.mockResolvedValue([unreviewed('former_x')]);
+      await expect(run(caller('cashier_c'))).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.$transaction).not.toHaveBeenCalled();
+      await run(caller('owner_a')).catch(() => undefined);
+      expect(db.$transaction).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each(procedures)(
+    'Owner + Cashier: refuses %s to an owner under an explicit review DENY',
+    async (_name, run) => {
+      const denied = owner();
+      denied.permissionOverrides.push(REVIEW_DENY);
+      shop({ owner_a: denied, cashier_c: cashier() });
+      await expect(run(caller('owner_a'))).rejects.toMatchObject({ code: 'FORBIDDEN' });
       expect(db.$transaction).not.toHaveBeenCalled();
     }
   );
 
-  it.each(procedures)('refuses %s under an explicit review DENY', async (_name, run) => {
-    await expect(run(caller('reviewer', REVIEW_DENY))).rejects.toMatchObject({
+  it.each(procedures)(
+    'refuses %s to an administrator who is neither a reviewer nor an owner',
+    async (_name, run) => {
+      shop({ admin_a: admin(), cashier_c: cashier() });
+      await expect(run(caller('admin_a'))).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it('does not let a pharmacist accept their own edit', async () => {
+    shop({ owner_a: owner(), pharmacist_b: pharmacist() });
+    db.medicineProvenance.findMany.mockResolvedValue([unreviewed('pharmacist_b')]);
+    await expect(caller('pharmacist_b').recordReviewDecision(review)).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
-    expect(db.$transaction).not.toHaveBeenCalled();
-  });
-
-  it.each(procedures)('lets a reviewer holding the grant reach %s', async (_name, run) => {
-    db.medicineProvenance.findMany.mockResolvedValue([unreviewed]);
-    await run(caller('reviewer', REVIEW_GRANT)).catch(() => undefined);
-    expect(db.$transaction).toHaveBeenCalledOnce();
-  });
-
-  it.each(procedures)('lets a solo owner reach %s', async (_name, run) => {
-    guards.solo.mockResolvedValue(true);
-    db.medicineProvenance.findMany.mockResolvedValue([unreviewed]);
-    await run(caller('owner')).catch(() => undefined);
-    expect(db.$transaction).toHaveBeenCalledOnce();
-  });
-
-  it('does not let a single administrator accept their own edit, even holding the grant', async () => {
-    db.medicineProvenance.findMany.mockResolvedValue([unreviewed]);
-    await expect(caller('editor', REVIEW_GRANT).recordReviewDecision(review)).rejects.toMatchObject(
-      { code: 'FORBIDDEN' }
-    );
     expect(db.medicineProvenance.create).not.toHaveBeenCalled();
     expect(db.medicineReviewDecision.create).not.toHaveBeenCalled();
   });
 
-  it('does not let an administrator publish an assertion nobody else reviewed', async () => {
-    db.medicineProvenance.findMany.mockResolvedValue([unreviewed]);
+  it('Owner + Cashier: the owner accepts only with a fresh PIN, even another person’s edit', async () => {
+    shop({ owner_a: owner(), cashier_c: cashier() });
+    db.medicineProvenance.findMany.mockResolvedValue([unreviewed('former_x')]);
+    await expect(caller('owner_a').recordReviewDecision(review)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.medicineReviewDecision.create).not.toHaveBeenCalled();
+
+    await caller('owner_a').recordReviewDecision({ ...review, soloPin: '2468' });
+    expect(guards.pin).toHaveBeenCalledWith({
+      organizationId: 'org_a',
+      userId: 'owner_a',
+      pin: '2468',
+    });
+    expect(db.medicineReviewDecision.create).toHaveBeenCalledOnce();
+    expect(db.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        actorId: 'owner_a',
+        action: 'pharmacy.catalogueSoloOwnerApproval',
+        targetType: 'MedicineProvenance',
+        metadata: { soloOwner: true, pinVerified: true, reason: 'no other reviewer' },
+      }),
+    });
+  });
+
+  it('Owner + Owner: an owner cannot accept their own edit, the other owner can with a PIN', async () => {
+    shop({ owner_a: owner(), owner_b: owner() });
+    db.medicineProvenance.findMany.mockResolvedValue([unreviewed('owner_a')]);
     await expect(
-      caller('editor', REVIEW_GRANT).publishAssertions({ assertionIds: ['assertion'] })
+      caller('owner_a').recordReviewDecision({ ...review, soloPin: '2468' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.medicineReviewDecision.create).not.toHaveBeenCalled();
+
+    await caller('owner_b').recordReviewDecision({ ...review, soloPin: '1357' });
+    expect(db.medicineReviewDecision.create).toHaveBeenCalledOnce();
+    expect(db.medicineProvenance.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ status: 'ACCEPTED', reviewer: 'owner_b' }),
+    });
+  });
+
+  it('does not let anyone publish an assertion nobody reviewed', async () => {
+    shop({ owner_a: owner(), pharmacist_b: pharmacist() });
+    db.medicineProvenance.findMany.mockResolvedValue([unreviewed('owner_a')]);
+    await expect(
+      caller('pharmacist_b').publishAssertions({ assertionIds: ['assertion'] })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     db.medicineProvenance.findMany.mockResolvedValue([
-      { ...unreviewed, status: 'ACCEPTED', reviewer: 'reviewer' },
+      { ...unreviewed('owner_a'), status: 'ACCEPTED', reviewer: 'pharmacist_b' },
     ]);
     // Accepted but without review decision evidence: still refused.
     await expect(
-      caller('editor', REVIEW_GRANT).publishAssertions({ assertionIds: ['assertion'] })
+      caller('pharmacist_b').publishAssertions({ assertionIds: ['assertion'] })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(db.medicinePublicationBatch.create).not.toHaveBeenCalled();
   });
 
   it('audits every acceptance by a different reviewer as a catalogue approval', async () => {
-    db.medicineProvenance.findMany.mockResolvedValue([unreviewed]);
-    await caller('reviewer', REVIEW_GRANT).recordReviewDecision(review);
+    shop({ owner_a: owner(), pharmacist_b: pharmacist() });
+    db.medicineProvenance.findMany.mockResolvedValue([unreviewed('owner_a')]);
+    await caller('pharmacist_b').recordReviewDecision(review);
+    expect(guards.pin).not.toHaveBeenCalled();
     expect(db.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        actorId: 'reviewer',
+        actorId: 'pharmacist_b',
         action: 'pharmacy.catalogueApproval',
         targetType: 'MedicineProvenance',
         targetId: 'assertion',

@@ -292,13 +292,16 @@ export const SHOP_SCREEN_COPY = {
     evidenceWindow: 'Branch and dates',
     branch: 'Branch',
     chooseABranch: 'Choose a branch',
-    from500AmPkt: 'From (5:00 AM PKT)',
-    until500AmPktNotIncluded: 'Until (5:00 AM PKT, not included)',
+    // Picked dates start at the workspace's midnight; the zone label follows.
+    fromMidnight: 'From (midnight, ',
+    untilMidnight: 'Until (midnight, ',
+    closeZone: ')',
+    closeZoneNotIncluded: ', not included)',
     page: 'Page',
     readAuthorizedPage: 'Read authorized page',
     chooseAValidEvidenceWindow: 'Choose valid dates',
     chooseAnAuthorizedBranchAUtcDateWindow:
-      'Choose an authorized branch, a UTC date window of at most 92 days, and a page from 1 to 10,000. Invalid input is not read or exported.',
+      'Choose an authorized branch, a date window of at most 92 days, and a page from 1 to 10,000. Invalid input is not read or exported.',
     accessMayBeDeniedOrTheReadFailed:
       'Access may be denied or the read failed. No CSV is available; retry or ask your workspace administrator.',
     entriesOnThisPage: 'Entries on this page',
@@ -328,8 +331,6 @@ export const SHOP_SCREEN_COPY = {
       'Isolate one posted account and recorded currency from financial-statement aggregates.',
     chooseAnAccount: 'Choose an account',
     branch: 'Branch',
-    from500AmPkt: 'From (5:00 AM PKT)',
-    until500AmPktNotIncluded: 'Until (5:00 AM PKT, not included)',
     accountCurrency: 'Account / currency',
     chooseAnAccountCurrency: 'Choose an account / currency',
     readBridge: 'Read bridge',

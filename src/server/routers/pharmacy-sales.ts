@@ -56,6 +56,7 @@ import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
 import { BRANCH_NOT_ASSIGNED } from '@/lib/pharmacy/counter-setup';
+import { readPharmacyApprovalStatus } from '@/lib/pharmacy/onboarding';
 import { RefusalReason } from '@/server/refusal-reason';
 import {
   evaluateCounterSaleReadiness,
@@ -296,7 +297,10 @@ const tenderInput = z
       .optional(),
   })
   .strict()
-  .refine(hasValidTenderProviderReference, { path: ['providerRef'], message: 'Invalid payment reference.' });
+  .refine(hasValidTenderProviderReference, {
+    path: ['providerRef'],
+    message: 'Invalid payment reference.',
+  });
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
 const demandReason = z.enum([
   'STOCKOUT',
@@ -2376,7 +2380,16 @@ export const pharmacySalesRouter = router({
         deviceId: input.deviceId ?? null,
         takesPayment,
       });
-      return { ...readiness, canFixSetup: orgAdmin };
+      // DEV-905: a workspace that is not active may simply be waiting for DevFathom
+      // approval, or still have onboarding steps open. Say which, instead of the generic
+      // "not active". The read is additive: if it fails, the generic message stays.
+      const approval = readiness.blockers.includes('ORGANIZATION_NOT_ACTIVE')
+        ? await readPharmacyApprovalStatus(
+            ctx.db as unknown as ScopedDb,
+            scope.organizationId
+          ).catch(() => null)
+        : null;
+      return { ...readiness, canFixSetup: orgAdmin, ...(approval ? { approval } : {}) };
     }),
   create: protectedProcedure
     .input(
@@ -4015,14 +4028,18 @@ export const pharmacySalesRouter = router({
         // DEV-876's branch-assignment read scope first (its refusals stay as they
         // are), then DEV-878's counter grant before any catalogue or alternative read.
         await assignedBranchScope(ctx, input.branchId);
-        return await searchCounterCatalog(
-          ctx.db,
-          await requireCounterReceiptAccess(ctx, input.branchId),
-          {
-            query: input.query,
-            limit: input.limit,
-          }
-        );
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        // DEV-907: the owner's switch decides whether the other-branch line is
+        // computed at all; the client cannot ask for it.
+        const organization = await ctx.db.organization.findUnique({
+          where: { id: scope.organizationId },
+          select: { pharmacyOtherBranchAvailability: true },
+        });
+        return await searchCounterCatalog(ctx.db, scope, {
+          query: input.query,
+          limit: input.limit,
+          otherBranchAvailability: organization?.pharmacyOtherBranchAvailability === true,
+        });
       } catch (error) {
         fail(error);
       }
