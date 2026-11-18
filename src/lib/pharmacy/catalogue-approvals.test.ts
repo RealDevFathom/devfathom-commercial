@@ -350,6 +350,26 @@ describe('DEV-766 durable catalogue approvals', () => {
       })
     );
   });
+  it('holds a solo-owner approval to a fresh PIN even for an edit someone else submitted', async () => {
+    guards.solo.mockResolvedValue(true);
+    const f = fixture('former_editor');
+    const input = { editId: 'edit', decision: 'APPROVE' as const };
+    await expect(
+      decideCatalogueEdit(f.db, scope, input, undefined, { soloOwnerAuthority: true })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.raw.medicine.updateMany).not.toHaveBeenCalled();
+    await decideCatalogueEdit(f.db, scope, { ...input, soloPin: '2468' }, undefined, {
+      soloOwnerAuthority: true,
+    });
+    expect(guards.pin).toHaveBeenCalledWith({
+      organizationId: 'org_a',
+      userId: 'reviewer',
+      pin: '2468',
+    });
+    expect(f.raw.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ action: 'pharmacy.catalogueSoloOwnerApproval' }),
+    });
+  });
   it('refuses any other medicine-less edit instead of applying it', async () => {
     const f = fixture();
     Object.assign(f.proposal, { medicineId: null, operation: 'addAlias' });

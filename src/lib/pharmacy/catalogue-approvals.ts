@@ -249,7 +249,13 @@ export async function decideCatalogueEdit(
   db: ScopedDb,
   scope: Scope,
   input: { editId: string; decision: 'APPROVE' | 'REJECT'; soloPin?: string },
-  applyCommand?: (tx: ScopedDb, operation: string, payload: Prisma.JsonValue) => Promise<unknown>
+  applyCommand?: (tx: ScopedDb, operation: string, payload: Prisma.JsonValue) => Promise<unknown>,
+  /**
+   * DEV-19: the actor decides as the solo pharmacy owner rather than through the
+   * review grant. Every approval then needs their fresh PIN and the solo audit,
+   * whoever submitted the edit.
+   */
+  options: { soloOwnerAuthority?: boolean } = {}
 ) {
   return db.$transaction(async (tx) => {
     const scoped = tx as ScopedDb;
@@ -271,7 +277,9 @@ export async function decideCatalogueEdit(
       (await requireIndependentCatalogueReviewer(
         scoped,
         scope,
-        [proposal.editorId],
+        // Naming the actor as an editor routes a solo-owner approval through the
+        // solo-owner and fresh-PIN checks even when someone else submitted it.
+        options.soloOwnerAuthority ? [scope.actorId] : [proposal.editorId],
         input.soloPin
       ));
     const at = new Date();

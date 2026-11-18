@@ -48,6 +48,8 @@ import {
   type ConnectorRights,
 } from '@/lib/pharmacy/reference-connectors';
 import { isEffective } from '@/lib/pharmacy/pack-conversion';
+import { isSoloPharmacyOwner } from '@/lib/pharmacy/solo-owner';
+import { can, subjectFromSession, type Action } from '@/lib/abac';
 import { annotateAudit } from '../audit';
 import {
   adminProcedure,
@@ -335,15 +337,52 @@ function domainError(error: unknown): never {
 
 // Only this module can attach the replay token; client input is always parsed
 // by the original procedure again when a reviewer approves a queued command.
+// Its value is the approver's authority, which the replayed procedure re-checks.
 const catalogueReplay = Symbol('catalogueApproval');
-const isCatalogueReplay = (ctx: TRPCContext) =>
-  (ctx as TRPCContext & { [catalogueReplay]?: boolean })[catalogueReplay] === true;
-// A catalogue command is submitted by a catalogue administrator. When an approved
-// edit replays it, the reviewer's own review capability authorizes the write, so a
-// pharmacist reviewer who is not a tenant administrator can apply what they approve.
-const catalogueCommandProcedure = contextualCapabilityProcedure((ctx) =>
-  isCatalogueReplay(ctx) ? 'pharmacy:catalogue-review' : 'admin:access'
+const replayAuthority = (ctx: TRPCContext) =>
+  (ctx as TRPCContext & { [catalogueReplay]?: readonly Action[] })[catalogueReplay];
+const isCatalogueReplay = (ctx: TRPCContext) => Array.isArray(replayAuthority(ctx));
+// DEV-19: submitting any catalogue edit needs the catalogue-edit capability (deny
+// by default) on top of tenant administration; an explicit DENY refuses an admin.
+const CATALOGUE_EDIT_ACTIONS = ['admin:access', 'pharmacy:catalogue-edit'] as const;
+const REVIEWER_AUTHORITY = ['pharmacy:catalogue-review'] as const;
+// A solo owner approving without the review grant is held to the editor's own
+// capabilities; their fresh PIN was verified before the replay.
+const SOLO_OWNER_AUTHORITY = CATALOGUE_EDIT_ACTIONS;
+const catalogueEditProcedure = contextualCapabilityProcedure(() => CATALOGUE_EDIT_ACTIONS);
+// A catalogue command is submitted by a catalogue editor. When an approved edit
+// replays it, the approver's own authority authorizes the write, so a pharmacist
+// reviewer who is not a tenant administrator can apply what they approve.
+const catalogueCommandProcedure = contextualCapabilityProcedure(
+  (ctx) => replayAuthority(ctx) ?? CATALOGUE_EDIT_ACTIONS
 );
+
+/**
+ * Who may see and decide the catalogue queue. A reviewer holds the exact
+ * pharmacy:catalogue-review grant. A solo pharmacy owner (the only active member,
+ * with live owner authority and no DENY) may decide without it, but approves only
+ * with a fresh PIN. An editor may see the queue they submit to.
+ */
+async function catalogueAccess(ctx: TRPCContext) {
+  const user = ctx.session!.user;
+  const subject = subjectFromSession(user);
+  const opts = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
+  const allowed = async (actions: readonly Action[]) => {
+    for (const action of actions) if (!(await can(subject, action, undefined, opts))) return false;
+    return true;
+  };
+  const reviewer = await allowed(REVIEWER_AUTHORITY);
+  const editor = await allowed(CATALOGUE_EDIT_ACTIONS);
+  const soloOwner =
+    !reviewer &&
+    editor &&
+    (await isSoloPharmacyOwner(ctx.db, {
+      organizationId: ctx.entitlements.organizationId,
+      actorId: user.id,
+      actorOrganizationId: user.organizationId,
+    }));
+  return { reviewer, editor, soloOwner };
+}
 const catalogueCommands = [
   'createIngredient',
   'createPackLevel',
@@ -383,14 +422,15 @@ async function applyCatalogueCommand(
   ctx: TRPCContext,
   tx: typeof ctx.db,
   operation: string,
-  payload: Prisma.JsonValue
+  payload: Prisma.JsonValue,
+  authority: readonly Action[]
 ): Promise<unknown> {
   if (!catalogueCommands.includes(operation as CatalogueCommand))
     throw new TRPCError({
       code: 'BAD_REQUEST',
       message: 'Unsupported catalogue edit.',
     });
-  const replayContext = { ...ctx, db: tx, [catalogueReplay]: true };
+  const replayContext = { ...ctx, db: tx, [catalogueReplay]: authority };
   const caller = pharmacyMedicineRouter.createCaller(replayContext) as unknown as Record<
     CatalogueCommand,
     (input: unknown) => Promise<unknown>
@@ -405,8 +445,27 @@ const DUPLICATE_PACK_MESSAGE =
   'This pack already exists for this medicine. Use the existing pack instead of adding it again.';
 
 export const pharmacyMedicineRouter = router({
-  catalogueEdits: adminProcedure.query(({ ctx }) => listPendingCatalogueEdits(ctx.db)),
-  proposeCatalogueEdit: adminProcedure
+  // DEV-19: reviewers and the solo owner read the queue they decide; editors read
+  // the queue they submit to. Everyone else is refused.
+  catalogueEdits: auditedProtectedProcedure.query(async ({ ctx }) => {
+    const access = await catalogueAccess(ctx);
+    if (!access.reviewer && !access.editor)
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission for this action.',
+      });
+    return listPendingCatalogueEdits(ctx.db);
+  }),
+  /** What the signed-in member may do in the catalogue queue, for the UI only. */
+  catalogueQueueAccess: auditedProtectedProcedure.query(async ({ ctx }) => {
+    const access = await catalogueAccess(ctx);
+    return {
+      canEdit: access.editor,
+      canDecide: access.reviewer || access.soloOwner,
+      soloOwner: access.soloOwner,
+    };
+  }),
+  proposeCatalogueEdit: catalogueEditProcedure
     .input(z.object({ medicineId: boundedId, changes: catalogueChanges }).strict())
     .mutation(({ ctx, input }) =>
       submitCatalogueEdit(
@@ -419,9 +478,10 @@ export const pharmacyMedicineRouter = router({
         input.changes
       )
     ),
-  // DEV-19: approval is the pharmacist review capability, decided by the ABAC engine
-  // exactly like connector proposals: an explicit DENY refuses even an administrator.
-  decideCatalogueEdit: capabilityProcedure('pharmacy:catalogue-review')
+  // DEV-19: a decision needs the pharmacist review capability, decided by the ABAC
+  // engine like connector proposals: an explicit DENY refuses even an administrator.
+  // The one exception is the solo pharmacy owner, who approves with a fresh PIN.
+  decideCatalogueEdit: auditedProtectedProcedure
     .input(
       z
         .object({
@@ -431,8 +491,15 @@ export const pharmacyMedicineRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) =>
-      decideCatalogueEdit(
+    .mutation(async ({ ctx, input }) => {
+      const access = await catalogueAccess(ctx);
+      if (!access.reviewer && !access.soloOwner)
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Approving catalogue edits needs the catalogue review permission.',
+        });
+      const authority = access.reviewer ? REVIEWER_AUTHORITY : SOLO_OWNER_AUTHORITY;
+      return decideCatalogueEdit(
         ctx.db,
         {
           organizationId: ctx.entitlements.organizationId,
@@ -440,9 +507,10 @@ export const pharmacyMedicineRouter = router({
           actorOrganizationId: ctx.session.user.organizationId,
         },
         input,
-        (tx, operation, payload) => applyCatalogueCommand(ctx, tx, operation, payload)
-      )
-    ),
+        (tx, operation, payload) => applyCatalogueCommand(ctx, tx, operation, payload, authority),
+        { soloOwnerAuthority: !access.reviewer }
+      );
+    }),
   priceNotices: capabilityProcedure('pharmacy:safety').query(({ ctx }) =>
     priceIntelligence(ctx.db, {
       organizationId: ctx.entitlements.organizationId,
@@ -929,7 +997,7 @@ export const pharmacyMedicineRouter = router({
       }
     }),
 
-  createMedicine: adminProcedure
+  createMedicine: catalogueEditProcedure
     .input(
       z
         .object({
@@ -1041,7 +1109,7 @@ export const pharmacyMedicineRouter = router({
    * #718: shop-set retail price and category for a NON_DRUG_RETAIL (FRONT_SHOP) item. A medicine
    * keeps its DRAP printed MRP and is refused; `null` clears a field.
    */
-  setRetailDetails: adminProcedure
+  setRetailDetails: catalogueEditProcedure
     .input(
       z
         .object({

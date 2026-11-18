@@ -418,6 +418,20 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     );
   });
 
+  it('offers a catalogue reviewer the Medicine catalog destination, and a cashier not (DEV-19)', () => {
+    renderNavigation({
+      role: 'MEMBER',
+      capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
+    });
+    expect(screen.getByRole('link', { name: /Medicine catalog$/ })).toHaveAttribute(
+      'href',
+      '/pharmacy/medicines'
+    );
+    cleanup();
+    renderNavigation({ role: 'MEMBER', capabilities: ['pharmacy:counter', 'pharmacy:orders'] });
+    expect(screen.queryByRole('link', { name: /Medicine catalog$/ })).not.toBeInTheDocument();
+  });
+
   // #979, PR J: the rail answer is the ABAC-resolved capability list. No role
   // that does no procurement work is offered the Purchasing destination.
   it.each([

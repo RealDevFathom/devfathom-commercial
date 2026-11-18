@@ -336,6 +336,8 @@ export const navigation: NavItem[] = [
     href: '/pharmacy/medicines',
     icon: Pill,
     adminOnly: true,
+    // DEV-19: a pharmacist reviewer opens the catalogue approval queue there.
+    memberCapabilities: ['pharmacy:catalogue-review'],
     group: 'Pharmacy',
     module: 'pharmacy-core',
   },
