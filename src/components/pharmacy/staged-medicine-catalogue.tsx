@@ -281,7 +281,7 @@ export async function StagedMedicineCatalogue({
               <caption className="sr-only">
                 Unverified source quantities. No saleable stock is created.
               </caption>
-              <thead className="text-xs font-semibold text-text-muted">
+              <thead className="font-mono text-xs uppercase">
                 <tr>
                   {STAGED_COLUMN_HEADINGS.map((label) => (
                     <th className="px-3 py-3 text-left" key={label} scope="col">

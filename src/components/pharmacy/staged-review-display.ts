@@ -4,7 +4,7 @@
  */
 
 export const STAGED_LIST_INTRO =
-  'These rows come from your old system and are waiting for review. They are not in the medicine catalogue or in stock yet, so they cannot be sold. Next: open a medicine to check it, then approve it for the catalogue.';
+  'These rows come from your old system and are waiting for review. They are not in the medicine catalogue or in stock yet, so they cannot be sold. Next: open a medicine to check its name, quantity and prices against your old records. Approval for the catalogue is not available on this screen yet.';
 
 export const STAGED_COLUMN_HEADINGS = [
   'Medicine',
