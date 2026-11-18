@@ -7,6 +7,9 @@ import type { Prisma } from '@/generated/prisma/client';
 import { PharmacyProductClassError, validateRetailFields } from './product-class';
 import { isSoloPharmacyOwner } from './solo-owner';
 import { verifyOwnerExportPin } from './owner-data-export-pin';
+import { actorIsPharmacyOwner } from './procurement-access';
+import { can, subjectFromSession, ACTIVE_STATUSES } from '@/lib/abac';
+import type { AuthzDb } from '@/lib/authz';
 
 const nullableText = (max: number) => z.string().trim().max(max).nullable().optional();
 // Neither product family nor saleability can be changed here. Publication retains
@@ -41,25 +44,85 @@ type Scope = {
   actorOrganizationId?: string | null;
 };
 
+/** The reason recorded on an owner's PIN approval when nobody else can review. */
+export const NO_OTHER_REVIEWER = 'no other reviewer';
+
+/**
+ * DEV-19 solo-pharmacy rule for catalogue edits: a live pharmacy owner (owner
+ * authority, no DENY) in an organization where no OTHER active member holds
+ * pharmacy:catalogue-review. Evaluated at approval time: once another active
+ * reviewer exists, a different reviewer is required again; when that reviewer is
+ * deactivated, the owner may approve with a fresh PIN once more.
+ */
+export async function isOwnerWithoutOtherReviewer(
+  db: ScopedDb,
+  scope: Scope,
+  /**
+   * Self-approval: another active owner (no DENY) also counts as a reviewer, so an
+   * owner cannot approve their own edit while a second owner exists. Approving
+   * someone else's edit counts only holders of the review grant, so two owners
+   * can always approve each other's edits.
+   */
+  options: { countOtherOwners?: boolean } = {}
+): Promise<boolean> {
+  if (scope.actorOrganizationId !== scope.organizationId) return false;
+  if (!(await actorIsPharmacyOwner(db, scope.organizationId, scope.actorId))) return false;
+  const others = await db.user.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      id: { not: scope.actorId },
+      status: { in: [...ACTIVE_STATUSES] as Array<'ACTIVE' | 'ON_LEAVE'> },
+    },
+    select: { id: true, role: true, department: true, status: true },
+  });
+  for (const member of others) {
+    if (
+      await can(subjectFromSession(member), 'pharmacy:catalogue-review', undefined, {
+        db: db as unknown as AuthzDb,
+        source: 'TRPC',
+      })
+    )
+      return false;
+    if (
+      options.countOtherOwners &&
+      (await actorIsPharmacyOwner(db, scope.organizationId, member.id))
+    )
+      return false;
+  }
+  return true;
+}
+
 export async function requireIndependentCatalogueReviewer(
   db: ScopedDb,
   scope: Scope,
   editorIds: Array<string | null>,
-  soloPin?: string
+  soloPin?: string,
+  options: {
+    /** Catalogue edits: an owner with no other active reviewer counts as solo. */
+    ownerWithoutOtherReviewer?: boolean;
+    /** The approver submitted the edit; another active owner then counts as a reviewer. */
+    selfApproval?: boolean;
+  } = {}
 ): Promise<boolean> {
   if (!editorIds.includes(scope.actorId)) return false;
-  if (
-    !soloPin ||
-    !(await isSoloPharmacyOwner(db, {
-      organizationId: scope.organizationId,
-      actorId: scope.actorId,
-      actorOrganizationId: scope.actorOrganizationId,
-    }))
-  ) {
+  // Started only when needed: a refusal must not leave a query running after the
+  // transaction it belongs to has rolled back.
+  const eligible = () =>
+    options.ownerWithoutOtherReviewer
+      ? isOwnerWithoutOtherReviewer(db, scope, {
+          countOtherOwners: options.selfApproval ?? true,
+        })
+      : isSoloPharmacyOwner(db, {
+          organizationId: scope.organizationId,
+          actorId: scope.actorId,
+          actorOrganizationId: scope.actorOrganizationId,
+        });
+  if (!soloPin || !(await eligible())) {
     throw new TRPCError({
       code: 'FORBIDDEN',
-      message:
-        'Another reviewer must approve this edit. A solo owner may enter their own fresh PIN.',
+      message: options.ownerWithoutOtherReviewer
+        ? 'Another reviewer must approve this edit. When nobody else can review, the owner may enter their own fresh PIN.'
+        : 'Another reviewer must approve this edit. A solo owner may enter their own fresh PIN.',
     });
   }
   // A separate transaction commits failed guesses and their durable lockout.
@@ -84,6 +147,7 @@ export async function recordCatalogueApproval(
   targetId: string,
   solo: boolean,
   targetType = 'PharmacyCatalogueEdit',
+  reason?: string,
   controlledReviewed = false
 ) {
   await db.auditLog.create({
@@ -97,10 +161,12 @@ export async function recordCatalogueApproval(
       action: solo ? 'pharmacy.catalogueSoloOwnerApproval' : 'pharmacy.catalogueApproval',
       targetType,
       targetId,
-      // DEV-925: marks an approved controlled-flag change made under the catalogue review grant.
+      // DEV-925: `controlledReviewed` marks an approved controlled-flag change, made by a holder
+      // of the catalogue review grant or by the owner with no other reviewer, with a fresh PIN.
       metadata: {
         soloOwner: solo,
         pinVerified: solo,
+        ...(reason ? { reason } : {}),
         ...(controlledReviewed ? { controlledReviewed: true } : {}),
       },
     },
@@ -194,8 +260,9 @@ export async function listPendingCatalogueEdits(db: ScopedDb) {
   const presentationLabel = new Map(presentations.map((item) => [item.id, item.presentation]));
   return edits.map(({ medicine, ...edit }, index) => ({
     ...edit,
-    medicine: { productName: medicine.productName },
-    stale: medicine.updatedAt.getTime() !== edit.expectedUpdatedAt.getTime(),
+    // A new ingredient belongs to no medicine yet, so it cannot go out of date.
+    medicine: { productName: medicine?.productName ?? 'New ingredient' },
+    stale: medicine ? medicine.updatedAt.getTime() !== edit.expectedUpdatedAt.getTime() : false,
     targets: [
       ...commands[index]!.presentations.map((id) => ({
         label: 'Presentation',
@@ -261,19 +328,21 @@ function changesControlled(operation: string, changes: Prisma.JsonValue): boolea
   );
 }
 
-export const CONTROLLED_REVIEW_MESSAGE =
-  'Approving a change to the controlled flag needs the catalogue review permission.';
-
-/**
- * `canReviewControlled` answers whether the reviewer holds `pharmacy:catalogue-review`. It is
- * asked only when an approval changes the controlled flag; without it such an approval is refused.
- */
 export async function decideCatalogueEdit(
   db: ScopedDb,
   scope: Scope,
   input: { editId: string; decision: 'APPROVE' | 'REJECT'; soloPin?: string },
   applyCommand?: (tx: ScopedDb, operation: string, payload: Prisma.JsonValue) => Promise<unknown>,
-  canReviewControlled?: () => Promise<boolean>
+  options: {
+    /**
+     * DEV-19: the actor decides as the owner with no other reviewer rather than
+     * through the review grant. Every approval then needs their fresh PIN and the
+     * owner audit, whoever submitted the edit.
+     */
+    soloOwnerAuthority?: boolean;
+    /** DEV-19: an owner with no other active reviewer may self-approve with a PIN. */
+    ownerWithoutOtherReviewer?: boolean;
+  } = {}
 ) {
   return db.$transaction(async (tx) => {
     const scoped = tx as ScopedDb;
@@ -290,20 +359,22 @@ export async function decideCatalogueEdit(
         code: 'CONFLICT',
         message: 'Catalogue edit already reviewed.',
       });
-    // DEV-925: the controlled flag is a regulated catalogue field (SECURITY.md); an approval
-    // that changes it needs an explicit grant, checked before any PIN attempt is spent.
-    const controlledReviewed =
-      input.decision === 'APPROVE' && changesControlled(proposal.operation, proposal.changes);
-    if (controlledReviewed && !(await canReviewControlled?.()))
-      throw new TRPCError({ code: 'FORBIDDEN', message: CONTROLLED_REVIEW_MESSAGE });
     const solo =
       input.decision === 'APPROVE' &&
       (await requireIndependentCatalogueReviewer(
         scoped,
         scope,
-        [proposal.editorId],
-        input.soloPin
+        // Naming the actor as an editor routes a solo-owner approval through the
+        // solo-owner and fresh-PIN checks even when someone else submitted it.
+        options.soloOwnerAuthority ? [scope.actorId] : [proposal.editorId],
+        input.soloPin,
+        {
+          ownerWithoutOtherReviewer: options.ownerWithoutOtherReviewer,
+          selfApproval: proposal.editorId === scope.actorId,
+        }
       ));
+    const approvalReason =
+      solo && options.ownerWithoutOtherReviewer ? NO_OTHER_REVIEWER : undefined;
     const at = new Date();
     if (solo)
       await tx.$queryRaw`SELECT set_config('app.pharmacy_catalogue_solo_pin_user_id', ${scope.actorId}, true)`;
@@ -324,9 +395,26 @@ export async function decideCatalogueEdit(
         message: 'Catalogue edit already reviewed.',
       });
     let staleEdits = 0;
-    if (input.decision === 'APPROVE') {
+    const medicineId = proposal.medicineId;
+    if (input.decision === 'APPROVE' && medicineId === null) {
+      // DEV-19: a queued new ingredient names no medicine; only that command may.
+      if (proposal.operation !== 'createIngredient' || !applyCommand)
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Unsupported catalogue edit.',
+        });
+      await applyCommand(scoped, proposal.operation, proposal.changes);
+      await recordCatalogueApproval(
+        scoped,
+        scope,
+        proposal.id,
+        solo,
+        'PharmacyCatalogueEdit',
+        approvalReason
+      );
+    } else if (input.decision === 'APPROVE' && medicineId !== null) {
       const medicine = await tx.medicine.findFirst({
-        where: { id: proposal.medicineId },
+        where: { id: medicineId },
       });
       if (!medicine)
         throw new TRPCError({
@@ -361,7 +449,8 @@ export async function decideCatalogueEdit(
         proposal.id,
         solo,
         'PharmacyCatalogueEdit',
-        controlledReviewed
+        approvalReason,
+        changesControlled(proposal.operation, proposal.changes)
       );
       // Every other pending edit on this item was submitted against the version
       // this approval just replaced, so none of them can be approved any more.

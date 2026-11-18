@@ -1067,6 +1067,8 @@ export async function receiveTransferLine(
             ? 'PARTIALLY_RECEIVED'
             : 'EXCEPTION',
       receivedAt: totalReceived === totalExpected ? new Date() : null,
+      // DEV-908: the receiving side names who closed the receipt.
+      receivedById: totalReceived === totalExpected ? scope.actorId : null,
     },
   });
 }
