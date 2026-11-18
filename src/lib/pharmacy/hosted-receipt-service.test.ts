@@ -519,8 +519,7 @@ describe('DEV-16 hosted receipt access', () => {
         db,
         { organizationId: 'org-1', branchId: 'branch-1' },
         'sale-1',
-        // DEV-943: the receipt time is read on the organisation's own clock.
-        { name: 'Gulberg Branch', currency: 'PKR', timeZone: 'Asia/Karachi' }
+        { name: 'Gulberg Branch', currency: 'PKR' }
       );
       for (const hidden of ['Cashier Name', 'B-77', 'B-12'])
         expect(JSON.stringify(opened)).not.toContain(hidden);

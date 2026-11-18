@@ -14,7 +14,7 @@ export function HostedReceiptCard({ receipt }: { receipt: HostedReceiptView }) {
         <div>
           <dt className="font-mono text-xs tracking-wider text-text-muted uppercase">Issued</dt>
           <dd className="mt-1 text-text-strong tabular-nums">
-            {formatReceiptIssuedAt(receipt.completedAt, receipt.timeZone)}
+            {formatReceiptIssuedAt(receipt.completedAt)}
           </dd>
         </div>
         {receipt.counterLabel ? (
