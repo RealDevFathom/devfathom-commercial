@@ -269,7 +269,13 @@ export async function listPendingCatalogueEdits(db: ScopedDb) {
   return edits.map(({ medicine, ...edit }, index) => ({
     ...edit,
     // A new ingredient belongs to no medicine yet, so it cannot go out of date.
-    medicine: { productName: medicine?.productName ?? 'New ingredient' },
+    medicine: {
+      productName:
+        medicine?.productName ??
+        (edit.operation === 'createStagedMedicines'
+          ? 'New medicines from an imported file'
+          : 'New ingredient'),
+    },
     stale: medicine ? medicine.updatedAt.getTime() !== edit.expectedUpdatedAt.getTime() : false,
     targets: [
       ...commands[index]!.presentations.map((id) => ({
@@ -423,8 +429,12 @@ export async function decideCatalogueEdit(
     let staleEdits = 0;
     const medicineId = proposal.medicineId;
     if (input.decision === 'APPROVE' && medicineId === null) {
-      // DEV-19: a queued new ingredient names no medicine; only that command may.
-      if (proposal.operation !== 'createIngredient' || !applyCommand)
+      // DEV-19: a queued new ingredient names no medicine, nor does a staged file's bulk
+      // creation (DEV-912); only those commands may.
+      if (
+        !['createIngredient', 'createStagedMedicines'].includes(proposal.operation) ||
+        !applyCommand
+      )
         throw new TRPCError({
           code: 'BAD_REQUEST',
           message: 'Unsupported catalogue edit.',

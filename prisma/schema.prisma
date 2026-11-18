@@ -13023,6 +13023,42 @@ model PharmacyMigrationBatch {
 /// MIG-01 — every imported row keeps its incumbent source key and its import
 /// batch. Every parsed column is nullable and has NO default: a value the
 /// incumbent did not supply stays missing and raises an exception instead.
+/// DEV-912 — one catalogue medicine created from one staged legacy source row, after
+/// the batch's bulk creation was approved (`editId`). `sourceKey` (uploaded bytes'
+/// SHA-256 plus the row number) is unique per organization, so a re-run creates
+/// nothing twice. Imported pack MRP and purchase price are kept as read; null means
+/// the file did not record them. A re-exported file's row that names a medicine an
+/// earlier file created is linked to it as MATCHED instead of creating a copy. Read and insert only; foreign keys are migration
+/// enforced.
+model PharmacyStagedMedicineLink {
+  id                 String   @id @default(cuid())
+  organizationId     String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  sourceKey          String
+  batchId            String
+  rowId              String
+  editId             String
+  medicineId         String
+  packLevelId        String?
+  unitsPerPack       Int?
+  mrpMinor           Int?
+  purchasePriceMinor Int?
+  legacyCode         String?
+  barcode            String?
+  barcodeAttached    Boolean?
+  /// Old code, or name + units per pack + pack cell; computed in the application. Null: never matched.
+  matchKey           String?
+  /// CREATED, or MATCHED when an earlier staged file already created this medicine.
+  outcome            String   @default("CREATED")
+  createdById        String
+  createdAt          DateTime @default(now())
+
+  @@unique([organizationId, sourceKey])
+  @@index([organizationId, medicineId])
+  @@index([organizationId, matchKey])
+  @@index([organizationId, batchId])
+  @@map("pharmacy_staged_medicine_links")
+}
+
 model PharmacyMigrationRow {
   id                String    @id @default(cuid())
   organizationId    String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
