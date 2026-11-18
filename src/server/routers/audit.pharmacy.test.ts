@@ -13,6 +13,7 @@ vi.mock('@/server/audit', async (importOriginal) => ({
   recordTrpcAudit: vi.fn(),
 }));
 
+import { Prisma } from '@/generated/prisma/client';
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { isModuleGranted } from '@/lib/module-catalog';
 import { auditRouter } from './audit';
@@ -58,6 +59,13 @@ const PEOPLE: Record<string, Person> = {
     rules: template('pharmacist'),
     branches: ['branch_north'],
   },
+  southAdmin: {
+    role: 'ADMIN',
+    roleKey: 'manager',
+    isSystem: true,
+    rules: template('manager'),
+    branches: ['branch_south'],
+  },
 };
 
 const ROW = {
@@ -73,7 +81,7 @@ const ROW = {
   category: 'PHARMACYSALES',
   operation: 'UPDATE',
   action: 'pharmacySales.returnAndRefund',
-  input: { saleId: 'sale_1', approval: { pin: '[REDACTED]' } },
+  input: { saleId: 'sale_1', approval: { pin: '[REDACTED]' } } as Record<string, unknown>,
   changes: null,
   result: null,
   metadata: {
@@ -252,5 +260,137 @@ describe('DEV-913 pharmacy audit log access', () => {
     expect(procedures.length).toBeGreaterThan(0);
     for (const [name, procedure] of procedures)
       expect((procedure as { _def: { type: string } })._def.type, name).toBe('query');
+  });
+});
+
+// DEV-937: a refused request by a North person that names South is not planted
+// in South's log. The real `where` the router builds is evaluated against rows.
+type Where = Record<string, unknown>;
+function jsonAt(value: unknown, path: string[]): unknown {
+  return path.reduce<unknown>(
+    (at, key) => (at && typeof at === 'object' ? (at as Record<string, unknown>)[key] : undefined),
+    value
+  );
+}
+function matches(row: Record<string, unknown>, where: Where | undefined): boolean {
+  if (!where) return true;
+  return Object.entries(where).every(([key, condition]) => {
+    if (key === 'AND') return (condition as Where[]).every((part) => matches(row, part));
+    if (key === 'OR') return (condition as Where[]).some((part) => matches(row, part));
+    if (typeof condition === 'string') return row[key] === condition;
+    const filter = condition as {
+      in?: unknown[];
+      path?: string[];
+      equals?: unknown;
+      array_contains?: unknown[];
+      gte?: Date;
+    };
+    if (filter.in) return filter.in.includes(row[key]);
+    if (filter.gte) return (row[key] as Date) >= filter.gte;
+    if (filter.path) {
+      const value = jsonAt(row[key], filter.path);
+      // `AnyNull` is how the router asks for a key that is absent (or null).
+      if ('equals' in filter)
+        return filter.equals === Prisma.AnyNull ? value == null : value === filter.equals;
+      if (filter.array_contains)
+        return Array.isArray(value) && filter.array_contains.every((id) => value.includes(id));
+    }
+    throw new Error(`Unsupported audit filter: ${key}`);
+  });
+}
+
+describe('DEV-937 a request is shown where the person acted, not where it named', () => {
+  const entry = (id: string, fields: Partial<typeof ROW>) => ({
+    ...ROW,
+    id,
+    action: 'pharmacySales.returnAndRefund',
+    ...fields,
+  });
+  const ROWS = [
+    // A North cashier names South and is refused (recorded since DEV-937).
+    entry('planted', {
+      actorId: 'cashier',
+      outcome: 'FAILURE',
+      input: { branchId: 'branch_south', saleId: 'sale_1' },
+      metadata: { requestedBranchId: 'branch_south', actorBranchIds: ['branch_north'] },
+    }),
+    // A North cashier names South on a request that succeeds without it.
+    entry('planted_success', {
+      actorId: 'cashier',
+      input: { title: 'Note', branchId: 'branch_south' },
+      metadata: { requestedBranchId: 'branch_south', actorBranchIds: ['branch_north'] },
+    }),
+    // Recorded at North, its own branch, with an extra raw branchId naming South:
+    // a real pharmacyBranchId, or a record's tag (annotateAuditBranch).
+    entry('north_with_extra', {
+      actorId: 'cashier',
+      input: { title: 'Note', branchId: 'branch_south', pharmacyBranchId: 'branch_north' },
+      metadata: { branchId: 'branch_north' },
+    }),
+    // The same refusal recorded before the branch was kept on the entry.
+    entry('planted_legacy', {
+      actorId: 'cashier',
+      outcome: 'FAILURE',
+      input: { pharmacyBranchId: 'branch_south' },
+      metadata: {},
+    }),
+    // South's own refused and successful entries.
+    entry('south_refused', {
+      actorId: 'south_cashier',
+      outcome: 'FAILURE',
+      metadata: { branchId: 'branch_south' },
+    }),
+    entry('south_refund', { actorId: 'south_cashier', metadata: { branchId: 'branch_south' } }),
+    entry('south_legacy', {
+      actorId: 'south_cashier',
+      input: { branchId: 'branch_south' },
+      metadata: {},
+    }),
+  ];
+
+  function withRows() {
+    db.auditLog.findMany.mockImplementation(async ({ where }: { where?: unknown }) =>
+      ROWS.filter((row) => matches(row as Record<string, unknown>, where as Where))
+    );
+    db.auditLog.count.mockImplementation(
+      async ({ where }: { where?: unknown }) =>
+        ROWS.filter((row) => matches(row as Record<string, unknown>, where as Where)).length
+    );
+  }
+  const ids = (page: { items: { id: string }[] }) => page.items.map((item) => item.id).sort();
+
+  it("hides it from the named branch's manager", async () => {
+    withRows();
+    expect(ids(await caller('southAdmin').list({}))).toEqual(
+      ['south_legacy', 'south_refund', 'south_refused'].sort()
+    );
+    expect(ids(await caller('southAdmin').list({ outcome: 'FAILURE' }))).toEqual(['south_refused']);
+    const stats = await caller('southAdmin').stats();
+    expect(stats).toMatchObject({ total: 3, failures: 1 });
+  });
+
+  it("shows it to the manager of the person's own branch, without the named branch", async () => {
+    withRows();
+    const page = await caller('branchAdmin').list({});
+    expect(ids(page)).toEqual(['north_with_extra', 'planted', 'planted_success']);
+    for (const item of page.items)
+      expect(item).toMatchObject(
+        item.id === 'north_with_extra'
+          ? { branchId: 'branch_north', branchName: 'North' }
+          : { branchId: null, branchName: null }
+      );
+  });
+
+  it('shows the owner every entry, and the refusal under the branch the person works at', async () => {
+    withRows();
+    expect(ids(await caller('owner').list({}))).toEqual(ROWS.map((row) => row.id).sort());
+    expect(ids(await caller('owner').list({ branchId: 'branch_south' }))).toEqual(
+      ['south_legacy', 'south_refund', 'south_refused'].sort()
+    );
+    expect(ids(await caller('owner').list({ branchId: 'branch_north' }))).toEqual([
+      'north_with_extra',
+      'planted',
+      'planted_success',
+    ]);
   });
 });

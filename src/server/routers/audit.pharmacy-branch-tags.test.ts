@@ -15,6 +15,7 @@ vi.mock('@/lib/abac', async () => ({
   can: vi.fn(async () => true),
 }));
 
+import { Prisma } from '@/generated/prisma/client';
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { router, type TRPCContext } from '../trpc';
 import { auditRouter } from './audit';
@@ -60,14 +61,23 @@ function matches(row: Row, where: Where): boolean {
     if (key === 'AND') return (value as Where[]).every((part) => matches(row, part));
     if (key === 'OR') return (value as Where[]).some((part) => matches(row, part));
     if (value && typeof value === 'object' && 'path' in value) {
-      const { path, equals } = value as { path: string[]; equals: unknown };
+      const filter = value as { path: string[]; equals?: unknown; array_contains?: unknown[] };
       let current: unknown = row[key];
-      for (const segment of path)
+      for (const segment of filter.path)
         current =
           current && typeof current === 'object'
             ? (current as Record<string, unknown>)[segment]
             : undefined;
-      return current === equals;
+      // `AnyNull` is how the router asks for a key that is absent (or null).
+      if ('equals' in filter)
+        return filter.equals === Prisma.AnyNull ? current == null : current === filter.equals;
+      // DEV-937: a refusal recorded away from the branch it named lists the
+      // person's own branches; PostgreSQL's JSON containment, as Prisma maps it.
+      if (filter.array_contains)
+        return (
+          Array.isArray(current) && filter.array_contains.every((item) => current.includes(item))
+        );
+      throw new Error(`Unsupported JSON filter on ${key}`);
     }
     if (value && typeof value === 'object' && 'in' in value)
       return (value as { in: unknown[] }).in.includes(row[key]);

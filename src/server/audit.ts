@@ -1,6 +1,7 @@
 import { afterTenantTransaction } from '@/lib/side-effects/scope';
 import { clientIp } from '@/lib/rate-limit';
 import { type ScopedDb, withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
+import { auditActorBranches } from '@/server/audit-actor-branches';
 
 /**
  * ============================================================================
@@ -112,6 +113,10 @@ function isSensitiveKey(key: string): boolean {
     k === 'providerref' ||
     // Cash-memo buyer text can reach validation-failure audit before its resolver.
     k === 'buyername' ||
+    // DEV-743: a card-terminal review's slip reference and reason are typed by hand and may hold
+    // a card number by mistake; the service refuses one, but raw input is audited before that.
+    k === 'slipref' ||
+    k === 'resolutionreason' ||
     SENSITIVE_SUBSTRINGS.some((s) => k.includes(s))
   );
 }
@@ -350,6 +355,53 @@ export interface AuditRowInput {
   errorCode?: string | null;
   errorMessage?: string | null;
   durationMs?: number | null;
+  /**
+   * DEV-937: the branches the tRPC recorder took from the request (or, on a
+   * refusal, from a handler's note), in the order it reads them. The writer
+   * keeps one only where the person may act.
+   */
+  verifyBranchIds?: string[];
+}
+
+/**
+ * DEV-937: a branch taken from the request is only what the person named: the
+ * raw input, read before the procedure's schema drops keys it does not know, or
+ * a handler's note made before a refusal. A person could plant entries in
+ * another branch's log by naming it. The entry is placed at the first of those
+ * branches the person may act at: one they are actively assigned to, or any
+ * branch for the owner and an active ADMIN (the counter's branch gate). When
+ * there is none, the first named branch is kept as `requestedBranchId`, for the
+ * owner, and the entry is placed at the branches the person works at
+ * (`actorBranchIds`), so their own managers see it and the named branch's do
+ * not. Branches that are not this workspace's pharmacy branches are left as
+ * they were: no branch-limited reader can match them.
+ */
+async function verifiedBranchMetadata(
+  tenantDb: ScopedDb,
+  row: AuditRowInput
+): Promise<Record<string, unknown>> {
+  const metadata = {
+    ...((row.metadata && typeof row.metadata === 'object' ? row.metadata : {}) as Record<
+      string,
+      unknown
+    >),
+  };
+  const named = [...new Set(row.verifyBranchIds ?? [])];
+  if (!named.length || !row.organizationId || !tenantDb.pharmacyBranch) return metadata;
+  const found = await tenantDb.pharmacyBranch.findMany({
+    where: { organizationId: row.organizationId, id: { in: named } },
+    select: { id: true },
+  });
+  const pharmacyBranches = new Set(found.map((branch) => branch.id));
+  const candidates = named.filter((id) => pharmacyBranches.has(id));
+  if (!candidates.length) return metadata;
+  const actor = row.actorId
+    ? await auditActorBranches(tenantDb, row.organizationId, row.actorId)
+    : { all: false, anyBranch: false, branchIds: [] as string[] };
+  const actedAt = candidates.find((id) => actor.anyBranch || actor.branchIds.includes(id));
+  if (actedAt) return { ...metadata, branchId: actedAt };
+  delete metadata.branchId;
+  return { ...metadata, requestedBranchId: candidates[0], actorBranchIds: actor.branchIds };
 }
 
 /**
@@ -417,7 +469,11 @@ export function recordAudit(row: AuditRowInput, db?: ScopedDb): void | Promise<v
         changes: (row.changes ?? undefined) as never,
         result: (row.result ?? undefined) as never,
         metadata: {
-          ...((row.metadata && typeof row.metadata === 'object' ? row.metadata : {}) as object),
+          ...((row.verifyBranchIds?.length
+            ? await verifiedBranchMetadata(tenantDb, row)
+            : row.metadata && typeof row.metadata === 'object'
+              ? row.metadata
+              : {}) as object),
           ...(placeholder ? { placeholder: true } : {}),
         } as never,
         ip: row.ip ?? null,
@@ -508,6 +564,33 @@ export function auditBranchId(input: unknown, detail?: AuditDetail): string | nu
     : null;
 }
 
+/**
+ * DEV-937: every branch the raw request names, most specific first: the
+ * `pharmacyBranchId` and `scope.branchId` that pharmacy procedures declare, then
+ * a bare top-level `branchId`. The audit middleware wraps the procedure, so it
+ * sees the input before the schema drops keys it does not declare; a bare
+ * `branchId` added to a request that names its branch another way therefore
+ * never wins. The writer checks each in this order and places the entry at the
+ * first the person may act at. A record's own tag (`annotateAuditBranch`) is
+ * read before any of these.
+ */
+export function auditRequestBranchIds(input: unknown): string[] {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return [];
+  const record = input as Record<string, unknown>;
+  const scope = record.scope;
+  const scoped =
+    scope && typeof scope === 'object' && !Array.isArray(scope)
+      ? (scope as Record<string, unknown>).branchId
+      : undefined;
+  return [
+    ...new Set(
+      [record.pharmacyBranchId, scoped, record.branchId]
+        .map(branchIdFrom)
+        .filter((id): id is string => !!id)
+    ),
+  ];
+}
+
 /** Called by the tRPC audit middleware after each procedure resolves. */
 export function recordTrpcAudit(args: {
   ctx: AuditContext;
@@ -522,6 +605,14 @@ export function recordTrpcAudit(args: {
   const detail = args.ctx.audit?.detail ?? {};
   const { code, message } = extractError(args.error);
   const branchId = auditBranchId(args.input, detail);
+  // DEV-937: a handler's or record's tag on a successful action stands; any
+  // branch the request itself named, and every tag on a refusal, is checked.
+  const annotated = branchIdFrom(detail.metadata?.branchId);
+  const verifyBranchIds = annotated
+    ? args.outcome === 'FAILURE'
+      ? [annotated]
+      : []
+    : auditRequestBranchIds(args.input);
 
   return recordAudit(
     {
@@ -560,6 +651,7 @@ export function recordTrpcAudit(args: {
       errorCode: code,
       errorMessage: message,
       durationMs: args.durationMs ?? null,
+      ...(verifyBranchIds.length ? { verifyBranchIds } : {}),
     },
     args.ctx.audit?.db
   );

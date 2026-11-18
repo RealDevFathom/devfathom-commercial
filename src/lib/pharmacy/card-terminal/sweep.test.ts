@@ -3,6 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: vi.fn(), withTenantDb: vi.fn() }));
 vi.mock('./registry', () => ({ resolvePharmacyCardTerminal: vi.fn(async () => null) }));
+// The real store, as the production sweep builds it, is replaced by the in-memory one.
+const realStore = vi.hoisted(() => ({ build: vi.fn() }));
+vi.mock('./store', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./store')>()),
+  prismaCardTerminalAttemptStore: realStore.build,
+}));
 
 import { beginCardTerminalCharge, dispatchCardTerminalCharge } from './service';
 import {
@@ -13,6 +19,7 @@ import {
 } from './sweep';
 import { createFakeTerminal, type FakeTerminal } from './testing/fake-terminal';
 import { createInMemoryAttemptStore, type InMemoryAttemptStore } from './testing/in-memory-store';
+import { CARD_TERMINAL_TIMEOUT_MS } from './timing';
 
 const scope = { organizationId: 'org-1', branchId: 'branch-1', actorId: 'cashier-1' };
 const admission = { admittedProviders: ['FAKE_TERMINAL'] };
@@ -135,5 +142,44 @@ describe('DEV-743 card-terminal recovery sweep', () => {
     });
     expect(result).toMatchObject({ skipped: 1, resolved: 0 });
     expect(terminal.queries).toEqual([]);
+  });
+
+  it('judges staleness by the counter’s own timeout, so both close a crash-stale attempt alike', async () => {
+    // Committed, never sent: the counter crashed between commit and dispatch.
+    await beginCardTerminalCharge(
+      { store, adapter: terminal, admission, now: () => start },
+      scope,
+      {
+        saleId: 'sale-1',
+        deviceId: 'device-1',
+        terminalId: 'counter-1',
+        attemptKey: 'sale-1:card:0006',
+        amountMinor: 1500,
+        currency: 'PKR',
+        businessDate: new Date('2026-11-18T00:00:00.000Z'),
+      }
+    );
+    const justPast = new Date(start.getTime() + CARD_TERMINAL_TIMEOUT_MS + 1);
+    await expect(
+      processDueCardTerminalRecovery(justPast, 25, {
+        ...options(),
+        listDue: async () => [candidate('sale-1:card:0006')],
+      })
+    ).resolves.toMatchObject({ resolved: 1, open: 0 });
+    expect(store.all()[0]).toMatchObject({ status: 'ABANDONED' });
+    expect(terminal.charges).toEqual([]);
+    expect(CARD_TERMINAL_STALE_AFTER_MS).toBeGreaterThan(CARD_TERMINAL_TIMEOUT_MS);
+  });
+
+  it('audits what it changes as the system, in each change’s own committed transaction', async () => {
+    await openAttempt('sale-1:card:0007', 'sale-1');
+    realStore.build.mockReturnValueOnce(store);
+    terminal.scriptQuery({ kind: 'DECLINED', declineCode: '05' });
+    await processDueCardTerminalRecovery(later, 25, {
+      resolve: async () => ({ adapter: terminal, terminalId: 'counter-1', admission }),
+      listDue: async () => [candidate('sale-1:card:0007')],
+    });
+    expect(realStore.build).toHaveBeenCalledWith(expect.any(Function), 'SYSTEM');
+    expect(store.audits.at(-1)).toMatchObject({ from: 'UNKNOWN', to: 'DECLINED' });
   });
 });

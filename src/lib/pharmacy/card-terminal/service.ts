@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { PharmacySettlementError } from '../settlement';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { LedgerScope } from '../stock-ledger';
 import { assertNoCardholderData, CardholderDataError, redactForLog } from './cardholder-data';
 import {
@@ -16,7 +17,9 @@ import {
   type CardTerminalAttempt,
   type CardTerminalAttemptPatch,
   type CardTerminalAttemptStore,
+  type CardTerminalAuditDetail,
 } from './store';
+import { CARD_TERMINAL_TIMEOUT_MS } from './timing';
 
 /**
  * DEV-743: drive an integrated card terminal around one durable payment-attempt record.
@@ -28,6 +31,9 @@ import {
  *   recover   UNKNOWN and stale SENT attempts are resolved by a status query on the same
  *             operation reference; APPROVED attempts are settled; stale CREATED attempts are
  *             closed and never sent late. Recovery that keeps failing ends in MANUAL_REVIEW.
+ *   review    a manager or owner resolves MANUAL_REVIEW from the terminal slip: DECLINED
+ *             (nothing was charged) or REVERSED (money was taken; it is refunded through the
+ *             provider's own process). Never calls the terminal.
  *
  * Manual "received externally" Card and Wallet tenders (DEV-713) do not pass through here.
  */
@@ -57,7 +63,7 @@ export type BeginCardTerminalChargeInput = {
   businessDate: Date;
 };
 
-const DEFAULT_TIMEOUT_MS = 90_000;
+const DEFAULT_TIMEOUT_MS = CARD_TERMINAL_TIMEOUT_MS;
 const DEFAULT_MAX_STATUS_CHECKS = 10;
 const ATTEMPT_KEY = /^[A-Za-z0-9:_-]{8,128}$/;
 const TERMINAL_ID = /^[A-Za-z0-9._:-]{1,64}$/;
@@ -94,7 +100,11 @@ function requireAdmitted(deps: CardTerminalDeps, provider?: string) {
     throw new CardTerminalError('UNCERTIFIED_PROVIDER');
 }
 
-async function requireAttempt(deps: CardTerminalDeps, scope: LedgerScope, attemptKey: string) {
+async function requireAttempt(
+  deps: Pick<CardTerminalDeps, 'store'>,
+  scope: LedgerScope,
+  attemptKey: string
+) {
   const attempt = await deps.store.get(scope, attemptKey);
   if (!attempt) throw new CardTerminalError('ATTEMPT_NOT_FOUND');
   return attempt;
@@ -380,4 +390,81 @@ export async function recoverOpenCardTerminalAttempts(deps: CardTerminalDeps, sc
     }
   }
   return results;
+}
+
+export type ResolveCardTerminalReviewInput = {
+  attemptKey: string;
+  /** DECLINED: nothing was charged. REVERSED: the terminal took the money; refund it through the provider. */
+  outcome: 'DECLINED' | 'REVERSED';
+  /** Why, in the resolver's own words. */
+  reason: string;
+  /** The provider reference printed on the terminal slip. */
+  slipRef: string;
+};
+
+/**
+ * Resolve an attempt waiting for review. The caller has already checked that the signed-in
+ * person is a manager or owner and re-authenticated them with a fresh PIN (`approval` is that
+ * evidence, kept on the audit entry). Exactly one resolution wins: a second one, even at the
+ * same moment, finds the review already resolved. Once resolved the attempt no longer holds the
+ * sale or its business day. Never calls the terminal, so it needs no admitted provider.
+ *
+ * Second person: the resolver may not resolve a charge they took themselves (the attempt's
+ * `actorId`), unless `soleApprover` says nobody else could resolve it at this branch (the
+ * solo-pharmacy rule). That is checked inside the write's own transaction, with the attempt row
+ * locked, so a second manager activated after an earlier check still blocks the self-resolution.
+ */
+export async function resolveCardTerminalReview(
+  deps: Pick<CardTerminalDeps, 'store' | 'now'>,
+  scope: LedgerScope,
+  input: ResolveCardTerminalReviewInput,
+  approval: CardTerminalAuditDetail,
+  soleApprover: (db: ScopedDb) => Promise<boolean> = async () => false
+) {
+  const reason = input.reason.trim();
+  const slipRef = input.slipRef.trim();
+  if (
+    !ATTEMPT_KEY.test(input.attemptKey) ||
+    (input.outcome !== 'DECLINED' && input.outcome !== 'REVERSED') ||
+    reason.length < 3 ||
+    reason.length > 200 ||
+    !PROVIDER_REF.test(slipRef)
+  )
+    throw new CardTerminalError('INVALID_INPUT');
+  try {
+    assertNoCardholderData([reason, slipRef]);
+  } catch {
+    throw new CardTerminalError('INVALID_INPUT');
+  }
+  const attempt = await requireAttempt(deps, scope, input.attemptKey);
+  if (attempt.status !== 'MANUAL_REVIEW') throw new CardTerminalError('REVIEW_NOT_OPEN');
+  const ownCharge = attempt.actorId === scope.actorId;
+  // The terminal reported a charge reference: it cannot be recorded as "nothing was charged".
+  if (input.outcome === 'DECLINED' && attempt.providerRef)
+    throw new CardTerminalError('CHARGE_EVIDENCE_RECORDED');
+  if (input.outcome === 'REVERSED' && attempt.providerRef && attempt.providerRef !== slipRef)
+    throw new CardTerminalError('SLIP_REFERENCE_MISMATCH');
+  const next = await deps.store.transition(
+    scope,
+    attempt,
+    {
+      status: input.outcome,
+      resolvedById: scope.actorId,
+      resolutionReason: reason,
+      resolutionRef: slipRef,
+      resolvedAt: (deps.now ?? (() => new Date()))(),
+      // A reversal records the charge it reverses; an unknown outcome learns it from the slip.
+      ...(input.outcome === 'REVERSED' && !attempt.providerRef ? { providerRef: slipRef } : {}),
+    },
+    approval,
+    ownCharge
+      ? async (db) => {
+          if (!(await soleApprover(db)))
+            throw new CardTerminalError('OWN_CHARGE_NEEDS_ANOTHER_APPROVER');
+        }
+      : undefined
+  );
+  // Another manager resolved it first: theirs stands.
+  if (!next) throw new CardTerminalError('REVIEW_NOT_OPEN');
+  return next;
 }

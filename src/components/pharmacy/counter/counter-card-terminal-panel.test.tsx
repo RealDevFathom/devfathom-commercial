@@ -1,14 +1,22 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { CardTerminalCounterView } from '@/lib/pharmacy/card-terminal/counter-view';
+import type {
+  CardTerminalCounterView,
+  CardTerminalReviewAccess,
+} from '@/lib/pharmacy/card-terminal/counter-view';
+
+/** The `attempt` query's answer: the counter view plus, under review, who may resolve it. */
+type LatestAttempt = CardTerminalCounterView & { reviewAccess?: CardTerminalReviewAccess | null };
 
 const mocks = vi.hoisted(() => ({
   available: true,
-  latest: null as CardTerminalCounterView | null,
+  mayResolveReview: true,
+  latest: null as LatestAttempt | null,
   availabilityInput: vi.fn(),
   charge: vi.fn(),
   checkStatus: vi.fn(),
+  resolveReview: vi.fn(),
   chargePending: false,
 }));
 
@@ -19,7 +27,13 @@ vi.mock('@/lib/trpc', () => ({
         useQuery: (input: unknown, options: { enabled: boolean }) => {
           mocks.availabilityInput(input, options);
           return {
-            data: options.enabled ? { available: mocks.available, currency: 'PKR' } : undefined,
+            data: options.enabled
+              ? {
+                  available: mocks.available,
+                  currency: 'PKR',
+                  mayResolveReview: mocks.mayResolveReview,
+                }
+              : undefined,
           };
         },
       },
@@ -33,13 +47,16 @@ vi.mock('@/lib/trpc', () => ({
         useMutation: () => ({ mutateAsync: mocks.charge, isPending: mocks.chargePending }),
       },
       checkStatus: { useMutation: () => ({ mutateAsync: mocks.checkStatus, isPending: false }) },
+      resolveReview: {
+        useMutation: () => ({ mutateAsync: mocks.resolveReview, isPending: false }),
+      },
     },
   },
 }));
 
 import { CounterCardTerminalPanel } from './counter-card-terminal-panel';
 
-const view = (patch: Partial<CardTerminalCounterView>): CardTerminalCounterView => ({
+const view = (patch: Partial<LatestAttempt>): LatestAttempt => ({
   attemptKey: 'card-terminal:key-1',
   phase: 'PAID',
   amountMinor: 150_000,
@@ -51,6 +68,9 @@ const view = (patch: Partial<CardTerminalCounterView>): CardTerminalCounterView 
   cardLast4: null,
   declineCode: null,
   reviewReason: null,
+  chargeReported: false,
+  // A manager resolving a cashier's charge, unless a test says otherwise.
+  reviewAccess: { mayResolve: true, selfResolve: false, askName: null },
   ...patch,
 });
 
@@ -72,10 +92,12 @@ function renderPanel(props: Partial<Parameters<typeof CounterCardTerminalPanel>[
 
 beforeEach(() => {
   mocks.available = true;
+  mocks.mayResolveReview = true;
   mocks.latest = null;
   mocks.chargePending = false;
   mocks.charge.mockReset();
   mocks.checkStatus.mockReset();
+  mocks.resolveReview.mockReset();
   mocks.availabilityInput.mockReset();
 });
 
@@ -146,7 +168,7 @@ describe('DEV-743 counter card-terminal panel', () => {
     expect(onSettled).toHaveBeenCalledTimes(1);
   });
 
-  it('leaves manual review to a manager or owner, with no action at the counter', () => {
+  it('leaves manual review to a manager or owner: no charge or status check at the counter', () => {
     mocks.latest = view({
       phase: 'MANUAL_REVIEW',
       open: true,
@@ -156,7 +178,134 @@ describe('DEV-743 counter card-terminal panel', () => {
     expect(
       screen.getByText(/A manager or owner must review this card payment/)
     ).toBeInTheDocument();
+    expect(screen.getByText(/Terminal approved a different amount/)).toBeInTheDocument();
+    // The only action is the manager's review, and it waits for the slip, a reason and a PIN.
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'Record review',
+    ]);
+    expect(screen.getByRole('button', { name: 'Record review' })).toBeDisabled();
+    expect(mocks.charge).not.toHaveBeenCalled();
+    expect(mocks.checkStatus).not.toHaveBeenCalled();
+  });
+
+  it('tells a cashier to call a manager or owner instead of showing the review form', () => {
+    mocks.latest = view({
+      phase: 'MANUAL_REVIEW',
+      open: true,
+      reviewAccess: { mayResolve: false, selfResolve: false, askName: null },
+    });
+    renderPanel();
+    expect(
+      screen.getByText('Call a manager or owner to review this payment against the terminal slip.')
+    ).toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Your manager or owner PIN')).not.toBeInTheDocument();
+  });
+
+  it('tells a manager whose own charge someone else can resolve who to ask, with no form', () => {
+    mocks.latest = view({
+      phase: 'MANUAL_REVIEW',
+      open: true,
+      reviewAccess: { mayResolve: false, selfResolve: false, askName: 'Ayesha Khan' },
+    });
+    renderPanel();
+    expect(
+      screen.getByText(
+        'You took this payment. Ask Ayesha Khan or another manager at this branch to resolve it.'
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Your manager or owner PIN')).not.toBeInTheDocument();
+  });
+
+  it('tells a sole manager or owner they may resolve their own charge with their PIN', () => {
+    mocks.latest = view({
+      phase: 'MANUAL_REVIEW',
+      open: true,
+      reviewAccess: { mayResolve: true, selfResolve: true, askName: null },
+    });
+    renderPanel();
+    expect(screen.getByText(/you may resolve it yourself with your PIN/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Your manager or owner PIN')).toBeInTheDocument();
+  });
+
+  function fillReview(outcome: RegExp, pin = '2468') {
+    fireEvent.click(screen.getByRole('radio', { name: outcome }));
+    fireEvent.change(screen.getByLabelText('Reference on the terminal slip'), {
+      target: { value: ' SLIP-0042 ' },
+    });
+    fireEvent.change(screen.getByLabelText('Reason'), {
+      target: { value: 'Slip shows declined' },
+    });
+    fireEvent.change(screen.getByLabelText('Your manager or owner PIN'), {
+      target: { value: pin },
+    });
+  }
+
+  it('records a manager’s review with their PIN, then lets the bill take another payment', async () => {
+    mocks.latest = view({ phase: 'MANUAL_REVIEW', open: true });
+    mocks.resolveReview.mockImplementation(async () => {
+      mocks.latest = view({ phase: 'DECLINED' });
+      return mocks.latest;
+    });
+    renderPanel();
+    fillReview(/Not charged/);
+    fireEvent.click(screen.getByRole('button', { name: 'Record review' }));
+    await screen.findByRole('button', { name: 'Charge Rs 1500.00 on terminal' });
+    expect(mocks.resolveReview).toHaveBeenCalledWith({
+      branchId: 'branch-1',
+      attemptKey: 'card-terminal:key-1',
+      outcome: 'DECLINED',
+      resolutionReason: 'Slip shows declined',
+      slipRef: 'SLIP-0042',
+      managerPin: '2468',
+    });
+    expect(screen.getByText(/Nothing was charged/)).toBeInTheDocument();
+  });
+
+  it('never offers "not charged" when the terminal reported a charge', async () => {
+    mocks.latest = view({ phase: 'MANUAL_REVIEW', open: true, chargeReported: true });
+    mocks.resolveReview.mockImplementation(async () => {
+      mocks.latest = view({ phase: 'REVERSED' });
+      return mocks.latest;
+    });
+    renderPanel();
+    expect(screen.getByRole('radio', { name: /Not charged/ })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: /Money taken/ })).toBeChecked();
+    fillReview(/Money taken/);
+    fireEvent.click(screen.getByRole('button', { name: 'Record review' }));
+    const recorded = await screen.findByText(
+      /A manager recorded that the terminal took this payment/
+    );
+    expect(recorded).toHaveTextContent(/through the card provider’s own refund process/);
+    expect(recorded).toHaveTextContent(/Do not give cash for it/);
+    expect(screen.queryByRole('button', { name: 'Record review' })).not.toBeInTheDocument();
+    expect(mocks.resolveReview.mock.calls[0][0]).toMatchObject({ outcome: 'REVERSED' });
+  });
+
+  it('keeps the review open and clears the PIN when the server refuses it', async () => {
+    mocks.latest = view({ phase: 'MANUAL_REVIEW', open: true });
+    mocks.resolveReview.mockResolvedValueOnce({
+      blocked: 'Refund not recorded. Enter your manager or owner PIN.',
+    });
+    renderPanel();
+    fillReview(/Not charged/, '1111');
+    fireEvent.click(screen.getByRole('button', { name: 'Record review' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Enter your manager or owner PIN/);
+    expect(screen.getByLabelText('Your manager or owner PIN')).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Record review' })).toBeDisabled();
+    // A cashier is refused by the server with its own sentence.
+    mocks.resolveReview.mockRejectedValueOnce(
+      new Error('Only a manager or owner can resolve a card terminal payment under review.')
+    );
+    fireEvent.change(screen.getByLabelText('Your manager or owner PIN'), {
+      target: { value: '2468' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Record review' }));
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(/Only a manager or owner can resolve/)
+    );
+    expect(screen.queryByRole('button', { name: /Charge/ })).not.toBeInTheDocument();
   });
 
   it('offers a new charge after a decline', async () => {
