@@ -150,5 +150,13 @@ export async function stagedMedicineDetail(
   });
   if (!row)
     throw new TRPCError({ code: 'NOT_FOUND', message: 'Candidate not found in this batch.' });
-  return stagedReference(row, batch.source, batch.id, batch.quantityUnit, batch.quantityColumn);
+  // DEV-912: the catalogue medicine an approved bulk creation made from this source row.
+  const created = await db.pharmacyStagedMedicineLink.findFirst({
+    where: { organizationId, sourceKey: row.sourceKey },
+    select: { medicineId: true, mrpMinor: true, purchasePriceMinor: true, unitsPerPack: true },
+  });
+  return {
+    ...stagedReference(row, batch.source, batch.id, batch.quantityUnit, batch.quantityColumn),
+    catalogueMedicine: created,
+  };
 }

@@ -31,6 +31,9 @@ import type { SourceTable } from './source-values';
  * deliberately left unmapped: it is not guaranteed unique, and it is kept
  * verbatim in every row's source evidence, where the review screen shows and
  * searches it.
+ *
+ * DEV-912 adds the headers of the medicine import template (`Units per pack`,
+ * `Opening quantity`; its `Product name` was already known); its other columns are kept in each row's source evidence.
  */
 const HEADER_SYNONYMS: Readonly<Record<SourceField, readonly string[]>> = {
   sourceKey: ['id', 'code', 'itemcode', 'productcode', 'sr', 'srno', 'serial', 'sno'],
@@ -44,13 +47,31 @@ const HEADER_SYNONYMS: Readonly<Record<SourceField, readonly string[]>> = {
     'drug',
     'name',
   ],
-  pack: ['pack', 'packsize', 'packing', 'packunits', 'uom', 'unit', 'unitofmeasure'],
+  pack: [
+    'pack',
+    'packsize',
+    'packing',
+    'packunits',
+    'unitsperpack',
+    'uom',
+    'unit',
+    'unitofmeasure',
+  ],
   barcode: ['barcode', 'ean', 'ean13', 'upc', 'gtin'],
   batch: ['batch', 'batchno', 'batchnumber', 'lot', 'lotno', 'lotnumber'],
   expiry: ['expiry', 'expirydate', 'exp', 'expdate', 'expdt', 'expiredate'],
   mrp: ['mrp', 'retailprice', 'saleprice', 'sellingprice', 'rate'],
   cost: ['cost', 'costprice', 'tradeprice', 'tp', 'purchaseprice', 'purchaserate', 'purprice'],
-  quantity: ['qty', 'quantity', 'stock', 'stockqty', 'onhand', 'balanceqty', 'closingqty'],
+  quantity: [
+    'qty',
+    'quantity',
+    'stock',
+    'stockqty',
+    'onhand',
+    'balanceqty',
+    'closingqty',
+    'openingquantity',
+  ],
   supplier: ['supplier', 'vendor', 'distributor', 'suppliername'],
   customer: ['customer', 'client', 'customername', 'account'],
   balance: ['balance', 'closingbalance', 'outstanding', 'amountdue', 'openingbalance'],

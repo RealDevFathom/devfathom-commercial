@@ -1,5 +1,8 @@
 import Link from 'next/link';
 import { MigrationStagingForm } from './migration-staging-form';
+import { StagedMedicineCreation } from './staged-medicine-creation';
+import { readStagedMedicineCreation } from './staged-medicine-creation-actions';
+import { MedicineImportTemplate } from './medicine-import-template';
 import { TRPCError } from '@trpc/server';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -19,6 +22,12 @@ import {
 import { SOURCE_REFERENCE_COLUMNS } from '@/lib/pharmacy/migration/staged-review';
 import { createTRPCContext } from '@/server/trpc';
 import { pharmacyStagedReviewRouter } from '@/server/routers/pharmacy-staged-review';
+
+/** A stored pack price in rupees, or "not recorded" when the file had none. */
+const createdPrice = (minor: number | null) =>
+  minor === null
+    ? 'not recorded'
+    : `Rs ${(minor / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const linkClass =
   'inline-flex min-h-11 items-center rounded-sm px-3 text-sm underline hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-ring';
@@ -137,6 +146,10 @@ export async function StagedMedicineCatalogue({
     );
   }
   const { branches, branchId, batchPage, batches, selected, result, detail } = loaded;
+  // DEV-912: bulk creation controls, shown to a catalogue editor or reviewer only.
+  const creationRead =
+    result && selected.batchId ? await readStagedMedicineCreation(selected.batchId) : null;
+  const creation = creationRead && 'data' in creationRead ? creationRead.data : null;
   return (
     <div className="min-w-0 space-y-6">
       {header}
@@ -144,8 +157,8 @@ export async function StagedMedicineCatalogue({
         <p className="text-sm text-text-muted">
           Staged means unverified source evidence. A draft catalogue entry needs validated identity
           and pack metadata. Verified means an explicit review accepted the facts. Sellable also
-          requires stock and sale checks. This screen establishes no linked draft, verified medicine
-          or sellable balance.
+          requires stock and sale checks. Reading this list creates nothing: catalogue medicines are
+          created only from an approved request for the whole file, and no stock balance is posted.
         </p>
         <p className="mt-3 text-sm text-text-muted">
           Batch, expiry and verified MRP gaps concern opening stock or price publication. They do
@@ -154,6 +167,7 @@ export async function StagedMedicineCatalogue({
           counts.
         </p>
       </SectionCard>
+      <MedicineImportTemplate />
       {branchId && <MigrationStagingForm key={branchId} branchId={branchId} route={route} />}
       <SectionCard title="Source and branch" titleLevel={2}>
         <form action={route} className="flex flex-wrap items-end gap-3">
@@ -235,6 +249,15 @@ export async function StagedMedicineCatalogue({
               {result.batch.source.fileName} · SHA256 {result.batch.source.contentHash} ·{' '}
               {result.batch.profilerVersion}
             </p>
+          )}
+          {creation && (
+            <div className="mb-4">
+              <StagedMedicineCreation
+                key={selected.batchId}
+                batchId={selected.batchId}
+                initial={creation}
+              />
+            </div>
           )}
           <form action={route} className="mb-4 flex flex-wrap items-end gap-3">
             {Object.entries(selected).map(([key, value]) => (
@@ -351,6 +374,9 @@ export async function StagedMedicineCatalogue({
             {Object.entries({
               'Original status': detail.status,
               Catalogue: detail.catalogueStatus,
+              'Catalogue medicine': detail.catalogueMedicine
+                ? `Created · MRP ${createdPrice(detail.catalogueMedicine.mrpMinor)} · purchase price ${createdPrice(detail.catalogueMedicine.purchasePriceMinor)} · units per pack ${detail.catalogueMedicine.unitsPerPack ?? 'not recorded'}`
+                : 'Not created yet',
               'Controlled medicine': detail.controlled
                 ? 'Yes — set from legacy class NARCOTICS'
                 : 'No — not in the NARCOTICS class',

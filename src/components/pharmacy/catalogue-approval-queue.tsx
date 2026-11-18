@@ -33,6 +33,9 @@ const editLabels: Record<string, string> = {
   roundingIncrementMinor: 'Rounding increment (minor units)',
   value: 'Alias',
   name: 'Ingredient',
+  fileName: 'File',
+  sourceSha256: 'File SHA-256',
+  medicines: 'Medicines to create',
 };
 const operationLabels: Record<string, string> = {
   UPDATE_MEDICINE: 'Product details',
@@ -43,6 +46,7 @@ const operationLabels: Record<string, string> = {
   addBarcode: 'Add barcode',
   setPackBarcode: 'Attach pack barcode',
   addAlias: 'Add alias',
+  createStagedMedicines: 'Create medicines from an imported file',
 };
 
 function displayChange(field: string, value: unknown): string {

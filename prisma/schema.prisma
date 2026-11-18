@@ -12928,6 +12928,34 @@ model PharmacyMigrationBatch {
 /// MIG-01 — every imported row keeps its incumbent source key and its import
 /// batch. Every parsed column is nullable and has NO default: a value the
 /// incumbent did not supply stays missing and raises an exception instead.
+/// DEV-912 — one catalogue medicine created from one staged legacy source row, after
+/// the batch's bulk creation was approved (`editId`). `sourceKey` (uploaded bytes'
+/// SHA-256 plus the row number) is unique per organization, so a re-run creates
+/// nothing twice. Imported pack MRP and purchase price are kept as read; null means
+/// the file did not record them. Read and insert only; foreign keys are migration
+/// enforced.
+model PharmacyStagedMedicineLink {
+  id                 String   @id @default(cuid())
+  organizationId     String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  sourceKey          String
+  batchId            String
+  rowId              String
+  editId             String
+  medicineId         String
+  packLevelId        String?
+  unitsPerPack       Int?
+  mrpMinor           Int?
+  purchasePriceMinor Int?
+  legacyCode         String?
+  createdById        String
+  createdAt          DateTime @default(now())
+
+  @@unique([organizationId, sourceKey])
+  @@unique([organizationId, medicineId])
+  @@index([organizationId, batchId])
+  @@map("pharmacy_staged_medicine_links")
+}
+
 model PharmacyMigrationRow {
   id                String    @id @default(cuid())
   organizationId    String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
