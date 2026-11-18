@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-const name = '20261118015616_pharmacy_catalogue_edit_capability';
+const name = '20261118120500_pharmacy_catalogue_edit_capability';
 const sql = readFileSync(`prisma/migrations/${name}/migration.sql`, 'utf8');
 
 describe('DEV-19 pharmacy:catalogue-edit backfill migration', () => {
