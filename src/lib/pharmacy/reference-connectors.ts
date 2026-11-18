@@ -1,4 +1,5 @@
 import { csvSafeText } from '@/lib/csv';
+import { isLegacyControlledRow } from './migration/legacy-class';
 
 export const MEDICINE_REFERENCE_FIELDS = [
   'productName',
@@ -115,6 +116,8 @@ interface NormalizeOptions {
   /** Returns the canonical value, or `null` when the source value cannot be trusted. */
   scheduleFlag: (field: ScheduleFlagField, value: string) => string | null;
   fallbackRowSourceKey: (values: Partial<Record<MedicineReferenceField, string>>) => string | null;
+  /** DEV-854: a row whose legacy class column is NARCOTICS is imported as controlled. */
+  legacyControlledClass?: boolean;
 }
 
 function normalizeReferenceRows(
@@ -140,6 +143,13 @@ function normalizeReferenceRows(
         values[field] = flag;
       } else values[field] = raw;
     }
+    if (
+      options.legacyControlledClass &&
+      values.controlled !== 'true' &&
+      !invalidSchedule &&
+      isLegacyControlledRow(sourceRow)
+    )
+      values.controlled = 'true';
 
     const rowSourceKey =
       cell(sourceRow, input.mapping.rowSourceKey) ??
@@ -193,6 +203,7 @@ export class ManualFileConnector implements MedicineReferenceConnector<ManualFil
         scheduleFlag: (_field, value) =>
           ['true', 'false'].includes(value.toLowerCase()) ? value : null,
         fallbackRowSourceKey: () => null,
+        legacyControlledClass: true,
       }
     );
     return { connectorId: this.id, batchId: input.batchId, fetchedAt, rows };
