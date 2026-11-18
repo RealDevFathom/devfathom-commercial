@@ -40,14 +40,14 @@ const numericFields = [
   ['dailyDemandUnits', 'Assumed daily demand (units)', false, 0],
   ['currentQuantityUnits', 'Current policy order (units)', false, 0],
   ['proposedQuantityUnits', 'Proposed policy order (units)', false, 0],
-  ['currentUnitPriceMinor', 'Current unit selling price (minor units)', false, 0],
-  ['proposedUnitPriceMinor', 'What-if unit selling price (minor units)', false, 0],
-  ['salesGoalMinor', 'Sales goal (minor units)', true, 0],
-  ['marginGoalMinor', 'Margin goal (minor units)', true, 0],
+  ['currentUnitPriceMinor', 'Current selling price per unit (in paisa, 100 paisa = 1 rupee)', false, 0],
+  ['proposedUnitPriceMinor', 'What-if selling price per unit (in paisa, 100 paisa = 1 rupee)', false, 0],
+  ['salesGoalMinor', 'Sales goal (in paisa, 100 paisa = 1 rupee)', true, 0],
+  ['marginGoalMinor', 'Margin goal (in paisa, 100 paisa = 1 rupee)', true, 0],
   ['packSize', 'Order pack size (units)', false, 1],
   ['minimumOrderUnits', 'Minimum order (units)', false, 0],
-  ['unitCostMinor', 'Unit cost (integer minor units)', true, 0],
-  ['budgetMinor', 'Order budget (integer minor units)', true, 0],
+  ['unitCostMinor', 'Cost per unit (in paisa, 100 paisa = 1 rupee)', true, 0],
+  ['budgetMinor', 'Order budget (in paisa, 100 paisa = 1 rupee)', true, 0],
   ['storageLimitUnits', 'Net additional storage capacity (units)', true, 0],
 ] as const;
 type NumericKey = (typeof numericFields)[number][0];
@@ -605,8 +605,8 @@ function ScenarioWorkspace({
                 <div className="mt-4 space-y-4">
                   <p id="replenishment-unknown-help" className="text-sm text-text-muted">
                     Leave optional cost, budget, capacity, arrival and expiry blank when unknown. An
-                    explicit 0 is a supplied assumption. Money uses integer minor units in your
-                    supplied currency. Arrival and expiry require an explicit timezone.
+                    explicit 0 is a supplied assumption. Enter money as whole paisa (100 paisa = 1 rupee) in
+                    your chosen currency. Arrival and expiry require an explicit timezone.
                   </p>
                   <div className="grid gap-4 md:grid-cols-2">
                     {field('planningOrigin', 'Scenario starts on (future UTC day)', 'date')}

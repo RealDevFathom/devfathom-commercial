@@ -248,68 +248,405 @@ export const plainCopy = {
     'Sales, margin, cash, cash variance and refunds cover the selected dates. Stock alerts, recommended orders and expiry value are as of now; expiry value is not a loss yet. Margin is not cash. Margin comes from the same accounting entries as Finance, including returns and reversals, by posting date, so it can differ from sales by business date. Missing entries show as a dash. Supplier, ingredient and batch filters narrow sales, margin and stock figures. Cash, cash variance and refunds show a dash when those filters are used. The daily work pack and observed demand use branch and date filters only.',
 } as const;
 
-export type PlainCopyKey = keyof typeof plainCopy;
-
-export const copy = (key: PlainCopyKey): string => plainCopy[key];
-
-const PKT = 'Asia/Karachi';
-
-function pktParts(date: Date) {
-  const fmt = new Intl.DateTimeFormat('en-GB', {
-    timeZone: PKT,
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  });
-  const parts = Object.fromEntries(fmt.formatToParts(date).map((p) => [p.type, p.value]));
-  return {
-    day: `${parts.year}-${parts.month}-${parts.day}`,
-    label: `${parts.day} ${parts.month}`,
-    year: parts.year,
-    labelWithYear: `${parts.day} ${parts.month} ${parts.year}`,
-    time: `${parts.hour}:${parts.minute} ${String(parts.dayPeriod).toUpperCase()}`,
-  };
-}
-
-/** "Today 6:20 PM", "Yesterday 9:05 AM", or "3 Nov 6:20 PM", in Pakistan time. Empty for bad input. */
-export function formatPktTime(value: string | Date | null | undefined, now = new Date()): string {
-  if (!value) return '';
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  const at = pktParts(date);
-  if (at.day === pktParts(now).day) return `Today ${at.time}`;
-  if (at.day === pktParts(new Date(now.getTime() - 86_400_000)).day) return `Yesterday ${at.time}`;
-  const sameYear = at.year === pktParts(now).year;
-  return `${sameYear ? at.label : at.labelWithYear} ${at.time}`;
-}
-
-/** "28 Oct – 3 Nov" from two YYYY-MM-DD business dates. */
-export function formatDateRange(from: string, to: string): string {
-  const fmt = (value: string) => {
-    const date = new Date(`${value}T00:00:00Z`);
-    if (Number.isNaN(date.getTime())) return value;
-    return new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'UTC',
-      day: 'numeric',
-      month: 'short',
-    }).format(date);
-  };
-  return from === to ? fmt(from) : `${fmt(from)} – ${fmt(to)}`;
-}
-
-/** Cash variance as a sentence: "PKR 4 short", "PKR 4 over" or "Balanced". */
-export function describeCashVariance(
-  varianceMinor: number | null | undefined,
-  format: (minor: number) => string
-): { text: string; tone: 'short' | 'over' | 'even' | 'unknown' } {
-  if (varianceMinor == null || !Number.isSafeInteger(varianceMinor))
-    return { text: '—', tone: 'unknown' };
-  if (varianceMinor === 0) return { text: 'Balanced', tone: 'even' };
-  const amount = format(Math.abs(varianceMinor));
-  return varianceMinor < 0
-    ? { text: `${amount} short`, tone: 'short' }
-    : { text: `${amount} over`, tone: 'over' };
-}
+/** English catalog for the shop-language sweep; stable keys keep display copy ready for translation. */
+export const SHOP_SCREEN_COPY = {
+  dateWindow: {
+    from: 'From',
+    toExclusive: 'To, exclusive',
+    scopeAndPeriod: 'Scope and period',
+  },
+  reports: {
+    pharmacyOperations: 'Pharmacy operations',
+    reports: 'Reports',
+    reportsUnavailable: 'Reports unavailable',
+    subReports: 'Sub-reports',
+    replenishment: 'Replenishment',
+    repeatPurchasing: 'Repeat purchasing',
+    supplierCreditFollowUp: 'Supplier-credit follow-up',
+    compareBranches: 'Compare branches',
+    reportFilters: 'Report filters',
+    branch: 'Branch',
+    allAvailable: 'All available',
+    supplier: 'Supplier',
+    allSuppliers: 'All suppliers',
+    selectedSupplierUnavailable: 'Selected supplier unavailable',
+    supplierNamesCouldNotLoadApplyFiltersAgain:
+      'Supplier names could not load. Apply filters again to retry.',
+    ingredientId: 'Ingredient ID',
+    batchId: 'Batch ID',
+    from: 'From',
+    to: 'To',
+    applyFilters: 'Apply filters',
+    dailyWorkPackUnavailable: 'Daily work pack unavailable',
+    enterValidDatesWithFromOnOrBefore:
+      'Enter valid dates with From on or before To. No report was loaded.',
+    reportCouldNotLoad: 'Report could not load',
+    updated: 'Updated ',
+    salesDetail: 'Sales detail',
+    salesAndMarginForTheSelectedPeriod: 'Sales and margin for the selected period',
+    reportPeriod: 'Report period: ',
+    to2: ' to ',
+    inclusiveBusinessDatesBranchScope: ' (inclusive business dates). Branch scope:',
+    meansUnavailableNotZero: '. — means unavailable, not zero.',
+    backToOverview: 'Back to overview',
+    ownerCommandCentre: 'Owner command centre',
+    selectedPeriodAtAGlance: 'Selected period at a glance',
+    amountsUseThePharmacyMinorUnitScaleShown:
+      'Amounts use the pharmacy minor-unit scale, shown to two decimal places. — means unavailable, not zero. Sales, gross margin, cash, cash variance and refunds cover the selected period. Stock signals, recommended orders and expiry exposure are current snapshots; expiry exposure is not realized loss. Gross margin is not cash flow. Gross margin uses the same exact posted journal as Finance, including returns and reversals, on postings from the start of the first selected date to the start of the day after the last, in ',
+    financeAposSMarginComparisonSplitsDaysTheSameWay:
+      ". Finance's margin comparison splits days the same way. It may differ from sales grouped by business date. Missing journal evidence is unavailable; posted totals do not establish complete source or cost coverage. Supplier, ingredient and batch filters narrow sales, gross margin, stock signals, recommended orders and expiry exposure to the matching stock lots and products. Cash, cash variance and refunds cannot be traced to a supplier, ingredient or batch, so they show — while one is selected. The daily work pack and observed demand use branch/date scope only.",
+    theSelectedBranchDoesNotApplyToThis:
+      'The selected branch does not apply to this queue. Date, supplier, ingredient and batch filters do not apply either. Unsigned pharmacist review items plus open controlled-register incidents, from pharmacist review and controlled-register records at read time.',
+    advisoryOnly: 'Advisory only',
+    expiryAndSupplierReturnAdvisor: 'Expiry and supplier-return advisor',
+    rankedByProjectedStockValueLeftAtExpiry:
+      "Ranked by projected stock value left at expiry, using only each branch's recent completed dispensing and sales. Draft proposals do not reserve, move, quarantine, write off, or return stock; a human must review and submit them. Supplier, ingredient and batch filters narrow the lots listed.",
+    draftExpiryClaimCreatedForHumanReview: 'Draft expiry claim created for human review.',
+    theDraftCouldNotBeCreatedEligibilityOr:
+      'The draft could not be created. Eligibility or access may have changed.',
+    batch: 'Batch: ',
+    onHand: 'On hand: ',
+    units: ' units',
+    valueAtRisk: 'Value at risk:',
+    supplier2: 'Supplier: ',
+    createDraftProposal: 'Create draft proposal',
+    noFutureExpiryLotsWithAvailableStockMatch:
+      'No future-expiry lots with available stock match this scope.',
+    couldNotLoad: 'Could not load',
+    expiryAdviceCouldNotLoadApplyTheFilters:
+      'Expiry advice could not load. Apply the filters again to retry. No stock or supplier-return data was changed.',
+    ownerOnly: 'Owner only',
+    financialReportAndOwnerPermissionsAreRequiredTo:
+      'Financial report and owner permissions are required to view value-at-risk advice.',
+    reviewOnly: 'Review only',
+    anomalyReviewSignals: 'Anomaly review signals',
+    refreshSignals: 'Refresh signals',
+    deterministicEventChecksOnlySignalsNeverRankStaff:
+      'Deterministic event checks only. Signals never rank staff, imply misconduct, or create orders, stock movements, price changes, or finance postings. A human opens and reviews the source records.',
+    anomalySignalStateUpdated: 'Anomaly signal state updated.',
+    theAnomalyActionCouldNotBeCompletedCheck:
+      'The anomaly action could not be completed. Check the reason, date, and access.',
+    scope: 'Scope ·',
+    window: 'Window ',
+    sourceObserved: ' · source observed',
+    policy: ' · policy',
+    staffDrillDown: 'Staff drill-down · ',
+    openRelatedAuditTrail: 'Open related audit trail',
+    relatedAuditTrailRequiresAnAdministrator: 'Related audit trail requires an administrator.',
+    estimateMethod: 'Estimate method:',
+    window2: 'Window: ',
+    exclusions: 'Exclusions:',
+    confidence: 'Confidence:',
+    acknowledgementReason: 'Acknowledgement reason',
+    acknowledge: 'Acknowledge',
+    snoozeUntil: 'Snooze until',
+    snoozeReason: 'Snooze reason',
+    snoozeWithReason: 'Snooze with reason',
+    refreshSourceDataBeforeReviewingThisSignal: 'Refresh source data before reviewing this signal.',
+    noAnomalySignalsMatchTheseFiltersRefreshTo:
+      'No anomaly signals match these filters. Refresh to evaluate the current ledger window; no operational data will be changed.',
+    financialReportAndOwnerPermissionsAreRequiredTo2:
+      'Financial report and owner permissions are required to view anomaly records.',
+    safe05Advisory: 'SAFE-05 · Advisory',
+    packAuthenticationFlags: 'Pack authentication flags',
+    receivingAndDispensingScansCompareGtinBatchExpiry:
+      'Receiving and dispensing scans compare GTIN, batch, expiry, and serial evidence with this workspace. An unverifiable pack is never labelled counterfeit and never blocks a sale by itself. Recalled batches remain blocked by the recall path. Ingredient and batch filters narrow flags to scans matched to that medicine or batch.',
+    authenticationFlagAcknowledged: 'Authentication flag acknowledged.',
+    theFlagCouldNotBeAcknowledgedCheckThe:
+      'The flag could not be acknowledged. Check the reason and access.',
+    scan: ' scan',
+    gtin: 'GTIN ',
+    batch2: ' · batch',
+    serial: ' · serial',
+    acknowledged: 'Acknowledged: ',
+    acknowledgeFlag: 'Acknowledge flag',
+    noPackAuthenticationFlagsMatchTheseBranches:
+      'No pack authentication flags match these branches.',
+    reportCatalog: 'Report catalog',
+    availableReports: 'Available reports',
+    metricContractsFilters: ' metric contracts · filters: ',
+    sourceLabel: 'Source: ',
+    scope2: 'Scope: ',
+    access: 'Access: ',
+    drillThrough: 'Drill through',
+    drillThroughUnavailable: 'Drill-through unavailable',
+    scheduledDelivery: 'Scheduled delivery',
+    dailyOwnerDigest: 'Daily owner digest',
+    optInPerBranchTimesUseYourWorkspace:
+      'Opt in per branch. Times use your workspace timezone. Capture history is always stored; WhatsApp remains disabled until a provider integration is implemented.',
+    eachDigestOpensWithAFiveLineBriefing:
+      'Each digest opens with a five-line briefing: sales and cash, estimated lost demand and walk-outs, the top gap with its purchase status, recovered sales, and expiry at risk with khata due. A seven-day summary is added once a week. Item names for the top gap appear only here; the owner WhatsApp version carries figures only.',
+    digestSettingsSaved: 'Digest settings saved.',
+    digestSettingsCouldNotBeSavedCheckThe:
+      'Digest settings could not be saved. Check the time and try again.',
+    digestTime: 'Digest time',
+    whatsapp: 'WhatsApp',
+    capturedDelivery: 'Captured delivery',
+    digestHistory: 'Digest history',
+    noDigestsCapturedYetTurnOnABranch:
+      'No digests captured yet. Turn on a branch digest; history appears after its scheduled time.',
+    digestSettingsAndHistoryRequireOwnerPermissionReports:
+      'Digest settings and history require owner permission. Reports remain available on demand.',
+    noReportableBranches: 'No reportable branches',
+    pharmacyReports: 'Pharmacy reports',
+    sales: 'Sales',
+    grossMargin: 'Gross margin',
+    cash: 'Cash',
+    cashVariance: 'Cash variance',
+    refunds: 'Refunds',
+    stockAlerts: 'Stock alerts',
+    recommendedOrders: 'Recommended orders',
+    expiringIn30Days: 'Expiring in 30 days',
+    expiringIn90Days: 'Expiring in 90 days',
+    selectAnAvailableBranchScopeAndAValid:
+      'Select an available branch scope and a valid, unambiguous date range. No work-pack sources were queried.',
+    checkTheDateRangeAndBranchScopeThen:
+      'Check the date range and branch scope, then apply the filters again. No data was changed.',
+    organizationWideSafetyQueue: 'Organization-wide safety queue',
+    allBranchesLatestRecords: 'All branches · latest records',
+    packScansRecordTheMedicineAndBatchThey:
+      'Pack scans record the medicine and batch they matched, not the supplier, so these flags cannot be filtered by supplier. Clear the supplier filter to review them.',
+    anActivePharmacyBranchIsRequiredBeforeReports:
+      'An active pharmacy branch is required before reports can be shown. Ask your workspace administrator to activate one.',
+  },
+  workPack: {
+    couldNotCheck: 'Could not check ',
+    justNowRefreshToTryAgainTheRest:
+      ' just now. Refresh to try again; the rest of this list is still good to use.',
+    period: 'Period: ',
+    branches: '. Branches:',
+    preparedAt: 'Prepared at ',
+    sourceLabel: 'Source:',
+    observed: 'Observed: ',
+    computed: '. Computed:',
+    secondsSinceLastCheck: '. Allowed age of this check (seconds):',
+    endNotIncluded: ' (end not included)',
+    selectedDatesNotApplied: 'Selected dates do not apply',
+    limitReached: 'The check reached its limit; more items may exist.',
+    dueOrExpiryTime: '. Due or expiry time:',
+    whatWasChecked: 'What was checked',
+    noAvailableUnexpiredStockWasFoundForExpiry:
+      'No available, unexpired stock was found for expiry advice in this branch. This does not assess expired or quarantined stock. Refresh daily work pack after stock is received or updated.',
+    itemsReturned: 'Items returned: ',
+    maximumItems: '. Maximum items:',
+    window: 'Window:',
+    evaluatedAsOf: '. Evaluated as of: ',
+    readAt: '. Read at: ',
+    lastCheck: '. Last check:',
+  },
+  branchComparison: {
+    ownerOnly: 'Owner only',
+    branchComparison: 'Branch comparison',
+    compareSalesMarginRecordedLostDemandEstimatesExpiry:
+      'Compare sales, margin, recorded lost-demand estimates, expiry exposure and overdue khata across active branches.',
+    comparisonDates: 'Comparison dates',
+    branchComparisonDates: 'Branch comparison dates',
+    from: 'From',
+    to: 'To',
+    applyDates: 'Apply dates',
+    comparisonUnavailable: 'Comparison unavailable',
+    branchPerformance: 'Branch performance',
+    to2: ' to ',
+    inclusive: ', inclusive.',
+    moneyUsesMinorUnitValuesShownToTwo:
+      'Money uses minor-unit values shown to two decimal places; — means unavailable, not zero. Expiry at risk is available stock expiring in 30 days and is not realized loss. Lost demand is an ',
+    estimate: 'Estimate',
+    excludes: ' Excludes',
+    branch: 'Branch',
+    sales: 'Sales',
+    margin: 'Margin',
+    lostDemandEstimate: 'Lost demand estimate',
+    expiryAtRisk: 'Expiry at risk',
+    khataOverdue: 'Khata overdue',
+    events: ' events)',
+    noActiveBranchesAreAvailable: 'No active branches are available.',
+    branchComparisonPharmacyReports: 'Branch comparison · Pharmacy reports',
+  },
+  marginComparison: {
+    previous: 'Previous: ',
+    to: ' to',
+    current: '. Current:',
+    periodsAreStartInclusiveEndExclusiveSameBranch:
+      '. Periods are start inclusive, end exclusive. Same branch, equal elapsed duration.',
+    noMatchingPostedJournalGroupsIn: 'No matching sales entries in',
+    ledgerTotalsAreZeroForThatPeriodThis:
+      '. Ledger totals are zero for that period; this does not prove complete source data.',
+    accountingDecompositionCurrencyNotConfirmedPostedRevenueDiscounts:
+      'Accounting decomposition · currency not confirmed · posted revenue, discounts and cost of goods, including reversals and returns.',
+    account: 'Account',
+    previous2: 'Previous',
+    current2: 'Current',
+    effectOnGrossMargin: 'Effect on gross margin',
+    revenueDelta: 'Revenue delta ',
+    minusDiscountDelta: ' minus discount delta',
+    minusCogsDelta: ' minus COGS delta ',
+    grossMarginChange: ' gross-margin change.',
+    accountingDecompositionNotACausalPriceVolumeMix:
+      'Accounting decomposition, not a causal price/volume/mix explanation. Quantity, unit-price, unit-cost and expense evidence is not provided here; missing evidence is not zero. Gross margin is not net profit or contribution. Percentage change is omitted, including when the previous margin is zero or negative.',
+    grossMarginComparison: 'Gross-margin comparison',
+    marginChanges: 'Margin changes',
+    branch: 'Branch: ',
+    compareUpTo92DaysWithTheImmediately:
+      '. Compare up to 92 days with the immediately preceding equal-length period.',
+    // Picked dates start at the workspace's midnight; the zone label follows.
+    fromMidnight: 'From (midnight, ',
+    untilMidnight: 'Until (midnight, ',
+    closeZone: ')',
+    closeZoneNotIncluded: ', not included)',
+    comparePeriods: 'Compare periods',
+  },
+  cashFlow: {
+    pharmacyAccounts: 'Pharmacy accounts',
+    cashFlow: 'Cash flow',
+    cashComingInAndGoingOutGroupedBy: 'Cash coming in and going out, grouped by purpose.',
+    branchAndDates: 'Branch and dates',
+    activeBranch: 'Active branch',
+    noActiveBranchesAvailable: 'No active branches available',
+    showCashFlow: 'Show cash flow',
+    projectionUnavailable: 'Projection unavailable',
+    noFinancialDataIsShown: ' No financial data is shown.',
+    openingAndClosingCash: 'Opening and closing cash',
+    recordedCurrencyMinorUnitTotalsFromEveryScoped:
+      'Recorded currency minor-unit totals from every scoped posted cash/bank line. Retrieved',
+    completenessUnknown: '. Completeness: unknown —',
+    discrepancyIsCanonicalCashPlusBankAccountClosing:
+      ' Discrepancy is canonical CASH plus BANK account closing from the financial statements, read in the same snapshot, minus the projected closing.',
+    noScopedCashPostingsThisDoesNotProve:
+      'No cash movements were found for these dates. Other activity may be missing.',
+    paymentsAndReversals: 'Cash movements',
+    classificationRequiresSupportedSourceAndCounterpartEvidenceAmbiguous:
+      'Classification requires supported source and counterpart evidence. Ambiguous, mixed, and future policies remain unclassified; this is not a statutory or audited statement.',
+    showing: 'Showing ',
+    of: ' of ',
+    cashMovingEntriesTotalsAboveIncludeEveryEntry:
+      'cash-moving entries; totals above include every entry in the period.',
+    entry: 'Entry ',
+    sourceLabel: ' · source ',
+    classificationJournalLines: 'Classification journal lines',
+    evidencePages: 'Cash movement pages',
+    previousEvidence: 'Previous cash movements',
+    nextEvidence: 'Next cash movements',
+  },
+  journalExport: {
+    pharmacyAccounts: 'Pharmacy / accounts',
+    journalEvidenceExport: 'Download account entries',
+    downloadTheEntriesOnOnePageForThe: 'Download the entries on one page for the selected branch.',
+    evidenceCouldNotBeRead: 'Entries could not load',
+    accessCouldNotBeVerifiedNoCsvIs:
+      'Access could not be verified. No CSV is available; retry or ask your workspace administrator.',
+    permissionRequired: 'Permission required',
+    ownerFinancialReportPermissionAndPharmacyReportsAccess:
+      'Owner financial-report permission and Pharmacy Reports access are required. No CSV is available.',
+    downloadTheEntriesOnThisPageOtherEntries:
+      'Download the entries on this page. Other entries are not included.',
+    evidenceWindow: 'Branch and dates',
+    branch: 'Branch',
+    chooseABranch: 'Choose a branch',
+    // Picked dates start at the workspace's midnight; the zone label follows.
+    fromMidnight: 'From (midnight, ',
+    untilMidnight: 'Until (midnight, ',
+    closeZone: ')',
+    closeZoneNotIncluded: ', not included)',
+    page: 'Page',
+    readAuthorizedPage: 'Read authorized page',
+    chooseAValidEvidenceWindow: 'Choose valid dates',
+    chooseAnAuthorizedBranchAUtcDateWindow:
+      'Choose an authorized branch, a date window of at most 92 days, and a page from 1 to 10,000. Invalid input is not read or exported.',
+    accessMayBeDeniedOrTheReadFailed:
+      'Access may be denied or the read failed. No CSV is available; retry or ask your workspace administrator.',
+    entriesOnThisPage: 'Entries on this page',
+    otherActivityMayNotBeIncluded: '· Other activity may not be included',
+    page2: 'Page ',
+    entriesReturnedPageCap: ' entries returned · page cap',
+    entriesCountedInTheWindow: ' entries counted in the window.',
+    theCsvContainsOnlyThisPageDtoIt:
+      'The CSV contains only this page DTO. It is not a complete-ledger export, is not an atomic snapshot, and cannot establish unposted activity. Entry currency, source and reversal IDs, and exact integer minor-unit strings are retained.',
+    journalEvidenceExportPharmacyAccounts: 'Download account entries · Pharmacy accounts',
+  },
+  accountActivity: {
+    permissionRequired: 'Permission required',
+    organizationAdministratorAccessIsRequired: 'Organization administrator access is required.',
+    invalidFilters: 'Invalid filters',
+    chooseOneValueForEachFilter: 'Choose one value for each filter.',
+    branchUnavailable: 'Branch unavailable',
+    chooseAnActiveBranchInThisOrganization: 'Choose an active branch in this organization.',
+    noActiveBranch: 'No active branch',
+    createAnActivePharmacyBranchFirst: 'Create an active pharmacy branch first.',
+    invalidDateWindow: 'Invalid date window',
+    chooseAValidUtcDateWindowWithAn: 'Choose a valid date window with an exclusive end.',
+    chooseADateWindowOfAtMost92: 'Choose a date window of at most 92 days.',
+    pharmacyAccounts: 'Pharmacy accounts',
+    accountActivityBridge: 'Account activity',
+    isolateOnePostedAccountAndRecordedCurrencyFrom:
+      'Isolate one posted account and recorded currency from financial-statement aggregates.',
+    chooseAnAccount: 'Choose an account',
+    branch: 'Branch',
+    accountCurrency: 'Account / currency',
+    chooseAnAccountCurrency: 'Choose an account / currency',
+    readBridge: 'Read bridge',
+    accountTotals: 'Account totals',
+    noUniqueCompleteAggregateMatchesThisAccountAnd:
+      'No unique, complete aggregate matches this account and recorded currency. Missing values are not treated as zero.',
+    postedCoverageIsUnknownThisEvidenceIsNot:
+      'Posted coverage is unknown. This evidence is not a running ledger, trial balance, maturity report, statement, or wallet view.',
+    minorUnits: ' (smallest currency unit)',
+    openingBalanceMoneyInAndOutAndClosing:
+      'Opening balance, money in and out, and closing balance for one account.',
+  },
+  cheques: {
+    pharmacyAccounts: 'Pharmacy accounts',
+    recordedChequeMaturity: 'Cheques due',
+    seeWhenYourRecordedChequesAreDue: 'See when your recorded cheques are due.',
+    financialReportAccessRequired: 'Financial report access required',
+    ownerFinancialReportCapabilityPharmacyReportsAndExisting:
+      'Owner financial-report capability, Pharmacy Reports, and existing Finance workspace authorization are required. No cheque evidence was read.',
+    branch: 'Branch',
+    authorizedActiveBranch: 'Authorized active branch',
+    selectABranch: 'Select a branch',
+    showCheques: 'Show cheques',
+    branchUnavailable: 'Branch unavailable',
+    selectAnAuthorizedActiveBranchNoOutOf:
+      'Select an authorized active branch. No out-of-scope evidence was read.',
+    chooseABranch: 'Choose a branch',
+    thisIsolatedReadNeverCombinesBranchChequeRecords:
+      'This isolated read never combines branch cheque records.',
+    chequeEvidenceUnavailable: 'Cheques could not load',
+    theLiveFinanceWorkspaceReadFailedNoCached:
+      'The live Finance workspace read failed. No cached data is shown and no financial record was changed.',
+    aboutThisList: 'About this list',
+    latestRecordedChequesTheListMayBeIncomplete:
+      'Latest recorded cheques; the list may be incomplete.',
+    recordedChequesRetainedFromTheLatestWorkspaceResponse:
+      ' recorded cheques retained from the latest workspace response. Empty does not prove no cheques; exactly 50 means the read cap was reached. Dates use UTC. This does not infer contractual AP maturity, perform BANK deductions, repair postings, or establish historical currency.',
+    noRecordedChequesInThisRead: 'No recorded cheques in this read',
+    theRecentCappedLiveResponseContainedNoSafe:
+      'No cheques were found in the latest records. Other cheques may still be missing from this list.',
+    unknownRecordedDueDate: 'Unknown recorded due date',
+    theseChequeRecordsHaveNoUsableRecordedMaturity:
+      'These cheque records have no usable recorded maturity date; no date was inferred.',
+    dueDateUtc: 'Due date (UTC)',
+    reference: 'Reference',
+    cheque: 'Cheque',
+    status: 'Status',
+    recordedAmount: 'Recorded amount',
+    recordedChequeMaturityPharmacyAccounts: 'Recorded cheque maturity · Pharmacy accounts',
+  },
+  marketing: {
+    campaignResults: 'Campaign results',
+    reviewCampaigns: 'Review campaigns',
+    campaignResultsUnavailableForThisDateBranchOr:
+      'Campaign results unavailable for this date, branch or permission scope. No zero totals inferred.',
+    evidenceCutoff: '); evidence cutoff',
+    branchAndDateFiltersApplySupplierIngredientAnd:
+      '. Branch and date filters apply. Supplier, ingredient and batch filters do not scope these figures.',
+    sandboxOnly: 'Sandbox only: ',
+    captures: ' captures, ',
+    delivered: ' delivered,',
+    failed: ' failed, ',
+    unknownTheseCountsDoNotProveLiveDelivery: ' unknown. These counts do not prove live delivery.',
+    excludedUnverifiedLinks: 'Excluded unverified links: ',
+    competingReceiptLinksExcluded: '. Competing receipt links excluded: ',
+    messageCostUnavailable: '. Message cost unavailable.',
+    details: 'Details',
+  },
+} as const;

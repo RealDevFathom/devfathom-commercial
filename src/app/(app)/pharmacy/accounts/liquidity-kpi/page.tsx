@@ -203,7 +203,7 @@ function Results({
                   'Bank',
                   'Accounts payable',
                   'Goods-received accrual',
-                  'Coverage (minor units)',
+                  'Cash and bank vs bills owed',
                   'Coverage',
                   'Status',
                   'Flags',
@@ -231,7 +231,7 @@ function Results({
                     </td>
                   ))}
                   <td className="p-3 text-right font-mono">
-                    {row.numeratorMinor} / {row.denominatorMinor}
+                    {minor(row.numeratorMinor)} / {minor(row.denominatorMinor)}
                   </td>
                   <td className="p-3 text-right font-mono">{row.ratioDecimal ?? '—'}</td>
                   <td className="p-3 text-right">

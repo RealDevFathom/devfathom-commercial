@@ -45,7 +45,7 @@ const amount = (value: number | null) =>
   value !== null && Number.isSafeInteger(value) && value >= 0 ? formatMinor(value) : 'Unknown';
 const currencyLabel = (packet: FollowUpPacketData) => packet.currency ?? 'Currency unknown';
 const currencyBasis =
-  'Currency is the current organization setting; source records do not establish historical currency. Amounts use integer minor units (100 per major unit).';
+  'Currency is the current organization setting; source records do not establish historical currency. Amounts are shown in rupees with two decimals.';
 const uniqueCredits = (rows: FollowUpPacketData['rows']) => [
   ...new Map(rows.flatMap((row) => row.credits).map((credit) => [credit.id, credit])).values(),
 ];
