@@ -4793,6 +4793,9 @@ describe('DEV-618 counter composition', () => {
       fireEvent.change(input, { target: { value } });
       fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F6' });
       expect(screen.getByRole('button', { name: /Add to cart/ })).toBeDisabled();
+      expect(screen.getByRole('button', { name: /Add to cart/ })).toHaveAccessibleDescription(
+        /Enter a valid quantity|Not enough stock/
+      );
       expect(mocks.mutations.create).not.toHaveBeenCalled();
       expect(mocks.mutations.addLine).not.toHaveBeenCalled();
       expect(input).toHaveAccessibleDescription(

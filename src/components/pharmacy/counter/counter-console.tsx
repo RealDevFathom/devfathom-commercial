@@ -3961,12 +3961,22 @@ function ScopedPharmacyCounterConsole({
                     type="button"
                     className="min-h-12 rounded-[var(--radius-sm)]"
                     disabled={busy || !preview?.sufficient}
+                    aria-describedby={
+                      !busy && !preview?.sufficient ? 'counter-add-to-cart-reason' : undefined
+                    }
                     onClick={() => void addToCart()}
                   >
                     {pending === 'addToCart'
                       ? 'Adding…'
                       : `Add to cart · ${formatBinding(keymap.bindings.addToCart)}`}
                   </Button>
+                  {!busy && !preview?.sufficient ? (
+                    <p id="counter-add-to-cart-reason" className="text-xs text-text-muted">
+                      {preview
+                        ? 'Not enough stock for this quantity. Reduce it or record the shortage.'
+                        : 'Enter a valid quantity to add this item.'}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-text-muted">
                   <span>
