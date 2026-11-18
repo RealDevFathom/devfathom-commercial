@@ -135,5 +135,5 @@ export function formatChequeAmount(amountMinor: number | null, currency: string 
     const fraction = digits ? `.${String(absolute % scale).padStart(digits, '0')}` : '';
     return `${amountMinor < 0 ? '-' : ''}${currency} ${major}${fraction}`;
   }
-  return `${amountMinor} minor units ${currency ?? '(currency not recorded)'}`;
+  return `${amountMinor} ${currency ?? '(currency not recorded)'} (smallest unit)`;
 }

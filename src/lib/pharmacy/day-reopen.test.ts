@@ -52,6 +52,8 @@ function fixture(close: Close | null) {
         ...data,
       })),
     },
+    // DEV-743: no card-terminal payment is open on the day.
+    pharmacyCardTerminalAttempt: { count: vi.fn().mockResolvedValue(0) },
     pharmacyDrawerSession: {
       count: vi.fn().mockResolvedValue(0),
       findMany: vi.fn().mockResolvedValue([]),

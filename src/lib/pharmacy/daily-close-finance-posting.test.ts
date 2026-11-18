@@ -27,6 +27,8 @@ function fixture(drawer: { openingFloatMinor: number; countedCashMinor: number }
   const db = {
     pharmacyAccountingPeriod: { findFirst: vi.fn().mockResolvedValue(null) },
     $queryRaw: vi.fn().mockResolvedValue([]),
+    // DEV-743: no card-terminal payment is open on the day.
+    pharmacyCardTerminalAttempt: { count: vi.fn().mockResolvedValue(0) },
     pharmacyDrawerSession: {
       count: vi.fn().mockResolvedValue(0),
       findMany: vi.fn().mockResolvedValue([

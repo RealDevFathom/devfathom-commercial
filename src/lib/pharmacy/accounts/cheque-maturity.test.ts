@@ -72,11 +72,11 @@ describe('formatChequeAmount', () => {
     expect(formatChequeAmount(0, 'USD')).toBe('USD 0.00');
   });
 
-  it('labels raw minor units when the currency scale is unknown', () => {
-    expect(formatChequeAmount(12500, null)).toBe('12500 minor units (currency not recorded)');
-    expect(formatChequeAmount(12500, 'rupees')).toBe('12500 minor units rupees');
-    expect(formatChequeAmount(12500, 'JPY')).toBe('12500 minor units JPY');
-    expect(formatChequeAmount(12500, 'constructor')).toBe('12500 minor units constructor');
+  it('labels raw smallest-unit amounts when the currency scale is unknown', () => {
+    expect(formatChequeAmount(12500, null)).toBe('12500 (currency not recorded) (smallest unit)');
+    expect(formatChequeAmount(12500, 'rupees')).toBe('12500 rupees (smallest unit)');
+    expect(formatChequeAmount(12500, 'JPY')).toBe('12500 JPY (smallest unit)');
+    expect(formatChequeAmount(12500, 'constructor')).toBe('12500 constructor (smallest unit)');
     expect(formatChequeAmount(null, 'PKR')).toBe('Unknown');
   });
 });
