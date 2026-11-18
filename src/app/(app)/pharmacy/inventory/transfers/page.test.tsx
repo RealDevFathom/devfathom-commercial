@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   actor: vi.fn(),
   context: vi.fn(),
   board: vi.fn(),
+  settings: vi.fn(),
   assigned: vi.fn(),
 }));
 vi.mock('next/navigation', () => ({ redirect: vi.fn() }));
@@ -18,7 +19,12 @@ vi.mock('@/lib/abac', () => ({
 }));
 vi.mock('@/server/routers/pharmacy-inventory', () => ({
   admittedInventoryBranchIds: mocks.assigned,
-  pharmacyInventoryRouter: { createCaller: () => ({ transferBoard: mocks.board }) },
+  pharmacyInventoryRouter: {
+    createCaller: () => ({
+      transferBoard: mocks.board,
+      branchTransferSettings: mocks.settings,
+    }),
+  },
 }));
 
 import Page from './page';
@@ -50,6 +56,7 @@ beforeEach(() => {
   mocks.context.mockResolvedValue(ctx);
   mocks.assigned.mockResolvedValue(new Set([main.id]));
   mocks.board.mockResolvedValue([]);
+  mocks.settings.mockResolvedValue({ enabled: true, canChange: false });
 });
 
 afterEach(cleanup);
@@ -106,4 +113,38 @@ it('DEV-628: offers as shortfall witness only colleagues assigned to this branch
       }),
     })
   );
+});
+
+it('DEV-908: offers no send form while branch transfers are switched off, and only the owner may switch', async () => {
+  mocks.settings.mockResolvedValue({ enabled: false, canChange: false });
+  ctx.db.pharmacyStockBalance.findMany.mockResolvedValue([
+    {
+      inventoryLotId: 'lot_1',
+      stockLocationId: 'location_1',
+      onHandUnits: 10,
+      location: { name: 'Shelf' },
+      lot: {
+        id: 'lot_1',
+        batch: {
+          batchNumber: 'B1',
+          expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+          medicine: { productName: 'Product', brandName: null },
+        },
+      },
+    },
+  ]);
+  ctx.db.pharmacyStockLocation.findMany.mockResolvedValue([
+    { id: 'location_2', name: 'Store', branchId: other.id },
+  ]);
+
+  const { unmount } = render(await Page({ searchParams: Promise.resolve({ branch: main.id }) }));
+
+  expect(screen.getByText(/Branch transfers are switched off/)).toBeVisible();
+  expect(screen.getByText('Only the owner can change this setting.')).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'Switch on' })).toBeNull();
+  unmount();
+
+  mocks.settings.mockResolvedValue({ enabled: false, canChange: true });
+  render(await Page({ searchParams: Promise.resolve({ branch: main.id }) }));
+  expect(screen.getByRole('button', { name: 'Switch on' })).toBeVisible();
 });
