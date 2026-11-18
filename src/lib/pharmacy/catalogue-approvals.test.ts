@@ -275,6 +275,34 @@ describe('DEV-766 durable catalogue approvals', () => {
       expect.objectContaining({ where: { id: { in: ['pack_strip', 'pack_gone'] } } })
     );
   });
+  it('names the pack and branch a queued pack price applies to (DEV-923)', async () => {
+    const f = fixture();
+    const row = (id: string, json: Record<string, unknown>) => ({
+      id,
+      operation: 'setPackPrice',
+      changes: { json },
+      expectedUpdatedAt: timestamp,
+      medicine: { productName: 'Tablets', updatedAt: timestamp },
+      editor: { name: 'Editor' },
+    });
+    const branches = vi.fn(async () => [{ id: 'branch_a', name: 'Saddar' }]);
+    Object.assign(f.raw, { pharmacyBranch: { findMany: branches } });
+    f.raw.pharmacyCatalogueEdit.findMany.mockResolvedValue([
+      row('shop', { packLevelId: 'pack_strip', mrpMinor: 500, sellingPriceMinor: null }),
+      row('branch', { packLevelId: 'pack_strip', branchId: 'branch_a', mrpMinor: 500 }),
+      row('gone', { packLevelId: 'pack_strip', branchId: 'branch_gone', mrpMinor: 500 }),
+    ]);
+    const edits = await listPendingCatalogueEdits(f.db);
+    const pack = { label: 'Pack', value: 'STRIP (10 per pack), 3 x 10 tablets' };
+    expect(Object.fromEntries(edits.map((edit) => [edit.id, edit.targets]))).toEqual({
+      shop: [pack, { label: 'Applies to', value: 'All branches' }],
+      branch: [pack, { label: 'Applies to', value: 'Saddar only' }],
+      gone: [pack, { label: 'Applies to', value: 'Branch not found only' }],
+    });
+    expect(branches).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: { in: ['branch_a', 'branch_gone'] } } })
+    );
+  });
   it('refuses concurrent and repeated decisions', async () => {
     const f = fixture();
     f.raw.pharmacyCatalogueEdit.updateMany.mockResolvedValue({ count: 0 });

@@ -101,6 +101,14 @@ beforeEach(() => {
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
 });
 
+// DEV-923: reviewing and publishing need the exact catalogue review grant.
+function grantCatalogueReview() {
+  db.user.findUnique.mockResolvedValue({
+    organizationRole: null,
+    permissionOverrides: [{ capability: 'pharmacy:catalogue-review', effect: 'ALLOW' }],
+  } as never);
+}
+
 const catalogueEdits = [
   [
     'proposeCatalogueEdit',
@@ -468,6 +476,7 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
   });
 
   it('rejects oversized assertion publication before opening a transaction', async () => {
+    grantCatalogueReview();
     await expect(
       caller().publishAssertions({
         assertionIds: Array.from({ length: 21 }, (_, index) => `assertion_${index}`),
@@ -481,6 +490,7 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
   });
 
   it('rejects oversized review decision IDs before opening a transaction', async () => {
+    grantCatalogueReview();
     const oversizedId = 'x'.repeat(201);
 
     await expect(
@@ -651,6 +661,7 @@ describe('non-drug retail catalogue fields (#718)', () => {
 });
 
 describe('DEV-766 catalogue review separation and immutable evidence', () => {
+  beforeEach(grantCatalogueReview);
   const original = {
     id: 'assertion',
     medicineId: 'medicine_a',

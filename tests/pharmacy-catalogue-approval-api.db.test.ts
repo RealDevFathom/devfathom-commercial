@@ -55,6 +55,12 @@ vi.mock('@/server/audit', async () => {
               `INSERT INTO users (id,"organizationId","organizationRoleId",name,email,department,title,role,"updatedAt") VALUES ($1,$2,$3,$1,$1,'Pharmacy','Staff','ADMIN',now())`,
               [id(who + '_' + org), id(org), org === 'solo' ? id('ownerrole') : null]
             );
+            // DEV-19: approval is the exact pharmacy:catalogue-review grant.
+            if (org !== 'solo')
+              await c.query(
+                `INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"updatedAt") VALUES ($1,$2,$3,'pharmacy:catalogue-review','ALLOW','fixture',now())`,
+                [id('review_' + who + '_' + org), id(org), id(who + '_' + org)]
+              );
           }
           await c.query(
             `INSERT INTO pharmacy_medicines (id,"organizationId","productName","productFamily",saleable,"updatedAt") VALUES ($1,$2,'Fixture lotion','FRONT_SHOP',true,now())`,

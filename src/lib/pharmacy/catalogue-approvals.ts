@@ -168,7 +168,8 @@ export async function listPendingCatalogueEdits(db: ScopedDb) {
   const commands = edits.map((edit) => commandIds(edit.operation, edit.changes));
   const packIds = [...new Set(commands.flatMap((ids) => ids.packs))];
   const presentationIds = [...new Set(commands.flatMap((ids) => ids.presentations))];
-  const [packs, presentations] = await Promise.all([
+  const branchIds = [...new Set(commands.flatMap((ids) => ids.branches))];
+  const [packs, presentations, branches] = await Promise.all([
     packIds.length
       ? db.packLevel.findMany({
           where: { id: { in: packIds } },
@@ -178,6 +179,12 @@ export async function listPendingCatalogueEdits(db: ScopedDb) {
     presentationIds.length
       ? db.presentation.findMany({ where: { id: { in: presentationIds } } })
       : [],
+    branchIds.length
+      ? db.pharmacyBranch.findMany({
+          where: { id: { in: branchIds } },
+          select: { id: true, name: true },
+        })
+      : [],
   ]);
   const packLabel = new Map(
     packs.map((pack) => [
@@ -186,6 +193,7 @@ export async function listPendingCatalogueEdits(db: ScopedDb) {
     ])
   );
   const presentationLabel = new Map(presentations.map((item) => [item.id, item.presentation]));
+  const branchLabel = new Map(branches.map((item) => [item.id, item.name]));
   return edits.map(({ medicine, ...edit }, index) => ({
     ...edit,
     medicine: { productName: medicine.productName },
@@ -199,6 +207,17 @@ export async function listPendingCatalogueEdits(db: ScopedDb) {
         label: 'Pack',
         value: packLabel.get(id) ?? 'Pack not found',
       })),
+      // DEV-923: a pack price applies to one branch (an override) or to every branch.
+      ...(edit.operation === 'setPackPrice'
+        ? [
+            {
+              label: 'Applies to',
+              value: commands[index]!.branches.length
+                ? `${branchLabel.get(commands[index]!.branches[0]!) ?? 'Branch not found'} only`
+                : 'All branches',
+            },
+          ]
+        : []),
     ],
   }));
 }
@@ -209,9 +228,11 @@ function commandIds(operation: string | undefined, changes: unknown) {
       ? (changes as { json?: Record<string, unknown> }).json
       : undefined;
   const text = (value: unknown) => (typeof value === 'string' && value ? [value] : []);
-  if (!input) return { packs: [] as string[], presentations: [] as string[] };
+  if (!input)
+    return { packs: [] as string[], presentations: [] as string[], branches: [] as string[] };
   return {
     presentations: text(input.presentationId),
+    branches: text(input.branchId),
     packs: [
       // revisePackLevel identifies the pack it revises by `id`.
       ...text(operation === 'revisePackLevel' ? input.id : undefined),

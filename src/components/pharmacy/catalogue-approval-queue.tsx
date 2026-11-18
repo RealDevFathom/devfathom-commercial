@@ -31,10 +31,13 @@ const editLabels: Record<string, string> = {
   batchReference: 'Batch reference',
   printedMrpMinor: 'Printed MRP (minor units)',
   roundingIncrementMinor: 'Rounding increment (minor units)',
+  mrpMinor: 'MRP (minor units)',
+  sellingPriceMinor: 'Selling price (minor units)',
   value: 'Alias',
 };
 const operationLabels: Record<string, string> = {
   UPDATE_MEDICINE: 'Product details',
+  setPackPrice: 'Set pack price',
   createPackLevel: 'Add pack',
   revisePackLevel: 'Revise pack',
   recordPrintedMrp: 'Record printed MRP',
@@ -44,7 +47,8 @@ const operationLabels: Record<string, string> = {
 };
 
 function displayChange(field: string, value: unknown): string {
-  if (value === null) return 'Clear value';
+  // A pack price without a selling price sells at the MRP.
+  if (value === null) return field === 'sellingPriceMinor' ? 'Sell at MRP' : 'Clear value';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
   if (field === 'effectiveFrom' && typeof value === 'string') {
     const date = new Date(value);
