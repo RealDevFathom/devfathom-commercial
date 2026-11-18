@@ -6576,32 +6576,53 @@ describe('DEV-705 keyboard loose sale', () => {
     fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F9' });
     expect(screen.getByRole('dialog', { name: 'Payment' })).toBeInTheDocument();
   });
-  it('leaves focus where the cashier moved it while an add was finishing', async () => {
-    mocks.mutations.addLine!.mockResolvedValue({ saleLineId: 'loose-line' });
-    let finish!: () => void;
-    const refresh = (
-      trpc.useUtils() as unknown as {
+
+  it('DEV-930 leaves focus in payment opened while an add is still settling, so Enter takes it', async () => {
+    // The cart shows the line before the add's follow-up reads finish; F9 is allowed then.
+    let settle!: () => void;
+    const { controlledRegister } = (
+      trpc.useUtils as unknown as () => {
         pharmacySafety: { controlledRegister: { invalidate: ReturnType<typeof vi.fn> } };
       }
-    ).pharmacySafety.controlledRegister.invalidate;
-    refresh.mockImplementationOnce(() => new Promise<void>((resolve) => (finish = resolve)));
-    render(
-      <>
-        <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
-        <button type="button">Elsewhere</button>
-      </>
+    )().pharmacySafety;
+    controlledRegister.invalidate.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (settle = resolve))
     );
+    mocks.mutations.addLine!.mockResolvedValue({ saleLineId: 'loose-line' });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(looseRow()));
-    const quantity = screen.getByLabelText('Quantity');
-    fireEvent.change(quantity, { target: { value: '1' } });
-    fireEvent.keyDown(quantity, { key: 'Enter' });
-    await waitFor(() => expect(refresh).toHaveBeenCalled());
-    // The line is in the cart; the cashier goes on to another control before the add ends.
-    const elsewhere = screen.getByRole('button', { name: 'Elsewhere' });
-    act(() => elsewhere.focus());
-    await act(async () => finish());
-    await waitFor(() => expect(screen.getByLabelText('Scan or search')).toBeEnabled());
-    expect(elsewhere).toHaveFocus();
+    fireEvent.keyDown(screen.getByLabelText('Quantity'), { key: 'Enter' });
+    await waitFor(() => expect(controlledRegister.invalidate).toHaveBeenCalled());
+    fireEvent.keyDown(window, { key: 'F9' });
+    const payment = screen.getByRole('dialog', { name: 'Payment' });
+    const panel = within(payment)
+      .getByRole('group', { name: 'Payment method' })
+      .closest<HTMLElement>('[tabindex="-1"]')!;
+    act(() => panel.focus());
+    await act(async () => settle());
+    expect(payment).toContainElement(document.activeElement as HTMLElement);
+    expect(screen.getByLabelText('Scan or search')).not.toHaveFocus();
+  });
+
+  it('DEV-930 leaves focus on a control the cashier moved to while an add is still settling', async () => {
+    let settle!: () => void;
+    const { controlledRegister } = (
+      trpc.useUtils as unknown as () => {
+        pharmacySafety: { controlledRegister: { invalidate: ReturnType<typeof vi.fn> } };
+      }
+    )().pharmacySafety;
+    controlledRegister.invalidate.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (settle = resolve))
+    );
+    mocks.mutations.addLine!.mockResolvedValue({ saleLineId: 'loose-line' });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(looseRow()));
+    fireEvent.keyDown(screen.getByLabelText('Quantity'), { key: 'Enter' });
+    await waitFor(() => expect(controlledRegister.invalidate).toHaveBeenCalled());
+    const patient = screen.getByRole('button', { name: /^Patient/ });
+    act(() => patient.focus());
+    await act(async () => settle());
+    expect(patient).toHaveFocus();
   });
   it('shows every unit with its price and lets the operator switch to the strip', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);

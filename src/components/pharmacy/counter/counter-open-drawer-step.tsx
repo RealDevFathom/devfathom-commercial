@@ -58,6 +58,13 @@ export function CounterOpenDrawerStep({
 }: CounterOpenDrawerStepProps) {
   const [openingCash, setOpeningCash] = useState('');
   const [submitted, setSubmitted] = useState(false);
+  // DEV-930: a manager's access can arrive after the read-only 0 is on screen. The
+  // field then keeps that 0, editable, rather than go blank under the operator.
+  const [shownFloatField, setShownFloatField] = useState(canDeclareFloat);
+  if (shownFloatField !== canDeclareFloat) {
+    setShownFloatField(canDeclareFloat);
+    if (canDeclareFloat && openingCash === '') setOpeningCash('0');
+  }
   const [cashierId, setCashierId] = useState(currentUserId ?? '');
   const openingCashRef = useRef<HTMLInputElement>(null);
   useEffect(() => {

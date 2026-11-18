@@ -42,7 +42,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   }
   const passwordChange = workspaceRedirectForPasswordChange(actor.session.user.mustChangePassword);
   if (passwordChange) redirect(passwordChange);
-  const { entitlements, brand, pharmacyPlaceholder } = await withTenantDb(
+  const { entitlements, brand, pharmacyPlaceholder, pharmacyOnboarding } = await withTenantDb(
     actor.organization.id,
     async (db) => {
       const [entitlementSnapshot, organization, placeholderProfile] = await Promise.all([
@@ -52,6 +52,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           select: {
             id: true,
             displayName: true,
+            status: true,
             brand: {
               select: {
                 logoUrl: true,
@@ -85,6 +86,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           accentColor: organization?.brand?.accentColor ?? null,
         },
         pharmacyPlaceholder: Boolean(placeholderProfile),
+        pharmacyOnboarding: organization?.status === 'ONBOARDING',
       };
     }
   );
@@ -95,7 +97,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       entitlements={entitlements}
       realtimeEnabled={Boolean(process.env.ABLY_API_KEY)}
     >
-      <AppShell brand={brand} pharmacyPlaceholder={pharmacyPlaceholder}>
+      <AppShell
+        brand={brand}
+        pharmacyPlaceholder={pharmacyPlaceholder}
+        pharmacyOnboarding={pharmacyOnboarding}
+      >
         {actor.organization.isDemo ? (
           <DemoToolbar seatName={actor.organization.displayName} />
         ) : null}
