@@ -120,7 +120,9 @@ export const pharmacyStagedReviewRouter = router({
         version: stagingProfilerVersion(input.mapping),
         resolveColumns: () => input.mapping,
       };
-      const result = profileTable(profiler, table, { quantityUnit: input.quantityUnit });
+      // DEV-912: with no quantity column there is nothing to count, so no packs-or-units choice.
+      const quantityUnit = input.mapping.quantity === undefined ? null : input.quantityUnit!;
+      const result = profileTable(profiler, table, { quantityUnit: quantityUnit ?? undefined });
       const saved = await ctx.db.$transaction(async (tx) => {
         // One stage per file, mapping and quantity choice: concurrent or repeated
         // submissions of the same handover wait here and replay the first batch.
@@ -135,7 +137,7 @@ export const pharmacyStagedReviewRouter = router({
             organizationId: org,
             sourceId: source.id,
             profilerVersion: profiler.version,
-            quantityUnit: input.quantityUnit,
+            quantityUnit,
             status: 'PROFILED',
           },
           orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -185,7 +187,7 @@ export const pharmacyStagedReviewRouter = router({
         targetType: 'PharmacyMigrationBatch',
         targetId: saved.batchId,
         metadata: {
-          quantityUnit: input.quantityUnit,
+          quantityUnit,
           mapping: input.mapping,
           sourceId: saved.sourceId,
           rowCount: saved.rowCount,

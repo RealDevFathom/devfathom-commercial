@@ -12,6 +12,12 @@
  * record is stored as not recorded, never invented, and never blocks (owner's rule on DEV-852 and
  * DEV-853): no units per pack means no pack level, no MRP means no price.
  *
+ * Supplier and reorder level: a supplier cell is linked to the organization's existing supplier
+ * of exactly that normalised name, otherwise reported on the row; no supplier is ever created.
+ * A reorder level (packs) becomes the approved safety stock (PUR-07) of the branch the request
+ * named, in units, when units per pack is known. Tax rate and shelf have no per-medicine field
+ * in the catalogue; they stay in the row's source evidence.
+ *
  * Idempotent: a row whose source identity (uploaded bytes' SHA-256 plus row number) already has a
  * link creates nothing again, whichever batch of those bytes is run. Each call creates at most
  * one chunk, so a 19,000-row catalogue is created in short transactions.
@@ -22,17 +28,16 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { deriveLooseUnitPrice, normalizeMedicineText, parseDefaultPackSize } from '../medicine';
-import { applyLegacyControlledToMedicine } from './legacy-controlled';
+import { applyLegacyControlledToMedicines } from './legacy-controlled';
 import { isLegacyControlledRow } from './legacy-class';
 import { MIGRATION_TARGET_KEYS } from './mapping-targets';
 import { isStrengthPackLabel } from './source-values';
 
 /**
- * Rows created per call. DEV-854's shared lookup runs once for every medicine and reads the
- * organization's staged rows under row-level security (about 40 ms each on a 19,000-row file),
- * so one call stays near ten seconds and a 19,000-row file finishes in about 80 calls.
+ * Rows created per call. Every lookup is set-based, once per chunk (DEV-854's NARCOTICS rule
+ * included), so a call stays a few seconds and a 19,000-row file finishes in about 19 calls.
  */
-export const STAGED_CREATION_CHUNK = 250;
+export const STAGED_CREATION_CHUNK = 1000;
 export const STAGED_CREATION_OPERATION = 'createStagedMedicines';
 const MAX_INT = 2_147_483_647;
 
@@ -41,6 +46,15 @@ const GENERIC_HEADERS = ['genericname', 'generic', 'saltname', 'salt', 'formula'
 const LEGACY_CODE_HEADERS = ['legacycode', 'aliasname', 'oldcode', 'itemcode', 'productcode'];
 const STRIPS_HEADERS = ['stripsperbox', 'stripsperpack', 'strips'];
 const PACK_TYPE_HEADERS = ['packtype', 'packlevel'];
+const SUPPLIER_HEADERS = ['supplier', 'suppliername', 'distributor', 'vendor'];
+const REORDER_HEADERS = ['reorderlevel', 'reorderpoint', 'minimumstock', 'minstock'];
+
+/** A whole number of packs above 0 ("20", "20.0"); anything else is not recorded. */
+function reorderPacks(rawPayload: unknown): number | null {
+  const cell = sourceCell(rawPayload, REORDER_HEADERS)?.replace(/\.0+$/, '') ?? '';
+  if (!/^\d+$/.test(cell)) return null;
+  return boundedInt(Number(cell), 1);
+}
 
 /** The pack level a "pack type" cell names; a legacy numeric pack column cannot say "strip". */
 function namedLevel(rawPayload: unknown): PlannedPackLevel['level'] | null {
@@ -124,6 +138,10 @@ export type StagedMedicinePlan = {
   packLabel: string | null;
   /** The row itself is in the legacy NARCOTICS class (DEV-854). */
   narcoticsClass: boolean;
+  /** The supplier cell as read; matched to an existing supplier, never created. */
+  supplierName: string | null;
+  /** Reorder level in whole packs; null when the file did not record one. */
+  reorderLevelPacks: number | null;
 };
 
 /**
@@ -181,7 +199,20 @@ export function planStagedMedicine(row: StagedRowForCreation): StagedMedicinePla
       row.barcode && normalizeMedicineText(row.barcode) ? row.barcode.trim().slice(0, 64) : null,
     packLabel: packLabel || null,
     narcoticsClass: isLegacyControlledRow(row.rawPayload),
+    supplierName: sourceCell(row.rawPayload, SUPPLIER_HEADERS)?.slice(0, 300) ?? null,
+    reorderLevelPacks: reorderPacks(row.rawPayload),
   };
+}
+
+/**
+ * The approved safety stock (PUR-07) a reorder level becomes: packs times units per pack.
+ * Null when either is not recorded, or the result is more than the catalogue can hold.
+ */
+export function stagedReorderUnits(
+  plan: Pick<StagedMedicinePlan, 'reorderLevelPacks' | 'unitsPerPack'>
+): number | null {
+  if (plan.reorderLevelPacks === null || plan.unitsPerPack === null) return null;
+  return boundedInt(plan.reorderLevelPacks * plan.unitsPerPack, 1);
 }
 
 /**
@@ -227,6 +258,10 @@ export type StagedCreationProgress = {
   matchedEarlier: number;
   /** Rows whose barcode already belonged to another pack: reported, not attached, never moved. */
   barcodesNotAttached: number;
+  /** Rows naming a supplier that is not exactly one existing supplier: reported, not created. */
+  suppliersNotMatched: number;
+  /** Rows whose reorder level did not become a safety stock (no branch, pack size or match). */
+  reorderLevelsNotApplied: number;
 };
 
 export async function stagedCreationProgress(
@@ -241,9 +276,13 @@ export async function stagedCreationProgress(
            count(*) FILTER (WHERE NOT (${candidate('r')})) AS "unnamed"
       FROM "pharmacy_migration_rows" r
      WHERE r."organizationId" = ${organizationId} AND r."batchId" = ${batchId}`;
-  const [outcomes] = await db.$queryRaw<{ matched: bigint; barcodes: bigint }[]>`
+  const [outcomes] = await db.$queryRaw<
+    { matched: bigint; barcodes: bigint; suppliers: bigint; reorders: bigint }[]
+  >`
     SELECT count(*) FILTER (WHERE l."outcome" = 'MATCHED') AS "matched",
-           count(*) FILTER (WHERE l."barcodeAttached" = false) AS "barcodes"
+           count(*) FILTER (WHERE l."barcodeAttached" = false) AS "barcodes",
+           count(*) FILTER (WHERE l."supplierName" IS NOT NULL AND l."supplierId" IS NULL) AS "suppliers",
+           count(*) FILTER (WHERE l."reorderLevelApplied" = false) AS "reorders"
       FROM "pharmacy_staged_medicine_links" l
       JOIN "pharmacy_migration_rows" r
         ON r."organizationId" = l."organizationId" AND r."sourceKey" = l."sourceKey"
@@ -257,6 +296,8 @@ export async function stagedCreationProgress(
     unnamed: Number(counts?.unnamed ?? 0),
     matchedEarlier: Number(outcomes?.matched ?? 0),
     barcodesNotAttached: Number(outcomes?.barcodes ?? 0),
+    suppliersNotMatched: Number(outcomes?.suppliers ?? 0),
+    reorderLevelsNotApplied: Number(outcomes?.reorders ?? 0),
   };
 }
 
@@ -320,6 +361,21 @@ async function earlierMedicines(
   };
 }
 
+/**
+ * The organization's existing supplier a supplier cell names: exactly one supplier whose name is
+ * the same after `normalizeMatchText`. None, or two that normalise alike, is no match: the row
+ * reports the name and no supplier is ever created here.
+ */
+async function supplierMatcher(tx: ScopedDb, plans: readonly StagedMedicinePlan[]) {
+  if (!plans.some((plan) => plan.supplierName)) return () => null;
+  const byName = new Map<string, string | null>();
+  for (const supplier of await tx.pharmacySupplier.findMany({ select: { id: true, name: true } })) {
+    const key = normalizeMatchText(supplier.name);
+    byName.set(key, byName.has(key) ? null : supplier.id);
+  }
+  return (name: string | null) => (name ? (byName.get(normalizeMatchText(name)) ?? null) : null);
+}
+
 /** A barcode of 8, 12, 13 or 14 digits is a GTIN; any other printed code is the maker's own. */
 const barcodeType = (code: string) =>
   /^(?:\d{8}|\d{12,14})$/.test(code) ? 'GTIN' : 'MANUFACTURER';
@@ -332,7 +388,17 @@ const barcodeType = (code: string) =>
 export async function createStagedMedicinesChunk(
   tx: ScopedDb,
   scope: { organizationId: string; actorId: string },
-  request: { editId: string; editorId: string; reviewerId: string; batchId: string },
+  request: {
+    editId: string;
+    editorId: string;
+    reviewerId: string;
+    batchId: string;
+    /**
+     * The branch whose approved safety stock the file's reorder levels become; null when the
+     * request named none (the requester could not set stock thresholds there).
+     */
+    reorderBranchId?: string | null;
+  },
   limit = STAGED_CREATION_CHUNK
 ) {
   const { organizationId } = scope;
@@ -374,8 +440,14 @@ export async function createStagedMedicinesChunk(
         ).map((barcode) => barcode.normalizedCode)
       : []
   );
+  const supplierOf = await supplierMatcher(
+    tx,
+    planned.map((item) => item.plan)
+  );
+  const reorderBranchId = request.reorderBranchId ?? null;
   const now = new Date();
   const medicines: Prisma.MedicineCreateManyInput[] = [];
+  const safetyStocks: Prisma.PharmacySafetyStockCreateManyInput[] = [];
   const presentations: Prisma.PresentationCreateManyInput[] = [];
   const outerLevels: Prisma.PackLevelCreateManyInput[] = [];
   const innerLevels: Prisma.PackLevelCreateManyInput[] = [];
@@ -399,6 +471,9 @@ export async function createStagedMedicinesChunk(
       purchasePriceMinor: plan.purchasePriceMinor,
       legacyCode: plan.legacyCode,
       matchKey: stagedMatchKey(plan),
+      supplierName: plan.supplierName,
+      supplierId: supplierOf(plan.supplierName),
+      reorderLevelPacks: plan.reorderLevelPacks,
       createdById: scope.actorId,
     };
     const existing = earlier(plan);
@@ -412,6 +487,8 @@ export async function createStagedMedicinesChunk(
         outcome: 'MATCHED',
         barcode: plan.barcode,
         barcodeAttached: plan.barcode ? false : null,
+        // The existing medicine's thresholds are not changed here either.
+        reorderLevelApplied: plan.reorderLevelPacks === null ? null : false,
       });
       matched.set(existing.medicineId, existing);
       continue;
@@ -507,12 +584,25 @@ export async function createStagedMedicinesChunk(
           status: 'ACCEPTED',
           assertedValue: { value, ...evidence },
         });
+    // PUR-07: a reorder level is the branch's approved safety stock, counted in units. The
+    // batch approver approves it, as they approve the pack price.
+    const reorderUnits = reorderBranchId ? stagedReorderUnits(plan) : null;
+    if (reorderUnits !== null)
+      safetyStocks.push({
+        organizationId,
+        branchId: reorderBranchId!,
+        medicineId,
+        safetyStockUnits: reorderUnits,
+        approvedByUserId: request.reviewerId,
+        approvedAt: now,
+      });
     links.push({
       ...link,
       medicineId,
       packLevelId: outerId,
       barcode: plan.barcode,
       barcodeAttached: plan.barcode ? Boolean(barcodeId) : null,
+      reorderLevelApplied: plan.reorderLevelPacks === null ? null : reorderUnits !== null,
     });
     if (barcodeId) barcodeOfLink.set(links.at(-1)!, barcodeId);
     created.push({ id: medicineId, productName: plan.productName });
@@ -540,18 +630,20 @@ export async function createStagedMedicinesChunk(
     for (const [link, barcodeId] of barcodeOfLink)
       if (!attached.has(barcodeId)) link.barcodeAttached = false;
   }
+  if (safetyStocks.length) await tx.pharmacySafetyStock.createMany({ data: safetyStocks });
   if (links.length) await tx.pharmacyStagedMedicineLink.createMany({ data: links });
-  // DEV-854: the shared legacy NARCOTICS rule, for every medicine this step creates or matches.
-  let controlled = 0;
-  for (const medicine of [
-    ...created.map((item) => ({ ...item, controlled: false })),
-    ...[...matched.values()].map((item) => ({
-      id: item.medicineId,
-      productName: item.productName,
-      controlled: item.controlled,
-    })),
-  ])
-    if (await applyLegacyControlledToMedicine(tx, organizationId, medicine)) controlled += 1;
+  // DEV-854: the shared legacy NARCOTICS rule, for every medicine this step creates or matches,
+  // in one set-based statement for the chunk.
+  const controlled = (
+    await applyLegacyControlledToMedicines(tx, organizationId, [
+      ...created.map((item) => ({ ...item, controlled: false })),
+      ...[...matched.values()].map((item) => ({
+        id: item.medicineId,
+        productName: item.productName,
+        controlled: item.controlled,
+      })),
+    ])
+  ).length;
   if (prices.length) {
     // Pack prices are written under the organization's price lock, as every price write is.
     // Taken last, so the lock is held only while this chunk commits.

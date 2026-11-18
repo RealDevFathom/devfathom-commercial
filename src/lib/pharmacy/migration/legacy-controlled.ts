@@ -166,6 +166,55 @@ export async function hasStagedLegacyControlledRow(
 }
 
 /**
+ * DEV-912: the rule of `applyLegacyControlledToMedicine` for many medicines in one statement, so
+ * a bulk import reads the organization's staged rows once per chunk instead of once per medicine.
+ * A medicine becomes controlled when a NARCOTICS-class row with its product name has been staged
+ * in this organization. It never clears the flag and leaves alone a medicine a person has
+ * corrected to "not controlled" (DEV-925; a brand-new medicine has no such correction, a matched
+ * one may). Returns the ids it set, sorted.
+ */
+export async function applyLegacyControlledToMedicines(
+  db: Db,
+  organizationId: string,
+  medicines: readonly { id: string; productName?: string | null; controlled?: boolean | null }[]
+): Promise<string[]> {
+  const candidates = medicines.flatMap((medicine) => {
+    const key =
+      medicine.controlled || !medicine.productName
+        ? ''
+        : legacyProductNameKey(medicine.productName);
+    return key ? [{ id: medicine.id, key }] : [];
+  });
+  if (!candidates.length) return [];
+  const keys = [...new Set(candidates.map((candidate) => candidate.key))];
+  const flagged = await db.$queryRaw<{ id: string }[]>`
+    WITH wanted AS (
+      SELECT * FROM unnest(${candidates.map((c) => c.id)}::text[], ${candidates.map((c) => c.key)}::text[])
+        AS w("id", "key")
+    ), classed AS (
+      SELECT DISTINCT ${nameKey(Prisma.sql`r."productName"`)} AS "key"
+        FROM "pharmacy_migration_rows" r
+        CROSS JOIN LATERAL jsonb_each_text(
+          CASE WHEN jsonb_typeof(r."rawPayload") = 'object' THEN r."rawPayload" ELSE '{}'::jsonb END
+        ) AS cell(header, value)
+       WHERE r."organizationId" = ${organizationId}
+         AND ${nameKey(Prisma.sql`r."productName"`)} = ANY(${keys}::text[])
+         AND regexp_replace(lower(cell.header), '[^a-z0-9]', '', 'g') IN ('classname', 'class')
+         AND upper(${normalizedText(Prisma.sql`cell.value`)}) = ${LEGACY_CONTROLLED_CLASS}
+    )
+    UPDATE "pharmacy_medicines" p
+       SET "controlled" = true, "updatedAt" = CURRENT_TIMESTAMP
+      FROM wanted
+      JOIN classed ON classed."key" = wanted."key"
+     WHERE p."organizationId" = ${organizationId}
+       AND p."id" = wanted."id"
+       AND p."controlled" = false
+       AND NOT ${correctedNotControlled(organizationId, Prisma.sql`p."id"`)}
+    RETURNING p."id"`;
+  return flagged.map((row) => row.id).sort();
+}
+
+/**
  * DEV-854: the shared rule for a medicine created or matched by any import AFTER its legacy file
  * was staged (the manual reference import today, a "create products from staged rows" step later).
  * Call it in the same transaction, right after the medicine is created or updated. When a

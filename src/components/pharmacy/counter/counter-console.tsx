@@ -3864,6 +3864,7 @@ function ScopedPharmacyCounterConsole({
               ) : drawerRequired ? (
                 <CounterOpenDrawerStep
                   canDeclareFloat={actorIsManager}
+                  accessChecking={managerAccess.isLoading}
                   disabled={drawerBusy || !drawerStatusKnown || !canSettlePayments}
                   disabledReason={drawerDisabledReason}
                   statusError={drawerQuery.isError}

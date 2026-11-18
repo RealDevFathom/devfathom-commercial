@@ -2374,26 +2374,28 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     }
   );
 
-  it.each(['cashier', 'loading', 'failed'])(
-    'DEV-873: %s access never invites an opening float',
+  it.each(['cashier', 'failed'])(
+    'DEV-873/DEV-933: %s access never invites an opening float and needs a typed count',
     async (access) => {
       closeDrawer();
       mocks.queries.refundAccess =
         access === 'cashier'
           ? query({ authorized: false })
-          : access === 'loading'
-            ? { ...query(), isSuccess: false, isLoading: true }
-            : { ...query({ authorized: true }), isError: true };
+          : { ...query({ authorized: true }), isError: true };
       mocks.mutations.openDrawer!.mockResolvedValue(openDrawer);
       render(<PharmacyCounterConsole initialBranchId="branch-a" />);
       const field = screen.getByLabelText('Opening cash');
-      expect(field).toHaveValue('0');
-      expect(field).toHaveAttribute('readonly');
+      expect(field).toHaveValue('');
+      expect(field).not.toHaveAttribute('readonly');
       expect(screen.queryByRole('group', { name: 'Quick amounts' })).not.toBeInTheDocument();
       expect(screen.queryByText(/Count the cash in the drawer/)).not.toBeInTheDocument();
       expect(
         screen.getByText(/Ask a manager or owner to declare any opening float/)
       ).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+      expect(screen.getByRole('alert')).toHaveTextContent('Enter the opening cash');
+      expect(mocks.mutations.openDrawer).not.toHaveBeenCalled();
+      fireEvent.change(field, { target: { value: '0' } });
       fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
       await screen.findByText('Cash drawer opened for this counter.');
       expect(mocks.mutations.openDrawer).toHaveBeenCalledExactlyOnceWith(
@@ -2401,6 +2403,18 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
       );
     }
   );
+
+  it('DEV-933: a slow access check keeps the step waiting with no prefilled count', () => {
+    closeDrawer();
+    mocks.queries.refundAccess = { ...query(), isSuccess: false, isLoading: true };
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    const field = screen.getByLabelText('Opening cash');
+    expect(field).toHaveValue('');
+    expect(field).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Open drawer' })).toBeDisabled();
+    expect(screen.getByText('Checking your access…')).toBeInTheDocument();
+    expect(mocks.mutations.openDrawer).not.toHaveBeenCalled();
+  });
 
   it('DEV-873: a server float refusal does not claim the cashier cannot take payments', async () => {
     closeDrawer();
@@ -2420,6 +2434,25 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     expect(screen.getByRole('alert')).not.toHaveTextContent('does not take payments');
     expect(screen.getByLabelText('Opening cash')).toHaveValue('5000');
     await waitFor(() => expect(mocks.drawerStatusInvalidate).toHaveBeenCalled());
+  });
+
+  it('DEV-933: a cashier who types a float above 0 is told in plain words and keeps the value', async () => {
+    closeDrawer();
+    mocks.queries.refundAccess = query({ authorized: false });
+    mocks.mutations.openDrawer!.mockRejectedValue(
+      Object.assign(new Error('You do not have permission for this action.'), {
+        data: { code: 'FORBIDDEN' },
+      })
+    );
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    const field = screen.getByLabelText('Opening cash');
+    fireEvent.change(field, { target: { value: '5000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Only a manager or owner can open with a float. Open with 0 if the drawer is empty, or ask a manager.'
+    );
+    expect(screen.getByLabelText('Opening cash')).toHaveValue('5000');
+    expect(screen.getByLabelText('Opening cash')).toBeEnabled();
   });
 
   it('starts a bill only on this device’s open drawer, naming the device (DEV-725)', async () => {
