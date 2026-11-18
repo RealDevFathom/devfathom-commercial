@@ -1,0 +1,611 @@
+{
+  "note": "local, synthetic data, not staging",
+  "commit": "064e8ba0 + server prefetch of counterBranches (tried, reverted)",
+  "next": "16.4.6",
+  "runs": 7,
+  "metricsMs": "ttfb/lcp/usable/load/longTaskMs are milliseconds from navigation start; transferKb is KiB",
+  "summary": {
+    "cold.medicines": {
+      "ttfb": 2965,
+      "lcp": 3432,
+      "usable": 3414,
+      "load": 3328,
+      "longTaskMs": 52,
+      "transferKb": 664
+    },
+    "cold.medicinesPaged": {
+      "ttfb": 2874,
+      "lcp": 3324,
+      "usable": 3349,
+      "load": 3192,
+      "longTaskMs": 0,
+      "transferKb": 664
+    },
+    "cold.counter": {
+      "ttfb": 3716,
+      "lcp": 5336,
+      "usable": 5491,
+      "load": 3946,
+      "longTaskMs": 125,
+      "transferKb": 766
+    },
+    "coldBrowser.medicines": {
+      "ttfb": 44,
+      "lcp": 460,
+      "usable": 484,
+      "load": 263,
+      "longTaskMs": 0,
+      "transferKb": 688
+    },
+    "coldBrowser.medicinesPaged": {
+      "ttfb": 57,
+      "lcp": 472,
+      "usable": 491,
+      "load": 281,
+      "longTaskMs": 0,
+      "transferKb": 689
+    },
+    "coldBrowser.counter": {
+      "ttfb": 48,
+      "lcp": 580,
+      "usable": 656,
+      "load": 248,
+      "longTaskMs": 55,
+      "transferKb": 767
+    },
+    "warm.medicines": {
+      "ttfb": 39,
+      "lcp": 432,
+      "usable": 458,
+      "load": 220,
+      "longTaskMs": 0,
+      "transferKb": 39
+    },
+    "warm.medicinesPaged": {
+      "ttfb": 54,
+      "lcp": 452,
+      "usable": 474,
+      "load": 229,
+      "longTaskMs": 0,
+      "transferKb": 39
+    },
+    "warm.counter": {
+      "ttfb": 45,
+      "lcp": 568,
+      "usable": 646,
+      "load": 204,
+      "longTaskMs": 69,
+      "transferKb": 28
+    }
+  },
+  "samples": {
+    "cold": {
+      "medicines": [
+        {
+          "ttfb": 2965.3,
+          "load": 3274.1,
+          "lcp": 3396,
+          "usable": 3414,
+          "longTaskMs": 0,
+          "transferKb": 664.0
+        },
+        {
+          "ttfb": 2937.5,
+          "load": 3327.7,
+          "lcp": 3432,
+          "usable": 3407.2,
+          "longTaskMs": 52,
+          "transferKb": 680.9
+        },
+        {
+          "ttfb": 3082,
+          "load": 3401.6,
+          "lcp": 3504,
+          "usable": 3538.9,
+          "longTaskMs": 0,
+          "transferKb": 664.0
+        },
+        {
+          "ttfb": 3154.9,
+          "load": 3529.5,
+          "lcp": 3624,
+          "usable": 3640.4,
+          "longTaskMs": 61,
+          "transferKb": 664.0
+        },
+        {
+          "ttfb": 3055.4,
+          "load": 3369.2,
+          "lcp": 3492,
+          "usable": 3521,
+          "longTaskMs": 62,
+          "transferKb": 660.3
+        },
+        {
+          "ttfb": 2863.8,
+          "load": 3184.1,
+          "lcp": 3284,
+          "usable": 3313.6,
+          "longTaskMs": 0,
+          "transferKb": 664.0
+        },
+        {
+          "ttfb": 2775.5,
+          "load": 3112.4,
+          "lcp": 3224,
+          "usable": 3265,
+          "longTaskMs": 62,
+          "transferKb": 660.3
+        }
+      ],
+      "medicinesPaged": [
+        {
+          "ttfb": 2874.1,
+          "load": 3191.9,
+          "lcp": 3324,
+          "usable": 3349.4,
+          "longTaskMs": 0,
+          "transferKb": 664.2
+        },
+        {
+          "ttfb": 2849.3,
+          "load": 3138.2,
+          "lcp": 3264,
+          "usable": 3304.9,
+          "longTaskMs": 0,
+          "transferKb": 664.2
+        },
+        {
+          "ttfb": 2893.9,
+          "load": 3224.6,
+          "lcp": 3412,
+          "usable": 3448.6,
+          "longTaskMs": 121,
+          "transferKb": 664.3
+        },
+        {
+          "ttfb": 2873.6,
+          "load": 3149.2,
+          "lcp": 3300,
+          "usable": 3339.6,
+          "longTaskMs": 50,
+          "transferKb": 660.5
+        },
+        {
+          "ttfb": 3014,
+          "load": 3367.5,
+          "lcp": 3480,
+          "usable": 3489.5,
+          "longTaskMs": 0,
+          "transferKb": 664.3
+        },
+        {
+          "ttfb": 2839,
+          "load": 3174,
+          "lcp": 3308,
+          "usable": 3322.2,
+          "longTaskMs": 0,
+          "transferKb": 660.5
+        },
+        {
+          "ttfb": 2957.7,
+          "load": 3285.2,
+          "lcp": 3412,
+          "usable": 3443.3,
+          "longTaskMs": 50,
+          "transferKb": 664.3
+        }
+      ],
+      "counter": [
+        {
+          "ttfb": 3685.9,
+          "load": 3920.9,
+          "lcp": 5300,
+          "usable": 5453.2,
+          "longTaskMs": 125,
+          "transferKb": 766.3
+        },
+        {
+          "ttfb": 3715.6,
+          "load": 3979.9,
+          "lcp": 5332,
+          "usable": 5469.3,
+          "longTaskMs": 113,
+          "transferKb": 767.1
+        },
+        {
+          "ttfb": 3695.7,
+          "load": 3929.3,
+          "lcp": 5268,
+          "usable": 5428.4,
+          "longTaskMs": 171,
+          "transferKb": 767.1
+        },
+        {
+          "ttfb": 3744.7,
+          "load": 3998,
+          "lcp": 5436,
+          "usable": 5613.4,
+          "longTaskMs": 58,
+          "transferKb": 766.3
+        },
+        {
+          "ttfb": 3739.9,
+          "load": 3946,
+          "lcp": 5468,
+          "usable": 5623.3,
+          "longTaskMs": 129,
+          "transferKb": 767.1
+        },
+        {
+          "ttfb": 3762.4,
+          "load": 3977.8,
+          "lcp": 5336,
+          "usable": 5490.6,
+          "longTaskMs": 116,
+          "transferKb": 766.3
+        },
+        {
+          "ttfb": 3639.3,
+          "load": 3862.4,
+          "lcp": 5436,
+          "usable": 5621,
+          "longTaskMs": 127,
+          "transferKb": 766.3
+        }
+      ]
+    },
+    "coldBrowser": {
+      "medicines": [
+        {
+          "ttfb": 55.4,
+          "load": 285.1,
+          "lcp": 508,
+          "usable": 507.5,
+          "longTaskMs": 0,
+          "transferKb": 688.4
+        },
+        {
+          "ttfb": 43.9,
+          "load": 323.3,
+          "lcp": 480,
+          "usable": 486.2,
+          "longTaskMs": 0,
+          "transferKb": 688.4
+        },
+        {
+          "ttfb": 54,
+          "load": 265.4,
+          "lcp": 460,
+          "usable": 484,
+          "longTaskMs": 0,
+          "transferKb": 688.4
+        },
+        {
+          "ttfb": 37.6,
+          "load": 239.1,
+          "lcp": 448,
+          "usable": 466.5,
+          "longTaskMs": 0,
+          "transferKb": 688.4
+        },
+        {
+          "ttfb": 40.2,
+          "load": 263.2,
+          "lcp": 444,
+          "usable": 469.5,
+          "longTaskMs": 54,
+          "transferKb": 688.4
+        },
+        {
+          "ttfb": 48.3,
+          "load": 258,
+          "lcp": 468,
+          "usable": 496.1,
+          "longTaskMs": 0,
+          "transferKb": 688.4
+        },
+        {
+          "ttfb": 43.6,
+          "load": 241.7,
+          "lcp": 444,
+          "usable": 465.2,
+          "longTaskMs": 0,
+          "transferKb": 688.4
+        }
+      ],
+      "medicinesPaged": [
+        {
+          "ttfb": 57.8,
+          "load": 291,
+          "lcp": 476,
+          "usable": 527.8,
+          "longTaskMs": 54,
+          "transferKb": 688.6
+        },
+        {
+          "ttfb": 66,
+          "load": 280.6,
+          "lcp": 476,
+          "usable": 490.7,
+          "longTaskMs": 0,
+          "transferKb": 688.6
+        },
+        {
+          "ttfb": 51.5,
+          "load": 278.1,
+          "lcp": 472,
+          "usable": 500.7,
+          "longTaskMs": 0,
+          "transferKb": 688.6
+        },
+        {
+          "ttfb": 56.6,
+          "load": 260.7,
+          "lcp": 460,
+          "usable": 476.5,
+          "longTaskMs": 0,
+          "transferKb": 688.6
+        },
+        {
+          "ttfb": 73.3,
+          "load": 348.5,
+          "lcp": 528,
+          "usable": 554.3,
+          "longTaskMs": 75,
+          "transferKb": 688.6
+        },
+        {
+          "ttfb": 51.2,
+          "load": 291.2,
+          "lcp": 452,
+          "usable": 481.9,
+          "longTaskMs": 51,
+          "transferKb": 688.6
+        },
+        {
+          "ttfb": 37.9,
+          "load": 220.6,
+          "lcp": 464,
+          "usable": 485.8,
+          "longTaskMs": 0,
+          "transferKb": 688.6
+        }
+      ],
+      "counter": [
+        {
+          "ttfb": 56.4,
+          "load": 291.1,
+          "lcp": 672,
+          "usable": 775,
+          "longTaskMs": 130,
+          "transferKb": 767.1
+        },
+        {
+          "ttfb": 48.6,
+          "load": 268,
+          "lcp": 588,
+          "usable": 656,
+          "longTaskMs": 51,
+          "transferKb": 767.4
+        },
+        {
+          "ttfb": 40.3,
+          "load": 242.7,
+          "lcp": 552,
+          "usable": 623.7,
+          "longTaskMs": 55,
+          "transferKb": 767.1
+        },
+        {
+          "ttfb": 41.8,
+          "load": 234.8,
+          "lcp": 572,
+          "usable": 675.2,
+          "longTaskMs": 111,
+          "transferKb": 767.1
+        },
+        {
+          "ttfb": 48.6,
+          "load": 254.6,
+          "lcp": 584,
+          "usable": 681.7,
+          "longTaskMs": 54,
+          "transferKb": 767.1
+        },
+        {
+          "ttfb": 39.9,
+          "load": 232.8,
+          "lcp": 580,
+          "usable": 642,
+          "longTaskMs": 71,
+          "transferKb": 767.3
+        },
+        {
+          "ttfb": 48.4,
+          "load": 248.2,
+          "lcp": 556,
+          "usable": 642.7,
+          "longTaskMs": 51,
+          "transferKb": 767.3
+        }
+      ]
+    },
+    "warm": {
+      "medicines": [
+        {
+          "ttfb": 55.2,
+          "load": 255.1,
+          "lcp": 492,
+          "usable": 501.6,
+          "longTaskMs": 50,
+          "transferKb": 38.8
+        },
+        {
+          "ttfb": 38.2,
+          "load": 200.6,
+          "lcp": 432,
+          "usable": 452.5,
+          "longTaskMs": 0,
+          "transferKb": 38.8
+        },
+        {
+          "ttfb": 38.2,
+          "load": 216.1,
+          "lcp": 424,
+          "usable": 447.9,
+          "longTaskMs": 0,
+          "transferKb": 38.8
+        },
+        {
+          "ttfb": 38.5,
+          "load": 268.3,
+          "lcp": 452,
+          "usable": 476.1,
+          "longTaskMs": 0,
+          "transferKb": 38.8
+        },
+        {
+          "ttfb": 44.1,
+          "load": 228.8,
+          "lcp": 460,
+          "usable": 488.4,
+          "longTaskMs": 0,
+          "transferKb": 38.8
+        },
+        {
+          "ttfb": 35.9,
+          "load": 187.3,
+          "lcp": 432,
+          "usable": 458,
+          "longTaskMs": 0,
+          "transferKb": 38.8
+        },
+        {
+          "ttfb": 48.1,
+          "load": 219.7,
+          "lcp": 424,
+          "usable": 437.8,
+          "longTaskMs": 51,
+          "transferKb": 38.8
+        }
+      ],
+      "medicinesPaged": [
+        {
+          "ttfb": 50.6,
+          "load": 228.5,
+          "lcp": 464,
+          "usable": 486.2,
+          "longTaskMs": 0,
+          "transferKb": 39.1
+        },
+        {
+          "ttfb": 55.6,
+          "load": 245,
+          "lcp": 496,
+          "usable": 516.2,
+          "longTaskMs": 57,
+          "transferKb": 39.1
+        },
+        {
+          "ttfb": 58.7,
+          "load": 234.3,
+          "lcp": 452,
+          "usable": 474.1,
+          "longTaskMs": 0,
+          "transferKb": 39.1
+        },
+        {
+          "ttfb": 59.7,
+          "load": 234.8,
+          "lcp": 452,
+          "usable": 471.3,
+          "longTaskMs": 0,
+          "transferKb": 39.1
+        },
+        {
+          "ttfb": 53.7,
+          "load": 212.3,
+          "lcp": 452,
+          "usable": 472.8,
+          "longTaskMs": 0,
+          "transferKb": 39.1
+        },
+        {
+          "ttfb": 44.6,
+          "load": 225.5,
+          "lcp": 488,
+          "usable": 503.6,
+          "longTaskMs": 0,
+          "transferKb": 39.1
+        },
+        {
+          "ttfb": 43.6,
+          "load": 212.7,
+          "lcp": 436,
+          "usable": 449,
+          "longTaskMs": 0,
+          "transferKb": 39.0
+        }
+      ],
+      "counter": [
+        {
+          "ttfb": 58.9,
+          "load": 230.8,
+          "lcp": 636,
+          "usable": 712.1,
+          "longTaskMs": 58,
+          "transferKb": 28.5
+        },
+        {
+          "ttfb": 51.4,
+          "load": 237.3,
+          "lcp": 584,
+          "usable": 645.9,
+          "longTaskMs": 104,
+          "transferKb": 28.5
+        },
+        {
+          "ttfb": 51.4,
+          "load": 213.7,
+          "lcp": 568,
+          "usable": 651.8,
+          "longTaskMs": 69,
+          "transferKb": 28.5
+        },
+        {
+          "ttfb": 45,
+          "load": 195.9,
+          "lcp": 548,
+          "usable": 612.5,
+          "longTaskMs": 63,
+          "transferKb": 27.7
+        },
+        {
+          "ttfb": 37.7,
+          "load": 204.1,
+          "lcp": 540,
+          "usable": 597.3,
+          "longTaskMs": 107,
+          "transferKb": 28.5
+        },
+        {
+          "ttfb": 40.2,
+          "load": 183.1,
+          "lcp": 628,
+          "usable": 685.9,
+          "longTaskMs": 133,
+          "transferKb": 27.7
+        },
+        {
+          "ttfb": 44.9,
+          "load": 189.8,
+          "lcp": 492,
+          "usable": 569.2,
+          "longTaskMs": 53,
+          "transferKb": 27.7
+        }
+      ]
+    }
+  }
+}
