@@ -737,6 +737,15 @@ describe('pharmacy report catalog filters', () => {
     );
   });
 
+  it('shows the anomaly data window on the workspace clock, not the server locale', async () => {
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+    expect(
+      screen.getByText(
+        /Window 1 Sep 2026, 5:00 AM PKT–5 Sep 2026, 5:00 AM PKT · source observed 4 Sep 2026, 3:00 PM PKT/
+      )
+    ).toBeVisible();
+  });
+
   it('offers the sub-reports as header actions styled like every other Studio control', async () => {
     render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
     const header = document.querySelector('[data-slot="page-header"]')!;

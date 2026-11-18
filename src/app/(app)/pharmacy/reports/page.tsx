@@ -660,14 +660,14 @@ export default async function PharmacyReportsPage({
             snapshots; expiry exposure is not realized loss. Gross margin is not cash flow. Gross
             margin uses the same exact posted journal as Finance, including returns and reversals,
             on postings from the start of the first selected date to the start of the day after the
-            last, in {workspaceZoneLabel(timeZone)}. Finance&apos;s margin comparison still splits
-            days at midnight UTC, so its totals can differ for the same dates. It may differ from
-            sales grouped by business date. Missing journal evidence is unavailable; posted totals
-            do not establish complete source or cost coverage. Supplier, ingredient and batch
-            filters narrow sales, gross margin, stock signals, recommended orders and expiry
-            exposure to the matching stock lots and products. Cash, cash variance and refunds cannot
-            be traced to a supplier, ingredient or batch, so they show — while one is selected. The
-            daily work pack and observed demand use branch/date scope only.
+            last, in {workspaceZoneLabel(timeZone)}. Finance&apos;s margin comparison splits days
+            the same way. It may differ from sales grouped by business date. Missing journal
+            evidence is unavailable; posted totals do not establish complete source or cost
+            coverage. Supplier, ingredient and batch filters narrow sales, gross margin, stock
+            signals, recommended orders and expiry exposure to the matching stock lots and products.
+            Cash, cash variance and refunds cannot be traced to a supplier, ingredient or batch, so
+            they show — while one is selected. The daily work pack and observed demand use
+            branch/date scope only.
           </p>
         </SectionCard>
       ) : null}
@@ -946,10 +946,10 @@ export default async function PharmacyReportsPage({
                             ))}
                           </dl>
                           <p className="mt-3 text-xs leading-5 text-text-muted">
-                            Window {new Date(signal.dataWindowStart).toLocaleString()}–
-                            {new Date(signal.dataWindowEnd).toLocaleString()} · source observed{' '}
-                            {new Date(signal.sourceObservedAt).toLocaleString()} · policy{' '}
-                            {signal.policyVersion}
+                            Window {formatWorkspaceDateTime(signal.dataWindowStart, timeZone)}–
+                            {formatWorkspaceDateTime(signal.dataWindowEnd, timeZone)} · source
+                            observed {formatWorkspaceDateTime(signal.sourceObservedAt, timeZone)} ·
+                            policy {signal.policyVersion}
                           </p>
                           <div className="mt-3 flex flex-wrap gap-3 text-xs">
                             {scope.userId ? (

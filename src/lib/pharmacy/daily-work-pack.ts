@@ -17,6 +17,8 @@ export type PharmacyDailyWorkPackInput = {
   from: string;
   to: string;
   asOf: string;
+  /** Workspace IANA zone: anomaly windows are keyed on its midnights (UTC when absent). */
+  timeZone?: string | null;
 };
 
 type SourceKind = 'stock-dashboard' | 'stock-digest' | 'anomalies' | 'expiry' | 'supplier-credit';
@@ -359,6 +361,7 @@ export async function readPharmacyDailyWorkPack(
           branchIds: [branchId],
           from: input.from,
           to: input.to,
+          timeZone: input.timeZone,
         });
         source.returnedRows = rows.length;
         for (const row of rows) {

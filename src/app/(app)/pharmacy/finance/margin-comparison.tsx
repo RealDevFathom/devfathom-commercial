@@ -11,13 +11,25 @@ import {
 } from '@/components/ui/table';
 import type { grossMarginComparison } from '@/lib/pharmacy/finance-reports';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
-import { formatUtcInstant } from '@/lib/utc-instant';
+import {
+  formatWorkspaceDateTime,
+  workspaceDateOffset,
+  workspaceDateRange,
+  workspaceToday,
+  workspaceZoneLabel,
+} from '@/lib/timezone';
 
 type Comparison = Awaited<ReturnType<typeof grossMarginComparison>>;
 const money = (minor: number) =>
   `${(minor / 100).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (currency unknown)`;
 
-export function MarginComparisonLedger({ report }: { report: Comparison }) {
+export function MarginComparisonLedger({
+  report,
+  timeZone,
+}: {
+  report: Comparison;
+  timeZone?: string | null;
+}) {
   const rows = [
     [
       'Revenue',
@@ -47,11 +59,11 @@ export function MarginComparisonLedger({ report }: { report: Comparison }) {
   return (
     <div className="min-w-0 space-y-3">
       <p className="break-words text-sm text-text-muted">
-        Previous: {formatUtcInstant(report.periods.previous.from)} to{' '}
-        {formatUtcInstant(report.periods.previous.to)}. Current:{' '}
-        {formatUtcInstant(report.periods.current.from)} to{' '}
-        {formatUtcInstant(report.periods.current.to)}. Periods are start inclusive, end exclusive.
-        Same branch, equal elapsed duration.
+        Previous: {formatWorkspaceDateTime(report.periods.previous.from, timeZone)} to{' '}
+        {formatWorkspaceDateTime(report.periods.previous.to, timeZone)}. Current:{' '}
+        {formatWorkspaceDateTime(report.periods.current.from, timeZone)} to{' '}
+        {formatWorkspaceDateTime(report.periods.current.to, timeZone)}. Periods are start inclusive,
+        end exclusive. Same branch, equal elapsed duration.
       </p>
       {!report.previous.hasEntries || !report.current.hasEntries ? (
         <p role="status" className="text-sm text-text-muted">
@@ -115,6 +127,7 @@ export async function MarginComparisonSection({
   ledgerAt,
   ledgerBy,
   profitBy,
+  timeZone,
 }: {
   caller: ReturnType<typeof pharmacyFinanceRouter.createCaller>;
   branch: { id: string; name: string };
@@ -125,19 +138,22 @@ export async function MarginComparisonSection({
   ledgerAt?: string;
   ledgerBy?: string;
   profitBy?: string;
+  /** Workspace IANA zone: picked dates start at its midnight (UTC when absent). */
+  timeZone?: string | null;
 }) {
-  const end = new Date();
-  end.setUTCHours(0, 0, 0, 0);
-  const start = new Date(end.getTime() - 30 * 86_400_000);
-  const fromDate = from ?? start.toISOString().slice(0, 10);
-  const toDate = to ?? end.toISOString().slice(0, 10);
+  const fromDate = from ?? workspaceDateOffset(timeZone, -30);
+  const toDate = to ?? workspaceToday(timeZone);
+  const zone = workspaceZoneLabel(timeZone);
+  // A picked date starts at the workspace's midnight, as the Reports page bounds its days.
+  const dayStart = (day: string) =>
+    workspaceDateRange(day, day, timeZone).from.toISOString().replace('.000Z', 'Z');
   let report: Comparison | undefined;
   let denied = false;
   try {
     report = await caller.marginComparison({
       branchId: branch.id,
-      from: `${fromDate}T00:00:00Z`,
-      to: `${toDate}T00:00:00Z`,
+      from: dayStart(fromDate),
+      to: dayStart(toDate),
     });
   } catch (error) {
     denied =
@@ -162,7 +178,7 @@ export async function MarginComparisonSection({
             ) : null
         )}
         <label className="text-sm">
-          Current start (UTC)
+          Current start ({zone})
           <Input
             className="mt-1 min-h-11"
             name="marginFrom"
@@ -172,7 +188,7 @@ export async function MarginComparisonSection({
           />
         </label>
         <label className="text-sm">
-          Current end (UTC, exclusive)
+          Current end ({zone}, exclusive)
           <Input
             className="mt-1 min-h-11"
             name="marginTo"
@@ -186,7 +202,7 @@ export async function MarginComparisonSection({
         </Button>
       </form>
       {report ? (
-        <MarginComparisonLedger report={report} />
+        <MarginComparisonLedger report={report} timeZone={timeZone} />
       ) : (
         <p role="alert" className="text-sm text-text-muted">
           {denied
