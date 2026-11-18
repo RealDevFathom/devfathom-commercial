@@ -669,6 +669,7 @@ export const pharmacyOnboardingRouter = router({
         .extend({
           revision: z.number().int().nonnegative(),
           windows: pharmacistCoverageWindowsSchema,
+          timeZone: z.string().trim().min(1).max(64).optional(),
         })
         .strict()
     )
@@ -687,9 +688,16 @@ export const pharmacyOnboardingRouter = router({
         select: { timezone: true },
       });
       const windows = normalizeCoverageWindows(input.windows);
-      const hours = windows.length
-        ? { timeZone: coverageTimeZone(organization?.timezone), windows }
-        : null;
+      // A save never changes the zone already stored for the branch.
+      const storedZone = (branch.pharmacistCoverageHours as { timeZone?: unknown } | null)
+        ?.timeZone;
+      const keptTimeZone =
+        typeof storedZone === 'string' && isIanaTimezone(storedZone)
+          ? storedZone
+          : input.timeZone && isIanaTimezone(input.timeZone)
+            ? input.timeZone
+            : coverageTimeZone(organization?.timezone);
+      const hours = windows.length ? { timeZone: keptTimeZone, windows } : null;
       const revision = input.revision + 1;
       await ctx.db.$transaction(async (tx) => {
         const updated = await tx.pharmacyBranch.updateMany({
