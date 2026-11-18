@@ -6,7 +6,11 @@
  * validity, buyer name, qualified person's signature) on the thermal 80 mm, A4
  * and Urdu layouts; a Punjab branch's receipt is byte-for-byte unchanged.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// These tests cover the cash memo as it will behave once counsel lifts the #708 hold.
+// The hold itself, with the real constant, is proven in sindh-cash-memo-hold.test.ts.
+vi.mock('./sindh-cash-memo-hold', () => ({ SINDH_CASH_MEMO_LIVE: true }));
 
 import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
 

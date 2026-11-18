@@ -19,6 +19,7 @@ import { PrintDocumentSchema, type PrintDocument } from '@/lib/restaurant/printi
 
 import type { DispensingLabelSource } from './dispensing-label';
 import { isNoExpiryDate } from './product-class';
+import { SINDH_CASH_MEMO_LIVE } from './sindh-cash-memo-hold';
 
 import type { SaleUnitKind } from './counter-pricing';
 
@@ -547,12 +548,24 @@ export type CounterReceiptCashMemo = {
 };
 
 /**
+ * #708 — whether the branch's province would choose the Sindh cash memo now.
+ * Always false while the counsel hold (`SINDH_CASH_MEMO_LIVE`) is in place.
+ */
+export function sindhCashMemoSelected(code: string | null | undefined): boolean {
+  return SINDH_CASH_MEMO_LIVE && isSindhCashMemoProvince(code);
+}
+
+/**
  * #708 — Sindh Drugs Rules r.18 cash memo facts, or null outside Sindh.
  *
  * The mode is not an operator toggle: it follows the regulatory profile that
  * was in force when the sale completed, so a reprint from history prints the
  * same memo and a Punjab branch's receipt is unchanged. Missing facts print
  * as "not recorded" or a blank to be completed by hand, never invented.
+ *
+ * A receipt keeps the decision frozen into its identity snapshot. Only a
+ * receipt without one falls back to the profile, and that fallback is held
+ * off with sale completion until counsel confirms the memo wording.
  */
 export function counterReceiptCashMemo(
   receipt: Pick<CounterReceipt, 'buyerName' | 'cashMemoIdentity'>,
@@ -560,6 +573,7 @@ export function counterReceiptCashMemo(
   locale: CounterReceiptLocale
 ): CounterReceiptCashMemo | null {
   if (receipt.cashMemoIdentity !== undefined) identity = receipt.cashMemoIdentity;
+  else if (!sindhCashMemoSelected(identity?.provinceCode)) return null;
   if (!isSindhCashMemoProvince(identity?.provinceCode)) return null;
   const strings = COUNTER_RECEIPT_STRINGS[locale];
   const licenceNumber = identity?.licenceNumber?.trim() || strings.notRecorded;

@@ -27,6 +27,18 @@ type Query = {
   refetch: ReturnType<typeof vi.fn>;
 };
 
+// #708: the cash memo is held off by a hard-coded constant until counsel confirms it. Tests
+// read the real constant unless one sets `cashMemoHold.live` to check the post-hold memo.
+const cashMemoHold = vi.hoisted(() => ({ live: undefined as boolean | undefined }));
+vi.mock('@/lib/pharmacy/sindh-cash-memo-hold', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pharmacy/sindh-cash-memo-hold')>();
+  return {
+    get SINDH_CASH_MEMO_LIVE() {
+      return cashMemoHold.live ?? actual.SINDH_CASH_MEMO_LIVE;
+    },
+  };
+});
+
 const mocks = vi.hoisted(() => ({
   renderSearchResults: false,
   queries: {} as Record<string, Query>,
@@ -858,7 +870,26 @@ describe('PharmacyCounterConsole split tender (#722)', () => {
 });
 
 describe('PharmacyCounterConsole Sindh cash-memo buyer (#708)', () => {
+  afterEach(() => {
+    cashMemoHold.live = undefined;
+  });
+
+  it('hides the buyer name and sends none while the cash memo is held for counsel', async () => {
+    mocks.queries.counterBranches = query({
+      branches: [{ id: 'branch-a', name: 'Synthetic branch', code: 'MT1', provinceCode: 'PK-SD' }],
+    });
+    mocks.mutations.tender!.mockResolvedValue(accepted(0));
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.queryByLabelText('Buyer name (cash memo, optional)')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
+    await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledTimes(1));
+    expect(mocks.mutations.tender).toHaveBeenCalledWith(
+      expect.not.objectContaining({ buyerName: expect.anything() })
+    );
+  });
+
   it('keeps the replayable balance key when a buyer name is sent', async () => {
+    cashMemoHold.live = true; // As the memo will behave once counsel lifts the hold.
     mocks.queries.counterBranches = query({
       branches: [{ id: 'branch-a', name: 'Synthetic branch', code: 'MT1', provinceCode: 'PK-SD' }],
     });

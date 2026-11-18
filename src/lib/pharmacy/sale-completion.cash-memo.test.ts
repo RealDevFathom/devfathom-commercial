@@ -4,6 +4,9 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// These tests cover the cash memo as it will behave once counsel lifts the #708 hold.
+// The hold itself, with the real constant, is proven in sindh-cash-memo-hold.test.ts.
+vi.mock('./sindh-cash-memo-hold', () => ({ SINDH_CASH_MEMO_LIVE: true }));
 vi.mock('server-only', () => ({}));
 vi.mock('./finance-postings', () => ({ postSaleLineEntry: vi.fn(async () => undefined) }));
 vi.mock('./sale-batch-safety', () => ({ assertSaleBatchesSellable: vi.fn(async () => new Map()) }));

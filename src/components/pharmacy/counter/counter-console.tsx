@@ -139,7 +139,7 @@ import {
 import {
   formatMinor,
   formatShortExpiry,
-  isSindhCashMemoProvince,
+  sindhCashMemoSelected,
   type CounterReceipt,
   type CounterReceiptLocale,
 } from '@/lib/pharmacy/counter-receipt';
@@ -4376,7 +4376,7 @@ function ScopedPharmacyCounterConsole({
                 }
               : undefined
           }
-          cashMemo={isSindhCashMemoProvince(
+          cashMemo={sindhCashMemoSelected(
             branches.find((branch) => branch.id === branchId)?.provinceCode
           )}
           recoveryOutcome={tenderOutcome}

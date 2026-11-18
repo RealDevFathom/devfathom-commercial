@@ -8,7 +8,7 @@ import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { PharmacyReceiptIdentityError, validateReceiptIdentity } from './receipt-identity';
 import { assertRxSaleAllowed } from './rx-sale-gate';
 import { readPharmacyReceiptTaxIdentity } from './receipt-print';
-import { isSindhCashMemoProvince } from './counter-receipt';
+import { sindhCashMemoSelected } from './counter-receipt';
 import {
   assertRxLinesPrescribed,
   recordCompletedPrescriptionReference,
@@ -136,7 +136,9 @@ export async function completePaidPharmacySale(
     issuedAt,
     organization?.timezone
   );
-  const cashMemoIdentity = isSindhCashMemoProvince(regulatoryIdentity.provinceCode)
+  // #708 hold: the receipt mode is chosen here, and stays ordinary until counsel confirms
+  // the cash memo, even for a Sindh profile. The choice is frozen into the snapshot.
+  const cashMemoIdentity = sindhCashMemoSelected(regulatoryIdentity.provinceCode)
     ? regulatoryIdentity
     : null;
   const snapshot = validateReceiptIdentity(
@@ -148,7 +150,8 @@ export async function completePaidPharmacySale(
       deviceId: input.deviceId,
       businessDate: input.businessDate.toISOString().slice(0, 10),
       issuedAt: issuedAt.toISOString(),
-      ...(buyerName ? { buyerName } : {}),
+      // Only a cash memo names its buyer; an ordinary receipt records no buyer name.
+      ...(cashMemoIdentity && buyerName ? { buyerName } : {}),
       lines: sale.lines.map((line) => ({
         saleLineId: line.id,
         medicineId: line.medicineId,
