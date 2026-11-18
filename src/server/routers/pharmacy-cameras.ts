@@ -21,6 +21,7 @@ import { stillDataUrl } from '@/lib/pharmacy/counter-evidence';
 import { sealCameraCredential } from '@/lib/restaurant/camera-credentials';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { annotateAudit } from '../audit';
+import { annotateAuditBranch } from '../audit-branch';
 import { adminProcedure, router, type TRPCContext } from '../trpc';
 
 const id = z.string().min(1).max(128);
@@ -398,6 +399,7 @@ export const pharmacyCamerasRouter = router({
     .mutation(async ({ ctx, input }) => {
       const organizationId = ctx.session.user.organizationId;
       const row = await camera(ctx.db, organizationId, input.cameraId);
+      annotateAuditBranch(ctx, row.branchId);
       // Configured mode: enabling a camera exposes live video, so apply the live
       // branch rule. The simulator path keeps its existing organization-wide rule.
       await configuredModeGuard(ctx, organizationId, row.branchId);
@@ -442,6 +444,7 @@ export const pharmacyCamerasRouter = router({
     .mutation(async ({ ctx, input }) => {
       annotateAudit(ctx, { skipInput: true });
       const row = await camera(ctx.db, ctx.session.user.organizationId, input.cameraId);
+      annotateAuditBranch(ctx, row.branchId);
       await configuredModeGuard(ctx, ctx.session.user.organizationId, row.branchId);
       if (!row.enabled || row.gateway.status !== 'ACTIVE' || row.gateway.revokedAt)
         throw new TRPCError({ code: 'FORBIDDEN' });
@@ -484,6 +487,7 @@ export const pharmacyCamerasRouter = router({
     .mutation(async ({ ctx, input }) => {
       const organizationId = ctx.session.user.organizationId;
       const row = await camera(ctx.db, organizationId, input.cameraId);
+      annotateAuditBranch(ctx, row.branchId);
       await liveBranch(ctx, organizationId, row.branchId);
       assertLiveGateway(row);
       if (!cameraGatewayRuntime.available || cameraGatewayRuntime.mode !== 'mediamtx')
@@ -515,6 +519,7 @@ export const pharmacyCamerasRouter = router({
       configured();
       const organizationId = ctx.session.user.organizationId;
       const row = await camera(ctx.db, organizationId, input.cameraId);
+      annotateAuditBranch(ctx, row.branchId);
       await liveBranch(ctx, organizationId, row.branchId);
       if (!row.enabled) throw new TRPCError({ code: 'FORBIDDEN', message: 'Camera disabled.' });
       assertLiveGateway(row);
@@ -564,6 +569,13 @@ export const pharmacyCamerasRouter = router({
     .mutation(async ({ ctx, input }) => {
       annotateAudit(ctx, { skipInput: true });
       const organizationId = ctx.session.user.organizationId;
+      // The camera's branch, for the audit entry only: a missing camera still
+      // revokes nothing, exactly as before.
+      const cameraRow = await ctx.db.camera.findFirst({
+        where: { id: input.cameraId, organizationId },
+        select: { branchId: true },
+      });
+      annotateAuditBranch(ctx, cameraRow?.branchId);
       // Revocation is the viewer's own close; it never touches another viewer's grant.
       const revoked = await ctx.db.cameraStreamGrant.updateMany({
         where: {
@@ -626,6 +638,7 @@ export const pharmacyCamerasRouter = router({
     .mutation(async ({ ctx, input }) => {
       simulated();
       const row = await camera(ctx.db, ctx.session.user.organizationId, input.cameraId);
+      annotateAuditBranch(ctx, row.branchId);
       const pending = await ctx.db.cameraEvidence.findMany({
         where: {
           organizationId: row.organizationId,

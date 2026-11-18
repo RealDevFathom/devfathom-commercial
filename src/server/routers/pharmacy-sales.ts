@@ -97,6 +97,7 @@ import {
 } from '@/lib/pharmacy/controlled-register';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { annotateAudit } from '@/server/audit';
+import { annotateAuditBranch } from '@/server/audit-branch';
 import {
   authenticateVoucherCashierPin,
   counterVoucherInput,
@@ -2225,6 +2226,7 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { attempt } = input;
+      annotateAuditBranch(ctx, attempt.branchId);
       // Manual capture references stay out of the audit input, as on the tender itself.
       if (isManualTender(attempt.type) || attempt.approvalCode !== undefined)
         annotateAudit(ctx, { skipInput: true });
