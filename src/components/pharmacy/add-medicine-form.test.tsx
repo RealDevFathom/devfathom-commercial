@@ -84,6 +84,15 @@ function field(name: string) {
   return screen.getByRole('textbox', { name: new RegExp(`^${name}`) }) as HTMLInputElement;
 }
 
+function choice(group: 'Prescription only' | 'Controlled drug', answer: 'Yes' | 'No') {
+  return within(screen.getByRole('group', { name: group })).getByRole('radio', { name: answer });
+}
+
+function search() {
+  fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'synth' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+}
+
 describe('DEV-683 add-medicine DRAP auto-fill', () => {
   it('says plainly when no DRAP data was uploaded and still lets a person enter a medicine', () => {
     mocks.lookup.data = { hasReferenceData: false, matches: [] };
@@ -95,7 +104,17 @@ describe('DEV-683 add-medicine DRAP auto-fill', () => {
     fireEvent.change(field('Dosage form'), { target: { value: 'Capsule' } });
     fireEvent.change(field('Pack'), { target: { value: '10 capsules' } });
     fireEvent.change(field('DRAP registration number'), { target: { value: 'SYN-0100' } });
-    fireEvent.click(screen.getByRole('checkbox', { name: /Prescription only/ }));
+    // Neither flag is preselected: saving waits for an explicit answer to both.
+    expect(choice('Prescription only', 'Yes')).not.toBeChecked();
+    expect(choice('Prescription only', 'No')).not.toBeChecked();
+    fireEvent.click(choice('Prescription only', 'Yes'));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm and save draft' }));
+    expect(mocks.mutate).not.toHaveBeenCalled();
+    expect(screen.getByRole('group', { name: 'Controlled drug' })).toHaveAttribute(
+      'aria-invalid',
+      'true'
+    );
+    fireEvent.click(choice('Controlled drug', 'No'));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm and save draft' }));
     expect(mocks.mutate).toHaveBeenCalledWith({
       productName: 'Typed medicine',
@@ -111,8 +130,7 @@ describe('DEV-683 add-medicine DRAP auto-fill', () => {
   it('pre-fills an unsaved draft from a DRAP row and saves only when the person confirms', async () => {
     mocks.lookup.data = { hasReferenceData: true, matches: [synthamol] };
     render(<AddMedicineForm />);
-    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'synth' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    search();
     expect(mocks.searchInputs.at(-1)).toEqual({ query: 'synth' });
     const matches = screen.getByRole('list', { name: 'DRAP reference matches' });
     expect(within(matches).getByText(/Prescription only · Controlled/)).toBeVisible();
@@ -125,12 +143,10 @@ describe('DEV-683 add-medicine DRAP auto-fill', () => {
     expect(field('Dosage form').value).toBe('Tablet');
     expect(field('Pack').value).toBe('');
     expect(field('DRAP registration number')).toHaveAttribute('readonly');
-    const rx = screen.getByRole('checkbox', { name: /Prescription only/ });
-    const controlled = screen.getByRole('checkbox', { name: /Controlled drug/ });
-    expect(rx).toBeChecked();
-    expect(rx).toBeDisabled();
-    expect(controlled).toBeChecked();
-    expect(controlled).toBeDisabled();
+    expect(choice('Prescription only', 'Yes')).toBeChecked();
+    expect(choice('Prescription only', 'No')).toBeDisabled();
+    expect(choice('Controlled drug', 'Yes')).toBeChecked();
+    expect(choice('Controlled drug', 'No')).toBeDisabled();
     expect(mocks.mutate).not.toHaveBeenCalled();
 
     // Pack is required before the draft can be confirmed.
@@ -165,8 +181,7 @@ describe('DEV-683 add-medicine DRAP auto-fill', () => {
       matches: [{ ...synthamol, inCatalogue: true }],
     };
     render(<AddMedicineForm />);
-    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'synth' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    search();
     expect(screen.getByText('Already in catalogue')).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Use Synthamol' })).toBeNull();
   });
@@ -174,13 +189,42 @@ describe('DEV-683 add-medicine DRAP auto-fill', () => {
   it('clears the auto-fill and unlocks the flags', () => {
     mocks.lookup.data = { hasReferenceData: true, matches: [synthamol] };
     render(<AddMedicineForm />);
-    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'synth' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    search();
     fireEvent.click(screen.getByRole('button', { name: 'Use Synthamol' }));
     fireEvent.click(screen.getByRole('button', { name: 'Clear auto-fill' }));
     expect(screen.queryByText('Unsaved draft')).toBeNull();
     expect(field('Medicine name').value).toBe('');
-    expect(screen.getByRole('checkbox', { name: /Prescription only/ })).toBeEnabled();
+    expect(choice('Prescription only', 'Yes')).toBeEnabled();
+    expect(choice('Prescription only', 'Yes')).not.toBeChecked();
+  });
+
+  it('asks the person to choose a flag the DRAP row does not state, with nothing preselected', () => {
+    const { controlled: _unstated, ...values } = synthamol.values;
+    void _unstated;
+    mocks.lookup.data = { hasReferenceData: true, matches: [{ ...synthamol, values }] };
+    render(<AddMedicineForm />);
+    search();
+    expect(screen.getByText(/Controlled status not stated/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Use Synthamol' }));
+    const controlled = screen.getByRole('group', { name: 'Controlled drug' });
+    expect(within(controlled).getByText(/Not stated in the DRAP reference/)).toBeVisible();
+    expect(choice('Controlled drug', 'Yes')).toBeEnabled();
+    expect(choice('Controlled drug', 'Yes')).not.toBeChecked();
+    expect(choice('Controlled drug', 'No')).not.toBeChecked();
+    // The stated flag stays locked.
+    expect(choice('Prescription only', 'Yes')).toBeChecked();
+    expect(choice('Prescription only', 'No')).toBeDisabled();
+
+    fireEvent.change(field('Pack'), { target: { value: '10 tablets' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm and save draft' }));
+    expect(mocks.mutate).not.toHaveBeenCalled();
+    expect(within(controlled).getByText('Choose yes or no.')).toBeVisible();
+
+    fireEvent.click(choice('Controlled drug', 'No'));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm and save draft' }));
+    expect(mocks.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ rx: true, controlled: false, drapReferenceId: 'ref-1' })
+    );
   });
 
   it('hides reference data from a member without catalogue-edit rights', () => {

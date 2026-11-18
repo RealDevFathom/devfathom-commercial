@@ -15,9 +15,12 @@ type Draft = {
   dosageForm: string;
   pack: string;
   drapRegistrationNumber: string;
-  rx: boolean;
-  controlled: boolean;
+  /** null until the person (or a stated DRAP flag) answers; never defaulted. */
+  rx: boolean | null;
+  controlled: boolean | null;
 };
+
+type FlagField = 'rx' | 'controlled';
 
 type ReferenceValues = {
   productName?: string;
@@ -36,8 +39,8 @@ const EMPTY_DRAFT: Draft = {
   dosageForm: '',
   pack: '',
   drapRegistrationNumber: '',
-  rx: false,
-  controlled: false,
+  rx: null,
+  controlled: null,
 };
 
 const SEARCH_MIN_LENGTH = 2;
@@ -45,10 +48,15 @@ const SEARCH_MIN_LENGTH = 2;
 const inputClass =
   'mt-1 min-h-11 w-full rounded-control border border-border-default bg-surface-raised px-3 text-sm text-text-body focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring read-only:bg-surface-sunken disabled:opacity-60';
 
-function flagLabel(value: boolean | undefined, yes: string, no: string) {
-  if (value === undefined) return null;
+function flagLabel(value: boolean | undefined, yes: string, no: string, unknown: string) {
+  if (value === undefined) return unknown;
   return value ? yes : no;
 }
+
+const FLAG_FIELDS: ReadonlyArray<readonly [FlagField, string]> = [
+  ['rx', 'Prescription only'],
+  ['controlled', 'Controlled drug'],
+];
 
 /**
  * DEV-683: the add-medicine form. A catalogue editor may pre-fill an unsaved draft from the
@@ -125,8 +133,9 @@ export function AddMedicineForm() {
       strength: row.values.strength ?? '',
       dosageForm: row.values.dosageForm ?? '',
       drapRegistrationNumber: row.values.drapRegistrationNumber ?? '',
-      rx: row.values.rx ?? false,
-      controlled: row.values.controlled ?? false,
+      // A flag the DRAP row does not state stays unanswered until the person chooses.
+      rx: row.values.rx ?? null,
+      controlled: row.values.controlled ?? null,
     }));
     setReference(row);
     setSubmitted(false);
@@ -141,7 +150,8 @@ export function AddMedicineForm() {
   function confirm(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSubmitted(true);
-    if (!event.currentTarget.checkValidity()) return;
+    if (!event.currentTarget.checkValidity() || draft.rx === null || draft.controlled === null)
+      return;
     save.mutate({
       ...draft,
       ...(reference ? { drapReferenceId: reference.referenceId } : {}),
@@ -215,11 +225,17 @@ export function AddMedicineForm() {
               lookup.data?.matches.length ? (
                 <ul aria-label="DRAP reference matches" className="space-y-2">
                   {lookup.data.matches.map((row) => {
-                    const rx = flagLabel(row.values.rx, 'Prescription only', 'Not prescription');
+                    const rx = flagLabel(
+                      row.values.rx,
+                      'Prescription only',
+                      'Not prescription',
+                      'Prescription status not stated'
+                    );
                     const controlled = flagLabel(
                       row.values.controlled,
                       'Controlled',
-                      'Not controlled'
+                      'Not controlled',
+                      'Controlled status not stated'
                     );
                     return (
                       <li
@@ -328,32 +344,56 @@ export function AddMedicineForm() {
               );
             })}
           </div>
-          <fieldset className="min-w-0 space-y-2">
-            <legend className="text-sm font-medium text-text-body">Classification</legend>
-            {(
-              [
-                ['rx', 'Prescription only'],
-                ['controlled', 'Controlled drug'],
-              ] as const
-            ).map(([field, label]) => (
-              <label
+          {FLAG_FIELDS.map(([field, label]) => {
+            const locked = flagsLocked[field];
+            const missing = submitted && draft[field] === null;
+            const errorId = `${formId}-${field}-error`;
+            return (
+              <fieldset
                 key={field}
-                className="flex min-h-11 items-center gap-2 text-sm text-text-body"
+                className="min-w-0 space-y-1"
+                aria-invalid={missing || undefined}
+                aria-describedby={missing ? errorId : undefined}
               >
-                <input
-                  type="checkbox"
-                  className="size-4 focus-visible:outline-2 focus-visible:outline-ring"
-                  checked={draft[field]}
-                  disabled={flagsLocked[field]}
-                  onChange={(event) => update(field, event.target.checked)}
-                />
-                {label}
-                {flagsLocked[field] ? (
-                  <span className="text-xs text-text-muted">(from the DRAP reference row)</span>
+                <legend className="text-sm font-medium text-text-body">{label}</legend>
+                {locked ? (
+                  <p className="text-xs text-text-muted">From the DRAP reference row</p>
+                ) : reference ? (
+                  <p className="text-xs text-text-muted">
+                    Not stated in the DRAP reference. Choose yes or no.
+                  </p>
                 ) : null}
-              </label>
-            ))}
-          </fieldset>
+                <div className="flex flex-wrap gap-4">
+                  {(
+                    [
+                      [true, 'Yes'],
+                      [false, 'No'],
+                    ] as const
+                  ).map(([value, text]) => (
+                    <label
+                      key={text}
+                      className="flex min-h-11 items-center gap-2 text-sm text-text-body"
+                    >
+                      <input
+                        type="radio"
+                        name={`${formId}-${field}`}
+                        className="size-4 focus-visible:outline-2 focus-visible:outline-ring"
+                        checked={draft[field] === value}
+                        disabled={locked}
+                        onChange={() => update(field, value)}
+                      />
+                      {text}
+                    </label>
+                  ))}
+                </div>
+                {missing ? (
+                  <span id={errorId} className="block text-xs text-destructive">
+                    Choose yes or no.
+                  </span>
+                ) : null}
+              </fieldset>
+            );
+          })}
           <p className="text-xs text-text-muted">
             The draft is saved without a price and is not saleable. It appears in the reference
             review workbench, where a reviewer accepts and publishes it.

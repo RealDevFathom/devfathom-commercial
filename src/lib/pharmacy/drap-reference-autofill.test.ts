@@ -5,6 +5,9 @@ vi.mock('server-only', () => ({}));
 import {
   addMedicineDraftProvenance,
   drapAutofillValues,
+  findDrapReferenceByRegistration,
+  linkDrapReferenceRows,
+  literalSearchTerm,
   loadDrapReference,
   searchDrapReference,
   type DrapReferenceRow,
@@ -54,6 +57,7 @@ function fakeDb(options: {
             : options.anyRow
       ),
       findMany: vi.fn(async () => options.rows ?? []),
+      updateMany: vi.fn(async () => ({ count: 1 })),
     },
     medicine: { findMany: vi.fn(async () => options.existing ?? []) },
   };
@@ -148,6 +152,8 @@ describe('DEV-683 DRAP reference search', () => {
         where: {
           organizationId: 'org-a',
           connectorId: 'conn-drap',
+          // A row a pharmacist rejected or confirmed is never offered.
+          status: 'PENDING',
           targetMedicineId: null,
           OR: [
             {
@@ -193,6 +199,7 @@ describe('DEV-683 DRAP reference search', () => {
           id: 'p-new',
           organizationId: 'org-a',
           connectorId: 'conn-drap',
+          status: 'PENDING',
           targetMedicineId: null,
         },
       })
@@ -201,6 +208,87 @@ describe('DEV-683 DRAP reference search', () => {
     await expect(
       loadDrapReference(none as unknown as ScopedDb, 'org-a', 'p-new')
     ).resolves.toBeNull();
+  });
+});
+
+describe('DEV-683 literal search terms', () => {
+  it('escapes LIKE wildcards so % and _ match themselves', () => {
+    expect(literalSearchTerm('50%_off\\x')).toBe('50\\%\\_off\\\\x');
+  });
+
+  it('searches with the escaped term', async () => {
+    const db = fakeDb({});
+    await searchDrapReference(db as unknown as ScopedDb, 'org-a', 'SYN_%');
+    const calls = db.pharmacyReferenceConnectorProposal.findMany.mock.calls as unknown[][];
+    const where = calls[0]![0] as {
+      where: { OR: Array<{ payload: { string_contains: string } }> };
+    };
+    expect(where.where.OR.map((item) => item.payload.string_contains)).toEqual([
+      'SYN\\_\\%',
+      'SYN\\_\\%',
+    ]);
+  });
+});
+
+describe('DEV-683 registration lookup and linking', () => {
+  it('finds the newest DRAP row for a registration number in this organisation', async () => {
+    const db = fakeDb({});
+    await findDrapReferenceByRegistration(db as unknown as ScopedDb, 'org-a', 'SYN-0001');
+    expect(db.pharmacyReferenceConnectorProposal.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org-a',
+          connectorId: 'conn-drap',
+          payload: { path: ['values', 'drapRegistrationNumber'], equals: 'SYN-0001' },
+        },
+        orderBy: { createdAt: 'desc' },
+      })
+    );
+    const none = fakeDb({ connector: null });
+    await expect(
+      findDrapReferenceByRegistration(none as unknown as ScopedDb, 'org-a', 'SYN-0001')
+    ).resolves.toBeNull();
+  });
+
+  it('links only pending, unlinked rows of this organisation to the new draft', async () => {
+    const db = fakeDb({});
+    await expect(
+      linkDrapReferenceRows(db as unknown as ScopedDb, 'org-a', {
+        referenceId: 'p-new',
+        registration: 'SYN-0001',
+        medicineId: 'medicine-new',
+      })
+    ).resolves.toEqual({ referenceLinked: true });
+    const pending = {
+      organizationId: 'org-a',
+      connectorId: 'conn-drap',
+      status: 'PENDING',
+      targetMedicineId: null,
+    };
+    expect(db.pharmacyReferenceConnectorProposal.updateMany.mock.calls).toEqual([
+      [{ where: { ...pending, id: 'p-new' }, data: { targetMedicineId: 'medicine-new' } }],
+      [
+        {
+          where: {
+            ...pending,
+            payload: { path: ['values', 'drapRegistrationNumber'], equals: 'SYN-0001' },
+          },
+          data: { targetMedicineId: 'medicine-new' },
+        },
+      ],
+    ]);
+  });
+
+  it('reports a chosen row that was decided or used in the meantime', async () => {
+    const db = fakeDb({});
+    db.pharmacyReferenceConnectorProposal.updateMany.mockResolvedValueOnce({ count: 0 });
+    await expect(
+      linkDrapReferenceRows(db as unknown as ScopedDb, 'org-a', {
+        referenceId: 'p-new',
+        registration: 'SYN-0001',
+        medicineId: 'medicine-new',
+      })
+    ).resolves.toEqual({ referenceLinked: false });
   });
 });
 

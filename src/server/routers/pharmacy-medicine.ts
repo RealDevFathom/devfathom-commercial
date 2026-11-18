@@ -52,6 +52,8 @@ import {
 } from '@/lib/pharmacy/reference-connectors';
 import {
   addMedicineDraftProvenance,
+  findDrapReferenceByRegistration,
+  linkDrapReferenceRows,
   loadDrapReference,
   searchDrapReference,
 } from '@/lib/pharmacy/drap-reference-autofill';
@@ -1200,9 +1202,11 @@ export const pharmacyMedicineRouter = router({
   /**
    * DEV-683: saves the add-medicine form as a non-saleable draft whose every field is an
    * unreviewed assertion, so it is published only through the independent catalogue review
-   * (DEV-19/DEV-923). A draft pre-filled from a DRAP row keeps that row's prescription-only and
-   * controlled flags and registration number; the server checks them against the stored row.
-   * No price is accepted.
+   * (DEV-19/DEV-923). Whenever the organisation holds a DRAP row for the draft's registration
+   * number (or the form used one), the row's stated prescription-only and controlled flags and
+   * registration number are enforced here; a flag the row does not state needs the person's
+   * explicit choice. The source row is linked to the draft so confirming it later cannot add a
+   * second medicine. No price is accepted.
    */
   addMedicineDraft: catalogueEditProcedure
     .input(
@@ -1213,70 +1217,101 @@ export const pharmacyMedicineRouter = router({
           dosageForm: z.string().trim().min(1).max(100),
           pack: z.string().trim().min(1).max(300),
           drapRegistrationNumber: z.string().trim().min(1).max(100),
-          rx: z.boolean(),
-          controlled: z.boolean(),
+          // null: the person has not chosen yet. Refused below; never defaulted.
+          rx: z.boolean().nullable(),
+          controlled: z.boolean().nullable(),
           drapReferenceId: boundedId.optional(),
         })
         .strict()
     )
-    .mutation(async ({ ctx, input }) => {
-      const organizationId = ctx.entitlements.organizationId;
-      const { drapReferenceId, ...draft } = input;
-      const reference = drapReferenceId
-        ? await loadDrapReference(ctx.db, organizationId, drapReferenceId)
-        : null;
-      if (drapReferenceId && !reference)
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'This DRAP reference row is no longer available. Search again.',
-        });
-      if (reference) {
-        for (const field of ['rx', 'controlled'] as const) {
-          const official = reference.values[field];
-          if (official !== undefined && official !== draft[field])
-            throw new TRPCError({
-              code: 'BAD_REQUEST',
-              message:
-                'The prescription-only and controlled flags come from the DRAP reference row and cannot be changed here.',
-            });
-        }
-        const registration = reference.values.drapRegistrationNumber;
-        if (registration !== undefined && registration !== draft.drapRegistrationNumber)
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const db = tx as typeof ctx.db;
+        const organizationId = ctx.entitlements.organizationId;
+        const { drapReferenceId, ...draft } = input;
+        const registration = draft.drapRegistrationNumber;
+        const reference = drapReferenceId
+          ? await loadDrapReference(db, organizationId, drapReferenceId)
+          : null;
+        if (drapReferenceId && !reference)
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'This DRAP reference row is no longer available. Search again.',
+          });
+        const referenceRegistration = reference?.values.drapRegistrationNumber;
+        if (referenceRegistration !== undefined && referenceRegistration !== registration)
           throw new TRPCError({
             code: 'BAD_REQUEST',
             message:
               'The DRAP registration number comes from the reference row. Clear the auto-fill to enter another medicine.',
           });
-      }
-      const duplicate = await ctx.db.medicine.findFirst({
-        where: { drapRegistrationNumber: draft.drapRegistrationNumber },
-        select: { id: true },
-      });
-      if (duplicate)
-        throw new TRPCError({
-          code: 'CONFLICT',
-          message: 'A medicine with this DRAP registration number is already in the catalogue.',
+        // Serializes concurrent drafts for one registration number until this transaction ends.
+        await db.$queryRawUnsafe(
+          'SELECT pg_advisory_xact_lock(hashtext($1))',
+          `pharmacy-medicine-registration:${organizationId}:${registration}`
+        );
+        const official =
+          reference ?? (await findDrapReferenceByRegistration(db, organizationId, registration));
+        const flags = { rx: draft.rx, controlled: draft.controlled };
+        for (const field of ['rx', 'controlled'] as const) {
+          const stated = official?.values[field];
+          if (stated !== undefined && flags[field] !== stated)
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message:
+                'The prescription-only and controlled flags come from the DRAP reference row and cannot be changed here.',
+            });
+          if (flags[field] === null)
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: official
+                ? 'The DRAP reference does not state whether this medicine is prescription-only or controlled. Choose yes or no for each.'
+                : 'Choose yes or no for prescription-only and controlled.',
+            });
+        }
+        const duplicate = await db.medicine.findFirst({
+          where: { drapRegistrationNumber: registration },
+          select: { id: true },
         });
-      return ctx.db.medicine.create({
-        data: {
-          productName: draft.productName,
-          drapRegistrationNumber: draft.drapRegistrationNumber,
-          rx: draft.rx,
-          controlled: draft.controlled,
-          productFamily: 'PHARMACEUTICAL',
-          // Never saleable on creation: publication follows a recorded review.
-          saleable: false,
-          provenance: {
-            create: addMedicineDraftProvenance(draft, reference, {
-              editorId: ctx.session.user.id,
-              entryId: `add-medicine:${randomUUID()}`,
-              now: new Date(),
-            }),
+        if (duplicate)
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'A medicine with this DRAP registration number is already in the catalogue.',
+          });
+        const chosen = { ...draft, rx: flags.rx!, controlled: flags.controlled! };
+        const medicine = await db.medicine.create({
+          data: {
+            productName: chosen.productName,
+            drapRegistrationNumber: registration,
+            rx: chosen.rx,
+            controlled: chosen.controlled,
+            productFamily: 'PHARMACEUTICAL',
+            // Never saleable on creation: publication follows a recorded review.
+            saleable: false,
+            provenance: {
+              create: addMedicineDraftProvenance(chosen, official, {
+                editorId: ctx.session.user.id,
+                entryId: `add-medicine:${randomUUID()}`,
+                now: new Date(),
+              }),
+            },
           },
-        },
-        select: { id: true, productName: true, saleable: true },
-      });
-    }),
+          select: { id: true, productName: true, saleable: true },
+        });
+        const { referenceLinked } = await linkDrapReferenceRows(db, organizationId, {
+          referenceId: reference?.referenceId,
+          registration,
+          medicineId: medicine.id,
+        });
+        // A reviewer decided or another draft took the row since it was read: roll back.
+        if (reference && !referenceLinked)
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This DRAP reference row was just used or decided. Search again.',
+          });
+        return medicine;
+      })
+    ),
 
   /**
    * #718: shop-set retail price and category for a NON_DRUG_RETAIL (FRONT_SHOP) item. A medicine
