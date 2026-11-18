@@ -18,7 +18,7 @@ export default async function PharmacyPrinterSettingsPage() {
       <PageHeader
         eyebrow="Pharmacy"
         heading="Printer settings"
-        description="Choose each branch's receipt paper — thermal 58 mm, thermal 80 mm or A4 — and print a test page."
+        description="Choose each branch's receipt paper — thermal 58 mm, thermal 80 mm or A4 — print a test page, and set up the print bridge for a thermal printer."
       />
       <PharmacyPrinterSettingsConsole canSave={canSave} />
     </div>
