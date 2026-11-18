@@ -154,7 +154,6 @@ const WORKSPACE_WIDE_ACTIONS = new Map(
  */
 const BRANCH_TAGGING_HELPERS: Readonly<Record<string, readonly string[]>> = {
   'pharmacy-dispensing.ts': ['tagSaleLineBranch'],
-  'pharmacy-purchasing.ts': ['purchasingRecordScope'],
 };
 
 type AnyProcedure = {

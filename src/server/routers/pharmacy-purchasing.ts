@@ -433,9 +433,9 @@ async function purchasingOrderScope(ctx: TRPCContext) {
  * a branch-scoped buyer must not reach them by guessing an ID.
  */
 async function purchasingRecordScope(ctx: TRPCContext, branch: string | null | undefined) {
-  // DEV-913: the record's branch goes on the audit entry, refused or not. A
-  // central record has none and stays workspace-wide.
-  annotateAuditBranch(ctx, branch);
+  // Authorization only. It also runs for related records (an order's requisition
+  // or quote), so it never tags the audit entry: each mutation tags the branch of
+  // its own record with annotateAuditBranch (DEV-913).
   if (branch) {
     await receivingScope(ctx, branch);
     return;
@@ -844,6 +844,7 @@ const purchasingRouter = router({
           where: { id: input.requisitionId },
         });
         if (!requisition) throw new PharmacyPurchasingError('NOT_FOUND');
+        annotateAuditBranch(ctx, requisition.branchId);
         await purchasingRecordScope(ctx, requisition.branchId);
         assertRequisitionTransition(requisition.status, 'SUBMITTED');
         return await ctx.db.pharmacyRequisition.update({
@@ -907,6 +908,7 @@ const purchasingRouter = router({
           include: { lines: true },
         });
         if (!requisition) throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
+        annotateAuditBranch(ctx, requisition.branchId);
         await purchasingRecordScope(ctx, requisition.branchId);
         const ownLines = new Set(requisition.lines.map((line) => line.id));
         for (const line of input.lines) {
