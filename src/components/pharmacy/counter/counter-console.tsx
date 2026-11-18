@@ -791,6 +791,7 @@ function ScopedPharmacyCounterConsole({
         setAttempt(saved.attempt);
         setRestoredAttempt(saved.attempt);
         setSelectedBranchId(saved.attempt.input.branchId);
+        setHeldVoucher(null);
         setSaleId(saved.attempt.input.saleId);
         setTenderOutcome({ status: 'unknown', message: UNKNOWN_TENDER_MESSAGE });
         setTenderReadRequired(true);
@@ -1798,8 +1799,11 @@ function ScopedPharmacyCounterConsole({
             units,
             overrideLotId,
             scannedPack?.serial.toUpperCase(),
-            voucher?.id ?? null,
           ]);
+          // DEV-780: the voucher is not part of the attempt's identity. The held voucher (and its
+          // PIN) is dropped after every add, so a retry after a lost response reuses this key:
+          // the server replays the committed line, or refuses a changed voucher, and never adds
+          // the item a second time.
           let key = lineAttempts.current.get(selection);
           if (!key) {
             key = `counter-add:${browserUuid()}`;
@@ -3324,6 +3328,8 @@ function ScopedPharmacyCounterConsole({
               onChange={(event) => {
                 scannerRevision.current += 1;
                 setSelectedBranchId(event.target.value);
+                // A voucher and the cashier PIN held for one branch never carry to another.
+                setHeldVoucher(null);
                 setLastReceipt(null);
                 setReceiptReprint(false);
                 setActiveRow(null);

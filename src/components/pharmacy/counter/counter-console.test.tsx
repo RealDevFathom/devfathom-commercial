@@ -3102,6 +3102,63 @@ describe('PharmacyCounterConsole barcode safety', () => {
     );
   });
 
+  async function holdVoucher() {
+    mocks.voucherFetch.mockResolvedValue({
+      id: 'voucher-a',
+      code: 'SAVE-100',
+      name: 'Front shop offer',
+      discountMinor: 10_000,
+      usesLeft: 2,
+      maxUses: 3,
+      validUntil: new Date('2031-01-01T00:00:00.000Z'),
+      status: 'READY',
+    });
+    fireEvent.click(screen.getByText('Voucher'));
+    fireEvent.change(screen.getByLabelText('Voucher code'), { target: { value: 'SAVE-100' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Check voucher' }));
+    fireEvent.change(await screen.findByLabelText('Your PIN'), { target: { value: '4321' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Use on next item' }));
+    await screen.findByRole('button', { name: 'Remove voucher' });
+  }
+
+  it('DEV-780: a voucher held at one branch is discarded, not hidden, when the branch changes', async () => {
+    mocks.queries.counterBranches = query({
+      branches: [
+        { id: 'branch-a', name: 'A' },
+        { id: 'branch-b', name: 'B' },
+      ],
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    await holdVoucher();
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch-b' } });
+    expect(screen.queryByRole('button', { name: 'Remove voucher' })).not.toBeInTheDocument();
+    // Switching back does not restore the earlier customer's voucher or the cashier PIN.
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch-a' } });
+    expect(screen.queryByRole('button', { name: 'Remove voucher' })).not.toBeInTheDocument();
+    expect(screen.getByText('Voucher')).toBeInTheDocument();
+  });
+
+  it('DEV-780: a retry after a lost voucher add reuses its key, so it cannot add the item twice', async () => {
+    mocks.mutations.addLine!.mockRejectedValueOnce(new Error('Synthetic network failure'));
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    await holdVoucher();
+    scan();
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    // The voucher and its PIN are dropped after the uncertain add.
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Remove voucher' })).not.toBeInTheDocument()
+    );
+    scan();
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(2));
+    const [first, retry] = mocks.mutations.addLine!.mock.calls.map(
+      ([input]) => input as { idempotencyKey: string; voucherId?: string }
+    );
+    expect(first).toMatchObject({ voucherId: 'voucher-a', voucherPin: '4321' });
+    expect(retry!.voucherId).toBeUndefined();
+    // Same key: the server replays a committed line or refuses the changed voucher.
+    expect(retry!.idempotencyKey).toBe(first!.idempotencyKey);
+  });
+
   it('DEV-780: refuses to hold a voucher that reached its use limit', async () => {
     mocks.voucherFetch.mockResolvedValue({
       id: 'voucher-a',
