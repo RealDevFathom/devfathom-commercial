@@ -31,8 +31,8 @@ type FieldName = 'branchId' | 'entryId' | 'from' | 'to';
 const fields: { name: FieldName; label: string }[] = [
   { name: 'branchId', label: 'Branch ID' },
   { name: 'entryId', label: 'Journal entry ID' },
-  { name: 'from', label: 'From (RFC3339 UTC)' },
-  { name: 'to', label: 'To, exclusive (RFC3339 UTC)' },
+  { name: 'from', label: 'From (date and time)' },
+  { name: 'to', label: 'Until (date and time, not included)' },
 ];
 const idField = z.string().trim().min(1).max(128);
 const instantField = z.iso.datetime({ offset: true });
@@ -52,7 +52,7 @@ function fieldErrors(query: Query): Partial<Record<FieldName, string>> {
     if (name === 'branchId' || name === 'entryId') {
       if (!idField.safeParse(raw).success) errors[name] = 'Use at most 128 characters.';
     } else if (!instantField.safeParse(raw).success) {
-      errors[name] = 'Use an RFC3339 instant with an offset, for example 2026-08-01T00:00:00Z.';
+      errors[name] = 'Enter a full date and time including the time zone, for example 2026-08-01T09:00:00+05:00.';
     }
   }
   if (!errors.from && !errors.to) {

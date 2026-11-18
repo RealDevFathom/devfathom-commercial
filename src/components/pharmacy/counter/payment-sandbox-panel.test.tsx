@@ -19,7 +19,7 @@ function setup() {
       onRecorded={async () => {}}
     />
   );
-  fireEvent.change(screen.getByLabelText('Amount in minor units'), { target: { value: '200' } });
+  fireEvent.change(screen.getByLabelText('Amount (in paisa, 100 paisa = 1 rupee)'), { target: { value: '200' } });
   fireEvent.change(screen.getByLabelText('Evidence reason'), {
     target: { value: 'Synthetic evidence' },
   });
@@ -67,7 +67,7 @@ it('retains uncertain transport identity and unknown identity until explicit rec
   await submit(1);
   await screen.findByText('Transport unavailable');
   expect(screen.getByRole('button', { name: 'New sandbox operation' })).toBeDisabled();
-  expect(screen.getByLabelText('Amount in minor units')).toBeDisabled();
+  expect(screen.getByLabelText('Amount (in paisa, 100 paisa = 1 rupee)')).toBeDisabled();
   await submit(2);
   await screen.findByText(/UNKNOWN ·/);
   expect(screen.getByRole('button', { name: 'New sandbox operation' })).toBeDisabled();

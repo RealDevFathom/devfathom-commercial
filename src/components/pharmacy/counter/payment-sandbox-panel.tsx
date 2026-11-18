@@ -48,7 +48,7 @@ export function PaymentSandboxPanel({
           setNotice('');
           const amountMinor = Number(amount);
           if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) {
-            setNotice('Enter positive integer minor units.');
+            setNotice('Enter a whole amount in paisa, more than 0.');
             return;
           }
           const fingerprint = JSON.stringify([
@@ -122,7 +122,7 @@ export function PaymentSandboxPanel({
           </select>
         </Label>
         <Label className="grid gap-1">
-          Amount in minor units
+          Amount (in paisa, 100 paisa = 1 rupee)
           <Input
             type="number"
             min={1}
