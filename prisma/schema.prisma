@@ -2722,6 +2722,11 @@ model PharmacyInterbranchTransfer {
   createdAt      DateTime                          @default(now())
   dispatchedAt   DateTime?
   receivedAt     DateTime?
+  /// DEV-908: who closed the receipt at the destination branch.
+  receivedById   String?
+  /// DEV-908: the premises licences in force at each end when the stock left.
+  fromLicenceNumber String?
+  toLicenceNumber String?
   lines          PharmacyInterbranchTransferLine[]
   signalActions  PharmacyStockSignalAction[]
 
@@ -5902,6 +5907,9 @@ model Organization {
   /// DEV-879: when true, no member's fixed PIN is accepted for an approval; every approver
   /// must enter a code from their enrolled approval authenticator.
   requireApprovalAuthenticator  Boolean                        @default(false)
+  /// DEV-908: the owner switches on recorded stock transfers between their own
+  /// licensed branches. Off by default; controlled drugs never move this way.
+  pharmacyBranchTransfersEnabled Boolean                       @default(false)
   lastDemoResetAt               DateTime?
   gracePeriodDays               Int                            @default(0)
   activatedAt                   DateTime?
