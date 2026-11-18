@@ -46,10 +46,15 @@ describe('DEV-73 refill cycle prescription database contract', () => {
     );
   });
 
-  it('is recorded at the end of the new-migration ledger', () => {
+  it('is recorded once in the new-migration ledger, in timestamp order', () => {
     const ledger = readFileSync('tests/fixtures/new-migration-order.txt', 'utf8')
       .trim()
       .split('\n');
-    expect(ledger.at(-1)).toBe(NAME);
+    // A later migration is appended after this one, so "last" cannot stay true;
+    // the ledger entry and its order are what matter.
+    expect(ledger.filter((entry) => entry === NAME)).toHaveLength(1);
+    const index = ledger.indexOf(NAME);
+    expect(ledger.slice(0, index).every((entry) => entry < NAME)).toBe(true);
+    expect(ledger.slice(index + 1).every((entry) => entry > NAME)).toBe(true);
   });
 });

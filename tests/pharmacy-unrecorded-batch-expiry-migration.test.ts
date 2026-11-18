@@ -18,7 +18,10 @@ describe('unrecorded batch and expiry storage', () => {
     );
     expect(sql).toContain('CREATE OR REPLACE FUNCTION pharmacy_validate_restock_reservation()');
     const order = readFileSync('tests/fixtures/new-migration-order.txt', 'utf8').trim().split('\n');
-    expect(order.at(-1)).toBe(name);
+    expect(order.filter((entry) => entry === name)).toHaveLength(1);
+    const index = order.indexOf(name);
+    expect(order.slice(0, index).every((entry) => entry < name)).toBe(true);
+    expect(order.slice(index + 1).every((entry) => entry > name)).toBe(true);
   });
 
   it('stores an unrecorded batch number and expiry as NULL, never a default', () => {
