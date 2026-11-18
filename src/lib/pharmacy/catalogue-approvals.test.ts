@@ -120,6 +120,38 @@ describe('DEV-766 durable catalogue approvals', () => {
     });
     expect(guards.pin).not.toHaveBeenCalled();
   });
+  it('marks an approved controlled-flag change in its audit record (DEV-925)', async () => {
+    const f = fixture();
+    f.proposal.changes = { controlled: false } as unknown as typeof f.proposal.changes;
+    await decideCatalogueEdit(f.db, scope, { editId: 'edit', decision: 'APPROVE' });
+    expect(f.raw.medicine.updateMany).toHaveBeenCalledWith({
+      where: { id: 'medicine', updatedAt: timestamp },
+      data: { controlled: false, updatedAt: expect.any(Date) },
+    });
+    expect(f.raw.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'pharmacy.catalogueApproval',
+        metadata: { soloOwner: false, pinVerified: false, controlledReviewed: true },
+      }),
+    });
+  });
+  it("marks a solo owner's PIN approval of a controlled-flag change too (DEV-925)", async () => {
+    guards.solo.mockResolvedValue(true);
+    const f = fixture('reviewer');
+    f.proposal.changes = { controlled: false } as unknown as typeof f.proposal.changes;
+    await decideCatalogueEdit(f.db, scope, {
+      editId: 'edit',
+      decision: 'APPROVE',
+      soloPin: '2468',
+    });
+    expect(guards.pin).toHaveBeenCalledOnce();
+    expect(f.raw.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'pharmacy.catalogueSoloOwnerApproval',
+        metadata: { soloOwner: true, pinVerified: true, controlledReviewed: true },
+      }),
+    });
+  });
   it.each([undefined, '1234'])(
     'blocks editor self-approval without the solo-owner rule (PIN %s)',
     async (soloPin) => {

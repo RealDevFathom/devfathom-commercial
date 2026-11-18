@@ -53,7 +53,10 @@ import {
 import { isEffective } from '@/lib/pharmacy/pack-conversion';
 import { actorIsPharmacyOwner } from '@/lib/pharmacy/procurement-access';
 import { can, subjectFromSession, type Action } from '@/lib/abac';
-import { applyLegacyControlledToMedicine } from '@/lib/pharmacy/migration/legacy-controlled';
+import {
+  applyLegacyControlledToMedicine,
+  hasControlledCorrection,
+} from '@/lib/pharmacy/migration/legacy-controlled';
 import { annotateAudit } from '../audit';
 import {
   adminProcedure,
@@ -888,6 +891,7 @@ export const pharmacyMedicineRouter = router({
         let medicine = proposal.targetMedicineId
           ? await tx.medicine.findFirst({ where: { id: proposal.targetMedicineId } })
           : null;
+        let keptCorrection = false;
         if (proposal.targetMedicineId && !medicine) {
           throw new TRPCError({ code: 'NOT_FOUND', message: 'Target medicine not found.' });
         }
@@ -912,6 +916,16 @@ export const pharmacyMedicineRouter = router({
             },
           });
         } else {
+          // DEV-925: an import never sets back a person's correction to "not controlled".
+          keptCorrection =
+            source.sourceType === 'IMPORT' &&
+            !medicine.controlled &&
+            proposedBoolean(values.controlled) === true &&
+            (await hasControlledCorrection(
+              tx as typeof ctx.db,
+              ctx.entitlements.organizationId,
+              medicine.id
+            ));
           medicine = await tx.medicine.update({
             where: { id: medicine.id },
             data: {
@@ -921,7 +935,7 @@ export const pharmacyMedicineRouter = router({
               drapRegistrationNumber: values.drapRegistrationNumber,
               rx: proposedBoolean(values.rx),
               restricted: proposedBoolean(values.restricted),
-              controlled: proposedBoolean(values.controlled),
+              controlled: keptCorrection ? undefined : proposedBoolean(values.controlled),
             },
           });
         }
@@ -935,6 +949,8 @@ export const pharmacyMedicineRouter = router({
 
         const assertions = [];
         for (const [field, value] of Object.entries(values)) {
+          // The import's controlled value was not applied, so it is not recorded as accepted.
+          if (keptCorrection && field === 'controlled') continue;
           assertions.push(
             await tx.medicineProvenance.create({
               data: {

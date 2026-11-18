@@ -155,6 +155,7 @@ export const pharmacyStagedReviewRouter = router({
             replayed: true,
             controlledFromClass: replayLegacy.controlledRows,
             controlledMedicineIds: replayLegacy.medicineIds,
+            controlledSkippedCorrected: replayLegacy.skippedCorrectedRows,
           };
         }
         // Bind every row to the exact uploaded bytes, including repeated product names.
@@ -177,6 +178,7 @@ export const pharmacyStagedReviewRouter = router({
           replayed: false,
           controlledFromClass: legacy.controlledRows,
           controlledMedicineIds: legacy.medicineIds,
+          controlledSkippedCorrected: legacy.skippedCorrectedRows,
         };
       }, STAGE_TRANSACTION);
       annotateAudit(ctx, {
@@ -190,6 +192,7 @@ export const pharmacyStagedReviewRouter = router({
           replayed: saved.replayed,
           controlledFromClass: saved.controlledFromClass,
           controlledMedicineIds: saved.controlledMedicineIds,
+          controlledSkippedCorrected: saved.controlledSkippedCorrected,
         },
       });
       const { controlledMedicineIds, ...summary } = saved;

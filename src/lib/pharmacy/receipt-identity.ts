@@ -46,6 +46,8 @@ const snapshotSchema = z
       .optional(),
     saleId: id,
     receiptNumber: units,
+    /** DEV-637: the number printed offline when replay gave the sale a fresh number. */
+    offlineReference: units.optional(),
     deviceId: id,
     businessDate: z.iso.date(),
     issuedAt: z.iso.datetime(),
@@ -61,6 +63,8 @@ export type ReceiptIdentityFacts = {
   id: string;
   receiptNumber: number | null;
   receiptDeviceId: string | null;
+  /** DEV-637: compared only when the caller read it. */
+  offlineReceiptReference?: number | null;
   businessDate: Date | null;
   completedAt: Date | null;
   lines: readonly {
@@ -92,7 +96,9 @@ export function validateReceiptIdentity(payload: unknown, sale: ReceiptIdentityF
     snapshot.deviceId !== sale.receiptDeviceId ||
     snapshot.businessDate !== sale.businessDate?.toISOString().slice(0, 10) ||
     snapshot.issuedAt !== sale.completedAt?.toISOString() ||
-    snapshot.lines.length !== sale.lines.length
+    snapshot.lines.length !== sale.lines.length ||
+    (sale.offlineReceiptReference !== undefined &&
+      (snapshot.offlineReference ?? null) !== sale.offlineReceiptReference)
   )
     refuse();
   const lineIds = new Set<string>();

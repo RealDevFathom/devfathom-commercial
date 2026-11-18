@@ -314,12 +314,28 @@ export async function replayCounterCommand(
     clientOriginAt: new Date(command.leasedReceipt.originalSaleAt),
     receiptNumber: command.leasedReceipt.receiptNumber,
   });
-  if (recorded.command.status === 'ACCEPTED')
+  if (recorded.command.status === 'ACCEPTED') {
+    // DEV-637: answer with the number the sale was issued, which differs from the printed
+    // one when replay had to renumber it.
+    const issued = recorded.command.serverRef
+      ? await db.pharmacySale.findFirst({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            id: recorded.command.serverRef,
+          },
+          select: { receiptNumber: true, offlineReceiptReference: true },
+        })
+      : null;
     return {
       saleId: recorded.command.serverRef,
-      receiptNumber: recorded.command.receiptNumber,
+      receiptNumber: issued?.receiptNumber ?? recorded.command.receiptNumber,
+      ...(issued?.offlineReceiptReference
+        ? { offlineReference: issued.offlineReceiptReference }
+        : {}),
       replayed: true,
     };
+  }
   if (recorded.command.status !== 'PENDING')
     throw new CounterTransportError('command_rejected', 409);
   // #519: recall state is derived, never assumed. A lot the signed lease told
@@ -487,11 +503,25 @@ export async function replayCounterCommand(
       commandId: recorded.command.id,
       outcome: 'ACCEPTED',
       serverRef: sale.id,
+      // The command log keeps the number the counter printed.
       receiptNumber: command.leasedReceipt.receiptNumber,
     },
     new Date()
   );
-  return { saleId: sale.id, receiptNumber: command.leasedReceipt.receiptNumber, replayed: false };
+  // DEV-637: a number printed from a block leased before branch-wide numbering may have
+  // been replaced by a fresh branch number; the printed one is kept as the reference.
+  const issued =
+    'receiptNumber' in result && typeof result.receiptNumber === 'number'
+      ? result.receiptNumber
+      : command.leasedReceipt.receiptNumber;
+  return {
+    saleId: sale.id,
+    receiptNumber: issued,
+    ...(issued !== command.leasedReceipt.receiptNumber
+      ? { offlineReference: command.leasedReceipt.receiptNumber }
+      : {}),
+    replayed: false,
+  };
 }
 
 const sessionSchema = z
@@ -637,6 +667,10 @@ export function counterAuditEntry(
         targetId: text(field(outcome, 'saleId')),
         metadata: {
           receiptNumber: scalar(field(outcome, 'receiptNumber')),
+          // DEV-637: the number printed offline, when replay had to renumber the sale.
+          ...(scalar(field(outcome, 'offlineReference')) !== null
+            ? { offlineReference: scalar(field(outcome, 'offlineReference')) }
+            : {}),
           sequence: scalar(field(body, 'sequence')),
           commandAction: scalar(field(body, 'action')),
         },

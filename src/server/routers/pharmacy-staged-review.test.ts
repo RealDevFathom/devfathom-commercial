@@ -261,6 +261,28 @@ describe('production batch staging', () => {
     );
     expect(held).not.toMatch(/MISSING_MRP|controlled|narcotic/i);
   });
+  it('counts rows skipped because a person corrected the medicine to not controlled (DEV-925)', async () => {
+    const csv = [
+      'Name,classname,QTY',
+      'Synthetic Opioid 50mg,NARCOTICS,12',
+      'Synthetic Sedative 10mg,NARCOTICS,4',
+    ].join('\n');
+    db.$queryRaw.mockResolvedValue([
+      { id: 'med_sedative', correctedKey: null },
+      { id: 'med_opioid', correctedKey: 'synthetic opioid 50mg' },
+    ]);
+    const saved = await caller().stageBatch({
+      ...staging,
+      content: Buffer.from(csv).toString('base64'),
+      mapping: { product: 0, quantity: 2 },
+      quantityUnit: 'UNITS',
+    });
+    expect(saved).toMatchObject({
+      controlledFromClass: 2,
+      controlledMedicinesFlagged: 1,
+      controlledSkippedCorrected: 1,
+    });
+  });
   it('still applies the NARCOTICS rule when a re-staged file replays its first batch', async () => {
     const csv = ['Name,classname,QTY', 'Synthetic Opioid 50mg,NARCOTICS,12'].join('\n');
     db.pharmacyMigrationBatch.findMany.mockResolvedValue([
@@ -282,6 +304,26 @@ describe('production batch staging', () => {
     expect(db.$queryRaw).toHaveBeenCalledOnce();
     expect(db.pharmacyMigrationBatch.create).not.toHaveBeenCalled();
     expect(db.pharmacyMigrationRow.createMany).not.toHaveBeenCalled();
+  });
+  it('counts corrected rows when the same file is staged again and replays its batch (DEV-925)', async () => {
+    const csv = ['Name,classname,QTY', 'Synthetic Opioid 50mg,NARCOTICS,12'].join('\n');
+    db.pharmacyMigrationBatch.findMany.mockResolvedValue([
+      { id: 'batch_prev', rowCount: 1, exceptionCount: 0 },
+    ]);
+    db.$queryRaw.mockResolvedValue([{ id: 'med_opioid', correctedKey: 'synthetic opioid 50mg' }]);
+    const saved = await caller().stageBatch({
+      ...staging,
+      content: Buffer.from(csv).toString('base64'),
+      mapping: { product: 0, quantity: 2 },
+      quantityUnit: 'UNITS',
+    });
+    expect(saved).toMatchObject({
+      batchId: 'batch_prev',
+      replayed: true,
+      controlledFromClass: 1,
+      controlledMedicinesFlagged: 0,
+      controlledSkippedCorrected: 1,
+    });
   });
   it('flags nothing when no row is in the NARCOTICS class', async () => {
     const saved = await caller().stageBatch(staging);
