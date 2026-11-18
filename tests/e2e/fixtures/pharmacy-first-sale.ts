@@ -729,7 +729,10 @@ export async function freshPharmacyFirstSale(
     // DEV-499: Cash received is prefilled with the balance due; Enter takes it.
     await expect(page.getByLabel('Cash received', { exact: true })).toHaveValue(due!);
     await page.keyboard.press('Enter');
-    await expect(page.getByRole('region', { name: /^Receipt \d+$/ })).toBeVisible();
+    // DEV-637: a pharmacy receipt names the counter that issued it, as the counter spec checks.
+    await expect(
+      page.getByRole('region', { name: /^Receipt \d+ · Counter [A-Z0-9]{4}$/ })
+    ).toBeVisible();
     await noRawIdEntry(page);
     expect(fourXx).toEqual([]);
   } finally {

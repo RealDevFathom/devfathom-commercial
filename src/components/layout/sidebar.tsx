@@ -653,9 +653,20 @@ export interface NavSection {
  * an entry the member cannot open is already filtered out, so a menu holds only
  * pages the member can use, and a menu left with none is not shown.
  */
-const PHARMACY_MENUS: readonly (Omit<NavSection, 'items'> & { hrefs: readonly string[] })[] = [
-  // DEV-930: a new owner reaches setup in one click, never from inside a menu.
-  { label: 'Onboarding', icon: ListChecks, hrefs: ['/pharmacy'] },
+type PharmacyMenu = Omit<NavSection, 'items'> & { hrefs: readonly string[] };
+
+/**
+ * DEV-930: while the pharmacy is still onboarding, setup is the owner's own entry
+ * in the bar, one click away. Once the pharmacy is active it moves back into
+ * Settings, so an established pharmacy's bar does not grow (DEV-497 / DEV-44).
+ */
+const PHARMACY_ONBOARDING_MENU: PharmacyMenu = {
+  label: 'Onboarding',
+  icon: ListChecks,
+  hrefs: ['/pharmacy'],
+};
+
+const PHARMACY_MENUS: readonly PharmacyMenu[] = [
   {
     label: 'Sell',
     icon: Monitor,
@@ -692,6 +703,7 @@ const PHARMACY_MENUS: readonly (Omit<NavSection, 'items'> & { hrefs: readonly st
     label: 'Settings',
     icon: Settings,
     hrefs: [
+      '/pharmacy',
       '/pharmacy/regulatory',
       '/pharmacy/settings/branches',
       '/pharmacy/settings/printers',
@@ -706,7 +718,10 @@ const PHARMACY_MENUS: readonly (Omit<NavSection, 'items'> & { hrefs: readonly st
  * the member can open under More. A section with one entry is shown as that
  * entry, so nobody opens a menu to reach a single page.
  */
-export function groupPharmacyNavigation(items: readonly VisibleNavItem[]): NavSection[] {
+export function groupPharmacyNavigation(
+  items: readonly VisibleNavItem[],
+  { onboarding = false }: { onboarding?: boolean } = {}
+): NavSection[] {
   const byHref = new Map(items.map((item) => [item.href, item]));
   const placed = new Set<string>();
   const take = (href: string) => {
@@ -719,7 +734,10 @@ export function groupPharmacyNavigation(items: readonly VisibleNavItem[]): NavSe
   const dashboard = take('/dashboard');
   if (dashboard.length)
     sections.push({ label: 'Dashboard', icon: LayoutDashboard, items: dashboard });
-  for (const { hrefs, ...menu } of PHARMACY_MENUS) {
+  // `take` places each entry once, so the onboarding entry leaves Settings without it.
+  for (const { hrefs, ...menu } of onboarding
+    ? [PHARMACY_ONBOARDING_MENU, ...PHARMACY_MENUS]
+    : PHARMACY_MENUS) {
     const menuItems = hrefs.flatMap(take);
     if (menuItems.length) sections.push({ ...menu, items: menuItems });
   }
@@ -884,6 +902,8 @@ interface SidebarProps {
   collapsible?: boolean;
   /** Renders a close control in the header; used by the mobile drawer. */
   onClose?: () => void;
+  /** DEV-930: the pharmacy is still onboarding, so Onboarding is its own entry. */
+  pharmacyOnboarding?: boolean;
 }
 
 export function Sidebar({
@@ -893,6 +913,7 @@ export function Sidebar({
   onCollapsedChange,
   collapsible = true,
   onClose,
+  pharmacyOnboarding = false,
 }: SidebarProps = {}) {
   const [localCollapsed, setLocalCollapsed] = useState(false);
   const collapsed = controlledCollapsed ?? localCollapsed;
@@ -902,7 +923,7 @@ export function Sidebar({
   const numbered = icons !== 'architectural' && !pharmacy;
   // DEV-497: a pharmacy drawer uses the same task menus as the desktop bar.
   const sections = pharmacy
-    ? groupPharmacyNavigation(filteredNav).map((section) => ({
+    ? groupPharmacyNavigation(filteredNav, { onboarding: pharmacyOnboarding }).map((section) => ({
         key: section.label,
         heading:
           section.items.length > 1 || section.items[0]?.label !== section.label
@@ -1127,9 +1148,13 @@ export function Sidebar({
   );
 }
 
-export function TopNavigation() {
+export function TopNavigation({ pharmacyOnboarding = false }: { pharmacyOnboarding?: boolean }) {
   const { vertical } = useEntitlements();
-  return vertical === 'PHARMACY' ? <GroupedTopNavigation /> : <FlatTopNavigation />;
+  return vertical === 'PHARMACY' ? (
+    <GroupedTopNavigation onboarding={pharmacyOnboarding} />
+  ) : (
+    <FlatTopNavigation />
+  );
 }
 
 const topNavigationPill =
@@ -1152,10 +1177,10 @@ function ActivePill() {
  * is ever cut off. The menu holding the current page wears the active pill and
  * the page itself is the one link marked `aria-current`.
  */
-function GroupedTopNavigation() {
+function GroupedTopNavigation({ onboarding }: { onboarding: boolean }) {
   const pathname = usePathname();
   const { bestMatch, filteredNav } = useVisibleNavigation();
-  const sections = groupPharmacyNavigation(filteredNav);
+  const sections = groupPharmacyNavigation(filteredNav, { onboarding });
   const navRef = useRef<HTMLElement>(null);
   const baseId = useId();
   // Remembered with the route it was opened on, so navigating closes it.
