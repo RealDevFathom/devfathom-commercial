@@ -1626,7 +1626,8 @@ describe('DEV-878 counter search suggestion access', () => {
     expect(searchCounterCatalog).toHaveBeenCalledExactlyOnceWith(
       f.db,
       { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
-      { query: 'Nalbin', limit: undefined }
+      // DEV-907: the owner switch is read on the server and is off here.
+      { query: 'Nalbin', limit: undefined, otherBranchAvailability: false }
     );
   });
 
@@ -1662,6 +1663,40 @@ describe('DEV-878 counter search suggestion access', () => {
         ? { code: 'BAD_REQUEST', message: 'That record is not in this workspace.' }
         : { code: 'FORBIDDEN' }
     );
+    expect(searchCounterCatalog).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-907 other-branch availability switch at the counter', () => {
+  it('passes the owner switch from the stored organization, read for the caller organization', async () => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    assign(f, ['branch-a']);
+    f.db.organization.findUnique.mockResolvedValueOnce({
+      currency: 'PKR',
+      pharmacyOtherBranchAvailability: true,
+    } as never);
+    await f.caller().counterSearch({ branchId: 'branch-a', query: 'Nalbin' });
+    expect(f.db.organization.findUnique).toHaveBeenCalledWith({
+      where: { id: 'org-a' },
+      select: { pharmacyOtherBranchAvailability: true },
+    });
+    expect(searchCounterCatalog).toHaveBeenCalledExactlyOnceWith(
+      f.db,
+      { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
+      { query: 'Nalbin', limit: undefined, otherBranchAvailability: true }
+    );
+  });
+
+  it('cannot be turned on by the client', async () => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().counterSearch({
+        branchId: 'branch-a',
+        query: 'Nalbin',
+        otherBranchAvailability: true,
+      } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(searchCounterCatalog).not.toHaveBeenCalled();
   });
 });

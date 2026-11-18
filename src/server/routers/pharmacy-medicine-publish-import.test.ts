@@ -91,7 +91,14 @@ function makeStore(values: Record<string, string>, sourceType?: 'IMPORT' | 'REGU
 
   const db = {
     user: {
-      findUnique: vi.fn(async () => ({ organizationRole: null, permissionOverrides: [] })),
+      // The reviewer holds the exact grant that catalogue approval requires (DEV-19).
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => ({
+        organizationRole: null,
+        permissionOverrides:
+          where.id === 'reviewer'
+            ? [{ capability: 'pharmacy:catalogue-review', effect: 'ALLOW' }]
+            : [],
+      })),
     },
     medicineProvenance: {
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>

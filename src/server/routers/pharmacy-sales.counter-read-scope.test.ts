@@ -155,6 +155,7 @@ let db: {
   pharmacyBranch: { findMany: ReturnType<typeof vi.fn>; findFirst: ReturnType<typeof vi.fn> };
   pharmacyBranchAssignment: { findMany: ReturnType<typeof vi.fn> };
   pharmacyInventoryLot: { findMany: ReturnType<typeof vi.fn> };
+  organization: { findUnique: ReturnType<typeof vi.fn> };
   user: { findUnique: ReturnType<typeof vi.fn>; findFirst: ReturnType<typeof vi.fn> };
 };
 
@@ -202,6 +203,8 @@ beforeEach(() => {
       ),
     },
     pharmacyInventoryLot: { findMany: vi.fn(async () => []) },
+    // DEV-907: counterSearch reads the owner's other-branch switch (off here).
+    organization: { findUnique: vi.fn(async () => null) },
     // A counter member with the canonical counter grant, so any refusal is the branch.
     user: {
       findUnique: vi.fn(async () => ({

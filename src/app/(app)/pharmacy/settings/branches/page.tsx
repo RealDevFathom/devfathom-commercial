@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 
 import { BranchAssignmentsConsole } from '@/components/pharmacy/branch-assignments';
+import { OtherBranchAvailabilityConsole } from '@/components/pharmacy/other-branch-availability-setting';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { pharmacyBranchAssignmentsRouter } from '@/server/routers/pharmacy-branch-assignments';
@@ -17,8 +18,9 @@ export default async function PharmacyBranchAssignmentsPage() {
   const ctx = await createTRPCContext();
   const caller = pharmacyBranchAssignmentsRouter.createCaller(ctx);
   let initial: Awaited<ReturnType<typeof caller.list>>;
+  let availability: Awaited<ReturnType<typeof caller.otherBranchAvailability>>;
   try {
-    initial = await caller.list();
+    [initial, availability] = await Promise.all([caller.list(), caller.otherBranchAvailability()]);
   } catch {
     return (
       <div className="min-w-0 space-y-6">
@@ -45,6 +47,9 @@ export default async function PharmacyBranchAssignmentsPage() {
       />
       <SectionCard title="Who works at which branch" titleLevel={2}>
         <BranchAssignmentsConsole initial={initial} />
+      </SectionCard>
+      <SectionCard title="Availability at your other branches" titleLevel={2}>
+        <OtherBranchAvailabilityConsole initial={availability} />
       </SectionCard>
     </div>
   );
