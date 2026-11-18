@@ -305,6 +305,12 @@ const FORBIDDEN_PAYLOAD_KEYS: ReadonlySet<string> = new Set([
   'pinblock',
 ]);
 
+/** A frozen copy of the C6 key list, so the pharmacy card-terminal seam (DEV-743) extends this
+ * list instead of keeping a second one. The Set above stays private. */
+export const CARDHOLDER_PAYLOAD_KEYS: readonly string[] = Object.freeze([
+  ...FORBIDDEN_PAYLOAD_KEYS,
+]);
+
 /** Recursively assert no cardholder-data field is present in a payload (C6). */
 function assertNoCardData(value: unknown): void {
   if (Array.isArray(value)) {

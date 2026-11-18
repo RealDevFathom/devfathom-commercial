@@ -185,8 +185,12 @@ real card or wallet, or put credentials into chat, a ticket or a file until the 
   elsewhere (`src/lib/pharmacy/manual-payments.ts`, `MANUAL_TENDER_TYPES`). A manual
   "card received externally" tender is DEV-713 (PR #1363, in review). Both are `MANUAL-TENDER`:
   they say nothing about any terminal and must never be reported as terminal integration.
-- DEV-743 owns the provider-agnostic adapter seam. No provider, SDK or certification may be
-  assumed. Card numbers (PAN) and CVV must never be stored or logged.
+- DEV-743 owns the provider-agnostic adapter seam (`src/lib/pharmacy/card-terminal/`, design in
+  `docs/pharmacy/card-terminal-integration-boundary.md`). It commits one durable payment-attempt
+  record (`pharmacy_card_terminal_attempts`) before a terminal can be asked to charge. Its
+  production admission list is empty and only a fake test terminal exists, so the integrated row
+  stays `NOT-IMPLEMENTED` until a named provider passes a real-device test. No provider, SDK or
+  certification may be assumed. Card numbers (PAN) and CVV must never be stored or logged.
 
 ## 3. Dependencies and owners (Linear state read on 2026-11-04)
 
