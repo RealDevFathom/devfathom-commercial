@@ -320,6 +320,13 @@ describe('DEV-937 a request is shown where the person acted, not where it named'
       input: { title: 'Note', branchId: 'branch_south' },
       metadata: { requestedBranchId: 'branch_south', actorBranchIds: ['branch_north'] },
     }),
+    // Recorded at North, its own branch, with an extra raw branchId naming South:
+    // a real pharmacyBranchId, or a record's tag (annotateAuditBranch).
+    entry('north_with_extra', {
+      actorId: 'cashier',
+      input: { title: 'Note', branchId: 'branch_south', pharmacyBranchId: 'branch_north' },
+      metadata: { branchId: 'branch_north' },
+    }),
     // The same refusal recorded before the branch was kept on the entry.
     entry('planted_legacy', {
       actorId: 'cashier',
@@ -365,8 +372,13 @@ describe('DEV-937 a request is shown where the person acted, not where it named'
   it("shows it to the manager of the person's own branch, without the named branch", async () => {
     withRows();
     const page = await caller('branchAdmin').list({});
-    expect(ids(page)).toEqual(['planted', 'planted_success']);
-    for (const item of page.items) expect(item).toMatchObject({ branchId: null, branchName: null });
+    expect(ids(page)).toEqual(['north_with_extra', 'planted', 'planted_success']);
+    for (const item of page.items)
+      expect(item).toMatchObject(
+        item.id === 'north_with_extra'
+          ? { branchId: 'branch_north', branchName: 'North' }
+          : { branchId: null, branchName: null }
+      );
   });
 
   it('shows the owner every entry, and the refusal under the branch the person works at', async () => {
@@ -376,6 +388,7 @@ describe('DEV-937 a request is shown where the person acted, not where it named'
       ['south_legacy', 'south_refund', 'south_refused'].sort()
     );
     expect(ids(await caller('owner').list({ branchId: 'branch_north' }))).toEqual([
+      'north_with_extra',
       'planted',
       'planted_success',
     ]);

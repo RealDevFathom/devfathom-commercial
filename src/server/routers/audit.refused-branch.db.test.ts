@@ -5,8 +5,10 @@
  *
  * A North cashier, a South cashier and North's manager (an ADMIN, who may act at
  * every branch) each send `saveKhataReminderSettings` naming South, and all are
- * refused. The North cashier also creates a note, which succeeds, with an extra
- * `branchId` naming South that the procedure does not take. The real tRPC audit
+ * refused. The North cashier also creates notes, which succeed, with an extra
+ * `branchId` naming South that the procedure does not take: alone, beside a
+ * `pharmacyBranchId` naming North, and beside a `scope.branchId` naming North;
+ * and a record tagged at North carries the same extra key. The real tRPC audit
  * middleware records each entry after the request's transaction ends, as the
  * route does. The real audit router then reads them back: South's manager sees
  * South's own refusal and the ADMIN's, never the North cashier's entries; North's
@@ -51,6 +53,8 @@ const ACTION = 'pharmacySales.saveKhataReminderSettings';
 const NOTE = 'notes.create';
 /** Written through the real recorder as a handler noting its target before refusing. */
 const TARGETED = 'pharmacySales.saveManualPaymentSettings';
+/** Written through the real recorder as a handler that tags its loaded record's branch. */
+const TAGGED = 'pharmacyDispensing.recordSubstitution';
 const since = new Date();
 
 let withTenantDb: typeof import('@/lib/tenancy/scoped-db').withTenantDb;
@@ -242,12 +246,29 @@ beforeAll(async () => {
   await refusedAtSouth(southCashier);
   await refusedAtSouth(northManager);
   // Succeeds: `notes.create` takes no branch, so the extra key is dropped by its schema.
-  await act(northCashier, (api) =>
-    (api.notes as unknown as { create(input: unknown): Promise<unknown> }).create({
-      title: 'Shelf note',
-      branchId: ids.south,
-    })
-  );
+  const createNote = (input: Record<string, unknown>) =>
+    act(northCashier, (api) =>
+      (api.notes as unknown as { create(input: unknown): Promise<unknown> }).create(input)
+    );
+  await createNote({ title: 'Shelf note', branchId: ids.south });
+  // The same extra key beside the cashier's own branch, given the two ways pharmacy
+  // procedures name one: the entry belongs at North, and South must not match it.
+  await createNote({ title: 'Pair note', branchId: ids.south, pharmacyBranchId: ids.north });
+  await createNote({ title: 'Scope note', branchId: ids.south, scope: { branchId: ids.north } });
+  await flushAuditWritesForTest();
+  // A handler that tags its loaded record's branch (North), with an extra raw branchId.
+  const tagged = { audit: { detail: {} as import('@/server/audit').AuditDetail } };
+  (await import('@/server/audit-branch')).annotateAuditBranch(tagged, ids.north);
+  await audit.recordTrpcAudit({
+    ctx: {
+      session: { user: { id: ids.northCashier, name: ids.northCashier, organizationId: ids.org } },
+      audit: tagged.audit,
+    },
+    path: TAGGED,
+    type: 'mutation',
+    input: { saleLineId: 'line_1', branchId: ids.south },
+    outcome: 'SUCCESS',
+  });
   await flushAuditWritesForTest();
   // A handler that names its target branch before it refuses.
   await audit.recordTrpcAudit({
@@ -303,14 +324,30 @@ describeIfDatabase('DEV-937 requests naming another branch (runtime role)', () =
   });
 
   it('does not place a successful request at a branch it merely named', async () => {
-    const note = (await entries(NOTE)).get(ids.northCashier);
-    expect(note?.outcome).toBe('SUCCESS');
-    expect(note?.input).toMatchObject({ branchId: ids.south });
-    expect(note?.metadata).toMatchObject({
+    const notes = await withTenantDb(ids.org, (tx) =>
+      tx.auditLog.findMany({
+        where: { organizationId: ids.org, action: NOTE },
+        select: { metadata: true, input: true, outcome: true },
+      })
+    );
+    const byTitle = new Map(
+      notes.map((row) => [(row.input as { title: string }).title, row] as const)
+    );
+    for (const row of notes) {
+      expect(row.outcome).toBe('SUCCESS');
+      expect(row.input).toMatchObject({ branchId: ids.south });
+    }
+    expect(byTitle.get('Shelf note')?.metadata).toEqual({
       requestedBranchId: ids.south,
       actorBranchIds: [ids.north],
     });
-    expect(note?.metadata).not.toHaveProperty('branchId');
+    // The declared field wins over the extra bare branchId.
+    expect(byTitle.get('Pair note')?.metadata).toEqual({ branchId: ids.north });
+    expect(byTitle.get('Scope note')?.metadata).toEqual({ branchId: ids.north });
+    // The loaded record's tag stands.
+    expect((await entries(TAGGED)).get(ids.northCashier)?.metadata).toEqual({
+      branchId: ids.north,
+    });
   });
 
   it("is not shown to the named branch's manager", async () => {
@@ -324,17 +361,35 @@ describeIfDatabase('DEV-937 requests naming another branch (runtime role)', () =
     expect(actors(failures)).toEqual([ids.northManager, ids.southCashier].sort());
     const cashier = await act(southManager, (api) => api.audit.list({ actorId: ids.northCashier }));
     expect(cashier.items).toEqual([]);
+    const atSouth = await act(southManager, (api) => api.audit.list({ branchId: ids.south }));
+    expect(actors(atSouth)).toEqual([ids.northManager, ids.southCashier].sort());
+    // Every cursor page, one entry at a time.
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await act(southManager, (api) => api.audit.list({ limit: 1, cursor }));
+      seen.push(...page.items.map((item) => `${item.actorId}:${item.action}`));
+      cursor = page.nextCursor;
+    } while (cursor);
+    expect(seen.sort()).toEqual(
+      [`${ids.northManager}:${ACTION}`, `${ids.southCashier}:${ACTION}`].sort()
+    );
     const stats = await act(southManager, (api) => api.audit.stats());
     expect(stats.total).toBe(2);
     const filters = await act(southManager, (api) => api.audit.filters());
     expect(filters.actors.map((actor) => actor.id)).not.toContain(ids.northCashier);
     expect(filters.actions).not.toContain(NOTE);
+    expect(filters.actions).not.toContain(TAGGED);
   });
 
   it("is shown to the manager of the person's own branch", async () => {
     const page = await act(northManager, (api) => api.audit.list({ actorId: ids.northCashier }));
-    expect(page.items.map((item) => item.action).sort()).toEqual([ACTION, NOTE, TARGETED].sort());
-    for (const item of page.items) expect(item).toMatchObject({ branchId: null, branchName: null });
+    expect(page.items.map((item) => item.action).sort()).toEqual(
+      [ACTION, NOTE, NOTE, NOTE, TAGGED, TARGETED].sort()
+    );
+    // Recorded at North: the pair, the scope and the tagged record. Moved: the rest.
+    expect(page.items.filter((item) => item.branchName === 'North')).toHaveLength(3);
+    expect(page.items.filter((item) => item.branchId === null)).toHaveLength(3);
   });
 
   it('is shown to the owner, who sees every entry', async () => {
@@ -345,7 +400,9 @@ describeIfDatabase('DEV-937 requests naming another branch (runtime role)', () =
     );
     expect(actors(south)).toEqual([ids.northManager, ids.southCashier].sort());
     const north = await act(owner, (api) => api.audit.list({ branchId: ids.north }));
-    expect(north.items.map((item) => item.action).sort()).toEqual([ACTION, NOTE, TARGETED].sort());
+    expect(north.items.map((item) => item.action).sort()).toEqual(
+      [ACTION, NOTE, NOTE, NOTE, TAGGED, TARGETED].sort()
+    );
   });
 
   it("leaves South's inspection pack, even when the request aimed at South", async () => {

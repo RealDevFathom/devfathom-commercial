@@ -561,9 +561,14 @@ export function auditBranchId(input: unknown, detail?: AuditDetail): string | nu
 }
 
 /**
- * DEV-937: every branch the raw request names, in the order `auditBranchId`
- * reads them. A key the procedure's schema does not declare is still here, so
- * the writer checks each before one places the entry.
+ * DEV-937: every branch the raw request names, most specific first: the
+ * `pharmacyBranchId` and `scope.branchId` that pharmacy procedures declare, then
+ * a bare top-level `branchId`. The audit middleware wraps the procedure, so it
+ * sees the input before the schema drops keys it does not declare; a bare
+ * `branchId` added to a request that names its branch another way therefore
+ * never wins. The writer checks each in this order and places the entry at the
+ * first the person may act at. A record's own tag (`annotateAuditBranch`) is
+ * read before any of these.
  */
 export function auditRequestBranchIds(input: unknown): string[] {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return [];
@@ -575,7 +580,7 @@ export function auditRequestBranchIds(input: unknown): string[] {
       : undefined;
   return [
     ...new Set(
-      [record.branchId, record.pharmacyBranchId, scoped]
+      [record.pharmacyBranchId, scoped, record.branchId]
         .map(branchIdFrom)
         .filter((id): id is string => !!id)
     ),

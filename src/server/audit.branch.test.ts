@@ -208,7 +208,11 @@ describe('recordTrpcAudit branch of a refused request', () => {
 // so a branch it names is checked as well; a record's own tag stands.
 describe('recordTrpcAudit branch of a successful request', () => {
   const BRANCHES = ['branch_north', 'branch_south'];
-  async function record(input: unknown, metadata?: Record<string, unknown>) {
+  async function record(
+    input: unknown,
+    metadata?: Record<string, unknown>,
+    role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOYEE'
+  ) {
     const create = vi.fn(async () => ({ id: 'audit_1' }));
     const findMany = vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
       BRANCHES.filter((id) => where.id.in.includes(id)).map((id) => ({ id }))
@@ -219,7 +223,7 @@ describe('recordTrpcAudit branch of a successful request', () => {
       user: {
         findFirst: vi.fn(async () => ({
           status: 'ACTIVE',
-          role: 'EMPLOYEE',
+          role,
           organizationRole: { key: 'cashier', isSystem: true, permissions: [] },
           permissionOverrides: [],
         })),
@@ -254,6 +258,38 @@ describe('recordTrpcAudit branch of a successful request', () => {
     ).toEqual({ branchId: 'branch_north' });
     expect(
       (await record({ branchId: 'branch_south', scope: { branchId: 'branch_north' } })).metadata
+    ).toEqual({ branchId: 'branch_north' });
+  });
+
+  it('prefers the declared pharmacyBranchId or scope over a bare branchId, deterministically', async () => {
+    // An ADMIN may act at both branches, so only the order decides.
+    expect(
+      (
+        await record(
+          { branchId: 'branch_south', pharmacyBranchId: 'branch_north' },
+          undefined,
+          'ADMIN'
+        )
+      ).metadata
+    ).toEqual({ branchId: 'branch_north' });
+    expect(
+      (
+        await record(
+          { branchId: 'branch_south', scope: { branchId: 'branch_north' } },
+          undefined,
+          'ADMIN'
+        )
+      ).metadata
+    ).toEqual({ branchId: 'branch_north' });
+    // A record's own tag wins over every request field.
+    expect(
+      (
+        await record(
+          { branchId: 'branch_south', pharmacyBranchId: 'branch_south' },
+          { branchId: 'branch_north' },
+          'ADMIN'
+        )
+      ).metadata
     ).toEqual({ branchId: 'branch_north' });
   });
 

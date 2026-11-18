@@ -46,22 +46,26 @@ async function auditReadScope(ctx: TRPCContext): Promise<AuditReadScope> {
 /**
  * Rows recorded at one of `branchIds`: the recorded branch, the branches the
  * person works at for an entry recorded away from the branch it named
- * (DEV-937), then the raw request of an older entry. A raw request branch is
- * only what the person named, so it never places a refusal, nor an entry the
- * recorder moved away from it (`requestedBranchId`).
+ * (DEV-937), then the raw request of an entry that recorded no branch at all
+ * (written before the recorder kept one). A raw request branch is only what the
+ * person named, so it never places a refusal, an entry the recorder moved away
+ * from it (`requestedBranchId`), or an entry recorded at another branch.
  */
 function atBranches(branchIds: readonly string[]): Prisma.AuditLogWhereInput {
   if (branchIds.length === 0) return { id: { in: [] } };
-  const unmoved: Prisma.AuditLogWhereInput = {
-    outcome: 'SUCCESS',
-    metadata: { path: ['requestedBranchId'], equals: Prisma.AnyNull },
+  const unrecorded: Prisma.AuditLogWhereInput = {
+    AND: [
+      { outcome: 'SUCCESS' },
+      { metadata: { path: ['branchId'], equals: Prisma.AnyNull } },
+      { metadata: { path: ['requestedBranchId'], equals: Prisma.AnyNull } },
+    ],
   };
   return {
     OR: branchIds.flatMap((branchId): Prisma.AuditLogWhereInput[] => [
       { metadata: { path: ['branchId'], equals: branchId } },
       { metadata: { path: ['actorBranchIds'], array_contains: [branchId] } },
-      { AND: [unmoved, { input: { path: ['branchId'], equals: branchId } }] },
-      { AND: [unmoved, { input: { path: ['pharmacyBranchId'], equals: branchId } }] },
+      { AND: [unrecorded, { input: { path: ['branchId'], equals: branchId } }] },
+      { AND: [unrecorded, { input: { path: ['pharmacyBranchId'], equals: branchId } }] },
     ]),
   };
 }
