@@ -51,6 +51,10 @@ const X = {
   central: `br936_central_${suffix}`,
   north: `br936_north_${suffix}`,
   south: `br936_south_${suffix}`,
+  /** Inactive, although the buyer holds an assignment to it. */
+  closed: `br936_closed_${suffix}`,
+  /** Never created. */
+  missing: `br936_missing_${suffix}`,
   owner: `u936_owner_${suffix}`,
   buyer: `u936_buyer_${suffix}`,
   approver: `u936_approver_${suffix}`,
@@ -58,6 +62,8 @@ const X = {
   medicine: `med936_${suffix}`,
   packLevel: `pack936_${suffix}`,
 };
+/** Another tenant, with its own active branch. */
+const Y = { org: `org_dev936_other_${suffix}`, branch: `br936_other_${suffix}` };
 const storeOf = (branchId: string) => `loc_${branchId}`;
 const roleIdOf = (key: string) => `${X.org}_role_${key}`;
 
@@ -129,12 +135,19 @@ function centralOrder(receivingBranchId: string, reference: string) {
   };
 }
 
-/** A posted direct-purchase receipt of 20 units at the central branch. */
-async function postedCentralReceipt(label: string) {
-  const draft = await as(BUYER, (api) =>
+/**
+ * A posted direct-purchase receipt of 20 units: by default raised and posted by the buyer
+ * at the central branch. It is not the receipt of a central order: INV-10 keeps no
+ * central-order marker, so any posted receipt may be allocated.
+ */
+async function postedCentralReceipt(
+  label: string,
+  { branchId = X.central, actor = BUYER }: { branchId?: string; actor?: Actor } = {}
+) {
+  const draft = await as(actor, (api) =>
     api.createGoodsReceipt({
       reference: `GRN-${label}-${suffix}`,
-      branchId: X.central,
+      branchId,
       supplierId: X.supplier,
       supplierInvoiceRef: `INV-${label}-${suffix}`,
       supplierInvoiceDate: new Date(),
@@ -156,7 +169,7 @@ async function postedCentralReceipt(label: string) {
           canonicalUnitsPerPack: 10,
           receivedPacks: 2,
           invoicedPricePerPackMinor: 10_000,
-          stockLocationId: storeOf(X.central),
+          stockLocationId: storeOf(branchId),
         },
       ],
     })
@@ -164,16 +177,14 @@ async function postedCentralReceipt(label: string) {
   if (!draft || typeof draft !== 'object' || !('id' in draft)) {
     throw new Error(`Goods receipt was not drafted: ${JSON.stringify(draft)}`);
   }
-  await as(BUYER, (api) =>
-    api.postGoodsReceipt({ branchId: X.central, goodsReceiptId: draft.id as string })
-  );
+  await as(actor, (api) => api.postGoodsReceipt({ branchId, goodsReceiptId: draft.id as string }));
   const receipt = await read((db) =>
     db.pharmacyGoodsReceipt.findFirstOrThrow({
       where: { id: draft.id as string },
       include: { lines: true },
     })
   );
-  expect(receipt.status).toBe('POSTED');
+  expect(receipt).toMatchObject({ status: 'POSTED', branchId, purchaseOrderId: null });
   expect(receipt.lines).toHaveLength(1);
   expect(receipt.lines[0]!.acceptedCanonicalUnits).toBe(20);
   expect(receipt.lines[0]!.inventoryLotId).toBeTruthy();
@@ -226,9 +237,23 @@ beforeAll(async () => {
     tx.$executeRawUnsafe(
       `INSERT INTO organizations
          (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
-       VALUES ($1, $1, $1, $1, 'PHARMACY', 'ACTIVE', 'SHARED', now(), now())`,
-      X.org
+       VALUES ($1, $1, $1, $1, 'PHARMACY', 'ACTIVE', 'SHARED', now(), now()),
+              ($2, $2, $2, $2, 'PHARMACY', 'ACTIVE', 'SHARED', now(), now())`,
+      X.org,
+      Y.org
     )
+  );
+  await withTenantDb(Y.org, (tx) =>
+    tx.pharmacyBranch.create({
+      data: {
+        id: Y.branch,
+        code: `OTH-${suffix}`,
+        name: 'Another tenant',
+        addressLine: '2 Mall Road',
+        city: 'Lahore',
+        provinceCode: 'PB',
+      },
+    })
   );
   await withTenantDb(
     X.org,
@@ -276,13 +301,14 @@ beforeAll(async () => {
         });
       }
       const address = { addressLine: '1 Mall Road', city: 'Lahore', provinceCode: 'PB' };
-      for (const [id, code] of [
-        [X.central, 'CEN'],
-        [X.north, 'NOR'],
-        [X.south, 'SOU'],
+      for (const [id, code, active] of [
+        [X.central, 'CEN', true],
+        [X.north, 'NOR', true],
+        [X.south, 'SOU', true],
+        [X.closed, 'CLO', false],
       ] as const) {
         await tx.pharmacyBranch.create({
-          data: { id, code: `${code}-${suffix}`, name: `DEV-936 ${code}`, ...address },
+          data: { id, code: `${code}-${suffix}`, name: `DEV-936 ${code}`, active, ...address },
         });
         await tx.pharmacyStockLocation.create({
           data: {
@@ -294,7 +320,8 @@ beforeAll(async () => {
           },
         });
       }
-      // The buyer holds an organization-wide central grant but works at two branches only.
+      // The buyer holds an organization-wide central grant but works at central and north
+      // only (and holds an assignment to the closed branch, which must not count).
       await tx.pharmacyCentralPurchasingAccess.create({
         data: { userId: X.buyer, branchId: null, grantedById: X.owner },
       });
@@ -302,7 +329,9 @@ beforeAll(async () => {
         data: [
           { userId: X.buyer, branchId: X.central },
           { userId: X.buyer, branchId: X.north },
+          { userId: X.buyer, branchId: X.closed },
           { userId: X.approver, branchId: X.central },
+          { userId: X.approver, branchId: X.south },
         ],
       });
       await tx.restaurantStaffProfile.create({
@@ -357,6 +386,34 @@ afterAll(async () => {
   await disconnect?.();
 });
 
+/** Branches the procurement boundary never resolves, whoever asks. */
+const UNRESOLVABLE = [
+  ['a branch of another organization', Y.branch],
+  ['a branch that does not exist', X.missing],
+  ['an inactive branch the buyer is assigned to', X.closed],
+] as const;
+const ACTORS = [
+  ['the branch-limited buyer', BUYER],
+  ['the owner', OWNER],
+] as const;
+
+async function setBranchTransfers(enabled: boolean) {
+  await withPlatformDb((tx) =>
+    tx.$executeRawUnsafe(
+      `UPDATE organizations SET "pharmacyBranchTransfersEnabled" = $2 WHERE id = $1`,
+      X.org,
+      enabled
+    )
+  );
+  const [row] = await withPlatformDb((tx) =>
+    tx.$queryRawUnsafe<Array<{ enabled: boolean }>>(
+      `SELECT "pharmacyBranchTransfersEnabled" AS enabled FROM organizations WHERE id = $1`,
+      X.org
+    )
+  );
+  expect(row).toEqual({ enabled });
+}
+
 describeIfDatabase('DEV-936 central purchasing branch assignment (runtime role, RLS on)', () => {
   describe('createCentralPurchaseOrder', () => {
     it('refuses a branch-limited buyer for an unassigned receiving branch and writes nothing', async () => {
@@ -383,6 +440,22 @@ describeIfDatabase('DEV-936 central purchasing branch assignment (runtime role, 
       );
       expect(order).toMatchObject({ branchId: X.south, createdByUserId: X.owner });
     });
+
+    describe.each(ACTORS)('for %s', (_who, actor) => {
+      it.each(UNRESOLVABLE)(
+        'refuses %s as the receiving branch, the same way, and writes nothing',
+        async (label, branchId) => {
+          const reference = `CPO-UNRESOLVABLE-${actor.userId}-${label.length}-${suffix}`;
+          const outcome = await settle(
+            as(actor, (api) => api.createCentralPurchaseOrder(centralOrder(branchId, reference)))
+          );
+          expect(outcome).toMatchObject({ ok: false, error: OUTSIDE_SCOPE });
+          await expect(
+            read((db) => db.pharmacyPurchaseOrder.count({ where: { reference } }))
+          ).resolves.toBe(0);
+        }
+      );
+    });
   });
 
   describe('allocateCentralReceipt', () => {
@@ -397,7 +470,37 @@ describeIfDatabase('DEV-936 central purchasing branch assignment (runtime role, 
       await expect(writtenFor(receipt)).resolves.toEqual({ allocations: 0, transferLines: 0 });
     });
 
-    it('lets the buyer allocate to a branch they are assigned to', async () => {
+    it('refuses stock leaving a branch the buyer is not assigned to, and leaves the receipt allocatable', async () => {
+      // The owner received and posted this one at the south branch.
+      const receipt = await postedCentralReceipt('south', { branchId: X.south, actor: OWNER });
+      const outcome = await settle(
+        as(BUYER, (api) => api.allocateCentralReceipt(allocation(receipt, [X.north])))
+      );
+      expect(outcome).toMatchObject({ ok: false, error: OUTSIDE_SCOPE });
+      await expect(writtenFor(receipt)).resolves.toEqual({ allocations: 0, transferLines: 0 });
+      // Nothing locked the receipt's quantity: someone who may act at south still can.
+      const result = await as(OWNER, (api) =>
+        api.allocateCentralReceipt(allocation(receipt, [X.north]))
+      );
+      expect(result).toHaveLength(1);
+      await expect(writtenFor(receipt)).resolves.toEqual({ allocations: 1, transferLines: 1 });
+    });
+
+    describe.each(ACTORS)('for %s', (_who, actor) => {
+      it.each(UNRESOLVABLE)(
+        'refuses %s as a destination, the same way, and writes nothing',
+        async (label, branchId) => {
+          const receipt = await postedCentralReceipt(`bad-${actor.userId}-${label.length}`);
+          const outcome = await settle(
+            as(actor, (api) => api.allocateCentralReceipt(allocation(receipt, [X.north, branchId])))
+          );
+          expect(outcome).toMatchObject({ ok: false, error: OUTSIDE_SCOPE });
+          await expect(writtenFor(receipt)).resolves.toEqual({ allocations: 0, transferLines: 0 });
+        }
+      );
+    });
+
+    it('lets the buyer allocate a direct-purchase receipt (any posted receipt, by design) to an assigned branch', async () => {
       const receipt = await postedCentralReceipt('north');
       const result = await as(BUYER, (api) =>
         api.allocateCentralReceipt(allocation(receipt, [X.north]))
@@ -424,6 +527,16 @@ describeIfDatabase('DEV-936 central purchasing branch assignment (runtime role, 
           .sort()
           .map((destinationBranchId) => ({ destinationBranchId, allocatedById: X.owner }))
       );
+    });
+
+    it('still moves stock with the inter-branch transfer switch explicitly off (DEV-908)', async () => {
+      await setBranchTransfers(false);
+      const receipt = await postedCentralReceipt('switch-off');
+      const result = await as(BUYER, (api) =>
+        api.allocateCentralReceipt(allocation(receipt, [X.north]))
+      );
+      expect(result).toHaveLength(1);
+      await expect(writtenFor(receipt)).resolves.toEqual({ allocations: 1, transferLines: 1 });
     });
   });
 });

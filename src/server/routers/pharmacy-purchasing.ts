@@ -2912,7 +2912,16 @@ const purchasingRouter = router({
         annotateAuditBranch(ctx, receipt?.branchId);
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          // DEV-936: every destination branch is checked before anything is written.
+          const { organizationId } = tenantScope(ctx);
+          // DEV-936: the branch the stock leaves (the receipt's branch), read on the
+          // transaction client, and every destination branch are checked before
+          // anything is written. Any posted receipt may be allocated (INV-10 keeps no
+          // central-order marker), so the source branch is the boundary.
+          const source = await db.pharmacyGoodsReceipt.findFirst({
+            where: { id: input.goodsReceiptId, organizationId },
+            select: { branchId: true },
+          });
+          if (source) await assertProcurementBranch(ctx, source.branchId, db);
           const destinations = new Set(input.allocations.map((a) => a.destinationBranchId));
           for (const destination of destinations) {
             await assertProcurementBranch(ctx, destination, db);
@@ -2920,7 +2929,7 @@ const purchasingRouter = router({
           return allocateCentralReceipt(
             db,
             {
-              organizationId: tenantScope(ctx).organizationId,
+              organizationId,
               actorId: ctx.session.user.id,
             },
             input
