@@ -38,7 +38,9 @@ const priorCatalogDigests = {
   // description); no existing template changes.
   // DEV-505 (#1277): pharmacy:inventory on the Manager template; the hashed data
   // differs only by that one grant.
-  PHARMACY: 'f594a3b045d556315d79842a8499ee27238b33688bde0d86af94d85a929b2acd',
+  // DEV-19 (#1012): pharmacy:catalogue-edit in the pharmacy capability catalog
+  // and on the Owner / Operator template; the hashed data differs only by those.
+  PHARMACY: '7f7b7a23d812201f4d55f1ff4aed97d05db11264f8c2ae6654fb4d9d7c0203ab',
 };
 
 const property = {

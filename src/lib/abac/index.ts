@@ -75,6 +75,7 @@ async function customDecision(
 const ROLE_BOUNDED_ADMIN_ACTIONS: ReadonlySet<Action> = new Set([
   'pharmacy:procurement',
   'pharmacy:procurement-approve',
+  'pharmacy:catalogue-edit',
 ]);
 
 /** Grants require action eligibility and all mandatory resource constraints. */
