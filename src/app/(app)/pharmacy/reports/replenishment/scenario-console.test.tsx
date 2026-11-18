@@ -355,3 +355,77 @@ it('explains why financial planning is unavailable while keeping operational evi
   expect(screen.getByText(/Planning requires financial report access/)).toBeVisible();
   expect(screen.getByText(/monetary results are withheld/)).toBeVisible();
 });
+
+describe('scenario money typed as an amount', () => {
+  async function openScenario(currency: string) {
+    vi.setSystemTime(new Date('2026-11-03T12:00:00Z'));
+    mocks.replenishment.mockRejectedValue(new Error('not needed'));
+    render(<ScenarioConsole {...props} financial />);
+    const input = await typeAndSearch();
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Include a user-supplied scenario' }));
+    const set = (label: string | RegExp, value: string) =>
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    set('Scenario currency (three-letter code)', currency);
+    set('Assumed daily demand (units)', '3');
+    set('Current policy order (units)', '10');
+    set('Proposed policy order (units)', '12');
+    set('Order pack size (units)', '1');
+    set('Minimum order (units)', '0');
+    return set;
+  }
+  async function submit() {
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Read replenishment report' }));
+      await Promise.resolve();
+    });
+  }
+
+  it('sends the exact minor units for rupee amounts with up to two decimals', async () => {
+    const set = await openScenario('PKR');
+    set('Current selling price per unit (rupees)', '125.50');
+    set('What-if selling price per unit (rupees)', '0.05');
+    set('Sales goal (rupees, optional)', '1000000.00');
+    set('Margin goal (rupees, optional)', '');
+    set('Cost per unit (rupees, optional)', '99.9');
+    set('Order budget (rupees, optional)', '0');
+    await submit();
+    expect(mocks.replenishment).toHaveBeenCalledOnce();
+    const scenario = mocks.replenishment.mock.calls[0]![0].manualScenario;
+    expect(scenario.currency).toBe('PKR');
+    expect(scenario.pricing).toEqual({ currentUnitPriceMinor: 12550, proposedUnitPriceMinor: 5 });
+    expect(scenario.goals).toEqual({ salesMinor: 100000000, marginMinor: null });
+    expect(scenario.orderTerms.unitCostMinor).toBe(9990);
+    expect(scenario.orderTerms.budgetMinor).toBe(0);
+  });
+
+  it.each([
+    ['125.505', 'Use at most 2 decimal places'],
+    ['-5', 'Enter an amount of 0 or more.'],
+    ['', 'Enter an amount, for example 125.50.'],
+  ])('refuses %s in a required price and sends nothing', async (raw, message) => {
+    const set = await openScenario('PKR');
+    set('Current selling price per unit (rupees)', raw);
+    set('What-if selling price per unit (rupees)', '10');
+    await submit();
+    expect(mocks.replenishment).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Current selling price per unit (rupees)')).toHaveAttribute(
+      'aria-invalid',
+      'true'
+    );
+    expect(document.body.textContent).toContain(message);
+  });
+
+  it('names the chosen currency, not rupees or paisa, for a non-PKR scenario', async () => {
+    const set = await openScenario('USD');
+    expect(document.body.textContent).not.toMatch(/paisa|rupee|minor units/i);
+    set('Current selling price per unit (USD)', '2.75');
+    set('What-if selling price per unit (USD)', '3');
+    await submit();
+    expect(mocks.replenishment.mock.calls[0]![0].manualScenario.pricing).toEqual({
+      currentUnitPriceMinor: 275,
+      proposedUnitPriceMinor: 300,
+    });
+  });
+});

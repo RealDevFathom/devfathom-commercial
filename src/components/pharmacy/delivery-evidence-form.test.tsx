@@ -31,8 +31,8 @@ beforeEach(() => {
   });
 });
 
-function fill(action: string) {
-  render(<DeliveryEvidenceForm branchId="branch-a" orderId="order-a" />);
+function fill(action: string, currency = 'PKR') {
+  render(<DeliveryEvidenceForm branchId="branch-a" orderId="order-a" currency={currency} />);
   fireEvent.change(screen.getByLabelText('Evidence action'), { target: { value: action } });
   fireEvent.change(screen.getByLabelText('Evidence reference'), { target: { value: 'ref' } });
   fireEvent.change(screen.getByLabelText('Operation key (reuse for retry)'), {
@@ -76,4 +76,52 @@ it.each([
   fireEvent.click(screen.getByRole('button', { name: 'Record custody evidence' }));
   await waitFor(() => expect(mocks.command).toHaveBeenCalledOnce());
   expect(mocks.command.mock.calls[0]![0]).not.toHaveProperty('managerPin');
+});
+
+it.each([
+  ['125.50', 12550],
+  ['0.05', 5],
+  ['1000000.00', 100000000],
+  ['40', 4000],
+])('sends a collected amount typed as %s rupees as exactly %i minor units', async (raw, minor) => {
+  fill('COLLECT');
+  fireEvent.change(screen.getByLabelText('Actual amount (rupees)'), { target: { value: raw } });
+  fireEvent.click(screen.getByRole('button', { name: 'Record custody evidence' }));
+  await waitFor(() => expect(mocks.command).toHaveBeenCalledOnce());
+  expect(mocks.command.mock.calls[0]![0]).toMatchObject({ action: 'COLLECT', amountMinor: minor });
+});
+
+it.each([
+  ['125.505', 'Use at most 2 decimal places'],
+  ['-10', 'Enter an amount of 0 or more.'],
+  ['', 'Enter an amount more than 0'],
+  ['0.00', 'Enter an amount more than 0'],
+])('refuses %s and records nothing', async (raw, message) => {
+  fill('REMIT');
+  fireEvent.change(screen.getByLabelText('Actual amount (rupees)'), { target: { value: raw } });
+  fireEvent.change(screen.getByLabelText(/Open drawer device ID/), { target: { value: 'dev-1' } });
+  fireEvent.submit(
+    screen.getByRole('button', { name: 'Record custody evidence' }).closest('form')!
+  );
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(message));
+  expect(mocks.command).not.toHaveBeenCalled();
+});
+
+it('shows recorded totals as money and never says paisa or rupees for another currency', async () => {
+  mocks.command.mockResolvedValue({
+    replayed: false,
+    totals: { collectedMinor: 12550, remittedMinor: 0, custodyMinor: 12550 },
+  });
+  fill('CASH_RETURN', 'USD');
+  expect(screen.queryByLabelText(/rupees|paisa/i)).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Actual amount (USD)'), { target: { value: '2.75' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Record custody evidence' }));
+  await waitFor(() => expect(mocks.command).toHaveBeenCalledOnce());
+  expect(mocks.command.mock.calls[0]![0]).toMatchObject({ amountMinor: 275 });
+  await waitFor(() =>
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Recorded; collected USD 125.50, remitted USD 0.00, cash still with runner USD 125.50.'
+    )
+  );
+  expect(screen.getByRole('status').textContent).not.toMatch(/minor units|paisa/);
 });

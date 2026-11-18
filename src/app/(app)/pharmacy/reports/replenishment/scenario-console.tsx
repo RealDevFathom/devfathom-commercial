@@ -16,6 +16,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { amountInputError, amountInputToMinor, amountInputUnit } from '@/lib/money-input';
 import { demandDateAfter, demandDateMs, demandInstantMs } from '@/lib/pharmacy/demand-evidence';
 import type {
   PharmacyReplenishmentReport,
@@ -40,17 +41,29 @@ const numericFields = [
   ['dailyDemandUnits', 'Assumed daily demand (units)', false, 0],
   ['currentQuantityUnits', 'Current policy order (units)', false, 0],
   ['proposedQuantityUnits', 'Proposed policy order (units)', false, 0],
-  ['currentUnitPriceMinor', 'Current unit selling price (minor units)', false, 0],
-  ['proposedUnitPriceMinor', 'What-if unit selling price (minor units)', false, 0],
-  ['salesGoalMinor', 'Sales goal (minor units)', true, 0],
-  ['marginGoalMinor', 'Margin goal (minor units)', true, 0],
+  ['currentUnitPriceMinor', 'Current selling price per unit', false, 0],
+  ['proposedUnitPriceMinor', 'What-if selling price per unit', false, 0],
+  ['salesGoalMinor', 'Sales goal', true, 0],
+  ['marginGoalMinor', 'Margin goal', true, 0],
   ['packSize', 'Order pack size (units)', false, 1],
   ['minimumOrderUnits', 'Minimum order (units)', false, 0],
-  ['unitCostMinor', 'Unit cost (integer minor units)', true, 0],
-  ['budgetMinor', 'Order budget (integer minor units)', true, 0],
+  ['unitCostMinor', 'Cost per unit', true, 0],
+  ['budgetMinor', 'Order budget', true, 0],
   ['storageLimitUnits', 'Net additional storage capacity (units)', true, 0],
 ] as const;
 type NumericKey = (typeof numericFields)[number][0];
+/**
+ * Money the owner types as an amount with up to two decimals ("125.50"); the
+ * report still receives the integer minor units it always has.
+ */
+const moneyKeys = new Set<NumericKey>([
+  'currentUnitPriceMinor',
+  'proposedUnitPriceMinor',
+  'salesGoalMinor',
+  'marginGoalMinor',
+  'unitCostMinor',
+  'budgetMinor',
+]);
 type Draft = Record<NumericKey, string> & {
   historyStartDate: string;
   originDate: string;
@@ -219,6 +232,18 @@ function ScenarioWorkspace({
       }
       return number;
     };
+    const money = (key: NumericKey, optional: boolean) => {
+      const parsed = amountInputToMinor(draft[key]);
+      if (parsed.status === 'OK') return parsed.minor;
+      if (parsed.status === 'EMPTY') {
+        if (optional) return null;
+        invalid[key] = 'Enter an amount, for example 125.50.';
+      } else {
+        invalid[key] =
+          amountInputError(parsed.reason) + (optional ? ' Or leave blank for unknown.' : '');
+      }
+      return NaN;
+    };
     const date = (key: keyof Draft) => {
       try {
         return demandDateMs(draft[key]);
@@ -252,7 +277,9 @@ function ScenarioWorkspace({
         invalid.planningOrigin = 'Use a future UTC day within 31 days.';
       const values = {} as Record<NumericKey, number | null>;
       for (const [key, , optional, minimum] of numericFields)
-        values[key] = integer(key, minimum, Number.MAX_SAFE_INTEGER, optional);
+        values[key] = moneyKeys.has(key)
+          ? money(key, optional)
+          : integer(key, minimum, Number.MAX_SAFE_INTEGER, optional);
       if (!Number.isSafeInteger(values.dailyDemandUnits! * horizonDays))
         invalid.dailyDemandUnits = 'Demand across the horizon must be a safe whole-number total.';
       if (!/^[A-Z]{3}$/.test(draft.currency))
@@ -343,7 +370,7 @@ function ScenarioWorkspace({
       <Input
         id={`replenishment-${key}`}
         name={key}
-        type={type}
+        type={type === 'decimal' ? 'text' : type}
         value={draft[key]}
         onChange={(event) => change(key, event.target.value)}
         className="mt-1 min-h-11"
@@ -351,6 +378,7 @@ function ScenarioWorkspace({
         min={min}
         max={max}
         step={type === 'number' ? 1 : undefined}
+        inputMode={type === 'decimal' ? 'decimal' : undefined}
         aria-invalid={Boolean(errors[key])}
         aria-describedby={
           errors[key]
@@ -605,14 +633,28 @@ function ScenarioWorkspace({
                 <div className="mt-4 space-y-4">
                   <p id="replenishment-unknown-help" className="text-sm text-text-muted">
                     Leave optional cost, budget, capacity, arrival and expiry blank when unknown. An
-                    explicit 0 is a supplied assumption. Money uses integer minor units in your
-                    supplied currency. Arrival and expiry require an explicit timezone.
+                    explicit 0 is a supplied assumption. Enter money in the scenario currency with
+                    up to 2 decimals, for example 125.50. Arrival and expiry require an explicit
+                    timezone.
                   </p>
                   <div className="grid gap-4 md:grid-cols-2">
                     {field('planningOrigin', 'Scenario starts on (future UTC day)', 'date')}
                     {field('currency', 'Scenario currency (three-letter code)')}
                     {numericFields.map(([key, label, optional, min]) =>
-                      field(key, label + (optional ? ' (optional)' : ''), 'number', optional, min)
+                      moneyKeys.has(key)
+                        ? field(
+                            key,
+                            `${label} (${amountInputUnit(draft.currency)}${optional ? ', optional' : ''})`,
+                            'decimal',
+                            optional
+                          )
+                        : field(
+                            key,
+                            label + (optional ? ' (optional)' : ''),
+                            'number',
+                            optional,
+                            min
+                          )
                     )}
                     {field('arrivalAt', 'Assumed arrival (ISO instant, optional)', 'text', true)}
                     {field('expiresAt', 'Assumed expiry (ISO instant, optional)', 'text', true)}
