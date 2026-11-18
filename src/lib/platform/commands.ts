@@ -2048,9 +2048,9 @@ async function runCommand(
           platformApprovedById: actor.id,
           platformApprovalNote: note,
           platformApprovalUnmetChecks: toJson(unmet),
-          ...(promote
-            ? { status: 'ACTIVE', activatedAt: before.activatedAt ?? now, suspendedAt: null }
-            : {}),
+          // The activation time is the approval time, which is how a withdrawal later
+          // knows this approval is what made the pharmacy active.
+          ...(promote ? { status: 'ACTIVE', activatedAt: now, suspendedAt: null } : {}),
         },
       });
       if (promote) {
@@ -2085,18 +2085,43 @@ async function runCommand(
       };
     }
     case PHARMACY_APPROVAL_WITHDRAW_ACTION: {
-      // DEV-905: withdrawing the approval restores every normal check. The lifecycle
-      // state is left as it is; the operator suspends separately if that is wanted.
+      // DEV-905: withdrawing the approval restores every normal check. When the approval
+      // is what made the pharmacy active (it skipped the activation checks), the pharmacy
+      // goes back to ONBOARDING, as the placeholder lock does, so the organization-level
+      // gate refuses it again until it passes activation. A pharmacy that was activated
+      // through the normal checks keeps its lifecycle state, and its branch gate applies
+      // again.
       const input = z.object({ id, reason: sensitiveReason }).parse(payload);
       await db.$queryRawUnsafe('SELECT id FROM organizations WHERE id = $1 FOR UPDATE', input.id);
       const before = await db.organization.findUnique({ where: { id: input.id } });
       if (!before) throw new PlatformSecurityError('Organization not found.', 400);
       if (before.vertical !== 'PHARMACY' || !before.platformApprovedAt)
         throw new PlatformSecurityError('This pharmacy has no approval to withdraw.', 400);
+      const activatedByApproval =
+        before.activatedAt !== null &&
+        before.activatedAt.getTime() === before.platformApprovedAt.getTime();
+      const demote =
+        activatedByApproval && (before.status === 'ACTIVE' || before.status === 'GRACE');
       const organization = await db.organization.update({
         where: { id: input.id },
-        data: PLATFORM_APPROVAL_CLEARED,
+        data: {
+          ...PLATFORM_APPROVAL_CLEARED,
+          ...(demote ? { status: 'ONBOARDING', activatedAt: null } : {}),
+        },
       });
+      if (demote) {
+        await db.organizationLifecycleEvent.create({
+          data: {
+            organizationId: input.id,
+            action: lifecycleAction(before.status, 'ONBOARDING'),
+            fromStatus: before.status,
+            toStatus: 'ONBOARDING',
+            reason: input.reason,
+            actorId: actor.id,
+            metadata: toJson({ platformApproval: true, operation: 'WITHDRAWN' }),
+          },
+        });
+      }
       return {
         targetType: 'Organization',
         targetId: input.id,
@@ -2112,7 +2137,11 @@ async function runCommand(
           },
         },
         data: organization,
-        audit: { status: organization.status, platformApproved: false },
+        audit: {
+          status: organization.status,
+          platformApproved: false,
+          returnedToOnboarding: demote,
+        },
       };
     }
     case 'organization.create': {

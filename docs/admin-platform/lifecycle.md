@@ -61,14 +61,17 @@ shown, must be confirmed by name, and are stored with the approval (`platformApp
 approver, the note and the unmet checks) and in the platform audit ledger. An `ONBOARDING`
 pharmacy becomes `ACTIVE`.
 
-While the approval is in effect (`ONBOARDING`, `ACTIVE` or `GRACE`), the standing gates in
-`src/lib/pharmacy/platform-approval.ts` do not refuse the pharmacy: organization not active, the
-activation preflight, the regulatory profile and licence, and the qualified person. Per-sale rules
-are unchanged: an Rx, restricted or controlled line still meets the full branch check, and
-prescription, controlled-witness, refund, discount, stock, tax and money rules still apply. A later
-suspension or termination is not overridden. `organization.pharmacy.approval.withdraw` (or a
-placeholder lock) clears the approval and restores every check. Only the platform control plane can
-write the approval columns; a database trigger refuses any other transaction.
+While the approval is in effect (`ONBOARDING`, `ACTIVE` or `GRACE`), the gates in
+`src/lib/pharmacy/platform-approval.ts` do not refuse the pharmacy, on ordinary and regulated
+operations alike: organization not active, the activation preflight, and the branch regulatory gate
+(profile, licence, qualified person, and the profile's presence-hours and schedule limits). Per-sale
+rules are unchanged and run on every sale: the pharmacist dispensing grant, the pharmacist-attached
+prescription and signed review for an Rx line, the controlled-medicine witness PIN and register,
+refund and discount approvals, stock, tax and money. A later suspension or termination is not
+overridden. `organization.pharmacy.approval.withdraw` (or a placeholder lock) clears the approval
+and restores every check; a pharmacy the approval made active returns to `ONBOARDING`. Only the
+platform control plane can write the approval columns; a database trigger refuses any other
+transaction.
 
 ## Suspension and resume
 

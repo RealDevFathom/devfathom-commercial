@@ -9,26 +9,28 @@
  * `organization.pharmacy.approval.withdraw` commands, guarded again by a database
  * trigger). Nothing sets it automatically.
  *
- * What an approval overrides — the standing gates that stop a pharmacy operating at all:
+ * What an approval overrides — the gates that stop a pharmacy operating at all:
  * - ORGANIZATION_NOT_ACTIVE while the organization is still ONBOARDING;
  * - the activation preflight (base activation gates, the regulatory profile and every
  *   pharmacy onboarding gate);
- * - the branch's regulatory standing for ordinary operations: PROFILE_MISSING,
- *   BRANCH_INACTIVE, PROFILE_PREMISES_MISMATCH, RULE_SET_UNCONFIRMED, LICENCE_INVALID
- *   and QUALIFIED_PERSON_COVERAGE_MISSING.
+ * - the branch's regulatory gate on every operation, ordinary or regulated: a missing or
+ *   inoperable profile (PROFILE_MISSING, BRANCH_INACTIVE, PROFILE_PREMISES_MISMATCH,
+ *   RULE_SET_UNCONFIRMED, LICENCE_INVALID), no qualified person
+ *   (QUALIFIED_PERSON_COVERAGE_MISSING), and the profile's own presence-hours and
+ *   schedule limits (PHARMACIST_NOT_PRESENT, SCHEDULE_NOT_PERMITTED), which need that
+ *   profile and its pharmacist ("even if there's no pharmacist ... nothing is needed").
  *
  * What it never overrides:
  * - a later SUSPENDED, TERMINATED or PURGING state — a deliberate platform decision made
  *   after the approval; resuming the organization brings the approval back into effect;
- * - per-sale rules: an Rx, restricted or controlled line (an operation that needs the
- *   pharmacist present or names a schedule) still meets the full branch check, the
- *   prescription and pharmacist verification, controlled witnesses, refund and discount
- *   approvals, stock, tax and money rules, which all live outside these gates.
+ * - per-sale rules, which live outside these gates and run on every sale whether or not
+ *   the pharmacy is approved: the pharmacist's dispensing grant for an Rx or restricted
+ *   line, the pharmacist-attached prescription and signed review, the controlled-medicine
+ *   witness PIN and register entry, refund and discount approvals, expired or recalled
+ *   stock, stock, tax and money rules.
  *
  * Withdrawing the approval clears the fact, and every gate refuses exactly as before.
  */
-
-import type { BranchOperationAction } from './regulatory';
 
 /** Lifecycle states in which an approval lets a pharmacy run. */
 const APPROVAL_OPERATING_STATUSES: ReadonlySet<string> = new Set(['ONBOARDING', 'ACTIVE', 'GRACE']);
@@ -55,23 +57,14 @@ export function platformApprovalInEffect(organization: PlatformApprovalFacts | n
 }
 
 /**
- * A per-sale regulated act: dispensing or paying for an Rx, restricted or controlled
- * line (pharmacist presence), or an act naming a schedule. Approval never waives these.
- */
-export function isPerSaleRegulatedAction(action: BranchOperationAction): boolean {
-  return action.requiresPharmacistPresence === true || Boolean(action.schedule);
-}
-
-/**
- * The operating gate's question: does the approval let this operation past the
- * organization- and branch-level standing checks? Ordinary operations, yes; per-sale
- * regulated acts, no (they still run the full branch check).
+ * The operating gate's question: does the approval let this operation past the branch's
+ * regulatory gate? Yes, for every operation, while the approval is in effect. The
+ * per-sale rules are separate code that this answer never reaches.
  */
 export function platformApprovalWaivesBranchGate(
-  organization: PlatformApprovalFacts | null | undefined,
-  action: BranchOperationAction
+  organization: PlatformApprovalFacts | null | undefined
 ): boolean {
-  return platformApprovalInEffect(organization) && !isPerSaleRegulatedAction(action);
+  return platformApprovalInEffect(organization);
 }
 
 /** One unmet check recorded with an approval, as the queue and the organization page name it. */

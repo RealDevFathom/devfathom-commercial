@@ -254,7 +254,7 @@ export function PharmacyApprovalWithdrawForm({
         />
         <p className="mt-1 text-xs text-text-muted">
           Every normal check applies again at once: the organization, regulatory profile, qualified
-          person and onboarding gates.
+          person and onboarding gates. A pharmacy this approval made active goes back to onboarding.
         </p>
       </div>
       {error ? <FormError id={errorId} error={error} /> : null}

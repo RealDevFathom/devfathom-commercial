@@ -198,6 +198,7 @@ const platformDb = {
 
 import { executePlatformCommand } from './commands';
 import { PlatformSecurityError } from './security';
+import { storedPharmacyOperationDenial } from '@/lib/pharmacy/regulatory';
 import { assertPlatformCapability } from '@/lib/platform/auth';
 import {
   pharmacyApprovalCommand,
@@ -1613,10 +1614,83 @@ describe('pharmacy approval by a super admin (DEV-905)', () => {
     }
   );
 
-  it('withdraws an approval, restoring the checks, and audits who withdrew it and why', async () => {
+  it('approves, then withdraws: the pharmacy returns to onboarding and the gates refuse it again', async () => {
+    // A stateful organization row, so the withdrawal reads what the approval wrote.
+    let row: Record<string, unknown> = { ...pharmacyOrg(), timezone: 'Asia/Karachi' };
+    mocks.orgFindUnique.mockImplementation(async () => row);
+    mocks.orgUpdate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
+      row = { ...row, ...data };
+      return row;
+    });
+    mocks.regulatoryProfileFindFirst.mockResolvedValue(null);
+    noReadinessEvidence();
+    const gate = {
+      organization: { findUnique: async () => row },
+      branchRegulatoryProfile: { findFirst: async () => null },
+    };
+    const sale = { name: 'pharmacy.sale.create' };
+
+    // Not approved: refused exactly as before.
+    expect(await storedPharmacyOperationDenial(gate as never, 'org_p', 'branch-p', sale)).toBe(
+      'ORGANIZATION_NOT_ACTIVE'
+    );
+
+    const approve = pharmacyApprovalCommand('org_p', 'Owner instruction', BARE_UNMET);
+    await run(approve.action, approve.payload);
+    expect(row).toMatchObject({ status: 'ACTIVE' });
+    expect(row.activatedAt).toEqual(row.platformApprovedAt);
+    // Approved: the pharmacy with no profile and no pharmacist may operate.
+    expect(
+      await storedPharmacyOperationDenial(gate as never, 'org_p', 'branch-p', sale)
+    ).toBeNull();
+
+    vi.mocked(platformDb.organizationLifecycleEvent.create).mockClear();
+    const withdraw = pharmacyApprovalWithdrawCommand('org_p', 'Licence was never issued');
+    await run(withdraw.action, withdraw.payload);
+
+    expect(row).toMatchObject({
+      status: 'ONBOARDING',
+      activatedAt: null,
+      platformApprovedAt: null,
+      platformApprovedById: null,
+    });
+    expect(platformDb.organizationLifecycleEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        fromStatus: 'ACTIVE',
+        toStatus: 'ONBOARDING',
+        reason: 'Licence was never issued',
+        actorId: 'op_1',
+        metadata: { platformApproval: true, operation: 'WITHDRAWN' },
+      }),
+    });
+    expect(mocks.auditCreate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'organization.pharmacy.approval.withdraw',
+          after: expect.objectContaining({ status: 'ONBOARDING', returnedToOnboarding: true }),
+        }),
+      })
+    );
+    // Withdrawn: the organization-level gate refuses it again, and activation by the
+    // lifecycle form is held to every check once more.
+    expect(await storedPharmacyOperationDenial(gate as never, 'org_p', 'branch-p', sale)).toBe(
+      'ORGANIZATION_NOT_ACTIVE'
+    );
+    await expect(
+      run('organization.transition', {
+        id: 'org_p',
+        status: 'ACTIVE',
+        reason: 'Try to activate without the checks',
+      })
+    ).rejects.toThrow(/PROFILE_MISSING/);
+  });
+
+  it('withdraws an approval from a pharmacy activated through the normal checks without demoting it', async () => {
     const approvedAt = new Date('2026-11-18T09:00:00.000Z');
     bareOnboardingPharmacy({
       status: 'ACTIVE',
+      // Activated through the normal checks long before the approval.
+      activatedAt: new Date('2026-10-01T09:00:00.000Z'),
       platformApprovedAt: approvedAt,
       platformApprovedById: 'op_1',
       platformApprovalNote: 'Owner instruction',
@@ -1648,10 +1722,15 @@ describe('pharmacy approval by a super admin (DEV-905)', () => {
               note: 'Owner instruction',
             }),
           }),
-          after: expect.objectContaining({ platformApproved: false }),
+          after: expect.objectContaining({
+            status: 'ACTIVE',
+            platformApproved: false,
+            returnedToOnboarding: false,
+          }),
         }),
       })
     );
+    expect(platformDb.organizationLifecycleEvent.create).not.toHaveBeenCalled();
   });
 
   it('refuses to withdraw an approval that does not exist', async () => {

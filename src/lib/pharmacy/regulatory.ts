@@ -459,9 +459,10 @@ export async function assertStoredPharmacyMayOperate(
     });
     throw new BranchOperationDeniedError('ORGANIZATION_NOT_ACTIVE');
   }
-  // DEV-905: a pharmacy a super admin approved runs without the branch's standing checks;
-  // a per-sale regulated act (Rx, restricted, controlled) still meets them in full.
-  if (platformApprovalWaivesBranchGate(organization, action)) return;
+  // DEV-905: a pharmacy a super admin approved runs without the branch's regulatory gate.
+  // The per-sale rules (pharmacist grant, prescription and review, controlled witness and
+  // register) are enforced by their own code on every sale.
+  if (platformApprovalWaivesBranchGate(organization)) return;
   await assertStoredBranchMayOperate(db, organizationId, branchId, {
     ...action,
     timeZone: action.timeZone ?? organization.timezone,
@@ -488,7 +489,7 @@ export async function storedPharmacyOperationDenial(
   if (!organization || !organizationMayOperate(organization)) {
     return 'ORGANIZATION_NOT_ACTIVE';
   }
-  if (platformApprovalWaivesBranchGate(organization, action)) return null;
+  if (platformApprovalWaivesBranchGate(organization)) return null;
   try {
     await checkStoredBranch(
       db,

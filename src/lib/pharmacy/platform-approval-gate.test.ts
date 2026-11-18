@@ -6,7 +6,6 @@ vi.mock('@/server/audit', () => ({ recordAudit: vi.fn() }));
 import { recordAudit } from '@/server/audit';
 import {
   hasPlatformApproval,
-  isPerSaleRegulatedAction,
   platformApprovalInEffect,
   platformApprovalWaivesBranchGate,
   readPlatformApprovalChecks,
@@ -23,8 +22,9 @@ import { addSaleLine, createSale } from './sales';
 /**
  * DEV-905 (owner decision, 18 Nov): once a super admin approves a pharmacy, the
  * organization- and branch-level gates that stop it operating at all no longer refuse
- * it. A pharmacy that is not approved is refused exactly as before, and per-sale
- * regulated acts (Rx, restricted, controlled) still meet the full branch check.
+ * it, on ordinary and regulated operations alike. A pharmacy that is not approved is
+ * refused exactly as before. The per-sale rules (pharmacist grant, prescription and
+ * signed review, controlled witness) are separate code: settlement.platform-approval.test.ts.
  */
 const at = new Date('2026-09-02T12:00:00.000Z');
 const APPROVED_AT = new Date('2026-09-01T09:00:00.000Z');
@@ -113,20 +113,54 @@ const ORDINARY: BranchOperationAction[] = [
   { name: 'pharmacy.sale.tender', at },
 ];
 
-const REGULATED: BranchOperationAction = {
-  name: 'pharmacy.sale.dispense_regulated',
-  at,
-  requiresQualifiedPerson: true,
-  requiresPharmacistPresence: true,
-};
+/** The gate an Rx, restricted or controlled line meets at add-line and at payment. */
+const REGULATED: BranchOperationAction[] = [
+  {
+    name: 'pharmacy.sale.dispense_regulated',
+    at,
+    requiresQualifiedPerson: true,
+    requiresPharmacistPresence: true,
+  },
+  {
+    name: 'pharmacy.sale.tender_regulated',
+    at,
+    requiresQualifiedPerson: true,
+    requiresPharmacistPresence: true,
+  },
+];
+
+const EVERY = [...ORDINARY, ...REGULATED];
+
+/** A profile whose presence hours exclude `at` (a Wednesday). */
+const outsideHours = storedProfile({
+  jurisdictionRuleSet: {
+    ...ruleSet,
+    pharmacistCoverageRule: {
+      provisional: false,
+      values: { presenceHours: { windows: [{ days: [1], start: '09:00', end: '10:00' }] } },
+    },
+  },
+});
+
+/** The regulated-only refusals, with the state and the operation that trip them. */
+const REGULATED_ONLY: Array<
+  [BranchOperationDenialReason, ReturnType<typeof storedProfile>, BranchOperationAction]
+> = [
+  ['PHARMACIST_NOT_PRESENT', outsideHours, REGULATED[0]!],
+  [
+    'SCHEDULE_NOT_PERMITTED',
+    storedProfile(),
+    { name: 'pharmacy.controlled', at, schedule: 'CONTROLLED' },
+  ],
+];
 
 beforeEach(() => vi.clearAllMocks());
 
 describe('a pharmacy that is not approved is refused exactly as before', () => {
   it.each(STANDING)(
-    '%s still refuses every ordinary operation',
+    '%s still refuses every ordinary and regulated operation',
     async (reason, profile, status) => {
-      for (const action of ORDINARY) {
+      for (const action of EVERY) {
         const denial = storedDb(profile, { status });
         await expect(
           assertStoredPharmacyMayOperate(denial as never, 'org-a', 'branch-a', action)
@@ -141,19 +175,38 @@ describe('a pharmacy that is not approved is refused exactly as before', () => {
     }
   );
 
-  it('refuses a pharmacy whose approval was withdrawn (the fact cleared)', async () => {
+  it.each(REGULATED_ONLY)(
+    '%s still refuses its regulated operation',
+    async (reason, profile, action) => {
+      const db = storedDb(profile, { status: 'ACTIVE' });
+      await expect(
+        assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', action)
+      ).rejects.toMatchObject({ reason });
+    }
+  );
+
+  it('refuses a pharmacy the withdrawal returned to onboarding', async () => {
     const db = storedDb(null, { status: 'ONBOARDING', platformApprovedAt: null });
     await expect(
       assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', ORDINARY[0]!)
     ).rejects.toMatchObject({ reason: 'ORGANIZATION_NOT_ACTIVE' });
   });
+
+  it('refuses an active pharmacy whose approval was withdrawn, at the branch gate', async () => {
+    const db = storedDb(null, { status: 'ACTIVE', platformApprovedAt: null });
+    for (const action of EVERY) {
+      await expect(
+        assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', action)
+      ).rejects.toMatchObject({ reason: 'PROFILE_MISSING' });
+    }
+  });
 });
 
-describe('an approved pharmacy is not refused by the standing gates', () => {
+describe('an approved pharmacy is not refused by the operating gates', () => {
   it.each(STANDING)(
-    '%s no longer refuses an ordinary operation',
+    '%s no longer refuses an ordinary or regulated operation',
     async (_reason, profile, status) => {
-      for (const action of ORDINARY) {
+      for (const action of EVERY) {
         const db = storedDb(profile, { status, platformApprovedAt: APPROVED_AT });
         await expect(
           assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', action)
@@ -166,6 +219,16 @@ describe('an approved pharmacy is not refused by the standing gates', () => {
     }
   );
 
+  it.each(REGULATED_ONLY)(
+    "%s, a limit of the branch's own profile, no longer refuses",
+    async (_reason, profile, action) => {
+      const db = storedDb(profile, { status: 'ACTIVE', platformApprovedAt: APPROVED_AT });
+      await expect(
+        assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', action)
+      ).resolves.toBeUndefined();
+    }
+  );
+
   it('keeps the organization and profile row locks the operation takes', async () => {
     const db = storedDb(null, { status: 'ONBOARDING', platformApprovedAt: APPROVED_AT });
     await assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', ORDINARY[0]!);
@@ -175,10 +238,12 @@ describe('an approved pharmacy is not refused by the standing gates', () => {
   it.each(['SUSPENDED', 'TERMINATED', 'PURGING', 'PROSPECT'])(
     'does not override a later %s state',
     async (status) => {
-      const db = storedDb(storedProfile(), { status, platformApprovedAt: APPROVED_AT });
-      await expect(
-        assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', ORDINARY[0]!)
-      ).rejects.toMatchObject({ reason: 'ORGANIZATION_NOT_ACTIVE' });
+      for (const action of EVERY) {
+        const db = storedDb(storedProfile(), { status, platformApprovedAt: APPROVED_AT });
+        await expect(
+          assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', action)
+        ).rejects.toMatchObject({ reason: 'ORGANIZATION_NOT_ACTIVE' });
+      }
     }
   );
 
@@ -194,63 +259,7 @@ describe('an approved pharmacy is not refused by the standing gates', () => {
   });
 });
 
-describe('per-sale regulated acts keep their usual checks in an approved pharmacy', () => {
-  it('refuses an Rx, restricted or controlled dispense without a regulatory profile', async () => {
-    const db = storedDb(null, { status: 'ONBOARDING', platformApprovedAt: APPROVED_AT });
-    await expect(
-      assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', REGULATED)
-    ).rejects.toMatchObject({ reason: 'PROFILE_MISSING' });
-    expect(await storedPharmacyOperationDenial(db as never, 'org-a', 'branch-a', REGULATED)).toBe(
-      'PROFILE_MISSING'
-    );
-  });
-
-  it('refuses a regulated dispense with no qualified person, or outside presence hours', async () => {
-    let db = storedDb(storedProfile({ qualifiedPersonRegistration: '' }), {
-      status: 'ACTIVE',
-      platformApprovedAt: APPROVED_AT,
-    });
-    await expect(
-      assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', REGULATED)
-    ).rejects.toMatchObject({ reason: 'QUALIFIED_PERSON_COVERAGE_MISSING' });
-
-    db = storedDb(
-      storedProfile({
-        jurisdictionRuleSet: {
-          ...ruleSet,
-          pharmacistCoverageRule: {
-            provisional: false,
-            values: { presenceHours: { windows: [{ days: [1], start: '09:00', end: '10:00' }] } },
-          },
-        },
-      }),
-      { status: 'ACTIVE', platformApprovedAt: APPROVED_AT }
-    );
-    await expect(
-      assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', REGULATED)
-    ).rejects.toMatchObject({ reason: 'PHARMACIST_NOT_PRESENT' });
-  });
-
-  it('refuses a schedule the branch is not permitted', async () => {
-    const db = storedDb(storedProfile(), { status: 'ACTIVE', platformApprovedAt: APPROVED_AT });
-    await expect(
-      assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', {
-        name: 'pharmacy.controlled.dispense',
-        at,
-        schedule: 'CONTROLLED',
-      })
-    ).rejects.toMatchObject({ reason: 'SCHEDULE_NOT_PERMITTED' });
-  });
-
-  it('passes a regulated dispense on a valid profile, as it always did', async () => {
-    const db = storedDb(storedProfile(), { status: 'ACTIVE', platformApprovedAt: APPROVED_AT });
-    await expect(
-      assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', REGULATED)
-    ).resolves.toBeUndefined();
-  });
-});
-
-describe('an approved pharmacy with no profile and no pharmacist at the counter', () => {
+describe('the counter in a pharmacy with no profile and no pharmacist', () => {
   const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'actor-a' };
   const lineInput = {
     saleId: 'sale-a',
@@ -262,9 +271,15 @@ describe('an approved pharmacy with no profile and no pharmacist at the counter'
     canonicalUnitsPerSaleUnit: 1,
   } as never;
 
-  function counterDb(medicine: { rx: boolean; restricted: boolean; controlled: boolean }) {
+  function counterDb(
+    medicine: { rx: boolean; restricted: boolean; controlled: boolean },
+    approved: boolean
+  ) {
     return {
-      ...storedDb(null, { status: 'ONBOARDING', platformApprovedAt: APPROVED_AT }),
+      ...storedDb(null, {
+        status: approved ? 'ONBOARDING' : 'ACTIVE',
+        platformApprovedAt: approved ? APPROVED_AT : null,
+      }),
       pharmacySale: {
         create: vi.fn(async () => ({ id: 'sale-a', status: 'OPEN' })),
         findFirst: vi.fn(async () => ({ id: 'sale-a', status: 'OPEN', lines: [] })),
@@ -278,33 +293,46 @@ describe('an approved pharmacy with no profile and no pharmacist at the counter'
     };
   }
 
-  it('opens an ordinary sale', async () => {
-    const db = counterDb({ rx: false, restricted: false, controlled: false });
-    await expect(createSale(db as never, scope)).resolves.toMatchObject({ id: 'sale-a' });
-    expect(db.pharmacySale.create).toHaveBeenCalledOnce();
-  });
+  const KINDS = [
+    ['an over-the-counter', { rx: false, restricted: false, controlled: false }],
+    ['a prescription-only', { rx: true, restricted: false, controlled: false }],
+    ['a restricted', { rx: false, restricted: true, controlled: false }],
+    ['a controlled', { rx: false, restricted: false, controlled: true }],
+  ] as const;
 
-  it('lets an OTC line past the regulatory gate', async () => {
-    const db = counterDb({ rx: false, restricted: false, controlled: false });
-    // Stock allocation is not mocked here; only the gate decisions before it matter.
-    const error = await addSaleLine(db as never, scope, lineInput).catch((thrown) => thrown);
-    expect(error).not.toBeInstanceOf(BranchOperationDeniedError);
-    expect(db.medicine.findFirst).toHaveBeenCalled();
-  });
+  it('opens a sale once approved, and is refused when not approved', async () => {
+    const approved = counterDb(KINDS[0][1], true);
+    await expect(createSale(approved as never, scope)).resolves.toMatchObject({ id: 'sale-a' });
 
-  it.each([
-    ['prescription-only', { rx: true, restricted: false, controlled: false }],
-    ['restricted', { rx: false, restricted: true, controlled: false }],
-    ['controlled', { rx: false, restricted: false, controlled: true }],
-  ])('still refuses a %s line before allocating stock', async (_kind, medicine) => {
-    const db = counterDb(medicine);
-    await expect(addSaleLine(db as never, scope, lineInput)).rejects.toMatchObject({
+    const refused = counterDb(KINDS[0][1], false);
+    await expect(createSale(refused as never, scope)).rejects.toMatchObject({
       reason: 'PROFILE_MISSING',
     });
-    expect(db.pharmacyInventoryLot.findMany).not.toHaveBeenCalled();
-    expect(db.pharmacySaleLine.create).not.toHaveBeenCalled();
-    expect(db.pharmacySaleLineAllocation.create).not.toHaveBeenCalled();
+    expect(refused.pharmacySale.create).not.toHaveBeenCalled();
   });
+
+  it.each(KINDS)(
+    'lets %s line past the regulatory gates once approved',
+    async (_kind, medicine) => {
+      const db = counterDb(medicine, true);
+      // Stock allocation is not mocked here; only the gate decisions before it matter.
+      const error = await addSaleLine(db as never, scope, lineInput).catch((thrown) => thrown);
+      expect(error).not.toBeInstanceOf(BranchOperationDeniedError);
+      expect(db.medicine.findFirst).toHaveBeenCalled();
+    }
+  );
+
+  it.each(KINDS)(
+    'refuses %s line before reading the sale when not approved',
+    async (_kind, medicine) => {
+      const db = counterDb(medicine, false);
+      await expect(addSaleLine(db as never, scope, lineInput)).rejects.toMatchObject({
+        reason: 'PROFILE_MISSING',
+      });
+      expect(db.medicine.findFirst).not.toHaveBeenCalled();
+      expect(db.pharmacySaleLine.create).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('platform approval helpers', () => {
@@ -328,25 +356,22 @@ describe('platform approval helpers', () => {
   });
 
   it('puts the approval in effect only while onboarding, active or in grace', () => {
-    for (const status of ['ONBOARDING', 'ACTIVE', 'GRACE'])
-      expect(
-        platformApprovalInEffect({ status, vertical: 'PHARMACY', platformApprovedAt: APPROVED_AT })
-      ).toBe(true);
-    for (const status of ['SUSPENDED', 'TERMINATED', 'PURGING', 'PURGED', 'PROSPECT'])
-      expect(
-        platformApprovalInEffect({ status, vertical: 'PHARMACY', platformApprovedAt: APPROVED_AT })
-      ).toBe(false);
-  });
-
-  it('never waives a per-sale regulated act', () => {
-    const approved = { status: 'ACTIVE', vertical: 'PHARMACY', platformApprovedAt: APPROVED_AT };
-    expect(isPerSaleRegulatedAction(REGULATED)).toBe(true);
-    expect(isPerSaleRegulatedAction({ name: 'x', schedule: 'RX' })).toBe(true);
-    expect(isPerSaleRegulatedAction({ name: 'x', requiresQualifiedPerson: true })).toBe(false);
-    expect(platformApprovalWaivesBranchGate(approved, REGULATED)).toBe(false);
-    expect(platformApprovalWaivesBranchGate(approved, ORDINARY[0]!)).toBe(true);
+    for (const status of ['ONBOARDING', 'ACTIVE', 'GRACE']) {
+      const organization = { status, vertical: 'PHARMACY', platformApprovedAt: APPROVED_AT };
+      expect(platformApprovalInEffect(organization)).toBe(true);
+      expect(platformApprovalWaivesBranchGate(organization)).toBe(true);
+    }
+    for (const status of ['SUSPENDED', 'TERMINATED', 'PURGING', 'PURGED', 'PROSPECT']) {
+      const organization = { status, vertical: 'PHARMACY', platformApprovedAt: APPROVED_AT };
+      expect(platformApprovalInEffect(organization)).toBe(false);
+      expect(platformApprovalWaivesBranchGate(organization)).toBe(false);
+    }
     expect(
-      platformApprovalWaivesBranchGate({ ...approved, platformApprovedAt: null }, ORDINARY[0]!)
+      platformApprovalWaivesBranchGate({
+        status: 'ACTIVE',
+        vertical: 'PHARMACY',
+        platformApprovedAt: null,
+      })
     ).toBe(false);
   });
 
