@@ -169,12 +169,13 @@ describe.skipIf(!url)('DEV-66 smart-discount migration on PostgreSQL', () => {
     await expect(as({ platformAdmin: true }, visible)).resolves.toHaveLength(4);
   });
 
-  it("stores the owner's maximum discount with a 10% default, bounded to 0..100%", async () => {
+  it("stores no maximum discount until the owner sets one, bounded to 0..100%", async () => {
     const stored = await client.query(
       `SELECT "pharmacyMaxDiscountBps" AS bps FROM organizations WHERE id = $1`,
       [ORG_A]
     );
-    expect(stored.rows).toEqual([{ bps: 1_000 }]);
+    // 10000 bps = 100%: no maximum yet, so nothing that works today is refused on deploy.
+    expect(stored.rows).toEqual([{ bps: 10_000 }]);
     await client.query(`UPDATE organizations SET "pharmacyMaxDiscountBps" = 2500 WHERE id = $1`, [
       ORG_A,
     ]);

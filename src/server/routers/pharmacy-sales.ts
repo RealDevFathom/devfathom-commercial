@@ -46,6 +46,11 @@ import {
 } from '@/lib/pharmacy/manual-payment-settings';
 import { discountPolicySchema, maxDiscountBpsSchema } from '@/lib/pharmacy/smart-discount';
 import {
+  OWNER_EXPORT_PIN_MAX_INPUT,
+  verifyOwnerExportPin,
+} from '@/lib/pharmacy/owner-data-export-pin';
+import {
+  MAX_DISCOUNT_CHANGE_REFUSED,
   readDiscountPolicySettings,
   readDiscountSuggestions,
   readMaxDiscountSettings,
@@ -1417,20 +1422,62 @@ export const pharmacySalesRouter = router({
       return ctx.db.$transaction((tx) => saveKhataReminderSettings(txDb(tx), scope, input));
     }),
   /**
-   * DEV-66: the owner's maximum discount for the organization (stored default 10%), and
+   * DEV-66: the owner's maximum discount for the organization (none set until the owner sets one), and
    * whether the caller is the owner who may change it. Anyone at the branch may read it.
    */
   discountMaximum: protectedProcedure
     .input(z.object({ branchId }).strict())
     .query(async ({ ctx, input }) => {
       const scope = await branchScopeOrForbidden(ctx, input.branchId);
-      return readMaxDiscountSettings(ctx.db, scope);
+      const settings = await readMaxDiscountSettings(ctx.db, scope);
+      // A support or impersonation session may see the setting but never change it.
+      const support = Boolean(ctx.support || ctx.session?.user?.isSupportSession);
+      return { ...settings, canChange: settings.canChange && !support };
     }),
-  /** DEV-66: the owner alone sets the maximum discount; it binds everyone. Audited. */
+  /**
+   * DEV-66: the owner alone sets the maximum discount; it binds everyone. Every change needs
+   * the owner's fresh PIN (as the other owner settings do) and is audited with the old and
+   * the new value. A support or impersonation session is refused.
+   */
   saveDiscountMaximum: protectedProcedure
-    .input(z.object({ branchId, maxDiscountBps: maxDiscountBpsSchema }).strict())
+    .input(
+      z
+        .object({
+          branchId,
+          maxDiscountBps: maxDiscountBpsSchema,
+          pin: z.string().max(OWNER_EXPORT_PIN_MAX_INPUT),
+        })
+        .strict()
+    )
     .mutation(async ({ ctx, input }) => {
+      // The PIN never reaches the audit row.
+      annotateAudit(ctx, { skipInput: true, targetType: 'Organization' });
       const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      if (ctx.support || ctx.session?.user?.isSupportSession)
+        throw new TRPCError({ code: 'FORBIDDEN', message: MAX_DISCOUNT_CHANGE_REFUSED });
+      if (!(await readMaxDiscountSettings(ctx.db, scope)).canChange)
+        throw new TRPCError({ code: 'FORBIDDEN', message: MAX_DISCOUNT_CHANGE_REFUSED });
+      if (!input.pin)
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Enter your own PIN to confirm.' });
+      // Its own tenant transaction, so a wrong-PIN strike commits even though we refuse.
+      const pin = await verifyOwnerExportPin({
+        organizationId: scope.organizationId,
+        userId: scope.actorId,
+        pin: input.pin,
+        action: 'pharmacy.maxDiscount',
+      });
+      if (pin === 'NO_PIN')
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Set up your own staff PIN first, then try again.',
+        });
+      if (pin === 'LOCKED')
+        throw new TRPCError({
+          code: 'TOO_MANY_REQUESTS',
+          message: 'Your PIN is locked after too many wrong tries. Wait and try again.',
+        });
+      if (pin !== 'OK')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'That PIN is not correct.' });
       const saved = await ctx.db.$transaction((tx) =>
         saveMaxDiscountBps(txDb(tx), scope, input.maxDiscountBps)
       );
@@ -1438,10 +1485,16 @@ export const pharmacySalesRouter = router({
         operation: 'UPDATE',
         targetType: 'Organization',
         targetId: scope.organizationId,
-        description: `Set the maximum discount to ${saved.maxDiscountBps / 100}%`,
-        metadata: { pharmacyMaxDiscountBps: saved.maxDiscountBps },
+        description: `Changed the maximum discount from ${saved.previousMaxDiscountBps / 100}% to ${saved.maxDiscountBps / 100}%`,
+        changes: {
+          pharmacyMaxDiscountBps: {
+            before: saved.previousMaxDiscountBps,
+            after: saved.maxDiscountBps,
+          },
+        },
+        metadata: { pinVerified: true },
       });
-      return saved;
+      return { maxDiscountBps: saved.maxDiscountBps };
     }),
   /** DEV-66: smart-discount policy (minimum margin, evidence windows). */
   discountPolicy: protectedProcedure

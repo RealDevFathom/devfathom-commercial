@@ -5,6 +5,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { legacyStripOption, packLevelCanonicalUnits } from './counter-pricing';
 import { mrpRoundingIncrementForLot, priceFromLot } from './medicine';
+import { COUNTER_DISCOUNT_NOTICES } from './counter-messages';
 import { maxDiscountMinorFor, minimumPriceForMargin } from './smart-discount';
 import { readDiscountLimits } from './smart-discount-service';
 import {
@@ -228,6 +229,9 @@ export class PharmacySaleError extends Error {
     super(reason);
   }
 }
+
+/** DEV-66: why an automatic discount was not applied; the counter shows its sentence. */
+export type PharmacyDiscountNotice = keyof typeof COUNTER_DISCOUNT_NOTICES;
 
 export function validateDiscount(input: {
   regulated: boolean;
@@ -806,18 +810,33 @@ async function addSaleLineWithAllocation(
   // DEV-66: an automatic offer that would breach the branch's minimum margin or the owner's
   // maximum discount is skipped, never allowed to block an otherwise valid full-price sale.
   const promotionLimits = promotionCandidate ? await readDiscountLimits(db, scope) : null;
-  const promotion = promotionLimits
-    ? await priceCounterPromotion(db, scope, {
-        medicineId: input.medicineId,
-        regulated,
-        grossMinor,
-        costMinor: Math.max(
-          minimumPriceForMargin(costMinor, promotionLimits.minMarginBps),
-          grossMinor - maxDiscountMinorFor(grossMinor, promotionLimits.maxDiscountBps)
-        ),
-        at: promotionEvaluatedAt,
-      })
-    : null;
+  const marginFloorMinor = promotionLimits
+    ? minimumPriceForMargin(costMinor, promotionLimits.minMarginBps)
+    : costMinor;
+  const promotionFloorMinor = promotionLimits
+    ? Math.max(
+        marginFloorMinor,
+        grossMinor - maxDiscountMinorFor(grossMinor, promotionLimits.maxDiscountBps)
+      )
+    : costMinor;
+  const pricePromotion = (floorMinor: number) =>
+    priceCounterPromotion(db, scope, {
+      medicineId: input.medicineId,
+      regulated,
+      grossMinor,
+      costMinor: floorMinor,
+      at: promotionEvaluatedAt,
+    });
+  const promotion = promotionLimits ? await pricePromotion(promotionFloorMinor) : null;
+  // DEV-66: a promotion skipped only because of the owner's maximum is never silent: the
+  // counter tells the cashier why the line sold at full price.
+  const promotionNotice: PharmacyDiscountNotice | undefined =
+    promotionLimits &&
+    !promotion &&
+    promotionFloorMinor > marginFloorMinor &&
+    (await pricePromotion(marginFloorMinor))
+      ? 'PROMOTION_ABOVE_MAXIMUM'
+      : undefined;
   const discountMinor = voucher
     ? Math.min(voucher.discountMinor, grossMinor)
     : (promotion?.discountMinor ?? input.discountMinor ?? 0);
@@ -917,7 +936,7 @@ async function addSaleLineWithAllocation(
         }
       : {}),
   });
-  return { line, allocation, replayed: false };
+  return { line, allocation, replayed: false, ...(promotionNotice ? { promotionNotice } : {}) };
 }
 
 /**

@@ -3,9 +3,10 @@
 -- organizations.pharmacyMaxDiscountBps
 --                                     the owner's maximum discount on a line, in
 --                                     basis points of the undiscounted price. The
---                                     stored default is 1000 (10%); the owner can
---                                     change it. A discount above it is refused
---                                     for everyone.
+--                                     stored default is 10000 (100%): no maximum is
+--                                     set yet, so nothing that works today changes
+--                                     on deploy. Once the owner sets one, a
+--                                     discount above it is refused for everyone.
 -- pharmacy_branches.discountPolicy   branch policy (minimum margin, evidence
 --                                     windows); NULL means the defaults, which
 --                                     keep the existing never-below-cost floor.
@@ -18,7 +19,7 @@
 BEGIN;
 
 ALTER TABLE "organizations"
-  ADD COLUMN IF NOT EXISTS "pharmacyMaxDiscountBps" INTEGER NOT NULL DEFAULT 1000;
+  ADD COLUMN IF NOT EXISTS "pharmacyMaxDiscountBps" INTEGER NOT NULL DEFAULT 10000;
 DO $$
 BEGIN
   IF NOT EXISTS (

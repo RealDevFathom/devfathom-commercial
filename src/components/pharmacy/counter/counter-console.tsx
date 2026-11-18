@@ -105,6 +105,7 @@ import {
   type CounterKeymapPresetKey,
 } from '@/lib/pharmacy/counter-keymap';
 import {
+  COUNTER_DISCOUNT_NOTICES,
   COUNTER_ERROR_MESSAGES,
   counterBillMovedOn,
   counterErrorMessage,
@@ -2030,9 +2031,14 @@ function ScopedPharmacyCounterConsole({
         await utils.pharmacySafety.controlledRegister.invalidate();
         await utils.pharmacySales.counterSearch.invalidate();
         setLotOverride(null);
+        // DEV-66: a promotion the owner's maximum skipped is said, never silent.
+        const discountNotice =
+          'promotionNotice' in added && added.promotionNotice
+            ? COUNTER_DISCOUNT_NOTICES[added.promotionNotice]
+            : null;
         setNotice({
-          tone: 'success',
-          message: `${startedNextBill ? 'New bill started. ' : ''}${units} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}${voucher ? ` with voucher ${voucher.code}` : ''}.`,
+          tone: discountNotice ? 'warning' : 'success',
+          message: `${startedNextBill ? 'New bill started. ' : ''}${units} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}${voucher ? ` with voucher ${voucher.code}` : ''}.${discountNotice ? ` ${discountNotice}` : ''}`,
         });
         setAddVersion(completedAdds.current);
         setQuery('');

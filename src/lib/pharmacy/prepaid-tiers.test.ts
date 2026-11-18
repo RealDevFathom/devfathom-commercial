@@ -71,7 +71,7 @@ function fixture(balance = 0, refundable = 0) {
       ),
     },
     pharmacyBranch: { findFirst: vi.fn(async () => ({ id: 'branch-a' })) },
-    // DEV-66: the owner's maximum discount at its stored default of 10%; no branch policy.
+    // DEV-66: the owner has set a 10% maximum discount; no branch policy.
     organization: { findFirst: vi.fn(async () => ({ pharmacyMaxDiscountBps: 1_000 })) },
     pharmacyPrepaidTierVersion: {
       findFirst: vi.fn(async () => ({ actorId: 'owner-a' })),

@@ -17,9 +17,9 @@ describe('DEV-66 smart-discount storage contract', () => {
     );
   });
 
-  it("stores the owner's maximum discount per organization, 10% by default, bounded 0..100%", () => {
+  it("stores the owner's maximum discount per organization, unset (100%) by default, bounded 0..100%", () => {
     expect(migration).toContain(
-      'ADD COLUMN IF NOT EXISTS "pharmacyMaxDiscountBps" INTEGER NOT NULL DEFAULT 1000'
+      'ADD COLUMN IF NOT EXISTS "pharmacyMaxDiscountBps" INTEGER NOT NULL DEFAULT 10000'
     );
     expect(migration).toContain('CHECK ("pharmacyMaxDiscountBps" BETWEEN 0 AND 10000)');
   });

@@ -381,6 +381,8 @@ describe("DEV-66 owner's maximum discount", () => {
   function ownerDb(user: unknown, stored: unknown = 1_000) {
     return {
       user: { findFirst: vi.fn(async () => user) },
+      // The locked read of the value being replaced, for the audit's "before".
+      $queryRaw: vi.fn(async () => [{ bps: 1_000 }]),
       organization: {
         findFirst: vi.fn(async () => ({ pharmacyMaxDiscountBps: stored })),
         update: vi.fn(async ({ data }: { data: { pharmacyMaxDiscountBps: number } }) => data),
@@ -394,8 +396,10 @@ describe("DEV-66 owner's maximum discount", () => {
   it('lets the owner change it and stores it for the whole organization', async () => {
     const db = ownerDb(ownerRole);
     await expect(saveMaxDiscountBps(db as never, scope, 2_000)).resolves.toEqual({
+      previousMaxDiscountBps: 1_000,
       maxDiscountBps: 2_000,
     });
+    expect(db.$queryRaw.mock.calls[0]!.join(' ')).toContain('FOR UPDATE');
     expect(db.organization.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'org-a' }, data: { pharmacyMaxDiscountBps: 2_000 } })
     );

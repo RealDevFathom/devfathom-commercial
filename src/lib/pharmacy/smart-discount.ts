@@ -25,6 +25,12 @@ export const discountPolicySchema = z
   })
   .strict();
 
+/**
+ * The stored default: no maximum set yet (100%), so the limit does not bite until the owner
+ * sets one. The minimum-margin guard and the cost floor apply regardless.
+ */
+export const NO_MAXIMUM_DISCOUNT_BPS = BPS;
+
 /** The owner's maximum discount on a line, in bps of the undiscounted price (100% = 10,000). */
 export const maxDiscountBpsSchema = z.number().int().min(0).max(BPS);
 

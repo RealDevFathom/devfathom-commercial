@@ -6027,8 +6027,9 @@ model Organization {
   /// line. Off by default; branch names only, never controlled drugs.
   pharmacyOtherBranchAvailability Boolean                      @default(false)
   /// DEV-66: the owner's maximum discount on a pharmacy line, in basis points of the
-  /// undiscounted price (stored default 1000 = 10%). Enforced on the server for everyone.
-  pharmacyMaxDiscountBps        Int                            @default(1000)
+  /// undiscounted price. The stored default 10000 means no maximum is set yet; once the
+  /// owner sets one it is enforced on the server for everyone.
+  pharmacyMaxDiscountBps        Int                            @default(10000)
   lastDemoResetAt               DateTime?
   gracePeriodDays               Int                            @default(0)
   activatedAt                   DateTime?

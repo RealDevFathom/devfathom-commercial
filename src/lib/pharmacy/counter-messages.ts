@@ -58,6 +58,15 @@ const NO_PERMISSION_SERVER_MESSAGE = 'You do not have permission for this action
 /** DEV-712: the refusal a payment gets when a supervisor discarded its attempt. */
 export const TENDER_ATTEMPT_DISCARDED = 'TENDER_ATTEMPT_DISCARDED';
 
+/**
+ * DEV-66: why an automatic discount was not applied to a line that was still added. The
+ * add-line response carries the key; the counter shows the sentence to the cashier.
+ */
+export const COUNTER_DISCOUNT_NOTICES = {
+  PROMOTION_ABOVE_MAXIMUM:
+    "This promotion is above the owner's maximum discount, so the item was added at full price.",
+} as const;
+
 export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // Inventory (INV) — arrangement, stock and safety.
   // Raised in BOTH directions — too few loose units for a strip sale, and a
@@ -91,7 +100,8 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   PRICE_ABOVE_MRP: 'That price is above the printed MRP, which is not allowed.',
   MARGIN_GUARDRAIL: 'That discount falls below the permitted margin.',
   // DEV-66: the owner's maximum discount applies to everyone.
-  DISCOUNT_ABOVE_MAXIMUM: 'That discount is more than the owner allows. Give a smaller discount.',
+  DISCOUNT_ABOVE_MAXIMUM:
+    "This discount or voucher is above the owner's maximum discount. Give a smaller discount, or ask the owner to raise the maximum.",
   APPROVAL_REQUIRED: 'A supervisor must approve this discount before it can be applied.',
   REGULATED_DISCOUNT_REFUSED: 'Regulated medicines cannot be discounted.',
   VOUCHER_CATEGORY_REFUSED:

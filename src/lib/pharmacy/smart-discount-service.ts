@@ -69,7 +69,8 @@ export async function readMaxDiscountSettings(
 
 /**
  * DEV-66: the owner alone sets the maximum discount for the whole organization. It binds
- * everyone, the owner included, on every line, promotion and voucher.
+ * everyone, the owner included, on every line, promotion and voucher. The caller has
+ * already verified the owner's fresh PIN; ownership is re-checked here, in the write.
  */
 export async function saveMaxDiscountBps(
   db: ScopedDb,
@@ -79,12 +80,17 @@ export async function saveMaxDiscountBps(
   const value = maxDiscountBpsSchema.parse(maxDiscountBps);
   if (!(await isOrganizationOwner(db, scope.organizationId, scope.actorId)))
     throw new TRPCError({ code: 'FORBIDDEN', message: MAX_DISCOUNT_CHANGE_REFUSED });
+  // The organization row is locked so the recorded previous value is the one replaced.
+  const [current] = await db.$queryRaw<Array<{ bps: number }>>`
+    SELECT "pharmacyMaxDiscountBps" AS bps FROM "organizations"
+     WHERE "id" = ${scope.organizationId} FOR UPDATE`;
+  if (!current) throw new TRPCError({ code: 'NOT_FOUND' });
   const saved = await db.organization.update({
     where: { id: scope.organizationId },
     data: { pharmacyMaxDiscountBps: value },
     select: { pharmacyMaxDiscountBps: true },
   });
-  return { maxDiscountBps: saved.pharmacyMaxDiscountBps };
+  return { previousMaxDiscountBps: current.bps, maxDiscountBps: saved.pharmacyMaxDiscountBps };
 }
 
 /** DEV-66: the branch's discount policy; defaults when none is configured. */
