@@ -495,6 +495,7 @@ describe('organization.create vertical + package compatibility', () => {
             'pharmacy:close',
             'pharmacy:manage',
             'pharmacy:procurement-approve',
+            'pharmacy:catalogue-edit',
             'sop:manage',
             'sop:complete',
             'sop:verify',
