@@ -284,6 +284,38 @@ describe('DEV-923: a pack price is a reviewed catalogue edit', () => {
     );
   });
 
+  it('DEV-928: the price row and its one audit entry name proposer, approver, old price, new price and pack', async () => {
+    shop({ owner_a: owner(), pharmacist_b: pharmacist() });
+    const edit = await caller('owner_a').setPackPrice(PRICE);
+    db.pharmacyPackPrice.findFirst.mockResolvedValue({
+      id: 'price_0',
+      mrpMinor: 40_000,
+      sellingPriceMinor: 36_000,
+    } as never);
+
+    await caller('pharmacist_b').decideCatalogueEdit({ editId: edit.id, decision: 'APPROVE' });
+
+    expect(db.pharmacyPackPrice.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ proposedById: 'owner_a', createdById: 'pharmacist_b' }),
+    });
+    const priceAudits = db.auditLog.create.mock.calls
+      .map((call) => (call as unknown as [{ data: Record<string, unknown> }])[0].data)
+      .filter((data) => data.action === 'pharmacyMedicine.setPackPrice');
+    expect(priceAudits).toHaveLength(1);
+    expect(priceAudits[0]).toMatchObject({
+      actorId: 'pharmacist_b',
+      changes: {
+        proposedById: 'owner_a',
+        approvedById: 'pharmacist_b',
+        packLevelId: 'pack_a',
+        previousMrpMinor: 40_000,
+        previousSellingPriceMinor: 36_000,
+        mrpMinor: 50_000,
+        sellingPriceMinor: 45_000,
+      },
+    });
+  });
+
   it('writes no price when the reviewer rejects it', async () => {
     shop({ owner_a: owner(), pharmacist_b: pharmacist() });
     const edit = await caller('owner_a').setPackPrice(PRICE);

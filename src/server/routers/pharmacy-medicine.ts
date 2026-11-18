@@ -346,6 +346,8 @@ function domainError(error: unknown): never {
 // by the original procedure again when a reviewer approves a queued command.
 // Its value is the approver's authority, which the replayed procedure re-checks.
 const catalogueReplay = Symbol('catalogueApproval');
+/** DEV-928: the member who proposed the edit being replayed. */
+const catalogueProposer = Symbol('catalogueProposer');
 const replayAuthority = (ctx: TRPCContext) =>
   (ctx as TRPCContext & { [catalogueReplay]?: readonly Action[] })[catalogueReplay];
 const isCatalogueReplay = (ctx: TRPCContext) => Array.isArray(replayAuthority(ctx));
@@ -431,14 +433,20 @@ async function applyCatalogueCommand(
   tx: typeof ctx.db,
   operation: string,
   payload: Prisma.JsonValue,
-  authority: readonly Action[]
+  authority: readonly Action[],
+  proposerId?: string
 ): Promise<unknown> {
   if (!catalogueCommands.includes(operation as CatalogueCommand))
     throw new TRPCError({
       code: 'BAD_REQUEST',
       message: 'Unsupported catalogue edit.',
     });
-  const replayContext = { ...ctx, db: tx, [catalogueReplay]: authority };
+  const replayContext = {
+    ...ctx,
+    db: tx,
+    [catalogueReplay]: authority,
+    [catalogueProposer]: proposerId,
+  };
   const caller = pharmacyMedicineRouter.createCaller(replayContext) as unknown as Record<
     CatalogueCommand,
     (input: unknown) => Promise<unknown>
@@ -536,7 +544,8 @@ export const pharmacyMedicineRouter = router({
           actorOrganizationId: ctx.session.user.organizationId,
         },
         input,
-        (tx, operation, payload) => applyCatalogueCommand(ctx, tx, operation, payload, authority),
+        (tx, operation, payload, proposerId) =>
+          applyCatalogueCommand(ctx, tx, operation, payload, authority, proposerId),
         { soloOwnerAuthority: !access.reviewer, ownerWithoutOtherReviewer: true }
       );
     }),
@@ -654,7 +663,8 @@ export const pharmacyMedicineRouter = router({
       return setManualPackPrice(
         ctx.db,
         { organizationId: ctx.entitlements.organizationId, actorId: ctx.session.user.id },
-        input
+        input,
+        (ctx as TRPCContext & { [catalogueProposer]?: string })[catalogueProposer]
       );
     }),
   priceOverrides: adminProcedure

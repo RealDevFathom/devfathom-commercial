@@ -141,7 +141,9 @@ export async function setManualPackPrice(
     mrpMinor: number;
     sellingPriceMinor: number | null;
     effectiveFrom: Date;
-  }
+  },
+  /** DEV-928: who proposed this price when `scope.actorId` is the approver replaying it. */
+  proposedById?: string
 ) {
   // MRP is the legal ceiling; a selling policy above it is never valid.
   if (input.sellingPriceMinor !== null && input.sellingPriceMinor > input.mrpMinor)
@@ -166,6 +168,16 @@ export async function setManualPackPrice(
       where: { organizationId: scope.organizationId, packLevelId: pack.id, branchId: null },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
+    // DEV-928: the price this one replaces, in the same scope (this branch, or the
+    // organisation-wide price), read before the append-only insert.
+    const previous = await scoped.pharmacyPackPrice.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        packLevelId: pack.id,
+        branchId: input.branchId ?? null,
+      },
+      orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+    });
     const price = await scoped.pharmacyPackPrice.create({
       data: {
         ...input,
@@ -174,6 +186,7 @@ export async function setManualPackPrice(
         isOverride: !!input.branchId,
         source: 'manual',
         createdById: scope.actorId,
+        proposedById: proposedById ?? scope.actorId,
         reviewedOrgPriceId: input.branchId ? orgPrice?.id : null,
       },
     });
@@ -192,6 +205,11 @@ export async function setManualPackPrice(
           sellingPriceMinor: price.sellingPriceMinor,
           effectiveFrom: price.effectiveFrom.toISOString(),
           branchId: price.branchId,
+          packLevelId: price.packLevelId,
+          proposedById: price.proposedById,
+          approvedById: scope.actorId,
+          previousMrpMinor: previous?.mrpMinor ?? null,
+          previousSellingPriceMinor: previous?.sellingPriceMinor ?? null,
         },
       },
     });

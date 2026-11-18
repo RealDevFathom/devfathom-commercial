@@ -353,7 +353,12 @@ export async function decideCatalogueEdit(
   db: ScopedDb,
   scope: Scope,
   input: { editId: string; decision: 'APPROVE' | 'REJECT'; soloPin?: string },
-  applyCommand?: (tx: ScopedDb, operation: string, payload: Prisma.JsonValue) => Promise<unknown>,
+  applyCommand?: (
+    tx: ScopedDb,
+    operation: string,
+    payload: Prisma.JsonValue,
+    proposerId: string
+  ) => Promise<unknown>,
   options: {
     /**
      * DEV-19: the actor decides as the owner with no other reviewer rather than
@@ -424,7 +429,7 @@ export async function decideCatalogueEdit(
           code: 'BAD_REQUEST',
           message: 'Unsupported catalogue edit.',
         });
-      await applyCommand(scoped, proposal.operation, proposal.changes);
+      await applyCommand(scoped, proposal.operation, proposal.changes, proposal.editorId);
       await recordCatalogueApproval(
         scoped,
         scope,
@@ -462,7 +467,7 @@ export async function decideCatalogueEdit(
             code: 'BAD_REQUEST',
             message: 'Unsupported catalogue edit.',
           });
-        await applyCommand(scoped, proposal.operation, proposal.changes);
+        await applyCommand(scoped, proposal.operation, proposal.changes, proposal.editorId);
       }
       await recordCatalogueApproval(
         scoped,
