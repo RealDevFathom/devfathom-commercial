@@ -2,7 +2,14 @@
 
 import { OwnPinLink } from '@/components/pharmacy/pin-aware-message';
 import { PHARMACY_COPY as copy } from '@/lib/pharmacy/plain-language';
-import { forwardRef, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import {
+  forwardRef,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from 'react';
 import { Check } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -268,6 +275,36 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const balanceKnown =
       balanceMinor !== null && Number.isSafeInteger(balanceMinor) && balanceMinor >= 0;
     const editable = state === 'ready' && balanceKnown && !disabled && !takingPayment && !unknown;
+    // DEV-931: a background re-read of the bill briefly disables these controls, and the
+    // browser drops focus from a control that becomes disabled. A cashier who had just moved
+    // to a payment method (keyboard only) would be left with nothing focused. Remember the
+    // focused control as the panel locks, and give focus back when it unlocks, unless the
+    // cashier or the panel moved focus somewhere else meanwhile.
+    const rootRef = useRef<HTMLDivElement | null>(null);
+    const focusBeforeLock = useRef<HTMLElement | null>(null);
+    useLayoutEffect(() => {
+      if (editable) return;
+      const active = document.activeElement;
+      if (
+        active instanceof HTMLElement &&
+        active !== rootRef.current &&
+        rootRef.current?.contains(active)
+      )
+        focusBeforeLock.current = active;
+    }, [editable]);
+    useEffect(() => {
+      if (!editable) return;
+      const target = focusBeforeLock.current;
+      focusBeforeLock.current = null;
+      if (!target?.isConnected || target.matches(':disabled')) return;
+      const active = document.activeElement;
+      // Lost means nowhere, or only on a container of the control (the dialog or this panel).
+      const lost =
+        !active ||
+        active === document.body ||
+        (active !== target && active instanceof HTMLElement && active.contains(target));
+      if (lost) target.focus();
+    }, [editable]);
 
     const prepaidWallet = type === 'WALLET' && prepaidBalanceMinor > 0;
     // DEV-863: an untouched prepaid amount is what the balance can cover; never more than it holds.
@@ -708,7 +745,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
     return (
       <div
-        ref={ref}
+        ref={(node) => {
+          rootRef.current = node;
+          if (typeof ref === 'function') ref(node);
+          else if (ref) ref.current = node;
+        }}
         tabIndex={-1}
         className="min-w-0 space-y-5 focus-visible:outline-none"
         onKeyDown={takePaymentOnEnter}
