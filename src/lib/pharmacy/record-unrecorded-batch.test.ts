@@ -48,6 +48,7 @@ function makeDb(own: Partial<Batch> = {}, existing: Batch | null = null) {
     receivedExpiresAt: null as Date | null,
   };
   const db = {
+    pharmacyRecallNotice: { count: vi.fn().mockResolvedValue(0) },
     pharmacyInventoryLot: {
       findFirst: vi
         .fn()
@@ -192,6 +193,26 @@ describe('DEV-853 record batch and expiry for a legacy lot', () => {
     ).rejects.toMatchObject({ reason: 'BATCH_BLOCKED' });
     expect(lot.manufacturingBatchId).toBe('batch_own');
     expect(models.pharmacyInventoryLot.update).not.toHaveBeenCalled();
+  });
+
+  it('never moves a lot whose batch has an open recall notice', async () => {
+    const existing: Batch = {
+      id: 'batch_known',
+      medicineId: 'medicine',
+      batchNumber: 'B-9',
+      expiresAt: JUNE_2027_END,
+      expiryPrecision: 'MONTH',
+      state: 'ACTIVE',
+    };
+    const { db, lot, models } = makeDb({}, existing);
+    models.pharmacyRecallNotice.count.mockResolvedValue(1);
+    await expect(
+      recordUnrecordedBatch(db, SCOPE, { inventoryLotId: 'lot', batchNumber: 'B-9' })
+    ).rejects.toMatchObject({ reason: 'BATCH_BLOCKED' });
+    expect(models.pharmacyRecallNotice.count).toHaveBeenCalledWith({
+      where: { organizationId: 'org', batchId: 'batch_own', status: 'OPEN' },
+    });
+    expect(lot.manufacturingBatchId).toBe('batch_own');
   });
 
   it('refuses an empty request and a lot outside the branch', async () => {

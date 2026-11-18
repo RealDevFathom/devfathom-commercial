@@ -154,7 +154,14 @@ export async function recordUnrecordedBatch(
     if (existing) {
       // A recall or quarantine lives on the batch. Moving a blocked lot onto
       // another batch would silently drop that block, so it is refused.
-      if (lot.batch.state !== 'ACTIVE') throw new PharmacyUnrecordedBatchError('BATCH_BLOCKED');
+      // The batch row is locked above, so a recall cannot land between this
+      // check and the move. An open recall notice on the batch also refuses.
+      const openRecall = await db.pharmacyRecallNotice.count({
+        where: { organizationId: scope.organizationId, batchId: lot.batch.id, status: 'OPEN' },
+      });
+      if (lot.batch.state !== 'ACTIVE' || openRecall > 0) {
+        throw new PharmacyUnrecordedBatchError('BATCH_BLOCKED');
+      }
       // The lot is unrecorded on at least the batch number, so its own expiry
       // (if any) must agree with the recorded batch it joins.
       const ownExpiry = expiresAt ?? lot.batch.expiresAt;
