@@ -1,4 +1,3 @@
-import { ReportDetails } from '@/components/pharmacy/report-details';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import type { readLostSalesRecovery } from '@/lib/pharmacy/lost-sales-recovery-report';
@@ -97,13 +96,6 @@ export function LostSalesRecovery({
             expire after {report.policy.requestExpiryDays} days. Supplier, ingredient and batch
             filters do not apply.
           </p>
-          <ReportDetails>
-            <p>
-              Lost-sales dates {report.period.from} to {report.period.to} are whole UTC calendar
-              days (00:00 to 24:00 UTC), not the shop&apos;s own clock, so a request made near the
-              shop&apos;s midnight can count on the neighbouring day.
-            </p>
-          </ReportDetails>
           <div className="grid gap-4 sm:grid-cols-3">
             <Stat label="Estimated lost" value={money(report.totals.estimatedLostMinor)} />
             <Stat label="Recovered" value={money(report.totals.recoveredMinor)} />

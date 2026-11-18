@@ -5,8 +5,7 @@ import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
-import { ReportDetails } from '@/components/pharmacy/report-details';
-import { formatWorkspaceDateTime } from '@/lib/timezone';
+import { formatWorkspaceDateTime, workspaceZoneLabel } from '@/lib/timezone';
 import {
   FISCAL_EXCEPTION_COVERAGE, FISCAL_EXCEPTION_NOTICE,
   type FiscalExceptionRegister,
@@ -23,7 +22,7 @@ export default async function FiscalExceptionsPage({ searchParams }: {
 }) {
   const query = await searchParams;
   let input: ReturnType<typeof fiscalExceptionQuery> | null = null;
-  let register: (FiscalExceptionRegister & { timeZone?: string | null }) | null = null;
+  let register: FiscalExceptionRegister | null = null;
   let error: string | null = null;
   try {
     input = fiscalExceptionQuery(query);
@@ -32,7 +31,7 @@ export default async function FiscalExceptionsPage({ searchParams }: {
     error = fiscalExceptionError(cause);
   }
   const scalar = (value: unknown) => typeof value === 'string' ? value : '';
-  // Recorded instants on the organisation's clock; the creation window itself stays UTC days.
+  // Recorded instants and the creation window are both on the organisation's clock.
   const shopTime = (value: string) => (
     <time dateTime={value}>{formatWorkspaceDateTime(value, register?.timeZone)}</time>
   );
@@ -51,11 +50,11 @@ export default async function FiscalExceptionsPage({ searchParams }: {
           </label>
           <label className="text-sm text-text-body">
             Created from
-            <Input name="from" type="date" defaultValue={scalar(input?.from ?? query.from)} required className="mt-1 min-h-11" />
+            <Input name="from" type="date" defaultValue={scalar(register?.filters.from ?? input?.from ?? query.from)} required className="mt-1 min-h-11" />
           </label>
           <label className="text-sm text-text-body">
             Created before (not included)
-            <Input name="to" type="date" defaultValue={scalar(input?.to ?? query.to)} required className="mt-1 min-h-11" />
+            <Input name="to" type="date" defaultValue={scalar(register?.filters.to ?? input?.to ?? query.to)} required className="mt-1 min-h-11" />
           </label>
           <label className="text-sm text-text-body">
             Rows per page
@@ -64,17 +63,9 @@ export default async function FiscalExceptionsPage({ searchParams }: {
           </label>
           <p id="fiscal-window-help" className="text-sm text-text-muted md:col-span-2">
             Use the branch ID from your workspace administrator. Maximum 92 days, excluding the end date.
-            Filters restart at page 1. Schedule values are recorded metadata; they do not trigger work.
+            {register ? ` Days run midnight to midnight, ${workspaceZoneLabel(register.timeZone)} time.` : ''}
+            {' '}Filters restart at page 1. Schedule values are recorded metadata; they do not trigger work.
           </p>
-          <div className="md:col-span-2">
-            <ReportDetails>
-              <p>
-                Creation dates are whole UTC calendar days: the window starts at 00:00 UTC on the
-                first date and stops before 00:00 UTC on the end date. The CSV uses the same UTC
-                window and UTC timestamps.
-              </p>
-            </ReportDetails>
-          </div>
           <Button type="submit" size="touch">Apply evidence window</Button>
         </form>
       </SectionCard>
@@ -97,11 +88,6 @@ export default async function FiscalExceptionsPage({ searchParams }: {
             Read started {shopTime(register.readAt)}. Created from {register.filters.from} up to (not
             including) {register.filters.to}. CSV downloads re-read this page and may differ from the screen.
           </p>
-          <ReportDetails>
-            <p className="font-mono text-xs">
-              Read started {register.readAt}. Created [{register.filters.from}, {register.filters.to}) UTC.
-            </p>
-          </ReportDetails>
           <div role="region" aria-label="Fiscal exception documents" tabIndex={0}
             className="overflow-x-auto rounded-md border border-border-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
             <table className="w-full min-w-[1000px] text-sm tabular-nums">

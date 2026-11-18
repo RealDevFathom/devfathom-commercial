@@ -9,16 +9,25 @@ import {
   type LostSalesRecoveryRow,
 } from './back-in-stock';
 import { validateMarketingReportFilters } from './marketing-report';
+import { workspaceDateRange } from '@/lib/timezone';
 
 /** Upper bound on demand events read for one report; a larger scope is reported as truncated. */
 export const LOST_SALES_RECOVERY_EVENT_LIMIT = 20_000;
 
+/**
+ * The picked dates are the organisation's days (inclusive): demand is read from the start of
+ * `from` to the start of the day after `to`, both on the organisation's clock. For a UTC
+ * organisation (or none) this is exactly the UTC-day window the shared validator returns.
+ */
 export async function readLostSalesRecovery(
   db: ScopedDb,
   organizationId: string,
-  filters: { branchIds: string[]; from: string; to: string }
+  filters: { branchIds: string[]; from: string; to: string },
+  timeZone?: string | null
 ) {
-  const createdAt = validateMarketingReportFilters(filters);
+  validateMarketingReportFilters(filters);
+  const window = workspaceDateRange(filters.from, filters.to, timeZone);
+  const createdAt = { gte: window.from, lt: window.to };
   const [branches, events] = await Promise.all([
     db.pharmacyBranch.findMany({
       where: { organizationId, id: { in: filters.branchIds } },

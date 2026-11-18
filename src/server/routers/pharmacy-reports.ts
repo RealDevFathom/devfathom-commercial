@@ -367,7 +367,12 @@ export const pharmacyReportsRouter = router({
           message: error instanceof Error ? error.message : 'Invalid report dates.',
         });
       }
-      return readLostSalesRecovery(ctx.db, ctx.entitlements.organizationId, scoped);
+      return readLostSalesRecovery(
+        ctx.db,
+        ctx.entitlements.organizationId,
+        scoped,
+        ctx.organization?.timezone
+      );
     }),
   createPharmacovigilanceReport: auditedProtectedProcedure
     .input(

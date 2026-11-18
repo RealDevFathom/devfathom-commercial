@@ -141,6 +141,74 @@ describe('ledger reports on the organisation clock', () => {
   });
 });
 
+describe('ledger windows across a daylight-saving change (DEV-722 review)', () => {
+  const LONDON = 'Europe/London';
+
+  it('shows the filter error instead of sending a window longer than the readers allow', async () => {
+    // 1 Aug to 1 Nov is 92 calendar days, but 92 days and one hour on the London clock.
+    const caller = ledgerCaller();
+    const view = html(
+      renderToStaticMarkup(
+        await LedgerReportsSection({
+          caller: caller as never,
+          branch,
+          from: '2026-08-01',
+          to: '2026-11-01',
+          at: '2026-08-01',
+          timeZone: LONDON,
+        })
+      )
+    );
+    expect(view.querySelector('#ledger-filter-error')).not.toBeNull();
+    expect(caller.grossMargin).not.toHaveBeenCalled();
+    expect(caller.leakageReport).not.toHaveBeenCalled();
+    const trueProfit = vi.fn().mockRejectedValue(new Error('window captured'));
+    const profit = html(
+      renderToStaticMarkup(
+        await TrueProfitSection({
+          caller: { trueProfit } as never,
+          branch,
+          from: '2026-08-01',
+          to: '2026-11-01',
+          timeZone: LONDON,
+        })
+      )
+    );
+    expect(profit.querySelector('#profit-filter-error')).not.toBeNull();
+    expect(trueProfit).not.toHaveBeenCalled();
+  });
+
+  it('still reads a window that fits, and the same 92 days for a UTC organisation', async () => {
+    const london = ledgerCaller();
+    await LedgerReportsSection({
+      caller: london as never,
+      branch,
+      from: '2026-08-02',
+      to: '2026-11-01',
+      at: '2026-08-01',
+      timeZone: LONDON,
+    });
+    expect(london.leakageReport).toHaveBeenCalledWith({
+      branchId: 'branch_1',
+      from: '2026-08-01T23:00:00.000Z',
+      to: '2026-11-01T00:00:00.000Z',
+    });
+    const utc = ledgerCaller();
+    await LedgerReportsSection({
+      caller: utc as never,
+      branch,
+      from: '2026-08-01',
+      to: '2026-11-01',
+      at: '2026-08-01',
+    });
+    expect(utc.leakageReport).toHaveBeenCalledWith({
+      branchId: 'branch_1',
+      from: '2026-08-01T00:00:00.000Z',
+      to: '2026-11-01T00:00:00.000Z',
+    });
+  });
+});
+
 describe('true profit on the organisation clock', () => {
   it.each([
     [undefined, '2026-08-01T00:00:00.000Z', '2026-08-02T00:00:00.000Z'],

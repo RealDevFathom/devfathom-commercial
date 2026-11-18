@@ -444,6 +444,18 @@ function dateOnly(value: string) {
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value ? date : null;
 }
 
+/**
+ * The readers refuse a window longer than 92 × 24 hours. Across a daylight-saving change 92
+ * calendar days on the organisation's clock can be an hour longer, so the converted instants are
+ * checked too and the filter error is shown instead of a refused read.
+ */
+function withinReaderLimit(start: string, end: string, timeZone: Zone) {
+  return (
+    Date.parse(ledgerDayStart(end, timeZone)) - Date.parse(ledgerDayStart(start, timeZone)) <=
+    92 * day
+  );
+}
+
 export async function LedgerReportsSection({
   caller,
   branch,
@@ -482,7 +494,8 @@ export async function LedgerReportsSection({
     !!fromDate &&
     !!toDate &&
     toDate.getTime() > fromDate.getTime() &&
-    toDate.getTime() - fromDate.getTime() <= 92 * day;
+    toDate.getTime() - fromDate.getTime() <= 92 * day &&
+    withinReaderLimit(start, end, timeZone);
   // The cutoff is the start of the picked day on the organisation's clock; it cannot be later
   // than now, so today is the latest day that can be picked.
   const atValid = !!atDate && Date.parse(ledgerDayStart(cutoff, timeZone)) <= now.getTime();
@@ -727,7 +740,8 @@ export async function TrueProfitSection({
     !!fromDate &&
     !!toDate &&
     toDate.getTime() > fromDate.getTime() &&
-    toDate.getTime() - fromDate.getTime() <= 92 * day;
+    toDate.getTime() - fromDate.getTime() <= 92 * day &&
+    withinReaderLimit(start, end, timeZone);
   const groupValid = profitGroups.includes(group as ProfitGroup);
   let result: PromiseSettledResult<TrueProfit> | undefined;
   if (periodValid && groupValid) {

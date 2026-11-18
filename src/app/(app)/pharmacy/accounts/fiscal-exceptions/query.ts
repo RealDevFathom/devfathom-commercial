@@ -1,5 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import type { FiscalExceptionInput } from '@/lib/pharmacy/accounts/fiscal-exceptions';
+import { workspaceDateOffset } from '@/lib/timezone';
 
 export type FiscalExceptionQuery = Record<string, string | string[] | undefined>;
 
@@ -10,17 +11,28 @@ export function fiscalExceptionQuery(query: FiscalExceptionQuery) {
   if (Object.keys(query).some((key) => !allowedKeys.has(key))) {
     throw new TRPCError({ code: 'BAD_REQUEST', message: 'Unsupported fiscal evidence query field.' });
   }
-  // Preserve duplicate and malformed values for rejection by the reader schema.
-  const today = new Date();
-  const midnight = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
-  const from = new Date(midnight - 6 * 86_400_000).toISOString().slice(0, 10);
-  const to = new Date(midnight + 86_400_000).toISOString().slice(0, 10);
+  // Preserve duplicate and malformed values for rejection by the reader schema. Missing dates
+  // stay missing here: the default window needs the organisation's zone (fiscalExceptionDefaults).
   const number = (value: string | string[] | undefined) => value === undefined
     ? undefined : typeof value === 'string' && /^(0|[1-9]\d{0,5})$/.test(value) ? Number(value) : NaN;
   return {
     ...query,
-    branchId: query.branchId ?? '', from: query.from ?? from, to: query.to ?? to,
+    branchId: query.branchId ?? '', from: query.from, to: query.to,
     page: number(query.page), pageSize: number(query.pageSize),
+  };
+}
+
+/**
+ * The default creation window on the organisation's clock: the last seven of its days, today
+ * included (the end date, tomorrow, is not included). Typed dates are kept as typed.
+ */
+export function fiscalExceptionDefaults<T extends Record<string, unknown>>(
+  input: T, timeZone: string | null | undefined, now = new Date()
+) {
+  return {
+    ...input,
+    from: input.from ?? workspaceDateOffset(timeZone, -6, now),
+    to: input.to ?? workspaceDateOffset(timeZone, 1, now),
   };
 }
 

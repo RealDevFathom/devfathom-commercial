@@ -322,6 +322,26 @@ describe('Finance posting window on the organisation clock (DEV-722)', () => {
           db: { pharmacyBranch: { findMany: mocks.branches } },
         }) as never
     );
+    // One settlement candidate, so the settlement form (with its business date) renders.
+    mocks.workspace.mockResolvedValue({
+      settlementCandidates: [
+        {
+          id: 'tender_1',
+          type: 'CARD',
+          provider: 'Bank',
+          amountMinor: 1000,
+          payerName: null,
+          providerRef: 'REF-1',
+          referenceSkipped: false,
+          sale: { receiptNumber: 12 },
+        },
+      ],
+      settlementBatches: [],
+      transactions: [],
+      bankLines: [],
+      taxProfiles: [],
+      periods: [],
+    });
     const tree = await PharmacyFinancePage({ searchParams: Promise.resolve({}) });
     const statements = sectionProps(tree, FinancialStatements);
     const ledger = sectionProps(tree, LedgerReportsSection);
@@ -349,5 +369,17 @@ describe('Finance posting window on the organisation clock (DEV-722)', () => {
     ]);
     for (const window of windows)
       expect(posting >= new Date(window.from) && posting < new Date(window.to)).toBe(true);
+    // The business and posting dates default to the Karachi today, not the UTC one (31 Jul).
+    const defaults: Record<string, unknown> = {};
+    const visit = (node: ReactNode) =>
+      Children.forEach(node, (child) => {
+        if (!isValidElement<{ children?: ReactNode; name?: string; defaultValue?: unknown }>(child))
+          return;
+        if (child.props.name === 'businessDate' || child.props.name === 'occurredAt')
+          defaults[child.props.name] = child.props.defaultValue;
+        visit(child.props.children);
+      });
+    visit(tree);
+    expect(defaults).toEqual({ businessDate: '2026-08-01', occurredAt: '2026-08-01' });
   });
 });

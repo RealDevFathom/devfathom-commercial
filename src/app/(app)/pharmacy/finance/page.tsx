@@ -28,7 +28,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
-import { workspaceDateOffset } from '@/lib/timezone';
+import { workspaceDateOffset, workspaceToday } from '@/lib/timezone';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
 
@@ -279,10 +279,12 @@ export default async function PharmacyFinancePage({
   }
 
   const now = new Date();
-  const today = now.toISOString().slice(0, 10);
+  const timeZone = ctx.organization?.timezone;
+  // The organisation's today (00:00–04:59 PKT is already the new day there, not in UTC): the
+  // default business and posting date.
+  const today = workspaceToday(timeZone, now);
   // Shared [from, to) posting window in the organisation's days (UTC when it has no zone): it
   // includes today; valuation stays independent.
-  const timeZone = ctx.organization?.timezone;
   const ledgerFrom = query.ledgerFrom ?? workspaceDateOffset(timeZone, -30, now);
   const ledgerTo = query.ledgerTo ?? workspaceDateOffset(timeZone, 1, now);
   return (
