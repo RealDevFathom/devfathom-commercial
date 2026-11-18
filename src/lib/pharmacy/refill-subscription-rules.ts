@@ -1,5 +1,7 @@
 /** DEV-73 pure refill-subscription rules, safe to import from any server module. */
 
+import { workspaceToday } from '@/lib/timezone';
+
 export const DAY_MS = 86_400_000;
 
 /**
@@ -19,6 +21,22 @@ export const REFILL_SUBSCRIPTION_LIMITS = {
 
 export function nextCycleDueAt(dueAt: Date, cycleDays: number) {
   return new Date(dueAt.getTime() + cycleDays * DAY_MS);
+}
+
+/**
+ * The scheduled job opens a cycle on the organisation's own calendar day: the day,
+ * in its workspace time zone, that falls `reminderLeadDays` before the due date.
+ * Midnight UTC is not the pharmacy's midnight; the shop's own day decides.
+ */
+export function refillCycleOpensBy(
+  subscription: { nextDueAt: Date; reminderLeadDays: number },
+  timeZone: string | null | undefined,
+  now: Date
+) {
+  const opensAt = new Date(
+    subscription.nextDueAt.getTime() - subscription.reminderLeadDays * DAY_MS
+  );
+  return workspaceToday(timeZone, opensAt) <= workspaceToday(timeZone, now);
 }
 
 /**

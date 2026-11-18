@@ -874,3 +874,194 @@ export async function listRefillSubscriptions(
     take: 200,
   });
 }
+
+/**
+ * The refill program screen's list: each subscription with the item it names, for
+ * staff eyes only. Messages to the customer never carry these names.
+ */
+export async function listRefillProgram(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>
+) {
+  const subscriptions = await listRefillSubscriptions(db, scope);
+  const medicineIds = [...new Set(subscriptions.map((row) => row.medicineId))];
+  const medicines = medicineIds.length
+    ? await db.medicine.findMany({
+        where: { organizationId: scope.organizationId, id: { in: medicineIds } },
+        select: {
+          id: true,
+          productName: true,
+          rx: true,
+          presentations: { select: { id: true, presentation: true } },
+        },
+      })
+    : [];
+  const byId = new Map(medicines.map((row) => [row.id, row]));
+  return subscriptions.map((subscription) => {
+    const medicine = byId.get(subscription.medicineId);
+    return {
+      ...subscription,
+      item: {
+        productName: medicine?.productName ?? 'Unknown item',
+        presentation:
+          medicine?.presentations.find((row) => row.id === subscription.presentationId)
+            ?.presentation ?? null,
+        prescriptionOnly: medicine?.rx ?? false,
+      },
+    };
+  });
+}
+
+/**
+ * Items a subscription may name: saleable, never controlled or restricted, with
+ * the current pack levels of each presentation. Prescription-only items are
+ * listed; every one of their cycles is held for a pharmacist.
+ */
+export async function listSubscribableItems(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId'>,
+  search = ''
+) {
+  const query = search.trim();
+  const medicines = await db.medicine.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      saleable: true,
+      restricted: false,
+      controlled: false,
+      ...(query
+        ? {
+            OR: [
+              { productName: { contains: query, mode: 'insensitive' } },
+              { brandName: { contains: query, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+    },
+    select: {
+      id: true,
+      productName: true,
+      rx: true,
+      presentations: {
+        select: {
+          id: true,
+          presentation: true,
+          packLevels: {
+            where: { effectiveTo: null },
+            select: { id: true, level: true },
+            orderBy: { id: 'asc' },
+          },
+        },
+        orderBy: { id: 'asc' },
+      },
+    },
+    orderBy: [{ productName: 'asc' }, { id: 'asc' }],
+    take: 50,
+  });
+  return medicines.flatMap((medicine) =>
+    medicine.presentations.flatMap((presentation) =>
+      presentation.packLevels.map((pack) => ({
+        medicineId: medicine.id,
+        productName: medicine.productName,
+        prescriptionOnly: medicine.rx,
+        presentationId: presentation.id,
+        presentation: presentation.presentation,
+        packLevelId: pack.id,
+        packLabel: pack.level,
+      }))
+    )
+  );
+}
+
+/**
+ * The subscriber's prescription lines for this cycle's medicine and presentation,
+ * for the pharmacist to choose from. Listing one is not approving it: the
+ * approval re-checks date, patient, quantity and repeats under lock.
+ */
+export async function listRefillCyclePrescriptionCandidates(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
+  cycleId: string
+) {
+  await activateBranchScope(db, scope);
+  const cycle = await db.pharmacyRefillSubscriptionCycle.findFirst({
+    where: { id: cycleId, organizationId: scope.organizationId, branchId: scope.branchId },
+    include: { subscription: true },
+  });
+  if (!cycle) throw new RefillSubscriptionError('CYCLE_NOT_FOUND');
+  const customer = await db.pharmacyCustomer.findFirst({
+    where: { id: cycle.subscription.customerId, organizationId: scope.organizationId },
+    select: { patientId: true },
+  });
+  if (!customer?.patientId) return [];
+  const lines = await db.prescriptionLine.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      medicineId: cycle.subscription.medicineId,
+      presentationId: cycle.subscription.presentationId,
+      prescription: { patientId: customer.patientId },
+    },
+    select: {
+      id: true,
+      authorizedCanonicalUnits: true,
+      prescription: {
+        select: {
+          validFrom: true,
+          validUntil: true,
+          authorizedRepeats: true,
+          prescriber: { select: { name: true } },
+        },
+      },
+      fills: { select: { quantityCanonicalUnits: true } },
+    },
+    orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+    take: 20,
+  });
+  return lines.map((line) => {
+    const filled = line.fills.reduce((sum, fill) => sum + fill.quantityCanonicalUnits, 0);
+    return {
+      id: line.id,
+      prescriberName: line.prescription.prescriber.name,
+      validFrom: line.prescription.validFrom,
+      validUntil: line.prescription.validUntil,
+      remainingUnits: Math.max(0, line.authorizedCanonicalUnits - filled),
+      repeatsLeft: Math.max(0, line.prescription.authorizedRepeats + 1 - line.fills.length),
+    };
+  });
+}
+
+/**
+ * Staff profiles the screen may offer to sign a prescription cycle: active members
+ * with a live staff PIN who hold the dispensing capability. When nobody else
+ * qualifies (the solo rule), the actor's own profile is offered so a sole
+ * owner-pharmacist can self-approve by re-entering their PIN; the approval itself
+ * re-checks everything and records the self-approval in the audit.
+ */
+export async function listRefillCyclePharmacists(db: ScopedDb, scope: LedgerScope) {
+  const now = new Date();
+  const profiles = await db.restaurantStaffProfile.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      status: 'ACTIVE',
+      user: { organizationId: scope.organizationId, status: 'ACTIVE' },
+      credentials: { some: { type: 'PIN', revokedAt: null, deviceId: null } },
+    },
+    select: {
+      id: true,
+      displayName: true,
+      user: {
+        select: { id: true, role: true, department: true, status: true, organizationId: true },
+      },
+    },
+    orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
+  });
+  const eligible: Array<{ id: string; name: string; self: boolean }> = [];
+  for (const profile of profiles) {
+    const user = profile.user as ActiveUser | null;
+    if (!user || user.organizationId !== scope.organizationId || user.status !== 'ACTIVE') continue;
+    if (!(await can(user, REFILL_CYCLE_APPROVAL_CAPABILITY, undefined, { db, now }))) continue;
+    eligible.push({ id: profile.id, name: profile.displayName, self: user.id === scope.actorId });
+  }
+  const others = eligible.filter((profile) => !profile.self);
+  return others.length ? others : eligible;
+}
