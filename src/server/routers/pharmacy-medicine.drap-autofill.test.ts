@@ -209,7 +209,17 @@ function store(proposals: Proposal[] = [], medicines: Array<Record<string, unkno
         return medicine;
       }),
     },
-    medicineProvenance: { create: vi.fn(async () => ({ id: 'assertion' })) },
+    medicineProvenance: {
+      create: vi.fn(async () => ({ id: 'assertion' })),
+      // Who entered a medicine's values: the editors of its draft assertions.
+      findMany: vi.fn(async ({ where }: { where: { medicineId: string } }) => {
+        const medicine = medicines.find((item) => item.id === where.medicineId);
+        const entries =
+          (medicine?.provenance as { create?: Array<{ editorId: string }> } | undefined)?.create ??
+          [];
+        return [...new Set(entries.map((item) => item.editorId))].map((editorId) => ({ editorId }));
+      }),
+    },
     medicineReviewDecision: { create: vi.fn() },
   };
   return db;
@@ -428,6 +438,50 @@ describe('DEV-683 add-medicine DRAP auto-fill boundary', () => {
     const db = store([{ ...drapProposal('ref-1', statedRow), status: 'REJECTED' }]);
     await caller(db).addMedicineDraft({ ...draft, controlled: false });
     expect(created(db).controlled).toBe(false);
+  });
+
+  it('does not let the draft’s editor confirm the DRAP row that validates it', async () => {
+    const db = store([drapProposal('ref-1', statedRow)]);
+    await caller(db).addMedicineDraft({ ...draft, drapReferenceId: 'ref-1' });
+    await expect(
+      caller(db).decideReferenceConnectorProposal({ proposalId: 'ref-1', decision: 'CONFIRM' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.medicine.update).not.toHaveBeenCalled();
+    expect(db.proposals[0]!.status).toBe('PENDING');
+  });
+
+  it('refuses a row matched at upload while a twin carries the registration number', async () => {
+    const db = store(
+      [{ ...drapProposal('ref-1', { productName: 'Synthamol' }), targetMedicineId: 'twin-a' }],
+      [
+        { id: 'twin-a', productName: 'Synthamol', drapRegistrationNumber: 'SYN-0001' },
+        { id: 'twin-b', productName: 'Synthamol', drapRegistrationNumber: 'syn-0001 ' },
+      ]
+    );
+    // The upload matched the exact spelling; the row itself repeats no registration number.
+    db.proposals[0]!.payload.values.drapRegistrationNumber = 'SYN-0001';
+    await expect(
+      caller(db, 'pharmacist-b').decideReferenceConnectorProposal({
+        proposalId: 'ref-1',
+        decision: 'CONFIRM',
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(db.medicine.update).not.toHaveBeenCalled();
+  });
+
+  it('does not record the row’s spelling of the kept name and registration as accepted', async () => {
+    const db = store([drapProposal('ref-1', statedRow)]);
+    await caller(db).addMedicineDraft({ ...draft, drapReferenceId: 'ref-1' });
+    await caller(db, 'pharmacist-b').decideReferenceConnectorProposal({
+      proposalId: 'ref-1',
+      decision: 'CONFIRM',
+    });
+    const accepted = db.medicineProvenance.create.mock.calls.map(
+      (call) => (call as unknown as [{ data: { field: string } }])[0].data.field
+    );
+    expect(accepted).not.toContain('productName');
+    expect(accepted).not.toContain('drapRegistrationNumber');
+    expect(accepted).toContain('strength');
   });
 
   it('refuses to merge a different product sharing the registration number', async () => {

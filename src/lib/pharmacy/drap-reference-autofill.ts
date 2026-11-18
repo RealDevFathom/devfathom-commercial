@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
-import { normalizeMedicineText } from './medicine';
+import { parseSimpleMedicineStrength } from './medicine';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   DRAP_REGISTRY_CONNECTOR_ID,
@@ -393,9 +393,32 @@ const IDENTITY_FIELDS = [
 ] as const;
 
 /**
+ * Text for an identity comparison: case, spacing and punctuation are ignored, but a decimal point
+ * or comma between two digits is kept, so "2.5 mg" never equals "25 mg" and "25.0" never "250".
+ * (normalizeMedicineText drops it, which is right for search but not for identity.)
+ */
+export function identityText(value: string): string {
+  return value
+    .trim()
+    .toLocaleLowerCase('en')
+    .replace(/(\p{N})[.,](?=\p{N})/gu, '$1\u0000')
+    .replace(/[^\p{L}\p{N}\u0000]+/gu, '')
+    .replace(/\u0000/g, '.');
+}
+
+function sameStrength(proposed: string, current: string): boolean {
+  const left = parseSimpleMedicineStrength(proposed);
+  const right = parseSimpleMedicineStrength(current);
+  if (left && right)
+    return left.value === right.value && left.unit.toLowerCase() === right.unit.toLowerCase();
+  return identityText(proposed) === identityText(current);
+}
+
+/**
  * Identity fields where a DRAP row and the catalogue medicine with its registration number name
- * different products. Compared without case, spacing or punctuation; a value either side leaves
- * unstated is not a difference.
+ * different products. Strengths compare by value and unit when both parse; otherwise, like the
+ * name and form, by text that keeps decimal points. A value either side leaves unstated is not a
+ * difference.
  */
 export function registrationIdentityConflicts(
   values: Partial<Record<string, string>>,
@@ -405,7 +428,11 @@ export function registrationIdentityConflicts(
     const proposed = values[field];
     const current = medicine[field];
     if (!proposed || !current) return [];
-    return normalizeMedicineText(proposed) === normalizeMedicineText(current) ? [] : [label];
+    const same =
+      field === 'strength'
+        ? sameStrength(proposed, current)
+        : identityText(proposed) === identityText(current);
+    return same ? [] : [label];
   });
 }
 

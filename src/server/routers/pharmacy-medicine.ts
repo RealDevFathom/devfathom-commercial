@@ -969,18 +969,47 @@ export const pharmacyMedicineRouter = router({
           const db = tx as typeof ctx.db;
           const organizationId = ctx.entitlements.organizationId;
           await lockDrapRegistration(db, organizationId, registration);
-          if (!medicine) {
-            const ids = await findMedicinesByRegistration(db, organizationId, registration);
-            if (ids.length > 1)
-              throw new TRPCError({
-                code: 'CONFLICT',
-                message: `More than one catalogue medicine carries DRAP registration number ${registration}. Resolve them before confirming this row.`,
-              });
-            if (ids.length === 1)
-              medicine = await tx.medicine.findFirst({ where: { id: ids[0]! } });
-          }
+          // Always checked, also for a row matched at upload (exactly, case-sensitively): the
+          // counter finds every case variant, so a twin must be resolved first.
+          const ids = await findMedicinesByRegistration(db, organizationId, registration);
+          if (ids.length > 1)
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: `More than one catalogue medicine carries DRAP registration number ${registration}. Resolve them before confirming this row.`,
+            });
+          if (medicine && ids.length === 1 && ids[0] !== medicine.id)
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: `Another catalogue medicine carries DRAP registration number ${registration}. Resolve it before confirming this row.`,
+            });
+          if (!medicine && ids.length === 1)
+            medicine = await tx.medicine.findFirst({ where: { id: ids[0]! } });
         }
         if (medicine && source.official) {
+          // The row validates this medicine: whoever entered the medicine's values may not be the
+          // one who confirms it, unless they are a solo owner with a fresh PIN (same rule as the
+          // importer; not asked twice when the importer check already took the PIN).
+          if (!solo) {
+            const editors = await tx.medicineProvenance.findMany({
+              where: { medicineId: medicine.id, editorId: { not: null } },
+              select: { editorId: true },
+              distinct: ['editorId'],
+            });
+            const editorSolo = await requireIndependentCatalogueReviewer(
+              tx as typeof ctx.db,
+              scope,
+              editors.map((item) => item.editorId),
+              input.soloPin
+            );
+            if (editorSolo)
+              await recordCatalogueApproval(
+                tx as typeof ctx.db,
+                scope,
+                proposal.id,
+                true,
+                'PharmacyReferenceConnectorProposal'
+              );
+          }
           const current = (
             await catalogueMedicineSnapshots(tx as typeof ctx.db, [medicine.id])
           ).get(medicine.id);
@@ -990,7 +1019,10 @@ export const pharmacyMedicineRouter = router({
               code: 'CONFLICT',
               message: `This DRAP row does not match ${medicine.productName}, already in the catalogue with registration number ${registration ?? 'none'}: the ${conflicts.join(', ')} differ. Reject the row, or correct the catalogue medicine first.`,
             });
-          // The same product: descriptive fields are filled in, the name and registration kept.
+          // The same product: descriptive fields are filled in, the name and registration kept, so
+          // the row's spelling of either is not recorded as accepted.
+          notApplied.add('productName');
+          notApplied.add('drapRegistrationNumber');
           const flags = {} as Partial<Record<'rx' | 'restricted' | 'controlled', true>>;
           for (const field of ['rx', 'restricted', 'controlled'] as const) {
             const stated = proposedBoolean(values[field]);

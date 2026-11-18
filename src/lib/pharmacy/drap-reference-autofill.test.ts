@@ -7,6 +7,7 @@ import {
   drapAutofillValues,
   findDrapReferenceByRegistration,
   findMedicinesByRegistration,
+  identityText,
   lockDrapRegistration,
   normalizeDrapRegistration,
   registrationIdentityConflicts,
@@ -312,6 +313,33 @@ describe('DEV-683 registration identity', () => {
         medicine
       )
     ).toEqual(['name', 'strength', 'form']);
+  });
+
+  it('keeps decimal points: 2.5 mg is not 25 mg, and "250" is not "25.0"', () => {
+    expect(
+      registrationIdentityConflicts({ strength: '25 mg' }, { ...medicine, strength: '2.5 mg' })
+    ).toEqual(['strength']);
+    expect(
+      registrationIdentityConflicts({ strength: '2.5mg' }, { ...medicine, strength: '2.5 MG' })
+    ).toEqual([]);
+    // Numerically the same strength.
+    expect(
+      registrationIdentityConflicts({ strength: '25.0 mg' }, { ...medicine, strength: '25 mg' })
+    ).toEqual([]);
+    // A strength that does not parse still keeps its decimal point.
+    expect(
+      registrationIdentityConflicts(
+        { strength: '2.5 mg/5 ml' },
+        { ...medicine, strength: '25 mg/5 ml' }
+      )
+    ).toEqual(['strength']);
+    expect(
+      registrationIdentityConflicts(
+        { productName: 'Amoxil 25.0' },
+        { ...medicine, productName: 'Amoxil 250' }
+      )
+    ).toEqual(['name']);
+    expect(identityText('Amoxil 2,5 mg')).toBe('amoxil2.5mg');
   });
 
   it('does not count a value either side leaves unstated', () => {

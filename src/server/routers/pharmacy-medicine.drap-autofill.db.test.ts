@@ -177,6 +177,12 @@ describeIfDatabase('DEV-683 DRAP auto-fill against PostgreSQL', () => {
       db.pharmacyReferenceConnectorProposal.findFirstOrThrow({ where: { id } })
     );
     expect(proposal).toMatchObject({ status: 'CONFIRMED', targetMedicineId: draft.id });
+    // The medicine's own name and registration are kept, so the row's spelling is not accepted.
+    const accepted = await withTenantDb(ORG_A, (db) =>
+      db.medicineProvenance.findMany({ where: { medicineId: draft.id, status: 'ACCEPTED' } })
+    );
+    expect(accepted.map((item) => item.field)).not.toContain('productName');
+    expect(accepted.map((item) => item.field)).not.toContain('drapRegistrationNumber');
     // Another organisation sees neither the reference rows nor the draft.
     await withTenantDb(ORG_B, async (db) => {
       expect(await db.pharmacyReferenceConnectorProposal.count()).toBe(0);
@@ -266,6 +272,111 @@ describeIfDatabase('DEV-683 DRAP auto-fill against PostgreSQL', () => {
       })
     );
     expect(accepted.map((item) => item.field)).toEqual(['controlled']);
+  });
+
+  const manualDraft = (values: { name: string; strength: string; reg: string }) =>
+    as(EDITOR, (api) =>
+      api.addMedicineDraft({
+        productName: values.name,
+        strength: values.strength,
+        dosageForm: 'Tablet',
+        pack: '10 tablets',
+        drapRegistrationNumber: values.reg,
+        rx: false,
+        controlled: false,
+      })
+    );
+
+  // A row matched at upload stores only the fields that differ, so find it by its row key.
+  const pendingFor = (registration: string) =>
+    withTenantDb(ORG_A, (db) =>
+      db.pharmacyReferenceConnectorProposal.findFirstOrThrow({
+        where: { status: 'PENDING', rowSourceKey: `drap-${registration}` },
+        orderBy: { createdAt: 'desc' },
+      })
+    );
+
+  it('keeps decimal points: 2.5 mg is not 25 mg, and "250" is not "25.0"', async () => {
+    const decimal = await manualDraft({ name: 'Synthadec', strength: '2.5 mg', reg: 'SYN-D1' });
+    const named = await manualDraft({ name: 'Synthoxil 250', strength: '5 mg', reg: 'SYN-N1' });
+    await upload('drap-decimal.csv', [
+      row({ reg: 'SYN-D1', name: 'Synthadec', strength: '25 mg', rx: 'OTC', controlled: 'No' }),
+      row({ reg: 'SYN-N1', name: 'Synthoxil 25.0', strength: '5 mg', rx: 'OTC', controlled: 'No' }),
+    ]);
+    for (const [registration, medicine] of [
+      ['SYN-D1', decimal],
+      ['SYN-N1', named],
+    ] as const) {
+      const proposal = await pendingFor(registration);
+      await expect(
+        as(REVIEWER, (api) =>
+          api.decideReferenceConnectorProposal({ proposalId: proposal.id, decision: 'CONFIRM' })
+        )
+      ).rejects.toMatchObject({ code: 'CONFLICT' });
+      const accepted = await withTenantDb(ORG_A, (db) =>
+        db.medicineProvenance.count({ where: { medicineId: medicine.id, status: 'ACCEPTED' } })
+      );
+      expect(accepted).toBe(0);
+    }
+  });
+
+  it('refuses a row matched at upload while a case-variant twin carries the number', async () => {
+    const twinsCreated = await withTenantDb(ORG_A, (db) =>
+      Promise.all(
+        ['P3-TWO', 'p3-two '].map((reg) =>
+          db.medicine.create({
+            data: {
+              productName: 'Synthatwin',
+              drapRegistrationNumber: reg,
+              productFamily: 'PHARMACEUTICAL',
+              saleable: false,
+            },
+          })
+        )
+      )
+    );
+    const first = twinsCreated[0]!;
+    await upload('drap-twin.csv', [row({ reg: 'P3-TWO', name: 'Synthatwin' })]);
+    const proposal = await pendingFor('P3-TWO');
+    // The upload matcher matched the exact spelling only.
+    expect(proposal.targetMedicineId).toBe(first.id);
+    await expect(
+      as(REVIEWER, (api) =>
+        api.decideReferenceConnectorProposal({ proposalId: proposal.id, decision: 'CONFIRM' })
+      )
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    // Neither twin was changed.
+    const twins = await withTenantDb(ORG_A, (db) =>
+      db.medicine.findMany({ where: { id: { in: twinsCreated.map((medicine) => medicine.id) } } })
+    );
+    expect(twins.map((medicine) => [medicine.controlled, medicine.rx])).toEqual([
+      [false, false],
+      [false, false],
+    ]);
+  });
+
+  it('does not let the draft’s editor confirm the DRAP row that validates it', async () => {
+    await upload('drap-self.csv', [row({ reg: 'SYN-E1', name: 'Synthaself' })]);
+    const proposalId = await referenceId('SYN-E1');
+    await as(EDITOR, (api) =>
+      api.addMedicineDraft({
+        productName: 'Synthaself',
+        strength: '500 mg',
+        dosageForm: 'Tablet',
+        pack: '10 tablets',
+        drapRegistrationNumber: 'SYN-E1',
+        rx: true,
+        controlled: true,
+        drapReferenceId: proposalId,
+      })
+    );
+    await expect(
+      as(EDITOR, (api) => api.decideReferenceConnectorProposal({ proposalId, decision: 'CONFIRM' }))
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    const proposal = await withTenantDb(ORG_A, (db) =>
+      db.pharmacyReferenceConnectorProposal.findFirstOrThrow({ where: { id: proposalId } })
+    );
+    expect(proposal.status).toBe('PENDING');
   });
 
   it('applies the stated controlled flag to a case variant of the registration number', async () => {
