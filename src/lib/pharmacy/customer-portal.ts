@@ -46,6 +46,7 @@ export class PharmacyPortalError extends Error {
       | 'CUSTOMER_NOT_FOUND'
       | 'PHONE_REQUIRED'
       | 'LINK_INVALID'
+      | 'LINK_LOCKED'
       | 'CODE_INVALID'
       | 'SEND_FAILED'
       | 'SALE_NOT_FOUND'
@@ -175,7 +176,8 @@ export async function resolvePortalLink(db: ScopedDb, organizationId: string, to
 
 /**
  * Sends a fresh code to the customer's stored phone. A new code replaces the old one;
- * the failed-guess counter carries over and clears only on a correct code.
+ * the failed-guess counter carries over and clears only on a correct code. A link
+ * locked by five wrong codes sends nothing more (DEV-906): staff issue a new link.
  */
 export async function startPortalSignIn(
   db: ScopedDb,
@@ -185,17 +187,22 @@ export async function startPortalSignIn(
 ) {
   const link = await resolvePortalLink(db, organizationId, token);
   if (!link) throw new PharmacyPortalError('LINK_INVALID');
+  if (link.otpFailedAttempts >= PORTAL_OTP_MAX_ATTEMPTS)
+    throw new PharmacyPortalError('LINK_LOCKED');
   const { phone } = await customerPhone(db, organizationId, link.customerId);
   if (!phone) throw new PharmacyPortalError('PHONE_REQUIRED');
   const otp = String(randomBytes(4).readUInt32BE() % 1_000_000).padStart(6, '0');
-  await db.pharmacyCustomerPortalLink.update({
-    where: { id: link.id },
+  // The lock is re-checked in the write, so a guess that locks the link while this
+  // request is in flight still stops the code from being stored or sent.
+  const stored = await db.pharmacyCustomerPortalLink.updateMany({
+    where: { id: link.id, otpFailedAttempts: { lt: PORTAL_OTP_MAX_ATTEMPTS } },
     data: {
       otpHash: hashPortalOtp(otp),
       otpExpiresAt: new Date(Date.now() + PORTAL_OTP_TTL_MS),
       // otpFailedAttempts is deliberately not reset: a resend must not refresh the guess limit.
     },
   });
+  if (stored.count !== 1) throw new PharmacyPortalError('LINK_LOCKED');
   try {
     await sendCode({ to: phone, otp, body: portalCodeMessage(link.branch.name, otp) });
   } catch {
