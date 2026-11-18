@@ -15,6 +15,7 @@ vi.mock('@/lib/abac', async () => ({
   can: vi.fn(async () => true),
 }));
 
+import { Prisma } from '@/generated/prisma/client';
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { router, type TRPCContext } from '../trpc';
 import { auditRouter } from './audit';
@@ -67,7 +68,9 @@ function matches(row: Row, where: Where): boolean {
           current && typeof current === 'object'
             ? (current as Record<string, unknown>)[segment]
             : undefined;
-      if ('equals' in filter) return current === filter.equals;
+      // `AnyNull` is how the router asks for a key that is absent (or null).
+      if ('equals' in filter)
+        return filter.equals === Prisma.AnyNull ? current == null : current === filter.equals;
       // DEV-937: a refusal recorded away from the branch it named lists the
       // person's own branches; PostgreSQL's JSON containment, as Prisma maps it.
       if (filter.array_contains)

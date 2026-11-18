@@ -1,7 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { router, adminProcedure, type TRPCContext } from '../trpc';
-import type { Prisma } from '@/generated/prisma/client';
+import { Prisma } from '@/generated/prisma/client';
 import { auditApproverIds, auditRowBranchId } from '@/lib/audit-labels';
 import { auditActorBranches } from '@/server/audit-actor-branches';
 
@@ -44,19 +44,24 @@ async function auditReadScope(ctx: TRPCContext): Promise<AuditReadScope> {
 }
 
 /**
- * Rows recorded at one of `branchIds`: the recorded branch first, then the raw
- * request of an older entry. DEV-937: a refused request's raw branch is only
- * what the person named, so it never places the entry; a refusal recorded away
- * from the branch it named belongs to the branches the person works at.
+ * Rows recorded at one of `branchIds`: the recorded branch, the branches the
+ * person works at for an entry recorded away from the branch it named
+ * (DEV-937), then the raw request of an older entry. A raw request branch is
+ * only what the person named, so it never places a refusal, nor an entry the
+ * recorder moved away from it (`requestedBranchId`).
  */
 function atBranches(branchIds: readonly string[]): Prisma.AuditLogWhereInput {
   if (branchIds.length === 0) return { id: { in: [] } };
+  const unmoved: Prisma.AuditLogWhereInput = {
+    outcome: 'SUCCESS',
+    metadata: { path: ['requestedBranchId'], equals: Prisma.AnyNull },
+  };
   return {
     OR: branchIds.flatMap((branchId): Prisma.AuditLogWhereInput[] => [
       { metadata: { path: ['branchId'], equals: branchId } },
       { metadata: { path: ['actorBranchIds'], array_contains: [branchId] } },
-      { outcome: 'SUCCESS', input: { path: ['branchId'], equals: branchId } },
-      { outcome: 'SUCCESS', input: { path: ['pharmacyBranchId'], equals: branchId } },
+      { AND: [unmoved, { input: { path: ['branchId'], equals: branchId } }] },
+      { AND: [unmoved, { input: { path: ['pharmacyBranchId'], equals: branchId } }] },
     ]),
   };
 }

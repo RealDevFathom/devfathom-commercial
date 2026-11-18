@@ -73,9 +73,11 @@ describe('recordTrpcAudit branch', () => {
 // in that branch's log. The branch stays only when the person really works there.
 describe('recordTrpcAudit branch of a refused request', () => {
   const BRANCHES = ['branch_north', 'branch_south'];
-  const PEOPLE: Record<string, { owner: boolean; branches: string[] }> = {
+  const PEOPLE: Record<string, { owner: boolean; admin?: boolean; branches: string[] }> = {
     north_cashier: { owner: false, branches: ['branch_north'] },
     owner_1: { owner: true, branches: [] },
+    // An ADMIN without `*`: the counter lets them act at every branch.
+    north_admin: { owner: false, admin: true, branches: ['branch_north'] },
   };
 
   async function record(args: {
@@ -88,8 +90,8 @@ describe('recordTrpcAudit branch of a refused request', () => {
     const db = {
       auditLog: { create },
       pharmacyBranch: {
-        findFirst: vi.fn(async ({ where }: { where: { id: string } }) =>
-          BRANCHES.includes(where.id) ? { id: where.id } : null
+        findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+          BRANCHES.filter((id) => where.id.in.includes(id)).map((id) => ({ id }))
         ),
       },
       user: {
@@ -98,10 +100,10 @@ describe('recordTrpcAudit branch of a refused request', () => {
           if (!person) return null;
           return {
             status: 'ACTIVE',
-            role: person.owner ? 'ADMIN' : 'EMPLOYEE',
+            role: person.owner || person.admin ? 'ADMIN' : 'EMPLOYEE',
             organizationRole: person.owner
               ? { key: 'owner', isSystem: true, permissions: [] }
-              : { key: 'cashier', isSystem: true, permissions: [] },
+              : { key: person.admin ? 'manager' : 'cashier', isSystem: true, permissions: [] },
             permissionOverrides: [],
           };
         }),
@@ -183,18 +185,87 @@ describe('recordTrpcAudit branch of a refused request', () => {
     expect(data.metadata).toEqual({ requestedBranchId: 'branch_south', actorBranchIds: [] });
   });
 
-  it('leaves successes and branches outside the pharmacy as they were', async () => {
-    const success = await record({
-      actorId: 'north_cashier',
+  it("keeps an ADMIN's refusal at the branch they acted at, as the counter lets them", async () => {
+    const data = await record({
+      actorId: 'north_admin',
       input: { branchId: 'branch_south' },
-      outcome: 'SUCCESS',
+      outcome: 'FAILURE',
     });
-    expect(success.metadata).toEqual({ branchId: 'branch_south' });
+    expect(data.metadata).toEqual({ branchId: 'branch_south' });
+  });
+
+  it('leaves branches outside the pharmacy as they were', async () => {
     const other = await record({
       actorId: 'north_cashier',
       input: { branchId: 'restaurant_branch_1' },
       outcome: 'FAILURE',
     });
     expect(other.metadata).toEqual({ branchId: 'restaurant_branch_1' });
+  });
+});
+
+// DEV-937: a successful request is read before its schema drops unknown keys,
+// so a branch it names is checked as well; a record's own tag stands.
+describe('recordTrpcAudit branch of a successful request', () => {
+  const BRANCHES = ['branch_north', 'branch_south'];
+  async function record(input: unknown, metadata?: Record<string, unknown>) {
+    const create = vi.fn(async () => ({ id: 'audit_1' }));
+    const findMany = vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+      BRANCHES.filter((id) => where.id.in.includes(id)).map((id) => ({ id }))
+    );
+    const db = {
+      auditLog: { create },
+      pharmacyBranch: { findMany },
+      user: {
+        findFirst: vi.fn(async () => ({
+          status: 'ACTIVE',
+          role: 'EMPLOYEE',
+          organizationRole: { key: 'cashier', isSystem: true, permissions: [] },
+          permissionOverrides: [],
+        })),
+      },
+      pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch_north' }]) },
+    } as unknown as ScopedDb;
+    await recordTrpcAudit({
+      ctx: {
+        session: { user: { id: 'north_cashier', organizationId: 'org_p' } },
+        audit: { detail: metadata ? { metadata } : {}, db },
+      },
+      path: 'notes.create',
+      type: 'mutation',
+      input,
+      outcome: 'SUCCESS',
+    });
+    const data = (create.mock.calls[0] as unknown as [{ data: Record<string, unknown> }])[0].data;
+    return { metadata: data.metadata, lookedUp: findMany.mock.calls.length > 0 };
+  }
+
+  it('does not place an entry at a branch the request merely named', async () => {
+    const { metadata } = await record({ title: 'Note', branchId: 'branch_south' });
+    expect(metadata).toEqual({
+      requestedBranchId: 'branch_south',
+      actorBranchIds: ['branch_north'],
+    });
+  });
+
+  it('does not let an extra branchId override a real pharmacyBranchId or scope', async () => {
+    expect(
+      (await record({ branchId: 'branch_south', pharmacyBranchId: 'branch_north' })).metadata
+    ).toEqual({ branchId: 'branch_north' });
+    expect(
+      (await record({ branchId: 'branch_south', scope: { branchId: 'branch_north' } })).metadata
+    ).toEqual({ branchId: 'branch_north' });
+  });
+
+  it('keeps a request at the branch the person works at', async () => {
+    expect((await record({ branchId: 'branch_north' })).metadata).toEqual({
+      branchId: 'branch_north',
+    });
+  });
+
+  it("keeps the record's own tag without looking it up again", async () => {
+    const result = await record({ branchId: 'branch_south' }, { branchId: 'branch_south' });
+    expect(result.metadata).toEqual({ branchId: 'branch_south' });
+    expect(result.lookedUp).toBe(false);
   });
 });

@@ -20,8 +20,9 @@ function stringValue(value: unknown): string | null {
  * audit layer since DEV-913, and by the terminal and offline writers before
  * it), else the request's own `branchId` or `scope.branchId`.
  *
- * DEV-937: a refused request's own branch is only what the person named, not
- * where they acted, so a refusal shows the recorded branch or none.
+ * DEV-937: a request's own branch is only what the person named, not where
+ * they acted, so a refusal, or an entry recorded away from the branch it named
+ * (`requestedBranchId`), shows the recorded branch or none.
  */
 export function auditRowBranchId(row: {
   metadata?: unknown;
@@ -30,7 +31,8 @@ export function auditRowBranchId(row: {
 }): string | null {
   const metadata = record(row.metadata);
   const recorded = stringValue(metadata?.branchId);
-  if (recorded || row.outcome === 'FAILURE') return recorded;
+  if (recorded || row.outcome === 'FAILURE' || metadata?.requestedBranchId !== undefined)
+    return recorded;
   const input = record(row.input);
   return (
     stringValue(input?.branchId) ??

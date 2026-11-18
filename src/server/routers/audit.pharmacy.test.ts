@@ -13,6 +13,7 @@ vi.mock('@/server/audit', async (importOriginal) => ({
   recordTrpcAudit: vi.fn(),
 }));
 
+import { Prisma } from '@/generated/prisma/client';
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { isModuleGranted } from '@/lib/module-catalog';
 import { auditRouter } from './audit';
@@ -288,7 +289,9 @@ function matches(row: Record<string, unknown>, where: Where | undefined): boolea
     if (filter.gte) return (row[key] as Date) >= filter.gte;
     if (filter.path) {
       const value = jsonAt(row[key], filter.path);
-      if ('equals' in filter) return value === filter.equals;
+      // `AnyNull` is how the router asks for a key that is absent (or null).
+      if ('equals' in filter)
+        return filter.equals === Prisma.AnyNull ? value == null : value === filter.equals;
       if (filter.array_contains)
         return Array.isArray(value) && filter.array_contains.every((id) => value.includes(id));
     }
@@ -296,7 +299,7 @@ function matches(row: Record<string, unknown>, where: Where | undefined): boolea
   });
 }
 
-describe('DEV-937 a refused request is shown where the person acted, not where it named', () => {
+describe('DEV-937 a request is shown where the person acted, not where it named', () => {
   const entry = (id: string, fields: Partial<typeof ROW>) => ({
     ...ROW,
     id,
@@ -309,6 +312,12 @@ describe('DEV-937 a refused request is shown where the person acted, not where i
       actorId: 'cashier',
       outcome: 'FAILURE',
       input: { branchId: 'branch_south', saleId: 'sale_1' },
+      metadata: { requestedBranchId: 'branch_south', actorBranchIds: ['branch_north'] },
+    }),
+    // A North cashier names South on a request that succeeds without it.
+    entry('planted_success', {
+      actorId: 'cashier',
+      input: { title: 'Note', branchId: 'branch_south' },
       metadata: { requestedBranchId: 'branch_south', actorBranchIds: ['branch_north'] },
     }),
     // The same refusal recorded before the branch was kept on the entry.
@@ -356,8 +365,8 @@ describe('DEV-937 a refused request is shown where the person acted, not where i
   it("shows it to the manager of the person's own branch, without the named branch", async () => {
     withRows();
     const page = await caller('branchAdmin').list({});
-    expect(ids(page)).toEqual(['planted']);
-    expect(page.items[0]).toMatchObject({ branchId: null, branchName: null });
+    expect(ids(page)).toEqual(['planted', 'planted_success']);
+    for (const item of page.items) expect(item).toMatchObject({ branchId: null, branchName: null });
   });
 
   it('shows the owner every entry, and the refusal under the branch the person works at', async () => {
@@ -366,6 +375,9 @@ describe('DEV-937 a refused request is shown where the person acted, not where i
     expect(ids(await caller('owner').list({ branchId: 'branch_south' }))).toEqual(
       ['south_legacy', 'south_refund', 'south_refused'].sort()
     );
-    expect(ids(await caller('owner').list({ branchId: 'branch_north' }))).toEqual(['planted']);
+    expect(ids(await caller('owner').list({ branchId: 'branch_north' }))).toEqual([
+      'planted',
+      'planted_success',
+    ]);
   });
 });

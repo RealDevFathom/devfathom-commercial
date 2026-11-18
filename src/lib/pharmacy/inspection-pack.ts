@@ -65,7 +65,9 @@ export function buildInspectionManifest(input: {
  * only pharmacy regulatory events tied to the authorized branch — either aimed
  * at the branch itself or carrying it as `metadata.branchId`. Events without a
  * branch (organization-wide or administrative) are excluded; the full log stays
- * behind the admin-only audit listing. The projection names the actor and the
+ * behind the admin-only audit listing. DEV-937: an entry the recorder moved away
+ * from the branch it named (`requestedBranchId`) is not this branch's, even when
+ * the request aimed at it. The projection names the actor and the
  * event, never request payloads, diffs, results, metadata, contact details,
  * network context, tokens or error text.
  */
@@ -89,6 +91,7 @@ WHERE a."createdAt" >= $1 AND a."createdAt" <= $2
     (a."targetType" = 'PharmacyBranch' AND a."targetId" = $3)
     OR a."metadata"->>'branchId' = $3
   )
+  AND NOT jsonb_exists(COALESCE(a."metadata", '{}'::jsonb), 'requestedBranchId')
 ORDER BY a."createdAt", a."id"`;
 
 export async function createInspectionPack(
