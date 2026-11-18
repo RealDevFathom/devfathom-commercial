@@ -1,4 +1,5 @@
 import 'server-only';
+import { PHARMACY_COPY as copy } from './plain-language';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { readPharmacyAnomalySignals } from './anomaly-signals-operations';
@@ -17,6 +18,8 @@ export type PharmacyDailyWorkPackInput = {
   from: string;
   to: string;
   asOf: string;
+  /** Workspace IANA zone: anomaly windows are keyed on its midnights (UTC when absent). */
+  timeZone?: string | null;
 };
 
 type SourceKind = 'stock-dashboard' | 'stock-digest' | 'anomalies' | 'expiry' | 'supplier-credit';
@@ -113,11 +116,7 @@ const groupSections: Record<Group, Section> = {
   'anomaly-review': 'finance-compliance',
   'supplier-credit-review': 'procurement-suppliers',
 };
-const titles: Record<Group, string> = {
-  'inventory-review': 'Review related inventory signals',
-  'anomaly-review': 'Review recorded financial exceptions',
-  'supplier-credit-review': 'Review supplier claims and dispatch evidence',
-};
+const titles = copy.workPack.titles;
 const anomalyAmounts: Record<string, Record<string, string>> = {
   DISCOUNT_OVERRIDE: {
     grossMinor: 'Recorded gross line amount.',
@@ -158,8 +157,7 @@ export async function readPharmacyDailyWorkPack(
       allClear: false,
       uniqueProblemCount: null,
       additiveSavings: false,
-      definition:
-        'Review groups are not distinct problems. Signals may overlap across sources. Amounts are source observations or exposure, never additive savings. Empty persisted reads do not prove all clear or detector coverage.',
+      definition: copy.workPack.completeness,
     },
     sources: [],
     groups: [],
@@ -187,7 +185,7 @@ export async function readPharmacyDailyWorkPack(
           nextActions: [
             {
               kind: 'review',
-              label: titles[group],
+              label: copy.workPack.actions[group],
               href:
                 group === 'supplier-credit-review'
                   ? `/pharmacy/purchasing/returns?${new URLSearchParams({ branch: branchId })}`
@@ -266,8 +264,8 @@ export async function readPharmacyDailyWorkPack(
             : 'live-inputs-not-historical',
         missingInputs: [
           kind.startsWith('stock') || kind === 'anomalies'
-            ? 'Detector coverage and current source freshness are not established by a persisted read.'
-            : 'Current records are not a historical snapshot at the requested as-of instant.',
+            ? copy.workPack.savedCheck
+            : copy.workPack.currentCheck,
         ],
       };
       result.sources.push(source);
@@ -282,8 +280,7 @@ export async function readPharmacyDailyWorkPack(
           );
           if (source.limitReached) source.coverage = 'partial';
         }
-        if (source.returnedRows === 0)
-          source.missingInputs.push('No returned evidence; this is not an all-clear result.');
+        if (source.returnedRows === 0) source.missingInputs.push(copy.workPack.emptyCheck);
       } catch {
         // Never expose provider/database messages, raw payloads, or partly projected source rows.
         for (const bucket of result.groups)
@@ -293,9 +290,7 @@ export async function readPharmacyDailyWorkPack(
         source.coverage = 'partial';
         source.returnedRows = null;
         source.missingInputs.push(
-          kind === 'expiry'
-            ? 'Expiry advice could not load. Refresh daily work pack to retry. No stock or supplier-return data was changed. Expiry risk has not been assessed.'
-            : 'Source unavailable; review the existing report before acting.'
+          kind === 'expiry' ? copy.workPack.expiryFailure : copy.workPack.failedCheck
         );
       }
       task(group).missingInputs.push(...source.missingInputs);
@@ -304,142 +299,113 @@ export async function readPharmacyDailyWorkPack(
       );
     };
 
-    await read(
-      'stock-dashboard',
-      'inventory-review',
-      'Current live persisted signals across owners; overdue evaluated at as-of. Requested period is not applied.',
-      async (source) => {
-        const rows = await roleDashboard(db, scope, asOf);
-        source.returnedRows = rows.length;
-        const byKind = new Map<string, PharmacyWorkPackEvidence>();
-        for (const row of rows) {
-          const item = byKind.get(row.kind) ?? evidence(source, 'stock-kind', row.kind, 'RECORDED');
-          for (const key of ['open', 'acknowledged', 'snoozed', 'stale', 'overdue'] as const)
-            item.counts[key] = (item.counts[key] ?? 0) + row[key];
-          byKind.set(row.kind, item);
-        }
-        for (const row of byKind.values()) add('inventory-review', row);
+    await read('stock-dashboard', 'inventory-review', copy.workPack.checkNote1, async (source) => {
+      const rows = await roleDashboard(db, scope, asOf);
+      source.returnedRows = rows.length;
+      const byKind = new Map<string, PharmacyWorkPackEvidence>();
+      for (const row of rows) {
+        const item = byKind.get(row.kind) ?? evidence(source, 'stock-kind', row.kind, 'RECORDED');
+        for (const key of ['open', 'acknowledged', 'snoozed', 'stale', 'overdue'] as const)
+          item.counts[key] = (item.counts[key] ?? 0) + row[key];
+        byKind.set(row.kind, item);
       }
-    );
-    await read(
-      'stock-digest',
-      'inventory-review',
-      'Current persisted signals for the session actor only; overdue, next 24 hours, stale and resuming at as-of. Requested period is not applied.',
-      async (source) => {
-        const digest = await ownerDigest(db, scope, input.actorId, asOf);
-        if (digest.branchId !== branchId || digest.ownerUserId !== input.actorId)
-          throw new Error('Source scope mismatch');
-        const rows = [...digest.overdue, ...digest.dueSoon, ...digest.stale, ...digest.resuming];
-        source.returnedRows = rows.length;
-        source.missingInputs.push(
-          'Digest omits other owners, future-due and still-snoozed signals; dashboard counts overlap this digest.'
-        );
-        for (const row of rows) {
-          const item = evidence(source, 'stock-signal', row.signalId, row.status);
-          item.dueAt = row.dueAt.toISOString();
-          if (row.confidence === 'PARTIAL')
-            item.missingInputs.push('Underlying stock facts are partial.');
-          if (row.status === 'STALE')
-            item.missingInputs.push(
-              'Persisted signal is stale; verify source facts before acting.'
-            );
-          add('inventory-review', item);
-        }
+      for (const row of byKind.values()) add('inventory-review', row);
+    });
+    await read('stock-digest', 'inventory-review', copy.workPack.checkNote2, async (source) => {
+      const digest = await ownerDigest(db, scope, input.actorId, asOf);
+      if (digest.branchId !== branchId || digest.ownerUserId !== input.actorId)
+        throw new Error('Source scope mismatch');
+      const rows = [...digest.overdue, ...digest.dueSoon, ...digest.stale, ...digest.resuming];
+      source.returnedRows = rows.length;
+      source.missingInputs.push(copy.workPack.checkNote6);
+      for (const row of rows) {
+        const item = evidence(source, 'stock-signal', row.signalId, row.status);
+        item.dueAt = row.dueAt.toISOString();
+        if (row.confidence === 'PARTIAL') item.missingInputs.push(copy.workPack.checkNote7);
+        if (row.status === 'STALE') item.missingInputs.push(copy.workPack.checkNote8);
+        add('inventory-review', item);
       }
-    );
+    });
 
     // Financial readers also return financial metadata/free text: skip the entire source before querying.
     if (!input.financial) continue;
-    await read(
-      'anomalies',
-      'anomaly-review',
-      'Persisted live anomaly records matching the exact requested data window; not refreshed or historical as-of reconstruction.',
-      async (source) => {
-        const rows = await readPharmacyAnomalySignals(db, {
-          branchIds: [branchId],
-          from: input.from,
-          to: input.to,
-        });
-        source.returnedRows = rows.length;
-        for (const row of rows) {
-          if (row.branchId !== branchId || row.organizationId !== input.organizationId)
-            throw new Error('Source scope mismatch');
-          const item = evidence(source, 'anomaly', row.id, row.status);
-          item.observedAt = row.sourceObservedAt.toISOString();
-          item.computedAt = row.computedAt.toISOString();
-          item.freshnessSeconds = row.freshnessSeconds;
-          if (row.status === 'STALE')
-            item.missingInputs.push('Persisted anomaly is stale; verify its source facts.');
-          if (row.computedAt > asOf || row.sourceObservedAt > asOf)
-            item.missingInputs.push(
-              'Record contains evidence observed or computed after requested as-of.'
-            );
-          const numbers =
-            row.exactNumbers &&
-            typeof row.exactNumbers === 'object' &&
-            !Array.isArray(row.exactNumbers)
-              ? row.exactNumbers
-              : {};
-          for (const [key, definition] of Object.entries(anomalyAmounts[row.kind] ?? {}))
-            amount(item, key, numbers[key], definition);
-          if (row.kind === 'SHRINKAGE')
-            for (const key of [
-              'expectedUnits',
-              'countedUnits',
-              'missingUnits',
-              'approvedThresholdUnits',
-            ]) {
-              const value = numbers[key];
-              if (typeof value === 'number' && Number.isSafeInteger(value))
-                item.counts[key] = value;
-            }
-          add(row.kind === 'SHRINKAGE' ? 'inventory-review' : 'anomaly-review', item);
-        }
+    await read('anomalies', 'anomaly-review', copy.workPack.checkNote3, async (source) => {
+      const rows = await readPharmacyAnomalySignals(db, {
+        branchIds: [branchId],
+        from: input.from,
+        to: input.to,
+        timeZone: input.timeZone,
+      });
+      source.returnedRows = rows.length;
+      for (const row of rows) {
+        if (row.branchId !== branchId || row.organizationId !== input.organizationId)
+          throw new Error('Source scope mismatch');
+        const item = evidence(source, 'anomaly', row.id, row.status);
+        item.observedAt = row.sourceObservedAt.toISOString();
+        item.computedAt = row.computedAt.toISOString();
+        item.freshnessSeconds = row.freshnessSeconds;
+        if (row.status === 'STALE') item.missingInputs.push(copy.workPack.checkNote9);
+        if (row.computedAt > asOf || row.sourceObservedAt > asOf)
+          item.missingInputs.push(copy.workPack.checkNote10);
+        const numbers =
+          row.exactNumbers &&
+          typeof row.exactNumbers === 'object' &&
+          !Array.isArray(row.exactNumbers)
+            ? row.exactNumbers
+            : {};
+        for (const [key, definition] of Object.entries(anomalyAmounts[row.kind] ?? {}))
+          amount(item, key, numbers[key], definition);
+        if (row.kind === 'SHRINKAGE')
+          for (const key of [
+            'expectedUnits',
+            'countedUnits',
+            'missingUnits',
+            'approvedThresholdUnits',
+          ]) {
+            const value = numbers[key];
+            if (typeof value === 'number' && Number.isSafeInteger(value)) item.counts[key] = value;
+          }
+        add(row.kind === 'SHRINKAGE' ? 'inventory-review' : 'anomaly-review', item);
       }
-    );
-    await read(
-      'expiry',
-      'inventory-review',
-      'Current available lot balances with expiry after as-of; trailing 30-day completed-sales history before as-of. Requested period is not applied.',
-      async (source) => {
-        const rows = await readExpiryAdvice(
-          db,
-          { organizationId: input.organizationId, branchIds: [branchId] },
-          asOf
+    });
+    await read('expiry', 'inventory-review', copy.workPack.checkNote4, async (source) => {
+      const rows = await readExpiryAdvice(
+        db,
+        { organizationId: input.organizationId, branchIds: [branchId] },
+        asOf
+      );
+      source.returnedRows = rows.length;
+      for (const row of rows) {
+        if (row.branchId !== branchId) throw new Error('Source scope mismatch');
+        if (row.classification === 'SELLABLE') continue;
+        const item = evidence(source, 'lot', row.lotId, row.classification);
+        item.counts = {
+          onHandUnits: row.onHandUnits,
+          projectedUnsoldUnits: row.projectedUnsoldUnits,
+          historyDays: row.historyDays,
+        };
+        item.dueAt = row.expiresAt.toISOString();
+        amount(
+          item,
+          'valueAtRiskMinor',
+          row.valueAtRiskMinor,
+          'Source projected unsold units times frozen lot cost; exposure, not realized loss or savings.'
         );
-        source.returnedRows = rows.length;
-        for (const row of rows) {
-          if (row.branchId !== branchId) throw new Error('Source scope mismatch');
-          if (row.classification === 'SELLABLE') continue;
-          const item = evidence(source, 'lot', row.lotId, row.classification);
-          item.counts = {
-            onHandUnits: row.onHandUnits,
-            projectedUnsoldUnits: row.projectedUnsoldUnits,
-            historyDays: row.historyDays,
-          };
-          item.dueAt = row.expiresAt.toISOString();
-          amount(
-            item,
-            'valueAtRiskMinor',
-            row.valueAtRiskMinor,
-            'Source projected unsold units times frozen lot cost; exposure, not realized loss or savings.'
+        if (row.classification === 'INSUFFICIENT_HISTORY')
+          item.missingInputs.push(
+            'Completed-sales history is insufficient; source exposure is not a demand forecast.'
           );
-          if (row.classification === 'INSUFFICIENT_HISTORY')
-            item.missingInputs.push(
-              'Completed-sales history is insufficient; source exposure is not a demand forecast.'
-            );
-          if (!row.returnWindowDays)
-            item.missingInputs.push('Supplier return window is not recorded.');
-          if (!row.proposalAllowed)
-            item.missingInputs.push('Source does not establish eligibility for a return proposal.');
-          add('inventory-review', item);
-        }
+        if (!row.returnWindowDays)
+          item.missingInputs.push('Supplier return window is not recorded.');
+        if (!row.proposalAllowed)
+          item.missingInputs.push('Source does not establish eligibility for a return proposal.');
+        add('inventory-review', item);
       }
-    );
+    });
     await read(
       'supplier-credit',
       'supplier-credit-review',
-      'Current returns, debit notes, credits and allocations; age and recorded dispatch deadlines evaluated at as-of. Requested period is not applied.',
+      copy.workPack.checkNote5,
       async (source) => {
         const returns = await listPurchaseReturns(db, scope, { at: asOf });
         const credits = await listSupplierCredits(db, scope);

@@ -53,7 +53,7 @@ import {
   authenticateRefundPin,
   REFUND_FORBIDDEN,
   REFUND_PIN_BLOCKED,
-  REFUND_PIN_POLICY,
+  refundApprovalAudit,
 } from '@/lib/pharmacy/refund-authorization';
 import { annotateAudit } from '@/server/audit';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
@@ -220,7 +220,8 @@ function fail(error: unknown): never {
     const code =
       error.reason === 'SUBSCRIPTION_NOT_FOUND' ||
       error.reason === 'CYCLE_NOT_FOUND' ||
-      error.reason === 'CUSTOMER_NOT_FOUND'
+      error.reason === 'CUSTOMER_NOT_FOUND' ||
+      error.reason === 'PRESCRIPTION_NOT_FOUND'
         ? 'NOT_FOUND'
         : error.reason === 'PHARMACIST_APPROVAL_REQUIRED'
           ? 'FORBIDDEN'
@@ -283,11 +284,11 @@ export const pharmacyOrderingRouter = router({
                 })
               : { blocked: REFUND_PIN_BLOCKED };
             annotateAudit(ctx, {
-              metadata: {
-                policy: REFUND_PIN_POLICY,
+              metadata: refundApprovalAudit({
+                initiatedById: scope.actorId,
                 approverId: scope.actorId,
-                pinVerified: 'verified' in pin,
-              },
+                pin,
+              }),
             });
             if ('blocked' in pin) throw new TRPCError({ code: 'FORBIDDEN', message: pin.blocked });
           },
@@ -675,6 +676,8 @@ export const pharmacyOrderingRouter = router({
               pin: z.string().regex(/^\d{4,8}$/),
             })
             .strict(),
+          // The prescription line the pharmacist confirms covers this cycle (no exception).
+          prescriptionLineId: z.string().min(1).max(128),
         })
         .strict()
     )
@@ -698,7 +701,9 @@ export const pharmacyOrderingRouter = router({
         });
         if (!approval) throw new RefillCycleApprovalDenied();
         return await ctx.db.$transaction(async (tx) =>
-          approveRefillCycle(txDb(tx), scope, input.cycleId, approval)
+          approveRefillCycle(txDb(tx), scope, input.cycleId, approval, {
+            prescriptionLineId: input.prescriptionLineId,
+          })
         );
       } catch (error) {
         fail(error);

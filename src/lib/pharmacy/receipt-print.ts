@@ -32,6 +32,8 @@ import { renderEscPos } from '@/lib/restaurant/printing/esc-pos';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import {
+  cashMemoManufacturer,
+  counterReceiptCashMemo,
   COUNTER_RECEIPT_STRINGS,
   formatMinor,
   formatReceiptExpiry,
@@ -71,15 +73,18 @@ function clamp(value: string, max: number): string {
 function lineIdentity(line: CounterReceipt['lines'][number]): string {
   return line.identityStatus === 'ISSUED'
     ? [line.medicineName, line.strength, line.presentation].filter(Boolean).join(' - ')
-    : 'Historical identity unavailable';
+    : 'Original item details unavailable';
 }
 
 /** English facts with ASCII separators; mirrors counter-receipt-presentation semantics. */
 function escPosFacts(
   receipt: CounterReceipt & { receiptNumber: number; completedAt: string },
-  taxIdentity: PharmacyReceiptTaxIdentity,
+  currentTaxIdentity: PharmacyReceiptTaxIdentity,
   reprint: boolean
 ): ReceiptPreviewFacts {
+  // #708: a cash memo reprints every identity fact frozen at issuance; other receipts
+  // (and older snapshots without the frozen identity) keep the profile read for the sale.
+  const taxIdentity = receipt.cashMemoIdentity ?? currentTaxIdentity;
   const strings = COUNTER_RECEIPT_STRINGS.en;
   const date = `${strings.date}: ${formatReceiptIssuedAt(receipt.completedAt)}`;
   let cashReceived: number | null;
@@ -88,17 +93,21 @@ function escPosFacts(
   } catch {
     throw new RawPrintValidationError('INVALID_PRINT_DOCUMENT');
   }
+  const memo = counterReceiptCashMemo(receipt, taxIdentity, 'en');
   return {
     businessName: receipt.branchName,
     invoiceNumber: String(receipt.receiptNumber),
-    invoiceLabel: strings.invoice,
-    issuedAt: `${date}${receipt.cashierName ? `\n${strings.cashier}: ${receipt.cashierName}` : ''}${reprint ? `\n${REPRINT_MARKER}` : ''}`,
+    invoiceLabel: memo ? memo.title : strings.invoice,
+    issuedAt: `${memo ? `${memo.licence.join('\n')}\n${memo.buyer}\n` : ''}${date}${receipt.cashierName ? `\n${strings.cashier}: ${receipt.cashierName}` : ''}${reprint ? `\n${REPRINT_MARKER}` : ''}`,
     lines: receipt.lines.map((line) => {
       const issued = line.identityStatus === 'ISSUED';
       const promotion = receiptPromotionLabel(line, 'en');
       return [
         lineIdentity(line),
-        counterLinePricing(line, 'en', 'x'),
+        ...(memo ? [cashMemoManufacturer(line, 'en')] : []),
+        memo
+          ? `${strings.quantity} x ${strings.unitPrice}: ${counterLinePricing(line, 'en', 'x')}`
+          : counterLinePricing(line, 'en', 'x'),
         ...(line.allocations ?? []).map((allocation) => {
           const batch = issued ? allocation.batchNumber : null;
           const expiry = issued && allocation.expiresAt ? allocation.expiresAt : null;
@@ -115,7 +124,11 @@ function escPosFacts(
     taxLines: [
       ...(taxIdentity.address ? [taxIdentity.address] : []),
       ...(taxIdentity.phone ? [`${strings.phone}: ${taxIdentity.phone}`] : []),
-      ...(taxIdentity.licenceNumber ? [`${strings.licence}: ${taxIdentity.licenceNumber}`] : []),
+      ...(memo
+        ? []
+        : taxIdentity.licenceNumber
+          ? [`${strings.licence}: ${taxIdentity.licenceNumber}`]
+          : []),
       ...(taxIdentity.ntn ? [`NTN: ${taxIdentity.ntn}`] : []),
       ...(taxIdentity.strn ? [`STRN: ${taxIdentity.strn}`] : []),
     ],
@@ -128,12 +141,15 @@ function escPosFacts(
       ...(cashReceived !== null ? [`Cash received: ${formatMinor(cashReceived)}`] : []),
       `${strings.change}: ${formatMinor(receipt.totals.changeMinor)}`,
     ],
-    payments: receipt.tenders.length
-      ? receipt.tenders.map(
-          (tender) =>
-            `${strings.tenderName[tender.type] ?? tender.type}: ${formatMinor(tender.amountMinor)}`
-        )
-      : ['Payment details unavailable'],
+    payments: [
+      ...(receipt.tenders.length
+        ? receipt.tenders.map(
+            (tender) =>
+              `${strings.tenderName[tender.type] ?? tender.type}: ${formatMinor(tender.amountMinor)}`
+          )
+        : ['Payment details unavailable']),
+      ...(memo ? [`\n${memo.signature}`] : []),
+    ],
   };
 }
 
@@ -241,7 +257,16 @@ export async function readPharmacyReceiptTaxIdentity(
       ...regulatoryProfileInForceWhere(at, timeZone),
     },
     orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
-    select: { premises: true, licenceNumber: true, ntn: true, strn: true },
+    select: {
+      premises: true,
+      licenceNumber: true,
+      ntn: true,
+      strn: true,
+      provinceCode: true,
+      licenceValidFrom: true,
+      licenceValidTo: true,
+      qualifiedPersonRegistration: true,
+    },
   });
   const premises = profile?.premises as
     { addressLine?: unknown; city?: unknown; phone?: unknown } | undefined;
@@ -255,6 +280,11 @@ export async function readPharmacyReceiptTaxIdentity(
     licenceNumber: profile?.licenceNumber?.trim() || null,
     ntn: profile?.ntn?.trim() || null,
     strn: profile?.strn?.trim() || null,
+    // #708: the province and licence facts the Sindh cash memo prints.
+    provinceCode: profile?.provinceCode?.trim() || null,
+    licenceValidFrom: profile?.licenceValidFrom?.toISOString() ?? null,
+    licenceValidTo: profile?.licenceValidTo?.toISOString() ?? null,
+    pharmacistRegistration: profile?.qualifiedPersonRegistration?.trim() || null,
   };
 }
 

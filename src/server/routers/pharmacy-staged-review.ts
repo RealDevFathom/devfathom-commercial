@@ -14,6 +14,7 @@ import {
   persistProfile,
   recordSource,
 } from '@/lib/pharmacy/migration/workbench';
+import { applyLegacyControlledClass } from '@/lib/pharmacy/migration/legacy-controlled';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { adminProcedure, router, type TRPCContext } from '../trpc';
@@ -141,7 +142,10 @@ export const pharmacyStagedReviewRouter = router({
           take: 1,
           select: { id: true, rowCount: true, exceptionCount: true },
         });
-        if (previous)
+        if (previous) {
+          // DEV-854 still applies on a replay: a medicine created since the first stage
+          // must not escape the NARCOTICS rule. The flag only ever tightens.
+          const replayLegacy = await applyLegacyControlledClass(tx, org, result.rows);
           return {
             sourceId: source.id,
             batchId: previous.id,
@@ -149,22 +153,30 @@ export const pharmacyStagedReviewRouter = router({
             exceptionCount: previous.exceptionCount,
             buckets: await openExceptionCounts(tx as typeof ctx.db, previous.id),
             replayed: true,
+            controlledFromClass: replayLegacy.controlledRows,
+            controlledMedicineIds: replayLegacy.medicineIds,
           };
+        }
         // Bind every row to the exact uploaded bytes, including repeated product names.
         for (const row of result.rows) {
           row.sourceKey = `sha256:${source.contentHash}:row:${row.rowNumber}`;
           row.rawPayload.__source_sha256 = source.contentHash;
           row.rawPayload.__source_row = String(row.rowNumber);
         }
+        const persisted = await persistProfile(tx, {
+          sourceId: source.id,
+          label: input.fileName,
+          profiler,
+          result,
+        });
+        // DEV-854: a NARCOTICS-class row is imported as controlled, with no review hold.
+        const legacy = await applyLegacyControlledClass(tx, org, result.rows);
         return {
           sourceId: source.id,
-          ...(await persistProfile(tx, {
-            sourceId: source.id,
-            label: input.fileName,
-            profiler,
-            result,
-          })),
+          ...persisted,
           replayed: false,
+          controlledFromClass: legacy.controlledRows,
+          controlledMedicineIds: legacy.medicineIds,
         };
       }, STAGE_TRANSACTION);
       annotateAudit(ctx, {
@@ -176,9 +188,12 @@ export const pharmacyStagedReviewRouter = router({
           sourceId: saved.sourceId,
           rowCount: saved.rowCount,
           replayed: saved.replayed,
+          controlledFromClass: saved.controlledFromClass,
+          controlledMedicineIds: saved.controlledMedicineIds,
         },
       });
-      return saved;
+      const { controlledMedicineIds, ...summary } = saved;
+      return { ...summary, controlledMedicinesFlagged: controlledMedicineIds.length };
     }),
     stagedBranches: adminProcedure.query(({ ctx }) =>
       ctx.db.pharmacyBranch.findMany({

@@ -1,3 +1,6 @@
+import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/screen-copy';
+import { ReportDetails } from '@/components/pharmacy/report-details';
+import { formatShopTime } from '@/lib/pharmacy/plain-language';
 import Link from 'next/link';
 import { SectionCard } from '@/components/ui/section-card';
 import { buttonVariants } from '@/components/ui/button';
@@ -16,49 +19,50 @@ export function MarketingSummary({
 }) {
   return (
     <SectionCard
-      title="Marketing evidence"
+      title={screenCopy.marketing.campaignResults}
       titleLevel={2}
       actions={
         <Link
           className={buttonVariants({ variant: 'outline' })}
           href={`/pharmacy/marketing${branch ? `?branch=${encodeURIComponent(branch)}` : ''}`}
         >
-          Review campaigns
+          {screenCopy.marketing.reviewCampaigns}
         </Link>
       }
     >
       {!report ? (
         <p className="text-sm text-text-muted">
-          Marketing evidence unavailable for this date, branch or permission scope. No zero totals
-          inferred.
+          {screenCopy.marketing.campaignResultsUnavailableForThisDateBranchOr}
         </p>
       ) : (
         <div className="space-y-4 text-sm">
-          <p className="text-text-muted">
-            {report.period.from}–{report.period.to} ({report.period.timezone}); evidence cutoff{' '}
-            {report.cutoff}. Branch and date filters apply. Supplier, ingredient and batch filters
-            do not scope these figures.
-          </p>
+          <ReportDetails>
+            <p className="text-text-muted">
+              {report.period.from}–{report.period.to} ({report.period.timezone}
+              {screenCopy.marketing.evidenceCutoff} {formatShopTime(report.cutoff)}
+              {screenCopy.marketing.branchAndDateFiltersApplySupplierIngredientAnd}
+            </p>
+          </ReportDetails>
           <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {(
               [
-                ['Prepared captures', report.prepared],
-                ['Live accepted', report.providerAccepted],
-                ['Live delivered', report.delivered],
-                ['Live failure evidence', report.failed],
-                ['Unresolved live outcome', report.unknown],
-                ['Contradictory evidence', report.contradictory],
-                ['Branch opt-out logs', report.consentOptOuts],
-                ['Unassigned opt-out logs', report.unassignedConsentOptOuts],
-                ['Observed attributed receipts', report.attribution.attributedReceipts],
+                ['Messages prepared', report.prepared],
+                ['Accepted by delivery service', report.providerAccepted],
+                ['Delivered', report.delivered],
+                ['Failed deliveries', report.failed],
+                ['Delivery not confirmed', report.unknown],
+                ['Delivery needs a check', report.contradictory],
+                ['Opt-outs at this branch', report.consentOptOuts],
+                ['Opt-outs without a branch', report.unassignedConsentOptOuts],
+                ['Linked receipts', report.attribution.attributedReceipts],
                 [
-                  'Attributed net sales',
+                  'Sales linked to campaigns',
                   financial
                     ? money(report.attribution.recoveredSalesMinor)
                     : 'Financial permission required',
                 ],
                 [
-                  'Attributed signed margin',
+                  'Margin linked to campaigns',
                   financial
                     ? money(report.attribution.recoveredMarginMinor)
                     : 'Financial permission required',
@@ -72,20 +76,31 @@ export function MarketingSummary({
             ))}
           </dl>
           {process.env.NODE_ENV !== 'production' ? (
-            <p>
-              Sandbox only: {report.sandbox.captures} captures, {report.sandbox.delivered} delivered,{' '}
-              {report.sandbox.failed} failed, {report.sandbox.unknown} unknown. These counts do not
-              prove live delivery.
-            </p>
+            <ReportDetails>
+              <p>
+                {screenCopy.marketing.sandboxOnly}
+                {report.sandbox.captures}
+                {screenCopy.marketing.captures}
+                {report.sandbox.delivered}
+                {screenCopy.marketing.delivered} {report.sandbox.failed}
+                {screenCopy.marketing.failed}
+                {report.sandbox.unknown}
+                {screenCopy.marketing.unknownTheseCountsDoNotProveLiveDelivery}
+              </p>
+            </ReportDetails>
           ) : null}
-          <p>
-            Excluded unverified links: {report.attribution.excludedUnverifiedLinks}. Competing
-            receipt links excluded: {report.attribution.excludedCompetingLinks}. Message cost
-            unavailable.
-          </p>
+          <ReportDetails>
+            <p>
+              {screenCopy.marketing.excludedUnverifiedLinks}
+              {report.attribution.excludedUnverifiedLinks}
+              {screenCopy.marketing.competingReceiptLinksExcluded}
+              {report.attribution.excludedCompetingLinks}
+              {screenCopy.marketing.messageCostUnavailable}
+            </p>
+          </ReportDetails>
           <details>
             <summary className="cursor-pointer focus-visible:outline-2 focus-visible:outline-ring">
-              Definitions and exclusions
+              {screenCopy.marketing.details}
             </summary>
             <ul className="mt-3 space-y-2 text-text-muted">
               {Object.entries(report.definitions).map(([key, definition]) => (

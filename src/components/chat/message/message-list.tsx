@@ -244,7 +244,7 @@ function DateDivider({ label }: { label: string }) {
 function UnreadDivider() {
   return (
     <div role="separator" aria-label="New messages below" className="relative my-2.5 px-4">
-      <div className="h-px w-full bg-brass/50" />
+      <div className="h-px w-full bg-accent-brand/50" />
       <span className="absolute -top-2 right-4 bg-background px-2 text-[11px] font-semibold tracking-wider text-foreground uppercase">
         New messages
       </span>

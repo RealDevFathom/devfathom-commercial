@@ -155,6 +155,33 @@ describe('ApAgingPage', () => {
     expect(output).not.toContain('Export aging CSV');
   });
 
+  it('offers invoice and payment entry only after the branch was authorized and read', async () => {
+    expect(await html({})).not.toContain('Record invoice');
+    const output = await html({ branch: 'branch_1', asOf: '2026-11-15' });
+    expect(output).toContain('Record a supplier expense invoice');
+    expect(output).toContain('Record invoice');
+    expect(output).toContain('Record a payment');
+    expect(output).toContain('Record payment');
+    expect(output).toMatch(/name="branchId" value="branch_1"/);
+    expect(output).toMatch(/name="createKey" value="ap-invoice:[0-9a-f-]{36}"/);
+    expect(output).toMatch(/name="commandKey" value="ap-payment:[0-9a-f-]{36}"/);
+    // Only invoices open in this view are payment targets, with what each still owes.
+    expect(output).toContain('<option value="inv_1">');
+    expect(output).toContain('PKR 1000.00 outstanding');
+  });
+
+  it('asks for an invoice first when nothing is open to pay', async () => {
+    mocks.aging.mockResolvedValue({
+      scope: { organizationId: 'org_1', branchId: 'branch_1' },
+      view: { ...view, rows: [], totals: [] },
+      retrievedAt: new Date(),
+    });
+    const output = await html({ branch: 'branch_1' });
+    expect(output).toContain('Record invoice');
+    expect(output).not.toContain('Record payment');
+    expect(output).toContain('Record the invoice');
+  });
+
   it.each(['FORBIDDEN', 'UNAUTHORIZED'] as const)(
     'maps a %s router refusal to the denial state',
     async (code) => {
@@ -162,6 +189,8 @@ describe('ApAgingPage', () => {
       const output = await html({ branch: 'branch_1' });
       expect(output).toContain('Aging unavailable');
       expect(output).not.toContain('AP-0001');
+      expect(output).not.toContain('Record invoice');
+      expect(output).not.toContain('Record payment');
     }
   );
 

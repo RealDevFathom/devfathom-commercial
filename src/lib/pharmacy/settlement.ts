@@ -59,6 +59,8 @@ export class PharmacySettlementError extends Error {
       | 'OPEN_DRAWER'
       | 'REOPEN_REASON_REQUIRED'
       | 'INVALID_MANUAL_CAPTURE'
+      | 'DAY_NOT_CLOSED'
+      | 'REOPEN_NOT_TODAY'
       | 'PREPAID_REFUND_RESTORES_BALANCE'
       | 'TENDER_ATTEMPT_DISCARDED'
   ) {
@@ -353,13 +355,43 @@ export async function lockPharmacyDay(db: ScopedDb, scope: LedgerScope, date: Da
   );
 }
 
-export async function requirePharmacyDayOpen(db: ScopedDb, scope: LedgerScope, date: Date) {
-  await lockPharmacyDay(db, scope, date);
+/**
+ * DEV-631: a day is closed for trading while its latest close stands. An owner's
+ * reopen of that close opens the day again until the next close supersedes it.
+ * Reads without the day lock: callers that write take it first.
+ */
+export async function pharmacyDayClosedForTrading(db: ScopedDb, scope: LedgerScope, date: Date) {
   const close = await db.pharmacyDailyClose.findFirst({
     where: { organizationId: scope.organizationId, branchId: scope.branchId, businessDate: date },
-    select: { id: true },
+    orderBy: { sequence: 'desc' },
+    select: { id: true, reopen: { select: { id: true } } },
   });
-  if (close) throw new PharmacySettlementError('DAY_CLOSED');
+  return Boolean(close && !close.reopen);
+}
+
+export async function requirePharmacyDayOpen(db: ScopedDb, scope: LedgerScope, date: Date) {
+  await lockPharmacyDay(db, scope, date);
+  if (await pharmacyDayClosedForTrading(db, scope, date))
+    throw new PharmacySettlementError('DAY_CLOSED');
+}
+
+/**
+ * DEV-631: a counter bill is not opened, and no line reserves stock, while today's
+ * business day (in the workspace zone) is closed for trading. Hold the same day
+ * lock as close/reopen and money writes through the caller's transaction so a
+ * close cannot race bill creation or stock reservation.
+ */
+export async function requirePharmacyTodayOpenForTrading(
+  db: ScopedDb,
+  scope: LedgerScope,
+  now: Date = new Date()
+) {
+  const organization = await db.organization.findUnique({
+    where: { id: scope.organizationId },
+    select: { timezone: true },
+  });
+  const today = new Date(`${workspaceToday(organization?.timezone, now)}T00:00:00.000Z`);
+  await requirePharmacyDayOpen(db, scope, today);
 }
 
 /**
@@ -389,8 +421,7 @@ export async function requireCurrentPharmacyBusinessDate(
  * branch. An enrolled offline counter replays under its own authenticated device.
  */
 export type PharmacyDrawerOperator =
-  | { kind: 'COUNTER'; actorIsManager: boolean }
-  | { kind: 'REGISTERED_DEVICE_REPLAY' };
+  { kind: 'COUNTER'; actorIsManager: boolean } | { kind: 'REGISTERED_DEVICE_REPLAY' };
 
 /** Options for an online counter call; replay and delivery paths omit them. */
 export type PharmacySettlementOptions = {
@@ -481,6 +512,8 @@ export async function applyPharmacyTender(
     referenceSkipped?: boolean;
     /** Manual card: the approval code on the standalone terminal slip. */
     approvalCode?: string;
+    /** #708: the buyer the Sindh cash memo names, recorded only on the completing tender. */
+    buyerName?: string;
     idempotencyKey: string;
     adapter?: PharmacyPaymentAdapter;
     leasedReceipt?: PharmacyLeasedReceipt;
@@ -1242,7 +1275,8 @@ export function movementsByOtherThanOperator(
   const firstCashier = shifts[0]?.fromCashierId ?? drawerOperatingCashierId(drawer);
   const cashierAt = (at: Date) =>
     shifts.reduce(
-      (cashier, handover) => (handover.createdAt.getTime() <= at.getTime() ? handover.toCashierId : cashier),
+      (cashier, handover) =>
+        handover.createdAt.getTime() <= at.getTime() ? handover.toCashierId : cashier,
       firstCashier
     );
   return movements
@@ -1333,8 +1367,11 @@ export async function cutPharmacyDailyClose(
       businessDate: input.businessDate,
     },
     orderBy: { sequence: 'desc' },
+    include: { reopen: { select: { id: true } } },
   });
-  if (prior && !input.reopenReason?.trim())
+  // DEV-631: closing a day the owner reopened for trading is a normal close; the
+  // reopen already carries its reason. Re-cutting a standing close still needs one.
+  if (prior && !prior.reopen && !input.reopenReason?.trim())
     throw new PharmacySettlementError('REOPEN_REASON_REQUIRED');
   const [sales, refunds, drawers, tenders] = await Promise.all([
     db.pharmacySale.findMany({
@@ -1363,7 +1400,11 @@ export async function cutPharmacyDailyClose(
       include: { movements: true },
     }),
     db.pharmacyTender.findMany({
-      where: { organizationId: scope.organizationId, branchId: scope.branchId, businessDate: input.businessDate },
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        businessDate: input.businessDate,
+      },
       select: { id: true, type: true, amountMinor: true, confirmedById: true },
     }),
   ]);

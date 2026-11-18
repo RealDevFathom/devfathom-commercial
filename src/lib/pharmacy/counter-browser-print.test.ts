@@ -55,6 +55,10 @@ describe('isolated Pharmacy browser receipt', () => {
       licenceNumber: ' DSL-42 ',
       ntn: ' NTN-HISTORICAL ',
       strn: '   ',
+      provinceCode: ' PK-PB ',
+      licenceValidFrom: new Date('2026-01-01T00:00:00Z'),
+      licenceValidTo: new Date('2027-12-31T00:00:00Z'),
+      qualifiedPersonRegistration: ' PCP-9001 ',
     }));
 
     await expect(
@@ -69,6 +73,10 @@ describe('isolated Pharmacy browser receipt', () => {
       licenceNumber: 'DSL-42',
       ntn: 'NTN-HISTORICAL',
       strn: null,
+      provinceCode: 'PK-PB',
+      licenceValidFrom: '2026-01-01T00:00:00.000Z',
+      licenceValidTo: '2027-12-31T00:00:00.000Z',
+      pharmacistRegistration: 'PCP-9001',
     });
     expect(findFirst).toHaveBeenCalledWith({
       where: {
@@ -78,7 +86,16 @@ describe('isolated Pharmacy browser receipt', () => {
         OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
       },
       orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
-      select: { premises: true, licenceNumber: true, ntn: true, strn: true },
+      select: {
+        premises: true,
+        licenceNumber: true,
+        ntn: true,
+        strn: true,
+        provinceCode: true,
+        licenceValidFrom: true,
+        licenceValidTo: true,
+        qualifiedPersonRegistration: true,
+      },
     });
   });
 
@@ -97,6 +114,10 @@ describe('isolated Pharmacy browser receipt', () => {
       licenceNumber: null,
       ntn: null,
       strn: null,
+      provinceCode: null,
+      licenceValidFrom: null,
+      licenceValidTo: null,
+      pharmacistRegistration: null,
     });
   });
 
@@ -456,7 +477,7 @@ describe('isolated Pharmacy browser receipt', () => {
       };
       const html = buildCounterBrowserReceipt(source, locale, 'A4');
       expect(html).toContain(
-        locale === 'en' ? 'Historical identity unavailable' : 'تاریخی شناخت دستیاب نہیں'
+        locale === 'en' ? 'Original item details unavailable' : 'اصل آئٹم کی تفصیل دستیاب نہیں'
       );
       expect(html).not.toContain('LIVE_CATALOG');
       expect(html).not.toContain('Batch 1');
@@ -466,7 +487,7 @@ describe('isolated Pharmacy browser receipt', () => {
 
   it('treats missing legacy identity status honestly and rejects shared-schema control input', () => {
     expect(buildCounterBrowserReceipt(receipt, 'en', 'A4')).toContain(
-      'Historical identity unavailable'
+      'Original item details unavailable'
     );
     expect(() =>
       buildCounterBrowserReceipt({ ...receipt, branchName: 'Bad\u001b' }, 'en', 'A4')

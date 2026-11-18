@@ -187,6 +187,61 @@ describe('MED-06 connector router boundary', () => {
     ).rejects.toMatchObject({ code: 'CONFLICT' });
   });
 
+  it('makes a medicine confirmed after its NARCOTICS legacy row was staged controlled (DEV-854)', async () => {
+    const proposal = (id: string, productName: string) => ({
+      id,
+      run: { triggeredBy: 'editor-1' },
+      status: 'PENDING',
+      targetMedicineId: null,
+      inputDigest: 'digest',
+      rowSourceKey: `row-${id}`,
+      payload: {
+        values: { productName },
+        source: {
+          connectorId: 'manual-file',
+          label: 'Manual CSV / Excel',
+          fileName: 'catalogue.csv',
+          batchId: 'batch-m',
+          rowSourceKey: `row-${id}`,
+          rights: MANUAL_FILE_RIGHTS,
+        },
+      },
+    });
+    for (const [staged, expected] of [
+      [true, true],
+      [false, false],
+    ] as const) {
+      const tx = {
+        $queryRaw: vi.fn().mockResolvedValue([{ found: staged }]),
+        pharmacyReferenceConnectorProposal: {
+          findFirst: vi.fn().mockResolvedValue(proposal('proposal-m', 'Synthetic Opioid 50mg')),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        medicine: {
+          findFirst: vi.fn(),
+          create: vi.fn().mockResolvedValue({
+            id: 'medicine-m',
+            productName: 'Synthetic Opioid 50mg',
+            controlled: false,
+          }),
+          update: vi.fn().mockResolvedValue({}),
+        },
+        medicineProvenance: { create: vi.fn().mockResolvedValue({ id: 'assertion-m' }) },
+        medicineReviewDecision: { create: vi.fn() },
+      };
+      await caller({
+        $transaction: (run: (client: typeof tx) => unknown) => run(tx),
+      }).decideReferenceConnectorProposal({ proposalId: 'proposal-m', decision: 'CONFIRM' });
+      expect(tx.$queryRaw).toHaveBeenCalledOnce();
+      if (expected)
+        expect(tx.medicine.update).toHaveBeenCalledWith({
+          where: { id: 'medicine-m' },
+          data: { controlled: true },
+        });
+      else expect(tx.medicine.update).not.toHaveBeenCalled();
+    }
+  });
+
   it('records confirmed DRAP values as regulator provenance', async () => {
     const created: Array<Record<string, unknown>> = [];
     const tx = {

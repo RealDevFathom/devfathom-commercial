@@ -56,6 +56,7 @@ import { CounterReturnPanel } from './counter-return-panel';
 import { CounterRxPanel } from './counter-rx-panel';
 import { CounterSearchResults } from './counter-search-results';
 import { CounterScanInput } from './counter-scan-input';
+import { CounterVoucherEntry, type CounterHeldVoucher } from './counter-voucher';
 import { CounterSkeleton } from './counter-skeleton';
 import { CounterSubstituteProposals } from './counter-substitute-proposals';
 import {
@@ -139,6 +140,7 @@ import {
 import {
   formatMinor,
   formatShortExpiry,
+  sindhCashMemoSelected,
   type CounterReceipt,
   type CounterReceiptLocale,
 } from '@/lib/pharmacy/counter-receipt';
@@ -158,6 +160,8 @@ import { trpc } from '@/lib/trpc';
 type Notice = {
   tone: 'success' | 'info' | 'warning' | 'danger' | 'neutral';
   message: string;
+  /** DEV-910: stays on screen until the cashier dismisses it. */
+  persistent?: boolean;
   inventoryBranchId?: string;
   /** DEV-860: a sale refused for a setup gap carries its fix link or whom to ask. */
   setup?: CounterSetupAdvice;
@@ -557,6 +561,11 @@ function ScopedPharmacyCounterConsole({
   const [patientQuery, setPatientQuery] = useState('');
   const [submittedPatientQuery, setSubmittedPatientQuery] = useState('');
   const [controlledAuth, setControlledAuth] = useState(EMPTY_CONTROLLED_AUTH);
+  // DEV-780: a voucher checked and confirmed with the cashier's own PIN, sent with the next
+  // item added. It is dropped after that add, whatever the outcome, so the PIN is not kept.
+  const [voucherHold, setHeldVoucher] = useState<
+    (CounterHeldVoucher & { branchId: string }) | null
+  >(null);
   const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
     enabled: safetyLicensed,
   });
@@ -617,7 +626,8 @@ function ScopedPharmacyCounterConsole({
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   useEffect(() => {
-    if (!notice || (notice.tone !== 'success' && notice.tone !== 'info')) return;
+    if (!notice || notice.persistent) return;
+    if (notice.tone !== 'success' && notice.tone !== 'info') return;
     const timer = window.setTimeout(() => setNotice(null), 5000);
     return () => window.clearTimeout(timer);
   }, [notice]);
@@ -678,6 +688,8 @@ function ScopedPharmacyCounterConsole({
     () => ({ organizationId, accountId, branchId }),
     [organizationId, accountId, branchId]
   );
+  // A voucher belongs to the branch it was checked at; switching branch drops it.
+  const heldVoucher = voucherHold?.branchId === branchId ? voucherHold : null;
   const branchAuthorized =
     branchesQuery.isSuccess &&
     !branchesQuery.isError &&
@@ -793,6 +805,7 @@ function ScopedPharmacyCounterConsole({
         setAttempt(saved.attempt);
         setRestoredAttempt(saved.attempt);
         setSelectedBranchId(saved.attempt.input.branchId);
+        setHeldVoucher(null);
         setSaleId(saved.attempt.input.saleId);
         setTenderOutcome({ status: 'unknown', message: UNKNOWN_TENDER_MESSAGE });
         setTenderReadRequired(true);
@@ -858,6 +871,14 @@ function ScopedPharmacyCounterConsole({
       trpc: { abortOnUnmount: true },
     }
   );
+  const searchState =
+    !branchAuthorized || trimmedQuery.length < 2 || (scannerQuery && !searchCurrent)
+      ? 'idle'
+      : !searchCurrent || searchQuery.isFetching || searchQuery.isPlaceholderData
+        ? 'loading'
+        : searchQuery.isError
+          ? 'error'
+          : 'ready';
 
   const cartQuery = trpc.pharmacySales.counterCart.useQuery(
     { branchId, saleId: saleId ?? '' },
@@ -878,6 +899,10 @@ function ScopedPharmacyCounterConsole({
   // On the client a missing device id means site storage is blocked: no drawer
   // can be read or opened, so the step says so instead of waiting forever.
   const deviceUnavailable = useHydrated() && deviceId === null;
+  const tradingDayQuery = trpc.pharmacySales.tradingDayStatus.useQuery(
+    { branchId },
+    { enabled: branchAuthorized, staleTime: 30_000, refetchInterval: 30_000 }
+  );
   const drawerQuery = trpc.pharmacySales.drawerStatus.useQuery(
     { branchId, deviceId: deviceId ?? '' },
     { enabled: drawerQueryEnabled, staleTime: 30_000 }
@@ -893,6 +918,10 @@ function ScopedPharmacyCounterConsole({
   const drawerOpen = Boolean(openDrawerSession) && !drawerQuery.isError;
   // DEV-97: someone who takes no payment opens no drawer, and still builds bills.
   const drawerRequired = branchAuthorized && !settlementDenied && !drawerOpen;
+  // DEV-631: the business day is closed, so the counter says so before a bill is
+  // built rather than only when payment is refused. The server still refuses it.
+  const dayClosed =
+    branchAuthorized && !tradingDayQuery.isError && tradingDayQuery.data?.dayClosed === true;
   // DEV-860: the ready-to-sell check lists missing setup before the first scan. The
   // server answers with reason codes and whether this account may fix them.
   const saleReadiness = trpc.pharmacySales.saleReadiness.useQuery(
@@ -916,9 +945,11 @@ function ScopedPharmacyCounterConsole({
   );
   // Read at call time: a scan or shortcut can finish after the drawer closed.
   const drawerRequiredRef = useRef(drawerRequired);
+  const dayClosedRef = useRef(dayClosed);
   useEffect(() => {
     drawerRequiredRef.current = drawerRequired;
-  }, [drawerRequired]);
+    dayClosedRef.current = dayClosed;
+  }, [drawerRequired, dayClosed]);
 
   const receiptQuery = trpc.pharmacySales.counterReceipt.useQuery(
     { branchId, saleId: saleId ?? '' },
@@ -1674,10 +1705,13 @@ function ScopedPharmacyCounterConsole({
   );
 
   const openSale = useCallback(async () => {
+    if (dayClosedRef.current) throw new Error('DAY_CLOSED');
     if (drawerRequiredRef.current) throw new Error('DRAWER_NOT_OPEN');
     const created = await createSale
       .mutateAsync({ branchId, quotation: false, deviceId: counterDeviceId() })
       .catch((error: unknown) => {
+        if (error instanceof Error && error.message === 'DAY_CLOSED')
+          void utils.pharmacySales.tradingDayStatus.invalidate();
         // The drawer was closed elsewhere: re-read it so the opening step returns.
         if (error instanceof Error && error.message === 'DRAWER_NOT_OPEN')
           void utils.pharmacySales.drawerStatus.invalidate();
@@ -1760,7 +1794,8 @@ function ScopedPharmacyCounterConsole({
         }
       }
       try {
-        // No line is added while the drawer is closed, to a new bill or an open one.
+        // No line is added while the day or the drawer is closed, to a new bill or an open one.
+        if (dayClosedRef.current) throw new Error('DAY_CLOSED');
         if (drawerRequiredRef.current) throw new Error('DRAWER_NOT_OPEN');
         let activeSaleId = replaceClosedBill ? await openSale() : await ensureSale();
         const freshBill = replaceClosedBill || activeSaleId !== saleId;
@@ -1805,6 +1840,7 @@ function ScopedPharmacyCounterConsole({
               )
           : undefined;
         const refSerial = Number(billAuth.refSerial);
+        const voucher = heldVoucher;
         const attemptKeys: string[] = [];
         const postLine = (lineSaleId: string, approval?: CounterApprovalPin) => {
           const selection = JSON.stringify([
@@ -1817,6 +1853,10 @@ function ScopedPharmacyCounterConsole({
             row.labelLot?.inventoryLotId,
             scannedPack?.serial.toUpperCase(),
           ]);
+          // DEV-780: the voucher is not part of the attempt's identity. The held voucher (and its
+          // PIN) is dropped after every add, so a retry after a lost response reuses this key:
+          // the server replays the committed line, or refuses a changed voucher, and never adds
+          // the item a second time.
           let key = lineAttempts.current.get(selection);
           if (!key) {
             key = `counter-add:${browserUuid()}`;
@@ -1850,6 +1890,8 @@ function ScopedPharmacyCounterConsole({
             branchId,
             saleId: lineSaleId,
             medicineId: row.medicineId,
+            // DEV-780: the server sets the voucher's amount and re-checks every rule.
+            ...(voucher ? { voucherId: voucher.id, voucherPin: voucher.pin } : {}),
             presentationId: row.presentationId,
             packLevelId: option.packLevelId,
             saleUnit: option.kind,
@@ -1942,7 +1984,7 @@ function ScopedPharmacyCounterConsole({
         setLotOverride(null);
         setNotice({
           tone: 'success',
-          message: `${startedNextBill ? 'New bill started. ' : ''}${units} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}.`,
+          message: `${startedNextBill ? 'New bill started. ' : ''}${units} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}${voucher ? ` with voucher ${voucher.code}` : ''}.`,
         });
         setAddVersion(completedAdds.current);
         setQuery('');
@@ -1954,6 +1996,8 @@ function ScopedPharmacyCounterConsole({
           focusSearch();
         }
       } catch (error) {
+        if (error instanceof Error && error.message === 'DAY_CLOSED')
+          void utils.pharmacySales.tradingDayStatus.invalidate();
         catalogueCache.clear();
         const message = counterSaleErrorMessage(error);
         setNotice({
@@ -1969,12 +2013,14 @@ function ScopedPharmacyCounterConsole({
         setPackApproval(null);
         packApprovalResolver.current = null;
         setControlledAuth((value) => ({ ...value, pin: '' }));
+        if (heldVoucher) setHeldVoucher(null);
         setPending(null);
       }
     },
     [
       activeRow,
       addLine,
+      heldVoucher,
       catalogueCache,
       cartQuery,
       clearBill,
@@ -2199,7 +2245,7 @@ function ScopedPharmacyCounterConsole({
         focusSearch();
         return true;
       } catch (error) {
-        setNotice({ tone: 'danger', message: messageFrom(error) });
+        setNotice({ tone: 'warning', message: messageFrom(error) });
         return false;
       } finally {
         setPending(null);
@@ -2241,7 +2287,7 @@ function ScopedPharmacyCounterConsole({
         setNotice({ tone: 'success', message: 'Bill voided. Its stock is back on sale.' });
         return true;
       } catch (error) {
-        setNotice({ tone: 'danger', message: messageFrom(error) });
+        setNotice({ tone: 'warning', message: messageFrom(error) });
         return false;
       } finally {
         setPending(null);
@@ -2370,6 +2416,7 @@ function ScopedPharmacyCounterConsole({
         payerName?: string;
         referenceSkipped?: boolean;
         approvalCode?: string;
+        buyerName?: string;
       },
       draft: TenderDraft
     ): Promise<CounterTenderResult> => {
@@ -2414,6 +2461,8 @@ function ScopedPharmacyCounterConsole({
             : {}),
           // #722: equal split rows (Rs 500 + Rs 500) are distinct payments at
           // different paid balances; a double tap at the same balance still replays.
+          // #708: a cash-memo buyer keeps this key; a changed buyer conflicts on the
+          // payload hash rather than recording the same payment twice.
           idempotencyKey:
             input.familyAccountId ||
             input.payerName !== undefined ||
@@ -2440,6 +2489,7 @@ function ScopedPharmacyCounterConsole({
             ? { referenceSkipped: input.referenceSkipped }
             : {}),
           ...(input.approvalCode !== undefined ? { approvalCode: input.approvalCode } : {}),
+          ...(input.buyerName !== undefined ? { buyerName: input.buyerName } : {}),
         };
         sentKey = payload.idempotencyKey;
         const original: TenderAttempt = { version: 1, scope: recoveryScope, input: payload, draft };
@@ -2478,6 +2528,9 @@ function ScopedPharmacyCounterConsole({
       } catch (error) {
         discardReceiptIntent();
         if (!dispatched) setStorageError(true);
+        // DEV-631: the day was closed under this bill: re-read it so the counter says so.
+        if (error instanceof Error && error.message === 'DAY_CLOSED')
+          void utils.pharmacySales.tradingDayStatus.invalidate();
         if (
           dispatched &&
           sentKey &&
@@ -3009,6 +3062,7 @@ function ScopedPharmacyCounterConsole({
       setReceiptReprint(allocation.reprint);
       setNotice({
         tone: 'success',
+        persistent: true,
         message:
           'Browser print dialog requested. Select the matching paper size and OS printer. Physical printing is not confirmed.',
       });
@@ -3209,7 +3263,7 @@ function ScopedPharmacyCounterConsole({
         />
         <SectionCard title="Branches unavailable">
           <div className="space-y-3" role="alert">
-            <p className="text-sm text-destructive">{messageFrom(branchesQuery.error)}</p>
+            <p className="text-sm text-warning">{messageFrom(branchesQuery.error)}</p>
             <Button
               type="button"
               variant="outline"
@@ -3404,6 +3458,8 @@ function ScopedPharmacyCounterConsole({
               onChange={(event) => {
                 scannerRevision.current += 1;
                 setSelectedBranchId(event.target.value);
+                // A voucher and the cashier PIN held for one branch never carry to another.
+                setHeldVoucher(null);
                 setLastReceipt(null);
                 setReceiptReprint(false);
                 setActiveRow(null);
@@ -3433,6 +3489,9 @@ function ScopedPharmacyCounterConsole({
                 }
               />
               {heldSaleId ? <StatusPill status="held" tone="warning" label="1 held" /> : null}
+              {dayClosed ? (
+                <StatusPill status="day-closed" tone="warning" label="Day closed" />
+              ) : null}
               {drawerOpen ? (
                 <StatusPill status="drawer-open" tone="success" label="Drawer open" />
               ) : drawerRequired && drawerQuery.isSuccess ? (
@@ -3608,6 +3667,16 @@ function ScopedPharmacyCounterConsole({
                       </Link>
                     ) : null}
                   </div>
+                  {notice.persistent ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="ml-auto min-h-11 min-w-11 shrink-0"
+                      onClick={() => setNotice(null)}
+                    >
+                      Dismiss
+                    </Button>
+                  ) : null}
                 </div>
               ) : null}
               {lostSaleCapture && lostSaleCapture.branchId === branchId ? (
@@ -3619,7 +3688,31 @@ function ScopedPharmacyCounterConsole({
                 />
               ) : null}
 
-              {drawerRequired ? (
+              {dayClosed ? (
+                <div
+                  role="status"
+                  aria-label="Business day closed"
+                  className="space-y-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm"
+                >
+                  <p className="font-medium text-text-strong">
+                    Today&apos;s business day is closed.
+                  </p>
+                  <p className="text-text-body">
+                    New bills, payments and drawer changes are blocked. The owner or a manager can
+                    reopen today for trading on Day close, with a reason; selling resumes here once
+                    they do.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="min-h-11"
+                    disabled={tradingDayQuery.isFetching}
+                    onClick={() => void tradingDayQuery.refetch()}
+                  >
+                    {tradingDayQuery.isFetching ? 'Checking…' : 'Check again'}
+                  </Button>
+                </div>
+              ) : drawerRequired ? (
                 <CounterOpenDrawerStep
                   canDeclareFloat={actorIsManager}
                   disabled={drawerBusy || !drawerStatusKnown || !canSettlePayments}
@@ -3830,13 +3923,37 @@ function ScopedPharmacyCounterConsole({
                           if (first) stageRow(first);
                           else void searchAndStage(trimmed);
                         }}
-                        className="h-12"
+                        // DEV-44: the field is focused on load, and the coral focus ring read as
+                        // an error before anything was typed. It stays neutral until a search
+                        // actually fails, then carries the destructive state and aria-invalid.
+                        aria-invalid={searchState === 'error' || undefined}
+                        className={
+                          searchState === 'error'
+                            ? 'h-12 [--ring:var(--destructive)]'
+                            : 'h-12 [--ring:var(--text-muted)]'
+                        }
                       />
                       <p id="counter-search-help" className="text-xs text-text-muted">
                         {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
                         selected medicine, or a barcode. {formatBinding(keymap.bindings.openTender)}{' '}
                         opens pay.
                       </p>
+                    </div>
+                    <div className="mt-3">
+                      <CounterVoucherEntry
+                        branchId={branchId}
+                        held={heldVoucher}
+                        disabled={busy || !branchAuthorized || !online}
+                        onHold={(voucher) => {
+                          setHeldVoucher({ ...voucher, branchId });
+                          setNotice({
+                            tone: 'success',
+                            message: `Voucher ${voucher.code} will be used on the next item you add.`,
+                          });
+                          focusSearch();
+                        }}
+                        onClear={() => setHeldVoucher(null)}
+                      />
                     </div>
                   </div>
 
@@ -3846,17 +3963,7 @@ function ScopedPharmacyCounterConsole({
                         ? (searchQuery.data?.rows ?? [])
                         : []
                     }
-                    state={
-                      !branchAuthorized ||
-                      trimmedQuery.length < 2 ||
-                      (scannerQuery && !searchCurrent)
-                        ? 'idle'
-                        : !searchCurrent || searchQuery.isFetching || searchQuery.isPlaceholderData
-                          ? 'loading'
-                          : searchQuery.isError
-                            ? 'error'
-                            : 'ready'
-                    }
+                    state={searchState}
                     query={trimmedQuery}
                     disabled={busy || !branchAuthorized}
                     disabledReasonId={branchControlReason ? 'counter-branch-reason' : undefined}
@@ -3871,7 +3978,7 @@ function ScopedPharmacyCounterConsole({
                 </div>
               )}
             </div>
-            {activeRow && !drawerRequired ? (
+            {activeRow && !drawerRequired && !dayClosed ? (
               <section
                 aria-label="Next line"
                 className="m-4 rounded-lg border border-border-subtle bg-surface-sunken p-3"
@@ -3961,12 +4068,22 @@ function ScopedPharmacyCounterConsole({
                     type="button"
                     className="min-h-12 rounded-[var(--radius-sm)]"
                     disabled={busy || !preview?.sufficient}
+                    aria-describedby={
+                      !busy && !preview?.sufficient ? 'counter-add-to-cart-reason' : undefined
+                    }
                     onClick={() => void addToCart()}
                   >
                     {pending === 'addToCart'
                       ? 'Adding…'
                       : `Add to cart · ${formatBinding(keymap.bindings.addToCart)}`}
                   </Button>
+                  {!busy && !preview?.sufficient ? (
+                    <p id="counter-add-to-cart-reason" className="text-xs text-text-muted">
+                      {preview
+                        ? 'Not enough stock for this quantity. Reduce it or record the shortage.'
+                        : 'Enter a valid quantity to add this item.'}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-text-muted">
                   <span>
@@ -4367,9 +4484,13 @@ function ScopedPharmacyCounterConsole({
                   providerRef: restoredAttempt.input.providerRef,
                   referenceSkipped: restoredAttempt.input.referenceSkipped,
                   approvalCode: restoredAttempt.input.approvalCode,
+                  buyerName: restoredAttempt.input.buyerName,
                 }
               : undefined
           }
+          cashMemo={sindhCashMemoSelected(
+            branches.find((branch) => branch.id === branchId)?.provinceCode
+          )}
           recoveryOutcome={tenderOutcome}
           checkingOutcome={checkingOutcome}
           onCheckOutcome={

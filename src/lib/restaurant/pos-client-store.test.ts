@@ -442,6 +442,7 @@ describe('versioned catalog cache (criterion 2)', () => {
         throw new Error('QuotaExceededError');
       },
       write: async () => undefined,
+      writeIfRevision: async () => true,
       remove: async () => undefined,
       close: () => undefined,
     };
@@ -463,6 +464,53 @@ describe('versioned catalog cache (criterion 2)', () => {
       writePosState(driver, { ...emptyPosState(scope), schemaVersion: 2 })
     ).rejects.toBeInstanceOf(PosStorageError);
   });
+
+  it.each([
+    ['in-memory', () => createMemoryDriver()],
+    ['native IndexedDB', () => createIndexedDbDriver(createFakeIndexedDb().factory)],
+  ] as const)(
+    'refuses, through the %s driver, a stale tab write that would replace a newer document',
+    async (_label, makeDriver) => {
+      const driver = makeDriver();
+      expect((await readPosState(driver, scope)).status).toBe('empty');
+
+      // Both tabs read the empty document (revision 0); tab A saves first.
+      const savedA = await writePosState(
+        driver,
+        { ...emptyPosState(scope), catalog: snapshotOf() },
+        0
+      );
+      expect(savedA).toBe(1);
+
+      const staleB = writePosState(
+        driver,
+        { ...emptyPosState(scope), catalog: snapshotOf({ price: '999.00' }, 'v1:stale') },
+        0
+      );
+      await expect(staleB).rejects.toMatchObject({
+        name: 'TerminalStorageError',
+        reason: 'WRITE_CONFLICT',
+      });
+
+      const read = await readPosState(driver, scope);
+      expect(read.status).toBe('ok');
+      if (read.status !== 'ok') return;
+      expect(read.revision).toBe(1);
+      expect(read.state.catalog?.version).toBe('v1:aaaa');
+
+      // Re-read, re-applied on the newer revision, tab B's write lands.
+      expect(
+        await writePosState(
+          driver,
+          { ...read.state, catalog: snapshotOf({ price: '999.00' }, 'v1:bbbb') },
+          read.revision
+        )
+      ).toBe(2);
+      const after = await readPosState(driver, scope);
+      if (after.status === 'ok') expect(after.state.catalog?.version).toBe('v1:bbbb');
+      driver.close();
+    }
+  );
 });
 
 // ── Refresh policy ───────────────────────────────────────────────────────────

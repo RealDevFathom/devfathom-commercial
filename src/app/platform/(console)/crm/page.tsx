@@ -352,7 +352,7 @@ export default async function CrmPage() {
         </div>
 
         <aside className="space-y-7">
-          <section className="border border-border-default bg-abyss-900 p-5 text-paper-50">
+          <section className="rounded-control border border-border-default bg-primary p-5 text-primary-foreground shadow-control-ink">
             <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-primary-foreground">
               Follow-up queue
             </p>
@@ -368,7 +368,7 @@ export default async function CrmPage() {
                       {followUp.dueAt.toLocaleDateString()}
                     </span>
                   </div>
-                  <p className="mt-1 text-[10px] text-abyss-200">
+                  <p className="mt-1 text-[10px] text-primary-foreground">
                     {followUp.opportunity?.name ?? followUp.lead?.name ?? followUp.account?.name}
                   </p>
                   <div className="mt-3 flex gap-2">
@@ -387,7 +387,7 @@ export default async function CrmPage() {
                 </div>
               ))}
               {!data.followUps.length ? (
-                <p className="py-7 text-xs text-abyss-200">No open follow-ups.</p>
+                <p className="py-7 text-xs text-primary-foreground">No open follow-ups.</p>
               ) : null}
             </div>
           </section>

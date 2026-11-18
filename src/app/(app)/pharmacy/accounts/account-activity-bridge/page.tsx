@@ -1,3 +1,5 @@
+import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/screen-copy';
+import { ReportDetails } from '@/components/pharmacy/report-details';
 import type { Metadata } from 'next';
 import { TRPCError } from '@trpc/server';
 import { PageHeader } from '@/components/ui/page-header';
@@ -15,7 +17,7 @@ import { createTRPCContext } from '@/server/trpc';
 import { workspaceDateOffset, workspaceDateRange, workspaceZoneLabel } from '@/lib/timezone';
 import { AccountActivityExportButton } from './export-button';
 
-export const metadata: Metadata = { title: 'Account activity bridge' };
+export const metadata: Metadata = { title: screenCopy.accountActivity.accountActivityBridge };
 
 type Search = Partial<Record<'branch' | 'from' | 'to' | 'selection', string | string[]>>;
 const date = /^\d{4}-\d{2}-\d{2}$/;
@@ -48,7 +50,9 @@ export default async function AccountActivityBridgePage({
     : null;
   if (!ctx?.session?.user || ctx.session.user.role !== 'ADMIN')
     return (
-      <State title="Permission required">Organization administrator access is required.</State>
+      <State title={screenCopy.accountActivity.permissionRequired}>
+        {screenCopy.accountActivity.organizationAdministratorAccessIsRequired}
+      </State>
     );
 
   if (
@@ -57,7 +61,11 @@ export default async function AccountActivityBridgePage({
     Array.isArray(query.to) ||
     Array.isArray(query.selection)
   )
-    return <State title="Invalid filters">Choose one value for each filter.</State>;
+    return (
+      <State title={screenCopy.accountActivity.invalidFilters}>
+        {screenCopy.accountActivity.chooseOneValueForEachFilter}
+      </State>
+    );
 
   const organizationId = ctx.entitlements.organizationId;
   const branches = await ctx.db.pharmacyBranch.findMany({
@@ -70,9 +78,17 @@ export default async function AccountActivityBridgePage({
       ? branches[0]
       : branches.find((candidate) => candidate.id === query.branch);
   if (query.branch !== undefined && !branch)
-    return <State title="Branch unavailable">Choose an active branch in this organization.</State>;
+    return (
+      <State title={screenCopy.accountActivity.branchUnavailable}>
+        {screenCopy.accountActivity.chooseAnActiveBranchInThisOrganization}
+      </State>
+    );
   if (!branch)
-    return <State title="No active branch">Create an active pharmacy branch first.</State>;
+    return (
+      <State title={screenCopy.accountActivity.noActiveBranch}>
+        {screenCopy.accountActivity.createAnActivePharmacyBranchFirst}
+      </State>
+    );
 
   const timeZone = ctx.organization?.timezone;
   const zone = workspaceZoneLabel(timeZone);
@@ -83,13 +99,15 @@ export default async function AccountActivityBridgePage({
   const to = query.to ?? fallbackTo;
   if (!validDate(from) || !validDate(to) || from >= to)
     return (
-      <State title="Invalid date window">
-        Choose a valid date window with an exclusive end.
+      <State title={screenCopy.accountActivity.invalidDateWindow}>
+        {screenCopy.accountActivity.chooseAValidUtcDateWindowWithAn}
       </State>
     );
   if (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`) > MAX_WINDOW_MS)
     return (
-      <State title="Invalid date window">Choose a date window of at most 92 days.</State>
+      <State title={screenCopy.accountActivity.invalidDateWindow}>
+        {screenCopy.accountActivity.chooseADateWindowOfAtMost92}
+      </State>
     );
 
   let statement;
@@ -137,14 +155,14 @@ export default async function AccountActivityBridgePage({
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Pharmacy accounts"
-        heading="Account activity bridge"
-        description="Isolate one posted account and recorded currency from financial-statement aggregates."
+        eyebrow={screenCopy.accountActivity.pharmacyAccounts}
+        heading={screenCopy.accountActivity.accountActivityBridge}
+        description={screenCopy.accountActivity.isolateOnePostedAccountAndRecordedCurrencyFrom}
       />
-      <SectionCard title="Select aggregate evidence" titleLevel={2}>
+      <SectionCard title={screenCopy.accountActivity.chooseAnAccount} titleLevel={2}>
         <form method="get" className="grid items-end gap-4 md:grid-cols-2 xl:grid-cols-5">
           <label className="grid gap-2 text-sm">
-            Branch
+            {screenCopy.accountActivity.branch}
             <select
               name="branch"
               defaultValue={branch.id}
@@ -158,15 +176,15 @@ export default async function AccountActivityBridgePage({
             </select>
           </label>
           <label className="grid gap-2 text-sm">
-            From ({zone})
+            {screenCopy.dateWindow.from} ({zone})
             <Input name="from" type="date" defaultValue={from} required />
           </label>
           <label className="grid gap-2 text-sm">
-            To, exclusive ({zone})
+            {screenCopy.dateWindow.toExclusive} ({zone})
             <Input name="to" type="date" defaultValue={to} required />
           </label>
           <label className="grid gap-2 text-sm">
-            Account / currency
+            {screenCopy.accountActivity.accountCurrency}
             <select
               name="selection"
               defaultValue={selected?.value ?? ''}
@@ -174,7 +192,7 @@ export default async function AccountActivityBridgePage({
             >
               {!selected && (
                 <option value="" disabled>
-                  Choose an account / currency
+                  {screenCopy.accountActivity.chooseAnAccountCurrency}
                 </option>
               )}
               {choices.map((choice) => (
@@ -185,22 +203,22 @@ export default async function AccountActivityBridgePage({
             </select>
           </label>
           <Button type="submit" size="lg">
-            Read bridge
+            {screenCopy.accountActivity.readBridge}
           </Button>
         </form>
       </SectionCard>
-      <SectionCard title="Bridge evidence" titleLevel={2}>
+      <SectionCard title={screenCopy.accountActivity.accountTotals} titleLevel={2}>
         {!bridge ? (
           <p role="alert" className="text-sm text-text-muted">
-            No unique, complete aggregate matches this account and recorded currency. Missing values
-            are not treated as zero.
+            {screenCopy.accountActivity.noUniqueCompleteAggregateMatchesThisAccountAnd}
           </p>
         ) : (
           <>
-            <p className="text-sm text-text-muted">
-              Posted coverage is unknown. This evidence is not a running ledger, trial balance,
-              maturity report, statement, or wallet view.
-            </p>
+            <ReportDetails>
+              <p className="text-sm text-text-muted">
+                {screenCopy.accountActivity.postedCoverageIsUnknownThisEvidenceIsNot}
+              </p>
+            </ReportDetails>
             <div className="mt-4 overflow-x-auto">
               <table className="w-full text-sm tabular-nums">
                 <thead className="font-mono text-xs uppercase">
@@ -233,10 +251,13 @@ export default async function AccountActivityBridgePage({
                 </tbody>
               </table>
             </div>
-            <p className="my-4 font-mono text-sm">
-              {bridge.openingMinor} + {bridge.debitMinor} − {bridge.creditMinor} ={' '}
-              {bridge.closingMinor} minor units
-            </p>
+            <ReportDetails>
+              <p className="my-4 font-mono text-sm">
+                {bridge.openingMinor} + {bridge.debitMinor} − {bridge.creditMinor} ={' '}
+                {bridge.closingMinor}
+                {screenCopy.accountActivity.minorUnits}
+              </p>
+            </ReportDetails>
             <AccountActivityExportButton
               csv={accountActivityBridgeCsv(bridge)}
               filename={`account-activity-${from}-to-${to}.csv`}
@@ -252,9 +273,9 @@ function State({ title, children }: { title: string; children: React.ReactNode }
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Pharmacy accounts"
-        heading="Account activity bridge"
-        description="Single-account aggregate evidence."
+        eyebrow={screenCopy.accountActivity.pharmacyAccounts}
+        heading={screenCopy.accountActivity.accountActivityBridge}
+        description={screenCopy.accountActivity.openingBalanceMoneyInAndOutAndClosing}
       />
       <SectionCard title={title}>
         <p role="alert" className="text-sm text-text-muted">

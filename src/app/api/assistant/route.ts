@@ -239,12 +239,17 @@ async function respond(req: Request) {
   // latest message, or an explicit choice of language, still wins.
   const stored = await tenantDb.organization.findUnique({
     where: { id: organization.id },
-    select: { locale: true },
+    select: { locale: true, timezone: true },
   });
   const reply = resolveReplyLocale(recentUserText(messages, 1), stored?.locale);
   const result = streamText({
     model: ai.model,
-    system: assistantSystemPrompt(ctx, Object.keys(tools), reply.locale, reply.workspaceDefault),
+    system: assistantSystemPrompt(
+      { ...ctx, timeZone: stored?.timezone },
+      Object.keys(tools),
+      reply.locale,
+      reply.workspaceDefault
+    ),
     messages: modelMessages,
     // Cost control: send only the tools relevant to what the user is asking
     // about (a core read set + the matched domain), not all ~96 every request.

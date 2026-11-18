@@ -10,9 +10,11 @@ import {
 } from '@/lib/restaurant/operator-credentials';
 import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { workspaceTimezone } from '@/lib/timezone';
 
 import { activateBranchScope, reservationCandidates } from './customer-ordering';
 import { planAllocation, PharmacyInventoryError } from './inventory';
+import { prescriptionIsCurrent } from './prescription-calendar';
 import {
   DAY_MS,
   nextCycleDueAt,
@@ -21,7 +23,9 @@ import {
   refillCycleCampaignKey,
 } from './refill-subscription-rules';
 
+import { attachPrescriptionReference } from './rx-prescription-reference';
 import { assertRxSaleAllowed } from './rx-sale-gate';
+import { requirePharmacyTodayOpenForTrading } from './settlement';
 import { addReservedSaleLine, createSale } from './sales';
 import type { LedgerScope } from './stock-ledger';
 
@@ -42,8 +46,9 @@ export {
  * every `cycleDays`. Opening a cycle is the "due order": it holds the stock with
  * DEM-03 restock reservations (so every availability query already excludes it)
  * and advances the next due date. A prescription-only cycle stays
- * AWAITING_PHARMACIST until a pharmacist approves THAT cycle with a fresh PIN;
- * only then can the counter start its checkout. Controlled and restricted
+ * AWAITING_PHARMACIST until a valid prescription covers THAT cycle and a
+ * pharmacist approves it with a fresh PIN; only then can the counter start its
+ * checkout. There is no emergency exception. Controlled and restricted
  * medicines are never subscribable: their registers need a per-sale decision.
  */
 
@@ -65,6 +70,11 @@ export class RefillSubscriptionError extends Error {
       | 'INSUFFICIENT_STOCK'
       | 'INVALID_STATE'
       | 'PHARMACIST_APPROVAL_REQUIRED'
+      | 'PRESCRIPTION_REQUIRED'
+      | 'PRESCRIPTION_NOT_FOUND'
+      | 'PRESCRIPTION_PATIENT_MISMATCH'
+      | 'PRESCRIPTION_NOT_IN_DATE'
+      | 'PRESCRIPTION_EXHAUSTED'
   ) {
     super(reason);
     this.name = 'RefillSubscriptionError';
@@ -407,6 +417,75 @@ export async function listDueRefillSubscriptionIds(
     .map((subscription) => subscription.id);
 }
 
+/**
+ * A prescription covers a cycle when its line is for this organization, the
+ * subscriber's patient, this medicine and presentation; it is in date both on
+ * the cycle's due date and today (the dispense happens now); and its remaining
+ * authorized quantity and repeats can still take the whole cycle. The line is
+ * locked so a concurrent fill cannot spend the same remainder. The counter sale
+ * repeats the quantity check when it records the fill.
+ */
+async function assertPrescriptionCoversCycle(
+  db: ScopedDb,
+  scope: LedgerScope,
+  cycle: {
+    dueAt: Date;
+    canonicalUnits: number;
+    subscription: { customerId: string; medicineId: string; presentationId: string };
+  },
+  prescriptionLineId: string | null | undefined,
+  now: Date = new Date()
+): Promise<{ prescriptionLineId: string; patientId: string }> {
+  if (!prescriptionLineId) throw new RefillSubscriptionError('PRESCRIPTION_REQUIRED');
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM pharmacy_prescription_lines WHERE "organizationId"=${scope.organizationId} AND id=${prescriptionLineId} FOR UPDATE`
+  );
+  const line = await db.prescriptionLine.findFirst({
+    where: {
+      id: prescriptionLineId,
+      organizationId: scope.organizationId,
+      medicineId: cycle.subscription.medicineId,
+      presentationId: cycle.subscription.presentationId,
+    },
+    select: {
+      id: true,
+      authorizedCanonicalUnits: true,
+      prescription: {
+        select: { patientId: true, validFrom: true, validUntil: true, authorizedRepeats: true },
+      },
+      fills: { select: { quantityCanonicalUnits: true } },
+    },
+  });
+  if (!line) throw new RefillSubscriptionError('PRESCRIPTION_NOT_FOUND');
+  const customer = await db.pharmacyCustomer.findFirst({
+    where: { id: cycle.subscription.customerId, organizationId: scope.organizationId },
+    select: { patientId: true },
+  });
+  if (!customer || customer.patientId !== line.prescription.patientId) {
+    throw new RefillSubscriptionError('PRESCRIPTION_PATIENT_MISMATCH');
+  }
+  const organization = await db.organization.findUnique({
+    where: { id: scope.organizationId },
+    select: { timezone: true },
+  });
+  const timeZone = workspaceTimezone(organization?.timezone);
+  const { validFrom, validUntil } = line.prescription;
+  if (
+    !prescriptionIsCurrent(validFrom, validUntil, cycle.dueAt, timeZone) ||
+    !prescriptionIsCurrent(validFrom, validUntil, now, timeZone)
+  ) {
+    throw new RefillSubscriptionError('PRESCRIPTION_NOT_IN_DATE');
+  }
+  const filled = line.fills.reduce((sum, fill) => sum + fill.quantityCanonicalUnits, 0);
+  if (
+    filled + cycle.canonicalUnits > line.authorizedCanonicalUnits ||
+    line.fills.length > line.prescription.authorizedRepeats
+  ) {
+    throw new RefillSubscriptionError('PRESCRIPTION_EXHAUSTED');
+  }
+  return { prescriptionLineId: line.id, patientId: line.prescription.patientId };
+}
+
 export type RefillCyclePin = { staffProfileId: string; pin: string };
 
 export type RefillCycleApproval = {
@@ -478,13 +557,15 @@ export async function verifyRefillCyclePharmacistPin(
 
 /**
  * Approve an Rx cycle. Inside the business transaction the approver must still
- * hold `pharmacy:dispense` and the PIN credential that proved it must be live.
+ * hold `pharmacy:dispense`, the PIN credential that proved it must be live, and
+ * the named prescription line must cover this cycle.
  */
 export async function approveRefillCycle(
   db: ScopedDb,
   scope: LedgerScope,
   cycleId: string,
-  approval: RefillCycleApproval
+  approval: RefillCycleApproval,
+  prescription: { prescriptionLineId: string }
 ) {
   await activateBranchScope(db, scope);
   const cycle = await lockCycle(db, scope, cycleId);
@@ -495,7 +576,12 @@ export async function approveRefillCycle(
     cycle.status === 'RESERVED' &&
     !cycle.approvedAt &&
     (await subscribableMedicine(db, scope.organizationId, cycle.subscription)).rx;
-  if (!awaiting && !reclassified) throw new RefillSubscriptionError('INVALID_STATE');
+  // An approved Rx cycle not yet at the counter may take a fresh PIN approval that
+  // replaces its prescription, e.g. once another sale used up the one it relied on.
+  const replacing = cycle.status === 'RESERVED' && cycle.requiresPharmacist && !!cycle.approvedAt;
+  if (!awaiting && !reclassified && !replacing) {
+    throw new RefillSubscriptionError('INVALID_STATE');
+  }
   const approver = (await db.user.findFirst({
     where: {
       id: approval.approvedByUserId,
@@ -518,6 +604,13 @@ export async function approveRefillCycle(
     select: { id: true },
   });
   if (!credential) throw new RefillCycleApprovalDenied();
+  // The owner's launch rule: no prescription covering this cycle, no release.
+  const covering = await assertPrescriptionCoversCycle(
+    db,
+    scope,
+    cycle,
+    prescription.prescriptionLineId
+  );
   const selfApproved = approval.approvedByUserId === cycle.openedByUserId;
   const approvedAt = new Date();
   const updated = await db.pharmacyRefillSubscriptionCycle.update({
@@ -530,6 +623,7 @@ export async function approveRefillCycle(
       approvalCredentialId: approval.credentialId,
       selfApproved,
       approvedAt,
+      prescriptionLineId: covering.prescriptionLineId,
     },
   });
   await db.auditLog.create({
@@ -548,6 +642,7 @@ export async function approveRefillCycle(
         policy: REFILL_CYCLE_APPROVAL_POLICY,
         pinVerified: true,
         selfApproved,
+        prescriptionLineId: covering.prescriptionLineId,
       },
     },
   });
@@ -626,6 +721,9 @@ export async function startRefillCycleCheckout(db: ScopedDb, scope: LedgerScope,
     throw new RefillSubscriptionError('PHARMACIST_APPROVAL_REQUIRED');
   }
   if (cycle.status !== 'RESERVED') throw new RefillSubscriptionError('INVALID_STATE');
+  // DEV-631: no counter bill is opened, and no hold is consumed into one, while today's
+  // business day is closed for trading. Takes the day lock before any stock lock.
+  await requirePharmacyTodayOpenForTrading(db, scope);
   const { subscription } = cycle;
   const medicine = await subscribableMedicine(db, scope.organizationId, subscription);
   // Both the flag snapshotted at opening and the medicine's current schedule count:
@@ -634,6 +732,10 @@ export async function startRefillCycleCheckout(db: ScopedDb, scope: LedgerScope,
   if (prescriptionOnly && (!cycle.approvedByUserId || !cycle.approvedAt)) {
     throw new RefillSubscriptionError('PHARMACIST_APPROVAL_REQUIRED');
   }
+  // The approved prescription must still cover the cycle at the moment of hand-over.
+  const covering = prescriptionOnly
+    ? await assertPrescriptionCoversCycle(db, scope, cycle, cycle.prescriptionLineId)
+    : null;
   // The counter's own Rx gate (#518): only a dispenser may put an Rx line on a sale.
   await assertRxSaleAllowed(db, scope, [medicine]);
   const unitsPerPack = cycle.canonicalUnits / subscription.packsPerCycle;
@@ -660,7 +762,7 @@ export async function startRefillCycleCheckout(db: ScopedDb, scope: LedgerScope,
     where: { organizationId_id: { organizationId: scope.organizationId, id: sale.id } },
     data: { customerId: subscription.customerId },
   });
-  await addReservedSaleLine(
+  const added = await addReservedSaleLine(
     db,
     scope,
     {
@@ -684,6 +786,19 @@ export async function startRefillCycleCheckout(db: ScopedDb, scope: LedgerScope,
       pharmacistApprovedRx: prescriptionOnly,
     }
   );
+  if (covering) {
+    // DEV-629: the counter sale carries the cycle's prescription, and payment still
+    // waits for the pharmacist's RX-03 SIGN of this exact sale line.
+    await attachPrescriptionReference(db, scope, { ...covering, saleLineId: added.line.id });
+    await db.pharmacyPharmacistReviewItem.create({
+      data: {
+        organizationId: scope.organizationId,
+        prescriptionLineId: covering.prescriptionLineId,
+        saleLineId: added.line.id,
+        requestedByUserId: scope.actorId,
+      },
+    });
+  }
   await db.pharmacyRefillSubscriptionCycle.update({
     where: { organizationId_id: { organizationId: scope.organizationId, id: cycle.id } },
     data: { status: 'CHECKOUT_STARTED', counterSaleId: sale.id },

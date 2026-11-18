@@ -72,9 +72,12 @@ describe('branch comparison currency', () => {
       });
       const row = await renderComparison();
       for (const amount of ['1,234.56', '25.00', '12.00', '9.00', '4.00']) {
-        expect(row.getByText(`${amount} (currency unknown)`, { exact: false })).toBeVisible();
+        expect(row.getByText(`${amount} (currency not confirmed)`, { exact: false })).toBeVisible();
       }
-      expect(screen.getByText(/Currency unknown: an authoritative currency/)).toBeVisible();
+      const note = screen.getByText(/Currency unknown: an authoritative currency/);
+      expect(note.closest('details')).not.toHaveAttribute('open');
+      note.closest('details')!.open = true;
+      expect(note).toBeVisible();
     }
   );
 
@@ -84,7 +87,7 @@ describe('branch comparison currency', () => {
       entitlements: { organizationId: 'org-a' },
     });
     const row = await renderComparison();
-    expect(row.getByRole('cell', { name: '1,234.56 (currency unknown)' })).toBeVisible();
+    expect(row.getByRole('cell', { name: '1,234.56 (currency not confirmed)' })).toBeVisible();
     expect(screen.queryByText(/USD/)).not.toBeInTheDocument();
   });
 
@@ -94,7 +97,7 @@ describe('branch comparison currency', () => {
       entitlements: { organizationId: 'org-a' },
     });
     const row = await renderComparison();
-    expect(row.getByRole('cell', { name: '1,234.56 (currency unknown)' })).toBeVisible();
+    expect(row.getByRole('cell', { name: '1,234.56 (currency not confirmed)' })).toBeVisible();
   });
 
   it('keeps unavailable amounts distinct from zero and preserves negative margins', async () => {

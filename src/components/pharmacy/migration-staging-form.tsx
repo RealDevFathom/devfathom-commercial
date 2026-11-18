@@ -97,9 +97,11 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
       setSource(null);
       setHeaders([]);
       setMessage(
-        result.data.replayed
-          ? `This file was already staged with the same columns: ${count(result.data.rowCount)} rows. No duplicate batch was created and no stock was posted.`
-          : `${count(result.data.rowCount)} rows staged for review with ${count(result.data.exceptionCount)} exceptions. No stock was posted.`
+        (result.data.replayed
+          ? `This file was already staged with the same columns: ${count(result.data.rowCount)} rows. No duplicate batch was created. `
+          : `${count(result.data.rowCount)} rows staged for review with ${count(result.data.exceptionCount)} exceptions. `) +
+          `${result.data.controlledFromClass} set as controlled from legacy class NARCOTICS` +
+          ` (${result.data.controlledMedicinesFlagged} catalogue ${result.data.controlledMedicinesFlagged === 1 ? 'medicine' : 'medicines'} flagged). No stock was posted.`
       );
       router.push(
         `${route}?${new URLSearchParams({ branchId, sourceId: result.data.sourceId, batchId: result.data.batchId })}`

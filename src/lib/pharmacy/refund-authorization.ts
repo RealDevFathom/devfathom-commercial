@@ -21,6 +21,37 @@ export const REFUND_PIN_BLOCKED = 'Refund not recorded. Enter your manager or ow
 export const RETURN_FORBIDDEN = 'Only a manager or owner can record a return.';
 export const RETURN_PIN_BLOCKED = 'Enter your manager or owner PIN.';
 
+/**
+ * DEV-32: the approval detail written to a refund's or return's audit record. The
+ * signed-in manager or owner both starts the refund and approves it with their own
+ * fresh PIN, so the record names who started it, who approved it, when the PIN was
+ * accepted, and that this was a self-approval. A refused PIN has no approval time and
+ * is never recorded as approved.
+ */
+export function refundApprovalAudit(input: {
+  initiatedById: string;
+  approverId: string;
+  pin: { verified: true } | { blocked: string };
+  now?: Date;
+}): {
+  policy: typeof REFUND_PIN_POLICY;
+  approverId: string;
+  initiatedById: string;
+  pinVerified: boolean;
+  selfApproved: boolean;
+  approvedAt: string | null;
+} {
+  const verified = 'verified' in input.pin;
+  return {
+    policy: REFUND_PIN_POLICY,
+    approverId: input.approverId,
+    initiatedById: input.initiatedById,
+    pinVerified: verified,
+    selfApproved: verified && input.approverId === input.initiatedById,
+    approvedAt: verified ? (input.now ?? new Date()).toISOString() : null,
+  };
+}
+
 export function actorMayRefund(
   db: ScopedDb,
   actor: { id: string; role?: string | null; department?: string | null; status?: string | null },
@@ -100,6 +131,9 @@ export function authenticateRefundPin(input: {
   pin: string;
   /** The refunding procedure, for the audit row. */
   action: string;
+  /** DEV-881: another manager-PIN control reusing this check names its own policy. */
+  policy?: string;
+  errorCode?: string;
 }): Promise<{ verified: true } | { blocked: string }> {
   return withTenantDb(
     input.organizationId,
@@ -115,8 +149,8 @@ export function authenticateRefundPin(input: {
             operation: 'EXECUTE',
             action: input.action,
             outcome: 'FAILURE',
-            errorCode: 'REFUND_PIN_REFUSED',
-            metadata: { policy: REFUND_PIN_POLICY, pinVerified: false },
+            errorCode: input.errorCode ?? 'REFUND_PIN_REFUSED',
+            metadata: { policy: input.policy ?? REFUND_PIN_POLICY, pinVerified: false },
           },
         });
       return result;

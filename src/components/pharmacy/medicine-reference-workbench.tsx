@@ -27,6 +27,7 @@ import {
   type NormalizedMedicineReferenceRow,
   type ReferenceUploadChunk,
 } from '@/lib/pharmacy/reference-connectors';
+import { notRecordedFields, STRENGTH_NOT_RECORDED } from '@/lib/pharmacy/medicine';
 import { trpc } from '@/lib/trpc';
 
 type ConnectorHealth = {
@@ -539,9 +540,10 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
             <div>
               <h3 className="text-sm font-semibold text-text-strong">Column mapping</h3>
               <p className="mt-1 text-xs text-text-muted">
-                Strength, dosage form, and pack have no defaults. Missing values stay blocked in
-                review. Pack must state a unit count, such as 10 tablets or 3 x 10; publishing
-                creates that pack size.
+                Strength, dosage form, and pack have no defaults. Dosage form and pack must be
+                present. A manual import without strength or registration number can still be
+                published and sold; those values are recorded as not recorded. Pack must state a
+                unit count, such as 10 tablets or 3 x 10; publishing creates that pack size.
               </p>
               <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                 {[
@@ -784,6 +786,11 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                   </div>
                   <StatusPill status={referenceState.label} tone={referenceState.tone} />
                 </div>
+                {notRecordedFields(candidate).length ? (
+                  <p className="mt-3 text-sm text-text-muted">
+                    {notRecordedFields(candidate).join(' · ')}
+                  </p>
+                ) : null}
                 <dl className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                   {candidate.provenance.map((assertion) => {
                     const envelope = assertionEnvelope(assertion.assertedValue);
@@ -891,7 +898,12 @@ const ReferencePreview = memo(function ReferencePreview({
             <tr key={row.rowSourceKey} className="hover:bg-surface-sunken/60">
               <td className="px-3 py-3 font-mono text-xs">{row.rowSourceKey}</td>
               <td className="px-3 py-3">{row.values.productName ?? 'Missing'}</td>
-              <td className="px-3 py-3">{row.values.strength ?? 'Missing'}</td>
+              <td className="px-3 py-3">
+                {row.values.strength ??
+                  (row.blockingIssues.includes('MISSING_STRENGTH')
+                    ? 'Missing'
+                    : STRENGTH_NOT_RECORDED)}
+              </td>
               <td className="px-3 py-3">{row.values.dosageForm ?? 'Missing'}</td>
               <td className="px-3 py-3">{row.values.pack ?? 'Missing'}</td>
               <td className="px-3 py-3">

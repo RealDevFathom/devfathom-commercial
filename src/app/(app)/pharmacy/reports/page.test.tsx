@@ -238,7 +238,7 @@ describe('pharmacy report catalog filters', () => {
             ingredient: 'ing-9',
             batch: 'batch-3',
           }),
-        }),
+        })
       );
       fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
       const csv = await blob!.text();
@@ -297,16 +297,20 @@ describe('pharmacy report catalog filters', () => {
   // (QA installs Chromium only later), so it runs where both exist and is skipped with a reason
   // elsewhere; the plain test above keeps the print behaviour covered everywhere.
   const pdfToolsMissing = !pdfToolsAvailable();
-  it.skipIf(pdfToolsMissing)('DEV-61 preserves off-screen report sections in Chromium A4 PDFs across the Studio matrix', async () => {
-    const { verifyReportPrint } =
-      await import('../../../../../tests/helpers/pharmacy-report-print');
-    const { container } = render(
-      await PharmacyReportsPage({
-        searchParams: Promise.resolve({ branch: 'b1', from: '2026-09-01', to: '2026-09-04' }),
-      })
-    );
-    await verifyReportPrint(container.innerHTML);
-  }, 120_000);
+  it.skipIf(pdfToolsMissing)(
+    'DEV-61 preserves off-screen report sections in Chromium A4 PDFs across the Studio matrix',
+    async () => {
+      const { verifyReportPrint } =
+        await import('../../../../../tests/helpers/pharmacy-report-print');
+      const { container } = render(
+        await PharmacyReportsPage({
+          searchParams: Promise.resolve({ branch: 'b1', from: '2026-09-01', to: '2026-09-04' }),
+        })
+      );
+      await verifyReportPrint(container.innerHTML);
+    },
+    120_000
+  );
 
   it('DEV-61 prints the loaded report without changing its selected filters', async () => {
     const print = vi.spyOn(window, 'print').mockImplementation(() => {});
@@ -514,7 +518,12 @@ describe('pharmacy report catalog filters', () => {
       minimumStaff: 1,
     });
     expect(screen.getByLabelText('To')).toHaveValue('2026-11-15');
-    expect(screen.getByText('As of 4 Sep 2026, 3:00 PM PKT')).toBeVisible();
+    expect(screen.getByText('Updated 4 Sep 2026, 3:00 PM PKT')).toBeVisible();
+    const calculation = screen
+      .getByText(/to the start of the day after the last, in PKT\. Finance/)
+      .closest('details')!;
+    expect(calculation).not.toHaveAttribute('open');
+    calculation.open = true;
     expect(
       screen.getByText(/to the start of the day after the last, in PKT\. Finance/)
     ).toBeVisible();
@@ -737,6 +746,15 @@ describe('pharmacy report catalog filters', () => {
     );
   });
 
+  it('shows the anomaly data window on the workspace clock, not the server locale', async () => {
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+    expect(
+      screen.getByText(
+        /Window 1 Sep 2026, 5:00 AM PKT–5 Sep 2026, 5:00 AM PKT · source observed 4 Sep 2026, 3:00 PM PKT/
+      )
+    ).toBeInTheDocument();
+  });
+
   it('offers the sub-reports as header actions styled like every other Studio control', async () => {
     render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
     const header = document.querySelector('[data-slot="page-header"]')!;
@@ -781,7 +799,7 @@ describe('pharmacy report catalog filters', () => {
         },
       } as never);
 
-    it('flags an abnormal refund ratio and a cash variance in amber with a visible label', async () => {
+    it('flags abnormal refunds in amber and short cash in red with visible labels', async () => {
       withMetrics({ refundsMinor: 82_797, cashVarianceMinor: -400 });
       render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
 
@@ -797,8 +815,8 @@ describe('pharmacy report catalog filters', () => {
 
       const variance = kpi('Cash variance');
       expect(variance).toHaveAttribute('data-flagged', 'true');
-      expect(variance.querySelector('.stat-figure')).toHaveTextContent('PKR -4.00');
-      expect(variance.querySelector('.stat-figure')).toHaveClass('text-warning');
+      expect(variance.querySelector('.stat-figure')).toHaveTextContent('PKR 4 short');
+      expect(variance.querySelector('.stat-figure')).toHaveClass('text-destructive');
       expect(within(variance).getByText('Review')).toBeVisible();
     });
 
@@ -822,5 +840,26 @@ describe('pharmacy report catalog filters', () => {
       ).toBeVisible();
       expect(variance).not.toHaveAttribute('data-flagged');
     });
+  });
+  it('shows a concise owner period with calculation caveats under a disclosure', async () => {
+    render(
+      await PharmacyReportsPage({
+        searchParams: Promise.resolve({ from: '2026-10-28', to: '2026-11-03', branch: '' }),
+      })
+    );
+    const owner = screen
+      .getByRole('heading', { name: 'Selected period at a glance' })
+      .closest<HTMLDivElement>('[data-slot="section-card"]')!;
+    expect(within(owner).getByText('28 Oct – 3 Nov · All branches')).toBeVisible();
+    expect(
+      within(owner)
+        .getByText(/historical transaction currency is not verified/)
+        .closest('details')
+    ).not.toBeNull();
+    expect(within(owner).getByText('How is this calculated?')).toHaveAttribute(
+      'class',
+      expect.stringContaining('focus-visible')
+    );
+    expect(within(owner).queryByText(/All available branches · ledger source/)).toBeNull();
   });
 });

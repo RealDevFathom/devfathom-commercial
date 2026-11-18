@@ -55,6 +55,7 @@ export class PharmacyLoyaltyError extends Error {
       | 'IDEMPOTENCY_CONFLICT'
       | 'INVALID_ADJUSTMENT'
       | 'ADJUSTMENT_EXCEEDS_BALANCE'
+      | 'MANAGER_ADJUSTMENT_LIMIT'
       | 'LOYALTY_INACTIVE'
       | 'INVALID_MEMBERSHIP_CHANGE'
       // DEV-748: physical loyalty cards.
@@ -432,11 +433,17 @@ export async function restoreRefundedLoyaltyPoints(
   return { ...entry, replayed: false };
 }
 
+/**
+ * DEV-909: `visibleBranchIds` limits the detailed points history to those branches, for staff
+ * who are not the owner. The points balance stays the one shared, organization-wide balance.
+ * Omitted (the owner, or the customer's own portal), every branch is shown.
+ */
 export async function readCustomerSnapshot(
   db: ScopedDb,
   scope: LedgerScope,
   customerId: string,
-  page = 1
+  page = 1,
+  visibleBranchIds?: readonly string[]
 ) {
   const customer = await db.pharmacyCustomer.findFirst({
     where: { id: customerId, organizationId: scope.organizationId, active: true },
@@ -449,8 +456,15 @@ export async function readCustomerSnapshot(
     },
   });
   if (!customer) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
-  // DEV-764: points are one balance across the organization's branches, so the balance and
-  // the points history cover every branch. Purchases and khata stay this branch's.
+  // DEV-764: points are one balance across the organization's branches, so the balance covers
+  // every branch. DEV-909: the points history covers the branches the caller may see.
+  // Purchases and khata stay this branch's.
+  const pointsWhere = {
+    organizationId: scope.organizationId,
+    customerId,
+    ...(visibleBranchIds ? { branchId: { in: [...visibleBranchIds] } } : {}),
+    NOT: CLOSED_LOT_WITHOUT_POINTS,
+  };
   const [points, sales, pointsHistory, pointsCount, program] = await Promise.all([
     customerPointsBalance(db, scope.organizationId, customerId),
     db.pharmacySale.findMany({
@@ -473,11 +487,7 @@ export async function readCustomerSnapshot(
       take: 10,
     }),
     db.pharmacyLoyaltyPointsEntry.findMany({
-      where: {
-        organizationId: scope.organizationId,
-        customerId,
-        NOT: CLOSED_LOT_WITHOUT_POINTS,
-      },
+      where: pointsWhere,
       orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
       skip: (page - 1) * 25,
       take: 25,
@@ -492,13 +502,7 @@ export async function readCustomerSnapshot(
         sale: { select: { receiptNumber: true } },
       },
     }),
-    db.pharmacyLoyaltyPointsEntry.count({
-      where: {
-        organizationId: scope.organizationId,
-        customerId,
-        NOT: CLOSED_LOT_WITHOUT_POINTS,
-      },
-    }),
+    db.pharmacyLoyaltyPointsEntry.count({ where: pointsWhere }),
     currentLoyaltyProgram(db, scope.organizationId),
   ]);
   const creditBalanceMinor = sales
@@ -610,11 +614,17 @@ export async function listLoyaltyCustomers(db: ScopedDb, scope: LedgerScope, que
   };
 }
 
+/**
+ * DEV-909: `visibleBranchIds` limits the detailed history (entries and the per-branch merge
+ * record) to those branches, for a branch manager. The points balance stays the one shared,
+ * organization-wide balance. Omitted, as for the owner, every branch is shown.
+ */
 export async function readLoyaltyHistory(
   db: ScopedDb,
   scope: LedgerScope,
   customerId: string,
-  page = 1
+  page = 1,
+  visibleBranchIds?: readonly string[]
 ) {
   if (!Number.isInteger(page) || page < 1 || page > LOYALTY_HISTORY_MAX_PAGE)
     throw new RangeError('INVALID_HISTORY_PAGE');
@@ -634,12 +644,13 @@ export async function readLoyaltyHistory(
   if (!customer) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
   // DEV-764: one balance across branches; each entry still shows the branch it was posted at.
   const where = { organizationId: scope.organizationId, customerId };
-  const listed = { ...where, NOT: CLOSED_LOT_WITHOUT_POINTS };
+  const branchScope = visibleBranchIds ? { branchId: { in: [...visibleBranchIds] } } : {};
+  const listed = { ...where, ...branchScope, NOT: CLOSED_LOT_WITHOUT_POINTS };
   const [balance, total, reconciliation] = await Promise.all([
     db.pharmacyLoyaltyPointsEntry.aggregate({ where, _sum: { points: true } }),
     db.pharmacyLoyaltyPointsEntry.count({ where: listed }),
     db.pharmacyLoyaltyBalanceReconciliation.findMany({
-      where,
+      where: { ...where, ...branchScope },
       orderBy: [{ branchId: 'asc' }],
       select: { branchId: true, points: true, entries: true, reconciledAt: true },
     }),
@@ -689,10 +700,33 @@ export const LOYALTY_MAX_ADJUSTMENT_POINTS = 1_000_000;
  * removal may not take the balance below zero. The caller has authorized the actor and records
  * the audit; this runs in the caller's tenant transaction.
  */
+const PAKISTAN_OFFSET_MS = 5 * 3_600_000;
+const DAY_MS = 86_400_000;
+
+/**
+ * DEV-881: the Pakistan calendar day (Asia/Karachi, UTC+05:00, no daylight saving) holding
+ * `now`, as a half-open UTC range. A manager's adjustment allowance resets at local midnight.
+ */
+export function loyaltyAdjustmentDay(now: Date): { from: Date; to: Date } {
+  const local = new Date(now.getTime() + PAKISTAN_OFFSET_MS);
+  const start =
+    Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()) - PAKISTAN_OFFSET_MS;
+  return { from: new Date(start), to: new Date(start + DAY_MS) };
+}
+
+/**
+ * DEV-764: a manual adjustment. DEV-881: with `managerLimit`, the owner's ceiling applies to the
+ * total of every adjustment (added and removed points both count) to this customer in the
+ * current Pakistan calendar day, across branches, this one included, so a large grant cannot be
+ * split into entries that are each under the ceiling. Checked under the customer lock, after an
+ * idempotent replay is recognised, so concurrent entries cannot both pass and a retry is never
+ * refused.
+ */
 export async function adjustLoyaltyPoints(
   db: ScopedDb,
   scope: LedgerScope,
-  input: { customerId: string; points: number; reason: string; idempotencyKey: string }
+  input: { customerId: string; points: number; reason: string; idempotencyKey: string },
+  options: { managerLimit?: number; now?: Date } = {}
 ) {
   const reason = input.reason.trim();
   if (
@@ -738,6 +772,34 @@ export async function adjustLoyaltyPoints(
       throw new PharmacyLoyaltyError('IDEMPOTENCY_CONFLICT');
     return { entry: prior, balanceBefore: null, balanceAfter: null, replayed: true };
   }
+  // One instant, read after the customer lock, both picks the day and dates a manager's entry:
+  // the column default is the transaction start, which can fall in the previous day.
+  const at = options.now ?? new Date();
+  if (options.managerLimit !== undefined) {
+    const day = loyaltyAdjustmentDay(at);
+    const today = {
+      organizationId: scope.organizationId,
+      customerId: customer.id,
+      kind: 'ADJUSTMENT' as const,
+      occurredAt: { gte: day.from, lt: day.to },
+    };
+    // Every branch's adjustments count, even when this transaction is bound to one branch.
+    const [added, removed] = await readAcrossBranches(db, () =>
+      Promise.all([
+        db.pharmacyLoyaltyPointsEntry.aggregate({
+          where: { ...today, points: { gt: 0 } },
+          _sum: { points: true },
+        }),
+        db.pharmacyLoyaltyPointsEntry.aggregate({
+          where: { ...today, points: { lt: 0 } },
+          _sum: { points: true },
+        }),
+      ])
+    );
+    const adjustedToday = (added._sum.points ?? 0) - (removed._sum.points ?? 0);
+    if (adjustedToday + Math.abs(input.points) > options.managerLimit)
+      throw new PharmacyLoyaltyError('MANAGER_ADJUSTMENT_LIMIT');
+  }
   const balanceBefore = await customerPointsBalance(db, scope.organizationId, customer.id);
   // A removal may take only points that can still be spent: not those already past expiry.
   if (input.points < 0) {
@@ -759,6 +821,7 @@ export async function adjustLoyaltyPoints(
       reason,
       actorId: scope.actorId,
       idempotencyKey: key,
+      ...(options.managerLimit !== undefined ? { occurredAt: at } : {}),
     },
   });
   return { entry, balanceBefore, balanceAfter: balanceBefore + input.points, replayed: false };
