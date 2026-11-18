@@ -592,7 +592,7 @@ function LayOffDialog({
   );
 }
 
-function ResetPasswordForm({
+export function ResetPasswordForm({
   memberId,
   memberName,
   onClose,
@@ -638,9 +638,11 @@ function ResetPasswordForm({
               className="w-full rounded-xl border border-border bg-background px-4 py-2.5 pr-10 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
             <button
+              type="button"
               onClick={() => setShowPw(!showPw)}
+              aria-label={showPw ? 'Hide password' : 'Show password'}
+              aria-pressed={showPw}
               className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              tabIndex={-1}
             >
               {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </button>
