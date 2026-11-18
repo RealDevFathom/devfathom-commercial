@@ -89,7 +89,7 @@ describe('medicine pack setup', () => {
   it('repeats the same search after publication instead of keeping an empty result', () => {
     mocks.search.data = [];
     render(<MedicinePackSetup />);
-    fireEvent.change(screen.getByLabelText('Medicine name'), { target: { value: 'Paracetamol' } });
+    fireEvent.change(screen.getByLabelText('Find a medicine'), { target: { value: 'Paracetamol' } });
     fireEvent.click(screen.getByRole('button', { name: 'Find medicine' }));
     fireEvent.click(screen.getByRole('button', { name: 'Find medicine' }));
     expect(mocks.search.refetch).toHaveBeenCalledOnce();
@@ -166,7 +166,7 @@ describe('medicine pack setup', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Loading medicine');
     mocks.search.isFetching = false;
     view.rerender(<MedicinePackSetup />);
-    fireEvent.change(screen.getByLabelText('Medicine name'), { target: { value: 'Missing' } });
+    fireEvent.change(screen.getByLabelText('Find a medicine'), { target: { value: 'Missing' } });
     fireEvent.click(screen.getByRole('button', { name: 'Find medicine' }));
     expect(screen.getByText(/No saleable medicines match/)).toBeVisible();
     mocks.search.error = { message: 'Try again', data: { code: 'INTERNAL_SERVER_ERROR' } };

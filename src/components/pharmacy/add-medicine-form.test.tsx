@@ -99,7 +99,7 @@ describe('DEV-683 add-medicine DRAP auto-fill', () => {
     render(<AddMedicineForm />);
     expect(screen.getByText(/No DRAP reference data has been uploaded/)).toBeVisible();
     expect(screen.queryByRole('search')).toBeNull();
-    fireEvent.change(field('Medicine name'), { target: { value: 'Typed medicine' } });
+    fireEvent.change(field('New medicine name'), { target: { value: 'Typed medicine' } });
     fireEvent.change(field('Strength'), { target: { value: '250 mg' } });
     fireEvent.change(field('Dosage form'), { target: { value: 'Capsule' } });
     fireEvent.change(field('Pack'), { target: { value: '10 capsules' } });
@@ -138,7 +138,7 @@ describe('DEV-683 add-medicine DRAP auto-fill', () => {
 
     expect(screen.getByText('Unsaved draft')).toBeVisible();
     expect(screen.getByText(/Prices are never filled/)).toBeVisible();
-    expect(field('Medicine name').value).toBe('Synthamol');
+    expect(field('New medicine name').value).toBe('Synthamol');
     expect(field('Strength').value).toBe('500 mg');
     expect(field('Dosage form').value).toBe('Tablet');
     expect(field('Pack').value).toBe('');
@@ -193,7 +193,7 @@ describe('DEV-683 add-medicine DRAP auto-fill', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Use Synthamol' }));
     fireEvent.click(screen.getByRole('button', { name: 'Clear auto-fill' }));
     expect(screen.queryByText('Unsaved draft')).toBeNull();
-    expect(field('Medicine name').value).toBe('');
+    expect(field('New medicine name').value).toBe('');
     expect(choice('Prescription only', 'Yes')).toBeEnabled();
     expect(choice('Prescription only', 'Yes')).not.toBeChecked();
   });

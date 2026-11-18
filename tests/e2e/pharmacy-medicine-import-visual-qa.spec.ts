@@ -156,7 +156,7 @@ test.describe('medicine import Studio visual QA', () => {
       await page.goto('/pharmacy/medicines');
       await page.waitForLoadState('networkidle');
       await page.getByText('Medicine reference connectors', { exact: true }).click();
-      await page.getByRole('textbox', { name: 'Medicine name', exact: true }).fill(exampleName);
+      await page.getByRole('textbox', { name: 'Find a medicine', exact: true }).fill(exampleName);
       await page.getByRole('button', { name: 'Find medicine' }).click();
       await page
         .getByRole('combobox', { name: 'Medicine', exact: true })
