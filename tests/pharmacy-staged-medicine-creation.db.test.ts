@@ -304,8 +304,14 @@ const soloReexport = [
           );
           assert.equal(box.levels[1]!.parentPackLevelId, box.levels[0]!.id);
           assert.deepEqual(
-            box.prices.map((price) => [price.packLevelId, price.mrpMinor, price.source]),
-            [[box.levels[0]!.id, 100_000, 'import']]
+            box.prices.map((price) => [
+              price.packLevelId,
+              price.mrpMinor,
+              price.source,
+              price.createdById,
+              price.proposedById,
+            ]),
+            [[box.levels[0]!.id, 100_000, 'import', id('reviewer_a'), id('editor_a')]]
           );
           assert.deepEqual([box.link.mrpMinor, box.link.purchasePriceMinor], [100_000, 80_000]);
           assert.equal(box.link.legacyCode, 'LC-1');

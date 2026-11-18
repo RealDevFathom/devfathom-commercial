@@ -3,6 +3,7 @@ import {
   authorizeCounterApproval,
   confirmCounterApproval,
   CounterApprovalDenied,
+  DISCOUNT_RIGHT_APPROVAL_POLICY,
   isSoleActiveApprover,
   listCounterApprovers,
   mayApproveCounterLine,
@@ -718,5 +719,90 @@ describe('DEV-712: discarding an unknown payment attempt', () => {
       approvalPolicy: 'SOLE_APPROVER_PIN_REAUTH',
       selfApproved: true,
     });
+  });
+});
+
+describe('DEV-66 discount right granted by the owner', () => {
+  /** `rights` hold `pharmacy:discount`; `managers` hold `pharmacy:manage`. */
+  function rightsFixture(rights: string[], managers: string[] = ['manager']) {
+    const db = fixture();
+    vi.mocked(can).mockImplementation(async (subject, action) =>
+      action === 'pharmacy:discount' ? rights.includes(subject.id) : managers.includes(subject.id)
+    );
+    return db;
+  }
+
+  it('lets an operator holding the right give a discount without a PIN', async () => {
+    const db = rightsFixture(['cashier']);
+    await expect(authorizeCounterApproval(db as never, scope, 'DISCOUNT')).resolves.toEqual({
+      approvedByUserId: 'cashier',
+      approvalPolicy: DISCOUNT_RIGHT_APPROVAL_POLICY,
+      selfApproved: false,
+      credentialId: null,
+    });
+    expect(can).toHaveBeenCalledWith(actor, 'pharmacy:discount', undefined, expect.anything());
+    expect(db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('still needs a manager PIN by default, when nobody granted the right', async () => {
+    const db = rightsFixture([]);
+    await expect(authorizeCounterApproval(db as never, scope, 'DISCOUNT')).rejects.toBeInstanceOf(
+      CounterApprovalDenied
+    );
+  });
+
+  it('never lets the right stand in for any other approval', async () => {
+    const db = rightsFixture(['cashier'], []);
+    for (const kind of ['KHATA_OVER_LIMIT', 'SCANNED_PACK_FEFO', 'TENDER_DISCARD'] as const)
+      await expect(authorizeCounterApproval(db as never, scope, kind)).rejects.toBeInstanceOf(
+        CounterApprovalDenied
+      );
+  });
+
+  it('verifies a PIN when one is given, even for a holder of the right', async () => {
+    const db = rightsFixture(['cashier']);
+    await expect(
+      authorizeCounterApproval(db as never, scope, 'DISCOUNT', pin)
+    ).resolves.toMatchObject({
+      approvedByUserId: 'manager',
+      approvalPolicy: 'MANAGER_PIN',
+      credentialId: 'cred',
+    });
+  });
+
+  it('re-checks the right inside the sale and refuses it once revoked', async () => {
+    const approval = {
+      approvedByUserId: 'cashier',
+      approvalPolicy: DISCOUNT_RIGHT_APPROVAL_POLICY,
+      selfApproved: false,
+      credentialId: null,
+    };
+    const held = rightsFixture(['cashier']);
+    await expect(
+      confirmCounterApproval(held as never, scope, 'DISCOUNT', approval)
+    ).resolves.toBeUndefined();
+    const revoked = rightsFixture([]);
+    await expect(
+      confirmCounterApproval(revoked as never, scope, 'DISCOUNT', approval)
+    ).rejects.toBeInstanceOf(CounterApprovalDenied);
+  });
+
+  it('refuses the right recorded for someone other than the operator, or for another kind', async () => {
+    const db = rightsFixture(['cashier', 'manager']);
+    const approval = {
+      approvedByUserId: 'manager',
+      approvalPolicy: DISCOUNT_RIGHT_APPROVAL_POLICY,
+      selfApproved: false,
+      credentialId: null,
+    };
+    await expect(
+      confirmCounterApproval(db as never, scope, 'DISCOUNT', approval)
+    ).rejects.toBeInstanceOf(CounterApprovalDenied);
+    await expect(
+      confirmCounterApproval(db as never, scope, 'TENDER_DISCARD', {
+        ...approval,
+        approvedByUserId: 'cashier',
+      })
+    ).rejects.toBeInstanceOf(CounterApprovalDenied);
   });
 });

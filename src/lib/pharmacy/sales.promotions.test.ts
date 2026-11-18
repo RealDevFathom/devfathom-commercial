@@ -22,6 +22,7 @@ vi.mock('./voucher-scope', async () => ({
   assertVoucherEligibleLine: vi.fn(),
 }));
 
+import { COUNTER_DISCOUNT_NOTICES } from './counter-messages';
 import { addSaleLine } from './sales';
 import { allocateForSale } from './stock-ledger';
 
@@ -104,6 +105,18 @@ function counterDb(
         { id: 'pack-a', level: 'PACK', parentPackLevelId: null, unitsPerParent: 10 },
       ]),
     },
+    // DEV-66: no configured discount policy, so the default cost floor applies.
+    pharmacyBranch: {
+      findFirst: vi.fn<(args: unknown) => Promise<{ discountPolicy: unknown }>>(async () => ({
+        discountPolicy: null,
+      })),
+    },
+    // DEV-66: the owner has set a 10% maximum discount.
+    organization: {
+      findFirst: vi.fn<(args: unknown) => Promise<{ pharmacyMaxDiscountBps: unknown }>>(
+        async () => ({ pharmacyMaxDiscountBps: 1_000 })
+      ),
+    },
     medicinePackMrp: { findMany: vi.fn(async () => []) },
     pharmacyPromotion: { findMany: vi.fn(async () => promotions) },
     pharmacySaleLine: {
@@ -141,6 +154,54 @@ afterEach(() => {
 });
 
 describe('addSaleLine counter promotion hook (#727)', () => {
+  it('skips a promotion that would breach the branch minimum margin and still sells at full price', async () => {
+    // Gross 1000, cost 500, 10% off leaves 900. A 50% minimum margin needs 1000.
+    const db = counterDb();
+    db.pharmacyBranch.findFirst.mockResolvedValue({ discountPolicy: { minMarginBps: 5_000 } });
+
+    const result = await addSaleLine(db as never, scope, lineInput, {
+      applyCounterPromotions: true,
+    });
+    // Skipped for margin, not for the owner's maximum: no maximum notice.
+    expect(result).not.toHaveProperty('promotionNotice');
+
+    expect(db.pharmacySaleLine.create.mock.calls[0]![0].data).toMatchObject({
+      grossMinor: 1_000,
+      discountMinor: 0,
+    });
+    expect(db.pharmacySaleLine.create.mock.calls[0]![0].data.promotionId ?? null).toBeNull();
+  });
+
+  it("skips a promotion deeper than the owner's maximum and still sells at full price", async () => {
+    // 10% off 1000 is within the cost and margin floors, but the owner allows 5%.
+    const db = counterDb();
+    db.organization.findFirst.mockResolvedValue({ pharmacyMaxDiscountBps: 500 });
+
+    const result = await addSaleLine(db as never, scope, lineInput, {
+      applyCounterPromotions: true,
+    });
+
+    expect(db.pharmacySaleLine.create.mock.calls[0]![0].data).toMatchObject({
+      grossMinor: 1_000,
+      discountMinor: 0,
+    });
+    expect(db.pharmacySaleLine.create.mock.calls[0]![0].data.promotionId ?? null).toBeNull();
+    // The cashier is told why the offer did not apply.
+    expect(result).toMatchObject({ promotionNotice: 'PROMOTION_ABOVE_MAXIMUM' });
+    expect(COUNTER_DISCOUNT_NOTICES.PROMOTION_ABOVE_MAXIMUM).toBe(
+      "This promotion is above the owner's maximum discount, so the item was added at full price."
+    );
+  });
+
+  it('applies a promotion within the maximum and gives no notice', async () => {
+    const db = counterDb();
+    const result = await addSaleLine(db as never, scope, lineInput, {
+      applyCounterPromotions: true,
+    });
+    expect(result).not.toHaveProperty('promotionNotice');
+    expect(db.pharmacySaleLine.create.mock.calls[0]![0].data).toMatchObject({ discountMinor: 100 });
+  });
+
   it('prices the line with the live promotion and attributes it', async () => {
     const db = counterDb();
 

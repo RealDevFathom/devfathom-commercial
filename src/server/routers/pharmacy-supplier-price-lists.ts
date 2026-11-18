@@ -15,8 +15,9 @@ import {
 /**
  * DEV-681 — supplier price lists. Deny by default: importing and reading the
  * alerts is procurement work a manager or buyer may do; turning a draft into a
- * shop-wide shelf price needs the same authority as `setPackPrice` (owner or
- * administrator). The importer never approves their own list, except a solo
+ * shop-wide shelf price needs admin access here. (`setPackPrice` is a reviewed
+ * catalogue edit: one person proposes it and a reviewer, or a solo owner with a
+ * fresh PIN, approves it.) The importer never approves their own list, except a solo
  * owner who re-enters their PIN.
  */
 export const PRICE_LIST_PROCUREMENT = {

@@ -194,6 +194,7 @@ describe('corrected reports', () => {
       proposalId: null,
       reviewedOrgPriceId: null,
       createdById: 'actor',
+      proposedById: null,
       createdAt: new Date(),
       needsReview: true,
     };

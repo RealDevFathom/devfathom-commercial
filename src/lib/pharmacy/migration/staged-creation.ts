@@ -448,7 +448,9 @@ export async function createStagedMedicinesChunk(
         sellingPriceMinor: null,
         effectiveFrom: now,
         source: 'import',
+        // DEV-928: the approver wrote the price; the editor who asked for the creation proposed it.
         createdById: request.reviewerId,
+        proposedById: request.editorId,
       });
     for (const [type, value] of [
       ['GENERIC', plan.genericName],

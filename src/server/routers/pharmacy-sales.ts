@@ -44,6 +44,20 @@ import {
   readManualPaymentSettings,
   saveManualPaymentSettings,
 } from '@/lib/pharmacy/manual-payment-settings';
+import { discountPolicySchema, maxDiscountBpsSchema } from '@/lib/pharmacy/smart-discount';
+import {
+  OWNER_EXPORT_PIN_MAX_INPUT,
+  verifyOwnerExportPin,
+} from '@/lib/pharmacy/owner-data-export-pin';
+import {
+  MAX_DISCOUNT_CHANGE_REFUSED,
+  readDiscountPolicySettings,
+  readDiscountSuggestions,
+  readMaxDiscountSettings,
+  recordCompetitorPrice,
+  saveDiscountPolicy,
+  saveMaxDiscountBps,
+} from '@/lib/pharmacy/smart-discount-service';
 import {
   readKhataReminderSettings,
   saveKhataReminderSettings,
@@ -1406,6 +1420,149 @@ export const pharmacySalesRouter = router({
       });
       const scope = await branchScopeOrForbidden(ctx, input.branchId);
       return ctx.db.$transaction((tx) => saveKhataReminderSettings(txDb(tx), scope, input));
+    }),
+  /**
+   * DEV-66: the owner's maximum discount for the organization (none set until the owner sets one), and
+   * whether the caller is the owner who may change it. Anyone at the branch may read it.
+   */
+  discountMaximum: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      const settings = await readMaxDiscountSettings(ctx.db, scope);
+      // A support or impersonation session may see the setting but never change it.
+      const support = Boolean(ctx.support || ctx.session?.user?.isSupportSession);
+      return { ...settings, canChange: settings.canChange && !support };
+    }),
+  /**
+   * DEV-66: the owner alone sets the maximum discount; it binds everyone. Every change needs
+   * the owner's fresh PIN (as the other owner settings do) and is audited with the old and
+   * the new value. A support or impersonation session is refused.
+   */
+  saveDiscountMaximum: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          maxDiscountBps: maxDiscountBpsSchema,
+          pin: z.string().max(OWNER_EXPORT_PIN_MAX_INPUT),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      // The PIN never reaches the audit row.
+      annotateAudit(ctx, { skipInput: true, targetType: 'Organization' });
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      if (ctx.support || ctx.session?.user?.isSupportSession)
+        throw new TRPCError({ code: 'FORBIDDEN', message: MAX_DISCOUNT_CHANGE_REFUSED });
+      if (!(await readMaxDiscountSettings(ctx.db, scope)).canChange)
+        throw new TRPCError({ code: 'FORBIDDEN', message: MAX_DISCOUNT_CHANGE_REFUSED });
+      if (!input.pin)
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Enter your own PIN to confirm.' });
+      // Its own tenant transaction, so a wrong-PIN strike commits even though we refuse.
+      const pin = await verifyOwnerExportPin({
+        organizationId: scope.organizationId,
+        userId: scope.actorId,
+        pin: input.pin,
+        action: 'pharmacy.maxDiscount',
+      });
+      if (pin === 'NO_PIN')
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Set up your own staff PIN first, then try again.',
+        });
+      if (pin === 'LOCKED')
+        throw new TRPCError({
+          code: 'TOO_MANY_REQUESTS',
+          message: 'Your PIN is locked after too many wrong tries. Wait and try again.',
+        });
+      if (pin !== 'OK')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'That PIN is not correct.' });
+      const saved = await ctx.db.$transaction((tx) =>
+        saveMaxDiscountBps(txDb(tx), scope, input.maxDiscountBps)
+      );
+      annotateAudit(ctx, {
+        operation: 'UPDATE',
+        targetType: 'Organization',
+        targetId: scope.organizationId,
+        description: `Changed the maximum discount from ${saved.previousMaxDiscountBps / 100}% to ${saved.maxDiscountBps / 100}%`,
+        changes: {
+          pharmacyMaxDiscountBps: {
+            before: saved.previousMaxDiscountBps,
+            after: saved.maxDiscountBps,
+          },
+        },
+        metadata: { pinVerified: true },
+      });
+      return { maxDiscountBps: saved.maxDiscountBps };
+    }),
+  /** DEV-66: smart-discount policy (minimum margin, evidence windows). */
+  discountPolicy: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await marginScopeFor(ctx, input.branchId, ['pharmacy:manage']);
+      return readDiscountPolicySettings(ctx.db, scope);
+    }),
+  saveDiscountPolicy: adminProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          revision: z.number().int().nonnegative(),
+          policy: discountPolicySchema,
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, {
+        targetType: 'PharmacyBranch',
+        targetId: input.branchId,
+        metadata: { revision: input.revision, discountPolicy: input.policy },
+      });
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      return ctx.db.$transaction((tx) => saveDiscountPolicy(txDb(tx), scope, input));
+    }),
+  /** DEV-66: append-only competitor discount log (price per sealed pack). */
+  recordCompetitorPrice: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          medicineId: z.string().trim().min(1).max(128),
+          packLevelId: z.string().trim().min(1).max(128),
+          competitorLabel: z.string().trim().min(1).max(80),
+          observedPriceMinor: z.number().int().positive().max(1_000_000_000),
+          observedAt: z.coerce.date(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await marginScopeFor(ctx, input.branchId, ['pharmacy:manage']);
+      annotateAudit(ctx, {
+        targetType: 'PharmacyCompetitorPriceObservation',
+        metadata: { medicineId: input.medicineId },
+      });
+      return recordCompetitorPrice(ctx.db, scope, input);
+    }),
+  /**
+   * DEV-66: discount suggestions capped at MRP, floored by the minimum-margin
+   * guard, never for regulated (Rx-only, restricted, controlled) stock.
+   */
+  discountSuggestions: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          medicineIds: z.array(z.string().trim().min(1).max(128)).min(1).max(50),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = await marginScopeFor(ctx, input.branchId, [
+        'pharmacy:dispense',
+        'pharmacy:manage',
+      ]);
+      return readDiscountSuggestions(ctx.db, scope, { medicineIds: input.medicineIds });
     }),
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });
