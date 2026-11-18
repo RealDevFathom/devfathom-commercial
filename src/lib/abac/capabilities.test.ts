@@ -22,6 +22,8 @@ export const intendedPharmacyGrants = {
     'pharmacy:close',
     'pharmacy:manage',
     'pharmacy:procurement-approve',
+    // DEV-19: the proprietor submits catalogue edits for review.
+    'pharmacy:catalogue-edit',
   ],
   pharmacist: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
   manager: [

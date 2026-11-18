@@ -478,7 +478,7 @@ describe('M4-L1 capability reconciliation (additive-only)', () => {
 });
 
 describe('optional pharmacy Owner / Operator', () => {
-  it('offers exactly fifteen explicit grants accepted by the pharmacy capability catalog', () => {
+  it('offers exactly sixteen explicit grants accepted by the pharmacy capability catalog', () => {
     const templates = roleTemplatesForVertical('PHARMACY').filter(
       (role) => role.key === 'owner-operator'
     );
@@ -500,6 +500,7 @@ describe('optional pharmacy Owner / Operator', () => {
           'pharmacy:close',
           'pharmacy:manage',
           'pharmacy:procurement-approve',
+          'pharmacy:catalogue-edit',
           'sop:manage',
           'sop:complete',
           'sop:verify',

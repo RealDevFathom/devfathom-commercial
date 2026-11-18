@@ -695,11 +695,12 @@ model Medicine {
 model PharmacyCatalogueEdit {
   id                String   @id @default(cuid())
   organizationId    String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  medicineId        String
+  // Null only for a queued createIngredient: a new ingredient belongs to no medicine.
+  medicineId        String?
   editorId          String
   editor            User     @relation("CatalogueEditEditor", fields: [organizationId, editorId], references: [organizationId, id], onDelete: Restrict)
   operation         String   @default("UPDATE_MEDICINE")
-  medicine          Medicine @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
+  medicine          Medicine? @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
   changes           Json
   expectedUpdatedAt DateTime
   status            String   @default("PENDING")
@@ -6016,6 +6017,9 @@ model Organization {
   /// DEV-908: the owner switches on recorded stock transfers between their own
   /// licensed branches. Off by default; controlled drugs never move this way.
   pharmacyBranchTransfersEnabled Boolean                       @default(false)
+  /// DEV-907: owner switch for the counter's "also in stock at another branch"
+  /// line. Off by default; branch names only, never controlled drugs.
+  pharmacyOtherBranchAvailability Boolean                      @default(false)
   /// DEV-66: the owner's maximum discount on a pharmacy line, in basis points of the
   /// undiscounted price (stored default 1000 = 10%). Enforced on the server for everyone.
   pharmacyMaxDiscountBps        Int                            @default(1000)
@@ -15117,6 +15121,26 @@ model PharmacyDeviceLotQuota {
   @@unique([organizationId, id], map: "pharmacy_device_lot_quotas_org_id_key")
   @@index([organizationId, inventoryLotId, stockLocationId], map: "pharmacy_device_lot_quotas_bucket_idx")
   @@map("pharmacy_device_lot_quotas")
+}
+
+/// #518 / DEV-753 / DEV-911 — one owner-policy row per pharmacy organization. The table and
+/// its guard and audit triggers are created by migrations; application writes go through
+/// raw SQL so the triggers stamp the actor, version and audit row. This model exists so the
+/// policy readers can use an ordinary typed read. A missing row means every default below.
+model PharmacyOwnerPolicy {
+  organizationId                    String   @id @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  allowCashierRxSale                Boolean  @default(false)
+  updatedByUserId                   String?
+  updatedAt                         DateTime @default(now())
+  supplierComplianceChecksEnabled   Boolean  @default(true)
+  supplierCompliancePolicyVersion   Int      @default(0)
+  supplierComplianceAcknowledgement String?
+  /// DEV-911: the pharmacist check and prescription record at each sale. ON by default.
+  pharmacistCheckEnabled            Boolean  @default(true)
+  pharmacistCheckPolicyVersion      Int      @default(0)
+  pharmacistCheckAcknowledgement    String?
+
+  @@map("pharmacy_owner_policies")
 }
 
 /// RPT-03 — one owner's explicit daily digest opt-in for one active branch.

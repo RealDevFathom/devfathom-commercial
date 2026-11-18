@@ -333,14 +333,16 @@ export const navigation: NavItem[] = [
     group: 'Pharmacy',
     module: 'pharmacy-core',
     exact: true,
-    // The owner's data export is offered from the onboarding page.
-    activePrefixes: ['/pharmacy/settings/data-export'],
+    // The owner's data export and pharmacist-check setting are offered from the onboarding page.
+    activePrefixes: ['/pharmacy/settings/data-export', '/pharmacy/settings/pharmacist-check'],
   },
   {
     label: 'Medicine catalog',
     href: '/pharmacy/medicines',
     icon: Pill,
     adminOnly: true,
+    // DEV-19: a pharmacist reviewer opens the catalogue approval queue there.
+    memberCapabilities: ['pharmacy:catalogue-review'],
     group: 'Pharmacy',
     module: 'pharmacy-core',
   },
