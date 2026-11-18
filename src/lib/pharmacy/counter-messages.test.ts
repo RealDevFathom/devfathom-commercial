@@ -111,6 +111,8 @@ describe('counterErrorMessage', () => {
       'CASHIER_NOT_ASSIGNED',
       // DEV-712: a payment whose attempt a supervisor discarded.
       'TENDER_ATTEMPT_DISCARDED',
+      // DEV-743: a terminal payment still open on the day being closed.
+      'CARD_TERMINAL_PAYMENT_OPEN',
     ] as const;
 
     for (const reason of settlementReasons) {

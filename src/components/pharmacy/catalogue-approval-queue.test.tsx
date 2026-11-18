@@ -216,9 +216,9 @@ describe('DEV-766 catalogue approval queue', () => {
     ];
     render(<CatalogueApprovalQueue />);
     expect(screen.getByText('Set pack price')).toBeVisible();
-    expect(screen.getByText('MRP (minor units)')).toBeVisible();
+    expect(screen.getByText('MRP (in paisa)')).toBeVisible();
     expect(screen.getByText('50000')).toBeVisible();
-    expect(screen.getByText('Selling price (minor units)')).toBeVisible();
+    expect(screen.getByText('Selling price (in paisa)')).toBeVisible();
     expect(screen.getByText('Sell at MRP')).toBeVisible();
     expect(screen.getByText('All branches')).toBeVisible();
     expect(screen.queryByText('pack_strip')).not.toBeInTheDocument();

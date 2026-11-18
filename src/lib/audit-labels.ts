@@ -101,6 +101,7 @@ export function auditApproverIds(row: {
 /** Plain names for the areas a pharmacy action belongs to. */
 const AREA_LABELS: Readonly<Record<string, string>> = {
   pharmacySales: 'Counter and sales',
+  pharmacyCardTerminal: 'Card terminal payments',
   pharmacyOffline: 'Offline counter',
   pharmacyOrdering: 'Customer orders',
   pharmacyPrinting: 'Receipt printing',

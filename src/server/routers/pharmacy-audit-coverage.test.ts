@@ -9,7 +9,12 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
  *    calling it really records an entry, even when it is refused. A new pharmacy
  *    mutation built on `publicProcedure` (or any base without the middleware)
  *    fails here unless it is added to MUTATION_EXEMPTIONS with a reason.
- * 2. Every pharmacy REST route that accepts a write is classified below: how it
+ * 2. Every pharmacy mutation's entry names the branch it was taken at: its
+ *    request carries the branch the recorder reads, or its handler tags the
+ *    branch of the record it loads (`annotateAuditBranch`). A new pharmacy
+ *    mutation with neither fails here unless WORKSPACE_WIDE says why it has no
+ *    branch. Without a branch, a branch-limited administrator never sees it.
+ * 3. Every pharmacy REST route that accepts a write is classified below: how it
  *    records its entry, or why it has no workspace person to record. A new route
  *    fails here until it is classified.
  */
@@ -37,13 +42,134 @@ const MUTATION_EXEMPTIONS: Readonly<Record<string, string>> = {
     'An outside supplier uploading to a signed one-time link: no workspace user. The document row records it; staff review is audited.',
 };
 
+/**
+ * Pharmacy mutations whose entry carries no branch, grouped by why. Each one
+ * acts on something the whole pharmacy shares, so only the owner sees its
+ * entry. Anything done at one branch must carry that branch instead.
+ */
+const WORKSPACE_WIDE: ReadonlyArray<{ reason: string; actions: readonly string[] }> = [
+  {
+    reason:
+      'The medicine register, DRAP reference data, manufacturer batches and recalls: one register for the whole pharmacy, not held per branch. Branch stock acting on them (counts, recall acknowledgement) carries its branch.',
+    actions: [
+      'pharmacyInventory.closeRecall',
+      'pharmacyInventory.confirmDrapPrice',
+      'pharmacyInventory.confirmDrapRecall',
+      'pharmacyInventory.createRecall',
+      'pharmacyInventory.dismissDrapRecall',
+      'pharmacyInventory.ingestDrapFile',
+      'pharmacyInventory.ingestDrapManual',
+      'pharmacyInventory.registerBatch',
+      'pharmacyInventory.reverseDrapRecall',
+      'pharmacyInventory.setBatchState',
+      'pharmacyMedicine.addAlias',
+      'pharmacyMedicine.addBarcode',
+      'pharmacyMedicine.addMedicineDraft',
+      'pharmacyMedicine.configureReferenceConnector',
+      'pharmacyMedicine.confirmPrices',
+      'pharmacyMedicine.createIngredient',
+      'pharmacyMedicine.createMedicine',
+      'pharmacyMedicine.createPackLevel',
+      'pharmacyMedicine.decideCatalogueEdit',
+      'pharmacyMedicine.decideReferenceConnectorProposal',
+      'pharmacyMedicine.dismissDrapPriceAlert',
+      'pharmacyMedicine.ingestPriceNotices',
+      'pharmacyMedicine.proposeCatalogueEdit',
+      'pharmacyMedicine.publishAssertions',
+      'pharmacyMedicine.recordPrintedMrp',
+      'pharmacyMedicine.recordReviewDecision',
+      'pharmacyMedicine.revisePackLevel',
+      'pharmacyMedicine.runReferenceConnectorNow',
+      'pharmacyMedicine.runStagedMedicineCreation',
+      'pharmacyMedicine.setPackBarcode',
+      'pharmacyMedicine.setRetailDetails',
+      'pharmacyMedicine.supersedePublication',
+    ],
+  },
+  {
+    reason:
+      'Supplier records, licences, authorisation and supplier price lists are shared by every branch; the orders and goods-in that use them carry their branch.',
+    actions: [
+      'pharmacyPurchasing.createSupplier',
+      'pharmacyPurchasing.recordSupplierLicence',
+      'pharmacyPurchasing.setSupplierAuthorization',
+      'pharmacyPurchasing.verifySupplierLicence',
+      'pharmacySupplierPriceLists.decide',
+      'pharmacySupplierPriceLists.import',
+    ],
+  },
+  {
+    reason:
+      'Patients, prescribers, consent, prescriptions and their scans are workspace records with no branch in the data model; the counter sale that dispenses one carries its branch.',
+    actions: [
+      'pharmacyPrescriptions.capture',
+      'pharmacyPrescriptions.createPatient',
+      'pharmacyPrescriptions.createPrescriber',
+      'pharmacyPrescriptions.draftCartFromSource',
+      'pharmacyPrescriptions.extractSource',
+      'pharmacyPrescriptions.fill',
+      'pharmacyPrescriptions.recordConsent',
+      'pharmacyPrescriptions.uploadSource',
+    ],
+  },
+  {
+    reason:
+      'Workspace settings and policies the owner sets once for every branch: transfers between branches, pharmacist checks, supplier checks, set-up steps, the procedure library, record retention and legal holds.',
+    actions: [
+      'pharmacyBranchAssignments.setOtherBranchAvailability',
+      'pharmacyInventory.setBranchTransfersEnabled',
+      'pharmacyOnboarding.recordFbrTier1Check',
+      'pharmacyOnboarding.recordGate',
+      'pharmacyPharmacistCheck.setPolicy',
+      'pharmacySafety.installSopLibrary',
+      'pharmacySafety.recordLegalHold',
+      'pharmacySafety.setRetentionClass',
+      'pharmacySop.installLibrary',
+      'pharmacySupplierCompliance.setPolicy',
+    ],
+  },
+  {
+    reason:
+      'Reads an uploaded stock file only to suggest its column mapping and writes nothing; the preview and import that follow name their branch.',
+    actions: ['pharmacyOwnerImport.upload'],
+  },
+  {
+    reason:
+      "The person's own counter keys, dashboard layout, purchase approval PIN and approval PIN: they follow the person to every branch.",
+    actions: [
+      'pharmacyPin.setMine',
+      'pharmacyPurchasing.provisionMyPurchasePin',
+      'pharmacyReports.updatePreferences',
+      'pharmacySales.counterSaveKeymap',
+    ],
+  },
+  {
+    reason:
+      "Resetting another member's approval PIN: the PIN is one per person and valid at every branch, and the right to reset it (owner, administrator or staff:manage) is workspace-wide with no branch check. The entry names the member.",
+    actions: ['pharmacyPin.resetForMember'],
+  },
+];
+
+const WORKSPACE_WIDE_ACTIONS = new Map(
+  WORKSPACE_WIDE.flatMap(({ reason, actions }) => actions.map((key) => [key, reason] as const))
+);
+
+/**
+ * Router helpers that tag the audit entry with a loaded record's branch, so a
+ * procedure calling one tags it too. Each is checked below to really do so.
+ */
+const BRANCH_TAGGING_HELPERS: Readonly<Record<string, readonly string[]>> = {
+  'pharmacy-dispensing.ts': ['tagSaleLineBranch'],
+};
+
 type AnyProcedure = {
-  _def: { type: string; middlewares: readonly unknown[] };
+  _def: { type: string; middlewares: readonly unknown[]; inputs?: readonly unknown[] };
 };
 
 let appProcedures: Record<string, AnyProcedure>;
 let stagedProcedures: Record<string, AnyProcedure>;
 let procedureWritesAudit: (procedure: AnyProcedure) => boolean;
+let auditBranchId: (input: unknown) => string | null;
 let appRouter: { createCaller: (ctx: unknown) => unknown };
 let stagedRouter: { createCaller: (ctx: unknown) => unknown };
 
@@ -56,6 +182,7 @@ beforeAll(async () => {
   appProcedures = app.appRouter._def.procedures as never;
   stagedProcedures = staged.pharmacyStagedReviewRouter._def.procedures as never;
   procedureWritesAudit = trpc.procedureWritesAudit as never;
+  auditBranchId = (await import('@/server/audit')).auditBranchId;
 }, 120_000);
 
 beforeEach(() => {
@@ -153,6 +280,168 @@ describe('DEV-913 pharmacy audit coverage guard', () => {
     const procedures = probe._def.procedures as unknown as Record<string, AnyProcedure>;
     expect(procedureWritesAudit(procedures.bare!)).toBe(false);
     expect(procedureWritesAudit(procedures.audited!)).toBe(true);
+  });
+});
+
+// ── Branch on every entry ───────────────────────────────────────────────────
+
+/** Request fields the recorder takes the branch from (`auditBranchId`). */
+const BRANCH_FIELDS = ['branchId', 'pharmacyBranchId', 'scope.branchId'] as const;
+
+type ZodLike = { _zod?: { def?: Record<string, unknown> } };
+
+function zodDef(schema: unknown): Record<string, unknown> | undefined {
+  return (schema as ZodLike | undefined)?._zod?.def;
+}
+
+/** Unwraps optional, default, pipe and similar wrappers down to the shape. */
+function unwrapSchema(schema: unknown): unknown {
+  let current = schema;
+  for (let depth = 0; depth < 20; depth += 1) {
+    const def = zodDef(current);
+    if (!def) return current;
+    if (
+      ['optional', 'nullable', 'default', 'prefault', 'readonly', 'catch', 'nonoptional'].includes(
+        def.type as string
+      )
+    )
+      current = def.innerType;
+    else if (def.type === 'pipe') current = def.in;
+    else if (def.type === 'lazy') current = (def.getter as () => unknown)();
+    else return current;
+  }
+  return current;
+}
+
+/** Top-level field names, plus one level of nesting as `outer.inner`. */
+function schemaFields(schema: unknown, nested = true): string[] {
+  const def = zodDef(unwrapSchema(schema));
+  if (!def) return [];
+  if (def.type === 'object')
+    return Object.entries(def.shape as Record<string, unknown>).flatMap(([key, value]) => [
+      key,
+      ...(nested ? schemaFields(value, false).map((inner) => `${key}.${inner}`) : []),
+    ]);
+  if (def.type === 'union')
+    return (def.options as unknown[]).flatMap((option) => schemaFields(option, nested));
+  if (def.type === 'intersection')
+    return [...schemaFields(def.left, nested), ...schemaFields(def.right, nested)];
+  return [];
+}
+
+function requestCarriesBranch(procedure: AnyProcedure): boolean {
+  const fields = (procedure._def.inputs ?? []).flatMap((schema) => schemaFields(schema));
+  return BRANCH_FIELDS.some((field) => fields.includes(field));
+}
+
+const ROUTERS_DIR = path.join(process.cwd(), 'src/server/routers');
+
+/** `pharmacyCameras` -> `pharmacy-cameras.ts`, read from the app router's imports. */
+function namespaceFiles(): Map<string, string> {
+  const app = readFileSync(path.join(ROUTERS_DIR, '_app.ts'), 'utf8');
+  const imports = new Map(
+    [...app.matchAll(/import \{ (\w+) \} from '\.\/([\w-]+)'/g)].map((m) => [m[1]!, m[2]!])
+  );
+  return new Map(
+    [...app.matchAll(/^\s+(pharmacy\w+): (\w+),$/gm)].map((m) => [
+      m[1]!,
+      `${imports.get(m[2]!)}.ts`,
+    ])
+  );
+}
+
+/** The source of one top-level procedure in its router file, or null. */
+function procedureSource(file: string, name: string): string | null {
+  const source = readFileSync(path.join(ROUTERS_DIR, file), 'utf8');
+  const start = new RegExp(`^  ${name}: `, 'm').exec(source);
+  if (!start) return null;
+  const rest = source.slice(start.index + 2);
+  const end = /^ {2}[A-Za-z_]\w*: |^\}\);?$/m.exec(rest.slice(name.length + 2));
+  return end ? rest.slice(0, end.index + name.length + 2) : rest;
+}
+
+const TAGS_BRANCH = /annotateAuditBranch\(|metadata:\s*\{[^}]*\bbranchId\b/;
+
+function handlerTagsBranch(file: string, name: string): boolean {
+  const body = procedureSource(file, name);
+  if (!body) return false;
+  if (TAGS_BRANCH.test(body)) return true;
+  return (BRANCH_TAGGING_HELPERS[file] ?? []).some((helper) =>
+    new RegExp(`\\b${helper}\\(`).test(body)
+  );
+}
+
+describe('DEV-913 pharmacy audit branch guard', () => {
+  it('reads the branch from every request field the guard accepts', () => {
+    expect(auditBranchId({ branchId: 'branch_a' })).toBe('branch_a');
+    expect(auditBranchId({ pharmacyBranchId: 'branch_a' })).toBe('branch_a');
+    expect(auditBranchId({ scope: { branchId: 'branch_a' } })).toBe('branch_a');
+  });
+
+  it('puts the branch on the entry of every pharmacy mutation, or names why it has none', () => {
+    const files = namespaceFiles();
+    const missing = pharmacyMutations(appProcedures).filter((key) => {
+      if (MUTATION_EXEMPTIONS[key] || WORKSPACE_WIDE_ACTIONS.has(key)) return false;
+      if (requestCarriesBranch(appProcedures[key]!)) return false;
+      const [namespace, name] = key.split('.') as [string, string];
+      return !handlerTagsBranch(files.get(namespace) ?? '', name);
+    });
+    const staged = pharmacyMutations(stagedProcedures, true).filter(
+      (key) => !requestCarriesBranch(stagedProcedures[key]!)
+    );
+    expect(missing).toEqual([]);
+    expect(staged).toEqual([]);
+  });
+
+  it('fails a mutation whose request and handler name no branch', () => {
+    const files = namespaceFiles();
+    // A workspace-wide action, judged without its listed reason, is caught.
+    expect(requestCarriesBranch(appProcedures['pharmacyMedicine.createIngredient']!)).toBe(false);
+    expect(handlerTagsBranch(files.get('pharmacyMedicine')!, 'createIngredient')).toBe(false);
+    // Newly tagged from the record they load.
+    for (const key of [
+      'pharmacyCameras.configure',
+      'pharmacyCameras.capturePending',
+      'pharmacyCameras.revokeViewerGrant',
+      'pharmacyDispensing.decideReview',
+      'pharmacyPurchasing.approvePurchaseOrder',
+      'pharmacyPurchasing.submitRequisition',
+      'pharmacySafety.approveRegisterIncident',
+      'pharmacySupplierLinks.revoke',
+      'pharmacySales.discardTenderAttempt',
+    ]) {
+      const [namespace, name] = key.split('.') as [string, string];
+      expect(handlerTagsBranch(files.get(namespace)!, name), key).toBe(true);
+    }
+  });
+
+  it('checks that each branch-tagging helper really tags the entry', () => {
+    for (const [file, helpers] of Object.entries(BRANCH_TAGGING_HELPERS)) {
+      const source = readFileSync(path.join(ROUTERS_DIR, file), 'utf8');
+      for (const helper of helpers) {
+        const body = new RegExp(`function ${helper}\\([\\s\\S]*?\\n\\}`).exec(source)?.[0];
+        expect(body, `${file} ${helper}`).toBeDefined();
+        expect(body, `${file} ${helper}`).toMatch(/annotateAuditBranch\(/);
+      }
+    }
+  });
+
+  it('keeps every workspace-wide action current, reasoned and truly branchless', () => {
+    const files = namespaceFiles();
+    const seen = new Set<string>();
+    for (const { reason, actions } of WORKSPACE_WIDE) {
+      expect(reason.length, actions.join()).toBeGreaterThan(40);
+      for (const key of actions) {
+        expect(seen.has(key), `${key} listed twice`).toBe(false);
+        seen.add(key);
+        expect(appProcedures[key]?._def.type, key).toBe('mutation');
+        expect(MUTATION_EXEMPTIONS[key], key).toBeUndefined();
+        // Once an action carries a branch it leaves this list.
+        expect(requestCarriesBranch(appProcedures[key]!), key).toBe(false);
+        const [namespace, name] = key.split('.') as [string, string];
+        expect(handlerTagsBranch(files.get(namespace)!, name), key).toBe(false);
+      }
+    }
   });
 });
 
