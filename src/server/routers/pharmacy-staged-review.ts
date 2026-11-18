@@ -8,6 +8,7 @@ import { OwnerImportError, parseOwnerUpload } from '@/lib/pharmacy/migration/own
 import { excelCsvProfiler } from '@/lib/pharmacy/migration/excel-csv-profiler';
 import { profileTable } from '@/lib/pharmacy/migration/profiler';
 import { recordSource, persistProfile } from '@/lib/pharmacy/migration/workbench';
+import { applyLegacyControlledClass } from '@/lib/pharmacy/migration/legacy-controlled';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { adminProcedure, router, type TRPCContext } from '../trpc';
@@ -102,14 +103,19 @@ export const pharmacyStagedReviewRouter = router({
           row.rawPayload.__source_sha256 = source.contentHash;
           row.rawPayload.__source_row = String(row.rowNumber);
         }
+        const persisted = await persistProfile(tx, {
+          sourceId: source.id,
+          label: input.fileName,
+          profiler,
+          result,
+        });
+        // DEV-854: a NARCOTICS-class row is imported as controlled, with no review hold.
+        const legacy = await applyLegacyControlledClass(tx, org, result.rows);
         return {
           sourceId: source.id,
-          ...(await persistProfile(tx, {
-            sourceId: source.id,
-            label: input.fileName,
-            profiler,
-            result,
-          })),
+          ...persisted,
+          controlledFromClass: legacy.controlledRows,
+          controlledMedicineIds: legacy.medicineIds,
         };
       });
       annotateAudit(ctx, {
@@ -119,9 +125,12 @@ export const pharmacyStagedReviewRouter = router({
           quantityUnit: input.quantityUnit,
           mapping: input.mapping,
           sourceId: saved.sourceId,
+          controlledFromClass: saved.controlledFromClass,
+          controlledMedicineIds: saved.controlledMedicineIds,
         },
       });
-      return saved;
+      const { controlledMedicineIds, ...summary } = saved;
+      return { ...summary, controlledMedicinesFlagged: controlledMedicineIds.length };
     }),
     stagedBranches: adminProcedure.query(({ ctx }) =>
       ctx.db.pharmacyBranch.findMany({

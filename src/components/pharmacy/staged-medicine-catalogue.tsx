@@ -302,6 +302,7 @@ export async function StagedMedicineCatalogue({
                       <p className="text-xs text-text-muted">
                         Row {row.rowNumber}
                         {row.collision ? ' · Name collision — keep separate' : ''}
+                        {row.controlled ? ' · Controlled medicine (legacy class NARCOTICS)' : ''}
                       </p>
                     </td>
                     {(['QTY', 'saleprice', 'purprice', 'UnitPrice', 'PackUnits'] as const).map(
@@ -346,6 +347,9 @@ export async function StagedMedicineCatalogue({
           <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
             {Object.entries({
               Catalogue: detail.catalogueStatus,
+              'Controlled medicine': detail.controlled
+                ? 'Yes — set from legacy class NARCOTICS'
+                : 'No — not in the NARCOTICS class',
               Draft: detail.draftStatus,
               Verified: 'Not established',
               'Sellable stock': 'Not established',
@@ -380,9 +384,11 @@ export async function StagedMedicineCatalogue({
             ))}
           </dl>
           <p className="mt-4 text-sm text-text-muted">
-            Name is the source product name. Lowercase name, classname and Category are unverified
-            legacy groupings. aliasname is a legacy code, not a verified barcode. All price columns
-            remain references; no MRP or cost conversion is applied.
+            Name is the source product name. A classname of NARCOTICS imports the item as a
+            controlled medicine; correct a wrong flag through the catalogue edit path. Other
+            classname values, lowercase name and Category are unverified legacy groupings. aliasname
+            is a legacy code, not a verified barcode. All price columns remain references; no MRP or
+            cost conversion is applied.
           </p>
           <h3 className="mt-6 font-semibold">Retained review flags and exceptions</h3>
           <ul className="mt-3 space-y-1 break-words text-sm">

@@ -140,6 +140,7 @@ import {
 import {
   formatMinor,
   formatShortExpiry,
+  sindhCashMemoSelected,
   type CounterReceipt,
   type CounterReceiptLocale,
 } from '@/lib/pharmacy/counter-receipt';
@@ -870,6 +871,14 @@ function ScopedPharmacyCounterConsole({
       trpc: { abortOnUnmount: true },
     }
   );
+  const searchState =
+    !branchAuthorized || trimmedQuery.length < 2 || (scannerQuery && !searchCurrent)
+      ? 'idle'
+      : !searchCurrent || searchQuery.isFetching || searchQuery.isPlaceholderData
+        ? 'loading'
+        : searchQuery.isError
+          ? 'error'
+          : 'ready';
 
   const cartQuery = trpc.pharmacySales.counterCart.useQuery(
     { branchId, saleId: saleId ?? '' },
@@ -2409,6 +2418,7 @@ function ScopedPharmacyCounterConsole({
         payerName?: string;
         referenceSkipped?: boolean;
         approvalCode?: string;
+        buyerName?: string;
       },
       draft: TenderDraft
     ): Promise<CounterTenderResult> => {
@@ -2453,6 +2463,8 @@ function ScopedPharmacyCounterConsole({
             : {}),
           // #722: equal split rows (Rs 500 + Rs 500) are distinct payments at
           // different paid balances; a double tap at the same balance still replays.
+          // #708: a cash-memo buyer keeps this key; a changed buyer conflicts on the
+          // payload hash rather than recording the same payment twice.
           idempotencyKey:
             input.familyAccountId ||
             input.payerName !== undefined ||
@@ -2479,6 +2491,7 @@ function ScopedPharmacyCounterConsole({
             ? { referenceSkipped: input.referenceSkipped }
             : {}),
           ...(input.approvalCode !== undefined ? { approvalCode: input.approvalCode } : {}),
+          ...(input.buyerName !== undefined ? { buyerName: input.buyerName } : {}),
         };
         sentKey = payload.idempotencyKey;
         const original: TenderAttempt = { version: 1, scope: recoveryScope, input: payload, draft };
@@ -3912,7 +3925,15 @@ function ScopedPharmacyCounterConsole({
                           if (first) stageRow(first);
                           else void searchAndStage(trimmed);
                         }}
-                        className="h-12"
+                        // DEV-44: the field is focused on load, and the coral focus ring read as
+                        // an error before anything was typed. It stays neutral until a search
+                        // actually fails, then carries the destructive state and aria-invalid.
+                        aria-invalid={searchState === 'error' || undefined}
+                        className={
+                          searchState === 'error'
+                            ? 'h-12 [--ring:var(--destructive)]'
+                            : 'h-12 [--ring:var(--text-muted)]'
+                        }
                       />
                       <p id="counter-search-help" className="text-xs text-text-muted">
                         {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
@@ -3944,17 +3965,7 @@ function ScopedPharmacyCounterConsole({
                         ? (searchQuery.data?.rows ?? [])
                         : []
                     }
-                    state={
-                      !branchAuthorized ||
-                      trimmedQuery.length < 2 ||
-                      (scannerQuery && !searchCurrent)
-                        ? 'idle'
-                        : !searchCurrent || searchQuery.isFetching || searchQuery.isPlaceholderData
-                          ? 'loading'
-                          : searchQuery.isError
-                            ? 'error'
-                            : 'ready'
-                    }
+                    state={searchState}
                     query={trimmedQuery}
                     disabled={busy || !branchAuthorized}
                     disabledReasonId={branchControlReason ? 'counter-branch-reason' : undefined}
@@ -4479,9 +4490,13 @@ function ScopedPharmacyCounterConsole({
                   providerRef: restoredAttempt.input.providerRef,
                   referenceSkipped: restoredAttempt.input.referenceSkipped,
                   approvalCode: restoredAttempt.input.approvalCode,
+                  buyerName: restoredAttempt.input.buyerName,
                 }
               : undefined
           }
+          cashMemo={sindhCashMemoSelected(
+            branches.find((branch) => branch.id === branchId)?.provinceCode
+          )}
           recoveryOutcome={tenderOutcome}
           checkingOutcome={checkingOutcome}
           onCheckOutcome={

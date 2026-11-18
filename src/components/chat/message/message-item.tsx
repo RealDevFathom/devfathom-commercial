@@ -95,7 +95,7 @@ export function MessageItem({
       className={cn(
         'group relative flex gap-3 rounded-md border-l-2 border-transparent px-4 transition-colors hover:bg-muted/40',
         grouped ? 'py-0.5' : 'mt-3 py-1',
-        mentionsMe && 'border-brass/70 bg-brass/[0.04] hover:bg-brass/[0.07]'
+        mentionsMe && 'border-accent-brand/70 bg-accent-brand/[0.04] hover:bg-accent-brand/[0.07]'
       )}
     >
       {/* Gutter: avatar for a group's first message, hover-time for the rest. */}

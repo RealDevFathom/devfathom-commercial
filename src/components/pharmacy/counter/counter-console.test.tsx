@@ -27,6 +27,18 @@ type Query = {
   refetch: ReturnType<typeof vi.fn>;
 };
 
+// #708: the cash memo is held off by a hard-coded constant until counsel confirms it. Tests
+// read the real constant unless one sets `cashMemoHold.live` to check the post-hold memo.
+const cashMemoHold = vi.hoisted(() => ({ live: undefined as boolean | undefined }));
+vi.mock('@/lib/pharmacy/sindh-cash-memo-hold', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pharmacy/sindh-cash-memo-hold')>();
+  return {
+    get SINDH_CASH_MEMO_LIVE() {
+      return cashMemoHold.live ?? actual.SINDH_CASH_MEMO_LIVE;
+    },
+  };
+});
+
 const mocks = vi.hoisted(() => ({
   renderSearchResults: false,
   queries: {} as Record<string, Query>,
@@ -862,6 +874,49 @@ describe('PharmacyCounterConsole split tender (#722)', () => {
     // The settled receipt drawer hides the panel from assistive tech; the rows remain.
     await waitFor(() =>
       expect(screen.getByLabelText('Recorded payments').children).toHaveLength(2)
+    );
+  });
+});
+
+describe('PharmacyCounterConsole Sindh cash-memo buyer (#708)', () => {
+  afterEach(() => {
+    cashMemoHold.live = undefined;
+  });
+
+  it('hides the buyer name and sends none while the cash memo is held for counsel', async () => {
+    mocks.queries.counterBranches = query({
+      branches: [{ id: 'branch-a', name: 'Synthetic branch', code: 'MT1', provinceCode: 'PK-SD' }],
+    });
+    mocks.mutations.tender!.mockResolvedValue(accepted(0));
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.queryByLabelText('Buyer name (cash memo, optional)')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
+    await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledTimes(1));
+    expect(mocks.mutations.tender).toHaveBeenCalledWith(
+      expect.not.objectContaining({ buyerName: expect.anything() })
+    );
+  });
+
+  it('keeps the replayable balance key when a buyer name is sent', async () => {
+    cashMemoHold.live = true; // As the memo will behave once counsel lifts the hold.
+    mocks.queries.counterBranches = query({
+      branches: [{ id: 'branch-a', name: 'Synthetic branch', code: 'MT1', provinceCode: 'PK-SD' }],
+    });
+    mocks.mutations.tender!.mockResolvedValue(accepted(0));
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Buyer name (cash memo, optional)'), {
+      target: { value: 'Synthetic Buyer' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
+    // A repeated tap at the same balance replays the first payment; a changed buyer
+    // conflicts on the payload hash instead of recording a second payment.
+    await waitFor(() =>
+      expect(mocks.mutations.tender).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          buyerName: 'Synthetic Buyer',
+          idempotencyKey: 'counter-tender:sale-a:CASH:25000',
+        })
+      )
     );
   });
 });
@@ -4721,6 +4776,33 @@ describe('PharmacyCounterConsole search latency (DEV-575)', () => {
         JSON.stringify(input ?? '').includes('DFLC')
       )
     ).toEqual([]);
+  });
+
+  it('keeps the focused scan field neutral until a search fails (DEV-44)', () => {
+    vi.useFakeTimers();
+    const view = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    const search = screen.getByLabelText('Scan or search');
+    // Focused on load: no error state, and a neutral focus ring instead of the coral one.
+    expect(search).toHaveFocus();
+    expect(search).not.toHaveAttribute('aria-invalid');
+    expect(search).toHaveClass('[--ring:var(--text-muted)]');
+    expect(search).not.toHaveClass('[--ring:var(--destructive)]');
+
+    mocks.queries.counterSearch = {
+      ...query(),
+      isSuccess: false,
+      isError: true,
+      error: new Error('Search unavailable'),
+    };
+    fireEvent.change(search, { target: { value: 'para' } });
+    act(() => vi.advanceTimersByTime(1000));
+    view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(mocks.searchProps.mock.lastCall![0]).toMatchObject({ state: 'error' });
+    expect(search).toHaveAttribute('aria-invalid', 'true');
+    expect(search).toHaveClass('[--ring:var(--destructive)]');
+    expect(search).not.toHaveClass('[--ring:var(--text-muted)]');
   });
 
   it('re-runs a completed name search on the newly selected branch', () => {
