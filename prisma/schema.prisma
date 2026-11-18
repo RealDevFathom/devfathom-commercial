@@ -215,6 +215,10 @@ model PharmacyBranch {
   /// the live-sale hours check reads the jurisdiction rule set, never this.
   pharmacistCoverageHours         Json?
   pharmacistCoverageRevision      Int                          @default(0)
+  /// DEV-66: the branch's smart-discount policy (minimum margin, evidence
+  /// windows). Null means the stored defaults, which the owner can change.
+  discountPolicy                  Json?
+  discountPolicyRevision          Int                          @default(0)
   id                              String                       @id @default(cuid())
   organizationId                  String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   code                            String
@@ -273,6 +277,7 @@ model PharmacyBranch {
   sopEvidenceCaptures                      PharmacySopEvidenceCapture[]
   sopSiteSettings                          PharmacySopSiteSetting[]
   sopReworkNotes                           PharmacySopReworkNote[]
+  competitorPriceObservations              PharmacyCompetitorPriceObservation[]
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
@@ -6106,6 +6111,10 @@ model Organization {
   /// DEV-907: owner switch for the counter's "also in stock at another branch"
   /// line. Off by default; branch names only, never controlled drugs.
   pharmacyOtherBranchAvailability Boolean                      @default(false)
+  /// DEV-66: the owner's maximum discount on a pharmacy line, in basis points of the
+  /// undiscounted price. The stored default 10000 means no maximum is set yet; once the
+  /// owner sets one it is enforced on the server for everyone.
+  pharmacyMaxDiscountBps        Int                            @default(10000)
   lastDemoResetAt               DateTime?
   gracePeriodDays               Int                            @default(0)
   activatedAt                   DateTime?
@@ -17390,4 +17399,29 @@ model PharmacyPrintJob {
   @@index([organizationId, bridgeId, status, queuedAt], map: "pharmacy_print_jobs_claim_idx")
   @@index([organizationId, branchId, saleId], map: "pharmacy_print_jobs_sale_idx")
   @@map("pharmacy_print_jobs")
+}
+
+/// DEV-66: APPEND-ONLY competitor discount log. A manager records the price a
+/// nearby competitor was seen charging for a medicine; the newest unexpired
+/// observations for the same pack level feed discount suggestions. `medicineId`
+/// and `packLevelId` reference pharmacy_medicines and pharmacy_pack_levels
+/// through SQL-only tenant-composite foreign keys.
+model PharmacyCompetitorPriceObservation {
+  id                 String   @id @default(cuid())
+  organizationId     String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  medicineId         String
+  /// The sealed pack the observed price is for; prices compare only like for like.
+  packLevelId        String
+  competitorLabel    String
+  observedPriceMinor Int
+  observedAt         DateTime
+  recordedByUserId   String
+  createdAt          DateTime @default(now())
+
+  branch PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_competitor_price_observations_org_id_key")
+  @@index([organizationId, branchId, medicineId, packLevelId, observedAt], map: "pharmacy_competitor_price_obs_medicine_idx")
+  @@map("pharmacy_competitor_price_observations")
 }

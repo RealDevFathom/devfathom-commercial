@@ -12,6 +12,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { ManualPaymentSettingsPanel } from '@/components/pharmacy/counter/manual-payment-settings-panel';
 import { KhataReminderSettingsPanel } from '@/components/pharmacy/counter/khata-reminder-settings-panel';
+import { DiscountMaximumPanel } from '@/components/pharmacy/counter/discount-maximum-panel';
 import { StatusPill } from '@/components/ui/status-pill';
 import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
 import {
@@ -409,6 +410,7 @@ export default async function PharmacyFinancePage({
       </SectionCard>
       <ManualPaymentSettingsPanel key={branch.id} branchId={branch.id} />
       <KhataReminderSettingsPanel key={`khata-reminders-${branch.id}`} branchId={branch.id} />
+      <DiscountMaximumPanel key={`discount-maximum-${branch.id}`} branchId={branch.id} />
       <SectionCard
         title="Create POS settlement batch"
         eyebrow="Card · Raast · wallet · bank transfer"

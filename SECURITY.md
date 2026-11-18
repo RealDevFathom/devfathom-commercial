@@ -18,8 +18,9 @@ The hardening report below is historical audit context.
 - The application database role must be `NOSUPERUSER NOBYPASSRLS`; production
   startup rejects a bypass role. Verify the migrated database with `bun run test:rls`
   using a dedicated disposable `TEST_DATABASE_URL`, never the application database.
-- `pharmacy:dispense`, `pharmacy:safety` (including the controlled-drugs register)
-  and `pharmacy:catalogue-review` require explicit grants. No default role grant or
+- `pharmacy:dispense`, `pharmacy:safety` (including the controlled-drugs register),
+  `pharmacy:catalogue-review` and `pharmacy:discount` (a counter discount without a
+  manager's PIN, still capped by the owner's maximum) require explicit grants. No default role grant or
   wildcard ALLOW grants these sensitive actions; wildcard DENY still revokes them.
   See [capability matching](./src/lib/abac/capabilities.ts) and the
   [authorization evaluator](./src/lib/abac/index.ts). Explicit grants in a named
