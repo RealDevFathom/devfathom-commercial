@@ -96,6 +96,30 @@ describe('staging column mapping', () => {
       )
     ).toBeInTheDocument();
   });
+  it('says how many rows were skipped because a person had corrected them (DEV-925)', async () => {
+    mocks.stage.mockResolvedValue({
+      data: {
+        sourceId: 'source_a',
+        batchId: 'batch_a',
+        rowCount: 4,
+        exceptionCount: 0,
+        controlledFromClass: 3,
+        controlledMedicinesFlagged: 1,
+        controlledSkippedCorrected: 2,
+      },
+    });
+    render(<MigrationStagingForm branchId="branch_a" route="/pharmacy/medicines/staged" />);
+    await upload();
+    fireEvent.change(screen.getByLabelText('Quantity column counts'), {
+      target: { value: 'UNITS' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Stage for review' }));
+    expect(
+      await screen.findByText(
+        /2 skipped: a person had already corrected those medicines to not controlled\./
+      )
+    ).toBeInTheDocument();
+  });
   it('clears the file input after a refused read so the same file can be chosen again', async () => {
     mocks.read.mockResolvedValue({ error: 'The file could not be staged. Try again.' });
     render(<MigrationStagingForm branchId="branch_a" route="/pharmacy/medicines/staged" />);
