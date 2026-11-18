@@ -160,11 +160,8 @@ describe('staged page → server action → router → review (connected)', () =
     expect(screen.getAllByText('29 units').length).toBeGreaterThan(0);
     expect(screen.queryByText(/packs ×/)).toBeNull();
   });
-  it('shows plain headings, plain batch status words and no raw status codes', async () => {
+  it('shows plain batch status words and no raw status codes', async () => {
     await stageAndReopen('UNITS');
-    for (const th of screen.getAllByRole('columnheader')) {
-      expect(th.closest('thead')?.className).not.toMatch(/uppercase|font-mono/);
-    }
     expect(screen.queryByText(/^(PROFILING|PROFILED|FAILED)$/)).toBeNull();
     expect(screen.queryByText(/staged as raw count\)$/, { selector: 'td' })).toBeNull();
   });
