@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { trpc } from '@/lib/trpc';
+import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { PinAwareMessage } from '@/components/pharmacy/pin-aware-message';
 import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
@@ -12,7 +13,7 @@ const editLabels: Record<string, string> = {
   productName: 'Product name',
   brandName: 'Brand',
   manufacturer: 'Manufacturer',
-  retailPriceMinor: 'Retail price (in paisa)',
+  retailPriceMinor: 'Retail price',
   retailCategory: 'Retail category',
   marketingAuthorizationHolder: 'Marketing authorization holder',
   drapRegistrationNumber: 'Registration number',
@@ -30,10 +31,10 @@ const editLabels: Record<string, string> = {
   unitsPerParent: 'Individual units per pack',
   effectiveFrom: 'Effective from',
   batchReference: 'Batch reference',
-  printedMrpMinor: 'Printed MRP (in paisa)',
-  roundingIncrementMinor: 'Rounding increment (in paisa)',
-  mrpMinor: 'MRP (in paisa)',
-  sellingPriceMinor: 'Selling price (in paisa)',
+  printedMrpMinor: 'Printed MRP',
+  roundingIncrementMinor: 'Rounding increment',
+  mrpMinor: 'MRP',
+  sellingPriceMinor: 'Selling price',
   value: 'Alias',
   name: 'Ingredient',
   fileName: 'File',
@@ -41,6 +42,14 @@ const editLabels: Record<string, string> = {
   medicines: 'Medicines to create',
   reorderBranch: 'Reorder levels set at',
 };
+/** Catalogue prices are stored in paisa; the person approving reads them in rupees. */
+const RUPEE_FIELDS = new Set([
+  'retailPriceMinor',
+  'printedMrpMinor',
+  'roundingIncrementMinor',
+  'mrpMinor',
+  'sellingPriceMinor',
+]);
 /** Checked on the server only; a file hash or branch id means nothing to the person approving. */
 const HIDDEN_FIELDS = new Set(['sourceSha256', 'reorderBranchId']);
 const operationLabels: Record<string, string> = {
@@ -61,6 +70,8 @@ function displayChange(field: string, value: unknown): string {
   if (value === null && field === 'reorderBranch') return 'Not set from this file';
   if (value === null) return field === 'sellingPriceMinor' ? 'Sell at MRP' : 'Clear value';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (RUPEE_FIELDS.has(field) && typeof value === 'number' && Number.isSafeInteger(value))
+    return `Rs ${formatMinor(value)}`;
   if ((field === 'effectiveFrom' || field === 'uploadedAt') && typeof value === 'string') {
     const date = new Date(value);
     if (Number.isFinite(date.getTime()))

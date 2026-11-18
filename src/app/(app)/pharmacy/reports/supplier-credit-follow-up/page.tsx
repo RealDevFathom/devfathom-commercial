@@ -306,6 +306,7 @@ export default async function SupplierCreditFollowUpPage({
         from,
         to,
         preparedAt: queue.asOf,
+        timeZone,
         currency: currency && /^[A-Z]{3}$/.test(currency) ? currency : null,
         coverage: queue.coverage,
         excluded: queue.excluded + returns.filter((row) => !iso(row.createdAt)).length,

@@ -292,7 +292,7 @@ export const SHOP_SCREEN_COPY = {
     ownerCommandCentre: 'Owner command centre',
     selectedPeriodAtAGlance: 'Selected period at a glance',
     amountsUseThePharmacyMinorUnitScaleShown:
-      'Amounts use the pharmacy minor-unit scale, shown to two decimal places. — means unavailable, not zero. Sales, gross margin, cash, cash variance and refunds cover the selected period. Stock signals, recommended orders and expiry exposure are current snapshots; expiry exposure is not realized loss. Gross margin is not cash flow. Gross margin uses the same exact posted journal as Finance, including returns and reversals, on postings from the start of the first selected date to the start of the day after the last, in ',
+      'Amounts are shown to two decimal places. — means unavailable, not zero. Sales, gross margin, cash, cash variance and refunds cover the selected period. Stock signals, recommended orders and expiry exposure are current snapshots; expiry exposure is not realized loss. Gross margin is not cash flow. Gross margin uses the same exact posted journal as Finance, including returns and reversals, on postings from the start of the first selected date to the start of the day after the last, in ',
     financeAposSMarginComparisonSplitsDaysTheSameWay:
       ". Finance's margin comparison splits days the same way. It may differ from sales grouped by business date. Missing journal evidence is unavailable; posted totals do not establish complete source or cost coverage. Supplier, ingredient and batch filters narrow sales, gross margin, stock signals, recommended orders and expiry exposure to the matching stock lots and products. Cash, cash variance and refunds cannot be traced to a supplier, ingredient or batch, so they show — while one is selected. The daily work pack and observed demand use branch/date scope only.",
     theSelectedBranchDoesNotApplyToThis:
@@ -449,7 +449,7 @@ export const SHOP_SCREEN_COPY = {
     to2: ' to ',
     inclusive: ', inclusive.',
     moneyUsesMinorUnitValuesShownToTwo:
-      'Money uses minor-unit values shown to two decimal places; — means unavailable, not zero. Expiry at risk is available stock expiring in 30 days and is not realized loss. Lost demand is an ',
+      'Money is shown to two decimal places; — means unavailable, not zero. Expiry at risk is available stock expiring in 30 days and is not realized loss. Lost demand is an ',
     estimate: 'Estimate',
     excludes: ' Excludes',
     branch: 'Branch',
@@ -507,7 +507,7 @@ export const SHOP_SCREEN_COPY = {
     noFinancialDataIsShown: ' No financial data is shown.',
     openingAndClosingCash: 'Opening and closing cash',
     recordedCurrencyMinorUnitTotalsFromEveryScoped:
-      'Recorded currency minor-unit totals from every scoped posted cash/bank line. Retrieved',
+      'Recorded currency totals from every scoped posted cash/bank line. Retrieved',
     completenessUnknown: '. Completeness: unknown —',
     discrepancyIsCanonicalCashPlusBankAccountClosing:
       ' Discrepancy is canonical CASH plus BANK account closing from the financial statements, read in the same snapshot, minus the projected closing.',
@@ -560,7 +560,7 @@ export const SHOP_SCREEN_COPY = {
     entriesReturnedPageCap: ' entries returned · page cap',
     entriesCountedInTheWindow: ' entries counted in the window.',
     theCsvContainsOnlyThisPageDtoIt:
-      'The CSV contains only this page DTO. It is not a complete-ledger export, is not an atomic snapshot, and cannot establish unposted activity. Entry currency, source and reversal IDs, and exact integer minor-unit strings are retained.',
+      'The CSV contains only this page DTO. It is not a complete-ledger export, is not an atomic snapshot, and cannot establish unposted activity. Entry currency, source and reversal IDs, and exact amounts as whole numbers of the smallest currency unit are retained.',
     journalEvidenceExportPharmacyAccounts: 'Download account entries · Pharmacy accounts',
   },
   accountActivity: {
@@ -624,7 +624,7 @@ export const SHOP_SCREEN_COPY = {
     unknownRecordedDueDate: 'Unknown recorded due date',
     theseChequeRecordsHaveNoUsableRecordedMaturity:
       'These cheque records have no usable recorded maturity date; no date was inferred.',
-    dueDateUtc: 'Due date (UTC)',
+    dueDateUtc: 'Due date',
     reference: 'Reference',
     cheque: 'Cheque',
     status: 'Status',
