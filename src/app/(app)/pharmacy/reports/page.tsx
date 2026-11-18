@@ -696,7 +696,7 @@ export default async function PharmacyReportsPage({
                 : 'Currency unknown: an authoritative currency for this organization is unavailable; historical transaction currency is not verified.'}{' '}
               {screenCopy.reports.amountsUseThePharmacyMinorUnitScaleShown}
               {workspaceZoneLabel(timeZone)}
-              {screenCopy.reports.financeAposSMarginComparisonStillSplitsDays}
+              {screenCopy.reports.financeAposSMarginComparisonSplitsDaysTheSameWay}
             </p>
           </details>
         </SectionCard>

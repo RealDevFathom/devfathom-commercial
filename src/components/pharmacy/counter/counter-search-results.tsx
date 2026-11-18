@@ -10,6 +10,7 @@ import {
   counterMedicineGenericName,
 } from '@/lib/pharmacy/counter-display-name';
 import { formatMinor, formatShortExpiry } from '@/lib/pharmacy/counter-receipt';
+import { STRENGTH_NOT_RECORDED } from '@/lib/pharmacy/medicine';
 import { BATCH_NOT_RECORDED } from '@/lib/pharmacy/unrecorded-batch';
 import { formatStockBreakdown } from '@/lib/pharmacy/stock-breakdown';
 
@@ -235,10 +236,16 @@ export function CounterSearchResults({
                 </span>
                 <span className="col-span-2 min-w-0 break-words text-xs leading-relaxed text-text-muted">
                   <span className="block">
-                    <span>Strength:</span>{' '}
-                    <span className="ms-1">
-                      <bdi dir="auto">{row.strength ?? 'Unavailable'}</bdi>
-                    </span>
+                    {row.strength ? (
+                      <>
+                        <span>Strength:</span>{' '}
+                        <span className="ms-1">
+                          <bdi dir="auto">{row.strength}</bdi>
+                        </span>
+                      </>
+                    ) : (
+                      STRENGTH_NOT_RECORDED
+                    )}
                   </span>
                   <span className="block">
                     <span>Form:</span> {row.presentation}
