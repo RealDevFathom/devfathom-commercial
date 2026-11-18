@@ -1408,31 +1408,3 @@ describe('DEV-875 bank transfer reference', () => {
     expect(props.onTender).not.toHaveBeenCalled();
   });
 });
-
-describe('DEV-931 focus through a background bill re-read', () => {
-  it('gives focus back to the payment method the cashier was on once the panel unlocks', () => {
-    const { container, rerender, props } = setup();
-    const khata = tenderButton('KHATA');
-    act(() => khata.focus());
-    // A cart refetch locks the panel. Chrome drops focus from the disabled button, and the
-    // dialog keeps it on the panel itself (jsdom never blurs a disabled control, so move it).
-    rerender(<CounterTenderPanel {...props} state="loading" />);
-    expect(tenderButton('KHATA')).toBeDisabled();
-    const panel = container.querySelector<HTMLElement>('[tabindex="-1"]')!;
-    act(() => panel.focus());
-    rerender(<CounterTenderPanel {...props} state="ready" />);
-    expect(tenderButton('KHATA')).toHaveFocus();
-  });
-
-  it('leaves focus where the cashier took it while the panel was locked', () => {
-    const { rerender, props } = setup();
-    act(() => tenderButton('KHATA').focus());
-    rerender(<CounterTenderPanel {...props} state="loading" />);
-    const elsewhere = document.createElement('button');
-    document.body.append(elsewhere);
-    act(() => elsewhere.focus());
-    rerender(<CounterTenderPanel {...props} state="ready" />);
-    expect(elsewhere).toHaveFocus();
-    elsewhere.remove();
-  });
-});

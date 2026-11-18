@@ -2,14 +2,7 @@
 
 import { OwnPinLink } from '@/components/pharmacy/pin-aware-message';
 import { PHARMACY_COPY as copy } from '@/lib/pharmacy/plain-language';
-import {
-  forwardRef,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type KeyboardEvent,
-} from 'react';
+import { forwardRef, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Check } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -275,32 +268,6 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const balanceKnown =
       balanceMinor !== null && Number.isSafeInteger(balanceMinor) && balanceMinor >= 0;
     const editable = state === 'ready' && balanceKnown && !disabled && !takingPayment && !unknown;
-    // DEV-931: a background re-read of the bill briefly disables these controls, and the
-    // browser drops focus from a control the moment it becomes disabled. A cashier who had
-    // just moved to a payment method (keyboard only) would be left with nothing focused, or
-    // with the dialog's own initial focus on the panel. The panel remembers the last control
-    // focused inside it and, when it unlocks, gives focus back to that control, unless the
-    // cashier moved focus somewhere else meanwhile.
-    const rootRef = useRef<HTMLDivElement | null>(null);
-    const lastFocused = useRef<HTMLElement | null>(null);
-    const wasLocked = useRef(false);
-    useLayoutEffect(() => {
-      if (!editable) {
-        wasLocked.current = true;
-        return;
-      }
-      if (!wasLocked.current) return;
-      wasLocked.current = false;
-      const target = lastFocused.current;
-      if (!target?.isConnected || target.matches(':disabled')) return;
-      const active = document.activeElement;
-      // Lost means nowhere, or only on a container of the control (the dialog or this panel).
-      const lost =
-        !active ||
-        active === document.body ||
-        (active !== target && active instanceof HTMLElement && active.contains(target));
-      if (lost) target.focus();
-    }, [editable]);
 
     const prepaidWallet = type === 'WALLET' && prepaidBalanceMinor > 0;
     // DEV-863: an untouched prepaid amount is what the balance can cover; never more than it holds.
@@ -741,16 +708,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
     return (
       <div
-        ref={(node) => {
-          rootRef.current = node;
-          if (typeof ref === 'function') ref(node);
-          else if (ref) ref.current = node;
-        }}
+        ref={ref}
         tabIndex={-1}
-        onFocus={(event) => {
-          if (event.target !== event.currentTarget && event.target instanceof HTMLElement)
-            lastFocused.current = event.target;
-        }}
         className="min-w-0 space-y-5 focus-visible:outline-none"
         onKeyDown={takePaymentOnEnter}
       >
