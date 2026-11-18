@@ -70,13 +70,17 @@ function payeeFilterQuery(query: Query) {
   return value && value.length <= 160 ? value : undefined;
 }
 
+type BranchOption = { id: string; name: string };
+
 function QueryForm({
   branchId,
+  branches,
   asOf,
   zone,
   payeeFilter,
 }: {
   branchId?: string;
+  branches: BranchOption[];
   asOf: string;
   zone: string;
   payeeFilter?: string;
@@ -85,15 +89,23 @@ function QueryForm({
     <SectionCard title="Branch and date" titleLevel={2}>
       <form method="get" className="grid gap-4 md:grid-cols-[1fr_1fr_1fr_auto] md:items-end">
         <label className="grid gap-2 text-sm">
-          Branch ID
-          <Input
-            className="min-h-11"
+          Branch
+          <select
+            className="min-h-11 rounded-md border border-border bg-surface px-3 text-sm"
             name="branch"
-            defaultValue={branchId}
-            maxLength={128}
+            defaultValue={branchId ?? ''}
             required
             aria-describedby="aging-help"
-          />
+          >
+            <option value="" disabled>
+              Choose a branch
+            </option>
+            {branches.map((branch) => (
+              <option key={branch.id} value={branch.id}>
+                {branch.name}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="grid gap-2 text-sm">
           As of ({zone} day)
@@ -123,11 +135,11 @@ function Notice({ state }: { state: Exclude<State, { kind: 'loaded' }> }) {
   const content = {
     initial: [
       'Choose a branch',
-      'Enter one branch and an as-of day to age its supplier expense invoices. Nothing has been read.',
+      'Choose one branch and an as-of day to age its supplier expense invoices. Nothing has been read.',
     ],
     invalid: [
       'Request needs attention',
-      'Enter one branch ID of at most 128 characters and an as-of day no later than today.',
+      'Choose one branch and an as-of day no later than today.',
     ],
     denied: [
       'Aging unavailable',
@@ -314,6 +326,29 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
   const payeeFilter = payeeFilterQuery(query);
   const narrow = payeeFilter ? { payeeFilter } : {};
 
+  let branches: BranchOption[] = [];
+  // The picker lists only active branches of the signed-in organization. A branch typed into
+  // the URL that is not listed is still sent to the router, which refuses it.
+  try {
+    const actor = await resolveTenantActor();
+    if (actor) {
+      const listCtx = await createTRPCContext({
+        session: actor.session,
+        organization: actor.organization,
+        support: actor.support,
+      });
+      if (listCtx.session?.user?.role === 'ADMIN') {
+        branches = await listCtx.db.pharmacyBranch.findMany({
+          where: { organizationId: actor.organization.id, active: true },
+          orderBy: { name: 'asc' },
+          select: { id: true, name: true },
+        });
+      }
+    }
+  } catch {
+    branches = [];
+  }
+
   if (parsed.branchId && !parsed.invalid) {
     try {
       const actor = await resolveTenantActor();
@@ -399,6 +434,7 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
       />
       <QueryForm
         branchId={typeof query.branch === 'string' ? query.branch : undefined}
+        branches={branches}
         asOf={parsed.asOf}
         zone={zone}
         payeeFilter={payeeFilter}

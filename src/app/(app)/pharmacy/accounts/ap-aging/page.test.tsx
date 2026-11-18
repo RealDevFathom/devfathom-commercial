@@ -122,14 +122,63 @@ describe('ApAgingPage', () => {
     const output = await html({});
     expect(output).toContain('Supplier expense invoice aging');
     expect(output).toContain('Nothing has been read');
-    expect(mocks.resolveTenantActor).not.toHaveBeenCalled();
     expect(mocks.aging).not.toHaveBeenCalled();
+    expect(mocks.payablesDrafts).not.toHaveBeenCalled();
+    expect(mocks.creditSetOffs).not.toHaveBeenCalled();
+  });
+
+  describe('DEV-103 branch picker', () => {
+    const findMany = vi.fn();
+    beforeEach(() => {
+      findMany.mockReset();
+      findMany.mockResolvedValue([
+        { id: 'branch_1', name: 'Main Branch' },
+        { id: 'branch_2', name: 'Gulshan Branch' },
+      ]);
+      mocks.createTRPCContext.mockResolvedValue({
+        session: actor.session,
+        db: { pharmacyBranch: { findMany } },
+      });
+    });
+
+    it('lists only the active branches of the signed-in organization by name', async () => {
+      const output = await html({});
+      expect(findMany).toHaveBeenCalledWith({
+        where: { organizationId: 'org_1', active: true },
+        orderBy: { name: 'asc' },
+        select: { id: true, name: true },
+      });
+      expect(output).toContain('<select');
+      expect(output).toContain('Main Branch');
+      expect(output).toContain('Gulshan Branch');
+      expect(output).not.toMatch(/name="branch"[^>]*type="text"/);
+    });
+
+    it('selects the requested branch', async () => {
+      expect(await html({ branch: 'branch_2' })).toMatch(
+        /<option value="branch_2" selected=""[^>]*>Gulshan Branch|<option value="branch_2"[^>]*selected/
+      );
+    });
+
+    it('offers no branches to a non-owner and still lets the router refuse a typed branch', async () => {
+      mocks.createTRPCContext.mockResolvedValue({
+        session: { user: { id: 'u', organizationId: 'org_1', role: 'STAFF' } },
+        db: { pharmacyBranch: { findMany } },
+      });
+      mocks.aging.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN' }));
+      const output = await html({ branch: 'branch_other', asOf: '2026-11-15' });
+      expect(findMany).not.toHaveBeenCalled();
+      expect(mocks.aging).toHaveBeenCalledWith({ branchId: 'branch_other', asOf: '2026-11-15' });
+      expect(output).toContain('Aging unavailable');
+      expect(output).not.toContain('AP-0001');
+    });
   });
 
   it('refuses a future as-of day before reading', async () => {
     expect(await html({ branch: 'branch_1', asOf: '2026-11-16' })).toContain('role="alert"');
-    expect(mocks.resolveTenantActor).not.toHaveBeenCalled();
     expect(mocks.aging).not.toHaveBeenCalled();
+    expect(mocks.payablesDrafts).not.toHaveBeenCalled();
+    expect(mocks.creditSetOffs).not.toHaveBeenCalled();
   });
 
   it('shows the aged rows, bucket totals and the CSV action from the same view', async () => {
