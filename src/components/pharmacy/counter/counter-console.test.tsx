@@ -276,6 +276,7 @@ vi.mock('./counter-upsell-suggestions', async (importOriginal) => {
 });
 
 import { PharmacyCounterConsole } from './counter-console';
+import { trpc } from '@/lib/trpc';
 import { resolveCounterKeymap } from '@/lib/pharmacy/counter-keymap';
 import {
   persistTenderAttempt,
@@ -2433,6 +2434,25 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     expect(screen.getByRole('alert')).not.toHaveTextContent('does not take payments');
     expect(screen.getByLabelText('Opening cash')).toHaveValue('5000');
     await waitFor(() => expect(mocks.drawerStatusInvalidate).toHaveBeenCalled());
+  });
+
+  it('DEV-933: a cashier who types a float above 0 is told in plain words and keeps the value', async () => {
+    closeDrawer();
+    mocks.queries.refundAccess = query({ authorized: false });
+    mocks.mutations.openDrawer!.mockRejectedValue(
+      Object.assign(new Error('You do not have permission for this action.'), {
+        data: { code: 'FORBIDDEN' },
+      })
+    );
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    const field = screen.getByLabelText('Opening cash');
+    fireEvent.change(field, { target: { value: '5000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Only a manager or owner can open with a float. Open with 0 if the drawer is empty, or ask a manager.'
+    );
+    expect(screen.getByLabelText('Opening cash')).toHaveValue('5000');
+    expect(screen.getByLabelText('Opening cash')).toBeEnabled();
   });
 
   it('starts a bill only on this device’s open drawer, naming the device (DEV-725)', async () => {
@@ -6583,6 +6603,54 @@ describe('DEV-705 keyboard loose sale', () => {
     await waitFor(() => expect(screen.getByLabelText('Scan or search')).toHaveFocus());
     fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F9' });
     expect(screen.getByRole('dialog', { name: 'Payment' })).toBeInTheDocument();
+  });
+
+  it('DEV-930 leaves focus in payment opened while an add is still settling, so Enter takes it', async () => {
+    // The cart shows the line before the add's follow-up reads finish; F9 is allowed then.
+    let settle!: () => void;
+    const { controlledRegister } = (
+      trpc.useUtils as unknown as () => {
+        pharmacySafety: { controlledRegister: { invalidate: ReturnType<typeof vi.fn> } };
+      }
+    )().pharmacySafety;
+    controlledRegister.invalidate.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (settle = resolve))
+    );
+    mocks.mutations.addLine!.mockResolvedValue({ saleLineId: 'loose-line' });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(looseRow()));
+    fireEvent.keyDown(screen.getByLabelText('Quantity'), { key: 'Enter' });
+    await waitFor(() => expect(controlledRegister.invalidate).toHaveBeenCalled());
+    fireEvent.keyDown(window, { key: 'F9' });
+    const payment = screen.getByRole('dialog', { name: 'Payment' });
+    const panel = within(payment)
+      .getByRole('group', { name: 'Payment method' })
+      .closest<HTMLElement>('[tabindex="-1"]')!;
+    act(() => panel.focus());
+    await act(async () => settle());
+    expect(payment).toContainElement(document.activeElement as HTMLElement);
+    expect(screen.getByLabelText('Scan or search')).not.toHaveFocus();
+  });
+
+  it('DEV-930 leaves focus on a control the cashier moved to while an add is still settling', async () => {
+    let settle!: () => void;
+    const { controlledRegister } = (
+      trpc.useUtils as unknown as () => {
+        pharmacySafety: { controlledRegister: { invalidate: ReturnType<typeof vi.fn> } };
+      }
+    )().pharmacySafety;
+    controlledRegister.invalidate.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (settle = resolve))
+    );
+    mocks.mutations.addLine!.mockResolvedValue({ saleLineId: 'loose-line' });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(looseRow()));
+    fireEvent.keyDown(screen.getByLabelText('Quantity'), { key: 'Enter' });
+    await waitFor(() => expect(controlledRegister.invalidate).toHaveBeenCalled());
+    const patient = screen.getByRole('button', { name: /^Patient/ });
+    act(() => patient.focus());
+    await act(async () => settle());
+    expect(patient).toHaveFocus();
   });
   it('shows every unit with its price and lets the operator switch to the strip', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);

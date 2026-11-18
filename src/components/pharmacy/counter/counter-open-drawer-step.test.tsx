@@ -77,3 +77,31 @@ describe('DEV-933: one opening-count rule on a slow or fast access check', () =>
     expect(screen.getByLabelText('Opening cash')).toHaveValue('');
   });
 });
+
+describe('DEV-930 manager access arriving after the step is on screen', () => {
+  // DEV-933 supersedes the prefilled 0 DEV-930 kept: the count is always typed.
+  it('leaves the field empty when access arrives late, and asks for a typed count', () => {
+    const onOpen = vi.fn();
+    const view = render(<CounterOpenDrawerStep disabled={false} onOpen={onOpen} />);
+    expect(screen.getByLabelText('Opening cash')).toHaveValue('');
+    view.rerender(<CounterOpenDrawerStep disabled={false} canDeclareFloat onOpen={onOpen} />);
+    const field = screen.getByLabelText('Opening cash');
+    expect(field).toHaveValue('');
+    expect(field).not.toHaveAttribute('readonly');
+    fireEvent.submit(screen.getByRole('form', { name: 'Open the cash drawer to start the shift' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter the opening cash');
+    expect(onOpen).not.toHaveBeenCalled();
+    fireEvent.change(field, { target: { value: '0' } });
+    fireEvent.submit(screen.getByRole('form', { name: 'Open the cash drawer to start the shift' }));
+    expect(onOpen).toHaveBeenCalledExactlyOnceWith(0, undefined);
+  });
+
+  it('still asks a manager known from the start to enter the counted cash', () => {
+    const onOpen = vi.fn();
+    render(<CounterOpenDrawerStep disabled={false} canDeclareFloat onOpen={onOpen} />);
+    expect(screen.getByLabelText('Opening cash')).toHaveValue('');
+    fireEvent.submit(screen.getByRole('form', { name: 'Open the cash drawer to start the shift' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter the opening cash');
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+});
