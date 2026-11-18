@@ -843,7 +843,9 @@ describe('PharmacyCounterConsole split tender (#722)', () => {
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.00' } });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
-    await waitFor(() => expect(screen.getByLabelText('Recorded tenders').children).toHaveLength(1));
+    await waitFor(() =>
+      expect(screen.getByLabelText('Recorded payments').children).toHaveLength(1)
+    );
     expect(screen.queryByText('Settled')).not.toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeEnabled()
@@ -856,7 +858,9 @@ describe('PharmacyCounterConsole split tender (#722)', () => {
       'counter-tender:sale-a:CASH:12500:after:12500',
     ]);
     // The settled receipt drawer hides the panel from assistive tech; the rows remain.
-    await waitFor(() => expect(screen.getByLabelText('Recorded tenders').children).toHaveLength(2));
+    await waitFor(() =>
+      expect(screen.getByLabelText('Recorded payments').children).toHaveLength(2)
+    );
   });
 });
 

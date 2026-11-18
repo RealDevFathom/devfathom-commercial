@@ -1,4 +1,11 @@
+import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/screen-copy';
 import type { Metadata } from 'next';
+import {
+  PHARMACY_COPY as copy,
+  cashVarianceLabel,
+  formatShopPeriod,
+  formatShopTime,
+} from '@/lib/pharmacy/plain-language';
 import { TRPCError } from '@trpc/server';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
@@ -14,16 +21,12 @@ import { can, subjectFromSession } from '@/lib/abac';
 import { isModuleGranted } from '@/lib/module-catalog';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { pharmacyReportKpiFlags } from '@/lib/pharmacy/report-kpi-flags';
-import {
-  formatWorkspaceDateTime,
-  workspaceDateRange,
-  workspaceToday,
-  workspaceZoneLabel,
-} from '@/lib/timezone';
+import { workspaceDateRange, workspaceToday, workspaceZoneLabel } from '@/lib/timezone';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { pharmacySalesRouter } from '@/server/routers/pharmacy-sales';
 import { createTRPCContext } from '@/server/trpc';
 import { DailyWorkPack, DailyWorkPackLoading } from './daily-work-pack';
+import { ReportDetails } from '@/components/pharmacy/report-details';
 import { LostSalesRecovery } from './lost-sales-recovery';
 import { MarketingSummary } from './marketing-summary';
 import { ObservedDemand } from './observed-demand';
@@ -33,7 +36,7 @@ import { ReportCsvButton } from './report-csv-button';
 import { ReportPrintButton } from './report-print-button';
 import { DEFAULT_STAFFING_CONFIG } from '@/lib/pharmacy/staffing-suggestions';
 
-export const metadata: Metadata = { title: 'Pharmacy reports' };
+export const metadata: Metadata = { title: screenCopy.reports.pharmacyReports };
 
 type SearchParams = Promise<
   Partial<
@@ -111,11 +114,11 @@ export default async function PharmacyReportsPage({
     return (
       <div className="min-w-0 space-y-6">
         <PageHeader
-          eyebrow="Pharmacy operations"
-          heading="Reports"
-          description="Bounded, permission-scoped command centre and report catalog."
+          eyebrow={screenCopy.reports.pharmacyOperations}
+          heading={screenCopy.reports.reports}
+          description={copy.reportsDescription}
         />
-        <ReportNotice title="Reports unavailable" detail={lockedDetail} />
+        <ReportNotice title={screenCopy.reports.reportsUnavailable} detail={lockedDetail} />
       </div>
     );
   }
@@ -150,11 +153,11 @@ export default async function PharmacyReportsPage({
     return (
       <div className="min-w-0 space-y-6">
         <PageHeader
-          eyebrow="Pharmacy operations"
-          heading="Reports"
-          description="Bounded, permission-scoped command centre and report catalog."
+          eyebrow={screenCopy.reports.pharmacyOperations}
+          heading={screenCopy.reports.reports}
+          description={copy.reportsDescription}
         />
-        <ReportNotice title="Reports unavailable" detail={detail} />
+        <ReportNotice title={screenCopy.reports.reportsUnavailable} detail={detail} />
       </div>
     );
   }
@@ -435,35 +438,47 @@ export default async function PharmacyReportsPage({
     figure: string | number;
     flag?: { detail: string };
     note?: string;
+    short?: boolean;
   }> = metrics
     ? [
-        { label: 'Sales', figure: money(metrics.salesMinor) },
-        { label: 'Gross margin', figure: money(metrics.marginMinor) },
-        { label: 'Cash', figure: money(metrics.cashMinor) },
+        { label: screenCopy.reports.sales, figure: money(metrics.salesMinor) },
+        { label: screenCopy.reports.grossMargin, figure: money(metrics.marginMinor) },
+        { label: screenCopy.reports.cash, figure: money(metrics.cashMinor) },
         {
-          label: 'Cash variance',
-          figure: money(metrics.cashVarianceMinor),
+          label: screenCopy.reports.cashVariance,
+          figure: cashVarianceLabel(metrics.cashVarianceMinor, currency),
+          short: metrics.cashVarianceMinor != null && metrics.cashVarianceMinor < 0,
           flag: kpiFlags.cashVarianceMinor,
-          note: varianceNotComputed ? 'Not computed · no final day close in period' : undefined,
+          note: varianceNotComputed ? copy.owner.noClose : undefined,
         },
-        { label: 'Refunds', figure: money(metrics.refundsMinor), flag: kpiFlags.refundsMinor },
+        {
+          label: screenCopy.reports.refunds,
+          figure: money(metrics.refundsMinor),
+          flag: kpiFlags.refundsMinor,
+        },
         // DEV-729: null means stock signals were never worked out for this scope, not zero.
-        { label: 'Open stock signals', figure: metrics.openStockSignals ?? 'Not calculated yet' },
-        { label: 'Recommended orders', figure: metrics.recommendedOrders ?? 'Not calculated yet' },
-        { label: 'Expiry ≤30d', figure: money(metrics.expiryValueMinor30) },
-        { label: 'Expiry ≤90d', figure: money(metrics.expiryValueMinor90) },
+        {
+          label: screenCopy.reports.stockAlerts,
+          figure: metrics.openStockSignals ?? 'Not calculated yet',
+        },
+        {
+          label: screenCopy.reports.recommendedOrders,
+          figure: metrics.recommendedOrders ?? 'Not calculated yet',
+        },
+        { label: screenCopy.reports.expiringIn30Days, figure: money(metrics.expiryValueMinor30) },
+        { label: screenCopy.reports.expiringIn90Days, figure: money(metrics.expiryValueMinor90) },
       ]
     : [];
   return (
     <div className="min-w-0 space-y-6" data-report-print>
       <PageHeader
-        eyebrow="Pharmacy operations"
-        heading="Reports"
-        description="Bounded, permission-scoped command centre and report catalog. Values are ledger-derived and freshness-labelled."
+        eyebrow={screenCopy.reports.pharmacyOperations}
+        heading={screenCopy.reports.reports}
+        description={copy.reportsDescription}
         actions={
           // The sub-reports are the page's secondary actions, so they sit in the
           // header's action slot as Studio controls rather than as bare links.
-          <nav aria-label="Sub-reports" className="flex flex-wrap gap-2">
+          <nav aria-label={screenCopy.reports.subReports} className="flex flex-wrap gap-2">
             {result ? <ReportPrintButton /> : null}
             {result ? (
               <ReportCsvButton
@@ -489,13 +504,13 @@ export default async function PharmacyReportsPage({
               href={`/pharmacy/reports/replenishment${branch ? `?${new URLSearchParams({ branch })}` : ''}`}
               className={buttonVariants({ variant: 'outline', size: 'lg' })}
             >
-              Replenishment
+              {screenCopy.reports.replenishment}
             </Link>
             <Link
               href={`/pharmacy/reports/repeat-purchasing${branch ? `?${new URLSearchParams({ branch })}` : ''}`}
               className={buttonVariants({ variant: 'outline', size: 'lg' })}
             >
-              Repeat purchasing
+              {screenCopy.reports.repeatPurchasing}
             </Link>
             {catalog.permissions.financial ? (
               <Link
@@ -503,7 +518,7 @@ export default async function PharmacyReportsPage({
                 prefetch={false}
                 className={buttonVariants({ variant: 'outline', size: 'lg' })}
               >
-                Supplier-credit follow-up
+                {screenCopy.reports.supplierCreditFollowUp}
               </Link>
             ) : null}
             {catalog.permissions.owner ? (
@@ -511,22 +526,26 @@ export default async function PharmacyReportsPage({
                 href={`/pharmacy/reports/branch-comparison?${new URLSearchParams({ from, to })}`}
                 className={buttonVariants({ variant: 'outline', size: 'lg' })}
               >
-                Compare branches
+                {screenCopy.reports.compareBranches}
               </Link>
             ) : null}
           </nav>
         }
       />
-      <SectionCard eyebrow="Reports" title="Report filters" titleLevel={2}>
+      <SectionCard
+        eyebrow={screenCopy.reports.reports}
+        title={screenCopy.reports.reportFilters}
+        titleLevel={2}
+      >
         <form data-report-filters className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" method="get">
           <label className="text-sm text-text-body">
-            Branch
+            {screenCopy.reports.branch}
             <select
               className="mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               defaultValue={branch ?? ''}
               name="branch"
             >
-              <option value="">All available</option>
+              <option value="">{screenCopy.reports.allAvailable}</option>
               {branchResult.branches.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name}
@@ -536,7 +555,7 @@ export default async function PharmacyReportsPage({
           </label>
           <div className="text-sm text-text-body">
             <label htmlFor="report-supplier" className="block">
-              Supplier
+              {screenCopy.reports.supplier}
             </label>
             <select
               id="report-supplier"
@@ -545,9 +564,9 @@ export default async function PharmacyReportsPage({
               name="supplier"
               aria-describedby={suppliers === null ? 'supplier-load-error' : undefined}
             >
-              <option value="">All suppliers</option>
+              <option value="">{screenCopy.reports.allSuppliers}</option>
               {supplier && !suppliers?.some((item) => item.id === supplier) ? (
-                <option value={supplier}>Selected supplier unavailable</option>
+                <option value={supplier}>{screenCopy.reports.selectedSupplierUnavailable}</option>
               ) : null}
               {suppliers?.map((item) => (
                 <option key={item.id} value={item.id}>
@@ -557,20 +576,20 @@ export default async function PharmacyReportsPage({
             </select>
             {suppliers === null ? (
               <span id="supplier-load-error" className="block text-sm text-text-muted">
-                Supplier names could not load. Apply filters again to retry.
+                {screenCopy.reports.supplierNamesCouldNotLoadApplyFiltersAgain}
               </span>
             ) : null}
           </div>
           <label className="text-sm text-text-body">
-            Ingredient ID
+            {screenCopy.reports.ingredientId}
             <Input className="mt-1 min-h-11" defaultValue={ingredient} name="ingredient" />
           </label>
           <label className="text-sm text-text-body">
-            Batch ID
+            {screenCopy.reports.batchId}
             <Input className="mt-1 min-h-11" defaultValue={batch} name="batch" />
           </label>
           <label className="text-sm text-text-body">
-            From
+            {screenCopy.reports.from}
             <Input
               className="mt-1 min-h-11"
               defaultValue={from}
@@ -582,7 +601,7 @@ export default async function PharmacyReportsPage({
             />
           </label>
           <label className="text-sm text-text-body">
-            To
+            {screenCopy.reports.to}
             <Input
               className="mt-1 min-h-11"
               defaultValue={to}
@@ -594,24 +613,38 @@ export default async function PharmacyReportsPage({
             />
           </label>
           <Button className="min-h-11 self-end" type="submit">
-            Apply filters
+            {screenCopy.reports.applyFilters}
           </Button>
         </form>
       </SectionCard>
       {result ? (
         <SectionCard
-          eyebrow="Owner command centre"
-          title="Selected period at a glance"
+          eyebrow={screenCopy.reports.ownerCommandCentre}
+          title={screenCopy.reports.selectedPeriodAtAGlance}
           titleLevel={2}
         >
+          <p className="mb-2 text-sm text-text-muted">
+            {formatShopPeriod(from, to)} ·{' '}
+            {branch
+              ? (branchResult.branches.find((item) => item.id === branch)?.name ??
+                copy.selectedBranch)
+              : copy.allBranches}
+          </p>
+          <p className="mb-4 text-sm text-text-muted">{copy.owner.currentStock}</p>
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-            {cards.map(({ label, figure, flag, note }) => (
+            {cards.map(({ label, figure, flag, note, short }) => (
               <Stat
                 key={label}
                 label={label}
                 value={figure}
                 className="min-w-0"
-                valueClassName={flag ? 'break-words text-warning' : 'break-words'}
+                valueClassName={
+                  short
+                    ? 'break-words text-destructive'
+                    : flag
+                      ? 'break-words text-warning'
+                      : 'break-words'
+                }
                 data-flagged={flag ? 'true' : undefined}
                 sub={
                   <span className="flex flex-col gap-1">
@@ -621,12 +654,7 @@ export default async function PharmacyReportsPage({
                         <span className="text-warning">{flag.detail}</span>
                       </>
                     ) : null}
-                    <span>
-                      {note ??
-                        (branch
-                          ? 'Selected branch · ledger source'
-                          : 'All available branches · ledger source')}
-                    </span>
+                    {note ? <span>{note}</span> : null}
                   </span>
                 }
               />
@@ -634,41 +662,42 @@ export default async function PharmacyReportsPage({
           </div>
           <div className="mt-6">
             <Stat
-              label="Organization-wide safety queue"
+              label={screenCopy.reports.organizationWideSafetyQueue}
               value={metrics?.safetyQueue ?? '—'}
-              sub="Current snapshot · organization-wide"
+              sub={screenCopy.reports.allBranchesLatestRecords}
             />
-            <p className="mt-2 text-sm text-text-muted">
-              The selected branch does not apply to this queue. Date, supplier, ingredient and batch
-              filters do not apply either. Unsigned pharmacist review items plus open
-              controlled-register incidents, from pharmacist review and controlled-register records
-              at read time.
-            </p>
+            <details className="text-sm text-text-muted">
+              <summary className="min-h-11 cursor-pointer py-3 focus-visible:outline-2 focus-visible:outline-ring">
+                {copy.details}
+              </summary>
+              <p className="mt-2 text-sm text-text-muted">
+                {screenCopy.reports.theSelectedBranchDoesNotApplyToThis}
+              </p>
+            </details>
           </div>
-          <p className="mt-6 text-sm text-text-muted">
-            Report period: {from} to {to} (inclusive business dates). Branch scope:{' '}
-            {branch
-              ? (branchResult.branches.find((item) => item.id === branch)?.name ?? branch)
-              : 'All available branches'}
-            .{' '}
-            {currency
-              ? `Currency basis: current organization setting (${currency}); historical transaction currency is not verified.`
-              : 'Currency unknown: an authoritative currency for this organization is unavailable; historical transaction currency is not verified.'}{' '}
-            Amounts use the pharmacy minor-unit scale, shown to two decimal places. — means
-            unavailable, not zero. Sales, gross margin, cash, cash variance and refunds cover the
-            selected period. Stock signals, recommended orders and expiry exposure are current
-            snapshots; expiry exposure is not realized loss. Gross margin is not cash flow. Gross
-            margin uses the same exact posted journal as Finance, including returns and reversals,
-            on postings from the start of the first selected date to the start of the day after the
-            last, in {workspaceZoneLabel(timeZone)}. Finance&apos;s margin comparison still splits
-            days at midnight UTC, so its totals can differ for the same dates. It may differ from
-            sales grouped by business date. Missing journal evidence is unavailable; posted totals
-            do not establish complete source or cost coverage. Supplier, ingredient and batch
-            filters narrow sales, gross margin, stock signals, recommended orders and expiry
-            exposure to the matching stock lots and products. Cash, cash variance and refunds cannot
-            be traced to a supplier, ingredient or batch, so they show — while one is selected. The
-            daily work pack and observed demand use branch/date scope only.
-          </p>
+          <details className="mt-4 text-sm text-text-muted">
+            <summary className="min-h-11 cursor-pointer py-3 font-medium focus-visible:outline-2 focus-visible:outline-ring">
+              {copy.calculation}
+            </summary>
+            <p className="mb-4 text-sm text-text-muted">
+              {screenCopy.reports.reportPeriod}
+              {from}
+              {screenCopy.reports.to2}
+              {to}
+              {screenCopy.reports.inclusiveBusinessDatesBranchScope}{' '}
+              {branch
+                ? (branchResult.branches.find((item) => item.id === branch)?.name ??
+                  copy.selectedBranch)
+                : 'All available branches'}
+              .{' '}
+              {currency
+                ? `Currency basis: current organization setting (${currency}); historical transaction currency is not verified.`
+                : 'Currency unknown: an authoritative currency for this organization is unavailable; historical transaction currency is not verified.'}{' '}
+              {screenCopy.reports.amountsUseThePharmacyMinorUnitScaleShown}
+              {workspaceZoneLabel(timeZone)}
+              {screenCopy.reports.financeAposSMarginComparisonStillSplitsDays}
+            </p>
+          </details>
         </SectionCard>
       ) : null}
       <MarketingSummary
@@ -708,6 +737,7 @@ export default async function PharmacyReportsPage({
         <Suspense key={returnQuery.toString()} fallback={<DailyWorkPackLoading />}>
           <DailyWorkPack
             read={caller.dailyWorkPack}
+            timeZone={timeZone}
             filters={{ ...(branch ? { branchId: branch } : {}), from, to }}
             branches={branchResult.branches}
             refreshFields={Object.fromEntries(returnQuery)}
@@ -715,75 +745,79 @@ export default async function PharmacyReportsPage({
         </Suspense>
       ) : (
         <ReportNotice
-          title="Daily work pack unavailable"
-          detail="Select an available branch scope and a valid, unambiguous date range. No work-pack sources were queried."
+          title={screenCopy.reports.dailyWorkPackUnavailable}
+          detail={screenCopy.reports.selectAnAvailableBranchScopeAndAValid}
         />
       )}
       {invalidRange ? (
         <p id="report-date-error" role="alert" className="text-sm text-destructive">
-          Enter valid dates with From on or before To. No report was loaded.
+          {screenCopy.reports.enterValidDatesWithFromOnOrBefore}
         </p>
       ) : reportError ? (
         <ReportNotice
-          title="Report could not load"
-          detail="Check the date range and branch scope, then apply the filters again. No data was changed."
+          title={screenCopy.reports.reportCouldNotLoad}
+          detail={screenCopy.reports.checkTheDateRangeAndBranchScopeThen}
         />
       ) : result ? (
         <>
-          <div className="flex flex-wrap items-center gap-3 text-sm text-text-muted">
-            <StatusPill
-              status={result.freshness.status === 'CURRENT' ? 'Current' : result.freshness.status}
-              tone={result.freshness.status === 'CURRENT' ? 'success' : 'warning'}
-            />
-            <span>As of {formatWorkspaceDateTime(result.freshness.asOf, timeZone)}</span>
-            <span>Source: {plainReportSource(result.freshness.source) ?? 'pharmacy records'}</span>
-          </div>
+          <p className="text-sm text-text-muted">
+            {screenCopy.reports.updated}
+            {formatShopTime(result.freshness.asOf, timeZone ?? 'Asia/Karachi')}
+          </p>
+          <details className="text-sm text-text-muted">
+            <summary className="min-h-11 cursor-pointer py-3 focus-visible:outline-2 focus-visible:outline-ring">
+              {copy.details}
+            </summary>
+            <p>{plainReportSource(result.freshness.source) ?? 'pharmacy records'}</p>
+          </details>
           {section === 'sales' && metrics ? (
             <SectionCard
               id="sales"
-              eyebrow="Sales detail"
-              title="Sales and margin for the selected period"
+              eyebrow={screenCopy.reports.salesDetail}
+              title={screenCopy.reports.salesAndMarginForTheSelectedPeriod}
               titleLevel={2}
             >
               <p className="mb-4 text-sm text-text-muted">
-                Report period: {from} to {to} (inclusive business dates). Branch scope:{' '}
+                {screenCopy.reports.reportPeriod}
+                {from}
+                {screenCopy.reports.to2}
+                {to}
+                {screenCopy.reports.inclusiveBusinessDatesBranchScope}{' '}
                 {branch
-                  ? (branchResult.branches.find((item) => item.id === branch)?.name ?? branch)
+                  ? (branchResult.branches.find((item) => item.id === branch)?.name ??
+                    copy.selectedBranch)
                   : 'All available branches'}
-                . — means unavailable, not zero.
+                {screenCopy.reports.meansUnavailableNotZero}
               </p>
               <div className="grid gap-6 sm:grid-cols-2">
-                <Stat label="Sales" value={money(metrics.salesMinor)} sub="Ledger source" />
-                <Stat label="Gross margin" value={money(metrics.marginMinor)} sub="Ledger source" />
+                <Stat label={screenCopy.reports.sales} value={money(metrics.salesMinor)} />
+                <Stat label={screenCopy.reports.grossMargin} value={money(metrics.marginMinor)} />
               </div>
               <Link
                 className="mt-4 inline-flex text-sm font-medium underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 href={scopedDrillThrough('/pharmacy/reports', branch)}
               >
-                Back to overview
+                {screenCopy.reports.backToOverview}
               </Link>
             </SectionCard>
           ) : null}
           {expiryAdvice ? (
             <SectionCard
-              eyebrow="Advisory only"
+              eyebrow={screenCopy.reports.advisoryOnly}
               id="expiry-advisor"
-              title="Expiry and supplier-return advisor"
+              title={screenCopy.reports.expiryAndSupplierReturnAdvisor}
               titleLevel={2}
             >
               <p className="max-w-3xl text-sm leading-6 text-text-muted">
-                Ranked by projected stock value left at expiry, using only each branch&apos;s recent
-                completed dispensing and sales. Draft proposals do not reserve, move, quarantine,
-                write off, or return stock; a human must review and submit them. Supplier,
-                ingredient and batch filters narrow the lots listed.
+                {screenCopy.reports.rankedByProjectedStockValueLeftAtExpiry}
               </p>
               {advisorMessage === 'saved' ? (
                 <p className="mt-3 text-sm text-success" role="status">
-                  Draft expiry claim created for human review.
+                  {screenCopy.reports.draftExpiryClaimCreatedForHumanReview}
                 </p>
               ) : advisorMessage === 'error' ? (
                 <p className="mt-3 text-sm text-destructive" role="alert">
-                  The draft could not be created. Eligibility or access may have changed.
+                  {screenCopy.reports.theDraftCouldNotBeCreatedEligibilityOr}
                 </p>
               ) : null}
               {expiryAdvice.length ? (
@@ -813,21 +847,30 @@ export default async function PharmacyReportsPage({
                           </p>
                           <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-2 font-mono text-xs text-text-muted tabular-nums">
                             <div>
-                              <dt className="inline font-semibold text-text-body">Batch: </dt>
+                              <dt className="inline font-semibold text-text-body">
+                                {screenCopy.reports.batch}
+                              </dt>
                               <dd className="inline">{item.batchNumber}</dd>
                             </div>
                             <div>
-                              <dt className="inline font-semibold text-text-body">On hand: </dt>
-                              <dd className="inline">{item.onHandUnits} units</dd>
+                              <dt className="inline font-semibold text-text-body">
+                                {screenCopy.reports.onHand}
+                              </dt>
+                              <dd className="inline">
+                                {item.onHandUnits}
+                                {screenCopy.reports.units}
+                              </dd>
                             </div>
                             <div>
                               <dt className="inline font-semibold text-text-body">
-                                Value at risk:{' '}
+                                {screenCopy.reports.valueAtRisk}{' '}
                               </dt>
                               <dd className="inline">{money(item.valueAtRiskMinor)}</dd>
                             </div>
                             <div>
-                              <dt className="inline font-semibold text-text-body">Supplier: </dt>
+                              <dt className="inline font-semibold text-text-body">
+                                {screenCopy.reports.supplier2}
+                              </dt>
                               <dd className="inline">{item.supplierName}</dd>
                             </div>
                           </dl>
@@ -837,7 +880,7 @@ export default async function PharmacyReportsPage({
                             <input name="branchId" type="hidden" value={item.branchId} />
                             <input name="lotId" type="hidden" value={item.lotId} />
                             <Button className="min-h-11" type="submit" variant="outline">
-                              Create draft proposal
+                              {screenCopy.reports.createDraftProposal}
                             </Button>
                           </form>
                         ) : null}
@@ -847,59 +890,56 @@ export default async function PharmacyReportsPage({
                 </ol>
               ) : (
                 <p className="mt-5 text-sm text-text-muted">
-                  No future-expiry lots with available stock match this scope.
+                  {screenCopy.reports.noFutureExpiryLotsWithAvailableStockMatch}
                 </p>
               )}
             </SectionCard>
           ) : expiryAdviceError ? (
             <SectionCard
-              eyebrow="Could not load"
+              eyebrow={screenCopy.reports.couldNotLoad}
               id="expiry-advisor"
-              title="Expiry and supplier-return advisor"
+              title={screenCopy.reports.expiryAndSupplierReturnAdvisor}
               titleLevel={2}
             >
               <p className="text-sm text-text-muted" role="alert">
-                Expiry advice could not load. Apply the filters again to retry. No stock or
-                supplier-return data was changed.
+                {screenCopy.reports.expiryAdviceCouldNotLoadApplyTheFilters}
               </p>
             </SectionCard>
           ) : (
             <SectionCard
-              eyebrow="Owner only"
+              eyebrow={screenCopy.reports.ownerOnly}
               id="expiry-advisor"
-              title="Expiry and supplier-return advisor"
+              title={screenCopy.reports.expiryAndSupplierReturnAdvisor}
               titleLevel={2}
             >
               <p className="text-sm text-text-muted">
-                Financial report and owner permissions are required to view value-at-risk advice.
+                {screenCopy.reports.financialReportAndOwnerPermissionsAreRequiredTo}
               </p>
             </SectionCard>
           )}
           {anomalies ? (
             <SectionCard
-              eyebrow="Review only"
-              title="Anomaly review signals"
+              eyebrow={screenCopy.reports.reviewOnly}
+              title={screenCopy.reports.anomalyReviewSignals}
               titleLevel={2}
               actions={
                 <form action={refreshAnomalies}>
                   <Button type="submit" variant="outline">
-                    Refresh signals
+                    {screenCopy.reports.refreshSignals}
                   </Button>
                 </form>
               }
             >
               <p className="max-w-3xl text-sm leading-6 text-text-muted">
-                Deterministic event checks only. Signals never rank staff, imply misconduct, or
-                create orders, stock movements, price changes, or finance postings. A human opens
-                and reviews the source evidence.
+                {screenCopy.reports.deterministicEventChecksOnlySignalsNeverRankStaff}
               </p>
               {anomalyMessage === 'saved' ? (
                 <p className="mt-3 text-sm text-success" role="status">
-                  Anomaly signal state updated.
+                  {screenCopy.reports.anomalySignalStateUpdated}
                 </p>
               ) : anomalyMessage === 'error' ? (
                 <p className="mt-3 text-sm text-destructive" role="alert">
-                  The anomaly action could not be completed. Check the reason, date, and access.
+                  {screenCopy.reports.theAnomalyActionCouldNotBeCompletedCheck}
                 </p>
               ) : null}
               {anomalies.length ? (
@@ -917,7 +957,7 @@ export default async function PharmacyReportsPage({
                                 {signal.kind.replaceAll('_', ' ').toLowerCase()}
                               </h3>
                               <p className="mt-1 font-mono text-xs text-text-muted">
-                                Scope ·{' '}
+                                {screenCopy.reports.scope}{' '}
                                 {Object.entries(scope)
                                   .map(([key, item]) => `${key}: ${item}`)
                                   .join(' · ')}
@@ -945,16 +985,21 @@ export default async function PharmacyReportsPage({
                               </div>
                             ))}
                           </dl>
-                          <p className="mt-3 text-xs leading-5 text-text-muted">
-                            Window {new Date(signal.dataWindowStart).toLocaleString()}–
-                            {new Date(signal.dataWindowEnd).toLocaleString()} · source observed{' '}
-                            {new Date(signal.sourceObservedAt).toLocaleString()} · policy{' '}
-                            {signal.policyVersion}
-                          </p>
+                          <ReportDetails>
+                            <p className="text-xs leading-5 text-text-muted">
+                              {screenCopy.reports.window}
+                              {formatShopTime(signal.dataWindowStart, timeZone ?? 'Asia/Karachi')}–
+                              {formatShopTime(signal.dataWindowEnd, timeZone ?? 'Asia/Karachi')}
+                              {screenCopy.reports.sourceObserved}{' '}
+                              {formatShopTime(signal.sourceObservedAt, timeZone ?? 'Asia/Karachi')}
+                              {screenCopy.reports.policy} {signal.policyVersion}
+                            </p>
+                          </ReportDetails>
                           <div className="mt-3 flex flex-wrap gap-3 text-xs">
                             {scope.userId ? (
                               <span className="font-mono text-text-body">
-                                Staff drill-down · {scope.userId}
+                                {screenCopy.reports.staffDrillDown}
+                                {scope.userId}
                               </span>
                             ) : null}
                             {ctx.session?.user?.role === 'ADMIN' ? (
@@ -962,11 +1007,11 @@ export default async function PharmacyReportsPage({
                                 className="font-semibold text-accent-brand underline-offset-4 hover:underline"
                                 href={`/audit-logs?${new URLSearchParams(scope.userId ? { actorId: scope.userId } : { search: signal.id })}`}
                               >
-                                Open related audit trail
+                                {screenCopy.reports.openRelatedAuditTrail}
                               </Link>
                             ) : (
                               <span className="text-text-muted">
-                                Related audit trail requires an administrator.
+                                {screenCopy.reports.relatedAuditTrailRequiresAnAdministrator}
                               </span>
                             )}
                           </div>
@@ -974,23 +1019,25 @@ export default async function PharmacyReportsPage({
                             <dl className="mt-3 grid gap-1 text-xs leading-5 text-text-muted">
                               <div>
                                 <dt className="inline font-semibold text-text-body">
-                                  Estimate method:{' '}
+                                  {screenCopy.reports.estimateMethod}{' '}
                                 </dt>
                                 <dd className="inline">{signal.estimateMethod}</dd>
                               </div>
                               <div>
-                                <dt className="inline font-semibold text-text-body">Window: </dt>
+                                <dt className="inline font-semibold text-text-body">
+                                  {screenCopy.reports.window2}
+                                </dt>
                                 <dd className="inline">{signal.estimateWindow}</dd>
                               </div>
                               <div>
                                 <dt className="inline font-semibold text-text-body">
-                                  Exclusions:{' '}
+                                  {screenCopy.reports.exclusions}{' '}
                                 </dt>
                                 <dd className="inline">{signal.estimateExclusions}</dd>
                               </div>
                               <div>
                                 <dt className="inline font-semibold text-text-body">
-                                  Confidence:{' '}
+                                  {screenCopy.reports.confidence}{' '}
                                 </dt>
                                 <dd className="inline">{signal.estimateConfidence}</dd>
                               </div>
@@ -1002,7 +1049,7 @@ export default async function PharmacyReportsPage({
                                 <input name="branchId" type="hidden" value={signal.branchId} />
                                 <input name="signalId" type="hidden" value={signal.id} />
                                 <label className="min-w-52 flex-1 text-xs text-text-body">
-                                  Acknowledgement reason
+                                  {screenCopy.reports.acknowledgementReason}
                                   <Input
                                     className="mt-1 min-h-11"
                                     maxLength={500}
@@ -1016,14 +1063,14 @@ export default async function PharmacyReportsPage({
                                   type="submit"
                                   variant="outline"
                                 >
-                                  Acknowledge
+                                  {screenCopy.reports.acknowledge}
                                 </Button>
                               </form>
                               <form action={snoozeAnomaly} className="grid gap-2 sm:grid-cols-2">
                                 <input name="branchId" type="hidden" value={signal.branchId} />
                                 <input name="signalId" type="hidden" value={signal.id} />
                                 <label className="text-xs text-text-body">
-                                  Snooze until
+                                  {screenCopy.reports.snoozeUntil}
                                   <Input
                                     className="mt-1 min-h-11"
                                     name="snoozedUntil"
@@ -1032,7 +1079,7 @@ export default async function PharmacyReportsPage({
                                   />
                                 </label>
                                 <label className="text-xs text-text-body">
-                                  Snooze reason
+                                  {screenCopy.reports.snoozeReason}
                                   <Input
                                     className="mt-1 min-h-11"
                                     maxLength={500}
@@ -1046,13 +1093,13 @@ export default async function PharmacyReportsPage({
                                   type="submit"
                                   variant="outline"
                                 >
-                                  Snooze with reason
+                                  {screenCopy.reports.snoozeWithReason}
                                 </Button>
                               </form>
                             </div>
                           ) : (
                             <p className="mt-4 text-sm font-medium text-text-muted">
-                              Refresh source data before reviewing this signal.
+                              {screenCopy.reports.refreshSourceDataBeforeReviewingThisSignal}
                             </p>
                           )}
                         </article>
@@ -1062,37 +1109,37 @@ export default async function PharmacyReportsPage({
                 </ol>
               ) : (
                 <p className="mt-5 text-sm text-text-muted">
-                  No anomaly signals match these filters. Refresh to evaluate the current ledger
-                  window; no operational data will be changed.
+                  {screenCopy.reports.noAnomalySignalsMatchTheseFiltersRefreshTo}
                 </p>
               )}
             </SectionCard>
           ) : (
-            <SectionCard eyebrow="Owner only" title="Anomaly review signals" titleLevel={2}>
+            <SectionCard
+              eyebrow={screenCopy.reports.ownerOnly}
+              title={screenCopy.reports.anomalyReviewSignals}
+              titleLevel={2}
+            >
               <p className="text-sm text-text-muted">
-                Financial report and owner permissions are required to view anomaly evidence.
+                {screenCopy.reports.financialReportAndOwnerPermissionsAreRequiredTo2}
               </p>
             </SectionCard>
           )}
           {authenticationFlags ? (
             <SectionCard
-              eyebrow="SAFE-05 · Advisory"
-              title="Pack authentication flags"
+              eyebrow={screenCopy.reports.safe05Advisory}
+              title={screenCopy.reports.packAuthenticationFlags}
               titleLevel={2}
             >
               <p className="max-w-3xl text-sm leading-6 text-text-muted">
-                Receiving and dispensing scans compare GTIN, batch, expiry, and serial evidence with
-                this workspace. An unverifiable pack is never labelled counterfeit and never blocks
-                a sale by itself. Recalled batches remain blocked by the recall path. Ingredient and
-                batch filters narrow flags to scans matched to that medicine or batch.
+                {screenCopy.reports.receivingAndDispensingScansCompareGtinBatchExpiry}
               </p>
               {authenticationMessage === 'saved' ? (
                 <p className="mt-3 text-sm text-success" role="status">
-                  Authentication flag acknowledged.
+                  {screenCopy.reports.authenticationFlagAcknowledged}
                 </p>
               ) : authenticationMessage === 'error' ? (
                 <p className="mt-3 text-sm text-destructive" role="alert">
-                  The flag could not be acknowledged. Check the reason and access.
+                  {screenCopy.reports.theFlagCouldNotBeAcknowledgedCheckThe}
                 </p>
               ) : null}
               {authenticationFlags.length ? (
@@ -1102,12 +1149,14 @@ export default async function PharmacyReportsPage({
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
                           <h3 className="font-semibold text-text-strong">
-                            {flag.source.toLowerCase()} scan
+                            {flag.source.toLowerCase()}
+                            {screenCopy.reports.scan}
                           </h3>
                           <p className="mt-1 font-mono text-xs text-text-muted">
-                            GTIN {flag.gtin ?? 'not available'} · batch{' '}
-                            {flag.batchNumber ?? 'not available'} · serial{' '}
-                            {flag.serial ?? 'not available'}
+                            {screenCopy.reports.gtin}
+                            {flag.gtin ?? 'not available'}
+                            {screenCopy.reports.batch2} {flag.batchNumber ?? 'not available'}
+                            {screenCopy.reports.serial} {flag.serial ?? 'not available'}
                           </p>
                         </div>
                         <StatusPill
@@ -1118,7 +1167,8 @@ export default async function PharmacyReportsPage({
                       <p className="mt-3 text-sm leading-6 text-text-body">{flag.explanation}</p>
                       {flag.acknowledgedAt ? (
                         <p className="mt-3 text-sm text-text-muted">
-                          Acknowledged: {flag.acknowledgementReason}
+                          {screenCopy.reports.acknowledged}
+                          {flag.acknowledgementReason}
                         </p>
                       ) : (
                         <form
@@ -1128,7 +1178,7 @@ export default async function PharmacyReportsPage({
                           <input name="branchId" type="hidden" value={flag.branchId} />
                           <input name="scanId" type="hidden" value={flag.id} />
                           <label className="min-w-52 flex-1 text-xs text-text-body">
-                            Acknowledgement reason
+                            {screenCopy.reports.acknowledgementReason}
                             <Input
                               className="mt-1 min-h-11"
                               maxLength={500}
@@ -1138,7 +1188,7 @@ export default async function PharmacyReportsPage({
                             />
                           </label>
                           <Button className="min-h-11 self-end" type="submit" variant="outline">
-                            Acknowledge flag
+                            {screenCopy.reports.acknowledgeFlag}
                           </Button>
                         </form>
                       )}
@@ -1147,17 +1197,21 @@ export default async function PharmacyReportsPage({
                 </ol>
               ) : (
                 <p className="mt-5 text-sm text-text-muted">
-                  No pack authentication flags match these branches.
+                  {screenCopy.reports.noPackAuthenticationFlagsMatchTheseBranches}
                 </p>
               )}
             </SectionCard>
           ) : authenticationNotFilterable ? (
             <ReportNotice
-              title="Pack authentication flags"
-              detail="Pack scans record the medicine and batch they matched, not the supplier, so these flags cannot be filtered by supplier. Clear the supplier filter to review them."
+              title={screenCopy.reports.packAuthenticationFlags}
+              detail={screenCopy.reports.packScansRecordTheMedicineAndBatchThey}
             />
           ) : null}
-          <SectionCard eyebrow="Report catalog" title="Available reports" titleLevel={2}>
+          <SectionCard
+            eyebrow={screenCopy.reports.reportCatalog}
+            title={screenCopy.reports.availableReports}
+            titleLevel={2}
+          >
             <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
               {catalog.reports.map((report) => (
                 <div
@@ -1166,7 +1220,9 @@ export default async function PharmacyReportsPage({
                 >
                   <h3 className="font-medium text-text-strong">{report.label}</h3>
                   <p className="mt-2 text-sm text-text-muted">
-                    {report.metrics.length} metric contracts · filters: {report.filters.join(', ')}
+                    {report.metrics.length}
+                    {screenCopy.reports.metricContractsFilters}
+                    {report.filters.join(', ')}
                   </p>
                   <div className="mt-4 space-y-3">
                     {report.metrics.map((metricKey) => {
@@ -1187,13 +1243,15 @@ export default async function PharmacyReportsPage({
                           </p>
                           <dl className="mt-2 grid gap-1 font-mono text-xs text-text-body">
                             <div>
-                              <dt className="inline font-semibold">Source: </dt>
+                              <dt className="inline font-semibold">
+                                {screenCopy.reports.sourceLabel}
+                              </dt>
                               <dd className="inline">
                                 {plainReportSource(contract.source) ?? 'Not recorded'}
                               </dd>
                             </div>
                             <div>
-                              <dt className="inline font-semibold">Scope: </dt>
+                              <dt className="inline font-semibold">{screenCopy.reports.scope2}</dt>
                               <dd className="inline">
                                 {metricKey === 'safetyQueue'
                                   ? 'Organization-wide at read time; selected branch does not apply'
@@ -1201,7 +1259,7 @@ export default async function PharmacyReportsPage({
                               </dd>
                             </div>
                             <div>
-                              <dt className="inline font-semibold">Access: </dt>
+                              <dt className="inline font-semibold">{screenCopy.reports.access}</dt>
                               <dd className="inline">
                                 {plainReportPermission(contract.permission)}
                               </dd>
@@ -1212,11 +1270,11 @@ export default async function PharmacyReportsPage({
                               className="mt-2 inline-flex text-sm font-medium underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                               href={scopedDrillThrough(contract.drillThrough, branch)}
                             >
-                              Drill through
+                              {screenCopy.reports.drillThrough}
                             </Link>
                           ) : (
                             <p className="mt-2 text-xs text-text-muted">
-                              Drill-through unavailable
+                              {screenCopy.reports.drillThroughUnavailable}
                             </p>
                           )}
                         </article>
@@ -1229,24 +1287,24 @@ export default async function PharmacyReportsPage({
           </SectionCard>
           {digest ? (
             <>
-              <SectionCard eyebrow="Scheduled delivery" title="Daily owner digest" titleLevel={2}>
+              <SectionCard
+                eyebrow={screenCopy.reports.scheduledDelivery}
+                title={screenCopy.reports.dailyOwnerDigest}
+                titleLevel={2}
+              >
                 <p className="text-sm text-text-muted">
-                  Opt in per branch. Times use your workspace timezone. Capture history is always
-                  stored; WhatsApp remains disabled until a provider integration is implemented.
+                  {screenCopy.reports.optInPerBranchTimesUseYourWorkspace}
                 </p>
                 <p className="mt-2 text-sm text-text-muted">
-                  Each digest opens with a five-line briefing: sales and cash, estimated lost demand
-                  and walk-outs, the top gap with its purchase status, recovered sales, and expiry
-                  at risk with khata due. A seven-day summary is added once a week. Item names for
-                  the top gap appear only here; the owner WhatsApp version carries figures only.
+                  {screenCopy.reports.eachDigestOpensWithAFiveLineBriefing}
                 </p>
                 {digestMessage === 'saved' ? (
                   <p className="mt-3 text-sm text-success" role="status">
-                    Digest settings saved.
+                    {screenCopy.reports.digestSettingsSaved}
                   </p>
                 ) : digestMessage === 'error' ? (
                   <p className="mt-3 text-sm text-destructive" role="alert">
-                    Digest settings could not be saved. Check the time and try again.
+                    {screenCopy.reports.digestSettingsCouldNotBeSavedCheckThe}
                   </p>
                 ) : null}
                 <div className="mt-5 grid gap-3 md:grid-cols-2">
@@ -1270,7 +1328,7 @@ export default async function PharmacyReportsPage({
                         />
                         <h3 className="font-medium text-text-strong">{item.name}</h3>
                         <label className="mt-3 block text-sm text-text-body">
-                          Digest time
+                          {screenCopy.reports.digestTime}
                           <Input
                             className="mt-1 min-h-11"
                             defaultValue={time}
@@ -1291,7 +1349,7 @@ export default async function PharmacyReportsPage({
                 </div>
                 <div className="mt-5 rounded-md border border-border-subtle p-4">
                   <div className="flex flex-wrap items-center gap-3">
-                    <h3 className="font-medium text-text-strong">WhatsApp</h3>
+                    <h3 className="font-medium text-text-strong">{screenCopy.reports.whatsapp}</h3>
                     <StatusPill status="Disabled" />
                   </div>
                   <p className="mt-2 text-sm text-text-muted">
@@ -1301,7 +1359,11 @@ export default async function PharmacyReportsPage({
                   </p>
                 </div>
               </SectionCard>
-              <SectionCard eyebrow="Captured delivery" title="Digest history" titleLevel={2}>
+              <SectionCard
+                eyebrow={screenCopy.reports.capturedDelivery}
+                title={screenCopy.reports.digestHistory}
+                titleLevel={2}
+              >
                 {digest.history.length ? (
                   <ol className="space-y-3">
                     {digest.history.map((capture) => (
@@ -1323,25 +1385,27 @@ export default async function PharmacyReportsPage({
                   </ol>
                 ) : (
                   <p className="text-sm text-text-muted">
-                    No digests captured yet. Turn on a branch digest; history appears after its
-                    scheduled time.
+                    {screenCopy.reports.noDigestsCapturedYetTurnOnABranch}
                   </p>
                 )}
               </SectionCard>
             </>
           ) : (
-            <SectionCard eyebrow="Owner only" title="Daily owner digest" titleLevel={2}>
+            <SectionCard
+              eyebrow={screenCopy.reports.ownerOnly}
+              title={screenCopy.reports.dailyOwnerDigest}
+              titleLevel={2}
+            >
               <p className="text-sm text-text-muted">
-                Digest settings and history require owner permission. Reports remain available on
-                demand.
+                {screenCopy.reports.digestSettingsAndHistoryRequireOwnerPermissionReports}
               </p>
             </SectionCard>
           )}
         </>
       ) : branchResult.branches.length === 0 ? (
         <ReportNotice
-          title="No reportable branches"
-          detail="An active pharmacy branch is required before reports can be shown. Ask your workspace administrator to activate one."
+          title={screenCopy.reports.noReportableBranches}
+          detail={screenCopy.reports.anActivePharmacyBranchIsRequiredBeforeReports}
         />
       ) : null}
     </div>

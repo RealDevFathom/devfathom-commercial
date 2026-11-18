@@ -2215,7 +2215,7 @@ function ScopedPharmacyCounterConsole({
         focusSearch();
         return true;
       } catch (error) {
-        setNotice({ tone: 'danger', message: messageFrom(error) });
+        setNotice({ tone: 'warning', message: messageFrom(error) });
         return false;
       } finally {
         setPending(null);
@@ -2257,7 +2257,7 @@ function ScopedPharmacyCounterConsole({
         setNotice({ tone: 'success', message: 'Bill voided. Its stock is back on sale.' });
         return true;
       } catch (error) {
-        setNotice({ tone: 'danger', message: messageFrom(error) });
+        setNotice({ tone: 'warning', message: messageFrom(error) });
         return false;
       } finally {
         setPending(null);
@@ -3228,7 +3228,7 @@ function ScopedPharmacyCounterConsole({
         />
         <SectionCard title="Branches unavailable">
           <div className="space-y-3" role="alert">
-            <p className="text-sm text-destructive">{messageFrom(branchesQuery.error)}</p>
+            <p className="text-sm text-warning">{messageFrom(branchesQuery.error)}</p>
             <Button
               type="button"
               variant="outline"
