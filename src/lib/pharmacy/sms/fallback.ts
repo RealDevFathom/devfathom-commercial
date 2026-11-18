@@ -3,7 +3,11 @@ import 'server-only';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { lockPatientConsent } from '../consent-writer';
-import { claimMessageLogInTransaction, sendClaimedMessage } from '../whatsapp/message-log';
+import {
+  claimMessageLogWithAliasesInTransaction,
+  sendClaimedMessage,
+  type MessageLogAliases,
+} from '../whatsapp/message-log';
 import { normalizeWhatsAppNumber, phoneLast4 } from '../whatsapp/messages';
 import { smsLanguage, utilitySmsBody, type UtilitySmsContent } from './messages';
 import { smsEnabledFor, type SmsConfig, type SmsProvider } from './provider';
@@ -28,6 +32,8 @@ export type UtilitySmsRequest = {
   customerId: string;
   /** WhatsApp dedupe key of the same utility message; SMS claims `sms:<key>`. */
   dedupeKey: string;
+  /** Other WhatsApp-style key formats of the same message, claimed as `sms:<key>` with it. */
+  aliases?: MessageLogAliases | null;
   content: UtilitySmsContent;
   refillCaptureId?: string | null;
   orderId?: string | null;
@@ -96,23 +102,30 @@ export async function sendUtilitySmsFallback(
       },
     });
     if (prior) return null;
-    const logId = await claimMessageLogInTransaction(db, {
-      organizationId: request.organizationId,
-      channel: 'SMS',
-      direction: 'OUTBOUND',
-      status: 'PENDING',
-      kind: request.content.kind,
-      dedupeKey,
-      // Atomic one-per-customer-per-day guard across accounts, medicines and branches.
-      customerDayKey: `sms:${request.content.kind}:${customer.id}:${now.toISOString().slice(0, 10)}`,
-      branchId: request.branchId,
-      customerId: customer.id,
-      patientId: customer.patientId,
-      phoneLast4: phoneLast4(to),
-      refillCaptureId: request.refillCaptureId ?? null,
-      orderId: request.orderId ?? null,
-      dueDate: request.dueDate ?? null,
-    });
+    const aliases = request.aliases
+      ? { ...request.aliases, dedupeKeys: request.aliases.dedupeKeys.map((key) => `sms:${key}`) }
+      : null;
+    const logId = await claimMessageLogWithAliasesInTransaction(
+      db,
+      {
+        organizationId: request.organizationId,
+        channel: 'SMS',
+        direction: 'OUTBOUND',
+        status: 'PENDING',
+        kind: request.content.kind,
+        dedupeKey,
+        // Atomic one-per-customer-per-day guard across accounts, medicines and branches.
+        customerDayKey: `sms:${request.content.kind}:${customer.id}:${now.toISOString().slice(0, 10)}`,
+        branchId: request.branchId,
+        customerId: customer.id,
+        patientId: customer.patientId,
+        phoneLast4: phoneLast4(to),
+        refillCaptureId: request.refillCaptureId ?? null,
+        orderId: request.orderId ?? null,
+        dueDate: request.dueDate ?? null,
+      },
+      aliases
+    );
     return {
       logId,
       to,

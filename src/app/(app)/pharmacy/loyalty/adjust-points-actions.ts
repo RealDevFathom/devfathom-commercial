@@ -5,6 +5,7 @@ import { unstable_rethrow } from 'next/navigation';
 import { TRPCError } from '@trpc/server';
 import { createTRPCContext } from '@/server/trpc';
 import { pharmacyLoyaltyRouter } from './loyalty-router';
+import { isExplainedAdjustRefusal } from './adjust-points-messages';
 
 export type AdjustPointsFormState = { status: 'idle' | 'saved' | 'error'; message: string };
 
@@ -19,6 +20,10 @@ export async function adjustPoints(
   const amount = text(form, 'points');
   if (!/^\d{1,7}$/.test(amount) || Number(amount) === 0 || !['add', 'remove'].includes(direction))
     return { status: 'error', message: 'Enter a whole number of points above 0.' };
+  // DEV-881: a manager's own PIN, never normalised or stored. Owners may leave it blank.
+  const managerPin = String(form.get('managerPin') ?? '');
+  if (managerPin && !/^\d{4,8}$/.test(managerPin))
+    return { status: 'error', message: 'Enter your 4 to 8 digit PIN.' };
   try {
     const caller = pharmacyLoyaltyRouter.createCaller(await createTRPCContext());
     const result = await caller.adjustPoints({
@@ -27,6 +32,7 @@ export async function adjustPoints(
       points: direction === 'remove' ? -Number(amount) : Number(amount),
       reason: text(form, 'reason'),
       idempotencyKey: text(form, 'idempotencyKey'),
+      ...(managerPin ? { managerPin } : {}),
     });
     revalidatePath('/pharmacy/loyalty');
     return {
@@ -39,6 +45,9 @@ export async function adjustPoints(
   } catch (error) {
     unstable_rethrow(error);
     if (error instanceof TRPCError) {
+      // DEV-881: a refused PIN or a manager over the owner's ceiling is told why.
+      if (error.code === 'FORBIDDEN' && isExplainedAdjustRefusal(error.message))
+        return { status: 'error', message: error.message };
       if (['FORBIDDEN', 'UNAUTHORIZED'].includes(error.code))
         return {
           status: 'error',

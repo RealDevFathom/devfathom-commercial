@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 // DEV-911: the owner setting for the pharmacist check at each sale, in the database.
-const NAME = '20261118120000_pharmacy_pharmacist_check_policy';
+const NAME = '20261118130000_pharmacy_pharmacist_check_policy';
 const sql = readFileSync(`prisma/migrations/${NAME}/migration.sql`, 'utf8');
 
 function section(start: string, end: string): string {

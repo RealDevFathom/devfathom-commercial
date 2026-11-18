@@ -19,7 +19,7 @@ describe('gross-margin comparison UI', () => {
     };
     const html = renderToStaticMarkup(<MarginComparisonLedger report={report} />);
     for (const text of [
-      '25.00 (currency unknown)',
+      '25.00 (currency not confirmed)',
       '30 Aug 2026, 12:00 AM UTC',
       'start inclusive, end exclusive',
       'the previous period',
@@ -49,7 +49,7 @@ describe('gross-margin comparison UI', () => {
       expect(html).toContain(
         code === 'FORBIDDEN' ? 'Permission required' : 'Comparison unavailable'
       );
-      expect(html).not.toContain('0.00 (currency unknown)');
+      expect(html).not.toContain('0.00 (currency not confirmed)');
       expect(html).toContain('name="marginFrom"');
       expect(html).toContain('value="2026-09-01"');
       expect(html).toContain('value="branch_1"');

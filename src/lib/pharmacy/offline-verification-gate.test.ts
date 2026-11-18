@@ -158,6 +158,7 @@ describe('PH-OFF OFF-05 — offline verification gate', () => {
         }
         return backing.write(key, value);
       },
+      writeIfRevision: (key, value, expected) => backing.writeIfRevision(key, value, expected),
       remove: (key) => backing.remove(key),
       close: () => backing.close(),
     };
