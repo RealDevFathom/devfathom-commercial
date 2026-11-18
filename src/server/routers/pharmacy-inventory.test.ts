@@ -1716,6 +1716,16 @@ const ASSIGNMENT_GATED: ReadonlyArray<{
     capability: 'pharmacy:inventory',
     invoke: () => caller().expiryBoardLots({ branchId: 'branch_a', withinDays: 90 }),
   },
+  // DEV-90 — shelf and price sticker content is a branch stock read.
+  {
+    name: 'shelfLabels',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().shelfLabels({
+        branchId: 'branch_a',
+        source: { kind: 'RECEIPT', goodsReceiptId: 'receipt_1' },
+      }),
+  },
   {
     name: 'stockSignalDashboard',
     capability: 'pharmacy:inventory',
@@ -2130,6 +2140,7 @@ const READS = new Set([
   'onHand',
   'temperatureZoneStatuses',
   'expiryBoardLots',
+  'shelfLabels',
   'stockSignalDashboard',
   'stockSignalDigest',
   'transferBoard',
@@ -2546,7 +2557,7 @@ describe('DEV-660 — every branch-scoped procedure is classified', () => {
 
     expect(new Set(classified).size).toBe(classified.length);
     expect(branchScoped).toEqual(classified);
-    expect(ASSIGNMENT_GATED).toHaveLength(42);
+    expect(ASSIGNMENT_GATED).toHaveLength(43);
   });
 });
 

@@ -84,6 +84,7 @@ import {
   DialogClose,
 } from '@/components/ui/dialog';
 import type { CounterCart, CounterSearchRow } from '@/lib/pharmacy/counter';
+import { counterLabelScanDecision } from '@/lib/pharmacy/counter-label-scan';
 import {
   counterMedicineDisplayName,
   counterMedicineGenericName,
@@ -112,6 +113,10 @@ import {
   counterSaleErrorMessage,
   TENDER_ATTEMPT_DISCARDED,
 } from '@/lib/pharmacy/counter-messages';
+import {
+  looksLikeLoyaltyCardCode,
+  normalizeLoyaltyCardCode,
+} from '@/lib/pharmacy/loyalty-card-code';
 import {
   ASK_OWNER_OR_MANAGER,
   BRANCH_NOT_ASSIGNED,
@@ -524,6 +529,9 @@ function ScopedPharmacyCounterConsole({
   const completedAdds = useRef(0);
   // Bumped with every confirmed add; the scan field clears its local draft on it.
   const [addVersion, setAddVersion] = useState(0);
+  // DEV-748: bumped when a scanned loyalty card is taken out of the search field, so the scan
+  // input drops its draft; added to addVersion (both only grow) to form its reset version.
+  const [cardScanResets, setCardScanResets] = useState(0);
   // DEV-575: complete scans entered while a line is saving, added in order afterwards.
   const [scanQueue, setScanQueue] = useState<{ code: string; branchId: string }[]>([]);
   const [drainingScan, setDrainingScan] = useState(false);
@@ -575,6 +583,8 @@ function ScopedPharmacyCounterConsole({
   const [patientAddressDraft, setPatientAddressDraft] = useState<string | null>(null);
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [redeemPoints, setRedeemPoints] = useState(0);
+  // DEV-748: a card code typed by hand when the scanner cannot read the card.
+  const [cardCodeText, setCardCodeText] = useState('');
   const [receiptLocale, setReceiptLocale] = useState<CounterReceiptLocale>('en');
   // DEV-742: a cashier's paper choice overrides the branch's saved paper for this session only.
   const [receiptFormatChoice, setReceiptFormatChoice] = useState<{
@@ -821,7 +831,8 @@ function ScopedPharmacyCounterConsole({
   const trimmedQuery = query.trim();
   // DEV-575: a scanner types a code in a burst and ends it with Enter, so a code
   // being typed never fires a search per digit; Enter submits it.
-  const scannerQuery = looksLikeScannedCode(trimmedQuery);
+  // DEV-748: a loyalty card code is never sent to the medicine search either.
+  const scannerQuery = looksLikeScannedCode(trimmedQuery) || looksLikeLoyaltyCardCode(trimmedQuery);
   // A name search follows the selected branch, including one submitted (or debounced)
   // just before a branch change, so it never waits on the old branch.
   if (
@@ -994,6 +1005,7 @@ function ScopedPharmacyCounterConsole({
   const setDemandOutcome = trpc.pharmacySales.setDemandOutcome.useMutation();
   const declineSubstitute = trpc.pharmacySales.declineSubstitute.useMutation();
   const linkCustomer = trpc.pharmacySales.linkCustomer.useMutation();
+  const scanLoyaltyCard = trpc.pharmacySales.scanLoyaltyCard.useMutation({ retry: false });
   const khataSignup = trpc.pharmacySales.khataSignup.useMutation();
   const redeemLoyalty = trpc.pharmacySales.redeemPoints.useMutation();
   const authenticatePack = trpc.pharmacySales.authenticatePack.useMutation();
@@ -1059,13 +1071,16 @@ function ScopedPharmacyCounterConsole({
     requestedCanonicalUnits !== null &&
     Number.isSafeInteger(requestedCanonicalUnits) &&
     requestedCanonicalUnits > 0
-      ? Math.max(0, requestedCanonicalUnits - activeRow.onHandUnits)
+      ? Math.max(
+          0,
+          requestedCanonicalUnits - (activeRow.medicineOnHandUnits ?? activeRow.onHandUnits)
+        )
       : 0;
   const substituteInput =
     activeRow &&
     selectedOption &&
     requestedCanonicalUnits !== null &&
-    activeRow.onHandUnits < requestedCanonicalUnits
+    (activeRow.medicineOnHandUnits ?? activeRow.onHandUnits) < requestedCanonicalUnits
       ? {
           branchId,
           medicineId: activeRow.medicineId,
@@ -1609,12 +1624,23 @@ function ScopedPharmacyCounterConsole({
   );
 
   const stageRow = useCallback((row: CounterSearchRow, focusQuantity = true) => {
+    const label = counterLabelScanDecision(row);
+    if (label.kind === 'BLOCKED') {
+      setActiveRow(null);
+      setQuantityText('');
+      setSaleUnit(null);
+      setLotOverride(null);
+      setNotice({ tone: 'danger', message: label.message });
+      return;
+    }
     focusQuantityOnStage.current = focusQuantity;
     quantityReviewed.current = false;
     setActiveRow(row);
     setQuantityText('1');
     setSaleUnit(preferredSaleUnitOption(row.saleUnits, row.dosageForm)?.kind ?? null);
-    setLotOverride(null);
+    setLotOverride(
+      label.kind === 'OVERRIDE' ? { inventoryLotId: label.inventoryLotId, reason: '' } : null
+    );
   }, []);
 
   const changeQuantity = useCallback((text: string) => {
@@ -1788,6 +1814,7 @@ function ScopedPharmacyCounterConsole({
             option.kind,
             units,
             overrideLotId,
+            row.labelLot?.inventoryLotId,
             scannedPack?.serial.toUpperCase(),
           ]);
           let key = lineAttempts.current.get(selection);
@@ -1828,6 +1855,7 @@ function ScopedPharmacyCounterConsole({
             saleUnit: option.kind,
             quantity: units,
             canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
+            ...(row.labelLot ? { shelfLabelLotId: row.labelLot.inventoryLotId } : {}),
             // Retries keep the key until a confirmed add; the next completed
             // scanner gesture must allocate another item, even for the same code.
             idempotencyKey: key,
@@ -2017,12 +2045,22 @@ function ScopedPharmacyCounterConsole({
         const row = result.rows[0]!;
         if (!cached && !search.serializedPack) catalogueCache.put(branchId, search.query, row);
         const serialized = search.serializedPack;
+        const label = counterLabelScanDecision(row);
+        if (label.kind === 'BLOCKED') {
+          stageRow(row);
+          return;
+        }
         // Use this lookup's restrictions/availability even when the medicine ID
         // matches the previous selection. A server refusal can refresh its rules.
         stageRow(row, false);
         setSaleUnit(row.saleUnits[0]?.kind ?? null);
         // Barcode entry keeps its one-item default; manual selection starts empty.
         setQuantityText('1');
+        if (label.kind === 'OVERRIDE') {
+          // A non-FEFO sticker waits for the existing reason and pharmacist approval.
+          setNotice({ tone: 'warning', message: label.message });
+          return;
+        }
         const scanPreview = counterSelectionPreview(row, row.saleUnits[0] ?? null, 1);
         if (serialized) {
           // The server pins the scanned pack's own lot and refuses a pack already sold.
@@ -2665,6 +2703,60 @@ function ScopedPharmacyCounterConsole({
     }
   }, [branchId, busy, ensureSale, linkCustomer, patient]);
 
+  // DEV-748: a scanned or typed loyalty card links its customer to the bill (opening one if
+  // needed), so the bill earns points when paid and the customer can redeem on it.
+  const linkLoyaltyCard = useCallback(
+    async (text: string) => {
+      if (busy) return false;
+      const cardToken = normalizeLoyaltyCardCode(text);
+      if (!cardToken) {
+        setNotice({
+          tone: 'warning',
+          message: 'That is not a loyalty card code. Check the code printed under the QR.',
+        });
+        return false;
+      }
+      setPending('customer');
+      // DEV-712: a card scanned after the last bill was paid or voided starts the next
+      // customer's bill, as a medicine scan does; the closed bill's patient is cleared.
+      const replaceClosedBill =
+        Boolean(saleId) && !attemptRef.current && billClosed(cartQuery.data, saleId);
+      if (replaceClosedBill) clearBill();
+      try {
+        const activeSaleId = replaceClosedBill ? await openSale() : await ensureSale();
+        const link = (linkSaleId: string) =>
+          scanLoyaltyCard.mutateAsync({ branchId, saleId: linkSaleId, cardToken });
+        let linked: Awaited<ReturnType<typeof link>>;
+        try {
+          linked = await link(activeSaleId);
+        } catch (error) {
+          // DEV-712: the bill moved on (paid or voided on another screen, or this copy was
+          // stale). Re-read it and, only once it is confirmed paid or voided, link the card to a
+          // new bill. A held bill keeps its ID so it can still be resumed.
+          const freshBill = replaceClosedBill || activeSaleId !== saleId;
+          if (!counterBillMovedOn(error) || freshBill || attemptRef.current) throw error;
+          const read = await cartQuery.refetch();
+          if (!read.isSuccess || !billClosed(read.data, activeSaleId)) throw error;
+          clearBill();
+          linked = await link(await openSale());
+        }
+        setCustomerId(linked.id);
+        setRedeemPoints(0);
+        setNotice({
+          tone: 'success',
+          message: `Loyalty card: ${linked.displayName} linked to this bill.`,
+        });
+        return true;
+      } catch (error) {
+        setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
+        return false;
+      } finally {
+        setPending(null);
+      }
+    },
+    [branchId, busy, cartQuery, clearBill, ensureSale, openSale, saleId, scanLoyaltyCard]
+  );
+
   const redeemCustomerPoints = useCallback(async () => {
     if (!saleId || redeemPoints <= 0 || busy) return;
     setPending('redeem');
@@ -2730,7 +2822,7 @@ function ScopedPharmacyCounterConsole({
           canonicalUnitsPerSaleUnit: selectedOption?.canonicalUnitsPerSaleUnit ?? 1,
           requestedCanonicalUnits: requestedCanonicalUnits ?? quantity,
           shortfallCanonicalUnits: capturedUnits,
-          onHandUnits: activeRow?.onHandUnits ?? 0,
+          onHandUnits: activeRow?.medicineOnHandUnits ?? activeRow?.onHandUnits ?? 0,
           blocked: activeRow?.blocked ?? [],
           capturedAt: new Date().toISOString(),
         },
@@ -3640,13 +3732,15 @@ function ScopedPharmacyCounterConsole({
                         autoFocus
                         autoComplete="off"
                         value={query}
-                        resetVersion={addVersion}
+                        resetVersion={addVersion + cardScanResets}
                         debounceMs={COUNTER_SEARCH_DEBOUNCE_MS}
                         buffering={bufferScans}
                         isScan={looksLikeScannedCode}
                         isScanPrefix={looksLikeScanPrefix}
                         onQueueScan={queueScan}
                         onSearch={(text) => {
+                          // DEV-748: a loyalty card code is never sent to the medicine search.
+                          if (looksLikeLoyaltyCardCode(text.trim())) return;
                           setQuery(text);
                           setSubmittedSearch({ text: text.trim(), query: text.trim(), branchId });
                         }}
@@ -3706,6 +3800,14 @@ function ScopedPharmacyCounterConsole({
                           if (event.key !== 'Enter') return;
                           event.preventDefault();
                           const trimmed = event.currentTarget.value.trim();
+                          if (looksLikeLoyaltyCardCode(trimmed)) {
+                            // DEV-748: a loyalty card scanned into the search field.
+                            scannerRevision.current += 1;
+                            setQuery('');
+                            setCardScanResets((count) => count + 1);
+                            void linkLoyaltyCard(trimmed);
+                            return;
+                          }
                           setQuery(trimmed);
                           if (looksLikeScannedCode(trimmed)) {
                             void addBarcode(trimmed);
@@ -3888,7 +3990,19 @@ function ScopedPharmacyCounterConsole({
                     }
                     error={lotOptionsQuery.error ? messageFrom(lotOptionsQuery.error) : null}
                     disabled={busy}
-                    onChange={setLotOverride}
+                    onChange={(next) => {
+                      // An explicit batch choice replaces the scanned sticker's lot pin;
+                      // otherwise the server refuses the chosen batch as a mismatch.
+                      // Merely opening the picker (lotOverride still null) keeps the pin.
+                      setActiveRow((current) =>
+                        lotOverride !== null &&
+                        current?.labelLot &&
+                        next?.inventoryLotId !== current.labelLot.inventoryLotId
+                          ? { ...current, labelLot: null }
+                          : current
+                      );
+                      setLotOverride(next);
+                    }}
                     onRetry={() => void lotOptionsQuery.refetch()}
                   />
                 </div>
@@ -4390,6 +4504,39 @@ function ScopedPharmacyCounterConsole({
             </Button>
           }
         >
+          <form
+            className="mb-4 flex flex-wrap items-end gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void linkLoyaltyCard(cardCodeText).then((linked) => {
+                if (linked) setCardCodeText('');
+              });
+            }}
+          >
+            <div className="grid min-w-0 flex-1 gap-1.5">
+              <Label htmlFor="counter-loyalty-card" className="text-sm">
+                Loyalty card code
+              </Label>
+              <Input
+                id="counter-loyalty-card"
+                autoComplete="off"
+                spellCheck={false}
+                value={cardCodeText}
+                disabled={busy || !branchAuthorized}
+                onChange={(event) => setCardCodeText(event.target.value)}
+                placeholder="Scan the card or type the code under the QR"
+                className="h-11 font-mono"
+              />
+            </div>
+            <Button
+              type="submit"
+              variant="outline"
+              className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
+              disabled={busy || !branchAuthorized || !cardCodeText.trim()}
+            >
+              {pending === 'customer' ? 'Linking…' : 'Link card'}
+            </Button>
+          </form>
           {customerQuery.data ? (
             <div className="space-y-4 text-sm text-text-body">
               <div>
@@ -4485,7 +4632,8 @@ function ScopedPharmacyCounterConsole({
             </div>
           ) : (
             <p className="text-sm text-text-muted">
-              Select a patient, open a bill, then link. Current loyalty consent is required.
+              Scan the customer’s loyalty card, or select a patient, open a bill, then link. Current
+              loyalty consent is required.
             </p>
           )}
         </SectionCard>

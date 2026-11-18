@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-const name = '20261118000000_pharmacy_catalogue_ingredient_edits';
+const name = '20261118015359_pharmacy_catalogue_ingredient_edits';
 const sql = readFileSync(`prisma/migrations/${name}/migration.sql`, 'utf8');
 
 describe('DEV-19 queued new-ingredient catalogue edits migration', () => {

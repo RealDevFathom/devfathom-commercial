@@ -57,6 +57,10 @@ export class PharmacyLoyaltyError extends Error {
       | 'ADJUSTMENT_EXCEEDS_BALANCE'
       | 'LOYALTY_INACTIVE'
       | 'INVALID_MEMBERSHIP_CHANGE'
+      // DEV-748: physical loyalty cards.
+      | 'LOYALTY_CARD_NOT_RECOGNISED'
+      | 'LOYALTY_CARD_NOT_ACTIVE'
+      | 'LOYALTY_CARD_REASON_REQUIRED'
   ) {
     super(reason);
   }

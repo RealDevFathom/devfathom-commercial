@@ -13,6 +13,7 @@ import { formatUtcInstant } from '@/lib/utc-instant';
 import { LoyaltyCustomerSearch } from './customer-search';
 import { EarnRateForm } from './earn-rate-form';
 import { AdjustPointsForm } from './adjust-points-form';
+import { LoyaltyCardPanel } from './loyalty-card-panel';
 import { MembershipForm } from './membership-form';
 import {
   describeLoyaltyEarnRule,
@@ -62,9 +63,12 @@ async function loadLoyalty(text: (key: string) => string) {
       caller.redemptions({ branchId, page: Number(text('redemptionsPage') || 1) }),
     ]);
     const customerId = text('customerId');
-    const history = customerId
-      ? await caller.history({ branchId, customerId, page: Number(text('page') || 1) })
-      : null;
+    const [history, card] = customerId
+      ? await Promise.all([
+          caller.history({ branchId, customerId, page: Number(text('page') || 1) }),
+          caller.card({ branchId, customerId }),
+        ])
+      : [null, null];
     return {
       state: 'ready' as const,
       branches,
@@ -74,6 +78,7 @@ async function loadLoyalty(text: (key: string) => string) {
       hasMore,
       customerId,
       history,
+      card,
       earnRate,
       liability,
       redemptions,
@@ -148,6 +153,7 @@ export default async function LoyaltyPage({
     hasMore,
     customerId,
     history,
+    card,
     earnRate,
     liability,
     redemptions,
@@ -506,6 +512,15 @@ export default async function LoyaltyPage({
                 Points cannot be adjusted while the member is deactivated. Re-enrol them first.
               </p>
             )}
+          </div>
+          <div className="mt-5 border-t border-border-subtle pt-5">
+            <h3 className="mb-3 text-sm font-semibold text-text-strong">Loyalty card</h3>
+            <LoyaltyCardPanel
+              key={customerId}
+              branchId={branchId}
+              customerId={customerId}
+              activeCard={card ? { issuedAt: card.issuedAt.toISOString() } : null}
+            />
           </div>
           {history.entries.length ? (
             <div
