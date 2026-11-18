@@ -118,7 +118,7 @@ function OrderCard({
         ))}
       </ol>
       {staff && ['READY_FOR_COLLECTION', 'OUT_FOR_DELIVERY', 'COMPLETED'].includes(order.status) ? (
-        <DeliveryEvidenceForm branchId={order.branchId} orderId={order.id} />
+        <DeliveryEvidenceForm branchId={order.branchId} orderId={order.id} currency={currency} />
       ) : null}
       {order.runner ? (
         <p className="mt-3 text-xs text-text-muted">Runner: {order.runner.name}</p>
