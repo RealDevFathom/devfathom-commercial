@@ -224,3 +224,38 @@ describe('unresolved supplied quantities', () => {
     expect(view.quantityReview.label).toBeNull();
   });
 });
+
+describe('DEV-927 — batch and expiry the old system did not record', () => {
+  it('shows a missing batch and expiry as information, not as an exception', () => {
+    const view = stagedReference(
+      { ...fixture(), batchNumber: null, expiryDate: null, exceptions: [] },
+      source,
+      'batch_1'
+    );
+    expect(view).toMatchObject({
+      batchLabel: 'Batch not recorded',
+      expiryLabel: 'Expiry not recorded',
+      batchNotRecorded: true,
+      expiryNotRecorded: true,
+      exceptions: [],
+    });
+  });
+
+  it('shows a recorded batch and expiry as recorded', () => {
+    const view = stagedReference(
+      { ...fixture(), batchNumber: 'B-17', expiryDate: new Date(Date.UTC(2027, 2, 31)) },
+      source,
+      'batch_1'
+    );
+    expect(view).toMatchObject({
+      batchLabel: 'B-17',
+      expiryLabel: '2027-03-31',
+      batchNotRecorded: false,
+      expiryNotRecorded: false,
+    });
+  });
+
+  it('routes a passed expiry to the opening stock review', () => {
+    expect(exceptionWorkflow('EXPIRED_STOCK')).toBe('Opening stock');
+  });
+});

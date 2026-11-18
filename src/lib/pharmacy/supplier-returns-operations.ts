@@ -517,10 +517,22 @@ export async function allocateSupplierCredit(
     });
   }
 
-  const creditAllocated = await db.pharmacySupplierCreditAllocation.aggregate({
-    where: { organizationId: scope.organizationId, supplierCreditId: credit.id },
-    _sum: { amountMinor: true },
-  });
+  const [creditAllocated, creditSetOff] = await Promise.all([
+    db.pharmacySupplierCreditAllocation.aggregate({
+      where: { organizationId: scope.organizationId, supplierCreditId: credit.id },
+      _sum: { amountMinor: true },
+    }),
+    // DEV-694: a credit already set off (or awaiting approval to be set off)
+    // against an AP bill cannot also settle a debit note.
+    db.pharmacyApCreditSetOff.aggregate({
+      where: {
+        organizationId: scope.organizationId,
+        supplierCreditId: credit.id,
+        status: { in: ['APPROVED', 'PENDING'] },
+      },
+      _sum: { amountMinor: true },
+    }),
+  ]);
   const position = creditPosition({
     expectedCreditMinor: note.expectedCreditMinor,
     allocations: note.allocations,
@@ -528,7 +540,8 @@ export async function allocateSupplierCredit(
   assertAllocatable({
     amountMinor: input.amountMinor,
     creditAmountMinor: credit.amountMinor,
-    creditAlreadyAllocatedMinor: creditAllocated._sum.amountMinor ?? 0,
+    creditAlreadyAllocatedMinor:
+      (creditAllocated._sum.amountMinor ?? 0) + (creditSetOff._sum.amountMinor ?? 0),
     noteExpectedCreditMinor: note.expectedCreditMinor,
     noteAlreadyReceivedMinor: position.receivedCreditMinor,
   });

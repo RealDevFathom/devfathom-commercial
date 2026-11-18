@@ -50,6 +50,8 @@ type Store = {
   allocations: Allocation[];
   returnStatus: Record<string, string>;
   locks: Map<string, Promise<void>>;
+  /** DEV-694: approved or pending AP bill set-offs per credit. */
+  setOffs: Record<string, number>;
 };
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -61,6 +63,7 @@ function makeStore(credits: Credit[], notes: Note[]): Store {
     allocations: [],
     returnStatus: Object.fromEntries(notes.map((note) => [note.purchaseReturnId, 'DISPATCHED'])),
     locks: new Map(),
+    setOffs: {},
   };
 }
 
@@ -146,6 +149,13 @@ async function inTransaction<T>(store: Store, work: (db: ScopedDb) => Promise<T>
         return { ...row };
       },
     },
+    // DEV-694: AP bill set-offs already holding part of a credit.
+    pharmacyApCreditSetOff: {
+      async aggregate({ where }: { where: { supplierCreditId: string } }) {
+        await tick();
+        return { _sum: { amountMinor: store.setOffs[where.supplierCreditId] ?? null } };
+      },
+    },
     pharmacySupplierCreditAllocation: {
       async aggregate({ where }: { where: { organizationId: string; supplierCreditId: string } }) {
         await tick();
@@ -214,6 +224,30 @@ function allocated(store: Store, by: (a: Allocation) => boolean) {
 }
 
 describe('PUR-06 — concurrent settlement allocation', () => {
+  it('DEV-694: never settles a debit note from credit already set off against an AP bill', async () => {
+    const store = makeStore([credit('credit_1', 10_000)], [note('note_1', 10_000)]);
+    store.setOffs.credit_1 = 7_000;
+    await expect(
+      inTransaction(store, (db) =>
+        allocateSupplierCredit(db, scope('user_finance_a'), {
+          supplierCreditId: 'credit_1',
+          debitNoteId: 'note_1',
+          amountMinor: 3_001,
+          at: AT,
+        })
+      )
+    ).rejects.toMatchObject({ reason: 'OVER_ALLOCATION' });
+    await inTransaction(store, (db) =>
+      allocateSupplierCredit(db, scope('user_finance_a'), {
+        supplierCreditId: 'credit_1',
+        debitNoteId: 'note_1',
+        amountMinor: 3_000,
+        at: AT,
+      })
+    );
+    expect(allocated(store, (a) => a.supplierCreditId === 'credit_1')).toBe(3_000);
+  });
+
   it('lets exactly one of two credits settle the same debit note', async () => {
     const store = makeStore(
       [credit('credit_1', 10_000), credit('credit_2', 10_000)],

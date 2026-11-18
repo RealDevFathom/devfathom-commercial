@@ -36,10 +36,16 @@
  *     unit, so the pack label is `1 <unit>`. Any other unit is passed through raw
  *     and raises UNIT_AMBIGUOUS.
  *  4. A `BATCHNAME` of "Primary Batch" is Tally's placeholder for an item that
- *     does not track batches, and is reported as a missing batch.
+ *     does not track batches, and is stored as not recorded (DEV-927).
  */
 import { MIGRATION_TARGET_KEYS } from './mapping-targets';
-import type { ColumnMap, ProfiledRow, SourceField, SourceProfiler } from './profiler';
+import {
+  batchIdentity,
+  type ColumnMap,
+  type ProfiledRow,
+  type SourceField,
+  type SourceProfiler,
+} from './profiler';
 import { readMoneyMinor, type SourceTable } from './source-values';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -465,8 +471,9 @@ export type FlattenedTally = {
 
 /**
  * Tally's placeholder allocation when an item does not maintain batches. It is
- * not a manufacturer batch number, so it is never mapped as one: the row raises
- * MISSING_BATCH and the placeholder survives as evidence in `Tally Batch Name`.
+ * not a manufacturer batch number, so it is never mapped as one: the batch is
+ * stored as not recorded and the placeholder survives as evidence in
+ * `Tally Batch Name`.
  */
 export const TALLY_PLACEHOLDER_BATCH = 'primary batch';
 
@@ -769,8 +776,10 @@ export const tallyXmlProfiler: SourceProfiler = {
   // One stock item appears once per batch per godown in a Tally export.
   duplicateDiscriminator(row: ProfiledRow): string {
     if (row.targetModelKey !== MIGRATION_TARGET_KEYS.PRODUCT) return '';
-    const batch = (row.batchNumber ?? '').toLowerCase();
     const godown = (row.rawPayload['Godown'] ?? '').toLowerCase();
-    return `${batch}|${godown}`;
+    return `${batchIdentity(row)}|${godown}`;
   },
+
+  // DEV-927: a blank batch or expiry is "not recorded"; a passed expiry still blocks.
+  unrecordedBatchAndExpiry: 'NOT_RECORDED',
 };
