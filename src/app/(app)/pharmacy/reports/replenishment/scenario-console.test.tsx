@@ -161,7 +161,7 @@ it('closes on Escape or blur and reopens without committing a hidden option', as
   expect(screen.getByRole('button', { name: 'Read replenishment report' })).toBeDisabled();
   fireEvent.keyDown(input, { key: 'ArrowDown' });
   expect(screen.getByRole('listbox')).toBeVisible();
-  fireEvent.blur(input, { relatedTarget: screen.getByLabelText('History start (UTC)') });
+  fireEvent.blur(input, { relatedTarget: screen.getByLabelText('History start') });
   expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
   fireEvent.focus(input);
   expect(screen.getByRole('listbox')).toBeVisible();
@@ -357,10 +357,10 @@ it('explains why financial planning is unavailable while keeping operational evi
 });
 
 describe('scenario money typed as an amount', () => {
-  async function openScenario(currency: string) {
+  async function openScenario(currency: string, timeZone?: string) {
     vi.setSystemTime(new Date('2026-11-03T12:00:00Z'));
     mocks.replenishment.mockRejectedValue(new Error('not needed'));
-    render(<ScenarioConsole {...props} financial />);
+    render(<ScenarioConsole {...props} financial timeZone={timeZone} />);
     const input = await typeAndSearch();
     fireEvent.keyDown(input, { key: 'ArrowDown' });
     fireEvent.keyDown(input, { key: 'Enter' });
@@ -427,5 +427,36 @@ describe('scenario money typed as an amount', () => {
       currentUnitPriceMinor: 275,
       proposedUnitPriceMinor: 300,
     });
+  });
+
+  it("reads assumed arrival and expiry on the organisation's clock, with no ISO example", async () => {
+    const set = await openScenario('PKR', 'Asia/Karachi');
+    const arrival = screen.getByLabelText('Assumed arrival (date and time, optional)');
+    expect(arrival).toHaveAttribute('type', 'datetime-local');
+    expect(screen.getByLabelText('History start')).toHaveAttribute('type', 'date');
+    expect(screen.getByLabelText('Scenario starts on (a future day)')).toBeVisible();
+    expect(document.body.textContent).toContain("organisation's clock (PKT)");
+    expect(document.body.textContent).not.toMatch(/ISO instant|2026-09-16T12:00:00Z/);
+    set('Current selling price per unit (rupees)', '10');
+    set('What-if selling price per unit (rupees)', '12');
+    // Karachi is UTC+5: 5 Nov 09:00 is 04:00 UTC; 1 Jan 00:30 is 19:30 UTC on 31 Dec.
+    set('Assumed arrival (date and time, optional)', '2026-11-05T09:00');
+    set('Assumed expiry (date and time, optional)', '2027-01-01T00:30');
+    await submit();
+    expect(mocks.replenishment.mock.calls[0]![0].manualScenario.orderTerms).toMatchObject({
+      arrivalAt: '2026-11-05T04:00:00.000Z',
+      expiresAt: '2026-12-31T19:30:00.000Z',
+    });
+  });
+
+  it('refuses an arrival before the scenario starts in plain words', async () => {
+    const set = await openScenario('PKR', 'Asia/Karachi');
+    set('Current selling price per unit (rupees)', '10');
+    set('What-if selling price per unit (rupees)', '12');
+    // 4 Nov 04:00 in Karachi is 3 Nov 23:00 UTC, before the 4 Nov scenario start.
+    set('Assumed arrival (date and time, optional)', '2026-11-04T04:00');
+    await submit();
+    expect(mocks.replenishment).not.toHaveBeenCalled();
+    expect(screen.getByText('Arrival must be on or after the planning origin.')).toBeVisible();
   });
 });

@@ -216,12 +216,55 @@ describe('DEV-766 catalogue approval queue', () => {
     ];
     render(<CatalogueApprovalQueue />);
     expect(screen.getByText('Set pack price')).toBeVisible();
-    expect(screen.getByText('MRP (in paisa)')).toBeVisible();
-    expect(screen.getByText('50000')).toBeVisible();
-    expect(screen.getByText('Selling price (in paisa)')).toBeVisible();
+    expect(screen.getByText('MRP')).toBeVisible();
+    expect(screen.getByText('Rs 500.00')).toBeVisible();
+    expect(screen.queryByText('50000')).not.toBeInTheDocument();
+    expect(screen.getByText('Selling price')).toBeVisible();
+    expect(document.body.textContent).not.toMatch(/paisa/i);
     expect(screen.getByText('Sell at MRP')).toBeVisible();
     expect(screen.getByText('All branches')).toBeVisible();
     expect(screen.queryByText('pack_strip')).not.toBeInTheDocument();
+  });
+  it('shows every queued catalogue price in rupees with two decimals, never paisa (DEV-722)', () => {
+    m.queue.data = [
+      {
+        id: 'retail-edit',
+        operation: 'UPDATE_MEDICINE',
+        medicine: { productName: 'Fixture lotion' },
+        editor: { name: 'Editor' },
+        changes: { retailPriceMinor: 12550 },
+        stale: false,
+        targets: [],
+      },
+      {
+        id: 'mrp-edit',
+        operation: 'recordPrintedMrp',
+        medicine: { productName: 'Fixture tablets' },
+        editor: { name: 'Editor' },
+        changes: { json: { printedMrpMinor: 5, roundingIncrementMinor: 100 } },
+        stale: false,
+        targets: [],
+      },
+      {
+        id: 'sell-edit',
+        operation: 'setPackPrice',
+        medicine: { productName: 'Fixture syrup' },
+        editor: { name: 'Editor' },
+        changes: { json: { mrpMinor: 100000000, sellingPriceMinor: 99999 } },
+        stale: false,
+        targets: [],
+      },
+    ];
+    render(<CatalogueApprovalQueue />);
+    expect(screen.getByText('Retail price')).toBeVisible();
+    expect(screen.getByText('Rs 125.50')).toBeVisible();
+    expect(screen.getByText('Printed MRP')).toBeVisible();
+    expect(screen.getByText('Rs 0.05')).toBeVisible();
+    expect(screen.getByText('Rounding increment')).toBeVisible();
+    expect(screen.getByText('Rs 1.00')).toBeVisible();
+    expect(screen.getByText('Rs 1000000.00')).toBeVisible();
+    expect(screen.getByText('Rs 999.99')).toBeVisible();
+    expect(document.body.textContent).not.toMatch(/paisa|12550|99999/i);
   });
   it('shows a bulk creation by file, count and upload time, never the file hash (DEV-912)', () => {
     m.queue.data = [

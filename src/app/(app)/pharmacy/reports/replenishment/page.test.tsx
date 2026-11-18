@@ -6,7 +6,10 @@ const mocks = vi.hoisted(() => ({
   console: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({
-  resolveTenantActor: async () => ({ session: { user: { role: 'ADMIN' } } }),
+  resolveTenantActor: async () => ({
+    session: { user: { role: 'ADMIN' } },
+    organization: { timezone: 'Asia/Karachi' },
+  }),
 }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: async (actor: unknown) => actor }));
 vi.mock('@/server/routers/pharmacy-reports', () => ({
@@ -40,6 +43,11 @@ it('defaults replenishment to the only authorized branch', async () => {
   expect(mocks.console).toHaveBeenCalledWith(
     expect.objectContaining({ initialBranchId: 'b1', invalidInitialBranch: false })
   );
+});
+
+it("passes the organisation's time zone so assumed arrival and expiry use its clock", async () => {
+  render(await Page({ searchParams: Promise.resolve({}) }));
+  expect(mocks.console).toHaveBeenCalledWith(expect.objectContaining({ timeZone: 'Asia/Karachi' }));
 });
 
 it('keeps an explicit unauthorized branch invalid and preserves the return filter', async () => {

@@ -45,6 +45,7 @@ export default async function ReplenishmentPage({
       initialBranchId: invalidBranch ? '' : branchId,
       invalidInitialBranch: invalidBranch,
       today: new Date().toISOString().slice(0, 10),
+      timeZone: actor.organization?.timezone ?? null,
     };
   } catch {
     // Contain read/access failures without exposing source error text.

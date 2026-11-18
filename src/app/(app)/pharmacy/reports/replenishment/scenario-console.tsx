@@ -16,6 +16,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { ReportDetails } from '@/components/pharmacy/report-details';
+import { workspaceInstantFromInput, workspaceZoneLabel } from '@/lib/timezone';
 import { amountInputError, amountInputToMinor, amountInputUnit } from '@/lib/money-input';
 import { demandDateAfter, demandDateMs, demandInstantMs } from '@/lib/pharmacy/demand-evidence';
 import type {
@@ -32,6 +34,8 @@ type Props = {
   initialBranchId: string;
   invalidInitialBranch: boolean;
   today: string;
+  /** The organisation's IANA zone: assumed arrival and expiry are typed on its clock. */
+  timeZone?: string | null;
 };
 type Medicine = { id: string; productName: string };
 type State = 'idle' | 'loading' | 'ready' | 'error' | 'denied' | 'stale';
@@ -103,6 +107,7 @@ function ScenarioWorkspace({
   initialBranchId,
   invalidInitialBranch,
   today,
+  timeZone,
 }: Props) {
   const utils = trpc.useUtils();
   const reportVersion = useRef(0);
@@ -248,7 +253,7 @@ function ScenarioWorkspace({
       try {
         return demandDateMs(draft[key]);
       } catch {
-        invalid[key] = 'Enter a valid UTC calendar date.';
+        invalid[key] = 'Choose a valid date.';
         return NaN;
       }
     };
@@ -261,7 +266,7 @@ function ScenarioWorkspace({
     const days = (origin - start) / 86_400_000;
     if (days < 1 || days > 90)
       invalid.historyStartDate = 'Use 1 to 90 history days before the exclusive end.';
-    if (origin > Date.now()) invalid.originDate = 'History must end no later than today (UTC).';
+    if (origin > Date.now()) invalid.originDate = 'History must end no later than today.';
     const horizonDays = integer('horizonDays', 1, 366)!;
     const input: PharmacyReplenishmentReportInput = {
       branchId,
@@ -274,7 +279,7 @@ function ScenarioWorkspace({
     if (manual && canPlan) {
       const planningOrigin = date('planningOrigin');
       if (planningOrigin <= Date.now() || planningOrigin > Date.now() + 31 * 86_400_000)
-        invalid.planningOrigin = 'Use a future UTC day within 31 days.';
+        invalid.planningOrigin = 'Choose a future day within the next 31 days.';
       const values = {} as Record<NumericKey, number | null>;
       for (const [key, , optional, minimum] of numericFields)
         values[key] = moneyKeys.has(key)
@@ -287,13 +292,13 @@ function ScenarioWorkspace({
       const instant = (key: 'arrivalAt' | 'expiresAt') => {
         if (!draft[key].trim()) return null;
         try {
-          const ms = demandInstantMs(draft[key].trim());
+          // A date-and-time picker value has no zone: read it on the organisation's clock.
+          const ms = demandInstantMs(workspaceInstantFromInput(draft[key].trim(), timeZone));
           if (key === 'arrivalAt' && ms < planningOrigin)
             invalid[key] = 'Arrival must be on or after the planning origin.';
           return new Date(ms).toISOString();
         } catch {
-          invalid[key] =
-            'Use an ISO instant with timezone, for example 2026-09-16T12:00:00Z, or leave blank for unknown.';
+          invalid[key] = 'Choose a date and time, or leave blank for unknown.';
           return null;
         }
       };
@@ -579,8 +584,8 @@ function ScenarioWorkspace({
       <form id="replenishment-report-form" onSubmit={submit} noValidate className="space-y-6">
         <SectionCard title="Observation window" titleLevel={2}>
           <div className="grid gap-4 md:grid-cols-2">
-            {field('historyStartDate', 'History start (UTC)', 'date')}
-            {field('originDate', 'Forecast from (UTC date; history ends the day before)', 'date')}
+            {field('historyStartDate', 'History start', 'date')}
+            {field('originDate', 'Forecast from (history ends the day before)', 'date')}
             {field('horizonDays', 'Planning / forecast horizon (days)', 'number', false, 1, 366)}
             <label className="text-sm text-text-body">
               Forecast method
@@ -596,9 +601,14 @@ function ScenarioWorkspace({
             </label>
           </div>
           <p className="mt-4 text-sm text-text-muted">
-            Use 1–90 history days and a 1–366 day horizon. Sales use business dates; demand coverage
-            uses UTC days. Current reads cannot reconstruct historical versions.
+            Use 1–90 history days and a 1–366 day horizon.
           </p>
+          <ReportDetails>
+            <p>
+              Sales use business dates; demand coverage, the history and scenario dates use UTC days
+              (midnight to midnight UTC). Current reads cannot reconstruct historical versions.
+            </p>
+          </ReportDetails>
         </SectionCard>
         <SectionCard title="Manual planning assumptions" titleLevel={2}>
           {!canPlan ? (
@@ -634,11 +644,11 @@ function ScenarioWorkspace({
                   <p id="replenishment-unknown-help" className="text-sm text-text-muted">
                     Leave optional cost, budget, capacity, arrival and expiry blank when unknown. An
                     explicit 0 is a supplied assumption. Enter money in the scenario currency with
-                    up to 2 decimals, for example 125.50. Arrival and expiry require an explicit
-                    timezone.
+                    up to 2 decimals, for example 125.50. Arrival and expiry are on your
+                    organisation's clock ({workspaceZoneLabel(timeZone)}).
                   </p>
                   <div className="grid gap-4 md:grid-cols-2">
-                    {field('planningOrigin', 'Scenario starts on (future UTC day)', 'date')}
+                    {field('planningOrigin', 'Scenario starts on (a future day)', 'date')}
                     {field('currency', 'Scenario currency (three-letter code)')}
                     {numericFields.map(([key, label, optional, min]) =>
                       moneyKeys.has(key)
@@ -656,8 +666,18 @@ function ScenarioWorkspace({
                             min
                           )
                     )}
-                    {field('arrivalAt', 'Assumed arrival (ISO instant, optional)', 'text', true)}
-                    {field('expiresAt', 'Assumed expiry (ISO instant, optional)', 'text', true)}
+                    {field(
+                      'arrivalAt',
+                      'Assumed arrival (date and time, optional)',
+                      'datetime-local',
+                      true
+                    )}
+                    {field(
+                      'expiresAt',
+                      'Assumed expiry (date and time, optional)',
+                      'datetime-local',
+                      true
+                    )}
                   </div>
                 </div>
               )}
@@ -759,7 +779,7 @@ function ReportEvidence({
           <Stat
             label="Observed demand days"
             value={demand.coverage.observedDemandDays}
-            sub={`Of ${demand.coverage.requestedDays} requested UTC days`}
+            sub={`Of ${demand.coverage.requestedDays} requested days`}
           />
           <Stat label="Unknown demand days" value={demand.coverage.unknownDays} />
           <Stat label="Stockout-censored days" value={demand.coverage.censoredDays} />
@@ -771,18 +791,22 @@ function ReportEvidence({
         <p className="mt-2 text-sm text-text-muted">
           Qualifying lines: {demand.coverage.qualifyingLineCount}; excluded lines:{' '}
           {demand.coverage.excludedLineCount}. Business-date consumption days:{' '}
-          {demand.coverage.businessConsumptionDays}; UTC consumption days:{' '}
-          {demand.coverage.utcConsumptionDays}.
+          {demand.coverage.businessConsumptionDays}.
         </p>
+        <ReportDetails>
+          <p>
+            Consumption days counted midnight to midnight UTC: {demand.coverage.utcConsumptionDays}.
+          </p>
+        </ReportDetails>
         <details className="mt-4">
           <summary className="min-h-11 cursor-pointer py-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
-            Daily UTC evidence
+            Day by day
           </summary>
           {demand.days.length ? (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>UTC day</TableHead>
+                  <TableHead>Day</TableHead>
                   <TableHead>Demand state</TableHead>
                   <TableHead className="text-right">Recorded consumption units</TableHead>
                 </TableRow>
@@ -855,7 +879,7 @@ function ReportEvidence({
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>UTC day</TableHead>
+                  <TableHead>Day</TableHead>
                   <TableHead className="text-right">Conditional units</TableHead>
                 </TableRow>
               </TableHeader>
