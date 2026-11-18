@@ -57,6 +57,7 @@ import { pharmacySalesRouter } from './pharmacy-sales';
 
 type Rule = { capability: string; effect: 'ALLOW' | 'DENY' };
 const app = router({ pharmacySales: pharmacySalesRouter });
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 // Capabilities as the pharmacy role templates grant them (vertical-catalog).
 const ROLES: Record<string, Rule[]> = {
@@ -230,6 +231,10 @@ describe('DEV-647 refunds need a manager or owner PIN', () => {
         policy: REFUND_PIN_POLICY,
         approverId: 'user-a',
         pinVerified: true,
+        // DEV-32: the manager or owner who started it approved it with their own PIN.
+        initiatedById: 'user-a',
+        selfApproved: true,
+        approvedAt: expect.stringMatching(ISO_TIME),
       });
       expect(f.db.auditLog.create).not.toHaveBeenCalled();
     }
@@ -249,6 +254,9 @@ describe('DEV-647 refunds need a manager or owner PIN', () => {
     expect(f.audit.detail.metadata).toMatchObject({
       policy: REFUND_PIN_POLICY,
       pinVerified: false,
+      // DEV-32: a refused PIN is never recorded as an approval.
+      selfApproved: false,
+      approvedAt: null,
     });
     // The request audit sees a blocked (successful) call, so the refusal has its own row.
     expect(f.db.auditLog.create).toHaveBeenCalledExactlyOnceWith({
@@ -351,6 +359,10 @@ describe('DEV-621 returns need a manager or owner PIN', () => {
         policy: REFUND_PIN_POLICY,
         approverId: 'user-a',
         pinVerified: true,
+        // DEV-32: the manager or owner who started it approved it with their own PIN.
+        initiatedById: 'user-a',
+        selfApproved: true,
+        approvedAt: expect.stringMatching(ISO_TIME),
       });
     }
   );
@@ -511,6 +523,10 @@ describe('DEV-501 one confirm records the return and refunds it', () => {
         policy: REFUND_PIN_POLICY,
         approverId: 'user-a',
         pinVerified: true,
+        // DEV-32: the manager or owner who started it approved it with their own PIN.
+        initiatedById: 'user-a',
+        selfApproved: true,
+        approvedAt: expect.stringMatching(ISO_TIME),
       });
     }
   );

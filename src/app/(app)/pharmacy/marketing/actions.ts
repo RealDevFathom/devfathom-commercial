@@ -159,6 +159,63 @@ export async function marketingAction(
         message = 'Draft saved. Review and approve the campaign before capture.';
         break;
       }
+      case 'voucher-issue': {
+        // DEV-780: the owner issues a stored voucher. The server enforces the money rules
+        // (value caps, second approver above the cap, expiry window, use limit, non-drug only).
+        if (form.get('reviewed') !== 'on')
+          return { error: true, message: 'Confirm you reviewed the voucher before issuing it.' };
+        if (!/^[A-Za-z0-9-]{3,40}$/.test(text('code').trim()))
+          return {
+            error: true,
+            message: 'Use 3 to 40 letters, numbers or dashes for the voucher code.',
+          };
+        if (!text('name').trim() || !text('body').trim())
+          return { error: true, message: 'Enter a voucher name and the message customers see.' };
+        const rupees = text('discountRupees').trim();
+        if (!/^\d{1,7}$/.test(rupees) || Number(rupees) < 1)
+          return { error: true, message: 'Enter the voucher value in whole rupees, at least 1.' };
+        const maxUses = text('maxUses').trim();
+        if (!/^\d{1,5}$/.test(maxUses) || Number(maxUses) < 1)
+          return {
+            error: true,
+            message: 'Enter how many times the voucher can be used, at least 1.',
+          };
+        const validUntil = localDayAfter(text('validUntil'), zone);
+        if (!Number.isFinite(validUntil.getTime()))
+          return { error: true, message: 'Choose the last day the voucher can be used.' };
+        const approverId = text('approverId').trim();
+        const approverPin = text('approverPin').trim();
+        if (approverPin && !/^\d{4,8}$/.test(approverPin))
+          return { error: true, message: 'The approver PIN is 4 to 8 digits.' };
+        const result = await caller.issueVoucher({
+          branchId,
+          code: text('code'),
+          name: text('name'),
+          body: text('body'),
+          discountMinor: Number(rupees) * 100,
+          maxUses: Number(maxUses),
+          validUntil,
+          ...(approverId && approverPin
+            ? { approval: { staffProfileId: approverId, pin: approverPin } }
+            : {}),
+          reviewed: true,
+        });
+        message = `Voucher ${result.voucher.code} issued. It can be used ${result.voucher.maxUses} ${result.voucher.maxUses === 1 ? 'time' : 'times'}.`;
+        break;
+      }
+      case 'voucher-revoke': {
+        if (form.get('confirmed') !== 'on')
+          return { error: true, message: 'Confirm that this voucher should stop working.' };
+        if (text('reason').trim().length < 3)
+          return { error: true, message: 'Give a short reason for revoking this voucher.' };
+        await caller.revokeVoucher({
+          branchId,
+          voucherId: text('voucherId'),
+          reason: text('reason'),
+        });
+        message = 'Voucher revoked. It cannot be redeemed again.';
+        break;
+      }
       case 'approve':
         if (form.get('reviewed') !== 'on')
           return { error: true, message: 'Confirm you reviewed the campaign.' };

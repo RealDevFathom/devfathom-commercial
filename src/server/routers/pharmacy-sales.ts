@@ -76,7 +76,11 @@ import {
 } from '@/lib/pharmacy/controlled-register';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { annotateAudit } from '@/server/audit';
-import { authenticateVoucherCashierPin } from '@/lib/pharmacy/vouchers';
+import {
+  authenticateVoucherCashierPin,
+  counterVoucherInput,
+  lookupCounterVoucher,
+} from '@/lib/pharmacy/vouchers';
 import {
   isLockedOut,
   registerFailedAttempt,
@@ -207,7 +211,7 @@ import {
   actorMayRefund,
   authenticateRefundPin,
   REFUND_FORBIDDEN,
-  REFUND_PIN_POLICY,
+  refundApprovalAudit,
   RETURN_FORBIDDEN,
   RETURN_PIN_BLOCKED,
 } from '@/lib/pharmacy/refund-authorization';
@@ -2279,11 +2283,11 @@ export const pharmacySalesRouter = router({
           action: 'pharmacySales.refundTender',
         });
         annotateAudit(ctx, {
-          metadata: {
-            policy: REFUND_PIN_POLICY,
+          metadata: refundApprovalAudit({
+            initiatedById: scope.actorId,
             approverId: scope.actorId,
-            pinVerified: 'verified' in pin,
-          },
+            pin,
+          }),
         });
         if ('blocked' in pin) return pin;
         return await ctx.db.$transaction((tx) =>
@@ -3156,11 +3160,11 @@ export const pharmacySalesRouter = router({
           action: 'pharmacySales.returnLine',
         });
         annotateAudit(ctx, {
-          metadata: {
-            policy: REFUND_PIN_POLICY,
+          metadata: refundApprovalAudit({
+            initiatedById: scope.actorId,
             approverId: scope.actorId,
-            pinVerified: 'verified' in pin,
-          },
+            pin,
+          }),
         });
         if ('blocked' in pin) return { blocked: RETURN_PIN_BLOCKED };
         return await ctx.db.$transaction(async (tx) => {
@@ -3230,11 +3234,11 @@ export const pharmacySalesRouter = router({
           action: 'pharmacySales.returnAndRefund',
         });
         annotateAudit(ctx, {
-          metadata: {
-            policy: REFUND_PIN_POLICY,
+          metadata: refundApprovalAudit({
+            initiatedById: scope.actorId,
             approverId: scope.actorId,
-            pinVerified: 'verified' in pin,
-          },
+            pin,
+          }),
         });
         if ('blocked' in pin) return { blocked: RETURN_PIN_BLOCKED };
         return await ctx.db.$transaction(async (tx) => {
@@ -3978,6 +3982,22 @@ export const pharmacySalesRouter = router({
             limit: input.limit,
           }
         );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  /**
+   * DEV-780: the counter reads a typed or scanned voucher code before applying it to the next
+   * item. Read-only: the voucher is redeemed (and every rule re-checked) only by `addLine`.
+   */
+  counterVoucher: protectedProcedure
+    .input(counterVoucherInput.extend({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        await assignedBranchScope(ctx, input.branchId);
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        return await lookupCounterVoucher(ctx.db as unknown as ScopedDb, scope, input.code);
       } catch (error) {
         fail(error);
       }

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-const name = '20261118120000_pharmacy_unrecorded_batch_expiry';
+const name = '20261118120900_pharmacy_unrecorded_batch_expiry';
 const sql = readFileSync(`prisma/migrations/${name}/migration.sql`, 'utf8');
 
 /** DEV-853 — legacy opening stock with no batch number and/or no expiry. */

@@ -36,6 +36,7 @@ import {
   readActiveLoyaltyCard,
   revokeLoyaltyCard,
 } from '@/lib/pharmacy/loyalty-card';
+import { issuePharmacyWalletTestPasses } from '@/lib/pharmacy/loyalty-wallet-pass';
 import {
   LOYALTY_MEMBERSHIP_REASON_MAX,
   LOYALTY_MEMBERSHIP_REASON_MIN,
@@ -44,6 +45,13 @@ import {
 import { annotateAudit } from '@/server/audit';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { requireDrawerManagerAccess } from '@/server/routers/pharmacy-sales';
+import { authenticateRefundPin } from '@/lib/pharmacy/refund-authorization';
+import {
+  LOYALTY_ADJUST_PIN_BLOCKED,
+  LOYALTY_ADJUST_PIN_POLICY,
+  loyaltyAdjustDailyLimitMessage,
+  loyaltyAdjustLimitMessage,
+} from './adjust-points-messages';
 import { adminProcedure, protectedProcedure, router, type TRPCContext } from '@/server/trpc';
 
 const txDb = (tx: unknown) => tx as ScopedDb;
@@ -85,6 +93,11 @@ export const adjustPointsInput = branchInput
       .refine((points) => points !== 0),
     reason: z.string().trim().min(3).max(500),
     idempotencyKey: z.string().trim().min(8).max(128),
+    // DEV-881: a manager re-enters their own staff PIN for every adjustment. Never stored.
+    managerPin: z
+      .string()
+      .regex(/^\d{4,8}$/)
+      .optional(),
   })
   .strict();
 
@@ -322,6 +335,29 @@ export const pharmacyLoyaltyRouter = router({
   // DEV-764: owner or manager correction of a customer's points, with a written reason.
   adjustPoints: protectedProcedure.input(adjustPointsInput).mutation(async ({ ctx, input }) => {
     const { scope, authority } = await requireAdjustAccess(ctx, input.branchId);
+    if (authority === 'MANAGER') {
+      // DEV-881: the manager's own PIN, checked in its own transaction so a refusal still
+      // commits its lockout strike and a FAILURE audit row.
+      const pin = input.managerPin
+        ? await authenticateRefundPin({
+            organizationId: scope.organizationId,
+            actorId: scope.actorId,
+            pin: input.managerPin,
+            action: 'pharmacyLoyalty.adjustPoints',
+            policy: LOYALTY_ADJUST_PIN_POLICY,
+            errorCode: 'LOYALTY_ADJUST_PIN_REFUSED',
+          })
+        : ({ blocked: LOYALTY_ADJUST_PIN_BLOCKED } as const);
+      annotateAudit(ctx, {
+        metadata: {
+          policy: LOYALTY_ADJUST_PIN_POLICY,
+          approverId: scope.actorId,
+          pinVerified: 'verified' in pin,
+        },
+      });
+      if ('blocked' in pin)
+        throw new TRPCError({ code: 'FORBIDDEN', message: LOYALTY_ADJUST_PIN_BLOCKED });
+    }
     let result: Awaited<ReturnType<typeof adjustLoyaltyPoints>>;
     let managerLimit = DEFAULT_MANAGER_ADJUST_LIMIT_POINTS;
     try {
@@ -334,19 +370,28 @@ export const pharmacyLoyaltyRouter = router({
         if (authority === 'MANAGER' && Math.abs(input.points) > managerLimit)
           throw new TRPCError({
             code: 'FORBIDDEN',
-            message: `Adjustments above ${managerLimit.toLocaleString('en-PK')} points need the owner.`,
+            message: loyaltyAdjustLimitMessage(managerLimit),
           });
-        return adjustLoyaltyPoints(txDb(tx), scope, {
+        const adjustment = {
           customerId: input.customerId,
           points: input.points,
           reason: input.reason,
           idempotencyKey: input.idempotencyKey,
-        });
+        };
+        // DEV-881: a manager's ceiling also bounds the day's total for this customer.
+        return authority === 'MANAGER'
+          ? adjustLoyaltyPoints(txDb(tx), scope, adjustment, { managerLimit })
+          : adjustLoyaltyPoints(txDb(tx), scope, adjustment);
       });
     } catch (error) {
       if (error instanceof PharmacyLoyaltyError) {
         if (error.reason === 'CUSTOMER_NOT_FOUND')
           throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch or customer unavailable.' });
+        if (error.reason === 'MANAGER_ADJUSTMENT_LIMIT')
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: loyaltyAdjustDailyLimitMessage(managerLimit),
+          });
         throw new TRPCError({
           code: error.reason === 'IDEMPOTENCY_CONFLICT' ? 'CONFLICT' : 'BAD_REQUEST',
           message:
@@ -444,12 +489,20 @@ export const pharmacyLoyaltyRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { scope, authority } = await requireAdjustAccess(ctx, input.branchId);
       const issued = await cardWrite(() =>
-        ctx.db.$transaction((tx) =>
-          issueLoyaltyCard(txDb(tx), scope, {
+        ctx.db.$transaction(async (tx) => {
+          const card = await issueLoyaltyCard(txDb(tx), scope, {
             customerId: input.customerId,
             ...(input.reason ? { reason: input.reason } : {}),
-          })
-        )
+          });
+          // DEV-747: the same card as Apple and Google Wallet TEST passes, with the ledger
+          // balance as of this issue. Built here because the code exists only now.
+          const walletTestPasses = await issuePharmacyWalletTestPasses(
+            txDb(tx),
+            scope.organizationId,
+            { customerId: input.customerId, code: card.code }
+          );
+          return { ...card, walletTestPasses };
+        })
       );
       annotateAudit(ctx, {
         category: 'PHARMACY',
@@ -471,6 +524,7 @@ export const pharmacyLoyaltyRouter = router({
         issuedAt: issued.card.issuedAt,
         code: issued.code,
         replaced: issued.replacedCardId !== null,
+        walletTestPasses: issued.walletTestPasses,
       };
     }),
   // DEV-748: an owner or branch manager stops a card working (lost, stolen) without a new one.

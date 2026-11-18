@@ -50,7 +50,8 @@ export type TerminalStorageErrorReason =
   | 'SCHEMA_VERSION'
   | 'MALFORMED_CATALOG'
   | 'UNSUPPORTED_ENVIRONMENT'
-  | 'UNRECOVERABLE';
+  | 'UNRECOVERABLE'
+  | 'WRITE_CONFLICT';
 
 /** A refused or impossible persistence attempt. Never carries the offending value —
  * only the key path — so an error report cannot itself leak a secret. */
@@ -253,8 +254,26 @@ export function assertPersistSafe(value: unknown): void {
 export interface TerminalStorageDriver {
   read(scopeKey: string): Promise<unknown>;
   write(scopeKey: string, record: unknown): Promise<void>;
+  /**
+   * Compare-and-swap: replace the document only if the stored one still carries
+   * `expectedRevision` (see `storedTerminalRevision`), checked and written in one
+   * transaction. Resolves false, writing nothing, when another writer got there first.
+   */
+  writeIfRevision(scopeKey: string, record: unknown, expectedRevision: number): Promise<boolean>;
   remove(scopeKey: string): Promise<void>;
   close(): void;
+}
+
+/**
+ * The write revision a stored document carries; 0 for a missing document or one
+ * written without a revision. Each revision-checked write stores the next number.
+ */
+export function storedTerminalRevision(raw: unknown): number {
+  if (typeof raw !== 'object' || raw === null) return 0;
+  const revision = (raw as { revision?: unknown }).revision;
+  return typeof revision === 'number' && Number.isSafeInteger(revision) && revision > 0
+    ? revision
+    : 0;
 }
 
 /**
@@ -344,6 +363,25 @@ export function createTerminalIndexedDbDriver(
     write: async (scopeKey, record) => {
       await transact('readwrite', (store) => store.put(record, scopeKey));
     },
+    writeIfRevision: async (scopeKey, record, expectedRevision) => {
+      const db = await connection();
+      const tx = db.transaction(database.objectStoreName, 'readwrite');
+      const store = tx.objectStore(database.objectStoreName);
+      return new Promise<boolean>((resolve, reject) => {
+        let swapped = false;
+        const current = store.get(scopeKey);
+        // The put is issued from the get's success callback, inside the same
+        // still-active transaction, so no other writer can land in between.
+        current.onsuccess = () => {
+          if (storedTerminalRevision(current.result) !== expectedRevision) return;
+          swapped = true;
+          store.put(record, scopeKey);
+        };
+        tx.oncomplete = () => resolve(swapped);
+        tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted.'));
+        tx.onerror = () => reject(tx.error ?? new Error('IndexedDB transaction failed.'));
+      });
+    },
     remove: async (scopeKey) => {
       await transact('readwrite', (store) => store.delete(scopeKey));
     },
@@ -373,6 +411,13 @@ export function createMemoryDriver(
     },
     write: async (scopeKey, record) => {
       rows.set(scopeKey, JSON.stringify(record));
+    },
+    writeIfRevision: async (scopeKey, record, expectedRevision) => {
+      const raw = rows.get(scopeKey);
+      const current = raw === undefined ? undefined : JSON.parse(raw);
+      if (storedTerminalRevision(current) !== expectedRevision) return false;
+      rows.set(scopeKey, JSON.stringify(record));
+      return true;
     },
     remove: async (scopeKey) => {
       rows.delete(scopeKey);
@@ -438,7 +483,12 @@ export function emptyTerminalState<Q, C>(
 // ── Read / write / purge ─────────────────────────────────────────────────────
 
 export type TerminalStoreReadResult<Q, C> =
-  | { status: 'ok'; state: PersistedTerminalState<Q, C> }
+  | {
+      status: 'ok';
+      state: PersistedTerminalState<Q, C>;
+      /** Pass to a revision-checked write so it refuses to replace a newer document. */
+      revision: number;
+    }
   | { status: 'empty' }
   | {
       status: 'unrecoverable';
@@ -513,18 +563,25 @@ export async function readTerminalState<Q, C>(
       catalog: (record.catalog ?? null) as C | null,
       queue: (record.queue ?? null) as Q | null,
     },
+    revision: storedTerminalRevision(record),
   };
 }
 
 /**
  * Persist this scope's whole document in one atomic write, after the minimization
  * guard. A forbidden field throws BEFORE anything reaches the browser.
+ *
+ * With `expectedRevision` (the revision the caller read) the write is a
+ * compare-and-swap: if any other tab wrote the document since, nothing is written
+ * and it throws `WRITE_CONFLICT`, so a stale snapshot can never silently replace
+ * work another tab already reported as saved. Resolves to the stored revision.
  */
 export async function writeTerminalState<Q, C>(
   driver: TerminalStorageDriver,
   state: PersistedTerminalState<Q, C>,
-  schemaVersion: number
-): Promise<void> {
+  schemaVersion: number,
+  expectedRevision?: number
+): Promise<number> {
   if (state.schemaVersion !== schemaVersion) {
     throw new TerminalStorageError(
       'SCHEMA_VERSION',
@@ -532,7 +589,19 @@ export async function writeTerminalState<Q, C>(
     );
   }
   assertPersistSafe(state);
-  await driver.write(terminalScopeKey(state.scope), state);
+  const key = terminalScopeKey(state.scope);
+  if (expectedRevision === undefined) {
+    await driver.write(key, state);
+    return 0;
+  }
+  const revision = expectedRevision + 1;
+  if (!(await driver.writeIfRevision(key, { ...state, revision }, expectedRevision))) {
+    throw new TerminalStorageError(
+      'WRITE_CONFLICT',
+      'Another tab on this terminal saved first. Nothing was overwritten.'
+    );
+  }
+  return revision;
 }
 
 /**

@@ -273,3 +273,68 @@ export async function listVouchers(db: ScopedDb, scope: MarketingScope) {
   });
   return vouchers.map((voucher) => ({ ...voucher, messages: voucherMessages(voucher.body) }));
 }
+
+export const counterVoucherInput = z
+  .object({
+    code: z
+      .string()
+      .trim()
+      .min(3)
+      .max(40)
+      .regex(/^[A-Za-z0-9-]+$/),
+  })
+  .strict();
+
+export type CounterVoucherStatus = 'READY' | 'REVOKED' | 'EXPIRED' | 'USED_UP';
+
+/**
+ * DEV-780: the counter resolves a typed or scanned voucher code to the stored voucher of this
+ * branch, so the cashier sees what it is worth and how many uses remain before applying it.
+ * This read takes no use and grants nothing: `addSaleLine` re-checks every rule (cashier PIN,
+ * expiry, revocation, use limit, issuer and approver, eligible categories) when it redeems.
+ */
+export async function lookupCounterVoucher(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string },
+  code: string,
+  now = new Date()
+) {
+  const parsed = counterVoucherInput.parse({ code });
+  const voucher = await db.pharmacyVoucher.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      code: parsed.code.toUpperCase(),
+    },
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      discountMinor: true,
+      maxUses: true,
+      usedCount: true,
+      validUntil: true,
+      active: true,
+      revokedAt: true,
+    },
+  });
+  if (!voucher) return null;
+  const status: CounterVoucherStatus =
+    voucher.revokedAt !== null || !voucher.active
+      ? 'REVOKED'
+      : voucher.validUntil.getTime() <= now.getTime()
+        ? 'EXPIRED'
+        : voucher.usedCount >= voucher.maxUses
+          ? 'USED_UP'
+          : 'READY';
+  return {
+    id: voucher.id,
+    code: voucher.code,
+    name: voucher.name,
+    discountMinor: voucher.discountMinor,
+    usesLeft: Math.max(0, voucher.maxUses - voucher.usedCount),
+    maxUses: voucher.maxUses,
+    validUntil: voucher.validUntil,
+    status,
+  };
+}

@@ -33,10 +33,15 @@ vi.mock('@/server/audit', () => ({
 }));
 vi.mock('@/server/routers/pharmacy-sales', () => ({ requireDrawerManagerAccess: mocks.access }));
 vi.mock('@/lib/pharmacy/procurement-access', () => ({ actorIsPharmacyOwner: mocks.liveOwner }));
-vi.mock('@/lib/pharmacy/refund-authorization', () => ({
+vi.mock('@/lib/pharmacy/refund-authorization', async () => ({
   authenticateRefundPin: mocks.pin,
   actorMayRefund: mocks.mayRefund,
   REFUND_PIN_POLICY: 'PHARMACY_REFUND_MANAGER_PIN',
+  refundApprovalAudit: (
+    await vi.importActual<typeof import('@/lib/pharmacy/refund-authorization')>(
+      '@/lib/pharmacy/refund-authorization'
+    )
+  ).refundApprovalAudit,
 }));
 vi.mock('@/lib/pharmacy/settlement', () => ({
   lockOpenPharmacyDrawer: mocks.drawer,
@@ -145,6 +150,11 @@ describe('prepaid owner controls', () => {
         metadata: expect.objectContaining({
           pinVerified: true,
           policy: 'PHARMACY_REFUND_MANAGER_PIN',
+          // DEV-32: the owner who started the refund approved it with their own PIN.
+          approverId: 'owner-a',
+          initiatedById: 'owner-a',
+          selfApproved: true,
+          approvedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
         }),
       })
     );
