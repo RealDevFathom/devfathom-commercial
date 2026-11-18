@@ -703,6 +703,8 @@ function ScopedPharmacyCounterConsole({
   // The default quantity of 1 is a proposal until the cashier has looked at it (DEV-633).
   const quantityReviewed = useRef(false);
   const restoreSearchAfterAdd = useRef(false);
+  // The element focused when that restore was armed: only it (or nothing) gives focus back.
+  const restoreSearchFrom = useRef<Element | null>(null);
   const rxPanelRef = useRef<HTMLDivElement>(null);
   const tenderRef = useRef<HTMLDivElement>(null);
   const [paymentOpen, setPaymentOpen] = useState(false);
@@ -1846,6 +1848,9 @@ function ScopedPharmacyCounterConsole({
         });
         return;
       }
+      // Where focus was when the add began, so the scan field only takes it back if the
+      // cashier has not moved on to another control while the add was finishing.
+      const focusedAtAdd = document.activeElement;
       setPending('addToCart');
       lastAddOutcome.current = 'pending';
       setNotice(null);
@@ -2128,9 +2133,17 @@ function ScopedPharmacyCounterConsole({
         // A focused field may already hold the next scan's digits; selecting them
         // would let the scanner's next digit replace them. A field that lost focus
         // (disabled while adding, or an add from a button) gets it back once enabled.
-        if (document.activeElement !== searchRef.current) {
+        // A cashier who already moved to another control (Patient, Returns) keeps it.
+        const focused = document.activeElement;
+        const movedOn =
+          focused instanceof HTMLElement &&
+          focused !== document.body &&
+          focused !== focusedAtAdd &&
+          focused.isConnected;
+        if (focused !== searchRef.current && !movedOn) {
           restoreSearchAfterAdd.current = true;
           focusSearch();
+          restoreSearchFrom.current = document.activeElement;
         }
       } catch (error) {
         if (error instanceof Error && error.message === 'DAY_CLOSED')
@@ -3352,10 +3365,13 @@ function ScopedPharmacyCounterConsole({
    * recovery is ready, so `autoFocus` alone cannot land on it.
    */
   useEffect(() => {
-    if (!busy && (restoreSearchAfterAdd.current || document.activeElement === document.body)) {
-      restoreSearchAfterAdd.current = false;
-      focusSearch();
-    }
+    if (busy) return;
+    const active = document.activeElement;
+    const restore = restoreSearchAfterAdd.current && active === restoreSearchFrom.current;
+    restoreSearchAfterAdd.current = false;
+    restoreSearchFrom.current = null;
+    // A cashier who moved on to another control while the add finished keeps it.
+    if (restore || active === document.body) focusSearch();
   }, [busy, focusSearch]);
 
   const chordFor = useCallback(

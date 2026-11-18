@@ -276,6 +276,7 @@ vi.mock('./counter-upsell-suggestions', async (importOriginal) => {
 });
 
 import { PharmacyCounterConsole } from './counter-console';
+import { trpc } from '@/lib/trpc';
 import { resolveCounterKeymap } from '@/lib/pharmacy/counter-keymap';
 import {
   persistTenderAttempt,
@@ -3947,6 +3948,11 @@ describe('PharmacyCounterConsole barcode safety', () => {
       expect(within(dialog).getByRole('button', { name: 'Approve pack' })).toBeDisabled();
       fireEvent.click(within(dialog).getByRole('button', { name: 'Retry' }));
       await within(dialog).findByText(/No manager or owner has an active staff PIN/);
+      // DEV-931: the notice says where a manager or owner creates their own PIN.
+      expect(within(dialog).getByRole('link', { name: 'Set up your PIN' })).toHaveAttribute(
+        'href',
+        '/pharmacy/settings/pin'
+      );
       expect(within(dialog).getByRole('button', { name: 'Approve pack' })).toBeDisabled();
       expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
     });
@@ -4656,7 +4662,10 @@ describe('PharmacyCounterConsole browser print audit', () => {
   );
 
   it('keeps the unconfirmed-printing notice until dismissed (DEV-910)', async () => {
-    mocks.mutations.counterReceiptBrowserPrint!.mockResolvedValue({ copyNumber: 1, reprint: false });
+    mocks.mutations.counterReceiptBrowserPrint!.mockResolvedValue({
+      copyNumber: 1,
+      reprint: false,
+    });
     const onPrint = renderSettledReceipt();
     vi.useFakeTimers();
     try {
@@ -6566,6 +6575,33 @@ describe('DEV-705 keyboard loose sale', () => {
     await waitFor(() => expect(screen.getByLabelText('Scan or search')).toHaveFocus());
     fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F9' });
     expect(screen.getByRole('dialog', { name: 'Payment' })).toBeInTheDocument();
+  });
+  it('leaves focus where the cashier moved it while an add was finishing', async () => {
+    mocks.mutations.addLine!.mockResolvedValue({ saleLineId: 'loose-line' });
+    let finish!: () => void;
+    const refresh = (
+      trpc.useUtils() as unknown as {
+        pharmacySafety: { controlledRegister: { invalidate: ReturnType<typeof vi.fn> } };
+      }
+    ).pharmacySafety.controlledRegister.invalidate;
+    refresh.mockImplementationOnce(() => new Promise<void>((resolve) => (finish = resolve)));
+    render(
+      <>
+        <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+        <button type="button">Elsewhere</button>
+      </>
+    );
+    act(() => mocks.searchProps.mock.calls.at(-1)![0].onSelect(looseRow()));
+    const quantity = screen.getByLabelText('Quantity');
+    fireEvent.change(quantity, { target: { value: '1' } });
+    fireEvent.keyDown(quantity, { key: 'Enter' });
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+    // The line is in the cart; the cashier goes on to another control before the add ends.
+    const elsewhere = screen.getByRole('button', { name: 'Elsewhere' });
+    act(() => elsewhere.focus());
+    await act(async () => finish());
+    await waitFor(() => expect(screen.getByLabelText('Scan or search')).toBeEnabled());
+    expect(elsewhere).toHaveFocus();
   });
   it('shows every unit with its price and lets the operator switch to the strip', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);

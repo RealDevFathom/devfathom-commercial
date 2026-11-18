@@ -53,6 +53,7 @@ import {
   MessageSquareText,
   Printer,
   X,
+  KeyRound,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -500,6 +501,14 @@ export const navigation: NavItem[] = [
     group: 'Pharmacy',
     module: 'pharmacy-core',
   },
+  // DEV-931: every pharmacy member creates or changes their own approval PIN here.
+  {
+    label: 'Your PIN',
+    href: '/pharmacy/settings/pin',
+    icon: KeyRound,
+    group: 'Pharmacy',
+    module: 'pharmacy-core',
+  },
   {
     label: 'Printer settings',
     href: '/pharmacy/settings/printers',
@@ -694,6 +703,7 @@ const PHARMACY_MENUS: readonly (Omit<NavSection, 'items'> & { hrefs: readonly st
       '/pharmacy/regulatory',
       '/pharmacy/settings/branches',
       '/pharmacy/settings/printers',
+      '/pharmacy/settings/pin',
       '/organization',
       '/settings',
     ],
