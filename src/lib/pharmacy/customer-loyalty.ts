@@ -433,11 +433,17 @@ export async function restoreRefundedLoyaltyPoints(
   return { ...entry, replayed: false };
 }
 
+/**
+ * DEV-909: `visibleBranchIds` limits the detailed points history to those branches, for staff
+ * who are not the owner. The points balance stays the one shared, organization-wide balance.
+ * Omitted (the owner, or the customer's own portal), every branch is shown.
+ */
 export async function readCustomerSnapshot(
   db: ScopedDb,
   scope: LedgerScope,
   customerId: string,
-  page = 1
+  page = 1,
+  visibleBranchIds?: readonly string[]
 ) {
   const customer = await db.pharmacyCustomer.findFirst({
     where: { id: customerId, organizationId: scope.organizationId, active: true },
@@ -450,8 +456,15 @@ export async function readCustomerSnapshot(
     },
   });
   if (!customer) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
-  // DEV-764: points are one balance across the organization's branches, so the balance and
-  // the points history cover every branch. Purchases and khata stay this branch's.
+  // DEV-764: points are one balance across the organization's branches, so the balance covers
+  // every branch. DEV-909: the points history covers the branches the caller may see.
+  // Purchases and khata stay this branch's.
+  const pointsWhere = {
+    organizationId: scope.organizationId,
+    customerId,
+    ...(visibleBranchIds ? { branchId: { in: [...visibleBranchIds] } } : {}),
+    NOT: CLOSED_LOT_WITHOUT_POINTS,
+  };
   const [points, sales, pointsHistory, pointsCount, program] = await Promise.all([
     customerPointsBalance(db, scope.organizationId, customerId),
     db.pharmacySale.findMany({
@@ -474,11 +487,7 @@ export async function readCustomerSnapshot(
       take: 10,
     }),
     db.pharmacyLoyaltyPointsEntry.findMany({
-      where: {
-        organizationId: scope.organizationId,
-        customerId,
-        NOT: CLOSED_LOT_WITHOUT_POINTS,
-      },
+      where: pointsWhere,
       orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
       skip: (page - 1) * 25,
       take: 25,
@@ -493,13 +502,7 @@ export async function readCustomerSnapshot(
         sale: { select: { receiptNumber: true } },
       },
     }),
-    db.pharmacyLoyaltyPointsEntry.count({
-      where: {
-        organizationId: scope.organizationId,
-        customerId,
-        NOT: CLOSED_LOT_WITHOUT_POINTS,
-      },
-    }),
+    db.pharmacyLoyaltyPointsEntry.count({ where: pointsWhere }),
     currentLoyaltyProgram(db, scope.organizationId),
   ]);
   const creditBalanceMinor = sales
