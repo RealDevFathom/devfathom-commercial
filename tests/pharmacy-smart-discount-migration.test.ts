@@ -17,6 +17,13 @@ describe('DEV-66 smart-discount storage contract', () => {
     );
   });
 
+  it("stores the owner's maximum discount per organization, 10% by default, bounded 0..100%", () => {
+    expect(migration).toContain(
+      'ADD COLUMN IF NOT EXISTS "pharmacyMaxDiscountBps" INTEGER NOT NULL DEFAULT 1000'
+    );
+    expect(migration).toContain('CHECK ("pharmacyMaxDiscountBps" BETWEEN 0 AND 10000)');
+  });
+
   it('forces tenant and branch RLS on the competitor log, append-only for the runtime role', () => {
     expect(migration).toContain(
       'ALTER TABLE "pharmacy_competitor_price_observations" ENABLE ROW LEVEL SECURITY'
