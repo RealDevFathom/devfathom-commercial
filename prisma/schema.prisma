@@ -1367,6 +1367,7 @@ model PharmacySale {
 /// CRM-L01 retail identity. Clinical identity remains in PharmacyPatient and is
 /// joined only server-side after a current LOYALTY consent check.
 model PharmacyCustomer {
+  prepaidAccount PharmacyPrepaidAccount?
   portalLinks      PharmacyCustomerPortalLink[]
   portalSessions   PharmacyCustomerPortalSession[]
   portalRequests   PharmacyCustomerPortalRequest[]
@@ -1910,6 +1911,9 @@ model PharmacyPromotion {
 }
 
 model PharmacySaleLine {
+  tierAllocationDiscounts Json?
+  tierDiscountMinor Int @default(0)
+  tierName String?
   id                        String                           @id @default(cuid())
   organizationId            String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId                  String
@@ -3082,6 +3086,7 @@ enum FinanceJournalSide {
 /// query rather than a special case — there is no account here that no adapter
 /// posts to.
 enum FinanceAccountCode {
+  CUSTOMER_PREPAID
   /// Asset. Perpetual stock value, carried per lot and location.
   INVENTORY
   /// Asset. Stock that has left a branch and not yet been received.
@@ -3119,6 +3124,7 @@ enum FinanceAccountCode {
 /// FIN-01 traceability: the operational table an entry accounts for. `sourceId`
 /// is a row id in that table.
 enum FinanceSourceKind {
+  PHARMACY_PREPAID
   PHARMACY_GOODS_RECEIPT
   PHARMACY_SALE_LINE
   PHARMACY_SALE_RETURN_LINE
@@ -16982,6 +16988,73 @@ model UploadedFileLegacyBinding {
   @@map("uploaded_file_legacy_bindings")
 }
 
+/// Owner-authored immutable dated settings. No default tiers.
+model PharmacyPrepaidTierVersion {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  version Int
+  tiers Json
+  refundable Boolean
+  effectiveFrom DateTime @default(now())
+  actorId String
+  @@unique([organizationId, id])
+  @@unique([organizationId, version])
+  @@map("pharmacy_prepaid_tier_versions")
+}
+
+model PharmacyPrepaidAccount {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  customerId String
+  balanceMinor Int @default(0)
+  refundableMinor Int @default(0)
+  qualifyingMinor Int @default(0)
+  tierName String?
+  discountBasisPoints Int @default(0)
+  tierVersionId String?
+  /// bcrypt hash of the customer's own spend PIN; never the PIN itself.
+  spendPinHash String?
+  pinFailedAttempts Int @default(0)
+  pinLockedUntil DateTime?
+  customer PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+  entries PharmacyPrepaidEntry[]
+  @@unique([organizationId, id])
+  @@unique([organizationId, customerId])
+  @@map("pharmacy_prepaid_accounts")
+}
+
+/// Every money movement and tier transition is immutable and attributable.
+model PharmacyPrepaidEntry {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId String
+  accountId String
+  /// 1, 2, 3… per account; the database checks each entry's post-state against its position.
+  sequence Int
+  kind String
+  amountMinor Int
+  refundableDeltaMinor Int
+  balanceAfterMinor Int
+  refundableAfterMinor Int
+  qualifyingAfterMinor Int
+  discountBasisPointsAfter Int
+  tierBefore String?
+  tierAfter String?
+  tierVersionId String?
+  tierVersionAfterId String?
+  refundable Boolean?
+  tenderId String?
+  refundId String?
+  actorId String
+  idempotencyKey String
+  createdAt DateTime @default(now())
+  account PharmacyPrepaidAccount @relation(fields: [organizationId, accountId], references: [organizationId, id], onDelete: Restrict)
+  @@unique([organizationId, id])
+  @@unique([organizationId, idempotencyKey])
+  @@unique([organizationId, accountId, sequence])
+  @@index([organizationId, accountId, createdAt])
+  @@map("pharmacy_prepaid_entries")
+}
 
 model PharmacyPrintBridge {
   id                String               @id @default(cuid())

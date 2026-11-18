@@ -1,3 +1,5 @@
+import { readPrepaidAccount } from './prepaid-tiers';
+import { pricePrepaidSale } from './prepaid-discount';
 /**
  * PH-POS — the counter's read side (POS-02 search, the FEFO cart, POS-08
  * receipts).
@@ -777,6 +779,8 @@ export type CounterCartLine = {
   unitPriceMinor: number;
   proRataCeilingMinor: number;
   discountMinor: number;
+  tierDiscountMinor?: number;
+  tierName?: string | null;
   /** #727: the automatic promotion that priced this line, as issued. */
   promotionName?: string | null;
   lineTotalMinor: number;
@@ -814,6 +818,7 @@ export type CounterCartTender = {
 };
 
 export type CounterCart = {
+  prepaidBalanceMinor?: number;
   saleId: string;
   status: string;
   receiptNumber: number | null;
@@ -855,7 +860,7 @@ export async function readCounterCart(
   scope: CounterScope,
   saleId: string
 ): Promise<CounterCart> {
-  const sale = await saleInScope(db, scope, saleId);
+  const sale = await pricePrepaidSale(db, await saleInScope(db, scope, saleId));
   const locationIds = [
     ...new Set(sale.lines.flatMap((line) => line.allocations.map((a) => a.stockLocationId))),
   ];
@@ -915,6 +920,8 @@ export async function readCounterCart(
       unitPriceMinor: line.unitPriceMinor,
       proRataCeilingMinor: line.proRataCeilingMinor,
       discountMinor: line.discountMinor,
+      tierDiscountMinor: line.tierDiscountMinor,
+      tierName: line.tierName,
       promotionName: line.promotionName,
       lineTotalMinor: line.grossMinor - line.discountMinor,
       rx: line.medicine.rx,
@@ -945,6 +952,9 @@ export async function readCounterCart(
   const grossMinor = sale.lines.reduce((total, line) => total + line.grossMinor, 0);
   const discountMinor = lines.reduce((total, line) => total + line.discountMinor, 0);
   return {
+    prepaidBalanceMinor: sale.customerId
+      ? ((await readPrepaidAccount(db, scope.organizationId, sale.customerId))?.balanceMinor ?? 0)
+      : 0,
     saleId: sale.id,
     status: sale.status,
     receiptNumber: sale.receiptNumber,
@@ -1039,6 +1049,8 @@ export async function readCounterReceipt(
       canonicalUnits: line.canonicalUnits,
       unitPriceMinor: line.unitPriceMinor,
       discountMinor: line.discountMinor,
+      tierDiscountMinor: line.tierDiscountMinor,
+      tierName: line.tierName,
       promotionName: line.promotionName,
       lineTotalMinor: line.grossMinor - line.discountMinor,
     };

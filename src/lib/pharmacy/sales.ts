@@ -1,4 +1,5 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { PREPAID_PROVIDER } from './prepaid-tiers';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -1120,6 +1121,8 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
   const tenders = sale.tenders.map((tender) => ({
     id: tender.id,
     type: tender.type,
+    // DEV-863: a prepaid wallet tender is restored to the customer's balance, never paid in cash.
+    prepaid: tender.provider === PREPAID_PROVIDER,
     amountMinor: tender.amountMinor,
     refundedMinor: tender.refunds.reduce((n, row) => n + row.amountMinor, 0),
     refunds: tender.refunds.map((row) => ({
