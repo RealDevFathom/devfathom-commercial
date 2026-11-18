@@ -21,8 +21,11 @@ type CustomerOrder = NonNullable<Outputs['pharmacyOrdering']['mine'][number]>;
 type CartLine = CatalogItem & { quantity: number };
 type Notice = { tone: 'success' | 'danger' | 'neutral'; message: string };
 
-function message(error: { message: string }) {
+export function customerOrderingErrorMessage(error: { message: string }) {
   const messages: Record<string, string> = {
+    // DEV-631: checkout opens a counter sale, which a closed business day refuses.
+    DAY_CLOSED:
+      "Today's business day is closed, so no counter sale can be started. The owner or a manager can reopen today for trading on Day close.",
     CUSTOMER_ACCOUNT_REQUIRED: 'Ask pharmacy staff to link this sign-in to your customer account.',
     ITEM_NOT_ORDERABLE: 'That item is not available for customer ordering.',
     INSUFFICIENT_STOCK: 'Stock changed before placement. Review the basket and try again.',
@@ -288,7 +291,10 @@ export function PharmacyCustomerOrderingConsole() {
       setNotice({ tone: 'success', message: 'Order proposed and branch stock reserved.' });
       await refresh();
     } catch (error) {
-      setNotice({ tone: 'danger', message: message(error as { message: string }) });
+      setNotice({
+        tone: 'danger',
+        message: customerOrderingErrorMessage(error as { message: string }),
+      });
     } finally {
       setPending(null);
     }
@@ -316,7 +322,10 @@ export function PharmacyCustomerOrderingConsole() {
       }
       await refresh();
     } catch (error) {
-      setNotice({ tone: 'danger', message: message(error as { message: string }) });
+      setNotice({
+        tone: 'danger',
+        message: customerOrderingErrorMessage(error as { message: string }),
+      });
     } finally {
       setPending(null);
     }
@@ -487,7 +496,7 @@ export function PharmacyCustomerOrderingConsole() {
                       } catch (error) {
                         setNotice({
                           tone: 'danger',
-                          message: message(error as { message: string }),
+                          message: customerOrderingErrorMessage(error as { message: string }),
                         });
                       } finally {
                         setPending(null);

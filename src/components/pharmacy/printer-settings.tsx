@@ -15,6 +15,8 @@ import type { CounterReceiptLocale } from '@/lib/pharmacy/counter-receipt';
 import type { ReceiptLayout } from '@/lib/receipts/configuration';
 import { trpc } from '@/lib/trpc';
 
+import { PharmacyPrintBridges } from './print-bridges';
+
 const controlClass =
   'mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-body outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60';
 
@@ -197,6 +199,7 @@ function BranchPrinterForm({
  * DEV-742: branch receipt printer settings and a browser/OS test print for
  * pharmacy. Saving is enforced server-side (administrators only); this console
  * only reflects that. No restaurant kitchen routing is offered here.
+ * DEV-904: administrators also enrol and revoke the branch's thermal print bridges.
  */
 export function PharmacyPrinterSettingsConsole({ canSave }: { canSave: boolean }) {
   const branchesQuery = trpc.pharmacySales.counterBranches.useQuery(undefined, {
@@ -242,52 +245,59 @@ export function PharmacyPrinterSettingsConsole({ canSave }: { canSave: boolean }
   }
 
   return (
-    <SectionCard title="Receipt printer" titleLevel={2}>
-      <div className="space-y-6">
-        <div className="max-w-md">
-          <Label htmlFor="printer-branch">Branch</Label>
-          <select
-            id="printer-branch"
-            className={controlClass}
-            value={branchId}
-            onChange={(event) => setSelected(event.target.value)}
-          >
-            {branches.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.name} ({option.code})
-              </option>
-            ))}
-          </select>
-        </div>
-        {format.isLoading ? (
-          <p className="text-sm text-text-muted" role="status">
-            Loading saved printer settings…
-          </p>
-        ) : format.isError || !format.data ? (
-          <div className="space-y-3">
-            <p className="text-sm text-destructive" role="alert">
-              Saved printer settings for {branch.name} could not be loaded. Nothing was changed.
-            </p>
-            <Button
-              className="min-h-11"
-              type="button"
-              variant="outline"
-              onClick={() => void format.refetch()}
+    <>
+      <SectionCard title="Receipt printer" titleLevel={2}>
+        <div className="space-y-6">
+          <div className="max-w-md">
+            <Label htmlFor="printer-branch">Branch</Label>
+            <select
+              id="printer-branch"
+              className={controlClass}
+              value={branchId}
+              onChange={(event) => setSelected(event.target.value)}
             >
-              Retry
-            </Button>
+              {branches.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.name} ({option.code})
+                </option>
+              ))}
+            </select>
           </div>
-        ) : (
-          <BranchPrinterForm
-            key={`${branchId}:${format.data.revision}`}
-            branchId={branchId}
-            branchName={branch.name}
-            layout={format.data.layout}
-            revision={format.data.revision}
-            canSave={canSave}
-          />
-        )}
-      </div>
-    </SectionCard>
+          {format.isLoading ? (
+            <p className="text-sm text-text-muted" role="status">
+              Loading saved printer settings…
+            </p>
+          ) : format.isError || !format.data ? (
+            <div className="space-y-3">
+              <p className="text-sm text-destructive" role="alert">
+                Saved printer settings for {branch.name} could not be loaded. Nothing was changed.
+              </p>
+              <Button
+                className="min-h-11"
+                type="button"
+                variant="outline"
+                onClick={() => void format.refetch()}
+              >
+                Retry
+              </Button>
+            </div>
+          ) : (
+            <BranchPrinterForm
+              key={`${branchId}:${format.data.revision}`}
+              branchId={branchId}
+              branchName={branch.name}
+              layout={format.data.layout}
+              revision={format.data.revision}
+              canSave={canSave}
+            />
+          )}
+        </div>
+      </SectionCard>
+      {canSave ? (
+        <SectionCard title="Thermal print bridges" titleLevel={2}>
+          <PharmacyPrintBridges key={branchId} branchId={branchId} branchName={branch.name} />
+        </SectionCard>
+      ) : null}
+    </>
   );
 }

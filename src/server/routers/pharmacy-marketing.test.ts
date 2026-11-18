@@ -495,3 +495,16 @@ describe('Google Business Profile health and review replies (DEV-13)', () => {
     expect(mocks.reviewReply).not.toHaveBeenCalled();
   });
 });
+
+describe('voucher procedures (DEV-780)', () => {
+  it.each(['MANAGER', 'CASHIER', 'PHARMACIST'])(
+    'refuses %s before listing vouchers or the approvers for one above the cap',
+    async (role) => {
+      await expect(caller(role).vouchers(input)).rejects.toThrow('An owner account is required');
+      await expect(caller(role).voucherApprovers(input)).rejects.toThrow(
+        'An owner account is required'
+      );
+      expect(mocks.transaction).not.toHaveBeenCalled();
+    }
+  );
+});

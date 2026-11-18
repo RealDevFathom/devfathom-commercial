@@ -151,8 +151,8 @@ export function EarnRateForm({
           />
         </label>
         <p id="adjust-limit-help" className="text-sm text-text-muted">
-          A manager can add or remove up to this many points in one adjustment. Larger adjustments
-          need the owner. Every adjustment is audited.
+          A manager can add or remove up to this many points for a customer in one day, across all
+          of that day&apos;s adjustments. Larger totals need the owner. Every adjustment is audited.
         </p>
       </fieldset>
       <Button type="submit" className="min-h-11" disabled={pending}>

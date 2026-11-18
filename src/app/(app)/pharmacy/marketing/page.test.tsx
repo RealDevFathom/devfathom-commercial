@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   history: vi.fn(),
   review: vi.fn(),
   deliveryHistory: vi.fn(),
+  vouchers: vi.fn(),
+  voucherApprovers: vi.fn(),
 }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: async () => ({}) }));
 vi.mock('@/server/routers/pharmacy-marketing', () => ({
@@ -39,6 +41,8 @@ beforeEach(() => {
     attempts: [],
   });
   mocks.branches.mockResolvedValue([{ id: 'branch-a', name: 'Main branch' }]);
+  mocks.vouchers.mockResolvedValue([]);
+  mocks.voucherApprovers.mockResolvedValue([]);
   mocks.history.mockResolvedValue({ campaigns: [], templates: [], timezone: 'Asia/Karachi' });
   mocks.review.mockResolvedValue({
     campaign,
@@ -400,4 +404,32 @@ it('asks for local send times and never for replay keys or UTC timestamps', asyn
   );
   expect(screen.getByText('7 Oct 2026, 12:00')).toBeInTheDocument();
   expect(container).not.toHaveTextContent(/ISO UTC|UTC ISO|\(UTC|explicit UTC|2026-10-07T07/);
+});
+
+it('DEV-780: shows the branch vouchers with uses left and keeps the page when they fail', async () => {
+  mocks.vouchers.mockResolvedValue([
+    {
+      id: 'voucher-a',
+      code: 'GIFT10',
+      name: 'Gift sets',
+      discountMinor: 15_000,
+      maxUses: 2,
+      usedCount: 2,
+      validUntil: new Date(Date.now() + 86_400_000),
+      active: true,
+      revokedAt: null,
+      messages: { whatsapp: 'Rs 150 off.', print: 'Rs 150 off.' },
+    },
+  ]);
+  render(await Page({ searchParams: Promise.resolve({}) }));
+  expect(mocks.vouchers).toHaveBeenCalledWith({ branchId: 'branch-a' });
+  expect(mocks.voucherApprovers).toHaveBeenCalledWith({ branchId: 'branch-a' });
+  expect(screen.getByRole('heading', { name: 'Vouchers' })).toBeInTheDocument();
+  expect(screen.getByText('2 of 2')).toBeInTheDocument();
+  expect(screen.getByText('Used up')).toBeInTheDocument();
+
+  mocks.vouchers.mockRejectedValue(new Error('synthetic failure'));
+  const { container } = render(await Page({ searchParams: Promise.resolve({}) }));
+  expect(container).toHaveTextContent('Vouchers could not be loaded');
+  expect(screen.getAllByRole('button', { name: 'Save draft' }).length).toBeGreaterThan(0);
 });

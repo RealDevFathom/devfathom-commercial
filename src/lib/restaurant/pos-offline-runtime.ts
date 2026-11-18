@@ -50,10 +50,17 @@ export type PosOfflineRuntimeState = PosPersistedState<PosQueueSnapshot>;
  * the persisted document and applies its transition to that fresh copy before the
  * write: a draft another tab saved is never replaced by this tab's stale snapshot,
  * and a catalog refresh cannot roll back newer queue state.
+ *
+ * The write itself is also revision-checked, so the guarantee does not rest on the
+ * lock alone: where a browser has no Web Locks the lock cannot span tabs, and a
+ * write that another tab beat is refused, re-read and re-applied instead of
+ * replacing that tab's saved work.
  */
 export class PosOfflineRuntime {
   private state: PosOfflineRuntimeState;
   private closed = false;
+  /** The write revision of the document `state` was last read from or written as. */
+  private revision = 0;
   private activeReplay: Promise<ReplayResult> | null = null;
   private readonly stateLock: string;
   private readonly replayLock: string;
@@ -74,7 +81,7 @@ export class PosOfflineRuntime {
   }
 
   async hydrate(): Promise<'ready' | 'unrecoverable'> {
-    return this.lock(this.stateLock, async () => {
+    return this.exclusive(async () => {
       const loaded = await this.load();
       if (loaded === 'unrecoverable') return 'unrecoverable';
       if (loaded === 'ok') await this.persist();
@@ -444,7 +451,7 @@ export class PosOfflineRuntime {
         response = { status: 0 };
       }
       const outcome = classifyReplayOutcome(response);
-      const applied = await this.lock(this.stateLock, async () => {
+      const applied = await this.exclusive(async () => {
         await this.loadOrThrow();
         const result = applyReplayOutcome(this.queue(), {
           draftId: step.draftId,
@@ -498,6 +505,7 @@ export class PosOfflineRuntime {
   private async load(): Promise<'ok' | 'empty' | 'unrecoverable'> {
     const result = await readPosState<PosQueueSnapshot>(this.driver, this.scope);
     if (result.status === 'unrecoverable') return 'unrecoverable';
+    this.revision = result.status === 'ok' ? result.revision : 0;
     if (result.status === 'empty') {
       // A confirmed revocation purged the document; this runtime stays stopped
       // rather than recreating local work the device can never send.
@@ -545,7 +553,7 @@ export class PosOfflineRuntime {
 
   /** Lock the scope, apply `transition` to the freshly read document, then write it. */
   private commit<T>(transition: () => { persist: boolean; result: T }): Promise<T> {
-    return this.lock(this.stateLock, async () => {
+    return this.exclusive(async () => {
       await this.loadOrThrow();
       const { persist, result } = transition();
       if (persist) await this.persist();
@@ -553,10 +561,36 @@ export class PosOfflineRuntime {
     });
   }
 
-  private persist(): Promise<void> {
-    return writePosState(this.driver, this.state);
+  /**
+   * Hold the scope lock while `body` reads, transforms and writes the document. If
+   * another tab wrote in between (possible only where the lock cannot span tabs),
+   * the revision-checked write refused: run `body` again on the newer document. If
+   * that keeps happening, fail loudly with this tab's view reset to what is stored,
+   * so it never reports or shows a save that did not happen.
+   */
+  private exclusive<T>(body: () => Promise<T>): Promise<T> {
+    return this.lock(this.stateLock, async () => {
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          return await body();
+        } catch (error) {
+          if (!(error instanceof PosStorageError) || error.reason !== 'WRITE_CONFLICT') throw error;
+          if (attempt >= MAX_WRITE_ATTEMPTS) {
+            await this.load();
+            throw error;
+          }
+        }
+      }
+    });
+  }
+
+  private async persist(): Promise<void> {
+    this.revision = await writePosState(this.driver, this.state, this.revision);
   }
 }
+
+/** Re-reads allowed when other tabs keep winning the write; each one makes progress for them. */
+const MAX_WRITE_ATTEMPTS = 8;
 
 type ReplayStep =
   { done: ReplayResult } | { draftId: string; commandId: string; request: PosReplayRequest };
