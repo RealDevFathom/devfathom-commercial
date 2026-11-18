@@ -96,6 +96,16 @@ function caller(enabledModules = ['pharmacy-core'], role = 'ADMIN', actorId = 'u
   } as unknown as TRPCContext);
 }
 
+// DEV-19: catalogue approval is the exact pharmacy:catalogue-review grant.
+function grantCatalogueReview(...userIds: string[]) {
+  db.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => ({
+    organizationRole: null,
+    permissionOverrides: userIds.includes(where.id)
+      ? [{ capability: 'pharmacy:catalogue-review', effect: 'ALLOW' }]
+      : [],
+  }));
+}
+
 beforeEach(() => {
   db = makeDb();
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
@@ -181,6 +191,7 @@ describe('catalogue edits require catalogue administration (DEV-19)', () => {
   });
 
   it('queues a draft alias, refuses its editor, then lets another administrator approve the normalized write', async () => {
+    grantCatalogueReview('user_a', 'user_b');
     db.medicine.findFirst.mockResolvedValue({
       id: 'medicine_a',
       saleable: false,
@@ -206,6 +217,112 @@ describe('catalogue edits require catalogue administration (DEV-19)', () => {
       normalizedValue: 'panadol',
     });
     expect(db.medicineAlias.create).toHaveBeenCalledOnce();
+  });
+
+  it('queues a new ingredient for review instead of publishing it, then a reviewer approves it', async () => {
+    const proposal = await caller().createIngredient({ name: 'Paracetamol' });
+    expect(proposal).toMatchObject({
+      status: 'PENDING',
+      operation: 'createIngredient',
+      medicineId: null,
+      editorId: 'user_a',
+    });
+    expect(db.ingredient.create).not.toHaveBeenCalled();
+
+    grantCatalogueReview('user_b');
+    db.pharmacyCatalogueEdit.findFirst.mockResolvedValue(proposal);
+    await expect(
+      caller(['pharmacy-core'], 'ADMIN', 'user_b').decideCatalogueEdit({
+        editId: proposal.id,
+        decision: 'APPROVE',
+      })
+    ).resolves.toMatchObject({ status: 'APPROVED', staleEdits: 0 });
+    expect(db.ingredient.create).toHaveBeenCalledExactlyOnceWith({
+      data: { name: 'Paracetamol' },
+    });
+    expect(db.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'pharmacy.catalogueApproval',
+          targetId: proposal.id,
+        }),
+      })
+    );
+  });
+
+  it('refuses a duplicate ingredient before queueing it', async () => {
+    db.ingredient.findFirst.mockResolvedValue({ id: 'ingredient_a', name: 'Paracetamol' });
+    await expect(caller().createIngredient({ name: 'Paracetamol' })).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
+    expect(db.pharmacyCatalogueEdit.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses an administrator whose catalogue review is explicitly denied', async () => {
+    db.user.findUnique.mockResolvedValue({
+      organizationRole: null,
+      permissionOverrides: [{ capability: 'pharmacy:catalogue-review', effect: 'DENY' }],
+    });
+    await expect(
+      caller(['pharmacy-core'], 'ADMIN', 'user_b').decideCatalogueEdit({
+        editId: 'edit',
+        decision: 'APPROVE',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.$transaction).not.toHaveBeenCalled();
+    expect(db.pharmacyCatalogueEdit.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses an administrator without the catalogue review grant', async () => {
+    await expect(
+      caller(['pharmacy-core'], 'ADMIN', 'user_b').decideCatalogueEdit({
+        editId: 'edit',
+        decision: 'REJECT',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('lets a pharmacist who is not an administrator approve and apply a queued edit', async () => {
+    db.medicine.findFirst.mockResolvedValue({
+      id: 'medicine_a',
+      saleable: false,
+      updatedAt: new Date('2026-01-01'),
+    });
+    const proposal = await caller().addAlias({
+      medicineId: 'medicine_a',
+      type: 'BRAND',
+      value: 'Panadol',
+    });
+    db.pharmacyCatalogueEdit.findFirst.mockResolvedValue(proposal);
+    db.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => ({
+      organizationRole:
+        where.id === 'pharmacist_b'
+          ? { permissions: [{ capability: 'pharmacy:catalogue-review', effect: 'ALLOW' }] }
+          : null,
+      permissionOverrides: [],
+    }));
+
+    // The pharmacist still cannot submit catalogue edits of their own.
+    await expect(
+      caller(['pharmacy-core'], 'EMPLOYEE', 'pharmacist_b').addAlias({
+        medicineId: 'medicine_a',
+        type: 'BRAND',
+        value: 'Other',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller(['pharmacy-core'], 'EMPLOYEE', 'pharmacist_b').decideCatalogueEdit({
+        editId: proposal.id,
+        decision: 'APPROVE',
+      })
+    ).resolves.toMatchObject({ status: 'APPROVED' });
+    expect(db.medicineAlias.create).toHaveBeenCalledOnce();
+    expect(db.pharmacyCatalogueEdit.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'APPROVED', reviewerId: 'pharmacist_b' }),
+      })
+    );
   });
 
   it.each(['ACCEPTED', 'CORRECTED', 'REJECTED'])(
@@ -544,6 +661,7 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
   });
 
   it('holds a draft printed MRP rounding rule until another administrator approves it', async () => {
+    grantCatalogueReview('user_b');
     db.packLevel.findFirst.mockResolvedValue({
       id: 'pack_a',
       presentation: { medicineId: 'medicine_a' },

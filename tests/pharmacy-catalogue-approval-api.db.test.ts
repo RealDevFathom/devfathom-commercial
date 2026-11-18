@@ -55,6 +55,12 @@ vi.mock('@/server/audit', async () => {
               `INSERT INTO users (id,"organizationId","organizationRoleId",name,email,department,title,role,"updatedAt") VALUES ($1,$2,$3,$1,$1,'Pharmacy','Staff','ADMIN',now())`,
               [id(who + '_' + org), id(org), org === 'solo' ? id('ownerrole') : null]
             );
+            // DEV-19: approval is the exact pharmacy:catalogue-review grant.
+            if (org !== 'solo')
+              await c.query(
+                `INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"updatedAt") VALUES ($1,$2,$3,'pharmacy:catalogue-review','ALLOW','fixture',now())`,
+                [id('review_' + who + '_' + org), id(org), id(who + '_' + org)]
+              );
           }
           await c.query(
             `INSERT INTO pharmacy_medicines (id,"organizationId","productName","productFamily",saleable,"updatedAt") VALUES ($1,$2,'Fixture lotion','FRONT_SHOP',true,now())`,
@@ -282,6 +288,19 @@ vi.mock('@/server/audit', async () => {
           'REJECTED'
         );
         checks.push('simultaneous connector decisions apply exactly one');
+        const ingredient = await editor.createIngredient({ name: prefix + ' ingredient' });
+        assert('status' in ingredient);
+        assert.equal(ingredient.medicineId, null);
+        assert.equal(
+          await runtime.ingredient.count({ where: { name: prefix + ' ingredient' } }),
+          0
+        );
+        await reviewer.decideCatalogueEdit({ editId: ingredient.id, decision: 'APPROVE' });
+        assert.equal(
+          await runtime.ingredient.count({ where: { name: prefix + ' ingredient' } }),
+          1
+        );
+        checks.push('new ingredient stays pending until review (DEV-19)');
         const alias = await editor.addAlias({
           medicineId: id('med_a'),
           type: 'BRAND',
@@ -433,7 +452,7 @@ vi.mock('@/server/audit', async () => {
           0
         );
         checks.push('front-shop publication has reviewed provenance and no invented strength');
-        assert.equal(checks.length, 12);
+        assert.equal(checks.length, 13);
       } finally {
         await c.end();
       }

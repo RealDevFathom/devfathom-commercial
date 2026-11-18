@@ -49,7 +49,13 @@ import {
 } from '@/lib/pharmacy/reference-connectors';
 import { isEffective } from '@/lib/pharmacy/pack-conversion';
 import { annotateAudit } from '../audit';
-import { adminProcedure, auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
+import {
+  adminProcedure,
+  auditedProtectedProcedure,
+  capabilityProcedure,
+  contextualCapabilityProcedure,
+  router,
+} from '../trpc';
 
 const family = z.enum(['PHARMACEUTICAL', 'BIOLOGICAL', 'DEVICE', 'ALTERNATIVE', 'FRONT_SHOP']);
 const boundedId = z.string().min(1).max(200);
@@ -330,7 +336,16 @@ function domainError(error: unknown): never {
 // Only this module can attach the replay token; client input is always parsed
 // by the original procedure again when a reviewer approves a queued command.
 const catalogueReplay = Symbol('catalogueApproval');
+const isCatalogueReplay = (ctx: TRPCContext) =>
+  (ctx as TRPCContext & { [catalogueReplay]?: boolean })[catalogueReplay] === true;
+// A catalogue command is submitted by a catalogue administrator. When an approved
+// edit replays it, the reviewer's own review capability authorizes the write, so a
+// pharmacist reviewer who is not a tenant administrator can apply what they approve.
+const catalogueCommandProcedure = contextualCapabilityProcedure((ctx) =>
+  isCatalogueReplay(ctx) ? 'pharmacy:catalogue-review' : 'admin:access'
+);
 const catalogueCommands = [
+  'createIngredient',
   'createPackLevel',
   'revisePackLevel',
   'recordPrintedMrp',
@@ -345,7 +360,7 @@ async function queueCatalogueCommand(
   operation: CatalogueCommand,
   input: unknown
 ) {
-  if ((ctx as TRPCContext & { [catalogueReplay]?: boolean })[catalogueReplay]) return;
+  if (isCatalogueReplay(ctx)) return;
   const medicine = await ctx.db.medicine.findFirst({
     where: { id: medicineId },
   });
@@ -385,6 +400,7 @@ async function applyCatalogueCommand(
   );
 }
 
+const DUPLICATE_INGREDIENT_MESSAGE = 'This ingredient already exists. Use the existing one.';
 const DUPLICATE_PACK_MESSAGE =
   'This pack already exists for this medicine. Use the existing pack instead of adding it again.';
 
@@ -403,7 +419,9 @@ export const pharmacyMedicineRouter = router({
         input.changes
       )
     ),
-  decideCatalogueEdit: adminProcedure
+  // DEV-19: approval is the pharmacist review capability, decided by the ABAC engine
+  // exactly like connector proposals: an explicit DENY refuses even an administrator.
+  decideCatalogueEdit: capabilityProcedure('pharmacy:catalogue-review')
     .input(
       z
         .object({
@@ -884,9 +902,32 @@ export const pharmacyMedicineRouter = router({
     })
   ),
 
-  createIngredient: adminProcedure
+  // DEV-19: a new ingredient is queued for review like every other catalogue edit.
+  createIngredient: catalogueCommandProcedure
     .input(z.object({ name: z.string().trim().min(1).max(200) }).strict())
-    .mutation(({ ctx, input }) => ctx.db.ingredient.create({ data: input })),
+    .mutation(async ({ ctx, input }) => {
+      // Checked when the edit is submitted and again when an approval replays it.
+      if (await ctx.db.ingredient.findFirst({ where: { name: input.name } }))
+        throw new TRPCError({ code: 'CONFLICT', message: DUPLICATE_INGREDIENT_MESSAGE });
+      if (!isCatalogueReplay(ctx))
+        return ctx.db.pharmacyCatalogueEdit.create({
+          data: {
+            medicineId: null,
+            editorId: ctx.session.user.id,
+            operation: 'createIngredient',
+            changes: superjson.serialize(input) as unknown as Prisma.InputJsonObject,
+            // A new ingredient has no prior version for this edit to go stale against.
+            expectedUpdatedAt: new Date(),
+          },
+        });
+      try {
+        return await ctx.db.ingredient.create({ data: input });
+      } catch (error) {
+        if ((error as { code?: string })?.code === 'P2002')
+          throw new TRPCError({ code: 'CONFLICT', message: DUPLICATE_INGREDIENT_MESSAGE });
+        throw error;
+      }
+    }),
 
   createMedicine: adminProcedure
     .input(
@@ -1044,7 +1085,7 @@ export const pharmacyMedicineRouter = router({
       return medicine;
     }),
 
-  createPackLevel: adminProcedure
+  createPackLevel: catalogueCommandProcedure
     .input(
       z
         .object({
@@ -1102,7 +1143,7 @@ export const pharmacyMedicineRouter = router({
       }
     }),
 
-  revisePackLevel: adminProcedure
+  revisePackLevel: catalogueCommandProcedure
     .input(
       z
         .object({
@@ -1154,7 +1195,7 @@ export const pharmacyMedicineRouter = router({
   // (MED-08), so recording one is a pricing write held to the same gate as
   // `setPackPrice`; otherwise any employee could cut a charge without the
   // discount approval path.
-  recordPrintedMrp: adminProcedure
+  recordPrintedMrp: catalogueCommandProcedure
     .input(
       z
         .object({
@@ -1204,7 +1245,7 @@ export const pharmacyMedicineRouter = router({
       });
     }),
 
-  addBarcode: adminProcedure
+  addBarcode: catalogueCommandProcedure
     .input(
       z
         .object({
@@ -1236,7 +1277,7 @@ export const pharmacyMedicineRouter = router({
    * received by scanning the pack. Barcode rows are append-only, so a pack's
    * code cannot be edited, replaced or moved here.
    */
-  setPackBarcode: adminProcedure
+  setPackBarcode: catalogueCommandProcedure
     .input(
       z
         .object({
@@ -1297,7 +1338,7 @@ export const pharmacyMedicineRouter = router({
       })
     ),
 
-  addAlias: adminProcedure
+  addAlias: catalogueCommandProcedure
     .input(
       z
         .object({

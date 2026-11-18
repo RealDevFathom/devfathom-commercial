@@ -188,8 +188,9 @@ export async function listPendingCatalogueEdits(db: ScopedDb) {
   const presentationLabel = new Map(presentations.map((item) => [item.id, item.presentation]));
   return edits.map(({ medicine, ...edit }, index) => ({
     ...edit,
-    medicine: { productName: medicine.productName },
-    stale: medicine.updatedAt.getTime() !== edit.expectedUpdatedAt.getTime(),
+    // A new ingredient belongs to no medicine yet, so it cannot go out of date.
+    medicine: { productName: medicine?.productName ?? 'New ingredient' },
+    stale: medicine ? medicine.updatedAt.getTime() !== edit.expectedUpdatedAt.getTime() : false,
     targets: [
       ...commands[index]!.presentations.map((id) => ({
         label: 'Presentation',
@@ -293,9 +294,19 @@ export async function decideCatalogueEdit(
         message: 'Catalogue edit already reviewed.',
       });
     let staleEdits = 0;
-    if (input.decision === 'APPROVE') {
+    const medicineId = proposal.medicineId;
+    if (input.decision === 'APPROVE' && medicineId === null) {
+      // DEV-19: a queued new ingredient names no medicine; only that command may.
+      if (proposal.operation !== 'createIngredient' || !applyCommand)
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Unsupported catalogue edit.',
+        });
+      await applyCommand(scoped, proposal.operation, proposal.changes);
+      await recordCatalogueApproval(scoped, scope, proposal.id, solo);
+    } else if (input.decision === 'APPROVE' && medicineId !== null) {
       const medicine = await tx.medicine.findFirst({
-        where: { id: proposal.medicineId },
+        where: { id: medicineId },
       });
       if (!medicine)
         throw new TRPCError({

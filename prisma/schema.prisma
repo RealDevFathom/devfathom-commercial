@@ -684,11 +684,12 @@ model Medicine {
 model PharmacyCatalogueEdit {
   id                String   @id @default(cuid())
   organizationId    String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  medicineId        String
+  // Null only for a queued createIngredient: a new ingredient belongs to no medicine.
+  medicineId        String?
   editorId          String
   editor            User     @relation("CatalogueEditEditor", fields: [organizationId, editorId], references: [organizationId, id], onDelete: Restrict)
   operation         String   @default("UPDATE_MEDICINE")
-  medicine          Medicine @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
+  medicine          Medicine? @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
   changes           Json
   expectedUpdatedAt DateTime
   status            String   @default("PENDING")

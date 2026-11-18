@@ -32,9 +32,11 @@ const editLabels: Record<string, string> = {
   printedMrpMinor: 'Printed MRP (minor units)',
   roundingIncrementMinor: 'Rounding increment (minor units)',
   value: 'Alias',
+  name: 'Ingredient',
 };
 const operationLabels: Record<string, string> = {
   UPDATE_MEDICINE: 'Product details',
+  createIngredient: 'Add ingredient',
   createPackLevel: 'Add pack',
   revisePackLevel: 'Revise pack',
   recordPrintedMrp: 'Record printed MRP',
