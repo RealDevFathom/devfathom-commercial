@@ -11,6 +11,7 @@ const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'manager
 const NOW = new Date('2026-11-15T00:00:00Z');
 
 type Lot = {
+  id: string;
   packLevelId: string;
   printedMrpMinor: number;
   unitCostMinor: number;
@@ -33,13 +34,16 @@ type Medicine = {
   controlled: boolean;
 };
 
+let lotSequence = 0;
 const lot = (
   medicineId: string,
   packLevelId: string,
   mrp: number,
   unitCost: number,
-  units = 10
+  units = 10,
+  id = `lot-${(lotSequence += 1)}`
 ) => ({
+  id,
   packLevelId,
   printedMrpMinor: mrp,
   unitCostMinor: unitCost,
@@ -85,6 +89,8 @@ function suggestionDb(
       _min: { observedPriceMinor: number | null };
     }>;
     maxDiscountBps?: number;
+    /** Lots whose remaining stock is fully held for supplier claims or restock orders. */
+    reservedLotIds?: string[];
   } = {}
 ) {
   return {
@@ -107,9 +113,7 @@ function suggestionDb(
     },
     pharmacyCompetitorPriceObservation: {
       groupBy: vi.fn<
-        (args: {
-          where: Record<string, unknown>;
-        }) => Promise<
+        (args: { where: Record<string, unknown> }) => Promise<
           Array<{
             medicineId: string;
             packLevelId: string;
@@ -133,8 +137,16 @@ function suggestionDb(
           ]
       ),
     },
-    $queryRaw: vi.fn<(query: TemplateStringsArray, ...values: unknown[]) => Promise<DailySales[]>>(
-      async () => options.sales ?? []
+    $queryRaw: vi.fn<(query: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>>(
+      async (query, ...values) => {
+        // The stock ledger's net-availability read, keyed by lot id.
+        if (query.join('?').includes('"inventoryLotId" = ANY'))
+          return (values.find(Array.isArray) as string[]).map((inventoryLotId) => ({
+            inventoryLotId,
+            availableUnits: options.reservedLotIds?.includes(inventoryLotId) ? 0 : 10,
+          }));
+        return options.sales ?? [];
+      }
     ),
   };
 }
@@ -240,11 +252,47 @@ describe('DEV-66 discount suggestions read', () => {
     expect(rows).toHaveLength(50);
     expect(db.pharmacyInventoryLot.findMany).toHaveBeenCalledTimes(1);
     expect(db.pharmacyCompetitorPriceObservation.groupBy).toHaveBeenCalledTimes(1);
-    // Sale history is aggregated per day in the database, in one query.
-    expect(db.$queryRaw).toHaveBeenCalledTimes(1);
-    const sql = db.$queryRaw.mock.calls[0]![0].join('?');
+    // One net-availability read for every lot, and sale history aggregated per day in one query.
+    expect(db.$queryRaw).toHaveBeenCalledTimes(2);
+    const sql = db.$queryRaw.mock.calls[1]![0].join('?');
     expect(sql).toContain('GROUP BY');
     expect(sql).toContain('"status" = \'COMPLETED\'');
+  });
+
+  it('ignores a lot whose remaining stock is fully reserved', async () => {
+    // The newest lot is a cheap strip pack, but all of it is held for restock orders: the
+    // box sets the pack and the bounds, as the ledger would sell it.
+    const db = suggestionDb({
+      lots: [
+        lot('medicine-a', 'pack-strip', 100, 999, 1, 'lot-reserved'),
+        lot('medicine-a', 'pack-box', 1_200, 80, 10, 'lot-box'),
+      ],
+      reservedLotIds: ['lot-reserved'],
+    });
+    const [row] = await readDiscountSuggestions(db as never, scope, {
+      medicineIds: ['medicine-a'],
+      now: NOW,
+    });
+    expect(db.$queryRaw.mock.calls[0]!.slice(1).find(Array.isArray)).toEqual([
+      'lot-reserved',
+      'lot-box',
+    ]);
+    expect(row).toMatchObject({
+      packLevelId: 'pack-box',
+      suggestion: { kind: 'SUGGEST', ceilingPriceMinor: 1_200, floorPriceMinor: 1_000 },
+    });
+  });
+
+  it('offers no suggestion when every lot is fully reserved', async () => {
+    const db = suggestionDb({
+      lots: [lot('medicine-a', 'pack-box', 1_200, 80, 10, 'lot-held')],
+      reservedLotIds: ['lot-held'],
+    });
+    const [row] = await readDiscountSuggestions(db as never, scope, {
+      medicineIds: ['medicine-a'],
+      now: NOW,
+    });
+    expect(row).toMatchObject({ suggestion: null });
   });
 
   it('never reads stock or evidence for regulated medicines', async () => {

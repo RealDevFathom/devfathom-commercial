@@ -3,7 +3,7 @@ import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
 import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import type { LedgerScope } from './stock-ledger';
+import { lotsWithNetAvailableStock, type LedgerScope } from './stock-ledger';
 import {
   discountPolicySchema,
   estimateDiscountElasticity,
@@ -233,7 +233,7 @@ export async function readDiscountSuggestions(
   const candidateIds = medicines
     .filter((medicine) => !isRegulatedForDiscount(medicine))
     .map((medicine) => medicine.id);
-  const lots = candidateIds.length
+  const lotRows = candidateIds.length
     ? await db.pharmacyInventoryLot.findMany({
         where: {
           organizationId: scope.organizationId,
@@ -246,6 +246,7 @@ export async function readDiscountSuggestions(
           packLevel: { presentation: { medicineId: { in: candidateIds } } },
         },
         select: {
+          id: true,
           packLevelId: true,
           printedMrpMinor: true,
           unitCostMinor: true,
@@ -255,6 +256,14 @@ export async function readDiscountSuggestions(
         orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
       })
     : [];
+  // Stock fully held for supplier claims or customer restock orders is not sellable: keep
+  // only lots with units left after reservations, as the stock ledger allocates them.
+  const sellable = await lotsWithNetAvailableStock(
+    db,
+    scope,
+    lotRows.map((lot) => lot.id)
+  );
+  const lots = lotRows.filter((lot) => sellable.has(lot.id));
   // Compare like with like: per medicine, only lots of its newest lot's pack level,
   // aggregated over every eligible lot of that pack (never a truncated sample).
   const packs = new Map<
