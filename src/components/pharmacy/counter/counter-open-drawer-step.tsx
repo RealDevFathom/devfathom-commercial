@@ -16,6 +16,8 @@ export type CounterOpenDrawerStepProps = {
   canDeclareFloat?: boolean;
   /** The drawer status read failed: the drawer may or may not be open. */
   statusError?: boolean;
+  /** The manager-access check has not answered yet; the step waits for it. */
+  accessChecking?: boolean;
   /** Site storage is blocked, so this browser has no counter device id. */
   deviceUnavailable?: boolean;
   /** A drawer status read is in flight. */
@@ -49,6 +51,7 @@ export function CounterOpenDrawerStep({
   canDeclareFloat = false,
   statusError = false,
   deviceUnavailable = false,
+  accessChecking = false,
   checking = false,
   onRetry,
   cashiers,
@@ -58,26 +61,24 @@ export function CounterOpenDrawerStep({
 }: CounterOpenDrawerStepProps) {
   const [openingCash, setOpeningCash] = useState('');
   const [submitted, setSubmitted] = useState(false);
-  // DEV-930: a manager's access can arrive after the read-only 0 is on screen. The
-  // field then keeps that 0, editable, rather than go blank under the operator.
-  const [shownFloatField, setShownFloatField] = useState(canDeclareFloat);
-  if (shownFloatField !== canDeclareFloat) {
-    setShownFloatField(canDeclareFloat);
-    if (canDeclareFloat && openingCash === '') setOpeningCash('0');
-  }
   const [cashierId, setCashierId] = useState(currentUserId ?? '');
+  const waiting = disabled || accessChecking;
   const openingCashRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     // A disabled field cannot receive its mount-time autofocus while access loads.
     // Preserve focus if the cashier has already chosen another control.
-    if (!disabled && document.activeElement === document.body) openingCashRef.current?.focus();
-  }, [disabled]);
+    if (!waiting && document.activeElement === document.body) openingCashRef.current?.focus();
+  }, [waiting]);
   const chooseCashier = canDeclareFloat && Boolean(cashiers?.length);
-  const openingFloatMinor = canDeclareFloat ? parseAmountMinor(openingCash) : 0;
-  const reason = disabled
+  // One rule on any connection: the count is always typed (a typed 0 is allowed).
+  // The server still refuses a float above 0 from anyone but a manager or owner.
+  const openingFloatMinor = parseAmountMinor(openingCash);
+  const reason = waiting
     ? deviceUnavailable
       ? 'Allow site storage for this site, then reload before opening the drawer.'
-      : (disabledReason ?? 'Wait for the current counter action to finish.')
+      : accessChecking
+        ? 'Checking your access…'
+        : (disabledReason ?? 'Wait for the current counter action to finish.')
     : null;
   const invalid = submitted && openingFloatMinor === null;
 
@@ -88,7 +89,7 @@ export function CounterOpenDrawerStep({
       onSubmit={(event) => {
         event.preventDefault();
         setSubmitted(true);
-        if (disabled || openingFloatMinor === null) return;
+        if (waiting || openingFloatMinor === null) return;
         onOpen(
           openingFloatMinor,
           chooseCashier && cashierId && cashierId !== currentUserId ? cashierId : undefined
@@ -102,7 +103,7 @@ export function CounterOpenDrawerStep({
         <p className="text-sm text-text-body">
           {canDeclareFloat
             ? 'Count the cash in the drawer and enter it below. Bills can be started once the drawer is open.'
-            : 'Open with 0 only if the drawer is empty. Ask a manager or owner to declare any opening float. Bills can be started once the drawer is open.'}
+            : 'Type 0 only if the drawer is empty. Ask a manager or owner to declare any opening float. Bills can be started once the drawer is open.'}
         </p>
       </div>
       {context ? (
@@ -165,9 +166,8 @@ export function CounterOpenDrawerStep({
             autoComplete="off"
             autoFocus
             placeholder="0.00"
-            value={canDeclareFloat ? openingCash : '0'}
-            readOnly={!canDeclareFloat}
-            disabled={disabled}
+            value={openingCash}
+            disabled={waiting}
             aria-invalid={invalid}
             aria-describedby={
               [
@@ -188,7 +188,7 @@ export function CounterOpenDrawerStep({
               id="counter-drawer-cashier"
               className={COUNTER_NATIVE_SELECT_CLASS}
               value={cashierId}
-              disabled={disabled}
+              disabled={waiting}
               aria-describedby={reason ? 'counter-drawer-disabled-reason' : undefined}
               onChange={(event) => setCashierId(event.target.value)}
             >
@@ -206,7 +206,7 @@ export function CounterOpenDrawerStep({
         <Button
           type="submit"
           className="h-11"
-          disabled={disabled}
+          disabled={waiting}
           aria-describedby={reason ? 'counter-drawer-disabled-reason' : undefined}
         >
           Open drawer
@@ -226,7 +226,7 @@ export function CounterOpenDrawerStep({
               variant="outline"
               className="h-11 font-mono tabular-nums"
               aria-pressed={openingCash === amount}
-              disabled={disabled}
+              disabled={waiting}
               aria-describedby={reason ? 'counter-drawer-disabled-reason' : undefined}
               onClick={() => setOpeningCash(amount)}
             >
