@@ -19,17 +19,36 @@ const lineSchema = z
     medicineName: id,
     strength: id.nullable(),
     presentation: id,
+    /** #708: absent on snapshots issued before manufacturers were recorded. */
+    manufacturer: z.string().trim().min(1).max(300).optional(),
     allocations: z.array(allocationSchema).min(1),
   })
   .strict();
 const snapshotSchema = z
   .object({
     receiptIdentitySnapshotVersion: z.literal(1),
+    cashMemoIdentity: z
+      .object({
+        address: z.string().nullable().optional(),
+        phone: z.string().nullable().optional(),
+        licenceNumber: z.string().nullable().optional(),
+        ntn: z.string().nullable(),
+        strn: z.string().nullable(),
+        provinceCode: z.string().nullable().optional(),
+        licenceValidFrom: z.iso.datetime().nullable().optional(),
+        licenceValidTo: z.iso.datetime().nullable().optional(),
+        pharmacistRegistration: z.string().nullable().optional(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
     saleId: id,
     receiptNumber: units,
     deviceId: id,
     businessDate: z.iso.date(),
     issuedAt: z.iso.datetime(),
+    /** #708: the buyer the cash memo names; absent for an unnamed walk-in. */
+    buyerName: z.string().trim().min(1).max(200).optional(),
     lines: z.array(lineSchema).min(1),
   })
   .strict();

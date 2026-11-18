@@ -104,6 +104,8 @@ function sale() {
 let order: string[];
 function makeDb() {
   return {
+    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi' }) },
+    branchRegulatoryProfile: { findFirst: vi.fn().mockResolvedValue(null) },
     $queryRaw: vi.fn<(sql: unknown) => Promise<{ receipt_number: number }[]>>(async () => {
       order.push('sequence');
       return [{ receipt_number: 41 }];
