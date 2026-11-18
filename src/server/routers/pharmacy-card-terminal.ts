@@ -301,14 +301,31 @@ export const pharmacyCardTerminalRouter = router({
         annotateAudit(ctx, { metadata: { ...approval, branchId: scope.branchId } });
         if ('blocked' in pin) return pin;
         // Commits in its own tenant transaction with its audit entry, like every attempt step.
-        const resolved = await resolveCardTerminalReview(
-          { store },
-          scope,
-          { ...resolution, reason: resolutionReason },
-          approval,
-          // Re-checked inside the write's transaction, with the attempt row locked.
-          async (db) => (await otherCardTerminalReviewers(db, scope)).length === 0
-        );
+        let resolved;
+        try {
+          resolved = await resolveCardTerminalReview(
+            { store },
+            scope,
+            { ...resolution, reason: resolutionReason },
+            approval,
+            // Re-checked inside the write's transaction, with the attempt row locked.
+            async (db) => (await otherCardTerminalReviewers(db, scope)).length === 0
+          );
+        } catch (error) {
+          if (
+            !(error instanceof CardTerminalError) ||
+            error.reason !== 'OWN_CHARGE_NEEDS_ANOTHER_APPROVER'
+          )
+            throw error;
+          // Someone else became able to resolve it after the first check: nothing was written,
+          // and the request's audit row must not claim a self-approval.
+          annotateAudit(ctx, { metadata: { selfApproved: false, soloOwner: false } });
+          const [other] = await otherCardTerminalReviewers(ctx.db as unknown as ScopedDb, scope);
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: cardTerminalOwnChargeMessage(other?.name ?? null),
+          });
+        }
         return cardTerminalCounterView(resolved);
       } catch (error) {
         fail(error);

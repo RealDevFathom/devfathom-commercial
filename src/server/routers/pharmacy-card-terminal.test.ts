@@ -491,13 +491,17 @@ describe('DEV-743 card-terminal router', () => {
       // Alone at the first check (before the PIN); a manager is activated before the write.
       approvers.others
         .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([{ id: 'manager-b', name: 'Ayesha Khan' }]);
+        .mockResolvedValue([{ id: 'manager-b', name: 'Ayesha Khan' }]);
       await expect(caller().resolveReview(resolution(attemptKey))).rejects.toMatchObject({
         code: 'FORBIDDEN',
-        message: 'OWN_CHARGE_NEEDS_ANOTHER_APPROVER',
+        message: `${CARD_TERMINAL_REVIEW_OWN_CHARGE} Ask Ayesha Khan or another manager at this branch to resolve it.`,
       });
       // The second check ran inside the write's transaction, and nothing changed.
-      expect(approvers.others).toHaveBeenCalledTimes(2);
+      expect(approvers.others).toHaveBeenCalledTimes(3);
+      // The request's audit row does not claim the self-approval that was refused.
+      expect(vi.mocked(annotateAudit).mock.calls.at(-1)?.[1]).toEqual({
+        metadata: { selfApproved: false, soloOwner: false },
+      });
       expect(store.all()[0]).toMatchObject({ status: 'MANUAL_REVIEW', resolvedById: null });
       expect(store.audits.filter((entry) => entry.from === 'MANUAL_REVIEW')).toEqual([]);
     });

@@ -184,7 +184,8 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     'The terminal reported a charge for this payment, so it cannot be recorded as not charged. If the slip shows the money was taken, record it as taken and refund it through the card provider.',
   SLIP_REFERENCE_MISMATCH:
     'That reference is not the one the terminal reported for this payment. Enter the reference printed on the terminal slip.',
-  OWN_CHARGE_NEEDS_ANOTHER_APPROVER: 'Another manager or owner must resolve a payment you took.',
+  OWN_CHARGE_NEEDS_ANOTHER_APPROVER:
+    'Another manager or owner must resolve a payment you took. Ask another manager or owner at this branch to resolve it.',
   SLIP_REFERENCE_IN_USE:
     'That slip reference is already recorded on another card terminal payment. Check the slip and enter its reference again.',
   // DEV-821: cash goes only into a till the signed-in user runs.

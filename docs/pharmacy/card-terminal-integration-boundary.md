@@ -137,11 +137,17 @@ terminal, so all of this stays dormant.
   refused before any PIN is asked, and the counter shows a cashier no review form, only a line to
   call a manager or owner.
 - A second person: nobody resolves a charge they took themselves (the attempt's `actorId`) while
-  someone else could resolve it at this branch. Someone else counts (`otherCardTerminalReviewers`)
-  only if they are an active member who passes the counter's operator and branch gate for this
-  branch (`counterOperatorDenial`, the gate the resolve procedure applies) and holds
-  `pharmacy:manage`. A manager assigned only to another branch, or whose counter access is denied,
-  does not block the resolver.
+  someone else could resolve it at this branch, now. Someone else counts
+  (`otherCardTerminalReviewers`) only if all of these hold:
+  - they could enter their own approval PIN. Candidates are built as `isSoleApprover` builds them:
+    an unrevoked PIN not tied to a device, on an ACTIVE staff profile of an ACTIVE member. A member
+    on leave, or without such a PIN, does not count. A temporarily locked-out PIN still counts, as
+    in `isSoleApprover`: the lockout is that person's to clear, and it never silently turns the
+    resolver into a self-approver;
+  - they pass the counter's operator and branch gate for this branch (`counterOperatorDenial`, the
+    gate the resolve procedure applies). A manager assigned only to another branch, or whose
+    counter access is denied, does not count;
+  - they hold `pharmacy:manage`.
   - If someone else could, the resolver is refused before any PIN is asked, with a message naming
     one of them: "Another manager or owner must resolve a payment you took. Ask <name> or another
     manager at this branch to resolve it." The counter shows that line instead of the form.
@@ -149,7 +155,9 @@ terminal, so all of this stays dormant.
     pharmacy with only cashiers can still close its day. The counter says they may resolve it
     themselves.
   - The rule is checked again inside the write's own transaction, with the attempt row locked, so a
-    manager activated after the first check still blocks the self-resolution.
+    manager activated after the first check still blocks the self-resolution. That refusal uses the
+    same sentence, and the request's audit row then records `selfApproved: false` and
+    `soloOwner: false`.
 - The signed-in manager or owner re-enters their own PIN (`authenticateRefundPin`, policy
   `PHARMACY_CARD_TERMINAL_REVIEW_MANAGER_PIN`). A refused PIN commits its lockout strike and a
   FAILURE audit row, and changes nothing. The audit entry records `initiatedById` (who took the

@@ -859,8 +859,15 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
   /** Another manager in the organization, who may or may not be able to act at a branch. */
   async function addManager(
     id: string,
-    options: { branchId: string; counter: 'ALLOW' | 'DENY'; status?: 'ACTIVE' | 'INACTIVE' }
+    options: {
+      branchId: string;
+      counter: 'ALLOW' | 'DENY';
+      status?: 'ACTIVE' | 'INACTIVE' | 'ON_LEAVE';
+      /** An approval PIN on an active staff profile, as resolving needs. Default true. */
+      pin?: boolean;
+    }
   ) {
+    const { hashOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
     await tenant(async (db) => {
       await db.user.create({
         data: {
@@ -886,6 +893,17 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
       });
       await db.pharmacyBranchAssignment.create({
         data: { userId: id, branchId: options.branchId },
+      });
+      if (options.pin === false) return;
+      const profile = await db.restaurantStaffProfile.create({
+        data: { userId: id, displayName: `Manager ${id}` },
+      });
+      await db.restaurantOperatorCredential.create({
+        data: {
+          staffProfileId: profile.id,
+          type: 'PIN',
+          credentialHash: await hashOperatorCredential('PIN', secondManagerPin),
+        },
       });
     });
   }
@@ -928,6 +946,28 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
     });
   });
 
+  it('does not let a manager on leave, or one with no PIN, block the owner’s own review', async () => {
+    // Both hold pharmacy:manage and counter access at this branch, but neither could enter a PIN.
+    await addManager(`ct-mgr-on-leave-${run}`, {
+      branchId: branchMain,
+      counter: 'ALLOW',
+      status: 'ON_LEAVE',
+    });
+    await addManager(`ct-mgr-no-pin-${run}`, {
+      branchId: branchMain,
+      counter: 'ALLOW',
+      pin: false,
+    });
+    const { saleId, resolved, entry } = await ownerResolvesOwnCharge(`RRN-${run}-12`);
+    expect(resolved).toMatchObject({ phase: 'REVERSED', open: false });
+    expect(await attemptsFor(saleId)).toEqual([
+      expect.objectContaining({ status: 'REVERSED', actorId, resolvedById: actorId }),
+    ]);
+    expect(entry).toMatchObject({
+      metadata: expect.objectContaining({ selfApproved: true, soloOwner: true }),
+    });
+  });
+
   it('re-checks the solo rule in the write’s transaction: a manager activated meanwhile blocks it', async () => {
     const lateManager = `ct-mgr-late-${run}`;
     await addManager(lateManager, { branchId: branchMain, counter: 'ALLOW', status: 'INACTIVE' });
@@ -949,7 +989,10 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
             managerPin,
           })
         )
-      ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'OWN_CHARGE_NEEDS_ANOTHER_APPROVER' });
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: `Another manager or owner must resolve a payment you took. Ask Manager ${lateManager} or another manager at this branch to resolve it.`,
+      });
     } finally {
       pinHook.before = null;
     }
