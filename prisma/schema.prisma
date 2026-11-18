@@ -4254,6 +4254,23 @@ model TaskLabel {
   @@map("task_labels")
 }
 
+/// DEV-190: task-label links that pointed at another board's label, removed by
+/// migration 20261118120000_task_label_board_boundary or dropped when a task
+/// moved to another board. Kept so that removal can be reviewed and undone.
+/// No foreign keys: a backup outlives its task/label.
+model TaskLabelBoardRepairBackup {
+  id             String   @id
+  organizationId String
+  taskId         String
+  labelId        String
+  taskBoardId    String
+  labelBoardId   String
+  removedAt      DateTime @default(now())
+
+  @@index([organizationId])
+  @@map("task_label_board_repair_backups")
+}
+
 model TaskChecklist {
   id             String @id @default(cuid())
   organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
