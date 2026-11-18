@@ -167,12 +167,13 @@ type SaleRegisterInput = {
   organizationId: string;
   branchId: string;
   movementIds: readonly string[];
-  patientId: string;
-  patientAddress: string;
+  /** Null only on an entry written while the owner had the pharmacist check off (DEV-911). */
+  patientId: string | null;
+  patientAddress: string | null;
   medicineId: string;
   manufacturer: string | null;
   prescriberId: string | null;
-  prescriberName: string;
+  prescriberName: string | null;
   prescriberRegNo: string | null;
   prescriptionId: string | null;
   prescriptionLineId: string | null;
@@ -228,6 +229,8 @@ export async function appendControlledSaleEntries(db: ScopedDb, input: SaleRegis
       manufacturer: input.manufacturer,
       inventoryLotId: lot.id,
       stockMovementId: movement.id,
+      // DEV-853: NULL when the lot's batch was never recorded (never a label);
+      // the register trigger matches it against the lot's own NULL batch.
       batchNumber: lot.batch.batchNumber,
       quantityCanonicalUnits,
       balanceDelta,

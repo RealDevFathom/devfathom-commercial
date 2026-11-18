@@ -18,7 +18,8 @@ type Lot = {
   medicineId: string;
   receivedAt: Date | null;
   state: string;
-  expiresAt: Date;
+  /** DEV-853: null when the expiry was never recorded. */
+  expiresAt: Date | null;
   disposition: string;
   onHandUnits: number;
 };
@@ -75,7 +76,7 @@ type LotFilter = {
     organizationId: string;
     medicineId: { in: string[] };
     state: string;
-    expiresAt: { gt: Date };
+    OR: [{ expiresAt: null }, { expiresAt: { gt: Date } }];
     medicine: { organizationId: string; controlled: boolean };
   };
   balances: {
@@ -104,7 +105,7 @@ function matchesLot(lot: Lot, filter: LotFilter, medicines: Medicine[]) {
     lot.organizationId === filter.batch.organizationId &&
     filter.batch.medicineId.in.includes(lot.medicineId) &&
     lot.state === filter.batch.state &&
-    lot.expiresAt > filter.batch.expiresAt.gt &&
+    (lot.expiresAt === null || lot.expiresAt > filter.batch.OR[1].expiresAt.gt) &&
     medicine !== undefined &&
     medicine.organizationId === filter.batch.medicine.organizationId &&
     medicine.controlled === filter.batch.medicine.controlled &&
@@ -284,6 +285,23 @@ describe('DEV-907 other-branch availability at the counter', () => {
       defaultLots.filter((lot) => lot.id.startsWith('d-'))
     );
     expect(await f.row('nalbin', true)).not.toHaveProperty('otherBranchAvailability');
+  });
+
+  it('DEV-853: names a branch whose stock has no recorded expiry, never treating it as expired', async () => {
+    const f = fixture(defaultBranches, [
+      stock('d-legacy', 'branch-d', 'nalbin', { expiresAt: null }),
+      stock('g-expired', 'branch-g', 'nalbin', { expiresAt: new Date('2026-10-01T00:00:00Z') }),
+    ]);
+    expect((await f.row('nalbin', true)).otherBranchAvailability).toEqual({
+      branchNames: ['DHA'],
+      more: false,
+    });
+    for (const [args] of f.db.pharmacyBranch.findMany.mock.calls) {
+      expect(args.where.inventoryLots.some.batch.OR).toEqual([
+        { expiresAt: null },
+        { expiresAt: { gt: expect.any(Date) } },
+      ]);
+    }
   });
 
   it('never shows a controlled drug, even when another branch holds it', async () => {

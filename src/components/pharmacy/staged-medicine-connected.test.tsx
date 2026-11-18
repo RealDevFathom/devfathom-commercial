@@ -45,6 +45,8 @@ function makeDb() {
   const db = {
     state,
     $transaction: async (run: (tx: unknown) => unknown) => run(db),
+    // The staging advisory lock; one in-memory tenant has nothing to serialize.
+    $executeRaw: async () => 0,
     user: { findUnique: async () => ({ organizationRole: null, permissionOverrides: [] }) },
     pharmacyBranch: {
       findFirst: async () => ({ id: 'branch_a' }),

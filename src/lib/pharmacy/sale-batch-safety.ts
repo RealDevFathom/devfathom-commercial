@@ -22,7 +22,8 @@ export class PharmacySaleBatchError extends Error {
   }
 }
 
-export type CheckedSaleBatch = { batchNumber: string; expiresAt: Date };
+/** DEV-853: either may be null when it was never recorded (legacy opening stock). */
+export type CheckedSaleBatch = { batchNumber: string | null; expiresAt: Date | null };
 
 type AllocationRow = {
   saleLineId: string;
@@ -36,9 +37,9 @@ type LotRow = {
   organizationId: string;
   branchId: string;
   receivedAt: Date | null;
-  batchNumber: string;
+  batchNumber: string | null;
   batchState: BatchState;
-  expiresAt: Date;
+  expiresAt: Date | null;
 };
 
 // Most severe first, so the counter names the reason an operator must act on.

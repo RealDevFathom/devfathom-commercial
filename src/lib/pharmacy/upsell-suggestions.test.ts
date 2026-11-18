@@ -204,7 +204,8 @@ describe('#730 findUpsellSuggestions', () => {
       batch: {
         medicineId: { notIn: ['inhaler'] },
         state: 'ACTIVE',
-        expiresAt: { gt: at },
+        // DEV-853: an unrecorded expiry is never treated as expired.
+        OR: [{ expiresAt: null }, { expiresAt: { gt: at } }],
         medicine: {
           organizationId: 'org-a',
           saleable: true,

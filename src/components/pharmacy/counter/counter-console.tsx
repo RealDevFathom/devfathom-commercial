@@ -976,13 +976,21 @@ function ScopedPharmacyCounterConsole({
     },
     [organizationApproval, branchId, canFixSetup]
   );
+  // DEV-911: the owner switched the pharmacist check at each sale off. Only an explicit OFF
+  // from the server counts; unknown (loading, failed, offline before a read) means on. The
+  // server reads the stored setting again at every line, payment and completion.
+  const pharmacistCheckOff =
+    (saleReadiness.data as { pharmacistCheckOff?: boolean } | undefined)?.pharmacistCheckOff ===
+    true;
   // Read at call time: a scan or shortcut can finish after the drawer closed.
   const drawerRequiredRef = useRef(drawerRequired);
   const dayClosedRef = useRef(dayClosed);
+  const pharmacistCheckOffRef = useRef(pharmacistCheckOff);
   useEffect(() => {
     drawerRequiredRef.current = drawerRequired;
     dayClosedRef.current = dayClosed;
-  }, [drawerRequired, dayClosed]);
+    pharmacistCheckOffRef.current = pharmacistCheckOff;
+  }, [drawerRequired, dayClosed, pharmacistCheckOff]);
 
   const receiptQuery = trpc.pharmacySales.counterReceipt.useQuery(
     { branchId, saleId: saleId ?? '' },
@@ -1212,12 +1220,14 @@ function ScopedPharmacyCounterConsole({
             }
           : null,
         requestedCanonicalUnits: line.canonicalUnits,
-        nearestSafeExpiry: line.allocations[0] ? new Date(line.allocations[0].expiresAt) : null,
+        nearestSafeExpiry: line.allocations[0]?.expiresAt
+          ? new Date(line.allocations[0].expiresAt)
+          : null,
         discountMinor: line.discountMinor,
       };
     });
-    return counterAlertsFor(lines, { at: new Date(), timeZone: workspaceZone });
-  }, [cart, patient, workspaceZone]);
+    return counterAlertsFor(lines, { at: new Date(), timeZone: workspaceZone, pharmacistCheckOff });
+  }, [cart, patient, workspaceZone, pharmacistCheckOff]);
 
   const blocked = hasBlockingAlert(alerts);
   const safetyLabel = blocked
@@ -1834,6 +1844,9 @@ function ScopedPharmacyCounterConsole({
         const freshBill = replaceClosedBill || activeSaleId !== saleId;
         // Creating a bill can outlive this scan or the mounted counter.
         if (!scanIsCurrent()) return;
+        // DEV-911: with the owner's pharmacist check off, nothing is asked for a controlled or
+        // prescription-only line; the server writes the controlled register entry itself.
+        const checkOff = pharmacistCheckOffRef.current;
         const controlled = row.restriction.controlled;
         const patient = billPatient;
         const addressOk = patientAddress.trim().length >= 3;
@@ -1841,6 +1854,7 @@ function ScopedPharmacyCounterConsole({
         const emergencyOk = !billAuth.emergency || billAuth.prescriberName.trim().length > 0;
         if (
           controlled &&
+          !checkOff &&
           (!patient ||
             !addressOk ||
             !prescriptionOk ||
@@ -1860,7 +1874,8 @@ function ScopedPharmacyCounterConsole({
         // DEV-629: the server refuses to take payment for an Rx/restricted line without a
         // prescription reference, so the counter sends the selected patient's current
         // prescription line for this medicine. Without one the line still shows its safety block.
-        const needsPrescription = !controlled && (row.restriction.rx || row.restriction.restricted);
+        const needsPrescription =
+          !checkOff && !controlled && (row.restriction.rx || row.restriction.restricted);
         const prescriptionLine = needsPrescription
           ? patient?.prescriptions
               .filter((prescription) => prescription.inDate)
@@ -1906,7 +1921,7 @@ function ScopedPharmacyCounterConsole({
                 }
               : {}),
             controlledAuthorization:
-              controlled && patient
+              controlled && patient && !checkOff
                 ? {
                     patientId: patient.patientId,
                     patientAddress: patientAddress.trim(),
@@ -4034,8 +4049,12 @@ function ScopedPharmacyCounterConsole({
                       {[
                         activeRow.presentation,
                         activeRow.dosageForm,
-                        activeRow.batchNumber ? `Batch ${activeRow.batchNumber}` : null,
-                        activeRow.nearestSafeExpiry
+                        activeRow.batchNumber
+                          ? `Batch ${activeRow.batchNumber}`
+                          : activeRow.recommendedLotId
+                            ? 'Batch not recorded'
+                            : null,
+                        activeRow.nearestSafeExpiry || activeRow.recommendedLotId
                           ? formatShortExpiry(activeRow.nearestSafeExpiry)
                           : null,
                         locationLabel,
@@ -4123,7 +4142,7 @@ function ScopedPharmacyCounterConsole({
                     {lotOverride?.inventoryLotId
                       ? `Selected batch ${lotOptionsQuery.data?.find((lot) => lot.inventoryLotId === lotOverride.inventoryLotId)?.batchNumber ?? 'override'} will be used with a recorded reason.`
                       : activeRow.recommendedLotId && activeRow.batchNumber
-                        ? `Earliest-expiry batch ${activeRow.batchNumber} is used; more batches are added if needed.`
+                        ? `Earliest-expiry batch${activeRow.batchNumber ? ` ${activeRow.batchNumber}` : ''} is used; more batches are added if needed.`
                         : activeRow.onHandUnits === 0 && activeRow.blocked.length === 0
                           ? 'No batch of this medicine is in stock here.'
                           : 'No batch can be sold here right now.'}

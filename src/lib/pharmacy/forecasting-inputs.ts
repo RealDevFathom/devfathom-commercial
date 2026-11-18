@@ -210,8 +210,11 @@ export async function loadForecastingInputs(
       throw new RangeError('Stock scope does not match forecasting supply scope');
     }
     const lot = { ...candidate, medicineId: scope.medicineId };
+    // DEV-853: an expiry that was never recorded (legacy opening stock) is
+    // sellable on-hand stock, never "expired" and never excluded. Only an
+    // unreadable date is unknown; a known expiry that has passed stays excluded.
     const reason =
-      !lot.expiresAt || !Number.isFinite(lot.expiresAt.getTime())
+      lot.expiresAt !== null && !Number.isFinite(lot.expiresAt.getTime())
         ? 'UNKNOWN_EXPIRY'
         : blockReasonFor(lot, { ...scope, at });
     if (reason) excludedStock.push({ lot, reason });

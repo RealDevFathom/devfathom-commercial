@@ -798,6 +798,16 @@ async function resolveManufacturingBatch(
     },
   });
   if (existing) {
+    // DEV-853: a batch first seen in legacy opening stock may have no recorded
+    // expiry. The printed pack in hand now records it, once.
+    if (existing.expiresAt === null) {
+      const recorded = await db.pharmacyManufacturingBatch.updateMany({
+        where: { organizationId: scope.organizationId, id: existing.id, expiresAt: null },
+        data: { expiresAt, expiryPrecision: input.expiryPrecision },
+      });
+      if (recorded.count !== 1) throw new PharmacyReceivingError('BATCH_EXPIRY_CONFLICT');
+      return { ...existing, expiresAt, expiryPrecision: input.expiryPrecision };
+    }
     if (
       normalizeExpiryBoundary(existing.expiresAt).getTime() !==
       normalizeExpiryBoundary(expiresAt).getTime()
@@ -806,7 +816,7 @@ async function resolveManufacturingBatch(
     }
     return { ...existing, expiresAt };
   }
-  return db.pharmacyManufacturingBatch.create({
+  const created = await db.pharmacyManufacturingBatch.create({
     data: {
       organizationId: scope.organizationId,
       medicineId: input.medicineId,
@@ -815,6 +825,7 @@ async function resolveManufacturingBatch(
       expiryPrecision: input.expiryPrecision,
     },
   });
+  return { ...created, expiresAt };
 }
 
 /**

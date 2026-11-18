@@ -208,7 +208,7 @@ async function stockColdChainLot(fridge: string): Promise<void> {
       supplierInvoiceRef: `INV-${randomBytes(4).toString('hex')}`,
       unitCostMinor: 100,
       printedMrpMinor: 200,
-      receivedExpiresAt: batch.expiresAt,
+      receivedExpiresAt: batch.expiresAt as Date,
       receivedExpiryPrecision: 'DAY',
       quantityUnits: 10,
       idempotencyKey: `receive-${randomBytes(4).toString('hex')}`,

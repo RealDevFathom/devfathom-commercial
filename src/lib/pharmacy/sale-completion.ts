@@ -59,7 +59,7 @@ export async function completePaidPharmacySale(
     sale.lines.map((line) => line.medicine)
   );
   // DEV-629: and that every such line carries a pharmacist-attached, pharmacist-signed prescription.
-  await assertRxLinesPrescribed(db, sale.lines);
+  await assertRxLinesPrescribed(db, sale.lines, scope);
   // #659: re-check every batch under lock before a receipt number is drawn. The receipt
   // snapshot below records these checked facts, not the ones loaded with the sale.
   const checkedBatches = await assertSaleBatchesSellable(db, scope, sale.id);
@@ -185,7 +185,7 @@ export async function completePaidPharmacySale(
             allocationId: allocation.id,
             inventoryLotId: allocation.inventoryLotId,
             batchNumber: batch.batchNumber,
-            expiresAt: batch.expiresAt.toISOString(),
+            expiresAt: batch.expiresAt?.toISOString() ?? null,
             canonicalUnits: allocation.canonicalUnits,
           };
         }),

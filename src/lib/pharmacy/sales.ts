@@ -28,8 +28,11 @@ import { checkSafetyLease } from './offline-safety-lease';
 import { SNAPSHOT_SIGNING_KEY_ID, verifySnapshotSignature } from './offline-snapshots';
 import {
   authorizeControlledRestoration,
+  ControlledRestorationDenied,
   type ControlledRestorationPin,
+  type ControlledRestorationWitness,
 } from './controlled-restoration-authorization';
+import { pharmacistCheckOffMarker } from './pharmacist-check-policy';
 import { appendControlledRestorations, lockRegister } from './controlled-register';
 import { lockStockBalances, lockStockRowsFrom } from './stock-lock-order';
 import { assertStoredPharmacyMayOperate } from './regulatory';
@@ -59,6 +62,29 @@ import {
   type BackInStockPolicy,
 } from './back-in-stock';
 import { priceCounterPromotion, promotionApprovalPolicy } from './promotions';
+import { hasKnownExpiryPassed } from './unrecorded-batch';
+
+/**
+ * DEV-911: the witness for restoring a controlled sale line (a void or a return at the counter).
+ * With the owner's pharmacist check on, exactly `authorizeControlledRestoration`. With it off,
+ * a refusal there gives way: the restoration is recorded by the acting user and its register
+ * correction carries the owner-switched-off marker, which the database accepts only while the
+ * setting is off at that version. The setting is read only when the witness was refused.
+ */
+export async function controlledSaleRestorationWitness(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input?: ControlledRestorationPin
+): Promise<ControlledRestorationWitness> {
+  try {
+    return await authorizeControlledRestoration(db, scope, input);
+  } catch (error) {
+    if (!(error instanceof ControlledRestorationDenied)) throw error;
+    const marker = await pharmacistCheckOffMarker(db, scope.organizationId);
+    if (!marker) throw error;
+    return { witnessedByUserId: scope.actorId, signatureRef: marker };
+  }
+}
 
 /**
  * Re-exported from `./medicine`, where MED-08 pricing now lives so the counter
@@ -718,10 +744,12 @@ async function addSaleLineWithAllocation(
     ? await db.medicinePackMrp.findMany({
         where: {
           organizationId: scope.organizationId,
-          OR: lots.map((lot) => ({
-            packLevelId: lot.packLevelId,
-            batchReference: lot.batch.batchNumber,
-          })),
+          // DEV-853: a lot with no recorded batch has no batch-specific rule.
+          OR: lots.flatMap((lot) =>
+            lot.batch.batchNumber === null
+              ? []
+              : [{ packLevelId: lot.packLevelId, batchReference: lot.batch.batchNumber }]
+          ),
         },
         select: { packLevelId: true, batchReference: true, roundingIncrementMinor: true },
       })
@@ -912,7 +940,7 @@ export async function changeSaleStatus(
     });
   const witness =
     action === 'void' && sale.lines.some((line) => line.medicine.controlled)
-      ? await authorizeControlledRestoration(db, scope, controlledWitness)
+      ? await controlledSaleRestorationWitness(db, scope, controlledWitness)
       : undefined;
   const claimed = await db.pharmacySale.updateMany({
     where: {
@@ -1089,7 +1117,8 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
         lotId,
         batchNumber: batch.batchNumber,
         expiresAt: batch.expiresAt,
-        restockAllowed: batch.state === 'ACTIVE' && batch.expiresAt > new Date(),
+        restockAllowed:
+          batch.state === 'ACTIVE' && !hasKnownExpiryPassed(batch.expiresAt, new Date()),
         returnableUnits: Math.min(
           line.canonicalUnits - returnedUnits,
           allocations.reduce((n, row) => n + row.canonicalUnits, 0) -
@@ -1316,7 +1345,7 @@ export async function returnSaleLine(
   });
   if (!line || line.sale.status !== 'COMPLETED') throw new PharmacySaleError('NOT_FOUND');
   const witness = line.medicine.controlled
-    ? await authorizeControlledRestoration(db, scope, input.controlledWitness)
+    ? await controlledSaleRestorationWitness(db, scope, input.controlledWitness)
     : undefined;
   const requestedDisposition = input.disposition ?? 'QUARANTINE';
   const disposition = input.lotId ? requestedDisposition : 'QUARANTINE';
@@ -1529,7 +1558,12 @@ export async function returnSaleLine(
           kind: { notIn: ['QUARANTINE', 'RETURNS'] },
         },
       });
-      if (!lot || lot.batch.state !== 'ACTIVE' || lot.batch.expiresAt <= new Date() || !location)
+      if (
+        !lot ||
+        lot.batch.state !== 'ACTIVE' ||
+        hasKnownExpiryPassed(lot.batch.expiresAt, new Date()) ||
+        !location
+      )
         throw new PharmacySaleError('UNSAFE_STOCK');
     }
     const stockLocationId =
@@ -1876,7 +1910,7 @@ export async function captureSafeRestockArrival(
   if (
     !lot?.receivedAt ||
     lot.batch.state !== 'ACTIVE' ||
-    lot.batch.expiresAt.getTime() <= at.getTime() ||
+    hasKnownExpiryPassed(lot.batch.expiresAt, at) ||
     lot.balances.length === 0
   )
     throw new PharmacySaleError('UNSAFE_STOCK');

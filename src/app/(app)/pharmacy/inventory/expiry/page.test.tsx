@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   board: vi.fn(),
   assigned: vi.fn(async () => new Set(['branch_a'])),
   claim: vi.fn(),
+  record: vi.fn(),
   redirect: vi.fn(),
   replace: vi.fn(),
 }));
@@ -24,7 +25,11 @@ vi.mock('@/server/routers/pharmacy-inventory', () => ({
   admittedInventoryBranchIds: mocks.assigned,
   EXPIRY_BOARD_WINDOWS: [30, 60, 90, 180],
   pharmacyInventoryRouter: {
-    createCaller: () => ({ expiryBoardLots: mocks.lots, draftExpiryReturnClaim: mocks.claim }),
+    createCaller: () => ({
+      expiryBoardLots: mocks.lots,
+      draftExpiryReturnClaim: mocks.claim,
+      recordUnrecordedBatch: mocks.record,
+    }),
   },
 }));
 vi.mock('@/components/pharmacy/inventory/expiry-board', () => ({
@@ -66,6 +71,7 @@ it('passes serialized return calendars and cumulative risk from the server page 
       { expiresAt, returnWindowOpensAt: opensAt, returnDeadlineAt: expiresAt, markdown: null },
       { expiresAt, returnWindowOpensAt: null, returnDeadlineAt: null, markdown: null },
     ],
+    unrecordedExpiryRows: [],
     suppliers: [{ id: 'supplier_a', name: 'Distributor' }],
   });
 
@@ -137,6 +143,7 @@ it('DEV-660: opens an assigned branch instead of an unassigned one named in the 
     generatedAt: new Date('2026-11-15T00:00:00.000Z'),
     riskBuckets: [],
     rows: [],
+    unrecordedExpiryRows: [],
     suppliers: [],
   });
 
@@ -166,6 +173,7 @@ it('DEV-58: says so when a report drill-through names a branch the board cannot 
     generatedAt: new Date('2026-11-15T00:00:00.000Z'),
     riskBuckets: [],
     rows: [],
+    unrecordedExpiryRows: [],
     suppliers: [],
   });
   const notice = /requested branch is not one of your inventory branches/;
@@ -205,6 +213,7 @@ it('DEV-728: drafts one distributor return claim through the server procedure', 
     costVisible: true,
     riskBuckets: [],
     rows: [],
+    unrecordedExpiryRows: [],
     suppliers: [],
   });
   mocks.claim.mockResolvedValue({
@@ -269,6 +278,7 @@ it('DEV-627: tells the board when the read withheld purchase cost', async () => 
         valueAtRiskMinor: null,
       },
     ],
+    unrecordedExpiryRows: [],
     suppliers: [],
   });
 
@@ -299,6 +309,7 @@ it('DEV-61 applies expiry filters immediately with replacement history and one-c
     costVisible: false,
     riskBuckets: [],
     rows: [],
+    unrecordedExpiryRows: [],
     suppliers: [],
   });
   render(
@@ -318,4 +329,71 @@ it('DEV-61 applies expiry filters immediately with replacement history and one-c
     'href',
     '/pharmacy/inventory?branch=branch_a'
   );
+});
+
+it('DEV-853: lists unrecorded-expiry lots and records the real batch and expiry', async () => {
+  const context = {
+    session: { user: { id: 'user_a' } },
+    organization: { id: 'org_a' },
+    entitlements: {},
+    db: {
+      pharmacyBranch: {
+        findMany: vi.fn().mockResolvedValue([{ id: 'branch_a', name: 'Main', city: 'Karachi' }]),
+      },
+    },
+  };
+  mocks.actor.mockResolvedValue(context);
+  mocks.context.mockResolvedValue(context);
+  mocks.lots.mockResolvedValue({
+    generatedAt: new Date('2026-11-18T00:00:00Z'),
+    costVisible: false,
+    riskBuckets: [],
+    rows: [],
+    unrecordedExpiryRows: [
+      {
+        key: 'lot_9:location_1',
+        inventoryLotId: 'lot_9',
+        stockLocationId: 'location_1',
+        locationName: 'Main shelf',
+        medicineName: 'Legacy Panadol',
+        batchNumber: null,
+        printedExpiry: null,
+        onHandUnits: 40,
+        unitsPerPack: 10,
+        printedMrpMinor: 2500,
+      },
+    ],
+    suppliers: [],
+  });
+  mocks.record.mockResolvedValue({
+    inventoryLotId: 'lot_9',
+    batchNumber: 'B-REAL',
+    expiresAt: new Date('2027-06-30T19:00:00.000Z'),
+    expiryPrecision: 'MONTH',
+  });
+  render(await Page({ searchParams: Promise.resolve({ branch: 'branch_a', within: '90' }) }));
+  expect(screen.getByRole('heading', { name: 'Batch or expiry not recorded' })).toBeVisible();
+  expect(screen.getByText(/Batch not recorded · Expiry not recorded/)).toBeVisible();
+
+  const { action } = mocks.board.mock.calls[0]![0] as ExpiryBoardProps;
+  const data = new FormData();
+  data.set('action', 'record');
+  data.set('branchId', 'branch_a');
+  data.set('within', '90');
+  data.set('inventoryLotId', 'lot_9');
+  data.set('batchNumber', 'B-REAL');
+  // A day-printed pack keeps its day (never widened to the month's end).
+  data.set('expiry', '2027-06-10');
+  await action(data);
+
+  expect(mocks.record).toHaveBeenCalledExactlyOnceWith({
+    branchId: 'branch_a',
+    inventoryLotId: 'lot_9',
+    batchNumber: 'B-REAL',
+    printedExpiry: new Date('2027-06-10T00:00:00.000Z'),
+    expiryPrecision: 'DAY',
+  });
+  const destination = new URL(String(mocks.redirect.mock.calls[0]![0]), 'https://app.invalid');
+  expect(destination.searchParams.get('kind')).toBe('success');
+  expect(destination.searchParams.get('notice')).toContain('Recorded for batch B-REAL');
 });

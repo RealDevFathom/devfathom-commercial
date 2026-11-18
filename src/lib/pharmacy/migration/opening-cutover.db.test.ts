@@ -373,9 +373,9 @@ describeIfDatabase('MIG-03 — opening stock is never defaulted', () => {
       const { line, gaps } = await deps.opening.draftLine(db, scopeOf(fixture), {
         sessionId: session.id,
         ...completeLine(fixture, batch.id, 'gaps', 40),
-        // The incumbent supplied no expiry and no MRP for this row.
+        // The incumbent stated an expiry precision with no date, and no MRP.
+        // (DEV-853: an expiry left out entirely is "not recorded", not a gap.)
         expiryDate: null,
-        expiryPrecision: null,
         printedMrpMinor: null,
       });
 

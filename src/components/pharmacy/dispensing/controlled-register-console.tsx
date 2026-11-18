@@ -9,11 +9,11 @@ import { registerPrintTotals } from '@/lib/pharmacy/register-print';
 import { trpc } from '@/lib/trpc';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
+import { batchNumberLabel } from '@/lib/pharmacy/unrecorded-batch';
 import { AccessDeniedState, WorkspaceState, isAccessDenied } from './field';
 
 const cell = 'break-words px-2 py-1.5 align-top text-xs text-text-body';
-const head =
-  'px-2 py-1.5 text-left font-mono text-xs tracking-wide text-text-muted uppercase';
+const head = 'px-2 py-1.5 text-left font-mono text-xs tracking-wide text-text-muted uppercase';
 
 export function ControlledRegisterConsole() {
   const page = useRef<HTMLDivElement>(null);
@@ -279,7 +279,9 @@ export function ControlledRegisterConsole() {
                               </span>
                             ) : null}
                           </td>
-                          <td className={`${cell} font-mono`}>{entry.batchNumber}</td>
+                          <td className={`${cell} font-mono`}>
+                            {batchNumberLabel(entry.batchNumber)}
+                          </td>
                           <td className={cell}>
                             {entry.witnessName ?? '—'}
                             {entry.signatureRef ? (
@@ -348,7 +350,7 @@ export function ControlledRegisterConsole() {
                       )
                       .map((entry) => (
                         <option key={entry.id} value={entry.id}>
-                          {entry.serial} · {entry.entryKind} · {entry.batchNumber}
+                          {entry.serial} · {entry.entryKind} · {batchNumberLabel(entry.batchNumber)}
                         </option>
                       ))}
                   </select>
@@ -436,7 +438,8 @@ type ShownEntry = {
   balanceDelta: number;
   runningBalance: number;
   quantityCanonicalUnits: number;
-  batchNumber: string;
+  /** DEV-853: null when the lot's batch number was never recorded. */
+  batchNumber: string | null;
   inventoryLotId: string;
   witnessName: string | null;
   correctionReason: string | null;
@@ -455,7 +458,7 @@ type ShownEntry = {
 function RegisterTotals({ entries }: { entries: readonly ShownEntry[] }) {
   const totals = registerPrintTotals(entries);
   const closing = totals.closing
-    .map((row) => `${row.batchNumber} balance ${row.runningBalance}`)
+    .map((row) => `${batchNumberLabel(row.batchNumber)} balance ${row.runningBalance}`)
     .join(' · ');
   return (
     <tfoot>
@@ -481,7 +484,7 @@ function RegisterCards({ entries }: { entries: readonly ShownEntry[] }) {
               {entry.serial} · {formatKarachiDateTime(entry.createdAt)}
             </p>
             <p className="mt-1 text-text-body">
-              {drug} · {entry.batchNumber} · qty {entry.quantityCanonicalUnits}
+              {drug} · {batchNumberLabel(entry.batchNumber)} · qty {entry.quantityCanonicalUnits}
             </p>
             <p className="mt-1 text-text-muted">
               {entry.patient?.displayName ?? entry.counterpartyName ?? '—'} ·{' '}
@@ -493,7 +496,7 @@ function RegisterCards({ entries }: { entries: readonly ShownEntry[] }) {
       <p className="text-xs text-text-muted">
         {totals.rows} rows · in {totals.unitsIn} · out {totals.unitsOut}
         {totals.closing
-          .map((row) => ` · ${row.batchNumber} balance ${row.runningBalance}`)
+          .map((row) => ` · ${batchNumberLabel(row.batchNumber)} balance ${row.runningBalance}`)
           .join('')}
       </p>
     </div>

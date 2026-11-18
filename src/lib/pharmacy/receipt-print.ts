@@ -113,11 +113,18 @@ function escPosFacts(
           ? `${strings.quantity} x ${strings.unitPrice}: ${counterLinePricing(line, 'en', 'x')}`
           : counterLinePricing(line, 'en', 'x'),
         ...(line.allocations ?? []).map((allocation) => {
-          const batch = issued ? allocation.batchNumber : null;
-          const expiry = issued && allocation.expiresAt ? allocation.expiresAt : null;
-          return `${strings.batch}: ${batch ?? 'Unavailable'} | ${strings.expiry}: ${
-            expiry ? formatReceiptExpiry(expiry) : 'Unavailable'
-          } | Tablets/units: ${allocation.canonicalUnits}`;
+          // DEV-853: plain words for an issued lot that never recorded them.
+          const batch = !issued
+            ? `${strings.batch}: Unavailable`
+            : allocation.batchNumber === null
+              ? strings.batchNotRecorded
+              : `${strings.batch}: ${allocation.batchNumber}`;
+          const expiry = !issued
+            ? `${strings.expiry}: Unavailable`
+            : allocation.expiresAt === null
+              ? strings.expiryNotRecorded
+              : `${strings.expiry}: ${formatReceiptExpiry(allocation.expiresAt)}`;
+          return `${batch} | ${expiry} | Tablets/units: ${allocation.canonicalUnits}`;
         }),
         ...(promotion ? [promotion] : []),
         `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor)}`,

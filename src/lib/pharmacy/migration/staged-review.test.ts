@@ -107,29 +107,31 @@ describe('staged medicine evidence', () => {
     expect(view.sellable).toBe(false);
     expect(view.canonicalQuantity).toBeNull();
     expect(view.exceptions[0].severity).toBe('BLOCKING');
-    expect(
-      missingAttributes({
-        sourceRef: 'ref',
-        manufacturingBatchId: null,
-        batchNumber: null,
-        expiryDate: null,
-        expiryPrecision: null,
-        printedMrpMinor: null,
-        unitCostMinor: null,
-        stockLocationId: null,
-        packLevelId: null,
-        unitsPerPack: null,
-        countedUnits: null,
-      })
-    ).toEqual(
+    const gaps = missingAttributes({
+      sourceRef: 'ref',
+      manufacturingBatchId: null,
+      batchNumber: null,
+      expiryDate: null,
+      expiryPrecision: null,
+      printedMrpMinor: null,
+      unitCostMinor: null,
+      stockLocationId: null,
+      packLevelId: null,
+      unitsPerPack: null,
+      countedUnits: null,
+    });
+    expect(gaps).toEqual(
       expect.arrayContaining([
         'MISSING_BATCH',
-        'MISSING_EXPIRY',
         'MISSING_MRP',
         'MISSING_COST',
+        'MISSING_LOCATION',
         'MISSING_COUNT',
       ])
     );
+    // DEV-853 owner decision: an expiry the old system never had is stored as
+    // "not recorded" and does not block opening stock.
+    expect(gaps).not.toContain('MISSING_EXPIRY');
   });
   it.each(['=1+1', '+SUM(A1)', '-1', '@formula', ' \t=CMD()', '\n=1', '\ttext'])(
     'escapes spreadsheet interpretation: %j',
