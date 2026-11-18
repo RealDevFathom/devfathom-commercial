@@ -60,7 +60,7 @@ export function MembershipForm({
       >
         {state.message ||
           (loyaltyActive
-            ? 'Owners and branch managers. A deactivated member keeps their points but earns nothing and cannot redeem or be adjusted until re-enrolled. Recorded in the audit log with your name and reason.'
+            ? 'Owner only: this applies at every branch. A deactivated member keeps their points but earns nothing and cannot redeem or be adjusted until re-enrolled. Recorded in the audit log with your name and reason.'
             : 'Owners and branch managers. Re-enrolling needs the customer’s current loyalty consent. Recorded in the audit log with your name and reason.')}
       </p>
     </form>
