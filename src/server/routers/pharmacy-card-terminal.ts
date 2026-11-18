@@ -22,9 +22,9 @@ import {
   type CardTerminalAttemptStore,
 } from '@/lib/pharmacy/card-terminal/store';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
-import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
 
-import { protectedProcedure, router, type TRPCContext } from '../trpc';
+import { protectedProcedure, router } from '../trpc';
 import { failPharmacySale, requireCounterReceiptAccess } from './pharmacy-sales';
 
 /**
@@ -46,12 +46,23 @@ import { failPharmacySale, requireCounterReceiptAccess } from './pharmacy-sales'
 const branchId = z.string().trim().min(1).max(128);
 const attemptKey = z.string().regex(/^[A-Za-z0-9:_-]{8,128}$/);
 
-type CounterContext = TRPCContext;
+/**
+ * How long the counter's request waits for the terminal before the outcome counts as UNKNOWN.
+ * It stays inside the 60-second request transaction (`src/app/api/trpc/[trpc]/route.ts`), so
+ * the counter always gets an answer; an UNKNOWN outcome is resolved by a status check.
+ */
+export const COUNTER_TERMINAL_TIMEOUT_MS = 45_000;
 
-/** One committed tenant transaction per store call, so each attempt state survives a crash. */
-function storeFor(ctx: CounterContext): CardTerminalAttemptStore {
+/**
+ * Each store call commits in its OWN tenant transaction, independent of the request's. The
+ * request runs inside one `withTenantDb` transaction, and a nested `ctx.db.$transaction` reuses
+ * it, so CREATED and SENT would not be committed while the terminal charges: a crash, a failed
+ * batch sibling or the request timeout would roll them back after money moved. These commits
+ * never wait on the request's transaction, which holds no attempt or sale lock.
+ */
+function storeFor(scope: LedgerScope): CardTerminalAttemptStore {
   return prismaCardTerminalAttemptStore((work) =>
-    ctx.db.$transaction((tx) => work(tx as unknown as ScopedDb))
+    withTenantDb(scope.organizationId, work, { userId: scope.actorId })
   );
 }
 
@@ -66,7 +77,6 @@ function admitted(terminal: ResolvedCardTerminal | null): terminal is ResolvedCa
 }
 
 async function depsFor(
-  ctx: CounterContext,
   scope: LedgerScope,
   deviceId: string
 ): Promise<{ deps: CardTerminalDeps; terminal: ResolvedCardTerminal }> {
@@ -76,8 +86,9 @@ async function depsFor(
   return {
     terminal,
     deps: {
-      store: storeFor(ctx),
+      store: storeFor(scope),
       adapter: terminal.adapter,
+      timeoutMs: COUNTER_TERMINAL_TIMEOUT_MS,
       ...(terminal.admission ? { admission: terminal.admission } : {}),
     },
   };
@@ -112,7 +123,7 @@ export const pharmacyCardTerminalRouter = router({
     .input(z.object({ branchId, saleId: z.string().min(1).max(128) }).strict())
     .query(async ({ ctx, input }) => {
       const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
-      const latest = await storeFor(ctx).latestForSale(scope, input.saleId);
+      const latest = await storeFor(scope).latestForSale(scope, input.saleId);
       return latest ? cardTerminalCounterView(latest) : null;
     }),
   charge: protectedProcedure
@@ -131,7 +142,7 @@ export const pharmacyCardTerminalRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
-        const { deps, terminal } = await depsFor(ctx, scope, input.deviceId);
+        const { deps, terminal } = await depsFor(scope, input.deviceId);
         const attempt = await chargeCardTerminal(deps, scope, {
           saleId: input.saleId,
           deviceId: input.deviceId,
@@ -151,11 +162,11 @@ export const pharmacyCardTerminalRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
-        const store = storeFor(ctx);
+        const store = storeFor(scope);
         const attempt = await store.get(scope, input.attemptKey);
         if (!attempt) throw new CardTerminalError('ATTEMPT_NOT_FOUND');
         // The terminal that took the charge answers for it.
-        const { deps } = await depsFor(ctx, scope, attempt.deviceId);
+        const { deps } = await depsFor(scope, attempt.deviceId);
         return cardTerminalCounterView(
           await recoverCardTerminalAttempt({ ...deps, store }, scope, input.attemptKey)
         );

@@ -6,7 +6,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
+const tenancy = vi.hoisted(() => ({
+  withTenantDb: vi.fn(async (_org: string, work: (db: unknown) => unknown) => work({})),
+}));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  createTenantDb: vi.fn(),
+  withTenantDb: tenancy.withTenantDb,
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: vi.fn(() => true),
@@ -26,6 +32,7 @@ const harness = vi.hoisted(() => ({
   }),
   resolve: vi.fn(),
   store: null as unknown,
+  runners: [] as Array<(work: (db: unknown) => Promise<unknown>) => Promise<unknown>>,
 }));
 vi.mock('./pharmacy-sales', () => ({
   requireCounterReceiptAccess: harness.requireCounterReceiptAccess,
@@ -37,7 +44,12 @@ vi.mock('@/lib/pharmacy/card-terminal/registry', () => ({
 vi.mock('@/lib/pharmacy/card-terminal/store', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/card-terminal/store')>()),
   // The router's store is the in-memory one, which enforces the migration's rules.
-  prismaCardTerminalAttemptStore: () => harness.store,
+  prismaCardTerminalAttemptStore: (
+    run: (work: (db: unknown) => Promise<unknown>) => Promise<unknown>
+  ) => {
+    harness.runners.push(run);
+    return harness.store;
+  },
 }));
 
 import { TRPCError } from '@trpc/server';
@@ -51,14 +63,16 @@ import {
   type FakeTerminal,
 } from '@/lib/pharmacy/card-terminal/testing/fake-terminal';
 import { router, type TRPCContext } from '../trpc';
-import { pharmacyCardTerminalRouter } from './pharmacy-card-terminal';
+import { COUNTER_TERMINAL_TIMEOUT_MS, pharmacyCardTerminalRouter } from './pharmacy-card-terminal';
 
 const app = router({ pharmacyCardTerminal: pharmacyCardTerminalRouter });
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' };
 const businessDate = new Date('2026-11-18T00:00:00.000Z');
 
+const requestDb = { $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(requestDb)) };
+
 function caller() {
-  const db = { $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(db)) };
+  const db = requestDb;
   const context = {
     db,
     entitlements: { organizationId: 'org-a', enabledModules: ['pharmacy-counter'], modules: [] },
@@ -88,6 +102,7 @@ const chargeInput = (attemptKey: string, amountMinor = 1500) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  harness.runners = [];
   terminal = createFakeTerminal();
   store = createInMemoryAttemptStore({ saleRemaining: () => 1500 });
   harness.store = store;
@@ -260,5 +275,26 @@ describe('DEV-743 card-terminal router', () => {
       caller().checkStatus({ branchId: 'branch-a', attemptKey: 'card-terminal:k-missing' })
     ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'ATTEMPT_NOT_FOUND' });
     await expect(caller().attempt({ branchId: 'branch-a', saleId: 'sale-1' })).resolves.toBeNull();
+  });
+
+  it('commits every attempt step in its own tenant transaction, never the request transaction', async () => {
+    terminal.scriptCharge({ kind: 'APPROVED', providerRef: 'RRN-5', amountMinor: 1500 });
+    await caller().charge(chargeInput('card-terminal:k-commit'));
+    expect(harness.runners.length).toBeGreaterThan(0);
+    // The request runs inside one transaction; a nested `ctx.db.$transaction` would reuse it, so
+    // CREATED and SENT would not be committed while the terminal charges.
+    for (const run of harness.runners) {
+      const work = vi.fn(async () => 'done');
+      await expect(run(work)).resolves.toBe('done');
+    }
+    expect(tenancy.withTenantDb).toHaveBeenCalledTimes(harness.runners.length);
+    for (const call of tenancy.withTenantDb.mock.calls)
+      expect([call[0], call[2]]).toEqual(['org-a', { userId: 'user-a' }]);
+    expect(requestDb.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('gives up on the terminal inside the 60-second request transaction', () => {
+    expect(COUNTER_TERMINAL_TIMEOUT_MS).toBeLessThan(60_000);
+    expect(COUNTER_TERMINAL_TIMEOUT_MS).toBeGreaterThanOrEqual(30_000);
   });
 });

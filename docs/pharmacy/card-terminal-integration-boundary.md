@@ -87,6 +87,10 @@ terminal, so all of this stays dormant.
   - `charge` commits the attempt, then dispatches one PKR charge for the balance due.
   - `checkStatus` asks the terminal about the same operation again (never a new charge).
   - `attempt` reads the sale's newest attempt, so a reloaded counter shows where it stands.
+  - Every attempt step commits in its own tenant transaction, not in the request's. Each tRPC
+    request runs inside one transaction, and a nested `$transaction` would reuse it, leaving
+    CREATED and SENT uncommitted while the terminal charges.
+  - The counter waits 45 seconds for the terminal, inside the 60-second request transaction.
 - **Counter states** (`counter-card-terminal-panel.tsx`, shown in the payment overlay only when
   `availability` is true):
 

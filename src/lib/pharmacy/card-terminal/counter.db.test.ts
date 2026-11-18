@@ -17,7 +17,7 @@
  */
 import { randomUUID } from 'node:crypto';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   retirePharmacyRegulatoryRules,
   seedPharmacyRegulatoryProfile,
@@ -27,6 +27,17 @@ const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 // `@/lib/db` reads DATABASE_URL on first use; everything that reaches it is imported below.
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
 const describeDatabase = TEST_DATABASE_URL ? describe : describe.skip;
+
+// The router resolves its terminal through the registry; this suite hands it the fake one.
+const registry = vi.hoisted(() => ({
+  resolve: vi.fn(async (): Promise<unknown> => null),
+}));
+vi.mock('./registry', () => ({ resolvePharmacyCardTerminal: registry.resolve }));
+vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn(async () => null) }));
+vi.mock('@/server/audit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/audit')>()),
+  recordTrpcAudit: vi.fn(),
+}));
 
 type ScopedDb = import('@/lib/tenancy/scoped-db').ScopedDb;
 type Scope = { organizationId: string; branchId: string; actorId: string };
@@ -41,6 +52,7 @@ let sweep: typeof import('./sweep');
 let settlement: typeof import('../settlement');
 let sales: typeof import('../sales');
 let ledger: typeof import('../stock-ledger');
+let terminalRouter: typeof import('@/server/routers/pharmacy-card-terminal');
 
 const run = randomUUID().replaceAll('-', '').slice(0, 10);
 const organizationId = `ct_counter_${run}`;
@@ -210,6 +222,29 @@ const tendersFor = (saleId: string) =>
 
 const noop = () => undefined;
 
+/** The card-terminal procedures as the cashier calls them, on one request's transaction. */
+function counterCaller(db: ScopedDb) {
+  return terminalRouter.pharmacyCardTerminalRouter.createCaller({
+    db,
+    entitlements: {
+      organizationId,
+      enabledModules: ['pharmacy-core', 'pharmacy-counter'],
+      modules: [],
+      limits: {},
+      seatLimit: 10,
+      activeSeats: 1,
+    },
+    session: {
+      expires: 'later',
+      user: { id: actorId, role: 'ADMIN', status: 'ACTIVE', organizationId },
+    },
+    organization: { id: organizationId, vertical: 'PHARMACY' },
+    support: null,
+    requestMeta: { ip: null, userAgent: null },
+    audit: { detail: {} },
+  } as never);
+}
+
 async function until(condition: () => boolean, label: string) {
   for (let tries = 0; tries < 400; tries += 1) {
     if (condition()) return;
@@ -227,6 +262,7 @@ beforeAll(async () => {
   settlement = await import('../settlement');
   sales = await import('../sales');
   ledger = await import('../stock-ledger');
+  terminalRouter = await import('@/server/routers/pharmacy-card-terminal');
   const { assertRlsEnforcingRole } = await import('@/lib/testing/rls-role-guard');
   const { workspaceToday } = await import('@/lib/timezone');
   await assertRlsEnforcingRole(withPlatformDb);
@@ -244,6 +280,25 @@ beforeAll(async () => {
   businessDate = new Date(`${workspaceToday(organization.timezone)}T00:00:00.000Z`);
   await setupBranch(branchMain);
   await setupBranch(branchClose);
+  // The counter cashier, with counter access on the main branch.
+  const { seedDepartments } = await import('@/lib/test-support/departments');
+  await tenant(async (db) => {
+    await seedDepartments(db, [organizationId], ['LEADERSHIP']);
+    await db.user.create({
+      data: {
+        id: actorId,
+        name: 'Terminal cashier',
+        email: `${actorId}@example.test`,
+        department: 'LEADERSHIP',
+        title: 'Cashier',
+        role: 'ADMIN',
+      },
+    });
+    await db.userPermissionOverride.create({
+      data: { userId: actorId, capability: 'pharmacy:counter', effect: 'ALLOW', reason: 'DEV-743' },
+    });
+    await db.pharmacyBranchAssignment.create({ data: { userId: actorId, branchId: branchMain } });
+  });
 }, 120_000);
 
 afterAll(async () => {
@@ -443,5 +498,55 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
       expect.objectContaining({ status: 'SETTLED', providerRef: `RRN-${run}-4` }),
     ]);
     expect(await tendersFor(saleId)).toHaveLength(1);
+  });
+
+  it('keeps the attempt and its tender when the counter request itself rolls back', async () => {
+    const saleId = await openSale(branchMain);
+    const terminal = gatedTerminal();
+    terminal.chargeAnswers.push({
+      kind: 'APPROVED',
+      providerRef: `RRN-${run}-5`,
+      amountMinor: 950,
+    });
+    registry.resolve.mockResolvedValue({
+      adapter: terminal.adapter,
+      terminalId: 'paired-terminal-1',
+      admission,
+    });
+    const attemptKey = `ct:${randomUUID()}`;
+    // The HTTP route runs each request inside one tenant transaction. Fail it after the charge:
+    // every attempt step committed on its own, so the record of the money survives.
+    await expect(
+      withTenantDb(
+        organizationId,
+        async (db) => {
+          const paid = await counterCaller(db).charge({
+            branchId: branchMain,
+            saleId,
+            deviceId: 'counter-device-1',
+            businessDate,
+            amountMinor: 950,
+            attemptKey,
+          });
+          expect(paid).toMatchObject({ phase: 'PAID', open: false });
+          throw new Error('request rolled back');
+        },
+        { userId: actorId }
+      )
+    ).rejects.toThrow('request rolled back');
+    expect(terminal.charges).toHaveLength(1);
+    expect(await attemptsFor(saleId)).toEqual([
+      expect.objectContaining({ attemptKey, status: 'SETTLED', providerRef: `RRN-${run}-5` }),
+    ]);
+    expect(await tendersFor(saleId)).toHaveLength(1);
+    await expect(
+      withTenantDb(
+        organizationId,
+        (db) => counterCaller(db).attempt({ branchId: branchMain, saleId }),
+        {
+          userId: actorId,
+        }
+      )
+    ).resolves.toMatchObject({ attemptKey, phase: 'PAID' });
   });
 });
