@@ -42,7 +42,16 @@ export async function otherCardTerminalReviewers(
         },
       },
     },
-    include: { staffProfile: { include: { user: true } } },
+    // Never a whole credential (its PIN hash) or user row: only what the checks below read.
+    select: {
+      staffProfile: {
+        select: {
+          user: {
+            select: { id: true, name: true, role: true, department: true, status: true },
+          },
+        },
+      },
+    },
     orderBy: { id: 'asc' },
   });
   const checked = new Set<string>();
