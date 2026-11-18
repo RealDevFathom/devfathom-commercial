@@ -1,6 +1,14 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 
+const thermal = vi.hoisted(() => ({ props: vi.fn() }));
+vi.mock('./counter-thermal-print', () => ({
+  CounterThermalPrint: (props: unknown) => {
+    thermal.props(props);
+    return <p>Thermal print queue</p>;
+  },
+}));
+
 import { CounterReceiptView, type CounterReceiptViewProps } from './counter-receipt-view';
 
 afterEach(cleanup);
@@ -578,4 +586,31 @@ it('previews the issue time and cashier in the on-screen header (DEF-15)', () =>
   const header = screen.getByRole('heading', { level: 4 }).closest('header')!;
   expect(within(header).getByText(/Date:.*15:00/)).toBeTruthy();
   expect(within(header).getByText('Cashier: Ayesha Khan')).toBeTruthy();
+});
+
+it('sends a settled receipt to the thermal print queue instead of offering a file download', () => {
+  thermal.props.mockClear();
+  render(<CounterReceiptView {...props({ branchId: 'branch-1', format: 'THERMAL_58' })} />);
+  expect(screen.getByText('Thermal print queue')).toBeTruthy();
+  expect(thermal.props).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      branchId: 'branch-1',
+      saleId: 'sale-1',
+      locale: 'en',
+      format: 'THERMAL_58',
+      disabled: false,
+    })
+  );
+  expect(screen.queryByText('Save ESC/POS job')).toBeNull();
+  expect(screen.queryByRole('button', { name: /ESC\/POS/ })).toBeNull();
+});
+
+it('offers no thermal queue for an unsettled bill or without a branch', () => {
+  thermal.props.mockClear();
+  const unsettled = props({ branchId: 'branch-1' });
+  unsettled.receipt!.receiptNumber = null;
+  render(<CounterReceiptView {...unsettled} />);
+  cleanup();
+  render(<CounterReceiptView {...props()} />);
+  expect(thermal.props).not.toHaveBeenCalled();
 });

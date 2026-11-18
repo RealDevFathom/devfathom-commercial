@@ -25,6 +25,8 @@ const queue = vi.hoisted(() => ({
   readPharmacyPrintJob: vi.fn(),
   retryPharmacyPrintJob: vi.fn(),
   enrollPharmacyPrintBridge: vi.fn(),
+  listPharmacyPrintBridges: vi.fn(),
+  revokePharmacyPrintBridge: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/receipt-print-queue', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/receipt-print-queue')>()),
@@ -382,5 +384,86 @@ describe('pharmacyPrinting.enrollBridge', () => {
         printerId: 'tcp://192.0.2.10:9100',
       })
     ).resolves.toMatchObject({ credential: 'ppb_secret.b3JnLWE', bridge: { online: false } });
+  });
+});
+
+describe('DEV-904 bridge administration is admin-only and branch-scoped on the server', () => {
+  const bridgeRow = {
+    id: 'bridge-1',
+    name: 'Front',
+    status: 'ACTIVE' as const,
+    revokedAt: null,
+    lastSeenAt: null,
+    printerId: 'queue:///Receipt_Printer',
+    createdAt: NOW,
+  };
+  const outOfScope = () =>
+    new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+
+  it('lists bridges for administrators only, inside the branch scope', async () => {
+    queue.listPharmacyPrintBridges.mockResolvedValue([bridgeRow]);
+    await expect(caller('EMPLOYEE').bridges({ branchId: 'branch-a' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(queue.listPharmacyPrintBridges).not.toHaveBeenCalled();
+
+    sales.branchScopeOrForbidden.mockRejectedValueOnce(outOfScope());
+    await expect(caller('ADMIN').bridges({ branchId: 'branch-b' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(queue.listPharmacyPrintBridges).not.toHaveBeenCalled();
+
+    const listed = await caller('ADMIN').bridges({ branchId: 'branch-a' });
+    expect(queue.listPharmacyPrintBridges).toHaveBeenCalledWith(expect.anything(), scope);
+    expect(listed).toEqual([
+      expect.objectContaining({
+        id: 'bridge-1',
+        printerId: 'queue:///Receipt_Printer',
+        online: false,
+        createdAt: NOW.toISOString(),
+      }),
+    ]);
+    expect(JSON.stringify(listed)).not.toMatch(/deviceSecretHash|ppb_/);
+  });
+
+  it('enrols only inside the administrator’s branch scope', async () => {
+    sales.branchScopeOrForbidden.mockRejectedValueOnce(outOfScope());
+    await expect(
+      caller('ADMIN').enrollBridge({
+        branchId: 'branch-b',
+        name: 'Front',
+        printerId: 'queue:///Receipt_Printer',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(queue.enrollPharmacyPrintBridge).not.toHaveBeenCalled();
+  });
+
+  it('revokes for administrators only, inside the branch scope', async () => {
+    queue.revokePharmacyPrintBridge.mockResolvedValue({ ...bridgeRow, status: 'REVOKED' });
+    await expect(
+      caller('EMPLOYEE').revokeBridge({ branchId: 'branch-a', bridgeId: 'bridge-1' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    sales.branchScopeOrForbidden.mockRejectedValueOnce(outOfScope());
+    await expect(
+      caller('ADMIN').revokeBridge({ branchId: 'branch-b', bridgeId: 'bridge-1' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(queue.revokePharmacyPrintBridge).not.toHaveBeenCalled();
+
+    queue.revokePharmacyPrintBridge.mockRejectedValueOnce(
+      new PharmacyPrintQueueError('BRIDGE_NOT_FOUND')
+    );
+    await expect(
+      caller('ADMIN').revokeBridge({ branchId: 'branch-a', bridgeId: 'other-branch-bridge' })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+
+    await expect(
+      caller('ADMIN').revokeBridge({ branchId: 'branch-a', bridgeId: 'bridge-1' })
+    ).resolves.toEqual({ bridgeId: 'bridge-1', status: 'REVOKED' });
+    expect(queue.revokePharmacyPrintBridge).toHaveBeenLastCalledWith(
+      expect.anything(),
+      scope,
+      'bridge-1',
+      expect.any(Date)
+    );
   });
 });
