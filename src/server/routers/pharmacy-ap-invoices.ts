@@ -92,6 +92,17 @@ function fail(error: unknown): never {
   throw error;
 }
 
+/**
+ * DEV-694: a set-off holds credit at `cutoff` when it was requested before it and
+ * was not rejected before it (pending then, or approved at any time).
+ */
+function setOffHeldAt(cutoff: Date) {
+  return {
+    requestedAt: { lt: cutoff },
+    OR: [{ status: { not: 'REJECTED' as const } }, { decidedAt: { gte: cutoff } }],
+  };
+}
+
 function txDb(tx: unknown) {
   return tx as ScopedDb;
 }
@@ -219,14 +230,10 @@ export const pharmacyApInvoicesRouter = router({
                 where: { createdAt: { lt: cutoff } },
                 select: { amountMinor: true },
               },
-              // DEV-694: credit already set off, or awaiting approval to be.
+              // DEV-694: credit set off, or reserved by a request, at the cutoff:
+              // requested before it and not rejected before it.
               apSetOffs: {
-                where: {
-                  OR: [
-                    { status: 'APPROVED', decidedAt: { lt: cutoff } },
-                    { status: 'PENDING', requestedAt: { lt: cutoff } },
-                  ],
-                },
+                where: setOffHeldAt(cutoff),
                 select: { amountMinor: true },
               },
             },
@@ -250,6 +257,31 @@ export const pharmacyApInvoicesRouter = router({
               (c.apSetOffs ?? []).reduce((s, a) => s + a.amountMinor, 0),
           }))
           .filter((c) => c.amountMinor > c.allocatedMinor);
+        // Requests still awaiting a decision at the cutoff reserve part of their bill
+        // without settling it, so the suggestion never offers that part again. The
+        // aging itself is unchanged: only approved set-offs reduce the payable.
+        const reserved = await ctx.db.pharmacyApCreditSetOff.groupBy({
+          by: ['invoiceId'],
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            requestedAt: { lt: cutoff },
+            OR: [{ status: 'PENDING' }, { decidedAt: { gte: cutoff } }],
+          },
+          _sum: { amountMinor: true },
+        });
+        const reservedByInvoice = new Map(
+          reserved.map((r) => [r.invoiceId, r._sum.amountMinor ?? 0])
+        );
+        const draftView = {
+          ...view,
+          rows: view.rows
+            .map((row) => ({
+              ...row,
+              outstandingMinor: row.outstandingMinor - (reservedByInvoice.get(row.invoiceId) ?? 0),
+            }))
+            .filter((row) => row.outstandingMinor > 0),
+        };
         const currency = input.payee?.currency ?? view.totals[0]?.currency ?? 'PKR';
         return {
           scope: { organizationId: scope.organizationId, branchId: scope.branchId },
@@ -262,7 +294,7 @@ export const pharmacyApInvoicesRouter = router({
                 budgetMinor: input.payee.budgetMinor,
               })
             : null,
-          setOffDraft: buildSetOffDraft(view, openCredits, SUPPLIER_CREDIT_CURRENCY),
+          setOffDraft: buildSetOffDraft(draftView, openCredits, SUPPLIER_CREDIT_CURRENCY),
           openCredits: openCredits.map((c) => ({
             creditId: c.creditId,
             reference: c.reference,

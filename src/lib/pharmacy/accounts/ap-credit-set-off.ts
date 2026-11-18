@@ -244,6 +244,8 @@ export async function approveApCreditSetOff(
   const credit = await lockCredit(db, scope, setOff.supplierCreditId);
   const invoice = await lockInvoice(db, scope, setOff.invoiceId);
   assertPair(invoice, credit);
+  // The set-off posts at `now`; like a payment, it may not precede the bill's liability.
+  if (now < invoice.invoiceDate) fail('INVALID_DATE');
   if (setOff.currency !== AP_SET_OFF_CURRENCY) fail('INVALID_STATE');
   const creditLeft = await creditRemainingMinor(db, scope, credit, { includePending: false });
   if (setOff.amountMinor > creditLeft) fail('SET_OFF_EXCEEDS_CREDIT');

@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   rejectSetOff: vi.fn(),
   listSetOffs: vi.fn(),
   soleApprover: vi.fn(),
+  setOffGroupBy: vi.fn(),
 }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -82,6 +83,7 @@ function caller(context: Partial<TRPCContext> = {}) {
       $transaction: mocks.transaction,
       pharmacyBranch: { findFirst: mocks.branchFindFirst },
       pharmacySupplierCredit: { findMany: mocks.creditFindMany },
+      pharmacyApCreditSetOff: { groupBy: mocks.setOffGroupBy },
     },
     entitlements: { organizationId: 'org_1', enabledModules: ['pharmacy-finance'], modules: [] },
     session: {
@@ -167,6 +169,7 @@ beforeEach(() => {
     replayed: false,
   });
   mocks.list.mockResolvedValue([]);
+  mocks.setOffGroupBy.mockResolvedValue([]);
   mocks.aging.mockResolvedValue({
     asOf: '2026-11-15',
     complete: true,
@@ -641,5 +644,73 @@ describe('pharmacyApInvoices router — credit set-off', () => {
       caller().approveCreditSetOff({ ...approveInput, pin: '12a4' })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mocks.pin).not.toHaveBeenCalled();
+  });
+});
+
+describe('pharmacyApInvoices router — set-off suggestion capacity', () => {
+  const draftsInput = { branchId: 'branch_1', asOf: '2026-11-15' };
+  const cutoff = new Date('2026-11-16T00:00:00.000Z');
+  const bill = (id: string, outstandingMinor: number) => ({
+    invoiceId: id,
+    reference: `AP-${id}`,
+    payeeName: 'Al-Shifa',
+    supplierInvoiceRef: id,
+    invoiceDate: '2026-10-01',
+    dueDate: '2026-10-31',
+    currency: 'PKR',
+    amountMinor: outstandingMinor,
+    paidMinor: 0,
+    setOffMinor: 0,
+    outstandingMinor,
+    daysPastDue: 15,
+    bucket: 'DAYS_1_30',
+  });
+
+  it('holds credit reserved at the cutoff, even when the request was decided later', async () => {
+    mocks.creditFindMany.mockResolvedValue([]);
+    await caller().payablesDrafts(draftsInput);
+    expect(mocks.creditFindMany.mock.calls[0]![0].select.apSetOffs.where).toEqual({
+      requestedAt: { lt: cutoff },
+      OR: [{ status: { not: 'REJECTED' } }, { decidedAt: { gte: cutoff } }],
+    });
+  });
+
+  it('never suggests bill capacity already reserved by an undecided request', async () => {
+    mocks.aging.mockResolvedValue({
+      asOf: '2026-11-15',
+      complete: true,
+      scannedInvoices: 2,
+      rows: [bill('inv_1', 1_000), bill('inv_2', 1_000)],
+      totals: [],
+    });
+    mocks.creditFindMany.mockResolvedValue([
+      {
+        id: 'cr_1',
+        reference: 'CN-1',
+        amountMinor: 1_500,
+        receivedAt: new Date('2026-11-01T00:00:00.000Z'),
+        supplier: { name: 'Al-Shifa' },
+        allocations: [],
+        apSetOffs: [],
+      },
+    ]);
+    // inv_1 is fully reserved by a pending request; inv_2 has 400 reserved.
+    mocks.setOffGroupBy.mockResolvedValue([
+      { invoiceId: 'inv_1', _sum: { amountMinor: 1_000 } },
+      { invoiceId: 'inv_2', _sum: { amountMinor: 400 } },
+    ]);
+    const result = await caller().payablesDrafts(draftsInput);
+    expect(mocks.setOffGroupBy.mock.calls[0]![0].where).toEqual({
+      organizationId: 'org_1',
+      branchId: 'branch_1',
+      requestedAt: { lt: cutoff },
+      OR: [{ status: 'PENDING' }, { decidedAt: { gte: cutoff } }],
+    });
+    expect(result.setOffDraft.lines).toEqual([
+      expect.objectContaining({ invoiceId: 'inv_2', setOffMinor: 600 }),
+    ]);
+    expect(result.setOffDraft.unmatchedCreditMinor).toBe(900);
+    // The reminders still use the unchanged aging.
+    expect(result.reminders[0]!.overdueMinor).toBe(2_000);
   });
 });

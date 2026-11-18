@@ -162,6 +162,7 @@ const SET_OFF_REASONS: Record<string, string> = {
   INVALID_STATE: 'Only an open PKR bill on this branch can take a credit note.',
   NOT_FOUND: 'That bill or credit note is not on this branch.',
   ALREADY_DECIDED: 'This set-off was already approved or rejected. Reload the page.',
+  INVALID_DATE: 'The bill is dated later than today, so it cannot be set off yet.',
 };
 
 /**

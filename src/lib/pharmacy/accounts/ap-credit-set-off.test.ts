@@ -47,6 +47,7 @@ function fixture(overrides: Partial<State> = {}) {
       amountMinor: 50_000,
       currency: 'PKR',
       status: 'POSTED',
+      invoiceDate: new Date('2026-11-01T00:00:00.000Z'),
       settlements: [
         {
           amountMinor: 10_000,
@@ -214,9 +215,9 @@ describe('requestApCreditSetOff', () => {
     });
     const reversed = fixture();
     reversed.state.invoice = { ...reversed.state.invoice, status: 'REVERSED' };
-    await expect(
-      requestApCreditSetOff(reversed.scoped, scope, request, NOW)
-    ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+    await expect(requestApCreditSetOff(reversed.scoped, scope, request, NOW)).rejects.toMatchObject(
+      { reason: 'INVALID_STATE' }
+    );
   });
 
   it('refuses a non-positive amount and a credit outside the branch', async () => {
@@ -338,6 +339,20 @@ describe('approveApCreditSetOff', () => {
       })
     ).rejects.toMatchObject({ reason: 'SET_OFF_EXCEEDS_BILL' });
     expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('refuses to post a set-off before the bill is dated', async () => {
+    const { db, scoped, state } = fixture({ setOff: pendingSetOff });
+    // A bill may be dated up to a day ahead of the clock.
+    state.invoice = { ...state.invoice, invoiceDate: new Date('2026-11-19T00:00:00.000Z') };
+    await expect(
+      approveApCreditSetOff(scoped, managerScope, decision, {
+        soleApprover: async () => false,
+        now: NOW,
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID_DATE' });
+    expect(mocks.post).not.toHaveBeenCalled();
+    expect(db.pharmacyApCreditSetOff.update).not.toHaveBeenCalled();
   });
 
   it('refuses an already decided request', async () => {
