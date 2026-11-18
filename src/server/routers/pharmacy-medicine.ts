@@ -57,6 +57,12 @@ import {
   applyLegacyControlledToMedicine,
   hasControlledCorrection,
 } from '@/lib/pharmacy/migration/legacy-controlled';
+import {
+  createStagedMedicinesChunk,
+  STAGED_CREATION_OPERATION,
+  stagedCreationProgress,
+} from '@/lib/pharmacy/migration/staged-creation';
+import { STAGING_MAX_ROWS } from '@/lib/pharmacy/migration/staging-input';
 import { annotateAudit } from '../audit';
 import {
   adminProcedure,
@@ -401,6 +407,7 @@ const catalogueCommands = [
   'addBarcode',
   'setPackBarcode',
   'addAlias',
+  STAGED_CREATION_OPERATION,
 ] as const;
 type CatalogueCommand = (typeof catalogueCommands)[number];
 async function queueCatalogueCommand(
@@ -1071,6 +1078,178 @@ export const pharmacyMedicineRouter = router({
           throw new TRPCError({ code: 'CONFLICT', message: DUPLICATE_INGREDIENT_MESSAGE });
         throw error;
       }
+    }),
+
+  /**
+   * DEV-912: ask for every named row of a staged legacy file to become a catalogue medicine. One
+   * request covers the whole batch and waits in the catalogue review queue; it is approved once,
+   * by a different reviewer, or by the owner with a fresh PIN when nobody else can review. The
+   * approval replays this command, which checks the batch again; `runStagedMedicineCreation`
+   * then creates the medicines in chunks.
+   */
+  createStagedMedicines: catalogueCommandProcedure
+    .input(
+      z
+        .object({
+          batchId: boundedId,
+          // Filled in by the server when the request is made, so the reviewer sees what they approve.
+          fileName: z.string().max(255).optional(),
+          uploadedAt: z.string().max(40).optional(),
+          // Checked again on approval; never shown to the reviewer.
+          sourceSha256: z.string().max(64).optional(),
+          medicines: z.number().int().min(1).max(STAGING_MAX_ROWS).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`pharmacy-staged-medicine-request:${ctx.entitlements.organizationId}:${input.batchId}`}, 0))`;
+        const batch = await tx.pharmacyMigrationBatch.findFirst({
+          where: {
+            id: input.batchId,
+            organizationId: ctx.entitlements.organizationId,
+            status: 'PROFILED',
+          },
+          select: {
+            id: true,
+            createdAt: true,
+            updatedAt: true,
+            source: { select: { fileName: true, contentHash: true } },
+          },
+        });
+        if (!batch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Staged file not found.' });
+        const progress = await stagedCreationProgress(
+          tx,
+          ctx.entitlements.organizationId,
+          batch.id
+        );
+        const request = {
+          batchId: batch.id,
+          fileName: batch.source.fileName.slice(0, 255),
+          uploadedAt: batch.createdAt.toISOString(),
+          sourceSha256: batch.source.contentHash,
+          medicines: progress.candidates,
+        };
+        if (isCatalogueReplay(ctx)) {
+          // The approval names exactly the batch and file the editor asked for.
+          if (
+            input.fileName !== request.fileName ||
+            input.uploadedAt !== request.uploadedAt ||
+            input.sourceSha256 !== request.sourceSha256 ||
+            input.medicines !== request.medicines
+          )
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'This request no longer matches its staged file. Reject it and ask again.',
+            });
+          return request;
+        }
+        if (!progress.candidates)
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'This file has no medicine names to create.',
+          });
+        // Asking again returns the open or approved request instead of a second one.
+        const existing = await tx.pharmacyCatalogueEdit.findFirst({
+          where: {
+            operation: STAGED_CREATION_OPERATION,
+            status: { in: ['PENDING', 'APPROVED'] },
+            changes: { path: ['json', 'batchId'], equals: batch.id },
+          },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        });
+        if (existing) return existing;
+        return tx.pharmacyCatalogueEdit.create({
+          data: {
+            medicineId: null,
+            editorId: ctx.session.user.id,
+            operation: STAGED_CREATION_OPERATION,
+            changes: superjson.serialize(request) as unknown as Prisma.InputJsonObject,
+            expectedUpdatedAt: batch.updatedAt,
+          },
+        });
+      })
+    ),
+
+  /** DEV-912: where a staged file's bulk creation stands, for an editor or a reviewer. */
+  stagedMedicineCreation: auditedProtectedProcedure
+    .input(z.object({ batchId: boundedId }).strict())
+    .query(async ({ ctx, input }) => {
+      const access = await catalogueAccess(ctx);
+      if (!access.editor && !access.reviewer)
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You do not have permission for this action.',
+        });
+      const [request] = await ctx.db.pharmacyCatalogueEdit.findMany({
+        where: {
+          operation: STAGED_CREATION_OPERATION,
+          changes: { path: ['json', 'batchId'], equals: input.batchId },
+        },
+        // An approved request outranks a pending or rejected one.
+        orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
+        select: { id: true, status: true, editorId: true, reviewerId: true },
+        take: 1,
+      });
+      return {
+        request: request ?? null,
+        canRequest: access.editor,
+        ...(await stagedCreationProgress(ctx.db, ctx.entitlements.organizationId, input.batchId)),
+      };
+    }),
+
+  /**
+   * DEV-912: create the next chunk of medicines from an approved staged file. Running it again,
+   * or for a second batch of the same file, creates nothing twice.
+   */
+  runStagedMedicineCreation: auditedProtectedProcedure
+    .input(z.object({ batchId: boundedId }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const access = await catalogueAccess(ctx);
+      if (!access.editor && !access.reviewer)
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You do not have permission for this action.',
+        });
+      const result = await ctx.db.$transaction(
+        async (tx) => {
+          const approved = await tx.pharmacyCatalogueEdit.findFirst({
+            where: {
+              operation: STAGED_CREATION_OPERATION,
+              status: 'APPROVED',
+              changes: { path: ['json', 'batchId'], equals: input.batchId },
+            },
+            orderBy: [{ reviewedAt: 'asc' }, { id: 'asc' }],
+            select: { id: true, editorId: true, reviewerId: true },
+          });
+          if (!approved?.reviewerId)
+            throw new TRPCError({
+              code: 'PRECONDITION_FAILED',
+              message: 'Creating these medicines needs an approved request first.',
+            });
+          return {
+            editId: approved.id,
+            ...(await createStagedMedicinesChunk(
+              tx as typeof ctx.db,
+              { organizationId: ctx.entitlements.organizationId, actorId: ctx.session.user.id },
+              {
+                editId: approved.id,
+                editorId: approved.editorId,
+                reviewerId: approved.reviewerId,
+                batchId: input.batchId,
+              }
+            )),
+          };
+        },
+        { maxWait: 10_000, timeout: 120_000 }
+      );
+      const { medicineIds, ...summary } = result;
+      annotateAudit(ctx, {
+        targetType: 'PharmacyMigrationBatch',
+        targetId: input.batchId,
+        metadata: { ...summary, firstMedicineId: medicineIds[0] ?? null },
+      });
+      return summary;
     }),
 
   createMedicine: catalogueEditProcedure

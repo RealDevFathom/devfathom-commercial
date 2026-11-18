@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   rows: vi.fn(),
   detail: vi.fn(),
   context: vi.fn(),
+  creation: vi.fn(),
 }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
@@ -22,6 +23,11 @@ vi.mock('@/server/routers/pharmacy-staged-review', () => ({
       },
     }),
   },
+}));
+vi.mock('@/components/pharmacy/staged-medicine-creation-actions', () => ({
+  readStagedMedicineCreation: mocks.creation,
+  requestStagedMedicineCreation: vi.fn(),
+  runStagedMedicineCreationStep: vi.fn(),
 }));
 vi.mock('@/components/pharmacy/medicine-reference-workbench', () => ({
   MedicineReferenceWorkbench: () => <div>Existing workbench</div>,
@@ -38,6 +44,9 @@ afterEach(cleanup);
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.context.mockResolvedValue({ session: { user: { role: 'ADMIN' } } });
+  mocks.creation.mockResolvedValue({
+    error: 'You need catalogue edit or review permission for this.',
+  });
   mocks.branches.mockResolvedValue([{ id: 'branch_a', name: 'Branch A' }]);
   mocks.batches.mockResolvedValue({ batches: [], total: 0 });
   mocks.rows.mockResolvedValue({
