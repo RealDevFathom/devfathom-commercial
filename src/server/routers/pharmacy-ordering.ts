@@ -53,7 +53,7 @@ import {
   authenticateRefundPin,
   REFUND_FORBIDDEN,
   REFUND_PIN_BLOCKED,
-  REFUND_PIN_POLICY,
+  refundApprovalAudit,
 } from '@/lib/pharmacy/refund-authorization';
 import { annotateAudit } from '@/server/audit';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
@@ -284,11 +284,11 @@ export const pharmacyOrderingRouter = router({
                 })
               : { blocked: REFUND_PIN_BLOCKED };
             annotateAudit(ctx, {
-              metadata: {
-                policy: REFUND_PIN_POLICY,
+              metadata: refundApprovalAudit({
+                initiatedById: scope.actorId,
                 approverId: scope.actorId,
-                pinVerified: 'verified' in pin,
-              },
+                pin,
+              }),
             });
             if ('blocked' in pin) throw new TRPCError({ code: 'FORBIDDEN', message: pin.blocked });
           },
