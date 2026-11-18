@@ -69,6 +69,27 @@ describe("DEV-66 owner's maximum discount", () => {
     expect(screen.getByLabelText('Maximum discount (%)')).toHaveAttribute('placeholder', 'Not set');
   });
 
+  it('DEV-929: lets the owner remove the maximum with their PIN', async () => {
+    render(<DiscountMaximumPanel branchId="branch" />);
+    expect(screen.getByRole('button', { name: 'Remove maximum' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Your PIN'), { target: { value: '2468' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Remove maximum' }));
+    await waitFor(() =>
+      expect(mocks.save).toHaveBeenCalledWith({
+        branchId: 'branch',
+        maxDiscountBps: 10_000,
+        pin: '2468',
+      })
+    );
+    expect(await screen.findByRole('status')).toHaveTextContent('Maximum discount removed.');
+  });
+
+  it('DEV-929: offers no remove control when no maximum is set', () => {
+    mocks.query.data = { maxDiscountBps: 10_000, canChange: true };
+    render(<DiscountMaximumPanel branchId="branch" />);
+    expect(screen.queryByRole('button', { name: 'Remove maximum' })).toBeNull();
+  });
+
   it('names the discount right by its plain label', () => {
     render(<DiscountMaximumPanel branchId="branch" />);
     expect(

@@ -44,7 +44,11 @@ import {
   readManualPaymentSettings,
   saveManualPaymentSettings,
 } from '@/lib/pharmacy/manual-payment-settings';
-import { discountPolicySchema, maxDiscountBpsSchema } from '@/lib/pharmacy/smart-discount';
+import {
+  discountPolicySchema,
+  maxDiscountBpsSchema,
+  NO_MAXIMUM_DISCOUNT_BPS,
+} from '@/lib/pharmacy/smart-discount';
 import {
   OWNER_EXPORT_PIN_MAX_INPUT,
   verifyOwnerExportPin,
@@ -257,6 +261,9 @@ import {
 import type { TRPCContext } from '../trpc';
 
 const branchId = z.string().trim().min(1).max(128);
+/** DEV-929: the owner's maximum discount in the audit description ("no maximum" or "10%"). */
+const maximumWords = (bps: number) =>
+  bps >= NO_MAXIMUM_DISCOUNT_BPS ? 'no maximum' : `${bps / 100}%`;
 // Preserve field order and parsing: settlement hashes JSON.stringify(parsed input).
 const counterApprovalPin = z
   .object({ staffProfileId: z.string().trim().min(1).max(128), pin: z.string().regex(/^\d{4,8}$/) })
@@ -1485,7 +1492,7 @@ export const pharmacySalesRouter = router({
         operation: 'UPDATE',
         targetType: 'Organization',
         targetId: scope.organizationId,
-        description: `Changed the maximum discount from ${saved.previousMaxDiscountBps / 100}% to ${saved.maxDiscountBps / 100}%`,
+        description: `Changed the maximum discount from ${maximumWords(saved.previousMaxDiscountBps)} to ${maximumWords(saved.maxDiscountBps)}`,
         changes: {
           pharmacyMaxDiscountBps: {
             before: saved.previousMaxDiscountBps,
@@ -2438,6 +2445,17 @@ export const pharmacySalesRouter = router({
     .query(async ({ ctx, input }) => {
       const scope = await khataScope(ctx, input.branchId, 'write');
       return listCounterApprovers(ctx.db as unknown as ScopedDb, scope, 'KHATA_OVER_LIMIT');
+    }),
+  /**
+   * DEV-929: who can approve a manual discount at this till with their PIN: other active
+   * managers or owners with a live counter PIN, or, when there is nobody else (solo rule),
+   * the signed-in user's own profile. Names and staff profile ids only.
+   */
+  discountApprovers: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      return listCounterApprovers(ctx.db as unknown as ScopedDb, scope, 'DISCOUNT');
     }),
   /** Eligible manager/owner PIN profiles for a scanned pack's first-expiry approval. */
   scannedPackFefoApprovers: protectedProcedure
