@@ -5,7 +5,10 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
-import { AP_REVERSAL_PAGE_ROWS } from '@/lib/pharmacy/accounts/ap-invoices-schema';
+import {
+  AP_REVERSAL_MAX_PAGE,
+  AP_REVERSAL_PAGE_ROWS,
+} from '@/lib/pharmacy/accounts/ap-invoices-schema';
 import { formatWorkspaceDateTime } from '@/lib/timezone';
 import type { pharmacyApInvoicesRouter } from '@/server/routers/pharmacy-ap-invoices';
 import { ReversalNoticeArea, ReverseApEntryForm } from './ap-entry-forms';
@@ -144,7 +147,12 @@ function Pager({
         </Link>
       ) : null}
       <span className="font-mono text-xs text-text-muted uppercase">Page {search.page}</span>
-      {hasOlder ? (
+      {hasOlder && search.page >= AP_REVERSAL_MAX_PAGE ? (
+        // The search serves no deeper page; a link would land back on page 1.
+        <span className="text-sm text-text-muted">
+          Older invoices are past page {AP_REVERSAL_MAX_PAGE}. Narrow the search to reach them.
+        </span>
+      ) : hasOlder ? (
         <Link
           href={pageHref(context, search, search.page + 1)}
           className={buttonVariants({ variant: 'outline', className: 'min-h-11' })}

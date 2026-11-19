@@ -602,6 +602,24 @@ describe('ApAgingPage', () => {
         expect(output).not.toContain('Newer invoices');
       });
 
+      it('offers no older link past the deepest page the search serves, and says to narrow it', async () => {
+        mocks.reversalSearch.mockResolvedValue({
+          scope,
+          invoices: [posted({ settlements: [] })],
+          page: 400,
+          hasOlder: true,
+          retrievedAt: NOW,
+        });
+        const output = await html({ branch: 'branch_1', asOf: '2026-11-15', rvPage: '400' });
+        expect(mocks.reversalSearch).toHaveBeenCalledWith({ branchId: 'branch_1', page: 400 });
+        expect(output).not.toContain('Older invoices</a>');
+        expect(output).not.toContain('rvPage=401');
+        expect(output).toContain(
+          'Older invoices are past page 400. Narrow the search to reach them.'
+        );
+        expect(output).toContain('Newer invoices');
+      });
+
       it('ignores an out-of-range page and starts from the first', async () => {
         await html({ branch: 'branch_1', asOf: '2026-11-15', rvPage: '99999' });
         expect(mocks.reversalSearch).toHaveBeenCalledWith({ branchId: 'branch_1', page: 1 });
