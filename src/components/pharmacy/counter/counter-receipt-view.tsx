@@ -382,8 +382,9 @@ export function CounterReceiptView({
               {locale === 'ur' ? 'ادائیگی درج ہو گئی' : 'Payment recorded'}
             </h3>
             <p className="text-sm text-text-muted">
-              {receipt.branchName} ·{' '}
-              {receipt.businessDate ?? formatReceiptDate(receipt.completedAt)}
+              {/* DEV-958A: the real clock date and time, as the receipt prints it; with a day
+                  ending after midnight the business day can be the day before. */}
+              {receipt.branchName} · {formatReceiptIssuedAt(receipt.completedAt)}
             </p>
           </div>
           <dl className="flex flex-wrap gap-x-8 gap-y-3">

@@ -1,6 +1,6 @@
 /** DEV-73 pure refill-subscription rules, safe to import from any server module. */
 
-import { workspaceToday } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 
 export const DAY_MS = 86_400_000;
 
@@ -36,7 +36,7 @@ export function refillCycleOpensBy(
   const opensAt = new Date(
     subscription.nextDueAt.getTime() - subscription.reminderLeadDays * DAY_MS
   );
-  return workspaceToday(timeZone, opensAt) <= workspaceToday(timeZone, now);
+  return pharmacyCalendarDay(timeZone, opensAt) <= pharmacyCalendarDay(timeZone, now);
 }
 
 /**

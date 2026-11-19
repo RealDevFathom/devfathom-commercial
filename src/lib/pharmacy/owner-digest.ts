@@ -28,6 +28,12 @@ import {
 import { readLicenceRenewalReminders } from './licence-renewal-operations';
 import { withPlatformDb, withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
+import {
+  pharmacyBranchDayEndsField,
+  pharmacyBusinessDay,
+  pharmacyDayEndField,
+  type PharmacyDayEnd,
+} from './business-day';
 
 const DIGEST_METRIC_KEYS = [
   'salesMinor',
@@ -121,12 +127,15 @@ export async function composeOwnerDigest(
     businessDate: string;
     /** Workspace zone the business date is on: bounds event timestamps (UTC when absent). */
     timeZone?: string | null;
+    /** DEV-958A: the branch's day-end hours by day (`PharmacyDayEnd`; midnight when absent). */
+    dayEnd?: PharmacyDayEnd;
   }
 ): Promise<OwnerDigest> {
   const filters = {
     branchIds: [input.branchId],
     from: input.businessDate,
     to: input.businessDate,
+    ...pharmacyBranchDayEndsField([{ id: input.branchId, dayEnd: input.dayEnd }]),
   };
   const [report, anomalies, renewals] = await Promise.all([
     readPharmacyOwnerCommandCentre(db, { ...filters, timeZone: input.timeZone }),
@@ -147,7 +156,13 @@ export async function composeOwnerDigest(
   for (const cadence of cadences) {
     // Lost demand, recovered sales and the weekly ledger read the shop's own days,
     // the days the digest is labelled with, not UTC days.
-    const window = ownerBriefingWindow(input.businessDate, cadence, config, input.timeZone);
+    const window = ownerBriefingWindow(
+      input.businessDate,
+      cadence,
+      config,
+      input.timeZone,
+      pharmacyDayEndField(input.dayEnd)
+    );
     const [ledger, demand] = await Promise.all([
       cadence === 'DAILY'
         ? Promise.resolve(report)
@@ -156,6 +171,7 @@ export async function composeOwnerDigest(
             from: window.from,
             to: window.to,
             timeZone: input.timeZone,
+            ...pharmacyBranchDayEndsField([{ id: input.branchId, dayEnd: input.dayEnd }]),
           }),
       readOwnerBriefingDemand(db, input, window, config),
     ]);
@@ -276,7 +292,9 @@ async function readAuthorizedDigestSetting(db: ScopedDb, id: string, organizatio
     where: { id, organizationId, enabled: true },
     include: {
       organization: { select: { status: true, vertical: true, timezone: true } },
-      branch: { select: { name: true, active: true, organizationId: true } },
+      branch: {
+        select: { name: true, active: true, organizationId: true, businessDayEndsAtHistory: true },
+      },
       user: {
         select: { id: true, organizationId: true, status: true, role: true, department: true },
       },
@@ -360,8 +378,13 @@ export async function processDueOwnerDigests(now = new Date(), limit = 25) {
         });
         return false;
       }
-      // A delayed retry belongs to the scheduled local day, not the retry day.
-      const businessDate = localClock(setting.nextDueAt, authorized.organization.timezone).date;
+      // A delayed retry belongs to the scheduled local day, not the retry day. DEV-958A: the
+      // branch's business day, which ends at its "day ends at" hour (midnight by default).
+      const dayEnd = authorized.branch.businessDayEndsAtHistory;
+      const businessDate = pharmacyBusinessDay(
+        { timeZone: authorized.organization.timezone, dayEnd },
+        setting.nextDueAt
+      );
       const key = {
         organizationId: item.organizationId,
         userId: authorized.userId,
@@ -380,6 +403,7 @@ export async function processDueOwnerDigests(now = new Date(), limit = 25) {
           from: businessDate,
           to: businessDate,
           timeZone: authorized.organization.timezone,
+          ...pharmacyBranchDayEndsField([{ id: authorized.branchId, dayEnd }]),
         },
         'system:owner-digest',
         new Date()
@@ -388,6 +412,7 @@ export async function processDueOwnerDigests(now = new Date(), limit = 25) {
         ...key,
         branchName: authorized.branch.name,
         timeZone: authorized.organization.timezone,
+        ...pharmacyDayEndField(dayEnd),
       });
       if (!(await readAuthorizedDigestSetting(db, item.id, item.organizationId))) {
         // Throw through withTenantDb so the claim and anomaly writes roll back.

@@ -2,7 +2,7 @@ import 'server-only';
 import { growthReceiptMoney } from './growth-evidence';
 import { readPharmacyMarketingReportWindow } from './marketing-report';
 import { localCalendarDays, localDayStart, shiftDay } from './marketing-dates';
-import { workspaceToday } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
@@ -74,7 +74,7 @@ export function growthPeriods(from: Date, cutoff: Date, now = new Date(), timeZo
   const comparisonFrom =
     days === null
       ? new Date(from.getTime() - duration)
-      : localDayStart(shiftDay(workspaceToday(timeZone, from), -days), timeZone!);
+      : localDayStart(shiftDay(pharmacyCalendarDay(timeZone, from), -days), timeZone!);
   return {
     current: { from: from.toISOString(), cutoff: cutoff.toISOString() },
     comparison: { from: comparisonFrom.toISOString(), cutoff: from.toISOString() },

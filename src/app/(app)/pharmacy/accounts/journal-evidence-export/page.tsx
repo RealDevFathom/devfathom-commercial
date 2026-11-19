@@ -15,7 +15,8 @@ import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext, type TRPCContext } from '@/server/trpc';
-import { workspaceDateRange, workspaceZoneLabel } from '@/lib/timezone';
+import { workspaceZoneLabel } from '@/lib/timezone';
+import { pharmacyCalendarDayRange } from '@/lib/pharmacy/business-day';
 import { JournalEvidenceExportButton } from './export-button';
 
 export const metadata: Metadata = {
@@ -118,8 +119,8 @@ export default async function JournalEvidenceExportPage({
   const zone = workspaceZoneLabel(timeZone);
   const pageText = value(query.page) ?? '1';
   const page = /^\d+$/.test(pageText) ? Number(pageText) : 0;
-  const fromInstant = from ? workspaceDateRange(fromText!, fromText!, timeZone).from : null;
-  const toInstant = to ? workspaceDateRange(toText!, toText!, timeZone).from : null;
+  const fromInstant = from ? pharmacyCalendarDayRange(fromText!, fromText!, timeZone).from : null;
+  const toInstant = to ? pharmacyCalendarDayRange(toText!, toText!, timeZone).from : null;
   const valid =
     !!branchId &&
     branchId.length <= 128 &&

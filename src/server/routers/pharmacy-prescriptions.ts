@@ -618,10 +618,26 @@ export const pharmacyPrescriptionsRouter = router({
           fillSequence: z.number().int().positive(),
           quantityCanonicalUnits: z.number().int().positive(),
           idempotencyKey: z.string().trim().min(1).max(200),
+          // DEV-962: the branch dispensing the fill. Only that branch may later record the
+          // fill's refill reminder; a fill recorded without one leaves that to an admin.
+          branchId: z.string().trim().min(1).max(128).optional(),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      if (input.branchId) {
+        const organizationId = ctx.entitlements.organizationId;
+        const branch = await ctx.db.pharmacyBranch.findFirst({
+          where: { id: input.branchId, organizationId, active: true },
+          select: { id: true },
+        });
+        if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'BRANCH_NOT_FOUND' });
+        annotateAuditBranch(ctx, branch.id);
+        if (
+          await counterBranchAssignmentDenial(ctx.db, ctx.session.user, organizationId, branch.id)
+        )
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+      }
       const line = await ctx.db.prescriptionLine.findFirst({
         where: {
           id: input.prescriptionLineId,
@@ -673,6 +689,22 @@ export const pharmacyPrescriptionsRouter = router({
       annotateAuditBranch(ctx, branch.id);
       if (await counterBranchAssignmentDenial(ctx.db, user, organizationId, branch.id))
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+      // DEV-962: a fill has one reminder slot, and only the branch that dispensed the fill may
+      // take it, so another branch cannot use it up. A fill whose dispensing branch is not
+      // recorded (older than this rule, branch not provable) is left to an organisation admin.
+      // The session ADMIN exception is the same as the branch rule above. A missing fill is
+      // reported by `captureRefillReminder` as before.
+      if (user.role !== 'ADMIN') {
+        const fill = await ctx.db.prescriptionFill.findFirst({
+          where: { id: input.fillId, organizationId },
+          select: { branchId: true },
+        });
+        if (fill && fill.branchId !== branch.id)
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: fill.branchId ? 'FILL_DISPENSED_AT_ANOTHER_BRANCH' : 'FILL_BRANCH_UNKNOWN',
+          });
+      }
       try {
         return await captureRefillReminder(
           ctx.db,

@@ -171,7 +171,11 @@ import {
   type CounterBrowserPrintReservation,
   type CounterReceiptFormat,
 } from '@/lib/pharmacy/counter-browser-print';
-import { workspaceToday } from '@/lib/timezone';
+import {
+  pharmacyBusinessDate,
+  pharmacyCalendarDay,
+  type PharmacyDayClock,
+} from '@/lib/pharmacy/business-day';
 import { counterLabel } from '@/lib/pharmacy/counter-label';
 import { trpc } from '@/lib/trpc';
 
@@ -249,12 +253,13 @@ function useHydrated(): boolean {
 }
 
 /**
- * Today in the workspace's zone, as the date-only value the settlement tables
- * store: the day the day close opens on, whatever zone this device is set to.
- * `workspaceToday` reads a missing or refused zone as UTC, as the close does.
+ * Today's business day on the branch's clock (the workspace's zone and, DEV-958A, the
+ * branch's "day ends at" hour), as the date-only value the settlement tables store: the
+ * day the day close opens on, whatever zone this device is set to. A missing or refused
+ * zone reads as UTC, as the close does.
  */
-function businessDate(timeZone: string | null | undefined): Date {
-  return new Date(`${workspaceToday(timeZone)}T00:00:00.000Z`);
+function businessDate(clock: PharmacyDayClock): Date {
+  return pharmacyBusinessDate(clock);
 }
 
 /**
@@ -755,9 +760,7 @@ function ScopedPharmacyCounterConsole({
     staleTime: 60_000,
   });
   const branches = useMemo(() => branchesQuery.data?.branches ?? [], [branchesQuery.data]);
-  // Every drawer, tender and loyalty write is stamped with the workspace's day.
   const workspaceZone = branchesQuery.data?.timezone;
-  const todayBusinessDate = useCallback(() => businessDate(workspaceZone), [workspaceZone]);
 
   // Derived, not mirrored into state: the default branch is simply "the first
   // one" until the operator picks another, so an effect would only add a render.
@@ -770,6 +773,13 @@ function ScopedPharmacyCounterConsole({
       ? counterEnrolment.branchId
       : null;
   const branchId = selectedBranchId || enrolledBranchId || (branches[0]?.id ?? '');
+  // Every drawer, tender and loyalty write is stamped with the branch's business day:
+  // DEV-958A, the workspace's day ending at the branch's "day ends at" hour.
+  const dayEnd = branches.find((entry) => entry.id === branchId)?.businessDayEndsAtHistory;
+  const todayBusinessDate = useCallback(
+    () => businessDate({ timeZone: workspaceZone, dayEnd }),
+    [workspaceZone, dayEnd]
+  );
   const recoveryScope = useMemo<TenderAttemptScope>(
     () => ({ organizationId, accountId, branchId }),
     [organizationId, accountId, branchId]
@@ -3961,9 +3971,7 @@ function ScopedPharmacyCounterConsole({
                       return branch?.name ?? null;
                     })(),
                     counter: counterLabel(deviceId),
-                    businessDay: new Date(
-                      `${workspaceToday(workspaceZone)}T00:00:00.000Z`
-                    ).toLocaleDateString('en-GB', {
+                    businessDay: todayBusinessDate().toLocaleDateString('en-GB', {
                       day: '2-digit',
                       month: 'short',
                       year: 'numeric',
@@ -5019,7 +5027,7 @@ function ScopedPharmacyCounterConsole({
                     >
                       <span>
                         {entry.kind} · Receipt {entry.sale?.receiptNumber ?? '—'} ·{' '}
-                        {workspaceToday(workspaceZone, new Date(entry.occurredAt))}
+                        {pharmacyCalendarDay(workspaceZone, new Date(entry.occurredAt))}
                       </span>
                       <span className="font-mono tabular-nums">
                         {entry.points > 0 ? '+' : ''}

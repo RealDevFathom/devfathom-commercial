@@ -63,7 +63,8 @@ import {
 } from '@/lib/pharmacy/counter-capability';
 import { lockSaleCandidates, type LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { lockStockRowsFrom } from '@/lib/pharmacy/stock-lock-order';
-import { workspaceToday } from '@/lib/timezone';
+import { pharmacyBusinessDate } from '@/lib/pharmacy/business-day';
+import { readPharmacyDayClock } from '@/lib/pharmacy/business-day-clock';
 import {
   cookieCredentialAllowed,
   counterDeviceCredential,
@@ -572,12 +573,11 @@ export async function replayCounterCommand(
   // stored clock (never a zone the device sends): 00:30 in Karachi is that day, not the
   // UTC day before. An organisation on UTC, or with no usable zone, keeps the UTC date.
   // Only a PENDING command reaches here, so a sale already replayed is never moved.
-  const organization = await db.organization.findUnique({
-    where: { id: scope.organizationId },
-    select: { timezone: true },
-  });
-  const businessDate = new Date(
-    `${workspaceToday(organization?.timezone, new Date(command.leasedReceipt.originalSaleAt))}T00:00:00.000Z`
+  // DEV-958A: on the branch's clock, whose day ends at its "day ends at" hour, so a sale
+  // signed at 00:30 at a branch whose day ends at 05:00 books on the day before.
+  const businessDate = pharmacyBusinessDate(
+    await readPharmacyDayClock(db, scope),
+    new Date(command.leasedReceipt.originalSaleAt)
   );
   // DEV-631: take the sale's day lock before any stock lock, the same order the online
   // counter uses (day, then stock), so a replay and a counter line cannot deadlock.

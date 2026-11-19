@@ -3,7 +3,8 @@ import { ZodError } from 'zod';
 
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { amountInputError, amountInputToMinor } from '@/lib/money-input';
-import { formatWorkspaceDateTime, workspaceToday } from '@/lib/timezone';
+import { formatWorkspaceDateTime } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import { pharmacyPurchasingRouter } from '@/server/routers/pharmacy-purchasing';
 import { createTRPCContext } from '@/server/trpc';
 
@@ -489,5 +490,5 @@ export function dateInputValue(value: Date): string {
 
 /** Today in the workspace's zone: a GRN keyed in 00:00–04:59 PKT is today's, not yesterday's. */
 export function today(timeZone: string | null | undefined): string {
-  return workspaceToday(timeZone);
+  return pharmacyCalendarDay(timeZone);
 }
