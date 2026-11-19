@@ -17,6 +17,9 @@ vi.mock('@/components/pharmacy/counter/khata-reminder-settings-panel', () => ({
 vi.mock('@/components/pharmacy/counter/discount-maximum-panel', () => ({
   DiscountMaximumPanel: () => null,
 }));
+vi.mock('@/components/pharmacy/counter/bill-discount-setting-panel', () => ({
+  BillDiscountSettingPanel: () => null,
+}));
 
 const mocks = vi.hoisted(() => ({
   financialStatements: vi.fn(),
