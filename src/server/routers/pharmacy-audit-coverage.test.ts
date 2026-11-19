@@ -464,6 +464,14 @@ const REST_ROUTES: Readonly<
     | { exempt: string }
   >
 > = {
+  'counter/bind/route.ts': {
+    audited: /bindPharmacyCounterBrowser/,
+    delegate: {
+      file: 'src/server/routers/pharmacy-offline-bind.ts',
+      writes: /'pharmacyOffline.bindCounterBrowser'/,
+    },
+    how: 'Binding writes pharmacyOffline.bindCounterBrowser with person, branch and terminal; DELETE only clears this browser cookie and grants nothing.',
+  },
   'counter/establish/route.ts': {
     audited: /pharmacyCounterRoute\('establish'\)/,
     delegate: { file: OFFLINE_ROUTER, writes: /'openCounterSession'/ },

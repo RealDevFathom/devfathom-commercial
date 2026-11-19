@@ -179,6 +179,23 @@ function vercelConfiguration() {
   return configuration;
 }
 
+/**
+ * The two Vercel API groups the jobs call, loaded from their own entry points.
+ * DEV-963: the package root declares every Vercel API (about 500 declaration
+ * files) for the type check. `new Vercel(options).deployments` is exactly
+ * `new Deployments(options)`, and likewise for `projects`.
+ */
+async function vercelClient(bearerToken: string) {
+  const [{ Deployments }, { Projects }] = await Promise.all([
+    import('@vercel/sdk/sdk/deployments.js'),
+    import('@vercel/sdk/sdk/projects.js'),
+  ]);
+  return {
+    deployments: new Deployments({ bearerToken }),
+    projects: new Projects({ bearerToken }),
+  };
+}
+
 async function dedicatedProvision(
   db: PrismaClient,
   job: PlatformJob,
@@ -186,15 +203,14 @@ async function dedicatedProvision(
 ): Promise<JobResult> {
   const organizationId = requiredOrganization(job);
   const { bearerToken, teamId } = vercelConfiguration();
-  const [{ Vercel }, organization] = await Promise.all([
-    import('@vercel/sdk'),
+  const [vercel, organization] = await Promise.all([
+    vercelClient(bearerToken),
     db.organization.findUnique({
       where: { id: organizationId },
       select: { slug: true, displayName: true },
     }),
   ]);
   if (!organization) throw new Error('Organization no longer exists.');
-  const vercel = new Vercel({ bearerToken });
   const deploymentRecord = await db.organizationDeployment.upsert({
     where: { organizationId_environment: { organizationId, environment: 'production' } },
     update: { mode: 'DEDICATED', status: 'PROVISIONING', provider: 'VERCEL' },
@@ -387,8 +403,7 @@ async function configureDomain(
   }
 
   const { bearerToken, teamId } = vercelConfiguration();
-  const { Vercel } = await import('@vercel/sdk');
-  const vercel = new Vercel({ bearerToken });
+  const vercel = await vercelClient(bearerToken);
   const projectId =
     domain.organization.deployments[0]?.projectId ?? process.env.VERCEL_PROJECT_ID ?? null;
   if (!projectId) throw new Error('No Vercel project is associated with this organization.');

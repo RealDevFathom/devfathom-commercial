@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 /**
@@ -92,17 +93,17 @@ export async function grantDeviceLotQuota(
     throw new PharmacyQuotaError('INVALID_UNITS');
   }
 
-  const device = await db.pharmacyRegisteredDevice.findFirst({
-    where: {
-      id: input.deviceId,
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-    },
-    select: { status: true, revokedAt: true },
-  });
-  if (!device || device.status !== 'ACTIVE' || device.revokedAt !== null) {
-    throw new PharmacyQuotaError('DEVICE_NOT_USABLE');
-  }
+  // DEV-957: FOR SHARE holds the counter row until this grant commits, so a revoke
+  // (which updates that row) waits for the grant and then releases it, and a grant
+  // that starts while a revoke is in flight waits, re-reads the row as REVOKED and is
+  // refused. Without the lock a grant racing its own counter's revoke left units held
+  // by a revoked counter for good.
+  const usable = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT id FROM pharmacy_registered_devices
+    WHERE id = ${input.deviceId} AND "organizationId" = ${scope.organizationId}
+      AND "branchId" = ${scope.branchId} AND status = 'ACTIVE' AND "revokedAt" IS NULL
+    FOR SHARE`);
+  if (!usable[0]) throw new PharmacyQuotaError('DEVICE_NOT_USABLE');
 
   try {
     return await db.pharmacyDeviceLotQuota.create({

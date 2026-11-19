@@ -7,6 +7,9 @@ import { PrismaClient } from '../src/generated/prisma/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 const url = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+// The schema owner builds the fixture and applies the migration; every checked
+// behaviour runs on the restricted runtime connection (`url`) under forced RLS.
+const ownerUrl = process.env.OWNER_DATABASE_URL;
 const migration = readFileSync(
   'prisma/migrations/20261118124900_task_label_board_boundary/migration.sql',
   'utf8'
@@ -14,19 +17,31 @@ const migration = readFileSync(
 
 (url ? describe : describe.skip)('task label board invariant on PostgreSQL', () => {
   let client: Client;
+  let owner: Client;
   let schema: string;
   type Snapshot = Record<'tasks' | 'labels' | 'columns' | 'links', Record<string, unknown>[]>;
   let beforeRepair: Snapshot;
   let afterRepair: Snapshot;
-  const snapshot = async (): Promise<Snapshot> => {
-    const rows = async (sql: string) => (await client.query(sql)).rows;
-    return {
-      tasks: await rows('SELECT * FROM tasks ORDER BY id'),
-      labels: await rows('SELECT * FROM labels ORDER BY id'),
-      columns: await rows('SELECT * FROM columns ORDER BY id'),
-      links: await rows('SELECT * FROM task_labels ORDER BY id'),
-    };
+  // Reads or writes every tenant's rows, with platform scope that ends at COMMIT.
+  const acrossTenants = async <T>(connection: Client, work: () => Promise<T>) => {
+    await connection.query('BEGIN');
+    try {
+      await connection.query("SELECT set_config('app.is_platform_admin', 'true', true)");
+      return await work();
+    } finally {
+      await connection.query('COMMIT');
+    }
   };
+  const snapshot = (): Promise<Snapshot> =>
+    acrossTenants(owner, async () => {
+      const rows = async (sql: string) => (await owner.query(sql)).rows;
+      return {
+        tasks: await rows('SELECT * FROM tasks ORDER BY id'),
+        labels: await rows('SELECT * FROM labels ORDER BY id'),
+        columns: await rows('SELECT * FROM columns ORDER BY id'),
+        links: await rows('SELECT * FROM task_labels ORDER BY id'),
+      };
+    });
   const connect = async () => {
     const connection = new Client({ connectionString: url });
     await connection.connect();
@@ -42,27 +57,35 @@ const migration = readFileSync(
   const move = (connection: Client, column = 'column-b') =>
     connection.query('UPDATE tasks SET "columnId" = $1 WHERE id = $2', [column, 'task-a']);
   const links = async () => (await client.query('SELECT id FROM task_labels ORDER BY id')).rows;
-  const backups = async () => {
-    await client.query('BEGIN');
-    try {
-      await client.query("SELECT set_config('app.is_platform_admin', 'true', true)");
-      return (
-        await client.query(
-          `SELECT id, "organizationId", "taskId", "labelId", "taskBoardId", "labelBoardId"
-           FROM task_label_board_repair_backups ORDER BY id`
-        )
-      ).rows;
-    } finally {
-      await client.query('COMMIT');
-    }
-  };
+  const backups = () =>
+    acrossTenants(
+      client,
+      async () =>
+        (
+          await client.query(
+            `SELECT id, "organizationId", "taskId", "labelId", "taskBoardId", "labelBoardId"
+             FROM task_label_board_repair_backups ORDER BY id`
+          )
+        ).rows
+    );
 
   beforeEach(async () => {
     schema = `labels_${randomUUID().replaceAll('-', '')}`;
     client = new Client({ connectionString: url });
+    owner = ownerUrl ? new Client({ connectionString: ownerUrl }) : client;
     await client.connect();
-    await client.query(`CREATE SCHEMA "${schema}"; SET search_path TO "${schema}"`);
-    await client.query(`
+    if (owner !== client) await owner.connect();
+    const {
+      rows: [role],
+    } = await client.query(
+      'SELECT current_user AS name, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user'
+    );
+    expect({ rolsuper: role.rolsuper, rolbypassrls: role.rolbypassrls }).toEqual({
+      rolsuper: false,
+      rolbypassrls: false,
+    });
+    await owner.query(`CREATE SCHEMA "${schema}"; SET search_path TO "${schema}"`);
+    await owner.query(`
       CREATE TABLE columns (id text PRIMARY KEY, "organizationId" text NOT NULL, "boardId" text NOT NULL);
       CREATE TABLE labels (id text PRIMARY KEY, "organizationId" text NOT NULL, "boardId" text NOT NULL, name text);
       CREATE TYPE "Priority" AS ENUM ('LOW', 'MEDIUM', 'HIGH', 'URGENT');
@@ -83,6 +106,19 @@ const migration = readFileSync(
         REFERENCES tasks ("organizationId", id) DEFERRABLE INITIALLY DEFERRED;
       ALTER TABLE task_labels ADD FOREIGN KEY ("organizationId", "labelId")
         REFERENCES labels ("organizationId", id) DEFERRABLE INITIALLY DEFERRED;
+    `);
+    // The production tenant boundary on every table the migration touches.
+    for (const table of ['columns', 'labels', 'tasks', 'task_labels']) {
+      await owner.query(`
+        ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY;
+        ALTER TABLE ${table} FORCE ROW LEVEL SECURITY;
+        CREATE POLICY tenant_isolation ON ${table}
+          USING (current_setting('app.is_platform_admin', true) = 'true' OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''))
+          WITH CHECK (current_setting('app.is_platform_admin', true) = 'true' OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''))`);
+    }
+    // Legacy rows of two tenants, written before the migration installs its guards.
+    await acrossTenants(owner, () =>
+      owner.query(`
       INSERT INTO columns VALUES ('column-a', 'org-a', 'board-a'), ('column-a2', 'org-a', 'board-a'),
         ('column-b', 'org-a', 'board-b'), ('other-column', 'org-b', 'other-board');
       INSERT INTO labels VALUES ('label-a', 'org-a', 'board-a', 'A'), ('label-a2', 'org-a', 'board-a', 'A2'),
@@ -93,18 +129,27 @@ const migration = readFileSync(
         ('legacy-valid-a', 'org-a', 'task-a', 'label-a'),
         ('legacy-valid-a2', 'org-a', 'task-a', 'label-a2'),
         ('legacy-valid-b', 'org-a', 'task-b', 'label-b');
-    `);
+    `)
+    );
     beforeRepair = await snapshot();
-    await client.query(migration);
+    await owner.query(migration);
     afterRepair = await snapshot();
     // Start each case from an empty link table.
-    await client.query('DELETE FROM task_labels');
+    await acrossTenants(owner, () => owner.query('DELETE FROM task_labels'));
+    if (owner !== client) {
+      const runtime = `"${String(role.name).replaceAll('"', '""')}"`;
+      await owner.query(`GRANT USAGE ON SCHEMA "${schema}" TO ${runtime};
+        GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "${schema}" TO ${runtime}`);
+    }
+    await client.query(`SET search_path TO "${schema}"`);
+    await client.query("SELECT set_config('app.current_organization_id', 'org-a', false)");
   });
 
   afterEach(async () => {
     await client.query('ROLLBACK');
-    await client.query(`DROP SCHEMA "${schema}" CASCADE`);
+    await owner.query(`DROP SCHEMA "${schema}" CASCADE`);
     await client.end();
+    if (owner !== client) await owner.end();
   });
 
   it('backs up and removes only legacy wrong-board links, and can be applied again', async () => {
@@ -139,19 +184,21 @@ const migration = readFileSync(
     );
     const backedUp = await backups();
     expect(backedUp).toEqual(expected);
-    expect(backedUp.map(({ id, organizationId, taskId, labelId }) => ({
-      id,
-      organizationId,
-      taskId,
-      labelId,
-    }))).toEqual(removed);
+    expect(
+      backedUp.map(({ id, organizationId, taskId, labelId }) => ({
+        id,
+        organizationId,
+        taskId,
+        labelId,
+      }))
+    ).toEqual(removed);
 
     await attach(client);
-    await client.query(migration);
+    await owner.query(migration);
     expect(await links()).toEqual([{ id: 'link' }]);
     expect(await backups()).toEqual(expected);
     expect(
-      (await client.query("SELECT current_setting('app.is_platform_admin', true) AS value")).rows[0]
+      (await owner.query("SELECT current_setting('app.is_platform_admin', true) AS value")).rows[0]
         .value
     ).not.toBe('true');
   });
@@ -189,7 +236,10 @@ const migration = readFileSync(
   it('supports Prisma nested creation and removes labels on a Prisma task move', async () => {
     const prisma = new PrismaClient({
       adapter: new PrismaPg(
-        { connectionString: url, options: `-c search_path=${schema}` },
+        {
+          connectionString: url,
+          options: `-c search_path=${schema} -c app.current_organization_id=org-a`,
+        },
         { schema }
       ),
     });
@@ -240,9 +290,11 @@ const migration = readFileSync(
     await client.query(`UPDATE tasks SET "columnId" = 'column-a' WHERE id IN ('task-a', 'task-b')`);
     expect(await links()).toEqual([]);
     expect((await moveBackups()).map((row) => row.id)).toEqual(['link', 'link2', 'link3']);
-    // Labels and tasks themselves survive the move.
-    expect((await client.query('SELECT id FROM labels ORDER BY id')).rows).toHaveLength(4);
-    expect((await client.query('SELECT id FROM tasks ORDER BY id')).rows).toHaveLength(2);
+    // Labels and tasks themselves survive the move, in every tenant.
+    await acrossTenants(client, async () => {
+      expect((await client.query('SELECT id FROM labels ORDER BY id')).rows).toHaveLength(4);
+      expect((await client.query('SELECT id FROM tasks ORDER BY id')).rows).toHaveLength(2);
+    });
   });
 
   it.each(['columns', 'labels'])(
@@ -322,4 +374,111 @@ const migration = readFileSync(
       }
     }
   );
+});
+
+(url ? describe : describe.skip)('task label board invariant on the migrated tables', () => {
+  it('guards attachments and backs up moved labels for the restricted runtime role', async () => {
+    const client = new Client({ connectionString: url });
+    const id = (name: string) => `${name}_${randomUUID().replaceAll('-', '')}`;
+    const [org, user, project, boardA, boardB, columnA, columnB, labelA, labelB, task, link] = [
+      'org',
+      'user',
+      'project',
+      'board_a',
+      'board_b',
+      'column_a',
+      'column_b',
+      'label_a',
+      'label_b',
+      'task',
+      'link',
+    ].map(id);
+    const tenant = (organization: string) =>
+      client.query("SELECT set_config('app.current_organization_id', $1, true)", [organization]);
+    const attach = (label: string, linkId = link) =>
+      client.query(
+        'INSERT INTO task_labels (id, "organizationId", "taskId", "labelId") VALUES ($1, $2, $3, $4)',
+        [linkId, org, task, label]
+      );
+    await client.connect();
+    try {
+      const {
+        rows: [role],
+      } = await client.query(
+        'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user'
+      );
+      expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
+      await client.query('BEGIN');
+      await client.query('SET LOCAL search_path TO public');
+      // Only creating the organization row needs platform scope.
+      await client.query("SELECT set_config('app.is_platform_admin', 'true', true)");
+      await client.query(
+        `INSERT INTO organizations (id, slug, "legalName", "displayName", "updatedAt")
+         VALUES ($1, $1, 'Task label test', 'Task label test', now())`,
+        [org]
+      );
+      await client.query("SELECT set_config('app.is_platform_admin', '', true)");
+      await tenant(org);
+      await client.query(
+        `INSERT INTO organization_departments (id, "organizationId", key, name, "updatedAt")
+         VALUES ($1, $2, 'ENGINEERING', 'Engineering', now())`,
+        [id('department'), org]
+      );
+      await client.query(
+        `INSERT INTO users (id, "organizationId", name, email, department, title, "updatedAt")
+         VALUES ($1, $2, 'Actor', $3, 'ENGINEERING', 'Tester', now())`,
+        [user, org, `${user}@example.test`]
+      );
+      await client.query(
+        `INSERT INTO projects (id, "organizationId", name, type, "updatedAt")
+         VALUES ($1, $2, 'Project', 'INTERNAL', now())`,
+        [project, org]
+      );
+      for (const [board, column, label] of [
+        [boardA, columnA, labelA],
+        [boardB, columnB, labelB],
+      ]) {
+        await client.query(
+          `INSERT INTO boards (id, "organizationId", name, "projectId", "updatedAt")
+           VALUES ($1, $2, 'Board', $3, now())`,
+          [board, org, project]
+        );
+        await client.query(
+          `INSERT INTO columns (id, "organizationId", name, "boardId", "order", "updatedAt")
+           VALUES ($1, $2, 'To Do', $3, 0, now())`,
+          [column, org, board]
+        );
+        await client.query(
+          `INSERT INTO labels (id, "organizationId", name, color, "boardId")
+           VALUES ($1, $2, 'Label', '#000000', $3)`,
+          [label, org, board]
+        );
+      }
+      await client.query(
+        `INSERT INTO tasks (id, "organizationId", title, "columnId", "order", "createdById", "updatedAt")
+         VALUES ($1, $2, 'Task', $3, 0, $4, now())`,
+        [task, org, columnA, user]
+      );
+
+      await client.query('SAVEPOINT foreign_board');
+      await expect(attach(labelB)).rejects.toMatchObject({ code: '23514' });
+      await client.query('ROLLBACK TO SAVEPOINT foreign_board');
+      await attach(labelA);
+      await client.query('UPDATE tasks SET "columnId" = $1 WHERE id = $2', [columnB, task]);
+      expect((await client.query('SELECT id FROM task_labels WHERE id = $1', [link])).rows).toEqual(
+        []
+      );
+      const backup =
+        'SELECT "taskBoardId", "labelBoardId" FROM task_label_board_repair_backups WHERE id = $1';
+      expect((await client.query(backup, [link])).rows).toEqual([
+        { taskBoardId: boardB, labelBoardId: boardA },
+      ]);
+      // The backup row stays inside its tenant.
+      await tenant(id('other_org'));
+      expect((await client.query(backup, [link])).rows).toEqual([]);
+    } finally {
+      await client.query('ROLLBACK');
+      await client.end();
+    }
+  });
 });
