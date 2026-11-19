@@ -293,3 +293,85 @@ export async function reverseCreditSetOffFromForm(
     return failure(error, SET_OFF_REASONS, 'The set-off was not reversed. Reload and try again.');
   }
 }
+
+const REVERSAL_REASONS: Record<string, string> = {
+  ...SHARED_REASONS,
+  PERIOD_CLOSED: 'Today falls in a closed accounting period. Nothing was reversed.',
+  ALREADY_REVERSED: 'This was already reversed. Reload the page.',
+  ACTIVE_SETTLEMENTS:
+    'Reverse every payment and approved credit set-off against this invoice first. Nothing was reversed.',
+  INVALID_DATE:
+    'A reversal cannot be dated before the entry it reverses or its payments. Nothing was reversed.',
+  NOT_FOUND: 'That entry is not on this branch. Reload the page.',
+  INVALID_STATE: 'That entry cannot be reversed here. Reload the page.',
+  MISSING_REASON: 'Say why it is being reversed.',
+};
+
+/**
+ * DEV-103: a manager or owner reverses a supplier expense invoice, or a payment against one,
+ * with their own PIN and a reason. The router checks the PIN, who recorded it and every money
+ * rule, posts the mirror entry and keeps the original; the server dates the reversal now.
+ */
+async function reverseFromForm(
+  form: FormData,
+  kind: 'invoice' | 'payment'
+): Promise<ApEntryFormState> {
+  // The PIN is passed through once and never stored or echoed back.
+  const pin = String(form.get('pin') ?? '');
+  if (!/^\d{4,8}$/.test(pin)) {
+    return { status: 'error', message: 'Enter your 4 to 8 digit manager or owner PIN.' };
+  }
+  const reason = field(form, 'reason');
+  if (!reason) return { status: 'error', message: REVERSAL_REASONS.MISSING_REASON! };
+  const common = {
+    branchId: field(form, 'branchId'),
+    commandKey: field(form, 'commandKey'),
+    reason,
+    pin,
+  };
+  try {
+    const caller = pharmacyApInvoicesRouter.createCaller(await createTRPCContext());
+    if (kind === 'invoice') {
+      const invoice = await caller.reverseInvoice({
+        ...common,
+        invoiceId: field(form, 'invoiceId'),
+      });
+      revalidatePath(AGING_PATH);
+      return {
+        status: 'saved',
+        message: `Invoice ${invoice.reference} reversed. The original stays on record with a mirror entry, and it no longer counts as owed.`,
+      };
+    }
+    await caller.reverseSettlement({ ...common, settlementId: field(form, 'settlementId') });
+    revalidatePath(AGING_PATH);
+    return {
+      status: 'saved',
+      message:
+        'Payment reversed. The original stays on record with a mirror entry, and the invoice owes that amount again.',
+    };
+  } catch (error) {
+    unstable_rethrow(error);
+    if (error instanceof TRPCError && error.code === 'FORBIDDEN') {
+      return { status: 'error', message: error.message };
+    }
+    return failure(
+      error,
+      REVERSAL_REASONS,
+      `The ${kind} was not reversed. Keep the reason under 500 characters, reload and try again.`
+    );
+  }
+}
+
+export async function reverseApInvoiceFromForm(
+  _previous: ApEntryFormState,
+  form: FormData
+): Promise<ApEntryFormState> {
+  return reverseFromForm(form, 'invoice');
+}
+
+export async function reverseApSettlementFromForm(
+  _previous: ApEntryFormState,
+  form: FormData
+): Promise<ApEntryFormState> {
+  return reverseFromForm(form, 'payment');
+}

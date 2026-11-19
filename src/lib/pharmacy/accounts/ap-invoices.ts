@@ -41,6 +41,39 @@ import { commandPayloadHash } from './general-journal';
 
 export type ApInvoiceScope = { organizationId: string; branchId: string; actorId: string };
 
+/**
+ * DEV-103: reversing an invoice or a payment needs a manager or owner with their own fresh PIN
+ * (checked in the router). The person who recorded it may approve its reversal only when nobody
+ * else could (`otherApReversalApprovers`); `soleApprover` re-checks that inside the write.
+ */
+export const AP_REVERSAL_SEGREGATED_POLICY = 'PHARMACY_AP_REVERSAL_MANAGER_PIN';
+export const AP_REVERSAL_SOLE_APPROVER_POLICY = 'PHARMACY_AP_REVERSAL_SOLE_APPROVER_PIN';
+export type ApReversalOptions = { soleApprover: () => Promise<boolean>; now?: Date };
+
+async function reversalPolicy(
+  recordedById: string,
+  scope: ApInvoiceScope,
+  options: ApReversalOptions
+) {
+  if (recordedById !== scope.actorId) return AP_REVERSAL_SEGREGATED_POLICY;
+  if (!(await options.soleApprover())) fail('SELF_APPROVAL');
+  return AP_REVERSAL_SOLE_APPROVER_POLICY;
+}
+
+/**
+ * A reversal dated by the client keeps that instant in its payload; one dated by the server
+ * (the screen sends none) takes the server clock and leaves it out, so a double submit of the
+ * same command key replays instead of conflicting.
+ */
+function reversalInstant(
+  input: { at?: string },
+  now: Date
+): { at: Date; hashed: Record<string, string> } {
+  if (!input.at) return { at: now, hashed: {} };
+  const at = parseApInstant(input.at, now);
+  return { at, hashed: { at: at.toISOString() } };
+}
+
 export type ApInvoiceErrorReason =
   | 'INVALID_AMOUNT'
   | 'INVALID_DATE'
@@ -525,24 +558,29 @@ export async function payApInvoice(
 export async function reverseApSettlement(
   db: ScopedDb,
   scope: ApInvoiceScope,
-  input: ReverseApSettlementInput,
-  now: Date = new Date()
+  input: Omit<ReverseApSettlementInput, 'pin'>,
+  options: ApReversalOptions
 ) {
+  const now = options.now ?? new Date();
   const reason = input.reason.trim();
   if (!reason) fail('MISSING_REASON');
-  const at = parseApInstant(input.at, now);
+  const { at, hashed } = reversalInstant(input, now);
   await lockPharmacyLedgerScope(db, scope);
   const payloadHash = commandPayloadHash({
     branchId: scope.branchId,
     settlementId: input.settlementId,
     reason,
-    at: at.toISOString(),
+    ...hashed,
   });
   const replay = await db.pharmacyApInvoiceSettlement.findFirst({
     where: { organizationId: scope.organizationId, reverseCommandKey: input.commandKey },
   });
   if (replay) {
-    if (replay.branchId !== scope.branchId || replay.reversePayloadHash !== payloadHash) {
+    if (
+      replay.branchId !== scope.branchId ||
+      replay.id !== input.settlementId ||
+      replay.reversePayloadHash !== payloadHash
+    ) {
       fail('IDEMPOTENCY_CONFLICT');
     }
     return { settlement: replay, replayed: true as const };
@@ -551,6 +589,7 @@ export async function reverseApSettlement(
   const settlement = await lockSettlement(db, scope, input.settlementId);
   if (settlement.status === 'REVERSED') fail('ALREADY_REVERSED');
   if (at < settlement.paidAt) fail('INVALID_DATE');
+  const policy = await reversalPolicy(settlement.createdByUserId, scope, options);
 
   let transaction;
   try {
@@ -590,30 +629,35 @@ export async function reverseApSettlement(
       reversePayloadHash: payloadHash,
     },
   });
-  return { settlement: reversed, transaction, replayed: false as const };
+  return { settlement: reversed, transaction, policy, replayed: false as const };
 }
 
 export async function reverseApInvoice(
   db: ScopedDb,
   scope: ApInvoiceScope,
-  input: ReverseApInvoiceInput,
-  now: Date = new Date()
+  input: Omit<ReverseApInvoiceInput, 'pin'>,
+  options: ApReversalOptions
 ) {
+  const now = options.now ?? new Date();
   const reason = input.reason.trim();
   if (!reason) fail('MISSING_REASON');
-  const at = parseApInstant(input.at, now);
+  const { at, hashed } = reversalInstant(input, now);
   await lockPharmacyLedgerScope(db, scope);
   const payloadHash = commandPayloadHash({
     branchId: scope.branchId,
     invoiceId: input.invoiceId,
     reason,
-    at: at.toISOString(),
+    ...hashed,
   });
   const replay = await db.pharmacyApInvoice.findFirst({
     where: { organizationId: scope.organizationId, reverseCommandKey: input.commandKey },
   });
   if (replay) {
-    if (replay.branchId !== scope.branchId || replay.reversePayloadHash !== payloadHash) {
+    if (
+      replay.branchId !== scope.branchId ||
+      replay.id !== input.invoiceId ||
+      replay.reversePayloadHash !== payloadHash
+    ) {
       fail('IDEMPOTENCY_CONFLICT');
     }
     return { invoice: replay, replayed: true as const };
@@ -636,6 +680,7 @@ export async function reverseApInvoice(
     }
   }
   await assertOpenPeriod(db, scope, at);
+  const policy = await reversalPolicy(invoice.createdByUserId, scope, options);
 
   const reversal = await reverseJournalEntry(db, scope, {
     entryId: invoice.journalEntryId,
@@ -663,7 +708,7 @@ export async function reverseApInvoice(
       reversalEntryId: reversal.id,
     },
   });
-  return { invoice: reversed, entry: reversal, replayed: false as const };
+  return { invoice: reversed, entry: reversal, policy, replayed: false as const };
 }
 
 export function listApInvoices(
