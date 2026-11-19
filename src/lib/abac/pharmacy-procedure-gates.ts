@@ -1071,12 +1071,16 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); read only, the quota grant itself is the manager-only counter route',
     none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
   },
+  'pharmacyOffline.receiptNumberGaps': {
+    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); read only',
+    none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
+  },
   'pharmacyOffline.revoke': {
     gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); releases the counter\'s open stock quotas in the same transaction, audited',
     none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
   },
   'pharmacyOffline.rotate': {
-    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch)',
+    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); moves the credential expiry 30 days on',
     none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
   },
   'pharmacyOnboarding.fbrTier1Status': {

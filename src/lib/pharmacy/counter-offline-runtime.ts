@@ -68,16 +68,101 @@ import { applyRecallBulletin, checkSafetyLease } from './offline-safety-lease';
 import { validateManualTenderPolicy } from './manual-payments';
 import type { OfflineRecallBulletin, SafetyLeaseState } from './offline-safety-lease';
 
-/** Bump when the persisted document shape changes; an older record fails closed. */
-export const COUNTER_STORE_SCHEMA_VERSION = 2;
+/**
+ * Bump when the persisted document shape changes; an unknown record fails closed.
+ * DEV-957 phase 2: version 3 adds the offline bills being built (`catalog.drafts`).
+ * A version-2 document (phase 1: snapshots, leases and quotas, never a sale) is
+ * upgraded in place on hydrate; nothing else is.
+ */
+export const COUNTER_STORE_SCHEMA_VERSION = 3;
+const COUNTER_STORE_PREVIOUS_SCHEMA_VERSION = 2;
 
 export const COUNTER_STORE_DATABASE: TerminalStoreDatabase = {
   // A distinct database name from the Restaurant POS: a device enrolled in both
   // cannot read the other's documents even before the scope check runs.
   databaseName: 'devfathom-pharmacy-counter',
   objectStoreName: 'scope-state',
-  schemaVersion: COUNTER_STORE_SCHEMA_VERSION,
+  // The IndexedDB database version, which only creates the object store. It stays at 2:
+  // the document's own version above is what changed, and raising this would block on
+  // any counter tab still open with the old version.
+  schemaVersion: 2,
 };
+
+/** Bills a counter holds at once while offline. */
+export const MAX_OFFLINE_DRAFTS = 5;
+/** Lines on one offline bill; the replay schema accepts at most 50. */
+export const MAX_OFFLINE_DRAFT_LINES = 50;
+
+/**
+ * DEV-957 phase 2: one line of an offline bill as it is kept locally. Identifiers and
+ * counts only: the name and the price are read again from the verified snapshots each
+ * time the bill is shown or paid, so a stored draft can never carry a price of its own.
+ */
+export type CounterDraftLine = {
+  inventoryLotId: string;
+  stockLocationId: string;
+  medicineId: string;
+  presentationId: string;
+  packLevelId: string;
+  saleUnit: 'PACK' | 'STRIP' | 'UNIT';
+  canonicalUnitsPerSaleUnit: number;
+  quantity: number;
+};
+
+/** An offline bill being built, saved on every change so a reload brings it back. */
+export type CounterDraft = {
+  draftId: string;
+  /** The cashier the counter's signed rules name (who the sale is attributed to). */
+  operatorUserId: string | null;
+  updatedAt: string;
+  lines: CounterDraftLine[];
+};
+
+const SALE_UNITS = new Set(['PACK', 'STRIP', 'UNIT']);
+const ID = /^[A-Za-z0-9_:-]{1,160}$/;
+
+/**
+ * The allowlist projection every stored draft passes through: exactly the fields above,
+ * each checked, so nothing else a caller attached (a name, a price, a customer) is ever
+ * written. The local store's forbidden-field guard still walks the whole document.
+ */
+export function projectCounterDraft(value: unknown): CounterDraft | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const draft = value as Record<string, unknown>;
+  if (typeof draft.draftId !== 'string' || !ID.test(draft.draftId)) return null;
+  if (draft.operatorUserId !== null && (typeof draft.operatorUserId !== 'string' || !ID.test(draft.operatorUserId)))
+    return null;
+  if (typeof draft.updatedAt !== 'string' || !Number.isFinite(Date.parse(draft.updatedAt))) return null;
+  if (!Array.isArray(draft.lines) || draft.lines.length > MAX_OFFLINE_DRAFT_LINES) return null;
+  const lines: CounterDraftLine[] = [];
+  for (const raw of draft.lines) {
+    if (!raw || typeof raw !== 'object') return null;
+    const line = raw as Record<string, unknown>;
+    const ids = ['inventoryLotId', 'stockLocationId', 'medicineId', 'presentationId', 'packLevelId'] as const;
+    if (ids.some((key) => typeof line[key] !== 'string' || !ID.test(line[key] as string))) return null;
+    if (typeof line.saleUnit !== 'string' || !SALE_UNITS.has(line.saleUnit)) return null;
+    for (const key of ['canonicalUnitsPerSaleUnit', 'quantity'] as const) {
+      const count = line[key];
+      if (!Number.isSafeInteger(count) || (count as number) <= 0 || (count as number) > 10_000) return null;
+    }
+    lines.push({
+      inventoryLotId: line.inventoryLotId as string,
+      stockLocationId: line.stockLocationId as string,
+      medicineId: line.medicineId as string,
+      presentationId: line.presentationId as string,
+      packLevelId: line.packLevelId as string,
+      saleUnit: line.saleUnit as CounterDraftLine['saleUnit'],
+      canonicalUnitsPerSaleUnit: line.canonicalUnitsPerSaleUnit as number,
+      quantity: line.quantity as number,
+    });
+  }
+  return {
+    draftId: draft.draftId,
+    operatorUserId: (draft.operatorUserId as string | null) ?? null,
+    updatedAt: draft.updatedAt,
+    lines,
+  };
+}
 
 export function createCounterIndexedDbDriver(
   factory: IDBFactory | null = null
@@ -100,7 +185,24 @@ export type CounterCache = {
   /** The Ed25519 public key the counter verifies envelopes against. Not a secret. */
   snapshotPublicKey: string;
   snapshots: StoredCounterSnapshot[];
+  /** DEV-957 phase 2: offline bills being built (allowlist projection only). */
+  drafts?: CounterDraft[];
 };
+
+/** The cashier the counter's verified RULES snapshot names, if any. */
+export function counterOperatorOf(
+  snapshots: readonly StoredCounterSnapshot[]
+): { userId: string; name: string | null } | null {
+  const rules = snapshots.find((stored) => stored.envelope.kind === 'RULES' && stored.verified);
+  const operator =
+    rules?.payload && typeof rules.payload === 'object'
+      ? (rules.payload as { operator?: unknown }).operator
+      : null;
+  if (!operator || typeof operator !== 'object') return null;
+  const { userId, name } = operator as { userId?: unknown; name?: unknown };
+  if (typeof userId !== 'string' || !userId) return null;
+  return { userId, name: typeof name === 'string' && name.trim() ? name.trim() : null };
+}
 
 export type CounterRuntimeState = PersistedTerminalState<CounterQueueSnapshot, CounterCache>;
 
@@ -210,20 +312,52 @@ export class PharmacyCounterRuntime {
   }
 
   private async hydrateNow(): Promise<'ready' | 'unrecoverable'> {
-    const result = await readTerminalState<CounterQueueSnapshot, CounterCache>(
+    let result = await readTerminalState<CounterQueueSnapshot, CounterCache>(
       this.driver,
       this.scope,
       COUNTER_STORE_SCHEMA_VERSION
     );
+    if (
+      result.status === 'unrecoverable' &&
+      result.reason === 'SCHEMA_VERSION' &&
+      result.foundSchemaVersion === COUNTER_STORE_PREVIOUS_SCHEMA_VERSION
+    ) {
+      // DEV-957 phase 2: a phase-1 document gains an empty draft list and is written back
+      // at the new version. Its queue, leases, quotas and snapshots are kept as they are.
+      const previous = await readTerminalState<CounterQueueSnapshot, CounterCache>(
+        this.driver,
+        this.scope,
+        COUNTER_STORE_PREVIOUS_SCHEMA_VERSION
+      );
+      if (previous.status !== 'ok') return 'unrecoverable';
+      if (previous.state.queue && previous.state.queue.deviceId !== this.scope.deviceId)
+        return 'unrecoverable';
+      const upgraded: CounterRuntimeState = {
+        ...previous.state,
+        schemaVersion: COUNTER_STORE_SCHEMA_VERSION,
+        catalog: previous.state.catalog
+          ? { ...previous.state.catalog, drafts: [] }
+          : previous.state.catalog,
+      };
+      await writeTerminalState(this.driver, upgraded, COUNTER_STORE_SCHEMA_VERSION);
+      result = { status: 'ok', state: upgraded, revision: 0 };
+    }
     if (result.status === 'unrecoverable') return 'unrecoverable';
     if (result.status === 'ok') {
       if (result.state.queue && result.state.queue.deviceId !== this.scope.deviceId) {
         return 'unrecoverable';
       }
+      const catalog = result.state.catalog ?? this.cache();
       this.state = {
         ...result.state,
         queue: result.state.queue ?? createCounterQueue(this.scope.deviceId),
-        catalog: result.state.catalog ?? this.cache(),
+        catalog: {
+          ...catalog,
+          // Only what passes the projection is ever read back.
+          drafts: (catalog.drafts ?? [])
+            .map(projectCounterDraft)
+            .filter((draft): draft is CounterDraft => draft !== null),
+        },
       };
     }
     return 'ready';
@@ -286,15 +420,20 @@ export class PharmacyCounterRuntime {
     };
     const previousLease = this.safetyLeaseState().lease;
     const eventType = previousLease ? 'RENEWED' : 'ISSUED';
+    const snapshots = [
+      ...cache.snapshots.filter((row) => row.envelope.kind !== input.envelope.kind),
+      stored,
+    ];
+    // DEV-957 phase 2 (shared till): a price list signed for another cashier means another
+    // person is signed in on this counter, so the previous person's unfinished bills go.
+    const operator = counterOperatorOf(snapshots)?.userId ?? null;
+    const drafts =
+      input.envelope.kind === 'RULES'
+        ? (cache.drafts ?? []).filter((draft) => draft.operatorUserId === operator)
+        : (cache.drafts ?? []);
     const nextState: CounterRuntimeState = {
       ...this.state,
-      catalog: {
-        ...cache,
-        snapshots: [
-          ...cache.snapshots.filter((row) => row.envelope.kind !== input.envelope.kind),
-          stored,
-        ],
-      },
+      catalog: { ...cache, snapshots, drafts },
       queue: {
         ...this.queue(),
         safetyLeaseEvents: [
@@ -466,14 +605,16 @@ export class PharmacyCounterRuntime {
    */
   enqueue(
     input: CounterCommandInput,
-    matrix: Omit<CounterMatrixInputs, 'snapshots'>
+    matrix: Omit<CounterMatrixInputs, 'snapshots'>,
+    options: { draftId?: string } = {}
   ): Promise<CounterEnqueueResult> {
-    return this.exclusive(() => this.enqueueNow(input, matrix));
+    return this.exclusive(() => this.enqueueNow(input, matrix, options));
   }
 
   private async enqueueNow(
     input: CounterCommandInput,
-    matrix: Omit<CounterMatrixInputs, 'snapshots'>
+    matrix: Omit<CounterMatrixInputs, 'snapshots'>,
+    options: { draftId?: string }
   ): Promise<CounterEnqueueResult> {
     let queuedInput = input;
     if (input.action === 'MANUAL_OTC_SALE') {
@@ -515,16 +656,61 @@ export class PharmacyCounterRuntime {
         await this.commit(nextState);
       }
     }
-    const batchId = input.bucket?.inventoryLotId ?? null;
+    const batchIds = [
+      ...(input.bucket ? [input.bucket.inventoryLotId] : []),
+      ...(input.buckets ?? []).map((bucket) => bucket.inventoryLotId),
+    ];
     const result = enqueueCounterCommand(this.queue(), queuedInput, {
       ...matrix,
       snapshots: this.cachedSnapshotStates(),
       safetyLeaseOk: leaseCheck.ok,
-      batchRecalled: batchId !== null && leaseState.recalledBatchIds.includes(batchId),
+      batchRecalled: batchIds.some((batchId) => leaseState.recalledBatchIds.includes(batchId)),
     });
     if (!result.ok) return result;
-    await this.commit({ ...this.state, queue: result.snapshot });
+    // DEV-957 phase 2: the bill that became this sale is gone in the same write, so a
+    // reload shows the sale queued and never the same bill again.
+    const drafts = options.draftId
+      ? (this.cache().drafts ?? []).filter((row) => row.draftId !== options.draftId)
+      : this.cache().drafts;
+    await this.commit({
+      ...this.state,
+      queue: result.snapshot,
+      catalog: { ...this.cache(), ...(drafts ? { drafts } : {}) },
+    });
     return result;
+  }
+
+  /** DEV-957 phase 2: the offline bills this counter is building, newest first. */
+  drafts(): CounterDraft[] {
+    return [...(this.cache().drafts ?? [])].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  /**
+   * Save one offline bill (replacing the stored copy with the same id). An empty bill is
+   * removed. Only the allowlist projection is written; a bill that does not pass it, or
+   * one more than MAX_OFFLINE_DRAFTS, is refused and nothing changes.
+   */
+  saveDraft(draft: CounterDraft): Promise<boolean> {
+    return this.exclusive(async () => {
+      const projected = projectCounterDraft(draft);
+      if (!projected) return false;
+      if (this.queue().replay === 'STOPPED_REVOKED') return false;
+      const others = (this.cache().drafts ?? []).filter((row) => row.draftId !== projected.draftId);
+      if (projected.lines.length && others.length >= MAX_OFFLINE_DRAFTS) return false;
+      const drafts = projected.lines.length ? [...others, projected] : others;
+      await this.commit({ ...this.state, catalog: { ...this.cache(), drafts } });
+      return true;
+    });
+  }
+
+  /** Drop offline bills: one, or every one (sign-out, another person signed in). */
+  discardDrafts(draftId?: string): Promise<void> {
+    return this.exclusive(async () => {
+      const drafts = draftId
+        ? (this.cache().drafts ?? []).filter((row) => row.draftId !== draftId)
+        : [];
+      await this.commit({ ...this.state, catalog: { ...this.cache(), drafts } });
+    });
   }
 
   resume(): Promise<void> {

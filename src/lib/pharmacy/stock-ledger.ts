@@ -89,7 +89,28 @@ export function normalizeExpiryBoundary(expiresAt: Date): Date {
     : expiresAt;
 }
 
-const CANDIDATE_COLUMNS = Prisma.sql`
+/**
+ * DEV-957 phase 2: units a manager set aside for an enrolled counter to sell offline
+ * (OFF-03 device lot quotas), still open and unsold. Online selling, reserved order
+ * hand-over and transfers treat them as taken, so a unit promised to a counter is
+ * never sold twice. Read in the same fresh statement as the claims and reservations,
+ * after the candidate balances are locked: a grant locks that balance row before it
+ * sums (guard_pharmacy_device_lot_quota) and an offline replay consumes its own quota
+ * while holding the same locks, so every reader sees a settled figure. A replay
+ * consumes its quota before it allocates, so its own units are no longer held when
+ * its line is planned.
+ */
+const DEVICE_QUOTA_HELD = Prisma.sql`CASE WHEN balance."disposition" = 'AVAILABLE' THEN COALESCE((
+    SELECT SUM(quota."quotaUnits" - quota."consumedUnits") FROM "pharmacy_device_lot_quotas" quota
+    WHERE quota."organizationId" = balance."organizationId"
+      AND quota."branchId" = balance."branchId"
+      AND quota."inventoryLotId" = balance."inventoryLotId"
+      AND quota."stockLocationId" = balance."stockLocationId"
+      AND quota."releasedAt" IS NULL
+  ), 0) ELSE 0 END`;
+
+function candidateColumns(counterHolds: boolean) {
+  return Prisma.sql`
   balance."inventoryLotId"    AS "inventoryLotId",
   balance."stockLocationId"   AS "stockLocationId",
   balance."organizationId"    AS "organizationId",
@@ -111,10 +132,12 @@ const CANDIDATE_COLUMNS = Prisma.sql`
       AND reservation."inventoryLotId" = balance."inventoryLotId"
       AND reservation."stockLocationId" = balance."stockLocationId"
       AND reservation."status" = 'RESERVED'
-  ), 0))                         AS "availableUnits",
+  ), 0) - ${counterHolds ? DEVICE_QUOTA_HELD : Prisma.sql`0`}) AS "availableUnits",
   lot."unitsPerPack"          AS "unitsPerPack",
   balance."sealedPacks"       AS "sealedPacks",
   balance."looseUnits"        AS "looseUnits"`;
+}
+const CANDIDATE_COLUMNS = candidateColumns(true);
 
 const CANDIDATE_JOINS = Prisma.sql`
   FROM "pharmacy_stock_balances" balance
@@ -138,10 +161,11 @@ async function loadCandidates(
   db: ScopedDb,
   scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
   medicineId: string,
-  lock: boolean
+  lock: boolean,
+  counterHolds = true
 ): Promise<CandidateRow[]> {
   const query = Prisma.sql`
-    SELECT ${CANDIDATE_COLUMNS}
+    SELECT ${candidateColumns(counterHolds)}
     ${CANDIDATE_JOINS}
     WHERE balance."organizationId" = ${scope.organizationId}
       AND balance."branchId" = ${scope.branchId}
@@ -160,7 +184,7 @@ async function loadCandidates(
           AND reservation."inventoryLotId" = balance."inventoryLotId"
           AND reservation."stockLocationId" = balance."stockLocationId"
           AND reservation."status" = 'RESERVED'
-      ), 0)) > 0
+      ), 0) - ${counterHolds ? DEVICE_QUOTA_HELD : Prisma.sql`0`}) > 0
     ORDER BY batch."expiresAt" ASC NULLS LAST, lot."receivedAt" ASC NULLS FIRST,
              balance."inventoryLotId" ASC, balance."stockLocationId" ASC`;
 
@@ -1091,7 +1115,9 @@ export async function onHand(
   medicineId: string,
   at: Date
 ) {
-  const rows = await loadCandidates(db, scope, medicineId, false);
+  // The projection as counted on the shelf: units set aside for a counter are still
+  // there, so they are not taken off here (they are off every sale path above).
+  const rows = await loadCandidates(db, scope, medicineId, false, false);
   return rows.map((row) => {
     const bucket = {
       inventoryLotId: row.inventoryLotId,

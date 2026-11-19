@@ -56,6 +56,8 @@ vi.mock('@/lib/pharmacy/offline-devices', async (importOriginal) => ({
     branchId: 'branch_a',
     status: 'ACTIVE',
     revokedAt: null,
+    // DEV-957 phase 2: the device row now carries its credential expiry.
+    secretExpiresAt: new Date(Date.now() + 30 * 86_400_000),
   })),
 }));
 vi.mock('@/lib/pharmacy/sales', async (importOriginal) => ({

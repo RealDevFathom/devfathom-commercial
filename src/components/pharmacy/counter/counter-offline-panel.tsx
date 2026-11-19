@@ -11,6 +11,7 @@ import { searchOfflineCatalogue } from '@/lib/pharmacy/counter-offline-catalogue
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 
 import type { CounterOfflineView } from './use-counter-offline';
+import { CounterOfflineSale, OfflineQueue } from './counter-offline-sale';
 
 /** Whole hours (rounded down) between two instants, never negative. */
 function wholeHours(fromMs: number, toMs: number): number {
@@ -42,6 +43,21 @@ const SETTINGS_HREF = '/pharmacy/settings/counters';
  */
 export function CounterOfflinePanel({ offline }: { offline: CounterOfflineView }) {
   const { status, readiness, nowMs } = offline;
+  if (status === 'unenrolled' && offline.revokedNotice)
+    return (
+      <p className="text-text-body" role="alert" data-counter-offline-mode="revoked">
+        A manager revoked this counter, so its offline data was deleted from this computer and it
+        can no longer sell offline.{' '}
+        {offline.revokedNotice.discarded > 0
+          ? `${offline.revokedNotice.discarded} offline sale${offline.revokedNotice.discarded === 1 ? ' was' : 's were'} not sent and the server will not accept ${offline.revokedNotice.discarded === 1 ? 'it' : 'them'}; give the paper receipts to the manager. `
+          : ''}
+        A manager can enrol it again in{' '}
+        <Link className="font-medium text-text-strong underline" href={SETTINGS_HREF}>
+          Settings, Counter computers
+        </Link>
+        .
+      </p>
+    );
   if (status === 'unenrolled')
     return (
       <p className="text-text-body" data-counter-offline-mode="unenrolled">
@@ -72,15 +88,17 @@ export function CounterOfflinePanel({ offline }: { offline: CounterOfflineView }
         {offline.message ?? 'Offline mode is not available on this computer.'}
       </p>
     );
+  const selling =
+    readiness.snapshotsReady && readiness.prepared && offline.actions !== null && offline.rows.length > 0;
   return (
     <div className="space-y-3" data-counter-offline-mode="ready">
       {readiness.snapshotsReady ? (
         <>
           <p className="text-text-body">
             <span className="font-medium text-text-strong">Still works: </span>
-            price check of the {readiness.itemsAvailable} medicine
-            {readiness.itemsAvailable === 1 ? '' : 's'} this counter holds offline stock for.
-            Selling offline is not switched on yet: bills and payments wait for the connection.
+            {selling
+              ? `cash sales of the ${readiness.itemsAvailable} medicine${readiness.itemsAvailable === 1 ? '' : 's'} this counter holds offline stock for. Each sale is saved on this computer and sent when the connection returns.`
+              : `price check of the ${readiness.itemsAvailable} medicine${readiness.itemsAvailable === 1 ? '' : 's'} this counter holds offline stock for.`}
           </p>
           <p className="text-text-body">
             <span className="font-medium text-text-strong">Never offline: </span>
@@ -125,9 +143,16 @@ export function CounterOfflinePanel({ offline }: { offline: CounterOfflineView }
         </p>
       ) : null}
       {offline.message ? <p className="text-text-body">{offline.message}</p> : null}
-      {readiness.snapshotsReady && offline.rows.length > 0 ? (
-        <OfflinePriceCheck offline={offline} />
-      ) : null}
+      {selling ? (
+        <CounterOfflineSale offline={offline} />
+      ) : (
+        <>
+          {readiness.snapshotsReady && offline.rows.length > 0 ? (
+            <OfflinePriceCheck offline={offline} />
+          ) : null}
+          {offline.queued.length > 0 ? <OfflineQueue queued={offline.queued} /> : null}
+        </>
+      )}
     </div>
   );
 }
@@ -222,8 +247,8 @@ export function CounterOfflineOnly({ offline }: { offline: CounterOfflineView })
             Offline — this counter cannot reach the server.
           </p>
           <p className="text-text-body">
-            Bills, payments and the full search come back when the connection returns. This page
-            checks again by itself.
+            Online bills, card and khata payments and the full search come back when the
+            connection returns. This page checks again by itself.
           </p>
           <CounterOfflinePanel offline={offline} />
         </div>

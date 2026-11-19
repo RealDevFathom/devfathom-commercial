@@ -144,7 +144,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'take-payment-use-offline',
-        text: 'With Take payment, use an offline counter: start it, download stock, upload offline sales and renew its receipt numbers',
+        text: 'With Take payment, use an offline counter: start it, download stock, take cash sales of over-the-counter medicines on it while offline, upload offline sales, renew its receipt numbers and renew its own device credential before it expires',
         sites: { 'src/server/routers/pharmacy-offline.ts': 2 },
       },
       {

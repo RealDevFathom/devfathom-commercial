@@ -3848,8 +3848,19 @@ function ScopedPharmacyCounterConsole({
                 ? '1 payment waiting to send. Keep this bill open and do not take the money again.'
                 : pending === 'tender'
                   ? 'Keep this bill open and do not take the money again until the connection returns.'
-                  : 'Search, bill changes and payments wait until the connection returns.'}
+                  : offlineMode.actions
+                    ? // DEV-957 phase 2: the open online bill is parked, never copied into an
+                      // offline sale; its stock stays held on the server until it is finished
+                      // or voided online.
+                      'The open online bill waits for the connection. Take new cash sales below as offline bills.'
+                    : 'Search, bill changes and payments wait until the connection returns.'}
             </p>
+            {(paymentQueued || pending === 'tender') && offlineMode.actions ? (
+              <p className="text-text-body">
+                The payment on the open online bill is still waiting for the server. Do not ring
+                the same items up again as an offline sale.
+              </p>
+            ) : null}
             <CounterOfflinePanel offline={offlineMode} />
           </div>
           {paymentQueued ? (

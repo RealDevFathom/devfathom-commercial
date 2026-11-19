@@ -481,6 +481,20 @@ describeIfDatabase('DEV-957 counter enrolment procedures (runtime role, real ABA
     expect(device?.deviceSecretHash).toBeDefined();
   });
 
+  it('DEV-957 phase 2: the receipt-number gap report is for an assigned administrator of this tenant only', async () => {
+    expect(await refusal(act(cashierA, (api) => api.receiptNumberGaps({ branchId: ids.branchA })))).toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(await refusal(act(managerA, (api) => api.receiptNumberGaps({ branchId: ids.branchA })))).toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'branch_forbidden',
+    });
+    expect(await refusal(act(ownerB, (api) => api.receiptNumberGaps({ branchId: ids.branchA })))).toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(Array.isArray(await act(ownerA, (api) => api.receiptNumberGaps({ branchId: ids.branchA })))).toBe(true);
+  });
+
   it('refuses a non-ADMIN with admin:access at a branch they are not assigned to (branch_forbidden)', async () => {
     const attempts: Array<(api: OfflineCaller) => Promise<unknown>> = [
       (api) => api.enroll({ branchId: ids.branchA, name: 'Unassigned manager' }),

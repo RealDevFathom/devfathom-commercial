@@ -132,7 +132,7 @@ export function remainingReceiptNumbers(snapshot: CounterQueueSnapshot): number 
  */
 export function issueReceiptNumber(
   leases: readonly CounterLeaseCursor[]
-): { receiptNumber: number; leases: CounterLeaseCursor[] } | null {
+): { receiptNumber: number; leaseId: string; leases: CounterLeaseCursor[] } | null {
   let chosen: CounterLeaseCursor | null = null;
   for (const lease of leases) {
     if (lease.nextNumber > lease.blockEnd) continue;
@@ -142,6 +142,7 @@ export function issueReceiptNumber(
   const receiptNumber = chosen.nextNumber;
   return {
     receiptNumber,
+    leaseId: chosen.leaseId,
     leases: leases.map((lease) =>
       lease.leaseId === chosen.leaseId ? { ...lease, nextNumber: receiptNumber + 1 } : lease
     ),
@@ -163,6 +164,23 @@ export function quotaUnitsAvailable(
       candidate.stockLocationId === bucket.stockLocationId
   );
   return quota ? quota.quotaUnits - quota.consumedUnits : 0;
+}
+
+/** One draw per bucket: two lines of the same lot and location add up. */
+function mergeDraws(
+  buckets: ReadonlyArray<QuotaBucketRef & { units: number }>
+): Array<QuotaBucketRef & { units: number }> {
+  const merged = new Map<string, QuotaBucketRef & { units: number }>();
+  for (const bucket of buckets) {
+    const key = `${bucket.inventoryLotId}:${bucket.stockLocationId}`;
+    const prior = merged.get(key);
+    merged.set(key, {
+      inventoryLotId: bucket.inventoryLotId,
+      stockLocationId: bucket.stockLocationId,
+      units: (prior?.units ?? 0) + bucket.units,
+    });
+  }
+  return [...merged.values()];
 }
 
 function consumeQuota(
@@ -189,6 +207,12 @@ export type CounterCommandInput = {
   /** The bucket this command draws stock from, and how much. */
   bucket?: QuotaBucketRef | null;
   requestedUnits?: number;
+  /**
+   * DEV-957 phase 2: a bill with several lines draws from several buckets. Each one must
+   * hold enough of this counter's quota, and each is debited in the same returned
+   * snapshot (or none is). Takes the place of `bucket` and `requestedUnits`.
+   */
+  buckets?: ReadonlyArray<QuotaBucketRef & { units: number }>;
   requestedCreditMinor?: number;
   /** Defaults true for sale actions, keeping older callers fail closed. */
   medicineSale?: boolean;
@@ -260,12 +284,27 @@ export function enqueueCounterCommand(
     };
   }
 
-  const requestedUnits = input.requestedUnits ?? 0;
+  // DEV-957 phase 2: several buckets are summed per bucket and the matrix judges the
+  // tightest one, so a bill is refused when ANY of its lots is short.
+  const draws = input.buckets ? mergeDraws(input.buckets) : null;
+  const tightest = draws
+    ? draws.reduce<{ bucket: QuotaBucketRef; units: number } | null>((worst, draw) => {
+        const slack = quotaUnitsAvailable(snapshot, draw) - draw.units;
+        if (!worst) return { bucket: draw, units: draw.units };
+        return slack < quotaUnitsAvailable(snapshot, worst.bucket) - worst.units
+          ? { bucket: draw, units: draw.units }
+          : worst;
+      }, null)
+    : null;
+  const requestedUnits = tightest ? tightest.units : (input.requestedUnits ?? 0);
   const decision = decideOfflineAction(input.action, {
     nowMs: matrix.nowMs,
     snapshots: matrix.snapshots,
     receiptNumbersRemaining: remainingReceiptNumbers(snapshot),
-    quotaUnitsAvailable: quotaUnitsAvailable(snapshot, input.bucket ?? null),
+    quotaUnitsAvailable: quotaUnitsAvailable(
+      snapshot,
+      tightest ? tightest.bucket : (input.bucket ?? null)
+    ),
     requestedUnits,
     requestedCreditMinor: input.requestedCreditMinor ?? 0,
     cachedCreditRemainingMinor: matrix.cachedCreditRemainingMinor,
@@ -280,8 +319,18 @@ export function enqueueCounterCommand(
     return { ok: false, reason: decision.reason, message: decision.message, decision };
   }
 
+  if (draws && draws.some((draw) => !Number.isSafeInteger(draw.units) || draw.units <= 0)) {
+    return {
+      ok: false,
+      reason: 'QUOTA_EXCEEDED',
+      message: 'Every line needs a whole number of units.',
+      decision,
+    };
+  }
+
   let leases = snapshot.leases;
   let receiptNumber: number | null = null;
+  let leaseId: string | null = null;
   if (decision.rule.requires.includes('RECEIPT_NUMBER')) {
     const issued = issueReceiptNumber(leases);
     // `decideOfflineAction` already refused an empty runway; this is the
@@ -295,13 +344,25 @@ export function enqueueCounterCommand(
       };
     }
     receiptNumber = issued.receiptNumber;
+    leaseId = issued.leaseId;
     leases = issued.leases;
   }
 
-  const quotas =
-    decision.rule.requires.includes('STOCK_QUOTA') && input.bucket && requestedUnits > 0
-      ? consumeQuota(snapshot.quotas, input.bucket, requestedUnits)
-      : snapshot.quotas;
+  const quotas = !decision.rule.requires.includes('STOCK_QUOTA')
+    ? snapshot.quotas
+    : draws
+      ? draws.reduce((held, draw) => consumeQuota(held, draw, draw.units), snapshot.quotas)
+      : input.bucket && requestedUnits > 0
+        ? consumeQuota(snapshot.quotas, input.bucket, requestedUnits)
+        : snapshot.quotas;
+
+  // DEV-957 phase 2: the leased receipt names the block its number was drawn from, so
+  // the server checks the number against exactly that lease at replay.
+  const leasedReceipt = input.payload.leasedReceipt;
+  const payload =
+    leaseId && leasedReceipt && typeof leasedReceipt === 'object' && !Array.isArray(leasedReceipt)
+      ? { ...input.payload, leasedReceipt: { ...leasedReceipt, leaseId } }
+      : input.payload;
 
   const commandId = newId();
   const command: CounterQueuedCommand = {
@@ -309,7 +370,7 @@ export function enqueueCounterCommand(
     idempotencyKey: commandId,
     sequence: snapshot.nextSequence,
     action: input.action,
-    payload: input.payload,
+    payload,
     clientOriginAt: input.clientOriginAt,
     receiptNumber,
     status: 'PENDING',

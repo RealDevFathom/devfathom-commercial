@@ -305,9 +305,10 @@ function PrepareThisComputer({
         Reserves a block of receipt numbers for this counter and earmarks, for each listed
         over-the-counter batch, the units this counter may sell while the connection is down
         (suggested: half the units on hand, at most 20). Other counters cannot be given the same
-        units. Until offline selling is switched on, online sales can still sell them.
-        Prescription-only, controlled, restricted, high-alert and look-alike medicines are never
-        listed. Revoking the counter hands its earmarked units back.
+        units, and online sales at any counter cannot sell them either: the server keeps them for
+        this counter until it sells them offline or is revoked. Prescription-only, controlled,
+        restricted, high-alert and look-alike medicines are never listed. Revoking the counter
+        hands its earmarked units back.
       </p>
       {plan.isLoading ? (
         <p className="text-sm text-text-muted" role="status">
@@ -443,6 +444,8 @@ type CounterRow = {
   status: 'ACTIVE' | 'REVOKED';
   revokedAt: string | null;
   lastSeenAt: string | null;
+  credentialExpiresAt: string;
+  credentialExpired: boolean;
   enrolledAt: string;
   receiptNumbersLeft: number;
   offlineUnitsLeft: number;
@@ -592,6 +595,13 @@ function BranchCounters({
                       : `${row.receiptNumbersLeft} receipt numbers and ${row.offlineUnitsLeft} offline units held`}{' '}
                     · last seen {when(row.lastSeenAt, 'not recorded yet')}
                   </p>
+                  {row.status === 'ACTIVE' ? (
+                    <p className="text-xs text-text-muted">
+                      {!row.credentialExpired
+                        ? `Credential valid until ${when(row.credentialExpiresAt, 'unknown')}; the counter renews it by itself when it opens online in its last 7 days.`
+                        : `Credential expired ${when(row.credentialExpiresAt, 'unknown')}: it gets no new price list, receipt numbers or stock for offline selling. Rotate it from that computer to renew it.`}
+                    </p>
+                  ) : null}
                 </div>
                 {row.status === 'ACTIVE' ? (
                   confirming?.id === row.id ? (
@@ -683,7 +693,65 @@ function BranchCounters({
         A counter&apos;s credential is rotated from the computer that holds it. Another computer is
         revoked here and enrolled again from that computer.
       </p>
+      <p className="max-w-prose text-xs text-text-muted" data-counter-revoke-rule="">
+        Revoking from another computer: from that moment the server refuses everything the
+        revoked counter sends, including offline sales it has not sent yet, and its earmarked
+        units go back to the branch. The next time it reaches the server it deletes its offline
+        data, its unfinished bills and its stored page, and it can never take another sale;
+        once its signed price list ends (at most 8 hours) it cannot sell offline even if it
+        never reconnects. Sales it sent before the revoke stay booked.
+      </p>
       <NoticeLine notice={notice} />
+      <ReceiptNumberGaps branchId={branchId} />
+    </div>
+  );
+}
+
+/**
+ * DEV-957 phase 2: receipt numbers a revoked counter, or one whose credential expired,
+ * reserved and never printed. They are never reused; this explains each gap.
+ */
+function ReceiptNumberGaps({ branchId }: { branchId: string }) {
+  const gaps = trpc.pharmacyOffline.receiptNumberGaps.useQuery({ branchId }, { retry: false });
+  return (
+    <div className="space-y-2 border-t border-border-subtle pt-4" data-counter-receipt-gaps="">
+      <h3 className="text-sm font-semibold text-text-strong">Receipt numbers never used</h3>
+      {gaps.isLoading ? (
+        <p className="text-sm text-text-muted" role="status">
+          Loading receipt number gaps…
+        </p>
+      ) : gaps.isError ? (
+        <p className="text-sm text-destructive" role="alert">
+          Receipt number gaps could not be loaded. Reload the page to try again.
+        </p>
+      ) : !gaps.data?.length ? (
+        <p className="text-sm text-text-muted">
+          No gaps: every receipt number reserved by a revoked or expired counter was used.
+        </p>
+      ) : (
+        <>
+          <p className="max-w-prose text-xs text-text-muted">
+            These numbers were reserved for a counter and will never be printed, by it or by any
+            other counter or online sale. Each line says why, for the accountant.
+          </p>
+          <ul className="divide-y divide-border-subtle text-sm">
+            {gaps.data.map((gap) => (
+              <li key={gap.leaseId} className="py-2 text-text-body">
+                <span className="font-medium tabular-nums text-text-strong">
+                  {gap.firstUnused === gap.lastUnused
+                    ? `No. ${gap.firstUnused}`
+                    : `Nos. ${gap.firstUnused} to ${gap.lastUnused}`}
+                </span>{' '}
+                ({gap.unused} unused, block {gap.blockStart} to {gap.blockEnd}) ·{' '}
+                {gap.deviceName} ·{' '}
+                {gap.cause === 'REVOKED'
+                  ? `counter revoked ${when(gap.since, 'unknown')}`
+                  : `credential expired ${when(gap.since, 'unknown')}; unused unless a manager renews it`}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   );
 }

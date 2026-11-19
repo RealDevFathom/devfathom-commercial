@@ -20,8 +20,18 @@ import type { PharmacyOfflineSnapshotKind } from './offline-action-matrix';
 /** Receipt numbers a manager reserves when preparing; the server caps a block at 1,000. */
 export const COUNTER_PREPARE_RECEIPT_BLOCK = 200;
 
+export type CounterEstablishedSession = {
+  sessionToken: string;
+  snapshotPublicKey: string;
+  device: { id: string };
+  /** DEV-957 phase 2: when the server stops renewing this counter, and whether to renew now. */
+  credential?: { expiresAt: string; expired: boolean; renewDue: boolean };
+};
+
 export type CounterOfflineTransport = {
-  establish(): Promise<{ sessionToken: string; snapshotPublicKey: string; device: { id: string } }>;
+  establish(): Promise<CounterEstablishedSession>;
+  /** DEV-957 phase 2: rotate this counter's own secret; the new one comes back once. */
+  renew?(token: string): Promise<{ secret: string; credentialExpiresAt: string }>;
   snapshots(token: string): Promise<{ snapshots: CounterSignedSnapshot[]; publicKey: string }>;
   lease(token: string, size: number): Promise<unknown>;
   quota(
@@ -31,6 +41,11 @@ export type CounterOfflineTransport = {
 };
 
 export type CounterOfflineDeps = {
+  /**
+   * DEV-957 phase 2: keep a renewed secret as this browser's signing key (a new
+   * non-extractable WebCrypto key in its own store), then drop the string.
+   */
+  rekey?: (secret: string) => Promise<void>;
   driver: TerminalStorageDriver;
   verifier: SnapshotVerifier;
   transport: CounterOfflineTransport;
@@ -45,7 +60,23 @@ export type OpenedCounter = {
   /** Why the server could not be used, when it could not. */
   error: unknown;
   hydrated: 'ready' | 'unrecoverable';
+  /**
+   * DEV-957 phase 2: the server confirmed this counter is revoked. Its local store has
+   * been wiped (queued sales included: the server refuses a revoked counter's sales), and
+   * `discarded` says how many unsent sales were on it.
+   */
+  revoked?: { discarded: number };
+  /** When the server stops renewing this counter's offline selling, once known online. */
+  credentialExpiresAt?: string | null;
+  /** The credential could not be renewed although it was due (it still works until expiry). */
+  renewalFailed?: boolean;
 };
+
+/** The server's answer code on a refused counter request, when it gave one. */
+function refusalCode(error: unknown): string | null {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' ? code : null;
+}
 
 function scopeOf(enrolment: CounterEnrolment) {
   return {
@@ -68,10 +99,27 @@ export async function openCounterRuntime(
   let sessionToken: string | null = null;
   let publicKey = '';
   let error: unknown = null;
+  let credentialExpiresAt: string | null = null;
+  let renewalFailed = false;
   if (online) {
     try {
-      const established = await deps.transport.establish();
+      let established = await deps.transport.establish();
       if (established.device.id !== enrolment.deviceId) throw new Error('device_mismatch');
+      credentialExpiresAt = established.credential?.expiresAt ?? null;
+      // DEV-957 phase 2: renew the secret while it is still valid, then start a session
+      // with the new one (the old session names the old secret and stops working).
+      if (established.credential?.renewDue && deps.transport.renew && deps.rekey) {
+        try {
+          const renewed = await deps.transport.renew(established.sessionToken);
+          await deps.rekey(renewed.secret);
+          established = await deps.transport.establish();
+          if (established.device.id !== enrolment.deviceId) throw new Error('device_mismatch');
+          credentialExpiresAt = established.credential?.expiresAt ?? renewed.credentialExpiresAt;
+        } catch (failure) {
+          if (refusalCode(failure) === 'device_revoked') throw failure;
+          renewalFailed = true;
+        }
+      }
       sessionToken = established.sessionToken;
       publicKey = established.snapshotPublicKey;
     } catch (failure) {
@@ -84,6 +132,22 @@ export async function openCounterRuntime(
     deps.verifier,
     publicKey
   );
+  // DEV-957 phase 2 (remote revoke): only the server's own word that this counter is
+  // revoked wipes it. Nothing can be queued afterwards: the document is gone, the queue
+  // reads STOPPED_REVOKED in memory, and the caller forgets the enrolment and its key.
+  if (refusalCode(error) === 'device_revoked') {
+    // Read first, so the counter can say how many unsent sales the revoke cost.
+    await runtime.hydrate().catch(() => 'unrecoverable');
+    const discarded = (await runtime.revoke().catch(() => null))?.commands ?? 0;
+    return {
+      runtime,
+      sessionToken: null,
+      error,
+      hydrated: 'ready',
+      revoked: { discarded },
+      credentialExpiresAt,
+    };
+  }
   const hydrated = await runtime.hydrate();
   // A document this runtime cannot read (another counter's queue, another
   // schema, corrupt) must never be overwritten by a lease or a snapshot: with
@@ -91,7 +155,7 @@ export async function openCounterRuntime(
   // recovery guidance instead.
   if (hydrated === 'unrecoverable')
     return { runtime, sessionToken: null, error: new Error('unrecoverable_document'), hydrated };
-  return { runtime, sessionToken, error, hydrated };
+  return { runtime, sessionToken, error, hydrated, credentialExpiresAt, renewalFailed };
 }
 
 export type SnapshotInstallReport = {
@@ -218,4 +282,28 @@ export async function prepareCounterForOffline(
   }
   report.snapshots = await installCounterSnapshots(runtime, sessionToken, deps);
   return report;
+}
+
+/**
+ * DEV-957 phase 2 (shared till): forget every offline bill being built on this computer,
+ * for sign-out. Queued sales are kept: they are money already taken and must still be
+ * sent. Never throws; a computer that is not a counter has nothing to forget.
+ */
+export async function discardCounterDrafts(
+  enrolment: CounterEnrolment | null,
+  driver: TerminalStorageDriver
+): Promise<void> {
+  if (!enrolment) return;
+  try {
+    // Never verifies anything: it only reads the stored document and rewrites its drafts.
+    const runtime = new PharmacyCounterRuntime(scopeOf(enrolment), driver, { verify: () => false }, '');
+    try {
+      if ((await runtime.hydrate()) === 'ready' && runtime.drafts().length > 0)
+        await runtime.discardDrafts();
+    } finally {
+      runtime.close();
+    }
+  } catch {
+    // Storage blocked or unreadable: nothing to forget there.
+  }
 }

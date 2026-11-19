@@ -16,6 +16,11 @@ import {
   revokePharmacyCounter,
   resolvePharmacyCounterBySecret,
 } from '@/lib/pharmacy/offline-devices';
+import { mrpRoundingIncrementForLot } from '@/lib/pharmacy/medicine';
+import {
+  pharmacyDeviceSecretDueForRenewal,
+  pharmacyDeviceSecretExpired,
+} from '@/lib/pharmacy/device-secret-expiry';
 import {
   issueOfflineSnapshot,
   snapshotPayloadHash,
@@ -67,9 +72,13 @@ import { pharmacyBusinessDate } from '@/lib/pharmacy/business-day';
 import { readPharmacyDayClock } from '@/lib/pharmacy/business-day-clock';
 import {
   cookieCredentialAllowed,
+  counterDeviceCookieOptions,
   counterDeviceCredential,
   exactSameOrigin,
+  PHARMACY_COUNTER_DEVICE_COOKIE,
+  PHARMACY_COUNTER_DEVICE_COOKIE_MAX_AGE,
 } from '@/lib/pharmacy/counter-device-cookie';
+import { NextResponse } from 'next/server';
 import {
   OFFLINE_PREPARATION_LOT_LIMIT,
   offlinePreparationPlan,
@@ -136,6 +145,7 @@ export const pharmacyOfflineRouter = router({
           revokedAt: true,
           lastSeenAt: true,
           createdAt: true,
+          secretExpiresAt: true,
         },
         orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
         take: 100,
@@ -175,6 +185,9 @@ export const pharmacyOfflineRouter = router({
         revokedAt: device.revokedAt?.toISOString() ?? null,
         lastSeenAt: device.lastSeenAt?.toISOString() ?? null,
         enrolledAt: device.createdAt.toISOString(),
+        // DEV-957 phase 2: when the server stops renewing this counter's offline selling.
+        credentialExpiresAt: device.secretExpiresAt.toISOString(),
+        credentialExpired: pharmacyDeviceSecretExpired(device, new Date()),
         receiptNumbersLeft: leases
           .filter((lease) => lease.deviceId === device.id)
           .reduce((total, lease) => total + Math.max(0, lease.blockEnd - lease.nextNumber + 1), 0),
@@ -213,6 +226,22 @@ export const pharmacyOfflineRouter = router({
         return { lots, limit: OFFLINE_PREPARATION_LOT_LIMIT };
       })
     ),
+  /**
+   * DEV-957 phase 2: receipt numbers a revoked counter, or one whose credential expired,
+   * reserved but never printed. They are never reused (a block's numbers are issued once,
+   * from its cursor, and no other counter or online sale takes them), so this lists every
+   * such gap with its cause, for an accountant to explain each missing number. A revoked
+   * counter's gap is final; an expired counter's numbers stay unused unless a manager
+   * renews it in Settings, Counter computers.
+   */
+  receiptNumberGaps: adminProcedure.input(branchInput).query(({ ctx, input }) =>
+    ctx.db.$transaction(async (tx) => {
+      const db = tx as ScopedDb;
+      const organizationId = ctx.entitlements.organizationId;
+      await managedBranch(db, ctx.session.user, organizationId, input.branchId);
+      return receiptNumberGaps(db, { organizationId, branchId: input.branchId }, new Date());
+    })
+  ),
   enroll: adminProcedure
     .input(branchInput.extend({ name: z.string().trim().min(1).max(100) }))
     .mutation(({ ctx, input }) =>
@@ -313,6 +342,68 @@ export const pharmacyOfflineRouter = router({
     })
   ),
 });
+
+export type ReceiptNumberGap = {
+  deviceId: string;
+  deviceName: string;
+  leaseId: string;
+  blockStart: number;
+  blockEnd: number;
+  /** The first and last number of the block that were never printed. */
+  firstUnused: number;
+  lastUnused: number;
+  unused: number;
+  cause: 'REVOKED' | 'EXPIRED';
+  /** When the counter was revoked, or when its credential expired. */
+  since: string;
+};
+
+/** Every block of this branch with numbers a revoked or expired counter can no longer print. */
+export async function receiptNumberGaps(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string },
+  now: Date
+): Promise<ReceiptNumberGap[]> {
+  const devices = await db.pharmacyRegisteredDevice.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      kind: 'PHARMACY_COUNTER',
+      OR: [{ status: 'REVOKED' }, { revokedAt: { not: null } }, { secretExpiresAt: { lte: now } }],
+    },
+    select: { id: true, name: true, status: true, revokedAt: true, secretExpiresAt: true },
+    take: 500,
+  });
+  if (!devices.length) return [];
+  const byId = new Map(devices.map((device) => [device.id, device]));
+  const leases = await db.pharmacyReceiptNumberLease.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      deviceId: { in: devices.map((device) => device.id) },
+    },
+    select: { id: true, deviceId: true, blockStart: true, blockEnd: true, nextNumber: true },
+    orderBy: [{ blockStart: 'asc' }],
+  });
+  return leases
+    .filter((lease) => lease.nextNumber <= lease.blockEnd)
+    .map((lease) => {
+      const device = byId.get(lease.deviceId)!;
+      const revoked = device.status === 'REVOKED' || device.revokedAt !== null;
+      return {
+        deviceId: device.id,
+        deviceName: device.name,
+        leaseId: lease.id,
+        blockStart: lease.blockStart,
+        blockEnd: lease.blockEnd,
+        firstUnused: lease.nextNumber,
+        lastUnused: lease.blockEnd,
+        unused: lease.blockEnd - lease.nextNumber + 1,
+        cause: revoked ? ('REVOKED' as const) : ('EXPIRED' as const),
+        since: (revoked ? (device.revokedAt ?? device.secretExpiresAt) : device.secretExpiresAt).toISOString(),
+      };
+    });
+}
 
 class CounterTransportError extends Error {
   constructor(
@@ -778,7 +869,17 @@ function verifyToken(token: string, ctx: PharmacyCounterContext) {
   )
     throw new CounterTransportError('invalid_terminal_session', 401);
 }
-export type CounterOperation = 'establish' | 'snapshot' | 'replay' | 'lease' | 'quota' | 'reject';
+export type CounterOperation =
+  | 'establish'
+  | 'snapshot'
+  | 'replay'
+  | 'lease'
+  | 'quota'
+  | 'reject'
+  | 'renew';
+
+/** DEV-957 phase 2: what an expired device secret may no longer be used for. */
+const EXTENDS_OFFLINE_SELLING: ReadonlySet<CounterOperation> = new Set(['snapshot', 'lease', 'quota']);
 
 /** Live web actor plus enrolled device, with an actor/device-bound terminal
  * token after establishment. Errors are mapped only outside the transaction. */
@@ -804,6 +905,21 @@ function scalar(value: unknown): string | number | boolean | null {
   return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
     ? value
     : null;
+}
+
+/** The signed RULES payload a replayed command carried (verified before any audit is written). */
+function rulesPayload(body: unknown): unknown {
+  const snapshots = field(body, 'snapshots');
+  if (!Array.isArray(snapshots)) return null;
+  return field(
+    snapshots.find((snapshot) => field(field(snapshot, 'envelope'), 'kind') === 'RULES'),
+    'payload'
+  );
+}
+
+/** The cashier the signed RULES named (DEV-957 phase 2), or null for an older price list. */
+function offlineOperator(body: unknown): string | null {
+  return text(field(field(rulesPayload(body), 'operator'), 'userId'));
 }
 
 function text(value: unknown): string | null {
@@ -850,6 +966,15 @@ export function counterAuditEntry(
           units: scalar(field(body, 'units')),
         },
       };
+    case 'renew':
+      // Never the new secret: only when it now expires.
+      return {
+        action: 'renewCounterCredential',
+        operation: 'UPDATE',
+        targetType: 'PharmacyRegisteredDevice',
+        targetId: text(field(field(outcome, 'device'), 'id')),
+        metadata: { credentialExpiresAt: text(field(outcome, 'credentialExpiresAt')) },
+      };
     case 'snapshot':
       return {
         action: 'issueOfflineSnapshot',
@@ -873,6 +998,10 @@ export function counterAuditEntry(
             : {}),
           sequence: scalar(field(body, 'sequence')),
           commandAction: scalar(field(body, 'action')),
+          // DEV-957 phase 2: the cashier signed in on the counter when it was handed its
+          // price list (the signed RULES snapshot the sale carried), who served the sale
+          // offline. The replay itself is by the person signed in now (actorId).
+          ...(offlineOperator(body) !== null ? { offlineOperatorId: offlineOperator(body) } : {}),
         },
       };
   }
@@ -973,8 +1102,16 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
         if (!leasingManager && !(await allows(manager ? 'admin:access' : 'pharmacy:orders')))
           throw new CounterTransportError('forbidden', 403);
         const device = await resolvePharmacyCounterBySecret(db, secret);
-        if (!device || device.status !== 'ACTIVE' || device.revokedAt)
-          throw new CounterTransportError('unauthorized_device', 401);
+        if (!device) throw new CounterTransportError('unauthorized_device', 401);
+        // DEV-957 phase 2: a counter revoked from another computer is told so in so many
+        // words, so it can wipe its local store (only a confirmed revocation purges).
+        if (device.status !== 'ACTIVE' || device.revokedAt)
+          throw new CounterTransportError('device_revoked', 401);
+        // An expired secret can still open a session and replay what it signed while it was
+        // valid, but it is handed no new price list, receipt block or stock to sell offline.
+        const credentialExpired = pharmacyDeviceSecretExpired(device, new Date());
+        if (credentialExpired && (EXTENDS_OFFLINE_SELLING.has(operation) || operation === 'renew'))
+          throw new CounterTransportError('device_credential_expired', 401);
         const ctx = {
           db,
           scope: {
@@ -1021,9 +1158,40 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
               organizationId: device.organizationId,
             },
             snapshotPublicKey: snapshotPublicKey(),
+            credential: {
+              expiresAt: device.secretExpiresAt.toISOString(),
+              expired: credentialExpired,
+              renewDue: pharmacyDeviceSecretDueForRenewal(device, new Date()),
+            },
           };
         }
         verifyToken(request.headers.get('x-terminal-session') ?? '', ctx);
+        if (operation === 'renew') {
+          // DEV-957 phase 2: the counter rotates its own secret while it is still valid.
+          // The new secret goes back once, for this browser's non-extractable signing key
+          // and (on the cookie path) its httpOnly cookie; the old one stops working here.
+          z.object({}).strict().parse(body);
+          const now = new Date();
+          const rotated = await rotatePharmacyCounterSecret(
+            db,
+            ctx.scope,
+            device.id,
+            device.deviceSecretHash,
+            { now, requireUnexpired: true }
+          ).catch((error: unknown) => {
+            if (error instanceof PharmacyDeviceError)
+              throw new CounterTransportError(
+                error.reason === 'EXPIRED' ? 'device_credential_expired' : 'device_revoked',
+                401
+              );
+            throw error;
+          });
+          return {
+            device: { id: rotated.device.id },
+            secret: rotated.secret,
+            credentialExpiresAt: rotated.device.secretExpiresAt.toISOString(),
+          };
+        }
         if (operation === 'lease') {
           const input = z
             .object({
@@ -1066,10 +1234,36 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
               unitsPerPack: true,
               printedMrpMinor: true,
               receivedExpiresAt: true,
+              batch: { select: { batchNumber: true } },
             },
             take: 1000,
             orderBy: { id: 'asc' },
           });
+          // DEV-957 phase 2: the counter prices an offline line exactly as addSaleLine does
+          // (priceFromLot with the lot's own MED-08 rounding increment), so each signed lot
+          // carries that increment.
+          const mrpRules = lots.length
+            ? await db.medicinePackMrp.findMany({
+                where: {
+                  organizationId: ctx.scope.organizationId,
+                  OR: lots.flatMap((lot) =>
+                    lot.batch.batchNumber === null
+                      ? []
+                      : [{ packLevelId: lot.packLevelId, batchReference: lot.batch.batchNumber }]
+                  ),
+                },
+                select: { packLevelId: true, batchReference: true, roundingIncrementMinor: true },
+              })
+            : [];
+          const pricedLots = lots.map(({ batch, ...lot }) => ({
+            ...lot,
+            // Printed on the offline receipt, as online.
+            batchNumber: batch.batchNumber,
+            roundingIncrementMinor: mrpRoundingIncrementForLot(mrpRules, {
+              packLevelId: lot.packLevelId,
+              batchNumber: batch.batchNumber,
+            }),
+          }));
           // #519: every recalled lot in this branch, uncapped by the catalogue
           // limit, so the counter blocks it offline under the signed lease.
           const recalledLots = await db.pharmacyInventoryLot.findMany({
@@ -1097,7 +1291,9 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
             select: {
               id: true,
               productName: true,
-              presentations: { select: { id: true, presentation: true, packLevels: true } },
+              presentations: {
+                select: { id: true, presentation: true, dosageForm: true, packLevels: true },
+              },
             },
             take: 1000,
             orderBy: { id: 'asc' },
@@ -1136,15 +1332,27 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
             recalledBatchIds: recalledLots.map((lot) => lot.id),
           };
           const merchant = await readManualPaymentSettings(db, ctx.scope);
+          const branchName = await db.pharmacyBranch.findFirst({
+            where: { id: device.branchId, organizationId: ctx.scope.organizationId },
+            select: { name: true },
+          });
           const payloads = {
             CATALOG: catalog,
-            PRICES: lots,
+            PRICES: pricedLots,
             TAX: taxes,
             RULES: {
               controlledMedicinesPermittedOffline: false,
               rxPermittedOffline: false,
               manualMerchantPolicies: manualMerchantPolicies(merchant.settings),
               manualMerchantRevision: merchant.revision,
+              // DEV-957 phase 2: who is signed in on this counter now. Sales it takes offline
+              // under this list are attributed to them on the receipt and in the replay audit.
+              operator: { userId: ctx.scope.actorId, name: actor.session.user.name ?? null },
+              // The branch name the on-screen offline receipt shows.
+              branchName: branchName?.name ?? null,
+              // When the server stops issuing this counter new price lists.
+              // (Never a key named like a credential: the counter's local store refuses those.)
+              deviceAccessUntil: device.secretExpiresAt.toISOString(),
             },
             LOT_BALANCES: quotas,
           };
@@ -1247,6 +1455,20 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
         actor.organization.id,
         withCounterAudit(operation, request, actor.session.user, body, audit, counterWork)
       );
+      if (operation === 'renew') {
+        const response = NextResponse.json(result, {
+          status: 200,
+          headers: { 'Cache-Control': 'no-store' },
+        });
+        // The browser's cookie follows the rotation; a bearer client keeps its own copy.
+        if (credential.cookie)
+          response.cookies.set(
+            PHARMACY_COUNTER_DEVICE_COOKIE,
+            (result as { secret: string }).secret,
+            counterDeviceCookieOptions(request, PHARMACY_COUNTER_DEVICE_COOKIE_MAX_AGE)
+          );
+        return response;
+      }
       return Response.json(result, {
         status: operation === 'establish' ? 201 : 200,
         headers: { 'Cache-Control': 'no-store' },
