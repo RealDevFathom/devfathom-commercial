@@ -119,6 +119,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     'Payment has already been started or taken on this bill, so its whole-bill discount can no longer be given or changed.',
   BILL_DISCOUNT_LOCKED_BY_PAYMENT:
     'This bill has a whole-bill discount and a payment has been taken, so no item can be added to it. Finish this bill, then start a new one for more items.',
+  // DEV-966: a cash-on-delivery bill priced by the prepaid tier when the rider collected.
+  BILL_DISCOUNT_LOCKED_BY_PREPAID_TIER:
+    "The customer's prepaid discount has already been priced on top of this bill's whole-bill discount, so the bill can no longer change. Finish this bill as it is, then start a new bill for any other item.",
   VOUCHER_CATEGORY_REFUSED:
     'Vouchers apply to non-medicine items only. Remove the voucher from this line.',
   VOUCHER_INVALID: 'That voucher is not valid at this branch. Check the voucher and try again.',

@@ -3,6 +3,7 @@ import {
   billAllocationDiscount,
   billDiscountExclusion,
   BillDiscountRefused,
+  billShareHeldByTier,
   cappedLargestRemainder,
   largestRemainder,
   planBillDiscount,
@@ -302,5 +303,14 @@ describe('planBillDiscount (DEV-956)', () => {
       // The maximum the counter reports can always be given in full.
       if (capacity > 0) check(planBillDiscount(lines, { kind: 'AMOUNT', minor: capacity }, limits));
     }
+  });
+});
+
+describe('DEV-966 billShareHeldByTier', () => {
+  it('holds a bill share only when a prepaid tier share was priced on top of it', () => {
+    expect(billShareHeldByTier({ billDiscountMinor: 190, tierDiscountMinor: 10 })).toBe(true);
+    expect(billShareHeldByTier({ billDiscountMinor: 190, tierDiscountMinor: 0 })).toBe(false);
+    expect(billShareHeldByTier({ billDiscountMinor: 0, tierDiscountMinor: 49 })).toBe(false);
+    expect(billShareHeldByTier({})).toBe(false);
   });
 });
