@@ -218,15 +218,27 @@ describeIfDatabase('RX-01/RX-02 PostgreSQL RLS and cumulative fills', () => {
       [id('consent'), id('patient_a'), id('recorder')]
     );
 
+    // DEV-96: the retention window trigger runs first on a prescription and refuses the
+    // delete of a record inside its window (55000) before the append-only guard is reached.
+    for (const [table, rowId, code] of [
+      ['pharmacy_patient_consents', id('consent'), '23514'],
+      ['pharmacy_prescriptions', id('prescription_a'), '55000'],
+      ['pharmacy_prescription_lines', lineA, '23514'],
+      ['pharmacy_prescription_fills', id('fill_first'), '23514'],
+    ] as const) {
+      await expectPgCode(code, () => runtime!.query(`DELETE FROM ${table} WHERE id = $1`, [rowId]));
+    }
     for (const [table, rowId] of [
       ['pharmacy_patient_consents', id('consent')],
       ['pharmacy_prescriptions', id('prescription_a')],
       ['pharmacy_prescription_lines', lineA],
       ['pharmacy_prescription_fills', id('fill_first')],
     ] as const) {
-      await expectPgCode('23514', () =>
-        runtime!.query(`DELETE FROM ${table} WHERE id = $1`, [rowId])
+      const kept = await runtime!.query(
+        `SELECT count(*)::int AS rows FROM ${table} WHERE id = $1`,
+        [rowId]
       );
+      expect(kept.rows[0]).toEqual({ rows: 1 });
     }
   });
 });

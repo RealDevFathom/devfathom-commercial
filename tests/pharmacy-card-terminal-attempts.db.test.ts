@@ -99,6 +99,8 @@ describeIfDatabase('pharmacy card-terminal attempts PostgreSQL RLS and guards (D
          VALUES ($1,$2,$1,'Main','Synthetic address','Lahore','PB',now())`,
         [branch, org]
       );
+      // pharmacy_sales admits only its own tenant: the platform setting does not reach it.
+      await client.query(`SELECT set_config('app.current_organization_id',$1,true)`, [org]);
       for (const sale of sales)
         await client.query(
           `INSERT INTO pharmacy_sales (id,"organizationId","branchId","createdByUserId","updatedAt")

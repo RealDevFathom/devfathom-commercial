@@ -169,7 +169,7 @@ describe.skipIf(!url)('DEV-66 smart-discount migration on PostgreSQL', () => {
     await expect(as({ platformAdmin: true }, visible)).resolves.toHaveLength(4);
   });
 
-  it("stores no maximum discount until the owner sets one, bounded to 0..100%", async () => {
+  it('stores no maximum discount until the owner sets one, bounded to 0..100%', async () => {
     const stored = await client.query(
       `SELECT "pharmacyMaxDiscountBps" AS bps FROM organizations WHERE id = $1`,
       [ORG_A]
@@ -179,12 +179,43 @@ describe.skipIf(!url)('DEV-66 smart-discount migration on PostgreSQL', () => {
     await client.query(`UPDATE organizations SET "pharmacyMaxDiscountBps" = 2500 WHERE id = $1`, [
       ORG_A,
     ]);
-    for (const bps of [-1, 10_001])
-      await expectCode('23514', () =>
-        client.query(`UPDATE organizations SET "pharmacyMaxDiscountBps" = $2 WHERE id = $1`, [
-          ORG_A,
-          bps,
-        ])
+    // The bound. The migration finds its CHECK constraint by name in every schema, so in a
+    // database that is already migrated it skips this schema's copy of the table: prove the
+    // bound on the deployed public.organizations instead, in a transaction rolled back.
+    const deployed = await client.query(
+      `SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint
+        WHERE conrelid = 'public.organizations'::regclass
+          AND conname = 'organizations_pharmacy_max_discount_bps_check'`
+    );
+    expect(deployed.rows).toEqual([
+      {
+        definition:
+          'CHECK ((("pharmacyMaxDiscountBps" >= 0) AND ("pharmacyMaxDiscountBps" <= 10000)))',
+      },
+    ]);
+    const deployedOrg = `org_dev66_bound_${schema}`;
+    await client.query('BEGIN');
+    try {
+      await client.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
+      await client.query(
+        `INSERT INTO public.organizations (id, slug, "legalName", "displayName", status,
+           "deploymentMode", vertical, "createdAt", "updatedAt")
+         VALUES ($1, $1, $1, $1, 'ACTIVE', 'SHARED', 'PHARMACY', now(), now())`,
+        [deployedOrg]
       );
+      const update = (bps: number) =>
+        client.query(
+          `UPDATE public.organizations SET "pharmacyMaxDiscountBps" = $2 WHERE id = $1`,
+          [deployedOrg, bps]
+        );
+      await expect(update(2500)).resolves.toMatchObject({ rowCount: 1 });
+      for (const bps of [-1, 10_001]) {
+        await client.query('SAVEPOINT bound');
+        await expectCode('23514', () => update(bps));
+        await client.query('ROLLBACK TO SAVEPOINT bound');
+      }
+    } finally {
+      await client.query('ROLLBACK');
+    }
   });
 });
