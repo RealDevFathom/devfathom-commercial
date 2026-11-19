@@ -24,6 +24,12 @@ export type MemberAccess = {
     customRole: boolean;
     /** Live per-person exceptions on top of the role. */
     exceptionCount: number;
+    /**
+     * A workspace administrator. Some pharmacy checks let an administrator through
+     * before any permission is read (for example day close), so the ticks do not
+     * show everything they can do until phase 2 makes the ticks binding.
+     */
+    workspaceAdmin: boolean;
   };
   groups: PharmacySubRoleGroup[];
 };
@@ -71,6 +77,7 @@ export async function readPharmacyMemberAccess(
       roleName: member.organizationRole?.name ?? null,
       customRole: member.organizationRole ? !member.organizationRole.isSystem : false,
       exceptionCount: member.permissionOverrides.length,
+      workspaceAdmin: member.role === 'ADMIN',
     },
     groups: pharmacySubRoleGroups(allowed),
   };

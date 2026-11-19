@@ -9,7 +9,11 @@ const state = vi.hoisted(() => ({
 vi.mock('@/lib/trpc', () => ({
   trpc: { organizationAdmin: { memberAccess: { useQuery: state.query } } },
 }));
-import { MEMBER_ACCESS_READ_ONLY_NOTE, MemberAccessPanel } from './member-access-panel';
+import {
+  MEMBER_ACCESS_ADMIN_NOTE,
+  MEMBER_ACCESS_READ_ONLY_NOTE,
+  MemberAccessPanel,
+} from './member-access-panel';
 
 const member = {
   id: 'u_1',
@@ -18,6 +22,7 @@ const member = {
   roleName: 'Cashier',
   customRole: false,
   exceptionCount: 0,
+  workspaceAdmin: false,
 };
 
 function loaded(allowed: string[], overrides: Partial<typeof member> = {}) {
@@ -102,6 +107,16 @@ describe('what this person can do', () => {
     expect(
       screen.getByText('Ayesha cannot sign in right now, so they cannot use any of this.')
     ).toBeVisible();
+  });
+
+  it('tells the owner an administrator can do more than the ticks show', () => {
+    loaded([], { workspaceAdmin: true });
+    const { unmount } = render(<MemberAccessPanel userId="u_1" />);
+    expect(screen.getByText(MEMBER_ACCESS_ADMIN_NOTE)).toBeVisible();
+    unmount();
+    loaded([]);
+    render(<MemberAccessPanel userId="u_1" />);
+    expect(screen.queryByText(MEMBER_ACCESS_ADMIN_NOTE)).toBeNull();
   });
 
   it('shows loading, then an error that says nothing changed and can be retried', () => {

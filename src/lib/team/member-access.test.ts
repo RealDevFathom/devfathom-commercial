@@ -74,6 +74,7 @@ describe('what this person can do', () => {
       roleName: 'Cashier',
       customRole: false,
       exceptionCount: 0,
+      workspaceAdmin: false,
     });
     expect(update).not.toHaveBeenCalled();
   });
@@ -129,6 +130,7 @@ describe('what this person can do', () => {
       ].sort()
     );
     expect(result.member.roleName).toBeNull();
+    expect(result.member.workspaceAdmin).toBe(true);
   });
 
   it('refuses a person outside the organization', async () => {

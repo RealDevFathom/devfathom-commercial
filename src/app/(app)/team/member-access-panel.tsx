@@ -22,6 +22,13 @@ import type { AppRouter } from '@/server/routers/_app';
 type MemberAccess = inferRouterOutputs<AppRouter>['organizationAdmin']['memberAccess'];
 type SubRole = MemberAccess['groups'][number]['subRoles'][number];
 
+/**
+ * Some pharmacy checks let a workspace administrator through before any permission is
+ * read (day close is one), so for an administrator the ticks are not the whole story.
+ */
+export const MEMBER_ACCESS_ADMIN_NOTE =
+  'As a workspace administrator, this person can also do some owner tasks that the ticks do not show yet, such as closing the day.';
+
 /** The one line that says ticks are read-only in this phase (DEV-959A). */
 export const MEMBER_ACCESS_READ_ONLY_NOTE =
   'You cannot change these ticks yet. Editing comes in the next update.';
@@ -56,7 +63,7 @@ function SubRoleRow({ subRole }: { subRole: SubRole }) {
           <span className="font-medium text-foreground">{subRole.label}</span>
           {stateLabel ? <span className="sr-only">{stateLabel}</span> : null}
           {subRole.sensitive ? (
-            <span className="inline-flex items-center gap-1 font-mono text-[0.625rem] font-semibold tracking-wide text-warning uppercase">
+            <span className="eyebrow inline-flex items-center gap-1 text-warning">
               <ShieldAlert className="size-3" aria-hidden />
               Extra care
             </span>
@@ -122,6 +129,9 @@ export function MemberAccessView(access: {
           <p className="text-text-muted">
             {member.name} cannot sign in right now, so they cannot use any of this.
           </p>
+        ) : null}
+        {member.workspaceAdmin ? (
+          <p className="text-text-muted">{MEMBER_ACCESS_ADMIN_NOTE}</p>
         ) : null}
         <p className="text-text-muted">{MEMBER_ACCESS_READ_ONLY_NOTE}</p>
       </div>
