@@ -80,6 +80,11 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         sites: { 'src/lib/pharmacy/counter-capability.ts': 2 },
       },
       {
+        id: 'whole-bill-discount',
+        text: "Where the owner turned it on, put one whole-bill discount (an amount or a percentage) on an open, unpaid bill at their branches. It needs their own Give discounts or a manager's PIN, is shared across the lines within the owner's maximum discount, cost and minimum margin, never touches prescription-only, restricted or controlled items, and is refused if the bill cannot take it in full",
+        sites: {},
+      },
+      {
         id: 'handle-customer-orders-run',
         text: 'With Handle customer orders, run an offline counter; be named as the cashier of a till someone else opens',
         sites: { 'src/lib/pharmacy/counter-capability.ts': 1 },
@@ -167,7 +172,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     allows: [
       {
         id: 'give-counter-discounts-without',
-        text: "Give counter discounts without a manager's PIN, within the owner's maximum and minimum margin, never on prescription-only, restricted or controlled items",
+        text: "Give counter discounts without a manager's PIN, on a line or, where the owner turned it on, on the whole bill, within the owner's maximum discount and minimum margin, never on prescription-only, restricted or controlled items",
         sites: { 'src/lib/pharmacy/counter-line-approval.ts': 3 },
       },
     ],
@@ -248,6 +253,11 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         id: 'use-counter-without-counter',
         text: 'Use the counter without counter permission: open, hold, void and print bills, search stock and link customers (taking payment still needs Take payment)',
         sites: { 'src/lib/pharmacy/counter-capability.ts': 3 },
+      },
+      {
+        id: 'whole-bill-discount',
+        text: 'Where the owner turned it on, put a whole-bill discount on an open, unpaid counter bill at their branch, even without Take payment, with the same approval and limits as for Take payment',
+        sites: {},
       },
       {
         id: 'sell-prescriptiononly-restricted-medicines',
@@ -528,7 +538,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'approve-someone-elses-counter',
-        text: "Approve someone else's counter discount with their PIN, within the owner's limits",
+        text: "Approve someone else's counter discount, on a line or the whole bill, with their PIN, within the owner's limits",
         sites: { 'src/lib/pharmacy/counter-line-approval.ts': 2 },
       },
       {

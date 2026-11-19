@@ -2187,6 +2187,19 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense',
     lines: ['take-payment/see-till-approvers', 'dispense-prescriptions/see-till-approvers'],
   },
+  'pharmacySales.applyBillDiscount': {
+    gate: "requireCounterReceiptAccess (pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN) + the owner's whole-bill discount switch on; approved as an item discount: the operator's own pharmacy:discount, or a pharmacy:manage approver's PIN (solo: the sole approver's own PIN); removing it (zero) needs no approval",
+    lines: [
+      'take-payment/whole-bill-discount',
+      'dispense-prescriptions/whole-bill-discount',
+      'give-discounts/give-counter-discounts-without',
+      'run-branches/approve-someone-elses-counter',
+    ],
+  },
+  'pharmacySales.billDiscountSetting': {
+    gate: "branchScopeOrForbidden only (branch in caller's organization); no capability or assignment",
+    none: 'any signed-in member of the workspace (reads whether it is on; canChange is true only for the owner)',
+  },
   'pharmacySales.discountMaximum': {
     gate: "branchScopeOrForbidden only (branch in caller's organization); no capability or assignment",
     none: 'any signed-in member of the workspace (read-only; canChange is true only for the owner)',
@@ -2395,6 +2408,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
   'pharmacySales.sandboxPayment': {
     gate: 'adminProcedure (admin:access)',
     none: 'workspace administrators only (admin:access)',
+  },
+  'pharmacySales.saveBillDiscountSetting': {
+    gate: "protectedProcedure + owner (readMaxDiscountSettings canChange) + the owner's fresh PIN; support sessions refused; audited",
+    none: 'owner only, with a fresh PIN',
   },
   'pharmacySales.saveDiscountMaximum': {
     gate: "protectedProcedure + isOrganizationOwner + owner's PIN; support sessions refused",
