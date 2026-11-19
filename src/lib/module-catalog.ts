@@ -310,6 +310,9 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   // DEV-911: the owner switch for the pharmacist check at each sale. Every pharmacy has it,
   // and the counter reads it, so it belongs to mandatory Pharmacy Core.
   pharmacyPharmacistCheck: 'pharmacy-core',
+  // DEV-960: the owner's per-branch "One pharmacist per shift" setting and the list of declared
+  // solo sign-offs. The counter's prescription self-sign reads it, so Pharmacy Core.
+  pharmacyRxSoloShift: 'pharmacy-core',
   // DEV-931: every pharmacy member's own approval PIN ("Your PIN" in Settings).
   pharmacyPin: 'pharmacy-core',
   hotelProperty: 'hotel-core',
@@ -465,6 +468,7 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   ['/pharmacy/settings/branches', 'pharmacy-core'],
   ['/pharmacy/settings/data-export', 'pharmacy-core'],
   ['/pharmacy/settings/pharmacist-check', 'pharmacy-core'],
+  ['/pharmacy/settings/one-pharmacist-per-shift', 'pharmacy-core'],
   ['/pharmacy/settings/pin', 'pharmacy-core'],
   ['/pharmacy/settings/printers', 'pharmacy-counter'],
   ['/pharmacy/marketing', 'pharmacy-crm'],

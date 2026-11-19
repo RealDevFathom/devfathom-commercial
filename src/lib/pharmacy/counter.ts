@@ -987,6 +987,8 @@ export type CounterCartLine = {
   discountMinor: number;
   tierDiscountMinor?: number;
   tierName?: string | null;
+  /** DEV-956: this line's share of the whole-bill discount, already inside discountMinor. */
+  billDiscountMinor?: number;
   /** #727: the automatic promotion that priced this line, as issued. */
   promotionName?: string | null;
   lineTotalMinor: number;
@@ -1130,6 +1132,7 @@ export async function readCounterCart(
       discountMinor: line.discountMinor,
       tierDiscountMinor: line.tierDiscountMinor,
       tierName: line.tierName,
+      billDiscountMinor: line.billDiscountMinor,
       promotionName: line.promotionName,
       lineTotalMinor: line.grossMinor - line.discountMinor,
       rx: line.medicine.rx,
@@ -1263,6 +1266,7 @@ export async function readCounterReceipt(
       discountMinor: line.discountMinor,
       tierDiscountMinor: line.tierDiscountMinor,
       tierName: line.tierName,
+      billDiscountMinor: line.billDiscountMinor,
       promotionName: line.promotionName,
       lineTotalMinor: line.grossMinor - line.discountMinor,
     };
