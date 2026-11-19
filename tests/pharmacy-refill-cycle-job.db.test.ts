@@ -154,6 +154,10 @@ beforeAll(async () => {
         provinceCode: 'PB',
       },
     });
+    // DEV-941: the sole owner-pharmacist works at this branch, so their PIN may approve its refills.
+    await db.pharmacyBranchAssignment.create({
+      data: { organizationId: ORG, userId: OWNER, branchId: BRANCH, active: true },
+    });
     const patient = await db.pharmacyPatient.create({
       data: { organizationId: ORG, displayName: 'Chronic patient' },
     });
