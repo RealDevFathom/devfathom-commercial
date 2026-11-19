@@ -3,7 +3,6 @@ import 'server-only';
 import { can, subjectFromSession } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { otherBranchApproversWithPin } from './card-terminal/review-approvers';
 import { counterBranchAssignmentDenial } from './counter-capability';
 
 /**
@@ -16,11 +15,14 @@ import { counterBranchAssignmentDenial } from './counter-capability';
  * pharmacist still signs it from the pharmacist queue (`decideReview`), as before. The requester
  * may sign it only when all of this holds, checked again inside the write's transaction:
  *   - they hold `pharmacy:dispense` and may act at the line's branch;
- *   - nobody else could sign it there: no other active member with a working own PIN, assigned
- *     to that branch (or a session ADMIN), holds `pharmacy:dispense`. This is the solo rule as
- *     `otherCardTerminalReviewers` defines it, with the pharmacist's right and the branch
- *     assignment in place of the manager's right and the counter gate, because a pharmacist signs
- *     reviews without the counter grant;
+ *   - nobody else could sign it there: no other ACTIVE member of the organization who may act at
+ *     that branch (an active assignment to it, or a session ADMIN) holds `pharmacy:dispense`.
+ *     Whether they have a PIN does not matter: a second pharmacist signs the review from the
+ *     pharmacist queue without one (`decideReview`), so anyone who could do that is someone else
+ *     who could sign. This is the solo rule's "nobody else could act here" test, with the
+ *     pharmacist's right and the branch assignment (a pharmacist signs reviews without the
+ *     counter grant). The card-terminal rule (`otherCardTerminalReviewers`) is unchanged: its
+ *     resolver needs a PIN, so there only people with a working PIN count;
  *   - the medicine is not controlled: a controlled line's review is signed by the independent
  *     pharmacist who witnesses the controlled register, and that rule is unchanged;
  *   - they re-entered their own PIN for this signature (checked by the caller, shared lockout);
@@ -35,17 +37,56 @@ export const RX_SELF_SIGN_POLICY = 'PHARMACY_RX_REVIEW_SOLO_SELF_SIGN_PIN';
 
 export type RxSelfSignScope = { organizationId: string; branchId: string; actorId: string };
 
-/** The other people who could sign a prescription review at this branch; empty means solo. */
-export function otherRxReviewSigners(db: ScopedDb, scope: RxSelfSignScope, now = new Date()) {
-  return otherBranchApproversWithPin(db, scope, async (other) => {
-    if (await counterBranchAssignmentDenial(db, other, scope.organizationId, scope.branchId))
-      return false;
-    return can(subjectFromSession(other), 'pharmacy:dispense', undefined, {
-      db,
-      now,
-      source: 'TRPC',
-    });
+/**
+ * The other people who could sign a prescription review at this branch; empty means solo. Every
+ * other ACTIVE member assigned to the branch (or a session ADMIN) who holds `pharmacy:dispense`,
+ * with or without a PIN. Never the actor. Stable order, so the refusal names the same person.
+ */
+export async function otherRxReviewSigners(
+  db: ScopedDb,
+  scope: RxSelfSignScope,
+  now = new Date()
+): Promise<{ id: string; name: string | null }[]> {
+  const members = await db.user.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      status: 'ACTIVE',
+      id: { not: scope.actorId },
+      OR: [
+        { role: 'ADMIN' },
+        {
+          pharmacyBranchAssignments: {
+            some: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              active: true,
+              branch: { organizationId: scope.organizationId, active: true },
+            },
+          },
+        },
+      ],
+    },
+    // Only what the checks below read.
+    select: { id: true, name: true, role: true, department: true, status: true },
+    orderBy: { id: 'asc' },
   });
+  const signers: { id: string; name: string | null }[] = [];
+  for (const other of members) {
+    if (other.id === scope.actorId) continue;
+    // The same branch gate the actor passes, read live.
+    if (await counterBranchAssignmentDenial(db, other, scope.organizationId, scope.branchId))
+      continue;
+    if (
+      !(await can(subjectFromSession(other), 'pharmacy:dispense', undefined, {
+        db,
+        now,
+        source: 'TRPC',
+      }))
+    )
+      continue;
+    signers.push({ id: other.id, name: other.name });
+  }
+  return signers;
 }
 
 const MESSAGES = {

@@ -4650,7 +4650,13 @@ function ScopedPharmacyCounterConsole({
         </div>
         {/* DEV-950: a prescription line still waiting for its pharmacist's signature. */}
         {canSignPrescriptionLines && paymentOpen ? (
-          <CounterRxSelfSign branchId={branchId} saleId={currentBill ? saleId : null} enabled />
+          <CounterRxSelfSign
+            branchId={branchId}
+            saleId={currentBill ? saleId : null}
+            enabled
+            // The signed line releases the bill: read it again so payment can be taken at once.
+            onSigned={() => void cartQuery.refetch()}
+          />
         ) : null}
         <CounterTenderPanel
           key={`${branchId}:${saleId ?? 'none'}:${restoredAttempt?.input.idempotencyKey ?? ''}`}

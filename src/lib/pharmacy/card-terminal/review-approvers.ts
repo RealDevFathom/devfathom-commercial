@@ -27,42 +27,6 @@ export async function otherCardTerminalReviewers(
   scope: Pick<LedgerScope, 'organizationId' | 'branchId' | 'actorId'>,
   now = new Date()
 ): Promise<{ id: string; name: string | null }[]> {
-  return otherBranchApproversWithPin(db, scope, async (other) => {
-    if (
-      await counterOperatorDenial(db, other, scope.organizationId, scope.branchId, {
-        source: 'TRPC',
-      })
-    )
-      return false;
-    return can(subjectFromSession(other), 'pharmacy:manage', undefined, {
-      db,
-      now,
-      source: 'TRPC',
-    });
-  });
-}
-
-/** The live member data the solo-rule checks read for one candidate approver. */
-export type BranchApproverCandidate = {
-  id: string;
-  name: string | null;
-  role: string;
-  department: string | null;
-  status: string;
-};
-
-/**
- * The solo rule's candidate list, shared by every second-person control that follows it: the
- * other active members of the organization who hold an unrevoked staff PIN not tied to a device,
- * on an ACTIVE staff profile (what an own-PIN approval needs), and whom `admits` accepts for this
- * branch and right. A locked-out PIN still counts (see `otherCardTerminalReviewers`). Never the
- * actor. Returns them in a stable order; an empty list means the solo rule applies.
- */
-export async function otherBranchApproversWithPin(
-  db: ScopedDb,
-  scope: Pick<LedgerScope, 'organizationId' | 'actorId'>,
-  admits: (other: BranchApproverCandidate) => Promise<boolean>
-): Promise<{ id: string; name: string | null }[]> {
   const credentials = await db.restaurantOperatorCredential.findMany({
     where: {
       organizationId: scope.organizationId,
@@ -91,13 +55,26 @@ export async function otherBranchApproversWithPin(
     orderBy: { id: 'asc' },
   });
   const checked = new Set<string>();
-  const approvers: { id: string; name: string | null }[] = [];
+  const reviewers: { id: string; name: string | null }[] = [];
   for (const credential of credentials) {
     const other = credential.staffProfile.user;
     if (!other || other.id === scope.actorId || checked.has(other.id)) continue;
     checked.add(other.id);
-    if (!(await admits(other))) continue;
-    approvers.push({ id: other.id, name: other.name });
+    if (
+      await counterOperatorDenial(db, other, scope.organizationId, scope.branchId, {
+        source: 'TRPC',
+      })
+    )
+      continue;
+    if (
+      !(await can(subjectFromSession(other), 'pharmacy:manage', undefined, {
+        db,
+        now,
+        source: 'TRPC',
+      }))
+    )
+      continue;
+    reviewers.push({ id: other.id, name: other.name });
   }
-  return approvers;
+  return reviewers;
 }

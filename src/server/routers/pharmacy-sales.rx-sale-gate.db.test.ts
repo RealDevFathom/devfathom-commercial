@@ -77,6 +77,7 @@ let withPlatformDb: typeof import('@/lib/tenancy/scoped-db').withPlatformDb;
 let pharmacySalesRouter: typeof import('./pharmacy-sales').pharmacySalesRouter;
 let pharmacyDispensingRouter: typeof import('./pharmacy-dispensing').pharmacyDispensingRouter;
 let ownPin: typeof import('@/lib/pharmacy/own-pin');
+let selfSignRule: typeof import('@/lib/pharmacy/rx-review-self-sign');
 let disconnect: (() => Promise<void>) | null = null;
 let rx: { medicineId: string; presentationId: string; packLevelId: string };
 let patientId: string;
@@ -278,6 +279,7 @@ beforeAll(async () => {
   pharmacySalesRouter = sales.pharmacySalesRouter;
   pharmacyDispensingRouter = (await import('./pharmacy-dispensing')).pharmacyDispensingRouter;
   ownPin = await import('@/lib/pharmacy/own-pin');
+  selfSignRule = await import('@/lib/pharmacy/rx-review-self-sign');
   disconnect = () => db.$disconnect();
   const [role] = await withPlatformDb((tx) =>
     tx.$queryRawUnsafe<Array<{ rolsuper: boolean; rolbypassrls: boolean }>>(
@@ -589,8 +591,31 @@ describeIfDatabase('Rx/restricted sale gate with persisted roles (#518 launch fi
         return { saleId: created.id, netMinor: bill.totals.netMinor, saleLineId: added.line.id };
       });
       expect(sale.netMinor).toBeGreaterThan(0);
-      // Nobody else at this branch could sign it, so they sign it themselves with that PIN.
-      await selfSign(combined, sale.saleLineId, '4826');
+      // DEV-950: the solo rule. Every other member holding the dispensing right at this branch,
+      // PIN or not, could sign it from the pharmacist queue; here two such pharmacists work.
+      const scope = { organizationId: ids.org, branchId: ids.branch, actorId: combined };
+      const otherSigners = () =>
+        withTenantDb(ids.org, (db) => selfSignRule.otherRxReviewSigners(db, scope));
+      expect((await otherSigners()).map((other) => other.id).sort()).toEqual(
+        [ids.pharmacist, ids.templatePharmacist].sort()
+      );
+      const colleagues = { userId: { in: [ids.pharmacist, ids.templatePharmacist] } };
+      const assigned = (active: boolean) =>
+        withTenantDb(ids.org, (db) =>
+          db.pharmacyBranchAssignment.updateMany({
+            where: { ...colleagues, branchId: ids.branch },
+            data: { active },
+          })
+        );
+      // This seller works alone: the two pharmacists are off this branch for the sale.
+      await assigned(false);
+      try {
+        expect(await otherSigners()).toEqual([]);
+        // Nobody else at this branch could sign it, so they sign it themselves with that PIN.
+        await selfSign(combined, sale.saleLineId, '4826');
+      } finally {
+        await assigned(true);
+      }
       await expect(payInCash(combined, sale)).resolves.toMatchObject({ settled: true });
       expect(await cart(sale.saleId)).toMatchObject({
         status: 'COMPLETED',

@@ -25,7 +25,11 @@ vi.mock('@/lib/trpc', () => ({
       counterSignStatus: {
         useQuery: (input: unknown, options: { enabled: boolean }) => {
           mocks.queryInput(input, options);
-          return { data: options.enabled ? mocks.data : undefined, refetch: mocks.refetch };
+          return {
+            data: options.enabled ? mocks.data : undefined,
+            refetch: mocks.refetch,
+            isFetching: false,
+          };
         },
       },
       selfSignReview: {
@@ -105,6 +109,8 @@ describe('CounterRxSelfSign (DEV-950)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign with my PIN' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('That PIN was not accepted.');
     expect(screen.getByLabelText('Your PIN')).toHaveValue('');
+    // A refused PIN may have just locked it, so the line and PIN state are read again.
+    await waitFor(() => expect(mocks.refetch).toHaveBeenCalled());
   });
 
   it('sends a pharmacist without a PIN to set one up', () => {
@@ -117,10 +123,19 @@ describe('CounterRxSelfSign (DEV-950)', () => {
     );
   });
 
-  it('says when the PIN is locked', () => {
+  it('takes no PIN while it is locked, and checks again on request', async () => {
     mocks.data = { lines: [line()], pin: { state: 'SET', locked: true, lockedUntil: new Date() } };
     render(<CounterRxSelfSign branchId="b" saleId="s" enabled />);
-    expect(screen.getByText(/Your PIN is locked/)).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Your PIN is locked after too many wrong tries. Wait until the lock ends, then try again.'
+    );
+    const field = screen.getByLabelText('Your PIN');
+    expect(field).toBeDisabled();
+    fireEvent.change(field, { target: { value: '4826' } });
+    expect(screen.getByRole('button', { name: 'Sign with my PIN' })).toBeDisabled();
+    expect(mocks.selfSign).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(mocks.refetch).toHaveBeenCalled());
   });
 
   it('names the other pharmacist who signs when the solo rule does not apply', () => {

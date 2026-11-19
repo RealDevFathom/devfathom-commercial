@@ -5,8 +5,10 @@ BEGIN;
 -- a second person keep the solo rule: self-approval with a fresh PIN and an audit record").
 --
 -- The application writes that self-signature only through one path
--- (`pharmacyDispensing.selfSignReview`): the person holds the dispensing right, nobody else at the
--- branch with a working PIN holds it, and the person re-entered their own PIN. In the same
+-- (`pharmacyDispensing.selfSignReview`): the person holds the dispensing right, no other active
+-- member who may act at the branch holds it (with or without a PIN: a second pharmacist signs
+-- without one), and the person re-entered their own PIN. Who else exists is the application's
+-- check, made again under the review's row lock; this trigger checks the audit marker. In the same
 -- transaction it first writes an audit_logs entry marked self-approved (who, when, which sale and
 -- line), then the SIGN decision naming that entry in "selfApprovalAuditId".
 --

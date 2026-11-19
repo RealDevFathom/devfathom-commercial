@@ -36,7 +36,10 @@ const ids = {
   solo: `user_d950_solo_${suffix}`,
   /** The shipped Cashier role: no dispensing right. */
   cashier: `user_d950_cashier_${suffix}`,
-  /** A second pharmacist of this branch; holds a PIN only in the second-person tests. */
+  /**
+   * A second pharmacist. Unassigned from this branch except in the second-person tests, where they
+   * work here first without a PIN, then with one.
+   */
   colleague: `user_d950_colleague_${suffix}`,
   /** A pharmacist with a PIN, assigned only to another branch: never counts here. */
   elsewhere: `user_d950_elsewhere_${suffix}`,
@@ -293,10 +296,10 @@ beforeAll(async () => {
     await tx.branchRegulatoryProfile.create({
       data: { ...profile, premises: { addressLine: '1 Road', city: 'Lahore' } },
     });
-    const users: Array<{ id: string; template: string; branchId: string }> = [
+    const users: Array<{ id: string; template: string; branchId: string; active?: boolean }> = [
       { id: ids.solo, template: 'pharmacist-cashier', branchId: ids.branch },
       { id: ids.cashier, template: 'cashier', branchId: ids.branch },
-      { id: ids.colleague, template: 'pharmacist', branchId: ids.branch },
+      { id: ids.colleague, template: 'pharmacist', branchId: ids.branch, active: false },
       { id: ids.elsewhere, template: 'pharmacist-cashier', branchId: ids.otherBranch },
     ];
     for (const user of users) {
@@ -324,7 +327,7 @@ beforeAll(async () => {
         },
       });
       await tx.pharmacyBranchAssignment.create({
-        data: { userId: user.id, branchId: user.branchId },
+        data: { userId: user.id, branchId: user.branchId, active: user.active ?? true },
       });
     }
     // The lone pharmacist and the pharmacist of another branch have their own PINs.
@@ -604,19 +607,17 @@ describeIfDatabase('solo pharmacist self-signs a prescription review (DEV-950)',
     await expect(payInCash(ids.solo, sale)).resolves.toMatchObject({ settled: true });
   });
 
-  describe('when another pharmacist with a PIN works at this branch', () => {
-    beforeAll(async () => {
-      if (!databaseUrl) return;
-      await withTenantDb(ids.org, (tx) =>
-        ownPin.saveOwnPin(tx, {
-          organizationId: ids.org,
-          userId: ids.colleague,
-          pin: PINS.colleague,
-        })
-      );
-    });
-
-    it('refuses the self-signature before any PIN is checked, naming who signs', async () => {
+  describe('when another pharmacist works at this branch', () => {
+    const colleagueAt = (data: { assigned: boolean; status: 'ACTIVE' | 'INACTIVE' }) =>
+      tenant(async (db) => {
+        await db.pharmacyBranchAssignment.updateMany({
+          where: { userId: ids.colleague, branchId: ids.branch },
+          data: { active: data.assigned },
+        });
+        await db.user.update({ where: { id: ids.colleague }, data: { status: data.status } });
+      });
+    /** Self-signature refused before any PIN is checked, naming the colleague who signs. */
+    async function expectColleagueNamed() {
       const sale = await ringUp();
       expect(
         await dispensing(ids.solo, (api) =>
@@ -642,9 +643,57 @@ describeIfDatabase('solo pharmacist self-signs a prescription review (DEV-950)',
         )
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
       expect(await signDecisions(sale.reviewItemId)).toEqual([]);
+      return sale;
+    }
+    /** The solo rule applies again: the lone pharmacist signs with their PIN and is paid. */
+    async function expectSelfSignAllowed() {
+      const sale = await ringUp();
+      expect(
+        await dispensing(ids.solo, (api) =>
+          api.counterSignStatus({ branchId: ids.branch, saleId: sale.saleId })
+        )
+      ).toMatchObject({ lines: [{ maySelfSign: true, askName: null }] });
+      await dispensing(ids.solo, (api) =>
+        api.selfSignReview({ reviewItemId: sale.reviewItemId, pin: PINS.solo })
+      );
+      expect(await signDecisions(sale.reviewItemId)).toEqual([
+        {
+          actorUserId: ids.solo,
+          signedAt: expect.any(Date),
+          selfApprovalAuditId: expect.any(String),
+        },
+      ]);
+      await expect(payInCash(ids.solo, sale)).resolves.toMatchObject({ settled: true });
+    }
+
+    beforeAll(async () => {
+      if (databaseUrl) await colleagueAt({ assigned: true, status: 'ACTIVE' });
     });
 
-    it('lets that other pharmacist sign as before, and refuses them the self-sign path', async () => {
+    it('counts a second pharmacist without a PIN, who could sign from the queue', async () => {
+      // No PIN at all: they still sign normally, so the seller may not sign alone.
+      expect(
+        await tenant((db) => ownPin.readOwnPinState(db, ids.org, ids.colleague))
+      ).toMatchObject({ state: 'NOT_SET' });
+      const sale = await expectColleagueNamed();
+      await dispensing(ids.colleague, (api) =>
+        api.decideReview({ reviewItemId: sale.reviewItemId, kind: 'SIGN' })
+      );
+      expect(await signDecisions(sale.reviewItemId)).toEqual([
+        { actorUserId: ids.colleague, signedAt: expect.any(Date), selfApprovalAuditId: null },
+      ]);
+      await expect(payInCash(ids.solo, sale)).resolves.toMatchObject({ settled: true });
+    });
+
+    it('counts them with a PIN too, and they sign as before but never self-sign', async () => {
+      await tenant((db) =>
+        ownPin.saveOwnPin(db, {
+          organizationId: ids.org,
+          userId: ids.colleague,
+          pin: PINS.colleague,
+        })
+      );
+      await expectColleagueNamed();
       const sale = await ringUp();
       await expect(
         dispensing(ids.colleague, (api) =>
@@ -660,12 +709,22 @@ describeIfDatabase('solo pharmacist self-signs a prescription review (DEV-950)',
       await expect(payInCash(ids.solo, sale)).resolves.toMatchObject({ settled: true });
     });
 
+    it('no longer counts them once they are made inactive', async () => {
+      await colleagueAt({ assigned: true, status: 'INACTIVE' });
+      await expectSelfSignAllowed();
+    });
+
+    it('no longer counts them once they are unassigned from this branch', async () => {
+      await colleagueAt({ assigned: false, status: 'ACTIVE' });
+      await expectSelfSignAllowed();
+      // Assigned again, they count again.
+      await colleagueAt({ assigned: true, status: 'ACTIVE' });
+      await expectColleagueNamed();
+    });
+
     afterAll(async () => {
       // Back to a pharmacist working alone at this branch.
-      if (databaseUrl)
-        await withTenantDb(ids.org, (tx) =>
-          ownPin.resetMemberPin(tx, { organizationId: ids.org, userId: ids.colleague })
-        );
+      if (databaseUrl) await colleagueAt({ assigned: false, status: 'ACTIVE' });
     });
   });
 

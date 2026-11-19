@@ -38,13 +38,17 @@ export function CounterRxSelfSign({ branchId, saleId, enabled, onSigned }: Props
     >
       {lines.map((line) => (
         <div key={line.reviewItemId} className="space-y-2">
-          <h3 className="font-semibold text-text-strong">
+          <h3 className="text-sm font-semibold text-text-strong">
             {line.productName} needs a pharmacist’s signature
           </h3>
           {line.maySelfSign ? (
             <SelfSignForm
               reviewItemId={line.reviewItemId}
               pin={status.data?.pin ?? null}
+              checking={status.isFetching}
+              onRefresh={async () => {
+                await status.refetch();
+              }}
               onSigned={async () => {
                 await status.refetch();
                 onSigned?.();
@@ -88,10 +92,15 @@ export function CounterRxSelfSign({ branchId, saleId, enabled, onSigned }: Props
 function SelfSignForm({
   reviewItemId,
   pin: pinState,
+  checking = false,
+  onRefresh,
   onSigned,
 }: {
   reviewItemId: string;
   pin: { state: 'SET' | 'NOT_SET' | 'RESET'; locked: boolean } | null;
+  checking?: boolean;
+  /** Reads the line and the PIN state again (after a refusal, or once a lock may have ended). */
+  onRefresh: () => Promise<void>;
   onSigned: () => Promise<void>;
 }) {
   const id = useId();
@@ -99,7 +108,9 @@ function SelfSignForm({
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
   const inFlight = useRef(false);
-  const ready = PIN.test(pin) && !sign.isPending;
+  // The server refuses a locked PIN anyway; the form says so and takes no PIN meanwhile.
+  const locked = pinState?.locked === true;
+  const ready = PIN.test(pin) && !sign.isPending && !locked;
 
   if (pinState && pinState.state !== 'SET')
     return (
@@ -120,6 +131,8 @@ function SelfSignForm({
     } catch (failure) {
       setPin('');
       setError(counterErrorMessage(failure));
+      // A refused PIN may have just locked it: show that state at once.
+      await onRefresh().catch(() => undefined);
     } finally {
       inFlight.current = false;
     }
@@ -137,10 +150,21 @@ function SelfSignForm({
         You rang up this line and nobody else at this branch can sign it, so sign it yourself with
         your PIN. Your signature is recorded as self-approved.
       </p>
-      {pinState?.locked ? (
-        <p className="text-text-body">
-          Your PIN is locked after too many wrong tries. Wait until the lock ends, then try again.
-        </p>
+      {locked ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <p id={`${id}-locked`} role="status" className="text-text-body">
+            Your PIN is locked after too many wrong tries. Wait until the lock ends, then try again.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            className="h-11"
+            disabled={checking}
+            onClick={() => void onRefresh()}
+          >
+            {checking ? 'Checking…' : 'Check again'}
+          </Button>
+        </div>
       ) : null}
       <Label htmlFor={`${id}-pin`}>Your PIN</Label>
       <div className="flex flex-wrap items-center gap-2">
@@ -151,8 +175,8 @@ function SelfSignForm({
           autoComplete="off"
           maxLength={8}
           className="h-11 max-w-40"
-          disabled={sign.isPending}
-          aria-describedby={`${id}-help`}
+          disabled={sign.isPending || locked}
+          aria-describedby={locked ? `${id}-help ${id}-locked` : `${id}-help`}
           aria-invalid={error ? true : undefined}
           value={pin}
           onChange={(event) => setPin(event.target.value.replace(/\D/g, ''))}
@@ -161,7 +185,7 @@ function SelfSignForm({
           {sign.isPending ? 'Signing…' : 'Sign with my PIN'}
         </Button>
       </div>
-      {error ? (
+      {error && !locked ? (
         <p role="alert" className="text-destructive">
           <PinAwareMessage message={error} />
         </p>
