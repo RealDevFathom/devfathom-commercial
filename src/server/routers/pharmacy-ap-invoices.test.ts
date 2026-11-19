@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   settlementFindFirst: vi.fn(),
   invoiceFindFirst: vi.fn(),
   otherApprovers: vi.fn(),
+  search: vi.fn(),
 }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -52,6 +53,7 @@ vi.mock('@/lib/pharmacy/accounts/ap-invoices', async () => ({
   reverseApSettlement: mocks.reverseSettlement,
   reverseApInvoice: mocks.reverseInvoice,
   listApInvoices: mocks.list,
+  searchApReversals: mocks.search,
 }));
 vi.mock('@/lib/pharmacy/refund-authorization', () => ({
   actorMayRefund: mocks.mayManage,
@@ -139,7 +141,6 @@ const reverseSettlementInput = {
   settlementId: 'set_1',
   commandKey: 'rev-pay-0001',
   reason: 'Bounced',
-  at: '2026-11-12T00:00:00.000Z',
   pin: '2468',
 };
 const reverseInvoiceInput = {
@@ -147,7 +148,6 @@ const reverseInvoiceInput = {
   invoiceId: 'inv_1',
   commandKey: 'rev-inv-0001',
   reason: 'Duplicate',
-  at: '2026-11-12T00:00:00.000Z',
   pin: '2468',
 };
 const invoice = {
@@ -1007,7 +1007,7 @@ describe('pharmacyApInvoices router — invoice and payment reversal approval (D
         metadata: expect.objectContaining({
           policy: 'PHARMACY_AP_REVERSAL_MANAGER_PIN',
           approverId: 'owner_1',
-          initiatedById: 'clerk_1',
+          recordedById: 'clerk_1',
           pinVerified: true,
           selfApproved: false,
           reason: 'Bounced',
@@ -1026,7 +1026,7 @@ describe('pharmacyApInvoices router — invoice and payment reversal approval (D
         result: expect.objectContaining({ status: 'REVERSED', reversalEntryId: 'entry_rev' }),
         metadata: expect.objectContaining({
           approverId: 'owner_1',
-          initiatedById: 'clerk_1',
+          recordedById: 'clerk_1',
           pinVerified: true,
           selfApproved: false,
           reason: 'Duplicate',
@@ -1075,7 +1075,51 @@ describe('pharmacyApInvoices router — invoice and payment reversal approval (D
       withoutPin(undated),
       expect.anything()
     );
+    expect(mocks.reverseSettlement.mock.calls[0]![2]).not.toHaveProperty('at');
   });
+
+  it.each([
+    [
+      'reverseSettlement',
+      () =>
+        caller().reverseSettlement({
+          ...reverseSettlementInput,
+          at: '2026-11-12T00:00:00.000Z',
+        } as never),
+      mocks.reverseSettlement,
+      mocks.settlementFindFirst,
+    ],
+    [
+      'reverseInvoice',
+      () =>
+        caller().reverseInvoice({
+          ...reverseInvoiceInput,
+          at: '2026-11-12T00:00:00.000Z',
+        } as never),
+      mocks.reverseInvoice,
+      mocks.invoiceFindFirst,
+    ],
+  ] as const)(
+    '%s refuses a client-sent date before any read, PIN or write: the server dates reversals',
+    async (_n, call, domain, target) => {
+      await expect(call()).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(target).not.toHaveBeenCalled();
+      expect(mocks.pin).not.toHaveBeenCalled();
+      expect(mocks.transaction).not.toHaveBeenCalled();
+      expect(domain).not.toHaveBeenCalled();
+      expect(mocks.recordAudit).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(calls)(
+    '%s audits the recorder as recordedById, not under the old initiatedById name',
+    async (_n, call) => {
+      await call();
+      const metadata = mocks.recordAudit.mock.calls[0]![0].metadata;
+      expect(metadata).toMatchObject({ recordedById: 'clerk_1' });
+      expect(metadata).not.toHaveProperty('initiatedById');
+    }
+  );
 
   it('reports whether the signed-in person may reverse and who else could approve', async () => {
     mocks.otherApprovers.mockResolvedValue([{ id: 'manager_2', name: 'Hina' }]);
@@ -1094,5 +1138,86 @@ describe('pharmacyApInvoices router — invoice and payment reversal approval (D
     await expect(caller().reversalAccess({ branchId: 'branch_1' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
+  });
+});
+
+describe('DEV-103 pharmacyApInvoices.reversalSearch', () => {
+  beforeEach(() => {
+    mocks.search.mockResolvedValue({ invoices: [], page: 1, hasOlder: false });
+  });
+
+  it('searches only the authorized tenant and branch, on the shop clock', async () => {
+    const result = await caller({
+      organization: { id: 'org_1', timezone: 'Asia/Karachi' },
+    } as Partial<TRPCContext>).reversalSearch({
+      branchId: 'branch_1',
+      payee: 'K-Electric',
+      reference: 'KE-11',
+      amountMinor: 23_456,
+      from: '2026-08-01',
+      to: '2026-09-30',
+      page: 2,
+    });
+    expect(mocks.branchFindFirst).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', id: 'branch_1', active: true },
+      select: { id: true },
+    });
+    expect(mocks.search).toHaveBeenCalledWith(
+      expect.anything(),
+      { organizationId: 'org_1', branchId: 'branch_1' },
+      expect.objectContaining({ amountMinor: 23_456, page: 2, from: '2026-08-01' }),
+      'Asia/Karachi'
+    );
+    expect(result).toMatchObject({
+      scope: { organizationId: 'org_1', branchId: 'branch_1' },
+      page: 1,
+      hasOlder: false,
+    });
+  });
+
+  it('defaults to the first page', async () => {
+    await caller().reversalSearch({ branchId: 'branch_1' });
+    expect(mocks.search.mock.calls[0]![2]).toMatchObject({ page: 1 });
+  });
+
+  it.each([
+    ['without the finance licence', () => mocks.hasModule.mockReturnValue(false)],
+    ['without finance:read', () => mocks.can.mockResolvedValue(false)],
+    ['at a branch outside the tenant', () => mocks.branchFindFirst.mockResolvedValue(null)],
+  ])('refuses %s before searching', async (_name, arrange) => {
+    arrange();
+    await expect(caller().reversalSearch({ branchId: 'branch_x' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.search).not.toHaveBeenCalled();
+  });
+
+  it('refuses a non-owner before searching', async () => {
+    await expect(
+      caller({
+        session: {
+          expires: 'later',
+          user: { id: 'u', role: 'EMPLOYEE', status: 'ACTIVE', organizationId: 'org_1' },
+        },
+      } as Partial<TRPCContext>).reversalSearch({ branchId: 'branch_1' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.search).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { page: 0 },
+    { page: 401 },
+    { amountMinor: 0 },
+    { amountMinor: 12.5 },
+    { amountMinor: 1_000_000_000 },
+    { from: '2026-09-01', to: '2026-08-01' },
+    { from: '2026-02-30' },
+    { payee: 'x'.repeat(161) },
+    { organizationId: 'org_2' },
+  ])('refuses %o at the wire', async (bad) => {
+    await expect(
+      caller().reversalSearch({ branchId: 'branch_1', ...bad } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.search).not.toHaveBeenCalled();
   });
 });

@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
   aging: vi.fn(),
   payablesDrafts: vi.fn(),
   creditSetOffs: vi.fn(),
-  list: vi.fn(),
+  reversalSearch: vi.fn(),
   reversalAccess: vi.fn(),
 }));
 
@@ -20,7 +20,7 @@ vi.mock('@/server/routers/pharmacy-ap-invoices', () => ({
       aging: mocks.aging,
       payablesDrafts: mocks.payablesDrafts,
       creditSetOffs: mocks.creditSetOffs,
-      list: mocks.list,
+      reversalSearch: mocks.reversalSearch,
       reversalAccess: mocks.reversalAccess,
     }),
   },
@@ -116,7 +116,13 @@ describe('ApAgingPage', () => {
     });
     mocks.payablesDrafts.mockResolvedValue(emptyDrafts);
     mocks.creditSetOffs.mockResolvedValue({ scope, setOffs: [], retrievedAt: NOW });
-    mocks.list.mockResolvedValue({ scope, invoices: [], retrievedAt: NOW });
+    mocks.reversalSearch.mockResolvedValue({
+      scope,
+      invoices: [],
+      page: 1,
+      hasOlder: false,
+      retrievedAt: NOW,
+    });
     mocks.reversalAccess.mockResolvedValue({
       scope,
       actorId: 'owner_1',
@@ -509,14 +515,101 @@ describe('ApAgingPage', () => {
       ...overrides,
     });
 
-    it('reads only posted invoices of the authorized branch, newest 50', async () => {
+    it('reads the first page of posted invoices of the authorized branch through the search', async () => {
       await html({ branch: 'branch_1', asOf: '2026-11-15' });
-      expect(mocks.list).toHaveBeenCalledWith({ branchId: 'branch_1', status: 'POSTED', take: 50 });
+      expect(mocks.reversalSearch).toHaveBeenCalledWith({ branchId: 'branch_1', page: 1 });
       expect(mocks.reversalAccess).toHaveBeenCalledWith({ branchId: 'branch_1' });
     });
 
+    describe('DEV-103 search and paging', () => {
+      const searchQuery = {
+        branch: 'branch_1',
+        asOf: '2026-11-15',
+        rvPayee: ' K-Electric ',
+        rvRef: 'KE-11',
+        rvAmount: '234.56',
+        rvFrom: '2026-08-01',
+        rvTo: '2026-09-30',
+        rvPage: '2',
+      };
+
+      it('sends every filter to the server, the typed amount in exact minor units', async () => {
+        await html(searchQuery);
+        expect(mocks.reversalSearch).toHaveBeenCalledWith({
+          branchId: 'branch_1',
+          payee: 'K-Electric',
+          reference: 'KE-11',
+          amountMinor: 23_456,
+          from: '2026-08-01',
+          to: '2026-09-30',
+          page: 2,
+        });
+      });
+
+      it.each([
+        [{ rvAmount: '12.345' }, 'Use at most 2 decimal places'],
+        [{ rvAmount: '-5' }, 'Enter an amount of 0 or more.'],
+        [{ rvAmount: '1,000' }, 'Enter an amount using digits'],
+        [{ rvAmount: '0' }, 'Enter an amount above 0'],
+        [{ rvAmount: '10000000' }, 'Enter an amount above 0'],
+        [{ rvFrom: '2026-02-30' }, 'Choose a date.'],
+        [{ rvFrom: '2026-09-01', rvTo: '2026-08-01' }, 'Choose a day on or after the from day.'],
+        [{ rvPayee: ['a', 'b'] }, 'Enter this only once.'],
+      ])('refuses %o without searching and names the field', async (bad, message) => {
+        const output = await html({ branch: 'branch_1', asOf: '2026-11-15', ...bad });
+        expect(mocks.reversalSearch).not.toHaveBeenCalled();
+        expect(output).toContain(message);
+        expect(output).toContain('aria-invalid="true"');
+        expect(output).toContain('Fix the search above. Nothing was searched.');
+        expect(output).not.toContain('Reverse payment');
+      });
+
+      it('keeps the search and the aging request in the form and in the page links', async () => {
+        mocks.reversalSearch.mockResolvedValue({
+          scope,
+          invoices: [posted({ settlements: [] })],
+          page: 2,
+          hasOlder: true,
+          retrievedAt: NOW,
+        });
+        const output = await html({ ...searchQuery, payeeFilter: 'K-Electric' });
+        expect(output).toContain('role="search"');
+        expect(output).toMatch(
+          /name="rvAmount"[^>]*value="234.56"|value="234.56"[^>]*name="rvAmount"/
+        );
+        expect(output).toContain('<input type="hidden" name="branch" value="branch_1"/>');
+        expect(output).toContain('<input type="hidden" name="payeeFilter" value="K-Electric"/>');
+        const link = (page: string) =>
+          `/pharmacy/accounts/ap-aging?branch=branch_1&amp;asOf=2026-11-15&amp;payeeFilter=K-Electric&amp;rvPayee=K-Electric&amp;rvRef=KE-11&amp;rvAmount=234.56&amp;rvFrom=2026-08-01&amp;rvTo=2026-09-30${page}#reverse`;
+        expect(output).toContain(`href="${link('')}"`);
+        expect(output).toContain(`href="${link('&amp;rvPage=3')}"`);
+        expect(output).toContain('Newer invoices');
+        expect(output).toContain('Older invoices');
+        expect(output).toContain('Page 2');
+      });
+
+      it('offers no older page on the last page and explains an empty search', async () => {
+        mocks.reversalSearch.mockResolvedValue({
+          scope,
+          invoices: [],
+          page: 1,
+          hasOlder: false,
+          retrievedAt: NOW,
+        });
+        const output = await html({ branch: 'branch_1', asOf: '2026-11-15', rvRef: 'nothing' });
+        expect(output).toContain('matches this search. Change or clear the search.');
+        expect(output).not.toContain('Older invoices');
+        expect(output).not.toContain('Newer invoices');
+      });
+
+      it('ignores an out-of-range page and starts from the first', async () => {
+        await html({ branch: 'branch_1', asOf: '2026-11-15', rvPage: '99999' });
+        expect(mocks.reversalSearch).toHaveBeenCalledWith({ branchId: 'branch_1', page: 1 });
+      });
+    });
+
     it('offers the payment still in force for reversal, and the invoice only after it', async () => {
-      mocks.list.mockResolvedValue({ scope, invoices: [posted()], retrievedAt: NOW });
+      mocks.reversalSearch.mockResolvedValue({ scope, invoices: [posted()], retrievedAt: NOW });
       const output = await html({ branch: 'branch_1', asOf: '2026-11-15' });
       expect(output).toContain('Reverse an invoice or payment');
       expect(output).toContain('Reverse payment');
@@ -529,7 +622,7 @@ describe('ApAgingPage', () => {
     });
 
     it('offers the invoice once nothing settles it', async () => {
-      mocks.list.mockResolvedValue({
+      mocks.reversalSearch.mockResolvedValue({
         scope,
         invoices: [posted({ settlements: [] })],
         retrievedAt: NOW,
@@ -541,7 +634,7 @@ describe('ApAgingPage', () => {
     });
 
     it('sends an entry you recorded to the other manager instead of showing a form', async () => {
-      mocks.list.mockResolvedValue({
+      mocks.reversalSearch.mockResolvedValue({
         scope,
         invoices: [posted({ settlements: [], createdByUserId: 'owner_1' })],
         retrievedAt: NOW,
@@ -558,7 +651,7 @@ describe('ApAgingPage', () => {
     });
 
     it('lets a solo owner reverse what they recorded', async () => {
-      mocks.list.mockResolvedValue({
+      mocks.reversalSearch.mockResolvedValue({
         scope,
         invoices: [posted({ settlements: [], createdByUserId: 'owner_1' })],
         retrievedAt: NOW,
@@ -568,7 +661,7 @@ describe('ApAgingPage', () => {
     });
 
     it('shows no reversal form to someone who is not a manager or owner', async () => {
-      mocks.list.mockResolvedValue({ scope, invoices: [posted()], retrievedAt: NOW });
+      mocks.reversalSearch.mockResolvedValue({ scope, invoices: [posted()], retrievedAt: NOW });
       mocks.reversalAccess.mockResolvedValue({
         scope,
         actorId: 'owner_1',
@@ -582,11 +675,11 @@ describe('ApAgingPage', () => {
     });
 
     it('keeps the aging when the reversal list cannot be read, and refuses another branch', async () => {
-      mocks.list.mockRejectedValue(new Error('boom'));
+      mocks.reversalSearch.mockRejectedValue(new Error('boom'));
       let output = await html({ branch: 'branch_1', asOf: '2026-11-15' });
       expect(output).toContain('AP-0001');
       expect(output).toContain('Reversals could not be loaded');
-      mocks.list.mockResolvedValue({
+      mocks.reversalSearch.mockResolvedValue({
         scope: { ...scope, branchId: 'b2' },
         invoices: [posted()],
         retrievedAt: NOW,
