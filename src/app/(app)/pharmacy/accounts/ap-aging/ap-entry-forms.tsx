@@ -1,6 +1,14 @@
 'use client';
 
-import { startTransition, useActionState, useState, type FormEvent } from 'react';
+import {
+  createContext,
+  startTransition,
+  useActionState,
+  useContext,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -509,6 +517,29 @@ export function ReverseCreditSetOffForm({
  * owner's own PIN and a reason. The reason and the PIN are the deliberate confirmation step; the
  * server checks the PIN, who recorded the entry and every money rule, and dates it now.
  */
+/**
+ * DEV-103: a saved reversal removes its own row (the server re-renders the list without it), so
+ * its confirmation is announced here, above the list, which stays mounted.
+ */
+const ReversalNotice = createContext<((message: string) => void) | null>(null);
+
+export function ReversalNoticeArea({ children }: { children: ReactNode }) {
+  const [message, setMessage] = useState('');
+  return (
+    <ReversalNotice.Provider value={setMessage}>
+      <p
+        role="status"
+        aria-live="polite"
+        // Always rendered, so the live region exists before the message arrives.
+        className={message ? 'mt-3 text-sm font-medium text-success' : undefined}
+      >
+        {message}
+      </p>
+      {children}
+    </ReversalNotice.Provider>
+  );
+}
+
 export function ReverseApEntryForm({
   kind,
   branchId,
@@ -525,8 +556,14 @@ export function ReverseApEntryForm({
   initialKey: string;
 }) {
   const prefix = kind === 'invoice' ? 'ap-invoice-rev' : 'ap-payment-rev';
+  const announce = useContext(ReversalNotice);
+  const action = kind === 'invoice' ? reverseApInvoiceFromForm : reverseApSettlementFromForm;
   const { key, formKey, state, onSubmit, pending, invalid } = useEntryAction(
-    kind === 'invoice' ? reverseApInvoiceFromForm : reverseApSettlementFromForm,
+    async (previous, form) => {
+      const result = await action(previous, form);
+      if (result.status === 'saved') announce?.(result.message);
+      return result;
+    },
     initialKey,
     prefix
   );

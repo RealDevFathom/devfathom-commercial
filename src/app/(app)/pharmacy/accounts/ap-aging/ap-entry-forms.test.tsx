@@ -14,7 +14,12 @@ vi.mock('./ap-entry-actions', () => ({
   reverseApSettlementFromForm: mocks.reverseSettlement,
 }));
 
-import { PayApInvoiceForm, RecordApInvoiceForm, ReverseApEntryForm } from './ap-entry-forms';
+import {
+  PayApInvoiceForm,
+  RecordApInvoiceForm,
+  ReversalNoticeArea,
+  ReverseApEntryForm,
+} from './ap-entry-forms';
 
 const hidden = (container: HTMLElement, name: string) =>
   (container.querySelector(`input[name="${name}"]`) as HTMLInputElement).value;
@@ -155,5 +160,36 @@ describe('DEV-103 reversal form', () => {
     await waitFor(() => expect(screen.getByText('Invoice reversed.')).toBeInTheDocument());
     expect((mocks.reverseInvoice.mock.calls[0]?.[1] as FormData).get('invoiceId')).toBe('inv_1');
     expect(screen.getByRole('button', { name: /Reverse invoice/ })).toHaveClass('min-h-11');
+  });
+});
+
+describe('DEV-103 reversal confirmation', () => {
+  it('keeps the saved message in the panel after the reversed row leaves the list', async () => {
+    mocks.reverseInvoice.mockResolvedValueOnce({
+      status: 'saved',
+      message: 'Invoice AP-0001 reversed.',
+    });
+    const form = (
+      <ReverseApEntryForm
+        kind="invoice"
+        branchId="branch_1"
+        targetId="inv_1"
+        label="AP-0001"
+        initialKey="ap-invoice-rev:first-key"
+      />
+    );
+    const { rerender } = render(<ReversalNoticeArea>{form}</ReversalNoticeArea>);
+    fireEvent.submit(screen.getByRole('form', { name: 'Reverse invoice AP-0001' }));
+    await waitFor(() => expect(mocks.reverseInvoice).toHaveBeenCalled());
+    // The server re-renders the list without the reversed invoice.
+    rerender(
+      <ReversalNoticeArea>
+        <p>Nothing left to reverse.</p>
+      </ReversalNoticeArea>
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('Invoice AP-0001 reversed.')
+    );
+    expect(screen.queryByRole('form')).toBeNull();
   });
 });
