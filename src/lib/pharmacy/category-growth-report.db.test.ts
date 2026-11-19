@@ -9,15 +9,20 @@ import { readPharmacyCategoryGrowthReport } from './category-growth-report';
 // DEV-945: each shadow is built LIKE the migrated table, so the fixture carries exactly the real
 // columns (and their NOT NULL rules). A query that reads a column the real table does not have
 // fails here, instead of passing against a hand-written table that has drifted from the schema.
+// DEV-946: INCLUDING ALL also copies the CHECK constraints, so a seeded row the real table would
+// refuse (a discount with no approval, a prepaid-tier share with no tier) is refused here too.
 const url = process.env.TEST_DATABASE_URL;
 const suite = url ? describe : describe.skip;
 
 const lineColumns = `(id, "organizationId", "branchId", "saleId", "medicineId", "presentationId",
   "packLevelId", "saleUnit", quantity, "canonicalUnitsPerSaleUnit", "canonicalUnits",
   "unitPriceMinor", "proRataCeilingMinor", "unitCostMinor", "idempotencyKey", "grossMinor",
-  "discountMinor", "tierDiscountMinor")`;
+  "discountMinor", "tierDiscountMinor", "discountKind", "approvalPolicy", "approvedByUserId",
+  "tierName", "tierAllocationDiscounts")`;
+const sqlText = (value: string | null) => (value === null ? 'NULL' : `'${value}'`);
 // One line: id, org, branch, sale, medicine, quantity, canonical units, unit price, gross charged,
-// discount (all kinds, a prepaid tier included), and the tier's share of that discount.
+// discount (all kinds, a prepaid tier included), and the tier's share of that discount. A
+// discounted line carries the approval the real table requires; a tier share names its tier.
 const line = (
   id: string,
   org: string,
@@ -32,12 +37,17 @@ const line = (
   tierDiscount = 0
 ) =>
   `('${id}','${org}','${branch}','${sale}','${medicine}','pres','pack','UNIT',${quantity},` +
-  `${units / quantity},${units},${unitPrice},${unitPrice},1,'${id}',${gross},${discount},${tierDiscount})`;
+  `${units / quantity},${units},${unitPrice},${unitPrice},1,'${id}',${gross},${discount},${tierDiscount},` +
+  `${discount > 0 ? "'DISCOUNT'" : 'NULL'},${sqlText(discount > 0 ? 'MANAGER_APPROVED' : null)},` +
+  `${sqlText(discount > 0 ? 'manager' : null)},${sqlText(tierDiscount > 0 ? 'Gold' : null)},` +
+  `${tierDiscount > 0 ? `'{"${id}": ${tierDiscount}}'` : 'NULL'})`;
 
 const fixtureSql = `
-CREATE TEMP TABLE pharmacy_sale_lines (LIKE public.pharmacy_sale_lines INCLUDING DEFAULTS);
-CREATE TEMP TABLE pharmacy_sales (LIKE public.pharmacy_sales INCLUDING DEFAULTS);
-CREATE TEMP TABLE pharmacy_medicines (LIKE public.pharmacy_medicines INCLUDING DEFAULTS);
+CREATE TEMP TABLE pharmacy_sale_lines (LIKE public.pharmacy_sale_lines INCLUDING ALL);
+CREATE TEMP TABLE pharmacy_sales (LIKE public.pharmacy_sales INCLUDING ALL);
+CREATE TEMP TABLE pharmacy_medicines (LIKE public.pharmacy_medicines INCLUDING ALL);
+CREATE TEMP TABLE pharmacy_sale_returns (LIKE public.pharmacy_sale_returns INCLUDING ALL);
+CREATE TEMP TABLE pharmacy_sale_return_lines (LIKE public.pharmacy_sale_return_lines INCLUDING ALL);
 INSERT INTO pharmacy_medicines (id, "organizationId", "productName", "productFamily", otc, "updatedAt") VALUES
   ('otc','org_1','OTC item','PHARMACEUTICAL',true,now()),
   ('cos','org_1','Front-shop item','FRONT_SHOP',true,now()),
@@ -53,10 +63,12 @@ INSERT INTO pharmacy_sales (id, "organizationId", "branchId", status, "receiptNu
   ('s7','org_1','b1','COMPLETED',7,'2026-10-09','u',now()),
   ('s8','org_1','b1','COMPLETED',8,'2026-09-30','u',now()),
   ('s9','org_1','b4','COMPLETED',9,'2026-10-03','u',now()),
-  ('s10','org_1','b4','VOID',10,'2026-10-03','u',now()),
+  ('s10','org_1','b4','VOID',null,'2026-10-03','u',now()),
   ('s11','org_1','b4','HELD',null,'2026-10-03','u',now()),
   ('s12','org_1','b5','COMPLETED',12,'2026-09-30 19:30','u',now()),
-  ('s13','org_1','b5','COMPLETED',13,'2026-10-08 20:00','u',now());
+  ('s13','org_1','b5','COMPLETED',13,'2026-10-08 20:00','u',now()),
+  ('s14','org_1','b5','COMPLETED',14,'2026-09-30 18:59','u',now()),
+  ('s15','org_1','b5','COMPLETED',15,'2026-10-08 18:59','u',now());
 INSERT INTO pharmacy_sale_lines ${lineColumns} VALUES
   ${line('l1', 'org_1', 'b1', 's1', 'otc', 10, 100, 1000, 10000, 1000)},
   ${line('l2', 'org_1', 'b1', 's1', 'cos', 2, 2, 500, 1000, 0)},
@@ -75,7 +87,16 @@ INSERT INTO pharmacy_sale_lines ${lineColumns} VALUES
   ${line('l15', 'org_1', 'b4', 's11', 'cos', 1, 1, 40000, 40000, 0)},
   ${line('l16', 'org_1', 'b5', 's12', 'otc', 1, 1, 700, 700, 0)},
   ${line('l17', 'org_1', 'b5', 's12', 'rx', 1, 1, 300, 300, 0)},
-  ${line('l18', 'org_1', 'b5', 's13', 'cos', 1, 1, 5000, 5000, 0)};
+  ${line('l18', 'org_1', 'b5', 's13', 'cos', 1, 1, 5000, 5000, 0)},
+  ${line('l19', 'org_1', 'b5', 's14', 'cos', 1, 1, 400, 400, 0)},
+  ${line('l20', 'org_1', 'b5', 's15', 'otc', 1, 1, 1000, 1000, 0)};
+-- A return of 40 of l1's 100 OTC units inside the window. The basis is gross completed receipts,
+-- so it does not reduce b1's figures.
+INSERT INTO pharmacy_sale_returns (id, "organizationId", "branchId", "originalSaleId", "actorId", reason, "createdAt") VALUES
+  ('r1','org_1','b1','s1','u','Customer return','2026-10-05');
+INSERT INTO pharmacy_sale_return_lines (id, "organizationId", "branchId", "returnId", "saleLineId", "inventoryLotId",
+  "stockLocationId", "canonicalUnits", "integrityDecision", "stockMovementId", "grossMinor", "discountMinor", "createdAt") VALUES
+  ('rl1','org_1','b1','r1','l1','lot','loc',40,'RESTOCK','sm-r1',4000,400,'2026-10-05');
 `;
 
 function pgDb(client: Client) {
@@ -115,6 +136,7 @@ suite('category growth SQL aggregation', () => {
       to: '2026-10-09',
       configuration: [],
     });
+    // r1 returned 40 of l1's OTC units: gross completed-receipt basis, so b1 is not netted.
     expect(report[0]).toMatchObject({
       branchId: 'b1',
       totalSalesMinor: 20000,
@@ -186,12 +208,14 @@ suite('category growth SQL aggregation', () => {
       timeZone: 'Asia/Karachi',
     });
     // 2026-09-30 19:30 UTC is 00:30 on 1 October in Karachi (inside); 2026-10-08 20:00 UTC is
-    // 01:00 on 9 October (outside the exclusive cutoff).
+    // 01:00 on 9 October (outside the exclusive cutoff). At 18:59 UTC it is 23:59 in Karachi:
+    // 2026-09-30 18:59 is still 30 September (outside, front shop 400) and 2026-10-08 18:59 is
+    // still 8 October (inside, OTC 1,000).
     expect(report[0]).toMatchObject({
       branchId: 'b5',
-      totalSalesMinor: 1000,
+      totalSalesMinor: 2000,
       categories: [
-        { category: 'OTC', salesMinor: 700, units: 1, salesSharePercent: 70 },
+        { category: 'OTC', salesMinor: 1700, units: 2, salesSharePercent: 85 },
         { category: 'COSMETICS', salesMinor: 0, units: 0, salesSharePercent: 0 },
       ],
     });

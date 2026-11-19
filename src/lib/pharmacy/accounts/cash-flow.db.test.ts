@@ -75,13 +75,15 @@ beforeAll(async () => {
     { accountCode: 'BANK', side: 'DEBIT', amountMinor: 50, branchId: branch },
     { accountCode: 'SALES_CLEARING', side: 'CREDIT', amountMinor: 50, branchId: branch },
   ]);
+  // A reversal must post exactly the original's lines with the sides swapped
+  // (finance_journal_entries_reversal_negates, 20260902180000); a partial one is refused.
   await post(
     org,
     `${org}_reversal`,
     new Date('2026-10-03T00:00:00Z'),
     [
-      { accountCode: 'BANK', side: 'CREDIT', amountMinor: 20, branchId: branch },
-      { accountCode: 'SALES_CLEARING', side: 'DEBIT', amountMinor: 20, branchId: branch },
+      { accountCode: 'BANK', side: 'CREDIT', amountMinor: 50, branchId: branch },
+      { accountCode: 'SALES_CLEARING', side: 'DEBIT', amountMinor: 50, branchId: branch },
     ],
     original
   );
@@ -176,10 +178,10 @@ suite('cash-flow projection on migrated PostgreSQL with RLS', () => {
       expect.objectContaining({
         currency: 'PKR',
         opening: BigInt(100),
-        operating: BigInt(60),
+        operating: BigInt(30),
         unclassified: BigInt(40),
-        closing: BigInt(200),
-        canonicalClosing: BigInt(200),
+        closing: BigInt(170),
+        canonicalClosing: BigInt(170),
         discrepancy: BigInt(0),
       }),
       expect.objectContaining({
@@ -200,7 +202,7 @@ suite('cash-flow projection on migrated PostgreSQL with RLS', () => {
     expect(result.evidence.every((entry) => entry.netMinor !== BigInt(0))).toBe(true);
     expect(result.evidence.find((entry) => entry.id === `${org}_reversal`)).toMatchObject({
       reversesEntryId: `${org}_original`,
-      netMinor: BigInt(-20),
+      netMinor: BigInt(-50),
       occurredAt: new Date('2026-10-03T00:00:00Z'),
     });
   });
@@ -215,7 +217,7 @@ suite('cash-flow projection on migrated PostgreSQL with RLS', () => {
       return loadCashFlowProjection(db, scope, period, accounts);
     });
     expect(result.totals.find((row) => row.currency === 'PKR')).toMatchObject({
-      closing: BigInt(200),
+      closing: BigInt(170),
       discrepancy: BigInt(7),
     });
     expect(result.totals.find((row) => row.currency === 'USD')?.discrepancy).toBe(BigInt(0));
