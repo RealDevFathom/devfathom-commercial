@@ -18,7 +18,11 @@ type Step =
  * DEV-961: password, then QR code and setup key confirmed with a current code, then the
  * one-time recovery codes, shown once. Every step is checked on the server.
  */
-export function ApprovalAuthenticatorSetupForm() {
+export function ApprovalAuthenticatorSetupForm({
+  passwordless = false,
+}: {
+  passwordless?: boolean;
+}) {
   const router = useRouter();
   const [step, setStep] = useState<Step>({ kind: 'password' });
   const [password, setPassword] = useState('');
@@ -66,25 +70,36 @@ export function ApprovalAuthenticatorSetupForm() {
     const submit = (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
       setError('');
-      begin.mutate({ currentPassword: password });
+      begin.mutate(passwordless ? {} : { currentPassword: password });
     };
     return (
       <form className="mt-6 space-y-4" onSubmit={submit} aria-label="Start set-up">
-        <label className="block text-sm text-text-body">
-          Your current password
-          <Input
-            className="mt-1.5 block min-h-11"
-            type="password"
-            autoComplete="current-password"
-            required
-            value={password}
-            aria-invalid={Boolean(error) || undefined}
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        </label>
+        {passwordless ? (
+          <p className="text-sm text-text-body">
+            You signed in with your organization&apos;s single sign-on, so there is no password to
+            enter. Set the app up within 15 minutes of signing in.
+          </p>
+        ) : (
+          <label className="block text-sm text-text-body">
+            Your current password
+            <Input
+              className="mt-1.5 block min-h-11"
+              type="password"
+              autoComplete="current-password"
+              required
+              value={password}
+              aria-invalid={Boolean(error) || undefined}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </label>
+        )}
         {alert}
         <div className="flex flex-wrap gap-3">
-          <Button type="submit" className="min-h-11" disabled={!password || begin.isPending}>
+          <Button
+            type="submit"
+            className="min-h-11"
+            disabled={(!passwordless && !password) || begin.isPending}
+          >
             {begin.isPending ? 'Starting…' : 'Continue'}
           </Button>
           {signOut}

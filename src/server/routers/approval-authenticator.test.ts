@@ -61,6 +61,8 @@ const MEMBERS: Record<string, Party> = {
   owner: party('owner', 'EMPLOYEE', 'owner'),
   admin: party('admin', 'ADMIN', null),
   manager: party('manager', 'EMPLOYEE', 'manager'),
+  // DEV-961: provisioned by single sign-on or SCIM, with no password.
+  sso: party('sso', 'EMPLOYEE', 'manager'),
 };
 
 type AuthRow = {
@@ -74,7 +76,7 @@ type AuthRow = {
 
 type RecoveryRow = { userId: string; codeHash: string; usedAt: Date | null };
 
-function setup(userId: keyof typeof MEMBERS) {
+function setup(userId: keyof typeof MEMBERS, sessionExtra: Record<string, unknown> = {}) {
   const rows = new Map<string, AuthRow>();
   const recovery: RecoveryRow[] = [];
   const organization = { requireApprovalAuthenticator: false };
@@ -89,7 +91,11 @@ function setup(userId: keyof typeof MEMBERS) {
     user: {
       findFirst: vi.fn(async ({ where }: { where: { id: string } }) =>
         MEMBERS[where.id]
-          ? { ...MEMBERS[where.id], email: `${where.id}@example.test`, password: PASSWORD_HASH }
+          ? {
+              ...MEMBERS[where.id],
+              email: `${where.id}@example.test`,
+              password: where.id === 'sso' ? null : PASSWORD_HASH,
+            }
           : null
       ),
       findMany: vi.fn(async () =>
@@ -207,6 +213,7 @@ function setup(userId: keyof typeof MEMBERS) {
         status: 'ACTIVE',
         organizationId: 'org',
         approvalApprover: true,
+        ...sessionExtra,
       },
     },
     organization: { id: 'org', isDemo: false },
@@ -579,5 +586,49 @@ describe('DEV-961 status for the set-up screen', () => {
       setupRequired: false,
       enrolled: true,
     });
+  });
+});
+
+describe('DEV-961 members with no password (single sign-on, SCIM)', () => {
+  const freshly = { signedInAt: Date.now() - 60_000 };
+
+  it('lets a freshly signed-in passwordless approver set up and recover without a password', async () => {
+    const { caller, rows } = setup('sso', freshly);
+    await expect(caller.getStatus()).resolves.toMatchObject({ passwordless: true });
+    const started = await caller.beginEnrollment({});
+    const confirmed = await caller.confirmEnrollment({
+      token: codeAt(started.secret, Math.floor(Date.now() / 30_000)),
+    });
+    expect(rows.get('sso')?.enabledAt).toBeInstanceOf(Date);
+    await expect(caller.useRecoveryCode({ code: confirmed.recoveryCodes[0] })).resolves.toEqual({
+      reset: true,
+    });
+    expect(rows.has('sso')).toBe(false);
+  });
+
+  it('refuses a passwordless member whose sign-in is stale, missing or in the future', async () => {
+    for (const extra of [
+      { signedInAt: Date.now() - 16 * 60_000 },
+      {},
+      { signedInAt: Date.now() + 60_000 },
+    ]) {
+      const { caller, rows } = setup('sso', extra);
+      await expect(caller.beginEnrollment({})).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message:
+          'For your security, sign out and sign in again, then set up the app straight away.',
+      });
+      expect(rows.has('sso')).toBe(false);
+    }
+  });
+
+  it('still needs the password of a member who has one, however fresh the sign-in', async () => {
+    const { caller, rows } = setup('manager', freshly);
+    await expect(caller.beginEnrollment({})).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller.beginEnrollment({ currentPassword: 'wrong' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(rows.has('manager')).toBe(false);
+    await expect(caller.getStatus()).resolves.toMatchObject({ passwordless: false });
   });
 });

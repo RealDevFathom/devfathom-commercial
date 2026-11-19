@@ -778,6 +778,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         // Never infer password entry from session refresh or non-password sign-in.
         token.passwordAuthenticatedAt = user.passwordAuthenticatedAt;
         token.signedInAt = Date.now();
+        // DEV-961: set only here, at a real sign-in, and never backfilled, so it can prove a
+        // fresh sign-in where no password exists to re-enter (single sign-on).
+        token.signInVerifiedAt = token.signedInAt;
         token.lastValidatedAt = Date.now();
         // DEV-961: decide at sign-in whether this member must set up an approval
         // authenticator before the account works. Fails closed to the set-up screen.
@@ -992,6 +995,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           typeof token.passwordAuthenticatedAt === 'number' &&
           Number.isFinite(token.passwordAuthenticatedAt)
             ? token.passwordAuthenticatedAt
+            : undefined;
+        // DEV-961: when this session signed in (server-issued), so a member with no password
+        // (single sign-on) can prove a fresh sign-in when setting up an approval authenticator.
+        session.user.signedInAt =
+          !token.sessionRevoked &&
+          typeof token.signInVerifiedAt === 'number' &&
+          Number.isFinite(token.signInVerifiedAt)
+            ? token.signInVerifiedAt
             : undefined;
         session.user.sessionInvalidReason =
           (token.sessionInvalidReason as SessionInvalidReason | null) ?? null;

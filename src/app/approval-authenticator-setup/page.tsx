@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { ApprovalAuthenticatorSetupForm } from './setup-form';
 
@@ -14,6 +15,13 @@ export default async function ApprovalAuthenticatorSetupPage() {
   if (!actor?.session.user?.id) redirect('/login');
   if (actor.session.user.mustChangePassword === true) redirect('/change-password');
   if (actor.session.user.approvalAuthenticatorSetupRequired !== true) redirect('/dashboard');
+  // A member signed in by single sign-on has no password; a fresh sign-in stands in for it.
+  const account = await withTenantDb(actor.organization.id, (db) =>
+    db.user.findFirst({
+      where: { id: actor.session.user.id, organizationId: actor.organization.id },
+      select: { password: true },
+    })
+  );
 
   return (
     <main
@@ -31,7 +39,7 @@ export default async function ApprovalAuthenticatorSetupPage() {
         from an authenticator app for approvals instead of a fixed PIN. Your account opens once the
         app is set up.
       </p>
-      <ApprovalAuthenticatorSetupForm />
+      <ApprovalAuthenticatorSetupForm passwordless={Boolean(account && !account.password)} />
     </main>
   );
 }

@@ -160,7 +160,10 @@ export function ApprovalAuthenticatorSection() {
                 </Button>
               </div>
             ) : (
-              <UseRecoveryCode codesLeft={data.recoveryCodesLeft} />
+              <UseRecoveryCode
+                codesLeft={data.recoveryCodesLeft}
+                passwordless={data.passwordless === true}
+              />
             )}
           </div>
         ) : enrolling ? (
@@ -219,25 +222,29 @@ export function ApprovalAuthenticatorSection() {
         ) : data.available ? (
           <div className="flex flex-wrap items-end gap-3">
             <StatusPill status="neutral" label={data.required ? 'Required' : 'Not set up'} />
-            <div className="w-full space-y-1 sm:w-auto">
-              <label
-                htmlFor="approval-authenticator-password"
-                className="block text-xs font-medium text-foreground"
-              >
-                Your current password
-              </label>
-              <Input
-                id="approval-authenticator-password"
-                type="password"
-                autoComplete="current-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="sm:w-56"
-              />
-            </div>
+            {data.passwordless !== true && (
+              <div className="w-full space-y-1 sm:w-auto">
+                <label
+                  htmlFor="approval-authenticator-password"
+                  className="block text-xs font-medium text-foreground"
+                >
+                  Your current password
+                </label>
+                <Input
+                  id="approval-authenticator-password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="sm:w-56"
+                />
+              </div>
+            )}
             <Button
-              onClick={() => begin.mutate({ currentPassword: password })}
-              disabled={!password || begin.isPending}
+              onClick={() =>
+                begin.mutate(data.passwordless === true ? {} : { currentPassword: password })
+              }
+              disabled={(data.passwordless !== true && !password) || begin.isPending}
             >
               {begin.isPending ? 'Starting…' : 'Set up authenticator'}
             </Button>
@@ -392,7 +399,13 @@ function TurnOffAuthenticator({
 }
 
 /** DEV-961: a member who lost their phone uses a recovery code to set the app up again. */
-function UseRecoveryCode({ codesLeft }: { codesLeft: number }) {
+function UseRecoveryCode({
+  codesLeft,
+  passwordless,
+}: {
+  codesLeft: number;
+  passwordless: boolean;
+}) {
   const utils = trpc.useUtils();
   const [open, setOpen] = useState(false);
   const [code, setCode] = useState('');
@@ -443,20 +456,22 @@ function UseRecoveryCode({ codesLeft }: { codesLeft: number }) {
             className="mt-1 block w-40 font-mono"
           />
         </label>
-        <label className="block text-xs font-medium text-foreground">
-          Your current password
-          <Input
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="mt-1 block w-44"
-          />
-        </label>
+        {!passwordless && (
+          <label className="block text-xs font-medium text-foreground">
+            Your current password
+            <Input
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="mt-1 block w-44"
+            />
+          </label>
+        )}
         <Button
           size="sm"
-          disabled={!code || !password || use.isPending}
-          onClick={() => use.mutate({ code, currentPassword: password })}
+          disabled={!code || (!passwordless && !password) || use.isPending}
+          onClick={() => use.mutate(passwordless ? { code } : { code, currentPassword: password })}
         >
           {use.isPending ? 'Checking…' : 'Use code'}
         </Button>

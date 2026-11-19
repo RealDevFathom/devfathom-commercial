@@ -41,7 +41,10 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 const ENROLMENT_UNAVAILABLE =
   'Approval authenticators are not available until the server encryption key is configured.';
 
-type Ctx = { db: ScopedDb; session: { user: { id: string; organizationId?: string | null } } };
+type Ctx = {
+  db: ScopedDb;
+  session: { user: { id: string; organizationId?: string | null; signedInAt?: number } };
+};
 
 function organizationOf(ctx: Ctx): string {
   const id = ctx.session.user.organizationId;
@@ -99,10 +102,48 @@ async function requirePasswordReauthentication(ctx: Ctx, organizationId: string,
   });
 }
 
+/** DEV-961: how recent a sign-in must be to stand in for a password that does not exist. */
+export const PASSWORDLESS_REAUTHENTICATION_MS = 15 * 60_000;
+
+export const PASSWORDLESS_REAUTHENTICATION_MESSAGE =
+  'For your security, sign out and sign in again, then set up the app straight away.';
+
+/**
+ * DEV-961: setting up (or recovering) the authenticator is forced on every approver, including
+ * members provisioned by single sign-on or SCIM, who have no password to re-enter. For such an
+ * account only, a fresh sign-in through the identity provider (the server-issued sign-in time
+ * on the session, at most 15 minutes old) stands in for the password. An account that has a
+ * password must always enter it.
+ */
+async function requireSetupReauthentication(
+  ctx: Ctx,
+  organizationId: string,
+  password: string | undefined
+) {
+  const account = await ctx.db.user.findFirst({
+    where: { id: ctx.session.user.id, organizationId, status: 'ACTIVE' },
+    select: { password: true },
+  });
+  if (account && !account.password) {
+    const signedInAt = ctx.session.user.signedInAt;
+    if (
+      typeof signedInAt !== 'number' ||
+      !Number.isFinite(signedInAt) ||
+      Date.now() - signedInAt > PASSWORDLESS_REAUTHENTICATION_MS ||
+      signedInAt > Date.now()
+    )
+      throw new TRPCError({ code: 'FORBIDDEN', message: PASSWORDLESS_REAUTHENTICATION_MESSAGE });
+    return;
+  }
+  if (!password)
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Your current password is incorrect.' });
+  await requirePasswordReauthentication(ctx, organizationId, password);
+}
+
 export const approvalAuthenticatorRouter = router({
   getStatus: protectedProcedure.query(async ({ ctx }) => {
     const organizationId = organizationOf(ctx);
-    const [authenticator, organization, actor] = await Promise.all([
+    const [authenticator, organization, actor, account] = await Promise.all([
       ctx.db.approvalAuthenticator.findFirst({
         where: { organizationId, userId: ctx.session.user.id },
         select: { enabledAt: true },
@@ -112,6 +153,10 @@ export const approvalAuthenticatorRouter = router({
         select: { requireApprovalAuthenticator: true },
       }),
       liveParty(ctx, organizationId, ctx.session.user.id),
+      ctx.db.user.findFirst({
+        where: { id: ctx.session.user.id, organizationId },
+        select: { password: true },
+      }),
     ]);
     const owner = Boolean(actor && hasAllCapabilityAccess(actor));
     const recoveryCodesLeft = authenticator?.enabledAt
@@ -133,6 +178,8 @@ export const approvalAuthenticatorRouter = router({
         })
       ).setupRequired,
       recoveryCodesLeft,
+      /** DEV-961: signed in by single sign-on, with no password to re-enter. */
+      passwordless: Boolean(account && !account.password),
       required: Boolean(organization?.requireApprovalAuthenticator),
       isOwner: owner,
       canManage: owner || (actor?.status === 'ACTIVE' && actor.role === 'ADMIN'),
@@ -143,7 +190,7 @@ export const approvalAuthenticatorRouter = router({
   // Phase 1: mint a secret and return it (+ otpauth URI for the QR code) once. Inactive
   // until confirmEnrollment succeeds. Restarting replaces any unconfirmed secret.
   beginEnrollment: protectedProcedure
-    .input(z.strictObject({ currentPassword: reauthentication }))
+    .input(z.strictObject({ currentPassword: reauthentication.optional() }))
     .mutation(async ({ ctx, input }) => {
       const organizationId = organizationOf(ctx);
       const userId = ctx.session.user.id;
@@ -151,7 +198,7 @@ export const approvalAuthenticatorRouter = router({
         throw new TRPCError({ code: 'PRECONDITION_FAILED', message: ENROLMENT_UNAVAILABLE });
       if (!(await rateLimit(`approval-authenticator-begin:${userId}`, 10, 15 * 60_000)).ok)
         throw tooManyAttempts();
-      await requirePasswordReauthentication(ctx, organizationId, input.currentPassword);
+      await requireSetupReauthentication(ctx, organizationId, input.currentPassword);
       const [user, existing] = await Promise.all([
         ctx.db.user.findFirst({ where: { id: userId, organizationId }, select: { email: true } }),
         ctx.db.approvalAuthenticator.findFirst({
@@ -255,7 +302,7 @@ export const approvalAuthenticatorRouter = router({
     .input(
       z.strictObject({
         code: z.string().trim().min(1).max(32),
-        currentPassword: reauthentication,
+        currentPassword: reauthentication.optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -264,7 +311,7 @@ export const approvalAuthenticatorRouter = router({
       if (!(await rateLimit(`approval-authenticator-recovery:${userId}`, 5, 15 * 60_000)).ok)
         throw tooManyAttempts();
       annotateAudit(ctx, { skipInput: true });
-      await requirePasswordReauthentication(ctx, organizationId, input.currentPassword);
+      await requireSetupReauthentication(ctx, organizationId, input.currentPassword);
       const spent = await ctx.db.approvalAuthenticatorRecoveryCode.updateMany({
         where: { organizationId, userId, codeHash: hashRecoveryCode(input.code), usedAt: null },
         data: { usedAt: new Date() },

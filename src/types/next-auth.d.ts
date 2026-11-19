@@ -35,6 +35,8 @@ declare module 'next-auth' {
       sessionInvalidReason?: SessionInvalidReason | null;
       /** Server-issued epoch ms of verified password entry; never a refresh timestamp. */
       passwordAuthenticatedAt?: number;
+      /** DEV-961: server-issued epoch ms of this session's sign-in (any method). */
+      signedInAt?: number;
       demoAccessExpiresAt?: number;
     };
   }
@@ -76,6 +78,8 @@ declare module 'next-auth/jwt' {
     lastValidatedAt?: number;
     // #1252: sign-in time (epoch ms); bounds the session's absolute lifetime.
     signedInAt?: number;
+    // DEV-961: sign-in time set only at a real sign-in (never backfilled).
+    signInVerifiedAt?: number;
     // #16: session revocation as its own claim, never folded into `status`.
     sessionRevoked?: boolean;
     sessionInvalidReason?: SessionInvalidReason | null;

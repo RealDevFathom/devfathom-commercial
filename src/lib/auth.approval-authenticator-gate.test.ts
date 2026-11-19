@@ -268,3 +268,22 @@ describe('DEV-961 approval authenticator gate on every request', () => {
     });
   });
 });
+
+describe('DEV-961 the sign-in time a passwordless member can prove', () => {
+  it('exposes the time of a real sign-in, and never a backfilled one', async () => {
+    database({ required: true });
+    mocks.holdsAnyApprovalRight.mockResolvedValue(false);
+    const before = Date.now();
+    const token = await config().callbacks.jwt({ token: {}, user: signedIn });
+    const user = await sessionUser(token);
+    expect(user.signedInAt).toBeGreaterThanOrEqual(before);
+    expect(user.signedInAt).toBe(token.signInVerifiedAt);
+
+    // A token from before this claim existed gets a backfilled signedInAt, which is not
+    // proof of a fresh sign-in.
+    database({ required: true });
+    const legacy = await config().callbacks.jwt({ token: liveToken({ signedInAt: undefined }) });
+    expect(typeof legacy.signedInAt).toBe('number');
+    expect((await sessionUser(legacy)).signedInAt).toBeUndefined();
+  });
+});

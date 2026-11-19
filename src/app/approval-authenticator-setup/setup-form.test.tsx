@@ -94,3 +94,12 @@ describe('DEV-961 approval authenticator set-up form', () => {
     expect(mocks.signOutEverything).toHaveBeenCalledWith('/login');
   });
 });
+
+describe('DEV-961 set-up form for a member with no password', () => {
+  it('asks for no password and starts set-up on the fresh sign-in', () => {
+    render(<ApprovalAuthenticatorSetupForm passwordless />);
+    expect(screen.queryByLabelText('Your current password')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(mocks.mutations['approvalAuthenticator.beginEnrollment']).toHaveBeenCalledWith({});
+  });
+});
