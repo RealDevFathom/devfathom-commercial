@@ -4,6 +4,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   BillDiscountRefused,
+  billShareHeldByTier,
   planBillDiscount,
   type BillDiscountExclusion,
   type BillDiscountPlan,
@@ -114,6 +115,10 @@ export async function applyBillDiscount(
       },
     },
   });
+  // DEV-966: a prepaid tier share priced on top of a bill share fixes the bill (a cash-on-delivery
+  // bill is priced when the rider collects, before any tender): nothing is changed or removed.
+  if (lines.some(billShareHeldByTier))
+    throw new PharmacySaleError('BILL_DISCOUNT_LOCKED_BY_PREPAID_TIER');
   const limits = await readDiscountLimits(db, scope);
   let plan: BillDiscountPlan;
   try {

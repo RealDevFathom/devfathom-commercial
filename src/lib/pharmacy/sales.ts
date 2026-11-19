@@ -6,7 +6,12 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { legacyStripOption, packLevelCanonicalUnits } from './counter-pricing';
 import { mrpRoundingIncrementForLot, priceFromLot } from './medicine';
 import { COUNTER_DISCOUNT_NOTICES } from './counter-messages';
-import { maxDiscountMinorFor, minimumPriceForMargin } from './smart-discount';
+import { billShareHeldByTier } from './bill-discount';
+import {
+  lineDiscountRoomMinor,
+  maxDiscountMinorFor,
+  minimumPriceForMargin,
+} from './smart-discount';
 import { readDiscountLimits } from './smart-discount-service';
 import {
   branchUnknownLossProbability,
@@ -233,6 +238,8 @@ export class PharmacySaleError extends Error {
       | 'BILL_DISCOUNT_AFTER_PAYMENT'
       // DEV-956: a paid bill with a whole-bill discount takes no new line.
       | 'BILL_DISCOUNT_LOCKED_BY_PAYMENT'
+      // DEV-966: the prepaid tier priced on top of the bill share, so the bill is fixed.
+      | 'BILL_DISCOUNT_LOCKED_BY_PREPAID_TIER'
   ) {
     super(reason);
   }
@@ -265,12 +272,20 @@ export function validateDiscount(input: {
     throw new PharmacySaleError('APPROVAL_REQUIRED');
   if (input.discountMinor > maxDiscountMinorFor(input.grossMinor, input.maxDiscountBps))
     throw new PharmacySaleError('DISCOUNT_ABOVE_MAXIMUM');
+  // Even an undiscounted line is never sold below its cost.
   if (input.grossMinor - input.discountMinor < input.costMinor)
     throw new PharmacySaleError('MARGIN_GUARDRAIL');
+  // DEV-966: the one line-room rule the whole-bill discount also uses: the owner's maximum on
+  // the line's price and the minimum-margin price on its cost.
   if (
     input.discountMinor > 0 &&
-    input.grossMinor - input.discountMinor <
-      minimumPriceForMargin(input.costMinor, input.minMarginBps ?? 0)
+    input.discountMinor >
+      lineDiscountRoomMinor({
+        grossMinor: input.grossMinor,
+        costMinor: input.costMinor,
+        minMarginBps: input.minMarginBps ?? 0,
+        maxDiscountBps: input.maxDiscountBps,
+      })
   )
     throw new PharmacySaleError('MARGIN_GUARDRAIL');
 }
@@ -691,6 +706,11 @@ async function clearBillDiscountForNewLine(
   if (await saleHasPaymentActivity(db, scope, sale.id))
     throw new PharmacySaleError('BILL_DISCOUNT_LOCKED_BY_PAYMENT');
   const shared = sale.lines.filter((row) => row.billDiscountMinor > 0);
+  // DEV-966: a cash-on-delivery bill is priced by the prepaid tier when the rider collects,
+  // before any tender. A tier share on top of a bill share fixes that line, so the share cannot
+  // be cleared and the new line is refused in words, before anything is written.
+  if (shared.some(billShareHeldByTier))
+    throw new PharmacySaleError('BILL_DISCOUNT_LOCKED_BY_PREPAID_TIER');
   for (const row of shared)
     // A line that held only a bill share had no discount kind or approval of its own.
     await db.pharmacySaleLine.update({
