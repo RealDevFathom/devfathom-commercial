@@ -1,7 +1,7 @@
 /**
- * DEV-957 phase 1 — counter enrolment, rotation, revocation, the counters list
- * and the offline preparation plan, through the real tRPC procedures and real
- * ABAC, against migrated PostgreSQL with FORCE row level security, as the
+ * DEV-957 phase 1 — counter enrolment, rotation, revocation (and its races with a
+ * stock grant or a receipt reservation), the counters list and the offline
+ * preparation plan, through the real tRPC procedures and real ABAC, against migrated PostgreSQL with FORCE row level security, as the
  * NOSUPERUSER / NOBYPASSRLS runtime role. Nothing in `@/lib/abac` is mocked.
  *
  * Skipped unless TEST_DATABASE_URL names that role on a migrated disposable database.
@@ -84,7 +84,11 @@ type OfflineCaller = ReturnType<(typeof offlineRouter)['createCaller']>;
 function act<T>(user: Person, run: (api: OfflineCaller) => Promise<T>): Promise<T> {
   return withTenantDb(
     user.org,
-    (db) => run((mounted().createCaller(context(db, user)) as Api).pharmacyOffline as unknown as OfflineCaller),
+    (db) =>
+      run(
+        (mounted().createCaller(context(db, user)) as Api)
+          .pharmacyOffline as unknown as OfflineCaller
+      ),
     { timeout: 60_000 }
   );
 }
@@ -96,6 +100,67 @@ async function refusal(promise: Promise<unknown>) {
     return { code: (error as { code?: string }).code, message: (error as Error).message };
   }
   throw new Error('expected a refusal');
+}
+
+/** A promise and the function that resolves it, for stepping two transactions in turn. */
+function latch() {
+  let open: () => void = () => {};
+  const opened = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { open, opened };
+}
+
+/**
+ * The same transaction client, except that `model.method` first runs `before`. Nested
+ * `$transaction` calls (the tRPC procedures open one) hand back the same wrapping.
+ */
+function pausing<T extends object>(
+  db: T,
+  model: string,
+  method: string,
+  before: () => Promise<void>
+): T {
+  return new Proxy(db, {
+    get(target, prop, receiver) {
+      if (prop === '$transaction') {
+        const run = Reflect.get(target, prop, receiver) as (
+          fn: (tx: unknown) => Promise<unknown>,
+          ...rest: unknown[]
+        ) => Promise<unknown>;
+        return (fn: (tx: unknown) => Promise<unknown>, ...rest: unknown[]) =>
+          run.call(target, (tx) => fn(pausing(tx as object, model, method, before)), ...rest);
+      }
+      const value = Reflect.get(target, prop, receiver) as unknown;
+      if (prop === model && value && typeof value === 'object') {
+        const delegate = value as Record<string, (...args: unknown[]) => Promise<unknown>>;
+        return new Proxy(delegate, {
+          get(inner, key) {
+            const original = Reflect.get(inner, key) as unknown;
+            if (key !== method || typeof original !== 'function') return original;
+            return async (...args: unknown[]) => {
+              await before();
+              return (original as (...a: unknown[]) => Promise<unknown>).apply(inner, args);
+            };
+          },
+        });
+      }
+      return typeof value === 'function'
+        ? (value as (...a: unknown[]) => unknown).bind(target)
+        : value;
+    },
+  });
+}
+
+/** Whether `promise` is still pending after `ms` (it is waiting on a row lock). */
+async function stillWaiting(promise: Promise<unknown>, ms = 400) {
+  let settled = false;
+  void promise.then(
+    () => (settled = true),
+    () => (settled = true)
+  );
+  await new Promise((resolve) => setTimeout(resolve, ms));
+  return !settled;
 }
 
 const LATER = new Date(Date.now() + 365 * 24 * 3_600_000);
@@ -209,7 +274,9 @@ beforeAll(async () => {
   ] as const) {
     await withTenantDb(org, async (tx) => {
       await seedDepartments(tx, [org], ['PHARMACY']);
-      await tx.pharmacyBranch.create({ data: { id: branch, code: 'MAIN', name: 'Main', ...address } });
+      await tx.pharmacyBranch.create({
+        data: { id: branch, code: 'MAIN', name: 'Main', ...address },
+      });
       await tx.organizationRole.create({
         data: {
           id: adminRole,
@@ -259,7 +326,9 @@ beforeAll(async () => {
         organizationRoleId: ids.cashierRole,
       },
     });
-    await tx.pharmacyBranchAssignment.create({ data: { userId: ids.cashierA, branchId: ids.branchA } });
+    await tx.pharmacyBranchAssignment.create({
+      data: { userId: ids.cashierA, branchId: ids.branchA },
+    });
     await tx.pharmacyBranch.create({
       data: { id: ids.branchA2, code: 'SECOND', name: 'Second', ...address },
     });
@@ -283,9 +352,16 @@ beforeAll(async () => {
         organizationRoleId: ids.managerRole,
       },
     });
-    await tx.pharmacyBranchAssignment.create({ data: { userId: ids.managerA, branchId: ids.branchA2 } });
+    await tx.pharmacyBranchAssignment.create({
+      data: { userId: ids.managerA, branchId: ids.branchA2 },
+    });
     const location = await tx.pharmacyStockLocation.create({
-      data: { branchId: ids.branchA, code: `FRONT-${suffix}`, name: 'Front shelf', kind: 'RACK_BIN' },
+      data: {
+        branchId: ids.branchA,
+        code: `FRONT-${suffix}`,
+        name: 'Front shelf',
+        kind: 'RACK_BIN',
+      },
     });
     locationId = location.id;
   });
@@ -437,7 +513,9 @@ describeIfDatabase('DEV-957 counter enrolment procedures (runtime role, real ABA
     const scope = { organizationId: ids.orgA, branchId: ids.branchA, actorId: ids.ownerA };
     const bucket = { inventoryLotId: lot.lotId, stockLocationId: locationId };
     const grant = (deviceId: string, units: number) =>
-      withTenantDb(ids.orgA, (tx) => grantDeviceLotQuota(tx, scope, { ...bucket, deviceId, units }));
+      withTenantDb(ids.orgA, (tx) =>
+        grantDeviceLotQuota(tx, scope, { ...bucket, deviceId, units })
+      );
     await grant(first.device.id, 10);
     // 12 on hand, 10 held: the second counter cannot take more than 2.
     await expect(grant(second.device.id, 3)).rejects.toMatchObject({
@@ -469,11 +547,188 @@ describeIfDatabase('DEV-957 counter enrolment procedures (runtime role, real ABA
     await expect(grant(second.device.id, 1)).rejects.toMatchObject({
       reason: 'QUOTA_EXCEEDS_ON_HAND',
     });
-    // A second revoke finds nothing open and releases nothing twice.
+    // A second revoke finds nothing open, releases nothing twice and keeps the
+    // first revocation time.
+    const revokedAt = async () =>
+      (
+        await withTenantDb(ids.orgA, (tx) =>
+          tx.pharmacyRegisteredDevice.findFirstOrThrow({ where: { id: first.device.id } })
+        )
+      ).revokedAt;
+    const firstRevokedAt = await revokedAt();
+    expect(firstRevokedAt).toBeInstanceOf(Date);
+    await new Promise((resolve) => setTimeout(resolve, 20));
     const again = await act(ownerA, (api) =>
       api.revoke({ branchId: ids.branchA, deviceId: first.device.id })
     );
-    expect(again.quotasReleased).toBe(0);
+    expect(again).toMatchObject({ status: 'REVOKED', quotasReleased: 0 });
+    expect(await revokedAt()).toEqual(firstRevokedAt);
+  });
+
+  describe("a stock grant or receipt reservation racing the same counter's revoke", () => {
+    const scope = { organizationId: ids.orgA, branchId: ids.branchA, actorId: ids.ownerA };
+
+    /** Open units held by `deviceId`, open units held by every counter, and on hand. */
+    async function ledger(lotId: string, deviceId: string) {
+      return withTenantDb(ids.orgA, async (tx) => {
+        const open = await tx.pharmacyDeviceLotQuota.findMany({
+          where: { inventoryLotId: lotId, stockLocationId: locationId, releasedAt: null },
+          select: { deviceId: true, quotaUnits: true, consumedUnits: true },
+        });
+        const held = (rows: typeof open) =>
+          rows.reduce((total, row) => total + row.quotaUnits - row.consumedUnits, 0);
+        const balance = await tx.pharmacyStockBalance.findFirstOrThrow({
+          where: { inventoryLotId: lotId, stockLocationId: locationId, disposition: 'AVAILABLE' },
+          select: { onHandUnits: true },
+        });
+        return {
+          revokedHolds: held(open.filter((row) => row.deviceId === deviceId)),
+          heldByAll: held(open),
+          onHand: balance.onHandUnits,
+        };
+      });
+    }
+
+    /** on hand == held + free, where free is exactly what another counter can still take. */
+    async function expectBalanced(lotId: string, revokedId: string) {
+      const { grantDeviceLotQuota } = await import('@/lib/pharmacy/offline-quotas');
+      const after = await ledger(lotId, revokedId);
+      expect(after.revokedHolds).toBe(0);
+      const free = after.onHand - after.heldByAll;
+      const other = await act(ownerA, (api) =>
+        api.enroll({ branchId: ids.branchA, name: `Other counter ${randomUUID().slice(0, 6)}` })
+      );
+      const grant = (units: number) =>
+        withTenantDb(ids.orgA, (tx) =>
+          grantDeviceLotQuota(tx, scope, {
+            inventoryLotId: lotId,
+            stockLocationId: locationId,
+            deviceId: other.device.id,
+            units,
+          })
+        );
+      await expect(grant(free + 1)).rejects.toMatchObject({ reason: 'QUOTA_EXCEEDS_ON_HAND' });
+      await grant(free);
+      const settled = await ledger(lotId, revokedId);
+      expect(settled.onHand).toBe(settled.heldByAll);
+    }
+
+    it('(a) grant checked the counter, then the revoke: the revoke waits and releases the grant', async () => {
+      const { grantDeviceLotQuota } = await import('@/lib/pharmacy/offline-quotas');
+      const lot = await stock('race-a', {}, { units: 8 });
+      const counter = await act(ownerA, (api) =>
+        api.enroll({ branchId: ids.branchA, name: 'Racing counter A' })
+      );
+      const checked = latch();
+      const go = latch();
+      const granting = withTenantDb(
+        ids.orgA,
+        (tx) =>
+          grantDeviceLotQuota(
+            pausing(tx, 'pharmacyDeviceLotQuota', 'create', async () => {
+              checked.open();
+              await go.opened;
+            }),
+            scope,
+            {
+              inventoryLotId: lot.lotId,
+              stockLocationId: locationId,
+              deviceId: counter.device.id,
+              units: 4,
+            }
+          ),
+        { timeout: 60_000 }
+      );
+      await checked.opened;
+      const revoking = act(ownerA, (api) =>
+        api.revoke({ branchId: ids.branchA, deviceId: counter.device.id })
+      );
+      // The grant holds the counter row: the revoke cannot commit before it.
+      expect(await stillWaiting(revoking)).toBe(true);
+      go.open();
+      await expect(granting).resolves.toMatchObject({ quotaUnits: 4 });
+      await expect(revoking).resolves.toMatchObject({ status: 'REVOKED', quotasReleased: 1 });
+      await expectBalanced(lot.lotId, counter.device.id);
+    });
+
+    it('(b) grant while the revoke is in progress: the grant waits and is refused', async () => {
+      const { grantDeviceLotQuota } = await import('@/lib/pharmacy/offline-quotas');
+      const lot = await stock('race-b', {}, { units: 8 });
+      const counter = await act(ownerA, (api) =>
+        api.enroll({ branchId: ids.branchA, name: 'Racing counter B' })
+      );
+      const revokedRow = latch();
+      const go = latch();
+      // Pause the revoke after it updated the counter row and before it reads the
+      // open quotas, so its transaction is in flight when the grant arrives.
+      const revoking = withTenantDb(
+        ids.orgA,
+        (db) =>
+          (
+            mounted().createCaller(
+              context(
+                pausing(db, 'pharmacyDeviceLotQuota', 'findMany', async () => {
+                  revokedRow.open();
+                  await go.opened;
+                }),
+                ownerA
+              )
+            ) as Api
+          ).pharmacyOffline.revoke({ branchId: ids.branchA, deviceId: counter.device.id }),
+        { timeout: 60_000 }
+      );
+      await revokedRow.opened;
+      const granting = withTenantDb(ids.orgA, (tx) =>
+        grantDeviceLotQuota(tx, scope, {
+          inventoryLotId: lot.lotId,
+          stockLocationId: locationId,
+          deviceId: counter.device.id,
+          units: 4,
+        })
+      );
+      expect(await stillWaiting(granting)).toBe(true);
+      go.open();
+      await expect(revoking).resolves.toMatchObject({ status: 'REVOKED', quotasReleased: 0 });
+      await expect(granting).rejects.toMatchObject({ reason: 'DEVICE_NOT_USABLE' });
+      await expectBalanced(lot.lotId, counter.device.id);
+    });
+
+    it('a receipt block reserved while the revoke is in progress waits and is refused', async () => {
+      const { reserveReceiptNumberBlock } = await import('@/lib/pharmacy/offline-receipt-leases');
+      const counter = await act(ownerA, (api) =>
+        api.enroll({ branchId: ids.branchA, name: 'Racing counter C' })
+      );
+      const revokedRow = latch();
+      const go = latch();
+      const revoking = withTenantDb(
+        ids.orgA,
+        (db) =>
+          (
+            mounted().createCaller(
+              context(
+                pausing(db, 'pharmacyDeviceLotQuota', 'findMany', async () => {
+                  revokedRow.open();
+                  await go.opened;
+                }),
+                ownerA
+              )
+            ) as Api
+          ).pharmacyOffline.revoke({ branchId: ids.branchA, deviceId: counter.device.id }),
+        { timeout: 60_000 }
+      );
+      await revokedRow.opened;
+      const reserving = withTenantDb(ids.orgA, (tx) =>
+        reserveReceiptNumberBlock(tx, scope, { deviceId: counter.device.id, size: 5 })
+      );
+      expect(await stillWaiting(reserving)).toBe(true);
+      go.open();
+      await expect(revoking).resolves.toMatchObject({ status: 'REVOKED' });
+      await expect(reserving).rejects.toMatchObject({ reason: 'DEVICE_NOT_USABLE' });
+      const leases = await withTenantDb(ids.orgA, (tx) =>
+        tx.pharmacyReceiptNumberLease.count({ where: { deviceId: counter.device.id } })
+      );
+      expect(leases).toBe(0);
+    });
   });
 
   it('plans only safe over-the-counter stock, at half on hand capped at 20, net of other counters', async () => {
@@ -500,17 +755,30 @@ describeIfDatabase('DEV-957 counter enrolment procedures (runtime role, real ABA
       grantDeviceLotQuota(
         tx,
         { organizationId: ids.orgA, branchId: ids.branchA, actorId: ids.ownerA },
-        { deviceId: other.device.id, inventoryLotId: shared.lotId, stockLocationId: locationId, units: 10 }
+        {
+          deviceId: other.device.id,
+          inventoryLotId: shared.lotId,
+          stockLocationId: locationId,
+          units: 10,
+        }
       )
     );
     const plan = await act(ownerA, (api) =>
       api.preparationPlan({ branchId: ids.branchA, deviceId: counter.device.id })
     );
     const byLot = new Map(plan.lots.map((lot) => [lot.inventoryLotId, lot]));
-    expect(byLot.get(otc.lotId)).toMatchObject({ onHandUnits: 30, freeUnits: 30, suggestedUnits: 15 });
+    expect(byLot.get(otc.lotId)).toMatchObject({
+      onHandUnits: 30,
+      freeUnits: 30,
+      suggestedUnits: 15,
+    });
     expect(byLot.get(big.lotId)).toMatchObject({ onHandUnits: 100, suggestedUnits: 20 });
     // 12 on hand, 10 held by the other counter: at most the 2 still free.
-    expect(byLot.get(shared.lotId)).toMatchObject({ onHandUnits: 12, freeUnits: 2, suggestedUnits: 2 });
+    expect(byLot.get(shared.lotId)).toMatchObject({
+      onHandUnits: 12,
+      freeUnits: 2,
+      suggestedUnits: 2,
+    });
     for (const lot of excluded) expect(byLot.has(lot.lotId)).toBe(false);
     expect(plan.lots.every((lot) => lot.stockLocationId === locationId)).toBe(true);
   });
