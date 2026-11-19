@@ -210,13 +210,14 @@ describe('DEV-961 approval authenticator set-up gate', () => {
       'approvalAuthenticator.getStatus',
       'approvalAuthenticator.beginEnrollment',
       'approvalAuthenticator.confirmEnrollment',
+      'approvalAuthenticator.setRequired',
       'team.changePassword',
       'team.signOutEverywhere',
     ])
       expect(approvalAuthenticatorSetupBlocks(gated, path)).toBe(false);
     for (const path of [
       'pharmacySales.refund',
-      'approvalAuthenticator.setRequired',
+      'approvalAuthenticator.members',
       'approvalAuthenticator.useRecoveryCode',
       'approvalAuthenticator.resetForMember',
       'team.updateProfile',

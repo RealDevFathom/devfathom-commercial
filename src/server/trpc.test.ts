@@ -335,6 +335,7 @@ describe('DEV-961 approval authenticator set-up gate', () => {
       beginEnrollment: protectedProcedure.mutation(() => 'begun'),
       confirmEnrollment: protectedProcedure.mutation(() => 'confirmed'),
       setRequired: protectedProcedure.mutation(() => 'switched'),
+      members: protectedProcedure.query(() => 'members'),
     }),
     team: router({ signOutEverywhere: protectedProcedure.mutation(() => 'signed out') }),
     pharmacySales: router({ refund: protectedProcedure.mutation(() => 'refunded') }),
@@ -359,9 +360,11 @@ describe('DEV-961 approval authenticator set-up gate', () => {
     await expect(caller.approvalAuthenticator.beginEnrollment()).resolves.toBe('begun');
     await expect(caller.approvalAuthenticator.confirmEnrollment()).resolves.toBe('confirmed');
     await expect(caller.team.signOutEverywhere()).resolves.toBe('signed out');
+    // The owner's switch to permanent PINs; the procedure itself refuses anyone else.
+    await expect(caller.approvalAuthenticator.setRequired()).resolves.toBe('switched');
     for (const call of [
       () => caller.pharmacySales.refund(),
-      () => caller.approvalAuthenticator.setRequired(),
+      () => caller.approvalAuthenticator.members(),
       () => caller.adminWrite(),
       () => caller.capabilityWrite(),
       () => caller.contextualWrite(),

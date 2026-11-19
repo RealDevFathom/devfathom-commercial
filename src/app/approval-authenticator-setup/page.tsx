@@ -1,5 +1,7 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
+import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
+import { approvalAuthenticatorPartySelect } from '@/lib/approval-authenticator-party';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { ApprovalAuthenticatorSetupForm } from './setup-form';
@@ -19,9 +21,11 @@ export default async function ApprovalAuthenticatorSetupPage() {
   const account = await withTenantDb(actor.organization.id, (db) =>
     db.user.findFirst({
       where: { id: actor.session.user.id, organizationId: actor.organization.id },
-      select: { password: true },
+      select: { password: true, ...approvalAuthenticatorPartySelect() },
     })
   );
+  // The owner may instead switch approvals to permanent PINs (checked again on the server).
+  const isOwner = Boolean(account && hasAllCapabilityAccess(account));
 
   return (
     <main
@@ -39,7 +43,10 @@ export default async function ApprovalAuthenticatorSetupPage() {
         from an authenticator app for approvals instead of a fixed PIN. Your account opens once the
         app is set up.
       </p>
-      <ApprovalAuthenticatorSetupForm passwordless={Boolean(account && !account.password)} />
+      <ApprovalAuthenticatorSetupForm
+        passwordless={Boolean(account && !account.password)}
+        isOwner={isOwner}
+      />
     </main>
   );
 }

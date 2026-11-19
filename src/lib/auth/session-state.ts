@@ -182,8 +182,9 @@ export function temporaryPasswordBlocks(
  * DEV-961 — authenticator by default. While the organization requires an authenticator for
  * approvals, a member who can approve anything and has not set one up cannot use their
  * account: every page sends them to the set-up screen and every API call, tRPC batch and
- * server action is refused, except the calls the set-up screen itself needs (and changing a
- * temporary password, which comes first, and signing out).
+ * server action is refused, except the calls the set-up screen itself needs (including the
+ * owner's switch to permanent PINs), changing a temporary password (which comes first) and
+ * signing out.
  */
 export const APPROVAL_AUTHENTICATOR_SETUP_PATH = '/approval-authenticator-setup';
 
@@ -194,6 +195,10 @@ const APPROVAL_AUTHENTICATOR_SETUP_PROCEDURES = new Set([
   'approvalAuthenticator.getStatus',
   'approvalAuthenticator.beginEnrollment',
   'approvalAuthenticator.confirmEnrollment',
+  // The owner may switch approvals to permanent PINs instead of setting up an app. The
+  // procedure itself refuses anyone but the owner and needs their password and an
+  // acknowledgement (or their own current code).
+  'approvalAuthenticator.setRequired',
   'team.changePassword',
   'team.signOutEverywhere',
 ]);

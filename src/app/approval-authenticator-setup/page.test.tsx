@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   resolveTenantActor: vi.fn(),
   password: 'hash' as string | null,
+  owner: false,
   redirect: vi.fn((path: string) => {
     throw new Error(`REDIRECT ${path}`);
   }),
@@ -13,11 +14,34 @@ vi.mock('next/navigation', () => ({ redirect: mocks.redirect }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.resolveTenantActor }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: async (_org: string, run: (db: unknown) => unknown) =>
-    run({ user: { findFirst: async () => ({ password: mocks.password }) } }),
+    run({
+      user: {
+        findFirst: async () => ({
+          password: mocks.password,
+          id: 'user_1',
+          role: 'EMPLOYEE',
+          status: 'ACTIVE',
+          organizationRole: mocks.owner
+            ? { key: 'owner', isSystem: true, permissions: [] }
+            : { key: 'manager', isSystem: false, permissions: [] },
+          permissionOverrides: [],
+        }),
+      },
+    }),
 }));
 vi.mock('./setup-form', () => ({
-  ApprovalAuthenticatorSetupForm: ({ passwordless }: { passwordless: boolean }) => (
-    <form aria-label="Start set-up" data-passwordless={String(passwordless)} />
+  ApprovalAuthenticatorSetupForm: ({
+    passwordless,
+    isOwner,
+  }: {
+    passwordless: boolean;
+    isOwner: boolean;
+  }) => (
+    <form
+      aria-label="Start set-up"
+      data-passwordless={String(passwordless)}
+      data-owner={String(isOwner)}
+    />
   ),
 }));
 
@@ -65,5 +89,20 @@ describe('DEV-961 approval authenticator set-up page', () => {
     render(await ApprovalAuthenticatorSetupPage());
     expect(screen.getByRole('form', { name: 'Start set-up' }).dataset.passwordless).toBe('true');
     mocks.password = 'hash';
+  });
+
+  it('offers the permanent-PIN switch only to the owner', async () => {
+    mocks.resolveTenantActor.mockResolvedValue(actor({ approvalAuthenticatorSetupRequired: true }));
+    render(await ApprovalAuthenticatorSetupPage());
+    expect(screen.getByRole('form', { name: 'Start set-up' }).dataset.owner).toBe('false');
+  });
+
+  it('tells the form when the member is the owner', async () => {
+    mocks.owner = true;
+    mocks.resolveTenantActor.mockResolvedValue(actor({ approvalAuthenticatorSetupRequired: true }));
+    const { unmount } = render(await ApprovalAuthenticatorSetupPage());
+    expect(screen.getByRole('form', { name: 'Start set-up' }).dataset.owner).toBe('true');
+    unmount();
+    mocks.owner = false;
   });
 });

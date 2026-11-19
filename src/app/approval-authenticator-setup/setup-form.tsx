@@ -20,8 +20,10 @@ type Step =
  */
 export function ApprovalAuthenticatorSetupForm({
   passwordless = false,
+  isOwner = false,
 }: {
   passwordless?: boolean;
+  isOwner?: boolean;
 }) {
   const router = useRouter();
   const [step, setStep] = useState<Step>({ kind: 'password' });
@@ -73,38 +75,41 @@ export function ApprovalAuthenticatorSetupForm({
       begin.mutate(passwordless ? {} : { currentPassword: password });
     };
     return (
-      <form className="mt-6 space-y-4" onSubmit={submit} aria-label="Start set-up">
-        {passwordless ? (
-          <p className="text-sm text-text-body">
-            You signed in with your organization&apos;s single sign-on, so there is no password to
-            enter. Set the app up within 15 minutes of signing in.
-          </p>
-        ) : (
-          <label className="block text-sm text-text-body">
-            Your current password
-            <Input
-              className="mt-1.5 block min-h-11"
-              type="password"
-              autoComplete="current-password"
-              required
-              value={password}
-              aria-invalid={Boolean(error) || undefined}
-              onChange={(event) => setPassword(event.target.value)}
-            />
-          </label>
-        )}
-        {alert}
-        <div className="flex flex-wrap gap-3">
-          <Button
-            type="submit"
-            className="min-h-11"
-            disabled={(!passwordless && !password) || begin.isPending}
-          >
-            {begin.isPending ? 'Starting…' : 'Continue'}
-          </Button>
-          {signOut}
-        </div>
-      </form>
+      <>
+        <form className="mt-6 space-y-4" onSubmit={submit} aria-label="Start set-up">
+          {passwordless ? (
+            <p className="text-sm text-text-body">
+              You signed in with your organization&apos;s single sign-on, so there is no password to
+              enter. Set the app up within 15 minutes of signing in.
+            </p>
+          ) : (
+            <label className="block text-sm text-text-body">
+              Your current password
+              <Input
+                className="mt-1.5 block min-h-11"
+                type="password"
+                autoComplete="current-password"
+                required
+                value={password}
+                aria-invalid={Boolean(error) || undefined}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </label>
+          )}
+          {alert}
+          <div className="flex flex-wrap gap-3">
+            <Button
+              type="submit"
+              className="min-h-11"
+              disabled={(!passwordless && !password) || begin.isPending}
+            >
+              {begin.isPending ? 'Starting…' : 'Continue'}
+            </Button>
+            {signOut}
+          </div>
+        </form>
+        {isOwner && !passwordless ? <OwnerUsePins /> : null}
+      </>
     );
   }
 
@@ -200,6 +205,98 @@ export function ApprovalAuthenticatorSetupForm({
       >
         Continue to the workspace
       </Button>
+    </section>
+  );
+}
+
+/**
+ * DEV-961: the owner may switch the whole organization to permanent PINs instead of setting
+ * up an app. Checked on the server: owner only, password and acknowledgement, audited.
+ */
+function OwnerUsePins() {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [password, setPassword] = useState('');
+  const [acknowledged, setAcknowledged] = useState(false);
+  const [error, setError] = useState('');
+  const turnOff = trpc.approvalAuthenticator.setRequired.useMutation({
+    onSuccess: () => {
+      router.replace('/dashboard');
+      router.refresh();
+    },
+    onError: (failure) => setError(failure.message),
+  });
+  if (!open)
+    return (
+      <div className="mt-8 border-t border-border pt-4">
+        <p className="text-sm text-text-body">
+          You are the owner. You can use permanent PINs for approvals instead.
+        </p>
+        <Button
+          type="button"
+          variant="ghost"
+          className="mt-2 min-h-11"
+          onClick={() => setOpen(true)}
+        >
+          Use permanent PINs instead
+        </Button>
+      </div>
+    );
+  return (
+    <section
+      aria-labelledby="owner-use-pins-heading"
+      className="mt-8 space-y-3 rounded-[var(--radius-sm)] border border-destructive/40 bg-destructive/5 p-4"
+    >
+      <h2 id="owner-use-pins-heading" className="text-base font-semibold text-text-strong">
+        Use permanent PINs for approvals?
+      </h2>
+      <p className="text-sm text-text-body">
+        Approvals will take each person&apos;s permanent PIN. Anyone who sees or is told a PIN can
+        approve refunds, discounts and other actions with it until it is changed. Nobody will be
+        asked to set up the app. This change is recorded in the audit log.
+      </p>
+      <label className="block text-sm text-text-body">
+        Your current password
+        <Input
+          className="mt-1.5 block min-h-11"
+          type="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+        />
+      </label>
+      <label className="flex items-start gap-2 text-sm text-text-body">
+        <Checkbox
+          className="mt-0.5"
+          checked={acknowledged}
+          onCheckedChange={(checked) => setAcknowledged(checked === true)}
+        />
+        I understand that approvals will use permanent PINs.
+      </label>
+      {error ? (
+        <p
+          role="alert"
+          className="rounded-control bg-destructive/10 px-3 py-2 text-sm text-destructive"
+        >
+          {error}
+        </p>
+      ) : null}
+      <div className="flex flex-wrap gap-3">
+        <Button
+          type="button"
+          variant="destructive"
+          className="min-h-11"
+          disabled={!password || !acknowledged || turnOff.isPending}
+          onClick={() =>
+            turnOff.mutate({ required: false, currentPassword: password, acknowledged: true })
+          }
+        >
+          {turnOff.isPending ? 'Turning off…' : 'Turn off and use PINs'}
+        </Button>
+        <Button type="button" variant="ghost" className="min-h-11" onClick={() => setOpen(false)}>
+          Keep the app
+        </Button>
+      </div>
     </section>
   );
 }

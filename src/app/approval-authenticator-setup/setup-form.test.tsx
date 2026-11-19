@@ -103,3 +103,28 @@ describe('DEV-961 set-up form for a member with no password', () => {
     expect(mocks.mutations['approvalAuthenticator.beginEnrollment']).toHaveBeenCalledWith({});
   });
 });
+
+describe('DEV-961 the owner may use permanent PINs instead', () => {
+  it('offers the switch to the owner only, behind password and acknowledgement', () => {
+    const { unmount } = render(<ApprovalAuthenticatorSetupForm />);
+    expect(screen.queryByRole('button', { name: 'Use permanent PINs instead' })).toBeNull();
+    unmount();
+
+    render(<ApprovalAuthenticatorSetupForm isOwner />);
+    fireEvent.click(screen.getByRole('button', { name: 'Use permanent PINs instead' }));
+    expect(screen.getByText(/Anyone who sees or is told a PIN/)).toBeTruthy();
+    const off = screen.getByRole('button', { name: 'Turn off and use PINs' }) as HTMLButtonElement;
+    const passwords = screen.getAllByLabelText('Your current password');
+    fireEvent.change(passwords[passwords.length - 1], { target: { value: 'owner pw' } });
+    expect(off.disabled).toBe(true);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(off);
+    expect(mocks.mutations['approvalAuthenticator.setRequired']).toHaveBeenCalledWith({
+      required: false,
+      currentPassword: 'owner pw',
+      acknowledged: true,
+    });
+    act(() => mocks.options['approvalAuthenticator.setRequired'].onSuccess?.({} as never));
+    expect(mocks.router.replace).toHaveBeenCalledWith('/dashboard');
+  });
+});
