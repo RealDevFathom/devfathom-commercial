@@ -22,6 +22,9 @@ const mocks = vi.hoisted(() => ({
   soleApprover: vi.fn(),
   setOffGroupBy: vi.fn(),
   reverseSetOff: vi.fn(),
+  settlementFindFirst: vi.fn(),
+  invoiceFindFirst: vi.fn(),
+  otherApprovers: vi.fn(),
 }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -65,6 +68,9 @@ vi.mock('@/lib/pharmacy/accounts/ap-credit-set-off', async () => ({
   isSoleSetOffApprover: mocks.soleApprover,
   reverseApCreditSetOff: mocks.reverseSetOff,
 }));
+vi.mock('@/lib/pharmacy/accounts/ap-reversal-approvers', () => ({
+  otherApReversalApprovers: mocks.otherApprovers,
+}));
 vi.mock('@/lib/pharmacy/accounts/ap-aging', async () => ({
   ...(await vi.importActual<typeof import('@/lib/pharmacy/accounts/ap-aging')>(
     '@/lib/pharmacy/accounts/ap-aging'
@@ -78,6 +84,9 @@ import type { TRPCContext } from '../trpc';
 import { pharmacyApInvoicesRouter } from './pharmacy-ap-invoices';
 
 const TX = { tx: true };
+/** The command a reversal reaches: everything but the PIN, which the router checks. */
+const withoutPin = (input: object) =>
+  Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'pin'));
 
 function caller(context: Partial<TRPCContext> = {}) {
   return pharmacyApInvoicesRouter.createCaller({
@@ -86,6 +95,8 @@ function caller(context: Partial<TRPCContext> = {}) {
       pharmacyBranch: { findFirst: mocks.branchFindFirst },
       pharmacySupplierCredit: { findMany: mocks.creditFindMany },
       pharmacyApCreditSetOff: { groupBy: mocks.setOffGroupBy },
+      pharmacyApInvoiceSettlement: { findFirst: mocks.settlementFindFirst },
+      pharmacyApInvoice: { findFirst: mocks.invoiceFindFirst },
     },
     entitlements: { organizationId: 'org_1', enabledModules: ['pharmacy-finance'], modules: [] },
     session: {
@@ -129,6 +140,7 @@ const reverseSettlementInput = {
   commandKey: 'rev-pay-0001',
   reason: 'Bounced',
   at: '2026-11-12T00:00:00.000Z',
+  pin: '2468',
 };
 const reverseInvoiceInput = {
   branchId: 'branch_1',
@@ -136,6 +148,7 @@ const reverseInvoiceInput = {
   commandKey: 'rev-inv-0001',
   reason: 'Duplicate',
   at: '2026-11-12T00:00:00.000Z',
+  pin: '2468',
 };
 const invoice = {
   id: 'inv_1',
@@ -172,6 +185,15 @@ beforeEach(() => {
   });
   mocks.list.mockResolvedValue([]);
   mocks.setOffGroupBy.mockResolvedValue([]);
+  // DEV-103: a manager or owner, a verified PIN, an entry someone else recorded.
+  mocks.mayManage.mockResolvedValue(true);
+  mocks.pin.mockResolvedValue({ verified: true });
+  mocks.settlementFindFirst.mockResolvedValue({
+    createdByUserId: 'clerk_1',
+    reverseCommandKey: null,
+  });
+  mocks.invoiceFindFirst.mockResolvedValue({ createdByUserId: 'clerk_1', reverseCommandKey: null });
+  mocks.otherApprovers.mockResolvedValue([]);
   mocks.aging.mockResolvedValue({
     asOf: '2026-11-15',
     complete: true,
@@ -297,7 +319,17 @@ describe('pharmacyApInvoices router — atomic audit', () => {
     '%s runs the command and its EXECUTE audit in one transaction',
     async (_name, call, domain, input, action, targetId) => {
       await call();
-      expect(domain).toHaveBeenCalledWith(TX, scope, input);
+      if ('pin' in input) {
+        // The PIN is checked by the router and never reaches the command.
+        expect(domain).toHaveBeenCalledWith(
+          TX,
+          scope,
+          withoutPin(input),
+          expect.objectContaining({ soleApprover: expect.any(Function) })
+        );
+      } else {
+        expect(domain).toHaveBeenCalledWith(TX, scope, input);
+      }
       expect(mocks.recordAudit).toHaveBeenCalledWith(
         expect.objectContaining({ operation: 'EXECUTE', action, targetId, outcome: 'SUCCESS' }),
         TX
@@ -833,5 +865,234 @@ describe('pharmacyApInvoices router — aging payee filter', () => {
       expect(call[5]).toEqual({ payeeName: 'K-Electric' });
     }
     expect(mocks.aging).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('pharmacyApInvoices router — invoice and payment reversal approval (DEV-103)', () => {
+  const reversedSettlement = {
+    ...settlement,
+    status: 'REVERSED',
+    createdByUserId: 'clerk_1',
+    reversedByUserId: 'owner_1',
+    reversalReason: 'Bounced',
+    reversedAt: new Date('2026-11-12T00:00:00.000Z'),
+  };
+  const reversedInvoice = {
+    ...invoice,
+    status: 'REVERSED',
+    reversalEntryId: 'entry_rev',
+    createdByUserId: 'clerk_1',
+    reversedByUserId: 'owner_1',
+    reversalReason: 'Duplicate',
+    reversedAt: new Date('2026-11-12T00:00:00.000Z'),
+  };
+
+  beforeEach(() => {
+    mocks.reverseSettlement.mockResolvedValue({
+      settlement: reversedSettlement,
+      policy: 'PHARMACY_AP_REVERSAL_MANAGER_PIN',
+      replayed: false,
+    });
+    mocks.reverseInvoice.mockResolvedValue({
+      invoice: reversedInvoice,
+      policy: 'PHARMACY_AP_REVERSAL_MANAGER_PIN',
+      replayed: false,
+    });
+  });
+
+  const calls = [
+    [
+      'reverseSettlement',
+      () => caller().reverseSettlement(reverseSettlementInput),
+      mocks.reverseSettlement,
+      mocks.settlementFindFirst,
+    ],
+    [
+      'reverseInvoice',
+      () => caller().reverseInvoice(reverseInvoiceInput),
+      mocks.reverseInvoice,
+      mocks.invoiceFindFirst,
+    ],
+  ] as const;
+
+  it.each(calls)(
+    '%s refuses someone who is not a manager or owner before any PIN',
+    async (_n, call, domain) => {
+      mocks.mayManage.mockResolvedValue(false);
+      await expect(call()).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Only a manager or owner can reverse a supplier expense invoice or payment.',
+      });
+      expect(mocks.pin).not.toHaveBeenCalled();
+      expect(mocks.transaction).not.toHaveBeenCalled();
+      expect(domain).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(calls)(
+    '%s refuses a refused PIN before anything is written',
+    async (name, call, domain) => {
+      mocks.pin.mockResolvedValue({ blocked: 'nope' });
+      await expect(call()).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Nothing was reversed. Enter your manager or owner PIN.',
+      });
+      expect(mocks.pin).toHaveBeenCalledWith({
+        organizationId: 'org_1',
+        actorId: 'owner_1',
+        pin: '2468',
+        action: `pharmacyApInvoices.${name}`,
+        policy: 'PHARMACY_AP_REVERSAL_MANAGER_PIN',
+        errorCode: 'AP_REVERSAL_PIN_REFUSED',
+      });
+      expect(mocks.transaction).not.toHaveBeenCalled();
+      expect(domain).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(calls)(
+    '%s refuses an entry you recorded while another manager or owner could approve, naming them',
+    async (_n, call, domain, target) => {
+      target.mockResolvedValue({ createdByUserId: 'owner_1', reverseCommandKey: null });
+      mocks.otherApprovers.mockResolvedValue([{ id: 'manager_2', name: 'Hina' }]);
+      await expect(call()).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message:
+          'Another manager or owner must reverse an entry you recorded. Ask Hina or another manager or owner to reverse it.',
+      });
+      expect(mocks.otherApprovers).toHaveBeenCalledWith(expect.anything(), scope);
+      expect(mocks.pin).not.toHaveBeenCalled();
+      expect(domain).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(calls)(
+    '%s lets a solo owner reverse their own entry with their PIN, re-checked inside the write',
+    async (_n, call, domain, target) => {
+      target.mockResolvedValue({ createdByUserId: 'owner_1', reverseCommandKey: null });
+      await call();
+      expect(mocks.pin).toHaveBeenCalledWith(
+        expect.objectContaining({ policy: 'PHARMACY_AP_REVERSAL_SOLE_APPROVER_PIN' })
+      );
+      const options = domain.mock.calls[0]![3];
+      mocks.otherApprovers.mockClear();
+      await expect(options.soleApprover()).resolves.toBe(true);
+      expect(mocks.otherApprovers).toHaveBeenCalledWith(TX, scope);
+      mocks.otherApprovers.mockResolvedValue([{ id: 'manager_2', name: 'Hina' }]);
+      await expect(options.soleApprover()).resolves.toBe(false);
+    }
+  );
+
+  it.each(calls)(
+    '%s answers a self-approval refused inside the write with FORBIDDEN and no audit',
+    async (_n, call, domain) => {
+      domain.mockRejectedValue(new PharmacyApInvoiceError('SELF_APPROVAL'));
+      mocks.otherApprovers.mockResolvedValue([{ id: 'manager_2', name: null }]);
+      await expect(call()).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message:
+          'Another manager or owner must reverse an entry you recorded. Ask another manager or owner to reverse it.',
+      });
+      expect(mocks.recordAudit).not.toHaveBeenCalled();
+    }
+  );
+
+  it('audits a payment reversal with who recorded it, who approved it and why', async () => {
+    await caller().reverseSettlement(reverseSettlementInput);
+    expect(mocks.recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'pharmacyApInvoices.reverseSettlement',
+        actorId: 'owner_1',
+        result: expect.objectContaining({ status: 'REVERSED', amountMinor: 100 }),
+        metadata: expect.objectContaining({
+          policy: 'PHARMACY_AP_REVERSAL_MANAGER_PIN',
+          approverId: 'owner_1',
+          initiatedById: 'clerk_1',
+          pinVerified: true,
+          selfApproved: false,
+          reason: 'Bounced',
+          reversedAt: '2026-11-12T00:00:00.000Z',
+        }),
+      }),
+      TX
+    );
+  });
+
+  it('audits an invoice reversal with who recorded it, who approved it and why', async () => {
+    await caller().reverseInvoice(reverseInvoiceInput);
+    expect(mocks.recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'pharmacyApInvoices.reverseInvoice',
+        result: expect.objectContaining({ status: 'REVERSED', reversalEntryId: 'entry_rev' }),
+        metadata: expect.objectContaining({
+          approverId: 'owner_1',
+          initiatedById: 'clerk_1',
+          pinVerified: true,
+          selfApproved: false,
+          reason: 'Duplicate',
+        }),
+      }),
+      TX
+    );
+  });
+
+  it('a replay of your own solo reversal is not refused for having another approver now', async () => {
+    mocks.invoiceFindFirst.mockResolvedValue({
+      createdByUserId: 'owner_1',
+      reverseCommandKey: reverseInvoiceInput.commandKey,
+    });
+    mocks.otherApprovers.mockResolvedValue([{ id: 'manager_2', name: 'Hina' }]);
+    mocks.reverseInvoice.mockResolvedValue({ invoice: reversedInvoice, replayed: true });
+    await expect(caller().reverseInvoice(reverseInvoiceInput)).resolves.toMatchObject({
+      status: 'REVERSED',
+    });
+    expect(mocks.pin).toHaveBeenCalled();
+  });
+
+  it('requires a 4 to 8 digit PIN and a reason at the wire', async () => {
+    await expect(
+      caller().reverseInvoice(withoutPin(reverseInvoiceInput) as never)
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    await expect(
+      caller().reverseSettlement({ ...reverseSettlementInput, pin: '12' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().reverseSettlement({ ...reverseSettlementInput, reason: '  ' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.pin).not.toHaveBeenCalled();
+  });
+
+  it('accepts a reversal without a date: the server dates it', async () => {
+    const undated = Object.fromEntries(
+      Object.entries(reverseSettlementInput).filter(([key]) => key !== 'at')
+    ) as Omit<typeof reverseSettlementInput, 'at'>;
+    await caller().reverseSettlement(undated);
+    expect(mocks.reverseSettlement).toHaveBeenCalledWith(
+      TX,
+      scope,
+      withoutPin(undated),
+      expect.anything()
+    );
+  });
+
+  it('reports whether the signed-in person may reverse and who else could approve', async () => {
+    mocks.otherApprovers.mockResolvedValue([{ id: 'manager_2', name: 'Hina' }]);
+    await expect(caller().reversalAccess({ branchId: 'branch_1' })).resolves.toEqual({
+      scope: { organizationId: 'org_1', branchId: 'branch_1' },
+      actorId: 'owner_1',
+      mayReverse: true,
+      otherApprover: { name: 'Hina' },
+    });
+    mocks.mayManage.mockResolvedValue(false);
+    await expect(caller().reversalAccess({ branchId: 'branch_1' })).resolves.toMatchObject({
+      mayReverse: false,
+      otherApprover: null,
+    });
+    mocks.hasModule.mockReturnValue(false);
+    await expect(caller().reversalAccess({ branchId: 'branch_1' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
   });
 });

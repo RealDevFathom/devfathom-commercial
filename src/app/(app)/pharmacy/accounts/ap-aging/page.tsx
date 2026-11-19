@@ -31,6 +31,12 @@ import {
   type PendingSetOffs,
 } from './payables-panels';
 import { parseAgingQuery, type AgingQuery as Query } from './query';
+import {
+  REVERSAL_PANEL_ROWS,
+  ReversalPanel,
+  type ReversalAccess,
+  type ReversibleInvoices,
+} from './reversal-panel';
 
 export const metadata: Metadata = { title: 'Supplier expense invoice aging · Pharmacy accounts' };
 
@@ -40,6 +46,12 @@ type State =
   | { kind: 'denied' }
   | { kind: 'failure' }
   | { kind: 'loaded'; branchId: string; view: ApAgingView; retrievedAt: Date };
+
+/** DEV-103: the reversal list loads separately too; its failure never hides the aging. */
+type Reversals =
+  | { kind: 'none' }
+  | { kind: 'failure' }
+  | { kind: 'loaded'; invoices: ReversibleInvoices; access: ReversalAccess };
 
 /** DEV-694: the payables drafts load separately, so their failure never hides the aging. */
 type Payables =
@@ -132,10 +144,7 @@ function Notice({ state }: { state: Exclude<State, { kind: 'loaded' }> }) {
       'Choose a branch',
       'Choose one branch and an as-of day to age its supplier expense invoices. Nothing has been read.',
     ],
-    invalid: [
-      'Request needs attention',
-      'Choose one branch and an as-of day no later than today.',
-    ],
+    invalid: ['Request needs attention', 'Choose one branch and an as-of day no later than today.'],
     denied: [
       'Aging unavailable',
       'Your authenticated tenant, active branch, Pharmacy Finance licence and owner finance permissions must all allow this read.',
@@ -317,6 +326,7 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
   const parsed = parseAgingQuery(query, new Date());
   let state: State = parsed.invalid ? { kind: 'invalid' } : { kind: 'initial' };
   let payables: Payables = { kind: 'none' };
+  let reversals: Reversals = { kind: 'none' };
   const draftQuery = paymentDraftQuery(query);
   const payeeFilter = payeeFilterQuery(query);
   const narrow = payeeFilter ? { payeeFilter } : {};
@@ -402,6 +412,24 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
         } catch {
           payables = { kind: 'failure' };
         }
+        try {
+          const caller = pharmacyApInvoicesRouter.createCaller(ctx);
+          const [list, access] = await Promise.all([
+            caller.list({ branchId: parsed.branchId, status: 'POSTED', take: REVERSAL_PANEL_ROWS }),
+            caller.reversalAccess({ branchId: parsed.branchId }),
+          ]);
+          if (
+            list.scope.organizationId !== actor.organization.id ||
+            list.scope.branchId !== parsed.branchId ||
+            access.scope.organizationId !== actor.organization.id ||
+            access.scope.branchId !== parsed.branchId
+          ) {
+            throw new Error('Reversal scope mismatch.');
+          }
+          reversals = { kind: 'loaded', invoices: list.invoices, access };
+        } catch {
+          reversals = { kind: 'failure' };
+        }
       }
     } catch (error) {
       state =
@@ -417,7 +445,7 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
       <PageHeader
         eyebrow="Pharmacy accounts"
         heading="Supplier expense invoice aging"
-        description="Record non-stock supplier expense invoices and their payments, and age what is outstanding for one branch by due date as of one day."
+        description="Record non-stock supplier expense invoices and their payments, reverse one entered by mistake, and age what is outstanding for one branch by due date as of one day."
         actions={
           state.kind === 'loaded' && state.view.complete && state.view.rows.length ? (
             <ExportCsv
@@ -497,6 +525,21 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
             </SectionCard>
           ) : null}
           <EntryForms branchId={state.branchId} view={state.view} timeZone={timeZone} />
+          {reversals.kind === 'loaded' ? (
+            <ReversalPanel
+              branchId={state.branchId}
+              invoices={reversals.invoices}
+              access={reversals.access}
+              timeZone={timeZone}
+            />
+          ) : reversals.kind === 'failure' ? (
+            <SectionCard title="Reversals could not be loaded" titleLevel={2}>
+              <p role="alert" className="text-sm text-text-muted">
+                The invoices and payments that can be reversed could not be read. Nothing was
+                changed and the aging above is unaffected; retry the request.
+              </p>
+            </SectionCard>
+          ) : null}
         </>
       ) : (
         <Notice state={state} />

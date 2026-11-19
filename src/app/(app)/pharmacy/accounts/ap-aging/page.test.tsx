@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   aging: vi.fn(),
   payablesDrafts: vi.fn(),
   creditSetOffs: vi.fn(),
+  list: vi.fn(),
+  reversalAccess: vi.fn(),
 }));
 
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.resolveTenantActor }));
@@ -18,6 +20,8 @@ vi.mock('@/server/routers/pharmacy-ap-invoices', () => ({
       aging: mocks.aging,
       payablesDrafts: mocks.payablesDrafts,
       creditSetOffs: mocks.creditSetOffs,
+      list: mocks.list,
+      reversalAccess: mocks.reversalAccess,
     }),
   },
 }));
@@ -112,6 +116,13 @@ describe('ApAgingPage', () => {
     });
     mocks.payablesDrafts.mockResolvedValue(emptyDrafts);
     mocks.creditSetOffs.mockResolvedValue({ scope, setOffs: [], retrievedAt: NOW });
+    mocks.list.mockResolvedValue({ scope, invoices: [], retrievedAt: NOW });
+    mocks.reversalAccess.mockResolvedValue({
+      scope,
+      actorId: 'owner_1',
+      mayReverse: true,
+      otherApprover: null,
+    });
   });
 
   afterEach(() => {
@@ -464,6 +475,130 @@ describe('ApAgingPage', () => {
       expect(output).toContain('Reminders and drafts could not be loaded');
       expect(output).not.toContain('Oldest due');
       expect(output).not.toContain('Request set-off');
+    });
+  });
+  describe('DEV-103 reversal of an invoice or payment', () => {
+    const posted = (overrides: Record<string, unknown> = {}) => ({
+      id: 'inv_1',
+      reference: 'AP-0001',
+      payeeName: 'K-Electric',
+      supplierInvoiceRef: 'KE-11',
+      invoiceDate: new Date('2026-08-01T00:00:00.000Z'),
+      amountMinor: 123_456,
+      currency: 'PKR',
+      status: 'POSTED',
+      createdByUserId: 'clerk_1',
+      settlements: [
+        {
+          id: 'set_1',
+          amountMinor: 23_456,
+          paidAt: new Date('2026-09-01T00:00:00.000Z'),
+          fundingAccount: 'BANK',
+          status: 'ACTIVE',
+          createdByUserId: 'clerk_1',
+        },
+        {
+          id: 'set_0',
+          amountMinor: 5_000,
+          paidAt: new Date('2026-08-20T00:00:00.000Z'),
+          fundingAccount: 'CASH',
+          status: 'REVERSED',
+          createdByUserId: 'clerk_1',
+        },
+      ],
+      ...overrides,
+    });
+
+    it('reads only posted invoices of the authorized branch, newest 50', async () => {
+      await html({ branch: 'branch_1', asOf: '2026-11-15' });
+      expect(mocks.list).toHaveBeenCalledWith({ branchId: 'branch_1', status: 'POSTED', take: 50 });
+      expect(mocks.reversalAccess).toHaveBeenCalledWith({ branchId: 'branch_1' });
+    });
+
+    it('offers the payment still in force for reversal, and the invoice only after it', async () => {
+      mocks.list.mockResolvedValue({ scope, invoices: [posted()], retrievedAt: NOW });
+      const output = await html({ branch: 'branch_1', asOf: '2026-11-15' });
+      expect(output).toContain('Reverse an invoice or payment');
+      expect(output).toContain('Reverse payment');
+      expect(output).toMatch(/name="settlementId" value="set_1"/);
+      expect(output).not.toMatch(/name="settlementId" value="set_0"/);
+      expect(output).toMatch(/name="commandKey" value="ap-payment-rev:[0-9a-f-]{36}"/);
+      expect(output).toContain('Reverse its payment first to reverse this invoice.');
+      expect(output).not.toContain('Reverse invoice');
+      expect(output).toContain('Your manager or owner PIN');
+    });
+
+    it('offers the invoice once nothing settles it', async () => {
+      mocks.list.mockResolvedValue({
+        scope,
+        invoices: [posted({ settlements: [] })],
+        retrievedAt: NOW,
+      });
+      const output = await html({ branch: 'branch_1', asOf: '2026-11-15' });
+      expect(output).toContain('Reverse invoice');
+      expect(output).toMatch(/name="invoiceId" value="inv_1"/);
+      expect(output).toMatch(/name="commandKey" value="ap-invoice-rev:[0-9a-f-]{36}"/);
+    });
+
+    it('sends an entry you recorded to the other manager instead of showing a form', async () => {
+      mocks.list.mockResolvedValue({
+        scope,
+        invoices: [posted({ settlements: [], createdByUserId: 'owner_1' })],
+        retrievedAt: NOW,
+      });
+      mocks.reversalAccess.mockResolvedValue({
+        scope,
+        actorId: 'owner_1',
+        mayReverse: true,
+        otherApprover: { name: 'Hina' },
+      });
+      const output = await html({ branch: 'branch_1', asOf: '2026-11-15' });
+      expect(output).toContain('You recorded this, so Hina or another manager or owner');
+      expect(output).not.toContain('Reverse invoice');
+    });
+
+    it('lets a solo owner reverse what they recorded', async () => {
+      mocks.list.mockResolvedValue({
+        scope,
+        invoices: [posted({ settlements: [], createdByUserId: 'owner_1' })],
+        retrievedAt: NOW,
+      });
+      const output = await html({ branch: 'branch_1', asOf: '2026-11-15' });
+      expect(output).toContain('Reverse invoice');
+    });
+
+    it('shows no reversal form to someone who is not a manager or owner', async () => {
+      mocks.list.mockResolvedValue({ scope, invoices: [posted()], retrievedAt: NOW });
+      mocks.reversalAccess.mockResolvedValue({
+        scope,
+        actorId: 'owner_1',
+        mayReverse: false,
+        otherApprover: null,
+      });
+      const output = await html({ branch: 'branch_1', asOf: '2026-11-15' });
+      expect(output).toContain('Only a manager or owner can reverse');
+      expect(output).not.toContain('Reverse payment');
+      expect(output).not.toContain('Reverse invoice');
+    });
+
+    it('keeps the aging when the reversal list cannot be read, and refuses another branch', async () => {
+      mocks.list.mockRejectedValue(new Error('boom'));
+      let output = await html({ branch: 'branch_1', asOf: '2026-11-15' });
+      expect(output).toContain('AP-0001');
+      expect(output).toContain('Reversals could not be loaded');
+      mocks.list.mockResolvedValue({
+        scope: { ...scope, branchId: 'b2' },
+        invoices: [posted()],
+        retrievedAt: NOW,
+      });
+      output = await html({ branch: 'branch_1', asOf: '2026-11-15' });
+      expect(output).toContain('Reversals could not be loaded');
+      expect(output).not.toContain('Reverse payment');
+    });
+
+    it('explains an empty list', async () => {
+      const output = await html({ branch: 'branch_1', asOf: '2026-11-15' });
+      expect(output).toContain('No posted supplier expense invoice on this branch to reverse.');
     });
   });
 });
