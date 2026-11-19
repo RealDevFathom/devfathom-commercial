@@ -53,7 +53,9 @@ vi.mock('@/lib/abac', async () => {
 import {
   adminProcedure,
   capabilityProcedure,
+  contextualCapabilityProcedure,
   createTRPCContext,
+  denyByDefaultProcedure,
   entitlementIndependentAdminProcedure,
   entitlementIndependentHistoryProcedure,
   hrProcedure,
@@ -323,6 +325,73 @@ describe('temporary password gate', () => {
       message: 'Change your temporary password before continuing.',
     });
     await expect(caller.adminWrite()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+});
+
+describe('DEV-961 approval authenticator set-up gate', () => {
+  const setupProbe = router({
+    approvalAuthenticator: router({
+      getStatus: protectedProcedure.query(() => 'status'),
+      beginEnrollment: protectedProcedure.mutation(() => 'begun'),
+      confirmEnrollment: protectedProcedure.mutation(() => 'confirmed'),
+      setRequired: protectedProcedure.mutation(() => 'switched'),
+    }),
+    team: router({ signOutEverywhere: protectedProcedure.mutation(() => 'signed out') }),
+    pharmacySales: router({ refund: protectedProcedure.mutation(() => 'refunded') }),
+    adminWrite: adminProcedure.mutation(() => 'admin'),
+    capabilityWrite: capabilityProcedure('team:view').mutation(() => 'capability'),
+    contextualWrite: contextualCapabilityProcedure(() => ['team:view']).mutation(() => 'ctx'),
+    declaredWrite: denyByDefaultProcedure
+      .meta({ capabilities: ['team:view'] })
+      .mutation(() => 'declared'),
+  });
+  const gated = { ...ADMIN, status: 'ACTIVE', approvalAuthenticatorSetupRequired: true };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
+    mocks.hasModule.mockReturnValue(true);
+  });
+
+  it('allows only the set-up screen’s calls and sign-out until set-up is done', async () => {
+    const caller = setupProbe.createCaller(contextFor(gated));
+    await expect(caller.approvalAuthenticator.getStatus()).resolves.toBe('status');
+    await expect(caller.approvalAuthenticator.beginEnrollment()).resolves.toBe('begun');
+    await expect(caller.approvalAuthenticator.confirmEnrollment()).resolves.toBe('confirmed');
+    await expect(caller.team.signOutEverywhere()).resolves.toBe('signed out');
+    for (const call of [
+      () => caller.pharmacySales.refund(),
+      () => caller.approvalAuthenticator.setRequired(),
+      () => caller.adminWrite(),
+      () => caller.capabilityWrite(),
+      () => caller.contextualWrite(),
+      () => caller.declaredWrite(),
+    ])
+      await expect(call()).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Set up your authenticator app for approvals before continuing.',
+      });
+  });
+
+  it('refuses a server action, which calls a router through createTRPCContext', async () => {
+    mocks.resolveTenantActor.mockResolvedValueOnce({
+      session: {
+        expires: 'later',
+        user: { ...gated, organizationId: 'org-1' },
+      },
+      organization: { id: 'org-1' },
+      support: null,
+    });
+    const caller = setupProbe.createCaller(await createTRPCContext());
+    await expect(caller.pharmacySales.refund()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('lets a member through once set-up is no longer required', async () => {
+    const caller = setupProbe.createCaller(
+      contextFor({ ...gated, approvalAuthenticatorSetupRequired: false })
+    );
+    await expect(caller.pharmacySales.refund()).resolves.toBe('refunded');
+    await expect(caller.adminWrite()).resolves.toBe('admin');
   });
 });
 

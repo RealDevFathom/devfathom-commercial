@@ -8,6 +8,7 @@ type MutationOptions = {
 const mocks = vi.hoisted(() => ({
   status: {} as Record<string, unknown>,
   members: [] as Array<{ id: string; name: string; enrolled: boolean }>,
+  terminalOnly: [] as Array<{ id: string; displayName: string }>,
   mutations: {} as Record<string, ReturnType<typeof vi.fn>>,
   options: {} as Record<string, MutationOptions>,
 }));
@@ -24,7 +25,9 @@ vi.mock('@/lib/trpc', () => {
                 ? mocks.status
                 : path === 'approvalAuthenticator.members'
                   ? mocks.members
-                  : undefined,
+                  : path === 'approvalAuthenticator.terminalOnlyApprovers'
+                    ? mocks.terminalOnly
+                    : undefined,
             isLoading: false,
             isError: false,
           });
@@ -43,6 +46,7 @@ import { ApprovalAuthenticatorSection } from './approval-authenticator-section';
 
 const baseStatus = {
   enrolled: false,
+  recoveryCodesLeft: 0,
   required: false,
   isOwner: false,
   canManage: false,
@@ -53,6 +57,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.status = { ...baseStatus };
   mocks.members = [];
+  mocks.terminalOnly = [];
   mocks.mutations = {};
   mocks.options = {};
 });
@@ -127,5 +132,91 @@ describe('ApprovalAuthenticatorSection (DEV-879)', () => {
       userId: 'manager',
       currentPassword: 'owner password',
     });
+  });
+});
+
+describe('ApprovalAuthenticatorSection (DEV-961)', () => {
+  it('shows the recovery codes once after set-up is confirmed', () => {
+    render(<ApprovalAuthenticatorSection />);
+    fireEvent.change(screen.getByLabelText('Your current password'), { target: { value: 'pw' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Set up authenticator' }));
+    act(() =>
+      mocks.options['approvalAuthenticator.beginEnrollment'].onSuccess?.({
+        secret: 'JBSWY3DPEHPK3PXP',
+        otpauthUri: 'otpauth://totp/x?secret=JBSWY3DPEHPK3PXP',
+      } as never)
+    );
+    mocks.status = { ...baseStatus, enrolled: true, recoveryCodesLeft: 2 };
+    act(() =>
+      mocks.options['approvalAuthenticator.confirmEnrollment'].onSuccess?.({
+        enrolled: true,
+        recoveryCodes: ['aaaaa-11111', 'bbbbb-22222'],
+      } as never)
+    );
+    const list = screen.getByRole('list', { name: 'Recovery codes' });
+    expect(list.textContent).toContain('aaaaa-11111');
+    fireEvent.click(screen.getByRole('button', { name: 'I have saved them' }));
+    expect(screen.queryByText('aaaaa-11111')).toBeNull();
+    expect(screen.getByText('2 recovery codes left.')).toBeTruthy();
+  });
+
+  it('uses a recovery code only with the password as well', () => {
+    mocks.status = { ...baseStatus, enrolled: true, recoveryCodesLeft: 3 };
+    render(<ApprovalAuthenticatorSection />);
+    fireEvent.click(screen.getByRole('button', { name: 'Lost your phone? Use a recovery code' }));
+    const use = screen.getByRole('button', { name: 'Use code' }) as HTMLButtonElement;
+    fireEvent.change(screen.getByLabelText('Recovery code'), { target: { value: 'aaaaa-11111' } });
+    expect(use.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText('Your current password'), { target: { value: 'pw' } });
+    fireEvent.click(use);
+    expect(mocks.mutations['approvalAuthenticator.useRecoveryCode']).toHaveBeenCalledWith({
+      code: 'aaaaa-11111',
+      currentPassword: 'pw',
+    });
+  });
+
+  it('asks an enrolled owner for his current code before turning the authenticator off', () => {
+    mocks.status = { ...baseStatus, isOwner: true, required: true, enrolled: true };
+    render(<ApprovalAuthenticatorSection />);
+    fireEvent.click(screen.getByRole('switch', { name: 'Require authenticator for approvals' }));
+    expect(mocks.mutations['approvalAuthenticator.setRequired']).not.toHaveBeenCalled();
+    expect(screen.getByText(/Approvals will take each person/)).toBeTruthy();
+    const off = screen.getByRole('button', { name: 'Turn off and use PINs' }) as HTMLButtonElement;
+    expect(off.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText('Current code from your authenticator app'), {
+      target: { value: '654321' },
+    });
+    fireEvent.click(off);
+    expect(mocks.mutations['approvalAuthenticator.setRequired']).toHaveBeenCalledWith(
+      { required: false, code: '654321' },
+      expect.anything()
+    );
+  });
+
+  it('asks an owner with no authenticator for his password and a plain acknowledgement', () => {
+    mocks.status = { ...baseStatus, isOwner: true, required: true, enrolled: false };
+    render(<ApprovalAuthenticatorSection />);
+    fireEvent.click(screen.getByRole('switch', { name: 'Require authenticator for approvals' }));
+    const off = screen.getByRole('button', { name: 'Turn off and use PINs' }) as HTMLButtonElement;
+    const passwords = screen.getAllByLabelText('Your current password');
+    fireEvent.change(passwords[passwords.length - 1], { target: { value: 'owner pw' } });
+    expect(off.disabled).toBe(true);
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(off.disabled).toBe(false);
+    fireEvent.click(off);
+    expect(mocks.mutations['approvalAuthenticator.setRequired']).toHaveBeenCalledWith(
+      { required: false, currentPassword: 'owner pw', acknowledged: true },
+      expect.anything()
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Keep it on' }));
+    expect(screen.queryByRole('button', { name: 'Turn off and use PINs' })).toBeNull();
+  });
+
+  it('lists staff with no login who keep their PIN', () => {
+    mocks.status = { ...baseStatus, isOwner: true, canManage: true, required: true };
+    mocks.terminalOnly = [{ id: 'staff_floor', displayName: 'Floor operator' }];
+    render(<ApprovalAuthenticatorSection />);
+    expect(screen.getByText('Cannot use an authenticator: no login')).toBeTruthy();
+    expect(screen.getByText('Floor operator')).toBeTruthy();
   });
 });

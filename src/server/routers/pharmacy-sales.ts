@@ -2930,6 +2930,7 @@ export const pharmacySalesRouter = router({
               credentialHash: credential.credentialHash,
               secret: authorization.pin,
               action: 'pharmacySales.controlledAuthorization',
+              approverRight: 'pharmacy:dispense',
               requestedById: scope.actorId,
               now,
             }))

@@ -116,6 +116,7 @@ async function verifyApprover(
       credentialHash: credential.credentialHash,
       secret: pin,
       action: 'pharmacy.purchaseApproval',
+      approverRight: 'pharmacy:procurement-approve',
       requestedById: input.actorId ?? approverId,
       now,
     }))

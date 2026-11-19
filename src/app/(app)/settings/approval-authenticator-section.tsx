@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import { KeyRound, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -44,10 +45,28 @@ export function AuthenticatorQrCode({ uri }: { uri: string }) {
   );
 }
 
+/** DEV-961: the one-time recovery codes, shown once after a confirmed set-up. */
+export function RecoveryCodeList({ codes }: { codes: string[] }) {
+  return (
+    <ul
+      aria-label="Recovery codes"
+      className="grid grid-cols-2 gap-2 rounded-[var(--radius-sm)] border border-border bg-surface-card p-3"
+    >
+      {codes.map((code) => (
+        <li key={code} className="font-mono text-xs tabular-nums text-foreground">
+          {code}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /**
  * DEV-879: the member's authenticator for manager and owner approvals. Enrolling turns off
  * their fixed approval PIN; the owner or an administrator handles recovery; the owner can
  * require an authenticator for every approval in the organization.
+ * DEV-961: required by default; set-up issues recovery codes; the owner confirms turning
+ * the requirement off with his own code, or his password and an acknowledgement.
  */
 export function ApprovalAuthenticatorSection() {
   const utils = trpc.useUtils();
@@ -56,6 +75,7 @@ export function ApprovalAuthenticatorSection() {
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
 
   const begin = trpc.approvalAuthenticator.beginEnrollment.useMutation({
     onSuccess: (data) => {
@@ -67,10 +87,11 @@ export function ApprovalAuthenticatorSection() {
     onError: (e) => setError(e.message),
   });
   const confirm = trpc.approvalAuthenticator.confirmEnrollment.useMutation({
-    onSuccess: () => {
+    onSuccess: (result) => {
       setEnrolling(null);
       setCode('');
       setError('');
+      setRecoveryCodes(result.recoveryCodes);
       void utils.approvalAuthenticator.invalidate();
     },
     onError: (e) => setError(e.message),
@@ -79,6 +100,7 @@ export function ApprovalAuthenticatorSection() {
     onSuccess: () => void utils.approvalAuthenticator.getStatus.invalidate(),
     onError: (e) => setError(e.message),
   });
+  const [turningOff, setTurningOff] = useState(false);
 
   const data = status.data;
 
@@ -116,12 +138,30 @@ export function ApprovalAuthenticatorSection() {
             Approval authenticator status could not be loaded. Refresh the page to try again.
           </p>
         ) : data.enrolled ? (
-          <div className="flex flex-wrap items-center gap-3">
-            <StatusPill status="active" label="Set up" />
-            <p className="text-sm text-muted-foreground">
-              Your PIN is no longer accepted for approvals. Enter the code from your app instead. If
-              you lose your phone, ask the owner or an administrator to reset it.
-            </p>
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <StatusPill status="active" label="Set up" />
+              <p className="text-sm text-muted-foreground">
+                Your PIN is no longer accepted for approvals. Enter the code from your app instead.
+                If you lose your phone, use a recovery code below or ask the owner or an
+                administrator to reset it.
+              </p>
+            </div>
+            {recoveryCodes ? (
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground">Save your recovery codes</p>
+                <p className="text-xs text-muted-foreground">
+                  Each code works once and lets you set up the app again on a new phone. They are
+                  shown only now.
+                </p>
+                <RecoveryCodeList codes={recoveryCodes} />
+                <Button size="sm" variant="outline" onClick={() => setRecoveryCodes(null)}>
+                  I have saved them
+                </Button>
+              </div>
+            ) : (
+              <UseRecoveryCode codesLeft={data.recoveryCodesLeft} />
+            )}
           </div>
         ) : enrolling ? (
           <div className="space-y-3">
@@ -224,22 +264,207 @@ export function ApprovalAuthenticatorSection() {
                 Require authenticator for approvals
               </p>
               <p className="text-xs text-muted-foreground">
-                Turns fixed PINs off for every approval in your organization. Members who have not
-                set up an authenticator cannot approve until they do.
+                On by default. Approvals take a code from each person&apos;s authenticator app, not
+                a fixed PIN. Anyone who can approve must set up the app before their account works.
+                Staff with no login keep their PIN.
               </p>
             </div>
             <Switch
               aria-labelledby="require-approval-authenticator"
-              checked={data.required}
+              checked={data.required && !turningOff}
               disabled={setRequired.isPending}
-              onCheckedChange={(required) => setRequired.mutate({ required })}
+              onCheckedChange={(required) => {
+                setError('');
+                if (required) {
+                  setTurningOff(false);
+                  setRequired.mutate({ required: true });
+                } else setTurningOff(true);
+              }}
             />
           </div>
+        )}
+
+        {data?.isOwner && data.required && turningOff && (
+          <TurnOffAuthenticator
+            ownerEnrolled={data.enrolled}
+            pending={setRequired.isPending}
+            onCancel={() => setTurningOff(false)}
+            onConfirm={(confirmation) =>
+              setRequired.mutate(
+                { required: false, ...confirmation },
+                { onSuccess: () => setTurningOff(false) }
+              )
+            }
+          />
         )}
 
         {data?.canManage && <ApprovalAuthenticatorRecovery />}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * DEV-961: what turning the requirement off means, confirmed by the owner with his own current
+ * code, or (before he has set up an app) his password and an acknowledgement.
+ */
+function TurnOffAuthenticator({
+  ownerEnrolled,
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  ownerEnrolled: boolean;
+  pending: boolean;
+  onCancel: () => void;
+  onConfirm: (
+    confirmation: { code: string } | { currentPassword: string; acknowledged: true }
+  ) => void;
+}) {
+  const [code, setCode] = useState('');
+  const [password, setPassword] = useState('');
+  const [acknowledged, setAcknowledged] = useState(false);
+  return (
+    <div
+      role="group"
+      aria-labelledby="turn-off-authenticator-title"
+      className="space-y-3 rounded-[var(--radius-sm)] border border-destructive/40 bg-destructive/5 p-3"
+    >
+      <p id="turn-off-authenticator-title" className="text-sm font-medium text-foreground">
+        Turn off the authenticator for approvals?
+      </p>
+      <p className="text-xs text-text-body">
+        Approvals will take each person&apos;s permanent PIN again. Anyone who sees or is told a PIN
+        can approve refunds, discounts and other actions with it until it is changed. Members will
+        no longer be asked to set up the app. People who already set one up keep using their code.
+        This change is recorded in the audit log.
+      </p>
+      {ownerEnrolled ? (
+        <label className="block text-xs font-medium text-foreground">
+          Current code from your authenticator app
+          <Input
+            autoComplete="one-time-code"
+            inputMode="numeric"
+            maxLength={6}
+            value={code}
+            onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+            className="mt-1 block w-32"
+          />
+        </label>
+      ) : (
+        <>
+          <label className="block text-xs font-medium text-foreground">
+            Your current password
+            <Input
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="mt-1 block sm:w-56"
+            />
+          </label>
+          <label className="flex items-start gap-2 text-xs text-text-body">
+            <Checkbox
+              className="mt-0.5"
+              checked={acknowledged}
+              onCheckedChange={(checked) => setAcknowledged(checked === true)}
+            />
+            I understand that approvals will use permanent PINs.
+          </label>
+        </>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant="destructive"
+          disabled={pending || (ownerEnrolled ? code.length !== 6 : !password || !acknowledged)}
+          onClick={() =>
+            onConfirm(ownerEnrolled ? { code } : { currentPassword: password, acknowledged: true })
+          }
+        >
+          {pending ? 'Turning off…' : 'Turn off and use PINs'}
+        </Button>
+        <Button variant="ghost" onClick={onCancel}>
+          Keep it on
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** DEV-961: a member who lost their phone uses a recovery code to set the app up again. */
+function UseRecoveryCode({ codesLeft }: { codesLeft: number }) {
+  const utils = trpc.useUtils();
+  const [open, setOpen] = useState(false);
+  const [code, setCode] = useState('');
+  const [password, setPassword] = useState('');
+  const [message, setMessage] = useState('');
+  const use = trpc.approvalAuthenticator.useRecoveryCode.useMutation({
+    onSuccess: () => {
+      setOpen(false);
+      setCode('');
+      setPassword('');
+      setMessage('');
+      void utils.approvalAuthenticator.invalidate();
+      window.location.reload();
+    },
+    onError: (e) => setMessage(e.message),
+  });
+  if (!open)
+    return (
+      <div className="flex flex-wrap items-center gap-3">
+        <p className="text-xs text-muted-foreground">
+          {codesLeft === 1 ? '1 recovery code left.' : `${codesLeft} recovery codes left.`}
+        </p>
+        {codesLeft > 0 && (
+          <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+            Lost your phone? Use a recovery code
+          </Button>
+        )}
+      </div>
+    );
+  return (
+    <div className="space-y-2 rounded-[var(--radius-sm)] border border-border p-3">
+      <p className="text-xs text-text-body">
+        Using a recovery code removes your current authenticator. You then set up the app again on
+        your new phone before you can approve anything.
+      </p>
+      {message && (
+        <p role="alert" className="text-xs text-destructive">
+          {message}
+        </p>
+      )}
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="block text-xs font-medium text-foreground">
+          Recovery code
+          <Input
+            autoComplete="off"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            className="mt-1 block w-40 font-mono"
+          />
+        </label>
+        <label className="block text-xs font-medium text-foreground">
+          Your current password
+          <Input
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="mt-1 block w-44"
+          />
+        </label>
+        <Button
+          size="sm"
+          disabled={!code || !password || use.isPending}
+          onClick={() => use.mutate({ code, currentPassword: password })}
+        >
+          {use.isPending ? 'Checking…' : 'Use code'}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
+          Cancel
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -260,6 +485,7 @@ function ApprovalAuthenticatorRecovery() {
     onError: (e) => setMessage(e.message),
   });
   const enrolled = (members.data ?? []).filter((member) => member.enrolled);
+  const terminalOnly = trpc.approvalAuthenticator.terminalOnlyApprovers.useQuery();
 
   return (
     <div className="space-y-2 border-t border-border pt-4">
@@ -321,6 +547,24 @@ function ApprovalAuthenticatorRecovery() {
             </li>
           ))}
         </ul>
+      )}
+      {(terminalOnly.data?.length ?? 0) > 0 && (
+        <div className="space-y-1 pt-2">
+          <p className="text-sm font-medium text-foreground">
+            Cannot use an authenticator: no login
+          </p>
+          <p className="text-xs text-muted-foreground">
+            These staff sign in only at a terminal, so they cannot set up the app. They keep
+            approving with their PIN. Give them a login to move them to the app.
+          </p>
+          <ul className="divide-y divide-border rounded-[var(--radius-sm)] border border-border">
+            {terminalOnly.data!.map((profile) => (
+              <li key={profile.id} className="px-3 py-2 text-sm text-foreground">
+                {profile.displayName}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );

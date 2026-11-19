@@ -136,6 +136,41 @@ describe('resolveTenantActor', () => {
     ).resolves.toMatchObject({ organization: { id: 'org_other' } });
   });
 
+  it('DEV-961: refuses every API route until a gated approver sets up the authenticator', async () => {
+    mocks.requireOrganizationForRequest.mockResolvedValue({ id: 'org_other' });
+    const gated = sessionFor({ status: 'ACTIVE', approvalAuthenticatorSetupRequired: true });
+    const call = (path: string, method = 'POST') =>
+      resolveTenantActor({
+        request: new Request(`http://devfathom.localhost:3000${path}`, { method }),
+        session: gated,
+      });
+    for (const path of [
+      '/api/upload',
+      '/api/pharmacy/counter/sales',
+      '/api/pharmacy/data-export',
+      '/api/assistant',
+      '/api/ably-token',
+      '/api/trpc/pharmacySales.refund',
+      // A batch cannot carry a blocked call alongside the set-up calls.
+      '/api/trpc/approvalAuthenticator.getStatus,pharmacySales.refund?batch=1',
+      '/api/trpc/approvalAuthenticator.getStatus%2CpharmacySales.refund?batch=1',
+    ])
+      await expect(call(path)).rejects.toMatchObject({
+        code: 'APPROVAL_AUTHENTICATOR_SETUP_REQUIRED',
+        status: 403,
+      });
+    expect(mocks.requireOrganizationForRequest).not.toHaveBeenCalled();
+
+    for (const path of [
+      '/api/trpc/approvalAuthenticator.getStatus,approvalAuthenticator.beginEnrollment?batch=1',
+      '/api/trpc/approvalAuthenticator.confirmEnrollment',
+      '/api/auth/signout',
+      // Pages build the actor; the workspace layout then sends them to the set-up screen.
+      '/dashboard',
+    ])
+      await expect(call(path)).resolves.toMatchObject({ organization: { id: 'org_other' } });
+  });
+
   it('still builds an actor for an ON_LEAVE session', async () => {
     mocks.requireOrganizationForRequest.mockResolvedValue({ id: 'org_other' });
 

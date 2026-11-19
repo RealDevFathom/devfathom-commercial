@@ -1,7 +1,11 @@
 import 'server-only';
 
-import type { Prisma } from '@/generated/prisma/client';
 import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
+import {
+  isApprovalApproverRight,
+  type ApprovalApproverRight,
+} from '@/lib/approval-approver-rights';
+import type { ApprovalAuthenticatorParty } from '@/lib/approval-authenticator-party';
 import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
 import { decryptSecret } from '@/lib/secret-crypto';
 import { matchTotpStep } from '@/lib/totp';
@@ -31,6 +35,13 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  *
  * Self-approval rules are unchanged: every caller decides who may approve (including the
  * solo-owner and sole-pharmacist exceptions) before the secret is checked.
+ *
+ * DEV-961: the requirement is on by default. Each caller names the approver right its own
+ * permission check required (`approverRight`); a right outside the shared registry
+ * (`src/lib/approval-approver-rights.ts`) is refused, so the members asked to set up an
+ * authenticator are exactly the members who can approve. A staff profile with no web login
+ * (a terminal-only operator) cannot enrol an authenticator, so it keeps its PIN while the
+ * requirement is on; the owner sees such profiles listed as "cannot use an authenticator".
  */
 
 /** Steps accepted either side of the server's current time step. */
@@ -48,6 +59,8 @@ export type ApprovalSecretInput = {
   secret: string;
   /** The action being approved, recorded on the audit row (for example a procedure path). */
   action: string;
+  /** DEV-961: the approver right the caller's own permission check required of the approver. */
+  approverRight: ApprovalApproverRight;
   /** The signed-in member who asked for the approval, when known. */
   requestedById?: string | null;
   /** The terminal operator who asked for the approval, when known. */
@@ -66,6 +79,9 @@ export async function verifyApprovalSecret(
 ): Promise<ApprovalSecretMethod | null> {
   const now = input.now ?? new Date();
   const approverUserId = input.approverUserId ?? null;
+  // DEV-961: an approval whose right is not in the shared registry is refused, so no route
+  // can approve with a right the forced set-up does not know about.
+  if (!isApprovalApproverRight(input.approverRight)) return null;
   const [organization, authenticator] = await Promise.all([
     db.organization.findFirst({
       where: { id: input.organizationId },
@@ -88,14 +104,54 @@ export async function verifyApprovalSecret(
       : null;
   }
   // Fail closed when the organization cannot be read, and when the owner switched fixed
-  // approval PINs off: the approver must enrol an authenticator first.
-  if (!organization || organization.requireApprovalAuthenticator) return null;
+  // approval PINs off: an approver with a web login must enrol an authenticator first.
+  // DEV-961: a staff profile with no web login cannot enrol one, so it keeps its PIN.
+  if (!organization || (organization.requireApprovalAuthenticator && approverUserId !== null))
+    return null;
   return (await verifyOperatorCredential('PIN', input.secret, input.credentialHash)) ? 'PIN' : null;
+}
+
+/**
+ * DEV-961: consume a member's own current approval code outside an approval (the owner
+ * confirming that approvals go back to PINs). Same window, single use and audit as an
+ * approval. Returns false for any refusal, including a member with no authenticator.
+ */
+export async function consumeMemberApprovalCode(
+  db: ScopedDb,
+  input: { organizationId: string; userId: string; code: string; action: string; now?: Date }
+): Promise<boolean> {
+  const now = input.now ?? new Date();
+  const authenticator = await db.approvalAuthenticator.findFirst({
+    where: { organizationId: input.organizationId, userId: input.userId, enabledAt: { not: null } },
+    select: { id: true, encryptedSecret: true },
+  });
+  if (!authenticator) return false;
+  return consumeApprovalCode(
+    db,
+    {
+      organizationId: input.organizationId,
+      secret: input.code,
+      action: input.action,
+      approverRight: 'OWNER',
+      requestedById: input.userId,
+    },
+    authenticator,
+    input.userId,
+    now
+  );
 }
 
 async function consumeApprovalCode(
   db: ScopedDb,
-  input: ApprovalSecretInput,
+  input: Pick<
+    ApprovalSecretInput,
+    | 'organizationId'
+    | 'secret'
+    | 'action'
+    | 'approverRight'
+    | 'requestedById'
+    | 'requestedByStaffProfileId'
+  >,
   authenticator: { id: string; encryptedSecret: string },
   approverUserId: string,
   now: Date
@@ -135,6 +191,7 @@ async function consumeApprovalCode(
         approvalMethod: 'AUTHENTICATOR',
         approverId: approverUserId,
         approvedAction: input.action,
+        approverRight: input.approverRight,
         approvedAt: now.toISOString(),
         requestedById: input.requestedById ?? null,
         requestedByStaffProfileId: input.requestedByStaffProfileId ?? null,
@@ -144,16 +201,10 @@ async function consumeApprovalCode(
   return true;
 }
 
-type Rule = { capability: string; effect: string };
-
-/** A member as `hasAllCapabilityAccess` reads them, loaded live from the database. */
-export type ApprovalAuthenticatorParty = {
-  id: string;
-  role: string;
-  status: string;
-  organizationRole?: { key?: string; isSystem?: boolean; permissions: readonly Rule[] } | null;
-  permissionOverrides: readonly Rule[];
-};
+export {
+  approvalAuthenticatorPartySelect,
+  type ApprovalAuthenticatorParty,
+} from '@/lib/approval-authenticator-party';
 
 /**
  * Who may recover (reset) a member's approval authenticator. Recovery is handled by the
@@ -176,24 +227,4 @@ export function approvalAuthenticatorResetDenial(
   if (hasAllCapabilityAccess(target) || target.role === 'ADMIN')
     return "Only the owner can reset this member's approval authenticator.";
   return null;
-}
-
-/** Live select for `approvalAuthenticatorResetDenial` and the owner checks. */
-export function approvalAuthenticatorPartySelect(now = new Date()) {
-  return {
-    id: true,
-    role: true,
-    status: true,
-    organizationRole: {
-      select: {
-        key: true,
-        isSystem: true,
-        permissions: { select: { capability: true, effect: true } },
-      },
-    },
-    permissionOverrides: {
-      where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
-      select: { capability: true, effect: true },
-    },
-  } satisfies Prisma.UserSelect;
 }

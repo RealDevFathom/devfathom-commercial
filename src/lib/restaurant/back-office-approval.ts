@@ -1,5 +1,6 @@
 import 'server-only';
 
+import type { RestaurantApproverRight } from '@/lib/approval-approver-rights';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { operatorHasCapability } from './checkout-routes';
 import {
@@ -44,8 +45,8 @@ export type BackOfficeApproverRequest = {
   approvingStaffProfileId: string;
   type: 'PIN' | 'BADGE';
   secret: string;
-  /** The capability the approver must hold at `branchId`. */
-  capability: string;
+  /** The capability the approver must hold at `branchId` (DEV-961: a registered approver right). */
+  capability: RestaurantApproverRight;
   /** The branch of the record being acted on, derived server-side. */
   branchId: string;
   /** The device the co-authorization record will carry (null when none). */
@@ -101,6 +102,7 @@ export async function verifyBackOfficeApprover(
       now,
       approval: {
         action: `restaurant.backOfficeApproval.${request.capability}`,
+        approverRight: request.capability,
         requestedByStaffProfileId: request.actingStaffProfileId,
       },
     });

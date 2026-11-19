@@ -562,6 +562,7 @@ export async function verifyRefillCyclePharmacistPin(
       credentialHash: credential.credentialHash,
       secret: input.pin,
       action: 'pharmacy.refillCycleApproval',
+      approverRight: REFILL_CYCLE_APPROVAL_CAPABILITY,
       requestedById: scope.actorId,
       now,
     }))

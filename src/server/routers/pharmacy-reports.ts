@@ -516,6 +516,7 @@ export const pharmacyReportsRouter = router({
               credentialHash: credential.credentialHash,
               secret: input.pin,
               action: 'pharmacyReports.transitionPharmacovigilanceReport',
+              approverRight: 'OWNER',
               requestedById: actorId,
               now,
             }))

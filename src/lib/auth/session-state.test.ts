@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  APPROVAL_AUTHENTICATOR_SETUP_PATH,
+  ApprovalAuthenticatorSetupRequiredError,
+  approvalAuthenticatorSetupBlocks,
+  isApprovalAuthenticatorSetupApiExempt,
+  workspaceRedirectForApprovalAuthenticator,
   ACCOUNT_INACTIVE_MESSAGE,
   SESSION_ENDED_MESSAGE,
   TEMPORARY_PASSWORD_MESSAGE,
@@ -186,5 +191,74 @@ describe('signInRedirectPath', () => {
     expect(signInRedirectPath('session-ended')).toBe('/login?reason=session-ended');
     expect(signInRedirectPath('account-inactive')).toBe('/login?reason=account-inactive');
     expect(signInRedirectPath('workspace-unavailable')).toBe('/login?reason=workspace-unavailable');
+  });
+});
+
+describe('DEV-961 approval authenticator set-up gate', () => {
+  const request = (path: string, method = 'POST') =>
+    new Request(`https://tenant.test${path}`, { method });
+
+  it('sends workspace pages to the set-up screen only while set-up is required', () => {
+    expect(workspaceRedirectForApprovalAuthenticator(true)).toBe(APPROVAL_AUTHENTICATOR_SETUP_PATH);
+    expect(workspaceRedirectForApprovalAuthenticator(false)).toBeNull();
+    expect(workspaceRedirectForApprovalAuthenticator(undefined)).toBeNull();
+  });
+
+  it('lets only the set-up, password-change and sign-out procedures through', () => {
+    const gated = { approvalAuthenticatorSetupRequired: true };
+    for (const path of [
+      'approvalAuthenticator.getStatus',
+      'approvalAuthenticator.beginEnrollment',
+      'approvalAuthenticator.confirmEnrollment',
+      'team.changePassword',
+      'team.signOutEverywhere',
+    ])
+      expect(approvalAuthenticatorSetupBlocks(gated, path)).toBe(false);
+    for (const path of [
+      'pharmacySales.refund',
+      'approvalAuthenticator.setRequired',
+      'approvalAuthenticator.useRecoveryCode',
+      'approvalAuthenticator.resetForMember',
+      'team.updateProfile',
+      '',
+    ])
+      expect(approvalAuthenticatorSetupBlocks(gated, path)).toBe(true);
+    expect(
+      approvalAuthenticatorSetupBlocks({ approvalAuthenticatorSetupRequired: false }, 'x')
+    ).toBe(false);
+    expect(approvalAuthenticatorSetupBlocks(undefined, 'x')).toBe(false);
+  });
+
+  it('exempts a tRPC batch only when every procedure in it is exempt', () => {
+    expect(
+      isApprovalAuthenticatorSetupApiExempt(
+        request(
+          '/api/trpc/approvalAuthenticator.getStatus,approvalAuthenticator.beginEnrollment?batch=1'
+        )
+      )
+    ).toBe(true);
+    for (const path of [
+      '/api/trpc/approvalAuthenticator.getStatus,pharmacySales.refund?batch=1',
+      '/api/trpc/approvalAuthenticator.getStatus%2CpharmacySales.refund?batch=1',
+      '/api/trpc/pharmacySales.refund',
+      '/api/trpc/',
+      '/api/trpc/%E0%A4%A',
+      '/api/upload',
+      '/api/pharmacy/counter/sale',
+      '/api/restaurant/terminal/co-authorize',
+      '/api/v1/tasks',
+    ])
+      expect([path, isApprovalAuthenticatorSetupApiExempt(request(path))]).toEqual([path, false]);
+    expect(isApprovalAuthenticatorSetupApiExempt(request('/api/auth/signout'))).toBe(true);
+    expect(isApprovalAuthenticatorSetupApiExempt(request('/api/login', 'DELETE'))).toBe(true);
+    expect(isApprovalAuthenticatorSetupApiExempt(request('/api/login', 'POST'))).toBe(false);
+  });
+
+  it('answers an API route with 403 APPROVAL_AUTHENTICATOR_SETUP_REQUIRED', async () => {
+    const response = responseForPasswordChange(new ApprovalAuthenticatorSetupRequiredError());
+    expect(response?.status).toBe(403);
+    await expect(response?.json()).resolves.toMatchObject({
+      code: 'APPROVAL_AUTHENTICATOR_SETUP_REQUIRED',
+    });
   });
 });

@@ -151,8 +151,16 @@ export function isPasswordChangeApiExempt(request: Request): boolean {
   );
 }
 
+/**
+ * The JSON refusal for an account gate: a temporary password still to change (#164), or
+ * (DEV-961) an approval authenticator still to set up. Null for any other error.
+ */
 export function responseForPasswordChange(error: unknown): Response | null {
-  if (!(error instanceof PasswordChangeRequiredError)) return null;
+  if (
+    !(error instanceof PasswordChangeRequiredError) &&
+    !(error instanceof ApprovalAuthenticatorSetupRequiredError)
+  )
+    return null;
   return Response.json({ code: error.code, error: error.message }, { status: error.status });
 }
 
@@ -168,6 +176,76 @@ export function temporaryPasswordBlocks(
   path: string
 ): boolean {
   return user?.mustChangePassword === true && !TEMPORARY_PASSWORD_ALLOWED_PATHS.has(path);
+}
+
+/**
+ * DEV-961 — authenticator by default. While the organization requires an authenticator for
+ * approvals, a member who can approve anything and has not set one up cannot use their
+ * account: every page sends them to the set-up screen and every API call, tRPC batch and
+ * server action is refused, except the calls the set-up screen itself needs (and changing a
+ * temporary password, which comes first, and signing out).
+ */
+export const APPROVAL_AUTHENTICATOR_SETUP_PATH = '/approval-authenticator-setup';
+
+export const APPROVAL_AUTHENTICATOR_SETUP_MESSAGE =
+  'Set up your authenticator app for approvals before continuing.';
+
+const APPROVAL_AUTHENTICATOR_SETUP_PROCEDURES = new Set([
+  'approvalAuthenticator.getStatus',
+  'approvalAuthenticator.beginEnrollment',
+  'approvalAuthenticator.confirmEnrollment',
+  'team.changePassword',
+  'team.signOutEverywhere',
+]);
+
+export class ApprovalAuthenticatorSetupRequiredError extends Error {
+  readonly status = 403 as const;
+  readonly code = 'APPROVAL_AUTHENTICATOR_SETUP_REQUIRED' as const;
+
+  constructor() {
+    super(APPROVAL_AUTHENTICATOR_SETUP_MESSAGE);
+    this.name = 'ApprovalAuthenticatorSetupRequiredError';
+  }
+}
+
+/** Whether a tRPC procedure is refused because the caller must set up an authenticator. */
+export function approvalAuthenticatorSetupBlocks(
+  user: { approvalAuthenticatorSetupRequired?: boolean | null } | null | undefined,
+  path: string
+): boolean {
+  return (
+    user?.approvalAuthenticatorSetupRequired === true &&
+    !APPROVAL_AUTHENTICATOR_SETUP_PROCEDURES.has(path)
+  );
+}
+
+/**
+ * Sign-out and the set-up screen's own tRPC calls stay available while set-up is required.
+ * A batch is exempt only when every procedure in it is, so a blocked call cannot ride along.
+ */
+export function isApprovalAuthenticatorSetupApiExempt(request: Request): boolean {
+  const url = new URL(request.url);
+  const path = url.pathname.replace(/\/+$/, '') || '/';
+  if (path === '/api/auth/signout') return true;
+  if (path === '/api/login' && request.method === 'DELETE') return true;
+  if (!path.startsWith('/api/trpc/')) return false;
+  let procedures: string[];
+  try {
+    procedures = decodeURIComponent(path.slice('/api/trpc/'.length)).split(',').filter(Boolean);
+  } catch {
+    return false;
+  }
+  return (
+    procedures.length > 0 &&
+    procedures.every((name) => APPROVAL_AUTHENTICATOR_SETUP_PROCEDURES.has(name))
+  );
+}
+
+/** Signed-in app pages send a member who must set up an authenticator to the set-up screen. */
+export function workspaceRedirectForApprovalAuthenticator(
+  approvalAuthenticatorSetupRequired: boolean | null | undefined
+): string | null {
+  return approvalAuthenticatorSetupRequired === true ? APPROVAL_AUTHENTICATOR_SETUP_PATH : null;
 }
 
 /** Query string the login page reads to explain why the session ended. */

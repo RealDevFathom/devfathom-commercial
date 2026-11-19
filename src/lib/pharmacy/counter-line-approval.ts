@@ -1,5 +1,6 @@
 import { can } from '@/lib/abac';
 import type { Action } from '@/lib/abac/policies';
+import type { PharmacyApproverRight } from '@/lib/approval-approver-rights';
 import type { Environment, Subject } from '@/lib/abac/types';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { LedgerScope } from './stock-ledger';
@@ -48,7 +49,12 @@ export type CounterApproval = {
  * - TENDER_DISCARD (DEV-712): discarding a counter payment attempt whose outcome is unknown
  *   is a manager's or owner's decision (`pharmacy:manage`), under the same rules.
  */
-export const COUNTER_APPROVAL_CAPABILITY: Record<CounterApprovalKind, Action> = {
+// DEV-961: each kind's capability is an approver right of the shared approval path, so the
+// forced authenticator set-up asks everyone who can approve a counter line.
+export const COUNTER_APPROVAL_CAPABILITY: Record<
+  CounterApprovalKind,
+  Extract<PharmacyApproverRight, Action>
+> = {
   DISCOUNT: 'pharmacy:manage',
   FEFO_OVERRIDE: 'pharmacy:dispense',
   KHATA_OVER_LIMIT: 'pharmacy:manage',
@@ -274,6 +280,7 @@ async function verifyApproverPin(
       credentialHash: credential.credentialHash,
       secret: input.pin,
       action: `pharmacy.counterApproval.${kind}`,
+      approverRight: COUNTER_APPROVAL_CAPABILITY[kind],
       requestedById: scope.actorId,
       now,
     }))

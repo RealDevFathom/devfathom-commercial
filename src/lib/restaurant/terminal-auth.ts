@@ -42,6 +42,7 @@ import {
   type OperatorCredentialType,
 } from '@/lib/restaurant/operator-credentials';
 import { verifyApprovalSecret } from '@/lib/approval-authenticator';
+import type { RestaurantApproverRight } from '@/lib/approval-approver-rights';
 import { resolveShiftEligibility, type ShiftDenialReason } from '@/lib/restaurant/shifts';
 import {
   evaluateTerminalSession,
@@ -592,7 +593,12 @@ export async function authenticateOperator(
     /** DEV-879: set when the credential approves an action rather than signing in. An
      * approver who enrolled an approval authenticator must then enter its current code
      * instead of their PIN (see `verifyApprovalSecret`). */
-    approval?: { action: string; requestedByStaffProfileId?: string | null };
+    approval?: {
+      action: string;
+      /** DEV-961: the approver right the route requires (see approval-approver-rights). */
+      approverRight: RestaurantApproverRight;
+      requestedByStaffProfileId?: string | null;
+    };
   }
 ): Promise<OperatorAuthResult> {
   const { staffProfileId, deviceId, branchId, type, secret, now, approval } = params;
@@ -654,6 +660,7 @@ export async function authenticateOperator(
           credentialHash: credential.credentialHash,
           secret,
           action: approval.action,
+          approverRight: approval.approverRight,
           requestedByStaffProfileId: approval.requestedByStaffProfileId ?? null,
           now,
         })) !== null

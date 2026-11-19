@@ -699,6 +699,7 @@ describe('waive', () => {
         now: expect.any(Date),
         approval: {
           action: 'restaurant.backOfficeApproval.sop:verify',
+          approverRight: 'sop:verify',
           requestedByStaffProfileId: 'staff_a',
         },
       });
@@ -1207,6 +1208,7 @@ describe('authenticated SOP identity boundary', () => {
       now: expect.any(Date),
       approval: {
         action: 'restaurant.backOfficeApproval.sop:verify',
+        approverRight: 'sop:verify',
         requestedByStaffProfileId: 'staff_a',
       },
     });

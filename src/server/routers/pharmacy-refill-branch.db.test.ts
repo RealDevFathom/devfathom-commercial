@@ -305,6 +305,8 @@ beforeAll(async () => {
         legalName: id,
         displayName: id,
         status: 'ACTIVE' as const,
+        // DEV-961: these approvals use PINs, which apply while the authenticator is off.
+        requireApprovalAuthenticator: false,
         vertical: 'PHARMACY' as const,
         timezone: 'Asia/Karachi',
       })),

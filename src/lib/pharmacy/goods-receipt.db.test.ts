@@ -342,6 +342,8 @@ beforeAll(async () => {
         legalName: `Goods receipt ${id}`,
         displayName: `Goods receipt ${id}`,
         status: 'ACTIVE' as const,
+        // DEV-961: these approvals use PINs, which apply while the authenticator is off.
+        requireApprovalAuthenticator: false,
       })),
       skipDuplicates: true,
     })

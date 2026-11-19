@@ -25,7 +25,9 @@ import { getSupportSession, type SupportIdentity } from '@/lib/tenancy/support-s
 import { getDemoSeatCount, isDemoEnabled } from '@/lib/demo/config';
 import { demoPersonaForUser } from '@/lib/demo/personas';
 import {
+  ApprovalAuthenticatorSetupRequiredError,
   evaluateSessionUser,
+  isApprovalAuthenticatorSetupApiExempt,
   isPasswordChangeApiExempt,
   isSessionUsable,
   liveDemoAccessExpiry,
@@ -194,6 +196,16 @@ async function resolveTenantActorUncached(
       !isPasswordChangeApiExempt(options.request)
     ) {
       throw new PasswordChangeRequiredError();
+    }
+    // DEV-961: until a member who can approve sets up their approval authenticator, every
+    // API route refuses them (the set-up screen's own tRPC calls and sign-out excepted).
+    if (
+      session.user.approvalAuthenticatorSetupRequired === true &&
+      options.request &&
+      new URL(options.request.url).pathname.startsWith('/api/') &&
+      !isApprovalAuthenticatorSetupApiExempt(options.request)
+    ) {
+      throw new ApprovalAuthenticatorSetupRequiredError();
     }
     const organization = await organizationForActor(session.user.organizationId, options.request);
     if (!organization) return null;
