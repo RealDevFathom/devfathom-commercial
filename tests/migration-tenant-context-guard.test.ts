@@ -31,6 +31,10 @@ const PINNED_OFFENDERS = [
   '20261116121200_pharmacy_voucher_controls:pharmacy_sale_lines',
 ];
 
+// DEV-954: dynamic EXECUTEs let through by a `-- tenant-context: allow <reason>` comment, as
+// `migration: reason`. Pinned so that every new allowance is a reviewed change to this list.
+const PINNED_DYNAMIC_SQL_ALLOWANCES: string[] = [];
+
 const analyzer = analyzeMigrations();
 const offenders = analyzer.offenders.map((o) => `${o.migration}:${o.table}`).sort();
 
@@ -53,6 +57,12 @@ describe('migrations set the tenant before touching tenant-only tables (DEV-951)
 
   it('finds no migration outside the pinned list that reads or writes one before setting the tenant', () => {
     expect(offenders).toEqual([...PINNED_OFFENDERS].sort());
+  });
+
+  it('lets no dynamic EXECUTE through by an allow comment outside the pinned list', () => {
+    expect(analyzer.allowances.map((a) => `${a.migration}: ${a.reason}`)).toEqual(
+      PINNED_DYNAMIC_SQL_ALLOWANCES
+    );
   });
 
   it('only shrinks the pinned list', () => {
@@ -85,11 +95,15 @@ describe('tenant-context detector', () => {
   `;
   const known = new Set(['tenant_rows', 'shared_rows', 'looped_a', 'looped_b']);
 
-  function offendersOf(sql: string): string[] {
+  function probeOf(sql: string): MigrationTenantContextAnalyzer {
     const probe = new MigrationTenantContextAnalyzer();
     probe.analyze('0001_setup', setup, known);
     probe.analyze('0002_probe', sql, known);
-    return probe.offenders.map((o) => `${o.migration}:${o.table}`);
+    return probe;
+  }
+
+  function offendersOf(sql: string): string[] {
+    return probeOf(sql).offenders.map((o) => `${o.migration}:${o.table}`);
   }
 
   it('flags a backfill that sets only the platform flag', () => {
@@ -419,6 +433,161 @@ describe('tenant-context detector', () => {
           EXECUTE format('CREATE TABLE %I AS TABLE %I', t || '_copy', t);
         END $$;`)
       ).toEqual(dynamic);
+    });
+
+    it('does not carry a tenant set inside a loop past the end of the loop', () => {
+      // After the loop only the last organisation is still set.
+      const loop = (header: string, read: string) =>
+        offendersOf(`DO $$ DECLARE tenant_id TEXT; ids TEXT[]; BEGIN
+          ${header}
+            PERFORM set_config('app.current_organization_id', tenant_id, true);
+            EXIT WHEN tenant_id IS NULL;
+          END LOOP;
+          ${read}
+        END $$;`);
+      for (const header of [
+        `FOR tenant_id IN SELECT "id" FROM "organizations" LOOP`,
+        `FOREACH tenant_id IN ARRAY ids LOOP`,
+        `WHILE false LOOP`,
+        `LOOP`,
+      ])
+        expect(loop(header, `DELETE FROM "tenant_rows";`)).toEqual(flagged);
+      // A later DO block, or a later statement, is after the loop too.
+      expect(
+        offendersOf(`BEGIN;
+          DO $$ DECLARE tenant_id TEXT; BEGIN
+            FOR tenant_id IN SELECT "id" FROM "organizations" LOOP
+              PERFORM set_config('app.current_organization_id', tenant_id, true);
+            END LOOP;
+          END $$;
+          DO $$ BEGIN DELETE FROM "tenant_rows"; END $$;
+          UPDATE "tenant_rows" SET "id" = "id";
+          COMMIT;`)
+      ).toEqual(flagged);
+      // Inside the body, after the set, is the per-organisation pattern.
+      expect(
+        offendersOf(`DO $$ DECLARE tenant_id TEXT; BEGIN
+          FOR tenant_id IN SELECT "id" FROM "organizations" LOOP
+            PERFORM set_config('app.current_organization_id', tenant_id, true);
+            WHILE false LOOP NULL; END LOOP;
+            DELETE FROM "tenant_rows" WHERE "organizationId" = tenant_id;
+          END LOOP;
+        END $$;`)
+      ).toEqual([]);
+    });
+
+    it('does not carry a tenant set inside an EXCEPTION handler past its block', () => {
+      expect(
+        offendersOf(`DO $$ DECLARE tenant_id TEXT; BEGIN
+          FOR tenant_id IN SELECT "id" FROM "organizations" LOOP
+            BEGIN
+              PERFORM 1 / 0;
+            EXCEPTION WHEN division_by_zero THEN
+              PERFORM set_config('app.current_organization_id', tenant_id, true);
+            END;
+            UPDATE "tenant_rows" SET "id" = "id";
+          END LOOP;
+        END $$;`)
+      ).toEqual(flagged);
+      // Another handler of the same block does not see it either.
+      expect(
+        offendersOf(`DO $$ DECLARE tenant_id TEXT; BEGIN
+          FOR tenant_id IN SELECT "id" FROM "organizations" LOOP
+            BEGIN
+              PERFORM 1 / 0;
+            EXCEPTION
+              WHEN division_by_zero THEN
+                PERFORM set_config('app.current_organization_id', tenant_id, true);
+              WHEN others THEN
+                DELETE FROM "tenant_rows";
+            END;
+          END LOOP;
+        END $$;`)
+      ).toEqual(flagged);
+      // A read in the same handler after the set is covered; a CASE expression's END inside the
+      // block does not end it.
+      expect(
+        offendersOf(`DO $$ DECLARE tenant_id TEXT; n int; BEGIN
+          FOR tenant_id IN SELECT "id" FROM "organizations" LOOP
+            BEGIN
+              n := CASE WHEN true THEN 1 ELSE 2 END;
+              PERFORM 1 / 0;
+            EXCEPTION WHEN division_by_zero THEN
+              PERFORM set_config('app.current_organization_id', tenant_id, true);
+              DELETE FROM "tenant_rows" WHERE "organizationId" = tenant_id;
+            END;
+          END LOOP;
+        END $$;`)
+      ).toEqual([]);
+    });
+
+    it('does not accept constant expressions or a single-row subquery as the tenant', () => {
+      for (const value of [
+        `('org_1')`,
+        `'org' || '_1'`,
+        `$o$org_1$o$`,
+        `(SELECT "id" FROM "organizations" LIMIT 1)`,
+        `(SELECT "id" FROM "organizations" WHERE "slug" = 'demo')`,
+      ])
+        expect(
+          offendersOf(`DO $$ DECLARE tenant_id TEXT; BEGIN
+            FOR tenant_id IN SELECT "id" FROM "organizations" LOOP
+              PERFORM set_config('app.current_organization_id', ${value}, true);
+              UPDATE "tenant_rows" SET "id" = "id";
+            END LOOP;
+          END $$;`)
+        ).toEqual(flagged);
+      // A subquery over the loop variable, or an expression of it, is per organisation.
+      for (const value of [
+        `(SELECT "id" FROM "organizations" WHERE "id" = tenant_id)`,
+        `'' || tenant_id`,
+        `tenant_id::text`,
+      ])
+        expect(
+          offendersOf(`DO $$ DECLARE tenant_id TEXT; BEGIN
+            FOR tenant_id IN SELECT "id" FROM "organizations" LOOP
+              PERFORM set_config('app.current_organization_id', ${value}, true);
+              UPDATE "tenant_rows" SET "id" = "id";
+            END LOOP;
+          END $$;`)
+        ).toEqual([]);
+    });
+
+    it('reads every statement of an EXECUTE that starts with DDL', () => {
+      expect(
+        offendersOf(`DO $$ BEGIN
+          EXECUTE 'ALTER TABLE "shared_rows" ADD COLUMN "n" int; UPDATE "tenant_rows" SET "id" = "id"';
+        END $$;`)
+      ).toEqual(flagged);
+      for (const execute of [
+        `EXECUTE 'ALTER TABLE ' || quote_ident(t) || ' ADD COLUMN "n" int; UPDATE ' || quote_ident(t) || ' SET "n" = 1';`,
+        `EXECUTE format('ALTER TABLE %I ADD COLUMN "n" int; UPDATE %I SET "n" = 1', t, t);`,
+        `EXECUTE 'ALTER TABLE "shared_rows" ADD COLUMN "n" int; ' || statement_text;`,
+      ])
+        expect(
+          offendersOf(`DO $$ DECLARE t text := 'tenant_rows'; statement_text text; BEGIN
+            ${execute}
+          END $$;`)
+        ).toEqual(dynamic);
+    });
+
+    it('takes an allow comment only from a real comment, for one EXECUTE, and records it', () => {
+      // Inside a string it is not a comment.
+      expect(
+        offendersOf(`DO $$ DECLARE t text := 'shared_rows'; BEGIN
+          RAISE NOTICE '-- tenant-context: allow this is a string'; EXECUTE format('DELETE FROM %I', t);
+        END $$;`)
+      ).toEqual(dynamic);
+      // It covers the EXECUTE right below it, not the next one.
+      const probe = probeOf(`DO $$ DECLARE t text := 'shared_rows'; BEGIN
+        -- tenant-context: allow shared_rows admits the platform
+        EXECUTE format('DELETE FROM %I', t);
+        EXECUTE format('UPDATE %I SET "id" = "id"', t);
+      END $$;`);
+      expect(probe.offenders.map((o) => `${o.migration}:${o.table}`)).toEqual(dynamic);
+      expect(probe.allowances).toEqual([
+        { migration: '0002_probe', reason: 'shared_rows admits the platform' },
+      ]);
     });
   });
 });

@@ -117,20 +117,48 @@ function clears(value: string): boolean {
 }
 
 /**
- * A literal value names one fixed organisation: a backfill run under it skips every other one.
- * In set_config the value is an expression, so only a quoted literal or a number is constant; a
- * SET value is always written out, so any word or literal is (a `%L` placeholder in an EXECUTE
- * template is not).
+ * A value that names one fixed organisation: a backfill run under it skips every other one. In
+ * set_config the value is an expression. It is constant when it is built only from literals
+ * ('org_1', $o$org_1$o$, numbers), casts, parentheses and `||`, or when it is a scalar subquery
+ * (`(SELECT "id" FROM "organizations" LIMIT 1)`) that names no loop variable of the block: a
+ * scalar subquery yields one value. A loop variable or a per-row column (`tenant_id`,
+ * `target."organizationId"`, `o."id"`) is not constant. A SET value is always written out, so
+ * any word or literal is constant (a `%L` placeholder in an EXECUTE template is not).
  */
-function constantFunctionValue(value: string): boolean {
-  return /^(?:E?'(?:[^']|'')*'|-?\d+)(?:\s*::\s*[A-Za-z_][A-Za-z0-9_ ]*)*$/i.test(value.trim());
+function constantFunctionValue(value: string, loopVariables: Set<string>): boolean {
+  const subquery = value.trim().replace(/^\(+\s*/, '');
+  if (/^SELECT\b/i.test(subquery))
+    return !(blankStrings(subquery).match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? []).some((word) =>
+      loopVariables.has(word.toLowerCase())
+    );
+  const rest = value
+    .replace(/E?'(?:[^']|'')*'/gi, '')
+    .replace(/\$([A-Za-z0-9_]*)\$[\s\S]*?\$\1\$/g, '')
+    .replace(/::\s*[A-Za-z_][A-Za-z0-9_]*(?:\s+varying)?/gi, '')
+    .replace(/\b\d+\b/g, '')
+    .replace(/\|\||[()\s]/g, '');
+  return rest === '';
+}
+
+/** The variables of FOR / FOREACH loops in a PL/pgSQL body. */
+function loopVariables(body: string): Set<string> {
+  const names = new Set<string>();
+  for (const m of body.matchAll(
+    new RegExp(String.raw`\bFOR(?:EACH)?\s+(${IDENT}(?:\s*,\s*${IDENT})*)\s+(?:IN|SLICE)\b`, 'gi')
+  ))
+    for (const name of m[1]!.split(',')) names.add(unquote(name.trim()));
+  return names;
 }
 
 function constantSetValue(value: string): boolean {
   return /^(?:'(?:[^']|'')*'|[A-Za-z0-9_.-]+)$/.test(value.trim());
 }
 
-function contextEvents(statement: string, offset: number): ContextEvent[] {
+function contextEvents(
+  statement: string,
+  offset: number,
+  variables: Set<string> = new Set()
+): ContextEvent[] {
   const events: ContextEvent[] = [];
   for (const m of statement.matchAll(TENANT_SETTING)) {
     const at = offset + m.index!;
@@ -138,7 +166,7 @@ function contextEvents(statement: string, offset: number): ContextEvent[] {
       events.push({
         at,
         kind: 'set',
-        active: !clears(m[1]) && !constantFunctionValue(m[1]),
+        active: !clears(m[1]) && !constantFunctionValue(m[1], variables),
         local: !/^false$/i.test(m[2]!.trim()),
       });
     else if (m[4] !== undefined)
@@ -169,136 +197,213 @@ function tenantSetAt(events: ContextEvent[], position: number): boolean {
 }
 
 /**
- * The IF / ELSIF / ELSE and CASE WHEN / ELSE branches of a PL/pgSQL body (strings blanked), as
- * [start, end) offsets. A statement-level keyword follows `;`, THEN, ELSE, LOOP or BEGIN (or opens
- * the body); that tells `IF ... THEN` from DDL's `IF [NOT] EXISTS`, and CASE statements from CASE
- * expressions, whose WHEN and ELSE never follow a `;`.
+ * The scopes of a PL/pgSQL body (strings and comments blanked) that a tenant set inside does not
+ * outlive, as [start, end) offsets:
+ * - each IF / ELSIF / ELSE branch and each CASE statement WHEN / ELSE branch: it may never run;
+ * - each loop body, LOOP ... END LOOP (FOR, FOREACH, WHILE, bare LOOP): after the loop only the
+ *   last organisation is still set, or none when the loop ran zero times. A read inside the body
+ *   after the set is the per-organisation pattern; a read after END LOOP is not covered by it;
+ * - each EXCEPTION handler, to the END of its block: it runs only on an error.
+ * A statement-level keyword follows `;`, THEN, ELSE, LOOP or BEGIN (or opens the body); that
+ * tells `IF ... THEN` from DDL's `IF [NOT] EXISTS`, and CASE statements from CASE expressions,
+ * whose WHEN and ELSE never follow a `;` and which close with a plain END.
  */
-export function plpgsqlBranches(body: string): Array<{ start: number; end: number }> {
-  const branches: Array<{ start: number; end: number }> = [];
-  const stack: Array<{ kind: 'if' | 'case'; start: number }> = [];
+export function plpgsqlScopes(body: string): Array<{ start: number; end: number }> {
+  const scopes: Array<{ start: number; end: number }> = [];
+  const stack: Array<{
+    kind: 'if' | 'case' | 'expression' | 'loop' | 'block';
+    start: number;
+    handler?: number;
+  }> = [];
   let previous = '';
   let previousEnd = 0;
   for (const m of body.matchAll(
-    /\b(?:END\s+IF|END\s+CASE|ELSIF|ELSEIF|ELSE|IF|CASE|WHEN|THEN|LOOP|BEGIN)\b|;/gi
+    /\b(?:END\s+IF|END\s+CASE|END\s+LOOP|END|ELSIF|ELSEIF|ELSE|IF|CASE|WHEN|THEN|LOOP|BEGIN|EXCEPTION)\b|;/gi
   )) {
     const token = m[0].toUpperCase().replace(/\s+/g, ' ');
-    const adjacent = body.slice(previousEnd, m.index).trim() === '';
+    const at = m.index!;
+    const after = at + m[0].length;
+    const adjacent = body.slice(previousEnd, at).trim() === '';
     const statementStart =
       adjacent && ['', ';', 'THEN', 'ELSE', 'LOOP', 'BEGIN'].includes(previous);
+    const nextStatement = adjacent && previous === ';';
     const top = stack.at(-1);
-    const close = (at: number) => branches.push({ start: top!.start, end: at });
-    if ((token === 'IF' || token === 'CASE') && statementStart)
-      stack.push({ kind: token === 'IF' ? 'if' : 'case', start: m.index! });
+    if (token === 'IF' && statementStart) stack.push({ kind: 'if', start: at });
+    else if (token === 'CASE')
+      stack.push({ kind: statementStart ? 'case' : 'expression', start: at });
+    else if (token === 'LOOP') stack.push({ kind: 'loop', start: at });
+    else if (token === 'BEGIN') stack.push({ kind: 'block', start: at });
     else if (
-      top?.kind === 'if' &&
-      ['ELSIF', 'ELSEIF', 'ELSE'].includes(token) &&
-      previous === ';' &&
-      adjacent
+      nextStatement &&
+      ((top?.kind === 'if' && ['ELSIF', 'ELSEIF', 'ELSE'].includes(token)) ||
+        (top?.kind === 'case' && ['WHEN', 'ELSE'].includes(token)))
     ) {
-      close(m.index!);
-      top.start = m.index!;
-    } else if (
-      top?.kind === 'case' &&
-      ['WHEN', 'ELSE'].includes(token) &&
-      previous === ';' &&
-      adjacent
+      scopes.push({ start: top.start, end: at });
+      top.start = at;
+    } else if (token === 'EXCEPTION' && top?.kind === 'block' && statementStart) top.handler = at;
+    else if (
+      token === 'WHEN' &&
+      nextStatement &&
+      top?.kind === 'block' &&
+      top.handler !== undefined
     ) {
-      close(m.index!);
-      top.start = m.index!;
+      scopes.push({ start: top.handler, end: at });
+      top.handler = at;
     } else if (
       (token === 'END IF' && top?.kind === 'if') ||
-      (token === 'END CASE' && top?.kind === 'case')
+      (token === 'END CASE' && top?.kind === 'case') ||
+      (token === 'END LOOP' && top?.kind === 'loop')
     ) {
-      close(m.index! + m[0].length);
+      scopes.push({ start: top.start, end: after });
+      stack.pop();
+    } else if (token === 'END' && (top?.kind === 'expression' || top?.kind === 'block')) {
+      if (top.handler !== undefined) scopes.push({ start: top.handler, end: after });
       stack.pop();
     }
     previous = token;
-    previousEnd = m.index! + m[0].length;
+    previousEnd = after;
   }
-  return branches;
+  return scopes;
 }
 
 /**
  * Dynamic SQL cannot be read statically, so DEV-954 sets this rule for every `EXECUTE` in a
- * migration DO block (EXECUTE FUNCTION / PROCEDURE of a trigger excepted):
- * 1. A command whose literal text starts with DDL (ALTER, CREATE other than a table or
- *    materialized view `AS` a query, DROP, COMMENT, GRANT, REVOKE, TRUNCATE, ...) reads no
- *    rows under RLS, so it needs no tenant.
- * 2. A literal command with no `%I` / `%s` placeholder and no concatenation is read like any
- *    other statement: each tenant-only table it names needs the tenant set at the EXECUTE.
+ * migration DO block (EXECUTE FUNCTION / PROCEDURE of a trigger excepted). The command is read
+ * as far as it is written out: its literals, with every other operand of `||` (and a `%I` / `%s`
+ * placeholder of format, also %1$I, %-10s, %*s) unknown. Each of its statements is then judged:
+ * 1. A statement that starts with DDL (ALTER, CREATE other than a table or materialized view
+ *    `AS` a query, DROP, COMMENT, GRANT, REVOKE, TRUNCATE, ...) reads no rows under RLS, so it
+ *    needs no tenant. A command made only of DDL statements passes.
+ * 2. A command written out in full is read like any other statement: each tenant-only table its
+ *    non-DDL statements name needs the tenant set at the EXECUTE.
  * 3. Anything else could name any table, so the tenant must be set at the EXECUTE (an explicit
  *    per-organisation loop around it), or the EXECUTE line or the comment lines right above it
- *    must carry `-- tenant-context: allow <reason>`, a reason of at least ten characters for
- *    the reviewer. Otherwise it is reported against the pseudo-table `DYNAMIC_SQL`.
+ *    must carry the comment `-- tenant-context: allow <reason>`, a reason of at least ten
+ *    characters. Each comment covers that one EXECUTE; every use is recorded in `allowances`,
+ *    which the guard test pins. Otherwise it is reported against the pseudo-table `DYNAMIC_SQL`.
  * A false alarm costs one comment; a miss is a backfill that silently skips every shop. Every
  * EXECUTE in the migrations reviewed for DEV-954 is DDL, so the rule raises no existing alarm.
  */
 export const DYNAMIC_SQL = '<dynamic sql>';
 
-const ALLOW_DYNAMIC = /--\s*tenant-context:\s*allow\b[\s:-]*(\S.*)$/i;
+const ALLOW_DYNAMIC = /^--\s*tenant-context:\s*allow\b[\s:-]*(\S.*)$/i;
 
-function dynamicSqlAllowed(sql: string, position: number): boolean {
-  const lines = sql.slice(0, position).split('\n');
-  const reason = (line: string) => (ALLOW_DYNAMIC.exec(line)?.[1]?.trim().length ?? 0) >= 10;
-  const lineEnd = sql.indexOf('\n', position);
-  if (reason(lines.at(-1)! + sql.slice(position, lineEnd === -1 ? sql.length : lineEnd)))
-    return true;
-  for (let i = lines.length - 2; i >= 0; i -= 1) {
-    const line = lines[i]!.trim();
-    if (!line.startsWith('--')) break;
-    if (reason(line)) return true;
+/**
+ * The reason of a `-- tenant-context: allow` comment on the line of `position` or on the comment
+ * lines right above it. Only real comments count: `blanked` is `raw` with its comments blanked
+ * (offsets kept), so a `--` inside a string is not one.
+ */
+function allowComment(raw: string, blanked: string, position: number): string | null {
+  const commentOn = (start: number, end: number) => {
+    for (let k = start; k < end - 1; k += 1)
+      if (raw.startsWith('--', k) && blanked[k] === ' ') return raw.slice(k, end).trim();
+    return null;
+  };
+  const reasonOf = (comment: string | null) => {
+    const reason = comment && ALLOW_DYNAMIC.exec(comment)?.[1]?.trim();
+    return reason && reason.length >= 10 ? reason : null;
+  };
+  let start = raw.lastIndexOf('\n', position - 1) + 1;
+  const lineEnd = raw.indexOf('\n', position);
+  const own = reasonOf(commentOn(start, lineEnd === -1 ? raw.length : lineEnd));
+  if (own) return own;
+  while (start > 0) {
+    const end = start - 1;
+    start = raw.lastIndexOf('\n', end - 1) + 1;
+    if (blanked.slice(start, end).trim() !== '') break;
+    const comment = commentOn(start, end);
+    if (!comment) break;
+    const reason = reasonOf(comment);
+    if (reason) return reason;
   }
-  return false;
+  return null;
 }
 
 const DDL_COMMAND =
   /^\s*(?:ALTER|DROP|COMMENT|GRANT|REVOKE|TRUNCATE|LOCK|ANALYZE|REINDEX|CLUSTER|SET|RESET|CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:TEMP|TEMPORARY)\s+)?(?:RECURSIVE\s+)?VIEW|CREATE\b(?![\s\S]*\bAS\s*\(?\s*(?:SELECT|WITH|TABLE|VALUES)\b))\b/i;
 
-/** The literal text an EXECUTE runs, and whether it is fully static. */
-function executedCommand(rest: string): { text: string; dynamic: boolean } | null {
-  const format = /^format\s*\(\s*/i.exec(rest);
-  const start = format ? format[0].length : 0;
-  const tail = rest.slice(start);
-  let text: string;
-  let after: number;
-  const dollar = /^\$[A-Za-z0-9_]*\$/.exec(tail)?.[0];
-  if (dollar) {
-    const end = tail.indexOf(dollar, dollar.length);
-    if (end === -1) return null;
-    text = tail.slice(dollar.length, end);
-    after = end + dollar.length;
-  } else {
-    const quoted = /^E?'((?:[^']|'')*)'/i.exec(tail);
-    if (!quoted) return null;
-    text = quoted[1]!.replace(/''/g, "'");
-    after = quoted[0].length;
-  }
-  let remainder = tail.slice(after);
-  if (format) {
-    // Step past the rest of the format(...) call, so `format(...) || x` is seen as concatenated.
-    let depth = 0;
-    let end = remainder.length;
-    for (let i = 0; i < remainder.length; i += 1) {
-      const literal = /^(?:E?'(?:[^']|'')*'|(\$[A-Za-z0-9_]*\$)[\s\S]*?\1)/i.exec(
-        remainder.slice(i)
-      );
-      if (literal) {
-        i += literal[0].length - 1;
-        continue;
+/** Stands for the part of an EXECUTE command that is not written out. */
+const UNKNOWN = ' %s ';
+
+const LITERAL = /^(?:E?'((?:[^']|'')*)'|(\$[A-Za-z0-9_]*\$)([\s\S]*?)\2)/i;
+
+/**
+ * Splits `text` at each top-level match of `separator` (outside literals and parentheses); with
+ * `stop`, ends at the first top-level `stop` instead.
+ */
+function splitTopLevel(text: string, separator: RegExp, stop?: RegExp): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let from = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const literal = LITERAL.exec(text.slice(i));
+    if (literal) {
+      i += literal[0].length - 1;
+      continue;
+    }
+    const ch = text[i]!;
+    if (ch === '(') depth += 1;
+    else if (ch === ')') depth -= 1;
+    else if (depth === 0) {
+      const rest = text.slice(i);
+      if (stop?.test(rest) && (!/^\w/.test(rest) || !/[\w$]/.test(text[i - 1] ?? ' '))) {
+        parts.push(text.slice(from, i));
+        return parts;
       }
-      if (remainder[i] === '(') depth += 1;
-      else if (remainder[i] === ')' && depth-- === 0) {
-        end = i + 1;
-        break;
+      const sep = separator.exec(rest);
+      if (sep) {
+        parts.push(text.slice(from, i));
+        from = i + sep[0].length;
+        i = from - 1;
       }
     }
-    remainder = remainder.slice(end);
   }
-  const concatenated = /^\s*\|\|/.test(remainder);
-  // %I and %s, also with a position (%1$I) or a width (%-10s, %*s, %*2$s).
-  const placeholders = format !== null && /%(?:\d+\$)?-?(?:\d+|\*(?:\d+\$)?)?[Is]/.test(text);
-  return { text, dynamic: concatenated || placeholders };
+  parts.push(text.slice(from));
+  return parts;
+}
+
+function literalText(operand: string): string | null {
+  const m = LITERAL.exec(operand.trim());
+  if (!m || !/^(?:\s*::\s*[A-Za-z_][A-Za-z0-9_]*)*$/.test(operand.trim().slice(m[0].length)))
+    return null;
+  return m[1] !== undefined ? m[1].replace(/''/g, "'") : m[3]!;
+}
+
+/** The text an EXECUTE runs, as far as it is written out, and whether any of it is unknown. */
+function executedCommand(rest: string): { text: string; dynamic: boolean } {
+  // The command expression ends at `;`, or at INTO / USING, at its own depth.
+  const expression = splitTopLevel(rest, /^(?!)/, /^(?:;|INTO\b|USING\b)/i)[0]!;
+  let dynamic = false;
+  const text = splitTopLevel(expression, /^\|\|/)
+    .map((operand) => {
+      const literal = literalText(operand);
+      if (literal !== null) return literal;
+      const format = /^\s*format\s*\(([\s\S]*)\)\s*$/i.exec(operand);
+      const template = format ? literalText(splitTopLevel(format[1]!, /^,/)[0]!) : null;
+      if (template === null) {
+        dynamic = true;
+        return UNKNOWN;
+      }
+      // %I and %s, also with a position (%1$I) or a width (%-10s, %*s, %*2$s).
+      if (/%(?:\d+\$)?-?(?:\d+|\*(?:\d+\$)?)?[Is]/.test(template)) dynamic = true;
+      return template;
+    })
+    .join('');
+  return { text, dynamic };
+}
+
+/** The statements of an EXECUTE command that are not DDL. */
+function dataStatements(command: string): string[] {
+  const blanked = blankStrings(command);
+  const statements: string[] = [];
+  let from = 0;
+  for (let i = 0; i <= blanked.length; i += 1)
+    if (i === blanked.length || blanked[i] === ';') {
+      const statement = command.slice(from, i);
+      if (statement.trim() && !DDL_COMMAND.test(statement)) statements.push(statement);
+      from = i + 1;
+    }
+  return statements;
 }
 
 const PLATFORM = /app\.is_platform_admin/i;
@@ -357,6 +462,8 @@ export function tableReferences(text: string): Array<{ name: string; index: numb
 export class MigrationTenantContextAnalyzer {
   private readonly tables = new Map<string, TableState>();
   readonly offenders: TenantContextOffender[] = [];
+  /** Every dynamic EXECUTE let through by a `-- tenant-context: allow` comment. */
+  readonly allowances: Array<{ migration: string; reason: string }> = [];
 
   /** Tables that, after everything applied so far, are forced and have no platform clause. */
   tenantOnlyTables(): string[] {
@@ -511,7 +618,7 @@ export class MigrationTenantContextAnalyzer {
   /** Applies the `DYNAMIC_SQL` rule to every EXECUTE of a DO block body. */
   private flagDynamic(
     migration: string,
-    sql: string,
+    raw: string,
     body: string,
     bodyOffset: number,
     events: ContextEvent[]
@@ -521,13 +628,16 @@ export class MigrationTenantContextAnalyzer {
     )) {
       const at = bodyOffset + m.index!;
       const command = executedCommand(body.slice(m.index! + m[0].length));
-      if (command && DDL_COMMAND.test(command.text)) continue;
-      if (command && !command.dynamic) {
-        this.flag(migration, command.text, at, events, at);
+      const statements = dataStatements(command.text);
+      if (statements.length === 0) continue;
+      if (!command.dynamic) {
+        this.flag(migration, statements.join(';\n'), at, events, at);
         continue;
       }
-      if (tenantSetAt(events, at) || dynamicSqlAllowed(sql, at)) continue;
-      this.report(migration, DYNAMIC_SQL);
+      if (tenantSetAt(events, at)) continue;
+      const reason = allowComment(raw, body, m.index!);
+      if (reason) this.allowances.push({ migration, reason });
+      else this.report(migration, DYNAMIC_SQL);
     }
   }
 
@@ -554,10 +664,11 @@ export class MigrationTenantContextAnalyzer {
         body
           ? statement.slice(0, bodyStart) + bodyText + statement.slice(bodyStart + bodyText.length)
           : statement,
-        offset
+        offset,
+        loopVariables(bodyText)
       );
       if (body)
-        for (const branch of plpgsqlBranches(blankStrings(bodyText)))
+        for (const branch of plpgsqlScopes(blankStrings(bodyText)))
           for (const event of statementEvents) {
             const end = bodyOffset + branch.end;
             if (event.kind !== 'set' || event.at < bodyOffset + branch.start || event.at >= end)
@@ -579,7 +690,7 @@ export class MigrationTenantContextAnalyzer {
         }
         this.applyDynamicDdl(body[2]!, knownTables);
         this.flag(migration, bodyText, bodyOffset, events);
-        this.flagDynamic(migration, sql, bodyText, bodyOffset, events);
+        this.flagDynamic(migration, body[2]!, bodyText, bodyOffset, events);
         continue;
       }
       if (
