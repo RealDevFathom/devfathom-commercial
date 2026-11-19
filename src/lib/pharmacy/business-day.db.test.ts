@@ -37,6 +37,7 @@ let clock: typeof import('./business-day-clock');
 let businessDay: typeof import('./business-day');
 let cashCloseCheck: typeof import('./cash-close-check-operations');
 let reports: typeof import('./reports');
+let marketing: typeof import('./marketing-report');
 
 const describeDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const run = randomUUID().slice(0, 8);
@@ -54,6 +55,7 @@ beforeAll(async () => {
   businessDay = await import('./business-day');
   cashCloseCheck = await import('./cash-close-check-operations');
   reports = await import('./reports');
+  marketing = await import('./marketing-report');
 
   const { assertRlsEnforcingRole } = await import('@/lib/testing/rls-role-guard');
   await assertRlsEnforcingRole(withPlatformDb);
@@ -521,5 +523,91 @@ describeDatabase('a report across branches on migrated PostgreSQL (DEV-958A)', (
     expect(await lostDemand([first!, second!, third], today(-30), today(-1), stored)).toBe(
       pastRange
     );
+  });
+});
+
+describeDatabase('opt-outs that name no branch on migrated PostgreSQL (DEV-958A)', () => {
+  // A WhatsApp opt-out that names no branch, at 02:00 Karachi time on past day X: before 05:00,
+  // so a branch whose day ends at 05:00 would put it on X - 1. It belongs to no branch, so it
+  // counts on the organisation's calendar day X, whichever branches are picked and whatever
+  // their hours.
+  const X = () => today(-10);
+  const days = () => [-1, 0, 1].map((offset) => businessDay.shiftPharmacyDay(X(), offset));
+
+  async function unassignedOptOuts(
+    scopes: readonly Scope[],
+    dayEnds: Record<string, unknown> = {}
+  ) {
+    const counts: Record<string, number> = {};
+    for (const day of days()) {
+      const report = await tenant(scopes[0]!, (db) =>
+        marketing.readPharmacyMarketingReport(
+          db,
+          scopes[0]!.organizationId,
+          {
+            branchIds: scopes.map((scope) => scope.branchId),
+            from: day,
+            to: day,
+            ...businessDay.pharmacyBranchDayEndsField(
+              scopes.map((scope) => ({ id: scope.branchId, dayEnd: dayEnds[scope.branchId] }))
+            ),
+          },
+          ZONE
+        )
+      );
+      counts[day] = report.unassignedConsentOptOuts;
+    }
+    return counts;
+  }
+
+  it('counts them on calendar days when a branch joins or a branch changes its hour', async () => {
+    const [late] = await organization('optout', ['late']);
+    await tenant(late!, (db) =>
+      db.pharmacyMessageLog.create({
+        data: {
+          organizationId: late!.organizationId,
+          branchId: null,
+          direction: 'INBOUND',
+          kind: 'OPT_OUT',
+          status: 'RECEIVED',
+          dedupeKey: `optout-${run}`,
+          createdAt: karachi(X(), '02:00'),
+        },
+      })
+    );
+    const expected = Object.fromEntries(days().map((day) => [day, day === X() ? 1 : 0]));
+    // A single branch whose day has ended at 05:00 since well before X.
+    const lateHistory = { [late!.branchId]: [{ from: today(-40), hour: 5 }] };
+    expect(await unassignedOptOuts([late!], lateHistory)).toEqual(expected);
+
+    // A midnight branch joins: every past day keeps its count.
+    const midnight = await addBranch(late!, 'midnight');
+    expect(await unassignedOptOuts([late!, midnight], lateHistory)).toEqual(expected);
+    // The branch's hour is different, or changes later: the same.
+    expect(await unassignedOptOuts([late!])).toEqual(expected);
+    expect(
+      await unassignedOptOuts([late!], {
+        [late!.branchId]: [
+          { from: today(-40), hour: 5 },
+          { from: today(-3), hour: 2 },
+        ],
+      })
+    ).toEqual(expected);
+    // Through the application: a branch changes its hour, and another joins with its own.
+    await saveHour(late!, 3);
+    const third = await addBranch(late!, 'third');
+    await saveHour(third, 6);
+    const stored = Object.fromEntries(
+      (
+        await tenant(late!, (db) =>
+          db.pharmacyBranch.findMany({
+            where: { id: { in: [late!.branchId, midnight.branchId, third.branchId] } },
+            select: { id: true, businessDayEndsAtHistory: true },
+          })
+        )
+      ).map((row) => [row.id, row.businessDayEndsAtHistory])
+    );
+    expect(await unassignedOptOuts([late!], stored)).toEqual(expected);
+    expect(await unassignedOptOuts([late!, midnight, third], stored)).toEqual(expected);
   });
 });

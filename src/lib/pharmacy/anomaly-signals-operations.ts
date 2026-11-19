@@ -313,11 +313,28 @@ export async function readPharmacyAnomalySignals(
   validatePharmacyReportFilters(filters);
   const groups = byWindow(filters);
   if (groups.length === 1) return readPharmacyAnomalySignalsInWindow(db, filters);
-  // DEV-958A: each branch's signals on its own business days.
+  // DEV-958A: each branch's signals on its own business days, in the one order a single read
+  // gives, before the same 200-row cut.
   const rows = (
     await Promise.all(groups.map((group) => readPharmacyAnomalySignalsInWindow(db, group)))
   ).flat();
-  return rows.slice(0, 200);
+  return rows.sort(compareSignals).slice(0, 200);
+}
+
+/** Postgres orders an enum by declaration order: these mirror the schema's enums. */
+const STATUS_ORDER = ['OPEN', 'ACKNOWLEDGED', 'SNOOZED', 'CLOSED', 'STALE'];
+const SEVERITY_ORDER = ['NOTICE', 'REVIEW', 'URGENT'];
+
+/** The read's own order: status ascending, severity descending, newest computed first. */
+function compareSignals(
+  a: { status: string; severity: string; computedAt: Date },
+  b: { status: string; severity: string; computedAt: Date }
+) {
+  return (
+    STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status) ||
+    SEVERITY_ORDER.indexOf(b.severity) - SEVERITY_ORDER.indexOf(a.severity) ||
+    b.computedAt.getTime() - a.computedAt.getTime()
+  );
 }
 
 async function readPharmacyAnomalySignalsInWindow(db: ScopedDb, filters: PharmacyReportFilters) {

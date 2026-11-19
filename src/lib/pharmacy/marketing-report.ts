@@ -119,28 +119,24 @@ export async function readPharmacyMarketingReport(
   validateMarketingReportFilters(input);
   const zone = workspaceTimezone(timeZone);
   // DEV-958A: each branch's campaigns on its own business days; across branches, their sum.
-  // Opt-outs that name no branch are counted on the organisation's calendar days.
+  // Opt-outs that name no branch belong to no branch's day, so they are always counted on the
+  // organisation's calendar days: never on a window that depends on which branches are picked
+  // or on their hours. At midnight the two are the same window, as before.
   const windows = pharmacyBranchDayWindows(input.from, input.to, input.branchIds, {
     timeZone: zone,
     dayEnds: input.dayEnds,
   });
   const calendar = pharmacyCalendarDayRange(input.from, input.to, zone);
-  const report =
-    windows.length === 1
-      ? await readPharmacyMarketingReportWindow(db, organizationId, input.branchIds, {
-          gte: windows[0]!.from,
-          lt: windows[0]!.to,
-        })
-      : await readMarketingWindows(
-          db,
-          organizationId,
-          windows.map((window) => ({
-            branchIds: window.branchIds,
-            gte: window.from,
-            lt: window.to,
-          })),
-          { gte: calendar.from, lt: calendar.to }
-        );
+  const report = await readMarketingWindows(
+    db,
+    organizationId,
+    windows.map((window) => ({
+      branchIds: window.branchIds,
+      gte: window.from,
+      lt: window.to,
+    })),
+    { gte: calendar.from, lt: calendar.to }
+  );
   return { ...report, period: { from: input.from, to: input.to, timezone: zone } };
 }
 
