@@ -22,7 +22,7 @@
 import {
   BPS,
   isRegulatedForDiscount,
-  maxDiscountMinorFor,
+  lineDiscountRoomMinor,
   minimumPriceForMargin,
 } from './smart-discount';
 
@@ -236,18 +236,21 @@ export function planBillDiscount(
       continue;
     }
     const room = allocationRoom(line, limits);
-    // The line's own discount is zero here, so its whole maximum is open to the bill share.
-    // The whole line must also keep the minimum margin on its total cost, exactly as an item
-    // discount must (validateDiscount): a lot already priced below its own floor takes no
-    // share, but it still counts against the line's floor.
-    const lineCostMinor = line.allocations.reduce(
-      (sum, a) => sum + a.canonicalUnits * a.lot.unitCostMinor,
-      0
-    );
+    // The line's own discount is zero here, so the whole line limit an item discount meets is
+    // open to the bill share: the owner's maximum and the minimum margin on the line's total
+    // cost. A lot already priced below its own floor takes no share but still counts against
+    // the line's floor. Within that, each lot keeps its own floor.
     const capacity = Math.min(
       room.reduce((sum, n) => sum + n, 0),
-      maxDiscountMinorFor(line.grossMinor, limits.maxDiscountBps),
-      Math.max(0, line.grossMinor - minimumPriceForMargin(lineCostMinor, limits.minMarginBps))
+      lineDiscountRoomMinor({
+        grossMinor: line.grossMinor,
+        costMinor: line.allocations.reduce(
+          (sum, a) => sum + a.canonicalUnits * a.lot.unitCostMinor,
+          0
+        ),
+        minMarginBps: limits.minMarginBps,
+        maxDiscountBps: limits.maxDiscountBps,
+      })
     );
     if (capacity <= 0) {
       excluded.push({ saleLineId: line.id, reason: 'AT_FLOOR' });

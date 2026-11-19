@@ -525,6 +525,61 @@ suite('DEV-956 whole-bill discount on PostgreSQL', () => {
     expect(sale.status).toBe('COMPLETED');
   });
 
+  it('clears the discount when an item is added afterwards, and refuses the item once paid', async () => {
+    await setEnabled(true);
+    await setMaximum(10_000);
+    const f = await bill();
+    await tenant((db) =>
+      applyBillDiscount(db, scope, {
+        saleId: f.sale.id,
+        request: { kind: 'PERCENT', bps: 1_000 },
+        approval,
+      })
+    );
+    const addOne = () =>
+      tenant(async (db) => {
+        const extra = await item(db, [400], [100]);
+        return addSaleLine(db, scope, {
+          saleId: f.sale.id,
+          medicineId: extra.medicine.id,
+          presentationId: extra.presentation.id,
+          packLevelId: extra.pack.id,
+          saleUnit: 'UNIT',
+          quantity: 1,
+          canonicalUnitsPerSaleUnit: 1,
+          idempotencyKey: randomUUID(),
+        });
+      });
+    const added = await addOne();
+    expect(added).toMatchObject({ billDiscountClearedMinor: 63 });
+    const after = await lines(f.sale.id);
+    expect(after.map((line) => [line.discountMinor, line.billDiscountMinor])).toEqual([
+      [0, 0],
+      [0, 0],
+      [10, 0],
+      [0, 0],
+    ]);
+    const cleared = await tenant((db) =>
+      db.pharmacySaleEvent.findFirstOrThrow({
+        where: { saleId: f.sale.id, kind: 'BILL_DISCOUNT', reason: 'CLEARED' },
+      })
+    );
+    expect(cleared.payload).toMatchObject({ cause: 'LINE_ADDED', previousTotalMinor: 63 });
+    // Given again, it covers the new item too.
+    await tenant((db) =>
+      applyBillDiscount(db, scope, {
+        saleId: f.sale.id,
+        request: { kind: 'PERCENT', bps: 1_000 },
+        approval,
+      })
+    );
+    expect((await lines(f.sale.id)).map((line) => line.billDiscountMinor)).toEqual([30, 33, 0, 40]);
+    // Once a payment is taken, no item can be added to the discounted bill.
+    await tender(f.sale.id, 100);
+    await expect(addOne()).rejects.toMatchObject({ reason: 'BILL_DISCOUNT_LOCKED_BY_PAYMENT' });
+    expect((await lines(f.sale.id)).map((line) => line.billDiscountMinor)).toEqual([30, 33, 0, 40]);
+  });
+
   it('voids an unpaid discounted bill and gives its stock back', async () => {
     await setEnabled(true);
     await setMaximum(10_000);

@@ -201,7 +201,9 @@ export function CounterBillDiscountEntry({
           }}
         >
           <p id={`${id}-rules`} className="text-text-body">
-            One discount for the whole bill, shared over its items by price.{' '}
+            One discount for the whole bill, shared over its items by price. A percentage is taken
+            of the items that can be discounted. Adding an item afterwards removes it, so give it
+            once the bill is complete.{' '}
             {maxBps !== null
               ? `No item takes more than the owner's maximum of ${maxBps / 100}%.`
               : 'The owner has not set a maximum discount.'}{' '}

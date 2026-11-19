@@ -3385,6 +3385,15 @@ describe('PharmacyCounterConsole barcode safety', () => {
       expect(mocks.refetch).toHaveBeenCalled();
     });
 
+    it('tells the cashier when adding an item removed the bill discount, to give it again', async () => {
+      mocks.mutations.addLine!.mockResolvedValueOnce({ billDiscountClearedMinor: 2_500 });
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      scan();
+      await screen.findByText(
+        '1 × Paracetamol added. The whole-bill discount of Rs 25.00 was removed because the bill changed. Give it again to include this item.'
+      );
+    });
+
     it('is not offered to change once the bill has taken a payment', () => {
       mocks.queries.billDiscountSetting = query({ enabled: true, canChange: false });
       mocks.queries.counterCart = {

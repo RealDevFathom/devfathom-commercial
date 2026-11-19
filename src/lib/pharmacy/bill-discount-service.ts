@@ -1,4 +1,5 @@
 import 'server-only';
+import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
@@ -8,8 +9,12 @@ import {
   type BillDiscountPlan,
   type BillDiscountRequest,
 } from './bill-discount';
-import { PharmacySaleError, validateDiscount } from './sales';
-import { readDiscountLimits } from './smart-discount-service';
+import { PharmacySaleError, saleHasPaymentActivity, validateDiscount } from './sales';
+import { readDiscountLimits, readMaxDiscountSettings } from './smart-discount-service';
+
+/** DEV-956: only the owner switches the whole-bill discount on or off. */
+export const BILL_DISCOUNT_CHANGE_REFUSED =
+  'Only the owner can change the whole-bill discount setting.';
 import type { LedgerScope } from './stock-ledger';
 
 /** DEV-956: whether the owner has switched the whole-bill discount on. Missing reads as off. */
@@ -22,14 +27,17 @@ export async function readBillDiscountEnabled(db: ScopedDb, organizationId: stri
 }
 
 /**
- * DEV-956: the owner's switch. The caller has verified the owner's identity and fresh PIN; the
- * organization row is locked so the recorded previous value is the one replaced.
+ * DEV-956: the owner's switch. The caller has verified the owner's fresh PIN; ownership is
+ * re-checked here, in the write, as for the maximum discount. The organization row is locked so
+ * the recorded previous value is the one replaced.
  */
 export async function saveBillDiscountEnabled(
   db: ScopedDb,
-  scope: Pick<LedgerScope, 'organizationId'>,
+  scope: Pick<LedgerScope, 'organizationId' | 'actorId'>,
   enabled: boolean
 ) {
+  if (!(await readMaxDiscountSettings(db, scope)).canChange)
+    throw new TRPCError({ code: 'FORBIDDEN', message: BILL_DISCOUNT_CHANGE_REFUSED });
   const [current] = await db.$queryRaw<Array<{ enabled: boolean }>>`
     SELECT "pharmacyBillDiscountEnabled" AS enabled FROM "organizations"
      WHERE "id" = ${scope.organizationId} FOR UPDATE`;
@@ -66,9 +74,6 @@ export type BillDiscountOutcome =
       excluded: { saleLineId: string; reason: BillDiscountExclusion }[];
     };
 
-/** Card-terminal attempts that may have charged, or may still charge, the bill's old total. */
-const LIVE_TERMINAL_STATUSES = ['CREATED', 'SENT', 'UNKNOWN', 'APPROVED', 'SETTLED'] as const;
-
 /**
  * DEV-956: give, change or remove (a zero request) the one whole-bill discount on an open bill.
  *
@@ -87,31 +92,18 @@ export async function applyBillDiscount(
 ): Promise<BillDiscountOutcome> {
   if (!(await readBillDiscountEnabled(db, scope.organizationId)))
     throw new PharmacySaleError('BILL_DISCOUNT_OFF');
+  // Giving or changing a discount needs a confirmed approval before the bill is even read;
+  // removing one (a zero request) never does.
+  const removal =
+    input.request.kind === 'PERCENT' ? input.request.bps === 0 : input.request.minor === 0;
+  if (!removal && !input.approval) throw new PharmacySaleError('APPROVAL_REQUIRED');
   const [locked] = await db.$queryRaw<Array<{ status: string }>>(
     Prisma.sql`SELECT status FROM pharmacy_sales WHERE id = ${input.saleId} AND "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId} FOR UPDATE`
   );
   if (!locked) throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
   if (locked.status !== 'OPEN') throw new PharmacySaleError('INVALID_STATE');
-  const [tender, attempt] = await Promise.all([
-    db.pharmacyTender.findFirst({
-      where: {
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-        saleId: input.saleId,
-      },
-      select: { id: true },
-    }),
-    db.pharmacyCardTerminalAttempt.findFirst({
-      where: {
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-        saleId: input.saleId,
-        status: { in: [...LIVE_TERMINAL_STATUSES] },
-      },
-      select: { id: true },
-    }),
-  ]);
-  if (tender || attempt) throw new PharmacySaleError('BILL_DISCOUNT_AFTER_PAYMENT');
+  if (await saleHasPaymentActivity(db, scope, input.saleId))
+    throw new PharmacySaleError('BILL_DISCOUNT_AFTER_PAYMENT');
   const lines = await db.pharmacySaleLine.findMany({
     where: { organizationId: scope.organizationId, branchId: scope.branchId, saleId: input.saleId },
     include: {
@@ -123,9 +115,6 @@ export async function applyBillDiscount(
     },
   });
   const limits = await readDiscountLimits(db, scope);
-  const removal =
-    input.request.kind === 'PERCENT' ? input.request.bps === 0 : input.request.minor === 0;
-  if (!removal && !input.approval) throw new PharmacySaleError('APPROVAL_REQUIRED');
   let plan: BillDiscountPlan;
   try {
     plan = planBillDiscount(lines, input.request, limits);

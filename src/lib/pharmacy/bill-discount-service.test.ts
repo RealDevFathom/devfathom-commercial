@@ -4,7 +4,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { applyBillDiscount } from './bill-discount-service';
+import { applyBillDiscount, saveBillDiscountEnabled } from './bill-discount-service';
 
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'cashier-a' };
 const approval = {
@@ -60,7 +60,11 @@ function db(
           : { pharmacyMaxDiscountBps: options.maxDiscountBps ?? 10_000 }
       ),
     },
-    pharmacyBranch: { findFirst: vi.fn(async () => ({ discountPolicy: null })) },
+    pharmacyBranch: {
+      findFirst: vi.fn(async (): Promise<{ discountPolicy: unknown }> => ({
+        discountPolicy: null,
+      })),
+    },
     $queryRaw: vi.fn(async () =>
       options.status === 'MISSING' ? [] : [{ status: options.status ?? 'OPEN' }]
     ),
@@ -117,9 +121,14 @@ describe('applyBillDiscount (DEV-956)', () => {
   });
 
   it('needs an approval to give a discount, never to remove one', async () => {
-    await expect(run(db(), { kind: 'AMOUNT', minor: 10 }, null)).rejects.toMatchObject({
+    // Refused before the bill is read, even where planning alone would refuse nothing worse:
+    // here every line is regulated, which on its own would return a quiet refusal.
+    const unapproved = db({ lines: [line('l1', 300, 0, { medicine: { ...otc, rx: true } })] });
+    await expect(run(unapproved, { kind: 'AMOUNT', minor: 10 }, null)).rejects.toMatchObject({
       reason: 'APPROVAL_REQUIRED',
     });
+    expect(unapproved.$queryRaw).not.toHaveBeenCalled();
+    expect(unapproved.pharmacySaleLine.findMany).not.toHaveBeenCalled();
     const fake = db({
       lines: [
         line('l1', 300, 0, {
@@ -288,5 +297,31 @@ describe('applyBillDiscount (DEV-956)', () => {
         }),
       }),
     });
+  });
+});
+
+describe('saveBillDiscountEnabled (DEV-956)', () => {
+  it('re-checks that the caller is the owner inside the write, before touching the row', async () => {
+    const fake = {
+      organization: {
+        findFirst: vi.fn(async () => ({ pharmacyMaxDiscountBps: 10_000 })),
+        update: vi.fn(),
+      },
+      // A member without every capability is not the owner.
+      user: {
+        findFirst: vi.fn(async () => ({
+          role: 'EMPLOYEE',
+          status: 'ACTIVE',
+          organizationRole: { key: 'cashier', isSystem: false, permissions: [] },
+          permissionOverrides: [],
+        })),
+      },
+      $queryRaw: vi.fn(async () => [{ enabled: false }]),
+    };
+    await expect(
+      saveBillDiscountEnabled(fake as unknown as ScopedDb, scope, true)
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(fake.$queryRaw).not.toHaveBeenCalled();
+    expect(fake.organization.update).not.toHaveBeenCalled();
   });
 });

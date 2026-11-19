@@ -8,6 +8,7 @@ import {
   planBillDiscount,
   type BillDiscountLine,
 } from './bill-discount';
+import { validateDiscount } from './sales';
 
 const NO_LIMITS = { minMarginBps: 0, maxDiscountBps: 10_000 };
 let sequence = 0;
@@ -216,5 +217,90 @@ describe('planBillDiscount (DEV-956)', () => {
     expect(billAllocationDiscount({ a: 12 }, 'a')).toBe(12);
     for (const snapshot of [null, [], { a: -1 }, { a: 1.5 }, { a: '3' }])
       expect(billAllocationDiscount(snapshot, 'a')).toBe(0);
+  });
+
+  it('money review: a mixed-cost line takes only what the item rule allows, and the reported maximum applies', () => {
+    // 15% minimum margin. Line A: two lots at Rs 1.00 costing 0.95 and 0.50; the whole line
+    // must keep ceil(145 / 0.85) = 171, so it takes at most 29. Line B: Rs 10.00 costing 1.00
+    // keeps ceil(100 / 0.85) = 118, so it takes at most 882.
+    const a = line([
+      [100, 95],
+      [100, 50],
+    ]);
+    const b = line([[1000, 100]]);
+    const limits = { minMarginBps: 1_500, maxDiscountBps: 10_000 };
+    const error = refusal(() => planBillDiscount([a, b], { kind: 'AMOUNT', minor: 5_000 }, limits));
+    expect(error.reason).toBe('ABOVE_LIMIT');
+    expect(error.plan?.capacityMinor).toBe(29 + 882);
+    const full = planBillDiscount([a, b], { kind: 'AMOUNT', minor: 911 }, limits);
+    expect(full.shares.map((share) => share.discountMinor)).toEqual([29, 882]);
+    // Rs 3.00 fits, moving what line A cannot take onto line B.
+    expect(
+      planBillDiscount([a, b], { kind: 'AMOUNT', minor: 300 }, limits).shares.map(
+        (share) => share.discountMinor
+      )
+    ).toEqual([29, 271]);
+  });
+
+  it('property: every plan, including the reported maximum, passes the item-discount rule line by line', () => {
+    let seed = 956;
+    const next = (n: number) => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+      return seed % n;
+    };
+    for (let bill = 0; bill < 400; bill++) {
+      const limits = {
+        minMarginBps: [0, 1_000, 1_500, 2_000, 5_000][next(5)]!,
+        maxDiscountBps: [10_000, 5_000, 2_500, 1_000][next(4)]!,
+      };
+      const lines = Array.from({ length: 1 + next(5) }, () =>
+        line(
+          Array.from({ length: 1 + next(3) }, () => {
+            const gross = 1 + next(5_000);
+            return [gross, next(gross + 200)] as [number, number];
+          })
+        )
+      );
+      const check = (plan: ReturnType<typeof planBillDiscount>) => {
+        expect(plan.shares.reduce((sum, share) => sum + share.discountMinor, 0)).toBe(
+          plan.totalMinor
+        );
+        for (const share of plan.shares) {
+          const planned = lines.find((candidate) => candidate.id === share.saleLineId)!;
+          expect(() =>
+            validateDiscount({
+              regulated: false,
+              discountMinor: share.discountMinor,
+              grossMinor: planned.grossMinor,
+              costMinor: planned.allocations.reduce((sum, a) => sum + a.lot.unitCostMinor, 0),
+              approvedByUserId: 'manager',
+              approvalPolicy: 'MANAGER_PIN',
+              ...limits,
+            })
+          ).not.toThrow();
+          planned.allocations.forEach((a) => {
+            const part = share.allocations[a.id]!;
+            if (part > 0)
+              expect(a.grossMinor! - part).toBeGreaterThanOrEqual(
+                Math.max(
+                  a.lot.unitCostMinor,
+                  Math.ceil((a.lot.unitCostMinor * 10_000) / (10_000 - limits.minMarginBps))
+                )
+              );
+          });
+        }
+      };
+      let capacity: number;
+      try {
+        const asked = 1 + next(3_000);
+        check(planBillDiscount(lines, { kind: 'AMOUNT', minor: asked }, limits));
+        capacity = planBillDiscount(lines, { kind: 'AMOUNT', minor: 0 }, limits).capacityMinor;
+      } catch (failure) {
+        if (!(failure instanceof BillDiscountRefused)) throw failure;
+        capacity = failure.plan?.capacityMinor ?? 0;
+      }
+      // The maximum the counter reports can always be given in full.
+      if (capacity > 0) check(planBillDiscount(lines, { kind: 'AMOUNT', minor: capacity }, limits));
+    }
   });
 });

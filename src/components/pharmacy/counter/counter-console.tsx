@@ -2146,9 +2146,14 @@ function ScopedPharmacyCounterConsole({
           'promotionNotice' in added && added.promotionNotice
             ? COUNTER_DISCOUNT_NOTICES[added.promotionNotice]
             : null;
+        // DEV-956: adding an item clears the whole-bill discount; the cashier gives it again.
+        const billDiscountNotice =
+          'billDiscountClearedMinor' in added && added.billDiscountClearedMinor
+            ? `The whole-bill discount of Rs ${formatMinor(added.billDiscountClearedMinor)} was removed because the bill changed. Give it again to include this item.`
+            : null;
         setNotice({
-          tone: discountNotice ? 'warning' : 'success',
-          message: `${startedNextBill ? 'New bill started. ' : ''}${units} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}${voucher ? ` with voucher ${voucher.code}` : ''}${discountMinor > 0 ? ` with a discount of Rs ${formatMinor(discountMinor)}` : ''}.${discountNotice ? ` ${discountNotice}` : ''}`,
+          tone: discountNotice || billDiscountNotice ? 'warning' : 'success',
+          message: `${startedNextBill ? 'New bill started. ' : ''}${units} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}${voucher ? ` with voucher ${voucher.code}` : ''}${discountMinor > 0 ? ` with a discount of Rs ${formatMinor(discountMinor)}` : ''}.${discountNotice ? ` ${discountNotice}` : ''}${billDiscountNotice ? ` ${billDiscountNotice}` : ''}`,
         });
         setAddVersion(completedAdds.current);
         setQuery('');

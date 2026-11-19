@@ -15,6 +15,7 @@ vi.mock('@/server/audit', async () => ({
   recordTrpcAudit: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/bill-discount-service', () => ({
+  BILL_DISCOUNT_CHANGE_REFUSED: 'Only the owner can change the whole-bill discount setting.',
   applyBillDiscount: vi.fn(),
   readBillDiscountEnabled: vi.fn(),
   saveBillDiscountEnabled: vi.fn(),
@@ -136,6 +137,18 @@ beforeEach(() => {
 });
 
 describe('DEV-956 pharmacySales.applyBillDiscount', () => {
+  beforeEach(() => vi.mocked(readBillDiscountEnabled).mockResolvedValue(true));
+
+  it('refuses while the owner has it off, before any PIN is checked (no lockout strike)', async () => {
+    vi.mocked(readBillDiscountEnabled).mockResolvedValue(false);
+    const f = fixture();
+    await expect(
+      f.caller.applyBillDiscount({ ...give, discountApproval: managerPin })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'BILL_DISCOUNT_OFF' });
+    expect(authorizeCounterApproval).not.toHaveBeenCalled();
+    expect(f.transaction).not.toHaveBeenCalled();
+  });
+
   it('asks a cashier without the discount right for a manager PIN before touching the bill', async () => {
     const f = fixture();
     await expect(f.caller.applyBillDiscount(give)).rejects.toMatchObject({

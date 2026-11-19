@@ -124,6 +124,7 @@ import { TRPCError } from '@trpc/server';
 import { NO_PIN_SET_MESSAGE } from '@/lib/pharmacy/own-pin-policy';
 import {
   applyBillDiscount,
+  BILL_DISCOUNT_CHANGE_REFUSED,
   readBillDiscountEnabled,
   saveBillDiscountEnabled,
 } from '@/lib/pharmacy/bill-discount-service';
@@ -270,8 +271,6 @@ import type { TRPCContext } from '../trpc';
 
 const branchId = z.string().trim().min(1).max(128);
 /** DEV-929: the owner's maximum discount in the audit description ("no maximum" or "10%"). */
-/** DEV-956: only the owner switches the whole-bill discount on or off. */
-const BILL_DISCOUNT_CHANGE_REFUSED = 'Only the owner can change the whole-bill discount setting.';
 const maximumWords = (bps: number) =>
   bps >= NO_MAXIMUM_DISCOUNT_BPS ? 'no maximum' : `${bps / 100}%`;
 // Preserve field order and parsing: settlement hashes JSON.stringify(parsed input).
@@ -2579,6 +2578,10 @@ export const pharmacySalesRouter = router({
       });
       try {
         const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        // A switched-off feature never reaches a PIN check, so a wrong PIN is never a lockout
+        // strike for it. The domain re-checks the switch inside the sale transaction.
+        if (!(await readBillDiscountEnabled(ctx.db as unknown as ScopedDb, scope.organizationId)))
+          throw new PharmacySaleError('BILL_DISCOUNT_OFF');
         const removal =
           input.discount.kind === 'PERCENT' ? input.discount.bps === 0 : input.discount.minor === 0;
         // #520: PINs are verified before the sale transaction takes a connection.
