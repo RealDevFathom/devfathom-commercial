@@ -127,12 +127,14 @@ function command(originalSaleAt: string) {
   });
 }
 
-function db(timezone: string | null) {
+function db(timezone: string | null, businessDayEndsAtHistory = 0) {
   return {
     $queryRaw: vi.fn(async () => []),
     organization: {
       findUnique: vi.fn(async () => (timezone === null ? null : { timezone })),
     },
+    // DEV-958A: the branch's "day ends at" hour; 0 (midnight) unless a test sets it.
+    pharmacyBranch: { findFirst: vi.fn(async () => ({ businessDayEndsAtHistory })) },
     pharmacyInventoryLot: {
       findMany: vi.fn(async () => [{ id: 'lot_1', batch: { state: 'ACTIVE' } }]),
     },
@@ -259,6 +261,32 @@ describe('DEV-944 offline replay books on the shop day of the sale', () => {
       router.counterReplaySchema.safeParse({ ...body, timeZone: 'Asia/Karachi' }).success
     ).toBe(false);
   });
+});
+
+describe('DEV-958A offline replay books on the branch business day', () => {
+  it.each([
+    // 23:30, 00:30 and 05:30 in Karachi on the night of 1 to 2 Nov.
+    ['2026-11-01T18:30:00.000Z', 0, '2026-11-01'],
+    ['2026-11-01T19:30:00.000Z', 0, '2026-11-02'],
+    ['2026-11-02T00:30:00.000Z', 0, '2026-11-02'],
+    ['2026-11-01T18:30:00.000Z', 5, '2026-11-01'],
+    // The late shift: 00:30 at a branch whose day ends at 05:00 is still 1 Nov, its drawer.
+    ['2026-11-01T19:30:00.000Z', 5, '2026-11-01'],
+    ['2026-11-02T00:30:00.000Z', 5, '2026-11-02'],
+  ])(
+    'books a sale signed at %s at a branch ending its day at %s:00 on %s',
+    async (soldAt, hour, day) => {
+      const target = db('Asia/Karachi', hour);
+      await replay(target, command(soldAt));
+      expect(target.pharmacyBranch.findFirst).toHaveBeenCalledWith({
+        where: { organizationId: 'org_a', id: 'branch_a' },
+        select: { businessDayEndsAtHistory: true },
+      });
+      const booked = bookedDay(target);
+      expect(booked.tender).toBe(`${day}T00:00:00.000Z`);
+      expect(new Set(booked.lockKeys)).toEqual(new Set([`org_a:branch_a:${day}`]));
+    }
+  );
 });
 
 function bookedDayLocks(target: ScopedDb) {

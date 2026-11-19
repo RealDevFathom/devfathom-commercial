@@ -91,9 +91,14 @@ type SignerRow = {
   status: string;
 };
 
-async function signerRowDenial(
+/**
+ * The same rule for a member row already read (live, in the caller's transaction), so a caller
+ * that lists people does not read each again. Refill approval uses it too (DEV-962), so a
+ * refill cycle's approver and a prescription check's signer are decided by one rule.
+ */
+export async function rxReviewSignerRowDenial(
   db: ScopedDb,
-  row: SignerRow,
+  row: Omit<SignerRow, 'name'>,
   scope: { organizationId: string; branchId: string },
   now: Date
 ): Promise<RxReviewSignerRefusal | null> {
@@ -123,7 +128,7 @@ export async function rxReviewSignerDenial(
     select: SIGNER_SELECT,
   });
   if (!row) return 'NOT_MEMBER';
-  return signerRowDenial(db, row, input, now);
+  return rxReviewSignerRowDenial(db, row, input, now);
 }
 
 /**
@@ -163,7 +168,7 @@ export async function otherRxReviewSigners(
   for (const other of members) {
     if (other.id === scope.actorId) continue;
     // The same rule `decideReview` applies, read live.
-    if (await signerRowDenial(db, other, scope, now)) continue;
+    if (await rxReviewSignerRowDenial(db, other, scope, now)) continue;
     signers.push({ id: other.id, name: other.name });
   }
   return signers;

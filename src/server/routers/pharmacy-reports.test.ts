@@ -329,21 +329,41 @@ describe('pharmacy administrator report bootstrap (#434)', () => {
 describe('pharmacyReports.branches role scope (DEV-20)', () => {
   beforeEach(() => {
     vi.mocked(hasModule).mockReturnValue(true);
-    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.branchFindMany.mockResolvedValue([
+      { id: 'branch_1', name: 'Main', businessDayEndsAtHistory: [] },
+    ]);
   });
 
   it('gives an operational-report holder every active branch of the organization', async () => {
     mocks.can.mockImplementation(async (_subject, action) => action === 'reports:operational');
     await expect(caller().branches()).resolves.toEqual({
       organizationId: 'org_1',
-      branches: [{ id: 'branch_1', name: 'Main' }],
+      branches: [{ id: 'branch_1', name: 'Main', businessDayEndsAtHistory: [] }],
     });
     expect(mocks.branchFindMany).toHaveBeenCalledWith({
       where: { organizationId: 'org_1', active: true },
       orderBy: { name: 'asc' },
-      select: { id: true, name: true },
+      select: { id: true, name: true, businessDayEndsAtHistory: true },
     });
     expect(mocks.assignmentFindMany).not.toHaveBeenCalled();
+  });
+
+  it('sends each branch day-end change as a day and an hour, never the member who made it', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'reports:operational');
+    mocks.branchFindMany.mockResolvedValue([
+      {
+        id: 'branch_1',
+        name: 'Main',
+        businessDayEndsAtHistory: [
+          { from: '2026-11-20', hour: 5, actorId: 'user_owner', at: '2026-11-18T18:30:00.000Z' },
+        ],
+      },
+    ]);
+    const result = await caller().branches();
+    expect(result.branches).toEqual([
+      { id: 'branch_1', name: 'Main', businessDayEndsAtHistory: [{ from: '2026-11-20', hour: 5 }] },
+    ]);
+    expect(JSON.stringify(result)).not.toContain('user_owner');
   });
 
   it.each(['cashier', 'pharmacist', 'procurement manager'])(
@@ -353,7 +373,7 @@ describe('pharmacyReports.branches role scope (DEV-20)', () => {
       mocks.assignmentFindMany.mockResolvedValue([{ branchId: 'branch_1' }]);
       await expect(caller('EMPLOYEE').branches()).resolves.toEqual({
         organizationId: 'org_1',
-        branches: [{ id: 'branch_1', name: 'Main' }],
+        branches: [{ id: 'branch_1', name: 'Main', businessDayEndsAtHistory: [] }],
       });
       expect(mocks.assignmentFindMany).toHaveBeenCalledWith({
         where: { organizationId: 'org_1', userId: 'user_admin', active: true },
@@ -362,7 +382,7 @@ describe('pharmacyReports.branches role scope (DEV-20)', () => {
       expect(mocks.branchFindMany).toHaveBeenCalledWith({
         where: { organizationId: 'org_1', active: true, id: { in: ['branch_1'] } },
         orderBy: { name: 'asc' },
-        select: { id: true, name: true },
+        select: { id: true, name: true, businessDayEndsAtHistory: true },
       });
     }
   );
@@ -414,7 +434,9 @@ describe('Reports supplier filter names', () => {
   beforeEach(() => {
     mocks.can.mockResolvedValue(true);
     vi.mocked(hasModule).mockReturnValue(true);
-    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.branchFindMany.mockResolvedValue([
+      { id: 'branch_1', name: 'Main', businessDayEndsAtHistory: [] },
+    ]);
     mocks.supplierFindMany.mockResolvedValue([{ id: 'sup1', name: 'Acme Distribution' }]);
   });
   afterEach(() => {
@@ -449,8 +471,8 @@ describe('pharmacy owner digest capability boundary', () => {
   it('allows an owner with reports:financial and passes only active tenant branches', async () => {
     mocks.can.mockResolvedValue(true);
     mocks.branchFindMany.mockResolvedValue([
-      { id: 'branch_2', name: 'Second' },
-      { id: 'branch_1', name: 'Main' },
+      { id: 'branch_2', name: 'Second', businessDayEndsAtHistory: [] },
+      { id: 'branch_1', name: 'Main', businessDayEndsAtHistory: [] },
     ]);
     mocks.comparisonRead.mockResolvedValue({ rows: [] });
 
@@ -467,14 +489,14 @@ describe('pharmacy owner digest capability boundary', () => {
     expect(mocks.branchFindMany).toHaveBeenCalledWith({
       where: { organizationId: 'org_1', active: true },
       orderBy: { name: 'asc' },
-      select: { id: true, name: true },
+      select: { id: true, name: true, businessDayEndsAtHistory: true },
     });
     expect(mocks.comparisonRead).toHaveBeenCalledWith(
       mocks.comparisonTx,
       expect.objectContaining({
         branches: [
-          { id: 'branch_2', name: 'Second' },
-          { id: 'branch_1', name: 'Main' },
+          { id: 'branch_2', name: 'Second', businessDayEndsAtHistory: [] },
+          { id: 'branch_1', name: 'Main', businessDayEndsAtHistory: [] },
         ],
         from: '2026-10-01',
         to: '2026-10-07',

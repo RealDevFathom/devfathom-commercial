@@ -7,6 +7,9 @@
  * Skipped unless TEST_DATABASE_URL is set.
  */
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+
+import pg from 'pg';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
@@ -18,6 +21,8 @@ const databaseUrl = process.env.TEST_DATABASE_URL;
 if (databaseUrl) process.env.DATABASE_URL = databaseUrl;
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 const describeIfDatabase = databaseUrl ? describe : describe.skip;
+const ownerUrl = process.env.PHARMACY_TEST_OWNER_DATABASE_URL;
+const describeIfOwner = databaseUrl && ownerUrl ? describe : describe.skip;
 
 vi.mock('@/server/audit', async () => {
   const actual = await vi.importActual<typeof import('@/server/audit')>('@/server/audit');
@@ -88,6 +93,7 @@ const lines = {
   retried: '',
   fullCompletion: '',
   concurrent: '',
+  legacy: '',
 };
 
 function act<T>(userId: string, run: (api: SalesCaller, db: ScopedDb) => Promise<T>) {
@@ -416,6 +422,7 @@ beforeAll(async () => {
       'fullCompletion',
       'retried',
       'concurrent',
+      'legacy',
     ] as const) {
       lines[name] = await prescriptionLine(tx, ids.org, {
         ...forAyesha,
@@ -626,6 +633,8 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
       quantityCanonicalUnits: 10,
       dispensedByUserId: ids.pharmacist,
       idempotencyKey: `rx-reference:${added.saleLineId}`,
+      // DEV-962: the fill records the branch that dispensed it.
+      branchId: ids.branch,
     });
   });
 
@@ -685,6 +694,7 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
     expect(state.fill).toMatchObject({
       quantityCanonicalUnits: 10,
       idempotencyKey: `rx-reference:${added.saleLineId}`,
+      branchId: ids.branch,
     });
   });
 
@@ -728,6 +738,79 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
     });
   });
 });
+
+describeIfOwner(
+  'DEV-962 dispensing-branch backfill of counter fills (as the migration owner)',
+  () => {
+    it('gives an older counter fill its sale line’s branch and leaves a hand-recorded fill unknown', async () => {
+      const saleId = await newSale(ids.pharmacist);
+      const added = await act(ids.pharmacist, (api) =>
+        api.addLine(line(saleId, rx, withReference(lines.legacy)))
+      );
+      // A second branch, so only the sale line can prove where the fill was dispensed.
+      await withTenantDb(ids.org, (tx) =>
+        tx.pharmacyBranch.create({
+          data: {
+            id: `${ids.branch}_second`,
+            code: `R962-${suffix}`,
+            name: 'DEV-962 second branch',
+            addressLine: '2 Mall Road',
+            city: 'Lahore',
+            provinceCode: 'PB',
+          },
+        })
+      );
+      // Fills as they were written before DEV-962: no branch.
+      const [counterFill, handFill] = await withTenantDb(
+        ids.org,
+        async (tx) => [
+          await tx.prescriptionFill.create({
+            data: {
+              prescriptionLineId: lines.legacy,
+              fillSequence: 1,
+              quantityCanonicalUnits: 5,
+              dispensedByUserId: ids.pharmacist,
+              idempotencyKey: `rx-reference:${added.line.id}`,
+            },
+          }),
+          await tx.prescriptionFill.create({
+            data: {
+              prescriptionLineId: lines.legacy,
+              fillSequence: 2,
+              quantityCanonicalUnits: 5,
+              dispensedByUserId: ids.pharmacist,
+              idempotencyKey: `hand-${suffix}`,
+            },
+          }),
+        ],
+        { userId: ids.pharmacist }
+      );
+      expect([counterFill.branchId, handFill.branchId]).toEqual([null, null]);
+      const owner = new pg.Client({ connectionString: ownerUrl });
+      await owner.connect();
+      try {
+        await owner.query(
+          readFileSync(
+            'prisma/migrations/20261118125700_pharmacy_prescription_fill_dispensing_branch/migration.sql',
+            'utf8'
+          )
+        );
+      } finally {
+        await owner.end();
+      }
+      const stored = await withTenantDb(ids.org, (tx) =>
+        tx.prescriptionFill.findMany({
+          where: { id: { in: [counterFill.id, handFill.id] } },
+          select: { id: true, branchId: true },
+        })
+      );
+      expect(Object.fromEntries(stored.map((fill) => [fill.id, fill.branchId]))).toEqual({
+        [counterFill.id]: ids.branch,
+        [handFill.id]: null,
+      });
+    });
+  }
+);
 
 describeIfDatabase('[DEF-10] counter API replay (DEV-874)', () => {
   it.each(['ordinary', 'prescription'])(

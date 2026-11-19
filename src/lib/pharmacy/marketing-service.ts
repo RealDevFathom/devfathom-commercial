@@ -2,7 +2,8 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
+import { workspaceTimezone } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import { z } from 'zod';
 import { lockCustomerConsent } from './consent-writer';
 import { readTenantMedicineNames } from './medicine-names';
@@ -312,7 +313,7 @@ export async function marketingConsent(
   const birth = customer.patient.dateOfBirth;
   if (birth) {
     // Age turns over on the workspace's calendar day (PKT), not UTC's.
-    const [year, month, day] = workspaceToday(scope.timezone, now).split('-').map(Number);
+    const [year, month, day] = pharmacyCalendarDay(scope.timezone, now).split('-').map(Number);
     const birthdayPending =
       month - 1 < birth.getUTCMonth() ||
       (month - 1 === birth.getUTCMonth() && day < birth.getUTCDate());

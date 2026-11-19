@@ -21,7 +21,14 @@ import { can, subjectFromSession } from '@/lib/abac';
 import { isModuleGranted } from '@/lib/module-catalog';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { pharmacyReportKpiFlags } from '@/lib/pharmacy/report-kpi-flags';
-import { workspaceDateRange, workspaceToday, workspaceZoneLabel } from '@/lib/timezone';
+import {
+  pharmacyBranchDayEndsField,
+  pharmacyBranchDaysDiffer,
+  pharmacyBusinessDay,
+  pharmacyBusinessDayRange,
+  sharedPharmacyDayEnd,
+} from '@/lib/pharmacy/business-day';
+import { workspaceZoneLabel } from '@/lib/timezone';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { pharmacySalesRouter } from '@/server/routers/pharmacy-sales';
 import { createTRPCContext } from '@/server/trpc';
@@ -174,17 +181,26 @@ export default async function PharmacyReportsPage({
   };
   // The owner's business day: the workspace zone, not UTC (00:00–04:59 PKT is still "today").
   const timeZone = ctx.organization?.timezone;
-  const today = workspaceToday(timeZone);
-  const fromDate = new Date(`${today}T00:00:00.000Z`);
-  fromDate.setUTCDate(fromDate.getUTCDate() - 6);
-  const from = value(query.from) ?? fromDate.toISOString().slice(0, 10);
-  const to = value(query.to) ?? today;
-  const invalidRange = !validDate(from) || !validDate(to) || from > to;
   const branch =
     value(query.branch) ??
     (query.branch === undefined && branchResult.branches.length === 1
       ? branchResult.branches[0]?.id
       : undefined);
+  // DEV-958A: the default dates are the chosen branch's business days (the branches' shared
+  // days when none is chosen, else the organisation's calendar days); every report itself
+  // reads each branch on its own business days.
+  const sharedDayEnd = sharedPharmacyDayEnd(
+    branchResult.branches
+      .filter((item) => !branch || item.id === branch)
+      .map((item) => item.businessDayEndsAtHistory)
+  );
+  const clock = { timeZone, dayEnd: sharedDayEnd.dayEnd };
+  const today = pharmacyBusinessDay(clock);
+  const fromDate = new Date(`${today}T00:00:00.000Z`);
+  fromDate.setUTCDate(fromDate.getUTCDate() - 6);
+  const from = value(query.from) ?? fromDate.toISOString().slice(0, 10);
+  const to = value(query.to) ?? today;
+  const invalidRange = !validDate(from) || !validDate(to) || from > to;
   const section = value(query.section);
   const supplier = value(query.supplier);
   let suppliers: Awaited<ReturnType<typeof caller.suppliers>> | null = null;
@@ -286,7 +302,7 @@ export default async function PharmacyReportsPage({
       // Event timestamps: bound the selected business dates on the workspace clock.
       demand = await pharmacySalesRouter.createCaller(ctx).demandAggregate({
         branchId: branch,
-        ...workspaceDateRange(from, to, timeZone),
+        ...pharmacyBusinessDayRange(from, to, clock),
       });
     } catch (error) {
       // A counter DENY or a branch outside the manager's assignment is a refusal, not a failure.
@@ -617,6 +633,28 @@ export default async function PharmacyReportsPage({
             {screenCopy.reports.applyFilters}
           </Button>
         </form>
+        {!invalidRange &&
+        pharmacyBranchDaysDiffer(
+          from,
+          to,
+          branchResult.branches
+            .filter((item) => !branch || item.id === branch)
+            .map((item) => item.id),
+          {
+            timeZone,
+            ...pharmacyBranchDayEndsField(
+              branchResult.branches.map((item) => ({
+                id: item.id,
+                dayEnd: item.businessDayEndsAtHistory,
+              }))
+            ),
+          }
+        ) ? (
+          <p className="mt-4 text-sm text-text-muted" role="note">
+            These branches end their days at different hours: each day here adds up each
+            branch&apos;s own business day.
+          </p>
+        ) : null}
       </SectionCard>
       {result ? (
         <SectionCard
