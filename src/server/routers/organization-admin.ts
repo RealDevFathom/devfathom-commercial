@@ -21,6 +21,11 @@ import { annotateAudit } from '@/server/audit';
 import { adminProcedure, protectedProcedure, router } from '@/server/trpc';
 import { readUploadRegistryReport } from '@/lib/uploads/registry-report';
 import { readPharmacyMemberAccess } from '@/lib/team/member-access';
+import {
+  applyPharmacyMemberRoleTemplate,
+  readPharmacyMemberTicking,
+  setPharmacyMemberSubRole,
+} from '@/lib/team/member-sub-role-edit';
 
 const optionalUrl = z
   .union([z.url().max(2_000), z.literal('')])
@@ -54,6 +59,23 @@ const SCIM_TOKEN_FIELDS = {
   revokedAt: true,
   createdAt: true,
 } as const;
+
+/** DEV-959A/B: sub-roles exist for pharmacies only until the other business types get theirs. */
+function assertPharmacySubRoles(ctx: { entitlements: { vertical?: string | null } }) {
+  if (ctx.entitlements.vertical !== 'PHARMACY') {
+    throw new TRPCError({
+      code: 'PRECONDITION_FAILED',
+      message: 'Sub-roles are available for pharmacies only.',
+    });
+  }
+}
+
+function supportSession(ctx: {
+  support?: unknown;
+  session?: { user?: { isSupportSession?: boolean } } | null;
+}): boolean {
+  return Boolean(ctx.support || ctx.session?.user?.isSupportSession);
+}
 
 function occupiesSeat(status: string): boolean {
   return (OCCUPIED_SEAT_STATUSES as readonly string[]).includes(status);
@@ -196,13 +218,70 @@ export const organizationAdminRouter = router({
   memberAccess: adminProcedure
     .input(z.object({ userId: z.string().trim().min(1).max(128) }))
     .query(async ({ ctx, input }) => {
-      if (ctx.entitlements.vertical !== 'PHARMACY') {
-        throw new TRPCError({
-          code: 'PRECONDITION_FAILED',
-          message: 'Sub-roles are available for pharmacies only.',
-        });
-      }
-      return readPharmacyMemberAccess(ctx.db, organizationId(ctx), input.userId);
+      assertPharmacySubRoles(ctx);
+      const access = await readPharmacyMemberAccess(ctx.db, organizationId(ctx), input.userId);
+      // DEV-959B: what the viewer may change for this person; every write re-checks.
+      const ticking = await readPharmacyMemberTicking(ctx.db, {
+        organizationId: organizationId(ctx),
+        actorId: ctx.session.user.id,
+        targetId: input.userId,
+        supportSession: supportSession(ctx),
+      });
+      return { ...access, ticking };
+    }),
+
+  /**
+   * DEV-959B: tick or untick one sub-role for one pharmacy member. Stored as a personal
+   * exception on top of their role; see `member-sub-role-edit.ts` for every rule enforced.
+   */
+  setMemberSubRole: adminProcedure
+    .input(
+      z
+        .object({
+          userId: z.string().trim().min(1).max(128),
+          subRoleKey: z.string().trim().min(1).max(64),
+          ticked: z.boolean(),
+          pin: z.string().min(1).max(64).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      // The PIN never reaches the request audit row; the change writes its own.
+      annotateAudit(ctx, { skipInput: true, targetType: 'User', targetId: input.userId });
+      assertPharmacySubRoles(ctx);
+      return setPharmacyMemberSubRole(ctx.db, {
+        organizationId: organizationId(ctx),
+        actorId: ctx.session.user.id,
+        targetId: input.userId,
+        supportSession: supportSession(ctx),
+        subRoleKey: input.subRoleKey,
+        ticked: input.ticked,
+        pin: input.pin ?? null,
+      });
+    }),
+
+  /** DEV-959B: start a pharmacy member from a ready-made role, clearing their sub-role ticks. */
+  applyMemberRoleTemplate: adminProcedure
+    .input(
+      z
+        .object({
+          userId: z.string().trim().min(1).max(128),
+          roleKey: z.string().trim().min(1).max(64),
+          pin: z.string().min(1).max(64).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, { skipInput: true, targetType: 'User', targetId: input.userId });
+      assertPharmacySubRoles(ctx);
+      return applyPharmacyMemberRoleTemplate(ctx.db, {
+        organizationId: organizationId(ctx),
+        actorId: ctx.session.user.id,
+        targetId: input.userId,
+        supportSession: supportSession(ctx),
+        roleKey: input.roleKey,
+        pin: input.pin ?? null,
+      });
     }),
 
   upsertDepartment: adminProcedure

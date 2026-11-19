@@ -246,7 +246,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'search-counter-patients-open',
-        text: 'Search counter patients and open their masked patient panel',
+        text: 'Search counter patients and open their masked patient panel, at every branch',
         sites: { 'src/server/routers/pharmacy-prescriptions.ts': 1 },
       },
       {
@@ -931,7 +931,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'see-stock-cost-value',
-        text: 'See stock cost and value at risk on the expiry board',
+        text: "See each lot's value at risk, and the value at risk in each expiry window, on the expiry board's lot list (the near-expiry summary shows value at risk by window to anyone assigned to that branch, with or without this)",
         sites: { 'src/server/routers/pharmacy-inventory.ts': 1 },
       },
       {

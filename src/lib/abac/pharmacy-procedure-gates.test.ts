@@ -12,6 +12,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
+import { enforcedProcedureGate } from '@/server/procedure-gate-tag';
+import { PHARMACY_PROCEDURE_ENFORCED_GATES } from './pharmacy-procedure-enforced-gates';
 import { PHARMACY_PROCEDURE_GATES } from './pharmacy-procedure-gates';
 import { PHARMACY_SUB_ROLES } from './pharmacy-sub-roles';
 
@@ -80,5 +82,97 @@ describe('every pharmacy procedure is explained by a sub-role or a reason', () =
         expect(uses > 0 || referenced.has(id), id).toBe(true);
       }
     }
+  });
+});
+
+type ProcedureLike = Parameters<typeof enforcedProcedureGate>[0];
+
+/** Every pharmacy procedure object, by path, from the same routers as above. */
+async function pharmacyProcedureObjects(): Promise<Map<string, ProcedureLike>> {
+  const { appRouter } = await import('@/server/routers/_app');
+  const all = (appRouter as unknown as RouterLike)._def.procedures;
+  const found = new Map<string, ProcedureLike>();
+  for (const [path, procedure] of Object.entries(all))
+    if (path.startsWith('pharmacy')) found.set(path, procedure as ProcedureLike);
+  for (const [prefix, load, name] of STANDALONE_ROUTERS) {
+    const mod = (await load()) as unknown as Record<string, RouterLike>;
+    for (const [key, procedure] of Object.entries(mod[name]._def.procedures))
+      found.set(`${prefix}.${key}`, procedure as ProcedureLike);
+  }
+  return found;
+}
+
+/**
+ * What a map line's gate text says the procedure is built on: base builders, an explicit
+ * `capabilityProcedure('action')`, or `meta NAME -> action AND action`. Each named gate must
+ * be one the code really enforces.
+ */
+function claimedGate(text: string): string[] {
+  const claims = new Set<string>();
+  if (/\badminProcedure\b/.test(text)) claims.add('admin:access');
+  if (/\b(?:protectedProcedure|auditedProtectedProcedure)\b/.test(text)) claims.add('signed-in');
+  for (const match of text.matchAll(/\bcapabilityProcedure\('([a-z-]+:[a-zA-Z-]+)'\)/g))
+    claims.add(match[1]);
+  const meta = /^meta [A-Z_]+ -> ([a-z-]+:[a-zA-Z-]+(?: AND [a-z-]+:[a-zA-Z-]+)*)/.exec(text);
+  for (const action of meta?.[1].split(' AND ') ?? []) claims.add(action);
+  return [...claims];
+}
+
+describe('DEV-959B: the gate each pharmacy procedure enforces matches the map', () => {
+  it('derives every procedure gate from the code and finds it unchanged', async () => {
+    const procedures = await pharmacyProcedureObjects();
+    const derived = Object.fromEntries(
+      [...procedures].map(([path, procedure]) => [path, enforcedProcedureGate(procedure)])
+    );
+    // A weaker builder (adminProcedure -> protectedProcedure, a capability dropped from
+    // .meta) changes the derived gate; update PHARMACY_PROCEDURE_ENFORCED_GATES in review.
+    expect(derived).toEqual(
+      Object.fromEntries(
+        Object.entries(PHARMACY_PROCEDURE_ENFORCED_GATES).map(([path, gate]) => [path, [...gate]])
+      )
+    );
+    expect(Object.keys(PHARMACY_PROCEDURE_ENFORCED_GATES).sort()).toEqual(
+      Object.keys(PHARMACY_PROCEDURE_GATES).sort()
+    );
+  }, 120_000);
+
+  it('never names a gate in the map that the code does not enforce', () => {
+    let claimed = 0;
+    for (const [path, entry] of Object.entries(PHARMACY_PROCEDURE_GATES)) {
+      const enforced = PHARMACY_PROCEDURE_ENFORCED_GATES[path] ?? [];
+      for (const gate of claimedGate(entry.gate)) {
+        claimed += 1;
+        expect(enforced, `${path} claims ${gate}`).toContain(gate);
+      }
+    }
+    // Most lines name their builder; the check must keep reading them.
+    expect(claimed).toBeGreaterThan(250);
+  });
+
+  it('reads a tagged gate from a built procedure, and a weaker builder reads weaker', async () => {
+    const { adminProcedure, capabilityProcedure, denyByDefaultProcedure, protectedProcedure } =
+      await import('@/server/trpc');
+    const resolve = async () => null;
+    expect(
+      enforcedProcedureGate(adminProcedure.query(resolve) as unknown as ProcedureLike)
+    ).toEqual(['admin:access']);
+    expect(
+      enforcedProcedureGate(protectedProcedure.query(resolve) as unknown as ProcedureLike)
+    ).toEqual(['signed-in']);
+    expect(
+      enforcedProcedureGate(
+        capabilityProcedure('pharmacy:counter').query(resolve) as unknown as ProcedureLike
+      )
+    ).toEqual(['pharmacy:counter']);
+    expect(
+      enforcedProcedureGate(
+        denyByDefaultProcedure
+          .meta({ capabilities: ['pharmacy:procurement', 'reports:financial'] })
+          .query(resolve) as unknown as ProcedureLike
+      )
+    ).toEqual(['pharmacy:procurement', 'reports:financial']);
+    expect(
+      enforcedProcedureGate(denyByDefaultProcedure.query(resolve) as unknown as ProcedureLike)
+    ).toEqual(['refused']);
   });
 });
