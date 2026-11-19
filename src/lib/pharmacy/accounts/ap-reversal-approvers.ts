@@ -12,8 +12,9 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  * The solo rule is the card-terminal review's (`otherCardTerminalReviewers`): someone counts only
  * if they hold an unrevoked own PIN on an active profile, pass this branch's operator gate and
  * hold `pharmacy:manage`. On top of that, a reversal runs through the AP router, which only an
- * owner-level (ADMIN) user with `finance:read` can reach, so a manager who could never open this
- * screen does not count either: counting them would leave the solo owner with nobody to ask.
+ * owner-level (ADMIN) user with `admin:access` and `finance:read` can reach, so a manager who
+ * could never open this screen does not count either: counting them would leave the solo owner
+ * with nobody to ask.
  */
 export async function otherApReversalApprovers(
   db: ScopedDb,
@@ -35,12 +36,13 @@ export async function otherApReversalApprovers(
   const approvers: { id: string; name: string | null }[] = [];
   for (const user of users) {
     if (user.id === scope.actorId) continue;
+    // Both gates the reversal procedures apply: `adminProcedure` (admin:access) and
+    // `authorizeGeneralJournal` (finance:read). Someone denied either could never approve.
+    const subject = subjectFromSession(user);
+    const options = { db, now, source: 'TRPC' as const };
     if (
-      !(await can(subjectFromSession(user), 'finance:read', undefined, {
-        db,
-        now,
-        source: 'TRPC',
-      }))
+      !(await can(subject, 'admin:access', undefined, options)) ||
+      !(await can(subject, 'finance:read', undefined, options))
     )
       continue;
     approvers.push({ id: user.id, name: user.name });
