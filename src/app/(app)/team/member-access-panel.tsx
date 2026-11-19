@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/dialog';
 import { Eyebrow } from '@/components/ui/eyebrow';
 import { Skeleton } from '@/components/ui/skeleton';
+import { SIGNIN_ALLOWED_STATUSES } from '@/lib/auth/constants';
 import { trpc } from '@/lib/trpc';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
@@ -117,9 +118,9 @@ export function MemberAccessView(access: {
     <div className="space-y-4">
       <div className="space-y-1 text-sm">
         <p className="text-foreground">{roleSummary(member)}</p>
-        {member.status !== 'ACTIVE' ? (
+        {!SIGNIN_ALLOWED_STATUSES.has(member.status) ? (
           <p className="text-text-muted">
-            {member.name} is not active, so they cannot sign in to use any of this now.
+            {member.name} cannot sign in right now, so they cannot use any of this.
           </p>
         ) : null}
         <p className="text-text-muted">{MEMBER_ACCESS_READ_ONLY_NOTE}</p>

@@ -84,7 +84,24 @@ describe('what this person can do', () => {
     });
     render(<MemberAccessPanel userId="u_1" />);
     expect(screen.getByText('Night shift (custom role), plus 2 personal exceptions')).toBeVisible();
-    expect(screen.getByText(/Ayesha is not active/)).toBeVisible();
+    expect(screen.getByText(/Ayesha cannot sign in right now/)).toBeVisible();
+  });
+
+  it.each(['ACTIVE', 'ON_LEAVE'])(
+    'says nothing about sign-in for a %s person, who can sign in',
+    (status) => {
+      loaded([], { status });
+      render(<MemberAccessPanel userId="u_1" />);
+      expect(screen.queryByText(/cannot sign in/)).toBeNull();
+    }
+  );
+
+  it.each(['INACTIVE', 'INVITED'])('says a %s person cannot sign in', (status) => {
+    loaded([], { status });
+    render(<MemberAccessPanel userId="u_1" />);
+    expect(
+      screen.getByText('Ayesha cannot sign in right now, so they cannot use any of this.')
+    ).toBeVisible();
   });
 
   it('shows loading, then an error that says nothing changed and can be retried', () => {
