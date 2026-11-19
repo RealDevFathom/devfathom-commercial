@@ -382,7 +382,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'sign-own-line-alone',
-        text: "See which lines on a bill still wait for a pharmacist's signature, and sign a non-controlled line they rang up themselves with a fresh PIN when no other pharmacist at the branch can",
+        text: "See which lines on a bill still wait for a pharmacist's signature, and sign a non-controlled line they rang up themselves with a fresh PIN when no other pharmacist at the branch can, or, where the owner turned on One pharmacist per shift, when they declare they are the only pharmacist on duty",
         sites: {},
       },
     ],

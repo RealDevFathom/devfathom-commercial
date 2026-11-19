@@ -1297,6 +1297,22 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'adminProcedure + live organization owner',
     none: 'owner only',
   },
+  'pharmacyRxSoloShift.declaredSignOffs': {
+    gate: 'auditedProtectedProcedure + ownerOnly (isPharmacistCheckPolicyOwner), no support session',
+    none: 'owner only',
+  },
+  'pharmacyRxSoloShift.history': {
+    gate: 'auditedProtectedProcedure + ownerOnly (isPharmacistCheckPolicyOwner), no support session',
+    none: 'owner only',
+  },
+  'pharmacyRxSoloShift.overview': {
+    gate: 'protectedProcedure; settings only for the owner (isPharmacistCheckPolicyOwner), no support session',
+    none: 'owner only (anyone else is told only that they may not see it)',
+  },
+  'pharmacyRxSoloShift.setPolicy': {
+    gate: "protectedProcedure + isPharmacistCheckPolicyOwner + the owner's fresh PIN, no support session",
+    none: 'owner only, with a fresh PIN',
+  },
   'pharmacyPrescriptions.capture': {
     gate: 'fileProcedure: pharmacy-dispensing module + pharmacy:prescriptions (dispense rules alias in; tenant-admin fallback); own uploaded photo only',
     lines: [
