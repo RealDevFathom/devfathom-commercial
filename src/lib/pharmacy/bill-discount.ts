@@ -96,6 +96,18 @@ export class BillDiscountRefused extends Error {
   }
 }
 
+/**
+ * DEV-966: whether a line's whole-bill share is held by a prepaid tier share priced on top of it.
+ * The tier priced the line after the bill share (a cash-on-delivery bill is priced when the rider
+ * collects, before any tender), so the bill share can no longer be cleared, changed or removed:
+ * the database refuses it, and the service refuses it first in words.
+ */
+export function billShareHeldByTier(
+  line: Pick<BillDiscountLine, 'billDiscountMinor' | 'tierDiscountMinor'>
+) {
+  return (line.billDiscountMinor ?? 0) > 0 && (line.tierDiscountMinor ?? 0) !== 0;
+}
+
 /** The line's discount before any bill share: what its own rule gave it, plus any tier share. */
 function ownDiscountMinor(line: BillDiscountLine) {
   return line.discountMinor - (line.billDiscountMinor ?? 0);

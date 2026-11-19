@@ -1000,32 +1000,149 @@ describe('DEV-103 apReversalAuditRecorderId', () => {
 
 describe('DEV-103 searchApReversals', () => {
   const scope = { organizationId: 'org_1', branchId: 'branch_1' };
-  const rows = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `inv_${i}` }));
-  const search = async (input: Parameters<typeof searchApReversals>[2], found = rows(0)) => {
+  const dated = new Date('2026-09-01T00:00:00.000Z');
+  const rows = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      id: `inv_${String(i).padStart(2, '0')}`,
+      invoiceDate: dated,
+    }));
+  const search = async (
+    input: Parameters<typeof searchApReversals>[2],
+    found = rows(0),
+    beyond: { id: string } | null = null
+  ) => {
     const findMany = vi.fn().mockResolvedValue(found);
-    const db = { pharmacyApInvoice: { findMany } } as unknown as ScopedDb;
+    const findFirst = vi.fn().mockResolvedValue(beyond);
+    const db = { pharmacyApInvoice: { findMany, findFirst } } as unknown as ScopedDb;
     const result = await searchApReversals(db, scope, input, 'Asia/Karachi');
-    return { result, args: findMany.mock.calls[0]![0] };
+    return { result, args: findMany.mock.calls[0]![0], findFirst };
   };
+  const matching = { organizationId: 'org_1', branchId: 'branch_1', status: 'POSTED' };
+  const cursor = { invoiceDate: '2026-09-05T00:00:00.000Z', id: 'inv_cursor' };
+  const at = new Date(cursor.invoiceDate);
 
   it('reads posted invoices of this tenant and branch only, in a stable order', async () => {
-    const { args } = await search({ page: 1 });
-    expect(args.where).toEqual({ organizationId: 'org_1', branchId: 'branch_1', status: 'POSTED' });
+    const { args, findFirst } = await search({});
+    expect(args.where).toEqual(matching);
     expect(args.orderBy).toEqual([{ invoiceDate: 'desc' }, { id: 'asc' }]);
     expect(args.include).toEqual({
       settlements: { orderBy: [{ paidAt: 'asc' }, { id: 'asc' }] },
     });
-    expect(args).toMatchObject({ skip: 0, take: 26 });
+    expect(args).toMatchObject({ take: 26 });
+    // DEV-967: never by position.
+    expect(args).not.toHaveProperty('skip');
+    expect(args).not.toHaveProperty('cursor');
+    expect(findFirst).not.toHaveBeenCalled();
   });
 
-  it('pages by 25 and reports an older page only when one exists', async () => {
-    const full = await search({ page: 3 }, rows(26));
-    expect(full.args).toMatchObject({ skip: 50, take: 26 });
+  it('pages by 25 from the newest page and names the row the older page starts after', async () => {
+    const full = await search({}, rows(26));
     expect(full.result.invoices).toHaveLength(25);
-    expect(full.result).toMatchObject({ page: 3, hasOlder: true });
-    const last = await search({ page: 3 }, rows(25));
+    expect(full.result).toMatchObject({
+      hasOlder: true,
+      hasNewer: false,
+      older: { invoiceDate: dated.toISOString(), id: 'inv_24' },
+      newer: null,
+    });
+    const last = await search({}, rows(25));
     expect(last.result.invoices).toHaveLength(25);
-    expect(last.result.hasOlder).toBe(false);
+    expect(last.result).toMatchObject({ hasOlder: false, older: null, newer: null });
+  });
+
+  it('DEV-967 reads the rows after an older cursor, by invoice date then id, never by offset', async () => {
+    const { args, result, findFirst } = await search({ older: cursor }, rows(26), { id: 'x' });
+    expect(args.where).toEqual({
+      AND: [
+        matching,
+        { OR: [{ invoiceDate: { lt: at } }, { invoiceDate: at, id: { gt: 'inv_cursor' } }] },
+      ],
+    });
+    expect(args.orderBy).toEqual([{ invoiceDate: 'desc' }, { id: 'asc' }]);
+    expect(args).not.toHaveProperty('skip');
+    expect(args).toMatchObject({ take: 26 });
+    // Whether anything is newer is asked one row before this page's first row, inside the scope.
+    expect(findFirst).toHaveBeenCalledWith({
+      where: {
+        AND: [
+          matching,
+          { OR: [{ invoiceDate: { gt: dated } }, { invoiceDate: dated, id: { lt: 'inv_00' } }] },
+        ],
+      },
+      select: { id: true },
+    });
+    expect(result).toMatchObject({
+      hasOlder: true,
+      hasNewer: true,
+      older: { invoiceDate: dated.toISOString(), id: 'inv_24' },
+      newer: { invoiceDate: dated.toISOString(), id: 'inv_00' },
+    });
+  });
+
+  it('DEV-967 reads the rows before a newer cursor nearest first and returns them in list order', async () => {
+    // Read toward the newest: the nearest row to the cursor comes back first.
+    const nearestFirst = rows(26).reverse();
+    const { args, result, findFirst } = await search({ newer: cursor }, nearestFirst, null);
+    expect(args.where).toEqual({
+      AND: [
+        matching,
+        { OR: [{ invoiceDate: { gt: at } }, { invoiceDate: at, id: { lt: 'inv_cursor' } }] },
+      ],
+    });
+    expect(args.orderBy).toEqual([{ invoiceDate: 'asc' }, { id: 'desc' }]);
+    expect(args).not.toHaveProperty('skip');
+    // The 25 nearest rows, in list order; a 26th means a newer page exists.
+    expect(result.invoices.map((row) => row.id)).toEqual(
+      nearestFirst
+        .slice(0, 25)
+        .reverse()
+        .map((row) => row.id)
+    );
+    expect(findFirst).toHaveBeenCalledWith({
+      where: {
+        AND: [
+          matching,
+          { OR: [{ invoiceDate: { lt: dated } }, { invoiceDate: dated, id: { gt: 'inv_25' } }] },
+        ],
+      },
+      select: { id: true },
+    });
+    expect(result).toMatchObject({
+      hasNewer: true,
+      hasOlder: false,
+      newer: { invoiceDate: dated.toISOString(), id: 'inv_01' },
+      older: null,
+    });
+  });
+
+  it('DEV-967 reports nothing either way on an empty turned page', async () => {
+    const { result, findFirst } = await search({ older: cursor }, rows(0), { id: 'x' });
+    expect(result).toMatchObject({
+      invoices: [],
+      hasOlder: false,
+      hasNewer: false,
+      older: null,
+      newer: null,
+    });
+    expect(findFirst).not.toHaveBeenCalled();
+  });
+
+  it('DEV-967 refuses a cursor each way', async () => {
+    await expect(search({ older: cursor, newer: cursor })).rejects.toMatchObject({
+      reason: 'INVALID_STATE',
+    });
+  });
+
+  it('DEV-967 matches percent, underscore and backslash as typed', async () => {
+    const { args } = await search({ payee: '100%_off\\', reference: 'a_b%' });
+    expect(args.where.AND).toEqual([
+      { payeeName: { contains: '100\\%\\_off\\\\', mode: 'insensitive' } },
+      {
+        OR: [
+          { reference: { contains: 'a\\_b\\%', mode: 'insensitive' } },
+          { supplierInvoiceRef: { contains: 'a\\_b\\%', mode: 'insensitive' } },
+        ],
+      },
+    ]);
   });
 
   it('applies every filter together, still inside the tenant and branch', async () => {
@@ -1035,7 +1152,6 @@ describe('DEV-103 searchApReversals', () => {
       amountMinor: 23_456,
       from: '2026-08-01',
       to: '2026-09-30',
-      page: 1,
     });
     expect(args.where).toMatchObject({
       organizationId: 'org_1',
@@ -1083,7 +1199,7 @@ describe('DEV-103 searchApReversals', () => {
   });
 
   it('leaves an open end of the day range open', async () => {
-    const { args } = await search({ from: '2026-08-01', page: 1 });
+    const { args } = await search({ from: '2026-08-01' });
     expect(args.where.AND).toEqual([
       {
         OR: [

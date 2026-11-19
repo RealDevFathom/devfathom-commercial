@@ -1143,7 +1143,13 @@ describe('pharmacyApInvoices router — invoice and payment reversal approval (D
 
 describe('DEV-103 pharmacyApInvoices.reversalSearch', () => {
   beforeEach(() => {
-    mocks.search.mockResolvedValue({ invoices: [], page: 1, hasOlder: false });
+    mocks.search.mockResolvedValue({
+      invoices: [],
+      hasOlder: false,
+      hasNewer: false,
+      older: null,
+      newer: null,
+    });
   });
 
   it('searches only the authorized tenant and branch, on the shop clock', async () => {
@@ -1156,7 +1162,7 @@ describe('DEV-103 pharmacyApInvoices.reversalSearch', () => {
       amountMinor: 23_456,
       from: '2026-08-01',
       to: '2026-09-30',
-      page: 2,
+      older: { invoiceDate: '2026-09-02T00:00:00.000Z', id: 'inv_9' },
     });
     expect(mocks.branchFindFirst).toHaveBeenCalledWith({
       where: { organizationId: 'org_1', id: 'branch_1', active: true },
@@ -1165,19 +1171,27 @@ describe('DEV-103 pharmacyApInvoices.reversalSearch', () => {
     expect(mocks.search).toHaveBeenCalledWith(
       expect.anything(),
       { organizationId: 'org_1', branchId: 'branch_1' },
-      expect.objectContaining({ amountMinor: 23_456, page: 2, from: '2026-08-01' }),
+      expect.objectContaining({
+        amountMinor: 23_456,
+        older: { invoiceDate: '2026-09-02T00:00:00.000Z', id: 'inv_9' },
+        from: '2026-08-01',
+      }),
       'Asia/Karachi'
     );
     expect(result).toMatchObject({
       scope: { organizationId: 'org_1', branchId: 'branch_1' },
-      page: 1,
       hasOlder: false,
+      hasNewer: false,
+      older: null,
+      newer: null,
     });
   });
 
-  it('defaults to the first page', async () => {
+  it('defaults to the newest page', async () => {
     await caller().reversalSearch({ branchId: 'branch_1' });
-    expect(mocks.search.mock.calls[0]![2]).toMatchObject({ page: 1 });
+    expect(mocks.search.mock.calls[0]![2]).not.toHaveProperty('older');
+    expect(mocks.search.mock.calls[0]![2]).not.toHaveProperty('newer');
+    expect(mocks.search.mock.calls[0]![2]).not.toHaveProperty('page');
   });
 
   it.each([
@@ -1207,6 +1221,16 @@ describe('DEV-103 pharmacyApInvoices.reversalSearch', () => {
   it.each([
     { page: 0 },
     { page: 401 },
+    { page: 2 },
+    { older: { invoiceDate: '2026-09-02', id: 'inv_9' } },
+    { older: { invoiceDate: 'not-a-date', id: 'inv_9' } },
+    { older: { invoiceDate: '2026-09-02T00:00:00.000Z', id: '' } },
+    { older: { invoiceDate: '2026-09-02T00:00:00.000Z', id: 'x'.repeat(129) } },
+    { older: { invoiceDate: '2026-09-02T00:00:00.000Z', id: 'inv_9', extra: 1 } },
+    {
+      older: { invoiceDate: '2026-09-02T00:00:00.000Z', id: 'inv_9' },
+      newer: { invoiceDate: '2026-09-02T00:00:00.000Z', id: 'inv_9' },
+    },
     { amountMinor: 0 },
     { amountMinor: 12.5 },
     { amountMinor: 1_000_000_000 },
