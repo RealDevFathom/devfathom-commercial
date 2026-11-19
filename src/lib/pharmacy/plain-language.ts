@@ -1,4 +1,5 @@
-import { formatWorkspaceDateTime, workspaceToday } from '@/lib/timezone';
+import { formatWorkspaceDateTime } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import { formatMinor } from './counter-receipt';
 
 /** Display copy only. Keys can be translated without changing report contracts or permissions. */
@@ -128,7 +129,7 @@ export function formatShopTime(
 ): string {
   if (!value || !Number.isFinite(new Date(value).getTime())) return PHARMACY_COPY.unavailable;
   const formatted = formatWorkspaceDateTime(value, timeZone);
-  if (workspaceToday(timeZone, new Date(value)) !== workspaceToday(timeZone, now)) return formatted;
+  if (pharmacyCalendarDay(timeZone, new Date(value)) !== pharmacyCalendarDay(timeZone, now)) return formatted;
   return `Today ${formatted.split(', ')[1]}`;
 }
 

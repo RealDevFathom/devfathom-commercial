@@ -2,7 +2,7 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { workspaceDateRange } from '@/lib/timezone';
+import { pharmacyCalendarDayRange } from './business-day';
 
 const DAY = 86_400_000;
 const QUERY_TIMEOUT_MS = 10_000;
@@ -32,13 +32,16 @@ export function validateRepeatFilters(
     !Number.isFinite(asOf.getTime()) ||
     asOf > now ||
     from > to ||
-    workspaceDateRange(input.to, input.to, timeZone).from > asOf ||
+    pharmacyCalendarDayRange(input.to, input.to, timeZone).from > asOf ||
     to.getTime() - from.getTime() >= 90 * DAY
   )
     throw new Error(
       'Use valid enrollment dates (maximum 90 days), ending on or before a nonfuture as-of cutoff, and 1–100 authorized branches.'
     );
-  const bounds = workspaceDateRange(input.from, input.to, timeZone);
+  // DEV-958A: a customer cohort, not a shop's day: enrollment days are the organisation's
+  // calendar days, whatever hour any branch's business day ends at, so a change at one branch
+  // never moves another's customers or a past cohort.
+  const bounds = pharmacyCalendarDayRange(input.from, input.to, timeZone);
   return { from: bounds.from, toExclusive: bounds.to, asOf };
 }
 

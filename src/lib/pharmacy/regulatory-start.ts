@@ -1,4 +1,4 @@
-import { workspaceToday } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 
 /**
  * DEV-298. Profile, licence and qualified-person start dates are stored as the
@@ -10,7 +10,7 @@ import { workspaceToday } from '@/lib/timezone';
  * Expiry (`licenceValidTo`, `qualifiedPersonValidTo`) stays compared with `at`.
  */
 export function regulatoryStartInstant(at: Date, timeZone?: string | null): Date {
-  const workspaceDay = new Date(`${workspaceToday(timeZone, at)}T00:00:00.000Z`);
+  const workspaceDay = new Date(`${pharmacyCalendarDay(timeZone, at)}T00:00:00.000Z`);
   return workspaceDay > at ? workspaceDay : at;
 }
 

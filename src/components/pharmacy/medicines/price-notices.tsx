@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { trpc } from '@/lib/trpc';
-import { workspaceToday } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import type { priceIntelligence, priceOverrides } from '@/lib/pharmacy/pricing';
 import { formatUtcInstant } from '@/lib/utc-instant';
 import type { listDrapPriceAlerts } from '@/lib/pharmacy/drap-monitoring';
@@ -205,7 +205,7 @@ export function PriceNoticesView({
                     <td className="p-3">
                       {policySourceLabel(r.source)}
                       <div className="whitespace-nowrap text-text-muted">
-                        {workspaceToday(timeZone, r.effectiveDate)}
+                        {pharmacyCalendarDay(timeZone, r.effectiveDate)}
                       </div>
                     </td>
                     <td className="p-3 text-right tabular-nums">
@@ -426,7 +426,7 @@ export function PriceOverridesView({
                       </div>
                     </td>
                     <td className="whitespace-nowrap p-3">
-                      {workspaceToday(timeZone, r.effectiveFrom)}
+                      {pharmacyCalendarDay(timeZone, r.effectiveFrom)}
                     </td>
                     <td className="p-3 text-right tabular-nums">{money(r.mrpMinor)}</td>
                     <td className="p-3 text-right tabular-nums">{money(r.sellingPriceMinor)}</td>

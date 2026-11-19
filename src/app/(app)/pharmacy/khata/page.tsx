@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
-import { workspaceToday } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import { createTRPCContext } from '@/server/trpc';
 import { pharmacyKhataRouter } from './khata-router';
 import { reminderOutcome } from './reminder-outcome';
@@ -19,7 +19,8 @@ const selectClass =
   'min-h-11 max-w-full rounded-sm border border-border bg-surface-card px-3 focus-visible:outline-2 focus-visible:outline-ring';
 const money = (minor: number) => `PKR ${formatMinor(minor)}`;
 /** DEV-943: a payment or due instant as the shop's own calendar day, not the UTC day. */
-const day = (date: Date, timeZone: string | null | undefined) => workspaceToday(timeZone, date);
+const day = (date: Date, timeZone: string | null | undefined) =>
+  pharmacyCalendarDay(timeZone, date);
 
 /** Result codes carried on the redirect back to the list. */
 const notices: Record<string, { tone: 'status' | 'alert'; text: string }> = {

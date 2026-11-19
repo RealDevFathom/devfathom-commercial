@@ -244,8 +244,11 @@ describe('requireCurrentPharmacyBusinessDate', () => {
       organization: {
         findUnique: vi.fn().mockResolvedValue(timezone === null ? null : { timezone }),
       },
+      // DEV-958A: the branch keeps no day-end change, so its day ends at midnight.
+      pharmacyBranch: { findFirst: vi.fn().mockResolvedValue(null) },
     }) as unknown as ScopedDb;
-  const scope = { organizationId: 'org-1' };
+  // DEV-958A: the branch is required, so its day-end hours are always read.
+  const scope = { organizationId: 'org-1', branchId: 'branch-1' };
 
   it('accepts only today in the workspace zone', async () => {
     await expect(

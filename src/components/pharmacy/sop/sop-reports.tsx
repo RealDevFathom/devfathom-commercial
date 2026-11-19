@@ -6,7 +6,7 @@ import { Field, fieldClass, WorkspaceState } from '@/components/pharmacy/dispens
 import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
-import { workspaceToday } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import { trpc } from '@/lib/trpc';
 
 import { errorMessage, type SopReport } from './sop-model';
@@ -28,7 +28,7 @@ export function SopReportsView({
   pharmacyBranchId: string;
   timezone: string | null;
 }) {
-  const today = workspaceToday(timezone);
+  const today = pharmacyCalendarDay(timezone);
   const [draft, setDraft] = useState({ from: daysBefore(today, 6), to: today });
   const [range, setRange] = useState(draft);
   const [error, setError] = useState<string | null>(null);

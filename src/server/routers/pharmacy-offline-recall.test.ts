@@ -116,6 +116,8 @@ function db(lots: Array<{ id: string; batch: { state: string } }>) {
       $queryRaw: vi.fn(async () => []),
       // The sale's business day is read on the organisation's stored clock.
       organization: { findUnique: vi.fn(async () => ({ timezone: 'UTC' })) },
+      // DEV-958A: the branch's "day ends at" hour; none stored reads as midnight.
+      pharmacyBranch: { findFirst: async () => null },
       pharmacyInventoryLot: { findMany },
       pharmacyOfflineCommand: { findFirst: vi.fn(async () => null) },
       // DEV-637: a retry answers with the number the sale was issued.

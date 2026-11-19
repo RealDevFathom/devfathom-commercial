@@ -4,7 +4,8 @@ import { Prisma } from '@/generated/prisma/client';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { isTenantLifecycleAccessible } from '@/lib/tenancy/host';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
-import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
+import { workspaceTimezone } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 
 import {
   BackInStockTemplateError,
@@ -244,7 +245,7 @@ export async function processBackInStockNotices(
           parameters = backInStockTemplateParameters(
             {
               branchName: branch.name,
-              requestedOn: workspaceToday(organization.timezone, interest.createdAt),
+              requestedOn: pharmacyCalendarDay(organization.timezone, interest.createdAt),
               interestId: interest.id,
             },
             [

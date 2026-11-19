@@ -1,4 +1,5 @@
-import { workspaceToday, workspaceTimezone } from '@/lib/timezone';
+import { workspaceTimezone } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 
 const CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -33,6 +34,6 @@ export function prescriptionIsCurrent(
   now: Date,
   timeZone: string | null | undefined
 ): boolean {
-  const today = workspaceToday(workspaceTimezone(timeZone), now);
+  const today = pharmacyCalendarDay(workspaceTimezone(timeZone), now);
   return prescriptionDateValue(validFrom) <= today && today <= prescriptionDateValue(validUntil);
 }

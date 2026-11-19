@@ -1,6 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import type { FiscalExceptionInput } from '@/lib/pharmacy/accounts/fiscal-exceptions';
-import { workspaceDateOffset } from '@/lib/timezone';
+import { pharmacyCalendarDayOffset } from '@/lib/pharmacy/business-day';
 
 export type FiscalExceptionQuery = Record<string, string | string[] | undefined>;
 
@@ -31,8 +31,8 @@ export function fiscalExceptionDefaults<T extends Record<string, unknown>>(
 ) {
   return {
     ...input,
-    from: input.from ?? workspaceDateOffset(timeZone, -6, now),
-    to: input.to ?? workspaceDateOffset(timeZone, 1, now),
+    from: input.from ?? pharmacyCalendarDayOffset(timeZone, -6, now),
+    to: input.to ?? pharmacyCalendarDayOffset(timeZone, 1, now),
   };
 }
 

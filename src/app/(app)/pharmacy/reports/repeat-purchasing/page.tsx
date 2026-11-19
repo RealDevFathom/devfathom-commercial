@@ -11,9 +11,9 @@ import {
   formatWorkspaceDateTime,
   workspaceInstantFromInput,
   workspaceMinuteInput,
-  workspaceDateOffset,
   workspaceZoneLabel,
 } from '@/lib/timezone';
+import { pharmacyCalendarDayOffset } from '@/lib/pharmacy/business-day';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { createTRPCContext } from '@/server/trpc';
 
@@ -37,8 +37,8 @@ export default async function RepeatPurchasingPage({
   const asOf = rawAsOf
     ? workspaceInstantFromInput(rawAsOf, timeZone)
     : `${now.toISOString().slice(0, 16)}:00Z`;
-  const from = scalar(query.from) ?? workspaceDateOffset(timeZone, -179, now);
-  const to = scalar(query.to) ?? workspaceDateOffset(timeZone, -90, now);
+  const from = scalar(query.from) ?? pharmacyCalendarDayOffset(timeZone, -179, now);
+  const to = scalar(query.to) ?? pharmacyCalendarDayOffset(timeZone, -90, now);
   const branchId = scalar(query.branch);
   let branches: { id: string; name: string }[] = [];
   let result: Awaited<

@@ -28,7 +28,7 @@ import {
   reverseBookkeepingTransaction,
 } from '@/lib/pharmacy/bookkeeping';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { workspaceDateRange } from '@/lib/timezone';
+import { pharmacyCalendarDayRange } from '@/lib/pharmacy/business-day';
 import {
   AP_INVOICE_MAX_MINOR,
   AP_INVOICE_MAX_TERM_DAYS,
@@ -819,7 +819,11 @@ export async function searchApReversals(
   }
   if (input.from || input.to) {
     // An invoice date is a calendar day already; a payment is an instant, read on the shop's clock.
-    const paid = workspaceDateRange(input.from ?? input.to!, input.to ?? input.from!, timeZone);
+    const paid = pharmacyCalendarDayRange(
+      input.from ?? input.to!,
+      input.to ?? input.from!,
+      timeZone
+    );
     where.push({
       OR: [
         {
