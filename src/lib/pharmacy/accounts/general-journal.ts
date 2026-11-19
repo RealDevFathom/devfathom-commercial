@@ -226,12 +226,37 @@ async function lockVoucher(db: ScopedDb, scope: JournalVoucherScope, voucherId: 
   return voucher;
 }
 
+/**
+ * DEV-953: a transaction-scoped advisory lock on one voucher identity in an
+ * organisation, held until commit or rollback. Creates racing on one create key,
+ * and creates or edits racing on one reference, queue here; the next holder's
+ * look-up is a new statement, so under READ COMMITTED (the default) it sees the
+ * voucher the previous holder committed and replays it or reports the clash.
+ *
+ * Locking first is chosen over catching P2002 from the unique index: a failed
+ * INSERT aborts the whole PostgreSQL transaction, so the comparison could not be
+ * re-run in it without a savepoint, and the caller's transaction would be lost.
+ *
+ * Order: create key, then reference. Updates take only the reference lock, after
+ * their voucher row lock; nothing takes them the other way round.
+ */
+async function lockVoucherIdentity(
+  db: ScopedDb,
+  scope: JournalVoucherScope,
+  kind: 'create-key' | 'reference',
+  value: string
+) {
+  const key = `pharmacy-jv-${kind}:${scope.organizationId}:${value}`;
+  await db.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
+}
+
 async function assertReferenceFree(
   db: ScopedDb,
   scope: JournalVoucherScope,
   reference: string,
   exceptId?: string
 ) {
+  await lockVoucherIdentity(db, scope, 'reference', reference);
   const clash = await db.pharmacyJournalVoucher.findFirst({
     where: {
       organizationId: scope.organizationId,
@@ -305,6 +330,7 @@ export async function createJournalVoucherDraft(
   now: Date = new Date()
 ) {
   const draft = normalizeVoucherDraft(input, now);
+  await lockVoucherIdentity(db, scope, 'create-key', input.createKey);
   const replay = await db.pharmacyJournalVoucher.findFirst({
     where: { organizationId: scope.organizationId, createKey: input.createKey },
     include: voucherInclude,
