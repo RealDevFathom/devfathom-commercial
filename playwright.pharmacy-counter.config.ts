@@ -13,7 +13,13 @@ export default defineConfig({
   // The counter spec owns this lane. Every sibling spec in tests/e2e belongs to
   // a different database and host, so the glob is what keeps them out.
   // DEV-751: the procedures (SOP) spec shares the seeded pharmacy workspace.
-  testMatch: ['pharmacy-counter.spec.ts', 'time-to-first-sale.spec.ts', 'pharmacy-sop.spec.ts'],
+  // DEV-957: the offline counter spec enrols its own browser profile on the same workspace.
+  testMatch: [
+    'pharmacy-counter.spec.ts',
+    'time-to-first-sale.spec.ts',
+    'pharmacy-sop.spec.ts',
+    'pharmacy-counter-offline.spec.ts',
+  ],
   outputDir: './playwright-artifacts/pharmacy-counter',
   // Serial: the three bills draw from one seeded stock balance, so a parallel
   // worker would race the same lot and make a failure meaningless.

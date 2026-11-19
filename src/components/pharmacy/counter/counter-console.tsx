@@ -1,6 +1,10 @@
 'use client';
 
 import { browserUuid } from '@/lib/browser-uuid';
+import {
+  enrolledCounterDeviceId,
+  subscribeCounterEnrolment,
+} from '@/lib/pharmacy/counter-device-store';
 import { CounterCatalogueCache } from '@/lib/pharmacy/counter-catalogue-cache';
 
 import {
@@ -79,6 +83,8 @@ import type { CounterTenderDiscardInput } from './counter-tender-discard';
 import { CounterUnitToggle } from './counter-unit-toggle';
 import { CounterUpsellSuggestions } from './counter-upsell-suggestions';
 import { useBrowserOnline } from './use-browser-online';
+import { useCounterEnrolment, useCounterOffline } from './use-counter-offline';
+import { CounterOfflineOnly, CounterOfflinePanel } from './counter-offline-panel';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -198,7 +204,12 @@ type ReceiptIntent = {
  * during the server render, and mirroring it into React state would only add a
  * cascading render to reach the same value.
  */
-function counterDeviceId(): string {
+function counterDeviceId(scope?: { organizationId: string; branchId: string }): string {
+  // DEV-957: once this computer is enrolled as a counter of this branch, its
+  // drawer, receipt runway and offline document all use the enrolled device id.
+  // An unenrolled browser (or another branch) keeps the per-browser id below.
+  const enrolled = scope ? enrolledCounterDeviceId(scope) : null;
+  if (enrolled) return enrolled;
   const key = 'devfathom.pharmacy.counter.device';
   const existing = window.localStorage.getItem(key);
   if (existing) return existing;
@@ -209,9 +220,9 @@ function counterDeviceId(): string {
 
 const subscribeToNothing = () => () => {};
 /** `null` when storage is unavailable: the tender path reports that case itself. */
-function readCounterDeviceId(): string | null {
+function readCounterDeviceId(scope?: { organizationId: string; branchId: string }): string | null {
   try {
-    return counterDeviceId();
+    return counterDeviceId(scope);
   } catch {
     return null;
   }
@@ -221,8 +232,13 @@ function readCounterDeviceId(): string | null {
  * storage), the stable browser id on the client. Lets the drawer status query
  * key on the device without a setState-in-effect round trip.
  */
-function useCounterDeviceId(): string | null {
-  return useSyncExternalStore(subscribeToNothing, readCounterDeviceId, () => null);
+function useCounterDeviceId(scope: { organizationId: string; branchId: string }): string | null {
+  const { organizationId, branchId } = scope;
+  const read = useCallback(
+    () => readCounterDeviceId({ organizationId, branchId }),
+    [organizationId, branchId]
+  );
+  return useSyncExternalStore(subscribeCounterEnrolment, read, () => null);
 }
 const hydratedOnClient = () => true;
 const notHydratedOnServer = () => false;
@@ -467,8 +483,20 @@ export function CounterUnsellableMessage({ row }: { row: CounterSearchRow }) {
 }
 
 export function PharmacyCounterConsole(props: ConsoleProps = {}) {
-  const { data: session, status } = useSession();
+  const { data: liveSession, status: liveStatus } = useSession();
   const entitlements = useEntitlements();
+  const browserOnline = useBrowserOnline();
+  // DEV-957: with no connection, a session re-check (on tab focus) cannot reach
+  // the server and reads as signed out. While the browser is offline the counter
+  // keeps the person it last verified, so the offline banner and price check
+  // stay on screen; nothing offline reaches the server, and the first online
+  // re-check decides again. Online, the live answer is used unchanged.
+  const [verifiedSession, setVerifiedSession] = useState(liveSession);
+  if (liveStatus === 'authenticated' && liveSession !== verifiedSession)
+    setVerifiedSession(liveSession);
+  const holdOffline = !browserOnline && liveStatus === 'unauthenticated' && verifiedSession;
+  const session = holdOffline ? verifiedSession : liveSession;
+  const status = holdOffline ? 'authenticated' : liveStatus;
   const user = session?.user;
   // Remount on account/tenant changes so neither drafts nor an in-flight read's
   // response can become another operator's recovery UI. Server remains authority.
@@ -732,12 +760,23 @@ function ScopedPharmacyCounterConsole({
 
   // Derived, not mirrored into state: the default branch is simply "the first
   // one" until the operator picks another, so an effect would only add a render.
-  const branchId = selectedBranchId || (branches[0]?.id ?? '');
+  // DEV-957: an enrolled counter opens on its own branch, also offline when the
+  // branch list cannot be loaded; an unenrolled browser keeps "the first one".
+  const counterEnrolment = useCounterEnrolment(organizationId);
+  const enrolledBranchId =
+    counterEnrolment &&
+    (branches.length === 0 || branches.some((branch) => branch.id === counterEnrolment.branchId))
+      ? counterEnrolment.branchId
+      : null;
+  const branchId = selectedBranchId || enrolledBranchId || (branches[0]?.id ?? '');
   const recoveryScope = useMemo<TenderAttemptScope>(
     () => ({ organizationId, accountId, branchId }),
     [organizationId, accountId, branchId]
   );
   // A voucher belongs to the branch it was checked at; switching branch drops it.
+  // DEV-957: an enrolled counter of this branch keeps its last verified price
+  // list for offline price check; an unenrolled browser stays online-only.
+  const offlineMode = useCounterOffline({ organizationId, branchId, online });
   const heldVoucher = voucherHold?.branchId === branchId ? voucherHold : null;
   const heldDiscount = discountHold?.branchId === branchId ? discountHold : null;
   const branchAuthorized =
@@ -948,7 +987,11 @@ function ScopedPharmacyCounterConsole({
   // POS-07: one OPEN drawer per counter device. The header offers "Open drawer"
   // only once the server has said this device has none; while one is open it
   // shows the drawer instead, so a second open is never offered.
-  const deviceId = useCounterDeviceId();
+  const deviceId = useCounterDeviceId({ organizationId, branchId });
+  const currentCounterDeviceId = useCallback(
+    () => counterDeviceId({ organizationId, branchId }),
+    [organizationId, branchId]
+  );
   const drawerQueryEnabled = Boolean(branchAuthorized && branchId && deviceId && !settlementDenied);
   // On the client a missing device id means site storage is blocked: no drawer
   // can be read or opened, so the step says so instead of waiting forever.
@@ -1787,7 +1830,7 @@ function ScopedPharmacyCounterConsole({
     if (dayClosedRef.current) throw new Error('DAY_CLOSED');
     if (drawerRequiredRef.current) throw new Error('DRAWER_NOT_OPEN');
     const created = await createSale
-      .mutateAsync({ branchId, quotation: false, deviceId: counterDeviceId() })
+      .mutateAsync({ branchId, quotation: false, deviceId: currentCounterDeviceId() })
       .catch((error: unknown) => {
         if (error instanceof Error && error.message === 'DAY_CLOSED')
           void utils.pharmacySales.tradingDayStatus.invalidate();
@@ -1799,7 +1842,7 @@ function ScopedPharmacyCounterConsole({
     setActiveSale(created.id);
     void refetchOpenBills();
     return created.id;
-  }, [branchId, createSale, refetchOpenBills, setActiveSale, utils]);
+  }, [branchId, createSale, currentCounterDeviceId, refetchOpenBills, setActiveSale, utils]);
 
   const ensureSale = useCallback(async () => saleId ?? (await openSale()), [openSale, saleId]);
 
@@ -2615,7 +2658,7 @@ function ScopedPharmacyCounterConsole({
         const payload: TenderAttempt['input'] = {
           branchId,
           saleId,
-          deviceId: counterDeviceId(),
+          deviceId: currentCounterDeviceId(),
           businessDate: todayBusinessDate(),
           type: input.type,
           amountMinor: input.amountMinor,
@@ -2737,6 +2780,7 @@ function ScopedPharmacyCounterConsole({
       branchId,
       busy,
       canSettlePayments,
+      currentCounterDeviceId,
       discardReceiptIntent,
       paidMinor,
       recoveryScope,
@@ -2981,7 +3025,7 @@ function ScopedPharmacyCounterConsole({
         branchId,
         saleId,
         points: redeemPoints,
-        deviceId: counterDeviceId(),
+        deviceId: currentCounterDeviceId(),
         businessDate: todayBusinessDate(),
         idempotencyKey: `counter-loyalty:${saleId}:${browserUuid()}`,
       });
@@ -2998,6 +3042,7 @@ function ScopedPharmacyCounterConsole({
   }, [
     branchId,
     busy,
+    currentCounterDeviceId,
     customerQuery,
     redeemLoyalty,
     redeemPoints,
@@ -3412,6 +3457,12 @@ function ScopedPharmacyCounterConsole({
     />
   );
 
+  // DEV-957: offline with nothing loaded from the server (the stored page opened
+  // with no connection), say so and offer what still works, not "no branch".
+  if ((!online || offlineMode.serverUnreachable) && !branchesQuery.data) {
+    return <CounterOfflineOnly offline={offlineMode} />;
+  }
+
   if (branchesQuery.isLoading) {
     return <CounterSkeleton />;
   }
@@ -3683,7 +3734,7 @@ function ScopedPharmacyCounterConsole({
               branchId={branchId}
               organizationId={organizationId}
               accountId={accountId}
-              deviceId={counterDeviceId}
+              deviceId={currentCounterDeviceId}
               businessDate={todayBusinessDate}
             />
             {canSettlePayments ? (
@@ -3691,7 +3742,7 @@ function ScopedPharmacyCounterConsole({
                 branchId={branchId}
                 organizationId={organizationId}
                 accountId={accountId}
-                deviceId={counterDeviceId}
+                deviceId={currentCounterDeviceId}
                 businessDate={todayBusinessDate}
               />
             ) : null}
@@ -3751,7 +3802,7 @@ function ScopedPharmacyCounterConsole({
           </Button>
         </div>
       </header>
-      {online ? null : (
+      {online && !offlineMode.serverUnreachable ? null : (
         <div
           role="status"
           aria-live="polite"
@@ -3774,6 +3825,7 @@ function ScopedPharmacyCounterConsole({
                   ? 'Keep this bill open and do not take the money again until the connection returns.'
                   : 'Search, bill changes and payments wait until the connection returns.'}
             </p>
+            <CounterOfflinePanel offline={offlineMode} />
           </div>
           {paymentQueued ? (
             <StatusPill status="queued" tone="warning" label="1 payment waiting" />
@@ -3911,7 +3963,7 @@ function ScopedPharmacyCounterConsole({
                     openDrawer
                       .mutateAsync({
                         branchId,
-                        deviceId: counterDeviceId(),
+                        deviceId: currentCounterDeviceId(),
                         businessDate: todayBusinessDate(),
                         openingFloatMinor,
                         ...(operatingCashierId ? { operatingCashierId } : {}),

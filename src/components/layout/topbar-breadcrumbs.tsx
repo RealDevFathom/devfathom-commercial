@@ -68,6 +68,7 @@ export const routeLabels: Record<string, string> = {
   '/pharmacy/settings/branches': 'Branch assignments',
   '/pharmacy/settings/pin': 'Your PIN',
   '/pharmacy/settings/printers': 'Printer settings',
+  '/pharmacy/settings/counters': 'Counter computers',
 };
 
 const linkableDetailRoute = /^\/(projects|clients|notes|team|meetings)\/[^/]+$/;
