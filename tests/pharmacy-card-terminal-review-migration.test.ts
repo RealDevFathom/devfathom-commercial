@@ -34,11 +34,19 @@ describe('DEV-743 card-terminal review resolution migration contract', () => {
     const migrations = readdirSync('prisma/migrations')
       .filter((entry) => /^\d{14}_/.test(entry))
       .sort();
-    expect(migrations.at(-1)).toBe(NAME);
+    // DEV-950: later migrations follow it (20261118124300), so it is ordered after the terminal
+    // migrations, as the counter migration's own contract checks, rather than being the newest.
+    expect(migrations.indexOf(NAME)).toBeGreaterThan(migrations.indexOf(COUNTER));
+    expect(migrations.indexOf(COUNTER)).toBeGreaterThan(migrations.indexOf(ATTEMPTS));
+    // Its attempt guard is still the live one: no later migration replaces that function.
+    for (const later of migrations.slice(migrations.indexOf(NAME) + 1))
+      expect(readFileSync(`prisma/migrations/${later}/migration.sql`, 'utf8'), later).not.toContain(
+        'pharmacy_card_terminal_attempt_guard'
+      );
     const ledger = readFileSync('tests/fixtures/new-migration-order.txt', 'utf8')
       .trim()
       .split('\n');
-    expect(ledger.at(-1)).toBe(NAME);
+    expect(ledger.indexOf(COUNTER)).toBeGreaterThanOrEqual(0);
     expect(ledger.indexOf(NAME)).toBeGreaterThan(ledger.indexOf(COUNTER));
   });
 

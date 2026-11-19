@@ -226,6 +226,8 @@ vi.mock('@/lib/trpc', async () => {
       pharmacyPrescriptions: router(['counterPatients', 'counterPatientPanel']),
       pharmacySafety: router(['controlledPharmacists']),
       pharmacyAccess: router(['navigation']),
+      // DEV-950: prescription lines waiting for a signature at payment.
+      pharmacyDispensing: router(['counterSignStatus', 'selfSignReview']),
     },
   };
 });
@@ -543,6 +545,7 @@ beforeEach(() => {
     'openBills',
     'saleReadiness',
     'drawerCashiers',
+    'counterSignStatus',
   ])
     mocks.queries[name] = query();
   // DEV-929: no maximum discount is set unless a test says otherwise.

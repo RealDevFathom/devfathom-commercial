@@ -46,8 +46,13 @@ export class PharmacyRxReferenceError extends Error {
  * non-controlled line unless a pharmacist attached a prescription reference to it AND a
  * pharmacist signed the RX-03 review of that sale line. A reference is only ever attached by a
  * pharmacist through `resolvePrescriptionReference`, which checks it is real, current and not
- * exhausted; attaching queues the review, and SIGN is the sole sale-release event. A sole
- * pharmacist may sign their own review through the audited pharmacist queue. Controlled lines
+ * exhausted; attaching queues the review, and SIGN is the sole sale-release event. The review is
+ * queued with the pharmacist who rang up the line as its requester, and the database refuses a
+ * decision by the requester (`pharmacy_review_no_self_approval`), so a different pharmacist signs
+ * it from the pharmacist queue. DEV-950: only under the solo rule (nobody else at the branch could
+ * sign it) may the requester sign it themselves, at the counter, by re-entering their own PIN;
+ * that signature names its self-approved audit entry, without which the database refuses it
+ * (`src/lib/pharmacy/rx-review-self-sign.ts`). Controlled lines
  * keep their own register gate (prescription or witnessed emergency supply), so they are not
  * judged here.
  *
