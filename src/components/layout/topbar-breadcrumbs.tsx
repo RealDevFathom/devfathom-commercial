@@ -49,6 +49,8 @@ export const routeLabels: Record<string, string> = {
   '/pharmacy/sop': 'Procedures',
   // DEV-111: the slug is hyphenated; the breadcrumb uses the page heading.
   '/pharmacy/pharmacist-queue': 'Pharmacist queue',
+  // DEV-960: the owner's per-branch setting, named by its page heading.
+  '/pharmacy/settings/one-pharmacist-per-shift': 'One pharmacist per shift',
   // DEV-44: the other pharmacy destinations, named as the pharmacy menu names them.
   '/pharmacy/medicines': 'Medicine catalog',
   '/pharmacy/counter': 'Counter',

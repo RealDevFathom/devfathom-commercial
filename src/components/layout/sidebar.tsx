@@ -335,8 +335,13 @@ export const navigation: NavItem[] = [
     group: 'Pharmacy',
     module: 'pharmacy-core',
     exact: true,
-    // The owner's data export and pharmacist-check setting are offered from the onboarding page.
-    activePrefixes: ['/pharmacy/settings/data-export', '/pharmacy/settings/pharmacist-check'],
+    // The owner's data export, pharmacist-check and one-pharmacist-per-shift settings are offered
+    // from the onboarding page.
+    activePrefixes: [
+      '/pharmacy/settings/data-export',
+      '/pharmacy/settings/pharmacist-check',
+      '/pharmacy/settings/one-pharmacist-per-shift',
+    ],
   },
   {
     label: 'Medicine catalog',

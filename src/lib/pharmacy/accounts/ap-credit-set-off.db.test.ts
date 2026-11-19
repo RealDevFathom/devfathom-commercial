@@ -222,13 +222,18 @@ describeDb('AP credit-note set-off', () => {
     // Nor can the bill be reversed from under the set-off.
     await expect(
       inTenant((db) =>
-        deps.ap.reverseApInvoice(db, manager, {
-          branchId,
-          invoiceId: bill.id,
-          commandKey: `so-rev-${suffix}-1`,
-          reason: 'Duplicate',
-          at: new Date().toISOString(),
-        })
+        deps.ap.reverseApInvoice(
+          db,
+          manager,
+          {
+            branchId,
+            invoiceId: bill.id,
+            commandKey: `so-rev-${suffix}-1`,
+            reason: 'Duplicate',
+            at: new Date().toISOString(),
+          },
+          { soleApprover: async () => false }
+        )
       )
     ).rejects.toMatchObject({ reason: 'ACTIVE_SETTLEMENTS' });
   }, 60_000);
@@ -430,13 +435,18 @@ describeDb('AP credit-note set-off', () => {
     // With nothing left settling it, the bill can be reversed again.
     await expect(
       inTenant((db) =>
-        deps.ap.reverseApInvoice(db, manager, {
-          branchId,
-          invoiceId: bill.id,
-          commandKey: `so-rev-inv-${suffix}-5`,
-          reason: 'Duplicate',
-          at: new Date().toISOString(),
-        })
+        deps.ap.reverseApInvoice(
+          db,
+          manager,
+          {
+            branchId,
+            invoiceId: bill.id,
+            commandKey: `so-rev-inv-${suffix}-5`,
+            reason: 'Duplicate',
+            at: new Date().toISOString(),
+          },
+          { soleApprover: async () => false }
+        )
       )
     ).resolves.toMatchObject({ invoice: { status: 'REVERSED' } });
     // A reversed set-off is final.

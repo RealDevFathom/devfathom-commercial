@@ -1,0 +1,76 @@
+{
+  "log-flows-light.json": {
+    "captures": [
+      "keyboard-focus-button-1024-light",
+      "destructive-confirmation-1024-light",
+      "error-wrong-pin-1024-light",
+      "loading-disabled-1024-light",
+      "saved-payment-reversed-1024-light",
+      "aging-after-payment-reversal-1024-light"
+    ],
+    "overflow": [],
+    "console": [],
+    "pageErrors": [],
+    "notes": [
+      "[light] Tab from reason lands on: pin",
+      "[light] Next Tab lands on: Reverse payment",
+      "[light] Wrong PIN message: Nothing was reversed. Enter your manager or owner PIN.",
+      "[light] Reason kept after refusal: Bank returned the transfer",
+      "[light] Pending button disabled: true"
+    ]
+  },
+  "log-flows.json": {
+    "captures": [
+      "keyboard-focus-button-1024-dark",
+      "destructive-confirmation-1024-dark",
+      "error-wrong-pin-1024-dark",
+      "saved-invoice-reversed-1024-light",
+      "reversal-manager-view-768-dark"
+    ],
+    "overflow": [],
+    "console": [],
+    "pageErrors": [],
+    "notes": [
+      "[dark] Tab from reason lands on: pin",
+      "[dark] Next Tab lands on: Reverse payment",
+      "[dark] Wrong PIN message: Nothing was reversed. Enter your manager or owner PIN.",
+      "[dark] Reason kept after refusal: Bank returned the transfer",
+      "AP-QA-0002 rows in open invoices after reversal: 0"
+    ]
+  },
+  "log-matrix.json": {
+    "captures": [
+      "reversal-default-375-light",
+      "reversal-empty-375-light",
+      "reversal-default-768-light",
+      "reversal-empty-768-light",
+      "reversal-default-1024-light",
+      "reversal-empty-1024-light",
+      "reversal-default-1440-light",
+      "reversal-empty-1440-light",
+      "reversal-default-1024-light-reduced-motion",
+      "reversal-default-375-dark",
+      "reversal-empty-375-dark",
+      "reversal-default-768-dark",
+      "reversal-empty-768-dark",
+      "reversal-default-1024-dark",
+      "reversal-empty-1024-dark",
+      "reversal-default-1440-dark",
+      "reversal-empty-1440-dark",
+      "reversal-default-1024-dark-reduced-motion"
+    ],
+    "overflow": [],
+    "console": [],
+    "pageErrors": [],
+    "notes": []
+  },
+  "log-pay2.json": {
+    "captures": [],
+    "overflow": [],
+    "console": [],
+    "pageErrors": [],
+    "notes": [
+      "Recorded PV-QA-0108 against AP-QA-0001 as the manager."
+    ]
+  }
+}

@@ -1,6 +1,14 @@
 'use client';
 
-import { startTransition, useActionState, useState, type FormEvent } from 'react';
+import {
+  createContext,
+  startTransition,
+  useActionState,
+  useContext,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -9,6 +17,8 @@ import {
   recordApInvoiceFromForm,
   rejectCreditSetOffFromForm,
   requestCreditSetOffFromForm,
+  reverseApInvoiceFromForm,
+  reverseApSettlementFromForm,
   reverseCreditSetOffFromForm,
   type ApEntryFormState,
 } from './ap-entry-actions';
@@ -496,6 +506,104 @@ export function ReverseCreditSetOffForm({
       </label>
       <Button type="submit" variant="destructive" className="min-h-11" disabled={pending}>
         {pending ? 'Reversing…' : 'Reverse set-off'}
+      </Button>
+      <Status id={status} state={state} />
+    </form>
+  );
+}
+
+/**
+ * DEV-103: reverse a supplier expense invoice, or one payment against it, with the manager's or
+ * owner's own PIN and a reason. The reason and the PIN are the deliberate confirmation step; the
+ * server checks the PIN, who recorded the entry and every money rule, and dates it now.
+ */
+/**
+ * DEV-103: a saved reversal removes its own row (the server re-renders the list without it), so
+ * its confirmation is announced here, above the list, which stays mounted.
+ */
+const ReversalNotice = createContext<((message: string) => void) | null>(null);
+
+export function ReversalNoticeArea({ children }: { children: ReactNode }) {
+  const [message, setMessage] = useState('');
+  return (
+    <ReversalNotice.Provider value={setMessage}>
+      <p
+        role="status"
+        aria-live="polite"
+        // Always rendered, so the live region exists before the message arrives.
+        className={message ? 'mt-3 text-sm font-medium text-success' : undefined}
+      >
+        {message}
+      </p>
+      {children}
+    </ReversalNotice.Provider>
+  );
+}
+
+export function ReverseApEntryForm({
+  kind,
+  branchId,
+  targetId,
+  label,
+  initialKey,
+}: {
+  kind: 'invoice' | 'payment';
+  branchId: string;
+  /** The invoice id or the payment (settlement) id. */
+  targetId: string;
+  /** Names the entry for assistive technology, e.g. its reference. */
+  label: string;
+  initialKey: string;
+}) {
+  const prefix = kind === 'invoice' ? 'ap-invoice-rev' : 'ap-payment-rev';
+  const announce = useContext(ReversalNotice);
+  const action = kind === 'invoice' ? reverseApInvoiceFromForm : reverseApSettlementFromForm;
+  const { key, formKey, state, onSubmit, pending, invalid } = useEntryAction(
+    async (previous, form) => {
+      const result = await action(previous, form);
+      if (result.status === 'saved') announce?.(result.message);
+      return result;
+    },
+    initialKey,
+    prefix
+  );
+  const status = `${prefix}-${targetId}`;
+  const aria = { 'aria-invalid': invalid || undefined, 'aria-describedby': status };
+  const noun = kind === 'invoice' ? 'invoice' : 'payment';
+  return (
+    <form
+      key={formKey}
+      onSubmit={onSubmit}
+      className="grid gap-3 md:grid-cols-[1fr_1fr_auto] md:items-end"
+      aria-label={`Reverse ${noun} ${label}`}
+    >
+      <input type="hidden" name="branchId" value={branchId} />
+      <input
+        type="hidden"
+        name={kind === 'invoice' ? 'invoiceId' : 'settlementId'}
+        value={targetId}
+      />
+      <input type="hidden" name="commandKey" value={key} />
+      <label className={fieldClass}>
+        Reason to reverse
+        <Input className="min-h-11" name="reason" maxLength={500} required {...aria} />
+      </label>
+      <label className={fieldClass}>
+        Your manager or owner PIN
+        <Input
+          className="min-h-11 font-mono"
+          name="pin"
+          type="password"
+          inputMode="numeric"
+          autoComplete="off"
+          pattern="\d{4,8}"
+          maxLength={8}
+          required
+          {...aria}
+        />
+      </label>
+      <Button type="submit" variant="destructive" className="min-h-11" disabled={pending}>
+        {pending ? 'Reversing…' : `Reverse ${noun}`}
       </Button>
       <Status id={status} state={state} />
     </form>
