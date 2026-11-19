@@ -12,6 +12,16 @@ import { splitSqlStatements } from '../split-sql-statements';
  * The table list is derived from the migrations themselves, in the order Prisma applies them:
  * `ALTER TABLE ... [NO] FORCE ROW LEVEL SECURITY`, `CREATE / ALTER / DROP POLICY`, table
  * renames and drops, including the `EXECUTE format(...)` loops in DO blocks.
+ *
+ * DEV-954 widened what counts as a read or write and what counts as setting the tenant:
+ * - tables later in a comma-separated FROM / USING list (`FROM a, b`, `UPDATE t ... FROM a, b`),
+ *   `TABLE t` queries (`CREATE TABLE x AS TABLE t`, `INSERT INTO x TABLE t`) and statements
+ *   that open with a parenthesis (`(SELECT ...)`);
+ * - a tenant set to a constant (a literal id) reaches one organisation only, so it does not
+ *   count as setting the tenant for a backfill;
+ * - a tenant set inside an IF / ELSIF / ELSE or CASE branch counts only inside that branch,
+ *   since the branch may never run;
+ * - dynamic SQL in a DO block (see `DYNAMIC_SQL`).
  */
 
 export type TenantContextOffender = { migration: string; table: string };
@@ -97,11 +107,27 @@ const TENANT_SETTING = new RegExp(
 
 /** A change of the tenant setting at an offset; `expire` is the end of a transaction. */
 type ContextEvent = { at: number } & (
-  { kind: 'set'; active: boolean; local: boolean } | { kind: 'reset' } | { kind: 'expire' }
+  | { kind: 'set'; active: boolean; local: boolean; until?: number }
+  | { kind: 'reset' }
+  | { kind: 'expire' }
 );
 
 function clears(value: string): boolean {
   return /^(?:''|NULL|DEFAULT)$/i.test(value.trim());
+}
+
+/**
+ * A literal value names one fixed organisation: a backfill run under it skips every other one.
+ * In set_config the value is an expression, so only a quoted literal or a number is constant; a
+ * SET value is always written out, so any word or literal is (a `%L` placeholder in an EXECUTE
+ * template is not).
+ */
+function constantFunctionValue(value: string): boolean {
+  return /^(?:E?'(?:[^']|'')*'|-?\d+)(?:\s*::\s*[A-Za-z_][A-Za-z0-9_ ]*)*$/i.test(value.trim());
+}
+
+function constantSetValue(value: string): boolean {
+  return /^(?:'(?:[^']|'')*'|[A-Za-z0-9_.-]+)$/.test(value.trim());
 }
 
 function contextEvents(statement: string, offset: number): ContextEvent[] {
@@ -112,11 +138,16 @@ function contextEvents(statement: string, offset: number): ContextEvent[] {
       events.push({
         at,
         kind: 'set',
-        active: !clears(m[1]),
+        active: !clears(m[1]) && !constantFunctionValue(m[1]),
         local: !/^false$/i.test(m[2]!.trim()),
       });
     else if (m[4] !== undefined)
-      events.push({ at, kind: 'set', active: !clears(m[4]), local: /^LOCAL/i.test(m[3] ?? '') });
+      events.push({
+        at,
+        kind: 'set',
+        active: !clears(m[4]) && !constantSetValue(m[4]),
+        local: /^LOCAL/i.test(m[3] ?? ''),
+      });
     else events.push({ at, kind: 'reset' });
   }
   return events;
@@ -128,13 +159,178 @@ function tenantSetAt(events: ContextEvent[], position: number): boolean {
   let local = false;
   for (const event of events) {
     if (event.at >= position) break;
-    if (event.kind === 'set') ({ active, local } = event);
-    else if (event.kind === 'reset' || local) active = false;
+    if (event.kind === 'set') {
+      // A set inside a branch does not hold after the branch: it may never have run.
+      if (event.active && event.until !== undefined && position >= event.until) continue;
+      ({ active, local } = event);
+    } else if (event.kind === 'reset' || local) active = false;
   }
   return active;
 }
 
+/**
+ * The IF / ELSIF / ELSE and CASE WHEN / ELSE branches of a PL/pgSQL body (strings blanked), as
+ * [start, end) offsets. A statement-level keyword follows `;`, THEN, ELSE, LOOP or BEGIN (or opens
+ * the body); that tells `IF ... THEN` from DDL's `IF [NOT] EXISTS`, and CASE statements from CASE
+ * expressions, whose WHEN and ELSE never follow a `;`.
+ */
+export function plpgsqlBranches(body: string): Array<{ start: number; end: number }> {
+  const branches: Array<{ start: number; end: number }> = [];
+  const stack: Array<{ kind: 'if' | 'case'; start: number }> = [];
+  let previous = '';
+  let previousEnd = 0;
+  for (const m of body.matchAll(
+    /\b(?:END\s+IF|END\s+CASE|ELSIF|ELSEIF|ELSE|IF|CASE|WHEN|THEN|LOOP|BEGIN)\b|;/gi
+  )) {
+    const token = m[0].toUpperCase().replace(/\s+/g, ' ');
+    const adjacent = body.slice(previousEnd, m.index).trim() === '';
+    const statementStart =
+      adjacent && ['', ';', 'THEN', 'ELSE', 'LOOP', 'BEGIN'].includes(previous);
+    const top = stack.at(-1);
+    const close = (at: number) => branches.push({ start: top!.start, end: at });
+    if ((token === 'IF' || token === 'CASE') && statementStart)
+      stack.push({ kind: token === 'IF' ? 'if' : 'case', start: m.index! });
+    else if (
+      top?.kind === 'if' &&
+      ['ELSIF', 'ELSEIF', 'ELSE'].includes(token) &&
+      previous === ';' &&
+      adjacent
+    ) {
+      close(m.index!);
+      top.start = m.index!;
+    } else if (
+      top?.kind === 'case' &&
+      ['WHEN', 'ELSE'].includes(token) &&
+      previous === ';' &&
+      adjacent
+    ) {
+      close(m.index!);
+      top.start = m.index!;
+    } else if (
+      (token === 'END IF' && top?.kind === 'if') ||
+      (token === 'END CASE' && top?.kind === 'case')
+    ) {
+      close(m.index! + m[0].length);
+      stack.pop();
+    }
+    previous = token;
+    previousEnd = m.index! + m[0].length;
+  }
+  return branches;
+}
+
+/**
+ * Dynamic SQL cannot be read statically, so DEV-954 sets this rule for every `EXECUTE` in a
+ * migration DO block (EXECUTE FUNCTION / PROCEDURE of a trigger excepted):
+ * 1. A command whose literal text starts with DDL (ALTER, CREATE other than a table or
+ *    materialized view `AS` a query, DROP, COMMENT, GRANT, REVOKE, TRUNCATE, ...) reads no
+ *    rows under RLS, so it needs no tenant.
+ * 2. A literal command with no `%I` / `%s` placeholder and no concatenation is read like any
+ *    other statement: each tenant-only table it names needs the tenant set at the EXECUTE.
+ * 3. Anything else could name any table, so the tenant must be set at the EXECUTE (an explicit
+ *    per-organisation loop around it), or the EXECUTE line or the comment lines right above it
+ *    must carry `-- tenant-context: allow <reason>`, a reason of at least ten characters for
+ *    the reviewer. Otherwise it is reported against the pseudo-table `DYNAMIC_SQL`.
+ * A false alarm costs one comment; a miss is a backfill that silently skips every shop. Every
+ * EXECUTE in the migrations reviewed for DEV-954 is DDL, so the rule raises no existing alarm.
+ */
+export const DYNAMIC_SQL = '<dynamic sql>';
+
+const ALLOW_DYNAMIC = /--\s*tenant-context:\s*allow\b[\s:-]*(\S.*)$/i;
+
+function dynamicSqlAllowed(sql: string, position: number): boolean {
+  const lines = sql.slice(0, position).split('\n');
+  const reason = (line: string) => (ALLOW_DYNAMIC.exec(line)?.[1]?.trim().length ?? 0) >= 10;
+  const lineEnd = sql.indexOf('\n', position);
+  if (reason(lines.at(-1)! + sql.slice(position, lineEnd === -1 ? sql.length : lineEnd)))
+    return true;
+  for (let i = lines.length - 2; i >= 0; i -= 1) {
+    const line = lines[i]!.trim();
+    if (!line.startsWith('--')) break;
+    if (reason(line)) return true;
+  }
+  return false;
+}
+
+const DDL_COMMAND =
+  /^\s*(?:ALTER|DROP|COMMENT|GRANT|REVOKE|TRUNCATE|LOCK|ANALYZE|REINDEX|CLUSTER|SET|RESET|CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:TEMP|TEMPORARY)\s+)?(?:RECURSIVE\s+)?VIEW|CREATE\b(?![\s\S]*\bAS\s*\(?\s*(?:SELECT|WITH|TABLE|VALUES)\b))\b/i;
+
+/** The literal text an EXECUTE runs, and whether it is fully static. */
+function executedCommand(rest: string): { text: string; dynamic: boolean } | null {
+  const format = /^format\s*\(\s*/i.exec(rest);
+  const start = format ? format[0].length : 0;
+  const tail = rest.slice(start);
+  let text: string;
+  let after: number;
+  const dollar = /^\$[A-Za-z0-9_]*\$/.exec(tail)?.[0];
+  if (dollar) {
+    const end = tail.indexOf(dollar, dollar.length);
+    if (end === -1) return null;
+    text = tail.slice(dollar.length, end);
+    after = end + dollar.length;
+  } else {
+    const quoted = /^E?'((?:[^']|'')*)'/i.exec(tail);
+    if (!quoted) return null;
+    text = quoted[1]!.replace(/''/g, "'");
+    after = quoted[0].length;
+  }
+  const concatenated = /^\s*\|\|/.test(tail.slice(after));
+  const placeholders = format !== null && /%[Is]/.test(text);
+  return { text, dynamic: concatenated || placeholders };
+}
+
 const PLATFORM = /app\.is_platform_admin/i;
+
+/** Words that end a FROM / USING list at its own depth. */
+const LIST_END = new RegExp(
+  String.raw`(?:WHERE|GROUP|HAVING|ORDER|LIMIT|OFFSET|FETCH|WINDOW|UNION|INTERSECT|EXCEPT|RETURNING|ON\s+CONFLICT|FOR|LOOP|THEN|INTO|WHEN|DO)\b`,
+  'iy'
+);
+const LIST_ITEM = new RegExp(String.raw`\s*(?:LATERAL\s+)?(?:ONLY\s+)?(${QUALIFIED})`, 'iy');
+
+/** The tables a statement reads or writes (strings blanked), with their offsets in it. */
+export function tableReferences(text: string): Array<{ name: string; index: number }> {
+  const found: Array<{ name: string; index: number }> = [];
+  const push = (m: RegExpMatchArray, group = 1) =>
+    found.push({ name: unquote(m[group]!), index: m.index! + m[0].length - m[group]!.length });
+  for (const m of text.matchAll(
+    new RegExp(String.raw`\b(?:FROM|JOIN|INTO|UPDATE|USING)\s+(?:ONLY\s+)?(${QUALIFIED})`, 'gi')
+  ))
+    push(m);
+  // `TABLE t` is `SELECT * FROM t`: after AS, a parenthesis, a set operator or INSERT INTO x.
+  for (const m of text.matchAll(
+    new RegExp(
+      String.raw`(?:^|\(|\bAS|\bUNION|\bINTERSECT|\bEXCEPT|\bALL|\bDISTINCT|\bINSERT\s+INTO\s+${QUALIFIED}(?:\s+AS\s+${IDENT})?(?:\s*\([^)]*\))?)\s*TABLE\s+(?:ONLY\s+)?(${QUALIFIED})`,
+      'gi'
+    )
+  ))
+    push(m);
+  // Every later item of a comma-separated FROM / USING list, up to the end of the list at its
+  // own parenthesis depth. `IS DISTINCT FROM` compares values and opens no list.
+  for (const m of text.matchAll(/\b(?:FROM|USING)\b/gi)) {
+    if (/\bDISTINCT\s+$/i.test(text.slice(Math.max(0, m.index! - 16), m.index!))) continue;
+    let depth = 0;
+    for (let i = m.index! + m[0].length; i < text.length; i += 1) {
+      const ch = text[i]!;
+      if (ch === '(') depth += 1;
+      else if (ch === ')') {
+        depth -= 1;
+        if (depth < 0) break;
+      } else if (ch === ';') break;
+      else if (depth > 0) continue;
+      else if (ch === ',') {
+        LIST_ITEM.lastIndex = i + 1;
+        const item = LIST_ITEM.exec(text);
+        if (item)
+          found.push({ name: unquote(item[1]!), index: LIST_ITEM.lastIndex - item[1]!.length });
+      } else if (/[A-Za-z]/.test(ch) && !/[A-Za-z0-9_$".]/.test(text[i - 1] ?? ' ')) {
+        LIST_END.lastIndex = i;
+        if (LIST_END.test(text)) break;
+      }
+    }
+  }
+  return found;
+}
 
 export class MigrationTenantContextAnalyzer {
   private readonly tables = new Map<string, TableState>();
@@ -270,18 +466,46 @@ export class MigrationTenantContextAnalyzer {
     }
   }
 
-  private flag(migration: string, text: string, offset: number, events: ContextEvent[]): void {
-    const blanked = blankStrings(text);
-    const refs = new RegExp(
-      String.raw`\b(?:FROM|JOIN|INTO|UPDATE|USING)\s+(?:ONLY\s+)?(${QUALIFIED})`,
-      'gi'
-    );
-    for (const m of blanked.matchAll(refs)) {
-      const table = unquote(m[1]!);
-      if (!this.isTenantOnly(this.tables.get(table))) continue;
-      if (tenantSetAt(events, offset + m.index!)) continue;
-      if (!this.offenders.some((o) => o.migration === migration && o.table === table))
-        this.offenders.push({ migration, table });
+  private report(migration: string, table: string): void {
+    if (!this.offenders.some((o) => o.migration === migration && o.table === table))
+      this.offenders.push({ migration, table });
+  }
+
+  /** Reports each tenant-only table `text` names; `at` fixes the position (an EXECUTE). */
+  private flag(
+    migration: string,
+    text: string,
+    offset: number,
+    events: ContextEvent[],
+    at?: number
+  ): void {
+    for (const ref of tableReferences(blankStrings(text))) {
+      if (!this.isTenantOnly(this.tables.get(ref.name))) continue;
+      if (tenantSetAt(events, at ?? offset + ref.index)) continue;
+      this.report(migration, ref.name);
+    }
+  }
+
+  /** Applies the `DYNAMIC_SQL` rule to every EXECUTE of a DO block body. */
+  private flagDynamic(
+    migration: string,
+    sql: string,
+    body: string,
+    bodyOffset: number,
+    events: ContextEvent[]
+  ): void {
+    for (const m of blankStrings(body).matchAll(
+      /\bEXECUTE\b(?!\s+(?:FUNCTION|PROCEDURE)\b)\s*/gi
+    )) {
+      const at = bodyOffset + m.index!;
+      const command = executedCommand(body.slice(m.index! + m[0].length));
+      if (command && DDL_COMMAND.test(command.text)) continue;
+      if (command && !command.dynamic) {
+        this.flag(migration, command.text, at, events, at);
+        continue;
+      }
+      if (tenantSetAt(events, at) || dynamicSqlAllowed(sql, at)) continue;
+      this.report(migration, DYNAMIC_SQL);
     }
   }
 
@@ -296,13 +520,25 @@ export class MigrationTenantContextAnalyzer {
       consumed = offset + statement.length;
       const head = statement.replace(/^\s+/, '');
       if (/^CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\b/i.test(head)) continue;
-      events.push(...contextEvents(statement, offset));
+      const statementEvents = contextEvents(statement, offset);
+      const body = /^DO\b/i.test(head)
+        ? /\$([A-Za-z0-9_]*)\$([\s\S]*)\$\1\$/.exec(statement)
+        : null;
+      const bodyOffset = body ? offset + statement.indexOf(body[2]!) : 0;
+      if (body)
+        for (const branch of plpgsqlBranches(blankStrings(body[2]!)))
+          for (const event of statementEvents) {
+            const end = bodyOffset + branch.end;
+            if (event.kind !== 'set' || event.at < bodyOffset + branch.start || event.at >= end)
+              continue;
+            // Nested branches: the innermost (earliest) end applies.
+            event.until = Math.min(event.until ?? end, end);
+          }
+      events.push(...statementEvents);
       // A transaction-local setting ends with its transaction.
       if (/^(?:COMMIT|ROLLBACK|END)\b/i.test(head)) events.push({ at: offset, kind: 'expire' });
       if (/^DO\b/i.test(head)) {
-        const body = /\$([A-Za-z0-9_]*)\$([\s\S]*)\$\1\$/.exec(statement);
         if (!body) continue;
-        const bodyOffset = offset + statement.indexOf(body[2]!);
         // Static DDL inside the block, usually behind IF [NOT] EXISTS (...) THEN.
         for (const inner of splitSqlStatements(body[2]!)) {
           const start = blankStrings(inner).search(
@@ -312,11 +548,12 @@ export class MigrationTenantContextAnalyzer {
         }
         this.applyDynamicDdl(body[2]!, knownTables);
         this.flag(migration, body[2]!, bodyOffset, events);
+        this.flagDynamic(migration, sql, body[2]!, bodyOffset, events);
         continue;
       }
       if (
-        /^(?:SELECT|INSERT|UPDATE|DELETE|WITH|MERGE)\b/i.test(head) ||
-        /^CREATE\s+(?:(?:TEMP|TEMPORARY|UNLOGGED)\s+)?(?:TABLE|MATERIALIZED\s+VIEW)\b[\s\S]*?\bAS\s*\(?\s*(?:SELECT|WITH)\b/i.test(
+        /^\(*\s*(?:SELECT|INSERT|UPDATE|DELETE|WITH|MERGE|TABLE)\b/i.test(head) ||
+        /^CREATE\s+(?:(?:TEMP|TEMPORARY|UNLOGGED)\s+)?(?:TABLE|MATERIALIZED\s+VIEW)\b[\s\S]*?\bAS\s*\(?\s*(?:SELECT|WITH|TABLE)\b/i.test(
           head
         )
       ) {
