@@ -47,6 +47,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { SectionCard } from '@/components/ui/section-card';
 import { PageHeader } from '@/components/ui/page-header';
 import { Textarea } from '@/components/ui/textarea';
 import { useEntitlements } from '@/components/entitlements-provider';
@@ -55,6 +56,7 @@ import { trpc } from '@/lib/trpc';
 import { inviteCopyForVertical } from '@/lib/team/invite-copy';
 import { useBreadcrumbLabel } from '@/lib/breadcrumb-store';
 import { cn } from '@/lib/utils';
+import { MemberAccessPanel } from '../member-access-panel';
 import { format } from 'date-fns';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
@@ -97,6 +99,17 @@ type Member = NonNullable<RouterOutput['team']['getById']>;
 type PersonalStats = RouterOutput['teamStats']['getForUser'];
 type PerformanceNotes = RouterOutput['team']['listPerformanceNotes'];
 type LeaveBalances = RouterOutput['team']['getLeaveBalances'];
+
+/** DEV-959A: the read-only sub-role view, in pharmacy workspaces only. */
+function PharmacyMemberAccessCard({ memberId }: { memberId: string }) {
+  const { vertical } = useEntitlements();
+  if (vertical !== 'PHARMACY') return null;
+  return (
+    <SectionCard title="What this person can do">
+      <MemberAccessPanel userId={memberId} />
+    </SectionCard>
+  );
+}
 
 export function MemberDetailContent({ memberId }: { memberId: string }) {
   const { data: session } = useSession();
@@ -297,6 +310,9 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
       {canViewPersonal && (
         <LeaveBalancesBlock data={balancesQuery.data} isLoading={balancesQuery.isLoading} />
       )}
+
+      {/* DEV-959A: read-only sub-roles, for the administrators who manage members */}
+      {isAdmin && <PharmacyMemberAccessCard memberId={memberId} />}
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
         {/* Projects */}

@@ -41,6 +41,7 @@ const state = vi.hoisted(() => ({
     isError: false,
   },
   invite: { mutate: vi.fn(), isPending: false },
+  memberAccess: vi.fn(() => ({ data: undefined, isLoading: true, isError: false })),
 }));
 vi.mock('next-auth/react', () => ({
   useSession: () => ({ data: { user: { role: state.role } } }),
@@ -62,6 +63,7 @@ vi.mock('@/lib/trpc', () => ({
       overview: { useQuery: state.overviewQuery },
       departments: { useQuery: () => state.departments },
       roles: { useQuery: () => state.roles },
+      memberAccess: { useQuery: state.memberAccess },
     },
     team: {
       getAll: { useQuery: state.directory },
@@ -510,6 +512,24 @@ describe('pharmacy team without HR', () => {
     expect(members.queryByText('Former colleague')).toBeNull();
     expect(state.overviewQuery).toHaveBeenCalledWith(undefined, { enabled: true, retry: false });
     expect(state.directory).toHaveBeenCalledWith(undefined, { enabled: false });
+  });
+
+  it('offers a read-only view of what each member can do', () => {
+    state.overview.data.organization.users.push({
+      id: 'cashier',
+      name: 'Ayesha',
+      role: 'EMPLOYEE',
+      status: 'ACTIVE',
+      title: 'Cashier',
+      organizationRoleId: null,
+    });
+    render(<TeamContent />);
+    const members = within(screen.getByRole('list', { name: 'Workspace members' }));
+    expect(members.getAllByRole('button', { name: /^What they can do/ })).toHaveLength(2);
+    expect(state.memberAccess).not.toHaveBeenCalled();
+    fireEvent.click(members.getByRole('button', { name: 'What they can do: Ayesha' }));
+    expect(screen.getByRole('dialog', { name: 'What Ayesha can do' })).toBeVisible();
+    expect(state.memberAccess).toHaveBeenCalledWith({ userId: 'cashier' }, { retry: false });
   });
 
   it('shows member loading and failure states without claiming there are no members', () => {

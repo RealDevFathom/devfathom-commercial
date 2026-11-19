@@ -29,6 +29,7 @@ import { trpc } from '@/lib/trpc';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { cn } from '@/lib/utils';
+import { MemberAccessButton } from './member-access-panel';
 import { formatDistanceToNow } from 'date-fns';
 
 type TeamMember = inferRouterOutputs<AppRouter>['team']['getAll'][number];
@@ -283,7 +284,10 @@ function StaffProfilesOffNotice({
                 ? roleNames.get(user.organizationRoleId)
                 : undefined;
               return (
-                <li key={user.id} className="flex items-center justify-between gap-4 py-3">
+                <li
+                  key={user.id}
+                  className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+                >
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold text-foreground">{user.name}</p>
                     <p className="truncate text-xs text-foreground">
@@ -292,7 +296,10 @@ function StaffProfilesOffNotice({
                     </p>
                     <p className="truncate text-xs text-muted-foreground">{user.title}</p>
                   </div>
-                  <StatusPill status={user.status} label={statusLabel(user.status)} />
+                  <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+                    <StatusPill status={user.status} label={statusLabel(user.status)} />
+                    {isPharmacy ? <MemberAccessButton userId={user.id} name={user.name} /> : null}
+                  </div>
                 </li>
               );
             })}
