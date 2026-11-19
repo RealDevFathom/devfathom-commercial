@@ -97,10 +97,18 @@ describe('ApprovalAuthenticatorSection (DEV-879)', () => {
   });
 
   it('tells an enrolled member their PIN no longer approves and how to recover', () => {
-    mocks.status = { ...baseStatus, enrolled: true };
+    mocks.status = { ...baseStatus, enrolled: true, required: true };
     render(<ApprovalAuthenticatorSection />);
     expect(screen.getByText(/Your PIN is no longer accepted for approvals/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Set up authenticator' })).toBeNull();
+  });
+
+  it('DEV-961: tells an enrolled member that, while it is off, their PIN approves and the app waits', () => {
+    mocks.status = { ...baseStatus, enrolled: true, required: false };
+    render(<ApprovalAuthenticatorSection />);
+    expect(screen.getByText(/approvals take your permanent PIN for now/)).toBeTruthy();
+    expect(screen.getByText(/codes work again as soon as the owner turns it back on/)).toBeTruthy();
+    expect(screen.queryByText(/Your PIN is no longer accepted/)).toBeNull();
   });
 
   it('shows the organization switch to the owner only', () => {
