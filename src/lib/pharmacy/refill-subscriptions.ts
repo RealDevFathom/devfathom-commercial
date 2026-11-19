@@ -607,7 +607,7 @@ export async function approveRefillCycle(
     throw new RefillSubscriptionError('INVALID_STATE');
   }
   // DEV-941 / DEV-962: the PIN must belong to someone who may sign a prescription check at
-  // the cycle's branch: an ACTIVE member holding `pharmacy:dispense` with an active
+  // the cycle's branch: an ACTIVE member holding the dispensing permission with an active
   // assignment to it, or an organisation admin. The shared rule (`rxReviewSignerDenial`),
   // read live inside the approval's transaction, so the two never drift.
   const approverDenial = await rxReviewSignerDenial(db, {
