@@ -1,3 +1,5 @@
+import { billAllocationDiscount } from './bill-discount';
+
 /** Integer money shared by checkout, refund authorization and journal adapters. */
 export function apportionDiscount(totalMinor: number, weights: readonly number[]): number[] {
   const total = weights.reduce((sum, weight) => sum + weight, 0);
@@ -15,6 +17,8 @@ type Money = { grossMinor?: number | null; discountMinor?: number | null };
 type ReturnMoney = Money & { canonicalUnits: number };
 type SoldMoney = {
   tierAllocationDiscounts?: unknown;
+  /** DEV-956: each allocation's share of the line's whole-bill discount. */
+  billAllocationDiscounts?: unknown;
   grossMinor?: number;
   quantity: number;
   unitPriceMinor: number;
@@ -37,7 +41,8 @@ export function saleAllocationMoney<T extends Money & { id: string; canonicalUni
     grossMinor: row.grossMinor ?? historicalGross[i]!,
     discountMinor:
       (row.discountMinor ?? historicalDiscount[i]!) +
-      tierAllocationDiscount(line.tierAllocationDiscounts, row.id),
+      tierAllocationDiscount(line.tierAllocationDiscounts, row.id) +
+      billAllocationDiscount(line.billAllocationDiscounts, row.id),
   }));
 }
 

@@ -73,6 +73,8 @@ export type CounterReceiptLine = {
   discountMinor: number;
   tierDiscountMinor?: number;
   tierName?: string | null;
+  /** DEV-956: this line's share of the whole-bill discount, already inside discountMinor. */
+  billDiscountMinor?: number;
   /** #727: the promotion name frozen on the line when it was priced; never the live rule. */
   promotionName?: string | null;
   lineTotalMinor: number;
@@ -142,6 +144,8 @@ type Strings = {
   gross: string;
   discount: string;
   tierDiscount: string;
+  /** DEV-956: the whole-bill discount, shown once on the receipt. */
+  billDiscount: string;
   promotion: string;
   net: string;
   tendered: string;
@@ -190,6 +194,7 @@ export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Stri
     gross: 'Gross',
     discount: 'Discount',
     tierDiscount: 'Prepaid tier discount',
+    billDiscount: 'Whole-bill discount',
     promotion: 'Promotion',
     net: 'Total',
     tendered: 'Tendered',
@@ -242,6 +247,7 @@ export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Stri
     gross: 'کل رقم',
     discount: 'رعایت',
     tierDiscount: 'پری پیڈ درجے کی رعایت',
+    billDiscount: 'پورے بل پر رعایت',
     promotion: 'پروموشن',
     net: 'قابلِ ادائیگی',
     tendered: 'ادا شدہ',
@@ -423,11 +429,14 @@ export function receiptLineLabel(line: CounterReceiptLine, locale: CounterReceip
 
 /** #727: descriptive savings only; the discount is already inside the line total. */
 export function receiptPromotionLabel(
-  line: Pick<CounterReceiptLine, 'promotionName' | 'discountMinor' | 'tierDiscountMinor'>,
+  line: Pick<
+    CounterReceiptLine,
+    'promotionName' | 'discountMinor' | 'tierDiscountMinor' | 'billDiscountMinor'
+  >,
   locale: CounterReceiptLocale
 ): string | null {
   if (!line.promotionName || line.discountMinor <= 0) return null;
-  const label = `${COUNTER_RECEIPT_STRINGS[locale].promotion}: ${line.promotionName} (-${formatMinor(line.discountMinor - (line.tierDiscountMinor ?? 0), locale)})`;
+  const label = `${COUNTER_RECEIPT_STRINGS[locale].promotion}: ${line.promotionName} (-${formatMinor(line.discountMinor - (line.tierDiscountMinor ?? 0) - (line.billDiscountMinor ?? 0), locale)})`;
   return label.length <= 160 ? label : label.slice(0, 160);
 }
 
@@ -560,19 +569,30 @@ export function formatReceiptIssuedAt(value: string | null): string {
   return Number.isNaN(date.getTime()) ? '—' : formatKarachiDateTime(date);
 }
 
-/** Separate informational savings lines; already included in total discounts. */
+/**
+ * Separate informational savings lines; already included in total discounts. DEV-956: the
+ * whole-bill discount comes first, as one line for the bill, then each prepaid tier.
+ */
 export function receiptTierLines(
   receipt: Pick<CounterReceipt, 'lines'>,
   locale: CounterReceiptLocale
 ) {
+  const billMinor = receipt.lines.reduce((sum, line) => sum + (line.billDiscountMinor ?? 0), 0);
+  const bill =
+    billMinor > 0
+      ? [`${COUNTER_RECEIPT_STRINGS[locale].billDiscount}: -${formatMinor(billMinor, locale)}`]
+      : [];
   const tiers = new Map<string, number>();
   for (const line of receipt.lines)
     if (line.tierName && line.tierDiscountMinor)
       tiers.set(line.tierName, (tiers.get(line.tierName) ?? 0) + line.tierDiscountMinor);
-  return [...tiers].map(
-    ([name, minor]) =>
-      `${COUNTER_RECEIPT_STRINGS[locale].tierDiscount} · ${name}: -${formatMinor(minor, locale)}`
-  );
+  return [
+    ...bill,
+    ...[...tiers].map(
+      ([name, minor]) =>
+        `${COUNTER_RECEIPT_STRINGS[locale].tierDiscount} · ${name}: -${formatMinor(minor, locale)}`
+    ),
+  ];
 }
 
 /**

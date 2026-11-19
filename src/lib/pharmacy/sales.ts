@@ -227,6 +227,12 @@ export class PharmacySaleError extends Error {
       | 'BILL_HAS_PAYMENTS'
       | 'BILL_HAS_CARD_TERMINAL_PAYMENT'
       | 'NOT_BILL_OWNER'
+      // DEV-956: the owner has not switched the whole-bill discount on.
+      | 'BILL_DISCOUNT_OFF'
+      // DEV-956: a whole-bill discount is given only before any payment on the bill.
+      | 'BILL_DISCOUNT_AFTER_PAYMENT'
+      // DEV-956: a paid bill with a whole-bill discount takes no new line.
+      | 'BILL_DISCOUNT_LOCKED_BY_PAYMENT'
   ) {
     super(reason);
   }
@@ -401,9 +407,11 @@ export async function replaySaleLine(db: ScopedDb, scope: LedgerScope, input: Ad
   // Saved lines are never re-priced, so an omitted manual discount means none. Only a
   // voucher or automatic promotion priced the line itself, and either needs no manual discount.
   const manualDiscountRequested = Boolean(input.discountKind || input.discountMinor);
+  // DEV-956: a whole-bill share goes only onto a line added with no discount of its own, so
+  // the line was added with none; the share given later is not part of this request.
   const discountChanged = previous.voucherId
     ? false
-    : previous.promotionId
+    : previous.promotionId || previous.billDiscountMinor > 0
       ? manualDiscountRequested
       : previous.discountKind !== (input.discountKind ?? null) ||
         previous.discountMinor !== (input.discountMinor ?? 0);
@@ -642,6 +650,70 @@ async function voucherForRedemption(
   return { ...voucher, approverUserId };
 }
 
+/** DEV-956: card-terminal attempts that may have charged, or may still charge, the bill. */
+export const LIVE_CARD_TERMINAL_STATUSES = [
+  'CREATED',
+  'SENT',
+  'UNKNOWN',
+  'APPROVED',
+  'SETTLED',
+] as const;
+
+/** DEV-956: whether the bill has taken, or may be taking, any payment of any kind. */
+export async function saleHasPaymentActivity(db: ScopedDb, scope: LedgerScope, saleId: string) {
+  const [tender, attempt] = await Promise.all([
+    db.pharmacyTender.findFirst({
+      where: { organizationId: scope.organizationId, branchId: scope.branchId, saleId },
+      select: { id: true },
+    }),
+    db.pharmacyCardTerminalAttempt.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        saleId,
+        status: { in: [...LIVE_CARD_TERMINAL_STATUSES] },
+      },
+      select: { id: true },
+    }),
+  ]);
+  return Boolean(tender || attempt);
+}
+
+/**
+ * DEV-956: clear every whole-bill share on the bill before a line is added, record it, and return
+ * the amount cleared. A bill that has taken any payment keeps its prices: no line can be added.
+ */
+async function clearBillDiscountForNewLine(
+  db: ScopedDb,
+  scope: LedgerScope,
+  sale: Awaited<ReturnType<typeof saleInScope>>
+) {
+  if (await saleHasPaymentActivity(db, scope, sale.id))
+    throw new PharmacySaleError('BILL_DISCOUNT_LOCKED_BY_PAYMENT');
+  const shared = sale.lines.filter((row) => row.billDiscountMinor > 0);
+  for (const row of shared)
+    // A line that held only a bill share had no discount kind or approval of its own.
+    await db.pharmacySaleLine.update({
+      where: { organizationId_id: { organizationId: scope.organizationId, id: row.id } },
+      data: {
+        discountMinor: row.discountMinor - row.billDiscountMinor,
+        billDiscountMinor: 0,
+        billAllocationDiscounts: Prisma.DbNull,
+        discountKind: null,
+        approvalPolicy: null,
+        approvedByUserId: null,
+      },
+    });
+  const clearedMinor = shared.reduce((sum, row) => sum + row.billDiscountMinor, 0);
+  await event(db, scope, sale.id, 'BILL_DISCOUNT', 'CLEARED', {
+    cause: 'LINE_ADDED',
+    totalMinor: 0,
+    previousTotalMinor: clearedMinor,
+    lines: shared.map((row) => ({ saleLineId: row.id, discountMinor: row.billDiscountMinor })),
+  });
+  return clearedMinor;
+}
+
 async function addSaleLineWithAllocation(
   db: ScopedDb,
   scope: LedgerScope,
@@ -674,6 +746,15 @@ async function addSaleLineWithAllocation(
     data: { status: 'OPEN' },
   });
   if (locked.count !== 1) throw new PharmacySaleError('INVALID_STATE');
+  // DEV-956: a whole-bill discount was given on the bill as it stood. A new line changes the
+  // bill, so the discount is cleared (it never silently covers only some items) and the cashier
+  // is told to give it again. Rolled back with the add if the add fails. The lines are read
+  // again now the sale row is locked: a discount committed while this add waited for the lock
+  // is seen here, never missed through the earlier read.
+  const lockedSale = await saleInScope(db, scope, input.saleId);
+  const billDiscountClearedMinor = (lockedSale.lines ?? []).some((row) => row.billDiscountMinor > 0)
+    ? await clearBillDiscountForNewLine(db, scope, lockedSale)
+    : 0;
   if (
     !Number.isSafeInteger(input.quantity) ||
     input.quantity <= 0 ||
@@ -938,7 +1019,13 @@ async function addSaleLineWithAllocation(
         }
       : {}),
   });
-  return { line, allocation, replayed: false, ...(promotionNotice ? { promotionNotice } : {}) };
+  return {
+    line,
+    allocation,
+    replayed: false,
+    ...(promotionNotice ? { promotionNotice } : {}),
+    ...(billDiscountClearedMinor ? { billDiscountClearedMinor } : {}),
+  };
 }
 
 /**

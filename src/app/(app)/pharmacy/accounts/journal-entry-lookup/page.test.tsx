@@ -2,7 +2,12 @@ import { TRPCError } from '@trpc/server';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ lookup: vi.fn(), context: vi.fn(), actor: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  lookup: vi.fn(),
+  context: vi.fn(),
+  actor: vi.fn(),
+  branches: vi.fn(),
+}));
 vi.mock('@/lib/pharmacy/accounts/journal-entry-lookup', () => ({
   journalEntryLookupRouter: { createCaller: () => ({ lookup: mocks.lookup }) },
 }));
@@ -34,23 +39,77 @@ async function html(query: Record<string, string | string[] | undefined>) {
 }
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.actor.mockResolvedValue({ session: {}, organization: {}, support: null });
-  mocks.context.mockResolvedValue({});
+  mocks.actor.mockResolvedValue({ session: {}, organization: { id: 'org-1' }, support: null });
+  // DEV-103: the branch picker lists the owner's active branches through this context.
+  mocks.context.mockResolvedValue({
+    session: { user: { id: 'owner-1', role: 'ADMIN' } },
+    db: { pharmacyBranch: { findMany: mocks.branches } },
+  });
+  mocks.branches.mockResolvedValue([
+    { id: 'branch-1', name: 'Main Branch' },
+    { id: 'branch-2', name: 'Gulshan Branch' },
+  ]);
   mocks.lookup.mockResolvedValue({ status: 'NOT_FOUND' });
 });
 
 describe('journal lookup page', () => {
-  it('renders a preserved labeled GET form and performs no read initially or for invalid/repeated input', async () => {
+  // DEV-103: before a valid lookup, the only read is the branch picker's list of the owner's
+  // branch names: one actor resolution and one branch list per render, never the lookup.
+  const expectOnlyTheBranchList = (renders: number) => {
+    expect(mocks.actor).toHaveBeenCalledTimes(renders);
+    expect(mocks.context).toHaveBeenCalledTimes(renders);
+    expect(mocks.branches).toHaveBeenCalledTimes(renders);
+    expect(mocks.branches).toHaveBeenCalledWith({
+      where: { organizationId: 'org-1', active: true },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true },
+    });
+    expect(mocks.lookup).not.toHaveBeenCalled();
+  };
+
+  it('renders a preserved labeled GET form and reads only the branch list initially or for invalid/repeated input', async () => {
     const initial = await html({});
     expect(initial).toContain('method="get"');
     expect(initial).toContain('action="/pharmacy/accounts/journal-entry-lookup"');
-    expect(initial).toContain('Branch ID');
+    expect(initial).toContain('<label for="journal-lookup-branchId">Branch</label>');
     expect(initial).toContain('Back to finance');
     await html({ ...valid, entryId: ['one', 'two'] });
     await html({ ...valid, unexpected: 'value' });
-    expect(mocks.actor).not.toHaveBeenCalled();
-    expect(mocks.context).not.toHaveBeenCalled();
-    expect(mocks.lookup).not.toHaveBeenCalled();
+    expectOnlyTheBranchList(3);
+  });
+
+  describe('DEV-103 branch picker', () => {
+    it('offers the active branches of the signed-in organization by name, not a typed ID', async () => {
+      const output = await html({});
+      expect(output).toMatch(/<select[^>]*id="journal-lookup-branchId"[^>]*name="branchId"/);
+      expect(output).toContain('>Main Branch</option>');
+      expect(output).toContain('>Gulshan Branch</option>');
+      expect(output).not.toContain('Branch ID');
+      expect(output).not.toMatch(/<input[^>]*name="branchId"/);
+    });
+
+    it('selects the requested branch', async () => {
+      expect(await html(valid)).toMatch(/<option value="branch-1" selected="">/);
+    });
+
+    it('shows the prompt, not another branch, for an unlisted branch and leaves it to the router', async () => {
+      mocks.lookup.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN' }));
+      const output = await html({ ...valid, branchId: 'branch-other' });
+      expect(output).toContain('<option value="">Choose a branch</option>');
+      expect(output).not.toMatch(/<option value="branch-[12]" selected/);
+      expect(mocks.lookup).toHaveBeenCalledWith({ ...sent, branchId: 'branch-other' });
+      expect(output).toContain('You do not have access to this financial report scope.');
+    });
+
+    it('offers no branches to someone who is not an owner', async () => {
+      mocks.context.mockResolvedValue({
+        session: { user: { id: 'u', role: 'EMPLOYEE' } },
+        db: { pharmacyBranch: { findMany: mocks.branches } },
+      });
+      const output = await html({});
+      expect(mocks.branches).not.toHaveBeenCalled();
+      expect(output).not.toContain('Main Branch');
+    });
   });
 
   it('associates field-level validation errors with the invalid inputs only', async () => {
@@ -59,7 +118,8 @@ describe('journal lookup page', () => {
       const marker = `id="journal-lookup-${name}"`;
       const at = output.indexOf(marker);
       if (at < 0) return '';
-      const start = output.lastIndexOf('<input', at);
+      // The branch is a picker (DEV-103); every other field is an input.
+      const start = Math.max(output.lastIndexOf('<input', at), output.lastIndexOf('<select', at));
       const end = output.indexOf('>', at);
       return start < 0 || end < 0 ? '' : output.slice(start, end + 1);
     };
@@ -248,7 +308,6 @@ describe('journal lookup page', () => {
     const output = await html({ ...valid, [name]: value });
     expect(output).toContain(message);
     expect(output).toContain(`aria-describedby="journal-lookup-${name}-error"`);
-    expect(mocks.actor).not.toHaveBeenCalled();
-    expect(mocks.lookup).not.toHaveBeenCalled();
+    expectOnlyTheBranchList(1);
   });
 });

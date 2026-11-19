@@ -2,7 +2,7 @@ import 'server-only';
 
 import { can, subjectFromSession } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { counterOperatorDenial } from '../counter-capability';
+import { counterBranchAssignmentDenial, counterOperatorDenial } from '../counter-capability';
 import type { LedgerScope } from '../stock-ledger';
 
 /**
@@ -21,11 +21,20 @@ import type { LedgerScope } from '../stock-ledger';
  *     (`counterOperatorDenial`, the gate the resolve procedure applies), so a manager assigned
  *     only to another branch, or whose counter access is denied, does not count;
  *   - they hold `pharmacy:manage` (the refund rule).
+ *
+ * DEV-103: another control that reuses this rule but whose procedure does not apply the counter
+ * gate passes `gate: 'branch'`: then the operator gate is only the branch rule the counter gate
+ * ends with (`counterBranchAssignmentDenial`: an active assignment to this branch, or an
+ * organization ADMIN), without the `pharmacy:counter` grant. The default is the card-terminal
+ * rule above, unchanged.
  */
+export type ReviewerGate = 'counter' | 'branch';
+
 export async function otherCardTerminalReviewers(
   db: ScopedDb,
   scope: Pick<LedgerScope, 'organizationId' | 'branchId' | 'actorId'>,
-  now = new Date()
+  now = new Date(),
+  options: { gate?: ReviewerGate } = {}
 ): Promise<{ id: string; name: string | null }[]> {
   const credentials = await db.restaurantOperatorCredential.findMany({
     where: {
@@ -60,12 +69,13 @@ export async function otherCardTerminalReviewers(
     const other = credential.staffProfile.user;
     if (!other || other.id === scope.actorId || checked.has(other.id)) continue;
     checked.add(other.id);
-    if (
-      await counterOperatorDenial(db, other, scope.organizationId, scope.branchId, {
-        source: 'TRPC',
-      })
-    )
-      continue;
+    const denial =
+      options.gate === 'branch'
+        ? await counterBranchAssignmentDenial(db, other, scope.organizationId, scope.branchId)
+        : await counterOperatorDenial(db, other, scope.organizationId, scope.branchId, {
+            source: 'TRPC',
+          });
+    if (denial) continue;
     if (
       !(await can(subjectFromSession(other), 'pharmacy:manage', undefined, {
         db,
