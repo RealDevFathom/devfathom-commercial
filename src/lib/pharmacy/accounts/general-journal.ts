@@ -254,6 +254,50 @@ async function assertOpenPeriod(db: ScopedDb, scope: JournalVoucherScope, at: Da
   }
 }
 
+/**
+ * Whether a saved voucher holds exactly this normalised draft: reference, purpose,
+ * currency, business instant, reason, evidence reference and every line.
+ */
+function sameVoucherDraft(
+  saved: {
+    reference: string;
+    purpose: string;
+    currency: string;
+    occurredAt: Date;
+    reason: string;
+    evidenceReference: string;
+    lines: readonly {
+      lineNumber: number;
+      accountCode: string;
+      side: string;
+      amountMinor: number;
+      memo: string | null;
+    }[];
+  },
+  draft: NormalizedVoucherDraft
+): boolean {
+  return (
+    saved.reference === draft.reference &&
+    saved.purpose === draft.purpose &&
+    saved.currency === draft.currency &&
+    saved.occurredAt.getTime() === draft.occurredAt.getTime() &&
+    saved.reason === draft.reason &&
+    saved.evidenceReference === draft.evidenceReference &&
+    saved.lines.length === draft.lines.length &&
+    draft.lines.every((line, index) => {
+      const savedLine = saved.lines[index];
+      return (
+        savedLine !== undefined &&
+        savedLine.lineNumber === line.lineNumber &&
+        savedLine.accountCode === line.accountCode &&
+        savedLine.side === line.side &&
+        savedLine.amountMinor === line.amountMinor &&
+        savedLine.memo === line.memo
+      );
+    })
+  );
+}
+
 export async function createJournalVoucherDraft(
   db: ScopedDb,
   scope: JournalVoucherScope,
@@ -269,6 +313,8 @@ export async function createJournalVoucherDraft(
     if (replay.branchId !== scope.branchId || replay.createdByUserId !== scope.actorId) {
       fail('IDEMPOTENCY_CONFLICT');
     }
+    // The same key replays only the same draft; changed details are refused, never dropped.
+    if (!sameVoucherDraft(replay, draft)) fail('IDEMPOTENCY_CONFLICT');
     return replay;
   }
   await assertReferenceFree(db, scope, draft.reference);

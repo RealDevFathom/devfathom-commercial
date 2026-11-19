@@ -273,6 +273,107 @@ describeDb('pharmacy journal voucher lifecycle', () => {
     expect(visible).toEqual([]);
   }, 60_000);
 
+  // DEV-949: a create replay returns the saved voucher only when its details match.
+  it('replays an identical create and refuses the same create key with changed details', async () => {
+    const original = draft(8, {
+      lines: [
+        { accountCode: 'OPERATING_EXPENSE', side: 'DEBIT', amountMinor: 12_500, memo: 'Meter 1' },
+        { accountCode: 'MANUAL_NONTRADE_ACCRUAL', side: 'CREDIT', amountMinor: 12_500 },
+      ],
+    });
+    const savedRows = () =>
+      inTenant((db) =>
+        db.pharmacyJournalVoucher.findMany({
+          where: { createKey: original.createKey },
+          include: { lines: { orderBy: { lineNumber: 'asc' } } },
+        })
+      );
+    const created = await inTenant((db) => deps.jv.createJournalVoucherDraft(db, scope, original));
+    const before = await savedRows();
+    expect(before).toHaveLength(1);
+
+    // Same key and the same details after normalisation: the same voucher, nothing new.
+    const replayed = await inTenant((db) =>
+      deps.jv.createJournalVoucherDraft(db, scope, {
+        ...original,
+        reference: `  ${original.reference} `,
+        reason: `${original.reason}  `,
+        evidenceReference: ` ${original.evidenceReference}`,
+        lines: [...original.lines].reverse(),
+      })
+    );
+    expect(replayed.id).toBe(created.id);
+    await expect(savedRows()).resolves.toEqual(before);
+
+    // Same key, different details: refused, and the saved voucher and its lines stay as they were.
+    const changed: Record<string, Record<string, unknown>> = {
+      reference: { reference: `JV-${suffix}-8-changed` },
+      amount: {
+        lines: [
+          { accountCode: 'OPERATING_EXPENSE', side: 'DEBIT', amountMinor: 99_000, memo: 'Meter 1' },
+          { accountCode: 'MANUAL_NONTRADE_ACCRUAL', side: 'CREDIT', amountMinor: 99_000 },
+        ],
+      },
+      memo: {
+        lines: [
+          { accountCode: 'OPERATING_EXPENSE', side: 'DEBIT', amountMinor: 12_500, memo: 'Meter 2' },
+          { accountCode: 'MANUAL_NONTRADE_ACCRUAL', side: 'CREDIT', amountMinor: 12_500 },
+        ],
+      },
+      currency: { currency: 'USD' },
+      occurredAt: { occurredAt: '2026-10-11T09:00:00.000Z' },
+      reason: { reason: 'Water accrual' },
+      evidenceReference: { evidenceReference: 'BILL-8-changed' },
+    };
+    for (const [field, overrides] of Object.entries(changed)) {
+      await expect(
+        inTenant((db) =>
+          deps.jv.createJournalVoucherDraft(db, scope, { ...original, ...overrides })
+        ),
+        field
+      ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+    }
+    await expect(savedRows()).resolves.toEqual(before);
+    await expect(
+      inTenant((db) =>
+        db.pharmacyJournalVoucher.count({ where: { reference: `JV-${suffix}-8-changed` } })
+      )
+    ).resolves.toBe(0);
+
+    // Another actor with the same key stays refused, even with identical details.
+    await expect(
+      inTenant((db) =>
+        deps.jv.createJournalVoucherDraft(db, { ...scope, actorId: `clerk_jv_${suffix}` }, original)
+      )
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+
+    // Once the draft is edited, replaying the original create no longer matches the saved
+    // voucher and is refused rather than returning the edited one as if it were the create.
+    const edited = await inTenant((db) =>
+      deps.jv.updateJournalVoucherDraft(db, scope, {
+        ...original,
+        reason: 'Electricity accrual, corrected',
+        voucherId: created.id,
+        expectedVersion: 1,
+      })
+    );
+    expect(edited.version).toBe(2);
+    await expect(
+      inTenant((db) => deps.jv.createJournalVoucherDraft(db, scope, original))
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+    const [after] = await savedRows();
+    expect(after).toMatchObject({
+      id: created.id,
+      version: 2,
+      status: 'DRAFT',
+      reason: 'Electricity accrual, corrected',
+    });
+    expect(after!.lines.map((line) => [line.amountMinor, line.memo])).toEqual([
+      [12_500, 'Meter 1'],
+      [12_500, null],
+    ]);
+  }, 60_000);
+
   // DEV-947: nested line rows take their organization and branch from the voucher.
   it('stores every line under its voucher scope and refuses cross-scope and unbalanced writes', async () => {
     const linesOf = (voucherId: string, org = organizationId) =>
