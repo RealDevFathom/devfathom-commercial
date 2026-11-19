@@ -91,17 +91,15 @@ export async function reserveReceiptNumberBlock(
     throw new PharmacyReceiptLeaseError('INVALID_SIZE');
   }
 
-  const device = await db.pharmacyRegisteredDevice.findFirst({
-    where: {
-      id: input.deviceId,
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-    },
-    select: { status: true, revokedAt: true },
-  });
-  if (!device || device.status !== 'ACTIVE' || device.revokedAt !== null) {
-    throw new PharmacyReceiptLeaseError('DEVICE_NOT_USABLE');
-  }
+  // DEV-957: FOR SHARE holds the counter row until the block is recorded, so a
+  // revoke cannot land between this check and the lease insert (which would hand a
+  // revoked counter numbers nobody can ever print, leaving a gap).
+  const usable = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT id FROM pharmacy_registered_devices
+    WHERE id = ${input.deviceId} AND "organizationId" = ${scope.organizationId}
+      AND "branchId" = ${scope.branchId} AND status = 'ACTIVE' AND "revokedAt" IS NULL
+    FOR SHARE`);
+  if (!usable[0]) throw new PharmacyReceiptLeaseError('DEVICE_NOT_USABLE');
 
   // DEV-637: the block is carved out of the BRANCH sequence that online sales also draw
   // from, under its row lock, so a concurrent sale or another counter's reservation can
