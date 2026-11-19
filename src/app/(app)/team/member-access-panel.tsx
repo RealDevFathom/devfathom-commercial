@@ -69,9 +69,14 @@ function SubRoleRow({ subRole }: { subRole: SubRole }) {
             </span>
           ) : null}
         </p>
-        <p id={`${id}-description`} className="text-xs leading-relaxed text-text-muted">
-          {subRole.description}
-        </p>
+        <ul
+          id={`${id}-description`}
+          className="list-disc space-y-0.5 pl-4 text-xs leading-relaxed text-text-muted"
+        >
+          {subRole.allows.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
       </div>
     </li>
   );

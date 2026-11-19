@@ -62,6 +62,29 @@ describe('what this person can do', () => {
     expect(screen.getByText('Cashier', { selector: 'p' })).toBeVisible();
   });
 
+  it('shows a partly held sub-role as a mixed tick', () => {
+    const groups = pharmacySubRoleGroups(new Set());
+    const subRole = groups[0].subRoles[0];
+    groups[0].subRoles[0] = { ...subRole, state: 'partial' };
+    state.query.mockReturnValue({
+      data: { member, groups },
+      isLoading: false,
+      isError: false,
+      refetch: state.refetch,
+    });
+    render(<MemberAccessPanel userId="u_1" />);
+    const box = screen.getByRole('checkbox', { name: new RegExp(subRole.label) });
+    expect(box).toHaveAttribute('aria-checked', 'mixed');
+    expect(screen.getByText('Partly allowed')).toBeInTheDocument();
+  });
+
+  it('lists in plain words what each sub-role allows', () => {
+    loaded([]);
+    render(<MemberAccessPanel userId="u_1" />);
+    const manage = PHARMACY_SUB_ROLES.find((subRole) => subRole.key === 'run-branches')!;
+    for (const item of manage.allows) expect(screen.getByText(item.text)).toBeInTheDocument();
+  });
+
   it('ignores a click on a tick', () => {
     loaded([]);
     render(<MemberAccessPanel userId="u_1" />);

@@ -24,6 +24,8 @@ const isWildcard = (capability: string) => capability === '*' || capability.ends
 /** Every action a pharmacy workspace can grant or check, from the real catalogue. */
 const PHARMACY_ACTIONS = new Set<string>([
   ...ALL_ACTIONS.filter((action) => action.startsWith('pharmacy:')),
+  // Shared report and procedure gates pharmacy workflows check, from the full action list.
+  ...ALL_ACTIONS.filter((action) => action.startsWith('reports:') || action.startsWith('sop:')),
   ...PHARMACY_CHECKED_CAPABILITIES,
   ...PHARMACY_CAPABILITIES.filter((capability) => !isWildcard(capability)),
   ...PHARMACY_ROLE_TEMPLATES.flatMap((template) =>
@@ -83,14 +85,18 @@ describe('pharmacy sub-role catalogue', () => {
     }
   });
 
-  it('gives every sub-role a unique key, a plain label and a one-line description', () => {
+  it('gives every sub-role a unique key, a plain label and plain lines of what it allows', () => {
     const keys = PHARMACY_SUB_ROLES.map((subRole) => subRole.key);
     expect(new Set(keys).size).toBe(keys.length);
     for (const subRole of PHARMACY_SUB_ROLES) {
       expect(subRole.actions.length).toBeGreaterThan(0);
-      expect(subRole.label).not.toMatch(/:/);
-      expect(subRole.description).not.toMatch(/\n/);
-      expect(subRole.description.length).toBeGreaterThan(0);
+      expect(subRole.label.length).toBeGreaterThan(0);
+      expect(subRole.allows.length).toBeGreaterThan(0);
+      for (const { text } of subRole.allows) {
+        expect(text).not.toMatch(/\n/);
+        // Owner-facing words, never an action name.
+        expect(text).not.toMatch(/\b(pharmacy|reports|sop):[a-z-]+/);
+      }
     }
   });
 
@@ -139,9 +145,16 @@ describe('pharmacy sub-role catalogue', () => {
   });
 
   it('marks a sub-role partly held when only some of its actions are allowed', () => {
-    const states = pharmacySubRoleStates(new Set(['pharmacy:counter']));
-    expect(states.get('take-payment')).toBe('on');
-    expect(states.get('dispense-prescriptions')).toBe('off');
+    // A test-only catalogue: today every real sub-role holds one action.
+    const catalogue = [
+      { key: 'counter-and-close', actions: ['pharmacy:counter', 'pharmacy:close'] as const },
+      { key: 'dispense', actions: ['pharmacy:dispense'] as const },
+    ];
+    const partly = pharmacySubRoleStates(new Set(['pharmacy:counter']), catalogue);
+    expect(partly.get('counter-and-close')).toBe('partial');
+    expect(partly.get('dispense')).toBe('off');
+    const whole = pharmacySubRoleStates(new Set(['pharmacy:counter', 'pharmacy:close']), catalogue);
+    expect(whole.get('counter-and-close')).toBe('on');
   });
 });
 
