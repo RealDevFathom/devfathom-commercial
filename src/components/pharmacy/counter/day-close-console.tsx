@@ -20,7 +20,11 @@ import { formatMinor, type CounterReceiptLocale } from '@/lib/pharmacy/counter-r
 import { printCounterBrowserZReport } from '@/lib/pharmacy/counter-browser-print';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { amountInputError, amountInputToMinor } from '@/lib/money-input';
-import { pharmacyBusinessDay, pharmacyDayEndLabel } from '@/lib/pharmacy/business-day';
+import {
+  pharmacyBusinessDay,
+  pharmacyDayEndHourOn,
+  pharmacyDayEndLabel,
+} from '@/lib/pharmacy/business-day';
 import { workspaceTimezone } from '@/lib/timezone';
 import {
   clearDayCloseDraft,
@@ -212,15 +216,13 @@ function DayCloseBranches({
   const timeZone = branches.data?.timezone;
   const linked = branches.data?.branches.find((b) => b.id === initial?.branch)?.id;
   const branchId = selected || linked || branches.data?.branches[0]?.id || '';
-  const dayEndsAtHour = branches.data?.branches.find(
-    (b) => b.id === branchId
-  )?.businessDayEndsAtHour;
+  const dayEnd = branches.data?.branches.find((b) => b.id === branchId)?.businessDayEndsAtHistory;
   // Until the operator picks a day: today's business day on the branch's clock (the
   // workspace's zone and, DEV-958A, the branch's "day ends at" hour), settled once the
   // zone is known, so a page left open past the day's end keeps its day.
   const today = useMemo(
-    () => (timeZone ? pharmacyBusinessDay({ timeZone, dayEndsAtHour }) : ''),
-    [timeZone, dayEndsAtHour]
+    () => (timeZone ? pharmacyBusinessDay({ timeZone, dayEnd }) : ''),
+    [timeZone, dayEnd]
   );
   const date = picked ?? today;
   const currency = branches.data?.currency;
@@ -265,10 +267,11 @@ function DayCloseBranches({
             />
           </label>
         </div>
-        {dayEndsAtHour ? (
+        {date && pharmacyDayEndHourOn({ dayEnd }, date) ? (
           <p className="mt-3 text-sm text-text-muted">
-            This branch&apos;s business day ends at {pharmacyDayEndLabel(dayEndsAtHour)}: sales
-            after midnight and before then count on the day before.
+            This branch&apos;s business day starts at{' '}
+            {pharmacyDayEndLabel(pharmacyDayEndHourOn({ dayEnd }, date))}: sales after midnight and
+            before then count on the day before.
           </p>
         ) : null}
         {branches.isLoading && <p role="status">Loading pharmacy branches…</p>}
@@ -363,8 +366,7 @@ function DayCloseForm({
   const data = preview.data;
   // Only today's business day can be reopened. Read from the clock on every render, not
   // memoized, so a page left open past the day's end never offers yesterday's reopen.
-  const isToday =
-    date === pharmacyBusinessDay({ timeZone: data.timezone, dayEndsAtHour: data.dayEndsAtHour });
+  const isToday = date === pharmacyBusinessDay({ timeZone: data.timezone, dayEnd: data.dayEnd });
   const reopenPinValid = /^\d{4,8}$/.test(reopenPin);
   // A close cut after a reopen records the variance note, not a re-cut reason.
   const followsReopen = close.data ? Boolean(data.close?.reopen) : Boolean(data.closeFollowsReopen);

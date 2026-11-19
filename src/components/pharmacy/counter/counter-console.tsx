@@ -738,10 +738,10 @@ function ScopedPharmacyCounterConsole({
   const branchId = selectedBranchId || (branches[0]?.id ?? '');
   // Every drawer, tender and loyalty write is stamped with the branch's business day:
   // DEV-958A, the workspace's day ending at the branch's "day ends at" hour.
-  const dayEndsAtHour = branches.find((entry) => entry.id === branchId)?.businessDayEndsAtHour;
+  const dayEnd = branches.find((entry) => entry.id === branchId)?.businessDayEndsAtHistory;
   const todayBusinessDate = useCallback(
-    () => businessDate({ timeZone: workspaceZone, dayEndsAtHour }),
-    [workspaceZone, dayEndsAtHour]
+    () => businessDate({ timeZone: workspaceZone, dayEnd }),
+    [workspaceZone, dayEnd]
   );
   const recoveryScope = useMemo<TenderAttemptScope>(
     () => ({ organizationId, accountId, branchId }),

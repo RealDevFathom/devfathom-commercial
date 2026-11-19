@@ -7,7 +7,11 @@ import { Input } from '@/components/ui/input';
 import { financeAccountLabel } from '@/lib/finance/account-labels';
 import { financeEntryDescription, financeSourceLabel } from '@/lib/finance/source-labels';
 import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/plain-language';
-import { pharmacyBusinessDayOffset, pharmacyBusinessDayRange } from '@/lib/pharmacy/business-day';
+import {
+  pharmacyBusinessDayOffset,
+  pharmacyBusinessDayRange,
+  type PharmacyDayEnd,
+} from '@/lib/pharmacy/business-day';
 import { formatWorkspaceDateTime, workspaceZoneLabel } from '@/lib/timezone';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 
@@ -24,7 +28,7 @@ const money = (value: string | number) => {
 export function statementDayStart(
   day: string,
   timeZone: string | null | undefined,
-  dayEndsAtHour?: number | null
+  dayEnd?: PharmacyDayEnd
 ): string {
   const utc = new Date(`${day}T00:00:00.000Z`);
   // Only a real calendar day is moved: 2026-02-30 would otherwise roll over to 2 March.
@@ -34,7 +38,7 @@ export function statementDayStart(
     utc.toISOString().slice(0, 10) === day;
   if (!real) return `${day}T00:00:00Z`;
   // DEV-958A: the branch's business day, which starts at its "day ends at" hour.
-  return pharmacyBusinessDayRange(day, day, { timeZone, dayEndsAtHour })
+  return pharmacyBusinessDayRange(day, day, { timeZone, dayEnd })
     .from.toISOString()
     .replace('.000Z', 'Z');
 }
@@ -46,7 +50,7 @@ export async function FinancialStatements({
   to,
   page,
   timeZone,
-  dayEndsAtHour,
+  dayEnd,
 }: {
   caller: ReturnType<typeof pharmacyFinanceRouter.createCaller>;
   branchId: string;
@@ -55,11 +59,11 @@ export async function FinancialStatements({
   page?: string;
   /** Workspace IANA zone: picked days are the organisation's days (UTC when absent). */
   timeZone?: string | null;
-  /** DEV-958A: the hour the branch's business day ends at (midnight when absent). */
-  dayEndsAtHour?: number | null;
+  /** DEV-958A: the branch's day-end hours by day (`PharmacyDayEnd`; midnight when absent). */
+  dayEnd?: PharmacyDayEnd;
 }) {
   const now = new Date();
-  const clock = { timeZone, dayEndsAtHour };
+  const clock = { timeZone, dayEnd };
   const start = from || pharmacyBusinessDayOffset(clock, -30, now);
   const end = to || pharmacyBusinessDayOffset(clock, 1, now);
   const zone = workspaceZoneLabel(timeZone);
@@ -67,8 +71,8 @@ export async function FinancialStatements({
   try {
     result = await caller.financialStatements({
       branchId,
-      from: statementDayStart(start, timeZone, dayEndsAtHour),
-      to: statementDayStart(end, timeZone, dayEndsAtHour),
+      from: statementDayStart(start, timeZone, dayEnd),
+      to: statementDayStart(end, timeZone, dayEnd),
       page: Number(page || 1),
     });
   } catch (error) {

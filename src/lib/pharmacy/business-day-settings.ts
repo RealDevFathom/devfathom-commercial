@@ -2,6 +2,7 @@ import 'server-only';
 
 import { z } from 'zod';
 
+import type { Prisma } from '@/generated/prisma/client';
 import { recordAudit } from '@/server/audit';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
@@ -9,12 +10,12 @@ import { workspaceTimezone } from '@/lib/timezone';
 import {
   PHARMACY_DEFAULT_DAY_END_HOUR,
   PHARMACY_MAX_DAY_END_HOUR,
-  pharmacyBusinessDate,
   pharmacyBusinessDay,
-  pharmacyDayEndHour,
+  pharmacyDayEndHourOn,
   pharmacyDayEndLabel,
+  pharmacyDayEndSchedule,
+  shiftPharmacyDay,
 } from './business-day';
-import { lockPharmacyDay } from './settlement';
 import type { LedgerScope } from './stock-ledger';
 
 /** DEV-958A: the audit action of a change to a branch's "day ends at" hour. */
@@ -27,7 +28,7 @@ export const pharmacyDayEndHourSchema = z
   .max(PHARMACY_MAX_DAY_END_HOUR);
 
 export class PharmacyDayEndHourError extends Error {
-  constructor(readonly reason: 'BRANCH_NOT_FOUND' | 'DRAWERS_OPEN' | 'REVISION_CONFLICT') {
+  constructor(readonly reason: 'BRANCH_NOT_FOUND' | 'REVISION_CONFLICT') {
     super(reason);
     this.name = 'PharmacyDayEndHourError';
   }
@@ -44,15 +45,33 @@ export type PharmacyDayEndHourActor = {
   platformUserId?: string | null;
 };
 
-async function openDrawerCount(db: ScopedDb, scope: LedgerScope) {
-  return db.pharmacyDrawerSession.count({
-    where: { organizationId: scope.organizationId, branchId: scope.branchId, status: 'OPEN' },
-  });
+/**
+ * DEV-958A — the first business day a change made at `now` applies to: the day after the next
+ * business day. Today, every earlier day and the next day all keep the start they had; the next
+ * day runs from its usual start to the new hour on the day after, so it is the one day that is
+ * longer (a later hour) or shorter (an earlier one). A day already closed is never reopened by a
+ * change, and a day being traded on keeps its end.
+ */
+export function pharmacyDayEndChangeFrom(currentBusinessDay: string): string {
+  return shiftPharmacyDay(currentBusinessDay, 2);
+}
+
+function readState(branch: { businessDayEndsAtHistory: unknown }, timeZone: string, now: Date) {
+  const clock = { timeZone, dayEnd: branch.businessDayEndsAtHistory };
+  const currentBusinessDay = pharmacyBusinessDay(clock, now);
+  const nextChangeDay = pharmacyDayEndChangeFrom(currentBusinessDay);
+  const today = pharmacyDayEndHourOn(clock, currentBusinessDay);
+  // The hour a change made now would replace: the one in force on the first day it applies to.
+  const scheduled = pharmacyDayEndHourOn(clock, nextChangeDay);
+  const pending = pharmacyDayEndSchedule(branch.businessDayEndsAtHistory)
+    .filter((change) => change.from > currentBusinessDay)
+    .at(-1);
+  return { clock, currentBusinessDay, nextChangeDay, today, scheduled, pending };
 }
 
 /**
- * DEV-958A — the branch's "day ends at" hour, the business day it gives now, and whether it
- * may be changed now (no drawer of the branch is open).
+ * DEV-958A — the branch's "day ends at" hour today, any change already set for a later day, the
+ * business day it is now, and the first day a change made now would apply to.
  */
 export async function readPharmacyDayEndHourSetting(
   db: ScopedDb,
@@ -61,7 +80,7 @@ export async function readPharmacyDayEndHourSetting(
 ) {
   const branch = await db.pharmacyBranch.findFirst({
     where: { organizationId: scope.organizationId, id: scope.branchId, active: true },
-    select: { id: true, businessDayEndsAtHour: true, businessDayEndsAtRevision: true },
+    select: { id: true, businessDayEndsAtHistory: true, businessDayEndsAtRevision: true },
   });
   if (!branch) throw new PharmacyDayEndHourError('BRANCH_NOT_FOUND');
   const organization = await db.organization.findUnique({
@@ -69,28 +88,30 @@ export async function readPharmacyDayEndHourSetting(
     select: { timezone: true },
   });
   const timeZone = workspaceTimezone(organization?.timezone);
-  const dayEndsAtHour = pharmacyDayEndHour(branch.businessDayEndsAtHour);
+  const state = readState(branch, timeZone, now);
   return {
     branchId: branch.id,
-    dayEndsAtHour,
+    dayEndsAtHour: state.today,
+    scheduledHour: state.scheduled,
+    pendingChange:
+      state.pending && state.pending.hour !== state.today
+        ? { from: state.pending.from, hour: state.pending.hour }
+        : null,
     revision: branch.businessDayEndsAtRevision,
     timeZone,
-    currentBusinessDay: pharmacyBusinessDay({ timeZone, dayEndsAtHour }, now),
-    openDrawers: await openDrawerCount(db, scope),
+    currentBusinessDay: state.currentBusinessDay,
+    nextChangeDay: state.nextChangeDay,
   };
 }
 
 /**
- * DEV-958A — change when the branch's business day ends. The rule: refused while any drawer
- * of the branch is open, because an open drawer belongs to the business day it was opened on
- * and moving the boundary under it would put its later sales on another day. Close the
- * drawers (day close), change the hour, then open the next day's drawers. Optimistic on the
- * branch's revision, and audited with the before and after hour in the same transaction.
- * Nothing already recorded moves: every business date already stamped on a drawer, sale,
- * tender, refund or close keeps its value; the hour only places new instants.
- *
- * The day locks of today under both the old and the new hour are held while the drawers are
- * counted, so a day close, reopen or drawer open on either day waits for this change.
+ * DEV-958A — change when the branch's business day ends. The change is appended to the
+ * branch's dated history (never rewritten) and applies from the day after the next business
+ * day ({@link pharmacyDayEndChangeFrom}), so it never moves a boundary of today or any earlier
+ * day: every past day's close and report keep exactly the window they had, and nothing already
+ * recorded changes. Because no day that has begun is touched, a change needs no drawer to be
+ * closed and can be made at any time. Optimistic on the branch's revision, and audited with the
+ * before and after hour and the first day it applies to, in the same transaction.
  */
 export async function savePharmacyDayEndHour(
   db: ScopedDb,
@@ -102,29 +123,32 @@ export async function savePharmacyDayEndHour(
   const next = pharmacyDayEndHourSchema.parse(input.dayEndsAtHour);
   const branch = await db.pharmacyBranch.findFirst({
     where: { organizationId: scope.organizationId, id: scope.branchId, active: true },
-    select: { id: true, name: true, businessDayEndsAtHour: true, businessDayEndsAtRevision: true },
+    select: {
+      id: true,
+      name: true,
+      businessDayEndsAtHistory: true,
+      businessDayEndsAtRevision: true,
+    },
   });
   if (!branch) throw new PharmacyDayEndHourError('BRANCH_NOT_FOUND');
   if (branch.businessDayEndsAtRevision !== input.revision)
     throw new PharmacyDayEndHourError('REVISION_CONFLICT');
-  const previous = pharmacyDayEndHour(branch.businessDayEndsAtHour);
-  if (previous === next)
-    return { branchId: branch.id, dayEndsAtHour: next, revision: input.revision };
   const organization = await db.organization.findUnique({
     where: { id: scope.organizationId },
     select: { timezone: true },
   });
-  const timeZone = organization?.timezone;
-  const days = [
-    pharmacyBusinessDate({ timeZone, dayEndsAtHour: previous }, now),
-    pharmacyBusinessDate({ timeZone, dayEndsAtHour: next }, now),
-  ]
-    .map((date) => date.toISOString())
-    .sort()
-    .filter((day, index, all) => all.indexOf(day) === index);
-  // In one order, so two changes cannot deadlock on each other's day.
-  for (const day of days) await lockPharmacyDay(db, scope, new Date(day));
-  if ((await openDrawerCount(db, scope)) > 0) throw new PharmacyDayEndHourError('DRAWERS_OPEN');
+  const state = readState(branch, workspaceTimezone(organization?.timezone), now);
+  if (state.scheduled === next)
+    return { branchId: branch.id, dayEndsAtHour: next, from: null, revision: input.revision };
+  const stored = Array.isArray(branch.businessDayEndsAtHistory)
+    ? (branch.businessDayEndsAtHistory as Prisma.JsonArray)
+    : [];
+  const change = {
+    from: state.nextChangeDay,
+    hour: next,
+    actorId: actor.id,
+    at: now.toISOString(),
+  };
   const updated = await db.pharmacyBranch.updateMany({
     where: {
       organizationId: scope.organizationId,
@@ -132,7 +156,10 @@ export async function savePharmacyDayEndHour(
       active: true,
       businessDayEndsAtRevision: input.revision,
     },
-    data: { businessDayEndsAtHour: next, businessDayEndsAtRevision: { increment: 1 } },
+    data: {
+      businessDayEndsAtHistory: [...stored, change],
+      businessDayEndsAtRevision: { increment: 1 },
+    },
   });
   if (updated.count !== 1) throw new PharmacyDayEndHourError('REVISION_CONFLICT');
   const revision = input.revision + 1;
@@ -148,11 +175,14 @@ export async function savePharmacyDayEndHour(
       category: 'PHARMACY',
       operation: 'UPDATE',
       action: PHARMACY_DAY_END_HOUR_SET_ACTION,
-      description: `Business day now ends at ${pharmacyDayEndLabel(next)} (was ${pharmacyDayEndLabel(previous)})`,
+      description: `Business day ends at ${pharmacyDayEndLabel(next)} (was ${pharmacyDayEndLabel(state.scheduled)}) from the business day ${state.nextChangeDay}`,
       targetType: 'PharmacyBranch',
       targetId: branch.id,
       targetLabel: branch.name,
-      changes: { businessDayEndsAtHour: { before: previous, after: next } },
+      changes: {
+        businessDayEndsAtHour: { before: state.scheduled, after: next },
+        effectiveFromBusinessDay: state.nextChangeDay,
+      },
       metadata: {
         revision,
         ...(actor.isSupportSession
@@ -167,5 +197,5 @@ export async function savePharmacyDayEndHour(
     },
     db
   );
-  return { branchId: branch.id, dayEndsAtHour: next, revision };
+  return { branchId: branch.id, dayEndsAtHour: next, from: state.nextChangeDay, revision };
 }

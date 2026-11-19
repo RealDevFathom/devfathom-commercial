@@ -4,10 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 type Setting = {
   branchId: string;
   dayEndsAtHour: number;
+  scheduledHour: number;
+  pendingChange: { from: string; hour: number } | null;
   revision: number;
   timeZone: string;
   currentBusinessDay: string;
-  openDrawers: number;
+  nextChangeDay: string;
 };
 
 const mocks = vi.hoisted(() => ({
@@ -42,10 +44,12 @@ import { DayEndHourPanel } from './day-end-hour-panel';
 const midnight: Setting = {
   branchId: 'branch-1',
   dayEndsAtHour: 0,
+  scheduledHour: 0,
+  pendingChange: null,
   revision: 2,
   timeZone: 'Asia/Karachi',
-  currentBusinessDay: '2026-11-02',
-  openDrawers: 0,
+  currentBusinessDay: '2026-11-18',
+  nextChangeDay: '2026-11-20',
 };
 
 beforeEach(() => {
@@ -54,21 +58,26 @@ beforeEach(() => {
   mocks.isLoading = false;
   mocks.error = null;
   mocks.refetch.mockResolvedValue({ error: null });
-  mocks.mutateAsync.mockResolvedValue({});
+  mocks.mutateAsync.mockResolvedValue({ from: '2026-11-20' });
 });
 afterEach(cleanup);
 
 describe('DayEndHourPanel (DEV-958A)', () => {
-  it('shows midnight, today and that receipts keep the real time', () => {
+  it('shows midnight, today, and that receipts and past days stay as they are', () => {
     render(<DayEndHourPanel branchId="branch-1" />);
     expect(screen.getByText('Ends at Midnight')).toBeInTheDocument();
     expect(screen.getByLabelText('The business day ends at')).toHaveValue('0');
-    expect(screen.getByText(/Today's business day: 2 Nov 2026/)).toBeInTheDocument();
+    expect(screen.getByText(/Today's business day: 18 Nov 2026/)).toBeInTheDocument();
     expect(screen.getByText(/Receipts still print the real date and time\./)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /A change starts with the next business day, 19 Nov 2026: it begins as usual and ends at the new hour on 20 Nov 2026.*Today, every earlier day, their day closes and their reports stay exactly as they are\./
+      )
+    ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save day end' })).toBeDisabled();
   });
 
-  it('saves a later hour at the loaded revision', async () => {
+  it('saves a later hour at the loaded revision and says from which day', async () => {
     render(<DayEndHourPanel branchId="branch-1" />);
     fireEvent.change(screen.getByLabelText('The business day ends at'), { target: { value: '5' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save day end' }));
@@ -80,7 +89,9 @@ describe('DayEndHourPanel (DEV-958A)', () => {
       })
     );
     expect(
-      await screen.findByText("Saved. This branch's business day now ends at 5:00 AM.")
+      await screen.findByText(
+        "Saved. From the business day of 20 Nov 2026, this branch's day ends at 5:00 AM."
+      )
     ).toBeInTheDocument();
   });
 
@@ -97,24 +108,28 @@ describe('DayEndHourPanel (DEV-958A)', () => {
     ]);
   });
 
-  it('is disabled while a drawer is open, and says why', () => {
-    mocks.data = { ...midnight, dayEndsAtHour: 5, openDrawers: 2 };
+  it('shows a change already set for a later day, and starts from it', () => {
+    mocks.data = { ...midnight, scheduledHour: 5, pendingChange: { from: '2026-11-20', hour: 5 } };
     render(<DayEndHourPanel branchId="branch-1" />);
-    expect(screen.getByLabelText('The business day ends at')).toBeDisabled();
-    expect(screen.getByText(/2 drawers are open\. Close the day first/)).toBeInTheDocument();
-    expect(screen.getByText('Ends at 5:00 AM')).toBeInTheDocument();
+    expect(screen.getByText('Ends at Midnight')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Already set: from the business day of 20 Nov 2026, the day ends at 5:00 AM.'
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('The business day ends at')).toHaveValue('5');
   });
 
   it('shows the server refusal when a save is refused', async () => {
     mocks.mutateAsync.mockRejectedValue(
-      new Error(
-        'Close every open drawer at this branch (day close) before changing when its day ends.'
-      )
+      new Error('This setting changed while you were editing it. Reload and try again.')
     );
     render(<DayEndHourPanel branchId="branch-1" />);
     fireEvent.change(screen.getByLabelText('The business day ends at'), { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save day end' }));
-    expect(await screen.findByText(/Close every open drawer at this branch/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/This setting changed while you were editing it/)
+    ).toBeInTheDocument();
   });
 
   it('explains who may change it to anyone else, and loading', () => {

@@ -4,15 +4,15 @@ import { reconcileCapture } from './marketing-delivery';
 import { eligibleMarketingReceipts, ATTRIBUTION_METHOD } from './marketing-attribution';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
-import { pharmacyBusinessDayRange } from './business-day';
+import { pharmacyBusinessDayRange, type PharmacyDayEnd } from './business-day';
 
 const DAY = 86_400_000;
 export type MarketingReportFilters = {
   branchIds: string[];
   from: string;
   to: string;
-  /** DEV-958A: the branches' day-end hour (`readPharmacyReportDayEndHour`); midnight when absent. */
-  dayEndsAtHour?: number | null;
+  /** DEV-958A: the branches' shared day-end hours by day (`sharedPharmacyDayEnd`); midnight when absent. */
+  dayEnd?: PharmacyDayEnd;
 };
 
 export function validateMarketingReportFilters(input: MarketingReportFilters) {
@@ -116,7 +116,7 @@ export async function readPharmacyMarketingReport(
   const zone = workspaceTimezone(timeZone);
   const window = pharmacyBusinessDayRange(input.from, input.to, {
     timeZone: zone,
-    dayEndsAtHour: input.dayEndsAtHour,
+    dayEnd: input.dayEnd,
   });
   const report = await readPharmacyMarketingReportWindow(db, organizationId, input.branchIds, {
     gte: window.from,

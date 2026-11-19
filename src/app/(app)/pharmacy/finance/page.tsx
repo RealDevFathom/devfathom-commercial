@@ -100,7 +100,7 @@ export default async function PharmacyFinancePage({
   const branches = await ctx.db.pharmacyBranch.findMany({
     where: { organizationId, active: true },
     orderBy: { name: 'asc' },
-    select: { id: true, name: true, businessDayEndsAtHour: true },
+    select: { id: true, name: true, businessDayEndsAtHistory: true },
   });
   const branch = branches.find((item) => item.id === query.branch) ?? branches[0] ?? null;
   if (!branch) {
@@ -289,7 +289,7 @@ export default async function PharmacyFinancePage({
   const timeZone = ctx.organization?.timezone;
   // DEV-958A: the branch's clock, the organisation's zone and the hour the branch's business day
   // ends at (midnight by default: 00:00–04:59 PKT is already the new day there, not in UTC).
-  const clock = { timeZone, dayEndsAtHour: branch.businessDayEndsAtHour };
+  const clock = { timeZone, dayEnd: branch.businessDayEndsAtHistory };
   // The branch's business today: the default business and posting date.
   const today = pharmacyBusinessDay(clock, now);
   // Shared [from, to) posting window in the branch's business days (UTC when it has no zone): it
@@ -319,7 +319,7 @@ export default async function PharmacyFinancePage({
           to={ledgerTo}
           page={query.journalPage}
           timeZone={timeZone}
-          dayEndsAtHour={branch.businessDayEndsAtHour}
+          dayEnd={branch.businessDayEndsAtHistory}
         />
       </Suspense>
       <Suspense

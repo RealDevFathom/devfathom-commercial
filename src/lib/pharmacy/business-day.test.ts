@@ -11,7 +11,11 @@ import {
   pharmacyCalendarDay,
   pharmacyDayEndHour,
   pharmacyDayEndLabel,
-  sharedPharmacyDayEndHour,
+  pharmacyDayEndField,
+  pharmacyDayEndHourOn,
+  pharmacyDayEndSchedule,
+  sharedPharmacyDayEnd,
+  shiftPharmacyDay,
 } from './business-day';
 import { workspaceDateOffset, workspaceDateRange, workspaceToday } from '@/lib/timezone';
 
@@ -20,7 +24,7 @@ const KARACHI = 'Asia/Karachi';
 const AT_2330 = new Date('2026-11-01T18:30:00.000Z'); // 23:30 on 1 Nov
 const AT_0030 = new Date('2026-11-01T19:30:00.000Z'); // 00:30 on 2 Nov
 const AT_0530 = new Date('2026-11-02T00:30:00.000Z'); // 05:30 on 2 Nov
-const LATE = { timeZone: KARACHI, dayEndsAtHour: 5 };
+const LATE = { timeZone: KARACHI, dayEnd: 5 };
 const DEFAULT = { timeZone: KARACHI };
 
 describe('DEV-958A the business day of an instant on a branch clock', () => {
@@ -31,7 +35,7 @@ describe('DEV-958A the business day of an instant on a branch clock', () => {
     ['05:30', AT_0530, '2026-11-02', '2026-11-02'],
   ])('at %s local: midnight branch %s, 05:00 branch %s', (_, at, midnight, late) => {
     expect(pharmacyBusinessDay(DEFAULT, at)).toBe(midnight);
-    expect(pharmacyBusinessDay({ ...DEFAULT, dayEndsAtHour: 0 }, at)).toBe(midnight);
+    expect(pharmacyBusinessDay({ ...DEFAULT, dayEnd: 0 }, at)).toBe(midnight);
     expect(pharmacyBusinessDay(LATE, at)).toBe(late);
   });
 
@@ -67,7 +71,7 @@ describe('DEV-958A the business day of an instant on a branch clock', () => {
 
   it('follows a daylight-saving change on the wall clock', () => {
     // London leaves summer time at 02:00 BST on 25 Oct 2026.
-    const london = { timeZone: 'Europe/London', dayEndsAtHour: 5 };
+    const london = { timeZone: 'Europe/London', dayEnd: 5 };
     expect(pharmacyBusinessDayRange('2026-10-24', '2026-10-24', london)).toEqual({
       from: new Date('2026-10-24T04:00:00.000Z'), // 05:00 BST
       to: new Date('2026-10-25T05:00:00.000Z'), // 05:00 GMT
@@ -88,7 +92,7 @@ describe('DEV-958A the default (midnight) is the organisation day used before', 
 
   it.each(zones)('equals workspaceToday, workspaceDateRange and the offsets in %s', (zone) => {
     for (const hour of [undefined, null, 0, 7, -1, 2.5]) {
-      const clock = { timeZone: zone, dayEndsAtHour: hour };
+      const clock = { timeZone: zone, dayEnd: hour };
       // 7, -1 and 2.5 are not hours a branch can store; they read as midnight.
       for (const at of instants) {
         expect(pharmacyBusinessDay(clock, at)).toBe(workspaceToday(zone, at));
@@ -112,14 +116,121 @@ describe('DEV-958A the default (midnight) is the organisation day used before', 
 });
 
 describe('DEV-958A windows over several branches', () => {
-  it('uses the shared hour, and midnight when the branches differ', () => {
-    expect(sharedPharmacyDayEndHour([])).toEqual({ dayEndsAtHour: 0, mixed: false });
-    expect(sharedPharmacyDayEndHour([5, 5])).toEqual({ dayEndsAtHour: 5, mixed: false });
-    expect(sharedPharmacyDayEndHour([0, null, undefined])).toEqual({
-      dayEndsAtHour: 0,
-      mixed: false,
+  const later = [{ from: '2026-11-20', hour: 5 }];
+  it('uses the shared hours, and midnight when the branches differ', () => {
+    expect(sharedPharmacyDayEnd([])).toEqual({ dayEnd: [], mixed: false });
+    expect(sharedPharmacyDayEnd([later, later])).toEqual({ dayEnd: later, mixed: false });
+    expect(
+      sharedPharmacyDayEnd([0, null, undefined, [], [{ from: '2026-11-20', hour: 0 }]])
+    ).toEqual({ dayEnd: [], mixed: false });
+    expect(sharedPharmacyDayEnd([later, []])).toEqual({ dayEnd: [], mixed: true });
+    expect(sharedPharmacyDayEnd([later, [{ from: '2026-11-21', hour: 5 }]])).toEqual({
+      dayEnd: [],
+      mixed: true,
     });
-    expect(sharedPharmacyDayEndHour([5, 0])).toEqual({ dayEndsAtHour: 0, mixed: true });
+  });
+
+  it('passes no field at midnight, so the default filters are unchanged', () => {
+    expect(pharmacyDayEndField([])).toEqual({});
+    expect(pharmacyDayEndField(undefined)).toEqual({});
+    expect(pharmacyDayEndField([{ from: '2026-11-20', hour: 0 }])).toEqual({});
+    expect(pharmacyDayEndField(later)).toEqual({ dayEnd: later });
+  });
+});
+
+describe('DEV-958A a change of the hour keeps every earlier day as it was', () => {
+  // Days closed at midnight up to 19 Nov; from the business day of 20 Nov the day ends at 05:00.
+  const raised = { timeZone: KARACHI, dayEnd: [{ from: '2026-11-20', hour: 5 }] };
+  // And back: from 23 Nov it ends at midnight again.
+  const loweredAgain = {
+    timeZone: KARACHI,
+    dayEnd: [
+      { from: '2026-11-20', hour: 5 },
+      { from: '2026-11-23', hour: 0 },
+    ],
+  };
+  const midnight = { timeZone: KARACHI };
+  const days = (from: string, count: number) =>
+    Array.from({ length: count }, (_, index) => shiftPharmacyDay(from, index));
+
+  it('reads every day before the change exactly as before it', () => {
+    for (const day of days('2026-10-01', 49)) {
+      expect(pharmacyBusinessDayRange(day, day, raised)).toEqual(
+        workspaceDateRange(day, day, KARACHI)
+      );
+    }
+    // A month of past days read in one window is the same window too.
+    expect(pharmacyBusinessDayRange('2026-10-19', '2026-11-18', raised)).toEqual(
+      pharmacyBusinessDayRange('2026-10-19', '2026-11-18', midnight)
+    );
+  });
+
+  it('makes the last day before the change the one longer day, and tiles every day', () => {
+    // 19 Nov starts at midnight as usual and ends at 05:00 on 20 Nov: 29 hours.
+    expect(pharmacyBusinessDayRange('2026-11-19', '2026-11-19', raised)).toEqual({
+      from: new Date('2026-11-18T19:00:00.000Z'),
+      to: new Date('2026-11-20T00:00:00.000Z'),
+    });
+    // 20 Nov onwards run from 05:00 to 05:00.
+    expect(pharmacyBusinessDayRange('2026-11-20', '2026-11-20', raised)).toEqual({
+      from: new Date('2026-11-20T00:00:00.000Z'),
+      to: new Date('2026-11-21T00:00:00.000Z'),
+    });
+    // Back to midnight: 22 Nov runs from 05:00 to midnight, 19 hours.
+    expect(pharmacyBusinessDayRange('2026-11-22', '2026-11-22', loweredAgain)).toEqual({
+      from: new Date('2026-11-22T00:00:00.000Z'),
+      to: new Date('2026-11-22T19:00:00.000Z'),
+    });
+    for (const clock of [raised, loweredAgain]) {
+      const span = days('2026-11-10', 21);
+      for (const [index, day] of span.entries()) {
+        if (index === 0) continue;
+        // No gap and no overlap: each day starts where the day before ends.
+        expect(pharmacyBusinessDayRange(day, day, clock).from).toEqual(
+          pharmacyBusinessDayRange(span[index - 1]!, span[index - 1]!, clock).to
+        );
+      }
+      // A range across the change is exactly its days laid end to end.
+      expect(pharmacyBusinessDayRange('2026-11-10', '2026-11-30', clock)).toEqual({
+        from: pharmacyBusinessDayRange('2026-11-10', '2026-11-10', clock).from,
+        to: pharmacyBusinessDayRange('2026-11-30', '2026-11-30', clock).to,
+      });
+    }
+  });
+
+  it('books each instant on the day whose window holds it', () => {
+    const at = (iso: string) => new Date(iso);
+    // 00:30 on 19 Nov (still midnight): 19 Nov. 00:30 on 20 Nov (the long day): 19 Nov.
+    expect(pharmacyBusinessDay(raised, at('2026-11-18T19:30:00.000Z'))).toBe('2026-11-19');
+    expect(pharmacyBusinessDay(raised, at('2026-11-19T19:30:00.000Z'))).toBe('2026-11-19');
+    // 05:30 on 20 Nov: 20 Nov. 00:30 on 21 Nov: still 20 Nov.
+    expect(pharmacyBusinessDay(raised, at('2026-11-20T00:30:00.000Z'))).toBe('2026-11-20');
+    expect(pharmacyBusinessDay(raised, at('2026-11-20T19:30:00.000Z'))).toBe('2026-11-20');
+    for (const clock of [raised, loweredAgain])
+      for (let hour = 0; hour < 24 * 20; hour += 5) {
+        const instant = new Date(Date.parse('2026-11-12T00:15:00.000Z') + hour * 3_600_000);
+        const day = pharmacyBusinessDay(clock, instant);
+        const range = pharmacyBusinessDayRange(day, day, clock);
+        expect(instant >= range.from && instant < range.to).toBe(true);
+      }
+    expect(pharmacyDayEndHourOn(raised, '2026-11-19')).toBe(0);
+    expect(pharmacyDayEndHourOn(raised, '2026-11-20')).toBe(5);
+  });
+
+  it('lets a later change for the same day win, and ignores entries that are not a change', () => {
+    const schedule = pharmacyDayEndSchedule([
+      { from: '2026-11-20', hour: 5, actorId: 'owner_1' },
+      { from: 'soon', hour: 3 },
+      { from: '2026-11-20', hour: 9 },
+      'nonsense',
+      { from: '2026-11-20', hour: 4, at: '2026-11-18T18:00:00.000Z' },
+    ]);
+    expect(schedule).toEqual([
+      { from: '2026-11-20', hour: 5 },
+      { from: '2026-11-20', hour: 4 },
+    ]);
+    expect(pharmacyDayEndHourOn({ dayEnd: schedule }, '2026-11-20')).toBe(4);
+    expect(pharmacyDayEndSchedule({ from: '2026-11-20', hour: 5 })).toEqual([]);
   });
 });
 

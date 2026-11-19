@@ -30,7 +30,7 @@ import { SeasonalCalendarPanel } from './seasonal-calendar-panel';
 
 type Props = {
   organizationId: string;
-  branches: { id: string; name: string; businessDayEndsAtHour?: number | null }[];
+  branches: { id: string; name: string; businessDayEndsAtHistory?: unknown }[];
   financial: boolean;
   initialBranchId: string;
   invalidInitialBranch: boolean;
@@ -279,9 +279,9 @@ function ScenarioWorkspace({
     // Today is the shop's day: a day has begun once it starts on the organisation's clock,
     // the same check the server makes.
     // DEV-958A: the chosen branch's business day, which ends at its "day ends at" hour.
-    const dayEndsAtHour = branches.find((branch) => branch.id === branchId)?.businessDayEndsAtHour;
+    const dayEnd = branches.find((branch) => branch.id === branchId)?.businessDayEndsAtHistory;
     const dayStart = (day: string) =>
-      pharmacyBusinessDayRange(day, day, { timeZone, dayEndsAtHour }).from.getTime();
+      pharmacyBusinessDayRange(day, day, { timeZone, dayEnd }).from.getTime();
     if (Number.isFinite(origin) && dayStart(draft.originDate) > Date.now())
       invalid.originDate = 'History must end no later than today.';
     const horizonDays = integer('horizonDays', 1, 366)!;

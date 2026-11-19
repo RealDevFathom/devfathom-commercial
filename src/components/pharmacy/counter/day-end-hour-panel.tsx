@@ -10,6 +10,7 @@ import {
   PHARMACY_DEFAULT_DAY_END_HOUR,
   PHARMACY_MAX_DAY_END_HOUR,
   pharmacyDayEndLabel,
+  shiftPharmacyDay,
 } from '@/lib/pharmacy/business-day';
 import { trpc } from '@/lib/trpc';
 
@@ -30,8 +31,9 @@ function dayLabel(day: string) {
 
 /**
  * DEV-958A — when this branch's business day ends. A shop open past midnight picks a later
- * hour so its late trade stays on one day and one drawer. The server enforces who may change
- * it (an owner, or a manager at the branch), refuses a change while a drawer is open, and
+ * hour so its late trade stays on one day and one drawer. A change applies from the day after
+ * the next business day, so no day that has begun, and no past day, its close or its reports,
+ * moves. The server enforces who may change it (an owner, or a manager at the branch) and
  * audits it; this form only explains and asks.
  */
 export function DayEndHourPanel({ branchId }: { branchId: string }) {
@@ -40,24 +42,29 @@ export function DayEndHourPanel({ branchId }: { branchId: string }) {
   const [draft, setDraft] = useState<number | null>(null);
   const [notice, setNotice] = useState('');
   const data = query.data;
-  const value = draft ?? data?.dayEndsAtHour ?? PHARMACY_DEFAULT_DAY_END_HOUR;
-  const drawersOpen = (data?.openDrawers ?? 0) > 0;
+  const value = draft ?? data?.scheduledHour ?? PHARMACY_DEFAULT_DAY_END_HOUR;
   const denied = query.error?.data?.code === 'FORBIDDEN';
-  const disabled = !data || save.isPending || drawersOpen;
+  const disabled = !data || save.isPending;
   const selectId = `day-end-hour-${branchId}`;
   const helpId = `${selectId}-help`;
 
   async function submit() {
-    if (!data || draft === null || draft === data.dayEndsAtHour) return;
+    if (!data || draft === null || draft === data.scheduledHour) return;
     setNotice('');
     try {
-      await save.mutateAsync({ branchId, revision: data.revision, dayEndsAtHour: draft });
+      const saved = await save.mutateAsync({
+        branchId,
+        revision: data.revision,
+        dayEndsAtHour: draft,
+      });
       const refreshed = await query.refetch();
       setDraft(null);
       setNotice(
         refreshed.error
           ? 'Saved. Reload this setting before changing it again.'
-          : `Saved. This branch's business day now ends at ${pharmacyDayEndLabel(draft)}.`
+          : saved.from
+            ? `Saved. From the business day of ${dayLabel(saved.from)}, this branch's day ends at ${pharmacyDayEndLabel(draft)}.`
+            : 'Saved. Nothing changed.'
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : '';
@@ -110,6 +117,12 @@ export function DayEndHourPanel({ branchId }: { branchId: string }) {
             Today&apos;s business day: {dayLabel(data.currentBusinessDay)} · times in{' '}
             {data.timeZone}
           </p>
+          {data.pendingChange ? (
+            <p className="rounded-md border border-border-subtle bg-surface-sunken px-3 py-2 text-sm text-text-body">
+              Already set: from the business day of {dayLabel(data.pendingChange.from)}, the day
+              ends at {pharmacyDayEndLabel(data.pendingChange.hour)}.
+            </p>
+          ) : null}
           <div className="space-y-2">
             <Label htmlFor={selectId}>The business day ends at</Label>
             <select
@@ -130,15 +143,16 @@ export function DayEndHourPanel({ branchId }: { branchId: string }) {
               ))}
             </select>
             <p className="text-sm text-text-muted" id={helpId}>
-              {drawersOpen
-                ? `${data.openDrawers} drawer${data.openDrawers === 1 ? ' is' : 's are'} open. Close the day first, then change this before opening the next day's drawers.`
-                : 'Change it between days, when no drawer is open. Days already closed, and everything already recorded, stay as they are.'}
+              A change starts with the next business day,{' '}
+              {dayLabel(shiftPharmacyDay(data.nextChangeDay, -1))}: it begins as usual and ends at
+              the new hour on {dayLabel(data.nextChangeDay)}, so that one day is longer or shorter.
+              Today, every earlier day, their day closes and their reports stay exactly as they are.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <Button
               className="min-h-11"
-              disabled={disabled || draft === null || draft === data.dayEndsAtHour}
+              disabled={disabled || draft === null || draft === data.scheduledHour}
               onClick={() => void submit()}
             >
               {save.isPending ? 'Saving…' : 'Save day end'}

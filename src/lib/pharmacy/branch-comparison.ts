@@ -1,10 +1,10 @@
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { readPharmacyOwnerCommandCentre } from '@/lib/pharmacy/reports';
-import { pharmacyBusinessDayRange, pharmacyDayEndHourField } from '@/lib/pharmacy/business-day';
+import { pharmacyBusinessDayRange, pharmacyDayEndField } from '@/lib/pharmacy/business-day';
 
 export type PharmacyBranchComparisonInput = {
-  /** DEV-958A: each branch's day-end hour bounds its own days (midnight when absent). */
-  branches: readonly { id: string; name: string; businessDayEndsAtHour?: number | null }[];
+  /** DEV-958A: each branch's own day-end hours bound its days (midnight when absent). */
+  branches: readonly { id: string; name: string; businessDayEndsAtHistory?: unknown }[];
   from: string;
   to: string;
   /** Workspace zone: demand-event timestamps are bounded by its midnights (UTC when absent). */
@@ -23,14 +23,14 @@ export async function readPharmacyBranchComparison(
   const rows = [];
   for (const branch of input.branches) {
     // DEV-958A: each branch is read on its own business days.
-    const clock = { timeZone: input.timeZone, dayEndsAtHour: branch.businessDayEndsAtHour };
+    const clock = { timeZone: input.timeZone, dayEnd: branch.businessDayEndsAtHistory };
     const eventWindow = pharmacyBusinessDayRange(input.from, input.to, clock);
     const report = await readPharmacyOwnerCommandCentre(db, {
       branchIds: [branch.id],
       from: input.from,
       to: input.to,
       timeZone: input.timeZone,
-      ...pharmacyDayEndHourField(branch.businessDayEndsAtHour),
+      ...pharmacyDayEndField(branch.businessDayEndsAtHistory),
     });
     const demand = await db.unfulfilledDemandEvent.aggregate({
       where: {

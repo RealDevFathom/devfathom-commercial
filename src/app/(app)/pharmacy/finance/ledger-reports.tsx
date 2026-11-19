@@ -20,6 +20,7 @@ import {
   pharmacyBusinessDay,
   pharmacyBusinessDayOffset,
   pharmacyBusinessDayRange,
+  type PharmacyDayEnd,
 } from '@/lib/pharmacy/business-day';
 import { formatWorkspaceDateTime, workspaceZoneLabel } from '@/lib/timezone';
 
@@ -74,10 +75,10 @@ type Zone = string | null | undefined;
  * The instant a picked day starts on the organisation's clock, as the ISO string the ledger
  * readers take. For a UTC organisation this is `YYYY-MM-DDT00:00:00.000Z`, exactly as before.
  */
-export function ledgerDayStart(day: string, timeZone: Zone, dayEndsAtHour?: number | null): string {
+export function ledgerDayStart(day: string, timeZone: Zone, dayEnd?: PharmacyDayEnd): string {
   // DEV-958A: the branch's business day, which starts at its "day ends at" hour (midnight
   // by default, exactly as before).
-  return pharmacyBusinessDayRange(day, day, { timeZone, dayEndsAtHour }).from.toISOString();
+  return pharmacyBusinessDayRange(day, day, { timeZone, dayEnd }).from.toISOString();
 }
 
 // Guard the receipt formatter's invalid-number fallback: missing/unsafe money is never zero.
@@ -450,15 +451,10 @@ function dateOnly(value: string) {
  * calendar days on the organisation's clock can be an hour longer, so the converted instants are
  * checked too and the filter error is shown instead of a refused read.
  */
-function withinReaderLimit(
-  start: string,
-  end: string,
-  timeZone: Zone,
-  dayEndsAtHour?: number | null
-) {
+function withinReaderLimit(start: string, end: string, timeZone: Zone, dayEnd?: PharmacyDayEnd) {
   return (
-    Date.parse(ledgerDayStart(end, timeZone, dayEndsAtHour)) -
-      Date.parse(ledgerDayStart(start, timeZone, dayEndsAtHour)) <=
+    Date.parse(ledgerDayStart(end, timeZone, dayEnd)) -
+      Date.parse(ledgerDayStart(start, timeZone, dayEnd)) <=
     92 * day
   );
 }
@@ -476,7 +472,7 @@ export async function LedgerReportsSection({
   timeZone,
 }: {
   caller: Caller;
-  branch: { id: string; name: string; businessDayEndsAtHour?: number | null };
+  branch: { id: string; name: string; businessDayEndsAtHistory?: unknown };
   from?: string;
   to?: string;
   at?: string;
@@ -489,10 +485,10 @@ export async function LedgerReportsSection({
 }) {
   const now = new Date();
   // DEV-958A: picked days are the branch's business days, ending at its "day ends at" hour.
-  const hour = branch.businessDayEndsAtHour;
-  const today = pharmacyBusinessDay({ timeZone, dayEndsAtHour: hour }, now);
+  const dayEnd = branch.businessDayEndsAtHistory;
+  const today = pharmacyBusinessDay({ timeZone, dayEnd }, now);
   const end = to ?? today;
-  const start = from ?? pharmacyBusinessDayOffset({ timeZone, dayEndsAtHour: hour }, -30, now);
+  const start = from ?? pharmacyBusinessDayOffset({ timeZone, dayEnd }, -30, now);
   const cutoff = at ?? today;
   const zone = workspaceZoneLabel(timeZone);
   const group = by ?? 'batch';
@@ -504,10 +500,10 @@ export async function LedgerReportsSection({
     !!toDate &&
     toDate.getTime() > fromDate.getTime() &&
     toDate.getTime() - fromDate.getTime() <= 92 * day &&
-    withinReaderLimit(start, end, timeZone, hour);
+    withinReaderLimit(start, end, timeZone, dayEnd);
   // The cutoff is the start of the picked day on the organisation's clock; it cannot be later
   // than now, so today is the latest day that can be picked.
-  const atValid = !!atDate && Date.parse(ledgerDayStart(cutoff, timeZone, hour)) <= now.getTime();
+  const atValid = !!atDate && Date.parse(ledgerDayStart(cutoff, timeZone, dayEnd)) <= now.getTime();
   const groupValid = groups.includes(group as Group);
   let results:
     | [PromiseSettledResult<Valuation>, PromiseSettledResult<Margin>, PromiseSettledResult<Leakage>]
@@ -515,13 +511,13 @@ export async function LedgerReportsSection({
   if (periodValid && atValid && groupValid) {
     const period = {
       branchId: branch.id,
-      from: ledgerDayStart(start, timeZone, hour),
-      to: ledgerDayStart(end, timeZone, hour),
+      from: ledgerDayStart(start, timeZone, dayEnd),
+      to: ledgerDayStart(end, timeZone, dayEnd),
     };
     results = await Promise.allSettled([
       caller.perpetualValuation({
         branchId: branch.id,
-        at: ledgerDayStart(cutoff, timeZone, hour),
+        at: ledgerDayStart(cutoff, timeZone, dayEnd),
       }),
       caller.grossMargin({ ...period, by: group as Group }),
       caller.leakageReport(period),
@@ -733,7 +729,7 @@ export async function TrueProfitSection({
   timeZone,
 }: {
   caller: TrueProfitCaller;
-  branch: { id: string; name: string; businessDayEndsAtHour?: number | null };
+  branch: { id: string; name: string; businessDayEndsAtHistory?: unknown };
   from?: string;
   to?: string;
   by?: string;
@@ -744,9 +740,9 @@ export async function TrueProfitSection({
 }) {
   const now = new Date();
   // DEV-958A: picked days are the branch's business days, ending at its "day ends at" hour.
-  const hour = branch.businessDayEndsAtHour;
-  const end = to ?? pharmacyBusinessDay({ timeZone, dayEndsAtHour: hour }, now);
-  const start = from ?? pharmacyBusinessDayOffset({ timeZone, dayEndsAtHour: hour }, -30, now);
+  const dayEnd = branch.businessDayEndsAtHistory;
+  const end = to ?? pharmacyBusinessDay({ timeZone, dayEnd }, now);
+  const start = from ?? pharmacyBusinessDayOffset({ timeZone, dayEnd }, -30, now);
   const group = by ?? 'item';
   const fromDate = dateOnly(start),
     toDate = dateOnly(end);
@@ -755,15 +751,15 @@ export async function TrueProfitSection({
     !!toDate &&
     toDate.getTime() > fromDate.getTime() &&
     toDate.getTime() - fromDate.getTime() <= 92 * day &&
-    withinReaderLimit(start, end, timeZone, hour);
+    withinReaderLimit(start, end, timeZone, dayEnd);
   const groupValid = profitGroups.includes(group as ProfitGroup);
   let result: PromiseSettledResult<TrueProfit> | undefined;
   if (periodValid && groupValid) {
     [result] = await Promise.allSettled([
       caller.trueProfit({
         branchId: branch.id,
-        from: ledgerDayStart(start, timeZone, hour),
-        to: ledgerDayStart(end, timeZone, hour),
+        from: ledgerDayStart(start, timeZone, dayEnd),
+        to: ledgerDayStart(end, timeZone, dayEnd),
         by: group as ProfitGroup,
       }),
     ]);

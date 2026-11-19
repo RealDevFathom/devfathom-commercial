@@ -219,10 +219,11 @@ model PharmacyBranch {
   /// windows). Null means the stored defaults, which the owner can change.
   discountPolicy                  Json?
   discountPolicyRevision          Int                          @default(0)
-  /// DEV-958A: the hour (0-6, shop clock) the branch's business day ends at. 0 is midnight, the
-  /// organisation-zone day used before. Read only to place a new instant on a business day
-  /// (`src/lib/pharmacy/business-day.ts`); dates already stamped never move.
-  businessDayEndsAtHour           Int                          @default(0)
+  /// DEV-958A: the dated history of the branch's "day ends at" hour, a JSON list of
+  /// `{ from: "YYYY-MM-DD", hour: 0..6, actorId, at }` changes, appended and never rewritten. An
+  /// empty list is midnight, the organisation-zone day used before. Read only through
+  /// `src/lib/pharmacy/business-day.ts`; dates already stamped never move.
+  businessDayEndsAtHistory        Json                         @default("[]")
   businessDayEndsAtRevision       Int                          @default(0)
   id                              String                       @id @default(cuid())
   organizationId                  String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))

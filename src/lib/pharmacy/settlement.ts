@@ -404,7 +404,7 @@ export async function requirePharmacyTodayOpenForTrading(
  */
 export async function requireCurrentPharmacyBusinessDate(
   db: ScopedDb,
-  scope: { organizationId: string; branchId?: string },
+  scope: { organizationId: string; branchId: string },
   date: Date,
   now: Date = new Date()
 ) {
@@ -419,7 +419,7 @@ export async function requireCurrentPharmacyBusinessDate(
  */
 export async function requireTodaysPharmacyDrawer(
   db: ScopedDb,
-  scope: { organizationId: string; branchId?: string },
+  scope: { organizationId: string; branchId: string },
   drawer: { businessDate: Date },
   now: Date = new Date()
 ) {

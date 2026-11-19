@@ -61,7 +61,7 @@ export async function readFiscalExceptions(
   if (!organization) throw denied();
   const branchRow = await ctx.db.pharmacyBranch.findFirst({
     where: { organizationId, id: filters.branchId, active: true },
-    select: { id: true, name: true, businessDayEndsAtHour: true },
+    select: { id: true, name: true, businessDayEndsAtHistory: true },
   });
   const branch = branchRow ? { id: branchRow.id, name: branchRow.name } : null;
   if (!branch) throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your active report scope.' });
@@ -76,7 +76,7 @@ export async function readFiscalExceptions(
   // organisation (or none) these are the same UTC midnights as before. DEV-958A: each day ends
   // at the branch's "day ends at" hour (midnight by default).
   const timeZone = ctx.organization?.timezone ?? null;
-  const clock = { timeZone, dayEndsAtHour: branchRow?.businessDayEndsAtHour };
+  const clock = { timeZone, dayEnd: branchRow?.businessDayEndsAtHistory };
   const window = {
     from: pharmacyBusinessDayRange(filters.from, filters.from, clock).from,
     to: pharmacyBusinessDayRange(filters.to, filters.to, clock).from,

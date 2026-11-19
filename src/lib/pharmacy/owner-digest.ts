@@ -28,7 +28,7 @@ import {
 import { readLicenceRenewalReminders } from './licence-renewal-operations';
 import { withPlatformDb, withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
-import { pharmacyBusinessDay, pharmacyDayEndHourField } from './business-day';
+import { pharmacyBusinessDay, pharmacyDayEndField, type PharmacyDayEnd } from './business-day';
 
 const DIGEST_METRIC_KEYS = [
   'salesMinor',
@@ -122,15 +122,15 @@ export async function composeOwnerDigest(
     businessDate: string;
     /** Workspace zone the business date is on: bounds event timestamps (UTC when absent). */
     timeZone?: string | null;
-    /** DEV-958A: the hour the branch's business day ends at (midnight when absent). */
-    dayEndsAtHour?: number | null;
+    /** DEV-958A: the branch's day-end hours by day (`PharmacyDayEnd`; midnight when absent). */
+    dayEnd?: PharmacyDayEnd;
   }
 ): Promise<OwnerDigest> {
   const filters = {
     branchIds: [input.branchId],
     from: input.businessDate,
     to: input.businessDate,
-    ...pharmacyDayEndHourField(input.dayEndsAtHour),
+    ...pharmacyDayEndField(input.dayEnd),
   };
   const [report, anomalies, renewals] = await Promise.all([
     readPharmacyOwnerCommandCentre(db, { ...filters, timeZone: input.timeZone }),
@@ -156,7 +156,7 @@ export async function composeOwnerDigest(
       cadence,
       config,
       input.timeZone,
-      pharmacyDayEndHourField(input.dayEndsAtHour)
+      pharmacyDayEndField(input.dayEnd)
     );
     const [ledger, demand] = await Promise.all([
       cadence === 'DAILY'
@@ -166,7 +166,7 @@ export async function composeOwnerDigest(
             from: window.from,
             to: window.to,
             timeZone: input.timeZone,
-            ...pharmacyDayEndHourField(input.dayEndsAtHour),
+            ...pharmacyDayEndField(input.dayEnd),
           }),
       readOwnerBriefingDemand(db, input, window, config),
     ]);
@@ -288,7 +288,7 @@ async function readAuthorizedDigestSetting(db: ScopedDb, id: string, organizatio
     include: {
       organization: { select: { status: true, vertical: true, timezone: true } },
       branch: {
-        select: { name: true, active: true, organizationId: true, businessDayEndsAtHour: true },
+        select: { name: true, active: true, organizationId: true, businessDayEndsAtHistory: true },
       },
       user: {
         select: { id: true, organizationId: true, status: true, role: true, department: true },
@@ -375,9 +375,9 @@ export async function processDueOwnerDigests(now = new Date(), limit = 25) {
       }
       // A delayed retry belongs to the scheduled local day, not the retry day. DEV-958A: the
       // branch's business day, which ends at its "day ends at" hour (midnight by default).
-      const dayEndsAtHour = authorized.branch.businessDayEndsAtHour;
+      const dayEnd = authorized.branch.businessDayEndsAtHistory;
       const businessDate = pharmacyBusinessDay(
-        { timeZone: authorized.organization.timezone, dayEndsAtHour },
+        { timeZone: authorized.organization.timezone, dayEnd },
         setting.nextDueAt
       );
       const key = {
@@ -398,7 +398,7 @@ export async function processDueOwnerDigests(now = new Date(), limit = 25) {
           from: businessDate,
           to: businessDate,
           timeZone: authorized.organization.timezone,
-          ...pharmacyDayEndHourField(dayEndsAtHour),
+          ...pharmacyDayEndField(dayEnd),
         },
         'system:owner-digest',
         new Date()
@@ -407,7 +407,7 @@ export async function processDueOwnerDigests(now = new Date(), limit = 25) {
         ...key,
         branchName: authorized.branch.name,
         timeZone: authorized.organization.timezone,
-        ...pharmacyDayEndHourField(dayEndsAtHour),
+        ...pharmacyDayEndField(dayEnd),
       });
       if (!(await readAuthorizedDigestSetting(db, item.id, item.organizationId))) {
         // Throw through withTenantDb so the claim and anomaly writes roll back.

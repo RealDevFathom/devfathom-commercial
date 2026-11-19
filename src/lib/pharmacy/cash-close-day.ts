@@ -1,8 +1,4 @@
-import {
-  pharmacyBusinessDayRange,
-  pharmacyDayEndHour,
-  PHARMACY_DEFAULT_DAY_END_HOUR,
-} from './business-day';
+import { pharmacyBusinessDayRange, pharmacyDayEndField, type PharmacyDayEnd } from './business-day';
 
 const DAY_MS = 86_400_000;
 
@@ -10,12 +6,15 @@ const DAY_MS = 86_400_000;
 export function pharmacyCashCloseDayBounds(
   businessDate: Date,
   timeZone: string,
-  /** DEV-958A: the hour the branch's business day ends at; midnight (the default) as before. */
-  dayEndsAtHour?: number | null
+  /** DEV-958A: the branch's day-end hours by day; midnight (the default) as before. */
+  dayEnd?: PharmacyDayEnd
 ): { start: Date; end: Date } {
   const day = businessDate.toISOString().slice(0, 10);
-  if (pharmacyDayEndHour(dayEndsAtHour) !== PHARMACY_DEFAULT_DAY_END_HOUR) {
-    const range = pharmacyBusinessDayRange(day, day, { timeZone, dayEndsAtHour });
+  // A branch that has ever moved its day end: that day's own window (midnight, the code below,
+  // for a day before any change).
+  const schedule = pharmacyDayEndField(dayEnd).dayEnd;
+  if (schedule) {
+    const range = pharmacyBusinessDayRange(day, day, { timeZone, dayEnd: schedule });
     return { start: range.from, end: range.to };
   }
   const anchor = Date.parse(`${day}T00:00:00.000Z`);

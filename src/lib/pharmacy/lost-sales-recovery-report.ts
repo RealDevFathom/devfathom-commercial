@@ -9,7 +9,7 @@ import {
   type LostSalesRecoveryRow,
 } from './back-in-stock';
 import { validateMarketingReportFilters } from './marketing-report';
-import { pharmacyBusinessDayRange } from './business-day';
+import { pharmacyBusinessDayRange, type PharmacyDayEnd } from './business-day';
 
 /** Upper bound on demand events read for one report; a larger scope is reported as truncated. */
 export const LOST_SALES_RECOVERY_EVENT_LIMIT = 20_000;
@@ -26,15 +26,15 @@ export async function readLostSalesRecovery(
     branchIds: string[];
     from: string;
     to: string;
-    /** DEV-958A: the branches' day-end hour; midnight when absent. */
-    dayEndsAtHour?: number | null;
+    /** DEV-958A: the branches' shared day-end hours by day; midnight when absent. */
+    dayEnd?: PharmacyDayEnd;
   },
   timeZone?: string | null
 ) {
   validateMarketingReportFilters(filters);
   const window = pharmacyBusinessDayRange(filters.from, filters.to, {
     timeZone,
-    dayEndsAtHour: filters.dayEndsAtHour,
+    dayEnd: filters.dayEnd,
   });
   const createdAt = { gte: window.from, lt: window.to };
   const [branches, events] = await Promise.all([

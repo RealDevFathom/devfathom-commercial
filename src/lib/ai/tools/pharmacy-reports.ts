@@ -3,8 +3,8 @@ import { z } from 'zod';
 import {
   pharmacyBusinessDay,
   pharmacyCalendarDay,
-  pharmacyDayEndHourField,
-  sharedPharmacyDayEndHour,
+  pharmacyDayEndField,
+  sharedPharmacyDayEnd,
 } from '@/lib/pharmacy/business-day';
 
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
@@ -539,7 +539,7 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
           const branches = await h.db.pharmacyBranch.findMany({
             where: { organizationId: h.ctx.organizationId, active: true },
             orderBy: { name: 'asc' },
-            select: { id: true, name: true, businessDayEndsAtHour: true },
+            select: { id: true, name: true, businessDayEndsAtHistory: true },
           });
           const selected = branch
             ? branches.filter(
@@ -555,9 +555,8 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
           // "day ends at" hour (midnight by default).
           const clock = {
             timeZone: 'Asia/Karachi',
-            dayEndsAtHour: sharedPharmacyDayEndHour(
-              selected.map((row) => row.businessDayEndsAtHour)
-            ).dayEndsAtHour,
+            dayEnd: sharedPharmacyDayEnd(selected.map((row) => row.businessDayEndsAtHistory))
+              .dayEnd,
           };
           const filters = {
             branchIds: selected.map(({ id }) => id),
@@ -565,7 +564,7 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
             to: to ?? from ?? pharmacyBusinessDay(clock),
             // The same PKT day as the defaults above bounds event timestamps.
             timeZone: clock.timeZone,
-            ...pharmacyDayEndHourField(clock.dayEndsAtHour),
+            ...pharmacyDayEndField(clock.dayEnd),
           };
           const report = await readPharmacyOwnerCommandCentre(h.db, filters);
           const values = report.metrics as Record<string, number | null>;
@@ -674,7 +673,7 @@ function cashCloseCheckTool(h: AssistantHelpers) {
         const branches = await h.db.pharmacyBranch.findMany({
           where: { organizationId: h.ctx.organizationId, active: true },
           orderBy: { name: 'asc' },
-          select: { id: true, name: true, businessDayEndsAtHour: true },
+          select: { id: true, name: true, businessDayEndsAtHistory: true },
         });
         const selected = branches.filter(
           (row) =>
@@ -687,7 +686,7 @@ function cashCloseCheckTool(h: AssistantHelpers) {
           parsed.data.businessDate >
           pharmacyBusinessDay({
             timeZone: organization?.timezone,
-            dayEndsAtHour: selected[0].businessDayEndsAtHour,
+            dayEnd: selected[0].businessDayEndsAtHistory,
           })
         )
           return invalid;

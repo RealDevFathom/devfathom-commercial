@@ -107,7 +107,7 @@ describe('fiscal exception reader access and query isolation', () => {
     db.pharmacyBranch.findFirst.mockResolvedValue(null);
     await expect(readFiscalExceptions(ctx, { ...filters, branchId })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(db.pharmacyBranch.findFirst).toHaveBeenCalledWith({
-      where: { organizationId: 'org-1', id: branchId, active: true }, select: { id: true, name: true, businessDayEndsAtHour: true },
+      where: { organizationId: 'org-1', id: branchId, active: true }, select: { id: true, name: true, businessDayEndsAtHistory: true },
     });
     expectNoEvidenceRead();
   });

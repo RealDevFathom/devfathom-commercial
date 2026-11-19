@@ -143,7 +143,7 @@ export async function MarginComparisonSection({
   timeZone,
 }: {
   caller: ReturnType<typeof pharmacyFinanceRouter.createCaller>;
-  branch: { id: string; name: string; businessDayEndsAtHour?: number | null };
+  branch: { id: string; name: string; businessDayEndsAtHistory?: unknown };
   from?: string;
   to?: string;
   ledgerFrom?: string;
@@ -155,7 +155,7 @@ export async function MarginComparisonSection({
   timeZone?: string | null;
 }) {
   // DEV-958A: picked dates are the branch's business days, ending at its "day ends at" hour.
-  const clock = { timeZone, dayEndsAtHour: branch.businessDayEndsAtHour };
+  const clock = { timeZone, dayEnd: branch.businessDayEndsAtHistory };
   const fromDate = from ?? pharmacyBusinessDayOffset(clock, -30);
   const toDate = to ?? pharmacyBusinessDay(clock);
   const zone = workspaceZoneLabel(timeZone);

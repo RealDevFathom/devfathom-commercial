@@ -1,7 +1,7 @@
 import 'server-only';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { pharmacyBusinessDayRange } from './business-day';
+import { pharmacyBusinessDayRange, type PharmacyDayEnd } from './business-day';
 
 /**
  * DEV-78 — the owner's five-line briefing (daily, plus a weekly summary).
@@ -88,12 +88,12 @@ export function ownerBriefingWindow(
   cadence: OwnerBriefingCadence,
   config: OwnerBriefingConfig = DEFAULT_OWNER_BRIEFING_CONFIG,
   timeZone?: string | null,
-  /** DEV-958A: the hour the branch's business day ends at (midnight when absent). */
-  { dayEndsAtHour }: { dayEndsAtHour?: number | null } = {}
+  /** DEV-958A: the branch's day-end hours by day (`PharmacyDayEnd`; midnight when absent). */
+  { dayEnd }: { dayEnd?: PharmacyDayEnd } = {}
 ) {
   const days = cadence === 'WEEKLY' ? config.weeklyDays : 1;
   const from = shiftDate(businessDate, -(days - 1));
-  const range = pharmacyBusinessDayRange(from, businessDate, { timeZone, dayEndsAtHour });
+  const range = pharmacyBusinessDayRange(from, businessDate, { timeZone, dayEnd });
   return {
     cadence,
     days,

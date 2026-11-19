@@ -1,7 +1,7 @@
 import 'server-only';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { pharmacyBusinessDay, pharmacyBusinessDayRange } from './business-day';
+import { pharmacyBusinessDay, pharmacyBusinessDayRange, type PharmacyDayEnd } from './business-day';
 import {
   demandDateAfter,
   demandDateMs,
@@ -25,8 +25,8 @@ export type PharmacyDemandEvidenceReaderInput = DemandScope & {
    * completion and stockout capture days are that clock's days. UTC when absent or refused.
    */
   timeZone?: string | null;
-  /** DEV-958A: the hour the branch's business day ends at (midnight when absent). */
-  dayEndsAtHour?: number | null;
+  /** DEV-958A: the branch's day-end hours by day (`PharmacyDayEnd`; midnight when absent). */
+  dayEnd?: PharmacyDayEnd;
 };
 
 type ConsumptionDay = {

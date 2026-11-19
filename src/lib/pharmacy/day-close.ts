@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
-import { isPharmacyCurrentBusinessDate, pharmacyDayEndHour } from './business-day';
+import { isPharmacyCurrentBusinessDate, pharmacyDayEndField } from './business-day';
 import { readPharmacyDayClock } from './business-day-clock';
 import type { LedgerScope } from './stock-ledger';
 import { aggregateTenderTotals } from './manual-payments';
@@ -25,7 +25,7 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
   const where = { organizationId: scope.organizationId, branchId: scope.branchId, businessDate };
   const branch = await db.pharmacyBranch.findFirst({
     where: { id: scope.branchId, organizationId: scope.organizationId, active: true },
-    select: { name: true, businessDayEndsAtHour: true },
+    select: { name: true, businessDayEndsAtHistory: true },
   });
   if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
   const [close, drawers, sales, refunds, organization, tenders, unpaid] = await Promise.all([
@@ -148,7 +148,7 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
     closeFollowsReopen,
     timezone: workspaceTimezone(organization?.timezone),
     // DEV-958A: the hour this branch's business day ends at, so the screen knows "today".
-    dayEndsAtHour: pharmacyDayEndHour(branch.businessDayEndsAtHour),
+    dayEnd: pharmacyDayEndField(branch.businessDayEndsAtHistory).dayEnd ?? [],
     openBills: {
       open: unpaid.filter((sale) => sale.status === 'OPEN').length,
       held: unpaid.filter((sale) => sale.status === 'HELD').length,

@@ -127,14 +127,14 @@ function command(originalSaleAt: string) {
   });
 }
 
-function db(timezone: string | null, businessDayEndsAtHour = 0) {
+function db(timezone: string | null, businessDayEndsAtHistory = 0) {
   return {
     $queryRaw: vi.fn(async () => []),
     organization: {
       findUnique: vi.fn(async () => (timezone === null ? null : { timezone })),
     },
     // DEV-958A: the branch's "day ends at" hour; 0 (midnight) unless a test sets it.
-    pharmacyBranch: { findFirst: vi.fn(async () => ({ businessDayEndsAtHour })) },
+    pharmacyBranch: { findFirst: vi.fn(async () => ({ businessDayEndsAtHistory })) },
     pharmacyInventoryLot: {
       findMany: vi.fn(async () => [{ id: 'lot_1', batch: { state: 'ACTIVE' } }]),
     },
@@ -280,7 +280,7 @@ describe('DEV-958A offline replay books on the branch business day', () => {
       await replay(target, command(soldAt));
       expect(target.pharmacyBranch.findFirst).toHaveBeenCalledWith({
         where: { organizationId: 'org_a', id: 'branch_a' },
-        select: { businessDayEndsAtHour: true },
+        select: { businessDayEndsAtHistory: true },
       });
       const booked = bookedDay(target);
       expect(booked.tender).toBe(`${day}T00:00:00.000Z`);

@@ -8,7 +8,7 @@
  */
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
-import { pharmacyBusinessDayRange } from './business-day';
+import { pharmacyBusinessDayRange, type PharmacyDayEnd } from './business-day';
 
 export type StaffingConfig = {
   /** Assumed receipts one staff member can serve in an hour. Owner-configurable estimate. */
@@ -137,8 +137,8 @@ export async function readStaffingSuggestions(
     from: string;
     to: string;
     timeZone: string | null | undefined;
-    /** DEV-958A: the hour the branch's business day ends at (midnight when absent). */
-    dayEndsAtHour?: number | null;
+    /** DEV-958A: the branch's day-end hours by day (`PharmacyDayEnd`; midnight when absent). */
+    dayEnd?: PharmacyDayEnd;
     config: StaffingConfig;
   }
 ) {

@@ -2,7 +2,7 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { pharmacyBusinessDayRange } from './business-day';
+import { pharmacyBusinessDayRange, type PharmacyDayEnd } from './business-day';
 
 const DAY = 86_400_000;
 const QUERY_TIMEOUT_MS = 10_000;
@@ -16,8 +16,8 @@ export type RepeatFilters = {
   from: string;
   to: string;
   asOf: string;
-  /** DEV-958A: the branches' day-end hour (midnight when absent). */
-  dayEndsAtHour?: number | null;
+  /** DEV-958A: the branches' shared day-end hours by day (midnight when absent). */
+  dayEnd?: PharmacyDayEnd;
 };
 export function validateRepeatFilters(
   input: RepeatFilters,
@@ -27,7 +27,7 @@ export function validateRepeatFilters(
   const from = new Date(`${input.from}T00:00:00.000Z`);
   const to = new Date(`${input.to}T00:00:00.000Z`);
   const asOf = new Date(input.asOf);
-  const clock = { timeZone, dayEndsAtHour: input.dayEndsAtHour };
+  const clock = { timeZone, dayEnd: input.dayEnd };
   if (
     !input.branchIds.length ||
     input.branchIds.length > 100 ||

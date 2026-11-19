@@ -67,7 +67,11 @@ import {
 } from '@/lib/pharmacy/staffing-suggestions';
 import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
 import { managerBranchIds } from '../pharmacy-manager-branches';
-import { pharmacyDayEndHourField, sharedPharmacyDayEndHour } from '@/lib/pharmacy/business-day';
+import {
+  pharmacyDayEndField,
+  sharedPharmacyDayEnd,
+  type PharmacyDayEndChange,
+} from '@/lib/pharmacy/business-day';
 import {
   PHARMACY_GROWTH_CATEGORIES,
   readPharmacyCategoryGrowthReport,
@@ -236,7 +240,7 @@ async function scope(ctx: TRPCContext) {
     where: { organizationId, active: true },
     orderBy: { name: 'asc' },
     // DEV-958A: the hour each branch's business day ends at, which bounds its report days.
-    select: { id: true, name: true, businessDayEndsAtHour: true },
+    select: { id: true, name: true, businessDayEndsAtHistory: true },
   });
   return { branches, organizationId };
 }
@@ -246,15 +250,15 @@ async function scope(ctx: TRPCContext) {
  * midnight when the chosen branches end their days at different hours.
  */
 function reportDayEndHour(
-  available: { branches: { id: string; businessDayEndsAtHour?: number | null }[] },
+  available: { branches: { id: string; businessDayEndsAtHistory?: unknown }[] },
   branchIds: readonly string[]
-): { dayEndsAtHour?: number } {
-  return pharmacyDayEndHourField(
-    sharedPharmacyDayEndHour(
+): { dayEnd?: PharmacyDayEndChange[] } {
+  return pharmacyDayEndField(
+    sharedPharmacyDayEnd(
       available.branches
         .filter((branch) => branchIds.includes(branch.id))
-        .map((branch) => branch.businessDayEndsAtHour)
-    ).dayEndsAtHour
+        .map((branch) => branch.businessDayEndsAtHistory)
+    ).dayEnd
   );
 }
 
@@ -359,7 +363,7 @@ export const pharmacyReportsRouter = router({
         configuration: input.configuration,
         // The caller's own organisation's days, as the other pharmacy reports read them.
         timeZone: ctx.organization?.timezone,
-        ...pharmacyDayEndHourField(scoped.dayEndsAtHour),
+        ...pharmacyDayEndField(scoped.dayEnd),
       });
     }),
   marketing: reports
@@ -732,7 +736,7 @@ export const pharmacyReportsRouter = router({
     const branches = await ctx.db.pharmacyBranch.findMany({
       where: { organizationId, active: true, id: { in: assigned } },
       orderBy: { name: 'asc' },
-      select: { id: true, name: true, businessDayEndsAtHour: true },
+      select: { id: true, name: true, businessDayEndsAtHistory: true },
     });
     return { branches, organizationId };
   }),
@@ -762,9 +766,9 @@ export const pharmacyReportsRouter = router({
       // The caller's own organisation's days; the screen offers the same days. DEV-958A: each
       // ends at the branch's "day ends at" hour.
       const timeZone = ctx.organization?.timezone;
-      const { dayEndsAtHour } = reportDayEndHour(available, [input.branchId]);
+      const { dayEnd } = reportDayEndHour(available, [input.branchId]);
       try {
-        validatePharmacyReplenishmentReportInput(input, readAt, timeZone, dayEndsAtHour);
+        validatePharmacyReplenishmentReportInput(input, readAt, timeZone, dayEnd);
       } catch {
         throw new TRPCError({
           code: 'BAD_REQUEST',
@@ -780,7 +784,7 @@ export const pharmacyReportsRouter = router({
             authorizedBranchIds: available.branches.map((branch) => branch.id),
             financial,
             timeZone,
-            ...pharmacyDayEndHourField(dayEndsAtHour),
+            ...pharmacyDayEndField(dayEnd),
           },
           readAt
         );

@@ -25,7 +25,7 @@ export async function readPharmacyCashCloseCheck(
 ): Promise<CashCloseCheck & { branchName: string; timezone: string }> {
   const branch = await db.pharmacyBranch.findFirst({
     where: { id: scope.branchId, organizationId: scope.organizationId, active: true },
-    select: { name: true, businessDayEndsAtHour: true },
+    select: { name: true, businessDayEndsAtHistory: true },
   });
   if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
   const organization = await db.organization.findUnique({
@@ -34,7 +34,7 @@ export async function readPharmacyCashCloseCheck(
   });
   const timezone = workspaceTimezone(organization?.timezone);
   // DEV-958A: the branch's business day, which ends at its "day ends at" hour.
-  const dayClock = { timeZone: timezone, dayEndsAtHour: branch.businessDayEndsAtHour };
+  const dayClock = { timeZone: timezone, dayEnd: branch.businessDayEndsAtHistory };
   const day = businessDate.toISOString().slice(0, 10);
   // A sale is voided while still OPEN, so it has no business date. Its VOIDED
   // event belongs to the day by the workspace zone the counter stamps in: read
@@ -42,7 +42,7 @@ export async function readPharmacyCashCloseCheck(
   const { start: dayStart, end: dayEnd } = pharmacyCashCloseDayBounds(
     businessDate,
     timezone,
-    dayClock.dayEndsAtHour
+    dayClock.dayEnd
   );
 
   const where = { organizationId: scope.organizationId, branchId: scope.branchId, businessDate };

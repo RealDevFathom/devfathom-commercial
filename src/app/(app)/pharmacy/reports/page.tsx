@@ -24,7 +24,7 @@ import { pharmacyReportKpiFlags } from '@/lib/pharmacy/report-kpi-flags';
 import {
   pharmacyBusinessDay,
   pharmacyBusinessDayRange,
-  sharedPharmacyDayEndHour,
+  sharedPharmacyDayEnd,
 } from '@/lib/pharmacy/business-day';
 import { workspaceZoneLabel } from '@/lib/timezone';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
@@ -186,14 +186,12 @@ export default async function PharmacyReportsPage({
       : undefined);
   // DEV-958A: the business day ends at the chosen branch's "day ends at" hour (the shared hour
   // of all branches when none is chosen, as the reports read it; midnight by default).
-  const clock = {
-    timeZone,
-    dayEndsAtHour: sharedPharmacyDayEndHour(
-      branchResult.branches
-        .filter((item) => !branch || item.id === branch)
-        .map((item) => item.businessDayEndsAtHour)
-    ).dayEndsAtHour,
-  };
+  const sharedDayEnd = sharedPharmacyDayEnd(
+    branchResult.branches
+      .filter((item) => !branch || item.id === branch)
+      .map((item) => item.businessDayEndsAtHistory)
+  );
+  const clock = { timeZone, dayEnd: sharedDayEnd.dayEnd };
   const today = pharmacyBusinessDay(clock);
   const fromDate = new Date(`${today}T00:00:00.000Z`);
   fromDate.setUTCDate(fromDate.getUTCDate() - 6);
@@ -632,6 +630,16 @@ export default async function PharmacyReportsPage({
             {screenCopy.reports.applyFilters}
           </Button>
         </form>
+        {sharedDayEnd.mixed ? (
+          <p
+            className="mt-4 rounded-md border border-border-subtle bg-surface-sunken px-3 py-2 text-sm text-text-body"
+            role="note"
+          >
+            These branches end their business days at different hours, so a report across all of
+            them counts each day from midnight to midnight and may not match each branch&apos;s day
+            close. Choose one branch to read its own business days.
+          </p>
+        ) : null}
       </SectionCard>
       {result ? (
         <SectionCard

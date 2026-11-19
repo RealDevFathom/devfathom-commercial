@@ -51,8 +51,7 @@ export default async function ReplenishmentPage({
       // DEV-958A: on the chosen branch's clock, whose day ends at its "day ends at" hour.
       today: pharmacyBusinessDay({
         timeZone: actor.organization?.timezone,
-        dayEndsAtHour: scope.branches.find((branch) => branch.id === branchId)
-          ?.businessDayEndsAtHour,
+        dayEnd: scope.branches.find((branch) => branch.id === branchId)?.businessDayEndsAtHistory,
       }),
       timeZone: actor.organization?.timezone ?? null,
     };

@@ -810,12 +810,6 @@ function failDayEndHour(error: unknown): never {
   if (error instanceof PharmacyDayEndHourError) {
     if (error.reason === 'BRANCH_NOT_FOUND')
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Choose an active branch.' });
-    if (error.reason === 'DRAWERS_OPEN')
-      throw new TRPCError({
-        code: 'PRECONDITION_FAILED',
-        message:
-          'Close every open drawer at this branch (day close) before changing when its day ends.',
-      });
     throw new TRPCError({
       code: 'CONFLICT',
       message: 'This setting changed while you were editing it. Reload and try again.',
@@ -2132,8 +2126,9 @@ export const pharmacySalesRouter = router({
       }
     }),
   /**
-   * DEV-958A: the hour this branch's business day ends at (midnight by default), the business
-   * day it gives now, and how many drawers are open. Owner or manager at the branch.
+   * DEV-958A: the hour this branch's business day ends at today (midnight by default), any change
+   * already set for a later day, and the first day a change made now applies to. Owner or
+   * manager at the branch.
    */
   dayEndHour: protectedProcedure
     .input(z.object({ branchId }).strict())
@@ -2147,8 +2142,8 @@ export const pharmacySalesRouter = router({
     }),
   /**
    * DEV-958A: an owner, or a manager at the branch (the drawer-manager gate), sets when the
-   * branch's business day ends. Refused while any drawer of the branch is open; audited with
-   * the before and after hour. Nothing already recorded moves.
+   * branch's business day ends. It applies from the day after the next business day, so no day
+   * that has begun, and no past day or report, moves; audited with the before and after hour.
    */
   saveDayEndHour: auditedProtectedProcedure
     .input(
@@ -4290,7 +4285,7 @@ export const pharmacySalesRouter = router({
           name: true,
           city: true,
           provinceCode: true,
-          businessDayEndsAtHour: true,
+          businessDayEndsAtHistory: true,
         },
         orderBy: [{ name: 'asc' }, { id: 'asc' }],
       }),
@@ -4338,7 +4333,7 @@ export const pharmacySalesRouter = router({
           ...(allowed === 'ALL' ? {} : { id: { in: allowed } }),
         },
         // DEV-958A: the close picks "today" on each branch's own clock.
-        select: { id: true, code: true, name: true, city: true, businessDayEndsAtHour: true },
+        select: { id: true, code: true, name: true, city: true, businessDayEndsAtHistory: true },
         orderBy: [{ name: 'asc' }, { id: 'asc' }],
       }),
       ctx.db.organization.findUnique({

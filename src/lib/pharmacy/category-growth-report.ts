@@ -2,7 +2,7 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { pharmacyBusinessDayRange } from './business-day';
+import { pharmacyBusinessDayRange, type PharmacyDayEnd } from './business-day';
 import { MAX_PHARMACY_REPORT_BRANCHES, MAX_PHARMACY_REPORT_DAYS } from './reports';
 
 export const PHARMACY_GROWTH_CATEGORIES = ['OTC', 'COSMETICS'] as const;
@@ -47,8 +47,8 @@ export type CategoryGrowthReportInput = {
    * exclusive cutoff `to` are that clock's days. UTC when absent or one Intl refuses.
    */
   timeZone?: string | null;
-  /** DEV-958A: the branches' day-end hour (`readPharmacyReportDayEndHour`); midnight when absent. */
-  dayEndsAtHour?: number | null;
+  /** DEV-958A: the branches' shared day-end hours by day (`sharedPharmacyDayEnd`); midnight when absent. */
+  dayEnd?: PharmacyDayEnd;
 };
 
 export function validateCategoryGrowthConfiguration(configuration: CategoryGrowthConfig[]) {

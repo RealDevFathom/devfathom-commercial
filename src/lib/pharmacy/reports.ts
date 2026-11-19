@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
-import { pharmacyBusinessDayRange } from './business-day';
+import { pharmacyBusinessDayRange, type PharmacyDayEnd } from './business-day';
 
 import { grossMarginQuery } from './finance-reports';
 import {
@@ -30,7 +30,7 @@ export type PharmacyReportFilters = {
    * DEV-958A: the hour the branches' business day ends at (`readPharmacyReportDayEndHour`), so
    * the window's days are the days their closes count. Absent: midnight, as before.
    */
-  dayEndsAtHour?: number | null;
+  dayEnd?: PharmacyDayEnd;
 };
 
 export type PharmacyMetricContract = {
