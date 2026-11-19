@@ -37,6 +37,7 @@ import {
   recordApInvoice,
   reverseApInvoice,
   reverseApSettlement,
+  searchApReversals,
 } from '@/lib/pharmacy/accounts/ap-invoices';
 import { otherApReversalApprovers } from '@/lib/pharmacy/accounts/ap-reversal-approvers';
 import {
@@ -51,6 +52,7 @@ import {
   recordApInvoiceSchema,
   reverseApInvoiceSchema,
   reverseApSettlementSchema,
+  searchApReversalsSchema,
 } from '@/lib/pharmacy/accounts/ap-invoices-schema';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { recordAudit } from '../audit';
@@ -104,8 +106,9 @@ type ReversalCtx = Pick<TRPCContext, 'db'> & {
  * DEV-103: the gate in front of an invoice or payment reversal. A manager or owner only
  * (`pharmacy:manage`, the refund rule). Someone reversing an entry they recorded is refused
  * before any PIN is asked while another manager or owner could approve it
- * (`otherApReversalApprovers`, the card-terminal solo rule); otherwise their own fresh PIN is
- * checked in its own transaction, so a refusal keeps its lockout strike and its FAILURE audit.
+ * (`otherApReversalApprovers`: exactly who these procedures would let approve); otherwise their
+ * own fresh PIN is checked in its own transaction, so a refusal keeps its lockout strike and its
+ * FAILURE audit.
  * The command re-checks the solo rule inside the write's transaction.
  */
 async function authorizeReversal(
@@ -699,7 +702,7 @@ export const pharmacyApInvoicesRouter = router({
             metadata: {
               policy: result.replayed ? null : result.policy,
               approverId: settlement.reversedByUserId,
-              initiatedById: settlement.createdByUserId,
+              recordedById: settlement.createdByUserId,
               pinVerified: true,
               selfApproved: settlement.reversedByUserId === settlement.createdByUserId,
               reason: settlement.reversalReason,
@@ -761,7 +764,7 @@ export const pharmacyApInvoicesRouter = router({
           metadata: {
             policy: result.replayed ? null : result.policy,
             approverId: invoice.reversedByUserId,
-            initiatedById: invoice.createdByUserId,
+            recordedById: invoice.createdByUserId,
             pinVerified: true,
             selfApproved: invoice.reversedByUserId === invoice.createdByUserId,
             reason: invoice.reversalReason,
@@ -774,6 +777,25 @@ export const pharmacyApInvoicesRouter = router({
       if (isSelfApproval(error)) await ownEntryRefusal(ctx, scope);
       fail(error);
     }
+  }),
+
+  /**
+   * DEV-103: find a posted invoice, or a payment in force against one, to reverse: search by
+   * payee, reference, exact amount and a range of days on the shop's clock, one page at a time.
+   * Authorized like every read here; scoped to the authenticated tenant and this branch.
+   */
+  reversalSearch: adminProcedure.input(searchApReversalsSchema).query(async ({ ctx, input }) => {
+    const scope = await authorizeGeneralJournal(ctx, input.branchId);
+    return {
+      scope: { organizationId: scope.organizationId, branchId: scope.branchId },
+      ...(await searchApReversals(
+        ctx.db,
+        { organizationId: scope.organizationId, branchId: scope.branchId },
+        input,
+        ctx.organization?.timezone
+      )),
+      retrievedAt: new Date(),
+    };
   }),
 
   /**

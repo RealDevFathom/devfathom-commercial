@@ -28,6 +28,7 @@ import {
   reverseBookkeepingTransaction,
 } from '@/lib/pharmacy/bookkeeping';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { workspaceDateRange } from '@/lib/timezone';
 import {
   AP_INVOICE_MAX_MINOR,
   AP_INVOICE_MAX_TERM_DAYS,
@@ -36,6 +37,8 @@ import {
   type RecordApInvoiceInput,
   type ReverseApInvoiceInput,
   type ReverseApSettlementInput,
+  AP_REVERSAL_PAGE_ROWS,
+  type SearchApReversalsInput,
 } from './ap-invoices-schema';
 import { commandPayloadHash } from './general-journal';
 
@@ -50,6 +53,26 @@ export const AP_REVERSAL_SEGREGATED_POLICY = 'PHARMACY_AP_REVERSAL_MANAGER_PIN';
 export const AP_REVERSAL_SOLE_APPROVER_POLICY = 'PHARMACY_AP_REVERSAL_SOLE_APPROVER_PIN';
 export type ApReversalOptions = { soleApprover: () => Promise<boolean>; now?: Date };
 
+/**
+ * DEV-103: what a reversal command receives: the wire input without the PIN. `at` is never on
+ * the wire (the API refuses it, so the server dates every reversal now); only server code, such
+ * as the date-rule tests, may pass one.
+ */
+export type ApSettlementReversalCommand = Omit<ReverseApSettlementInput, 'pin'> & { at?: string };
+export type ApInvoiceReversalCommand = Omit<ReverseApInvoiceInput, 'pin'> & { at?: string };
+
+/**
+ * DEV-103: the reversal audit entries name the person who recorded the reversed invoice or
+ * payment `recordedById`. Earlier entries named the same person `initiatedById`; this reads both,
+ * preferring the new name.
+ */
+export function apReversalAuditRecorderId(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  const record = metadata as Record<string, unknown>;
+  const value = record.recordedById ?? record.initiatedById;
+  return typeof value === 'string' && value ? value : null;
+}
+
 async function reversalPolicy(
   recordedById: string,
   scope: ApInvoiceScope,
@@ -61,9 +84,9 @@ async function reversalPolicy(
 }
 
 /**
- * A reversal dated by the client keeps that instant in its payload; one dated by the server
- * (the screen sends none) takes the server clock and leaves it out, so a double submit of the
- * same command key replays instead of conflicting.
+ * A reversal dated by server code keeps that instant in its payload; one dated now (every API
+ * call: the wire carries no date) takes the server clock and leaves it out, so a double submit
+ * of the same command key replays instead of conflicting.
  */
 function reversalInstant(
   input: { at?: string },
@@ -558,7 +581,7 @@ export async function payApInvoice(
 export async function reverseApSettlement(
   db: ScopedDb,
   scope: ApInvoiceScope,
-  input: Omit<ReverseApSettlementInput, 'pin'>,
+  input: ApSettlementReversalCommand,
   options: ApReversalOptions
 ) {
   const now = options.now ?? new Date();
@@ -635,7 +658,7 @@ export async function reverseApSettlement(
 export async function reverseApInvoice(
   db: ScopedDb,
   scope: ApInvoiceScope,
-  input: Omit<ReverseApInvoiceInput, 'pin'>,
+  input: ApInvoiceReversalCommand,
   options: ApReversalOptions
 ) {
   const now = options.now ?? new Date();
@@ -726,4 +749,82 @@ export function listApInvoices(
     orderBy: [{ invoiceDate: 'desc' }, { id: 'asc' }],
     take: input.take,
   });
+}
+
+/**
+ * DEV-103: the reversal search. Posted supplier expense invoices of one branch of one tenant that
+ * match every filter given (see `searchApReversalsSchema`), each with its payments, in a stable
+ * order (newest invoice date first, then id) one page at a time. One row more than a page is read
+ * to tell whether an older page exists; nothing outside the tenant and branch is ever read.
+ */
+/** A schema-checked YYYY-MM-DD day as the UTC midnight an invoice date is stored at. */
+const utcDay = (day: string) => new Date(`${day}T00:00:00.000Z`);
+
+export async function searchApReversals(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string },
+  input: Omit<SearchApReversalsInput, 'branchId'>,
+  timeZone: string | null | undefined
+) {
+  const page = input.page ?? 1;
+  const where: Prisma.PharmacyApInvoiceWhereInput[] = [];
+  if (input.payee) where.push({ payeeName: { contains: input.payee, mode: 'insensitive' } });
+  if (input.reference) {
+    where.push({
+      OR: [
+        { reference: { contains: input.reference, mode: 'insensitive' } },
+        { supplierInvoiceRef: { contains: input.reference, mode: 'insensitive' } },
+      ],
+    });
+  }
+  if (input.amountMinor !== undefined) {
+    where.push({
+      OR: [
+        { amountMinor: input.amountMinor },
+        { settlements: { some: { status: 'ACTIVE', amountMinor: input.amountMinor } } },
+      ],
+    });
+  }
+  if (input.from || input.to) {
+    // An invoice date is a calendar day already; a payment is an instant, read on the shop's clock.
+    const paid = workspaceDateRange(input.from ?? input.to!, input.to ?? input.from!, timeZone);
+    where.push({
+      OR: [
+        {
+          invoiceDate: {
+            ...(input.from ? { gte: utcDay(input.from) } : {}),
+            ...(input.to ? { lte: utcDay(input.to) } : {}),
+          },
+        },
+        {
+          settlements: {
+            some: {
+              status: 'ACTIVE',
+              paidAt: {
+                ...(input.from ? { gte: paid.from } : {}),
+                ...(input.to ? { lt: paid.to } : {}),
+              },
+            },
+          },
+        },
+      ],
+    });
+  }
+  const rows = await db.pharmacyApInvoice.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: 'POSTED',
+      ...(where.length ? { AND: where } : {}),
+    },
+    include: { settlements: { orderBy: [{ paidAt: 'asc' }, { id: 'asc' }] } },
+    orderBy: [{ invoiceDate: 'desc' }, { id: 'asc' }],
+    skip: (page - 1) * AP_REVERSAL_PAGE_ROWS,
+    take: AP_REVERSAL_PAGE_ROWS + 1,
+  });
+  return {
+    invoices: rows.slice(0, AP_REVERSAL_PAGE_ROWS),
+    page,
+    hasOlder: rows.length > AP_REVERSAL_PAGE_ROWS,
+  };
 }

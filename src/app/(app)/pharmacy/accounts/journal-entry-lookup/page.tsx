@@ -12,6 +12,7 @@ import {
   type JournalEntryLookupResult,
 } from '@/lib/pharmacy/accounts/journal-entry-lookup';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
+import { BranchSelect, loadBranchOptions } from '../branch-picker';
 import { createTRPCContext } from '@/server/trpc';
 import {
   formatWorkspaceDateTime,
@@ -47,8 +48,8 @@ const pageInput = z
   })
   .strict();
 type FieldName = keyof z.infer<typeof pageInput>;
-const fields: { name: FieldName; label: string; type: 'text' | 'date' | 'time' }[] = [
-  { name: 'branchId', label: 'Branch ID', type: 'text' },
+const fields: { name: FieldName; label: string; type: 'branch' | 'text' | 'date' | 'time' }[] = [
+  { name: 'branchId', label: 'Branch', type: 'branch' },
   { name: 'entryId', label: 'Journal entry ID', type: 'text' },
   { name: 'fromDate', label: 'From date', type: 'date' },
   { name: 'fromTime', label: 'From time', type: 'time' },
@@ -56,7 +57,8 @@ const fields: { name: FieldName; label: string; type: 'text' | 'date' | 'time' }
   { name: 'toTime', label: 'Until time (not included)', type: 'time' },
 ];
 const fieldSchema: Record<FieldName, z.ZodType> = pageInput.shape;
-const fieldMessage: Record<'text' | 'date' | 'time', string> = {
+const fieldMessage: Record<'branch' | 'text' | 'date' | 'time', string> = {
+  branch: 'Choose a branch from the list.',
   text: 'Use at most 128 characters.',
   date: 'Choose a date.',
   time: 'Choose a time.',
@@ -136,11 +138,14 @@ export default async function JournalEntryLookupPage({
           : { status: 'FAILURE' };
     }
   }
+  // The picker lists the branches an owner may act at; the router still checks the chosen one.
+  const branches = await loadBranchOptions();
   const zoneWords = timeZone
     ? `Dates and times are on your organisation's clock (${workspaceZoneLabel(timeZone)}).`
     : "Dates and times are on your organisation's clock.";
   const message: Partial<Record<ViewState['status'], string>> = {
-    INITIAL: 'Enter the journal entry ID, the branch and the dates and times to search.',
+    INITIAL:
+      'Choose the branch, then enter the journal entry ID and the dates and times to search.',
     INVALID:
       'Enter each field once, with an ID and a window that ends after it starts and is no more than 92 days long.',
     DENIED: 'You do not have access to this financial report scope.',
@@ -175,16 +180,29 @@ export default async function JournalEntryLookupPage({
             return (
               <div key={name} className="text-sm text-text-body">
                 <label htmlFor={`journal-lookup-${name}`}>{label}</label>
-                <Input
-                  id={`journal-lookup-${name}`}
-                  name={name}
-                  type={type}
-                  className="mt-1 min-h-11"
-                  defaultValue={displayValues[name] ?? ''}
-                  aria-invalid={error ? true : undefined}
-                  aria-describedby={error ? errorId : undefined}
-                  required
-                />
+                {type === 'branch' ? (
+                  <div className="mt-1">
+                    <BranchSelect
+                      id={`journal-lookup-${name}`}
+                      name={name}
+                      branchId={displayValues[name]}
+                      branches={branches}
+                      invalid={Boolean(error)}
+                      describedBy={error ? errorId : undefined}
+                    />
+                  </div>
+                ) : (
+                  <Input
+                    id={`journal-lookup-${name}`}
+                    name={name}
+                    type={type}
+                    className="mt-1 min-h-11"
+                    defaultValue={displayValues[name] ?? ''}
+                    aria-invalid={error ? true : undefined}
+                    aria-describedby={error ? errorId : undefined}
+                    required
+                  />
+                )}
                 {error ? (
                   <p id={errorId} className="mt-1 text-sm text-destructive">
                     {error}
