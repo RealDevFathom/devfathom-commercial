@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 const url = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
 const migration = readFileSync(
-  'prisma/migrations/20261118120300_task_label_board_boundary/migration.sql',
+  'prisma/migrations/20261118124900_task_label_board_boundary/migration.sql',
   'utf8'
 );
 
