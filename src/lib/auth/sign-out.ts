@@ -1,5 +1,7 @@
 import { signOut } from 'next-auth/react';
 
+import { clearCounterShell } from '@/lib/pharmacy/counter-shell';
+
 /**
  * Sign out of BOTH authentication and organization-selection state.
  *
@@ -13,10 +15,14 @@ import { signOut } from 'next-auth/react';
  * and a network failure must never leave the user stuck signed in.
  */
 export async function signOutEverything(callbackUrl = '/login') {
+  // DEV-957: the offline counter page is stored for the person signed in now;
+  // the next person at this computer must never be shown it. Never throws.
+  const shellCleared = clearCounterShell();
   try {
     await fetch('/api/login', { method: 'DELETE', credentials: 'include' });
   } catch {
     // Ignore — the intent is single-use and expires in five minutes regardless.
   }
+  await shellCleared;
   await signOut({ callbackUrl });
 }

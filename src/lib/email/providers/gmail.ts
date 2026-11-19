@@ -1,4 +1,4 @@
-import { google, type gmail_v1 } from 'googleapis';
+import { GoogleOAuth2, gmailClient, type gmail_v1 } from '../google-gmail';
 import type {
   AdapterCredentials,
   ListOptions,
@@ -15,10 +15,10 @@ export class GmailAdapter implements MailAdapter {
 
   private client(): gmail_v1.Gmail {
     const { clientId, clientSecret, redirectUri } = googleConfig();
-    const auth = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+    const auth = new GoogleOAuth2(clientId, clientSecret, redirectUri);
     // googleapis transparently refreshes the access token from the refresh token.
     auth.setCredentials({ refresh_token: this.creds.refreshToken });
-    return google.gmail({ version: 'v1', auth });
+    return gmailClient(auth);
   }
 
   async listMessages(opts: ListOptions = {}): Promise<ListResult> {
