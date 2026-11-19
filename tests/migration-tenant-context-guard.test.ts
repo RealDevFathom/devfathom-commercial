@@ -279,6 +279,18 @@ describe('tenant-context detector', () => {
           END LOOP;
         END $$;`)
       ).toEqual(flagged);
+      // A comment before the IF does not hide the branch (DO bodies keep their comments).
+      expect(
+        offendersOf(`DO $$ DECLARE tenant_id TEXT; BEGIN
+          FOR tenant_id IN SELECT "id" FROM "organizations" LOOP -- every shop
+            -- PERFORM set_config('app.current_organization_id', tenant_id, true);
+            IF false THEN
+              PERFORM set_config('app.current_organization_id', tenant_id, true);
+            END IF;
+            UPDATE "tenant_rows" SET "id" = "id";
+          END LOOP;
+        END $$;`)
+      ).toEqual(flagged);
       // The other branch of the same IF.
       expect(
         offendersOf(`DO $$ DECLARE tenant_id TEXT; BEGIN
@@ -351,6 +363,9 @@ describe('tenant-context detector', () => {
         `EXECUTE format('UPDATE %I SET "id" = "id"', t);`,
         `EXECUTE format($q$DELETE FROM %s$q$, t);`,
         `EXECUTE 'DELETE FROM ' || quote_ident(t);`,
+        `EXECUTE format('DELETE FROM ') || quote_ident(t);`,
+        `EXECUTE format('DELETE FROM %1$I', t);`,
+        `EXECUTE format('DELETE FROM %-20s', t);`,
         `EXECUTE statement_text;`,
       ])
         expect(

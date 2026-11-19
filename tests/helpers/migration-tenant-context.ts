@@ -274,8 +274,30 @@ function executedCommand(rest: string): { text: string; dynamic: boolean } | nul
     text = quoted[1]!.replace(/''/g, "'");
     after = quoted[0].length;
   }
-  const concatenated = /^\s*\|\|/.test(tail.slice(after));
-  const placeholders = format !== null && /%[Is]/.test(text);
+  let remainder = tail.slice(after);
+  if (format) {
+    // Step past the rest of the format(...) call, so `format(...) || x` is seen as concatenated.
+    let depth = 0;
+    let end = remainder.length;
+    for (let i = 0; i < remainder.length; i += 1) {
+      const literal = /^(?:E?'(?:[^']|'')*'|(\$[A-Za-z0-9_]*\$)[\s\S]*?\1)/i.exec(
+        remainder.slice(i)
+      );
+      if (literal) {
+        i += literal[0].length - 1;
+        continue;
+      }
+      if (remainder[i] === '(') depth += 1;
+      else if (remainder[i] === ')' && depth-- === 0) {
+        end = i + 1;
+        break;
+      }
+    }
+    remainder = remainder.slice(end);
+  }
+  const concatenated = /^\s*\|\|/.test(remainder);
+  // %I and %s, also with a position (%1$I) or a width (%-10s, %*s, %*2$s).
+  const placeholders = format !== null && /%(?:\d+\$)?-?(?:\d+|\*(?:\d+\$)?)?[Is]/.test(text);
   return { text, dynamic: concatenated || placeholders };
 }
 
@@ -520,13 +542,22 @@ export class MigrationTenantContextAnalyzer {
       consumed = offset + statement.length;
       const head = statement.replace(/^\s+/, '');
       if (/^CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\b/i.test(head)) continue;
-      const statementEvents = contextEvents(statement, offset);
       const body = /^DO\b/i.test(head)
         ? /\$([A-Za-z0-9_]*)\$([\s\S]*)\$\1\$/.exec(statement)
         : null;
-      const bodyOffset = body ? offset + statement.indexOf(body[2]!) : 0;
+      const bodyStart = body ? statement.indexOf(body[2]!) : 0;
+      const bodyOffset = offset + bodyStart;
+      // The outer pass keeps dollar-quoted bodies whole; blank their comments too (offsets
+      // kept), so a comment neither hides a branch keyword nor reads as a set or a reference.
+      const bodyText = body ? stripSqlComments(body[2]!) : '';
+      const statementEvents = contextEvents(
+        body
+          ? statement.slice(0, bodyStart) + bodyText + statement.slice(bodyStart + bodyText.length)
+          : statement,
+        offset
+      );
       if (body)
-        for (const branch of plpgsqlBranches(blankStrings(body[2]!)))
+        for (const branch of plpgsqlBranches(blankStrings(bodyText)))
           for (const event of statementEvents) {
             const end = bodyOffset + branch.end;
             if (event.kind !== 'set' || event.at < bodyOffset + branch.start || event.at >= end)
@@ -547,8 +578,8 @@ export class MigrationTenantContextAnalyzer {
           if (start !== -1) this.applyDdl(inner.slice(start));
         }
         this.applyDynamicDdl(body[2]!, knownTables);
-        this.flag(migration, body[2]!, bodyOffset, events);
-        this.flagDynamic(migration, sql, body[2]!, bodyOffset, events);
+        this.flag(migration, bodyText, bodyOffset, events);
+        this.flagDynamic(migration, sql, bodyText, bodyOffset, events);
         continue;
       }
       if (
