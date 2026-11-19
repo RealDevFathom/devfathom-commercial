@@ -1064,17 +1064,25 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
       'suggest-catalogue-edits/owner-approve-no-reviewer',
     ],
   },
+  'pharmacyOffline.counters': {
+    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch)',
+    none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
+  },
   'pharmacyOffline.enroll': {
-    gate: 'adminProcedure',
-    none: 'workspace administrators only (admin:access)',
+    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch)',
+    none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
+  },
+  'pharmacyOffline.preparationPlan': {
+    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); read only, the quota grant itself is the manager-only counter route',
+    none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
   },
   'pharmacyOffline.revoke': {
-    gate: 'adminProcedure',
-    none: 'workspace administrators only (admin:access)',
+    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); releases the counter\'s open stock quotas in the same transaction, audited',
+    none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
   },
   'pharmacyOffline.rotate': {
-    gate: 'adminProcedure',
-    none: 'workspace administrators only (admin:access)',
+    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch)',
+    none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
   },
   'pharmacyOnboarding.fbrTier1Status': {
     gate: 'fbrTier1Procedure = adminProcedure + pharmacy-core',
