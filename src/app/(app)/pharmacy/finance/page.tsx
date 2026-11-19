@@ -31,11 +31,11 @@ import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { workspaceDateOffset, workspaceToday } from '@/lib/timezone';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
+import { bankLineAmountMinor, financeAmountMinor, type FinanceAmount } from './typed-amount';
 
 export const metadata: Metadata = { title: 'Pharmacy finance' };
 const route = '/pharmacy/finance';
 const field = (data: FormData, key: string) => String(data.get(key) ?? '').trim();
-const moneyMinor = (data: FormData, key: string) => Math.round(Number(field(data, key)) * 100);
 const inputClass =
   'mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 const label = (value: string) =>
@@ -143,6 +143,12 @@ export default async function PharmacyFinancePage({
     'use server';
     const branchId = field(data, 'branchId');
     const action = field(data, 'action');
+    // DEV-942: a typed amount the shared reader refuses is explained and nothing is sent.
+    const typedAmount = (amount: FinanceAmount) => {
+      if (amount.status === 'REFUSED')
+        redirect(destination(branchId || branch.id, amount.message, 'error'));
+      return amount.minor;
+    };
     try {
       const actionCtx = await tenantContext();
       if (!actionCtx?.session?.user || actionCtx.session.user.role !== 'ADMIN')
@@ -162,7 +168,7 @@ export default async function PharmacyFinancePage({
           branchId,
           reference: field(data, 'reference'),
           kind,
-          amountMinor: moneyMinor(data, 'amount'),
+          amountMinor: typedAmount(financeAmountMinor(field(data, 'amount'))),
           occurredAt: new Date(`${field(data, 'occurredAt')}T12:00:00Z`),
           idempotencyKey: browserUuid(),
           counterpartyName: field(data, 'counterpartyName') || undefined,
@@ -211,7 +217,7 @@ export default async function PharmacyFinancePage({
           statementRef: field(data, 'statementRef'),
           lineReference: field(data, 'lineReference'),
           bookedAt: new Date(`${field(data, 'bookedAt')}T12:00:00Z`),
-          amountMinor: moneyMinor(data, 'amount'),
+          amountMinor: typedAmount(bankLineAmountMinor(field(data, 'amount'))),
           description: field(data, 'description'),
         });
         redirect(destination(branchId, 'Bank statement line added for matching.'));
@@ -221,7 +227,7 @@ export default async function PharmacyFinancePage({
           branchId,
           statementLineId: field(data, 'statementLineId'),
           transactionId: field(data, 'transactionId'),
-          amountMinor: moneyMinor(data, 'amount'),
+          amountMinor: typedAmount(financeAmountMinor(field(data, 'amount'))),
         });
         redirect(destination(branchId, 'Bank line matched to the selected transaction.'));
       }
@@ -230,7 +236,7 @@ export default async function PharmacyFinancePage({
           branchId,
           statementLineId: field(data, 'statementLineId'),
           settlementBatchId: field(data, 'settlementBatchId'),
-          amountMinor: moneyMinor(data, 'amount'),
+          amountMinor: typedAmount(financeAmountMinor(field(data, 'amount'))),
         });
         redirect(destination(branchId, 'Statement matched to POS settlement receipts.'));
       }

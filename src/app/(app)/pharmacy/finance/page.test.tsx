@@ -26,6 +26,9 @@ const mocks = vi.hoisted(() => ({
   perpetualValuation: vi.fn(),
   grossMargin: vi.fn(),
   leakageReport: vi.fn(),
+  post: vi.fn(),
+  importBankLine: vi.fn(),
+  reconcile: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({
   resolveTenantActor: vi.fn().mockResolvedValue({ session: { user: { role: 'ADMIN' } } }),
@@ -306,6 +309,97 @@ describe('DEV-103 native AP payments in recent transactions', () => {
     expect(generic).toContain('value="txn_generic"');
     expect(native).not.toContain('value="txn_native"');
     expect(native).toContain('reverse it through the invoice settlement');
+  });
+});
+
+describe('DEV-942 typed finance amounts', () => {
+  async function performAction() {
+    const tree = await PharmacyFinancePage({ searchParams: Promise.resolve({}) });
+    let perform: ((data: FormData) => Promise<void>) | undefined;
+    function visit(node: ReactNode) {
+      Children.forEach(node, (child) => {
+        if (!isValidElement<{ children?: ReactNode; action?: unknown }>(child)) return;
+        if (child.type === 'form' && typeof child.props.action === 'function')
+          perform = child.props.action as (data: FormData) => Promise<void>;
+        else visit(child.props.children);
+      });
+    }
+    visit(tree);
+    if (!perform) throw new Error('Expected the finance posting action');
+    return perform;
+  }
+
+  async function notice(fields: Record<string, string>) {
+    const perform = await performAction();
+    const data = new FormData();
+    for (const [key, value] of Object.entries(fields)) data.set(key, value);
+    const thrown = await perform(data).then(
+      () => null,
+      (error: unknown) => error as { digest?: string }
+    );
+    const url = String(thrown?.digest ?? '').split(';')[2] ?? '';
+    const query = new URL(url, 'https://example.test').searchParams;
+    return { notice: query.get('notice'), kind: query.get('kind') };
+  }
+
+  it('explains a refused posting amount and posts nothing', async () => {
+    await expect(
+      notice({
+        branchId: 'branch_1',
+        action: 'post',
+        transactionKind: 'EXPENSE',
+        reference: 'EXP-1',
+        amount: '12.345',
+        occurredAt: '2026-09-12',
+      })
+    ).resolves.toEqual({
+      notice: 'Use at most 2 decimal places, for example 125.50.',
+      kind: 'error',
+    });
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('posts a typed amount as exact paisa', async () => {
+    await notice({
+      branchId: 'branch_1',
+      action: 'post',
+      transactionKind: 'EXPENSE',
+      reference: 'EXP-1',
+      amount: '0.29',
+      occurredAt: '2026-09-12',
+    });
+    expect(mocks.post).toHaveBeenCalledWith(expect.objectContaining({ amountMinor: 29 }));
+  });
+
+  it('explains a refused match amount and matches nothing', async () => {
+    await expect(
+      notice({
+        branchId: 'branch_1',
+        action: 'reconcile',
+        statementLineId: 'line_1',
+        transactionId: 'txn_1',
+        amount: '1e3',
+      })
+    ).resolves.toEqual({
+      notice: 'Enter an amount using digits and an optional decimal point, for example 125.50.',
+      kind: 'error',
+    });
+    expect(mocks.reconcile).not.toHaveBeenCalled();
+  });
+
+  it('still adds a money-out bank statement line', async () => {
+    await notice({
+      branchId: 'branch_1',
+      action: 'bank-line',
+      statementRef: 'stmt_1',
+      lineReference: 'line_1',
+      bookedAt: '2026-09-12',
+      amount: '-125.50',
+      description: 'Card fee',
+    });
+    expect(mocks.importBankLine).toHaveBeenCalledWith(
+      expect.objectContaining({ amountMinor: -12550 })
+    );
   });
 });
 
