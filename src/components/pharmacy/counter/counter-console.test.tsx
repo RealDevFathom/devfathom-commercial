@@ -7504,3 +7504,95 @@ describe('DEV-633 keyboard-only counter', () => {
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
   });
 });
+
+describe('DEV-957 enrolled counter computer', () => {
+  const enrolled = (branchId: string) =>
+    window.localStorage.setItem(
+      'devfathom.pharmacy.counter.enrolled',
+      JSON.stringify({
+        organizationId: 'org-a',
+        branchId,
+        deviceId: 'device-enrolled',
+        name: 'Front counter',
+        enrolledAt: '2026-11-19T08:00:00.000Z',
+      })
+    );
+  const drawerDevices = () =>
+    mocks.queryInputs.mock.calls
+      .filter(([name]) => name === 'drawerStatus')
+      .map(([, input]) => (input as { deviceId: string }).deviceId);
+
+  it('opens the drawer under the enrolled device id at its own branch', () => {
+    enrolled('branch-a');
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    expect(drawerDevices().at(-1)).toBe('device-enrolled');
+  });
+
+  it('keeps the per-browser id at another branch and when not enrolled', () => {
+    window.localStorage.setItem('devfathom.pharmacy.counter.device', 'counter-browser');
+    enrolled('branch-other');
+    const view = render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    expect(drawerDevices().at(-1)).toBe('counter-browser');
+    view.unmount();
+    window.localStorage.removeItem('devfathom.pharmacy.counter.enrolled');
+    mocks.queryInputs.mockClear();
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    expect(drawerDevices().at(-1)).toBe('counter-browser');
+  });
+
+  it('says offline mode is not set up on an unenrolled computer, beside the existing banner', () => {
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    try {
+      render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+      expect(
+        screen.getByText('Search, bill changes and payments wait until the connection returns.')
+      ).toBeInTheDocument();
+      expect(screen.getByText(/This computer is not set up for offline mode/)).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Settings, Counter computers' })).toHaveAttribute(
+        'href',
+        '/pharmacy/settings/counters'
+      );
+    } finally {
+      onLine.mockRestore();
+    }
+  });
+
+  it('opens an offline page, not "no branch", when nothing could be loaded with no connection', async () => {
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    try {
+      enrolled('branch-a');
+      mocks.queries.counterBranches = { ...query(undefined), isSuccess: false };
+      render(<PharmacyCounterConsole />);
+      expect(screen.getByRole('heading', { name: 'Counter', level: 1 })).toBeInTheDocument();
+      expect(screen.getByText('Offline — this counter cannot reach the server.')).toBeInTheDocument();
+      expect(screen.queryByText('No active branch is configured yet.')).not.toBeInTheDocument();
+      // This browser has no IndexedDB here, so it says plainly why offline mode is off.
+      expect(await screen.findByText(/counter key is missing|blocks local storage/)).toBeInTheDocument();
+    } finally {
+      onLine.mockRestore();
+    }
+  });
+
+  it('keeps the counter on screen offline when a session re-check cannot reach the server', () => {
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    try {
+      const view = render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+      onLine.mockReturnValue(false);
+      act(() => {
+        window.dispatchEvent(new Event('offline'));
+      });
+      mocks.session = { status: 'unauthenticated', data: null } as unknown as typeof mocks.session;
+      view.rerender(<PharmacyCounterConsole initialBranchId="branch-a" />);
+      expect(screen.getByText('Offline — this counter cannot reach the server.')).toBeInTheDocument();
+      expect(screen.queryByText(/Sign in with an authorized pharmacy account/)).not.toBeInTheDocument();
+      // Online, the live answer is used unchanged.
+      onLine.mockReturnValue(true);
+      act(() => {
+        window.dispatchEvent(new Event('online'));
+      });
+      expect(screen.getByText(/Sign in with an authorized pharmacy account/)).toBeInTheDocument();
+    } finally {
+      onLine.mockRestore();
+    }
+  });
+});

@@ -52,6 +52,7 @@ import {
   DoorOpen,
   MessageSquareText,
   Printer,
+  MonitorSmartphone,
   X,
   KeyRound,
 } from 'lucide-react';
@@ -522,6 +523,14 @@ export const navigation: NavItem[] = [
     group: 'Pharmacy',
     module: 'pharmacy-counter',
   },
+  {
+    label: 'Counter computers',
+    href: '/pharmacy/settings/counters',
+    icon: MonitorSmartphone,
+    adminOnly: true,
+    group: 'Pharmacy',
+    module: 'pharmacy-counter',
+  },
   // H1-01 — the hospitality rail. Only configuration surfaces are here so far:
   // every operating surface arrives with its own lane, and a nav entry pointing
   // at a route that does not exist is a dead end (UX rule 12). Gated through
@@ -721,6 +730,7 @@ const PHARMACY_MENUS: readonly PharmacyMenu[] = [
       '/pharmacy/regulatory',
       '/pharmacy/settings/branches',
       '/pharmacy/settings/printers',
+      '/pharmacy/settings/counters',
       '/pharmacy/settings/pin',
       '/organization',
       '/settings',

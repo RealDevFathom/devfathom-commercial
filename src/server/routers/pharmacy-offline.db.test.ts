@@ -996,4 +996,92 @@ describeIfDatabase('offline transport authorization and conflicts', () => {
     expect(await r.json()).toEqual({ error: 'medicine_not_offline_otc' });
     expect((await f.counts()).commands).toBe(0);
   });
+  it.each(['highAlert', 'lasa'] as const)(
+    'DEV-957 refuses a %s medicine at replay and rolls back the log',
+    async (flag) => {
+      const f = await setup();
+      const before = await f.counts();
+      await inOrg(ORG_A, (db) =>
+        db.medicine.update({ where: { id: f.fixture.medicineId }, data: { [flag]: true } })
+      );
+      const r = await f.replay();
+      expect(r.status).toBe(403);
+      expect(await r.json()).toEqual({ error: 'medicine_not_offline_otc' });
+      expect(await f.counts()).toEqual(before);
+    }
+  );
+  it('DEV-957 leaves high-alert and look-alike medicines out of the signed catalogue', async () => {
+    const f = await setup();
+    const catalogIds = async () => {
+      const response = await f.call('snapshot');
+      expect(response.status).toBe(200);
+      const { snapshots } = await response.json();
+      const catalog = snapshots.find(
+        (snapshot: { envelope: { kind: string } }) => snapshot.envelope.kind === 'CATALOG'
+      );
+      return (catalog.payload as Array<{ id: string }>).map((row) => row.id);
+    };
+    expect(await catalogIds()).toContain(f.fixture.medicineId);
+    for (const flag of ['highAlert', 'lasa'] as const) {
+      await inOrg(ORG_A, (db) =>
+        db.medicine.update({ where: { id: f.fixture.medicineId }, data: { [flag]: true } })
+      );
+      expect(await catalogIds()).not.toContain(f.fixture.medicineId);
+      await inOrg(ORG_A, (db) =>
+        db.medicine.update({ where: { id: f.fixture.medicineId }, data: { [flag]: false } })
+      );
+    }
+    expect(await catalogIds()).toContain(f.fixture.medicineId);
+  });
+  it('DEV-957 binds the browser cookie to a real device and accepts it only from this site', async () => {
+    const f = await setup();
+    const { bindPharmacyCounterBrowser } = await import('./pharmacy-offline-bind');
+    const { pharmacyCounterRoute } = await import('./pharmacy-offline');
+    const bound = await bindPharmacyCounterBrowser(
+      new Request('https://tenant.test/api/pharmacy/counter/bind', {
+        method: 'POST',
+        headers: { origin: 'https://tenant.test', 'content-type': 'application/json' },
+        body: JSON.stringify({ secret: f.fixture.deviceSecret }),
+      })
+    );
+    expect(bound.status).toBe(200);
+    expect((await bound.json()).device.id).toBe(f.fixture.deviceId);
+    const setCookie = bound.headers.get('set-cookie') ?? '';
+    expect(setCookie).toMatch(/HttpOnly/i);
+    const cookie = setCookie.split(';')[0]!;
+    const audit = await inOrg(ORG_A, (db) =>
+      db.auditLog.findFirst({
+        where: { action: 'pharmacyOffline.bindCounterBrowser', targetId: f.fixture.deviceId },
+      })
+    );
+    expect(audit?.actorId).toBe(ACTOR);
+    expect(JSON.stringify(audit)).not.toContain(f.fixture.deviceSecret);
+    const establish = (headers: Record<string, string>) =>
+      pharmacyCounterRoute('establish')(
+        new Request('https://tenant.test/api/pharmacy/counter/establish', {
+          method: 'POST',
+          headers,
+          body: '{}',
+        })
+      );
+    const ok = await establish({ cookie, origin: 'https://tenant.test' });
+    expect(ok.status).toBe(201);
+    expect((await ok.json()).device.id).toBe(f.fixture.deviceId);
+    expect((await establish({ cookie, origin: 'https://evil.test' })).status).toBe(403);
+    expect((await establish({ cookie })).status).toBe(403);
+    expect(
+      (
+        await establish({
+          cookie,
+          origin: 'https://tenant.test',
+          authorization: `Bearer ${f.fixture.deviceSecret}`,
+        })
+      ).status
+    ).toBe(401);
+    // A revoked device's cookie is refused like its bearer secret.
+    await inOrg(ORG_A, (db) =>
+      deps.devices.revokePharmacyCounter(db, scopeOf(f.fixture), f.fixture.deviceId, new Date())
+    );
+    expect((await establish({ cookie, origin: 'https://tenant.test' })).status).toBe(401);
+  });
 });
