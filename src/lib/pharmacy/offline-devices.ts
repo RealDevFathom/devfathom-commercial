@@ -132,9 +132,14 @@ export async function revokePharmacyCounter(
     select: { id: true },
   });
   if (!device) throw new PharmacyDeviceError('NOT_FOUND');
-  return db.pharmacyRegisteredDevice.update({
-    where: { organizationId_id: { organizationId: scope.organizationId, id: deviceId } },
+  // DEV-957: only the first revoke stamps the time. A second (or concurrent) revoke
+  // matches no row here and returns the counter as the first one left it.
+  await db.pharmacyRegisteredDevice.updateMany({
+    where: { id: deviceId, organizationId: scope.organizationId, revokedAt: null },
     data: { status: 'REVOKED', revokedAt: now },
+  });
+  return db.pharmacyRegisteredDevice.findFirstOrThrow({
+    where: { id: deviceId, organizationId: scope.organizationId },
   });
 }
 

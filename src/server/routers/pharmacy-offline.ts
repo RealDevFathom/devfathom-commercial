@@ -11,6 +11,7 @@ import { clientIp, rateLimit } from '@/lib/rate-limit';
 import { hashDeviceSecret } from '@/lib/retail-terminal/device-secret';
 import {
   enrollPharmacyCounter,
+  PharmacyDeviceError,
   rotatePharmacyCounterSecret,
   revokePharmacyCounter,
   resolvePharmacyCounterBySecret,
@@ -32,6 +33,7 @@ import {
   grantDeviceLotQuota,
   consumeDeviceLotQuota,
   openDeviceLotQuota,
+  releaseDeviceLotQuota,
 } from '@/lib/pharmacy/offline-quotas';
 import {
   recordOfflineCommand,
@@ -62,6 +64,15 @@ import {
 import { lockSaleCandidates, type LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { lockStockRowsFrom } from '@/lib/pharmacy/stock-lock-order';
 import { workspaceToday } from '@/lib/timezone';
+import {
+  cookieCredentialAllowed,
+  counterDeviceCredential,
+  exactSameOrigin,
+} from '@/lib/pharmacy/counter-device-cookie';
+import {
+  OFFLINE_PREPARATION_LOT_LIMIT,
+  offlinePreparationPlan,
+} from '@/lib/pharmacy/offline-preparation';
 import { adminProcedure, router } from '../trpc';
 
 const id = z.string().min(1).max(160);
@@ -73,7 +84,134 @@ async function activeBranch(db: ScopedDb, organizationId: string, branchId: stri
   });
   if (!branch) throw new TRPCError({ code: 'FORBIDDEN', message: 'branch_unavailable' });
 }
+/**
+ * DEV-957: enrolment acts on one branch's counters, so the administrator must
+ * also be assigned to that branch (an organization ADMIN spans the
+ * organization), exactly as the counter route's manager operations (DEV-850).
+ */
+async function managedBranch(
+  db: ScopedDb,
+  user: Parameters<typeof counterBranchAssignmentDenial>[1],
+  organizationId: string,
+  branchId: string
+) {
+  await activeBranch(db, organizationId, branchId);
+  const denial = await counterBranchAssignmentDenial(db, user, organizationId, branchId);
+  if (denial) throw new TRPCError({ code: 'FORBIDDEN', message: denial });
+}
+
+/** The device service's refusals as tRPC answers, never a 500. */
+function deviceRefusal(error: unknown): never {
+  if (error instanceof PharmacyDeviceError) {
+    throw new TRPCError({
+      code:
+        error.reason === 'NOT_FOUND'
+          ? 'NOT_FOUND'
+          : error.reason === 'INVALID_NAME'
+            ? 'BAD_REQUEST'
+            : 'CONFLICT',
+      message: error.reason,
+    });
+  }
+  throw error;
+}
+
 export const pharmacyOfflineRouter = router({
+  /**
+   * DEV-957: the branch's counters for the enrolment screen. Only identifiers,
+   * status and runway counts: never a secret hash, a snapshot or a payload.
+   */
+  counters: adminProcedure.input(branchInput).query(({ ctx, input }) =>
+    ctx.db.$transaction(async (tx) => {
+      const db = tx as ScopedDb;
+      const organizationId = ctx.entitlements.organizationId;
+      await managedBranch(db, ctx.session.user, organizationId, input.branchId);
+      const devices = await db.pharmacyRegisteredDevice.findMany({
+        where: { organizationId, branchId: input.branchId, kind: 'PHARMACY_COUNTER' },
+        select: {
+          id: true,
+          name: true,
+          status: true,
+          revokedAt: true,
+          lastSeenAt: true,
+          createdAt: true,
+        },
+        orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
+        take: 100,
+      });
+      const ids = devices.map((device) => device.id);
+      const [leases, quotas, pending] = ids.length
+        ? await Promise.all([
+            db.pharmacyReceiptNumberLease.findMany({
+              where: { organizationId, branchId: input.branchId, deviceId: { in: ids } },
+              select: { deviceId: true, blockEnd: true, nextNumber: true },
+            }),
+            db.pharmacyDeviceLotQuota.findMany({
+              where: {
+                organizationId,
+                branchId: input.branchId,
+                deviceId: { in: ids },
+                releasedAt: null,
+              },
+              select: { deviceId: true, quotaUnits: true, consumedUnits: true },
+            }),
+            db.pharmacyOfflineCommand.groupBy({
+              by: ['deviceId'],
+              where: {
+                organizationId,
+                branchId: input.branchId,
+                deviceId: { in: ids },
+                status: 'PENDING',
+              },
+              _count: { _all: true },
+            }),
+          ])
+        : [[], [], []];
+      return devices.map((device) => ({
+        id: device.id,
+        name: device.name,
+        status: device.status,
+        revokedAt: device.revokedAt?.toISOString() ?? null,
+        lastSeenAt: device.lastSeenAt?.toISOString() ?? null,
+        enrolledAt: device.createdAt.toISOString(),
+        receiptNumbersLeft: leases
+          .filter((lease) => lease.deviceId === device.id)
+          .reduce((total, lease) => total + Math.max(0, lease.blockEnd - lease.nextNumber + 1), 0),
+        offlineUnitsLeft: quotas
+          .filter((quota) => quota.deviceId === device.id)
+          .reduce((total, quota) => total + Math.max(0, quota.quotaUnits - quota.consumedUnits), 0),
+        failedOfflineSales:
+          pending.find((row) => row.deviceId === device.id)?._count._all ?? 0,
+      }));
+    })
+  ),
+  /**
+   * DEV-957: what "Prepare this counter for offline" proposes to grant. Read
+   * only; the grant itself still goes through the counter route's manager-only
+   * quota operation and the database capacity guard.
+   */
+  preparationPlan: adminProcedure
+    .input(branchInput.extend({ deviceId: id }))
+    .query(({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const db = tx as ScopedDb;
+        const organizationId = ctx.entitlements.organizationId;
+        await managedBranch(db, ctx.session.user, organizationId, input.branchId);
+        const device = await db.pharmacyRegisteredDevice.findFirst({
+          where: { id: input.deviceId, organizationId, branchId: input.branchId },
+          select: { id: true, status: true, revokedAt: true },
+        });
+        if (!device) throw new TRPCError({ code: 'NOT_FOUND' });
+        if (device.status !== 'ACTIVE' || device.revokedAt)
+          throw new TRPCError({ code: 'CONFLICT', message: 'REVOKED' });
+        const lots = await offlinePreparationPlan(
+          db,
+          { organizationId, branchId: input.branchId },
+          { deviceId: device.id, now: new Date() }
+        );
+        return { lots, limit: OFFLINE_PREPARATION_LOT_LIMIT };
+      })
+    ),
   enroll: adminProcedure
     .input(branchInput.extend({ name: z.string().trim().min(1).max(100) }))
     .mutation(({ ctx, input }) =>
@@ -84,8 +222,10 @@ export const pharmacyOfflineRouter = router({
           branchId: input.branchId,
           actorId: ctx.session.user.id,
         };
-        await activeBranch(db, scope.organizationId, scope.branchId);
-        const { device, secret } = await enrollPharmacyCounter(db, scope, input);
+        await managedBranch(db, ctx.session.user, scope.organizationId, scope.branchId);
+        const { device, secret } = await enrollPharmacyCounter(db, scope, input).catch(
+          deviceRefusal
+        );
         return { device: { id: device.id, name: device.name, branchId: device.branchId }, secret };
       })
     ),
@@ -97,7 +237,7 @@ export const pharmacyOfflineRouter = router({
         branchId: input.branchId,
         actorId: ctx.session.user.id,
       };
-      await activeBranch(db, scope.organizationId, scope.branchId);
+      await managedBranch(db, ctx.session.user, scope.organizationId, scope.branchId);
       const current = await db.pharmacyRegisteredDevice.findFirst({
         where: {
           id: input.deviceId,
@@ -111,23 +251,64 @@ export const pharmacyOfflineRouter = router({
         scope,
         current.id,
         current.deviceSecretHash
-      );
+      ).catch(deviceRefusal);
       return { deviceId: device.id, secret };
     })
   ),
   revoke: adminProcedure.input(branchInput.extend({ deviceId: id })).mutation(({ ctx, input }) =>
     ctx.db.$transaction(async (tx) => {
-      const device = await revokePharmacyCounter(
-        tx as ScopedDb,
-        {
-          organizationId: ctx.entitlements.organizationId,
-          branchId: input.branchId,
-          actorId: ctx.session.user.id,
-        },
-        input.deviceId,
-        new Date()
+      const db = tx as ScopedDb;
+      const scope = {
+        organizationId: ctx.entitlements.organizationId,
+        branchId: input.branchId,
+        actorId: ctx.session.user.id,
+      };
+      await managedBranch(db, ctx.session.user, scope.organizationId, scope.branchId);
+      const now = new Date();
+      const device = await revokePharmacyCounter(db, scope, input.deviceId, now).catch(
+        deviceRefusal
       );
-      return { deviceId: device.id, status: device.status };
+      // DEV-957: a revoked counter can never sell what it was earmarked, so its
+      // open quotas go back to the branch in the same transaction. The rows stay
+      // (release is final and audited), so nothing is counted twice.
+      const open = await db.pharmacyDeviceLotQuota.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          deviceId: device.id,
+          releasedAt: null,
+        },
+        select: { id: true, quotaUnits: true, consumedUnits: true },
+        orderBy: { id: 'asc' },
+      });
+      for (const quota of open) await releaseDeviceLotQuota(db, scope, quota.id, now);
+      if (open.length) {
+        await db.auditLog.create({
+          data: {
+            organizationId: scope.organizationId,
+            actorId: scope.actorId,
+            actorName: ctx.session.user.name ?? null,
+            actorEmail: ctx.session.user.email ?? null,
+            actorRole: ctx.session.user.role ?? null,
+            source: 'TRPC',
+            category: 'PHARMACY',
+            operation: 'UPDATE',
+            action: 'pharmacyOffline.releaseOfflineQuotas',
+            targetType: 'PharmacyRegisteredDevice',
+            targetId: device.id,
+            metadata: {
+              branchId: scope.branchId,
+              deviceId: device.id,
+              quotasReleased: open.length,
+              unitsReleased: open.reduce(
+                (total, quota) => total + quota.quotaUnits - quota.consumedUnits,
+                0
+              ),
+            },
+          },
+        });
+      }
+      return { deviceId: device.id, status: device.status, quotasReleased: open.length };
     })
   ),
 });
@@ -425,9 +606,17 @@ export async function replayCounterCommand(
   for (const [index, line] of command.lines.entries()) {
     const medicine = await db.medicine.findFirst({
       where: { id: line.medicineId, organizationId: scope.organizationId },
-      select: { controlled: true, rx: true, restricted: true },
+      select: { controlled: true, rx: true, restricted: true, highAlert: true, lasa: true },
     });
-    if (!medicine || medicine.controlled || medicine.rx || medicine.restricted)
+    // DEV-957: the replay refuses exactly what the signed catalogue leaves out.
+    if (
+      !medicine ||
+      medicine.controlled ||
+      medicine.rx ||
+      medicine.restricted ||
+      medicine.highAlert ||
+      medicine.lasa
+    )
       throw new CounterTransportError('medicine_not_offline_otc', 403);
     const pack = await db.packLevel.findFirst({
       where: {
@@ -742,13 +931,21 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
       if (!(await rateLimit(`pharmacy-counter:${clientIp(request)}`, 120, 60_000)).ok)
         throw new CounterTransportError('rate_limited', 429);
       const origin = request.headers.get('origin');
-      if (origin && origin !== new URL(request.url).origin)
+      // DEV-957: a browser on the public host (behind a proxy, or `next start`
+      // reporting its bind address in request.url) is this site too; any other
+      // Origin is still refused, as before.
+      if (origin && origin !== new URL(request.url).origin && !exactSameOrigin(request))
         throw new CounterTransportError('origin_denied', 403);
       const actor = await resolveTenantActor({ request });
       if (!actor || actor.support) throw new CounterTransportError('unauthorized', 401);
-      const secret = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? '';
-      if (!/^pcd_[A-Za-z0-9_-]{43}$/.test(secret))
-        throw new CounterTransportError('unauthorized_device', 401);
+      // DEV-957: an enrolled browser sends its credential in the httpOnly cookie;
+      // tools and tests keep the bearer header. Never both, and the cookie only
+      // with this site's exact Origin, so another site cannot ride on it.
+      const credential = counterDeviceCredential(request);
+      if (!credential.ok) throw new CounterTransportError('unauthorized_device', 401);
+      if (credential.cookie && !cookieCredentialAllowed(request))
+        throw new CounterTransportError('origin_denied', 403);
+      const secret = credential.secret;
       const raw = await request.text();
       if (Buffer.byteLength(raw) > 256_000) throw new CounterTransportError('body_too_large', 413);
       const body: unknown = JSON.parse(raw || '{}');
@@ -891,6 +1088,11 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
               rx: false,
               controlled: false,
               restricted: false,
+              // DEV-957: as the online barcode cache (counter-catalogue-cache.ts),
+              // high-alert and look-alike sound-alike medicines need the online
+              // counter's checks, so they are never signed for offline selling.
+              highAlert: false,
+              lasa: false,
             },
             select: {
               id: true,

@@ -1,4 +1,4 @@
-import { google } from 'googleapis';
+import { GoogleOAuth2, gmailClient } from './google-gmail';
 
 /**
  * Server-side OAuth for the "one click → consent → connected" flow.
@@ -57,7 +57,7 @@ export function isProviderConfigured(provider: OAuthProvider): boolean {
 
 export function googleOAuthClient() {
   const { clientId, clientSecret, redirectUri } = googleConfig();
-  return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+  return new GoogleOAuth2(clientId, clientSecret, redirectUri);
 }
 
 /** Build the consent URL a popup will open. `state` carries provider + CSRF nonce. */
@@ -110,7 +110,7 @@ export async function exchangeCode(provider: OAuthProvider, code: string): Promi
       throw new Error('Google did not return a refresh token. Please try connecting again.');
     }
     client.setCredentials(tokens);
-    const gmail = google.gmail({ version: 'v1', auth: client });
+    const gmail = gmailClient(client);
     const profile = await gmail.users.getProfile({ userId: 'me' });
     const emailAddress = profile.data.emailAddress;
     if (!emailAddress) throw new Error('Could not read the Gmail account address.');

@@ -186,6 +186,7 @@ Open `http://devfathom.localhost:3000` for the tenant workspace and
 
 ```bash
 bun run typecheck
+node scripts/check-typecheck-budget.mjs   # full type check inside 8 GB, within its budget
 bun run lint
 bun run format:check
 bun run test          # Vitest unit + DB tests
