@@ -1,4 +1,4 @@
-import { Download, KeyRound, ShieldCheck } from 'lucide-react';
+import { Download, KeyRound, ShieldCheck, UserCheck } from 'lucide-react';
 import { TRPCError } from '@trpc/server';
 import type { Metadata } from 'next';
 import Link from 'next/link';
@@ -116,6 +116,12 @@ export default async function PharmacyOnboardingPage() {
                 className={buttonVariants({ variant: 'outline', className: 'min-h-11' })}
               >
                 <ShieldCheck aria-hidden /> Pharmacist check at each sale
+              </Link>
+              <Link
+                href="/pharmacy/settings/one-pharmacist-per-shift"
+                className={buttonVariants({ variant: 'outline', className: 'min-h-11' })}
+              >
+                <UserCheck aria-hidden /> One pharmacist per shift
               </Link>
               <Link
                 href="/pharmacy/settings/data-export"

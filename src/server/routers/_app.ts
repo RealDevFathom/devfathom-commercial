@@ -66,6 +66,7 @@ import { pharmacyOwnerImportRouter } from './pharmacy-owner-import';
 import { pharmacyPrescriptionsRouter } from './pharmacy-prescriptions';
 import { pharmacySupplierComplianceRouter } from './pharmacy-supplier-compliance';
 import { pharmacyPharmacistCheckRouter } from './pharmacy-pharmacist-check';
+import { pharmacyRxSoloShiftRouter } from './pharmacy-rx-solo-shift';
 import { pharmacyPinRouter } from './pharmacy-pin';
 import { pharmacyDispensingRouter } from './pharmacy-dispensing';
 import { pharmacySafetyRouter } from './pharmacy-safety';
@@ -152,6 +153,7 @@ export const appRouter = router({
   pharmacyPrescriptions: pharmacyPrescriptionsRouter,
   pharmacySupplierCompliance: pharmacySupplierComplianceRouter,
   pharmacyPharmacistCheck: pharmacyPharmacistCheckRouter,
+  pharmacyRxSoloShift: pharmacyRxSoloShiftRouter,
   pharmacyPin: pharmacyPinRouter,
   pharmacyDispensing: pharmacyDispensingRouter,
   pharmacySafety: pharmacySafetyRouter,
