@@ -16,6 +16,11 @@ import { trpc } from '@/lib/trpc';
  * their own PIN; the server checks every rule again and records the signature as self-approved.
  * Anyone else is told who signs it. Shown only to a person with the dispensing right; a cashier
  * sees the payment refusal the server already gives.
+ *
+ * DEV-960: at a branch where the owner turned "One pharmacist per shift" on, a pharmacist with
+ * colleagues on the staff list may still sign their own line, by ticking "I am the only pharmacist
+ * on duty now" and entering their PIN. The sign-off is recorded as declared, with who else was on
+ * the staff list, for the owner's list.
  */
 
 const PIN = /^\d{4,8}$/;
@@ -41,9 +46,11 @@ export function CounterRxSelfSign({ branchId, saleId, enabled, onSigned }: Props
           <h3 className="text-sm font-semibold text-text-strong">
             {line.productName} needs a pharmacist’s signature
           </h3>
-          {line.maySelfSign ? (
+          {line.maySelfSign || (line.mayDeclareSolo && status.data?.declaration) ? (
             <SelfSignForm
               reviewItemId={line.reviewItemId}
+              declaration={line.maySelfSign ? null : (status.data?.declaration ?? null)}
+              askName={line.askName}
               pin={status.data?.pin ?? null}
               checking={status.isFetching}
               onRefresh={async () => {
@@ -91,12 +98,18 @@ export function CounterRxSelfSign({ branchId, saleId, enabled, onSigned }: Props
 
 function SelfSignForm({
   reviewItemId,
+  declaration = null,
+  askName = null,
   pin: pinState,
   checking = false,
   onRefresh,
   onSigned,
 }: {
   reviewItemId: string;
+  /** DEV-960: the on-duty declaration to confirm; null for the staff-list solo rule. */
+  declaration?: { version: string; text: string } | null;
+  /** DEV-960: someone on the staff list who could sign it instead, for the declared form. */
+  askName?: string | null;
   pin: { state: 'SET' | 'NOT_SET' | 'RESET'; locked: boolean } | null;
   checking?: boolean;
   /** Reads the line and the PIN state again (after a refusal, or once a lock may have ended). */
@@ -106,14 +119,28 @@ function SelfSignForm({
   const id = useId();
   const sign = trpc.pharmacyDispensing.selfSignReview.useMutation();
   const [pin, setPin] = useState('');
+  const [declared, setDeclared] = useState(false);
   const [error, setError] = useState('');
   const inFlight = useRef(false);
   // The server refuses a locked PIN anyway; the form says so and takes no PIN meanwhile.
   const locked = pinState?.locked === true;
-  const ready = PIN.test(pin) && !sign.isPending && !locked;
+  const ready = PIN.test(pin) && !sign.isPending && !locked && (!declaration || declared);
 
   if (pinState && pinState.state !== 'SET')
-    return (
+    return declaration ? (
+      <p className="text-text-body">
+        You rang up this line. If you are the only pharmacist on duty now, you can sign it yourself
+        with your PIN. You have not set up your PIN yet. <OwnPinLink />, then come back to sign, or
+        ask {askName ?? 'another pharmacist'} to sign it in the{' '}
+        <Link
+          href={QUEUE_PATH}
+          className="font-medium underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          pharmacist queue
+        </Link>
+        .
+      </p>
+    ) : (
       <p className="text-text-body">
         You rang up this line and nobody else at this branch can sign it, so you sign it yourself
         with your PIN. You have not set up your PIN yet. <OwnPinLink />, then come back to sign.
@@ -125,8 +152,15 @@ function SelfSignForm({
     inFlight.current = true;
     setError('');
     try {
-      await sign.mutateAsync({ reviewItemId, pin });
+      await sign.mutateAsync({
+        reviewItemId,
+        pin,
+        ...(declaration
+          ? { declaration: { onlyPharmacistOnDuty: true as const, version: declaration.version } }
+          : {}),
+      });
       setPin('');
+      setDeclared(false);
       await onSigned();
     } catch (failure) {
       setPin('');
@@ -146,10 +180,39 @@ function SelfSignForm({
         void submit();
       }}
     >
-      <p id={`${id}-help`} className="text-text-body">
-        You rang up this line and nobody else at this branch can sign it, so sign it yourself with
-        your PIN. Your signature is recorded as self-approved.
-      </p>
+      {declaration ? (
+        <>
+          <p id={`${id}-help`} className="text-text-body">
+            You rang up this line. This branch runs one pharmacist per shift: if you are the only
+            pharmacist on duty now, sign it yourself with your PIN. Your signature is recorded as a
+            declared solo sign-off, with the others on the staff list, and the owner sees it.
+            Otherwise ask {askName ?? 'another pharmacist'} to sign it in the{' '}
+            <Link
+              href={QUEUE_PATH}
+              className="font-medium underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-ring"
+            >
+              pharmacist queue
+            </Link>
+            .
+          </p>
+          <label className="flex min-h-11 items-start gap-2 text-text-body">
+            <input
+              className="mt-0.5 size-4 shrink-0 accent-primary"
+              type="checkbox"
+              name="onlyPharmacistOnDuty"
+              checked={declared}
+              disabled={sign.isPending || locked}
+              onChange={(event) => setDeclared(event.target.checked)}
+            />
+            {declaration.text}
+          </label>
+        </>
+      ) : (
+        <p id={`${id}-help`} className="text-text-body">
+          You rang up this line and nobody else at this branch can sign it, so sign it yourself with
+          your PIN. Your signature is recorded as self-approved.
+        </p>
+      )}
       {locked ? (
         <div className="flex flex-wrap items-center gap-2">
           <p id={`${id}-locked`} role="status" className="text-text-body">
