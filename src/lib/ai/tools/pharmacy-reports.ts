@@ -3,7 +3,7 @@ import { z } from 'zod';
 import {
   pharmacyBusinessDay,
   pharmacyCalendarDay,
-  pharmacyDayEndField,
+  pharmacyBranchDayEndsField,
   sharedPharmacyDayEnd,
 } from '@/lib/pharmacy/business-day';
 
@@ -551,8 +551,8 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
             return { kind: 'refusal', message: REFUSAL };
           }
 
-          // DEV-958A: the selected branches' business day, which ends at their shared
-          // "day ends at" hour (midnight by default).
+          // DEV-958A: the default day is the selected branches' business day when they share
+          // their day-end hours, and the organisation's calendar day when they do not.
           const clock = {
             timeZone: 'Asia/Karachi',
             dayEnd: sharedPharmacyDayEnd(selected.map((row) => row.businessDayEndsAtHistory))
@@ -562,9 +562,12 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
             branchIds: selected.map(({ id }) => id),
             from: from ?? pharmacyBusinessDay(clock),
             to: to ?? from ?? pharmacyBusinessDay(clock),
-            // The same PKT day as the defaults above bounds event timestamps.
+            // The same PKT day as the defaults above bounds event timestamps. DEV-958A: each
+            // branch on its own business days; across branches, their sum.
             timeZone: clock.timeZone,
-            ...pharmacyDayEndField(clock.dayEnd),
+            ...pharmacyBranchDayEndsField(
+              selected.map((row) => ({ id: row.id, dayEnd: row.businessDayEndsAtHistory }))
+            ),
           };
           const report = await readPharmacyOwnerCommandCentre(h.db, filters);
           const values = report.metrics as Record<string, number | null>;

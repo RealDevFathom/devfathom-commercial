@@ -10,7 +10,6 @@ import {
   PHARMACY_DEFAULT_DAY_END_HOUR,
   PHARMACY_MAX_DAY_END_HOUR,
   pharmacyDayEndLabel,
-  shiftPharmacyDay,
 } from '@/lib/pharmacy/business-day';
 import { trpc } from '@/lib/trpc';
 
@@ -31,10 +30,11 @@ function dayLabel(day: string) {
 
 /**
  * DEV-958A — when this branch's business day ends. A shop open past midnight picks a later
- * hour so its late trade stays on one day and one drawer. A change applies from the day after
- * the next business day, so no day that has begun, and no past day, its close or its reports,
- * moves. The server enforces who may change it (an owner, or a manager at the branch) and
- * audits it; this form only explains and asks.
+ * hour so its late trade stays on one day and one drawer. A change first ends tomorrow's
+ * business day at the new hour, so no day that has begun, and no past day, its close or its
+ * reports, moves. "Ends at" is always the hour a day ends: today's is when tomorrow starts.
+ * The server enforces who may change it (an owner, or a manager at the branch) and audits it;
+ * this form only explains and asks.
  */
 export function DayEndHourPanel({ branchId }: { branchId: string }) {
   const query = trpc.pharmacySales.dayEndHour.useQuery({ branchId }, { retry: false });
@@ -62,8 +62,8 @@ export function DayEndHourPanel({ branchId }: { branchId: string }) {
       setNotice(
         refreshed.error
           ? 'Saved. Reload this setting before changing it again.'
-          : saved.from
-            ? `Saved. From the business day of ${dayLabel(saved.from)}, this branch's day ends at ${pharmacyDayEndLabel(draft)}.`
+          : saved.fromBusinessDay
+            ? `Saved. From ${dayLabel(saved.fromBusinessDay)}, the day ends at ${pharmacyDayEndLabel(draft)}.`
             : 'Saved. Nothing changed.'
       );
     } catch (error) {
@@ -87,10 +87,9 @@ export function DayEndHourPanel({ branchId }: { branchId: string }) {
       }
     >
       <p className="text-sm text-text-body">
-        Sales, drawers, refunds and the day close count on the business day. It normally ends at
-        midnight. If this shop stays open past midnight, choose a later hour: with 5:00 AM, a sale
-        at 12:30 AM belongs to the day before and goes in the drawer opened that day. Receipts still
-        print the real date and time.
+        Sales, drawers, refunds and the day close count on the business day. Open past midnight? End
+        the day later: with 5:00 AM, a 12:30 AM sale counts on the day before. Receipts keep the
+        real time.
       </p>
       {query.isLoading ? (
         <p className="mt-4 text-sm text-text-muted" role="status">
@@ -114,14 +113,17 @@ export function DayEndHourPanel({ branchId }: { branchId: string }) {
       {data ? (
         <div className="mt-4 space-y-4">
           <p className="font-mono text-xs text-text-muted">
-            Today&apos;s business day: {dayLabel(data.currentBusinessDay)} · times in{' '}
-            {data.timeZone}
+            Today&apos;s business day: {dayLabel(data.currentBusinessDay)} · {data.timeZone}
           </p>
-          {data.pendingChange ? (
-            <p className="rounded-md border border-border-subtle bg-surface-sunken px-3 py-2 text-sm text-text-body">
-              Already set: from the business day of {dayLabel(data.pendingChange.from)}, the day
-              ends at {pharmacyDayEndLabel(data.pendingChange.hour)}.
-            </p>
+          {data.pendingChanges.length ? (
+            <ul className="space-y-1 rounded-md border border-border-subtle bg-surface-sunken px-3 py-2 text-sm text-text-body">
+              {data.pendingChanges.map((change) => (
+                <li key={change.fromBusinessDay}>
+                  From {dayLabel(change.fromBusinessDay)}, the day ends at{' '}
+                  {pharmacyDayEndLabel(change.hour)}.
+                </li>
+              ))}
+            </ul>
           ) : null}
           <div className="space-y-2">
             <Label htmlFor={selectId}>The business day ends at</Label>
@@ -143,10 +145,8 @@ export function DayEndHourPanel({ branchId }: { branchId: string }) {
               ))}
             </select>
             <p className="text-sm text-text-muted" id={helpId}>
-              A change starts with the next business day,{' '}
-              {dayLabel(shiftPharmacyDay(data.nextChangeDay, -1))}: it begins as usual and ends at
-              the new hour on {dayLabel(data.nextChangeDay)}, so that one day is longer or shorter.
-              Today, every earlier day, their day closes and their reports stay exactly as they are.
+              A change starts with tomorrow&apos;s business day, {dayLabel(data.nextBusinessDay)}.
+              Today and earlier days, their closes and reports stay as they are.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">

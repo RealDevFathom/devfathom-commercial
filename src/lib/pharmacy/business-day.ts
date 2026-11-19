@@ -72,26 +72,64 @@ export function pharmacyDayEndHour(value: unknown): number {
   return isPharmacyDayEndHour(value) ? value : PHARMACY_DEFAULT_DAY_END_HOUR;
 }
 
+/** DEV-958A: a stored day-end history that is not a list of valid changes, in order. */
+export class PharmacyDayEndHistoryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PharmacyDayEndHistoryError';
+  }
+}
+
+function isCalendarDay(value: unknown): value is string {
+  if (typeof value !== 'string' || !DAY.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
 /**
  * The changes in `value`, in the order they apply: by first day, and for the same day in the
- * order they were made (the later one wins). One hour reads as a change from the first day.
- * Entries that are not a valid change are ignored.
+ * order they were made (the later one wins). One hour reads as a change from the first day; no
+ * value (no branch) is midnight. A stored history that is not a list of valid changes in
+ * ascending order is refused, never read as midnight: the database refuses to store one
+ * (`pharmacy_branch_day_end_history_guard`), so meeting one means something is wrong.
  */
 export function pharmacyDayEndSchedule(value: PharmacyDayEnd): PharmacyDayEndChange[] {
+  if (value === undefined || value === null) return [];
   if (typeof value === 'number') {
     const hour = pharmacyDayEndHour(value);
     return hour === PHARMACY_DEFAULT_DAY_END_HOUR ? [] : [{ from: '0000-01-01', hour }];
   }
-  if (!Array.isArray(value)) return [];
+  if (!Array.isArray(value))
+    throw new PharmacyDayEndHistoryError('A branch day-end history must be a list of changes.');
   const changes: PharmacyDayEndChange[] = [];
   for (const entry of value as unknown[]) {
-    if (!entry || typeof entry !== 'object') continue;
-    const { from, hour } = entry as { from?: unknown; hour?: unknown };
-    if (typeof from === 'string' && DAY.test(from) && isPharmacyDayEndHour(hour))
-      changes.push({ from, hour });
+    const { from, hour } = (entry && typeof entry === 'object' ? entry : {}) as {
+      from?: unknown;
+      hour?: unknown;
+    };
+    if (!isCalendarDay(from) || !isPharmacyDayEndHour(hour))
+      throw new PharmacyDayEndHistoryError(
+        'A branch day-end change needs a calendar day and an hour from midnight to 06:00.'
+      );
+    const previous = changes.at(-1);
+    if (previous && previous.from > from)
+      throw new PharmacyDayEndHistoryError('A branch day-end history must be in date order.');
+    changes.push({ from, hour });
   }
-  // A stable sort: changes made for the same first day keep their order.
-  return changes.sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : 0));
+  return changes;
+}
+
+/**
+ * DEV-958A: a branch as a screen gets it, its day-end history as `{ from, hour }` only: the
+ * stored entries also name who made each change and when, which stays on the server.
+ */
+export function withClientPharmacyDayEnd<T extends { businessDayEndsAtHistory: unknown }>(
+  branch: T
+) {
+  return {
+    ...branch,
+    businessDayEndsAtHistory: pharmacyDayEndSchedule(branch.businessDayEndsAtHistory),
+  };
 }
 
 /** The hour business day `day` (`YYYY-MM-DD`) starts at, from the changes in force on it. */
@@ -119,6 +157,68 @@ export function pharmacyDayEndHourOn(clock: PharmacyDayClock, day: string): numb
 /** The schedule as written for comparison: midnight throughout is one value whatever its form. */
 function scheduleKey(schedule: readonly PharmacyDayEndChange[]): string {
   return midnightThroughout(schedule) ? '[]' : JSON.stringify(schedule);
+}
+
+/** Each branch's own day-end history, by branch id. A branch not listed is on midnight. */
+export type PharmacyBranchDayEnds = Readonly<Record<string, PharmacyDayEnd>>;
+
+/** The branches that share one window over the picked days, and that window. */
+export type PharmacyBranchDayWindow = { branchIds: string[]; from: Date; to: Date };
+
+/**
+ * DEV-958A — the windows of the inclusive business days `from`..`to` for each of `branchIds`,
+ * each branch on its own day-end history: a report across branches is the sum of each branch's
+ * own business days, never one branch's days imposed on another, and never moved by a later
+ * change at another branch. Branches whose windows are the same share one entry, in the order
+ * first seen; with no history at all (every branch on midnight) this is the one organisation
+ * window it always was.
+ */
+export function pharmacyBranchDayWindows(
+  from: string,
+  to: string,
+  branchIds: readonly string[],
+  clock: { timeZone?: string | null; dayEnds?: PharmacyBranchDayEnds }
+): PharmacyBranchDayWindow[] {
+  const groups: PharmacyBranchDayWindow[] = [];
+  for (const branchId of branchIds) {
+    const window = pharmacyBusinessDayRange(from, to, {
+      timeZone: clock.timeZone,
+      dayEnd: clock.dayEnds?.[branchId],
+    });
+    const same = groups.find(
+      (group) =>
+        group.from.getTime() === window.from.getTime() && group.to.getTime() === window.to.getTime()
+    );
+    if (same) same.branchIds.push(branchId);
+    else groups.push({ branchIds: [branchId], from: window.from, to: window.to });
+  }
+  return groups;
+}
+
+/**
+ * The branches' own day-end histories as a field to spread into a reader's filters: only the
+ * branches not on midnight throughout, and none at all when every branch is, so a default
+ * organisation passes exactly the filters it passed before DEV-958A.
+ */
+export function pharmacyBranchDayEndsField(
+  branches: readonly { id: string; dayEnd?: PharmacyDayEnd }[]
+): { dayEnds?: Record<string, PharmacyDayEndChange[]> } {
+  const dayEnds: Record<string, PharmacyDayEndChange[]> = {};
+  for (const branch of branches) {
+    const schedule = pharmacyDayEndSchedule(branch.dayEnd);
+    if (!midnightThroughout(schedule)) dayEnds[branch.id] = schedule;
+  }
+  return Object.keys(dayEnds).length ? { dayEnds } : {};
+}
+
+/** Whether `branchIds` end their days at different hours on any of the picked days. */
+export function pharmacyBranchDaysDiffer(
+  from: string,
+  to: string,
+  branchIds: readonly string[],
+  clock: { timeZone?: string | null; dayEnds?: PharmacyBranchDayEnds }
+): boolean {
+  return pharmacyBranchDayWindows(from, to, branchIds, clock).length > 1;
 }
 
 /**

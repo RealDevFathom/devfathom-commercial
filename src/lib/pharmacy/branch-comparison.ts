@@ -1,6 +1,6 @@
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { readPharmacyOwnerCommandCentre } from '@/lib/pharmacy/reports';
-import { pharmacyBusinessDayRange, pharmacyDayEndField } from '@/lib/pharmacy/business-day';
+import { pharmacyBranchDayEndsField, pharmacyBusinessDayRange } from '@/lib/pharmacy/business-day';
 
 export type PharmacyBranchComparisonInput = {
   /** DEV-958A: each branch's own day-end hours bound its days (midnight when absent). */
@@ -30,7 +30,7 @@ export async function readPharmacyBranchComparison(
       from: input.from,
       to: input.to,
       timeZone: input.timeZone,
-      ...pharmacyDayEndField(branch.businessDayEndsAtHistory),
+      ...pharmacyBranchDayEndsField([{ id: branch.id, dayEnd: branch.businessDayEndsAtHistory }]),
     });
     const demand = await db.unfulfilledDemandEvent.aggregate({
       where: {

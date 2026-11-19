@@ -118,7 +118,7 @@ import { listOpenBills } from '@/lib/pharmacy/open-bills';
 import { readPharmacyCashCloseCheck } from '@/lib/pharmacy/cash-close-check-operations';
 import { readPharmacyShiftHandover } from '@/lib/pharmacy/shift-handover-operations';
 import { workspaceTimezone } from '@/lib/timezone';
-import { pharmacyBusinessDay } from '@/lib/pharmacy/business-day';
+import { pharmacyBusinessDay, withClientPharmacyDayEnd } from '@/lib/pharmacy/business-day';
 import { readPharmacyDayClock } from '@/lib/pharmacy/business-day-clock';
 import {
   PharmacyDayEndHourError,
@@ -4295,7 +4295,8 @@ export const pharmacySalesRouter = router({
       }),
     ]);
     return {
-      branches,
+      // DEV-958A: each branch's day-end history as days and hours only, never who set it.
+      branches: branches.map(withClientPharmacyDayEnd),
       currency: organization?.currency ?? 'PKR',
       // The workspace's zone: the day close picks "today" in it before any
       // close has been read. A stored value Intl refuses is handed over as UTC.
@@ -4342,7 +4343,8 @@ export const pharmacySalesRouter = router({
       }),
     ]);
     return {
-      branches,
+      // DEV-958A: each branch's day-end history as days and hours only, never who set it.
+      branches: branches.map(withClientPharmacyDayEnd),
       currency: organization?.currency ?? 'PKR',
       timezone: workspaceTimezone(organization?.timezone),
     };

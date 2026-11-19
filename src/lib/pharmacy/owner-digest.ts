@@ -28,7 +28,12 @@ import {
 import { readLicenceRenewalReminders } from './licence-renewal-operations';
 import { withPlatformDb, withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
-import { pharmacyBusinessDay, pharmacyDayEndField, type PharmacyDayEnd } from './business-day';
+import {
+  pharmacyBranchDayEndsField,
+  pharmacyBusinessDay,
+  pharmacyDayEndField,
+  type PharmacyDayEnd,
+} from './business-day';
 
 const DIGEST_METRIC_KEYS = [
   'salesMinor',
@@ -130,7 +135,7 @@ export async function composeOwnerDigest(
     branchIds: [input.branchId],
     from: input.businessDate,
     to: input.businessDate,
-    ...pharmacyDayEndField(input.dayEnd),
+    ...pharmacyBranchDayEndsField([{ id: input.branchId, dayEnd: input.dayEnd }]),
   };
   const [report, anomalies, renewals] = await Promise.all([
     readPharmacyOwnerCommandCentre(db, { ...filters, timeZone: input.timeZone }),
@@ -166,7 +171,7 @@ export async function composeOwnerDigest(
             from: window.from,
             to: window.to,
             timeZone: input.timeZone,
-            ...pharmacyDayEndField(input.dayEnd),
+            ...pharmacyBranchDayEndsField([{ id: input.branchId, dayEnd: input.dayEnd }]),
           }),
       readOwnerBriefingDemand(db, input, window, config),
     ]);
@@ -398,7 +403,7 @@ export async function processDueOwnerDigests(now = new Date(), limit = 25) {
           from: businessDate,
           to: businessDate,
           timeZone: authorized.organization.timezone,
-          ...pharmacyDayEndField(dayEnd),
+          ...pharmacyBranchDayEndsField([{ id: authorized.branchId, dayEnd }]),
         },
         'system:owner-digest',
         new Date()

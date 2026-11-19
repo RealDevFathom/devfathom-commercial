@@ -22,6 +22,8 @@ import { isModuleGranted } from '@/lib/module-catalog';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { pharmacyReportKpiFlags } from '@/lib/pharmacy/report-kpi-flags';
 import {
+  pharmacyBranchDayEndsField,
+  pharmacyBranchDaysDiffer,
   pharmacyBusinessDay,
   pharmacyBusinessDayRange,
   sharedPharmacyDayEnd,
@@ -184,8 +186,9 @@ export default async function PharmacyReportsPage({
     (query.branch === undefined && branchResult.branches.length === 1
       ? branchResult.branches[0]?.id
       : undefined);
-  // DEV-958A: the business day ends at the chosen branch's "day ends at" hour (the shared hour
-  // of all branches when none is chosen, as the reports read it; midnight by default).
+  // DEV-958A: the default dates are the chosen branch's business days (the branches' shared
+  // days when none is chosen, else the organisation's calendar days); every report itself
+  // reads each branch on its own business days.
   const sharedDayEnd = sharedPharmacyDayEnd(
     branchResult.branches
       .filter((item) => !branch || item.id === branch)
@@ -630,14 +633,26 @@ export default async function PharmacyReportsPage({
             {screenCopy.reports.applyFilters}
           </Button>
         </form>
-        {sharedDayEnd.mixed ? (
-          <p
-            className="mt-4 rounded-md border border-border-subtle bg-surface-sunken px-3 py-2 text-sm text-text-body"
-            role="note"
-          >
-            These branches end their business days at different hours, so a report across all of
-            them counts each day from midnight to midnight and may not match each branch&apos;s day
-            close. Choose one branch to read its own business days.
+        {!invalidRange &&
+        pharmacyBranchDaysDiffer(
+          from,
+          to,
+          branchResult.branches
+            .filter((item) => !branch || item.id === branch)
+            .map((item) => item.id),
+          {
+            timeZone,
+            ...pharmacyBranchDayEndsField(
+              branchResult.branches.map((item) => ({
+                id: item.id,
+                dayEnd: item.businessDayEndsAtHistory,
+              }))
+            ),
+          }
+        ) ? (
+          <p className="mt-4 text-sm text-text-muted" role="note">
+            These branches end their days at different hours: each day here adds up each
+            branch&apos;s own business day.
           </p>
         ) : null}
       </SectionCard>

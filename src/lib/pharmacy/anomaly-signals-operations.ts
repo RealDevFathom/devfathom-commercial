@@ -2,7 +2,7 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { pharmacyBusinessDayRange } from './business-day';
+import { pharmacyBranchDayWindows } from './business-day';
 import {
   detectPharmacyAnomalies,
   type AnomalyCandidate,
@@ -95,8 +95,9 @@ export async function readPharmacyAnomalyFacts(
   const window = validatePharmacyReportFilters(filters);
   // Business-date columns compare against `window`; event timestamps (count approvals, sale
   // events, receipt postings) use the workspace day, so 00:30 in Karachi counts on that date.
-  // DEV-958A: the branches' business days, ending at their "day ends at" hour.
-  const events = pharmacyBusinessDayRange(filters.from, filters.to, filters);
+  // DEV-958A: the branches' business days, ending at their "day ends at" hour. One window per
+  // call: refresh and read split a mixed set of branches into groups that share one.
+  const events = singleWindow(filters);
   const branches = Prisma.join(filters.branchIds);
   const ingredient = medicineFilter(filters.ingredientId);
   const batch = filters.batchId
@@ -287,10 +288,41 @@ function scopeMatches(
   return true;
 }
 
-export async function readPharmacyAnomalySignals(db: ScopedDb, filters: PharmacyReportFilters) {
+/**
+ * DEV-958A: the one window of `filters`' branches. Signals are stored per branch with the
+ * window they were computed over, so a call covers branches that share one; `byWindow` splits a
+ * mixed set into such groups.
+ */
+function singleWindow(filters: PharmacyReportFilters) {
+  const windows = pharmacyBranchDayWindows(filters.from, filters.to, filters.branchIds, filters);
+  if (windows.length !== 1) throw new RangeError('Read anomaly facts one shared window at a time.');
+  return windows[0]!;
+}
+
+/** `filters` split into groups of branches whose own business days give the same window. */
+function byWindow(filters: PharmacyReportFilters): PharmacyReportFilters[] {
+  return pharmacyBranchDayWindows(filters.from, filters.to, filters.branchIds, filters).map(
+    (window) => ({ ...filters, branchIds: window.branchIds })
+  );
+}
+
+export async function readPharmacyAnomalySignals(
+  db: ScopedDb,
+  filters: PharmacyReportFilters
+): Promise<Awaited<ReturnType<typeof readPharmacyAnomalySignalsInWindow>>> {
   validatePharmacyReportFilters(filters);
+  const groups = byWindow(filters);
+  if (groups.length === 1) return readPharmacyAnomalySignalsInWindow(db, filters);
+  // DEV-958A: each branch's signals on its own business days.
+  const rows = (
+    await Promise.all(groups.map((group) => readPharmacyAnomalySignalsInWindow(db, group)))
+  ).flat();
+  return rows.slice(0, 200);
+}
+
+async function readPharmacyAnomalySignalsInWindow(db: ScopedDb, filters: PharmacyReportFilters) {
   // Signals are stored with the workspace-day window refresh evaluated (readPharmacyAnomalyFacts).
-  const window = pharmacyBusinessDayRange(filters.from, filters.to, filters);
+  const window = singleWindow(filters);
   const [rows, ingredientMedicines] = await Promise.all([
     db.pharmacyAnomalySignal.findMany({
       where: {
@@ -315,6 +347,27 @@ export async function readPharmacyAnomalySignals(db: ScopedDb, filters: Pharmacy
 }
 
 export async function refreshPharmacyAnomalySignals(
+  db: ScopedDb,
+  filters: PharmacyReportFilters,
+  actorId: string,
+  at = new Date()
+): Promise<Awaited<ReturnType<typeof refreshPharmacyAnomalySignalsInWindow>>> {
+  const groups = byWindow(filters);
+  if (groups.length === 1) return refreshPharmacyAnomalySignalsInWindow(db, filters, actorId, at);
+  // DEV-958A: each branch's signals computed on its own business days.
+  const merged: Awaited<ReturnType<typeof refreshPharmacyAnomalySignalsInWindow>> = {
+    evaluated: 0,
+    signals: [],
+  };
+  for (const group of groups) {
+    const result = await refreshPharmacyAnomalySignalsInWindow(db, group, actorId, at);
+    merged.evaluated += result.evaluated;
+    merged.signals.push(...result.signals);
+  }
+  return merged;
+}
+
+async function refreshPharmacyAnomalySignalsInWindow(
   db: ScopedDb,
   filters: PharmacyReportFilters,
   actorId: string,

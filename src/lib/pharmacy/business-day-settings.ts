@@ -59,19 +59,42 @@ export function pharmacyDayEndChangeFrom(currentBusinessDay: string): string {
 function readState(branch: { businessDayEndsAtHistory: unknown }, timeZone: string, now: Date) {
   const clock = { timeZone, dayEnd: branch.businessDayEndsAtHistory };
   const currentBusinessDay = pharmacyBusinessDay(clock, now);
+  const nextBusinessDay = shiftPharmacyDay(currentBusinessDay, 1);
   const nextChangeDay = pharmacyDayEndChangeFrom(currentBusinessDay);
-  const today = pharmacyDayEndHourOn(clock, currentBusinessDay);
-  // The hour a change made now would replace: the one in force on the first day it applies to.
+  // A day ends where the next one starts: today ends at the hour in force on tomorrow, and
+  // tomorrow at the hour in force on the day after, which is what a change made now replaces.
+  const today = pharmacyDayEndHourOn(clock, nextBusinessDay);
   const scheduled = pharmacyDayEndHourOn(clock, nextChangeDay);
-  const pending = pharmacyDayEndSchedule(branch.businessDayEndsAtHistory)
-    .filter((change) => change.from > currentBusinessDay)
-    .at(-1);
-  return { clock, currentBusinessDay, nextChangeDay, today, scheduled, pending };
+  // Every change still ahead, as the first business day that ends at its hour: changes for the
+  // same day collapse to the last one made, and one that keeps the hour is not a change.
+  const ahead: { fromBusinessDay: string; hour: number }[] = [];
+  for (const change of pharmacyDayEndSchedule(branch.businessDayEndsAtHistory)) {
+    if (change.from <= nextBusinessDay) continue;
+    const fromBusinessDay = shiftPharmacyDay(change.from, -1);
+    const last = ahead.at(-1);
+    if (last?.fromBusinessDay === fromBusinessDay) last.hour = change.hour;
+    else ahead.push({ fromBusinessDay, hour: change.hour });
+  }
+  const pending: typeof ahead = [];
+  let previous = today;
+  for (const change of ahead) {
+    if (change.hour !== previous) pending.push(change);
+    previous = change.hour;
+  }
+  return {
+    currentBusinessDay,
+    nextBusinessDay,
+    nextChangeDay,
+    today,
+    scheduled,
+    pending,
+  };
 }
 
 /**
- * DEV-958A — the branch's "day ends at" hour today, any change already set for a later day, the
- * business day it is now, and the first day a change made now would apply to.
+ * DEV-958A — the hour this branch's business day ends at today, every change already set for a
+ * later day (as the first business day that ends at its hour), today's business day, and the
+ * first business day a change made now would end at its new hour (tomorrow).
  */
 export async function readPharmacyDayEndHourSetting(
   db: ScopedDb,
@@ -93,14 +116,11 @@ export async function readPharmacyDayEndHourSetting(
     branchId: branch.id,
     dayEndsAtHour: state.today,
     scheduledHour: state.scheduled,
-    pendingChange:
-      state.pending && state.pending.hour !== state.today
-        ? { from: state.pending.from, hour: state.pending.hour }
-        : null,
+    pendingChanges: state.pending,
     revision: branch.businessDayEndsAtRevision,
     timeZone,
     currentBusinessDay: state.currentBusinessDay,
-    nextChangeDay: state.nextChangeDay,
+    nextBusinessDay: state.nextBusinessDay,
   };
 }
 
@@ -139,7 +159,12 @@ export async function savePharmacyDayEndHour(
   });
   const state = readState(branch, workspaceTimezone(organization?.timezone), now);
   if (state.scheduled === next)
-    return { branchId: branch.id, dayEndsAtHour: next, from: null, revision: input.revision };
+    return {
+      branchId: branch.id,
+      dayEndsAtHour: next,
+      fromBusinessDay: null,
+      revision: input.revision,
+    };
   const stored = Array.isArray(branch.businessDayEndsAtHistory)
     ? (branch.businessDayEndsAtHistory as Prisma.JsonArray)
     : [];
@@ -175,13 +200,15 @@ export async function savePharmacyDayEndHour(
       category: 'PHARMACY',
       operation: 'UPDATE',
       action: PHARMACY_DAY_END_HOUR_SET_ACTION,
-      description: `Business day ends at ${pharmacyDayEndLabel(next)} (was ${pharmacyDayEndLabel(state.scheduled)}) from the business day ${state.nextChangeDay}`,
+      description: `From the business day of ${state.nextBusinessDay}, the day ends at ${pharmacyDayEndLabel(next)} (was ${pharmacyDayEndLabel(state.scheduled)})`,
       targetType: 'PharmacyBranch',
       targetId: branch.id,
       targetLabel: branch.name,
       changes: {
         businessDayEndsAtHour: { before: state.scheduled, after: next },
-        effectiveFromBusinessDay: state.nextChangeDay,
+        // The first business day that ends at the new hour, and the first that starts at it.
+        endsFromBusinessDay: state.nextBusinessDay,
+        startsFromBusinessDay: state.nextChangeDay,
       },
       metadata: {
         revision,
@@ -197,5 +224,10 @@ export async function savePharmacyDayEndHour(
     },
     db
   );
-  return { branchId: branch.id, dayEndsAtHour: next, from: state.nextChangeDay, revision };
+  return {
+    branchId: branch.id,
+    dayEndsAtHour: next,
+    fromBusinessDay: state.nextBusinessDay,
+    revision,
+  };
 }

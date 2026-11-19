@@ -14,6 +14,8 @@ import {
   pharmacyDayEndField,
   pharmacyDayEndHourOn,
   pharmacyDayEndSchedule,
+  PharmacyDayEndHistoryError,
+  withClientPharmacyDayEnd,
   sharedPharmacyDayEnd,
   shiftPharmacyDay,
 } from './business-day';
@@ -217,12 +219,9 @@ describe('DEV-958A a change of the hour keeps every earlier day as it was', () =
     expect(pharmacyDayEndHourOn(raised, '2026-11-20')).toBe(5);
   });
 
-  it('lets a later change for the same day win, and ignores entries that are not a change', () => {
+  it('lets a later change for the same day win, and keeps only the day and the hour', () => {
     const schedule = pharmacyDayEndSchedule([
       { from: '2026-11-20', hour: 5, actorId: 'owner_1' },
-      { from: 'soon', hour: 3 },
-      { from: '2026-11-20', hour: 9 },
-      'nonsense',
       { from: '2026-11-20', hour: 4, at: '2026-11-18T18:00:00.000Z' },
     ]);
     expect(schedule).toEqual([
@@ -230,7 +229,59 @@ describe('DEV-958A a change of the hour keeps every earlier day as it was', () =
       { from: '2026-11-20', hour: 4 },
     ]);
     expect(pharmacyDayEndHourOn({ dayEnd: schedule }, '2026-11-20')).toBe(4);
-    expect(pharmacyDayEndSchedule({ from: '2026-11-20', hour: 5 })).toEqual([]);
+    expect(pharmacyDayEndSchedule(undefined)).toEqual([]);
+    expect(pharmacyDayEndSchedule([])).toEqual([]);
+  });
+
+  it('fails closed on a stored history it cannot read, instead of reading midnight', () => {
+    for (const history of [
+      { from: '2026-11-20', hour: 5 },
+      'nonsense',
+      ['nonsense'],
+      [{ from: 'soon', hour: 3 }],
+      [{ from: '2026-02-30', hour: 3 }],
+      [{ from: '2026-11-20', hour: 9 }],
+      [{ from: '2026-11-20', hour: '5' }],
+      [{ from: '2026-11-20', hour: 2.5 }],
+      [{ hour: 5 }],
+      [
+        { from: '2026-11-22', hour: 5 },
+        { from: '2026-11-20', hour: 3 },
+      ],
+    ]) {
+      expect(() => pharmacyDayEndSchedule(history)).toThrow(PharmacyDayEndHistoryError);
+      expect(() => pharmacyBusinessDay({ timeZone: KARACHI, dayEnd: history }, AT_0030)).toThrow(
+        PharmacyDayEndHistoryError
+      );
+      expect(() =>
+        pharmacyBusinessDayRange('2026-11-01', '2026-11-01', {
+          timeZone: KARACHI,
+          dayEnd: history,
+        })
+      ).toThrow(PharmacyDayEndHistoryError);
+    }
+  });
+});
+
+describe('DEV-958A a branch as a screen gets it', () => {
+  it('sends the day and hour of each change, never who made it or when', () => {
+    expect(
+      withClientPharmacyDayEnd({
+        id: 'branch_a',
+        name: 'Main',
+        businessDayEndsAtHistory: [
+          { from: '2026-11-20', hour: 5, actorId: 'user_owner_1', at: '2026-11-18T18:30:00.000Z' },
+        ],
+      })
+    ).toEqual({
+      id: 'branch_a',
+      name: 'Main',
+      businessDayEndsAtHistory: [{ from: '2026-11-20', hour: 5 }],
+    });
+    expect(withClientPharmacyDayEnd({ id: 'branch_b', businessDayEndsAtHistory: [] })).toEqual({
+      id: 'branch_b',
+      businessDayEndsAtHistory: [],
+    });
   });
 });
 

@@ -2,7 +2,12 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { pharmacyBusinessDayRange, type PharmacyDayEnd } from './business-day';
+import {
+  pharmacyBranchDayWindows,
+  shiftPharmacyDay,
+  type PharmacyBranchDayEnds,
+} from './business-day';
+import { pharmacyBranchWindowSql } from './business-day-sql';
 import { MAX_PHARMACY_REPORT_BRANCHES, MAX_PHARMACY_REPORT_DAYS } from './reports';
 
 export const PHARMACY_GROWTH_CATEGORIES = ['OTC', 'COSMETICS'] as const;
@@ -47,8 +52,8 @@ export type CategoryGrowthReportInput = {
    * exclusive cutoff `to` are that clock's days. UTC when absent or one Intl refuses.
    */
   timeZone?: string | null;
-  /** DEV-958A: the branches' shared day-end hours by day (`sharedPharmacyDayEnd`); midnight when absent. */
-  dayEnd?: PharmacyDayEnd;
+  /** DEV-958A: each branch's own day-end history; a branch not listed is on midnight. */
+  dayEnds?: PharmacyBranchDayEnds;
 };
 
 export function validateCategoryGrowthConfiguration(configuration: CategoryGrowthConfig[]) {
@@ -102,9 +107,14 @@ export async function readPharmacyCategoryGrowthReport(
   if (from >= cutoff) throw new Error('The exclusive report cutoff must follow the start date.');
   // The checks above count calendar days; the instants below start each day on the shop's clock,
   // so the window covers the same number of whole shop days a UTC window would.
-  // DEV-958A: a shop day starts at the branches' "day ends at" hour (midnight by default).
-  const startsAt = pharmacyBusinessDayRange(input.from, input.from, input).from;
-  const endsBefore = pharmacyBusinessDayRange(input.to, input.to, input).from;
+  // DEV-958A: each branch's sales on its own business days, from the start of `from` to the
+  // start of the exclusive cutoff `to` on that branch's clock; across branches, their sum.
+  const windows = pharmacyBranchDayWindows(
+    input.from,
+    shiftPharmacyDay(input.to, -1),
+    input.branchIds,
+    input
+  );
 
   const rows = await db.$queryRaw<CategoryTotalRow[]>(Prisma.sql`
     WITH scoped AS (
@@ -114,7 +124,7 @@ export async function readPharmacyCategoryGrowthReport(
       JOIN pharmacy_medicines m ON m."organizationId"=l."organizationId" AND m.id=l."medicineId"
       WHERE l."organizationId"=${organizationId} AND l."branchId" IN (${Prisma.join(input.branchIds)})
         AND s.status='COMPLETED' AND s."receiptNumber" IS NOT NULL
-        AND s."completedAt">=${startsAt} AND s."completedAt"<${endsBefore}
+        AND ${pharmacyBranchWindowSql(windows, Prisma.raw('s."branchId"'), Prisma.raw('s."completedAt"'))}
     ), branch_totals AS (
       SELECT "branchId", SUM("grossMinor"::bigint - "discountMinor") AS "branchSalesMinor"
       FROM scoped GROUP BY "branchId"

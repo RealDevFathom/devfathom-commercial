@@ -177,11 +177,42 @@ describe('DEV-958A changing when a branch day ends', () => {
       branchId: 'branch_a',
       dayEndsAtHour: 0,
       scheduledHour: 0,
-      pendingChange: null,
+      pendingChanges: [],
       revision: 3,
       timeZone: 'Asia/Karachi',
       currentBusinessDay: '2026-11-18',
-      nextChangeDay: '2026-11-20',
+      nextBusinessDay: '2026-11-19',
+    });
+  });
+
+  it('on the changeover day, names the hour today ends at, and lists every change ahead', async () => {
+    // Saved on 18 Nov: 19 Nov began at midnight and is the first day to end at 05:00; a later
+    // change moves the end to 02:00 from the business day of 25 Nov.
+    const history = [
+      { from: '2026-11-20', hour: 5 },
+      { from: '2026-11-26', hour: 2 },
+    ];
+    // 23:30 on 19 Nov in Karachi.
+    const at = new Date('2026-11-19T18:30:00.000Z');
+    await expect(
+      readPharmacyDayEndHourSetting(historyDb(history).target, SCOPE, at)
+    ).resolves.toMatchObject({
+      dayEndsAtHour: 5,
+      scheduledHour: 5,
+      pendingChanges: [{ fromBusinessDay: '2026-11-25', hour: 2 }],
+      currentBusinessDay: '2026-11-19',
+      nextBusinessDay: '2026-11-20',
+    });
+    // The evening before, today still ends at midnight and both changes are ahead.
+    await expect(
+      readPharmacyDayEndHourSetting(historyDb(history).target, SCOPE, AT_18_2330)
+    ).resolves.toMatchObject({
+      dayEndsAtHour: 0,
+      scheduledHour: 5,
+      pendingChanges: [
+        { fromBusinessDay: '2026-11-19', hour: 5 },
+        { fromBusinessDay: '2026-11-25', hour: 2 },
+      ],
     });
   });
 
@@ -195,7 +226,12 @@ describe('DEV-958A changing when a branch day ends', () => {
         { id: 'owner_1', name: 'Owner', role: 'ADMIN' },
         AT_18_2330
       )
-    ).resolves.toEqual({ branchId: 'branch_a', dayEndsAtHour: 5, from: '2026-11-20', revision: 4 });
+    ).resolves.toEqual({
+      branchId: 'branch_a',
+      dayEndsAtHour: 5,
+      fromBusinessDay: '2026-11-19',
+      revision: 4,
+    });
     expect(target.pharmacyBranch.updateMany).toHaveBeenCalledWith({
       where: {
         organizationId: 'org_a',
@@ -219,7 +255,8 @@ describe('DEV-958A changing when a branch day ends', () => {
         targetId: 'branch_a',
         changes: {
           businessDayEndsAtHour: { before: 0, after: 5 },
-          effectiveFromBusinessDay: '2026-11-20',
+          endsFromBusinessDay: '2026-11-19',
+          startsFromBusinessDay: '2026-11-20',
         },
         metadata: { revision: 4 },
       }),
@@ -229,7 +266,7 @@ describe('DEV-958A changing when a branch day ends', () => {
     await expect(readPharmacyDayEndHourSetting(target, SCOPE, AT_18_2330)).resolves.toMatchObject({
       dayEndsAtHour: 0,
       scheduledHour: 5,
-      pendingChange: { from: '2026-11-20', hour: 5 },
+      pendingChanges: [{ fromBusinessDay: '2026-11-19', hour: 5 }],
       revision: 4,
     });
     expect(branch.businessDayEndsAtHistory).toHaveLength(1);
@@ -275,7 +312,7 @@ describe('DEV-958A changing when a branch day ends', () => {
     const at = new Date('2026-11-18T21:00:00.000Z');
     await expect(
       savePharmacyDayEndHour(target, SCOPE, { revision: 3, dayEndsAtHour: 0 }, { id: 'o' }, at)
-    ).resolves.toMatchObject({ from: '2026-11-20' });
+    ).resolves.toMatchObject({ fromBusinessDay: '2026-11-19' });
     const clock = await readPharmacyDayClock(target, SCOPE);
     expect(pharmacyBusinessDayRange('2026-11-18', '2026-11-18', clock)).toEqual({
       from: new Date('2026-11-18T00:00:00.000Z'),
@@ -330,7 +367,12 @@ describe('DEV-958A changing when a branch day ends', () => {
         { id: 'o' },
         AT_18_2330
       )
-    ).resolves.toEqual({ branchId: 'branch_a', dayEndsAtHour: 5, from: null, revision: 3 });
+    ).resolves.toEqual({
+      branchId: 'branch_a',
+      dayEndsAtHour: 5,
+      fromBusinessDay: null,
+      revision: 3,
+    });
     expect(target.pharmacyBranch.updateMany).not.toHaveBeenCalled();
     expect(audit.recordAudit).not.toHaveBeenCalled();
   });

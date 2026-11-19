@@ -68,10 +68,12 @@ import {
 import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
 import { managerBranchIds } from '../pharmacy-manager-branches';
 import {
+  pharmacyBranchDayEndsField,
   pharmacyDayEndField,
-  sharedPharmacyDayEnd,
+  withClientPharmacyDayEnd,
   type PharmacyDayEndChange,
 } from '@/lib/pharmacy/business-day';
+
 import {
   PHARMACY_GROWTH_CATEGORIES,
   readPharmacyCategoryGrowthReport,
@@ -239,27 +241,35 @@ async function scope(ctx: TRPCContext) {
   const branches = await ctx.db.pharmacyBranch.findMany({
     where: { organizationId, active: true },
     orderBy: { name: 'asc' },
-    // DEV-958A: the hour each branch's business day ends at, which bounds its report days.
+    // DEV-958A: each branch's day-end history, which bounds its report days. Only the days and
+    // hours leave the server: never who made a change, or when.
     select: { id: true, name: true, businessDayEndsAtHistory: true },
   });
-  return { branches, organizationId };
+  return { branches: branches.map(withClientPharmacyDayEnd), organizationId };
 }
 
 /**
- * DEV-958A: the day-end hour of a report window over `branchIds`: their shared hour, or
- * midnight when the chosen branches end their days at different hours.
+ * DEV-958A: each chosen branch's own day-end history, for a report across branches to read
+ * every branch on its own business days (their sum). Only branches not on midnight are
+ * listed, and none at all when every branch is, so default reads pass what they always did.
  */
-function reportDayEndHour(
+function reportDayEnds(
   available: { branches: { id: string; businessDayEndsAtHistory?: unknown }[] },
   branchIds: readonly string[]
-): { dayEnd?: PharmacyDayEndChange[] } {
-  return pharmacyDayEndField(
-    sharedPharmacyDayEnd(
-      available.branches
-        .filter((branch) => branchIds.includes(branch.id))
-        .map((branch) => branch.businessDayEndsAtHistory)
-    ).dayEnd
+): { dayEnds?: Record<string, PharmacyDayEndChange[]> } {
+  return pharmacyBranchDayEndsField(
+    available.branches
+      .filter((branch) => branchIds.includes(branch.id))
+      .map((branch) => ({ id: branch.id, dayEnd: branch.businessDayEndsAtHistory }))
   );
+}
+
+/** DEV-958A: one chosen branch's own day-end history. */
+function branchDayEnd(
+  available: { branches: { id: string; businessDayEndsAtHistory?: unknown }[] },
+  branchId: string
+): unknown {
+  return available.branches.find((branch) => branch.id === branchId)?.businessDayEndsAtHistory;
 }
 
 async function requireFinancialReports(ctx: TRPCContext) {
@@ -288,7 +298,7 @@ async function ownerFilters(ctx: TRPCContext, input: z.infer<typeof filters>) {
     branchIds.some((id) => !available.branches.some((branch) => branch.id === id))
   )
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
-  return { ...input, branchIds, ...reportDayEndHour(available, branchIds) };
+  return { ...input, branchIds, ...reportDayEnds(available, branchIds) };
 }
 
 /** The supplier, ingredient and batch filters a reader must apply (DEV-256); unset ones omitted. */
@@ -363,7 +373,7 @@ export const pharmacyReportsRouter = router({
         configuration: input.configuration,
         // The caller's own organisation's days, as the other pharmacy reports read them.
         timeZone: ctx.organization?.timezone,
-        ...pharmacyDayEndField(scoped.dayEnd),
+        ...(scoped.dayEnds ? { dayEnds: scoped.dayEnds } : {}),
       });
     }),
   marketing: reports
@@ -738,7 +748,7 @@ export const pharmacyReportsRouter = router({
       orderBy: { name: 'asc' },
       select: { id: true, name: true, businessDayEndsAtHistory: true },
     });
-    return { branches, organizationId };
+    return { branches: branches.map(withClientPharmacyDayEnd), organizationId };
   }),
   suppliers: branchReports.query(async ({ ctx }) => {
     const { organizationId } = await scope(ctx);
@@ -766,7 +776,7 @@ export const pharmacyReportsRouter = router({
       // The caller's own organisation's days; the screen offers the same days. DEV-958A: each
       // ends at the branch's "day ends at" hour.
       const timeZone = ctx.organization?.timezone;
-      const { dayEnd } = reportDayEndHour(available, [input.branchId]);
+      const dayEnd = branchDayEnd(available, input.branchId);
       try {
         validatePharmacyReplenishmentReportInput(input, readAt, timeZone, dayEnd);
       } catch {
@@ -883,6 +893,7 @@ export const pharmacyReportsRouter = router({
         actorId: ctx.session!.user.id,
         financial,
         timeZone: ctx.organization?.timezone,
+        ...reportDayEnds(available, branchIds),
       };
       const readAt = new Date();
       try {
@@ -972,7 +983,7 @@ export const pharmacyReportsRouter = router({
           from: input.from,
           to: input.to,
           timeZone: ctx.organization?.timezone,
-          ...reportDayEndHour(available, [input.branchId]),
+          ...pharmacyDayEndField(branchDayEnd(available, input.branchId)),
           config: {
             receiptsPerStaffHour: input.receiptsPerStaffHour,
             minimumStaff: input.minimumStaff,
@@ -1028,7 +1039,7 @@ export const pharmacyReportsRouter = router({
           ...input,
           branchIds,
           timeZone: ctx.organization?.timezone,
-          ...reportDayEndHour(available, branchIds),
+          ...reportDayEnds(available, branchIds),
         })
       );
       const financial = await can(

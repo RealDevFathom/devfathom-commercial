@@ -1,7 +1,8 @@
 import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
-import { pharmacyBusinessDayRange, type PharmacyDayEnd } from './business-day';
+import { pharmacyBranchDayWindows, type PharmacyBranchDayEnds } from './business-day';
+import { pharmacyBranchWindowSql, spanOf } from './business-day-sql';
 
 import { grossMarginQuery } from './finance-reports';
 import {
@@ -27,10 +28,11 @@ export type PharmacyReportFilters = {
   /** Workspace IANA zone: event timestamps are bounded by its midnights (UTC when absent). */
   timeZone?: string | null;
   /**
-   * DEV-958A: the hour the branches' business day ends at (`readPharmacyReportDayEndHour`), so
-   * the window's days are the days their closes count. Absent: midnight, as before.
+   * DEV-958A: each branch's own day-end history (`pharmacyBranchDayEndsField`), so every branch
+   * is read on the business days its own closes count, and a report across branches is the sum
+   * of each branch's own days. Absent: every branch on midnight, as before.
    */
-  dayEnd?: PharmacyDayEnd;
+  dayEnds?: PharmacyBranchDayEnds;
 };
 
 export type PharmacyMetricContract = {
@@ -343,7 +345,13 @@ export async function readPharmacyOwnerCommandCentre(
   // Business-date columns compare against `parsed`; event and posting timestamps use the
   // workspace day, so 00:00–04:59 PKT counts on the Karachi date it happened on (DEV-958A: the
   // branches' business day, which ends at their "day ends at" hour).
-  const eventWindow = pharmacyBusinessDayRange(filters.from, filters.to, filters);
+  const eventWindows = pharmacyBranchDayWindows(
+    filters.from,
+    filters.to,
+    filters.branchIds,
+    filters
+  );
+  const eventWindow = spanOf(eventWindows);
   const at = new Date();
   const branches = Prisma.join(filters.branchIds);
   // Supplier, ingredient and batch filters narrow every metric that can be traced to stock;
@@ -367,7 +375,11 @@ export async function readPharmacyOwnerCommandCentre(
       from: eventWindow.from,
       to: eventWindow.to,
       by: 'branch',
-      where: Prisma.sql`${ingredientOf(Prisma.sql`line."organizationId"`, Prisma.sql`line."productId"`)} ${lotDimension(lot, filters, false)}`,
+      where: Prisma.sql`${ingredientOf(Prisma.sql`line."organizationId"`, Prisma.sql`line."productId"`)} ${lotDimension(lot, filters, false)}${
+        eventWindows.length > 1
+          ? Prisma.sql` AND ${pharmacyBranchWindowSql(eventWindows, Prisma.raw('line."branchId"'), Prisma.raw('entry."occurredAt"'))}`
+          : Prisma.empty
+      }`,
     }
   );
   const saleWindow = Prisma.sql`l."branchId" IN (${branches}) AND s."status"='COMPLETED' AND s."businessDate">=${parsed.from} AND s."businessDate"<${parsed.to}`;
@@ -399,7 +411,7 @@ export async function readPharmacyOwnerCommandCentre(
       lotScoped
         ? none
         : db.$queryRaw<Array<{ value: number }>>(
-            Prisma.sql`SELECT COUNT(*)::int AS value FROM "pharmacy_unfulfilled_demand_events" WHERE "organizationId"=current_setting('app.current_organization_id',true) AND "branchId" IN (${branches}) AND "createdAt">=${eventWindow.from} AND "createdAt"<${eventWindow.to} ${ingredientOf(Prisma.sql`"pharmacy_unfulfilled_demand_events"."organizationId"`, Prisma.sql`"pharmacy_unfulfilled_demand_events"."requestedMedicineId"`)}`
+            Prisma.sql`SELECT COUNT(*)::int AS value FROM "pharmacy_unfulfilled_demand_events" WHERE "organizationId"=current_setting('app.current_organization_id',true) AND "branchId" IN (${branches}) AND ${pharmacyBranchWindowSql(eventWindows, Prisma.raw('"branchId"'), Prisma.raw('"createdAt"'))} ${ingredientOf(Prisma.sql`"pharmacy_unfulfilled_demand_events"."organizationId"`, Prisma.sql`"pharmacy_unfulfilled_demand_events"."requestedMedicineId"`)}`
           ),
       db.$queryRaw<
         Array<{ d30: number; d60: number; d90: number; d180: number; quarantine: number }>
