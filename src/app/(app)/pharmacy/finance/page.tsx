@@ -12,6 +12,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { ManualPaymentSettingsPanel } from '@/components/pharmacy/counter/manual-payment-settings-panel';
 import { KhataReminderSettingsPanel } from '@/components/pharmacy/counter/khata-reminder-settings-panel';
+import { DayEndHourPanel } from '@/components/pharmacy/counter/day-end-hour-panel';
 import { DiscountMaximumPanel } from '@/components/pharmacy/counter/discount-maximum-panel';
 import { BillDiscountSettingPanel } from '@/components/pharmacy/counter/bill-discount-setting-panel';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -29,7 +30,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
-import { workspaceDateOffset, workspaceToday } from '@/lib/timezone';
+import { pharmacyBusinessDay, pharmacyBusinessDayOffset } from '@/lib/pharmacy/business-day';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
 import { bankLineAmountMinor, financeAmountMinor, type FinanceAmount } from './typed-amount';
@@ -100,7 +101,7 @@ export default async function PharmacyFinancePage({
   const branches = await ctx.db.pharmacyBranch.findMany({
     where: { organizationId, active: true },
     orderBy: { name: 'asc' },
-    select: { id: true, name: true },
+    select: { id: true, name: true, businessDayEndsAtHistory: true },
   });
   const branch = branches.find((item) => item.id === query.branch) ?? branches[0] ?? null;
   if (!branch) {
@@ -287,13 +288,15 @@ export default async function PharmacyFinancePage({
 
   const now = new Date();
   const timeZone = ctx.organization?.timezone;
-  // The organisation's today (00:00–04:59 PKT is already the new day there, not in UTC): the
-  // default business and posting date.
-  const today = workspaceToday(timeZone, now);
-  // Shared [from, to) posting window in the organisation's days (UTC when it has no zone): it
+  // DEV-958A: the branch's clock, the organisation's zone and the hour the branch's business day
+  // ends at (midnight by default: 00:00–04:59 PKT is already the new day there, not in UTC).
+  const clock = { timeZone, dayEnd: branch.businessDayEndsAtHistory };
+  // The branch's business today: the default business and posting date.
+  const today = pharmacyBusinessDay(clock, now);
+  // Shared [from, to) posting window in the branch's business days (UTC when it has no zone): it
   // includes today; valuation stays independent.
-  const ledgerFrom = query.ledgerFrom ?? workspaceDateOffset(timeZone, -30, now);
-  const ledgerTo = query.ledgerTo ?? workspaceDateOffset(timeZone, 1, now);
+  const ledgerFrom = query.ledgerFrom ?? pharmacyBusinessDayOffset(clock, -30, now);
+  const ledgerTo = query.ledgerTo ?? pharmacyBusinessDayOffset(clock, 1, now);
   return (
     <div className="min-w-0 space-y-6">
       <PageHeader
@@ -317,6 +320,7 @@ export default async function PharmacyFinancePage({
           to={ledgerTo}
           page={query.journalPage}
           timeZone={timeZone}
+          dayEnd={branch.businessDayEndsAtHistory}
         />
       </Suspense>
       <Suspense
@@ -424,6 +428,7 @@ export default async function PharmacyFinancePage({
       <ManualPaymentSettingsPanel key={branch.id} branchId={branch.id} />
       <KhataReminderSettingsPanel key={`khata-reminders-${branch.id}`} branchId={branch.id} />
       <DiscountMaximumPanel key={`discount-maximum-${branch.id}`} branchId={branch.id} />
+      <DayEndHourPanel key={`day-end-hour-${branch.id}`} branchId={branch.id} />
       <BillDiscountSettingPanel key={`bill-discount-${branch.id}`} branchId={branch.id} />
       <SectionCard
         title="Create POS settlement batch"

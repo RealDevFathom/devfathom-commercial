@@ -24,7 +24,7 @@
  * module is a safe integer count of canonical base units. Packs are an input;
  * canonical units are their projection, never an independently supplied number.
  */
-import { workspaceToday } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import {
   allocateByWeight,
   assertSupplierEligible,
@@ -605,7 +605,7 @@ export function matchReceiptLine(input: {
     // holds through all of it, so the arrival is compared as a day in the organisation's zone.
     const validUntilDay = ordered.schemeValidUntil?.toISOString().slice(0, 10);
     const arrivalDay = received.receivedAt
-      ? workspaceToday(received.timeZone, received.receivedAt)
+      ? pharmacyCalendarDay(received.timeZone, received.receivedAt)
       : undefined;
     if (validUntilDay && arrivalDay && arrivalDay > validUntilDay) {
       exceptions.push({

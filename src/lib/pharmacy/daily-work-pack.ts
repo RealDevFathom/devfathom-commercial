@@ -3,6 +3,7 @@ import { PHARMACY_COPY as copy } from './plain-language';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { readPharmacyAnomalySignals } from './anomaly-signals-operations';
+import type { PharmacyBranchDayEnds } from './business-day';
 import { readExpiryAdvice } from './expiry-advisor-operations';
 import { listPurchaseReturns, listSupplierCredits } from './purchasing-console';
 import { pharmacyReportCatalog, validatePharmacyReportFilters } from './reports';
@@ -20,6 +21,8 @@ export type PharmacyDailyWorkPackInput = {
   asOf: string;
   /** Workspace IANA zone: anomaly windows are keyed on its midnights (UTC when absent). */
   timeZone?: string | null;
+  /** DEV-958A: each branch's own day-end history, the days its anomaly windows are keyed on. */
+  dayEnds?: PharmacyBranchDayEnds;
 };
 
 type SourceKind = 'stock-dashboard' | 'stock-digest' | 'anomalies' | 'expiry' | 'supplier-credit';
@@ -335,6 +338,7 @@ export async function readPharmacyDailyWorkPack(
         from: input.from,
         to: input.to,
         timeZone: input.timeZone,
+        ...(input.dayEnds?.[branchId] ? { dayEnds: { [branchId]: input.dayEnds[branchId] } } : {}),
       });
       source.returnedRows = rows.length;
       for (const row of rows) {

@@ -20,7 +20,7 @@ import type { CounterAlert } from '@/lib/pharmacy/counter-alerts';
 import type { CounterPatientPanel } from '@/lib/pharmacy/counter-prescriptions';
 import { formatReceiptDate } from '@/lib/pharmacy/counter-receipt';
 import type { RxOcrPrefill } from '@/lib/pharmacy/rx-ocr';
-import { workspaceToday } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 
@@ -64,7 +64,9 @@ function PrescriptionThumbnail({ url, label }: { url: string; label: string }) {
  * next day in Karachi.
  */
 export const isoDay = (timeZone: string | null | undefined, offsetDays = 0, now = new Date()) =>
-  new Date(Date.parse(`${workspaceToday(timeZone, now)}T00:00:00.000Z`) + offsetDays * 86_400_000)
+  new Date(
+    Date.parse(`${pharmacyCalendarDay(timeZone, now)}T00:00:00.000Z`) + offsetDays * 86_400_000
+  )
     .toISOString()
     .slice(0, 10);
 

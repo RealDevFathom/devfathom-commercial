@@ -17,6 +17,9 @@ vi.mock('@/components/pharmacy/counter/khata-reminder-settings-panel', () => ({
 vi.mock('@/components/pharmacy/counter/discount-maximum-panel', () => ({
   DiscountMaximumPanel: () => null,
 }));
+vi.mock('@/components/pharmacy/counter/day-end-hour-panel', () => ({
+  DayEndHourPanel: () => null,
+}));
 vi.mock('@/components/pharmacy/counter/bill-discount-setting-panel', () => ({
   BillDiscountSettingPanel: () => null,
 }));

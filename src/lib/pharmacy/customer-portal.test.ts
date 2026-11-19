@@ -446,6 +446,8 @@ describe('DEV-15 staff decisions', () => {
           updateMany,
         },
         organization: { findUnique: vi.fn(async () => ({ timezone: 'Asia/Karachi' })) },
+        // DEV-958A: the branch's "day ends at" hour; none stored reads as midnight.
+        pharmacyBranch: { findFirst: async () => null },
       }),
     };
   }

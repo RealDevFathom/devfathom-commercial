@@ -724,3 +724,22 @@ it('offers no thermal queue for an unsettled bill or without a branch', () => {
   render(<CounterReceiptView {...props()} />);
   expect(thermal.props).not.toHaveBeenCalled();
 });
+
+it('DEV-958A shows when the payment really happened, not the business day it books on', () => {
+  // 00:30 on 6 Sep in Karachi, at a branch whose day ends at 05:00: business day 5 Sep.
+  const input = props();
+  render(
+    <CounterReceiptView
+      {...input}
+      receipt={{
+        ...input.receipt!,
+        businessDate: '2026-09-05',
+        completedAt: '2026-09-05T19:30:00Z',
+      }}
+    />
+  );
+  const recorded = within(screen.getAllByRole('status')[0]!);
+  expect(recorded.getByRole('heading', { name: 'Payment recorded' })).toBeTruthy();
+  expect(recorded.getByText('Branch · 2026-09-06 00:30 PKT')).toBeTruthy();
+  expect(recorded.queryByText(/2026-09-05/)).toBeNull();
+});
