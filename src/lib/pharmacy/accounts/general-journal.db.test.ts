@@ -374,6 +374,80 @@ describeDb('pharmacy journal voucher lifecycle', () => {
     ]);
   }, 60_000);
 
+  // DEV-953: creates racing on one key end with one voucher and a stable outcome, never a
+  // unique-index error from the database.
+  it('settles racing creates with the same key or reference into one voucher', async () => {
+    const rounds = 15;
+    for (let round = 0; round < rounds; round += 1) {
+      const base = 1_000 + round * 10;
+
+      // Identical creates sent together: every one ends with the same voucher.
+      const identical = draft(base);
+      const same = await Promise.allSettled(
+        [0, 1, 2, 3].map(() =>
+          inTenant((db) => deps.jv.createJournalVoucherDraft(db, scope, identical))
+        )
+      );
+      const sameIds = same.map((result) => {
+        expect(
+          result.status,
+          `round ${round} identical: ${result.status === 'rejected' ? String(result.reason) : ''}`
+        ).toBe('fulfilled');
+        return (result as PromiseFulfilledResult<{ id: string }>).value.id;
+      });
+      expect(new Set(sameIds).size, `round ${round} identical`).toBe(1);
+      await expect(
+        inTenant((db) =>
+          db.pharmacyJournalVoucher.count({ where: { createKey: identical.createKey } })
+        )
+      ).resolves.toBe(1);
+
+      // The same key with different details sent together: one voucher, one plain conflict.
+      const keyed = draft(base + 1);
+      const conflict = await Promise.allSettled([
+        inTenant((db) => deps.jv.createJournalVoucherDraft(db, scope, keyed)),
+        inTenant((db) =>
+          deps.jv.createJournalVoucherDraft(db, scope, {
+            ...keyed,
+            evidenceReference: `${keyed.evidenceReference}-changed`,
+          })
+        ),
+      ]);
+      const conflictWins = conflict.filter((result) => result.status === 'fulfilled');
+      const conflictLosses = conflict.filter((result) => result.status === 'rejected');
+      expect(conflictWins, `round ${round} same key`).toHaveLength(1);
+      expect(conflictLosses, `round ${round} same key`).toHaveLength(1);
+      expect(conflictLosses[0]!.reason).toBeInstanceOf(deps.jv.PharmacyJournalVoucherError);
+      expect(conflictLosses[0]!.reason).toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+      await expect(
+        inTenant((db) => db.pharmacyJournalVoucher.count({ where: { createKey: keyed.createKey } }))
+      ).resolves.toBe(1);
+
+      // Different keys sharing one reference sent together: one voucher, one duplicate reference.
+      const shared = draft(base + 2);
+      const reference = await Promise.allSettled([
+        inTenant((db) => deps.jv.createJournalVoucherDraft(db, scope, shared)),
+        inTenant((db) =>
+          deps.jv.createJournalVoucherDraft(db, scope, {
+            ...shared,
+            createKey: `${shared.createKey}-other`,
+          })
+        ),
+      ]);
+      const referenceWins = reference.filter((result) => result.status === 'fulfilled');
+      const referenceLosses = reference.filter((result) => result.status === 'rejected');
+      expect(referenceWins, `round ${round} reference`).toHaveLength(1);
+      expect(referenceLosses, `round ${round} reference`).toHaveLength(1);
+      expect(referenceLosses[0]!.reason).toBeInstanceOf(deps.jv.PharmacyJournalVoucherError);
+      expect(referenceLosses[0]!.reason).toMatchObject({ reason: 'DUPLICATE_REFERENCE' });
+      await expect(
+        inTenant((db) =>
+          db.pharmacyJournalVoucher.count({ where: { reference: shared.reference } })
+        )
+      ).resolves.toBe(1);
+    }
+  }, 180_000);
+
   // DEV-947: nested line rows take their organization and branch from the voucher.
   it('stores every line under its voucher scope and refuses cross-scope and unbalanced writes', async () => {
     const linesOf = (voucherId: string, org = organizationId) =>

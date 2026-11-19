@@ -92,7 +92,14 @@ function fakeDb(state: { voucher?: ReturnType<typeof voucher> | null; closed?: b
   const db = {
     $queryRaw: track('queryRaw', (sql: unknown) => {
       const text = String((sql as { strings?: string[] }).strings?.join('?') ?? '');
-      calls.push(text.includes('pg_advisory_xact_lock') ? 'ledger-lock' : 'voucher-lock');
+      const key = String((sql as { values?: unknown[] }).values?.[0] ?? '');
+      calls.push(
+        !text.includes('pg_advisory_xact_lock')
+          ? 'voucher-lock'
+          : key.startsWith('pharmacy-jv-')
+            ? `identity-lock:${key}`
+            : 'ledger-lock'
+      );
       return Promise.resolve([]);
     }),
     pharmacyAccountingPeriod: {
@@ -318,6 +325,40 @@ describe('draft lifecycle', () => {
     expect(raw.pharmacyJournalVoucherLine.deleteMany).toHaveBeenCalledWith({
       where: { organizationId: 'org_1', voucherId: 'jv_1' },
     });
+  });
+
+  // DEV-953: racing creates queue on the key, then on the reference, before they look.
+  it('locks the create key before its look-up and the reference before its check', async () => {
+    const { db, calls } = fakeDb();
+    await createJournalVoucherDraft(db, scope, draftInput, NOW);
+    const keyLock = calls.indexOf(
+      `identity-lock:pharmacy-jv-create-key:org_1:${draftInput.createKey}`
+    );
+    const referenceLock = calls.indexOf(
+      `identity-lock:pharmacy-jv-reference:org_1:${draftInput.reference.trim()}`
+    );
+    const keyLookup = calls.indexOf('voucher.findFirst');
+    const referenceLookup = calls.lastIndexOf('voucher.findFirst');
+    expect(keyLock).toBeGreaterThan(-1);
+    expect(keyLock).toBeLessThan(keyLookup);
+    expect(keyLookup).toBeLessThan(referenceLock);
+    expect(referenceLock).toBeLessThan(referenceLookup);
+    expect(referenceLookup).toBeLessThan(calls.indexOf('voucher.create'));
+    expect(calls).not.toContain('ledger-lock');
+  });
+
+  it('locks a changed reference after the voucher lock and before its check on edit', async () => {
+    const { db, calls } = fakeDb({ voucher: voucher() });
+    await updateJournalVoucherDraft(
+      db,
+      scope,
+      { ...draftInput, reference: 'JV-0002', voucherId: 'jv_1', expectedVersion: 2 },
+      NOW
+    );
+    const referenceLock = calls.indexOf('identity-lock:pharmacy-jv-reference:org_1:JV-0002');
+    expect(calls.indexOf('voucher-lock')).toBeLessThan(referenceLock);
+    expect(referenceLock).toBeLessThan(calls.lastIndexOf('voucher.findFirst'));
+    expect(referenceLock).toBeLessThan(calls.indexOf('voucher.update'));
   });
 
   // DEV-949: the same create key replays only the same normalised draft.
