@@ -70,6 +70,11 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         sites: { 'src/server/routers/pharmacy-sales.ts': 1 },
       },
       {
+        id: 'open-close-own-cash-shift',
+        text: "At a branch that runs cash shifts, open their own shift on a counter's drawer with the cash they count, close it with a count, and see their own shift report (an over or short above the owner's limit needs a manager's PIN)",
+        sites: {},
+      },
+      {
         id: 'see-customerapp-request-queue',
         text: 'See the customer-app request queue and confirm or reject payments customers report against their khata',
         sites: { 'src/server/routers/pharmacy-ordering.ts': 3 },
@@ -502,6 +507,11 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
           'src/server/routers/pharmacy-sales.ts': 2,
           'src/server/pharmacy-manager-branches.ts': 1,
         },
+      },
+      {
+        id: 'run-cash-shifts-branches',
+        text: "At their branches that run cash shifts, open a shift for another cashier, close anyone's shift before the day close, see every shift report, and approve a shift's over or short above the owner's limit with their PIN",
+        sites: {},
       },
       {
         id: 'set-when-business-day',

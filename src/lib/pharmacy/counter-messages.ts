@@ -195,6 +195,28 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     'Another manager or owner must resolve a payment you took. Ask another manager or owner at this branch to resolve it.',
   SLIP_REFERENCE_IN_USE:
     'That slip reference is already recorded on another card terminal payment. Check the slip and enter its reference again.',
+  // DEV-958B: cash shifts on a drawer (shift close, then day close).
+  SHIFTS_NOT_ENABLED: 'This branch does not run cash shifts. The day close counts the drawer.',
+  SHIFT_NOT_FOUND: 'That shift is not on this branch. Refresh the counter and try again.',
+  SHIFT_NOT_OPEN:
+    'No shift is open on this counter. Open your shift with the cash you count in the drawer, then take the payment.',
+  SHIFT_OTHER_DAY:
+    'The shift open on this counter belongs to an earlier business day. Close that shift and its day first.',
+  SHIFT_OPEN:
+    'A shift is still open. Close every shift of the day on the counter first; a manager or owner can close anyone’s shift.',
+  SHIFT_ALREADY_OPEN:
+    'A shift is already open on this drawer. Close it before the next cashier opens theirs.',
+  SHIFT_ALREADY_CLOSED:
+    'This shift is already closed with a different count. A closed shift never changes; record any correction in the open shift.',
+  SHIFT_NOTE_REQUIRED: 'The count differs from the cash expected. Add a note that explains it.',
+  SHIFT_APPROVAL_REQUIRED:
+    'The over or short is above the owner’s limit. A manager or owner must approve it with their PIN.',
+  SHIFT_COUNT_MISMATCH:
+    'A drawer that runs shifts closes on its last shift’s count. Refresh the day close and try again.',
+  SHIFT_CHANGED:
+    'A payment reached this shift while you were counting. Check the expected cash again, then close.',
+  SHIFT_HANDOVER_BY_CLOSE:
+    'This drawer runs cash shifts. Close the current shift with a count, then the next cashier opens theirs.',
   // DEV-821: cash goes only into a till the signed-in user runs.
   DRAWER_NOT_YOURS:
     'Another cashier runs the cash drawer on this counter. Ask a manager or owner to hand it over to you, then take the cash.',
