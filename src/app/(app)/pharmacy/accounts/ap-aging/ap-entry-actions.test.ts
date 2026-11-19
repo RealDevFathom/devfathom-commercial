@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   approveSetOff: vi.fn(),
   rejectSetOff: vi.fn(),
   reverseSetOff: vi.fn(),
+  reverseInvoice: vi.fn(),
+  reverseSettlement: vi.fn(),
 }));
 vi.mock('next/cache', () => ({ revalidatePath: mocks.revalidatePath }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.createTRPCContext }));
@@ -22,6 +24,8 @@ vi.mock('@/server/routers/pharmacy-ap-invoices', () => ({
       approveCreditSetOff: mocks.approveSetOff,
       rejectCreditSetOff: mocks.rejectSetOff,
       reverseCreditSetOff: mocks.reverseSetOff,
+      reverseInvoice: mocks.reverseInvoice,
+      reverseSettlement: mocks.reverseSettlement,
     }),
   },
 }));
@@ -32,6 +36,8 @@ import {
   recordApInvoiceFromForm,
   rejectCreditSetOffFromForm,
   requestCreditSetOffFromForm,
+  reverseApInvoiceFromForm,
+  reverseApSettlementFromForm,
   reverseCreditSetOffFromForm,
 } from './ap-entry-actions';
 
@@ -329,5 +335,86 @@ describe('DEV-694 credit-note set-off actions', () => {
       (await reverseCreditSetOffFromForm(idle, reverseForm({ pin: '2468', reason: 'Wrong bill' })))
         .message
     ).toContain('closed accounting period');
+  });
+});
+
+describe('DEV-103: reversing an invoice or a payment', () => {
+  const reverseForm = (fields: Record<string, string> = {}) =>
+    form({
+      branchId: 'branch_1',
+      commandKey: 'ap-reverse:key-0001',
+      reason: ' Entered twice ',
+      pin: '2468',
+      ...fields,
+    });
+
+  beforeEach(() => {
+    mocks.reverseInvoice.mockResolvedValue({ id: 'inv_1', reference: 'AP-0001' });
+    mocks.reverseSettlement.mockResolvedValue({ id: 'set_1' });
+  });
+
+  it('sends an invoice reversal with the PIN and reason, and no date (the server dates it)', async () => {
+    const state = await reverseApInvoiceFromForm(idle, reverseForm({ invoiceId: 'inv_1' }));
+    expect(mocks.reverseInvoice).toHaveBeenCalledWith({
+      branchId: 'branch_1',
+      invoiceId: 'inv_1',
+      commandKey: 'ap-reverse:key-0001',
+      reason: 'Entered twice',
+      pin: '2468',
+    });
+    expect(state).toMatchObject({ status: 'saved' });
+    expect(state.message).toContain('AP-0001');
+    expect(state.message).not.toContain('2468');
+    expect(mocks.revalidatePath).toHaveBeenCalledWith('/pharmacy/accounts/ap-aging');
+  });
+
+  it('sends a payment reversal against the chosen payment', async () => {
+    const state = await reverseApSettlementFromForm(idle, reverseForm({ settlementId: 'set_1' }));
+    expect(mocks.reverseSettlement).toHaveBeenCalledWith(
+      expect.objectContaining({ settlementId: 'set_1', pin: '2468', reason: 'Entered twice' })
+    );
+    expect(state).toMatchObject({ status: 'saved' });
+    expect(state.message).toContain('owes that amount again');
+  });
+
+  it.each([
+    [{ pin: '12' }, 'Enter your 4 to 8 digit manager or owner PIN.'],
+    [{ pin: '' }, 'Enter your 4 to 8 digit manager or owner PIN.'],
+    [{ reason: '   ' }, 'Say why it is being reversed.'],
+  ])('refuses %o before calling the server', async (fields, message) => {
+    const state = await reverseApInvoiceFromForm(
+      idle,
+      reverseForm({ invoiceId: 'inv_1', ...fields })
+    );
+    expect(state).toEqual({ status: 'error', message });
+    expect(mocks.reverseInvoice).not.toHaveBeenCalled();
+  });
+
+  it('shows the server refusal for a forbidden reversal as written', async () => {
+    mocks.reverseSettlement.mockRejectedValue(
+      new TRPCError({
+        code: 'FORBIDDEN',
+        message:
+          'Another manager or owner must reverse an entry you recorded. Ask Hina or another manager or owner to reverse it.',
+      })
+    );
+    const state = await reverseApSettlementFromForm(idle, reverseForm({ settlementId: 'set_1' }));
+    expect(state).toEqual({
+      status: 'error',
+      message:
+        'Another manager or owner must reverse an entry you recorded. Ask Hina or another manager or owner to reverse it.',
+    });
+    expect(mocks.revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['ACTIVE_SETTLEMENTS', 'Reverse every payment and approved credit set-off'],
+    ['PERIOD_CLOSED', 'closed accounting period'],
+    ['ALREADY_REVERSED', 'already reversed'],
+  ])('explains %s', async (reason, text) => {
+    mocks.reverseInvoice.mockRejectedValue(new TRPCError({ code: 'CONFLICT', message: reason }));
+    const state = await reverseApInvoiceFromForm(idle, reverseForm({ invoiceId: 'inv_1' }));
+    expect(state.status).toBe('error');
+    expect(state.message).toContain(text);
   });
 });

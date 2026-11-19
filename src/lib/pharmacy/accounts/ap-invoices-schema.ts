@@ -51,23 +51,33 @@ export const payApInvoiceSchema = z
   })
   .strict();
 
+/**
+ * DEV-103: a manager or owner reverses with their own fresh PIN (never stored). `at` is
+ * optional: without it the server dates the reversal now.
+ */
 export const reverseApSettlementSchema = z
   .object({
     branchId: id,
     settlementId: id,
     commandKey,
     reason: z.string().trim().min(1).max(500),
-    at: instant,
+    at: instant.optional(),
+    pin: z.string().regex(/^\d{4,8}$/),
   })
   .strict();
 
+/**
+ * DEV-103: a manager or owner reverses with their own fresh PIN (never stored). `at` is
+ * optional: without it the server dates the reversal now.
+ */
 export const reverseApInvoiceSchema = z
   .object({
     branchId: id,
     invoiceId: id,
     commandKey,
     reason: z.string().trim().min(1).max(500),
-    at: instant,
+    at: instant.optional(),
+    pin: z.string().regex(/^\d{4,8}$/),
   })
   .strict();
 

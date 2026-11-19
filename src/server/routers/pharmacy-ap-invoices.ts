@@ -29,6 +29,8 @@ import {
 import { actorMayRefund, authenticateRefundPin } from '@/lib/pharmacy/refund-authorization';
 import { z } from 'zod';
 import {
+  AP_REVERSAL_SEGREGATED_POLICY,
+  AP_REVERSAL_SOLE_APPROVER_POLICY,
   listApInvoices,
   payApInvoice,
   PharmacyApInvoiceError,
@@ -36,6 +38,7 @@ import {
   reverseApInvoice,
   reverseApSettlement,
 } from '@/lib/pharmacy/accounts/ap-invoices';
+import { otherApReversalApprovers } from '@/lib/pharmacy/accounts/ap-reversal-approvers';
 import {
   apAgingSchema,
   approveApCreditSetOffSchema,
@@ -79,6 +82,74 @@ export const AP_SET_OFF_REVERSAL_PIN_BLOCKED =
   'Set-off not reversed. Enter your manager or owner PIN.';
 export const AP_SET_OFF_SELF_APPROVAL =
   'Another manager or owner must approve a set-off you requested.';
+
+/** DEV-103: reversing a supplier expense invoice or payment (owner decision, 19 Nov 2026). */
+export const AP_REVERSAL_FORBIDDEN =
+  'Only a manager or owner can reverse a supplier expense invoice or payment.';
+export const AP_REVERSAL_PIN_BLOCKED = 'Nothing was reversed. Enter your manager or owner PIN.';
+export const AP_REVERSAL_OWN_ENTRY = 'Another manager or owner must reverse an entry you recorded.';
+
+/** The own-entry refusal, naming someone who can approve the reversal at this branch. */
+export function apReversalOwnEntryMessage(name: string | null) {
+  return name
+    ? `${AP_REVERSAL_OWN_ENTRY} Ask ${name} or another manager or owner to reverse it.`
+    : `${AP_REVERSAL_OWN_ENTRY} Ask another manager or owner to reverse it.`;
+}
+
+type ReversalCtx = Pick<TRPCContext, 'db'> & {
+  session: NonNullable<TRPCContext['session']>;
+};
+
+/**
+ * DEV-103: the gate in front of an invoice or payment reversal. A manager or owner only
+ * (`pharmacy:manage`, the refund rule). Someone reversing an entry they recorded is refused
+ * before any PIN is asked while another manager or owner could approve it
+ * (`otherApReversalApprovers`, the card-terminal solo rule); otherwise their own fresh PIN is
+ * checked in its own transaction, so a refusal keeps its lockout strike and its FAILURE audit.
+ * The command re-checks the solo rule inside the write's transaction.
+ */
+async function authorizeReversal(
+  ctx: ReversalCtx,
+  scope: GeneralJournalScope,
+  input: { pin: string; commandKey: string },
+  target: { createdByUserId: string; reverseCommandKey: string | null } | null,
+  action: 'pharmacyApInvoices.reverseSettlement' | 'pharmacyApInvoices.reverseInvoice'
+) {
+  if (!(await actorMayRefund(ctx.db, ctx.session.user)))
+    throw new TRPCError({ code: 'FORBIDDEN', message: AP_REVERSAL_FORBIDDEN });
+  const ownEntry =
+    target !== null &&
+    target.createdByUserId === scope.actorId &&
+    target.reverseCommandKey !== input.commandKey;
+  if (ownEntry) {
+    const [other] = await otherApReversalApprovers(ctx.db, scope);
+    if (other)
+      throw new TRPCError({ code: 'FORBIDDEN', message: apReversalOwnEntryMessage(other.name) });
+  }
+  const pin = await authenticateRefundPin({
+    organizationId: scope.organizationId,
+    actorId: scope.actorId,
+    pin: input.pin,
+    action,
+    policy: ownEntry ? AP_REVERSAL_SOLE_APPROVER_POLICY : AP_REVERSAL_SEGREGATED_POLICY,
+    errorCode: 'AP_REVERSAL_PIN_REFUSED',
+  });
+  if ('blocked' in pin)
+    throw new TRPCError({ code: 'FORBIDDEN', message: AP_REVERSAL_PIN_BLOCKED });
+}
+
+/** Someone else became able to approve after the first check: nothing was written. */
+async function ownEntryRefusal(ctx: ReversalCtx, scope: GeneralJournalScope): Promise<never> {
+  const [other] = await otherApReversalApprovers(ctx.db, scope);
+  throw new TRPCError({
+    code: 'FORBIDDEN',
+    message: apReversalOwnEntryMessage(other?.name ?? null),
+  });
+}
+
+function isSelfApproval(error: unknown) {
+  return error instanceof PharmacyApInvoiceError && error.reason === 'SELF_APPROVAL';
+}
 
 function fail(error: unknown): never {
   if (error instanceof PharmacyApInvoiceError) {
@@ -578,58 +649,149 @@ export const pharmacyApInvoicesRouter = router({
     }
   }),
 
+  /**
+   * DEV-103: reverse one payment against a supplier expense invoice. The mirror entry is posted
+   * through the canonical bookkeeping reversal; the payment row stays, marked REVERSED, and the
+   * invoice owes that amount again from the reversal instant.
+   */
   reverseSettlement: adminProcedure
     .input(reverseApSettlementSchema)
     .mutation(async ({ ctx, input }) => {
       const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      const target = await ctx.db.pharmacyApInvoiceSettlement.findFirst({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          id: input.settlementId,
+        },
+        select: { createdByUserId: true, reverseCommandKey: true },
+      });
+      // The PIN is checked here and never reaches the command.
+      const { pin, ...command } = input;
+      await authorizeReversal(
+        ctx,
+        scope,
+        { pin, commandKey: command.commandKey },
+        target,
+        'pharmacyApInvoices.reverseSettlement'
+      );
       try {
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          const result = await reverseApSettlement(db, scope, input);
+          const result = await reverseApSettlement(db, scope, command, {
+            soleApprover: async () => (await otherApReversalApprovers(db, scope)).length === 0,
+          });
+          const settlement = result.settlement;
           await recordApAudit(db, ctx, scope, {
             action: 'pharmacyApInvoices.reverseSettlement',
-            description: `Reversed supplier expense invoice payment ${result.settlement.id}`,
+            description: `Reversed supplier expense invoice payment ${settlement.id}`,
             targetType: 'PharmacyApInvoiceSettlement',
-            targetId: result.settlement.id,
-            targetLabel: result.settlement.id,
+            targetId: settlement.id,
+            targetLabel: settlement.id,
             commandKey: input.commandKey,
             replayed: result.replayed,
             result: {
-              status: result.settlement.status,
-              invoiceId: result.settlement.invoiceId,
-              transactionId: result.settlement.transactionId,
+              status: settlement.status,
+              invoiceId: settlement.invoiceId,
+              transactionId: settlement.transactionId,
+              amountMinor: settlement.amountMinor,
+            },
+            metadata: {
+              policy: result.replayed ? null : result.policy,
+              approverId: settlement.reversedByUserId,
+              initiatedById: settlement.createdByUserId,
+              pinVerified: true,
+              selfApproved: settlement.reversedByUserId === settlement.createdByUserId,
+              reason: settlement.reversalReason,
+              reversedAt: settlement.reversedAt?.toISOString() ?? null,
             },
           });
-          return result.settlement;
+          return settlement;
         });
       } catch (error) {
+        if (isSelfApproval(error)) await ownEntryRefusal(ctx, scope);
         fail(error);
       }
     }),
 
+  /**
+   * DEV-103: reverse a supplier expense invoice with the mirror journal entry. The invoice row
+   * stays, marked REVERSED. Every payment and approved credit set-off against it must be
+   * reversed first, so the payable can never go negative.
+   */
   reverseInvoice: adminProcedure.input(reverseApInvoiceSchema).mutation(async ({ ctx, input }) => {
     const scope = await authorizeGeneralJournal(ctx, input.branchId);
+    const target = await ctx.db.pharmacyApInvoice.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        id: input.invoiceId,
+      },
+      select: { createdByUserId: true, reverseCommandKey: true },
+    });
+    // The PIN is checked here and never reaches the command.
+    const { pin, ...command } = input;
+    await authorizeReversal(
+      ctx,
+      scope,
+      { pin, commandKey: command.commandKey },
+      target,
+      'pharmacyApInvoices.reverseInvoice'
+    );
     try {
       return await ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
-        const result = await reverseApInvoice(db, scope, input);
+        const result = await reverseApInvoice(db, scope, command, {
+          soleApprover: async () => (await otherApReversalApprovers(db, scope)).length === 0,
+        });
+        const invoice = result.invoice;
         await recordApAudit(db, ctx, scope, {
           action: 'pharmacyApInvoices.reverseInvoice',
-          description: `Reversed supplier expense invoice ${result.invoice.reference}`,
+          description: `Reversed supplier expense invoice ${invoice.reference}`,
           targetType: 'PharmacyApInvoice',
-          targetId: result.invoice.id,
-          targetLabel: result.invoice.reference,
+          targetId: invoice.id,
+          targetLabel: invoice.reference,
           commandKey: input.commandKey,
           replayed: result.replayed,
           result: {
-            status: result.invoice.status,
-            reversalEntryId: result.invoice.reversalEntryId,
+            status: invoice.status,
+            amountMinor: invoice.amountMinor,
+            reversalEntryId: invoice.reversalEntryId,
+          },
+          metadata: {
+            policy: result.replayed ? null : result.policy,
+            approverId: invoice.reversedByUserId,
+            initiatedById: invoice.createdByUserId,
+            pinVerified: true,
+            selfApproved: invoice.reversedByUserId === invoice.createdByUserId,
+            reason: invoice.reversalReason,
+            reversedAt: invoice.reversedAt?.toISOString() ?? null,
           },
         });
-        return result.invoice;
+        return invoice;
       });
     } catch (error) {
+      if (isSelfApproval(error)) await ownEntryRefusal(ctx, scope);
       fail(error);
     }
   }),
+
+  /**
+   * DEV-103: whether the signed-in person may reverse here, for the screen to show the form or
+   * a plain line. The reversal procedures check everything again.
+   */
+  reversalAccess: adminProcedure
+    .input(listApInvoicesSchema.pick({ branchId: true }))
+    .query(async ({ ctx, input }) => {
+      const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      const mayReverse = await actorMayRefund(ctx.db, ctx.session.user);
+      const others = mayReverse ? await otherApReversalApprovers(ctx.db, scope) : [];
+      return {
+        scope: { organizationId: scope.organizationId, branchId: scope.branchId },
+        actorId: scope.actorId,
+        mayReverse,
+        /** Someone else who could approve, so an entry you recorded goes to them. */
+        otherApprover: others[0] ? { name: others[0].name } : null,
+      };
+    }),
 });
