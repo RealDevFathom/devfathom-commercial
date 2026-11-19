@@ -356,8 +356,10 @@ and for the SOP suites' cleanup.
      scripts/run-pharmacy-db-tests.sh
    ```
 
-   The script refuses a non-local host, a database name that is not marked disposable, and
-   URLs that point at different databases. It sets every variable the pharmacy suites read
+   The script refuses a non-local host (`localhost`, `127.0.0.1` or `[::1]` are local), a
+   database name that is not marked disposable, URLs that point at different databases, and a
+   URL carrying a `host`, `hostaddr` or `dbname` parameter (the driver would connect there
+   instead of the address the checks read). It sets every variable the pharmacy suites read
    (`TEST_DATABASE_URL`, `DATABASE_URL`, the `*_OWNER_DATABASE_URL` and
    `*_RUNTIME_DATABASE_URL` variants, `PHARMACY_REPEAT_PURCHASING_TEST_DATABASE_URL`, a random
    local `PLATFORM_ENCRYPTION_KEY`), then runs the two WhatsApp suites that create their own

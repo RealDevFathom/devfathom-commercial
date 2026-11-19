@@ -77,7 +77,7 @@ async function medicine(
           presentationId: created.presentations[0]!.id,
           versionGroupId: randomUUID(),
           version: 1,
-          level: 'PACK',
+          level: 'UNIT',
           unitsPerParent: 1,
           effectiveFrom: new Date('2026-01-01'),
         },

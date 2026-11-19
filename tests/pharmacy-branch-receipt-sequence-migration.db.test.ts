@@ -44,6 +44,14 @@ const body = migration.replace(/^BEGIN;$/m, '').replace(/^COMMIT;$/m, '');
         );
       try {
         await client.query('BEGIN');
+        // The owner is NOBYPASSRLS and these tables force row-level security, so write as
+        // the platform (organizations, branches) inside this tenant (pharmacy_sales admits
+        // only its own organization), for this transaction only.
+        await client.query(
+          `SELECT set_config('app.is_platform_admin', 'true', true),
+                  set_config('app.current_organization_id', $1, true)`,
+          [org]
+        );
         await client.query(
           `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status,
            "deploymentMode", "createdAt", "updatedAt")
@@ -73,7 +81,19 @@ const body = migration.replace(/^BEGIN;$/m, '').replace(/^COMMIT;$/m, '');
         await sale(`sale_a2_${suffix}`, branch, 'counter-a', 2);
         await sale(`sale_b9_${suffix}`, branch, 'counter-b', 9);
         // A per-device sequence and a lease that reserved numbers above every issued one.
-        await client.query('SET LOCAL session_replication_role = replica');
+        // Written past the current lease guard, which postdates this data. The owner is no
+        // superuser, so it switches the table's own triggers off rather than all triggers;
+        // the ALTER is part of the transaction and is rolled back with it.
+        await client.query('ALTER TABLE pharmacy_receipt_number_leases DISABLE TRIGGER USER');
+        // A lease belongs to a registered counter of the branch (foreign key).
+        for (const device of ['counter-d', 'counter-e'])
+          await client.query(
+            `INSERT INTO pharmacy_registered_devices (id, "organizationId", "branchId", name,
+             "deviceSecretHash", "enrolledByActorId", "updatedAt")
+           VALUES ($1, $2, $3, $1, encode(sha256(convert_to($1 || $4, 'UTF8')), 'hex'),
+             'user_dev637', now())`,
+            [device, org, branch, suffix]
+          );
         await client.query(
           `INSERT INTO pharmacy_receipt_number_sequences (id, "organizationId", "branchId", "deviceId",
            "nextNumber", "updatedAt") VALUES ($1, $2, $3, 'counter-c', 12, now())`,
@@ -85,7 +105,7 @@ const body = migration.replace(/^BEGIN;$/m, '').replace(/^COMMIT;$/m, '');
          VALUES ($1, $2, $3, 'counter-d', 13, 15, 13, 'user_dev637')`,
           [`lease_${suffix}`, org, branch]
         );
-        await client.query('SET LOCAL session_replication_role = origin');
+        await client.query('ALTER TABLE pharmacy_receipt_number_leases ENABLE TRIGGER USER');
 
         await client.query(body);
         await client.query(body); // safe to re-run

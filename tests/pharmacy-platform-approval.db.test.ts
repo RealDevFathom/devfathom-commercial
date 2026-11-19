@@ -64,13 +64,38 @@ const migration = readFileSync(
     }
   }
 
-  async function as(platform: boolean, statement: string) {
+  /** Reads as the platform, which row-level security lets see every organization. */
+  async function platformRead(statement: string) {
+    await client.query('BEGIN');
+    try {
+      await client.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
+      const result = await client.query(statement);
+      await client.query('COMMIT');
+      expect(result.rows).toHaveLength(1);
+      return result.rows[0];
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    }
+  }
+
+  /**
+   * A transaction as the schema owner. A tenant one is scoped to the organization it writes,
+   * so row-level security (forced on the owner too) admits the row and only the guard can
+   * refuse it: an unscoped tenant update would match no row and prove nothing.
+   */
+  async function as(platform: boolean, statement: string, organizationId = 'org_a') {
     await client.query('BEGIN');
     try {
       await client.query(`SELECT set_config('app.is_platform_admin', $1, true)`, [
         platform ? 'true' : 'false',
       ]);
-      await client.query(statement);
+      if (!platform)
+        await client.query(`SELECT set_config('app.current_organization_id', $1, true)`, [
+          organizationId,
+        ]);
+      const result = await client.query(statement);
+      if (!platform && result.rowCount === 0) throw new Error(`No row changed: ${statement}`);
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK');
@@ -81,13 +106,20 @@ const migration = readFileSync(
   it('refuses a tenant transaction that approves its own pharmacy', async () => {
     await expect(
       as(false, `UPDATE organizations SET "platformApprovedAt" = now() WHERE id = 'org_a'`)
-    ).rejects.toMatchObject({ code: '42501' });
+    ).rejects.toMatchObject({
+      code: '42501',
+      message: expect.stringContaining('only the DevFathom platform'),
+    });
     await expect(
       as(
         false,
-        `INSERT INTO organizations (id, status, "platformApprovedAt") VALUES ('org_b', 'ACTIVE', now())`
+        `INSERT INTO organizations (id, status, "platformApprovedAt") VALUES ('org_b', 'ACTIVE', now())`,
+        'org_b'
       )
-    ).rejects.toMatchObject({ code: '42501' });
+    ).rejects.toMatchObject({
+      code: '42501',
+      message: expect.stringContaining('only the DevFathom platform'),
+    });
   });
 
   it('lets the platform approve, and refuses a tenant that withdraws or rewrites it', async () => {
@@ -103,22 +135,25 @@ const migration = readFileSync(
     ]) {
       await expect(
         as(false, `UPDATE organizations SET ${change} WHERE id = 'org_a'`)
-      ).rejects.toMatchObject({ code: '42501' });
+      ).rejects.toMatchObject({
+        code: '42501',
+        message: expect.stringContaining('only the DevFathom platform'),
+      });
     }
     // Other columns stay writable as before.
     await expect(
       as(false, `UPDATE organizations SET timezone = 'Asia/Karachi' WHERE id = 'org_a'`)
     ).resolves.toBeUndefined();
     await as(true, `UPDATE organizations SET "platformApprovedAt" = NULL WHERE id = 'org_a'`);
-    const row = await client.query(
+    const row = await platformRead(
       `SELECT "platformApprovedAt" FROM organizations WHERE id = 'org_a'`
     );
-    expect(row.rows[0].platformApprovedAt).toBeNull();
+    expect(row.platformApprovedAt).toBeNull();
   });
 
   it('refuses the runtime role in its own tenant scope, though row-level security admits the row', async () => {
     const approvalColumns = `SELECT "platformApprovedAt", "platformApprovedById", "platformApprovalNote", "platformApprovalUnmetChecks" FROM organizations WHERE id = 'org_a'`;
-    const before = (await client.query(approvalColumns)).rows[0];
+    const before = await platformRead(approvalColumns);
     // Row-level security admits the tenant's own row: an ordinary column changes.
     await expect(
       asTenantRuntime('org_a', `UPDATE organizations SET timezone = 'UTC' WHERE id = 'org_a'`)
@@ -144,6 +179,6 @@ const migration = readFileSync(
         `INSERT INTO organizations (id, status, "platformApprovedAt") VALUES ('org_c', 'ACTIVE', now())`
       )
     ).rejects.toMatchObject({ code: '42501' });
-    expect((await client.query(approvalColumns)).rows[0]).toEqual(before);
+    expect(await platformRead(approvalColumns)).toEqual(before);
   });
 });

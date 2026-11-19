@@ -26,24 +26,39 @@ for name in "${urls[@]}"; do
   fi
 done
 
-target() { # prints host:port/database of a postgres URL, without credentials
-  bun -e 'const u = new URL(process.argv[1]); console.log(`${u.hostname}:${u.port || 5432}/${decodeURIComponent(u.pathname.slice(1))}`)' "$1"
+# Prints the host (IPv6 without brackets), port and database of a postgres URL, one per line,
+# without credentials. Refuses a host, hostaddr or dbname query parameter: node-postgres and
+# libpq let one override the address's host or database, so the checks below would pass for
+# one server while the suites connect to another.
+target() {
+  bun -e '
+const u = new URL(process.argv[1]);
+const overriding = [...u.searchParams.keys()].filter((key) =>
+  ["host", "hostaddr", "dbname"].includes(key.toLowerCase()));
+if (overriding.length > 0) {
+  console.error(`${process.argv[2]} carries a ${overriding.join(", ")} parameter; put the host and database in the address itself.`);
+  process.exit(2);
 }
-runtime_target="$(target "$PHARMACY_DB_TEST_RUNTIME_URL")"
+const host = u.hostname.replace(/^\[(.*)\]$/, "$1");
+console.log([host, u.port || "5432", decodeURIComponent(u.pathname.slice(1))].join("\n"));
+' "$1" "$2"
+}
+runtime_target="$(target "$PHARMACY_DB_TEST_RUNTIME_URL" PHARMACY_DB_TEST_RUNTIME_URL)" || exit 2
 for name in "${urls[@]}"; do
-  if [ "$(target "${!name}")" != "$runtime_target" ]; then
+  other_target="$(target "${!name}" "$name")" || exit 2
+  if [ "$other_target" != "$runtime_target" ]; then
     echo "$name must point at the same database as PHARMACY_DB_TEST_RUNTIME_URL." >&2
     exit 2
   fi
 done
-case "${runtime_target%%:*}" in
-  localhost | 127.0.0.1 | ::1 | '[::1]') ;;
+{ read -r host; read -r port; read -r database; } <<<"$runtime_target"
+case "$host" in
+  localhost | 127.0.0.1 | ::1) ;;
   *)
-    echo "Refusing a non-local database host: ${runtime_target%%:*}" >&2
+    echo "Refusing a non-local database host: $host" >&2
     exit 2
     ;;
 esac
-database="${runtime_target#*/}"
 if ! [[ "$database" =~ (^|[_-])(test|e2e|tmp|disposable)([_-]|$) ]]; then
   echo "Database '$database' is not marked disposable (test, e2e, tmp or disposable)." >&2
   exit 2
@@ -77,7 +92,7 @@ admin_files=(
   src/lib/pharmacy/whatsapp/message-log.db.test.ts
 )
 mapfile -t files < <(git ls-files '*.db.test.ts' | grep -i pharmacy | grep -vxF -f <(printf '%s\n' "${admin_files[@]}") | sort)
-echo "Running $((${#files[@]} + ${#admin_files[@]})) pharmacy database suites against $runtime_target" >&2
+echo "Running $((${#files[@]} + ${#admin_files[@]})) pharmacy database suites against $host port $port, database $database" >&2
 
 status=0
 bunx vitest run --no-file-parallelism "$@" "${files[@]}" || status=$?

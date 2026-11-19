@@ -132,8 +132,10 @@ const rxLine = (saleId: string, quantity = 1) => ({
 
 /**
  * A sale holding one Rx line the pharmacist added against the patient's prescription, optionally
- * linked to the loyalty customer. DEV-629: unless `signed` is false, the pharmacist then signs the
- * RX-03 review addLine queued for the line (a sole pharmacist may sign their own).
+ * linked to the loyalty customer. DEV-629: unless `signed` is false, a second pharmacist of the
+ * branch signs the RX-03 review addLine queued for the line. The database refuses a signature by
+ * the user who queued the review (pharmacy_review_no_self_approval), so the pharmacist who rang
+ * the line up cannot sign it; a sole pharmacist has no self-approval path yet (DEV-948 report).
  */
 function pharmacistSale({ customer = false, quantity = 1, signed = true } = {}) {
   return act(ids.pharmacist, async (api, db) => {
@@ -147,7 +149,7 @@ function pharmacistSale({ customer = false, quantity = 1, signed = true } = {}) 
         data: {
           reviewItemId: review.id,
           kind: 'SIGN',
-          actorUserId: ids.pharmacist,
+          actorUserId: ids.templatePharmacist,
           signedAt: new Date(),
         },
       });
@@ -226,6 +228,7 @@ beforeAll(async () => {
   const ledger = await import('@/lib/pharmacy/stock-ledger');
   const { seedDepartments } = await import('@/lib/test-support/departments');
   const { db } = await import('@/lib/db');
+  const loyalty = await import('@/lib/pharmacy/loyalty-program');
   withTenantDb = scoped.withTenantDb;
   withPlatformDb = scoped.withPlatformDb;
   pharmacySalesRouter = sales.pharmacySalesRouter;
@@ -446,6 +449,15 @@ beforeAll(async () => {
       code: 'FORBIDDEN',
       message: 'You do not have permission for this action.',
     });
+  // DEV-746: nothing is earned until the owner sets an earn rate. One point for every PKR 2
+  // makes the four-strip sale below (PKR 80) earn 40 points; a one-strip bill (PKR 20) costs 20.
+  await withTenantDb(ids.org, (tx) =>
+    loyalty.publishLoyaltyProgramVersion(
+      tx,
+      { organizationId: ids.org, actorId: ids.pharmacist },
+      loyalty.stepRule(1, 2)
+    )
+  );
   // The customer earns real points: the pharmacist sells and is paid for four strips. A refused
   // redemption rolls back, so the balance covers every one-strip redemption below.
   const earning = await pharmacistSale({ customer: true, quantity: 4 });
