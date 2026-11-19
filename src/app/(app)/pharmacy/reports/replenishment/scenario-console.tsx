@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/table';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { ReportDetails } from '@/components/pharmacy/report-details';
-import { workspaceInstantFromInput, workspaceZoneLabel } from '@/lib/timezone';
+import { workspaceDateRange, workspaceInstantFromInput, workspaceZoneLabel } from '@/lib/timezone';
 import { amountInputError, amountInputToMinor, amountInputUnit } from '@/lib/money-input';
 import { demandDateAfter, demandDateMs, demandInstantMs } from '@/lib/pharmacy/demand-evidence';
 import type {
@@ -266,7 +266,11 @@ function ScenarioWorkspace({
     const days = (origin - start) / 86_400_000;
     if (days < 1 || days > 90)
       invalid.historyStartDate = 'Use 1 to 90 history days before the exclusive end.';
-    if (origin > Date.now()) invalid.originDate = 'History must end no later than today.';
+    // Today is the shop's day: a day has begun once it starts on the organisation's clock,
+    // the same check the server makes.
+    const dayStart = (day: string) => workspaceDateRange(day, day, timeZone).from.getTime();
+    if (Number.isFinite(origin) && dayStart(draft.originDate) > Date.now())
+      invalid.originDate = 'History must end no later than today.';
     const horizonDays = integer('horizonDays', 1, 366)!;
     const input: PharmacyReplenishmentReportInput = {
       branchId,
@@ -278,7 +282,8 @@ function ScenarioWorkspace({
     };
     if (manual && canPlan) {
       const planningOrigin = date('planningOrigin');
-      if (planningOrigin <= Date.now() || planningOrigin > Date.now() + 31 * 86_400_000)
+      const planningStart = Number.isFinite(planningOrigin) ? dayStart(draft.planningOrigin) : NaN;
+      if (planningStart <= Date.now() || planningStart > Date.now() + 31 * 86_400_000)
         invalid.planningOrigin = 'Choose a future day within the next 31 days.';
       const values = {} as Record<NumericKey, number | null>;
       for (const [key, , optional, minimum] of numericFields)
@@ -605,8 +610,9 @@ function ScenarioWorkspace({
           </p>
           <ReportDetails>
             <p>
-              Sales use business dates; demand coverage, the history and scenario dates use UTC days
-              (midnight to midnight UTC). Current reads cannot reconstruct historical versions.
+              Sales use business dates; demand coverage and the history use your organisation&apos;s
+              days ({workspaceZoneLabel(timeZone)}). The planning scenario model counts its days
+              midnight to midnight UTC. Current reads cannot reconstruct historical versions.
             </p>
           </ReportDetails>
         </SectionCard>
@@ -723,6 +729,7 @@ function ScenarioWorkspace({
         <ReportEvidence
           report={report}
           financial={financial}
+          timeZone={timeZone}
           branchName={branches.find((branch) => branch.id === branchId)?.name ?? branchId}
           medicineName={
             medicines.find((medicine) => medicine.id === medicineId)?.productName ?? medicineId
@@ -745,11 +752,13 @@ function ReportEvidence({
   financial,
   branchName,
   medicineName,
+  timeZone,
 }: {
   report: PharmacyReplenishmentReport;
   financial: boolean;
   branchName: string;
   medicineName: string;
+  timeZone?: string | null;
 }) {
   const { demand, supply, supplyCoverage } = report.observations;
   const decision =
@@ -795,7 +804,9 @@ function ReportEvidence({
         </p>
         <ReportDetails>
           <p>
-            Consumption days counted midnight to midnight UTC: {demand.coverage.utcConsumptionDays}.
+            Consumption days counted by completion time, midnight to midnight on your
+            organisation&apos;s clock ({workspaceZoneLabel(timeZone)}):{' '}
+            {demand.coverage.completionDayConsumptionDays}.
           </p>
         </ReportDetails>
         <details className="mt-4">

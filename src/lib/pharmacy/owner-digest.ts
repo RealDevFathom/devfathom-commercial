@@ -145,7 +145,9 @@ export async function composeOwnerDigest(
     : ['DAILY'];
   const briefings: OwnerBriefing[] = [];
   for (const cadence of cadences) {
-    const window = ownerBriefingWindow(input.businessDate, cadence, config);
+    // Lost demand, recovered sales and the weekly ledger read the shop's own days,
+    // the days the digest is labelled with, not UTC days.
+    const window = ownerBriefingWindow(input.businessDate, cadence, config, input.timeZone);
     const [ledger, demand] = await Promise.all([
       cadence === 'DAILY'
         ? Promise.resolve(report)
@@ -153,6 +155,7 @@ export async function composeOwnerDigest(
             branchIds: [input.branchId],
             from: window.from,
             to: window.to,
+            timeZone: input.timeZone,
           }),
       readOwnerBriefingDemand(db, input, window, config),
     ]);

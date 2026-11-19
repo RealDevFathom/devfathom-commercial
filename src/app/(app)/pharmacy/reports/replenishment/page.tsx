@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
+import { workspaceToday } from '@/lib/timezone';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { createTRPCContext } from '@/server/trpc';
 import { ScenarioConsole } from './scenario-console';
@@ -44,12 +45,10 @@ export default async function ReplenishmentPage({
       financial: ctx.session?.user?.role === 'ADMIN' && catalog.permissions.financial,
       initialBranchId: invalidBranch ? '' : branchId,
       invalidInitialBranch: invalidBranch,
-      // DEV-943: kept on the UTC day on purpose. The replenishment reader counts demand
-      // coverage, history and scenario dates in UTC days and refuses a history that ends
-      // after the read instant (`validatePharmacyReplenishmentReportInput`), so between
-      // 00:00 and 04:59 PKT the shop's day would make the default window invalid. The
-      // screen says so in Details; label and server window agree.
-      today: new Date().toISOString().slice(0, 10),
+      // The shop's own day: the replenishment reader counts the history and demand coverage
+      // on the organisation's clock and accepts a history ending on the shop's today
+      // (`validatePharmacyReplenishmentReportInput`), so label and server window agree.
+      today: workspaceToday(actor.organization?.timezone),
       timeZone: actor.organization?.timezone ?? null,
     };
   } catch {

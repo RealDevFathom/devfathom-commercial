@@ -129,6 +129,8 @@ function db() {
   };
   return {
     $queryRaw: vi.fn(async () => []),
+    // The sale's business day is read on the organisation's stored clock.
+    organization: { findUnique: vi.fn(async () => ({ timezone: 'UTC' })) },
     pharmacyInventoryLot: {
       findMany: vi.fn(async () => [{ id: 'lot_1', batch: { state: 'ACTIVE' } }]),
       // No lot of this medicine was received as a one-tablet pack.

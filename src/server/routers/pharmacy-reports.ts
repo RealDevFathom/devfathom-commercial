@@ -338,6 +338,8 @@ export const pharmacyReportsRouter = router({
         // Public report filters are inclusive; the evidence reader uses an exclusive cutoff.
         to: period.to.toISOString().slice(0, 10),
         configuration: input.configuration,
+        // The caller's own organisation's days, as the other pharmacy reports read them.
+        timeZone: ctx.organization?.timezone,
       });
     }),
   marketing: reports
@@ -737,8 +739,10 @@ export const pharmacyReportsRouter = router({
           ip: ctx.requestMeta.ip,
         }));
       const readAt = new Date();
+      // The caller's own organisation's days; the screen offers the same days.
+      const timeZone = ctx.organization?.timezone;
       try {
-        validatePharmacyReplenishmentReportInput(input, readAt);
+        validatePharmacyReplenishmentReportInput(input, readAt, timeZone);
       } catch {
         throw new TRPCError({
           code: 'BAD_REQUEST',
@@ -753,6 +757,7 @@ export const pharmacyReportsRouter = router({
             organizationId: available.organizationId,
             authorizedBranchIds: available.branches.map((branch) => branch.id),
             financial,
+            timeZone,
           },
           readAt
         );

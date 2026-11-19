@@ -61,6 +61,7 @@ import {
 } from '@/lib/pharmacy/counter-capability';
 import { lockSaleCandidates, type LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { lockStockRowsFrom } from '@/lib/pharmacy/stock-lock-order';
+import { workspaceToday } from '@/lib/timezone';
 import { adminProcedure, router } from '../trpc';
 
 const id = z.string().min(1).max(160);
@@ -386,7 +387,17 @@ export async function replayCounterCommand(
     select: { id: true },
   });
   if (earlier) throw new CounterTransportError('earlier_command_pending', 409);
-  const businessDate = new Date(command.leasedReceipt.originalSaleAt.slice(0, 10) + 'T00:00:00Z');
+  // The sale books on the shop's day of its own signed sale time, on the organisation's
+  // stored clock (never a zone the device sends): 00:30 in Karachi is that day, not the
+  // UTC day before. An organisation on UTC, or with no usable zone, keeps the UTC date.
+  // Only a PENDING command reaches here, so a sale already replayed is never moved.
+  const organization = await db.organization.findUnique({
+    where: { id: scope.organizationId },
+    select: { timezone: true },
+  });
+  const businessDate = new Date(
+    `${workspaceToday(organization?.timezone, new Date(command.leasedReceipt.originalSaleAt))}T00:00:00.000Z`
+  );
   // DEV-631: take the sale's day lock before any stock lock, the same order the online
   // counter uses (day, then stock), so a replay and a counter line cannot deadlock.
   // The tender below re-enters this lock and still refuses a closed day.
