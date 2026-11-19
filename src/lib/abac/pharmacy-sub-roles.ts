@@ -76,13 +76,43 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'open-hold-resume-void',
-        text: "Open, hold, resume and void their counter bills, search medicines, use vouchers, link customers and loyalty cards, and reprint or send receipts (refunds need a manager's PIN; prescription-only lines need Dispense prescriptions)",
+        text: 'Open, hold, resume and void their counter bills, search medicines, use vouchers, link customers and loyalty cards, and reprint or send receipts (refunds and returns need Manage their branches; prescription-only lines need Dispense prescriptions)',
         sites: { 'src/lib/pharmacy/counter-capability.ts': 2 },
       },
       {
         id: 'handle-customer-orders-run',
         text: 'With Handle customer orders, run an offline counter; be named as the cashier of a till someone else opens',
         sites: { 'src/lib/pharmacy/counter-capability.ts': 1 },
+      },
+      {
+        id: 'ring-up-medicines',
+        text: 'Ring up medicines on their counter bills at their branches, by search or pack scan with live promotions applied, and acknowledge duplicate-ingredient warnings',
+        sites: {},
+      },
+      {
+        id: 'see-till-approvers',
+        text: 'See who can approve discounts, out-of-order packs, over-limit khata charges and discarded payments at their till',
+        sites: {},
+      },
+      {
+        id: 'discard-unknown-card-payment',
+        text: "Discard a payment whose result is unknown, with a manager's PIN",
+        sites: {},
+      },
+      {
+        id: 'see-returns-refund-value',
+        text: "See a receipt's past returns and what a proposed return would refund, at their branches",
+        sites: {},
+      },
+      {
+        id: 'follow-up-outofstock-requests',
+        text: 'Follow up out-of-stock requests at their branches: set the outcome, sign customers up to be told when it is back or opt them out, and link a request to the sale that recovered it',
+        sites: {},
+      },
+      {
+        id: 'settle-card-reviews',
+        text: 'With Manage their branches, settle card-machine payments under review with their PIN',
+        sites: {},
       },
     ],
   },
@@ -99,7 +129,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'create-pause-cancel-repeatrefill',
-        text: 'Create, pause and cancel repeat-refill subscriptions and check out refill cycles',
+        text: 'Create, pause, resume and cancel repeat-refill subscriptions and check out refill cycles',
         sites: { 'src/server/routers/pharmacy-ordering.ts': 1 },
       },
       {
@@ -111,6 +141,21 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         id: 'take-payment-use-offline',
         text: 'With Take payment, use an offline counter: start it, download stock, upload offline sales and renew its receipt numbers',
         sites: { 'src/server/routers/pharmacy-offline.ts': 2 },
+      },
+      {
+        id: 'run-refill-cycles',
+        text: "Open due refill cycles (holding their stock), release them, and get them approved with a pharmacist's PIN, seeing which pharmacists can approve, at their branches",
+        sites: {},
+      },
+      {
+        id: 'dispense-see-refill-prescriptions',
+        text: 'With Dispense prescriptions, see the prescriptions that could cover a refill',
+        sites: {},
+      },
+      {
+        id: 'record-failed-returned-deliveries',
+        text: 'Record refused, failed and returned deliveries, putting returned stock into quarantine (refunding a return needs Manage their branches and their PIN)',
+        sites: {},
       },
     ],
   },
@@ -152,6 +197,21 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         id: 'open-proof-photos-procedures',
         text: 'Open proof photos on procedures they own, claimed or uploaded',
         sites: { 'src/lib/pharmacy/sop-evidence.ts': 1 },
+      },
+      {
+        id: 'start-on-demand-procedures',
+        text: 'Start an on-demand procedure checklist for a procedure role they hold at their branch',
+        sites: {},
+      },
+      {
+        id: 'link-records-to-procedures',
+        text: 'Link branch records, such as temperature readings, to their own procedure checklists',
+        sites: {},
+      },
+      {
+        id: 'add-rework-notes',
+        text: 'Add a note saying what they changed when one of their procedures is sent back',
+        sites: {},
       },
     ],
   },
@@ -282,13 +342,48 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'file-adversereaction-medicationerror-reports',
-        text: 'File adverse-reaction and medication-error reports',
+        text: 'File adverse-reaction, medication-error and product-quality reports',
         sites: { 'src/server/routers/pharmacy-reports.ts': 1 },
       },
       {
         id: 'check-procedure-tasks-others',
         text: 'Check procedure tasks others did, as the qualified person',
         sites: { 'src/lib/pharmacy/sop-adapter.ts': 2 },
+      },
+      {
+        id: 'ring-up-medicines-without-counter',
+        text: 'Ring up medicines on counter bills at their branch and acknowledge duplicate-ingredient warnings, even without Take payment',
+        sites: {},
+      },
+      {
+        id: 'see-till-approvers',
+        text: 'See who can approve discounts and out-of-order packs at the counter',
+        sites: {},
+      },
+      {
+        id: 'see-returns-refund-value',
+        text: "See a receipt's past returns and what a proposed return would refund, at their branch",
+        sites: {},
+      },
+      {
+        id: 'witness-controlled-delivery-reversal',
+        text: 'Witness the reversal of a controlled-medicine delivery with their PIN, alone with a fresh PIN when they are the only pharmacist',
+        sites: {},
+      },
+      {
+        id: 'everything-record-prescriptions',
+        text: 'Do everything Record prescriptions allows: the prescription workspace, prescription photos, patient records, consents and exports',
+        sites: {},
+      },
+      {
+        id: 'see-returns-awaiting-verification',
+        text: 'See returned items waiting in quarantine for verification at their branch',
+        sites: {},
+      },
+      {
+        id: 'sign-own-line-alone',
+        text: "See which lines on a bill still wait for a pharmacist's signature, and sign a non-controlled line they rang up themselves with a fresh PIN when no other pharmacist at the branch can",
+        sites: {},
       },
     ],
   },
@@ -328,6 +423,11 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         text: "With Controlled medicines and safety, see patients' full phone numbers in recall contact lists",
         sites: { 'src/server/routers/pharmacy-inventory.ts': 1 },
       },
+      {
+        id: 'read-prescription-photo-draft-bill',
+        text: 'Read a prescription photo automatically to suggest medicines and doses, and draft a counter bill from it for a pharmacist to confirm (when prescription reading is switched on)',
+        sites: {},
+      },
     ],
   },
   {
@@ -345,6 +445,16 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         id: 'confirm-reject-imported-referencedata',
         text: 'Confirm or reject imported reference-data proposals they did not import',
         sites: { 'src/server/routers/pharmacy-medicine.ts': 2 },
+      },
+      {
+        id: 'review-medicine-details',
+        text: 'Accept, correct, reject or defer imported and drafted medicine details that someone else entered',
+        sites: {},
+      },
+      {
+        id: 'create-approved-imported-medicines',
+        text: 'Create the medicines from an imported file once its request is approved, and see how far it has got',
+        sites: {},
       },
     ],
   },
@@ -369,7 +479,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     allows: [
       {
         id: 'run-cash-drawers-branches',
-        text: 'Run the cash drawers at their branches: open a till with a float, pay cash in or out, close a drawer with a count, hand a till to another cashier, and manage customer loyalty points and cards',
+        text: "Run the cash drawers at their branches: open a till with a float, pay cash in or out, close a drawer with a count and hand a till to another cashier; adjust loyalty points with their PIN within the owner's limit, enrol customers and issue or revoke loyalty cards",
         sites: {
           'src/server/routers/pharmacy-sales.ts': 5,
           'src/lib/pharmacy/counter-capability.ts': 4,
@@ -446,12 +556,12 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'refund-sales-take-returns',
-        text: "Refund sales, take returns and void another cashier's bill, with their PIN each time",
+        text: "With Take payment or Dispense prescriptions, refund sales and take returns with their own PIN each time, and void another cashier's bill",
         sites: { 'src/lib/pharmacy/refund-authorization.ts': 2 },
       },
       {
         id: 'settle-cardmachine-payments-under',
-        text: 'Settle card-machine payments under review with their PIN',
+        text: 'With Take payment, settle card-machine payments under review with their PIN',
         sites: { 'src/lib/pharmacy/card-terminal/review-approvers.ts': 2 },
       },
       {
@@ -471,6 +581,21 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         id: 'owner-workspace-administrator-turn',
         text: 'As the owner or a workspace administrator: turn supplier compliance checks on or off',
         sites: { 'src/lib/pharmacy/supplier-compliance-policy.ts': 2 },
+      },
+      {
+        id: 'supplier-compliance-history',
+        text: 'As the owner or a workspace administrator: see who turned supplier compliance checks on or off, and what went through while they were off',
+        sites: {},
+      },
+      {
+        id: 'reject-undo-credit-set-offs',
+        text: 'As a workspace administrator with finance access: reject a supplier credit set-off, or undo an approved one with their PIN',
+        sites: {},
+      },
+      {
+        id: 'save-reports-dashboard-layout',
+        text: 'Save their Reports centre dashboard layout',
+        sites: {},
       },
     ],
   },
@@ -609,6 +734,56 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         text: 'With Manage stock, turn a stock alert into a draft purchase request or supplier claim',
         sites: { 'src/lib/pharmacy/stock-signals-operations.ts': 1 },
       },
+      {
+        id: 'verify-supplier-licence',
+        text: 'Verify a supplier licence someone else filed; a solo owner may verify their own',
+        sites: {},
+      },
+      {
+        id: 'receiving-exceptions',
+        text: 'See and resolve the receiving exceptions queue at their branches, with a note',
+        sites: {},
+      },
+      {
+        id: 'proposed-debit-notes',
+        text: 'See debit notes proposed when a delivery does not match its order or invoice at their branches; with Use financial reports, confirm or discard them',
+        sites: {},
+      },
+      {
+        id: 'controlled-witnesses',
+        text: 'With Dispense prescriptions or Controlled medicines and safety, see who can witness a controlled delivery; with Controlled medicines and safety, also who can witness reversing one',
+        sites: {},
+      },
+      {
+        id: 'official-price-alerts',
+        text: 'With Controlled medicines and safety, see official price alerts for the medicines they are receiving',
+        sites: {},
+      },
+      {
+        id: 'restock-advice',
+        text: 'See restock advice from lost sales and suggested reorder drafts at their branches, read the reorder thresholds and dismiss advice cards',
+        sites: {},
+      },
+      {
+        id: 'central-purchasing',
+        text: 'As the owner or a named central buyer, see stock demand across branches, raise central purchase orders and split a central delivery between branches',
+        sites: {},
+      },
+      {
+        id: 'revoke-supplier-links',
+        text: 'Revoke supplier response links issued at their branches',
+        sites: {},
+      },
+      {
+        id: 'supplier-check-skips',
+        text: 'See which supplier orders and deliveries went through while supplier checks were off',
+        sites: {},
+      },
+      {
+        id: 'read-pack-label-photo',
+        text: "Read a pack's batch, expiry and printed price from a photo while receiving an order",
+        sites: {},
+      },
     ],
   },
   {
@@ -636,6 +811,51 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         id: 'turn-stock-alert-into',
         text: 'Turn a stock alert into a draft transfer from another branch',
         sites: { 'src/lib/pharmacy/stock-signals-operations.ts': 1 },
+      },
+      {
+        id: 'receive-stock-without-order',
+        text: 'Receive stock straight into a batch at their branches without a purchase order, recording the supplier, invoice number, unit cost and printed MRP',
+        sites: {},
+      },
+      {
+        id: 'temperature-sensors',
+        text: 'Add live temperature sensors to storage zones at their branches, see them, and issue, rotate and revoke their credentials',
+        sites: {},
+      },
+      {
+        id: 'set-safety-stock',
+        text: 'Set safety-stock levels and cover days for medicines at their branches',
+        sites: {},
+      },
+      {
+        id: 'owner-switch-branch-transfers',
+        text: 'As the owner, turn stock transfers between branches on or off',
+        sites: {},
+      },
+      {
+        id: 'allocate-stock-for-sale',
+        text: "Set aside stock for a sale at their branches, earliest expiry first (taking another batch needs an approver's PIN)",
+        sites: {},
+      },
+      {
+        id: 'move-stock-break-packs',
+        text: 'Move stock between storage locations and break sealed packs into loose units at their branches',
+        sites: {},
+      },
+      {
+        id: 'work-stock-alerts',
+        text: 'Refresh stock alerts at their branches, mark old ones stale, and acknowledge, snooze or dismiss them (snooze and dismiss with a reason)',
+        sites: {},
+      },
+      {
+        id: 'quarantine-expiring-stock',
+        text: 'Quarantine near-expiry and expired stock at their branches',
+        sites: {},
+      },
+      {
+        id: 'solo-owner-approve-own',
+        text: 'As an owner working alone, approve their own stock count or branch transfer with a fresh PIN',
+        sites: {},
       },
     ],
   },
@@ -727,6 +947,21 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         text: 'With Order and receive stock: issue debit notes, create and dispatch supplier returns, and record and allocate supplier credits',
         sites: { 'src/server/routers/pharmacy-purchasing.ts': 1 },
       },
+      {
+        id: 'decide-proposed-debit-notes',
+        text: 'With Order and receive stock: confirm or discard debit notes proposed when a delivery does not match its order or invoice',
+        sites: {},
+      },
+      {
+        id: 'delivery-distance-profitability',
+        text: 'As a workspace administrator with Use operational reports: see delivered-order profitability by delivery distance',
+        sites: {},
+      },
+      {
+        id: 'admin-view-repeat-lostsales-packflags',
+        text: 'As a workspace administrator with Use operational reports: view the repeat-purchasing, lost-sales recovery and pack-authentication flag reports for every branch',
+        sites: {},
+      },
     ],
   },
   {
@@ -784,6 +1019,16 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         id: 'workspace-administrator-use-financial-6',
         text: 'As a workspace administrator with Use financial reports: receive the daily owner digest',
         sites: { 'src/lib/pharmacy/owner-digest.ts': 1 },
+      },
+      {
+        id: 'delivery-distance-profitability',
+        text: 'As a workspace administrator with Use financial reports: see delivered-order profitability by delivery distance',
+        sites: {},
+      },
+      {
+        id: 'admin-view-repeat-lostsales-packflags',
+        text: 'As a workspace administrator with Use financial reports: view the repeat-purchasing, lost-sales recovery and pack-authentication flag reports for every branch',
+        sites: {},
       },
     ],
   },
@@ -855,6 +1100,16 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         id: 'only-workspace-administrator-add',
         text: 'Only as a workspace administrator: add new medicines as unsaleable drafts and propose catalogue changes for review',
         sites: { 'src/server/routers/pharmacy-medicine.ts': 1 },
+      },
+      {
+        id: 'request-create-imported-medicines',
+        text: 'Only as a workspace administrator: ask for the medicines in an imported file to be created, follow the request and create them once someone approves it',
+        sites: {},
+      },
+      {
+        id: 'owner-approve-no-reviewer',
+        text: 'As the owner and a workspace administrator, while nobody else can review: approve catalogue changes, review medicine details and publish or withdraw medicines, approving with a fresh PIN',
+        sites: {},
       },
     ],
   },
