@@ -4,6 +4,8 @@ import { can, subjectFromSession } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { counterBranchAssignmentDenial } from './counter-capability';
+import { RX_ON_DUTY_DECLARATION, type RxDeclaredSoloSignOff } from './rx-solo-shift';
+import { readRxSoloShiftPolicy } from './rx-solo-shift-policy';
 
 /**
  * DEV-950 — a pharmacist working alone signs the RX-03 review of a prescription line they rang
@@ -30,6 +32,16 @@ import { counterBranchAssignmentDenial } from './counter-capability';
  * The audit entry (who, when, which sale and line, marked self-approved) is written first, in the
  * same transaction, and the signature names it. The database admits a requester's signature only
  * with that entry (migration 20261118124600), so the entry cannot be skipped.
+ *
+ * DEV-960 — a declared solo sign-off. When others are on the branch's staff list, the requester may
+ * still sign alone if, and only if, the owner turned "One pharmacist per shift" on at that branch
+ * (`readRxSoloShiftPolicy`, read under the branch's setting lock) and the requester confirms the
+ * current declaration "I am the only pharmacist on duty now" with this signature. Every other rule
+ * above still holds (the signer's own right and branch, never a controlled medicine, a fresh PIN,
+ * not signed yet). The audit entry is the same self-approved, PIN-verified entry the database
+ * requires, plus a marker that it was declared, the declaration, the setting's version and the
+ * other people who could have signed at that moment (`otherRxReviewSigners`). With the setting off
+ * nothing changes: a declaration is refused exactly as a self-signature with a colleague on the list.
  */
 
 export const RX_SELF_SIGN_AUDIT_ACTION = 'pharmacyDispensing.selfSignReview';
@@ -167,6 +179,8 @@ const MESSAGES = {
     'A controlled medicine needs an independent pharmacist’s signature. It cannot be self-signed.',
   ALREADY_SIGNED: 'This prescription line is already signed.',
   SECOND_PHARMACIST: 'Another pharmacist at this branch must sign a line you rang up.',
+  STALE_DECLARATION:
+    'The on-duty declaration has changed. Reload, read it again and confirm it before signing.',
 } as const;
 
 export type RxSelfSignRefusal = keyof typeof MESSAGES;
@@ -193,11 +207,22 @@ type Actor = {
   status?: string | null;
 };
 
+/** DEV-960: the declaration confirmed with a declared solo sign-off. */
+export type RxOnDutyDeclaration = { onlyPharmacistOnDuty: true; version: string };
+
+/** Who else could have signed, and the setting in force, for a declared solo sign-off. */
+export type RxDeclaredSolo = {
+  policyVersion: number;
+  otherSigners: { id: string; name: string | null }[];
+};
+
 export type RxSelfSignContext = {
   reviewItemId: string;
   saleId: string;
   saleLineId: string;
   branchId: string;
+  /** DEV-960: set only for a declared solo sign-off; null for the staff-list solo rule. */
+  declared: RxDeclaredSolo | null;
 };
 
 /**
@@ -207,7 +232,14 @@ export type RxSelfSignContext = {
  */
 export async function assertRxSelfSignAllowed(
   db: ScopedDb,
-  input: { organizationId: string; actor: Actor; reviewItemId: string; lock?: boolean },
+  input: {
+    organizationId: string;
+    actor: Actor;
+    reviewItemId: string;
+    lock?: boolean;
+    /** DEV-960: the requester declares they are the only pharmacist on duty now. */
+    declaration?: RxOnDutyDeclaration | null;
+  },
   now = new Date()
 ): Promise<RxSelfSignContext> {
   const { organizationId, actor, reviewItemId } = input;
@@ -239,13 +271,30 @@ export async function assertRxSelfSignAllowed(
     select: { id: true },
   });
   if (signed) throw new RxSelfSignError('ALREADY_SIGNED');
-  const [other] = await otherRxReviewSigners(
+  const others = await otherRxReviewSigners(
     db,
     { organizationId, branchId: line.branchId, actorId: actor.id },
     now
   );
-  if (other) throw new RxSelfSignError('SECOND_PHARMACIST', other.name);
-  return { reviewItemId, saleId: line.saleId, saleLineId: line.id, branchId: line.branchId };
+  const context = {
+    reviewItemId,
+    saleId: line.saleId,
+    saleLineId: line.id,
+    branchId: line.branchId,
+  };
+  const [other] = others;
+  // The staff-list solo rule, unchanged: nobody else could sign here.
+  if (!other) return { ...context, declared: null };
+  // DEV-960: others are on the staff list. Only a declaration, under the owner's setting, signs.
+  if (input.declaration?.onlyPharmacistOnDuty !== true)
+    throw new RxSelfSignError('SECOND_PHARMACIST', other.name);
+  const policy = await readRxSoloShiftPolicy(db, organizationId, line.branchId, {
+    lock: input.lock ? 'share' : undefined,
+  });
+  if (!policy.enabled) throw new RxSelfSignError('SECOND_PHARMACIST', other.name);
+  if (input.declaration.version !== RX_ON_DUTY_DECLARATION.version)
+    throw new RxSelfSignError('STALE_DECLARATION');
+  return { ...context, declared: { policyVersion: policy.version, otherSigners: others } };
 }
 
 /**
@@ -255,10 +304,28 @@ export async function assertRxSelfSignAllowed(
  */
 export async function selfSignRxReview(
   db: ScopedDb,
-  input: { organizationId: string; actor: Actor; reviewItemId: string },
+  input: {
+    organizationId: string;
+    actor: Actor;
+    reviewItemId: string;
+    declaration?: RxOnDutyDeclaration | null;
+  },
   now = new Date()
 ) {
   const context = await assertRxSelfSignAllowed(db, { ...input, lock: true }, now);
+  const metadata = {
+    policy: RX_SELF_SIGN_POLICY,
+    selfApproved: true,
+    pinVerified: true,
+    soloRule: true,
+    approverId: input.actor.id,
+    initiatedById: input.actor.id,
+    approvedAt: now.toISOString(),
+    reviewItemId: context.reviewItemId,
+    saleId: context.saleId,
+    saleLineId: context.saleLineId,
+    branchId: context.branchId,
+  };
   const audit = await db.auditLog.create({
     data: {
       organizationId: input.organizationId,
@@ -268,22 +335,17 @@ export async function selfSignRxReview(
       operation: 'EXECUTE',
       action: RX_SELF_SIGN_AUDIT_ACTION,
       outcome: 'SUCCESS',
-      description: 'Prescription line self-signed by a sole pharmacist with a fresh PIN',
+      description: context.declared
+        ? 'Prescription line self-signed with a fresh PIN by the pharmacist on duty, declared the only pharmacist on duty'
+        : 'Prescription line self-signed by a sole pharmacist with a fresh PIN',
       targetType: 'PharmacyPharmacistReviewItem',
       targetId: context.reviewItemId,
-      metadata: {
-        policy: RX_SELF_SIGN_POLICY,
-        selfApproved: true,
-        pinVerified: true,
-        soloRule: true,
-        approverId: input.actor.id,
-        initiatedById: input.actor.id,
-        approvedAt: now.toISOString(),
-        reviewItemId: context.reviewItemId,
-        saleId: context.saleId,
-        saleLineId: context.saleLineId,
-        branchId: context.branchId,
-      },
+      metadata: context.declared
+        ? {
+            ...metadata,
+            ...declaredSoloMetadata(context.declared),
+          }
+        : metadata,
     },
     select: { id: true },
   });
@@ -298,4 +360,127 @@ export async function selfSignRxReview(
     },
   });
   return { decision, auditId: audit.id, ...context };
+}
+
+/** DEV-960: the marker and evidence a declared solo sign-off's audit entry carries. */
+export function declaredSoloMetadata(declared: RxDeclaredSolo) {
+  return {
+    declaredSolo: true,
+    soloBasis: 'DECLARED_ON_DUTY',
+    declaration: RX_ON_DUTY_DECLARATION.text,
+    declarationVersion: RX_ON_DUTY_DECLARATION.version,
+    soloShiftPolicyVersion: declared.policyVersion,
+    otherEligibleSigners: declared.otherSigners.map((signer) => ({
+      id: signer.id,
+      name: signer.name,
+    })),
+  };
+}
+
+function otherSignersFrom(value: unknown): { id: string; name: string | null }[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return [];
+    const { id, name } = entry as { id?: unknown; name?: unknown };
+    return typeof id === 'string' ? [{ id, name: typeof name === 'string' ? name : null }] : [];
+  });
+}
+
+const text = (value: unknown) => (typeof value === 'string' && value ? value : null);
+
+/**
+ * DEV-960 — every declared solo sign-off, newest first, for the owner's list: who, when, which
+ * branch, sale and line, and who else was on the staff list then. Only audit entries a real
+ * signature names (`selfApprovalAuditId`) are listed, so an entry written without its signature
+ * never shows as a sign-off.
+ */
+export async function readDeclaredSoloSignOffs(
+  db: ScopedDb,
+  organizationId: string,
+  options: { branchId?: string; limit?: number } = {}
+): Promise<RxDeclaredSoloSignOff[]> {
+  const take = Math.min(Math.max(Math.trunc(options.limit ?? 50), 1), 200);
+  const entries = await db.auditLog.findMany({
+    where: {
+      organizationId,
+      action: RX_SELF_SIGN_AUDIT_ACTION,
+      outcome: 'SUCCESS',
+      targetType: 'PharmacyPharmacistReviewItem',
+      AND: [
+        { metadata: { path: ['declaredSolo'], equals: true } },
+        { metadata: { path: ['policy'], equals: RX_SELF_SIGN_POLICY } },
+        ...(options.branchId
+          ? [{ metadata: { path: ['branchId'], equals: options.branchId } }]
+          : []),
+      ],
+    },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take,
+    select: { id: true, createdAt: true, actorId: true, targetId: true, metadata: true },
+  });
+  if (entries.length === 0) return [];
+  const decisions = await db.pharmacyPharmacistReviewDecision.findMany({
+    where: {
+      organizationId,
+      kind: 'SIGN',
+      signedAt: { not: null },
+      selfApprovalAuditId: { in: entries.map((entry) => entry.id) },
+    },
+    select: { selfApprovalAuditId: true, reviewItemId: true, actorUserId: true, signedAt: true },
+  });
+  const signed = new Map(decisions.map((decision) => [decision.selfApprovalAuditId, decision]));
+  const rows = entries.flatMap((entry) => {
+    const decision = signed.get(entry.id);
+    // The signature must be the same person's, on the same review the entry names.
+    if (
+      !decision ||
+      decision.actorUserId !== entry.actorId ||
+      decision.reviewItemId !== entry.targetId
+    )
+      return [];
+    const meta = (entry.metadata ?? {}) as Record<string, unknown>;
+    return [
+      {
+        auditId: entry.id,
+        signedAt: decision.signedAt ?? entry.createdAt,
+        signerId: entry.actorId,
+        branchId: text(meta.branchId),
+        saleId: text(meta.saleId),
+        saleLineId: text(meta.saleLineId),
+        otherSigners: otherSignersFrom(meta.otherEligibleSigners),
+      },
+    ];
+  });
+  const ids = (values: (string | null)[]) => [
+    ...new Set(values.filter((value): value is string => Boolean(value))),
+  ];
+  const [users, branches, sales, lines] = await Promise.all([
+    db.user.findMany({
+      where: { organizationId, id: { in: ids(rows.map((row) => row.signerId)) } },
+      select: { id: true, name: true },
+    }),
+    db.pharmacyBranch.findMany({
+      where: { organizationId, id: { in: ids(rows.map((row) => row.branchId)) } },
+      select: { id: true, name: true },
+    }),
+    db.pharmacySale.findMany({
+      where: { organizationId, id: { in: ids(rows.map((row) => row.saleId)) } },
+      select: { id: true, receiptNumber: true },
+    }),
+    db.pharmacySaleLine.findMany({
+      where: { organizationId, id: { in: ids(rows.map((row) => row.saleLineId)) } },
+      select: { id: true, medicine: { select: { productName: true } } },
+    }),
+  ]);
+  const userName = new Map(users.map((user) => [user.id, user.name]));
+  const branchName = new Map(branches.map((branch) => [branch.id, branch.name]));
+  const receipt = new Map(sales.map((sale) => [sale.id, sale.receiptNumber]));
+  const product = new Map(lines.map((line) => [line.id, line.medicine.productName]));
+  return rows.map((row) => ({
+    ...row,
+    signerName: row.signerId ? (userName.get(row.signerId) ?? null) : null,
+    branchName: row.branchId ? (branchName.get(row.branchId) ?? null) : null,
+    receiptNumber: row.saleId ? (receipt.get(row.saleId) ?? null) : null,
+    productName: row.saleLineId ? (product.get(row.saleLineId) ?? null) : null,
+  }));
 }
