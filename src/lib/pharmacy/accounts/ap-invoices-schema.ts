@@ -91,8 +91,15 @@ export const listApInvoicesSchema = z
 
 /** DEV-103: rows per page of the reversal search. */
 export const AP_REVERSAL_PAGE_ROWS = 25;
-/** DEV-103: the deepest page the reversal search serves; narrow the search to go further back. */
-export const AP_REVERSAL_MAX_PAGE = 400;
+
+/**
+ * DEV-967: a row of the reversal list, by its place in the list order (newest invoice date
+ * first, then id). A page is the rows just older or just newer than one such row, so a bill
+ * recorded or reversed between two page reads never moves another row across a page boundary.
+ * The row itself need not still be listed (someone may have reversed it since).
+ */
+export const apReversalCursorSchema = z.object({ invoiceDate: z.iso.datetime(), id }).strict();
+export type ApReversalCursor = z.infer<typeof apReversalCursorSchema>;
 
 /**
  * DEV-103: find a posted supplier expense invoice, or a payment in force against one, to reverse.
@@ -100,7 +107,8 @@ export const AP_REVERSAL_MAX_PAGE = 400;
  * name or reference, ignoring case (`reference` matches our reference or the supplier's invoice
  * number). `amountMinor` (typed amounts go through `amountInputToMinor`) matches the invoice
  * amount or a payment in force exactly. `from`/`to` are calendar days on the shop's clock, both
- * included, and match the invoice date or the day a payment in force was made.
+ * included, and match the invoice date or the day a payment in force was made. Without a cursor
+ * the newest page is read; `older` reads the page after that row, `newer` the page before it.
  */
 export const searchApReversalsSchema = z
   .object({
@@ -110,12 +118,17 @@ export const searchApReversalsSchema = z
     amountMinor: amountMinor.optional(),
     from: calendarDate.optional(),
     to: calendarDate.optional(),
-    page: z.number().int().min(1).max(AP_REVERSAL_MAX_PAGE).default(1),
+    older: apReversalCursorSchema.optional(),
+    newer: apReversalCursorSchema.optional(),
   })
   .strict()
   .refine((input) => !input.from || !input.to || input.from <= input.to, {
     message: 'The from day must be on or before the to day.',
     path: ['to'],
+  })
+  .refine((input) => !input.older || !input.newer, {
+    message: 'Turn the page one way at a time.',
+    path: ['newer'],
   });
 
 export const apAgingSchema = z

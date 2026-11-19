@@ -119,8 +119,10 @@ describe('ApAgingPage', () => {
     mocks.reversalSearch.mockResolvedValue({
       scope,
       invoices: [],
-      page: 1,
       hasOlder: false,
+      hasNewer: false,
+      older: null,
+      newer: null,
       retrievedAt: NOW,
     });
     mocks.reversalAccess.mockResolvedValue({
@@ -517,7 +519,7 @@ describe('ApAgingPage', () => {
 
     it('reads the first page of posted invoices of the authorized branch through the search', async () => {
       await html({ branch: 'branch_1', asOf: '2026-11-15' });
-      expect(mocks.reversalSearch).toHaveBeenCalledWith({ branchId: 'branch_1', page: 1 });
+      expect(mocks.reversalSearch).toHaveBeenCalledWith({ branchId: 'branch_1' });
       expect(mocks.reversalAccess).toHaveBeenCalledWith({ branchId: 'branch_1' });
     });
 
@@ -530,8 +532,10 @@ describe('ApAgingPage', () => {
         rvAmount: '234.56',
         rvFrom: '2026-08-01',
         rvTo: '2026-09-30',
-        rvPage: '2',
+        rvOlder: '2026-09-02T00:00:00.000Z~inv_9',
       };
+      const older = { invoiceDate: '2026-08-20T00:00:00.000Z', id: 'inv_40' };
+      const newer = { invoiceDate: '2026-09-01T00:00:00.000Z', id: 'inv_10' };
 
       it('sends every filter to the server, the typed amount in exact minor units', async () => {
         await html(searchQuery);
@@ -542,7 +546,19 @@ describe('ApAgingPage', () => {
           amountMinor: 23_456,
           from: '2026-08-01',
           to: '2026-09-30',
-          page: 2,
+          older: { invoiceDate: '2026-09-02T00:00:00.000Z', id: 'inv_9' },
+        });
+      });
+
+      it('DEV-967 turns back toward the newest with a newer cursor', async () => {
+        await html({
+          branch: 'branch_1',
+          asOf: '2026-11-15',
+          rvNewer: '2026-09-02T00:00:00.000Z~inv_9',
+        });
+        expect(mocks.reversalSearch).toHaveBeenCalledWith({
+          branchId: 'branch_1',
+          newer: { invoiceDate: '2026-09-02T00:00:00.000Z', id: 'inv_9' },
         });
       });
 
@@ -568,8 +584,10 @@ describe('ApAgingPage', () => {
         mocks.reversalSearch.mockResolvedValue({
           scope,
           invoices: [posted({ settlements: [] })],
-          page: 2,
           hasOlder: true,
+          hasNewer: true,
+          older,
+          newer,
           retrievedAt: NOW,
         });
         const output = await html({ ...searchQuery, payeeFilter: 'K-Electric' });
@@ -581,48 +599,85 @@ describe('ApAgingPage', () => {
         expect(output).toContain('<input type="hidden" name="payeeFilter" value="K-Electric"/>');
         const link = (page: string) =>
           `/pharmacy/accounts/ap-aging?branch=branch_1&amp;asOf=2026-11-15&amp;payeeFilter=K-Electric&amp;rvPayee=K-Electric&amp;rvRef=KE-11&amp;rvAmount=234.56&amp;rvFrom=2026-08-01&amp;rvTo=2026-09-30${page}#reverse`;
-        expect(output).toContain(`href="${link('')}"`);
-        expect(output).toContain(`href="${link('&amp;rvPage=3')}"`);
+        // DEV-967: each link keeps the search and names the row its page starts after, never a
+        // page number.
+        expect(output).toContain(
+          `href="${link('&amp;rvNewer=2026-09-01T00%3A00%3A00.000Z%7Einv_10')}"`
+        );
+        expect(output).toContain(
+          `href="${link('&amp;rvOlder=2026-08-20T00%3A00%3A00.000Z%7Einv_40')}"`
+        );
         expect(output).toContain('Newer invoices');
         expect(output).toContain('Older invoices');
-        expect(output).toContain('Page 2');
+        expect(output).not.toContain('rvPage');
       });
 
       it('offers no older page on the last page and explains an empty search', async () => {
         mocks.reversalSearch.mockResolvedValue({
           scope,
           invoices: [],
-          page: 1,
           hasOlder: false,
+          hasNewer: false,
+          older: null,
+          newer: null,
           retrievedAt: NOW,
         });
         const output = await html({ branch: 'branch_1', asOf: '2026-11-15', rvRef: 'nothing' });
         expect(output).toContain('matches this search. Change or clear the search.');
         expect(output).not.toContain('Older invoices');
         expect(output).not.toContain('Newer invoices');
+        expect(output).not.toContain('Newest invoices');
       });
 
-      it('offers no older link past the deepest page the search serves, and says to narrow it', async () => {
+      it('DEV-967 offers an older link however deep the page, with no depth wall', async () => {
         mocks.reversalSearch.mockResolvedValue({
           scope,
           invoices: [posted({ settlements: [] })],
-          page: 400,
           hasOlder: true,
+          hasNewer: true,
+          older,
+          newer,
           retrievedAt: NOW,
         });
-        const output = await html({ branch: 'branch_1', asOf: '2026-11-15', rvPage: '400' });
-        expect(mocks.reversalSearch).toHaveBeenCalledWith({ branchId: 'branch_1', page: 400 });
-        expect(output).not.toContain('Older invoices</a>');
-        expect(output).not.toContain('rvPage=401');
-        expect(output).toContain(
-          'Older invoices are past page 400. Narrow the search to reach them.'
-        );
+        const output = await html({
+          branch: 'branch_1',
+          asOf: '2026-11-15',
+          rvOlder: '2016-01-01T00:00:00.000Z~inv_99999',
+        });
+        expect(output).toContain('Older invoices</a>');
+        expect(output).toContain('rvOlder=2026-08-20T00%3A00%3A00.000Z%7Einv_40');
+        expect(output).not.toContain('Narrow the search to reach them');
         expect(output).toContain('Newer invoices');
       });
 
-      it('ignores an out-of-range page and starts from the first', async () => {
-        await html({ branch: 'branch_1', asOf: '2026-11-15', rvPage: '99999' });
-        expect(mocks.reversalSearch).toHaveBeenCalledWith({ branchId: 'branch_1', page: 1 });
+      it('DEV-967 links an emptied turned page back to the newest page', async () => {
+        const output = await html({
+          branch: 'branch_1',
+          asOf: '2026-11-15',
+          rvOlder: '2026-09-02T00:00:00.000Z~inv_9',
+        });
+        expect(output).toContain('No more posted supplier expense invoices on this branch.');
+        expect(output).toContain(
+          'href="/pharmacy/accounts/ap-aging?branch=branch_1&amp;asOf=2026-11-15#reverse"'
+        );
+        expect(output).toContain('Newest invoices');
+        expect(output).not.toContain('Older invoices');
+      });
+
+      it.each([
+        [{ rvPage: '99999' }],
+        [{ rvPage: '2' }],
+        [{ rvOlder: 'garbage' }],
+        [{ rvOlder: '2026-09-02~inv_9' }],
+        [{ rvOlder: '2026-02-30T00:00:00.000Z~inv_9' }],
+        [{ rvOlder: '2026-09-02T00:00:00.000Z~' }],
+        [{ rvOlder: `2026-09-02T00:00:00.000Z~${'x'.repeat(129)}` }],
+        [{ rvOlder: '2026-09-02T00:00:00.000Z~ inv_9' }],
+        [{ rvOlder: ['2026-09-02T00:00:00.000Z~inv_9', '2026-09-01T00:00:00.000Z~inv_8'] }],
+        [{ rvOlder: '2026-09-02T00:00:00.000Z~inv_9', rvNewer: '2026-09-02T00:00:00.000Z~inv_9' }],
+      ])('ignores a malformed page %o and starts from the newest', async (bad) => {
+        await html({ branch: 'branch_1', asOf: '2026-11-15', ...bad } as never);
+        expect(mocks.reversalSearch).toHaveBeenCalledWith({ branchId: 'branch_1' });
       });
     });
 

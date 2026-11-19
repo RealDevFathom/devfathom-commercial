@@ -558,13 +558,17 @@ describeDb('DEV-103 reversal search and paging', () => {
       )
     );
 
-    // Paging: 26 posted bills match, 25 on page one and 1 on page two, in one total order.
-    const first = await search({ reference: tag, page: 1 });
-    const second = await search({ reference: tag, page: 2 });
+    // Paging: 26 posted bills match, 25 on page one and 1 on the page older than its last row,
+    // in one total order.
+    const first = await search({ reference: tag });
+    expect(first.older).not.toBeNull();
+    const second = await search({ reference: tag, older: first.older! });
     expect(first.invoices).toHaveLength(25);
     expect(first.hasOlder).toBe(true);
+    expect(first.hasNewer).toBe(false);
     expect(second.invoices).toHaveLength(1);
     expect(second.hasOlder).toBe(false);
+    expect(second.hasNewer).toBe(true);
     const listed = [...first.invoices, ...second.invoices];
     expect(new Set(listed.map((row) => row.id)).size).toBe(26);
     expect(listed.map((row) => row.id)).not.toContain(reversed.id);
@@ -578,27 +582,27 @@ describeDb('DEV-103 reversal search and paging', () => {
       .map((row) => row.id);
     expect(listed.map((row) => row.id)).toEqual(expectedOrder);
     // The same page read twice is the same page.
-    expect((await search({ reference: tag, page: 1 })).invoices.map((row) => row.id)).toEqual(
+    expect((await search({ reference: tag })).invoices.map((row) => row.id)).toEqual(
       first.invoices.map((row) => row.id)
     );
 
     // Payee, ignoring case; the supplier's invoice number; an invoice amount; a payment amount.
+    expect((await search({ payee: 'search payee five' })).invoices.map((r) => r.id)).toEqual([
+      made[4]!.id,
+    ]);
+    expect((await search({ reference: `SUP-${suffix}-12` })).invoices.map((r) => r.id)).toEqual([
+      made[11]!.id,
+    ]);
     expect(
-      (await search({ payee: 'search payee five', page: 1 })).invoices.map((r) => r.id)
-    ).toEqual([made[4]!.id]);
-    expect(
-      (await search({ reference: `SUP-${suffix}-12`, page: 1 })).invoices.map((r) => r.id)
-    ).toEqual([made[11]!.id]);
-    expect(
-      (await search({ reference: tag, amountMinor: 100_013, page: 1 })).invoices.map((r) => r.id)
+      (await search({ reference: tag, amountMinor: 100_013 })).invoices.map((r) => r.id)
     ).toEqual([made[12]!.id]);
-    const byPayment = await search({ reference: tag, amountMinor: 23_456, page: 1 });
+    const byPayment = await search({ reference: tag, amountMinor: 23_456 });
     expect(byPayment.invoices.map((r) => r.id)).toEqual([paid.id]);
     expect(byPayment.invoices[0]!.settlements.map((s) => s.id)).toEqual([payment.id]);
 
     // Days on the shop's clock: the invoice date, or the day a payment in force was made.
     const oldest = day(-22);
-    const onOldest = await search({ reference: tag, from: oldest, to: oldest, page: 1 });
+    const onOldest = await search({ reference: tag, from: oldest, to: oldest });
     expect(onOldest.invoices.map((r) => r.id).sort()).toEqual(
       made
         .filter((row) => row.invoiceDate.toISOString().slice(0, 10) === oldest)
@@ -609,24 +613,182 @@ describeDb('DEV-103 reversal search and paging', () => {
       payment.paidAt
     );
     expect(
-      (await search({ reference: tag, from: paidDay, to: paidDay, page: 1 })).invoices.map(
-        (r) => r.id
-      )
+      (await search({ reference: tag, from: paidDay, to: paidDay })).invoices.map((r) => r.id)
     ).toEqual([paid.id]);
 
     // Nothing outside this branch or this tenant.
     expect(
-      (await search({ reference: tag, page: 1 }, { organizationId, branchId: closedBranchId }))
-        .invoices
+      (await search({ reference: tag }, { organizationId, branchId: closedBranchId })).invoices
     ).toEqual([]);
     expect(
       (
         await search(
-          { reference: tag, page: 1 },
+          { reference: tag },
           { organizationId: otherOrganizationId, branchId },
           otherOrganizationId
         )
       ).invoices
     ).toEqual([]);
   }, 180_000);
+});
+
+describeDb('DEV-967 reversal list cursor paging and literal search', () => {
+  const tag = `ARP-${suffix}`;
+  let made = 0;
+  async function bill(invoiceDate: string, payeeName = 'Cursor payee', reference?: string) {
+    made += 1;
+    const result = await inTenant((db) =>
+      deps.ap.recordApInvoice(db, owner, {
+        branchId,
+        createKey: `aprev-cursor-${suffix}-${made}`,
+        reference: reference ?? `${tag}-${String(made).padStart(2, '0')}`,
+        payeeName,
+        supplierInvoiceRef: `CUR-${suffix}-${made}`,
+        invoiceDate,
+        dueDate: invoiceDate,
+        amountMinor: 50_000 + made,
+        currency: 'PKR',
+        description: 'Cursor fixture',
+        evidenceReference: 'Bill scan',
+      })
+    );
+    return result.invoice;
+  }
+  const reverse = (invoiceId: string, n: string) =>
+    inTenant((db) =>
+      deps.ap.reverseApInvoice(
+        db,
+        manager,
+        {
+          branchId,
+          invoiceId,
+          commandKey: `aprev-cursor-rev-${suffix}-${n}`,
+          reason: 'Wrong bill',
+        },
+        segregated
+      )
+    );
+  const search = (input: Parameters<Deps['ap']['searchApReversals']>[2]) =>
+    inTenant((db) =>
+      deps.ap.searchApReversals(db, { organizationId, branchId }, input, 'Asia/Karachi')
+    );
+  const ids = (rows: { id: string }[]) => rows.map((row) => row.id);
+  const listOrder = (rows: { id: string; invoiceDate: Date }[]) =>
+    [...rows]
+      .sort(
+        (a, b) =>
+          b.invoiceDate.getTime() - a.invoiceDate.getTime() ||
+          (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+      )
+      .map((row) => row.id);
+
+  it('shows every bill exactly once across pages while bills are recorded and reversed between page reads', async () => {
+    // 30 bills on three dates, so most rows tie on the date and fall back to the id.
+    const before = [];
+    for (let n = 0; n < 30; n += 1) before.push(await bill(day(-(n % 3) - 40)));
+
+    const first = await search({ reference: tag });
+    expect(first.invoices).toHaveLength(25);
+    expect(first.hasOlder).toBe(true);
+    expect(first.hasNewer).toBe(false);
+    expect(first.older).toEqual({
+      invoiceDate: first.invoices[24]!.invoiceDate.toISOString(),
+      id: first.invoices[24]!.id,
+    });
+
+    // Between the two reads: someone reverses the newest listed bill and the bill the page
+    // ended on, and the oldest bill not yet shown; bills are recorded newer than every bill,
+    // on the date the page ended on, and older than every bill.
+    const unread = before.filter((row) => !ids(first.invoices).includes(row.id));
+    const goneUnread = unread[0]!;
+    await reverse(first.invoices[0]!.id, '1');
+    await reverse(first.invoices[24]!.id, '2');
+    await reverse(goneUnread.id, '3');
+    const newest = await bill(day(-1));
+    const tie = await bill(first.invoices[24]!.invoiceDate.toISOString().slice(0, 10));
+    const oldest = await bill(day(-60));
+
+    const second = await search({ reference: tag, older: first.older! });
+    const shown = [...ids(first.invoices), ...ids(second.invoices)];
+    // No bill twice, and every bill posted throughout appears.
+    expect(new Set(shown).size).toBe(shown.length);
+    const reversedLater = new Set([first.invoices[0]!.id, first.invoices[24]!.id, goneUnread.id]);
+    for (const row of before) {
+      if (!reversedLater.has(row.id) || ids(first.invoices).includes(row.id)) {
+        expect(shown.filter((id) => id === row.id)).toHaveLength(1);
+      }
+    }
+    // The older page is exactly the posted rows after the cursor row, in list order.
+    const posted = [...before, newest, tie, oldest].filter((row) => !reversedLater.has(row.id));
+    const order = listOrder(posted);
+    const cursorAt = listOrder([...posted, first.invoices[24]!]).indexOf(first.invoices[24]!.id);
+    const afterCursor = listOrder([...posted, first.invoices[24]!]).slice(cursorAt + 1);
+    expect(ids(second.invoices)).toEqual(afterCursor);
+    expect(ids(second.invoices)).toContain(oldest.id);
+    expect(ids(second.invoices)).not.toContain(goneUnread.id);
+    expect(ids(second.invoices)).not.toContain(newest.id);
+    expect(second.hasOlder).toBe(false);
+    expect(second.older).toBeNull();
+    expect(second.hasNewer).toBe(true);
+    expect(second.newer).toEqual({
+      invoiceDate: second.invoices[0]!.invoiceDate.toISOString(),
+      id: second.invoices[0]!.id,
+    });
+
+    // Back toward the newest: the page just before the older page's first row, in list order.
+    const back = await search({ reference: tag, newer: second.newer! });
+    const at = order.indexOf(second.invoices[0]!.id);
+    expect(ids(back.invoices)).toEqual(order.slice(Math.max(0, at - 25), at));
+    expect(back.hasOlder).toBe(true);
+    expect(back.older).toEqual({
+      invoiceDate: back.invoices.at(-1)!.invoiceDate.toISOString(),
+      id: back.invoices.at(-1)!.id,
+    });
+    expect(back.hasNewer).toBe(at > 25);
+
+    // Walking the whole list from the newest page lists every posted bill once, in order.
+    const walked: string[] = [];
+    let page = await search({ reference: tag });
+    walked.push(...ids(page.invoices));
+    while (page.older) {
+      page = await search({ reference: tag, older: page.older });
+      walked.push(...ids(page.invoices));
+    }
+    expect(walked).toEqual(order);
+
+    // A cursor whose row was reversed still turns the page; a cursor each way is refused.
+    const fromReversed = await search({
+      reference: tag,
+      older: {
+        invoiceDate: first.invoices[0]!.invoiceDate.toISOString(),
+        id: first.invoices[0]!.id,
+      },
+    });
+    expect(ids(fromReversed.invoices)).not.toContain(first.invoices[0]!.id);
+    await expect(
+      search({ reference: tag, older: first.older!, newer: first.older! })
+    ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+  }, 240_000);
+
+  it('matches percent, underscore and backslash in the search as typed', async () => {
+    const pct = await bill(day(-70), `Cent 100%${suffix} Pure`);
+    const notPct = await bill(day(-70), `Cent 100x${suffix} Pure`);
+    const under = await bill(day(-70), 'Cursor payee', `ARU_${suffix}`);
+    const notUnder = await bill(day(-70), 'Cursor payee', `ARUx${suffix}`);
+    const slash = await bill(day(-70), `Back\\slash${suffix}`);
+
+    expect(ids((await search({ payee: `100%${suffix}` })).invoices)).toEqual([pct.id]);
+    expect(ids((await search({ payee: `00%${suffix} p` })).invoices)).toEqual([pct.id]);
+    expect(ids((await search({ reference: `ARU_${suffix}` })).invoices)).toEqual([under.id]);
+    expect(ids((await search({ reference: `aru_${suffix}` })).invoices)).toEqual([under.id]);
+    expect(ids((await search({ payee: `k\\slash${suffix}` })).invoices)).toEqual([slash.id]);
+    // A lone wildcard character matches only the rows that contain it.
+    const percentOnly = ids((await search({ payee: '%' })).invoices);
+    expect(percentOnly).toEqual([pct.id]);
+    const underscoreOnly = ids((await search({ reference: `_${suffix}` })).invoices);
+    expect(underscoreOnly).toEqual([under.id]);
+    expect(ids((await search({ reference: `ARU${suffix}` })).invoices)).toEqual([]);
+    expect(ids((await search({ payee: `100${suffix}` })).invoices)).not.toContain(notPct.id);
+    expect(ids((await search({ reference: `ARU_${suffix}` })).invoices)).not.toContain(notUnder.id);
+  }, 120_000);
 });
