@@ -29,6 +29,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { excelCsvProfiler } from './excel-csv-profiler';
 import { margBatchStockProfiler, parseMargBatchStockText } from './marg-batch-stock-profiler';
 import { profileTable } from './profiler';
+import { stagedReference } from './staged-review';
 import {
   decodeTallyXmlBytes,
   flattenTallyXml,
@@ -45,6 +46,8 @@ process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 const describeIfDatabase = TEST_DATABASE_URL && OWNER_DATABASE_URL ? describe : describe.skip;
 
 const FIXTURE_DIR = join(process.cwd(), 'src/lib/pharmacy/migration/fixtures');
+/** A fixed "now", so fixture expiries never drift into the past. */
+const AS_OF = new Date('2026-11-18T06:00:00Z');
 const MISSING_FIELDS_FIXTURE = join(FIXTURE_DIR, 'excel-missing-fields.csv');
 
 const suffix = randomBytes(6).toString('hex');
@@ -476,7 +479,10 @@ describeIfDatabase('PH-MIG workbench — #721 Tally XML and Marg Batch Stock pre
   it('records a TALLY_XML source and persists the sample with zero exceptions', async () => {
     const bytes = readFileSync(join(FIXTURE_DIR, 'tally-masters-sample.xml'));
     const flattened = flattenTallyXml(decodeTallyXmlBytes(bytes));
-    const result = profileTable(tallyXmlProfiler, flattened.table, { quantityUnit: 'UNITS' });
+    const result = profileTable(tallyXmlProfiler, flattened.table, {
+      quantityUnit: 'UNITS',
+      asOf: AS_OF,
+    });
     expect(unmappedTallyRequiredFields(result.columnMap)).toEqual([]);
 
     const { source, persisted, batch, rows } = await inOrgA(async (db) => {
@@ -523,7 +529,7 @@ describeIfDatabase('PH-MIG workbench — #721 Tally XML and Marg Batch Stock pre
     const result = profileTable(
       margBatchStockProfiler,
       parseMargBatchStockText(bytes.toString('utf8')).table,
-      { quantityUnit: 'PACKS' }
+      { quantityUnit: 'PACKS', asOf: AS_OF }
     );
 
     const { source, persisted, rows } = await inOrgA(async (db) => {
@@ -553,5 +559,92 @@ describeIfDatabase('PH-MIG workbench — #721 Tally XML and Marg Batch Stock pre
     expect(persisted.exceptionCount).toBe(0);
     expect(rows.map((row) => row.batchNumber)).toEqual(['B2411', 'B2502', 'AG-77', 'BR-9012']);
     expect((rows[0]!.rawPayload as Record<string, string>)['Item Code']).toBe('M001');
+  });
+});
+
+describeIfDatabase('PH-MIG workbench — DEV-927 Marg and Tally stock with no batch or expiry', () => {
+  /** Profile and persist one file, then read its rows and exceptions back. */
+  async function stage(input: {
+    kind: 'MARG_EXCEL' | 'TALLY_XML';
+    fileName: string;
+    text: string;
+  }) {
+    const profiler = input.kind === 'MARG_EXCEL' ? margBatchStockProfiler : tallyXmlProfiler;
+    const table =
+      input.kind === 'MARG_EXCEL'
+        ? parseMargBatchStockText(input.text).table
+        : flattenTallyXml(input.text).table;
+    const result = profileTable(profiler, table, {
+      quantityUnit: input.kind === 'MARG_EXCEL' ? 'PACKS' : 'UNITS',
+      asOf: AS_OF,
+    });
+    return inOrgA(async (db) => {
+      const source = await deps.workbench.recordSource(db, {
+        kind: input.kind,
+        fileName: input.fileName,
+        bytes: input.text,
+      });
+      const saved = await deps.workbench.persistProfile(db, {
+        sourceId: source.id,
+        label: `dev-927 ${input.kind}`,
+        profiler,
+        result,
+      });
+      const rows = await db.pharmacyMigrationRow.findMany({
+        where: { batchId: saved.batchId },
+        orderBy: { rowNumber: 'asc' },
+        include: { exceptions: { select: { bucket: true, status: true, severity: true } } },
+      });
+      return { source, saved, rows };
+    });
+  }
+
+  it('stages a Marg file with no batch and no expiry as not recorded, and refuses a passed expiry', async () => {
+    const { source, saved, rows } = await stage({
+      kind: 'MARG_EXCEL',
+      fileName: `marg-unrecorded-${suffix}.csv`,
+      text: [
+        'Item Name,Pack,Batch,Exp,Qty,MRP,Rate',
+        'Panadol,10x10,,,5,250.00,200.00',
+        'Brufen,20,BR-1,10/26,10,50.00,40.00',
+      ].join('\n'),
+    });
+
+    expect(rows[0]).toMatchObject({ batchNumber: null, expiryDate: null, exceptions: [] });
+    expect(rows[1]!.exceptions).toEqual([
+      { bucket: 'EXPIRED_STOCK', status: 'OPEN', severity: 'BLOCKING' },
+    ]);
+    expect(saved.buckets).toEqual({ EXPIRED_STOCK: 1 });
+
+    const review = stagedReference(rows[0]!, source, saved.batchId, 'PACKS', 'Qty');
+    expect(review).toMatchObject({
+      batchLabel: 'Batch not recorded',
+      expiryLabel: 'Expiry not recorded',
+      exceptions: [],
+    });
+  });
+
+  it('stages a Tally item with no batch allocation as not recorded, with no exception', async () => {
+    const { saved, rows } = await stage({
+      kind: 'TALLY_XML',
+      fileName: `tally-unrecorded-${suffix}.xml`,
+      text: `<ENVELOPE><BODY><IMPORTDATA><REQUESTDATA>
+        <TALLYMESSAGE><UNIT NAME="Nos"><ISSIMPLEUNIT>Yes</ISSIMPLEUNIT><DECIMALPLACES>0</DECIMALPLACES></UNIT></TALLYMESSAGE>
+        <TALLYMESSAGE><STOCKITEM NAME="Cotton Roll"><BASEUNITS>Nos</BASEUNITS>
+          <OPENINGBALANCE> 10 Nos</OPENINGBALANCE><OPENINGRATE>40.00/Nos</OPENINGRATE>
+          <MRPDETAILS.LIST><FROMDATE>20260101</FROMDATE><MRPRATEDETAILS.LIST>
+          <STATENAME>Any</STATENAME><MRPRATE>55.00/Nos</MRPRATE></MRPRATEDETAILS.LIST></MRPDETAILS.LIST>
+        </STOCKITEM></TALLYMESSAGE>
+      </REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>`,
+    });
+
+    expect(saved.exceptionCount).toBe(0);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      batchNumber: null,
+      expiryDate: null,
+      quantityCanonical: BigInt(10),
+      exceptions: [],
+    });
   });
 });

@@ -6,9 +6,20 @@ import { Label } from '@/components/ui/label';
 import { trpc } from '@/lib/trpc';
 import type { z } from 'zod';
 import type { deliveryCommandInput } from '@/lib/pharmacy/customer-delivery';
+import { formatOrderMoney } from '@/lib/pharmacy/customer-order-format';
+import { amountInputError, amountInputToMinor, amountInputUnit } from '@/lib/money-input';
 type Action = z.infer<typeof deliveryCommandInput>['action'];
 
-export function DeliveryEvidenceForm({ branchId, orderId }: { branchId: string; orderId: string }) {
+export function DeliveryEvidenceForm({
+  branchId,
+  orderId,
+  currency,
+}: {
+  branchId: string;
+  orderId: string;
+  /** The order's currency: the amount is typed in it, with up to 2 decimals. */
+  currency: string;
+}) {
   const command = trpc.pharmacyOrdering.deliveryCommand.useMutation();
   // DEV-786: only managers and owners may refund or return. deliveryCommand enforces the same rule.
   const access = trpc.pharmacySales.refundAccess.useQuery(undefined, { retry: false });
@@ -22,6 +33,7 @@ export function DeliveryEvidenceForm({ branchId, orderId }: { branchId: string; 
   const [managerPin, setManagerPin] = useState('');
   const [requestKey, setRequestKey] = useState('');
   const [notice, setNotice] = useState('');
+  const [amountError, setAmountError] = useState('');
   const moneyAction = ['COLLECT', 'REMIT', 'CASH_RETURN'].includes(action);
   return (
     <details className="mt-4 border-t border-border-subtle pt-3">
@@ -38,6 +50,21 @@ export function DeliveryEvidenceForm({ branchId, orderId }: { branchId: string; 
         onSubmit={async (event) => {
           event.preventDefault();
           setNotice('');
+          setAmountError('');
+          // The amount is typed as "125.50"; the server still receives integer minor units.
+          let amountMinor: number | undefined;
+          if (moneyAction) {
+            const parsed = amountInputToMinor(amount);
+            if (parsed.status !== 'OK' || parsed.minor <= 0) {
+              setAmountError(
+                parsed.status === 'INVALID'
+                  ? amountInputError(parsed.reason)
+                  : 'Enter an amount more than 0, for example 125.50.'
+              );
+              return;
+            }
+            amountMinor = parsed.minor;
+          }
           // DEV-647: the PIN is single-use and never kept in the form after submitting.
           const pin = action === 'PHYSICAL_RETURN' && refundAuthorized ? managerPin : '';
           setManagerPin('');
@@ -48,17 +75,17 @@ export function DeliveryEvidenceForm({ branchId, orderId }: { branchId: string; 
               action,
               reference,
               requestKey,
-              ...(moneyAction ? { amountMinor: Number(amount) } : {}),
-              ...(action === 'REMIT' || action === 'PHYSICAL_RETURN'
-                ? { deviceId, businessDate: new Date(new Date().toISOString().slice(0, 10)) }
-                : {}),
+              ...(amountMinor !== undefined ? { amountMinor } : {}),
+              // DEV-943: no business date is sent; the server books on today in the
+              // organisation's own zone, the day the drawer was opened on.
+              ...(action === 'REMIT' || action === 'PHYSICAL_RETURN' ? { deviceId } : {}),
               ...(action === 'PHYSICAL_RETURN' && location
                 ? { quarantineLocationId: location }
                 : {}),
               ...(pin ? { managerPin: pin } : {}),
             });
             setNotice(
-              `${result.replayed ? 'Already recorded' : 'Recorded'}; collected ${result.totals.collectedMinor}, remitted ${result.totals.remittedMinor}, cash still with runner ${result.totals.custodyMinor} minor units.`
+              `${result.replayed ? 'Already recorded' : 'Recorded'}; collected ${formatOrderMoney(result.totals.collectedMinor, currency)}, remitted ${formatOrderMoney(result.totals.remittedMinor, currency)}, cash still with runner ${formatOrderMoney(result.totals.custodyMinor, currency)}.`
             );
             await Promise.all([
               utils.pharmacyOrdering.mine.invalidate(),
@@ -90,17 +117,29 @@ export function DeliveryEvidenceForm({ branchId, orderId }: { branchId: string; 
           </select>
         </Label>
         {moneyAction ? (
-          <Label className="grid gap-1">
-            Actual amount in minor units
-            <Input
-              required
-              type="number"
-              min={1}
-              step={1}
-              value={amount}
-              onChange={(event) => setAmount(event.target.value)}
-            />
-          </Label>
+          <div className="grid gap-1">
+            <Label className="grid gap-1">
+              {`Actual amount (${amountInputUnit(currency)})`}
+              <Input
+                required
+                type="text"
+                inputMode="decimal"
+                placeholder="125.50"
+                value={amount}
+                aria-invalid={amountError ? true : undefined}
+                aria-describedby={amountError ? 'delivery-amount-error' : undefined}
+                onChange={(event) => {
+                  setAmount(event.target.value);
+                  setAmountError('');
+                }}
+              />
+            </Label>
+            {amountError ? (
+              <span id="delivery-amount-error" className="text-sm text-destructive">
+                {amountError}
+              </span>
+            ) : null}
+          </div>
         ) : null}
         <Label className="grid gap-1">
           Evidence reference

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // DEV-879: these fixtures model an approver with no approval authenticator, so the PIN is
 // checked exactly as before. approval-authenticator.test.ts covers the authenticator path.
@@ -21,7 +21,7 @@ vi.mock('@/lib/restaurant/operator-credentials', () => ({
 }));
 vi.mock('./sales', () => ({
   createSale: vi.fn(async () => ({ id: 'sale-1' })),
-  addReservedSaleLine: vi.fn(async () => ({})),
+  addReservedSaleLine: vi.fn(async () => ({ line: { id: 'sale-line-1' } })),
 }));
 
 import { can } from '@/lib/abac';
@@ -31,6 +31,7 @@ import {
   approveRefillCycle,
   createRefillSubscription,
   isSubscribableMedicine,
+  listDueRefillSubscriptionIds,
   openRefillCycle,
   RefillCycleApprovalDenied,
   refillSubscriptionReminder,
@@ -90,12 +91,45 @@ const subscriptionRow = {
   status: 'ACTIVE',
 };
 
+type RxLine = {
+  id: string;
+  medicineId: string;
+  presentationId: string;
+  authorizedCanonicalUnits: number;
+  prescription: { patientId: string; validFrom: Date; validUntil: Date; authorizedRepeats: number };
+  fills: { quantityCanonicalUnits: number }[];
+};
+
+/** A prescription line for the subscriber's patient that covers the DUE cycle. */
+function rxLine(
+  overrides: Partial<Omit<RxLine, 'prescription'>> & {
+    prescription?: Partial<RxLine['prescription']>;
+  } = {}
+): RxLine {
+  return {
+    id: 'rx-line-1',
+    medicineId: 'med-1',
+    presentationId: 'pres-1',
+    authorizedCanonicalUnits: 180,
+    fills: [],
+    ...overrides,
+    prescription: {
+      patientId: 'patient-1',
+      validFrom: new Date('2026-11-01T00:00:00.000Z'),
+      validUntil: new Date('2027-04-30T00:00:00.000Z'),
+      authorizedRepeats: 5,
+      ...overrides.prescription,
+    },
+  };
+}
+
 function fakeDb(
   options: {
     medicine?: ReturnType<typeof medicine> | null;
     lots?: ReturnType<typeof lot>[];
     creditLimitMinor?: number;
     cycle?: Record<string, unknown> | null;
+    rxLine?: ReturnType<typeof rxLine> | null;
     dayClose?: { id: string; reopen: { id: string } | null } | null;
   } = {}
 ) {
@@ -118,8 +152,31 @@ function fakeDb(
     organization: { findUnique: async () => ({ timezone: 'UTC' }) },
     pharmacyDailyClose: { findFirst: vi.fn(async () => options.dayClose ?? null) },
     pharmacyCustomer: {
-      findFirst: async () => ({ id: 'cust-1', creditLimitMinor: options.creditLimitMinor ?? 0 }),
+      findFirst: async () => ({
+        id: 'cust-1',
+        patientId: 'patient-1',
+        creditLimitMinor: options.creditLimitMinor ?? 0,
+      }),
     },
+    prescriptionLine: {
+      findFirst: vi.fn(
+        async ({
+          where,
+        }: {
+          where: { id: string; medicineId: string; presentationId: string };
+        }) => {
+          const line = options.rxLine === undefined ? rxLine() : options.rxLine;
+          return line &&
+            line.id === where.id &&
+            line.medicineId === where.medicineId &&
+            line.presentationId === where.presentationId
+            ? line
+            : null;
+        }
+      ),
+    },
+    pharmacySaleLine: { updateMany: record('saleLine.updateMany', { count: 1 }) },
+    pharmacyPharmacistReviewItem: { create: record('reviewItem.create') },
     pharmacyRefillSubscription: {
       findFirst: async () => subscriptionRow,
       create: record('subscription.create', (input: { data: object }) => input.data),
@@ -280,7 +337,18 @@ describe('DEV-73 opening a cycle reserves stock and creates the due order', () =
   });
 });
 
+const COVERING = { prescriptionLineId: 'rx-line-1' };
+
 describe('DEV-73 Rx cycle pharmacist approval', () => {
+  // The cycle is due 2026-12-01; the pharmacist acts during its reminder window.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-29T06:00:00.000Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   const awaiting = {
     id: 'cycle-1',
     status: 'AWAITING_PHARMACIST',
@@ -335,7 +403,7 @@ describe('DEV-73 Rx cycle pharmacist approval', () => {
     expect(approval).toEqual({ approvedByUserId: 'pharmacist', credentialId: 'cred-1' });
 
     await expect(
-      approveRefillCycle(db as never, scope, 'cycle-1', approval!)
+      approveRefillCycle(db as never, scope, 'cycle-1', approval!, COVERING)
     ).resolves.toMatchObject({
       status: 'RESERVED',
       approvedByUserId: 'pharmacist',
@@ -358,10 +426,13 @@ describe('DEV-73 Rx cycle pharmacist approval', () => {
     vi.mocked(can).mockResolvedValue(true);
     const { db, writes } = fakeDb({ cycle: { ...awaiting, openedByUserId: 'pharmacist' } });
     await expect(
-      approveRefillCycle(db as never, scope, 'cycle-1', {
-        approvedByUserId: 'pharmacist',
-        credentialId: 'cred-1',
-      })
+      approveRefillCycle(
+        db as never,
+        scope,
+        'cycle-1',
+        { approvedByUserId: 'pharmacist', credentialId: 'cred-1' },
+        COVERING
+      )
     ).resolves.toMatchObject({ selfApproved: true, status: 'RESERVED' });
     expect(writes).toContainEqual([
       'audit.create',
@@ -377,10 +448,13 @@ describe('DEV-73 Rx cycle pharmacist approval', () => {
     vi.mocked(can).mockResolvedValue(false);
     const { db } = fakeDb({ cycle: awaiting });
     await expect(
-      approveRefillCycle(db as never, scope, 'cycle-1', {
-        approvedByUserId: 'pharmacist',
-        credentialId: 'cred-1',
-      })
+      approveRefillCycle(
+        db as never,
+        scope,
+        'cycle-1',
+        { approvedByUserId: 'pharmacist', credentialId: 'cred-1' },
+        COVERING
+      )
     ).rejects.toBeInstanceOf(RefillCycleApprovalDenied);
   });
 
@@ -391,6 +465,7 @@ describe('DEV-73 Rx cycle pharmacist approval', () => {
       status: 'RESERVED',
       approvedByUserId: 'pharmacist',
       approvedAt: new Date(),
+      prescriptionLineId: 'rx-line-1',
     };
     const { db, writes } = fakeDb({
       cycle: approved,
@@ -413,6 +488,7 @@ describe('DEV-73 Rx cycle pharmacist approval', () => {
       status: 'RESERVED',
       approvedByUserId: 'pharmacist',
       approvedAt: new Date(),
+      prescriptionLineId: 'rx-line-1',
     };
     const { db } = fakeDb({
       cycle: approved,
@@ -432,6 +508,7 @@ describe('DEV-73 Rx cycle pharmacist approval', () => {
       status: 'RESERVED',
       approvedByUserId: 'pharmacist',
       approvedAt: new Date(),
+      prescriptionLineId: 'rx-line-1',
     };
     const { db, writes } = fakeDb({ cycle: approved, medicine: medicine({ rx: true }) });
     await expect(startRefillCycleCheckout(db as never, scope, 'cycle-1')).resolves.toEqual({
@@ -468,6 +545,7 @@ describe('DEV-73 Rx cycle pharmacist approval', () => {
       status: 'RESERVED',
       approvedByUserId: 'pharmacist',
       approvedAt: new Date(),
+      prescriptionLineId: 'rx-line-1',
     };
     const { db } = fakeDb({ cycle: approved, medicine: medicine({ rx: true }) });
     await expect(startRefillCycleCheckout(db as never, scope, 'cycle-1')).rejects.toThrow(
@@ -496,10 +574,13 @@ describe('DEV-73 Rx cycle pharmacist approval', () => {
       vi.mocked(can).mockResolvedValue(true);
       const { db } = fakeDb({ cycle: openedAsOtc, medicine: medicine({ otc: false, rx: true }) });
       await expect(
-        approveRefillCycle(db as never, scope, 'cycle-1', {
-          approvedByUserId: 'pharmacist',
-          credentialId: 'cred-1',
-        })
+        approveRefillCycle(
+          db as never,
+          scope,
+          'cycle-1',
+          { approvedByUserId: 'pharmacist', credentialId: 'cred-1' },
+          COVERING
+        )
       ).resolves.toMatchObject({ requiresPharmacist: true, approvedByUserId: 'pharmacist' });
     });
 
@@ -507,12 +588,245 @@ describe('DEV-73 Rx cycle pharmacist approval', () => {
       vi.mocked(can).mockResolvedValue(true);
       const { db } = fakeDb({ cycle: openedAsOtc });
       await expect(
-        approveRefillCycle(db as never, scope, 'cycle-1', {
-          approvedByUserId: 'pharmacist',
-          credentialId: 'cred-1',
-        })
+        approveRefillCycle(
+          db as never,
+          scope,
+          'cycle-1',
+          { approvedByUserId: 'pharmacist', credentialId: 'cred-1' },
+          COVERING
+        )
       ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
     });
+  });
+});
+
+describe('DEV-73 an Rx cycle is held until a valid prescription covers it and a pharmacist signs', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-29T06:00:00.000Z'));
+    vi.mocked(can).mockResolvedValue(true);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const awaiting = {
+    id: 'cycle-1',
+    status: 'AWAITING_PHARMACIST',
+    requiresPharmacist: true,
+    openedByUserId: 'cashier',
+    canonicalUnits: 30,
+    dueAt: DUE,
+    approvedByUserId: null,
+    approvedAt: null,
+    prescriptionLineId: null,
+    counterSaleId: null,
+    subscription: subscriptionRow,
+  };
+  const approval = { approvedByUserId: 'pharmacist', credentialId: 'cred-1' };
+
+  async function refusedApproval(
+    options: Parameters<typeof fakeDb>[0],
+    prescriptionLineId: string,
+    reason: string
+  ) {
+    const { db, writes } = fakeDb({ cycle: awaiting, ...options });
+    await expect(
+      approveRefillCycle(db as never, scope, 'cycle-1', approval, { prescriptionLineId })
+    ).rejects.toMatchObject({ reason });
+    // The cycle stays held: no approval is written and nothing is audited as approved.
+    expect(writes.some(([name]) => name === 'cycle.update')).toBe(false);
+    expect(writes.some(([name]) => name === 'audit.create')).toBe(false);
+  }
+
+  it('refuses a pharmacist PIN approval that names no prescription', async () => {
+    await refusedApproval({}, '', 'PRESCRIPTION_REQUIRED');
+  });
+
+  it('refuses a prescription line for another medicine or presentation', async () => {
+    await refusedApproval(
+      { rxLine: rxLine({ medicineId: 'med-2' }) },
+      'rx-line-1',
+      'PRESCRIPTION_NOT_FOUND'
+    );
+    await refusedApproval(
+      { rxLine: rxLine({ presentationId: 'pres-2' }) },
+      'rx-line-1',
+      'PRESCRIPTION_NOT_FOUND'
+    );
+  });
+
+  it("refuses another patient's prescription", async () => {
+    await refusedApproval(
+      { rxLine: rxLine({ prescription: { patientId: 'patient-2' } }) },
+      'rx-line-1',
+      'PRESCRIPTION_PATIENT_MISMATCH'
+    );
+  });
+
+  it('refuses a prescription that is in date today but expires before the cycle is due', async () => {
+    await refusedApproval(
+      { rxLine: rxLine({ prescription: { validUntil: new Date('2026-11-30T00:00:00.000Z') } }) },
+      'rx-line-1',
+      'PRESCRIPTION_NOT_IN_DATE'
+    );
+  });
+
+  it('refuses a prescription that only starts after today', async () => {
+    await refusedApproval(
+      { rxLine: rxLine({ prescription: { validFrom: new Date('2026-12-01T00:00:00.000Z') } }) },
+      'rx-line-1',
+      'PRESCRIPTION_NOT_IN_DATE'
+    );
+  });
+
+  it('refuses a prescription without the quantity or repeats left for the whole cycle', async () => {
+    await refusedApproval(
+      { rxLine: rxLine({ authorizedCanonicalUnits: 60, fills: [{ quantityCanonicalUnits: 40 }] }) },
+      'rx-line-1',
+      'PRESCRIPTION_EXHAUSTED'
+    );
+    await refusedApproval(
+      {
+        rxLine: rxLine({
+          fills: [{ quantityCanonicalUnits: 30 }, { quantityCanonicalUnits: 30 }],
+          prescription: { authorizedRepeats: 1 },
+        }),
+      },
+      'rx-line-1',
+      'PRESCRIPTION_EXHAUSTED'
+    );
+  });
+
+  it('releases the cycle only with a covering prescription and records it with the approval', async () => {
+    const { db, writes } = fakeDb({ cycle: awaiting });
+    await expect(
+      approveRefillCycle(db as never, scope, 'cycle-1', approval, COVERING)
+    ).resolves.toMatchObject({
+      status: 'RESERVED',
+      approvedByUserId: 'pharmacist',
+      prescriptionLineId: 'rx-line-1',
+    });
+    expect(writes).toContainEqual([
+      'audit.create',
+      expect.objectContaining({
+        data: expect.objectContaining({
+          metadata: expect.objectContaining({ prescriptionLineId: 'rx-line-1', pinVerified: true }),
+        }),
+      }),
+    ]);
+  });
+
+  it('refuses checkout of an approved Rx cycle that carries no prescription', async () => {
+    const { db } = fakeDb({
+      cycle: {
+        ...awaiting,
+        status: 'RESERVED',
+        approvedByUserId: 'pharmacist',
+        approvedAt: new Date(),
+      },
+      medicine: medicine({ otc: false, rx: true }),
+    });
+    await expect(startRefillCycleCheckout(db as never, scope, 'cycle-1')).rejects.toMatchObject({
+      reason: 'PRESCRIPTION_REQUIRED',
+    });
+    expect(createSale).not.toHaveBeenCalled();
+  });
+
+  it('lets a fresh PIN approval replace the prescription of an approved cycle not yet collected', async () => {
+    const { db, writes } = fakeDb({
+      cycle: {
+        ...awaiting,
+        status: 'RESERVED',
+        approvedByUserId: 'pharmacist',
+        approvedAt: new Date(),
+        prescriptionLineId: 'rx-line-old',
+      },
+    });
+    await expect(
+      approveRefillCycle(db as never, scope, 'cycle-1', approval, COVERING)
+    ).resolves.toMatchObject({ status: 'RESERVED', prescriptionLineId: 'rx-line-1' });
+    expect(writes.some(([name]) => name === 'audit.create')).toBe(true);
+  });
+
+  it('refuses to re-approve a cycle already handed to the counter', async () => {
+    await refusedApproval(
+      {
+        cycle: {
+          ...awaiting,
+          status: 'CHECKOUT_STARTED',
+          approvedByUserId: 'pharmacist',
+          approvedAt: new Date(),
+          prescriptionLineId: 'rx-line-1',
+          counterSaleId: 'sale-1',
+        },
+      },
+      'rx-line-1',
+      'INVALID_STATE'
+    );
+  });
+
+  it('refuses checkout once the approved prescription has run out', async () => {
+    const { db } = fakeDb({
+      cycle: {
+        ...awaiting,
+        status: 'RESERVED',
+        approvedByUserId: 'pharmacist',
+        approvedAt: new Date(),
+        prescriptionLineId: 'rx-line-1',
+      },
+      medicine: medicine({ otc: false, rx: true }),
+      rxLine: rxLine({ authorizedCanonicalUnits: 30, fills: [{ quantityCanonicalUnits: 30 }] }),
+    });
+    await expect(startRefillCycleCheckout(db as never, scope, 'cycle-1')).rejects.toMatchObject({
+      reason: 'PRESCRIPTION_EXHAUSTED',
+    });
+    expect(createSale).not.toHaveBeenCalled();
+  });
+
+  it('carries the prescription onto the counter line and queues the pharmacist sign-off', async () => {
+    const { db, writes } = fakeDb({
+      cycle: {
+        ...awaiting,
+        status: 'RESERVED',
+        approvedByUserId: 'pharmacist',
+        approvedAt: new Date(),
+        prescriptionLineId: 'rx-line-1',
+      },
+      medicine: medicine({ otc: false, rx: true }),
+    });
+    await expect(startRefillCycleCheckout(db as never, scope, 'cycle-1')).resolves.toMatchObject({
+      saleId: 'sale-1',
+    });
+    expect(writes).toContainEqual([
+      'saleLine.updateMany',
+      expect.objectContaining({
+        where: expect.objectContaining({ id: 'sale-line-1' }),
+        data: { prescriptionLineId: 'rx-line-1', prescriptionPatientId: 'patient-1' },
+      }),
+    ]);
+    expect(writes).toContainEqual([
+      'reviewItem.create',
+      {
+        data: {
+          organizationId: 'org',
+          prescriptionLineId: 'rx-line-1',
+          saleLineId: 'sale-line-1',
+          requestedByUserId: 'cashier',
+        },
+      },
+    ]);
+  });
+
+  it('asks nothing of an OTC cycle', async () => {
+    const { db, writes } = fakeDb({
+      cycle: { ...awaiting, status: 'RESERVED', requiresPharmacist: false },
+    });
+    await expect(startRefillCycleCheckout(db as never, scope, 'cycle-1')).resolves.toMatchObject({
+      saleId: 'sale-1',
+    });
+    expect(db.prescriptionLine.findFirst).not.toHaveBeenCalled();
+    expect(writes.some(([name]) => name === 'reviewItem.create')).toBe(false);
   });
 });
 
@@ -542,4 +856,68 @@ describe('DEV-73 reminder text', () => {
 
 it('exposes typed refusals', () => {
   expect(new RefillSubscriptionError('INVALID_STATE').reason).toBe('INVALID_STATE');
+});
+
+describe('DEV-943: "open due cycles now" uses the shop’s day', () => {
+  // Due at 12:00 UTC on 22 Nov (the console's due-date form), with a three-day lead:
+  // the cycle's opening day is 19 Nov.
+  const subscription = {
+    id: 'sub-due',
+    nextDueAt: new Date('2026-11-22T12:00:00.000Z'),
+    reminderLeadDays: 3,
+  };
+  function dueDb(timezone: string | null) {
+    const findMany = vi.fn(async () => [subscription]);
+    const findUnique = vi.fn(async () => ({ timezone }));
+    return {
+      db: {
+        $queryRaw: vi.fn(async () => []),
+        organization: { findUnique },
+        pharmacyRefillSubscription: { findMany },
+      },
+      findMany,
+      findUnique,
+    };
+  }
+
+  it.each([
+    // 19:30 UTC on 18 Nov is already 00:30 on 19 Nov in Karachi: the opening day has come.
+    ['Asia/Karachi', '2026-11-18T19:30:00.000Z', ['sub-due']],
+    // 18:59 UTC is still 23:59 on 18 Nov in Karachi: not yet.
+    ['Asia/Karachi', '2026-11-18T18:59:00.000Z', []],
+    // A UTC organisation's day still turns at UTC midnight.
+    ['UTC', '2026-11-18T19:30:00.000Z', []],
+    ['UTC', '2026-11-19T00:00:00.000Z', ['sub-due']],
+    [null, '2026-11-18T19:30:00.000Z', []],
+  ])('in %s at %s opens %j', async (timezone, now, expected) => {
+    const { db, findMany, findUnique } = dueDb(timezone);
+    await expect(listDueRefillSubscriptionIds(db as never, scope, new Date(now))).resolves.toEqual(
+      expected
+    );
+    // The zone is the caller's own organisation's, never an input.
+    expect(findUnique).toHaveBeenCalledWith({
+      where: { id: scope.organizationId },
+      select: { timezone: true },
+    });
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          status: 'ACTIVE',
+        }),
+      })
+    );
+  });
+
+  it('matches the scheduled job: the same subscriptions open on the same shop day', async () => {
+    const { refillCycleOpensBy } = await import('./refill-subscription-rules');
+    for (const now of ['2026-11-18T18:59:00.000Z', '2026-11-18T19:30:00.000Z']) {
+      const { db } = dueDb('Asia/Karachi');
+      const ids = await listDueRefillSubscriptionIds(db as never, scope, new Date(now));
+      expect(ids.includes('sub-due')).toBe(
+        refillCycleOpensBy(subscription, 'Asia/Karachi', new Date(now))
+      );
+    }
+  });
 });

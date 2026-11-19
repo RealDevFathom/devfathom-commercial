@@ -210,6 +210,15 @@ model PharmacyBranch {
   khataReminderCadenceDays        Int                          @default(7)
   khataReminderMinBalanceMinor    Int                          @default(10000)
   khataReminderRevision           Int                          @default(0)
+  /// DEV-846: the owner's record of pharmacist coverage hours for this branch,
+  /// `{ timeZone, windows }` (the rule-set `presenceHours` shape). A record only:
+  /// the live-sale hours check reads the jurisdiction rule set, never this.
+  pharmacistCoverageHours         Json?
+  pharmacistCoverageRevision      Int                          @default(0)
+  /// DEV-66: the branch's smart-discount policy (minimum margin, evidence
+  /// windows). Null means the stored defaults, which the owner can change.
+  discountPolicy                  Json?
+  discountPolicyRevision          Int                          @default(0)
   id                              String                       @id @default(cuid())
   organizationId                  String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   code                            String
@@ -255,6 +264,7 @@ model PharmacyBranch {
   visibilityPharmacyDayReopen              PharmacyDayReopen[]               @relation("PharmacyDayReopenVisibilityAnchor")
   visibilityPharmacyDrawerSession          PharmacyDrawerSession[]           @relation("PharmacyDrawerSessionVisibilityAnchor")
   visibilityPharmacyReceiptNumberSequence  PharmacyReceiptNumberSequence[]   @relation("PharmacyReceiptNumberSequenceVisibilityAnchor")
+  visibilityPharmacyBranchReceiptSequence  PharmacyBranchReceiptSequence[]   @relation("PharmacyBranchReceiptSequenceVisibilityAnchor")
   visibilityPharmacySale                   PharmacySale[]                    @relation("PharmacySaleVisibilityAnchor")
   visibilityPharmacySettlementBatch        PharmacySettlementBatch[]         @relation("PharmacySettlementBatchVisibilityAnchor")
   visibilityPharmacyTaxProfileVersion      PharmacyTaxProfileVersion[]       @relation("PharmacyTaxProfileVersionVisibilityAnchor")
@@ -267,6 +277,7 @@ model PharmacyBranch {
   sopEvidenceCaptures                      PharmacySopEvidenceCapture[]
   sopSiteSettings                          PharmacySopSiteSetting[]
   sopReworkNotes                           PharmacySopReworkNote[]
+  competitorPriceObservations              PharmacyCompetitorPriceObservation[]
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
@@ -685,11 +696,12 @@ model Medicine {
 model PharmacyCatalogueEdit {
   id                String   @id @default(cuid())
   organizationId    String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  medicineId        String
+  // Null only for a queued createIngredient: a new ingredient belongs to no medicine.
+  medicineId        String?
   editorId          String
   editor            User     @relation("CatalogueEditEditor", fields: [organizationId, editorId], references: [organizationId, id], onDelete: Restrict)
   operation         String   @default("UPDATE_MEDICINE")
-  medicine          Medicine @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
+  medicine          Medicine? @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
   changes           Json
   expectedUpdatedAt DateTime
   status            String   @default("PENDING")
@@ -1340,6 +1352,13 @@ model PharmacySale {
   completedAt               DateTime?
   receiptNumber             Int?
   receiptDeviceId           String?
+  /// DEV-637: set by the database when a receipt is numbered from the branch-wide sequence;
+  /// those numbers are unique per branch. Receipts numbered before that keep false.
+  receiptNumberBranchUnique Boolean                      @default(false)
+  /// DEV-637: the number an offline counter printed, kept when replay had to give the sale a
+  /// fresh branch number because a block leased before branch-wide numbering repeated an
+  /// existing receipt. Shown on reprints; fixed once issued.
+  offlineReceiptReference   Int?
   businessDate              DateTime?                    @db.Date
   customerId                String?
   createdAt                 DateTime                     @default(now())
@@ -1353,6 +1372,7 @@ model PharmacySale {
   recoveredRestockInterests PharmacyRestockInterest[]    @relation("PharmacyRestockRecoverySale")
   tenders                   PharmacyTender[]
   refunds                   PharmacyRefund[]
+  cardTerminalAttempts      PharmacyCardTerminalAttempt[]
   customer                  PharmacyCustomer?            @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
   loyaltyEntries            PharmacyLoyaltyPointsEntry[]
   customerOrder             PharmacyCustomerOrder?
@@ -1679,10 +1699,79 @@ model PharmacyTender {
   refunds           PharmacyRefund[]
   settlementMembers PharmacySettlementTender[]
   loyaltyEntries    PharmacyLoyaltyPointsEntry[]
+  cardTerminalAttempts PharmacyCardTerminalAttempt[]
 
   @@unique([organizationId, id])
   @@index([organizationId, branchId, businessDate])
   @@map("pharmacy_tenders")
+}
+
+/// DEV-743: lifecycle of one integrated card-terminal charge. Separate from the manual
+/// "received externally" Card and Wallet tenders (DEV-713), which never use this table.
+enum PharmacyCardTerminalAttemptStatus {
+  /// Written and committed before anything is sent to the terminal.
+  CREATED
+  /// One dispatcher claimed the attempt; the request may have reached the terminal.
+  SENT
+  /// Timeout, error or pending answer: never retried as a new charge, only queried.
+  UNKNOWN
+  /// The terminal approved the charge; not yet a tender.
+  APPROVED
+  /// The approval became exactly one pharmacy tender.
+  SETTLED
+  /// Declined, or confirmed never charged.
+  DECLINED
+  /// Never sent (stale CREATED): closed, never dispatched late.
+  ABANDONED
+  /// Needs a person: recovery gave up, or an approval could not become a tender.
+  MANUAL_REVIEW
+  /// A reviewed charge that was reversed outside DevFathom.
+  REVERSED
+}
+
+/// DEV-743: the one durable payment-attempt record for an integrated card terminal. It is
+/// committed before a terminal can send a charge, so a crash, timeout or lost response always
+/// leaves a row to recover from. Holds only an opaque provider reference, approval code, brand
+/// and last four: never a card number, CVV, track, PIN, expiry or secret.
+model PharmacyCardTerminalAttempt {
+  id             String                            @id @default(cuid())
+  organizationId String                            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  saleId         String
+  deviceId       String
+  terminalId     String
+  provider       String
+  /// Caller-supplied idempotency key. A replay returns the same attempt, never a new charge.
+  attemptKey     String
+  amountMinor    Int
+  currency       String
+  businessDate   DateTime                          @db.Date
+  status         PharmacyCardTerminalAttemptStatus @default(CREATED)
+  providerRef    String?
+  approvalCode   String?
+  cardBrand      String?
+  cardLast4      String?
+  declineCode    String?
+  statusChecks   Int                               @default(0)
+  tenderId       String?
+  reviewReason   String?
+  resolvedById   String?
+  /// DEV-743: why a manager or owner resolved a manual review, and the slip's provider reference.
+  resolutionReason String?
+  resolutionRef  String?
+  actorId        String
+  sentAt         DateTime?
+  resolvedAt     DateTime?
+  createdAt      DateTime                          @default(now())
+  updatedAt      DateTime                          @updatedAt
+  sale           PharmacySale                      @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
+  tender         PharmacyTender?                   @relation(fields: [organizationId, tenderId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, attemptKey])
+  @@index([organizationId, branchId, status])
+  @@index([organizationId, saleId])
+  @@map("pharmacy_card_terminal_attempts")
 }
 
 model PharmacyRefund {
@@ -1838,6 +1927,23 @@ model PharmacyReceiptNumberSequence {
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, deviceId])
   @@map("pharmacy_receipt_number_sequences")
+}
+
+/// DEV-637: the one receipt-number sequence of a branch. Online sales draw one number and
+/// offline counters lease blocks from it (`pharmacy_allocate_branch_receipt_numbers`), so no
+/// two receipts of a branch share a number whichever counter issued them.
+/// `PharmacyReceiptNumberSequence` (per device) is kept only as a historical record.
+model PharmacyBranchReceiptSequence {
+  id               String         @id @default(cuid())
+  organizationId   String         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  nextNumber       Int
+  updatedAt        DateTime       @default(now()) @updatedAt
+  visibilityAnchor PharmacyBranch @relation("PharmacyBranchReceiptSequenceVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_branch_receipt_sequences_visibility_fkey")
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, branchId])
+  @@map("pharmacy_branch_receipt_sequences")
 }
 
 /// Durable authority for original-versus-reprint receipt dispatches.
@@ -2288,7 +2394,8 @@ enum PharmacyRefillCycleStatus {
 
 /// DEV-73: a chronic-medicine monthly pack subscription. Each cycle holds stock
 /// through DEM-03 reservations; prescription-only cycles stay blocked until a
-/// pharmacist approves that cycle with a fresh PIN.
+/// valid prescription covers that cycle and a pharmacist approves it with a
+/// fresh PIN.
 model PharmacyRefillSubscription {
   id               String                            @id @default(cuid())
   organizationId   String                            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -2332,6 +2439,8 @@ model PharmacyRefillSubscriptionCycle {
   approvalCredentialId String?
   selfApproved         Boolean                    @default(false)
   approvedAt           DateTime?
+  /// The prescription line the approving pharmacist confirmed covers this cycle.
+  prescriptionLineId   String?
   counterSaleId        String?
   releasedAt           DateTime?
   createdAt            DateTime                   @default(now())
@@ -2625,8 +2734,12 @@ model PharmacyManufacturingBatch {
   id              String                  @id @default(cuid())
   organizationId  String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   medicineId      String
-  batchNumber     String
-  expiresAt       DateTime
+  /// DEV-853: null when the batch number was never recorded (legacy opening
+  /// stock). Shown as "Batch not recorded"; never invented.
+  batchNumber     String?
+  /// DEV-853: null when the expiry was never recorded. An unknown expiry is
+  /// never treated as expired and never blocks a sale; FEFO picks it last.
+  expiresAt       DateTime?
   expiryPrecision PharmacyExpiryPrecision @default(DAY)
   state           PharmacyBatchState      @default(ACTIVE)
   stateReason     String?
@@ -2659,8 +2772,10 @@ model PharmacyInventoryLot {
   supplierInvoiceRef      String
   unitCostMinor           Int
   printedMrpMinor         Int
-  receivedExpiresAt       DateTime
-  receivedExpiryPrecision PharmacyExpiryPrecision
+  /// DEV-853: both null when the expiry was not recorded at receipt (legacy
+  /// opening stock). Staff can record it later.
+  receivedExpiresAt       DateTime?
+  receivedExpiryPrecision PharmacyExpiryPrecision?
   receivedAt              DateTime?
   /// DEV-90: immutable numeric alias encoded in the internal shelf-label Code128.
   shelfLabelNumber        Int                     @unique @default(autoincrement())
@@ -2748,6 +2863,11 @@ model PharmacyInterbranchTransfer {
   createdAt      DateTime                          @default(now())
   dispatchedAt   DateTime?
   receivedAt     DateTime?
+  /// DEV-908: who closed the receipt at the destination branch.
+  receivedById   String?
+  /// DEV-908: the premises licences in force at each end when the stock left.
+  fromLicenceNumber String?
+  toLicenceNumber String?
   lines          PharmacyInterbranchTransferLine[]
   signalActions  PharmacyStockSignalAction[]
 
@@ -3196,6 +3316,8 @@ enum FinanceSourceKind {
   PHARMACY_JOURNAL_VOUCHER
   /// DEV-103: a native non-stock supplier operating-expense invoice.
   PHARMACY_AP_INVOICE
+  /// DEV-694: a manager-approved set-off of a supplier credit note against an AP invoice.
+  PHARMACY_AP_CREDIT_SET_OFF
 }
 
 /// CEO-JVCORE-20261025: the only journal-voucher purpose the pharmacy general
@@ -3326,7 +3448,8 @@ model PharmacyApInvoice {
   createdAt          DateTime                @default(now())
   updatedAt          DateTime                @updatedAt
 
-  settlements PharmacyApInvoiceSettlement[]
+  settlements   PharmacyApInvoiceSettlement[]
+  creditSetOffs PharmacyApCreditSetOff[]
 
   @@unique([organizationId, id], map: "pharmacy_ap_invoices_org_id_key")
   @@unique([organizationId, branchId, id], map: "pharmacy_ap_invoices_org_branch_id_key")
@@ -3372,6 +3495,63 @@ model PharmacyApInvoiceSettlement {
   @@unique([organizationId, reverseCommandKey], map: "pharmacy_ap_settlements_org_reverse_command_key")
   @@index([organizationId, branchId, invoiceId, status], map: "pharmacy_ap_settlements_org_branch_invoice_idx")
   @@map("pharmacy_ap_invoice_settlements")
+}
+
+enum PharmacyApCreditSetOffStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  REVERSED
+}
+
+/// DEV-694: staff choose the AP invoice a supplier credit note is set off
+/// against (PENDING); the payable reduces only when a manager approves it with
+/// their own fresh PIN (APPROVED), which posts Dr ACCOUNTS_PAYABLE /
+/// Cr SUPPLIER_CLAIM_RECEIVABLE. A rejected request changes no money. A manager
+/// may reverse an approved set-off once (REVERSED), posting the mirror entry.
+model PharmacyApCreditSetOff {
+  id                 String                       @id @default(cuid())
+  organizationId     String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  invoiceId          String
+  supplierCreditId   String
+  amountMinor        Int
+  currency           Currency                     @default(PKR)
+  status             PharmacyApCreditSetOffStatus @default(PENDING)
+  note               String?
+  requestKey         String
+  requestPayloadHash String
+  requestedByUserId  String
+  requestedAt        DateTime                     @default(now())
+  decisionKey        String?
+  decidedByUserId    String?
+  decidedAt          DateTime?
+  approvalPolicy     String?
+  rejectionReason    String?
+  journalEntryId     String?
+  reversedAt         DateTime?
+  reversedByUserId   String?
+  reversalReason     String?
+  reversalPolicy     String?
+  reverseCommandKey  String?
+  reversePayloadHash String?
+  reversalEntryId    String?
+  createdAt          DateTime                     @default(now())
+  updatedAt          DateTime                     @updatedAt
+
+  invoice PharmacyApInvoice      @relation(fields: [organizationId, branchId, invoiceId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_ap_credit_set_offs_invoice_fkey")
+  credit  PharmacySupplierCredit @relation(fields: [organizationId, supplierCreditId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_ap_credit_set_offs_credit_fkey")
+
+  @@unique([organizationId, id], map: "pharmacy_ap_credit_set_offs_org_id_key")
+  @@unique([organizationId, requestKey], map: "pharmacy_ap_credit_set_offs_org_request_key")
+  @@unique([organizationId, decisionKey], map: "pharmacy_ap_credit_set_offs_org_decision_key")
+  @@unique([organizationId, journalEntryId], map: "pharmacy_ap_credit_set_offs_org_entry_key")
+  @@unique([organizationId, reverseCommandKey], map: "pharmacy_ap_credit_set_offs_org_reverse_command_key")
+  @@unique([organizationId, reversalEntryId], map: "pharmacy_ap_credit_set_offs_org_reversal_entry_key")
+  @@index([organizationId, branchId, status], map: "pharmacy_ap_credit_set_offs_org_branch_status_idx")
+  @@index([organizationId, supplierCreditId, status], map: "pharmacy_ap_credit_set_offs_org_credit_status_idx")
+  @@index([organizationId, branchId, invoiceId, status], map: "pharmacy_ap_credit_set_offs_org_invoice_status_idx")
+  @@map("pharmacy_ap_credit_set_offs")
 }
 
 enum PharmacyBookkeepingKind {
@@ -5945,9 +6125,28 @@ model Organization {
   /// DEV-879: when true, no member's fixed PIN is accepted for an approval; every approver
   /// must enter a code from their enrolled approval authenticator.
   requireApprovalAuthenticator  Boolean                        @default(false)
+  /// DEV-908: the owner switches on recorded stock transfers between their own
+  /// licensed branches. Off by default; controlled drugs never move this way.
+  pharmacyBranchTransfersEnabled Boolean                       @default(false)
+  /// DEV-907: owner switch for the counter's "also in stock at another branch"
+  /// line. Off by default; branch names only, never controlled drugs.
+  pharmacyOtherBranchAvailability Boolean                      @default(false)
+  /// DEV-66: the owner's maximum discount on a pharmacy line, in basis points of the
+  /// undiscounted price. The stored default 10000 means no maximum is set yet; once the
+  /// owner sets one it is enforced on the server for everyone.
+  pharmacyMaxDiscountBps        Int                            @default(10000)
   lastDemoResetAt               DateTime?
   gracePeriodDays               Int                            @default(0)
   activatedAt                   DateTime?
+  /// DEV-905: the super admin's manual approval of a pharmacy. While set (and the
+  /// organization is ONBOARDING, ACTIVE or GRACE), the standing organization- and
+  /// branch-level gates do not refuse it (src/lib/pharmacy/platform-approval.ts).
+  /// Only the platform control plane may write these four columns (database trigger).
+  platformApprovedAt            DateTime?
+  platformApprovedById          String?
+  platformApprovalNote          String?
+  /// The checks that were not met when the pharmacy was approved: [{ key, label }].
+  platformApprovalUnmetChecks   Json?
   suspendedAt                   DateTime?
   terminatedAt                  DateTime?
   purgeScheduledAt              DateTime?
@@ -12778,6 +12977,7 @@ enum PharmacyMigrationExceptionBucket {
   DUPLICATE_PRODUCT
   PARTY_UNMATCHED
   BALANCE_MISMATCH
+  EXPIRED_STOCK
 }
 
 enum PharmacyMigrationExceptionSeverity {
@@ -12843,6 +13043,50 @@ model PharmacyMigrationBatch {
 /// MIG-01 — every imported row keeps its incumbent source key and its import
 /// batch. Every parsed column is nullable and has NO default: a value the
 /// incumbent did not supply stays missing and raises an exception instead.
+/// DEV-912 — one catalogue medicine created from one staged legacy source row, after
+/// the batch's bulk creation was approved (`editId`). `sourceKey` (uploaded bytes'
+/// SHA-256 plus the row number) is unique per organization, so a re-run creates
+/// nothing twice. Imported pack MRP and purchase price are kept as read; null means
+/// the file did not record them. A re-exported file's row that names a medicine an
+/// earlier file created is linked to it as MATCHED instead of creating a copy. Read and insert only; foreign keys are migration
+/// enforced.
+model PharmacyStagedMedicineLink {
+  id                 String   @id @default(cuid())
+  organizationId     String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  sourceKey          String
+  batchId            String
+  rowId              String
+  editId             String
+  medicineId         String
+  packLevelId        String?
+  unitsPerPack       Int?
+  mrpMinor           Int?
+  purchasePriceMinor Int?
+  legacyCode         String?
+  barcode            String?
+  barcodeAttached    Boolean?
+  /// Old code, or name + units per pack + pack cell; computed in the application. Null: never matched.
+  matchKey           String?
+  /// CREATED, or MATCHED when an earlier staged file already created this medicine.
+  outcome            String   @default("CREATED")
+  /// The supplier cell as read; `supplierId` is the existing supplier with exactly that
+  /// normalised name, null when none or several match (reported, never created).
+  supplierName       String?
+  supplierId         String?
+  /// The reorder level cell (whole packs); `reorderLevelApplied` says whether it became the
+  /// medicine's approved safety stock at the requested branch. Null: not recorded.
+  reorderLevelPacks  Int?
+  reorderLevelApplied Boolean?
+  createdById        String
+  createdAt          DateTime @default(now())
+
+  @@unique([organizationId, sourceKey])
+  @@index([organizationId, medicineId])
+  @@index([organizationId, matchKey])
+  @@index([organizationId, batchId])
+  @@map("pharmacy_staged_medicine_links")
+}
+
 model PharmacyMigrationRow {
   id                String    @id @default(cuid())
   organizationId    String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -13670,6 +13914,9 @@ model PharmacyPharmacistReviewDecision {
   actorUserId      String
   reason           String?
   signedAt         DateTime?
+  /// DEV-950: the audit entry of a solo self-signature (the requester signs with a fresh own
+  /// PIN). The database admits a requester's SIGN only with this marker (20261118124600).
+  selfApprovalAuditId String?
   createdAt        DateTime                        @default(now())
   reviewItem       PharmacyPharmacistReviewItem    @relation(fields: [organizationId, reviewItemId], references: [organizationId, id], onDelete: Restrict)
   reminderCaptures PharmacyRefillReminderCapture[]
@@ -13725,7 +13972,8 @@ model PharmacyControlledRegisterEntry {
   manufacturer           String?
   inventoryLotId         String
   stockMovementId        String?
-  batchNumber            String
+  /// DEV-853: null when the lot's batch number was never recorded.
+  batchNumber            String?
   quantityCanonicalUnits Int
   /// Signed change in the sellable balance. Sales store the units removed,
   /// purchases store the units accepted, and a correction stores the
@@ -14204,6 +14452,7 @@ model PharmacySupplierCredit {
 
   supplier    PharmacySupplier                   @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict)
   allocations PharmacySupplierCreditAllocation[]
+  apSetOffs   PharmacyApCreditSetOff[]
 
   @@unique([organizationId, id], map: "pharmacy_supplier_credits_org_id_key")
   @@unique([organizationId, supplierId, reference], map: "pharmacy_supplier_credits_org_supplier_reference_key")
@@ -15034,6 +15283,26 @@ model PharmacyDeviceLotQuota {
   @@unique([organizationId, id], map: "pharmacy_device_lot_quotas_org_id_key")
   @@index([organizationId, inventoryLotId, stockLocationId], map: "pharmacy_device_lot_quotas_bucket_idx")
   @@map("pharmacy_device_lot_quotas")
+}
+
+/// #518 / DEV-753 / DEV-911 — one owner-policy row per pharmacy organization. The table and
+/// its guard and audit triggers are created by migrations; application writes go through
+/// raw SQL so the triggers stamp the actor, version and audit row. This model exists so the
+/// policy readers can use an ordinary typed read. A missing row means every default below.
+model PharmacyOwnerPolicy {
+  organizationId                    String   @id @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  allowCashierRxSale                Boolean  @default(false)
+  updatedByUserId                   String?
+  updatedAt                         DateTime @default(now())
+  supplierComplianceChecksEnabled   Boolean  @default(true)
+  supplierCompliancePolicyVersion   Int      @default(0)
+  supplierComplianceAcknowledgement String?
+  /// DEV-911: the pharmacist check and prescription record at each sale. ON by default.
+  pharmacistCheckEnabled            Boolean  @default(true)
+  pharmacistCheckPolicyVersion      Int      @default(0)
+  pharmacistCheckAcknowledgement    String?
+
+  @@map("pharmacy_owner_policies")
 }
 
 /// RPT-03 — one owner's explicit daily digest opt-in for one active branch.
@@ -16902,6 +17171,8 @@ model PharmacyPackPrice {
   proposalId         String?
   reviewedOrgPriceId String?
   createdById        String
+  /// DEV-928: who proposed the price. createdById is who approved (applied) it.
+  proposedById       String?
   createdAt          DateTime @default(now())
 
   @@unique([organizationId, id])
@@ -17197,4 +17468,29 @@ model PharmacyPrintJob {
   @@index([organizationId, bridgeId, status, queuedAt], map: "pharmacy_print_jobs_claim_idx")
   @@index([organizationId, branchId, saleId], map: "pharmacy_print_jobs_sale_idx")
   @@map("pharmacy_print_jobs")
+}
+
+/// DEV-66: APPEND-ONLY competitor discount log. A manager records the price a
+/// nearby competitor was seen charging for a medicine; the newest unexpired
+/// observations for the same pack level feed discount suggestions. `medicineId`
+/// and `packLevelId` reference pharmacy_medicines and pharmacy_pack_levels
+/// through SQL-only tenant-composite foreign keys.
+model PharmacyCompetitorPriceObservation {
+  id                 String   @id @default(cuid())
+  organizationId     String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  medicineId         String
+  /// The sealed pack the observed price is for; prices compare only like for like.
+  packLevelId        String
+  competitorLabel    String
+  observedPriceMinor Int
+  observedAt         DateTime
+  recordedByUserId   String
+  createdAt          DateTime @default(now())
+
+  branch PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_competitor_price_observations_org_id_key")
+  @@index([organizationId, branchId, medicineId, packLevelId, observedAt], map: "pharmacy_competitor_price_obs_medicine_idx")
+  @@map("pharmacy_competitor_price_observations")
 }

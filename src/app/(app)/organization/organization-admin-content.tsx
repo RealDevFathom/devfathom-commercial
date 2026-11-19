@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Switch as StudioSwitch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
+import { permissionDisplayName } from '@/lib/abac/permission-labels';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { useAssistant } from '@/lib/assistant-store';
@@ -296,8 +297,8 @@ export function OrganizationAdminContent() {
         />
         <Card title="Access unavailable">
           <p className="text-sm text-destructive" role="alert">
-            {overview.error?.message ?? 'Organization information is unavailable.'} Ask a
-            workspace administrator to grant you organization access.
+            {overview.error?.message ?? 'Organization information is unavailable.'} Ask a workspace
+            administrator to grant you organization access.
           </p>
         </Card>
       </div>
@@ -627,8 +628,8 @@ export function OrganizationAdminContent() {
             </div>
             <p className="text-[11px] text-muted-foreground sm:col-span-2 lg:col-span-3">
               12–256 characters, with a lowercase letter, an uppercase letter and a digit. The new
-              member occupies one licensed seat ({entitlements.activeSeats}/
-              {entitlements.seatLimit} used).
+              member occupies one licensed seat ({entitlements.activeSeats}/{entitlements.seatLimit}{' '}
+              used).
             </p>
           </form>
         )}
@@ -660,10 +661,7 @@ export function OrganizationAdminContent() {
                         id: user.id,
                         role: formValue(values, 'role') as 'ADMIN' | 'HR' | 'EMPLOYEE',
                         status: formValue(values, 'status') as
-                          | 'ACTIVE'
-                          | 'INACTIVE'
-                          | 'ON_LEAVE'
-                          | 'INVITED',
+                          'ACTIVE' | 'INACTIVE' | 'ON_LEAVE' | 'INVITED',
                         organizationRoleId: formValue(values, 'organizationRoleId') || null,
                         title: formValue(values, 'title'),
                         department: formValue(values, 'department') as
@@ -787,7 +785,10 @@ export function OrganizationAdminContent() {
                   </div>
                   <p className="mt-2 text-[11px] leading-5 text-muted-foreground">
                     {item.permissions
-                      .map((permission) => `${permission.effect} ${permission.capability}`)
+                      .map(
+                        (permission) =>
+                          `${permission.effect} ${permissionDisplayName(permission.capability)}`
+                      )
                       .join(' · ') || 'No rules'}
                   </p>
                 </summary>

@@ -29,6 +29,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { LedgerScope } from './stock-ledger';
 import { packConversions } from './pack-conversion';
 import { loadTemperatureZoneStatuses } from './temperature-log';
+import { hasKnownExpiryPassed } from './unrecorded-batch';
 import {
   DEFAULT_SIGNAL_POLICY,
   evaluateStockSignals,
@@ -53,7 +54,7 @@ type LotRow = {
   inventoryLotId: string;
   medicineId: string;
   stockLocationId: string;
-  expiresAt: Date;
+  expiresAt: Date | null;
   receivedAt: Date | null;
   disposition: LotFact['disposition'];
   batchState: LotFact['batchState'];
@@ -888,7 +889,7 @@ async function assertDraftEligible(
       if (
         !destination ||
         lot.batch.state !== 'ACTIVE' ||
-        lot.batch.expiresAt <= at ||
+        hasKnownExpiryPassed(lot.batch.expiresAt, at) ||
         recall ||
         (medicine.coldChain && (!location.coldChain || !destination.coldChain))
       ) {

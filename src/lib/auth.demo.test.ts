@@ -42,6 +42,7 @@ vi.mock('@/server/audit', () => ({
 vi.mock('@/lib/rate-limit', () => ({
   rateLimit: () => ({ ok: true, retryAfter: 0 }),
   clearRateLimit: vi.fn(),
+  refundRateLimit: vi.fn(),
 }));
 vi.mock('@/lib/totp', () => ({ hashRecoveryCode: vi.fn(), verifyTotp: vi.fn() }));
 vi.mock('@/lib/tenancy/host', () => ({
@@ -201,7 +202,10 @@ describe('demo Auth.js boundary', () => {
       request()
     );
     expect(result).toMatchObject({ passwordAuthenticatedAt: createdAt.getTime() });
-    expect(read).toHaveBeenCalledWith({ where: { id: 'intent_1' }, select: { createdAt: true } });
+    expect(read).toHaveBeenCalledWith({
+      where: { id: 'intent_1' },
+      select: { createdAt: true, ip: true },
+    });
   });
 
   it('admits only the exact marked demo manager through a live server-owned intent', async () => {

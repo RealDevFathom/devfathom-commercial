@@ -68,10 +68,12 @@ function fixture() {
     tenders: [],
   };
   const db = {
+    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi' }) },
+    branchRegulatoryProfile: { findFirst: vi.fn().mockResolvedValue(null) },
     $queryRaw: vi
       .fn()
       .mockImplementation(async (q) =>
-        q.strings.join('').includes('receipt_number_sequences')
+        q.strings.join('').includes('pharmacy_allocate_branch_receipt_numbers')
           ? [{ receipt_number: 42 }]
           : [{ id: sale.id, patientId: 'patient-a' }]
       ),

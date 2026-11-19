@@ -375,10 +375,24 @@ suite('DEV-863 prepaid balances on PostgreSQL', () => {
        VALUES ($1, $2, $3, $1, 1, 'UNIT', 1, now())`,
       [pack, a.organizationId, presentation]
     );
-    await owner.query(
-      `INSERT INTO pharmacy_sales (id, "organizationId", "branchId", "createdByUserId", "updatedAt")
-       VALUES ($1, $2, $3, $4, now())`,
-      [sale, a.organizationId, a.branchId, a.actorId]
+    // pharmacy_sales and pharmacy_sale_lines admit only their own tenant (the platform flag
+    // does not reach them), so the owner writes and counts inside tenant A.
+    const asTenantA = async <T>(work: () => Promise<T>) => {
+      await owner.query(`SELECT set_config('app.current_organization_id', $1, false)`, [
+        a.organizationId,
+      ]);
+      try {
+        return await work();
+      } finally {
+        await owner.query(`SELECT set_config('app.current_organization_id', '', false)`);
+      }
+    };
+    await asTenantA(() =>
+      owner.query(
+        `INSERT INTO pharmacy_sales (id, "organizationId", "branchId", "createdByUserId", "updatedAt")
+         VALUES ($1, $2, $3, $4, now())`,
+        [sale, a.organizationId, a.branchId, a.actorId]
+      )
     );
     const line = (tier: Prisma.Sql) => Prisma.sql`INSERT INTO pharmacy_sale_lines
       (id, "organizationId", "branchId", "saleId", "medicineId", "presentationId", "packLevelId",
@@ -393,10 +407,14 @@ suite('DEV-863 prepaid balances on PostgreSQL', () => {
       raw(a, line(Prisma.sql`50, 'Bronze', '{"no-such-allocation": 50}'::jsonb`))
     ).rejects.toThrow(/price floor/);
     await expect(raw(a, line(Prisma.sql`50, NULL, NULL`))).rejects.toThrow(/check constraint/);
-    const { rows } = await owner.query(
-      `SELECT count(*)::int AS n FROM pharmacy_sale_lines WHERE "saleId" = $1`,
-      [sale]
+    const { rows } = await asTenantA(() =>
+      owner.query(
+        `SELECT (SELECT count(*)::int FROM pharmacy_sales WHERE id = $1) AS sales,
+                (SELECT count(*)::int FROM pharmacy_sale_lines WHERE "saleId" = $1) AS n`,
+        [sale]
+      )
     );
-    expect(rows[0].n).toBe(0);
+    // The sale is visible here, so zero lines means none was stored.
+    expect(rows[0]).toEqual({ sales: 1, n: 0 });
   });
 });

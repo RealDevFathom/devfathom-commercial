@@ -187,6 +187,130 @@ describe('MED-06 connector router boundary', () => {
     ).rejects.toMatchObject({ code: 'CONFLICT' });
   });
 
+  it('makes a medicine confirmed after its NARCOTICS legacy row was staged controlled (DEV-854)', async () => {
+    const proposal = (id: string, productName: string) => ({
+      id,
+      run: { triggeredBy: 'editor-1' },
+      status: 'PENDING',
+      targetMedicineId: null,
+      inputDigest: 'digest',
+      rowSourceKey: `row-${id}`,
+      payload: {
+        values: { productName },
+        source: {
+          connectorId: 'manual-file',
+          label: 'Manual CSV / Excel',
+          fileName: 'catalogue.csv',
+          batchId: 'batch-m',
+          rowSourceKey: `row-${id}`,
+          rights: MANUAL_FILE_RIGHTS,
+        },
+      },
+    });
+    for (const [staged, expected] of [
+      [true, true],
+      [false, false],
+    ] as const) {
+      const tx = {
+        $queryRaw: vi.fn().mockResolvedValue([{ found: staged }]),
+        pharmacyReferenceConnectorProposal: {
+          findFirst: vi.fn().mockResolvedValue(proposal('proposal-m', 'Synthetic Opioid 50mg')),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        medicine: {
+          findFirst: vi.fn(),
+          create: vi.fn().mockResolvedValue({
+            id: 'medicine-m',
+            productName: 'Synthetic Opioid 50mg',
+            controlled: false,
+          }),
+          update: vi.fn().mockResolvedValue({}),
+        },
+        medicineProvenance: { create: vi.fn().mockResolvedValue({ id: 'assertion-m' }) },
+        medicineReviewDecision: { create: vi.fn() },
+      };
+      await caller({
+        $transaction: (run: (client: typeof tx) => unknown) => run(tx),
+      }).decideReferenceConnectorProposal({ proposalId: 'proposal-m', decision: 'CONFIRM' });
+      expect(tx.$queryRaw).toHaveBeenCalledOnce();
+      if (expected)
+        expect(tx.medicine.update).toHaveBeenCalledWith({
+          where: { id: 'medicine-m' },
+          data: { controlled: true },
+        });
+      else expect(tx.medicine.update).not.toHaveBeenCalled();
+    }
+  });
+
+  it("does not let a reloaded legacy file undo a person's correction to not controlled (DEV-925)", async () => {
+    for (const corrected of [true, false]) {
+      const tx = {
+        // First the correction lookup, then the staged-row lookup of the shared rule.
+        $queryRaw: vi
+          .fn()
+          .mockResolvedValueOnce([{ corrected }])
+          .mockResolvedValueOnce([{ found: false }]),
+        pharmacyReferenceConnectorProposal: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'proposal-c',
+            run: { triggeredBy: 'editor-1' },
+            status: 'PENDING',
+            targetMedicineId: 'medicine-c',
+            inputDigest: 'digest',
+            rowSourceKey: 'row-c',
+            payload: {
+              // The manual file connector reads the NARCOTICS class as controlled: 'true'.
+              values: { productName: 'Synthetic Opioid 50mg', controlled: 'true' },
+              source: {
+                connectorId: 'manual-file',
+                label: 'Manual CSV / Excel',
+                fileName: 'legacy.csv',
+                batchId: 'batch-c',
+                rowSourceKey: 'row-c',
+                rights: MANUAL_FILE_RIGHTS,
+              },
+            },
+          }),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        medicine: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'medicine-c',
+            productName: 'Synthetic Opioid 50mg',
+            controlled: false,
+          }),
+          update: vi.fn(async ({ data }: { data: { controlled?: boolean } }) => ({
+            id: 'medicine-c',
+            productName: 'Synthetic Opioid 50mg',
+            controlled: data.controlled ?? false,
+          })),
+        },
+        medicineProvenance: { create: vi.fn().mockResolvedValue({ id: 'assertion-c' }) },
+        medicineReviewDecision: { create: vi.fn() },
+      };
+      await caller({
+        $transaction: (run: (client: typeof tx) => unknown) => run(tx),
+      }).decideReferenceConnectorProposal({ proposalId: 'proposal-c', decision: 'CONFIRM' });
+      const [strings, ...params] = tx.$queryRaw.mock.calls[0]!;
+      expect((strings as string[]).join('?') + JSON.stringify(params)).toContain(
+        'pharmacy_catalogue_edits'
+      );
+      expect(JSON.stringify(params)).toContain('"org-a"');
+      expect(JSON.stringify(params)).toContain('"medicine-c"');
+      const written = tx.medicine.update.mock.calls[0]![0].data;
+      const recorded = tx.medicineProvenance.create.mock.calls.map(
+        (call) => (call as unknown as [{ data: { field: string } }])[0].data.field
+      );
+      if (corrected) {
+        expect(written.controlled).toBeUndefined();
+        expect(recorded).not.toContain('controlled');
+      } else {
+        expect(written.controlled).toBe(true);
+        expect(recorded).toContain('controlled');
+      }
+    }
+  });
+
   it('records confirmed DRAP values as regulator provenance', async () => {
     const created: Array<Record<string, unknown>> = [];
     const tx = {

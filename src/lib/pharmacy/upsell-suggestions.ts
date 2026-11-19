@@ -259,7 +259,8 @@ export async function findUpsellSuggestions(
       batch: {
         medicineId: { notIn: medicineIds },
         state: 'ACTIVE',
-        expiresAt: { gt: at },
+        // DEV-853: an unrecorded expiry is never treated as expired.
+        OR: [{ expiresAt: null }, { expiresAt: { gt: at } }],
         medicine: {
           organizationId: scope.organizationId,
           ...suggestibleMedicineWhere,

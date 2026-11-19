@@ -18,7 +18,8 @@ export function chooseRegisterPersonName(
 
 export type RegisterPrintRow = {
   inventoryLotId: string;
-  batchNumber: string;
+  /** DEV-853: null when the lot's batch number was never recorded. */
+  batchNumber: string | null;
   balanceDelta: number;
   runningBalance: number;
   serial: number;
@@ -30,7 +31,7 @@ export function registerPrintTotals(entries: readonly RegisterPrintRow[]) {
   let unitsOut = 0;
   const closing = new Map<
     string,
-    { batchNumber: string; runningBalance: number; serial: number }
+    { batchNumber: string | null; runningBalance: number; serial: number }
   >();
   for (const entry of entries) {
     if (entry.balanceDelta > 0) unitsIn += entry.balanceDelta;

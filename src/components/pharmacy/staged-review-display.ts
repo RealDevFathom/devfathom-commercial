@@ -1,0 +1,122 @@
+/**
+ * Display-only wording and number formatting for the staged import review list.
+ * Nothing here changes stored values, hashes or import logic; raw spellings stay in row detail.
+ */
+
+const STAGED_LIST_BASE =
+  'These rows come from your old system and are waiting for review. They are not in the medicine catalogue or in stock yet, so they cannot be sold. Next: open a medicine to check its name, quantity and prices against your old records.';
+const STAGED_NEXT_CAN_CREATE =
+  ' When the list looks right, use “Create medicines” below to add them to your catalogue. Stock is not added by this step.';
+const STAGED_NEXT_OTHERS =
+  ' Adding them to the catalogue is done by a catalogue editor or reviewer. Ask one of them to do it. Stock is not added by that step.';
+
+/** Intro for the staged list; the next step depends on who can create medicines. */
+export function stagedListIntro(canCreate: boolean): string {
+  return STAGED_LIST_BASE + (canCreate ? STAGED_NEXT_CAN_CREATE : STAGED_NEXT_OTHERS);
+}
+
+export const STAGED_COLUMN_HEADINGS = [
+  'Medicine',
+  'Quantity in old system',
+  'MRP',
+  'Purchase price (from distributor)',
+  'Price per unit',
+  'Units per pack',
+  'Quantity counted for review',
+  'Status',
+] as const;
+
+/** Plain names for the two old-system price columns, shown next to the raw column name. */
+export const STAGED_PRICE_COLUMN_NOTE: Record<string, string> = {
+  saleprice: 'MRP (the sale price printed on the pack)',
+  purprice: 'Purchase price (the price you pay the distributor)',
+};
+
+export const STAGED_NOT_SUPPLIED = 'Not supplied';
+const NOT_SUPPLIED_AS_TEXT = 'Not supplied as text';
+export const STAGED_STATUS_LABEL = 'Not reviewed yet';
+
+const EXCEPTION_LABELS: Record<string, string> = {
+  MISSING_BATCH: 'No batch or expiry recorded',
+  MISSING_EXPIRY: 'No batch or expiry recorded',
+  EXPIRED_STOCK: 'Expiry has passed',
+  MISSING_MRP: 'MRP not confirmed',
+  UNIT_AMBIGUOUS: 'Pack or unit not clear',
+  DUPLICATE_PRODUCT: 'Same name as another medicine',
+  PARTY_UNMATCHED: 'Supplier not matched',
+  BALANCE_MISMATCH: 'Balance does not match',
+};
+
+export function plainExceptionLabel(bucket: string): string {
+  return EXCEPTION_LABELS[bucket] ?? 'Needs review';
+}
+
+const SEVERITY_LABELS: Record<string, string> = {
+  BLOCKING: 'Needs your attention',
+  WARNING: 'Information only',
+};
+const EXCEPTION_STATUS_LABELS: Record<string, string> = {
+  OPEN: 'Open',
+  SIGNED_OFF: 'Signed off',
+};
+const REVIEW_FLAG_LABELS: Record<string, string> = {
+  NORMALIZED_NAME_COLLISION_NO_MERGE: 'Another medicine has almost the same name: kept separate',
+};
+
+export function plainSeverity(severity: string): string {
+  return SEVERITY_LABELS[severity] ?? 'Needs review';
+}
+export function plainExceptionStatus(status: string): string {
+  return EXCEPTION_STATUS_LABELS[status] ?? 'Needs review';
+}
+export function plainReviewFlag(flag: string): string {
+  return REVIEW_FLAG_LABELS[flag] ?? 'Needs review';
+}
+
+const NUMERIC = /^-?\d+(\.\d+)?$/;
+
+/** Money to two decimals (display only). Non-numeric text is returned unchanged. */
+export function formatStagedPrice(value: string | null | undefined): string {
+  const text = value?.trim();
+  if (!text) return NOT_SUPPLIED_AS_TEXT;
+  return NUMERIC.test(text) ? Number(text).toFixed(2) : text;
+}
+
+/** Quantity without trailing zeros, e.g. 1.0000 -> 1, 2.5000 -> 2.5. */
+export function formatStagedQuantity(value: string | null | undefined): string {
+  const text = value?.trim();
+  if (!text) return NOT_SUPPLIED_AS_TEXT;
+  return NUMERIC.test(text) ? text.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '') : text;
+}
+
+const BATCH_STATUS_LABELS: Record<string, string> = {
+  PROFILING: 'Being read',
+  PROFILED: 'Ready to review',
+  FAILED: 'Could not be read',
+};
+
+/** Plain words for a batch status code (display only). */
+export function plainBatchStatus(status: string): string {
+  return BATCH_STATUS_LABELS[status] ?? 'Needs review';
+}
+
+interface QuantityReviewLike {
+  unit: string | null;
+  packs: string | null;
+  units: string | null;
+  unitsPerPack: string | null;
+  label: string | null;
+}
+
+/** Plain-words version of the counted quantity: no trailing zeros, no internal wording. */
+export function formatStagedQuantityReview(review: QuantityReviewLike): string | null {
+  if (review.label === null) return null;
+  if (review.units === null)
+    return review.label.replace(/\d+\.\d*0+(?!\d)/g, (m) => formatStagedQuantity(m));
+  const units = formatStagedQuantity(review.units);
+  if (review.unit === 'PACKS' && review.packs && review.unitsPerPack) {
+    return `${formatStagedQuantity(review.packs)} packs × ${formatStagedQuantity(review.unitsPerPack)} = ${units} units`;
+  }
+  if (review.unit === 'UNITS') return `${units} units`;
+  return `${units} (unit not chosen yet)`;
+}

@@ -130,7 +130,8 @@ export async function composeOwnerDigest(
   };
   const [report, anomalies, renewals] = await Promise.all([
     readPharmacyOwnerCommandCentre(db, { ...filters, timeZone: input.timeZone }),
-    readPharmacyAnomalySignals(db, filters),
+    // The same workspace-day window the scheduled refresh stored the signals under.
+    readPharmacyAnomalySignals(db, { ...filters, timeZone: input.timeZone }),
     // Additive line: an unreadable reminder never blocks the digest itself.
     readLicenceRenewalReminders(db, {
       organizationId: input.organizationId,
@@ -144,7 +145,9 @@ export async function composeOwnerDigest(
     : ['DAILY'];
   const briefings: OwnerBriefing[] = [];
   for (const cadence of cadences) {
-    const window = ownerBriefingWindow(input.businessDate, cadence, config);
+    // Lost demand, recovered sales and the weekly ledger read the shop's own days,
+    // the days the digest is labelled with, not UTC days.
+    const window = ownerBriefingWindow(input.businessDate, cadence, config, input.timeZone);
     const [ledger, demand] = await Promise.all([
       cadence === 'DAILY'
         ? Promise.resolve(report)
@@ -152,6 +155,7 @@ export async function composeOwnerDigest(
             branchIds: [input.branchId],
             from: window.from,
             to: window.to,
+            timeZone: input.timeZone,
           }),
       readOwnerBriefingDemand(db, input, window, config),
     ]);
@@ -371,7 +375,12 @@ export async function processDueOwnerDigests(now = new Date(), limit = 25) {
       if (existing) return false;
       await refreshPharmacyAnomalySignals(
         db,
-        { branchIds: [authorized.branchId], from: businessDate, to: businessDate },
+        {
+          branchIds: [authorized.branchId],
+          from: businessDate,
+          to: businessDate,
+          timeZone: authorized.organization.timezone,
+        },
         'system:owner-digest',
         new Date()
       );

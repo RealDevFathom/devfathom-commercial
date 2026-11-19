@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
 import { CounterUnitToggle } from './counter-unit-toggle';
@@ -231,6 +232,24 @@ describe('CounterUnitToggle (POS-03)', () => {
     expect(preview.className).toContain('min-w-0');
     expect(preview.className).not.toContain('grid-cols-3');
     expect(preview.parentElement!.className).toContain('flex-wrap');
+  });
+
+  it.each([
+    ['covered, in columns', { preview: previewFor('STRIP', 2, 500) }],
+    ['covered, inline', { inline: true, preview: previewFor('STRIP', 2, 500) }],
+    ['short, in columns', { selected: 'PACK' as const, preview: previewFor('PACK', 2, 150) }],
+    [
+      'short, inline',
+      { inline: true, selected: 'PACK' as const, preview: previewFor('PACK', 2, 150) },
+    ],
+  ])('DEV-930 keeps the %s price preview a valid description list', async (_case, props) => {
+    renderToggle(props);
+    const preview = screen.getByText('Unit price').closest('dl')!;
+    const result = await axe.run(preview, {
+      runOnly: { type: 'rule', values: ['definition-list', 'dlitem'] },
+    });
+    expect(result.violations).toEqual([]);
+    expect(within(preview).getByText('Stock').tagName).toBe('DT');
   });
 });
 

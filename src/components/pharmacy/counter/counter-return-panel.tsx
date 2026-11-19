@@ -10,6 +10,7 @@ import { trpc } from '@/lib/trpc';
 import { browserUuid } from '@/lib/browser-uuid';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { amountInputError, amountInputToMinor } from '@/lib/money-input';
 import { formatLotExpiry } from '@/lib/pharmacy/product-class';
 import {
   formatSoldQuantity,
@@ -17,6 +18,7 @@ import {
   soldUnitPluralNoun,
 } from '@/lib/pharmacy/stock-breakdown';
 import { buildCounterBrowserReceipt } from '@/lib/pharmacy/counter-browser-print';
+import { batchPhrase } from '@/lib/pharmacy/unrecorded-batch';
 
 const returnInputSchema = z.object({
   branchId: z.string(),
@@ -343,19 +345,27 @@ export function ReturnForm({
     : 0;
   // The refund is prefilled from the returned quantity and bounded by it and the tender.
   const returnRefundMax = Math.min(returnValueMinor, returnTenderRemaining);
+  // DEV-939: typed refunds use the shared reader (string and BigInt, no floats); refused is 0.
+  const typedReturnAmount = returnAmount === null ? null : amountInputToMinor(returnAmount);
   const returnAmountMinor =
-    returnAmount === null
+    typedReturnAmount === null
       ? returnRefundMax
-      : /^\d+(\.\d{1,2})?$/.test(returnAmount.trim())
-        ? Math.round(Number(returnAmount.trim()) * 100)
+      : typedReturnAmount.status === 'OK'
+        ? typedReturnAmount.minor
         : 0;
+  const returnAmountError =
+    typedReturnAmount?.status === 'INVALID' ? amountInputError(typedReturnAmount.reason) : null;
   // DEV-863: a prepaid wallet refund goes back to the customer's prepaid balance, never as cash.
   const returnManualRequired =
     !returnTender?.prepaid && (returnTender?.type === 'CARD' || returnTender?.type === 'WALLET');
   const tender = data?.tenders.find((row) => row.id === tenderId);
   // A saved return keeps its own line; a fresh one uses the selected line.
   const witnessLineId = attempt && attempt.kind !== 'refund' ? attempt.input.saleLineId : lineId;
-  const witnessRequired = !!data?.lines.find((row) => row.id === witnessLineId)?.controlled;
+  // DEV-911: no pharmacist witness is asked for while the owner has the check switched off.
+  const pharmacistCheckOff =
+    (data as { pharmacistCheckOff?: boolean } | undefined)?.pharmacistCheckOff === true;
+  const witnessRequired =
+    !pharmacistCheckOff && !!data?.lines.find((row) => row.id === witnessLineId)?.controlled;
   const pharmacists = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
     enabled: ready && online && witnessRequired,
     retry: false,
@@ -366,7 +376,10 @@ export function ReturnForm({
       ? { staffProfileId: witnessStaffId, pin: witnessPin }
       : undefined;
   const manualRequired = !tender?.prepaid && (tender?.type === 'CARD' || tender?.type === 'WALLET');
-  const amountMinor = /^\d+(\.\d{1,2})?$/.test(amount) ? Math.round(Number(amount) * 100) : 0;
+  const typedRefund = amountInputToMinor(amount);
+  const amountMinor = typedRefund.status === 'OK' ? typedRefund.minor : 0;
+  const refundAmountError =
+    typedRefund.status === 'INVALID' ? amountInputError(typedRefund.reason) : null;
   const available = Math.min(
     data?.refundableMinor ?? 0,
     tender ? tender.amountMinor - tender.refundedMinor : 0
@@ -789,7 +802,7 @@ export function ReturnForm({
       {!unparsed && !!lookup.data?.length && (
         <div className="space-y-2">
           {lookup.data.length > 1 && (
-            <p>Choose the matching date and counter. Receipt numbers can repeat.</p>
+            <p>Choose the matching date and counter. Older receipts can share a number.</p>
           )}
           {lookup.data.map((row) => (
             <Button
@@ -943,7 +956,7 @@ export function ReturnForm({
                   </option>
                   {line?.lots.map((lot) => (
                     <option key={lot.lotId} value={lot.lotId} disabled={lot.returnableUnits <= 0}>
-                      Batch {lot.batchNumber}
+                      {batchPhrase(lot.batchNumber)}
                       {lot.expiresAt
                         ? ` · ${formatLotExpiry(lot.expiresAt, (value) => `expires ${value.toISOString().slice(0, 10)}`)}`
                         : ''}{' '}
@@ -1042,7 +1055,11 @@ export function ReturnForm({
                       id="return-refund-amount"
                       className="h-11"
                       inputMode="decimal"
-                      aria-describedby="return-refund-amount-hint"
+                      aria-describedby={
+                        returnAmountError
+                          ? 'return-refund-amount-hint return-refund-amount-error'
+                          : 'return-refund-amount-hint'
+                      }
                       aria-invalid={
                         returnAmount !== null &&
                         !(returnAmountMinor > 0 && returnAmountMinor <= returnRefundMax)
@@ -1053,6 +1070,15 @@ export function ReturnForm({
                       }
                       onChange={(event) => setReturnAmount(event.target.value)}
                     />
+                    {returnAmountError ? (
+                      <p
+                        id="return-refund-amount-error"
+                        role="alert"
+                        className="text-sm text-destructive"
+                      >
+                        {returnAmountError}
+                      </p>
+                    ) : null}
                     <p id="return-refund-amount-hint" className="text-sm text-text-muted">
                       {quoted !== undefined
                         ? `Prefilled from the returned quantity. You can lower it, up to PKR ${formatMinor(returnRefundMax)}. Loyalty refunds restore redeemed points.`
@@ -1165,8 +1191,15 @@ export function ReturnForm({
                 className="h-11"
                 inputMode="decimal"
                 value={amount}
+                aria-invalid={refundAmountError ? true : undefined}
+                aria-describedby={refundAmountError ? 'refund-amount-error' : undefined}
                 onChange={(event) => setAmount(event.target.value)}
               />
+              {refundAmountError ? (
+                <p id="refund-amount-error" role="alert" className="text-sm text-destructive">
+                  {refundAmountError}
+                </p>
+              ) : null}
               <p className="text-sm text-text-muted">
                 Refund up to PKR {formatMinor(available)} on this tender. Repeat with another
                 original tender for a mixed payment. Loyalty refunds restore redeemed points.

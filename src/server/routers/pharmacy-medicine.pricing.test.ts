@@ -25,8 +25,9 @@ vi.mock('@/lib/pharmacy/pricing', () => ({
 import { pharmacyMedicineRouter } from './pharmacy-medicine';
 import type { TRPCContext } from '../trpc';
 const db = {};
-const caller = () =>
+const caller = (organization?: { id: string; timezone?: string }) =>
   pharmacyMedicineRouter.createCaller({
+    ...(organization ? { organization } : {}),
     db,
     entitlements: { organizationId: 'org_owned', enabledModules: ['pharmacy-core'] },
     session: { expires: 'later', user: { id: 'actor_owned', role: 'ADMIN', status: 'ACTIVE' } },
@@ -58,6 +59,19 @@ describe('price router authorization', () => {
       caller().confirmPrices({ proposalIds: ['p'], organizationId: 'other' } as never)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
+  it.each([
+    ['Asia/Karachi', 'Asia/Karachi'],
+    ['UTC', 'UTC'],
+    [undefined, 'UTC'],
+  ])(
+    'DEV-943: price notices carry the session organisation zone %s as %s',
+    async (stored, zone) => {
+      mocks.can.mockResolvedValue(true);
+      await expect(
+        caller({ id: 'org_owned', ...(stored ? { timezone: stored } : {}) }).priceNotices()
+      ).resolves.toEqual({ rows: [], timezone: zone });
+    }
+  );
   it('branch override reads require admin capability, not safety alone', async () => {
     mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:safety');
     await expect(caller().priceOverrides({ branchId: 'sibling' })).rejects.toMatchObject({

@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatLoyaltyCardCode } from '@/lib/pharmacy/loyalty-card-code';
+import { formatWorkspaceDate } from '@/lib/timezone';
 import { encodeQr, qrSvgPath } from '@/lib/qr/qr-code';
 import {
   issueLoyaltyCard,
@@ -13,6 +14,7 @@ import {
 } from './loyalty-card-actions';
 
 const initial: LoyaltyCardFormState = { status: 'idle', message: '' };
+type WalletTestPasses = NonNullable<LoyaltyCardFormState['walletTestPasses']>;
 const QR_MARGIN = 4;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -61,6 +63,93 @@ function printCard(code: string) {
 }
 
 /**
+ * DEV-747: saves one wallet test pass as a JSON file: the pass content Apple or Google would
+ * receive, unsigned. It holds the card code, balance and point value, and nothing about the
+ * customer. Returns false when the browser cannot make a download link.
+ */
+function downloadWalletTestPass(passes: WalletTestPasses, platform: 'apple' | 'google') {
+  if (typeof URL.createObjectURL !== 'function') return false;
+  const file = new Blob(
+    [
+      JSON.stringify(
+        {
+          mode: passes.mode,
+          platform: platform === 'apple' ? 'APPLE_WALLET' : 'GOOGLE_WALLET',
+          notice: passes.notice,
+          pass: passes[platform],
+        },
+        null,
+        2
+      ),
+    ],
+    { type: 'application/json' }
+  );
+  const href = URL.createObjectURL(file);
+  const link = document.createElement('a');
+  link.href = href;
+  link.download = `loyalty-card-${platform}-wallet-test-pass.json`;
+  link.rel = 'noopener';
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(href);
+  return true;
+}
+
+function formatPointValue(minor: number) {
+  const whole = minor / 100;
+  return `PKR ${Number.isInteger(whole) ? whole.toLocaleString('en-US') : whole.toFixed(2)}`;
+}
+
+/** DEV-747: the card as Apple and Google Wallet TEST passes, offered once with the card. */
+function WalletTestPasses({ passes }: { passes: WalletTestPasses }) {
+  const [blocked, setBlocked] = useState(false);
+  return (
+    <div className="space-y-3 border-t border-border-subtle pt-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <h4 className="text-sm font-semibold text-text-strong">Wallet passes</h4>
+        <StatusPill status="warning" label="Test only" />
+      </div>
+      <p className="text-sm text-text-body">
+        The same card for Apple Wallet and Google Wallet: same QR, same points at every branch. Pass
+        shows <span className="tabular-nums">{passes.balancePoints.toLocaleString('en-US')}</span>{' '}
+        points, 1 point = {formatPointValue(passes.pointValueMinor)}.
+      </p>
+      <p className="text-sm text-text-muted">
+        These are test passes. A phone will not add them to its Wallet until DevFathom’s Apple and
+        Google issuer accounts are approved; use them to check the pass content and the counter
+        scan.
+      </p>
+      <div className="flex flex-wrap gap-3">
+        <Button
+          type="button"
+          variant="outline"
+          size="touch"
+          className="min-h-11"
+          onClick={() => setBlocked(!downloadWalletTestPass(passes, 'apple'))}
+        >
+          Download Apple Wallet test pass
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="touch"
+          className="min-h-11"
+          onClick={() => setBlocked(!downloadWalletTestPass(passes, 'google'))}
+        >
+          Download Google Wallet test pass
+        </Button>
+      </div>
+      {blocked ? (
+        <p role="alert" className="text-sm text-destructive">
+          This browser cannot save the test pass. Try another browser.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * DEV-748: issue, replace or revoke a customer's physical loyalty card. The QR holds an opaque
  * random code that is shown once, here, for printing: only its hash is kept, so a lost card is
  * replaced (which stops the old one at once) rather than re-printed. Points stay with the customer.
@@ -69,10 +158,13 @@ export function LoyaltyCardPanel({
   branchId,
   customerId,
   activeCard,
+  timeZone,
 }: {
   branchId: string;
   customerId: string;
   activeCard: { issuedAt: string } | null;
+  /** Workspace IANA zone: the issue date shows on the organisation's clock (UTC when absent). */
+  timeZone?: string | null;
 }) {
   const [state, action, pending] = useActionState(
     (previous: LoyaltyCardFormState, form: FormData) =>
@@ -83,6 +175,7 @@ export function LoyaltyCardPanel({
   );
   const [printBlocked, setPrintBlocked] = useState(false);
   const issuedCode = state.status === 'issued' ? (state.code ?? null) : null;
+  const walletTestPasses = state.status === 'issued' ? (state.walletTestPasses ?? null) : null;
   const preview = useMemo(() => {
     if (!issuedCode) return null;
     const modules = encodeQr(issuedCode);
@@ -95,7 +188,9 @@ export function LoyaltyCardPanel({
         {activeCard ? (
           <>
             <StatusPill status="active" label="Card active" />
-            <span className="text-text-muted">Issued {activeCard.issuedAt.slice(0, 10)} (UTC)</span>
+            <span className="text-text-muted">
+              Issued {formatWorkspaceDate(activeCard.issuedAt, timeZone)}
+            </span>
           </>
         ) : (
           <StatusPill status="none" label="No card" />
@@ -155,7 +250,8 @@ export function LoyaltyCardPanel({
       {issuedCode && preview ? (
         <div className="space-y-3 rounded-md border border-border-subtle bg-surface-card p-4">
           <p className="text-sm text-text-body">
-            Print the card now. The code is shown only once; if the card is lost, replace it.
+            Print the card now. The code is shown only once; if the card or the phone holding its
+            wallet pass is lost, replace it.
           </p>
           <svg
             viewBox={`0 0 ${preview.extent} ${preview.extent}`}
@@ -188,6 +284,7 @@ export function LoyaltyCardPanel({
               Allow pop-ups for this site, then print again.
             </p>
           ) : null}
+          {walletTestPasses ? <WalletTestPasses passes={walletTestPasses} /> : null}
         </div>
       ) : null}
     </div>

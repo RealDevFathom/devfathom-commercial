@@ -1,0 +1,9 @@
+Name,classname,Category,saleprice,purprice,QTY,PackUnits
+Synthetic Opioid 50mg,NARCOTICS,ANALGESIC,450.00,380.50,12,10
+Synthetic Sedative 2mg, narcotics ,SEDATIVE,220.00,180.00,5,30
+Synthetic Cough Linctus,Narcotics,COUGH SYRUP,160.00,130.00,8,1
+Synthetic Opioid Drops,NARCOTIC,ANALGESIC,300.00,250.00,4,1
+Synthetic Opioid Patch,NARCOTICS DRUGS,ANALGESIC,900.00,760.00,2,5
+Synthetic Paracetamol 500mg,Example Distributors,ANALGESIC,35.00,28.00,120,10
+Synthetic Antacid,Sample Traders,ANTACID,90.00,72.00,40,20
+Synthetic Vitamin C,,VITAMINS,60.00,45.00,30,10

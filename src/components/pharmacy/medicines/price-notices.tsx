@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { trpc } from '@/lib/trpc';
+import { workspaceToday } from '@/lib/timezone';
 import type { priceIntelligence, priceOverrides } from '@/lib/pharmacy/pricing';
 import { formatUtcInstant } from '@/lib/utc-instant';
 import type { listDrapPriceAlerts } from '@/lib/pharmacy/drap-monitoring';
@@ -83,8 +84,11 @@ export function PriceNoticesView({
   error,
   forbidden,
   onRetry,
+  timeZone,
 }: {
   data?: PriceData;
+  /** DEV-943: the organisation zone; a price policy's start reads as the shop's day. */
+  timeZone?: string | null;
   loading?: boolean;
   error?: boolean;
   forbidden?: boolean;
@@ -201,7 +205,7 @@ export function PriceNoticesView({
                     <td className="p-3">
                       {policySourceLabel(r.source)}
                       <div className="whitespace-nowrap text-text-muted">
-                        {r.effectiveDate.toISOString().slice(0, 10)}
+                        {workspaceToday(timeZone, r.effectiveDate)}
                       </div>
                     </td>
                     <td className="p-3 text-right tabular-nums">
@@ -278,6 +282,9 @@ export function PriceNoticesView({
                     <td className="p-3">
                       {r.reference}
                       <div className="whitespace-nowrap text-text-muted">
+                        {/* DEV-943: a DRAP notice's effective date is the regulator's calendar
+                            date (stored as that date's UTC midnight), not an instant: read as
+                            is, it matches the official-price sentence on this row. */}
                         {r.effectiveDate?.toISOString().slice(0, 10)}
                       </div>
                     </td>
@@ -353,8 +360,11 @@ export function PriceOverridesView({
   error,
   forbidden,
   onRetry,
+  timeZone,
 }: {
   data?: Awaited<ReturnType<typeof priceOverrides>>;
+  /** DEV-943: the organisation zone; an override's start reads as the shop's day. */
+  timeZone?: string | null;
   loading?: boolean;
   error?: boolean;
   forbidden?: boolean;
@@ -416,7 +426,7 @@ export function PriceOverridesView({
                       </div>
                     </td>
                     <td className="whitespace-nowrap p-3">
-                      {r.effectiveFrom.toISOString().slice(0, 10)}
+                      {workspaceToday(timeZone, r.effectiveFrom)}
                     </td>
                     <td className="p-3 text-right tabular-nums">{money(r.mrpMinor)}</td>
                     <td className="p-3 text-right tabular-nums">{money(r.sellingPriceMinor)}</td>
@@ -546,6 +556,7 @@ export function PriceNotices() {
       )}
       <PriceNoticesView
         data={query.data}
+        timeZone={query.data?.timezone}
         loading={query.isLoading}
         error={query.isError}
         forbidden={
@@ -556,6 +567,7 @@ export function PriceNotices() {
       {query.data && (
         <PriceOverridesView
           data={overrides.data}
+          timeZone={query.data.timezone}
           loading={overrides.isLoading}
           error={overrides.isError}
           forbidden={

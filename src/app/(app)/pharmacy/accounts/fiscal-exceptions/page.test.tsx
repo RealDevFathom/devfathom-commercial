@@ -8,13 +8,16 @@ vi.mock('./access', () => ({ loadFiscalExceptionRegister: mocks.load }));
 import Page from './page';
 import Loading from './loading';
 import ErrorState from './error';
-import { fiscalExceptionHref, fiscalExceptionQuery } from './query';
+import {
+  fiscalExceptionDefaults, fiscalExceptionError, fiscalExceptionHref, fiscalExceptionQuery,
+} from './query';
 
 const query = { branchId: 'branch-1', from: '2026-07-01', to: '2026-10-01' };
 function register(): FiscalExceptionRegister {
   return {
     organizationId: 'org-1', branch: { id: 'branch-1', name: 'Main' },
-    filters: { ...query, page: 0, pageSize: 50 }, configuredMode: 'OFF',
+    filters: { ...query, page: 0, pageSize: 50 }, configuredMode: 'OFF', timeZone: null,
+    window: { from: '2026-07-01T00:00:00.000Z', to: '2026-10-01T00:00:00.000Z' },
     readAt: '2026-10-01T00:00:00.000Z', coverage: 'UNKNOWN', hasMoreAtRead: true,
     pageCapReached: false, nextPage: 1,
     rows: [{ id: 'doc-1', localReference: 'LOCAL-001', kind: 'INVOICE', integratorMode: 'SANDBOX',
@@ -38,7 +41,7 @@ describe('fiscal exception evidence page', () => {
     expect(screen.getByText(/Coverage unknown/)).toBeVisible();
     expect(screen.getByText(/Total unknown/)).toHaveTextContent('Page capped');
     expect(screen.getByText(/CSV downloads re-read/)).toBeVisible();
-    expect(screen.getByLabelText('Created before (UTC, exclusive)')).toHaveValue(query.to);
+    expect(screen.getByLabelText('Created before (not included)')).toHaveValue(query.to);
     const region = screen.getByRole('region', { name: 'Fiscal exception documents' });
     expect(region).toHaveAttribute('tabindex', '0');
     region.focus();
@@ -51,6 +54,43 @@ describe('fiscal exception evidence page', () => {
     expect(screen.getByRole('link', { name: 'Next page' })).toHaveAttribute('href',
       fiscalExceptionHref({ ...register().filters, page: 1 }));
     expect(screen.queryByRole('button', { name: /retry|send|dispatch/i })).not.toBeInTheDocument();
+  });
+
+  it('shows the shop-day window and recorded times on the organisation clock, with no UTC wording (DEV-722)', async () => {
+    // 00:30 in Karachi on 1 Aug is 19:30 UTC on 31 Jul.
+    mocks.load.mockResolvedValue({
+      ...register(), timeZone: 'Asia/Karachi', readAt: '2026-07-31T19:30:00.000Z',
+      filters: { branchId: 'branch-1', from: '2026-08-01', to: '2026-08-02', page: 0, pageSize: 50 },
+      window: { from: '2026-07-31T19:00:00.000Z', to: '2026-08-01T19:00:00.000Z' },
+      rows: [{ ...register().rows[0]!, nextAttemptAt: '2026-07-31T19:30:00.000Z',
+        createdAt: '2026-07-31T19:30:00.000Z', updatedAt: '2026-08-01T04:00:00.000Z' }],
+    });
+    const window = { branchId: 'branch-1', from: '2026-08-01', to: '2026-08-02' };
+    const { container } = render(await Page({ searchParams: Promise.resolve(window) }));
+    // The typed days go to the reader as typed; the reader reads them as Karachi days.
+    expect(mocks.load).toHaveBeenCalledWith({ ...window, page: undefined, pageSize: undefined });
+    const region = screen.getByRole('region', { name: 'Fiscal exception documents' });
+    expect(within(region).getAllByText('1 Aug 2026, 12:30 AM PKT')).toHaveLength(2);
+    expect(within(region).getByText('1 Aug 2026, 9:00 AM PKT').closest('time')).toHaveAttribute(
+      'dateTime', '2026-08-01T04:00:00.000Z');
+    expect(screen.getByText(/Read started/)).toHaveTextContent(
+      'Read started 1 Aug 2026, 12:30 AM PKT. Created from 2026-08-01 up to (not including) 2026-08-02.');
+    expect(screen.getByText(/Days run midnight to midnight, PKT time\./)).toBeVisible();
+    expect(screen.getByLabelText('Created from')).toHaveValue('2026-08-01');
+    expect(screen.getByLabelText('Created before (not included)')).toHaveValue('2026-08-02');
+    expect(container.textContent).not.toMatch(/\bUTC\b/);
+  });
+
+  it('fills the form with the default window the reader used when no dates were typed', async () => {
+    mocks.load.mockResolvedValue({
+      ...register(), filters: { branchId: 'branch-1', from: '2026-07-26', to: '2026-08-02', page: 0, pageSize: 50 },
+    });
+    render(await Page({ searchParams: Promise.resolve({ branchId: 'branch-1' }) }));
+    expect(mocks.load).toHaveBeenCalledWith({
+      branchId: 'branch-1', from: undefined, to: undefined, page: undefined, pageSize: undefined,
+    });
+    expect(screen.getByLabelText('Created from')).toHaveValue('2026-07-26');
+    expect(screen.getByLabelText('Created before (not included)')).toHaveValue('2026-08-02');
   });
 
   it('keeps empty evidence unknown and offers filter guidance', async () => {
@@ -118,5 +158,32 @@ describe('local URL interpretation', () => {
     expect(fiscalExceptionQuery({ ...query, branchId: ['one', 'two'] }).branchId).toEqual(['one', 'two']);
     expect(fiscalExceptionQuery({ ...query, pageSize: '1e2' }).pageSize).toBeNaN();
     expect(fiscalExceptionQuery({ ...query, page: '' }).page).toBeNaN();
+  });
+
+  it('leaves missing dates for the organisation default and keeps typed dates as typed', () => {
+    expect(fiscalExceptionQuery({ branchId: 'b' })).toMatchObject({ from: undefined, to: undefined });
+    expect(fiscalExceptionQuery({ branchId: 'b', from: '2026-08-01', to: '2026-08-02' }))
+      .toMatchObject({ from: '2026-08-01', to: '2026-08-02' });
+  });
+
+  it.each([
+    // 19:30 UTC on 31 Jul is 00:30 on 1 Aug in Karachi: the shop's today is already 1 Aug.
+    ['2026-07-31T19:30:00Z', 'Asia/Karachi', '2026-07-26', '2026-08-02'],
+    // 18:59 UTC on 31 Jul is 23:59 on 31 Jul in Karachi: still 31 Jul.
+    ['2026-07-31T18:59:00Z', 'Asia/Karachi', '2026-07-25', '2026-08-01'],
+    // A UTC organisation keeps the UTC today, exactly as before.
+    ['2026-07-31T19:30:00Z', null, '2026-07-25', '2026-08-01'],
+  ] as const)('defaults to the shop\'s last seven days at %s in %s', (at, zone, from, to) => {
+    const now = new Date(at);
+    expect(fiscalExceptionDefaults({ branchId: 'b' }, zone, now)).toEqual({ branchId: 'b', from, to });
+    expect(fiscalExceptionDefaults({ branchId: 'b', from: '2026-01-01', to: '2026-01-02' }, zone, now))
+      .toEqual({ branchId: 'b', from: '2026-01-01', to: '2026-01-02' });
+  });
+
+  it('explains a refused window in plain words', () => {
+    const message = fiscalExceptionError(new TRPCError({ code: 'BAD_REQUEST' }));
+    expect(message).toContain('real calendar dates');
+    expect(message).toContain('The end date is not included');
+    expect(message).not.toMatch(/\bUTC\b|exclusive/);
   });
 });

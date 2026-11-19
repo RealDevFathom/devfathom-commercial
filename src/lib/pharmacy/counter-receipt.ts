@@ -19,6 +19,7 @@ import { PrintDocumentSchema, type PrintDocument } from '@/lib/restaurant/printi
 
 import type { DispensingLabelSource } from './dispensing-label';
 import { isNoExpiryDate } from './product-class';
+import { SINDH_CASH_MEMO_LIVE } from './sindh-cash-memo-hold';
 
 import type { SaleUnitKind } from './counter-pricing';
 
@@ -31,6 +32,13 @@ export type PharmacyReceiptTaxIdentity = {
   licenceNumber?: string | null;
   ntn: string | null;
   strn: string | null;
+  /** #708: regulatory facts the Sindh cash memo prints; absent on older callers. */
+  provinceCode?: string | null;
+  /** ISO dates of the drug-sale licence in force at completion. */
+  licenceValidFrom?: string | null;
+  licenceValidTo?: string | null;
+  /** Qualified person (pharmacist) registration number, optional on the memo. */
+  pharmacistRegistration?: string | null;
 };
 
 export type CounterReceiptLine = {
@@ -47,12 +55,17 @@ export type CounterReceiptLine = {
     grossMinor?: number | null;
   }[];
   medicineName: string;
+  /** #708: manufacturer snapshotted at completion; null when not recorded. */
+  manufacturer?: string | null;
   /** Rendered strength, for example `500 mg`. Null for an unstrengthed item. */
   strength: string | null;
   presentation: string;
   batchNumber: string;
-  /** ISO date of the dispensed batch's expiry. */
-  expiresAt: string;
+  /**
+   * ISO date of the dispensed batch's expiry. DEV-853: null when the one
+   * dispensed lot never had its expiry recorded.
+   */
+  expiresAt: string | null;
   saleUnit: SaleUnitKind;
   quantity: number;
   canonicalUnits: number;
@@ -78,15 +91,23 @@ export type CounterReceipt = {
   dispensingLabelSources?: DispensingLabelSource[];
   /** Supplied by settled receipt reads; optional only for legacy in-memory callers. */
   taxIdentity?: PharmacyReceiptTaxIdentity;
+  cashMemoIdentity?: PharmacyReceiptTaxIdentity | null;
   saleId: string;
   /** Null until a tender settles the bill; never minted by a render. */
   receiptNumber: number | null;
-  /** Names the counter that issued the number; numbers restart per counter. */
+  /** Names the counter that issued the receipt (DEV-637: numbers are unique per branch). */
   counterLabel?: string | null;
+  /**
+   * DEV-637: the number an offline counter printed, when replay gave the sale a fresh
+   * branch number because a block leased before branch-wide numbering repeated one.
+   */
+  offlineReference?: number | null;
   branchName: string;
   businessDate: string | null;
   completedAt: string | null;
   cashierName?: string | null;
+  /** #708: buyer named at completion (typed at tender, or the sale's customer/patient). */
+  buyerName?: string | null;
   currency: string;
   lines: CounterReceiptLine[];
   tenders: CounterReceiptTender[];
@@ -111,6 +132,10 @@ type Strings = {
   expiry: string;
   /** QA-3: printed in place of an expiry date for a non-drug item with none. */
   noExpiry: string;
+  /** DEV-853: printed when legacy opening stock never recorded a batch number. */
+  batchNotRecorded: string;
+  /** DEV-853: printed when legacy opening stock never recorded an expiry. */
+  expiryNotRecorded: string;
   quantity: string;
   unitPrice: string;
   lineTotal: string;
@@ -124,8 +149,17 @@ type Strings = {
   tenders: string;
   invoice: string;
   cashier: string;
+  offlineReference: string;
   licence: string;
   phone: string;
+  cashMemo: string;
+  manufacturer: string;
+  buyer: string;
+  licenceValid: string;
+  licenceValidTo: string;
+  pharmacistRegistration: string;
+  signature: string;
+  notRecorded: string;
   tenderName: Record<string, string>;
   saleUnit: Record<SaleUnitKind, string>;
   noReceiptNumber: string;
@@ -148,6 +182,8 @@ export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Stri
     batch: 'Batch',
     expiry: 'Expiry',
     noExpiry: 'No expiry',
+    batchNotRecorded: 'Batch not recorded',
+    expiryNotRecorded: 'Expiry not recorded',
     quantity: 'Qty',
     unitPrice: 'Unit price',
     lineTotal: 'Amount',
@@ -161,8 +197,17 @@ export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Stri
     tenders: 'Payments',
     invoice: 'Receipt',
     cashier: 'Cashier',
+    offlineReference: 'Printed offline as receipt',
     licence: 'Drug-sale licence',
     phone: 'Phone',
+    cashMemo: 'Sindh cash memo',
+    manufacturer: 'Manufacturer',
+    buyer: 'Buyer',
+    licenceValid: 'valid',
+    licenceValidTo: 'to',
+    pharmacistRegistration: 'Pharmacist registration',
+    signature: 'Signature of qualified person',
+    notRecorded: 'Not recorded',
     tenderName: {
       CASH: 'Cash',
       CARD: 'Card',
@@ -189,6 +234,8 @@ export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Stri
     batch: 'بیچ',
     expiry: 'میعاد',
     noExpiry: 'کوئی میعاد نہیں',
+    batchNotRecorded: 'بیچ درج نہیں',
+    expiryNotRecorded: 'میعاد درج نہیں',
     quantity: 'مقدار',
     unitPrice: 'فی یونٹ قیمت',
     lineTotal: 'رقم',
@@ -202,8 +249,17 @@ export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Stri
     tenders: 'ادائیگیاں',
     invoice: 'رسید',
     cashier: 'کیشیئر',
+    offlineReference: 'آف لائن چھپی رسید نمبر',
     licence: 'ادویات فروشی لائسنس',
     phone: 'فون',
+    cashMemo: 'سندھ کیش میمو',
+    manufacturer: 'تیار کنندہ',
+    buyer: 'خریدار',
+    licenceValid: 'کارآمد',
+    licenceValidTo: 'تا',
+    pharmacistRegistration: 'فارماسسٹ رجسٹریشن',
+    signature: 'مستند شخص کے دستخط',
+    notRecorded: 'درج نہیں',
     tenderName: {
       CASH: 'نقد',
       CARD: 'کارڈ',
@@ -265,6 +321,16 @@ export function localizeReceiptNumber(value: string, locale: CounterReceiptLocal
   );
 }
 
+/** DEV-637: "Printed offline as receipt 12" when replay renumbered the sale, else null. */
+export function receiptOfflineReferenceLine(
+  receipt: Pick<CounterReceipt, 'offlineReference'>,
+  locale: CounterReceiptLocale
+): string | null {
+  if (!receipt.offlineReference) return null;
+  const number = localizeReceiptNumber(String(receipt.offlineReference), locale);
+  return `${COUNTER_RECEIPT_STRINGS[locale].offlineReference} ${number}`;
+}
+
 /** ISO timestamp reduced to the date a receipt prints. */
 export function formatReceiptDate(value: string | null): string {
   if (!value) return '—';
@@ -286,8 +352,12 @@ export function formatReceiptExpiry(
     : formatReceiptDate(value);
 }
 
-/** The compact "Exp 2027-01-31" a counter screen shows, or "No expiry" (QA-3). */
+/**
+ * The compact "Exp 2027-01-31" a counter screen shows, or "No expiry" (QA-3),
+ * or (DEV-853) "Expiry not recorded" for legacy stock that never had one.
+ */
 export function formatShortExpiry(value: string | null): string {
+  if (value === null) return COUNTER_RECEIPT_STRINGS.en.expiryNotRecorded;
   return isNoExpiryDate(value)
     ? COUNTER_RECEIPT_STRINGS.en.noExpiry
     : `Exp ${formatReceiptDate(value)}`;
@@ -311,11 +381,28 @@ export function receiptTitle(receipt: CounterReceipt, locale: CounterReceiptLoca
 export function receiptLineLabel(line: CounterReceiptLine, locale: CounterReceiptLocale): string {
   const strings = COUNTER_RECEIPT_STRINGS[locale];
   const identity = [line.medicineName, line.strength].filter(Boolean).join(' ');
+  // DEV-853: when any dispensed lot has no recorded batch, each lot is named
+  // on its own — "Batch B-1" or exactly "Batch not recorded" — so the label
+  // never reads "Batch Batch not recorded".
+  const allocations = line.allocations ?? [];
+  const batch = allocations.some((allocation) => allocation.batchNumber === null)
+    ? allocations
+        .map(
+          (allocation) =>
+            (allocation.batchNumber === null
+              ? strings.batchNotRecorded
+              : `${strings.batch} ${allocation.batchNumber}`) +
+            (allocations.length > 1 ? ` (${allocation.canonicalUnits} units)` : '')
+        )
+        .join('; ')
+    : `${strings.batch} ${line.batchNumber}`;
   const tail = [
-    `${strings.batch} ${line.batchNumber}`,
-    isNoExpiryDate(line.expiresAt)
-      ? strings.noExpiry
-      : `${strings.expiry} ${formatReceiptDate(line.expiresAt)}`,
+    batch,
+    line.expiresAt === null
+      ? strings.expiryNotRecorded
+      : isNoExpiryDate(line.expiresAt)
+        ? strings.noExpiry
+        : `${strings.expiry} ${formatReceiptDate(line.expiresAt)}`,
     `${line.quantity} ${strings.saleUnit[line.saleUnit]}`,
     formatMinor(line.lineTotalMinor, locale),
   ].join(' · ');
@@ -486,4 +573,86 @@ export function receiptTierLines(
     ([name, minor]) =>
       `${COUNTER_RECEIPT_STRINGS[locale].tierDiscount} · ${name}: -${formatMinor(minor, locale)}`
   );
+}
+
+/**
+ * #708: whether a province code is Sindh, compared without the `PK-` prefix or
+ * case, as the regulatory profile form compares provinces.
+ */
+export function isSindhCashMemoProvince(code: string | null | undefined): boolean {
+  return (
+    typeof code === 'string' &&
+    ['SD', 'SINDH'].includes(code.trim().toUpperCase().replace(/^PK-/, ''))
+  );
+}
+
+/** Blank rule the buyer or qualified person completes by hand on paper. */
+export const CASH_MEMO_BLANK = '________________';
+
+export type CounterReceiptCashMemo = {
+  title: string;
+  buyer: string;
+  /** The licence with its validity, then the optional pharmacist registration. */
+  licence: string[];
+  signature: string;
+};
+
+/**
+ * #708 — whether the branch's province would choose the Sindh cash memo now.
+ * Always false while the counsel hold (`SINDH_CASH_MEMO_LIVE`) is in place.
+ */
+export function sindhCashMemoSelected(code: string | null | undefined): boolean {
+  return SINDH_CASH_MEMO_LIVE && isSindhCashMemoProvince(code);
+}
+
+/**
+ * #708 — Sindh Drugs Rules r.18 cash memo facts, or null outside Sindh.
+ *
+ * The mode is not an operator toggle: it follows the regulatory profile that
+ * was in force when the sale completed, so a reprint from history prints the
+ * same memo and a Punjab branch's receipt is unchanged. Missing facts print
+ * as "not recorded" or a blank to be completed by hand, never invented.
+ *
+ * A receipt keeps the decision frozen into its identity snapshot. Only a
+ * receipt without one falls back to the profile, and that fallback is held
+ * off with sale completion until counsel confirms the memo wording.
+ */
+export function counterReceiptCashMemo(
+  receipt: Pick<CounterReceipt, 'buyerName' | 'cashMemoIdentity'>,
+  identity: PharmacyReceiptTaxIdentity | null | undefined,
+  locale: CounterReceiptLocale
+): CounterReceiptCashMemo | null {
+  if (receipt.cashMemoIdentity !== undefined) identity = receipt.cashMemoIdentity;
+  else if (!sindhCashMemoSelected(identity?.provinceCode)) return null;
+  if (!isSindhCashMemoProvince(identity?.provinceCode)) return null;
+  const strings = COUNTER_RECEIPT_STRINGS[locale];
+  const licenceNumber = identity?.licenceNumber?.trim() || strings.notRecorded;
+  const from = identity?.licenceValidFrom ? formatReceiptDate(identity.licenceValidFrom) : null;
+  const to = identity?.licenceValidTo ? formatReceiptDate(identity.licenceValidTo) : null;
+  const validity =
+    from && to
+      ? ` (${strings.licenceValid} ${from} ${strings.licenceValidTo} ${to})`
+      : to
+        ? ` (${strings.licenceValid} ${strings.licenceValidTo} ${to})`
+        : '';
+  const pharmacist = identity?.pharmacistRegistration?.trim();
+  return {
+    title: strings.cashMemo,
+    buyer: `${strings.buyer}: ${receipt.buyerName?.trim() || CASH_MEMO_BLANK}`,
+    licence: [
+      `${strings.licence}: ${licenceNumber}${validity}`,
+      ...(pharmacist ? [`${strings.pharmacistRegistration}: ${pharmacist}`] : []),
+    ],
+    signature: `${strings.signature}: ${CASH_MEMO_BLANK}`,
+  };
+}
+
+/** The per-line manufacturer fact a cash memo adds; r.18 asks for it on every line. */
+export function cashMemoManufacturer(
+  line: Pick<CounterReceiptLine, 'manufacturer' | 'identityStatus'>,
+  locale: CounterReceiptLocale
+): string {
+  const strings = COUNTER_RECEIPT_STRINGS[locale];
+  const manufacturer = line.identityStatus === 'ISSUED' ? line.manufacturer?.trim() : null;
+  return `${strings.manufacturer}: ${manufacturer || strings.notRecorded}`;
 }

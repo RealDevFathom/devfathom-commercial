@@ -18,9 +18,16 @@ import { pharmacyMedicineRouter } from '@/server/routers/pharmacy-medicine';
 import { router, type TRPCContext } from '@/server/trpc';
 import { purchasingWorkspace } from '@/lib/pharmacy/purchasing-console';
 
-// The catalogue administrator's capability lookup (no role overrides).
+// The catalogue administrator's capability lookup (no role overrides). The reviewer
+// holds the exact pharmacy:catalogue-review grant that approval requires (DEV-19).
 const adminActor = {
-  findUnique: vi.fn(async () => ({ organizationRole: null, permissionOverrides: [] })),
+  findUnique: vi.fn(async ({ where }: { where: { id: string } }) => ({
+    organizationRole: null,
+    permissionOverrides:
+      where.id === 'reviewer-a'
+        ? [{ capability: 'pharmacy:catalogue-review', effect: 'ALLOW' }]
+        : [],
+  })),
 };
 
 function caller(db: { user?: object; [delegate: string]: unknown }, actorId = 'admin-a') {

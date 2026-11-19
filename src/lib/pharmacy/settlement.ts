@@ -36,6 +36,7 @@ import {
 } from './manual-payments';
 import { readManualPaymentSettings } from './manual-payment-settings';
 import { counterOperatorDenial } from './counter-capability';
+import { anyCardTerminalTender, countOpenCardTerminalAttempts } from './card-terminal/open-attempts';
 
 export type PharmacyTenderType = 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET' | 'CREDIT' | ManualTenderType;
 
@@ -50,6 +51,7 @@ export class PharmacySettlementError extends Error {
       | 'INVALID_AMOUNT'
       | 'OVER_TENDER'
       | 'DRAWER_NOT_OPEN'
+      | 'DRAWER_FROM_EARLIER_DAY'
       | 'DRAWER_NOT_YOURS'
       | 'CASHIER_NOT_ASSIGNED'
       | 'REFUND_EXCEEDS_TENDER'
@@ -63,6 +65,8 @@ export class PharmacySettlementError extends Error {
       | 'REOPEN_NOT_TODAY'
       | 'PREPAID_REFUND_RESTORES_BALANCE'
       | 'TENDER_ATTEMPT_DISCARDED'
+      | 'CARD_TERMINAL_PAYMENT_OPEN'
+      | 'CARD_TERMINAL_REFUND_VIA_PROVIDER'
   ) {
     super(reason);
   }
@@ -416,6 +420,26 @@ export async function requireCurrentPharmacyBusinessDate(
 }
 
 /**
+ * DEV-769: a counter bill starts only on a drawer opened for today's business day. Cash
+ * goes only into today's drawer ({@link resolveOperatingPharmacyDrawer}), so a bill started
+ * on a drawer left open from an earlier day could never be paid in cash.
+ */
+export async function requireTodaysPharmacyDrawer(
+  db: ScopedDb,
+  scope: { organizationId: string },
+  drawer: { businessDate: Date },
+  now: Date = new Date()
+) {
+  const organization = await db.organization.findUnique({
+    where: { id: scope.organizationId },
+    select: { timezone: true },
+  });
+  const today = workspaceToday(organization?.timezone, now);
+  if (drawer.businessDate.toISOString().slice(0, 10) !== today)
+    throw new PharmacySettlementError('DRAWER_FROM_EARLIER_DAY');
+}
+
+/**
  * DEV-821: who is putting cash into, or taking it out of, a drawer. A counter user
  * may use only a drawer they run; a manager or owner may use any open drawer of the
  * branch. An enrolled offline counter replays under its own authenticated device.
@@ -512,6 +536,8 @@ export async function applyPharmacyTender(
     referenceSkipped?: boolean;
     /** Manual card: the approval code on the standalone terminal slip. */
     approvalCode?: string;
+    /** #708: the buyer the Sindh cash memo names, recorded only on the completing tender. */
+    buyerName?: string;
     idempotencyKey: string;
     adapter?: PharmacyPaymentAdapter;
     leasedReceipt?: PharmacyLeasedReceipt;
@@ -575,7 +601,7 @@ export async function applyPharmacyTender(
   );
   // DEV-629: an Rx/restricted line is never paid for without a pharmacist-attached prescription
   // and a pharmacist's signed review of that line.
-  await assertRxLinesPrescribed(db, sale.lines);
+  await assertRxLinesPrescribed(db, sale.lines, scope);
   // #659: before any lease, provider charge, tender or posting. A batch recalled,
   // quarantined or expired since add-to-cart refuses the payment.
   await assertSaleBatchesSellable(db, scope, sale.id);
@@ -593,6 +619,7 @@ export async function applyPharmacyTender(
   // the cursor, so a second command cannot consume the same number. Reserved
   // numbers never return to the online sequence, including on rejection.
   let receiptNumber: number | null = null;
+  let printedReceiptNumber: number | null = null;
   if (input.leasedReceipt) {
     const { leaseId, receiptNumber: leasedNumber } = input.leasedReceipt;
     const consumed = await db.$queryRaw<Array<{ receipt_number: number }>>(Prisma.sql`
@@ -615,6 +642,7 @@ export async function applyPharmacyTender(
       RETURNING lease."nextNumber" - 1 AS receipt_number`);
     if (!consumed[0]) throw new PharmacySettlementError('INVALID_RECEIPT_LEASE');
     receiptNumber = consumed[0].receipt_number;
+    printedReceiptNumber = receiptNumber;
   }
 
   let drawerSessionId: string | undefined;
@@ -773,6 +801,10 @@ export async function applyPharmacyTender(
     tenderId: tender.id,
     settled,
     receiptNumber,
+    // DEV-637: the number printed offline, when the sale had to take a fresh branch number.
+    ...(printedReceiptNumber !== null && receiptNumber !== printedReceiptNumber
+      ? { offlineReference: printedReceiptNumber }
+      : {}),
     remainingMinor: totalMinor - tenderedMinor - input.amountMinor,
   };
   await db.pharmacyMoneyIdempotencyKey.update({
@@ -844,6 +876,10 @@ export async function refundPharmacyTender(
   // reversed). Nothing is left on a released tender to refund.
   if (tender.type === 'LOYALTY' && tender.sale.status === 'VOID')
     throw new PharmacySettlementError('REFUND_EXCEEDS_TENDER');
+  // DEV-743: an integrated card-terminal charge is refunded through the provider's own process.
+  // No terminal refund is built yet, so it is refused here, and never paid out as cash instead.
+  if (!input.adapter && (await anyCardTerminalTender(db, scope, [tender])))
+    throw new PharmacySettlementError('CARD_TERMINAL_REFUND_VIA_PROVIDER');
   assertRefundWithinTender(
     tender.amountMinor,
     tender.refunds.reduce((sum, row) => sum + row.amountMinor, 0),
@@ -1358,6 +1394,10 @@ export async function cutPharmacyDailyClose(
     },
   });
   if (openDrawers > 0) throw new PharmacySettlementError('OPEN_DRAWER');
+  // DEV-743: a terminal payment still open on this day may already have charged the customer, so
+  // the Z report would miss it. Attempts are committed under this same day lock.
+  if ((await countOpenCardTerminalAttempts(db, scope, input.businessDate)) > 0)
+    throw new PharmacySettlementError('CARD_TERMINAL_PAYMENT_OPEN');
   const prior = await db.pharmacyDailyClose.findFirst({
     where: {
       organizationId: scope.organizationId,

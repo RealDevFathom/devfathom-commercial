@@ -8,7 +8,7 @@ import { compare } from 'bcryptjs';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { ipFromHeaders, recordAuthAudit } from '@/server/audit';
-import { clearRateLimit, rateLimit } from '@/lib/rate-limit';
+import { clearRateLimit, rateLimit, refundRateLimit } from '@/lib/rate-limit';
 import { verifyTotp, hashRecoveryCode } from '@/lib/totp';
 import {
   isTenantLifecycleAccessible,
@@ -22,6 +22,13 @@ import { liveDemoAccessExpiry, type SessionInvalidReason } from '@/lib/auth/sess
 import { DUMMY_PASSWORD_HASH, SIGNIN_ALLOWED_STATUSES } from '@/lib/auth/constants';
 import { SESSION_UPDATE_AGE_SECONDS } from '@/lib/auth/session-cookie-throttle';
 import { consumeLoginIntent, LOGIN_INTENT_COOKIE, peekLoginIntent } from '@/lib/auth/login-intent';
+import {
+  LOGIN_INTENT_RATE_WINDOW_MS,
+  LOGIN_SELECT_RATE_LIMIT,
+  LOGIN_SELECT_RATE_WINDOW_MS,
+  loginIntentRateLimitKey,
+  loginSelectRateLimitKey,
+} from '@/lib/auth/login-rate-limits';
 import { emailSchema } from '@/lib/email-address';
 import { requestHost } from '@/lib/tenancy/host';
 import { isSharedHost } from '@/lib/tenancy/host-routing';
@@ -444,8 +451,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         // D18: selection is rate limited independently of the credential check,
         // so a valid intent cannot be used to grind organization ids.
-        const selectionGate = await rateLimit(`login:select:${ip ?? 'unknown'}`, 30, 5 * 60_000);
+        const selectionGate = await rateLimit(
+          loginSelectRateLimitKey(ip),
+          LOGIN_SELECT_RATE_LIMIT,
+          LOGIN_SELECT_RATE_WINDOW_MS
+        );
         if (!selectionGate.ok) return null;
+        // The window this selection was charged in, by the store's clock, so a
+        // refund can never reach a later window.
+        const selectionSpentAt = selectionGate.windowStartedAt ?? new Date();
 
         const rawIntent = parseCookie(request.headers.get('cookie'), LOGIN_INTENT_COOKIE);
         const intent = await peekLoginIntent(rawIntent, host);
@@ -557,7 +571,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             : await withPlatformDb((db) =>
                 db.pendingLoginIntent.findUnique({
                   where: { id: consumed.id },
-                  select: { createdAt: true },
+                  select: { createdAt: true, ip: true },
                 })
               );
 
@@ -570,6 +584,27 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           // `intent.email` is the same normalized address /api/login keyed on.
           await clearRateLimit(`login:ip:${ip ?? 'unknown'}`);
           await clearRateLimit(`login:acct:${intent.email}`);
+          // DEV-932: the per-address intent and selection budgets are shared by
+          // everyone behind one connection, so they are NOT cleared — that would
+          // let anyone with one working account wipe the address's failures. This
+          // verified sign-in refunds only the one unit it spent in each, so 30
+          // staff can sign in from one address while failed guesses from it keep
+          // counting towards the same 20. The unit was spent at the address the
+          // intent was minted from, so only that address gets it back, and only
+          // while the window it was spent in (the one open when the intent row
+          // was written) is still the current one.
+          if (passwordIntent && passwordIntent.ip === (ip ?? null)) {
+            await refundRateLimit(
+              loginIntentRateLimitKey(ip),
+              LOGIN_INTENT_RATE_WINDOW_MS,
+              passwordIntent.createdAt
+            );
+          }
+          await refundRateLimit(
+            loginSelectRateLimitKey(ip),
+            LOGIN_SELECT_RATE_WINDOW_MS,
+            selectionSpentAt
+          );
 
           await tenantDb.user.update({
             where: { id: user.id },

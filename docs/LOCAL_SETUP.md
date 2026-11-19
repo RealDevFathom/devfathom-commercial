@@ -1,6 +1,6 @@
 # Running DevFathom Locally
 
-Last reviewed: 2026-10-21
+Last reviewed: 2026-11-19
 
 ## Prerequisites
 
@@ -282,6 +282,98 @@ SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;
 `test:rls` above is **different, and is correct on a superuser URL**: it creates its own unprivileged
 role with `CREATE ROLE … NOLOGIN` and `SET LOCAL ROLE`s into it, so it never asserts through the
 connection role. Do not reuse the superuser URL from that example for `bun run test`.
+
+### Running all pharmacy database suites
+
+`scripts/run-pharmacy-db-tests.sh` runs every pharmacy `*.db.test.ts` file (every tracked
+`*.db.test.ts` whose path contains `pharmacy`), one file at a time, against **one** migrated
+PostgreSQL 16 database. It is for local use; CI does not run it. The roles follow the QA gate
+in `.github/workflows/qa.yml`: a non-superuser owner runs the migrations, the suites write as
+a restricted runtime role, and a superuser is used only to load the repeat-purchasing fixture
+and for the SOP suites' cleanup.
+
+1. As a superuser, create the roles once per server and a database whose name contains
+   `test`, `e2e`, `tmp` or `disposable` as a separate word. Several suites refuse any other
+   name (`supplier-price-lists`, `pharmacy-purchasing`, `pharmacy-supplier-compliance` and
+   others). The examples use `devfathom_pharmacy_test`:
+
+   ```sql
+   -- Replace the placeholders. Do not commit a real password.
+   CREATE ROLE devfathom_test_owner LOGIN PASSWORD 'CHANGE_ME_OWNER'
+     NOSUPERUSER NOBYPASSRLS NOCREATEDB CREATEROLE NOINHERIT;
+   CREATE ROLE devfathom_test LOGIN PASSWORD 'CHANGE_ME'
+     NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+   CREATE ROLE cohort_runtime LOGIN PASSWORD 'CHANGE_ME_COHORT'
+     NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+   -- PostgreSQL 16: let the owner SET ROLE to the throwaway roles it creates.
+   ALTER ROLE devfathom_test_owner SET createrole_self_grant = 'set, inherit';
+
+   CREATE DATABASE devfathom_pharmacy_test OWNER devfathom_test_owner;
+   GRANT CONNECT, TEMPORARY ON DATABASE devfathom_pharmacy_test TO devfathom_test;
+   GRANT CONNECT ON DATABASE devfathom_pharmacy_test TO cohort_runtime;
+   ```
+
+   Keep the default `CONNECT` for `PUBLIC` on this database: the WhatsApp suites log in as a
+   role they create for the run.
+
+2. Migrate as the owner and grant the runtime roles:
+
+   ```bash
+   OWNER='postgresql://devfathom_test_owner:CHANGE_ME_OWNER@localhost:5432/devfathom_pharmacy_test'
+   EXTENSION_ADMIN_DATABASE_URL="$OWNER" bun prisma/prepare-extensions.ts
+   DATABASE_URL="$OWNER" MIGRATION_DATABASE_URL="$OWNER" bunx prisma migrate deploy
+   bunx prisma generate
+   psql "$OWNER" -v ON_ERROR_STOP=1 \
+     -c 'GRANT USAGE ON SCHEMA public TO devfathom_test, cohort_runtime;' \
+     -c 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO devfathom_test;' \
+     -c 'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO devfathom_test;' \
+     -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO devfathom_test;' \
+     -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO devfathom_test;'
+   ```
+
+   Run `bunx prisma generate` after every checkout: a stale generated client fails many
+   suites with `PrismaClientValidationError`.
+
+3. Load the repeat-purchasing fixture as the superuser (it writes two tenants' sales, which
+   row-level security refuses to every other role), then give `cohort_runtime` read access to
+   exactly the five tables that suite reads:
+
+   ```bash
+   SU='postgresql://postgres:postgres@localhost:5432/devfathom_pharmacy_test'
+   psql "$SU" -v ON_ERROR_STOP=1 -f src/lib/pharmacy/repeat-purchasing.fixture.sql
+   psql "$OWNER" -v ON_ERROR_STOP=1 -c 'GRANT SELECT ON pharmacy_sales, pharmacy_sale_lines,
+     pharmacy_sale_returns, pharmacy_sale_return_lines, pharmacy_refunds TO cohort_runtime;'
+   ```
+
+4. Run every suite:
+
+   ```bash
+   DB='localhost:5432/devfathom_pharmacy_test'
+   PHARMACY_DB_TEST_RUNTIME_URL="postgresql://devfathom_test:CHANGE_ME@$DB" \
+   PHARMACY_DB_TEST_OWNER_URL="$OWNER" \
+   PHARMACY_DB_TEST_SUPERUSER_URL="$SU" \
+   PHARMACY_DB_TEST_COHORT_URL="postgresql://cohort_runtime:CHANGE_ME_COHORT@$DB" \
+     scripts/run-pharmacy-db-tests.sh
+   ```
+
+   The script refuses a non-local host (`localhost`, `127.0.0.1` or `[::1]` are local), a
+   database name that is not marked disposable, URLs that point at different databases, any
+   scheme other than `postgres:` or `postgresql:`, and a URL carrying a `host`, `hostaddr`,
+   `port`, `dbname`, `db` or `database` parameter in any letter case (the driver would connect
+   there instead of the address the checks read). It sets every variable the pharmacy suites read
+   (`TEST_DATABASE_URL`, `DATABASE_URL`, the `*_OWNER_DATABASE_URL` and
+   `*_RUNTIME_DATABASE_URL` variants, `PHARMACY_REPEAT_PURCHASING_TEST_DATABASE_URL`, a random
+   local `PLATFORM_ENCRYPTION_KEY`), then runs the two WhatsApp suites that create their own
+   throwaway role in a second pass with `DATABASE_URL` set to the owner. Extra arguments go to
+   vitest, for example `--reporter=verbose`.
+
+The suites leave their uniquely named rows behind, so the database can be reused. To start
+clean, drop it and repeat the steps.
+Two suites need a database of their own and stay skipped in this run:
+`src/lib/pharmacy/receipt-identity.db.test.ts` (set `WHA1364_RECEIPT_TEST_DATABASE_URL` to a
+new database whose name starts with `wha1364_`) and
+`src/lib/pharmacy/settlement.returns.db.test.ts` (the seeded counter end-to-end database,
+`PHARMACY_E2E=1` with `PHARMACY_E2E_DATABASE_URL`).
 
 ### Repeat purchasing, RLS, and catering preconditions
 

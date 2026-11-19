@@ -4,6 +4,7 @@ import { TRPCError } from '@trpc/server';
 import { can, subjectFromSession } from '@/lib/abac';
 import { evaluateSessionUser, temporaryPasswordBlocks } from '@/lib/auth/session-state';
 import { hasModule } from '@/lib/entitlements';
+import { workspaceDateRange } from '@/lib/timezone';
 import type { TRPCContext } from '@/server/trpc';
 import {
   fiscalExceptionDocument,
@@ -50,7 +51,7 @@ export async function readFiscalExceptions(
   const parsed = fiscalExceptionInput.safeParse(input);
   if (!parsed.success) throw new TRPCError({
     code: 'BAD_REQUEST',
-    message: 'Choose an active branch, valid [from, to) UTC dates of at most 92 days, and a bounded page.',
+    message: 'Choose an active branch, real calendar dates at most 92 days apart (the end date is not included), and a bounded page.',
   });
   const filters = parsed.data;
   const organization = await ctx.db.organization.findFirst({
@@ -70,14 +71,18 @@ export async function readFiscalExceptions(
   const configuredMode = config?.integratorMode ?? 'OFF';
   if (configuredMode !== 'OFF' && configuredMode !== 'SANDBOX') throw denied();
   const readAt = new Date().toISOString();
+  // The picked days are the organisation's days: shop midnight to shop midnight. For a UTC
+  // organisation (or none) these are the same UTC midnights as before.
+  const timeZone = ctx.organization?.timezone ?? null;
+  const window = {
+    from: workspaceDateRange(filters.from, filters.from, timeZone).from,
+    to: workspaceDateRange(filters.to, filters.to, timeZone).from,
+  };
   const documents = await ctx.db.pharmacyFiscalDocument.findMany({
     where: {
       organizationId, branchId: branch.id,
       status: { in: [...FISCAL_EXCEPTION_STATUSES] },
-      createdAt: {
-        gte: new Date(`${filters.from}T00:00:00.000Z`),
-        lt: new Date(`${filters.to}T00:00:00.000Z`),
-      },
+      createdAt: { gte: window.from, lt: window.to },
     },
     select: documentSelect,
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -96,7 +101,8 @@ export async function readFiscalExceptions(
     };
   });
   return {
-    organizationId, branch, filters, configuredMode, readAt, coverage: 'UNKNOWN',
+    organizationId, branch, filters, configuredMode, readAt, coverage: 'UNKNOWN', timeZone,
+    window: { from: window.from.toISOString(), to: window.to.toISOString() },
     hasMoreAtRead, pageCapReached,
     nextPage: hasMoreAtRead && !pageCapReached ? filters.page + 1 : null,
     rows,

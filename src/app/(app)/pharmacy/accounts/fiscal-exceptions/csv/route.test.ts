@@ -16,6 +16,7 @@ describe('fiscal exception page CSV download', () => {
     mocks.load.mockResolvedValue({
       organizationId: 'org-1', branch: { id: 'main', name: 'Main' }, configuredMode: 'SANDBOX',
       filters: { branchId: 'main', from: '2026-07-01', to: '2026-10-01', page: 1, pageSize: 1 },
+      timeZone: null, window: { from: '2026-07-01T00:00:00.000Z', to: '2026-10-01T00:00:00.000Z' },
       readAt: '2026-10-01T00:00:00.000Z', coverage: 'UNKNOWN', hasMoreAtRead: true,
       pageCapReached: false, nextPage: 2,
       rows: [{ id: 'doc-2', localReference: '=HYPERLINK("https://example.invalid")', kind: 'INVOICE',

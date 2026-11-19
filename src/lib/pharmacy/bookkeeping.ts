@@ -457,9 +457,12 @@ export async function createSettlementBatch(
       businessDate: input.businessDate,
       expectedMinor,
       createdByUserId: scope.actorId,
+      // Each member row inherits organizationId from this batch: it is part of the
+      // composite (organizationId, settlementBatchId) relation, so Prisma rejects it
+      // here. The (organizationId, tenderId) foreign key still pins each tender to
+      // the batch's tenant.
       tenders: {
         create: tenders.map((tender) => ({
-          organizationId: scope.organizationId,
           tenderId: tender.id,
           amountMinor: tender.amountMinor,
         })),

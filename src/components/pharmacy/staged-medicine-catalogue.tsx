@@ -1,5 +1,8 @@
 import Link from 'next/link';
 import { MigrationStagingForm } from './migration-staging-form';
+import { StagedMedicineCreation } from './staged-medicine-creation';
+import { readStagedMedicineCreation } from './staged-medicine-creation-actions';
+import { MedicineImportTemplate } from './medicine-import-template';
 import { TRPCError } from '@trpc/server';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -7,9 +10,30 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { StagedMedicineExport } from '@/components/pharmacy/staged-medicine-export';
+import {
+  STAGED_COLUMN_HEADINGS,
+  stagedListIntro,
+  plainExceptionStatus,
+  plainReviewFlag,
+  plainSeverity,
+  STAGED_NOT_SUPPLIED,
+  STAGED_PRICE_COLUMN_NOTE,
+  STAGED_STATUS_LABEL,
+  formatStagedPrice,
+  formatStagedQuantity,
+  formatStagedQuantityReview,
+  plainBatchStatus,
+  plainExceptionLabel,
+} from '@/components/pharmacy/staged-review-display';
 import { SOURCE_REFERENCE_COLUMNS } from '@/lib/pharmacy/migration/staged-review';
 import { createTRPCContext } from '@/server/trpc';
 import { pharmacyStagedReviewRouter } from '@/server/routers/pharmacy-staged-review';
+
+/** A stored pack price in rupees, or "not recorded" when the file had none. */
+const createdPrice = (minor: number | null) =>
+  minor === null
+    ? 'not recorded'
+    : `Rs ${(minor / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const linkClass =
   'inline-flex min-h-11 items-center rounded-sm px-3 text-sm underline hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-ring';
@@ -101,7 +125,7 @@ export async function StagedMedicineCatalogue({
     <PageHeader
       eyebrow="Pharmacy / source review"
       heading={heading}
-      description="Review preserved medicine names, source counts and prices before catalogue or stock approval."
+      description="Review preserved medicine names, source counts and prices before you create catalogue medicines. Stock is not added here."
     />
   );
   if ('errorCode' in loaded) {
@@ -128,6 +152,10 @@ export async function StagedMedicineCatalogue({
     );
   }
   const { branches, branchId, batchPage, batches, selected, result, detail } = loaded;
+  // DEV-912: bulk creation controls, shown to a catalogue editor or reviewer only.
+  const creationRead =
+    result && selected.batchId ? await readStagedMedicineCreation(selected.batchId) : null;
+  const creation = creationRead && 'data' in creationRead ? creationRead.data : null;
   return (
     <div className="min-w-0 space-y-6">
       {header}
@@ -135,8 +163,8 @@ export async function StagedMedicineCatalogue({
         <p className="text-sm text-text-muted">
           Staged means unverified source evidence. A draft catalogue entry needs validated identity
           and pack metadata. Verified means an explicit review accepted the facts. Sellable also
-          requires stock and sale checks. This screen establishes no linked draft, verified medicine
-          or sellable balance.
+          requires stock and sale checks. Reading this list creates nothing: catalogue medicines are
+          created only from an approved request for the whole file, and no stock balance is posted.
         </p>
         <p className="mt-3 text-sm text-text-muted">
           Batch, expiry and verified MRP gaps concern opening stock or price publication. They do
@@ -145,6 +173,7 @@ export async function StagedMedicineCatalogue({
           counts.
         </p>
       </SectionCard>
+      <MedicineImportTemplate />
       {branchId && <MigrationStagingForm key={branchId} branchId={branchId} route={route} />}
       <SectionCard title="Source and branch" titleLevel={2}>
         <form action={route} className="flex flex-wrap items-end gap-3">
@@ -194,7 +223,7 @@ export async function StagedMedicineCatalogue({
                 >
                   {batch.label} · {batch.source.fileName}
                 </Link>
-                <StatusPill status={batch.status} />
+                <StatusPill status={batch.status} label={plainBatchStatus(batch.status)} />
                 <span className="text-sm text-text-muted">{batch.rowCount} recorded rows</span>
               </div>
             ))}
@@ -215,6 +244,9 @@ export async function StagedMedicineCatalogue({
       </SectionCard>
       {result && (
         <SectionCard title="Candidates and source quantities" titleLevel={2}>
+          <p className="mb-2 text-sm font-medium text-text-strong">
+            {stagedListIntro(creation !== null)}
+          </p>
           <p className="mb-4 text-sm">
             {result.candidateCount.toLocaleString('en-US')} staged product candidates available for
             review. {result.total.toLocaleString('en-US')} match this search. Source quantities are
@@ -225,6 +257,16 @@ export async function StagedMedicineCatalogue({
               {result.batch.source.fileName} · SHA256 {result.batch.source.contentHash} ·{' '}
               {result.batch.profilerVersion}
             </p>
+          )}
+          {creation && (
+            <div className="mb-4">
+              <StagedMedicineCreation
+                key={selected.batchId}
+                batchId={selected.batchId}
+                branchId={selected.branchId}
+                initial={creation}
+              />
+            </div>
           )}
           <form action={route} className="mb-4 flex flex-wrap items-end gap-3">
             {Object.entries(selected).map(([key, value]) => (
@@ -257,7 +299,7 @@ export async function StagedMedicineCatalogue({
           <ul className="mb-4 space-y-1 text-sm text-text-muted">
             {result.exceptions.map((e) => (
               <li key={e.bucket}>
-                {e.workflow}: {e.bucket} — {e.count} open
+                {e.workflow}: {plainExceptionLabel(e.bucket)} — {e.count} open
               </li>
             ))}
           </ul>
@@ -273,16 +315,7 @@ export async function StagedMedicineCatalogue({
               </caption>
               <thead className="font-mono text-xs uppercase">
                 <tr>
-                  {[
-                    'Medicine',
-                    'Source QTY',
-                    'Source saleprice',
-                    'Source purprice',
-                    'Source UnitPrice',
-                    'Source PackUnits',
-                    'Staged quantity',
-                    'Review',
-                  ].map((label) => (
+                  {STAGED_COLUMN_HEADINGS.map((label) => (
                     <th className="px-3 py-3 text-left" key={label} scope="col">
                       {label}
                     </th>
@@ -302,20 +335,25 @@ export async function StagedMedicineCatalogue({
                       <p className="text-xs text-text-muted">
                         Row {row.rowNumber}
                         {row.collision ? ' · Name collision — keep separate' : ''}
+                        {row.controlled ? ' · Controlled medicine (legacy class NARCOTICS)' : ''}
+                        {row.batchNotRecorded ? ` · ${row.batchLabel}` : ''}
+                        {row.expiryNotRecorded ? ` · ${row.expiryLabel}` : ''}
                       </p>
                     </td>
                     {(['QTY', 'saleprice', 'purprice', 'UnitPrice', 'PackUnits'] as const).map(
                       (key) => (
                         <td key={key} className="px-3 py-3 text-right font-mono tabular-nums">
-                          {row.references[key] ?? 'Not supplied as text'}
+                          {key === 'QTY' || key === 'PackUnits'
+                            ? formatStagedQuantity(row.references[key])
+                            : formatStagedPrice(row.references[key])}
                         </td>
                       )
                     )}
                     <td className="px-3 py-3 text-right font-mono tabular-nums">
-                      {row.quantityReview.label ?? 'Not supplied'}
+                      {formatStagedQuantityReview(row.quantityReview) ?? STAGED_NOT_SUPPLIED}
                     </td>
                     <td className="px-3 py-3">
-                      <StatusPill status="pending" label={row.status} />
+                      <StatusPill status="pending" label={STAGED_STATUS_LABEL} />
                     </td>
                   </tr>
                 ))}
@@ -342,10 +380,35 @@ export async function StagedMedicineCatalogue({
       )}
       {detail && (
         <SectionCard title={detail.productName || 'Candidate detail'} titleLevel={2}>
-          <StatusPill status="pending" label={detail.status} />
+          <StatusPill status="pending" label={STAGED_STATUS_LABEL} />
           <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
             {Object.entries({
+              'Original status': detail.status,
               Catalogue: detail.catalogueStatus,
+              'Catalogue medicine': detail.catalogueMedicine
+                ? `${detail.catalogueMedicine.outcome === 'MATCHED' ? 'Already created from an earlier file' : 'Created'} · MRP ${createdPrice(detail.catalogueMedicine.mrpMinor)} · purchase price ${createdPrice(detail.catalogueMedicine.purchasePriceMinor)} · units per pack ${detail.catalogueMedicine.unitsPerPack ?? 'not recorded'}`
+                : 'Not created yet',
+              Barcode: !detail.catalogueMedicine?.barcode
+                ? null
+                : detail.catalogueMedicine.barcodeAttached
+                  ? `${detail.catalogueMedicine.barcode} added to the pack`
+                  : detail.catalogueMedicine.outcome === 'MATCHED'
+                    ? `${detail.catalogueMedicine.barcode} was not added, because the medicine already existed`
+                    : `${detail.catalogueMedicine.barcode} already belongs to another pack, so it was not added`,
+              Supplier: !detail.catalogueMedicine?.supplierName
+                ? null
+                : detail.catalogueMedicine.supplierId
+                  ? `${detail.catalogueMedicine.supplierName} — matched to your supplier`
+                  : `${detail.catalogueMedicine.supplierName} — not one of your suppliers, so it was not linked. Add the supplier in Purchasing if you buy from them.`,
+              'Reorder level':
+                detail.catalogueMedicine?.reorderLevelPacks == null
+                  ? null
+                  : detail.catalogueMedicine.reorderLevelApplied
+                    ? `${detail.catalogueMedicine.reorderLevelPacks} packs — set as the branch's safety stock`
+                    : `${detail.catalogueMedicine.reorderLevelPacks} packs — not set: ${detail.catalogueMedicine.outcome === 'MATCHED' ? 'the medicine already existed' : detail.catalogueMedicine.unitsPerPack === null ? 'units per pack is not recorded' : 'the request named no branch where its sender may set stock levels'}`,
+              'Controlled medicine': detail.controlled
+                ? 'Yes — set from legacy class NARCOTICS'
+                : 'No — not in the NARCOTICS class',
               Draft: detail.draftStatus,
               Verified: 'Not established',
               'Sellable stock': 'Not established',
@@ -361,6 +424,8 @@ export async function StagedMedicineCatalogue({
               'Quantity column counts': detail.quantityReview.choiceLabel,
               'Staged quantity — not stock': detail.quantityReview.label,
               'Stored staged quantity — not stock': detail.canonicalQuantity,
+              'Batch number': detail.batchLabel,
+              'Expiry date': detail.expiryLabel,
             }).map(([key, value]) => (
               <div key={key} className="min-w-0">
                 <dt className="text-text-muted">{key}</dt>
@@ -372,7 +437,12 @@ export async function StagedMedicineCatalogue({
           <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
             {SOURCE_REFERENCE_COLUMNS.map((key) => (
               <div key={key} className="min-w-0">
-                <dt className="font-mono text-text-muted">{key}</dt>
+                <dt className="font-mono text-text-muted">
+                  {key}
+                  {STAGED_PRICE_COLUMN_NOTE[key] && (
+                    <span className="block font-sans text-xs">{STAGED_PRICE_COLUMN_NOTE[key]}</span>
+                  )}
+                </dt>
                 <dd className="break-all whitespace-pre-wrap">
                   {detail.references[key] ?? 'Not supplied as text'}
                 </dd>
@@ -380,18 +450,21 @@ export async function StagedMedicineCatalogue({
             ))}
           </dl>
           <p className="mt-4 text-sm text-text-muted">
-            Name is the source product name. Lowercase name, classname and Category are unverified
-            legacy groupings. aliasname is a legacy code, not a verified barcode. All price columns
-            remain references; no MRP or cost conversion is applied.
+            Name is the source product name. A classname of NARCOTICS imports the item as a
+            controlled medicine; correct a wrong flag through the catalogue edit path. Other
+            classname values, lowercase name and Category are unverified legacy groupings. aliasname
+            is a legacy code, not a verified barcode. saleprice is the MRP and purprice is the price
+            the pharmacy pays the distributor; both are shown as recorded in the old file.
           </p>
           <h3 className="mt-6 font-semibold">Retained review flags and exceptions</h3>
           <ul className="mt-3 space-y-1 break-words text-sm">
             {detail.flags.map((flag) => (
-              <li key={flag}>{flag}</li>
+              <li key={flag}>{plainReviewFlag(flag)}</li>
             ))}
             {detail.exceptions.map((e, i) => (
               <li key={`${e.bucket}-${i}`}>
-                {e.bucket} · {e.workflow} · {e.status} · {e.severity}
+                {plainExceptionLabel(e.bucket)} · {e.workflow} · {plainExceptionStatus(e.status)} ·{' '}
+                {plainSeverity(e.severity)}
               </li>
             ))}
           </ul>

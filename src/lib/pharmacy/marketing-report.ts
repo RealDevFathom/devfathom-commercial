@@ -3,6 +3,7 @@ import 'server-only';
 import { reconcileCapture } from './marketing-delivery';
 import { eligibleMarketingReceipts, ATTRIBUTION_METHOD } from './marketing-attribution';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { workspaceDateRange, workspaceTimezone } from '@/lib/timezone';
 
 const DAY = 86_400_000;
 export type MarketingReportFilters = { branchIds: string[]; from: string; to: string };
@@ -20,13 +21,14 @@ export function validateMarketingReportFilters(input: MarketingReportFilters) {
     from > to ||
     to.getTime() - from.getTime() >= 90 * DAY
   )
-    throw new Error('Use valid UTC dates spanning at most 90 days and 1–100 authorized branches.');
+    // DEV-943: both callers (campaign results, lost sales) count these as the shop's own days.
+    throw new Error('Use valid dates spanning at most 90 days and 1–100 authorized branches.');
   return { gte: from, lt: new Date(to.getTime() + DAY) };
 }
 
 export const MARKETING_REPORT_DEFINITIONS = {
   prepared:
-    'Distinct persisted campaign captures in the selected branches and inclusive UTC capture dates. Preparation is not provider acceptance or delivery.',
+    "Distinct persisted campaign captures in the selected branches and inclusive capture dates, counted as the organisation's own days. Preparation is not provider acceptance or delivery.",
   providerAccepted:
     'Distinct cohort captures with persisted Meta acceptance through the report cutoff; sandbox evidence excluded.',
   delivered:
@@ -36,11 +38,11 @@ export const MARKETING_REPORT_DEFINITIONS = {
   unknown:
     'Cohort captures without resolved live outcome, including preparation-only, sandbox-only and contradictory evidence. Does not imply a live attempt.',
   consentOptOuts:
-    'Distinct inbound WhatsApp OPT_OUT logs recorded in the selected branches and UTC dates. These are consent events, not campaign-attributed opt-outs or current consent state. Unassigned-branch events are excluded.',
+    'Distinct inbound WhatsApp OPT_OUT logs recorded in the selected branches and dates. These are consent events, not campaign-attributed opt-outs or current consent state. Unassigned-branch events are excluded.',
   unassignedConsentOptOuts:
-    'Organization-wide inbound WhatsApp OPT_OUT logs without a branch, in the selected UTC dates. Reported separately because STOP intake currently has no branch. Counts received requests, not proof that the consent update committed.',
+    'Organization-wide inbound WhatsApp OPT_OUT logs without a branch, in the selected dates. Reported separately because STOP intake currently has no branch. Counts received requests, not proof that the consent update committed.',
   optedOutExclusions:
-    'Persisted campaign exclusions with reason OPTED_OUT evaluated in the selected branches and UTC dates; not additional consent events.',
+    'Persisted campaign exclusions with reason OPTED_OUT evaluated in the selected branches and dates; not additional consent events.',
   attribution:
     'Estimated stored receipt links, revalidated against latest bound Meta delivery in the same tenant/customer/branch within seven days before completion. Receipt is the observed visit. Posted Finance sale/return amounts through cutoff determine net revenue and margin; sandbox and legacy links are excluded from verified totals. No causal uplift claim; message cost is unavailable.',
 } as const;
@@ -90,20 +92,26 @@ export function summarizeStoredMarketingAttribution(rows: StoredMarketingAttribu
   };
 }
 
-/** Read-only consumer. Tenant and branch predicates are explicit on every query. */
+/**
+ * Read-only consumer. Tenant and branch predicates are explicit on every query.
+ * DEV-943: the inclusive dates are the organisation's own days, shop midnight to shop
+ * midnight in `timeZone` (the caller's organisation zone, never an input), as every other
+ * owner report counts them. A UTC organisation, or none, reads the same UTC days as before.
+ */
 export async function readPharmacyMarketingReport(
   db: ScopedDb,
   organizationId: string,
-  input: MarketingReportFilters
+  input: MarketingReportFilters,
+  timeZone?: string | null
 ) {
-  const period = validateMarketingReportFilters(input);
-  const report = await readPharmacyMarketingReportWindow(
-    db,
-    organizationId,
-    input.branchIds,
-    period
-  );
-  return { ...report, period: { from: input.from, to: input.to, timezone: 'UTC' as const } };
+  validateMarketingReportFilters(input);
+  const zone = workspaceTimezone(timeZone);
+  const window = workspaceDateRange(input.from, input.to, zone);
+  const report = await readPharmacyMarketingReportWindow(db, organizationId, input.branchIds, {
+    gte: window.from,
+    lt: window.to,
+  });
+  return { ...report, period: { from: input.from, to: input.to, timezone: zone } };
 }
 
 /**

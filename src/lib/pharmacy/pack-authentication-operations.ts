@@ -75,8 +75,9 @@ export async function authenticatePharmacyPack(
     recordedBatch: batch
       ? {
           id: batch.id,
-          batchNumber: batch.batchNumber,
-          expiry: expiryCode(batch.expiresAt),
+          // Found by the scanned batch number, so it is recorded.
+          batchNumber: batch.batchNumber ?? fields!.batch!,
+          expiry: batch.expiresAt === null ? null : expiryCode(batch.expiresAt),
           recalled: batch.state === 'RECALLED',
         }
       : null,

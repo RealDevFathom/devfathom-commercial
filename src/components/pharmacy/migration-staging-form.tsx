@@ -5,21 +5,25 @@ import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
-import { IMPORT_MAX_ROWS } from '@/lib/pharmacy/migration/owner-import-input';
 import {
   STAGING_FIELDS,
-  STAGING_MAX_BYTES,
+  STAGING_MAX_FILE_BYTES,
+  STAGING_MAX_ROWS,
   type StagingInput,
 } from '@/lib/pharmacy/migration/staging-input';
 import type { ColumnMap, QuantityUnit } from '@/lib/pharmacy/migration/profiler';
 import { readStagingUpload, stageMigrationBatch } from './migration-staging-actions';
+import { encodeStagingFile, type EncodedStagingFile } from './staging-file-encoding';
+
+const MAX_FILE_LABEL = `${STAGING_MAX_FILE_BYTES / (1024 * 1024)} MiB`;
+const count = (value: number) => value.toLocaleString('en-US');
 
 const control =
   'mt-1 min-h-11 w-full min-w-0 rounded-sm border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
 export function MigrationStagingForm({ branchId, route }: { branchId: string; route: string }) {
   const router = useRouter();
-  const [source, setSource] = useState<{ fileName: string; content: string } | null>(null);
+  const [source, setSource] = useState<({ fileName: string } & EncodedStagingFile) | null>(null);
   const [headers, setHeaders] = useState<string[]>([]);
   const [mapping, setMapping] = useState<ColumnMap>({});
   const [quantityUnit, setQuantityUnit] = useState<QuantityUnit | ''>('');
@@ -40,17 +44,20 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
     setError('');
     setMessage('');
     if (!file) return;
-    if (!file.size || file.size > STAGING_MAX_BYTES) {
-      setError('Choose a nonempty file up to 512 KiB.');
+    if (!file.size || file.size > STAGING_MAX_FILE_BYTES) {
+      setError(`Choose a nonempty file up to ${MAX_FILE_LABEL}.`);
       resetFileInput();
       return;
     }
     setBusy(true);
     try {
-      let binary = '';
-      for (const byte of new Uint8Array(await file.arrayBuffer()))
-        binary += String.fromCharCode(byte);
-      const next = { fileName: file.name, content: btoa(binary) };
+      const encoded = await encodeStagingFile(new Uint8Array(await file.arrayBuffer()));
+      if (!encoded) {
+        setError('This file is too large to send. Export it as CSV, or split it into two files.');
+        resetFileInput();
+        return;
+      }
+      const next = { fileName: file.name, ...encoded };
       const result = await readStagingUpload({ ...next, branchId });
       if (!result.data) {
         setError(result.error);
@@ -61,7 +68,7 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
       setHeaders(result.data.headers);
       setMapping(result.data.mapping);
       setMessage(
-        `${result.data.rowCount} ${result.data.rowCount === 1 ? 'row' : 'rows'} ready for column mapping.`
+        `${count(result.data.rowCount)} ${result.data.rowCount === 1 ? 'row' : 'rows'} ready for column mapping.`
       );
     } catch {
       setError('The file could not be read. Choose it again.');
@@ -71,16 +78,19 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
     }
   }
 
+  // DEV-912: a products-only file maps no quantity column and needs no packs-or-units choice.
+  const quantityMapped = mapping.quantity !== undefined;
+  const ready = mapping.product !== undefined && (!quantityMapped || Boolean(quantityUnit));
+
   async function stage() {
-    if (!source || !quantityUnit || mapping.product === undefined || mapping.quantity === undefined)
-      return;
+    if (!source || !ready) return;
     setBusy(true);
     setError('');
     try {
       const result = await stageMigrationBatch({
         ...source,
         branchId,
-        quantityUnit,
+        ...(quantityMapped && quantityUnit ? { quantityUnit } : {}),
         mapping: mapping as StagingInput['mapping'],
       });
       if (!result.data) {
@@ -90,7 +100,15 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
       setSource(null);
       setHeaders([]);
       setMessage(
-        `${result.data.rowCount} rows staged for review with ${result.data.exceptionCount} exceptions. No stock was posted.`
+        (result.data.replayed
+          ? `This file was already staged with the same columns: ${count(result.data.rowCount)} rows. No duplicate batch was created. `
+          : `${count(result.data.rowCount)} rows staged for review with ${count(result.data.exceptionCount)} exceptions. `) +
+          `${result.data.controlledFromClass} set as controlled from legacy class NARCOTICS` +
+          ` (${result.data.controlledMedicinesFlagged} catalogue ${result.data.controlledMedicinesFlagged === 1 ? 'medicine' : 'medicines'} flagged). ` +
+          (result.data.controlledSkippedCorrected
+            ? `${result.data.controlledSkippedCorrected} skipped: a person had already corrected ${result.data.controlledSkippedCorrected === 1 ? 'that medicine' : 'those medicines'} to not controlled. `
+            : '') +
+          'No stock was posted.'
       );
       router.push(
         `${route}?${new URLSearchParams({ branchId, sourceId: result.data.sourceId, batchId: result.data.batchId })}`
@@ -106,8 +124,11 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
   return (
     <SectionCard title="Stage a source file" titleLevel={2}>
       <p className="text-sm text-text-muted">
-        Upload CSV or XLSX with up to {IMPORT_MAX_ROWS} rows. Choose what the quantity column
-        counts. Staging creates unverified evidence, not sellable stock.
+        Upload a CSV or XLSX product list with up to {count(STAGING_MAX_ROWS)} rows (
+        {MAX_FILE_LABEL}), such as a full catalogue export from your previous system. When the file
+        has a quantity column, choose what it counts; a list of medicines without stock needs no
+        quantity column. Staging creates unverified evidence, not sellable stock, and staging the
+        same file again with the same columns reuses its batch.
       </p>
       <fieldset disabled={busy || !branchId} className="mt-4 min-w-0 space-y-4">
         <label className="block text-sm">
@@ -139,9 +160,7 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
                     }}
                   >
                     <option value="">
-                      {field === 'product' || field === 'quantity'
-                        ? 'Choose a column'
-                        : 'Not supplied'}
+                      {field === 'product' ? 'Choose a column' : 'Not supplied'}
                     </option>
                     {headers.map((header, index) => (
                       <option key={index} value={index}>
@@ -154,16 +173,19 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
               <label className="min-w-0 text-sm">
                 Quantity column counts
                 <select
-                  required
+                  required={quantityMapped}
+                  disabled={!quantityMapped}
                   aria-describedby="quantity-choice-help"
                   className={control}
-                  value={quantityUnit}
+                  value={quantityMapped ? quantityUnit : ''}
                   onChange={(event) => {
                     setQuantityUnit(event.target.value as QuantityUnit | '');
                     setError('');
                   }}
                 >
-                  <option value="">Choose packs or units</option>
+                  <option value="">
+                    {quantityMapped ? 'Choose packs or units' : 'No quantity column'}
+                  </option>
                   <option value="PACKS">Packs</option>
                   <option value="UNITS">Units</option>
                 </select>
@@ -177,9 +199,7 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
             <Button
               type="button"
               className="min-h-11"
-              disabled={
-                !quantityUnit || mapping.product === undefined || mapping.quantity === undefined
-              }
+              disabled={!ready}
               onClick={() => void stage()}
             >
               Stage for review

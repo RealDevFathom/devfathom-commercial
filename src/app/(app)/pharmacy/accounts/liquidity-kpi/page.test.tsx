@@ -109,9 +109,9 @@ describe('LiquidityKpiPage', () => {
     });
     expect(mocks.mutation).not.toHaveBeenCalled();
     expect(output).toContain('9007199254740993.01');
-    expect(output).toContain('900719925474099310 / 400');
+    expect(output).toContain('9007199254740993.10 / 4.00');
     expect(output).toContain('2251799813685248.2750');
-    expect(output).toContain('50 / 200');
+    expect(output).toContain('0.50 / 2.00');
     expect(output).toContain('0.2500');
     expect(output).toContain('Export KPI CSV');
     expect(output).toMatch(/Retrieved\s+2 Feb 2026, 3:04 AM UTC/);

@@ -10,6 +10,8 @@ import {
   counterMedicineGenericName,
 } from '@/lib/pharmacy/counter-display-name';
 import { formatMinor, formatShortExpiry } from '@/lib/pharmacy/counter-receipt';
+import { STRENGTH_NOT_RECORDED } from '@/lib/pharmacy/medicine';
+import { BATCH_NOT_RECORDED } from '@/lib/pharmacy/unrecorded-batch';
 import { formatStockBreakdown } from '@/lib/pharmacy/stock-breakdown';
 
 export type CounterSearchResultsProps = {
@@ -45,6 +47,20 @@ const MATCH_LABEL: Record<CounterSearchRow['matchedOn'], string> = {
   INGREDIENT: 'Ingredient',
   PRESENTATION: 'Form',
 };
+
+/**
+ * DEV-907: "Gulberg", "Gulberg and DHA", "Gulberg, DHA and other branches".
+ * The server sends branch names only; nothing else about the other branch.
+ */
+export function otherBranchAvailabilityText(
+  availability: NonNullable<CounterSearchRow['otherBranchAvailability']>
+): string {
+  const names = availability.more
+    ? [...availability.branchNames, 'other branches']
+    : availability.branchNames;
+  if (names.length <= 1) return names[0] ?? '';
+  return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+}
 
 /**
  * POS-02 result rows.
@@ -234,10 +250,16 @@ export function CounterSearchResults({
                 </span>
                 <span className="col-span-2 min-w-0 break-words text-xs leading-relaxed text-text-muted">
                   <span className="block">
-                    <span>Strength:</span>{' '}
-                    <span className="ms-1">
-                      <bdi dir="auto">{row.strength ?? 'Unavailable'}</bdi>
-                    </span>
+                    {row.strength ? (
+                      <>
+                        <span>Strength:</span>{' '}
+                        <span className="ms-1">
+                          <bdi dir="auto">{row.strength}</bdi>
+                        </span>
+                      </>
+                    ) : (
+                      STRENGTH_NOT_RECORDED
+                    )}
                   </span>
                   <span className="block">
                     <span>Form:</span> {row.presentation}
@@ -252,8 +274,15 @@ export function CounterSearchResults({
                     <span>Stock:</span>{' '}
                     {formatStockBreakdown(row.onHandUnits, row.saleableUnits, row.dosageForm)}
                   </span>
-                  {row.batchNumber ? ` · Batch ${row.batchNumber}` : ''}
-                  {row.nearestSafeExpiry ? ` · ${formatShortExpiry(row.nearestSafeExpiry)}` : ''}
+                  {row.batchNumber
+                    ? ` · Batch ${row.batchNumber}`
+                    : row.recommendedLotId
+                      ? ` · ${BATCH_NOT_RECORDED}`
+                      : ''}
+                  {/* DEV-853: a sellable lot with no expiry says "Expiry not recorded". */}
+                  {row.nearestSafeExpiry || row.recommendedLotId
+                    ? ` · ${formatShortExpiry(row.nearestSafeExpiry)}`
+                    : ''}
                   {notes.length ? ` · ${notes.join(' · ')}` : ''}
                   {` · ${MATCH_LABEL[row.matchedOn]}`}
                 </span>
@@ -276,6 +305,18 @@ export function CounterSearchResults({
                   </span>
                 ) : null}
               </button>
+              {row.otherBranchAvailability?.branchNames.length ? (
+                <p className="border-t border-border-subtle px-4 py-2 text-sm text-text-body">
+                  Also in stock at{' '}
+                  <bdi dir="auto" className="font-semibold text-text-strong">
+                    {otherBranchAvailabilityText(row.otherBranchAvailability)}
+                  </bdi>
+                  .{' '}
+                  <span className="text-text-muted">
+                    The customer buys and collects it at that branch.
+                  </span>
+                </p>
+              ) : null}
               {row.stockAlternatives ? (
                 <section
                   aria-label={`Alternatives for ${counterMedicineDisplayName(row)}`}

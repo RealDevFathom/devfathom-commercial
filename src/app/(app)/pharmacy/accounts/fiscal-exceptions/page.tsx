@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
+import { formatWorkspaceDateTime, workspaceZoneLabel } from '@/lib/timezone';
 import {
   FISCAL_EXCEPTION_COVERAGE, FISCAL_EXCEPTION_NOTICE,
   type FiscalExceptionRegister,
@@ -30,6 +31,10 @@ export default async function FiscalExceptionsPage({ searchParams }: {
     error = fiscalExceptionError(cause);
   }
   const scalar = (value: unknown) => typeof value === 'string' ? value : '';
+  // Recorded instants and the creation window are both on the organisation's clock.
+  const shopTime = (value: string) => (
+    <time dateTime={value}>{formatWorkspaceDateTime(value, register?.timeZone)}</time>
+  );
 
   return (
     <div className="min-w-0 space-y-6">
@@ -44,12 +49,12 @@ export default async function FiscalExceptionsPage({ searchParams }: {
               className="mt-1 min-h-11" aria-describedby="fiscal-window-help" />
           </label>
           <label className="text-sm text-text-body">
-            Created from (UTC, inclusive)
-            <Input name="from" type="date" defaultValue={scalar(input?.from ?? query.from)} required className="mt-1 min-h-11" />
+            Created from
+            <Input name="from" type="date" defaultValue={scalar(register?.filters.from ?? input?.from ?? query.from)} required className="mt-1 min-h-11" />
           </label>
           <label className="text-sm text-text-body">
-            Created before (UTC, exclusive)
-            <Input name="to" type="date" defaultValue={scalar(input?.to ?? query.to)} required className="mt-1 min-h-11" />
+            Created before (not included)
+            <Input name="to" type="date" defaultValue={scalar(register?.filters.to ?? input?.to ?? query.to)} required className="mt-1 min-h-11" />
           </label>
           <label className="text-sm text-text-body">
             Rows per page
@@ -58,7 +63,8 @@ export default async function FiscalExceptionsPage({ searchParams }: {
           </label>
           <p id="fiscal-window-help" className="text-sm text-text-muted md:col-span-2">
             Use the branch ID from your workspace administrator. Maximum 92 days, excluding the end date.
-            Filters restart at page 1. Schedule values are recorded metadata; they do not trigger work.
+            {register ? ` Days run midnight to midnight, ${workspaceZoneLabel(register.timeZone)} time.` : ''}
+            {' '}Filters restart at page 1. Schedule values are recorded metadata; they do not trigger work.
           </p>
           <Button type="submit" size="touch">Apply evidence window</Button>
         </form>
@@ -78,9 +84,9 @@ export default async function FiscalExceptionsPage({ searchParams }: {
               className={buttonVariants({ variant: 'secondary', size: 'touch' })}>Download page CSV</a>
           </div>
           <p className="mb-3 text-sm text-text-muted">{FISCAL_EXCEPTION_COVERAGE}</p>
-          <p className="mb-4 break-words font-mono text-xs text-text-muted">
-            Read started {register.readAt}. Created [{register.filters.from}, {register.filters.to}) UTC.
-            CSV downloads re-read this page and may differ from the screen.
+          <p className="mb-4 break-words text-xs text-text-muted">
+            Read started {shopTime(register.readAt)}. Created from {register.filters.from} up to (not
+            including) {register.filters.to}. CSV downloads re-read this page and may differ from the screen.
           </p>
           <div role="region" aria-label="Fiscal exception documents" tabIndex={0}
             className="overflow-x-auto rounded-md border border-border-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
@@ -88,7 +94,7 @@ export default async function FiscalExceptionsPage({ searchParams }: {
               <thead className="bg-surface-sunken font-mono text-xs uppercase text-text-muted">
                 <tr>
                   {['Local document reference', 'Kind', 'Document mode', 'State', 'Attempts / limit',
-                    'Next recorded attempt (UTC)', 'Created / updated (UTC)'].map((label, index) => (
+                    'Next recorded attempt', 'Created / updated'].map((label, index) => (
                     <th key={label} scope="col" className={`p-3 ${index === 4 ? 'text-right' : 'text-left'}`}>{label}</th>
                   ))}
                 </tr>
@@ -103,8 +109,8 @@ export default async function FiscalExceptionsPage({ searchParams }: {
                     <td className="p-3"><StatusPill status={row.integratorMode} /></td>
                     <td className="p-3"><StatusPill status={row.status} tone={row.status === 'QUEUED' ? 'warning' : 'danger'} /></td>
                     <td className="p-3 text-right">{row.attempts} / {row.maxAttempts}</td>
-                    <td className="p-3 font-mono text-xs">{row.nextAttemptAt ?? 'Not recorded'}</td>
-                    <td className="p-3 font-mono text-xs">{row.createdAt}<br />{row.updatedAt}</td>
+                    <td className="p-3 text-xs">{row.nextAttemptAt ? shopTime(row.nextAttemptAt) : 'Not recorded'}</td>
+                    <td className="p-3 text-xs">{shopTime(row.createdAt)}<br />{shopTime(row.updatedAt)}</td>
                   </tr>
                 ))}
               </tbody>

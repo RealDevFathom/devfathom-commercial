@@ -25,11 +25,39 @@ describe('medicine reference normalization and provenance', () => {
       batchId: 'batch-01',
       rowSourceKey: 'legacy-7',
       values: { productName: 'Panadol' },
-      blockingIssues: ['MISSING_STRENGTH', 'MISSING_DOSAGE_FORM', 'MISSING_PACK'],
+      // DEV-852: a legacy import carries no strength; it is recorded as not available.
+      blockingIssues: ['MISSING_DOSAGE_FORM', 'MISSING_PACK'],
     });
     expect(result.rows[0]?.values).not.toHaveProperty('strength');
     expect(result.rows[0]?.values).not.toHaveProperty('dosageForm');
     expect(result.rows[0]?.values).not.toHaveProperty('pack');
+  });
+
+  it('DEV-852: lets a legacy import row through without strength or registration number', async () => {
+    const result = await new ManualFileConnector().fetch({
+      batchId: 'batch-legacy',
+      fileName: 'legacy.csv',
+      rows: [{ Name: 'Panadol', Form: 'Tablet', Pack: '10 tablets' }],
+      mapping: { productName: 'Name', dosageForm: 'Form', pack: 'Pack' },
+    });
+    expect(result.rows[0]?.blockingIssues).toEqual([]);
+    expect(result.rows[0]?.values).not.toHaveProperty('strength');
+    expect(result.rows[0]?.values).not.toHaveProperty('drapRegistrationNumber');
+  });
+
+  it('DEV-852: still blocks an official DRAP registry row with no strength', async () => {
+    const result = await new DrapRegistryFileConnector().fetch({
+      batchId: 'batch-drap',
+      fileName: 'drap.csv',
+      rows: [{ Name: 'Panadol', Form: 'Tablet', Pack: '10 tablets', Reg: '012345' }],
+      mapping: {
+        productName: 'Name',
+        dosageForm: 'Form',
+        pack: 'Pack',
+        drapRegistrationNumber: 'Reg',
+      },
+    });
+    expect(result.rows[0]?.blockingIssues).toEqual(['MISSING_STRENGTH']);
   });
 
   it('attaches immutable batch, row, source, retrieval, and rights evidence to every field', async () => {

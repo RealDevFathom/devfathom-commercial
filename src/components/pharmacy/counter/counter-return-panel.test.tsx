@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CounterReturnPanel, parseReceiptNumber, ReturnForm } from './counter-return-panel';
+import { MESSAGES, ROWS, type Shared } from './counter-amount-input.fixtures';
 const mocks = vi.hoisted(() => ({
   returnLine: vi.fn(),
   returnAndRefund: vi.fn(),
@@ -1440,9 +1441,117 @@ describe('DEV-501 returns in six steps or fewer', () => {
     render(<ReturnForm {...props} />);
     fireEvent.change(screen.getByLabelText('Receipt number'), { target: { value: '12' } });
     fireEvent.submit(screen.getByLabelText('Receipt number').closest('form')!);
-    expect(screen.getByText(/Receipt numbers can repeat/)).toBeVisible();
+    expect(screen.getByText(/Older receipts can share a number/)).toBeVisible();
     // Nothing is opened until the right date and counter is chosen.
     for (const match of screen.getAllByRole('button', { name: /Receipt 12/ }))
       expect(match).toHaveAttribute('aria-pressed', 'false');
   });
+});
+
+describe('DEV-939 typed refund amounts use the shared reader', () => {
+  /** The exact refund the panel sends for a typed amount, or why it refuses, for `max`. */
+  function expectRefund(
+    shared: Shared,
+    max: number,
+    submit: HTMLElement,
+    errorId: string,
+    field: HTMLElement
+  ) {
+    if (typeof shared === 'number' && shared > 0 && shared <= max) {
+      expect(submit).toBeEnabled();
+      expect(document.getElementById(errorId)).toBeNull();
+      return true;
+    }
+    expect(submit).toBeDisabled();
+    if (typeof shared === 'string' && shared !== 'EMPTY') {
+      expect(document.getElementById(errorId)).toHaveTextContent(MESSAGES[shared]);
+      expect(field).toHaveAttribute('aria-invalid', 'true');
+      expect(field.getAttribute('aria-describedby')).toContain(errorId);
+    } else {
+      expect(document.getElementById(errorId)).toBeNull();
+    }
+    return false;
+  }
+
+  it.each(ROWS)(
+    'sends the refund amount typed for %j',
+    async (input, _discount, _tender, shared) => {
+      render(<ReturnForm {...props} />);
+      chooseReceipt();
+      chooseRefundReason();
+      fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
+      enterManagerPin();
+      const field = screen.getByLabelText('Refund amount (PKR)');
+      fireEvent.change(field, { target: { value: input } });
+      const submit = screen.getByRole('button', { name: 'Confirm refund' });
+      // The fixture's refund limit: PKR 5.00 refundable on the sale.
+      if (expectRefund(shared, 500, submit, 'refund-amount-error', field)) {
+        fireEvent.click(submit);
+        await waitFor(() =>
+          expect(mocks.refund).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ originalTenderId: 'cash', amountMinor: shared })
+          )
+        );
+      } else {
+        fireEvent.click(submit);
+        expect(mocks.refund).not.toHaveBeenCalled();
+      }
+    }
+  );
+
+  it.each(ROWS)(
+    'sends the refund for this return typed as %j',
+    async (input, _discount, _tender, shared) => {
+      mocks.history = {
+        refetch: mocks.refetch,
+        data: {
+          saleId: 'sale',
+          lines: [
+            {
+              id: 'line',
+              name: 'Medicine',
+              quantity: 2,
+              saleUnit: 'STRIP',
+              levelLabel: 'STRIP',
+              canonicalUnits: 20,
+              canonicalUnitsPerSaleUnit: 10,
+              returnedUnits: 0,
+              netMinor: 2400,
+              returnedMinor: 0,
+              lots: [
+                { lotId: 'lot-a', batchNumber: 'A', returnableUnits: 20, restockAllowed: true },
+              ],
+            },
+          ],
+          tenders: [{ id: 'cash', type: 'CASH', amountMinor: 2400, refundedMinor: 0, refunds: [] }],
+          returns: [],
+          locations: [{ id: 'q', name: 'Quarantine' }],
+          refundableMinor: 0,
+        },
+      };
+      mocks.pricePerUnit = { '': 120 };
+      render(<ReturnForm {...props} />);
+      chooseReceipt();
+      chooseReturnReason();
+      enterManagerPin();
+      const field = screen.getByLabelText('Refund for this return (PKR)');
+      // Prefilled from the returned quantity: PKR 12.00 at most.
+      expect(field).toHaveValue('12.00');
+      fireEvent.change(field, { target: { value: input } });
+      const submit = screen.getByRole('button', { name: /^Keep aside.*Confirm return & refund$/ });
+      if (expectRefund(shared, 1200, submit, 'return-refund-amount-error', field)) {
+        fireEvent.click(submit);
+        await waitFor(() =>
+          expect(mocks.returnAndRefund).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+              refund: expect.objectContaining({ originalTenderId: 'cash', amountMinor: shared }),
+            })
+          )
+        );
+      } else {
+        fireEvent.click(submit);
+        expect(mocks.returnAndRefund).not.toHaveBeenCalled();
+      }
+    }
+  );
 });

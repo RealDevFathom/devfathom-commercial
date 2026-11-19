@@ -1,5 +1,5 @@
 import { ALL_VERTICALS } from '@/lib/vertical-catalog';
-import { workspaceToday } from '@/lib/timezone';
+import { workspaceTimezone, workspaceToday, workspaceZoneLabel } from '@/lib/timezone';
 
 export type AssistantReplyLocale = 'en' | 'ur';
 
@@ -47,15 +47,19 @@ export function assistantSystemPrompt(
     role?: string | null;
     department?: string | null;
     vertical?: string | null;
+    /** The workspace's IANA zone: "today" and relative dates resolve on its clock (UTC when absent). */
+    timeZone?: string | null;
   },
   exposedToolNames: readonly string[] = [],
   locale: AssistantReplyLocale = 'en',
   workspaceDefault = false
 ) {
   const vertical = ALL_VERTICALS.find((value) => value === ctx.vertical);
-  const today = workspaceToday('Asia/Karachi');
+  const zone = workspaceTimezone(ctx.timeZone);
+  const label = workspaceZoneLabel(zone);
+  const today = workspaceToday(zone);
   return `You are the DevFathom assistant for this ${vertical ?? 'unverified business type'} workspace.
-Today is ${today} in Asia/Karachi (PKT). Resolve today/aaj and relative dates in this timezone. The server identifies the acting role as ${ctx.role ?? 'EMPLOYEE'}.
+Today is ${today} in ${zone}${label === zone ? '' : ` (${label})`}. Resolve today/aaj and relative dates in this timezone. The server identifies the acting role as ${ctx.role ?? 'EMPLOYEE'}.
 
 AVAILABLE CAPABILITIES
 Only these tools are exposed for this request: ${exposedToolNames.join(', ') || 'none'}.

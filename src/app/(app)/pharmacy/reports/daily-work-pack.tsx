@@ -1,4 +1,4 @@
-import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/screen-copy';
+import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/plain-language';
 import Link from 'next/link';
 import {
   PHARMACY_COPY as copy,

@@ -1254,8 +1254,10 @@ test('[DEF-13] cashier float guidance and refusal preserve empty-drawer access',
 }) => {
   await openCounter(page, PHARMACY_E2E.cashierEmail);
   const openingCash = page.getByLabel('Opening cash', { exact: true });
-  await expect(openingCash).toHaveAttribute('readonly', '');
-  await expect(openingCash).toHaveValue('0');
+  // DEV-933: the count is always typed, a cashier's too (a typed 0 is allowed); it is
+  // never prefilled. The server still refuses a cashier's float, as below.
+  await expect(openingCash).toBeEditable();
+  await expect(openingCash).toHaveValue('');
   await expect(page.getByRole('group', { name: 'Quick amounts' })).toHaveCount(0);
   await expect(page.getByText(/Count the cash in the drawer/)).toHaveCount(0);
   await expect(page.getByText(/Ask a manager or owner to declare any opening float/)).toBeVisible();

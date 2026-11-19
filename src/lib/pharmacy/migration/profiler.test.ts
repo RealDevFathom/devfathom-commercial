@@ -273,6 +273,7 @@ describe('Bucket severity is a property of the bucket', () => {
       DUPLICATE_PRODUCT: 'BLOCKING',
       PARTY_UNMATCHED: 'WARNING',
       BALANCE_MISMATCH: 'BLOCKING',
+      EXPIRED_STOCK: 'BLOCKING',
     });
   });
 });
@@ -375,6 +376,15 @@ describe('mapped quantity column identity', () => {
 });
 
 describe('unrecorded quantity mapping', () => {
+  it('DEV-912: asks no packs-or-units choice of a products-only file with no quantity column', () => {
+    const result = profileTable(
+      excelCsvProfiler,
+      parseDelimitedText('Product,Pack,MRP\nExample,30,100.00')
+    );
+    expect(result.quantityColumn).toBeNull();
+    expect(result.rows[0]!.quantityCanonical).toBeNull();
+    expect(result.exceptions.filter((item) => item.bucket === 'UNIT_AMBIGUOUS')).toEqual([]);
+  });
   it('does not stage a raw count as units without a choice', () => {
     const result = profileTable(
       excelCsvProfiler,

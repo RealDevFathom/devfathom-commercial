@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { workspaceToday } from '@/lib/timezone';
 import type { LedgerScope } from './stock-ledger';
 import { applyPharmacyTender, refundPharmacyTender, saleTotalMinor } from './settlement';
 import { pricePrepaidSale } from './prepaid-discount';
@@ -13,6 +14,24 @@ import { releaseOrderReservations } from './customer-ordering';
 import { lockStockBalances } from './stock-lock-order';
 
 export class PharmacyDeliveryError extends Error {}
+
+/**
+ * DEV-943: the drawer day a remittance or returned-cash refund books on. Without a client
+ * date it is today on the caller's own organisation clock (the day the counter stamps and
+ * the close opens on), never the UTC day: 00:00–04:59 PKT is already the next shop day.
+ */
+async function drawerBusinessDate(
+  db: ScopedDb,
+  scope: { organizationId: string },
+  input: { deviceId?: string; businessDate?: Date }
+): Promise<Date | undefined> {
+  if (input.businessDate || !input.deviceId) return input.businessDate;
+  const organization = await db.organization.findUnique({
+    where: { id: scope.organizationId },
+    select: { timezone: true },
+  });
+  return new Date(`${workspaceToday(organization?.timezone)}T00:00:00.000Z`);
+}
 
 export const deliveryCommandInput = z
   .object({
@@ -204,14 +223,15 @@ export async function recordDeliveryCommand(
     scope.actorId
   );
   if (input.action === 'REMIT') {
-    if (!input.deviceId || !input.businessDate) throw new PharmacyDeliveryError('DRAWER_REQUIRED');
+    const businessDate = await drawerBusinessDate(db, scope, input);
+    if (!input.deviceId || !businessDate) throw new PharmacyDeliveryError('DRAWER_REQUIRED');
     await applyPharmacyTender(
       db,
       scope,
       {
         saleId: order.counterSaleId!,
         deviceId: input.deviceId,
-        businessDate: input.businessDate,
+        businessDate,
         type: 'CASH',
         amountMinor: input.amountMinor!,
         cashReceivedMinor: input.amountMinor!,
@@ -247,8 +267,8 @@ export async function recordDeliveryCommand(
           )
         )
           throw new PharmacyDeliveryError('PAYMENT_RECONCILIATION_REQUIRED');
-        if (!input.deviceId || !input.businessDate)
-          throw new PharmacyDeliveryError('DRAWER_REQUIRED');
+        const businessDate = await drawerBusinessDate(db, scope, input);
+        if (!input.deviceId || !businessDate) throw new PharmacyDeliveryError('DRAWER_REQUIRED');
         const refundDue = sale.tenders.some(
           (tender) =>
             tender.amountMinor > tender.refunds.reduce((n, refund) => n + refund.amountMinor, 0)
@@ -268,7 +288,7 @@ export async function recordDeliveryCommand(
               {
                 originalTenderId: tender.id,
                 deviceId: input.deviceId,
-                businessDate: input.businessDate,
+                businessDate,
                 amountMinor: remaining,
                 reason: `Physical failed-delivery return: ${input.reference}`,
                 idempotencyKey: `delivery-cancel:${order.id}:${tender.id}`,

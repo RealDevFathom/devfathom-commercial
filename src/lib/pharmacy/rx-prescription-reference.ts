@@ -4,7 +4,9 @@ import { workspaceTimezone } from '@/lib/timezone';
 
 import type { LedgerScope } from './stock-ledger';
 import { prescriptionIsCurrent } from './prescription-calendar';
-import { assertPharmacistApproved } from './dispensing';
+import { assertPharmacistApproved, PharmacyDispensingError } from './dispensing';
+import { PHARMACIST_CHECK_OFF_SIGNATURE_PREFIX } from './pharmacist-check';
+import { pharmacistCheckAtSaleEnabled } from './pharmacist-check-policy';
 import { needsRxSaleGrant } from './rx-sale-gate';
 
 const REASONS = {
@@ -21,6 +23,8 @@ const REASONS = {
     'A controlled-medicine authorization was sent for a medicine that is not controlled.',
   CONTROLLED_PRESCRIPTION_IN_AUTHORIZATION:
     "A controlled medicine's prescription belongs in its controlled authorization.",
+  CONTROLLED_LINE_UNCHECKED:
+    'This controlled medicine was added while the pharmacist check was switched off. The check is on again, so remove the line and add it again with a pharmacist’s authorization.',
 } as const;
 
 export type PharmacyRxReferenceReason = keyof typeof REASONS;
@@ -42,10 +46,19 @@ export class PharmacyRxReferenceError extends Error {
  * non-controlled line unless a pharmacist attached a prescription reference to it AND a
  * pharmacist signed the RX-03 review of that sale line. A reference is only ever attached by a
  * pharmacist through `resolvePrescriptionReference`, which checks it is real, current and not
- * exhausted; attaching queues the review, and SIGN is the sole sale-release event. A sole
- * pharmacist may sign their own review through the audited pharmacist queue. Controlled lines
+ * exhausted; attaching queues the review, and SIGN is the sole sale-release event. The review is
+ * queued with the pharmacist who rang up the line as its requester, and the database refuses a
+ * decision by the requester (`pharmacy_review_no_self_approval`), so a different pharmacist signs
+ * it from the pharmacist queue. DEV-950: only under the solo rule (nobody else at the branch could
+ * sign it) may the requester sign it themselves, at the counter, by re-entering their own PIN;
+ * that signature names its self-approved audit entry, without which the database refuses it
+ * (`src/lib/pharmacy/rx-review-self-sign.ts`). Controlled lines
  * keep their own register gate (prescription or witnessed emergency supply), so they are not
  * judged here.
+ *
+ * DEV-911: when the owner has switched the pharmacist check at each sale off, neither the
+ * prescription nor the signed review is demanded. The setting is read only when this gate is
+ * about to refuse, so with the check on (or the setting missing or unreadable) nothing changes.
  */
 export async function assertRxLinesPrescribed(
   db: ScopedDb,
@@ -53,12 +66,59 @@ export async function assertRxLinesPrescribed(
     id: string;
     prescriptionLineId: string | null;
     medicine: { rx: boolean; restricted: boolean; controlled: boolean } | null | undefined;
-  }>
+    allocations?: ReadonlyArray<{ stockMovementId: string | null }>;
+  }>,
+  scope?: { organizationId: string }
 ): Promise<void> {
+  await assertControlledLinesCheckedWhileOn(db, lines, scope);
   const regulated = lines.filter((line) => needsRxSaleGrant(line.medicine));
-  if (regulated.some((line) => !line.prescriptionLineId))
-    throw new PharmacyRxReferenceError('PRESCRIPTION_REQUIRED');
-  for (const line of regulated) await assertPharmacistApproved(db, line.id);
+  try {
+    if (regulated.some((line) => !line.prescriptionLineId))
+      throw new PharmacyRxReferenceError('PRESCRIPTION_REQUIRED');
+    for (const line of regulated) await assertPharmacistApproved(db, line.id);
+  } catch (error) {
+    if (
+      (error instanceof PharmacyRxReferenceError || error instanceof PharmacyDispensingError) &&
+      !(await pharmacistCheckAtSaleEnabled(db, scope?.organizationId))
+    )
+      return;
+    throw error;
+  }
+}
+
+/**
+ * DEV-911: a controlled line added while the owner had the pharmacist check switched off
+ * carries a register entry marked `pharmacist-check-off:`. If the owner turns the check back on
+ * before that bill is paid, the line is refused at tender and completion, so re-enabling the
+ * check also covers bills that are still open. Lines with no such entry are not touched, and
+ * nothing is read for a bill without a controlled line.
+ */
+async function assertControlledLinesCheckedWhileOn(
+  db: ScopedDb,
+  lines: ReadonlyArray<{
+    medicine: { controlled: boolean } | null | undefined;
+    allocations?: ReadonlyArray<{ stockMovementId: string | null }>;
+  }>,
+  scope?: { organizationId: string }
+): Promise<void> {
+  const movementIds = lines
+    .filter((line) => line.medicine?.controlled)
+    .flatMap((line) => line.allocations ?? [])
+    .map((allocation) => allocation.stockMovementId)
+    .filter((id): id is string => Boolean(id));
+  if (movementIds.length === 0) return;
+  const unchecked = await db.pharmacyControlledRegisterEntry.findFirst({
+    where: {
+      ...(scope?.organizationId ? { organizationId: scope.organizationId } : {}),
+      entryKind: 'SALE',
+      stockMovementId: { in: movementIds },
+      signatureRef: { startsWith: PHARMACIST_CHECK_OFF_SIGNATURE_PREFIX },
+    },
+    select: { id: true },
+  });
+  if (!unchecked) return;
+  if (await pharmacistCheckAtSaleEnabled(db, scope?.organizationId))
+    throw new PharmacyRxReferenceError('CONTROLLED_LINE_UNCHECKED');
 }
 
 export type PrescriptionReference = { prescriptionLineId: string; patientId: string };

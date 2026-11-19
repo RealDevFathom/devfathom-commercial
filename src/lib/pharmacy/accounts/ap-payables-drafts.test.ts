@@ -18,6 +18,7 @@ const row = (
   currency: 'PKR',
   amountMinor: out,
   paidMinor: 0,
+  setOffMinor: 0,
   outstandingMinor: out,
   daysPastDue: days,
   bucket: 'CURRENT',

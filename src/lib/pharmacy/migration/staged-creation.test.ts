@@ -1,0 +1,259 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  normalizeMatchText,
+  planStagedMedicine,
+  stagedLevelPrices,
+  stagedMatchKey,
+  stagedReorderUnits,
+  type StagedRowForCreation,
+} from './staged-creation';
+
+const row = (over: Partial<StagedRowForCreation> = {}): StagedRowForCreation => ({
+  id: 'row_1',
+  sourceKey: 'sha256:abc:row:1',
+  rowNumber: 1,
+  productName: 'Fixture Tablet',
+  packLabel: null,
+  packFactor: null,
+  mrpMinor: null,
+  costMinor: null,
+  rawPayload: {},
+  ...over,
+});
+
+describe('DEV-912 planStagedMedicine', () => {
+  it('keeps the MRP and purchase price exactly as read', () => {
+    const plan = planStagedMedicine(
+      row({
+        packLabel: '100',
+        packFactor: BigInt(100),
+        mrpMinor: BigInt(50_000),
+        costMinor: BigInt(42_000),
+      })
+    );
+    expect(plan).toMatchObject({
+      productName: 'Fixture Tablet',
+      unitsPerPack: 100,
+      mrpMinor: 50_000,
+      purchasePriceMinor: 42_000,
+      packLevels: [{ level: 'BOX', unitsPerParent: 100 }],
+    });
+  });
+
+  it('creates a medicine from a name only and records the rest as not recorded', () => {
+    expect(planStagedMedicine(row({ productName: '  Fixture   Syrup ' }))).toEqual({
+      productName: 'Fixture Syrup',
+      presentation: 'Pack size not recorded',
+      packLevels: [],
+      unitsPerPack: null,
+      mrpMinor: null,
+      purchasePriceMinor: null,
+      genericName: null,
+      legacyCode: null,
+      barcode: null,
+      packLabel: null,
+      narcoticsClass: false,
+      supplierName: null,
+      reorderLevelPacks: null,
+    });
+  });
+
+  it('creates nothing for a row with no medicine name', () => {
+    expect(planStagedMedicine(row({ productName: '   ' }))).toBeNull();
+    expect(planStagedMedicine(row({ productName: null }))).toBeNull();
+  });
+
+  it('builds a box of strips from "10 x 10" or a strips-per-box column', () => {
+    const grid = planStagedMedicine(row({ packLabel: '10 x 10', packFactor: BigInt(100) }));
+    expect(grid?.packLevels).toEqual([
+      { level: 'BOX', unitsPerParent: 10 },
+      { level: 'STRIP', unitsPerParent: 10 },
+    ]);
+    const column = planStagedMedicine(
+      row({ packLabel: '30', packFactor: BigInt(30), rawPayload: { 'Strips per box': '3' } })
+    );
+    expect(column?.packLevels).toEqual([
+      { level: 'BOX', unitsPerParent: 3 },
+      { level: 'STRIP', unitsPerParent: 10 },
+    ]);
+    // A split that does not divide the units per pack is not invented.
+    const uneven = planStagedMedicine(
+      row({ packLabel: '30', packFactor: BigInt(30), rawPayload: { 'Strips per box': '4' } })
+    );
+    expect(uneven?.packLevels).toEqual([{ level: 'BOX', unitsPerParent: 30 }]);
+  });
+
+  it('names a strip, a box and a single tablet', () => {
+    const strip = planStagedMedicine(
+      row({ packLabel: '10', packFactor: BigInt(10), rawPayload: { 'Pack Type': 'Strip' } })
+    );
+    expect(strip?.packLevels).toEqual([{ level: 'STRIP', unitsPerParent: 10 }]);
+    const single = planStagedMedicine(row({ packLabel: '1', packFactor: BigInt(1) }));
+    expect(single?.packLevels).toEqual([{ level: 'UNIT', unitsPerParent: 1 }]);
+    expect(single?.presentation).toBe('1');
+  });
+
+  it('reads the generic name, the old code and the NARCOTICS class from the source cells', () => {
+    const plan = planStagedMedicine(
+      row({
+        rawPayload: {
+          'Generic Name': ' Fixture  salt ',
+          aliasname: 'OLD-7',
+          classname: 'narcotics',
+        },
+      })
+    );
+    expect(plan).toMatchObject({
+      genericName: 'Fixture salt',
+      legacyCode: 'OLD-7',
+      narcoticsClass: true,
+    });
+  });
+
+  it('never reads a strength as a count, and treats a volume as one container', () => {
+    const strength = planStagedMedicine(row({ packLabel: '500mg', packFactor: BigInt(500) }));
+    expect([strength?.unitsPerPack, strength?.packLevels]).toEqual([null, []]);
+    const bottle = planStagedMedicine(row({ packLabel: '100ML', packFactor: BigInt(100) }));
+    expect(bottle?.packLevels).toEqual([{ level: 'UNIT', unitsPerParent: 1 }]);
+    for (const packLabel of ['10 strips', '2 boxes', '10 strip'])
+      expect(
+        planStagedMedicine(row({ packLabel, packFactor: BigInt(10) }))?.unitsPerPack,
+        packLabel
+      ).toBeNull();
+    const tablets = planStagedMedicine(row({ packLabel: '20 Tabs', packFactor: BigInt(20) }));
+    expect(tablets?.packLevels).toEqual([{ level: 'BOX', unitsPerParent: 20 }]);
+  });
+
+  it('stores a price of 0 as not recorded, never as 0', () => {
+    const plan = planStagedMedicine(row({ mrpMinor: BigInt(0), costMinor: BigInt(0) }));
+    expect([plan?.mrpMinor, plan?.purchasePriceMinor]).toEqual([null, null]);
+    expect(
+      stagedLevelPrices({ ...plan!, packLevels: [{ level: 'UNIT', unitsPerParent: 1 }] })
+    ).toBeNull();
+  });
+
+  it('keeps the barcode printed on the pack, and nothing for a blank one', () => {
+    expect(planStagedMedicine(row({ barcode: ' 0896000000017 ' }))?.barcode).toBe('0896000000017');
+    expect(planStagedMedicine(row({ barcode: '  ' }))?.barcode).toBeNull();
+    expect(planStagedMedicine(row())?.barcode).toBeNull();
+  });
+
+  it('treats a negative or oversized amount as not recorded', () => {
+    const plan = planStagedMedicine(
+      row({ mrpMinor: BigInt(-5), costMinor: BigInt(2) ** BigInt(40), packFactor: BigInt(0) })
+    );
+    expect([plan?.mrpMinor, plan?.purchasePriceMinor, plan?.unitsPerPack]).toEqual([
+      null,
+      null,
+      null,
+    ]);
+  });
+});
+
+describe('DEV-912 stagedLevelPrices', () => {
+  it('prices a box, a strip and a single tablet from the pack MRP', () => {
+    expect(
+      stagedLevelPrices({
+        mrpMinor: 100_000,
+        packLevels: [
+          { level: 'BOX', unitsPerParent: 10 },
+          { level: 'STRIP', unitsPerParent: 10 },
+        ],
+      })
+    ).toEqual({
+      levels: [
+        { level: 'BOX', priceMinor: 100_000 },
+        { level: 'STRIP', priceMinor: 10_000 },
+      ],
+      unitPriceMinor: 1_000,
+    });
+    expect(
+      stagedLevelPrices({ mrpMinor: 12_000, packLevels: [{ level: 'STRIP', unitsPerParent: 10 }] })
+    ).toEqual({ levels: [{ level: 'STRIP', priceMinor: 12_000 }], unitPriceMinor: 1_200 });
+    expect(
+      stagedLevelPrices({ mrpMinor: 1_500, packLevels: [{ level: 'UNIT', unitsPerParent: 1 }] })
+    ).toEqual({ levels: [{ level: 'UNIT', priceMinor: 1_500 }], unitPriceMinor: 1_500 });
+  });
+
+  it('never charges above the MRP when a unit price is not a whole amount', () => {
+    expect(
+      stagedLevelPrices({ mrpMinor: 1_000, packLevels: [{ level: 'BOX', unitsPerParent: 3 }] })
+        ?.unitPriceMinor
+    ).toBe(333);
+  });
+
+  it('has no price when the MRP or units per pack is not recorded', () => {
+    expect(
+      stagedLevelPrices({ mrpMinor: null, packLevels: [{ level: 'BOX', unitsPerParent: 3 }] })
+    ).toBeNull();
+    expect(stagedLevelPrices({ mrpMinor: 500, packLevels: [] })).toBeNull();
+  });
+});
+
+describe('DEV-912 stagedMatchKey', () => {
+  const plan = (over: Partial<StagedRowForCreation>) => planStagedMedicine(row(over))!;
+
+  it('keeps two strengths of one name apart when the strength sits in the pack cell', () => {
+    const strong = stagedMatchKey(plan({ productName: 'Fixture Tab', packLabel: '500MG' }));
+    const weak = stagedMatchKey(plan({ productName: 'Fixture Tab', packLabel: '250MG' }));
+    expect(strong).not.toBeNull();
+    expect(weak).not.toBeNull();
+    expect(strong).not.toBe(weak);
+  });
+
+  it('never matches by name alone', () => {
+    expect(stagedMatchKey(plan({ productName: 'Fixture Syrup' }))).toBeNull();
+  });
+
+  it('matches a re-spaced or re-cased re-export, with the same pack', () => {
+    expect(stagedMatchKey(plan({ productName: ' fixture   TAB ', packLabel: '500  mg' }))).toBe(
+      stagedMatchKey(plan({ productName: 'Fixture Tab', packLabel: '500 MG' }))
+    );
+    expect(
+      stagedMatchKey(plan({ productName: 'Fixture Tab', packLabel: '10', packFactor: BigInt(10) }))
+    ).not.toBe(
+      stagedMatchKey(plan({ productName: 'Fixture Tab', packLabel: '20', packFactor: BigInt(20) }))
+    );
+  });
+
+  it('uses the old code when the row has one, whatever the name', () => {
+    expect(
+      stagedMatchKey(plan({ productName: 'Renamed', rawPayload: { aliasname: ' ab-1 ' } }))
+    ).toBe(stagedMatchKey(plan({ productName: 'Original', rawPayload: { aliasname: 'AB-1' } })));
+  });
+
+  it('has one normalisation rule, applied before the key is stored', () => {
+    expect(normalizeMatchText('  Ｆｉｘｔｕｒｅ\t TAB\u00a0 500mg ')).toBe('fixture tab 500mg');
+  });
+});
+
+describe('DEV-912 supplier and reorder level', () => {
+  it('reads the template supplier and reorder level, and the legacy headers', () => {
+    expect(
+      planStagedMedicine(
+        row({
+          packFactor: BigInt(10),
+          rawPayload: { Supplier: ' Example  Distributors ', 'Reorder level': '20' },
+        })
+      )
+    ).toMatchObject({ supplierName: 'Example Distributors', reorderLevelPacks: 20 });
+    expect(
+      planStagedMedicine(row({ rawPayload: { distributor: 'Other Co', REORDERPOINT: '5.0' } }))
+    ).toMatchObject({ supplierName: 'Other Co', reorderLevelPacks: 5 });
+  });
+
+  it('stores a blank, zero, fractional or unreadable reorder level as not recorded', () => {
+    for (const cell of ['', '0', '2.5', 'ten', '-3'])
+      expect(
+        planStagedMedicine(row({ rawPayload: { 'Reorder level': cell, Supplier: '' } }))
+      ).toMatchObject({ reorderLevelPacks: null, supplierName: null });
+  });
+
+  it('counts a reorder level in units from the units per pack, or not at all', () => {
+    expect(stagedReorderUnits({ reorderLevelPacks: 20, unitsPerPack: 10 })).toBe(200);
+    expect(stagedReorderUnits({ reorderLevelPacks: 20, unitsPerPack: null })).toBeNull();
+    expect(stagedReorderUnits({ reorderLevelPacks: null, unitsPerPack: 10 })).toBeNull();
+    expect(stagedReorderUnits({ reorderLevelPacks: 2_000_000_000, unitsPerPack: 10 })).toBeNull();
+  });
+});

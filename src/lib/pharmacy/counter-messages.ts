@@ -58,6 +58,22 @@ const NO_PERMISSION_SERVER_MESSAGE = 'You do not have permission for this action
 /** DEV-712: the refusal a payment gets when a supervisor discarded its attempt. */
 export const TENDER_ATTEMPT_DISCARDED = 'TENDER_ATTEMPT_DISCARDED';
 
+/**
+ * DEV-66: why an automatic discount was not applied to a line that was still added. The
+ * add-line response carries the key; the counter shows the sentence to the cashier.
+ */
+/**
+ * DEV-929: the refusal a manual discount gets when the operator does not hold the discount
+ * right and no manager's PIN came with it. The counter asks for the PIN when it sees it.
+ */
+export const COUNTER_DISCOUNT_APPROVAL_REQUIRED =
+  'A discount needs a manager to approve it with their PIN.';
+
+export const COUNTER_DISCOUNT_NOTICES = {
+  PROMOTION_ABOVE_MAXIMUM:
+    "This promotion is above the owner's maximum discount, so the item was added at full price.",
+} as const;
+
 export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // Inventory (INV) — arrangement, stock and safety.
   // Raised in BOTH directions — too few loose units for a strip sale, and a
@@ -89,7 +105,11 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     'That unit does not match how this item is packed. Search for it again and choose the unit from the list.',
   // Sale aggregate (POS).
   PRICE_ABOVE_MRP: 'That price is above the printed MRP, which is not allowed.',
-  MARGIN_GUARDRAIL: 'That discount falls below the permitted margin.',
+  MARGIN_GUARDRAIL:
+    "This discount would take the item below its cost or the branch's minimum margin. Give a smaller discount.",
+  // DEV-66: the owner's maximum discount applies to everyone.
+  DISCOUNT_ABOVE_MAXIMUM:
+    "This discount or voucher is above the owner's maximum discount. Give a smaller discount, or ask the owner to raise the maximum.",
   APPROVAL_REQUIRED: 'A supervisor must approve this discount before it can be applied.',
   REGULATED_DISCOUNT_REFUSED: 'Regulated medicines cannot be discounted.',
   VOUCHER_CATEGORY_REFUSED:
@@ -145,7 +165,29 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // and drawer counts/close, so it names cash in or out, not one operation.
   DRAWER_NOT_OPEN:
     'The cash drawer for this counter is not open. Open it before taking or paying out cash.',
+  // DEV-769: the server refuses a bill on a drawer from an earlier business day.
+  DRAWER_FROM_EARLIER_DAY:
+    'This counter’s cash drawer is still open from an earlier business day. Close that drawer first, then start the bill.',
   OPEN_DRAWER: 'A drawer is already open on this counter. Close it before opening another.',
+  // DEV-743: the day cannot close while a terminal payment on it may have charged the customer.
+  CARD_TERMINAL_PAYMENT_OPEN:
+    'A card terminal payment on this day is still open. Check its status on the counter, or have a manager review it, before closing the day.',
+  // DEV-743: a terminal charge goes back through the card provider, never as cash.
+  CARD_TERMINAL_REFUND_VIA_PROVIDER:
+    'This payment was taken on the card terminal, so it cannot be refunded here. Do not give cash. Refund it through the card provider’s own refund process, and keep the provider’s refund slip with this bill.',
+  BILL_HAS_CARD_TERMINAL_PAYMENT:
+    'This bill was paid on the card terminal, so it cannot be voided or refunded here. Do not give cash. Refund the card payment through the card provider’s own refund process, and keep the provider’s refund slip with this bill.',
+  // DEV-743: resolving a card terminal payment under review.
+  REVIEW_NOT_OPEN:
+    'This card terminal payment is no longer waiting for review. It may already have been resolved. Refresh the bill to see where it stands.',
+  CHARGE_EVIDENCE_RECORDED:
+    'The terminal reported a charge for this payment, so it cannot be recorded as not charged. If the slip shows the money was taken, record it as taken and refund it through the card provider.',
+  SLIP_REFERENCE_MISMATCH:
+    'That reference is not the one the terminal reported for this payment. Enter the reference printed on the terminal slip.',
+  OWN_CHARGE_NEEDS_ANOTHER_APPROVER:
+    'Another manager or owner must resolve a payment you took. Ask another manager or owner at this branch to resolve it.',
+  SLIP_REFERENCE_IN_USE:
+    'That slip reference is already recorded on another card terminal payment. Check the slip and enter its reference again.',
   // DEV-821: cash goes only into a till the signed-in user runs.
   DRAWER_NOT_YOURS:
     'Another cashier runs the cash drawer on this counter. Ask a manager or owner to hand it over to you, then take the cash.',

@@ -60,8 +60,10 @@ export async function loadLedgerLabels(
         })
       : [],
   ]);
-  const batchName = (batch: { batchNumber: string; medicine: { productName: string } | null }) =>
-    batchLabel({ batchNumber: batch.batchNumber, medicineName: batch.medicine?.productName });
+  const batchName = (batch: {
+    batchNumber: string | null;
+    medicine: { productName: string } | null;
+  }) => batchLabel({ batchNumber: batch.batchNumber, medicineName: batch.medicine?.productName });
   return {
     branches: Object.fromEntries(branches.map((row) => [row.id, row.name])),
     lots: Object.fromEntries(lots.map((row) => [row.id, batchName(row.batch)])),

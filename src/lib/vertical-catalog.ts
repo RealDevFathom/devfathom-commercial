@@ -876,8 +876,9 @@ export type RoleTemplate = {
   isSystem: boolean;
   /** Capabilities granted by default. `['*']` = full administration, matching the
    * bootstrap admin role, except that wildcards (`*`, `pharmacy:*`) never grant
-   * pharmacy:dispense, pharmacy:prescriptions, pharmacy:safety or
-   * pharmacy:catalogue-review: those must be granted exactly (separation of duties).
+   * pharmacy:dispense, pharmacy:prescriptions, pharmacy:safety,
+   * pharmacy:catalogue-review or pharmacy:discount: those must be granted exactly
+   * (separation of duties).
    * A pharmacy:dispense grant also covers pharmacy:prescriptions. A wildcard DENY
    * still revokes them.
    * All entries are provisional (Phase 0 / D10). */
@@ -896,6 +897,7 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
   'pharmacy:dispense',
   'pharmacy:prescriptions',
   'pharmacy:catalogue-review',
+  'pharmacy:catalogue-edit',
   'pharmacy:manage',
   'pharmacy:counter',
   'pharmacy:close',
@@ -906,6 +908,9 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
   'reports:operational',
   'reports:financial',
   'pharmacy:safety',
+  // DEV-66: the owner grants this by name to any role that may give discounts (up to
+  // the owner's maximum) without a manager's PIN. No template grants it by default.
+  'pharmacy:discount',
   // DEV-751: pharmacy procedures run on the shared SOP engine and are gated on
   // the generic SOP actions. `pharmacy:*` does not match these (other
   // namespace), so they are listed for the role editor to grant explicitly.
@@ -926,7 +931,9 @@ export const PHARMACY_CHECKED_CAPABILITIES = [
   'pharmacy:prescriptions',
   'pharmacy:safety',
   'pharmacy:catalogue-review',
+  'pharmacy:catalogue-edit',
   'pharmacy:orders',
+  'pharmacy:discount',
   'reports:operational',
   'reports:financial',
 ] as const;
@@ -980,6 +987,8 @@ const PHARMACY_BASE_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       // PUR-02: the proprietor approves and sends purchase orders and authorizes
       // suppliers; self-approval stays refused outside the solo-owner exception.
       'pharmacy:procurement-approve',
+      // DEV-19: the proprietor submits catalogue edits for review.
+      'pharmacy:catalogue-edit',
     ],
   },
   {

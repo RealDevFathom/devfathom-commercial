@@ -147,8 +147,25 @@ async function waitForLockWait() {
   throw new Error('the second worker never waited on the first claim');
 }
 
+/**
+ * One statement as the platform. The administrator owns the schema but is no superuser, so
+ * the message log's forced row-level security applies to it as well.
+ */
+async function asPlatform(sql: string, params: unknown[]) {
+  await admin!.query('BEGIN');
+  try {
+    await admin!.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
+    const result = await admin!.query(sql, params);
+    await admin!.query('COMMIT');
+    return result;
+  } catch (error) {
+    await admin!.query('ROLLBACK');
+    throw error;
+  }
+}
+
 async function rowsFor(account: string) {
-  const rows = await admin!.query(
+  const rows = await asPlatform(
     `SELECT "dedupeKey", status, error, "customerId" FROM pharmacy_message_logs
      WHERE "organizationId" = $1 AND "dedupeKey" LIKE $2 ORDER BY "dedupeKey" COLLATE "C"`,
     [org, `khata:${account}:%`]
@@ -300,7 +317,7 @@ describeIfDatabase('DEV-899 weekly khata claim across a mixed-version rollout (P
 
   it('is not blocked by an old-format key an earlier week already holds', async () => {
     const keys = reminder();
-    await admin!.query(
+    await asPlatform(
       `INSERT INTO pharmacy_message_logs
          (id, "organizationId", "customerId", direction, kind, status, "dedupeKey",
           "createdAt", "updatedAt")

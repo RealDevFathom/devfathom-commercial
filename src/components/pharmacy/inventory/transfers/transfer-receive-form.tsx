@@ -3,6 +3,7 @@ import { Input } from '@/components/ui/input';
 
 import { TransferActionForm, type TransferStepAction } from './transfer-action-form';
 import { transferReference, type TransferBoardRow } from './transfer-presentation';
+import { batchPhrase } from '@/lib/pharmacy/unrecorded-batch';
 
 export type Witness = { id: string; name: string | null; title: string | null };
 
@@ -39,7 +40,7 @@ export function TransferReceiveForm({
       <input name="transferId" type="hidden" value={transfer.id} />
       {open.map((line) => (
         <label className="text-sm" key={line.id}>
-          Received units — {line.medicineName} · batch {line.batchNumber}
+          Received units — {line.medicineName} · {batchPhrase(line.batchNumber, 'batch')}
           <Input
             className="mt-1"
             defaultValue={line.quantityUnits - line.receivedUnits}

@@ -11,12 +11,15 @@ import {
   type CounterSetupAdvice,
   type CounterSetupReason,
 } from '@/lib/pharmacy/counter-setup';
+import type { PharmacyApprovalStatus } from '@/lib/pharmacy/approval-status';
 
 export type CounterSaleReadinessView = {
   ready: boolean;
   blockers: readonly string[];
   warnings: readonly string[];
   canFixSetup: boolean;
+  /** DEV-905: sent only when the workspace is not active: waiting for approval, or not. */
+  approval?: PharmacyApprovalStatus | null;
 };
 
 /**
@@ -105,6 +108,7 @@ export function CounterSaleReadiness({
           const advice = counterSetupAdvice(reason, {
             canFixSetup: readiness.canFixSetup,
             branchId,
+            approval: readiness.approval,
           });
           return (
             <li key={reason} data-reason={reason} className="flex items-start gap-3">

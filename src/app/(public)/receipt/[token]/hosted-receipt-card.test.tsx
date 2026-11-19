@@ -10,6 +10,8 @@ afterEach(cleanup);
 const receipt: HostedReceiptView = {
   branchName: 'Gulberg Branch',
   receiptNumber: 1042,
+  counterLabel: null,
+  offlineReference: null,
   completedAt: '2026-11-15T07:00:00.000Z',
   currency: 'PKR',
   lines: [
@@ -50,4 +52,25 @@ it('DEV-16: shows every purchased line with name, strength, quantity and price, 
   // No code prompt or form stands between the link holder and the receipt.
   expect(screen.queryByRole('textbox')).toBeNull();
   expect(screen.queryByText(/code/i)).toBeNull();
+});
+
+it('DEV-637: names the issuing counter and the number printed offline, when there is one', () => {
+  render(
+    <HostedReceiptCard
+      receipt={{
+        ...receipt,
+        counterLabel: 'Front till',
+        offlineReference: 'Printed offline as receipt 7',
+      }}
+    />
+  );
+  expect(screen.getByText('Counter')).toBeInTheDocument();
+  expect(screen.getByText('Front till')).toBeInTheDocument();
+  expect(screen.getByText('Printed offline as receipt 7')).toBeInTheDocument();
+});
+
+it('DEV-637: shows no counter or offline rows when the receipt has neither', () => {
+  render(<HostedReceiptCard receipt={receipt} />);
+  expect(screen.queryByText('Counter')).toBeNull();
+  expect(screen.queryByText(/Printed offline/)).toBeNull();
 });

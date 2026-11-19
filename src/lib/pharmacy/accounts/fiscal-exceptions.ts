@@ -12,7 +12,7 @@ export const FISCAL_EXCEPTION_COVERAGE =
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => {
   const date = new Date(`${value}T00:00:00.000Z`);
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
-}, 'Use a valid UTC calendar date.');
+}, 'Use a real calendar date.');
 
 export const fiscalExceptionInput = z.object({
   branchId: z.string().trim().min(1).max(128),
@@ -24,7 +24,7 @@ export const fiscalExceptionInput = z.object({
 }).strict().refine(({ from, to }) => {
   const duration = Date.parse(to) - Date.parse(from);
   return duration > 0 && duration <= FISCAL_EXCEPTION_LIMITS.days * 86_400_000;
-}, 'Choose a nonempty [from, to) UTC window of at most 92 days.');
+}, 'Choose an end date after the start date, at most 92 days later; the end date is not included.');
 
 export type FiscalExceptionInput = z.input<typeof fiscalExceptionInput>;
 export type FiscalExceptionFilters = z.output<typeof fiscalExceptionInput>;
@@ -54,6 +54,13 @@ export type FiscalExceptionRegister = {
   organizationId: string;
   branch: { id: string; name: string };
   filters: FiscalExceptionFilters;
+  /** The organisation's IANA zone the picked days were read in (null: UTC). */
+  timeZone: string | null;
+  /**
+   * The instants that bound the picked days on the organisation's clock: from the start of
+   * `filters.from` up to (not including) the start of `filters.to`, as ISO strings.
+   */
+  window: { from: string; to: string };
   configuredMode: 'OFF' | 'SANDBOX';
   readAt: string;
   coverage: 'UNKNOWN';
@@ -73,7 +80,7 @@ export function fiscalExceptionsCsv(register: FiscalExceptionRegister): string {
     'created_utc', 'updated_utc',
   ];
   const metadata = [
-    register.organizationId, register.branch.id, register.filters.from, register.filters.to,
+    register.organizationId, register.branch.id, register.window.from, register.window.to,
     register.readAt, register.configuredMode, register.coverage, register.filters.page + 1,
     register.filters.pageSize, register.rows.length, register.hasMoreAtRead, register.pageCapReached,
     `${FISCAL_EXCEPTION_COVERAGE} ${FISCAL_EXCEPTION_NOTICE}`,

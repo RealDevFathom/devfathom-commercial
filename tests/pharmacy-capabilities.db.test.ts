@@ -5,7 +5,7 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { can } from '@/lib/abac';
 import type { AuthzDb } from '@/lib/authz';
-import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
+import { PHARMACY_ROLE_TEMPLATES, PHARMACY_SOP_TEMPLATE_GRANTS } from '@/lib/vertical-catalog';
 import { assertDisposableRlsDatabase } from './disposable-rls-database';
 
 const url = process.env.PHARMACY_TEST_OWNER_DATABASE_URL;
@@ -37,6 +37,23 @@ const ownerPvSafetyMigration = readFileSync(
 )
   .replace(/^BEGIN;$/m, '')
   .replace(/^COMMIT;$/m, '');
+// Template grants added after these migrations, which never reach a legacy role through them.
+// Some have backfills of their own: the Manager's `pharmacy:procurement-approve`
+// (20261106200200_pharmacy_purchasing_authz) and `pharmacy:inventory`
+// (20261116130400_pharmacy_manager_inventory), and the Finance role's `reports:operational`
+// (20261115220200_pharmacy_finance_role_operational_reports). The DEV-751 SOP grants are for
+// new tenants only, and #654 (#925) added `pharmacy:close` to the Pharmacist template with no
+// backfill for existing tenants (reported under DEV-948).
+const laterTemplateGrants: Record<string, readonly string[]> = {
+  ...PHARMACY_SOP_TEMPLATE_GRANTS,
+  pharmacist: [...(PHARMACY_SOP_TEMPLATE_GRANTS.pharmacist ?? []), 'pharmacy:close'],
+  manager: [
+    ...(PHARMACY_SOP_TEMPLATE_GRANTS.manager ?? []),
+    'pharmacy:procurement-approve',
+    'pharmacy:inventory',
+  ],
+  finance: [...(PHARMACY_SOP_TEMPLATE_GRANTS.finance ?? []), 'reports:operational'],
+};
 const expiry = new Date('2035-01-02T00:00:00.000Z');
 const expired = new Date('2020-01-02T00:00:00.000Z');
 const legacy: Record<string, string[]> = {
@@ -197,8 +214,13 @@ const legacy: Record<string, string[]> = {
         [id(template.key)]
       );
       // Owner's redundant explicit order grant remains harmless and is not removed.
+      // A legacy role holds what these four migrations map it to. Grants that joined its
+      // template later are not theirs to add (see laterTemplateGrants).
+      const later = new Set(laterTemplateGrants[template.key] ?? []);
       const expected = [
-        ...template.capabilities,
+        ...template.capabilities.filter(
+          (capability) => !legacy[template.key] || !later.has(capability)
+        ),
         ...(template.key === 'owner' ? ['pharmacy:orders'] : []),
       ].sort();
       expect(rows.rows.map((r) => r.capability)).toEqual(expected);

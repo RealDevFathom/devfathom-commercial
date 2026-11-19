@@ -71,6 +71,8 @@ function fixture() {
   const tenderCreate = vi.fn().mockResolvedValue({ id: 'tender-1' });
   const saleUpdate = vi.fn().mockResolvedValue({});
   const db = {
+    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi' }) },
+    branchRegulatoryProfile: { findFirst: vi.fn().mockResolvedValue(null) },
     $executeRaw: vi.fn().mockImplementation(async () => {
       idempotency ??= {
         id: 'idem-1',
@@ -237,6 +239,7 @@ describe('leased receipt replay', () => {
     const sql = db.$queryRaw.mock.calls.map(([query]) => query.sql).join(' ');
     expect(sql).toContain('UPDATE pharmacy_receipt_number_leases');
     expect(sql).not.toContain('INSERT INTO pharmacy_receipt_number_sequences');
+    expect(sql).not.toContain('pharmacy_allocate_branch_receipt_numbers');
   });
   it('rejects a duplicate number under another command before writing a tender', async () => {
     const { db, input, tenderCreate } = fixture();

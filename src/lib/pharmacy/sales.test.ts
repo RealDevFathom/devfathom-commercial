@@ -345,7 +345,13 @@ describe('POS sale voiding', () => {
             saleId: 'sale-a',
             type: { not: 'LOYALTY' },
           },
-          select: { amountMinor: true, refunds: { select: { amountMinor: true } } },
+          select: {
+            id: true,
+            type: true,
+            provider: true,
+            amountMinor: true,
+            refunds: { select: { amountMinor: true } },
+          },
         },
       ]);
       // Refused before any stock is reversed or event recorded; the transaction
@@ -355,6 +361,55 @@ describe('POS sale voiding', () => {
       expect(events).not.toHaveBeenCalled();
     }
   );
+
+  // DEV-743: a card-terminal charge goes back through the provider, so the void says so.
+  it('refuses to void a bill paid on the card terminal, naming the provider refund', async () => {
+    const attemptCounts: unknown[] = [];
+    const allocationReads = vi.fn();
+    const db = {
+      pharmacySale: {
+        findFirst: async () => ({ id: 'sale-a', status: 'OPEN', lines: [] }),
+        updateMany: async () => ({ count: 1 }),
+      },
+      pharmacyTender: {
+        findMany: async () => [
+          // A refunded cash part and a manual card part are never terminal tenders.
+          { id: 'cash-1', type: 'CASH', provider: null, amountMinor: 200, refunds: [] },
+          {
+            id: 'manual-1',
+            type: 'CARD',
+            provider: 'MANUAL_TERMINAL',
+            amountMinor: 100,
+            refunds: [],
+          },
+          {
+            id: 'terminal-1',
+            type: 'CARD',
+            provider: 'FAKE_TERMINAL',
+            amountMinor: 700,
+            refunds: [],
+          },
+        ],
+      },
+      pharmacyCardTerminalAttempt: {
+        count: async (query: unknown) => {
+          attemptCounts.push(query);
+          return 1;
+        },
+      },
+      pharmacySaleLineAllocation: { findMany: allocationReads },
+    };
+
+    await expect(changeSaleStatus(db as never, scope, 'sale-a', 'void', manager)).rejects.toThrow(
+      'BILL_HAS_CARD_TERMINAL_PAYMENT'
+    );
+    expect(attemptCounts).toEqual([
+      {
+        where: { organizationId: 'org-a', branchId: 'branch-a', tenderId: { in: ['terminal-1'] } },
+      },
+    ]);
+    expect(allocationReads).not.toHaveBeenCalled();
+  });
 
   // DEV-821: a void releases the bill's stock, so another counter user cannot do it.
   it.each(['OPEN', 'HELD'])(
@@ -1267,6 +1322,7 @@ describe('POS-04 discount guardrails', () => {
         discountMinor: 1,
         grossMinor: 100,
         costMinor: 20,
+        maxDiscountBps: 10_000,
         approvedByUserId: 'manager',
         approvalPolicy: 'D06',
       })
@@ -1275,7 +1331,13 @@ describe('POS-04 discount guardrails', () => {
 
   it('requires attributable approval and refuses below-cost discounting', () => {
     expect(() =>
-      validateDiscount({ regulated: false, discountMinor: 10, grossMinor: 100, costMinor: 20 })
+      validateDiscount({
+        regulated: false,
+        discountMinor: 10,
+        grossMinor: 100,
+        costMinor: 20,
+        maxDiscountBps: 10_000,
+      })
     ).toThrow('APPROVAL_REQUIRED');
     expect(() =>
       validateDiscount({
@@ -1283,8 +1345,125 @@ describe('POS-04 discount guardrails', () => {
         discountMinor: 90,
         grossMinor: 100,
         costMinor: 20,
+        maxDiscountBps: 10_000,
         approvedByUserId: 'manager',
         approvalPolicy: 'standard',
+      })
+    ).toThrow('MARGIN_GUARDRAIL');
+  });
+});
+
+describe('DEV-66 minimum-margin guard', () => {
+  const approved = { approvedByUserId: 'manager-a', approvalPolicy: 'MANAGER_PIN' };
+  it('refuses a discount that leaves less than the configured minimum margin', () => {
+    // Cost 800, 20% minimum margin on price: floor is 1000.
+    expect(() =>
+      validateDiscount({
+        regulated: false,
+        discountMinor: 250,
+        grossMinor: 1_200,
+        costMinor: 800,
+        maxDiscountBps: 10_000,
+        minMarginBps: 2_000,
+        ...approved,
+      })
+    ).toThrow('MARGIN_GUARDRAIL');
+    expect(() =>
+      validateDiscount({
+        regulated: false,
+        discountMinor: 200,
+        grossMinor: 1_200,
+        costMinor: 800,
+        maxDiscountBps: 10_000,
+        minMarginBps: 2_000,
+        ...approved,
+      })
+    ).not.toThrow();
+  });
+
+  it('keeps the cost floor when no minimum margin is configured', () => {
+    expect(() =>
+      validateDiscount({
+        regulated: false,
+        discountMinor: 400,
+        grossMinor: 1_200,
+        costMinor: 800,
+        maxDiscountBps: 10_000,
+        ...approved,
+      })
+    ).not.toThrow();
+  });
+
+  it('never blocks an undiscounted line sold at MRP', () => {
+    expect(() =>
+      validateDiscount({
+        regulated: false,
+        discountMinor: 0,
+        grossMinor: 900,
+        costMinor: 800,
+        maxDiscountBps: 10_000,
+        minMarginBps: 2_000,
+      })
+    ).not.toThrow();
+  });
+
+  it('still refuses any discount on regulated stock', () => {
+    expect(() =>
+      validateDiscount({
+        regulated: true,
+        discountMinor: 1,
+        grossMinor: 1_200,
+        costMinor: 100,
+        maxDiscountBps: 10_000,
+        minMarginBps: 0,
+        ...approved,
+      })
+    ).toThrow('REGULATED_DISCOUNT_REFUSED');
+  });
+});
+
+describe("DEV-66 owner's maximum discount", () => {
+  const approved = { approvedByUserId: 'manager-a', approvalPolicy: 'MANAGER_PIN' };
+  const line = { regulated: false, grossMinor: 1_000, costMinor: 100, ...approved };
+
+  it('refuses a discount above the maximum even with a manager approval', () => {
+    expect(() => validateDiscount({ ...line, discountMinor: 101, maxDiscountBps: 1_000 })).toThrow(
+      new PharmacySaleError('DISCOUNT_ABOVE_MAXIMUM')
+    );
+    expect(() =>
+      validateDiscount({
+        ...line,
+        discountMinor: 101,
+        maxDiscountBps: 1_000,
+        approvalPolicy: 'SOLE_APPROVER_PIN_REAUTH',
+      })
+    ).toThrow('DISCOUNT_ABOVE_MAXIMUM');
+  });
+
+  it('accepts a discount up to the maximum', () => {
+    expect(() =>
+      validateDiscount({ ...line, discountMinor: 100, maxDiscountBps: 1_000 })
+    ).not.toThrow();
+  });
+
+  it('refuses every discount when the maximum is zero or unreadable', () => {
+    expect(() => validateDiscount({ ...line, discountMinor: 1, maxDiscountBps: 0 })).toThrow(
+      'DISCOUNT_ABOVE_MAXIMUM'
+    );
+    expect(() =>
+      validateDiscount({ ...line, discountMinor: 1, maxDiscountBps: Number.NaN })
+    ).toThrow('DISCOUNT_ABOVE_MAXIMUM');
+  });
+
+  it('keeps the minimum-margin guard on top of the maximum', () => {
+    // 10% is within a 50% maximum, but cost 850 with a 10% margin needs 945.
+    expect(() =>
+      validateDiscount({
+        ...line,
+        costMinor: 850,
+        discountMinor: 100,
+        maxDiscountBps: 5_000,
+        minMarginBps: 1_000,
       })
     ).toThrow('MARGIN_GUARDRAIL');
   });

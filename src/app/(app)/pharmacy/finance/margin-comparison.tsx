@@ -1,4 +1,4 @@
-import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/screen-copy';
+import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/plain-language';
 import { ReportDetails } from '@/components/pharmacy/report-details';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,13 +13,25 @@ import {
 } from '@/components/ui/table';
 import type { grossMarginComparison } from '@/lib/pharmacy/finance-reports';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
-import { formatUtcInstant } from '@/lib/utc-instant';
+import {
+  formatWorkspaceDateTime,
+  workspaceDateOffset,
+  workspaceDateRange,
+  workspaceToday,
+  workspaceZoneLabel,
+} from '@/lib/timezone';
 
 type Comparison = Awaited<ReturnType<typeof grossMarginComparison>>;
 const money = (minor: number) =>
   `${(minor / 100).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (currency not confirmed)`;
 
-export function MarginComparisonLedger({ report }: { report: Comparison }) {
+export function MarginComparisonLedger({
+  report,
+  timeZone,
+}: {
+  report: Comparison;
+  timeZone?: string | null;
+}) {
   const rows = [
     [
       'Revenue',
@@ -51,10 +63,13 @@ export function MarginComparisonLedger({ report }: { report: Comparison }) {
       <ReportDetails>
         <p className="break-words text-sm text-text-muted">
           {screenCopy.marginComparison.previous}
-          {formatUtcInstant(report.periods.previous.from)}
-          {screenCopy.marginComparison.to} {formatUtcInstant(report.periods.previous.to)}
-          {screenCopy.marginComparison.current} {formatUtcInstant(report.periods.current.from)}
-          {screenCopy.marginComparison.to} {formatUtcInstant(report.periods.current.to)}
+          {formatWorkspaceDateTime(report.periods.previous.from, timeZone)}
+          {screenCopy.marginComparison.to}{' '}
+          {formatWorkspaceDateTime(report.periods.previous.to, timeZone)}
+          {screenCopy.marginComparison.current}{' '}
+          {formatWorkspaceDateTime(report.periods.current.from, timeZone)}
+          {screenCopy.marginComparison.to}{' '}
+          {formatWorkspaceDateTime(report.periods.current.to, timeZone)}
           {screenCopy.marginComparison.periodsAreStartInclusiveEndExclusiveSameBranch}
         </p>
       </ReportDetails>
@@ -126,6 +141,7 @@ export async function MarginComparisonSection({
   ledgerAt,
   ledgerBy,
   profitBy,
+  timeZone,
 }: {
   caller: ReturnType<typeof pharmacyFinanceRouter.createCaller>;
   branch: { id: string; name: string };
@@ -136,19 +152,22 @@ export async function MarginComparisonSection({
   ledgerAt?: string;
   ledgerBy?: string;
   profitBy?: string;
+  /** Workspace IANA zone: picked dates start at its midnight (UTC when absent). */
+  timeZone?: string | null;
 }) {
-  const end = new Date();
-  end.setUTCHours(0, 0, 0, 0);
-  const start = new Date(end.getTime() - 30 * 86_400_000);
-  const fromDate = from ?? start.toISOString().slice(0, 10);
-  const toDate = to ?? end.toISOString().slice(0, 10);
+  const fromDate = from ?? workspaceDateOffset(timeZone, -30);
+  const toDate = to ?? workspaceToday(timeZone);
+  const zone = workspaceZoneLabel(timeZone);
+  // A picked date starts at the workspace's midnight, as the Reports page bounds its days.
+  const dayStart = (day: string) =>
+    workspaceDateRange(day, day, timeZone).from.toISOString().replace('.000Z', 'Z');
   let report: Comparison | undefined;
   let denied = false;
   try {
     report = await caller.marginComparison({
       branchId: branch.id,
-      from: `${fromDate}T00:00:00Z`,
-      to: `${toDate}T00:00:00Z`,
+      from: dayStart(fromDate),
+      to: dayStart(toDate),
     });
   } catch (error) {
     denied =
@@ -178,7 +197,9 @@ export async function MarginComparisonSection({
             ) : null
         )}
         <label className="text-sm">
-          {screenCopy.marginComparison.from500AmPkt}
+          {screenCopy.marginComparison.fromMidnight}
+          {zone}
+          {screenCopy.marginComparison.closeZone}
           <Input
             className="mt-1 min-h-11"
             name="marginFrom"
@@ -188,7 +209,9 @@ export async function MarginComparisonSection({
           />
         </label>
         <label className="text-sm">
-          {screenCopy.marginComparison.until500AmPktNotIncluded}
+          {screenCopy.marginComparison.untilMidnight}
+          {zone}
+          {screenCopy.marginComparison.closeZoneNotIncluded}
           <Input
             className="mt-1 min-h-11"
             name="marginTo"
@@ -202,7 +225,7 @@ export async function MarginComparisonSection({
         </Button>
       </form>
       {report ? (
-        <MarginComparisonLedger report={report} />
+        <MarginComparisonLedger report={report} timeZone={timeZone} />
       ) : (
         <p role="alert" className="text-sm text-text-muted">
           {denied

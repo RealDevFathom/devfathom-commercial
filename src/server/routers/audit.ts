@@ -1,6 +1,9 @@
+import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { router, adminProcedure } from '../trpc';
-import type { Prisma } from '@/generated/prisma/client';
+import { router, adminProcedure, type TRPCContext } from '../trpc';
+import { Prisma } from '@/generated/prisma/client';
+import { auditApproverIds, auditRowBranchId } from '@/lib/audit-labels';
+import { auditActorBranches } from '@/server/audit-actor-branches';
 
 /**
  * Admin-only read API over the audit trail. Every procedure here is an
@@ -23,6 +26,62 @@ const sourceEnum = z.enum(['TRPC', 'REST_API', 'AUTH', 'SYSTEM']);
 const outcomeEnum = z.enum(['SUCCESS', 'FAILURE']);
 const actorTypeEnum = z.enum(['USER', 'API_TOKEN', 'ANONYMOUS', 'SYSTEM']);
 
+/**
+ * DEV-913: whose entries this administrator may read. Outside a pharmacy, and
+ * for the pharmacy owner (the live system Owner, or an ADMIN holding `*` with
+ * no DENY), every entry. Any other pharmacy administrator reads only the entries
+ * recorded at a branch they are actively assigned to; workspace-wide entries
+ * and other branches stay hidden. Decided from the database, never the session.
+ */
+type AuditReadScope = { kind: 'ALL' } | { kind: 'BRANCHES'; branchIds: string[] };
+
+async function auditReadScope(ctx: TRPCContext): Promise<AuditReadScope> {
+  if (ctx.entitlements?.vertical !== 'PHARMACY') return { kind: 'ALL' };
+  const userId = ctx.session?.user?.id;
+  if (!userId) return { kind: 'BRANCHES', branchIds: [] };
+  const actor = await auditActorBranches(ctx.db, ctx.entitlements.organizationId, userId);
+  return actor.all ? { kind: 'ALL' } : { kind: 'BRANCHES', branchIds: actor.branchIds };
+}
+
+/**
+ * Rows recorded at one of `branchIds`: the recorded branch, the branches the
+ * person works at for an entry recorded away from the branch it named
+ * (DEV-937), then the raw request of an entry that recorded no branch at all
+ * (written before the recorder kept one). A raw request branch is only what the
+ * person named, so it never places a refusal, an entry the recorder moved away
+ * from it (`requestedBranchId`), or an entry recorded at another branch.
+ */
+function atBranches(branchIds: readonly string[]): Prisma.AuditLogWhereInput {
+  if (branchIds.length === 0) return { id: { in: [] } };
+  const unrecorded: Prisma.AuditLogWhereInput = {
+    AND: [
+      { outcome: 'SUCCESS' },
+      { metadata: { path: ['branchId'], equals: Prisma.AnyNull } },
+      { metadata: { path: ['requestedBranchId'], equals: Prisma.AnyNull } },
+    ],
+  };
+  return {
+    OR: branchIds.flatMap((branchId): Prisma.AuditLogWhereInput[] => [
+      { metadata: { path: ['branchId'], equals: branchId } },
+      { metadata: { path: ['actorBranchIds'], array_contains: [branchId] } },
+      { AND: [unrecorded, { input: { path: ['branchId'], equals: branchId } }] },
+      { AND: [unrecorded, { input: { path: ['pharmacyBranchId'], equals: branchId } }] },
+    ]),
+  };
+}
+
+function scopeWhere(scope: AuditReadScope): Prisma.AuditLogWhereInput | null {
+  return scope.kind === 'ALL' ? null : atBranches(scope.branchIds);
+}
+
+function withScope(
+  where: Prisma.AuditLogWhereInput,
+  scope: AuditReadScope
+): Prisma.AuditLogWhereInput {
+  const restriction = scopeWhere(scope);
+  return restriction ? { AND: [where, restriction] } : where;
+}
+
 export const auditRouter = router({
   /**
    * Paginated, filtered list of audit entries (newest first). Cursor is the
@@ -34,6 +93,8 @@ export const auditRouter = router({
         search: z.string().trim().optional(),
         actorId: z.string().optional(),
         actorType: actorTypeEnum.optional(),
+        // DEV-913: entries recorded at one pharmacy branch.
+        branchId: z.string().trim().min(1).max(64).optional(),
         category: z.string().optional(),
         operation: operationEnum.optional(),
         source: sourceEnum.optional(),
@@ -51,6 +112,9 @@ export const auditRouter = router({
       })
     )
     .query(async ({ ctx, input }) => {
+      const scope = await auditReadScope(ctx);
+      if (input.branchId && scope.kind === 'BRANCHES' && !scope.branchIds.includes(input.branchId))
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
       const where: Prisma.AuditLogWhereInput = {};
 
       if (input.actorId) where.actorId = input.actorId;
@@ -93,8 +157,13 @@ export const auditRouter = router({
         ];
       }
 
+      const conditions: Prisma.AuditLogWhereInput[] = [where];
+      if (input.branchId) conditions.push(atBranches([input.branchId]));
+      const restriction = scopeWhere(scope);
+      if (restriction) conditions.push(restriction);
+
       const rows = await ctx.db.auditLog.findMany({
-        where,
+        where: conditions.length === 1 ? where : { AND: conditions },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: input.limit + 1,
         ...(input.cursor && { cursor: { id: input.cursor }, skip: 1 }),
@@ -115,18 +184,22 @@ export const auditRouter = router({
         nextCursor = rows[rows.length - 1]?.id;
       }
 
-      return { items: rows, nextCursor };
+      return { items: await describeRows(ctx, rows), nextCursor };
     }),
 
   /** Distinct values + actor list to populate the filter controls. */
   filters: adminProcedure.query(async ({ ctx }) => {
-    const [categories, actions, actorRows] = await Promise.all([
+    const scope = await auditReadScope(ctx);
+    const scoped = scopeWhere(scope) ?? {};
+    const [categories, actions, actorRows, branches] = await Promise.all([
       ctx.db.auditLog.findMany({
+        where: scoped,
         distinct: ['category'],
         select: { category: true },
         orderBy: { category: 'asc' },
       }),
       ctx.db.auditLog.findMany({
+        where: scoped,
         distinct: ['action'],
         select: { action: true },
         orderBy: { action: 'asc' },
@@ -134,9 +207,19 @@ export const auditRouter = router({
       }),
       ctx.db.auditLog.groupBy({
         by: ['actorId', 'actorName'],
-        where: { actorId: { not: null } },
+        where: withScope({ actorId: { not: null } }, scope),
         _count: { _all: true },
       }),
+      ctx.entitlements?.vertical === 'PHARMACY'
+        ? ctx.db.pharmacyBranch.findMany({
+            where: {
+              organizationId: ctx.entitlements.organizationId,
+              ...(scope.kind === 'BRANCHES' ? { id: { in: scope.branchIds } } : {}),
+            },
+            select: { id: true, name: true, code: true },
+            orderBy: { name: 'asc' },
+          })
+        : Promise.resolve([]),
     ]);
 
     // Collapse to one entry per actorId (keep the highest-count snapshot name).
@@ -157,6 +240,7 @@ export const auditRouter = router({
       categories: categories.map((c) => c.category),
       actions: actions.map((a) => a.action),
       actors,
+      branches,
       operations: operationEnum.options,
       sources: sourceEnum.options,
       outcomes: outcomeEnum.options,
@@ -166,16 +250,20 @@ export const auditRouter = router({
   /** Headline counters for the dashboard strip on the audit page. */
   stats: adminProcedure.query(async ({ ctx }) => {
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const scope = await auditReadScope(ctx);
+    const scoped = (where: Prisma.AuditLogWhereInput) => withScope(where, scope);
 
     const [total, failures, last24h, failures24h, byCategoryRaw, topActorsRaw] = await Promise.all([
-      ctx.db.auditLog.count(),
-      ctx.db.auditLog.count({ where: { outcome: 'FAILURE' } }),
-      ctx.db.auditLog.count({ where: { createdAt: { gte: since24h } } }),
-      ctx.db.auditLog.count({ where: { outcome: 'FAILURE', createdAt: { gte: since24h } } }),
-      ctx.db.auditLog.groupBy({ by: ['category'], _count: { _all: true } }),
+      ctx.db.auditLog.count({ where: scoped({}) }),
+      ctx.db.auditLog.count({ where: scoped({ outcome: 'FAILURE' }) }),
+      ctx.db.auditLog.count({ where: scoped({ createdAt: { gte: since24h } }) }),
+      ctx.db.auditLog.count({
+        where: scoped({ outcome: 'FAILURE', createdAt: { gte: since24h } }),
+      }),
+      ctx.db.auditLog.groupBy({ by: ['category'], where: scoped({}), _count: { _all: true } }),
       ctx.db.auditLog.groupBy({
         by: ['actorId', 'actorName'],
-        where: { createdAt: { gte: since24h }, actorId: { not: null } },
+        where: scoped({ createdAt: { gte: since24h }, actorId: { not: null } }),
         _count: { _all: true },
       }),
     ]);
@@ -192,3 +280,41 @@ export const auditRouter = router({
     return { total, failures, last24h, failures24h, byCategory, topActors };
   }),
 });
+
+type AuditRow = Prisma.AuditLogGetPayload<object>;
+
+/**
+ * DEV-913: each entry with the branch it was recorded at and the people who
+ * approved it, by name. Names are read for this page only; the stored row is
+ * never changed (audit rows are append-only).
+ */
+async function describeRows(ctx: TRPCContext, rows: AuditRow[]) {
+  const branchIds = [...new Set(rows.map(auditRowBranchId).filter((id): id is string => !!id))];
+  const approverIds = [...new Set(rows.flatMap(auditApproverIds))];
+  const organizationId = ctx.entitlements?.organizationId;
+  const [branches, approvers] = await Promise.all([
+    branchIds.length && ctx.entitlements?.vertical === 'PHARMACY'
+      ? ctx.db.pharmacyBranch.findMany({
+          where: { organizationId, id: { in: branchIds } },
+          select: { id: true, name: true },
+        })
+      : Promise.resolve([] as { id: string; name: string }[]),
+    approverIds.length
+      ? ctx.db.user.findMany({
+          where: { organizationId, id: { in: approverIds } },
+          select: { id: true, name: true },
+        })
+      : Promise.resolve([] as { id: string; name: string }[]),
+  ]);
+  const branchName = new Map(branches.map((branch) => [branch.id, branch.name]));
+  const approverName = new Map(approvers.map((user) => [user.id, user.name]));
+  return rows.map((row) => {
+    const branchId = auditRowBranchId(row);
+    return {
+      ...row,
+      branchId,
+      branchName: branchId ? (branchName.get(branchId) ?? null) : null,
+      approvers: auditApproverIds(row).map((id) => ({ id, name: approverName.get(id) ?? null })),
+    };
+  });
+}

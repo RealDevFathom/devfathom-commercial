@@ -79,10 +79,72 @@ export const listApInvoicesSchema = z
   })
   .strict();
 
-export const apAgingSchema = z.object({ branchId: id, asOf: calendarDate }).strict();
+export const apAgingSchema = z
+  .object({
+    branchId: id,
+    asOf: calendarDate,
+    /** DEV-694: narrow the view to one payee when a branch has too many bills. */
+    payeeFilter: z.string().trim().min(1).max(160).optional(),
+  })
+  .strict();
+
+/** DEV-694: staff choose the bill a supplier credit note is set off against. */
+export const requestApCreditSetOffSchema = z
+  .object({
+    branchId: id,
+    invoiceId: id,
+    supplierCreditId: id,
+    requestKey: commandKey,
+    amountMinor,
+    note: z.string().trim().max(500).optional(),
+  })
+  .strict();
+
+/** DEV-694: a manager approves with their own fresh PIN; the PIN is never stored. */
+export const approveApCreditSetOffSchema = z
+  .object({
+    branchId: id,
+    setOffId: id,
+    decisionKey: commandKey,
+    pin: z.string().regex(/^\d{4,8}$/),
+  })
+  .strict();
+
+export const rejectApCreditSetOffSchema = z
+  .object({
+    branchId: id,
+    setOffId: id,
+    decisionKey: commandKey,
+    reason: z.string().trim().min(1).max(500),
+  })
+  .strict();
+
+/** DEV-694: undo an approved set-off; the manager's own fresh PIN, never stored. */
+export const reverseApCreditSetOffSchema = z
+  .object({
+    branchId: id,
+    setOffId: id,
+    commandKey,
+    reason: z.string().trim().min(1).max(500),
+    pin: z.string().regex(/^\d{4,8}$/),
+  })
+  .strict();
+
+export const listApCreditSetOffsSchema = z
+  .object({
+    branchId: id,
+    status: z.enum(['PENDING', 'APPROVED', 'REJECTED', 'REVERSED']).optional(),
+    take: z.number().int().min(1).max(100).default(50),
+  })
+  .strict();
 
 export type RecordApInvoiceInput = z.infer<typeof recordApInvoiceSchema>;
 export type PayApInvoiceInput = z.infer<typeof payApInvoiceSchema>;
 export type ReverseApSettlementInput = z.infer<typeof reverseApSettlementSchema>;
 export type ReverseApInvoiceInput = z.infer<typeof reverseApInvoiceSchema>;
 export type ListApInvoicesInput = z.infer<typeof listApInvoicesSchema>;
+export type RequestApCreditSetOffInput = z.infer<typeof requestApCreditSetOffSchema>;
+export type ApproveApCreditSetOffInput = z.infer<typeof approveApCreditSetOffSchema>;
+export type RejectApCreditSetOffInput = z.infer<typeof rejectApCreditSetOffSchema>;
+export type ReverseApCreditSetOffInput = z.infer<typeof reverseApCreditSetOffSchema>;
+export type ListApCreditSetOffsInput = z.infer<typeof listApCreditSetOffsSchema>;

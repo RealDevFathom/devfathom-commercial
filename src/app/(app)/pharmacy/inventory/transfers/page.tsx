@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 
 import { BranchAssignmentRequired } from '@/components/pharmacy/inventory/branch-assignment-required';
 import {
@@ -22,6 +23,7 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
+import { StatusPill } from '@/components/ui/status-pill';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import { soloOwnerApprovalAllowed } from '@/lib/pharmacy/purchase-approval';
@@ -32,6 +34,7 @@ import {
   pharmacyInventoryRouter,
 } from '@/server/routers/pharmacy-inventory';
 import { createTRPCContext } from '@/server/trpc';
+import { batchPhrase } from '@/lib/pharmacy/unrecorded-batch';
 
 export const metadata: Metadata = { title: 'Stock transfers' };
 
@@ -152,6 +155,8 @@ export default async function PharmacyTransfersPage({
   // DEV-660: the gated read admits the branch (and, for a tenant ADMIN without an
   // assignment, writes the exception's audit row) before any direct stock read.
   const transfers = await caller.transferBoard({ branchId: branch.id });
+  // DEV-908: the owner's switch. Display only; every allocation re-checks it.
+  const transferSwitch = await caller.branchTransferSettings();
   const [balances, destinationLocations, witnessOptions, soloApprover] = await Promise.all([
     ctx.db.pharmacyStockBalance.findMany({
       where: {
@@ -196,7 +201,7 @@ export default async function PharmacyTransfersPage({
   const branchNames = new Map(branches.map((item) => [item.id, item.name]));
   const stock = balances.map((balance) => ({
     value: `${balance.inventoryLotId}:${balance.stockLocationId}`,
-    label: `${balance.lot.batch.medicine.brandName ?? balance.lot.batch.medicine.productName} · batch ${balance.lot.batch.batchNumber} · ${balance.location.name} · ${balance.onHandUnits} units`,
+    label: `${balance.lot.batch.medicine.brandName ?? balance.lot.batch.medicine.productName} · ${batchPhrase(balance.lot.batch.batchNumber, 'batch')} · ${balance.location.name} · ${balance.onHandUnits} units`,
   }));
   const destinations = destinationLocations
     .filter((location) => branchNames.has(location.branchId))
@@ -244,6 +249,31 @@ export default async function PharmacyTransfersPage({
     }
   }
 
+  /** DEV-908: the owner switches recorded branch transfers on or off. */
+  async function setSwitch(data: FormData) {
+    'use server';
+    const branchId = String(data.get('branchId') ?? '').trim();
+    const enabled = String(data.get('enabled') ?? '') === 'true';
+    let destination: string;
+    try {
+      const actionCtx = await tenantContext();
+      if (!actionCtx?.session?.user)
+        throw new Error('Your session expired. Sign in and try again.');
+      await pharmacyInventoryRouter.createCaller(actionCtx).setBranchTransfersEnabled({ enabled });
+      destination = url(
+        branchId,
+        enabled ? 'Branch transfers switched on.' : 'Branch transfers switched off.'
+      );
+    } catch (error) {
+      destination = url(
+        branchId,
+        error instanceof Error ? error.message : 'The setting could not be changed.',
+        'error'
+      );
+    }
+    redirect(destination);
+  }
+
   return (
     <div className="min-w-0 space-y-6">
       <PageHeader
@@ -283,6 +313,35 @@ export default async function PharmacyTransfersPage({
         </form>
       </SectionCard>
 
+      <SectionCard eyebrow="Owner setting" title="Branch transfers">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0 flex-1 space-y-1 text-sm text-text-muted">
+            <StatusPill
+              label={transferSwitch.enabled ? 'On' : 'Off'}
+              status={transferSwitch.enabled ? 'active' : 'pending'}
+            />
+            <p>
+              Moves stock between this pharmacy&apos;s own licensed branches, recorded at both ends.
+              Controlled drugs are never transferred.
+            </p>
+            {transferSwitch.canChange ? null : <p>Only the owner can change this setting.</p>}
+          </div>
+          {transferSwitch.canChange ? (
+            <form action={setSwitch}>
+              <input name="branchId" type="hidden" value={branch.id} />
+              <input
+                name="enabled"
+                type="hidden"
+                value={transferSwitch.enabled ? 'false' : 'true'}
+              />
+              <Button type="submit" variant={transferSwitch.enabled ? 'outline' : 'default'}>
+                {transferSwitch.enabled ? 'Switch off' : 'Switch on'}
+              </Button>
+            </form>
+          ) : null}
+        </div>
+      </SectionCard>
+
       <section aria-label="Transfer summary" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <Stat
           label="Requested"
@@ -312,7 +371,11 @@ export default async function PharmacyTransfersPage({
       </section>
 
       <SectionCard eyebrow="Allocate → approve → dispatch" title="Send stock">
-        {stock.length && destinations.length ? (
+        {!transferSwitch.enabled ? (
+          <Empty>
+            Branch transfers are switched off. Stock already in transit can still be received.
+          </Empty>
+        ) : stock.length && destinations.length ? (
           <TransferAllocateForm
             action={perform}
             branchId={branch.id}

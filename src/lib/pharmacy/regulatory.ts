@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@/generated/prisma/client';
 import { recordAudit } from '@/server/audit';
+import { platformApprovalInEffect, platformApprovalWaivesBranchGate } from './platform-approval';
 import { normalizeRegulatoryProvince } from './regulatory-profile-form';
 import { regulatoryProfileInForceWhere, regulatoryStartInstant } from './regulatory-start';
 
@@ -217,6 +218,18 @@ export function pharmacistPresentAt(pharmacistCoverageRule: unknown, at: Date): 
 }
 
 /**
+ * DEV-846: whether the live-sale hours check is on for a rule set — the same
+ * test {@link pharmacistPresentAt} applies before it restricts anything. Hours
+ * an owner records on a branch never turn it on; only published rules do.
+ */
+export function presenceHoursCheckEnabled(pharmacistCoverageRule: unknown): boolean {
+  const values = ruleField(pharmacistCoverageRule).values;
+  return Boolean(
+    values && typeof values === 'object' && !Array.isArray(values) && 'presenceHours' in values
+  );
+}
+
+/**
  * PLAT-02 fail-closed primitive. Every denial is typed and audited before it is
  * thrown; callers cannot downgrade it to a warning by inspecting a boolean.
  */
@@ -381,6 +394,29 @@ async function checkStoredBranch(
 /** Lifecycle states in which an organization may operate (docs/admin-platform/lifecycle.md). */
 const OPERATING_ORGANIZATION_STATUSES = new Set(['ACTIVE', 'GRACE']);
 
+/** What the organization-level gate reads: the lifecycle state and the DEV-905 approval. */
+const ORGANIZATION_GATE_SELECT = {
+  status: true,
+  timezone: true,
+  vertical: true,
+  platformApprovedAt: true,
+} as const;
+
+/**
+ * The organization-level gate: an operating lifecycle state, or (DEV-905) a super
+ * admin's approval in effect, which lets a pharmacy still in ONBOARDING run.
+ */
+function organizationMayOperate(organization: {
+  status: string;
+  vertical?: string | null;
+  platformApprovedAt?: Date | null;
+}): boolean {
+  return (
+    OPERATING_ORGANIZATION_STATUSES.has(organization.status) ||
+    platformApprovalInEffect(organization)
+  );
+}
+
 /**
  * Runtime gate for regulated pharmacy operations. Tenant host access is also
  * available while onboarding, so operations must independently require the
@@ -404,9 +440,9 @@ export async function assertStoredPharmacyMayOperate(
     FOR SHARE`;
   const organization = await db.organization.findUnique({
     where: { id: organizationId },
-    select: { status: true, timezone: true },
+    select: ORGANIZATION_GATE_SELECT,
   });
-  if (!organization || !OPERATING_ORGANIZATION_STATUSES.has(organization.status)) {
+  if (!organization || !organizationMayOperate(organization)) {
     recordAudit({
       organizationId,
       actorType: 'SYSTEM',
@@ -423,6 +459,10 @@ export async function assertStoredPharmacyMayOperate(
     });
     throw new BranchOperationDeniedError('ORGANIZATION_NOT_ACTIVE');
   }
+  // DEV-905: a pharmacy a super admin approved runs without the branch's regulatory gate.
+  // The per-sale rules (pharmacist grant, prescription and review, controlled witness and
+  // register) are enforced by their own code on every sale.
+  if (platformApprovalWaivesBranchGate(organization)) return;
   await assertStoredBranchMayOperate(db, organizationId, branchId, {
     ...action,
     timeZone: action.timeZone ?? organization.timezone,
@@ -444,11 +484,12 @@ export async function storedPharmacyOperationDenial(
 ): Promise<BranchOperationDenialReason | null> {
   const organization = await db.organization.findUnique({
     where: { id: organizationId },
-    select: { status: true, timezone: true },
+    select: ORGANIZATION_GATE_SELECT,
   });
-  if (!organization || !OPERATING_ORGANIZATION_STATUSES.has(organization.status)) {
+  if (!organization || !organizationMayOperate(organization)) {
     return 'ORGANIZATION_NOT_ACTIVE';
   }
+  if (platformApprovalWaivesBranchGate(organization)) return null;
   try {
     await checkStoredBranch(
       db,

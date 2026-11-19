@@ -254,6 +254,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     railOrganizationId = 'pharmacy-1',
     sessionOrganizationId = 'pharmacy-1',
     isError = false,
+    onboarding = false,
   }: {
     role?: string;
     vertical?: EntitlementView['vertical'];
@@ -264,6 +265,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     railOrganizationId?: string;
     sessionOrganizationId?: string;
     isError?: boolean;
+    onboarding?: boolean;
   } = {}) {
     useSessionMock.mockReturnValue({
       data: {
@@ -297,9 +299,9 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
         }}
       >
         {surface === 'mobile' ? (
-          <Sidebar collapsible={false} onNavigate={onNavigate} />
+          <Sidebar collapsible={false} onNavigate={onNavigate} pharmacyOnboarding={onboarding} />
         ) : (
-          <TopNavigation />
+          <TopNavigation pharmacyOnboarding={onboarding} />
         )}
       </EntitlementsProvider>
     );
@@ -354,6 +356,14 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
         screen.queryByRole('link', { name: (name) => name.endsWith(label) })
       ).not.toBeInTheDocument();
     }
+  });
+
+  it('DEV-930 offers an onboarding owner Onboarding in one click, never inside a closed menu', () => {
+    renderNavigation({ onboarding: true });
+    const onboarding = screen.getByRole('link', { name: /Onboarding$/ });
+    expect(onboarding).toHaveAttribute('href', '/pharmacy');
+    // Not in a menu panel, which stays hidden until its button is pressed.
+    expect(onboarding.closest('ul.hidden, [hidden]')).toBeNull();
   });
 
   it('offers an inventory member without procurement or reports neither destination (#979)', () => {
@@ -416,6 +426,20 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
       'href',
       '/pharmacy/counter/close'
     );
+  });
+
+  it('offers a catalogue reviewer the Medicine catalog destination, and a cashier not (DEV-19)', () => {
+    renderNavigation({
+      role: 'MEMBER',
+      capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
+    });
+    expect(screen.getByRole('link', { name: /Medicine catalog$/ })).toHaveAttribute(
+      'href',
+      '/pharmacy/medicines'
+    );
+    cleanup();
+    renderNavigation({ role: 'MEMBER', capabilities: ['pharmacy:counter', 'pharmacy:orders'] });
+    expect(screen.queryByRole('link', { name: /Medicine catalog$/ })).not.toBeInTheDocument();
   });
 
   // #979, PR J: the rail answer is the ABAC-resolved capability list. No role
@@ -693,7 +717,14 @@ describe('Pharmacy grouped top navigation (DEV-497)', () => {
     pathname = '/dashboard',
     capabilities = everyCapability,
     granted = everyModule,
-  }: { role?: string; pathname?: string; capabilities?: string[]; granted?: string[] } = {}) {
+    onboarding = false,
+  }: {
+    role?: string;
+    pathname?: string;
+    capabilities?: string[];
+    granted?: string[];
+    onboarding?: boolean;
+  } = {}) {
     useSessionMock.mockReturnValue({
       data: {
         user: {
@@ -724,7 +755,7 @@ describe('Pharmacy grouped top navigation (DEV-497)', () => {
           limits: {},
         }}
       >
-        <TopNavigation />
+        <TopNavigation pharmacyOnboarding={onboarding} />
         <button type="button">Outside</button>
       </EntitlementsProvider>
     );
@@ -747,8 +778,13 @@ describe('Pharmacy grouped top navigation (DEV-497)', () => {
       Array.from(nav.children)
         .filter((child) => child.tagName === 'A')
         .map((link) => link.getAttribute('href'))
-    ).toEqual(['/dashboard', '/pharmacy/purchasing', '/pharmacy/finance']);
-    expect(nav.children).toHaveLength(9);
+    ).toEqual(['/dashboard', '/pharmacy/purchasing', '/audit-logs', '/pharmacy/finance']);
+    // DEV-913: the audit log is the owner's own entry, whatever the plan.
+    expect(within(nav).getByRole('link', { name: 'Audit log: who did what' })).toHaveAttribute(
+      'href',
+      '/audit-logs'
+    );
+    expect(nav.children).toHaveLength(10);
     expect(nav).toHaveClass('flex-wrap');
     expect(nav).not.toHaveClass('overflow-x-auto');
     expect(
@@ -756,24 +792,53 @@ describe('Pharmacy grouped top navigation (DEV-497)', () => {
         .getAllByRole('link')
         .map((link) => link.textContent)
     ).toEqual(['Counter', 'Day close', 'Khata', 'Loyalty points', 'Marketing & growth']);
+    // DEV-930: an active pharmacy keeps Onboarding in Settings, so its bar does not grow.
     expect(within(panel('Settings')).getByRole('link', { name: 'Onboarding' })).toHaveAttribute(
       'href',
       '/pharmacy'
     );
   });
 
-  it('offers a cashier only pages a cashier can open, with no menus to dig through', () => {
+  it('DEV-930 gives an onboarding owner Onboarding in the bar itself, first after Dashboard', () => {
+    const nav = renderBar({ onboarding: true });
+    expect(
+      Array.from(nav.children)
+        .filter((child) => child.tagName === 'A')
+        .map((link) => link.getAttribute('href'))
+    ).toEqual([
+      '/dashboard',
+      '/pharmacy',
+      '/pharmacy/purchasing',
+      '/audit-logs',
+      '/pharmacy/finance',
+    ]);
+    expect(nav.children[1]).toHaveAccessibleName('Onboarding');
+    expect(within(panel('Settings')).queryByRole('link', { name: /Onboarding$/ })).toBeNull();
+    expect(nav).toHaveClass('flex-wrap');
+  });
+
+  it('offers a cashier only pages a cashier can open, with Your PIN beside Settings', () => {
     const nav = renderBar({
       role: 'MEMBER',
       capabilities: ['pharmacy:counter', 'pharmacy:orders'],
       granted: ['pharmacy-core', 'pharmacy-counter', 'pharmacy-procurement', 'pharmacy-finance'],
     });
-    expect(within(nav).queryAllByRole('button')).toEqual([]);
+    // DEV-931: a cashier confirms vouchers with their own PIN, so "Your PIN" is theirs too;
+    // it joins Settings in the one menu a cashier has.
+    expect(
+      within(nav)
+        .getAllByRole('button')
+        .map((button) => button.textContent)
+    ).toEqual(['Settings']);
     expect(
       within(nav)
         .getAllByRole('link')
         .map((link) => link.getAttribute('href'))
-    ).toEqual(['/dashboard', '/pharmacy/counter', '/settings']);
+    ).toEqual(['/dashboard', '/pharmacy/counter', '/pharmacy/settings/pin', '/settings']);
+    expect(within(panel('Settings')).getByRole('link', { name: 'Your PIN' })).toHaveAttribute(
+      'href',
+      '/pharmacy/settings/pin'
+    );
   });
 
   it('opens one menu at a time and closes it on Escape, outside press and navigation', () => {

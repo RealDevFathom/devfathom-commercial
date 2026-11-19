@@ -16,6 +16,7 @@ import {
   searchCounterPatients,
 } from '@/lib/pharmacy/counter-prescriptions';
 import { auditPatientRead, maskedPatient } from '@/lib/pharmacy/patient-prescriptions';
+import { counterBranchAssignmentDenial } from '@/lib/pharmacy/counter-capability';
 import { captureRefillReminder, RefillSupportError } from '@/lib/pharmacy/refill-support';
 import {
   configuredRxOcrAdapterName,
@@ -25,7 +26,9 @@ import {
 } from '@/lib/pharmacy/rx-ocr';
 import { buildRxDraftCart } from '@/lib/pharmacy/rx-draft-cart';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { workspaceTimezone } from '@/lib/timezone';
 import type { TRPCContext } from '../trpc';
+import { annotateAuditBranch } from '../audit-branch';
 import {
   auditedProtectedProcedure,
   capabilityProcedure,
@@ -245,6 +248,8 @@ export const pharmacyPrescriptionsRouter = router({
       return {
         branches,
         selectedBranchId: selectedBranch?.id ?? null,
+        // DEV-943: the caller's own organisation zone, so date defaults use the shop's day.
+        timezone: workspaceTimezone(ctx.organization?.timezone),
         canDispense,
         patients: patients.map(maskedPatient),
         prescribers,
@@ -607,14 +612,25 @@ export const pharmacyPrescriptionsRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements.organizationId;
+      const user = ctx.session!.user;
+      // DEV-938: a reminder is recorded only at a branch the caller works at, as
+      // every other branch-scoped dispensing action. A branch of another
+      // organization, an inactive one and a missing one get the same refusal;
+      // only a session ADMIN of this organization may use any of its branches.
+      const branch = await ctx.db.pharmacyBranch.findFirst({
+        where: { id: input.branchId, organizationId, active: true },
+        select: { id: true },
+      });
+      if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'BRANCH_NOT_FOUND' });
+      // Tag the entry now, so a refused attempt is visible at the branch it targeted.
+      annotateAuditBranch(ctx, branch.id);
+      if (await counterBranchAssignmentDenial(ctx.db, user, organizationId, branch.id))
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
       try {
         return await captureRefillReminder(
           ctx.db,
-          {
-            organizationId: ctx.entitlements.organizationId,
-            branchId: input.branchId,
-            actorId: ctx.session!.user.id,
-          },
+          { organizationId, branchId: branch.id, actorId: user.id },
           input
         );
       } catch (error) {

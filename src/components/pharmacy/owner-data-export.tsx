@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { PinAwareMessage } from '@/components/pharmacy/pin-aware-message';
 import { StatusPill } from '@/components/ui/status-pill';
 import type { OwnerDataExportView } from '@/lib/pharmacy/owner-data-export-format';
 import { formatWorkspaceDateTime, workspaceZoneLabel } from '@/lib/timezone';
@@ -150,7 +151,8 @@ export function OwnerDataExportConsole({
       <form onSubmit={requestExport} className="space-y-4" noValidate>
         <fieldset className="grid gap-4 sm:grid-cols-2">
           <legend className="mb-2 text-sm text-text-muted">
-            Sales date range, read in your workspace timezone ({workspaceZoneLabel(timeZone)}). Leave both empty to include every sale.
+            Sales date range, read in your workspace timezone ({workspaceZoneLabel(timeZone)}).
+            Leave both empty to include every sale.
           </legend>
           <div className="space-y-1.5">
             <Label htmlFor="data-export-from">Sales from</Label>
@@ -206,7 +208,7 @@ export function OwnerDataExportConsole({
         ) : null}
         {error ? (
           <p role="alert" className="text-sm text-destructive">
-            {error}
+            <PinAwareMessage message={error} />
           </p>
         ) : null}
         <Button type="submit" className="h-11 px-5" disabled={busy || pending || rangeInvalid}>

@@ -1,0 +1,154 @@
+[
+  {
+    "name": "empty-branch-list",
+    "width": 375,
+    "theme": "light",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch"
+    ],
+    "selectValue": "",
+    "alerts": [],
+    "cardTitles": [
+      "Branch and date",
+      "Choose a branch"
+    ]
+  },
+  {
+    "name": "empty-branch-list",
+    "width": 375,
+    "theme": "dark",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch"
+    ],
+    "selectValue": "",
+    "alerts": [],
+    "cardTitles": [
+      "Branch and date",
+      "Choose a branch"
+    ]
+  },
+  {
+    "name": "empty-branch-list",
+    "width": 768,
+    "theme": "light",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch"
+    ],
+    "selectValue": "",
+    "alerts": [],
+    "cardTitles": [
+      "Branch and date",
+      "Choose a branch"
+    ]
+  },
+  {
+    "name": "empty-branch-list",
+    "width": 768,
+    "theme": "dark",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch"
+    ],
+    "selectValue": "",
+    "alerts": [],
+    "cardTitles": [
+      "Branch and date",
+      "Choose a branch"
+    ]
+  },
+  {
+    "name": "empty-branch-list",
+    "width": 1024,
+    "theme": "light",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch"
+    ],
+    "selectValue": "",
+    "alerts": [],
+    "cardTitles": [
+      "Branch and date",
+      "Choose a branch"
+    ]
+  },
+  {
+    "name": "empty-branch-list",
+    "width": 1024,
+    "theme": "dark",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch"
+    ],
+    "selectValue": "",
+    "alerts": [],
+    "cardTitles": [
+      "Branch and date",
+      "Choose a branch"
+    ]
+  },
+  {
+    "name": "empty-branch-list",
+    "width": 1440,
+    "theme": "light",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch"
+    ],
+    "selectValue": "",
+    "alerts": [],
+    "cardTitles": [
+      "Branch and date",
+      "Choose a branch"
+    ]
+  },
+  {
+    "name": "empty-branch-list",
+    "width": 1440,
+    "theme": "dark",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch"
+    ],
+    "selectValue": "",
+    "alerts": [],
+    "cardTitles": [
+      "Branch and date",
+      "Choose a branch"
+    ]
+  }
+]

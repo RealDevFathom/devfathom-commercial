@@ -51,7 +51,7 @@ type CandidateRow = {
   branchId: string;
   batchState: BatchState;
   disposition: StockDisposition;
-  expiresAt: Date;
+  expiresAt: Date | null;
   receivedAt: Date | null;
   availableUnits: number;
   unitsPerPack: number;
@@ -161,7 +161,7 @@ async function loadCandidates(
           AND reservation."stockLocationId" = balance."stockLocationId"
           AND reservation."status" = 'RESERVED'
       ), 0)) > 0
-    ORDER BY batch."expiresAt" ASC, lot."receivedAt" ASC NULLS FIRST,
+    ORDER BY batch."expiresAt" ASC NULLS LAST, lot."receivedAt" ASC NULLS FIRST,
              balance."inventoryLotId" ASC, balance."stockLocationId" ASC`;
 
   // The lock covers the projection rows only. The joined lot and batch rows are
@@ -218,6 +218,30 @@ function toCandidate(row: CandidateRow): AllocationCandidate {
     receivedAt: row.receivedAt,
     availableUnits: Number(row.availableUnits),
   };
+}
+
+/**
+ * DEV-66: of `inventoryLotIds`, the lots this branch could sell now: an AVAILABLE balance
+ * whose units, net of supplier claims and customer restock reservations (the allocation
+ * rule above), are above zero. Read only, one query for every lot.
+ */
+export async function lotsWithNetAvailableStock(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
+  inventoryLotIds: readonly string[]
+): Promise<Set<string>> {
+  if (!inventoryLotIds.length) return new Set();
+  const rows = await db.$queryRaw<Array<{ inventoryLotId: string; availableUnits: unknown }>>`
+    SELECT ${CANDIDATE_COLUMNS}
+    ${CANDIDATE_JOINS}
+    WHERE balance."organizationId" = ${scope.organizationId}
+      AND balance."branchId" = ${scope.branchId}
+      AND balance."inventoryLotId" = ANY(${[...inventoryLotIds]}::text[])
+      AND balance."disposition" = 'AVAILABLE'
+      AND balance."onHandUnits" > 0`;
+  return new Set(
+    rows.filter((row) => Number(row.availableUnits) > 0).map((row) => row.inventoryLotId)
+  );
 }
 
 /** Read-only ledger evidence, net of supplier claims and customer restock reservations. */

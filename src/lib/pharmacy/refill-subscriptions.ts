@@ -10,18 +10,27 @@ import {
 } from '@/lib/restaurant/operator-credentials';
 import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { workspaceTimezone } from '@/lib/timezone';
 
 import { activateBranchScope, reservationCandidates } from './customer-ordering';
 import { planAllocation, PharmacyInventoryError } from './inventory';
+import { prescriptionIsCurrent } from './prescription-calendar';
 import {
   DAY_MS,
   nextCycleDueAt,
   REFILL_SUBSCRIPTION_DEFAULTS,
   REFILL_SUBSCRIPTION_LIMITS,
   refillCycleCampaignKey,
+  refillCycleOpensBy,
 } from './refill-subscription-rules';
 
+import { attachPrescriptionReference } from './rx-prescription-reference';
 import { assertRxSaleAllowed } from './rx-sale-gate';
+import {
+  isPharmacistCheckOffMarker,
+  pharmacistCheckAtSaleEnabled,
+  pharmacistCheckOffMarker,
+} from './pharmacist-check-policy';
 import { requirePharmacyTodayOpenForTrading } from './settlement';
 import { addReservedSaleLine, createSale } from './sales';
 import type { LedgerScope } from './stock-ledger';
@@ -43,8 +52,9 @@ export {
  * every `cycleDays`. Opening a cycle is the "due order": it holds the stock with
  * DEM-03 restock reservations (so every availability query already excludes it)
  * and advances the next due date. A prescription-only cycle stays
- * AWAITING_PHARMACIST until a pharmacist approves THAT cycle with a fresh PIN;
- * only then can the counter start its checkout. Controlled and restricted
+ * AWAITING_PHARMACIST until a valid prescription covers THAT cycle and a
+ * pharmacist approves it with a fresh PIN; only then can the counter start its
+ * checkout. There is no emergency exception. Controlled and restricted
  * medicines are never subscribable: their registers need a per-sale decision.
  */
 
@@ -66,6 +76,11 @@ export class RefillSubscriptionError extends Error {
       | 'INSUFFICIENT_STOCK'
       | 'INVALID_STATE'
       | 'PHARMACIST_APPROVAL_REQUIRED'
+      | 'PRESCRIPTION_REQUIRED'
+      | 'PRESCRIPTION_NOT_FOUND'
+      | 'PRESCRIPTION_PATIENT_MISMATCH'
+      | 'PRESCRIPTION_NOT_IN_DATE'
+      | 'PRESCRIPTION_EXHAUSTED'
   ) {
     super(reason);
     this.name = 'RefillSubscriptionError';
@@ -347,6 +362,10 @@ export async function openRefillCycle(db: ScopedDb, scope: LedgerScope, subscrip
   if (!Number.isSafeInteger(canonicalUnits)) {
     throw new RefillSubscriptionError('ITEM_NOT_SUBSCRIBABLE');
   }
+  // DEV-911: while the owner has the pharmacist check switched off, an Rx cycle is not held
+  // for a pharmacist. It opens ready, its approval recorded as the owner-switched-off marker
+  // (accepted by the database only while the setting is off at that version).
+  const checkOff = medicine.rx ? await pharmacistCheckOffMarker(db, scope.organizationId) : null;
   const cycle = await db.pharmacyRefillSubscriptionCycle.create({
     data: {
       organizationId: scope.organizationId,
@@ -357,8 +376,11 @@ export async function openRefillCycle(db: ScopedDb, scope: LedgerScope, subscrip
       // Snapshot of the medicine's schedule now: an Rx item needs a pharmacist
       // every cycle, even if the catalogue flag changes before checkout.
       requiresPharmacist: medicine.rx,
-      status: medicine.rx ? 'AWAITING_PHARMACIST' : 'RESERVED',
+      status: medicine.rx && !checkOff ? 'AWAITING_PHARMACIST' : 'RESERVED',
       openedByUserId: scope.actorId,
+      ...(checkOff
+        ? { approvedByUserId: scope.actorId, approvalPolicy: checkOff, approvedAt: new Date() }
+        : {}),
     },
   });
   await reserveCycleStock(db, scope, {
@@ -386,8 +408,15 @@ export async function listDueRefillSubscriptionIds(
   now = new Date()
 ) {
   await activateBranchScope(db, scope);
+  // DEV-943: due on the shop's own calendar day, as the scheduled job decides
+  // (`refillCycleOpensBy`), so a cycle opening later today counts: one day past the
+  // longest lead time covers every subscription whose opening day is today.
+  const organization = await db.organization.findUnique({
+    where: { id: scope.organizationId },
+    select: { timezone: true },
+  });
   const horizon = new Date(
-    now.getTime() + REFILL_SUBSCRIPTION_LIMITS.reminderLeadDays.max * DAY_MS
+    now.getTime() + (REFILL_SUBSCRIPTION_LIMITS.reminderLeadDays.max + 1) * DAY_MS
   );
   const candidates = await db.pharmacyRefillSubscription.findMany({
     where: {
@@ -401,11 +430,77 @@ export async function listDueRefillSubscriptionIds(
     take: 200,
   });
   return candidates
-    .filter(
-      (subscription) =>
-        subscription.nextDueAt.getTime() - subscription.reminderLeadDays * DAY_MS <= now.getTime()
-    )
+    .filter((subscription) => refillCycleOpensBy(subscription, organization?.timezone, now))
     .map((subscription) => subscription.id);
+}
+
+/**
+ * A prescription covers a cycle when its line is for this organization, the
+ * subscriber's patient, this medicine and presentation; it is in date both on
+ * the cycle's due date and today (the dispense happens now); and its remaining
+ * authorized quantity and repeats can still take the whole cycle. The line is
+ * locked so a concurrent fill cannot spend the same remainder. The counter sale
+ * repeats the quantity check when it records the fill.
+ */
+async function assertPrescriptionCoversCycle(
+  db: ScopedDb,
+  scope: LedgerScope,
+  cycle: {
+    dueAt: Date;
+    canonicalUnits: number;
+    subscription: { customerId: string; medicineId: string; presentationId: string };
+  },
+  prescriptionLineId: string | null | undefined,
+  now: Date = new Date()
+): Promise<{ prescriptionLineId: string; patientId: string }> {
+  if (!prescriptionLineId) throw new RefillSubscriptionError('PRESCRIPTION_REQUIRED');
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM pharmacy_prescription_lines WHERE "organizationId"=${scope.organizationId} AND id=${prescriptionLineId} FOR UPDATE`
+  );
+  const line = await db.prescriptionLine.findFirst({
+    where: {
+      id: prescriptionLineId,
+      organizationId: scope.organizationId,
+      medicineId: cycle.subscription.medicineId,
+      presentationId: cycle.subscription.presentationId,
+    },
+    select: {
+      id: true,
+      authorizedCanonicalUnits: true,
+      prescription: {
+        select: { patientId: true, validFrom: true, validUntil: true, authorizedRepeats: true },
+      },
+      fills: { select: { quantityCanonicalUnits: true } },
+    },
+  });
+  if (!line) throw new RefillSubscriptionError('PRESCRIPTION_NOT_FOUND');
+  const customer = await db.pharmacyCustomer.findFirst({
+    where: { id: cycle.subscription.customerId, organizationId: scope.organizationId },
+    select: { patientId: true },
+  });
+  if (!customer || customer.patientId !== line.prescription.patientId) {
+    throw new RefillSubscriptionError('PRESCRIPTION_PATIENT_MISMATCH');
+  }
+  const organization = await db.organization.findUnique({
+    where: { id: scope.organizationId },
+    select: { timezone: true },
+  });
+  const timeZone = workspaceTimezone(organization?.timezone);
+  const { validFrom, validUntil } = line.prescription;
+  if (
+    !prescriptionIsCurrent(validFrom, validUntil, cycle.dueAt, timeZone) ||
+    !prescriptionIsCurrent(validFrom, validUntil, now, timeZone)
+  ) {
+    throw new RefillSubscriptionError('PRESCRIPTION_NOT_IN_DATE');
+  }
+  const filled = line.fills.reduce((sum, fill) => sum + fill.quantityCanonicalUnits, 0);
+  if (
+    filled + cycle.canonicalUnits > line.authorizedCanonicalUnits ||
+    line.fills.length > line.prescription.authorizedRepeats
+  ) {
+    throw new RefillSubscriptionError('PRESCRIPTION_EXHAUSTED');
+  }
+  return { prescriptionLineId: line.id, patientId: line.prescription.patientId };
 }
 
 export type RefillCyclePin = { staffProfileId: string; pin: string };
@@ -479,13 +574,15 @@ export async function verifyRefillCyclePharmacistPin(
 
 /**
  * Approve an Rx cycle. Inside the business transaction the approver must still
- * hold `pharmacy:dispense` and the PIN credential that proved it must be live.
+ * hold `pharmacy:dispense`, the PIN credential that proved it must be live, and
+ * the named prescription line must cover this cycle.
  */
 export async function approveRefillCycle(
   db: ScopedDb,
   scope: LedgerScope,
   cycleId: string,
-  approval: RefillCycleApproval
+  approval: RefillCycleApproval,
+  prescription: { prescriptionLineId: string }
 ) {
   await activateBranchScope(db, scope);
   const cycle = await lockCycle(db, scope, cycleId);
@@ -496,7 +593,12 @@ export async function approveRefillCycle(
     cycle.status === 'RESERVED' &&
     !cycle.approvedAt &&
     (await subscribableMedicine(db, scope.organizationId, cycle.subscription)).rx;
-  if (!awaiting && !reclassified) throw new RefillSubscriptionError('INVALID_STATE');
+  // An approved Rx cycle not yet at the counter may take a fresh PIN approval that
+  // replaces its prescription, e.g. once another sale used up the one it relied on.
+  const replacing = cycle.status === 'RESERVED' && cycle.requiresPharmacist && !!cycle.approvedAt;
+  if (!awaiting && !reclassified && !replacing) {
+    throw new RefillSubscriptionError('INVALID_STATE');
+  }
   const approver = (await db.user.findFirst({
     where: {
       id: approval.approvedByUserId,
@@ -519,6 +621,13 @@ export async function approveRefillCycle(
     select: { id: true },
   });
   if (!credential) throw new RefillCycleApprovalDenied();
+  // The owner's launch rule: no prescription covering this cycle, no release.
+  const covering = await assertPrescriptionCoversCycle(
+    db,
+    scope,
+    cycle,
+    prescription.prescriptionLineId
+  );
   const selfApproved = approval.approvedByUserId === cycle.openedByUserId;
   const approvedAt = new Date();
   const updated = await db.pharmacyRefillSubscriptionCycle.update({
@@ -531,6 +640,7 @@ export async function approveRefillCycle(
       approvalCredentialId: approval.credentialId,
       selfApproved,
       approvedAt,
+      prescriptionLineId: covering.prescriptionLineId,
     },
   });
   await db.auditLog.create({
@@ -549,6 +659,7 @@ export async function approveRefillCycle(
         policy: REFILL_CYCLE_APPROVAL_POLICY,
         pinVerified: true,
         selfApproved,
+        prescriptionLineId: covering.prescriptionLineId,
       },
     },
   });
@@ -623,10 +734,12 @@ export async function startRefillCycleCheckout(db: ScopedDb, scope: LedgerScope,
       paymentMode: cycle.subscription.paymentMode,
     };
   }
+  // DEV-911: the pharmacist hold gives way only while the owner has the check switched off.
+  let checkOff: string | null = null;
   if (cycle.status === 'AWAITING_PHARMACIST') {
-    throw new RefillSubscriptionError('PHARMACIST_APPROVAL_REQUIRED');
-  }
-  if (cycle.status !== 'RESERVED') throw new RefillSubscriptionError('INVALID_STATE');
+    checkOff = await pharmacistCheckOffMarker(db, scope.organizationId);
+    if (!checkOff) throw new RefillSubscriptionError('PHARMACIST_APPROVAL_REQUIRED');
+  } else if (cycle.status !== 'RESERVED') throw new RefillSubscriptionError('INVALID_STATE');
   // DEV-631: no counter bill is opened, and no hold is consumed into one, while today's
   // business day is closed for trading. Takes the day lock before any stock lock.
   await requirePharmacyTodayOpenForTrading(db, scope);
@@ -635,8 +748,51 @@ export async function startRefillCycleCheckout(db: ScopedDb, scope: LedgerScope,
   // Both the flag snapshotted at opening and the medicine's current schedule count:
   // a medicine reclassified as prescription-only since still needs its pharmacist.
   const prescriptionOnly = cycle.requiresPharmacist || medicine.rx;
-  if (prescriptionOnly && (!cycle.approvedByUserId || !cycle.approvedAt)) {
-    throw new RefillSubscriptionError('PHARMACIST_APPROVAL_REQUIRED');
+  // A cycle readied while the check was off is no longer approved once it is back on.
+  const approved =
+    Boolean(cycle.approvedByUserId && cycle.approvedAt) &&
+    !(
+      isPharmacistCheckOffMarker(cycle.approvalPolicy) &&
+      (await pharmacistCheckAtSaleEnabled(db, scope.organizationId))
+    );
+  if (prescriptionOnly && !approved) {
+    checkOff ??= await pharmacistCheckOffMarker(db, scope.organizationId);
+    if (!checkOff) throw new RefillSubscriptionError('PHARMACIST_APPROVAL_REQUIRED');
+  }
+  if (checkOff) {
+    // Recorded on the cycle before checkout, so the database CHECKs behind the pharmacist
+    // approval and the prescription still hold, with the owner-switched-off marker as the
+    // approval policy (accepted only while the setting is off at that version).
+    await db.pharmacyRefillSubscriptionCycle.update({
+      where: { organizationId_id: { organizationId: scope.organizationId, id: cycle.id } },
+      data: {
+        status: 'RESERVED',
+        requiresPharmacist: true,
+        approvedByUserId: scope.actorId,
+        approvalPolicy: checkOff,
+        approvalCredentialId: null,
+        selfApproved: false,
+        approvedAt: new Date(),
+      },
+    });
+  }
+  // DEV-911: released under the owner's switch, the cycle needs no prescription either.
+  const releasedByCheckOff =
+    prescriptionOnly && (Boolean(checkOff) || isPharmacistCheckOffMarker(cycle.approvalPolicy));
+  // The approved prescription must still cover the cycle at the moment of hand-over.
+  let covering: Awaited<ReturnType<typeof assertPrescriptionCoversCycle>> | null = null;
+  if (prescriptionOnly && !releasedByCheckOff) {
+    try {
+      covering = await assertPrescriptionCoversCycle(db, scope, cycle, cycle.prescriptionLineId);
+    } catch (error) {
+      // With the check switched off, a prescription that no longer covers the cycle does not
+      // stop it; with it on, missing or unreadable, the refusal stands.
+      if (
+        !(error instanceof RefillSubscriptionError) ||
+        (await pharmacistCheckAtSaleEnabled(db, scope.organizationId))
+      )
+        throw error;
+    }
   }
   // The counter's own Rx gate (#518): only a dispenser may put an Rx line on a sale.
   await assertRxSaleAllowed(db, scope, [medicine]);
@@ -664,7 +820,7 @@ export async function startRefillCycleCheckout(db: ScopedDb, scope: LedgerScope,
     where: { organizationId_id: { organizationId: scope.organizationId, id: sale.id } },
     data: { customerId: subscription.customerId },
   });
-  await addReservedSaleLine(
+  const added = await addReservedSaleLine(
     db,
     scope,
     {
@@ -688,6 +844,19 @@ export async function startRefillCycleCheckout(db: ScopedDb, scope: LedgerScope,
       pharmacistApprovedRx: prescriptionOnly,
     }
   );
+  if (covering) {
+    // DEV-629: the counter sale carries the cycle's prescription, and payment still
+    // waits for the pharmacist's RX-03 SIGN of this exact sale line.
+    await attachPrescriptionReference(db, scope, { ...covering, saleLineId: added.line.id });
+    await db.pharmacyPharmacistReviewItem.create({
+      data: {
+        organizationId: scope.organizationId,
+        prescriptionLineId: covering.prescriptionLineId,
+        saleLineId: added.line.id,
+        requestedByUserId: scope.actorId,
+      },
+    });
+  }
   await db.pharmacyRefillSubscriptionCycle.update({
     where: { organizationId_id: { organizationId: scope.organizationId, id: cycle.id } },
     data: { status: 'CHECKOUT_STARTED', counterSaleId: sale.id },
@@ -709,4 +878,195 @@ export async function listRefillSubscriptions(
     orderBy: [{ status: 'asc' }, { nextDueAt: 'asc' }, { id: 'asc' }],
     take: 200,
   });
+}
+
+/**
+ * The refill program screen's list: each subscription with the item it names, for
+ * staff eyes only. Messages to the customer never carry these names.
+ */
+export async function listRefillProgram(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>
+) {
+  const subscriptions = await listRefillSubscriptions(db, scope);
+  const medicineIds = [...new Set(subscriptions.map((row) => row.medicineId))];
+  const medicines = medicineIds.length
+    ? await db.medicine.findMany({
+        where: { organizationId: scope.organizationId, id: { in: medicineIds } },
+        select: {
+          id: true,
+          productName: true,
+          rx: true,
+          presentations: { select: { id: true, presentation: true } },
+        },
+      })
+    : [];
+  const byId = new Map(medicines.map((row) => [row.id, row]));
+  return subscriptions.map((subscription) => {
+    const medicine = byId.get(subscription.medicineId);
+    return {
+      ...subscription,
+      item: {
+        productName: medicine?.productName ?? 'Unknown item',
+        presentation:
+          medicine?.presentations.find((row) => row.id === subscription.presentationId)
+            ?.presentation ?? null,
+        prescriptionOnly: medicine?.rx ?? false,
+      },
+    };
+  });
+}
+
+/**
+ * Items a subscription may name: saleable, never controlled or restricted, with
+ * the current pack levels of each presentation. Prescription-only items are
+ * listed; every one of their cycles is held for a pharmacist.
+ */
+export async function listSubscribableItems(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId'>,
+  search = ''
+) {
+  const query = search.trim();
+  const medicines = await db.medicine.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      saleable: true,
+      restricted: false,
+      controlled: false,
+      ...(query
+        ? {
+            OR: [
+              { productName: { contains: query, mode: 'insensitive' } },
+              { brandName: { contains: query, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+    },
+    select: {
+      id: true,
+      productName: true,
+      rx: true,
+      presentations: {
+        select: {
+          id: true,
+          presentation: true,
+          packLevels: {
+            where: { effectiveTo: null },
+            select: { id: true, level: true },
+            orderBy: { id: 'asc' },
+          },
+        },
+        orderBy: { id: 'asc' },
+      },
+    },
+    orderBy: [{ productName: 'asc' }, { id: 'asc' }],
+    take: 50,
+  });
+  return medicines.flatMap((medicine) =>
+    medicine.presentations.flatMap((presentation) =>
+      presentation.packLevels.map((pack) => ({
+        medicineId: medicine.id,
+        productName: medicine.productName,
+        prescriptionOnly: medicine.rx,
+        presentationId: presentation.id,
+        presentation: presentation.presentation,
+        packLevelId: pack.id,
+        packLabel: pack.level,
+      }))
+    )
+  );
+}
+
+/**
+ * The subscriber's prescription lines for this cycle's medicine and presentation,
+ * for the pharmacist to choose from. Listing one is not approving it: the
+ * approval re-checks date, patient, quantity and repeats under lock.
+ */
+export async function listRefillCyclePrescriptionCandidates(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
+  cycleId: string
+) {
+  await activateBranchScope(db, scope);
+  const cycle = await db.pharmacyRefillSubscriptionCycle.findFirst({
+    where: { id: cycleId, organizationId: scope.organizationId, branchId: scope.branchId },
+    include: { subscription: true },
+  });
+  if (!cycle) throw new RefillSubscriptionError('CYCLE_NOT_FOUND');
+  const customer = await db.pharmacyCustomer.findFirst({
+    where: { id: cycle.subscription.customerId, organizationId: scope.organizationId },
+    select: { patientId: true },
+  });
+  if (!customer?.patientId) return [];
+  const lines = await db.prescriptionLine.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      medicineId: cycle.subscription.medicineId,
+      presentationId: cycle.subscription.presentationId,
+      prescription: { patientId: customer.patientId },
+    },
+    select: {
+      id: true,
+      authorizedCanonicalUnits: true,
+      prescription: {
+        select: {
+          validFrom: true,
+          validUntil: true,
+          authorizedRepeats: true,
+          prescriber: { select: { name: true } },
+        },
+      },
+      fills: { select: { quantityCanonicalUnits: true } },
+    },
+    orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+    take: 20,
+  });
+  return lines.map((line) => {
+    const filled = line.fills.reduce((sum, fill) => sum + fill.quantityCanonicalUnits, 0);
+    return {
+      id: line.id,
+      prescriberName: line.prescription.prescriber.name,
+      validFrom: line.prescription.validFrom,
+      validUntil: line.prescription.validUntil,
+      remainingUnits: Math.max(0, line.authorizedCanonicalUnits - filled),
+      repeatsLeft: Math.max(0, line.prescription.authorizedRepeats + 1 - line.fills.length),
+    };
+  });
+}
+
+/**
+ * Staff profiles the screen may offer to sign a prescription cycle: active members
+ * with a live staff PIN who hold the dispensing capability. When nobody else
+ * qualifies (the solo rule), the actor's own profile is offered so a sole
+ * owner-pharmacist can self-approve by re-entering their PIN; the approval itself
+ * re-checks everything and records the self-approval in the audit.
+ */
+export async function listRefillCyclePharmacists(db: ScopedDb, scope: LedgerScope) {
+  const now = new Date();
+  const profiles = await db.restaurantStaffProfile.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      status: 'ACTIVE',
+      user: { organizationId: scope.organizationId, status: 'ACTIVE' },
+      credentials: { some: { type: 'PIN', revokedAt: null, deviceId: null } },
+    },
+    select: {
+      id: true,
+      displayName: true,
+      user: {
+        select: { id: true, role: true, department: true, status: true, organizationId: true },
+      },
+    },
+    orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
+  });
+  const eligible: Array<{ id: string; name: string; self: boolean }> = [];
+  for (const profile of profiles) {
+    const user = profile.user as ActiveUser | null;
+    if (!user || user.organizationId !== scope.organizationId || user.status !== 'ACTIVE') continue;
+    if (!(await can(user, REFILL_CYCLE_APPROVAL_CAPABILITY, undefined, { db, now }))) continue;
+    eligible.push({ id: profile.id, name: profile.displayName, self: user.id === scope.actorId });
+  }
+  const others = eligible.filter((profile) => !profile.self);
+  return others.length ? others : eligible;
 }

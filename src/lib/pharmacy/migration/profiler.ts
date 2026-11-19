@@ -23,12 +23,15 @@ import {
   readText,
   type SourceTable,
 } from './source-values';
+import { expiryInstant } from '../stock-ledger';
+import { hasKnownExpiryPassed } from '../unrecorded-batch';
 
 export type MigrationSourceKind = 'ABUZAR' | 'EXCEL_CSV' | 'TALLY_XML' | 'MARG_EXCEL';
 
 export type ExceptionBucket =
   | 'MISSING_BATCH'
   | 'MISSING_EXPIRY'
+  | 'EXPIRED_STOCK'
   | 'MISSING_MRP'
   | 'UNIT_AMBIGUOUS'
   | 'DUPLICATE_PRODUCT'
@@ -50,6 +53,7 @@ export type ExceptionSeverity = 'BLOCKING' | 'WARNING';
 export const EXCEPTION_SEVERITY: Readonly<Record<ExceptionBucket, ExceptionSeverity>> = {
   MISSING_BATCH: 'BLOCKING',
   MISSING_EXPIRY: 'BLOCKING',
+  EXPIRED_STOCK: 'BLOCKING',
   MISSING_MRP: 'BLOCKING',
   UNIT_AMBIGUOUS: 'BLOCKING',
   DUPLICATE_PRODUCT: 'BLOCKING',
@@ -98,6 +102,16 @@ export interface SourceProfiler {
    * alone decides, which is the original behaviour for every existing adapter.
    */
   duplicateDiscriminator?(row: ProfiledRow): string;
+  /**
+   * DEV-927 — the owner's rule for old-system stock (as DEV-853 applies it to
+   * opening stock): a BLANK batch number or expiry is "not recorded", not a
+   * defect, so it raises no exception and the row stays importable and
+   * sellable. An expiry that is present but unreadable still raises
+   * MISSING_EXPIRY, and a known expiry that has passed raises EXPIRED_STOCK,
+   * both BLOCKING. Absent keeps the original rule for that adapter (a blank
+   * batch or expiry is BLOCKING).
+   */
+  readonly unrecordedBatchAndExpiry?: 'NOT_RECORDED';
 }
 
 export type ProfiledRow = {
@@ -119,6 +133,17 @@ export type ProfiledRow = {
   customerName: string | null;
   balanceMinor: bigint | null;
 };
+
+/**
+ * The batch part of a row's duplicate identity for a format that lists one
+ * product once per batch. DEV-853: rows with no batch number are told apart by
+ * their expiry instead, so two unrecorded-batch lots of one item with
+ * different expiries are not reported as a duplicate.
+ */
+export function batchIdentity(row: Pick<ProfiledRow, 'batchNumber' | 'expiryDate'>): string {
+  const batch = (row.batchNumber ?? '').toLowerCase();
+  return batch || `\u0000expiry:${row.expiryDate?.toISOString().slice(0, 10) ?? ''}`;
+}
 
 export type ProfiledException = {
   /** Index into `ProfileResult.rows`, or `null` for a batch-level exception. */
@@ -149,11 +174,17 @@ export type ProfileContext = {
   /** Party natural key → the balance the pharmacy's own statement declares. */
   declaredPartyBalanceMinor?: ReadonlyMap<string, bigint>;
   /**
-   * Column-mapping choice: what the quantity column counts. No choice leaves
-   * canonical quantities null and raises UNIT_AMBIGUOUS. PACKS converts by
+   * Column-mapping choice: what the quantity column counts. With a quantity
+   * column mapped, no choice leaves canonical quantities null and raises
+   * UNIT_AMBIGUOUS; a sheet with no quantity column has nothing to choose. PACKS converts by
    * the row's pack factor. The choice is stored on the batch, never in row evidence.
    */
   quantityUnit?: QuantityUnit;
+  /**
+   * The instant a known expiry is judged against, for adapters that follow the
+   * not-recorded rule. Defaults to the time of profiling.
+   */
+  asOf?: Date;
 };
 
 export type QuantityUnit = 'UNITS' | 'PACKS';
@@ -342,7 +373,7 @@ function deriveExceptions(
   table: SourceTable,
   columnMap: ColumnMap,
   context: ProfileContext,
-  profiler?: Pick<SourceProfiler, 'duplicateDiscriminator'>
+  profiler?: Pick<SourceProfiler, 'duplicateDiscriminator' | 'unrecordedBatchAndExpiry'>
 ): ProfiledException[] {
   const exceptions: ProfiledException[] = [];
   const quantityUnit =
@@ -354,21 +385,36 @@ function deriveExceptions(
   };
 
   const seenProductKeys = new Map<string, ProfiledRow>();
+  const blankIsNotRecorded = profiler?.unrecordedBatchAndExpiry === 'NOT_RECORDED';
+  const asOf = context.asOf ?? new Date();
 
   rows.forEach((row, index) => {
     const cells = table.rows[index] ?? [];
     const where = `source key ${row.sourceKey}`;
 
     if (row.targetModelKey === MIGRATION_TARGET_KEYS.PRODUCT) {
-      if (!row.batchNumber) {
+      const expiryRaw = rawOf(columnMap, cells, 'expiry');
+      if (!row.batchNumber && !blankIsNotRecorded) {
         raise(index, 'MISSING_BATCH', `No batch number for ${where}; it cannot be inferred.`);
       }
-      if (!row.expiryDate) {
+      if (
+        blankIsNotRecorded &&
+        row.expiryDate &&
+        // The printed date is the last day the pack may be sold.
+        hasKnownExpiryPassed(expiryInstant(row.expiryDate, 'DAY'), asOf)
+      ) {
+        raise(
+          index,
+          'EXPIRED_STOCK',
+          `Expiry "${expiryRaw}" for ${where} has passed; expired stock cannot be imported.`
+        );
+      }
+      if (!row.expiryDate && !(blankIsNotRecorded && !expiryRaw)) {
         raise(
           index,
           'MISSING_EXPIRY',
-          rawOf(columnMap, cells, 'expiry')
-            ? `Expiry "${rawOf(columnMap, cells, 'expiry')}" for ${where} is not a date this profiler reads.`
+          expiryRaw
+            ? `Expiry "${expiryRaw}" for ${where} is not a date this profiler reads.`
             : `No expiry for ${where}; it cannot be inferred.`
         );
       }
@@ -387,7 +433,9 @@ function deriveExceptions(
         raise(index, 'UNIT_AMBIGUOUS', `Pack "${packRaw}" for ${where} names no countable unit.`);
       }
       const quantityRaw = rawOf(columnMap, cells, 'quantity');
-      if ((quantityRaw || !quantityUnit) && row.quantityCanonical === null) {
+      // DEV-912: a file with no quantity column (products only) has no count to resolve.
+      const quantityMapped = columnMap.quantity !== undefined;
+      if ((quantityRaw || (!quantityUnit && quantityMapped)) && row.quantityCanonical === null) {
         raise(
           index,
           'UNIT_AMBIGUOUS',

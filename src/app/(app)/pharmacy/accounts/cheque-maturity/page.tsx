@@ -1,5 +1,4 @@
-import { PHARMACY_COPY } from '@/lib/pharmacy/plain-language';
-import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/screen-copy';
+import { PHARMACY_COPY, SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/plain-language';
 import { ReportDetails } from '@/components/pharmacy/report-details';
 import type { Metadata } from 'next';
 import { PageHeader } from '@/components/ui/page-header';
@@ -149,7 +148,7 @@ export default async function ChequeMaturityPage({
             </select>
           </label>
           <button
-            className="mt-4 min-h-11 rounded-[3px] bg-primary px-3 text-sm font-semibold text-primary-foreground"
+            className="mt-4 min-h-11 rounded-control bg-primary px-3 text-sm font-semibold text-primary-foreground"
             type="submit"
           >
             {screenCopy.cheques.showCheques}

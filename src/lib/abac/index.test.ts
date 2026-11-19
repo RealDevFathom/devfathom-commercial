@@ -49,6 +49,7 @@ describe('opt-in pharmacy Owner / Operator access', () => {
     'pharmacy:close',
     'pharmacy:manage',
     'pharmacy:procurement-approve',
+    'pharmacy:catalogue-edit',
   ] as const satisfies readonly Action[];
   const proprietor = { ...employee, role: 'ADMIN' };
   const permissionsFor = (key: string): Permission[] =>
@@ -442,6 +443,67 @@ describe('custom ABAC decisions', () => {
     });
   });
 
+  describe('catalogue editing (pharmacy:catalogue-edit, DEV-19)', () => {
+    const edit = 'pharmacy:catalogue-edit' as const;
+
+    it.each(['owner', 'owner-operator'])('is held by the %s template', async (key) => {
+      await expect(
+        can(employee, edit, undefined, {
+          db: authorizationDb({ rolePermissions: pharmacyPermissionsFor(key) }),
+        })
+      ).resolves.toBe(true);
+    });
+
+    it.each([
+      'cashier',
+      'manager',
+      'pharmacist',
+      'pharmacist-cashier',
+      'procurement',
+      'inventory',
+      'finance',
+      'auditor',
+    ])('is not held by the %s template', async (key) => {
+      await expect(
+        can(employee, edit, undefined, {
+          db: authorizationDb({ rolePermissions: pharmacyPermissionsFor(key) }),
+        })
+      ).resolves.toBe(false);
+    });
+
+    it('is denied by default to a member without a grant', async () => {
+      await expect(can(employee, edit, undefined, { db: authorizationDb({}) })).resolves.toBe(
+        false
+      );
+    });
+
+    it('is held directly by a tenant admin without a role, and by the bootstrap admin role', async () => {
+      const admin = { ...employee, role: 'ADMIN' };
+      await expect(can(admin, edit, undefined, { db: authorizationDb({}) })).resolves.toBe(true);
+      await expect(
+        can(admin, edit, undefined, {
+          db: authorizationDb({ rolePermissions: [{ capability: '*', effect: 'ALLOW' }] }),
+        })
+      ).resolves.toBe(true);
+    });
+
+    it('does not let tenant admin authority bypass an assigned role without it', async () => {
+      await expect(
+        can({ ...employee, role: 'ADMIN' }, edit, undefined, {
+          db: authorizationDb({ rolePermissions: pharmacyPermissionsFor('cashier') }),
+        })
+      ).resolves.toBe(false);
+    });
+
+    it('lets an explicit deny revoke it from an administrator', async () => {
+      await expect(
+        can({ ...employee, role: 'ADMIN' }, edit, undefined, {
+          db: authorizationDb({ overrides: [{ capability: edit, effect: 'DENY' }] }),
+        })
+      ).resolves.toBe(false);
+    });
+  });
+
   it('allows exact and namespace wildcard capabilities from a custom role', async () => {
     const db = authorizationDb({
       rolePermissions: [
@@ -534,9 +596,11 @@ describe('custom ABAC decisions', () => {
       // #638: back-office order cancel / item void. Granted through the manager
       // role templates' `orders:void`, never by an agency role.
       'orders:void',
+      // DEV-66: a discount without a manager's PIN. Exact grant only, default deny.
+      'pharmacy:discount',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(50);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(52);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);
@@ -649,5 +713,62 @@ describe('restaurant sign-in order-taking capability', () => {
         expected
       );
     }
+  });
+});
+
+describe('DEV-66 pharmacy:discount', () => {
+  const cashier = { ...employee, role: 'EMPLOYEE' };
+  const cashierRole = (extra: Permission[] = []) =>
+    authorizationDb({
+      rolePermissions: [
+        ...roleTemplatesForVertical('PHARMACY')
+          .find((role) => role.key === 'cashier')!
+          .capabilities.map((capability): Permission => ({ capability, effect: 'ALLOW' })),
+        ...extra,
+      ],
+    });
+
+  it('is not held by the default Cashier, Owner or tenant administrator', async () => {
+    await expect(can(cashier, 'pharmacy:discount', undefined, { db: cashierRole() })).resolves.toBe(
+      false
+    );
+    for (const key of ['owner', 'manager', 'owner-operator']) {
+      const db = authorizationDb({
+        rolePermissions: roleTemplatesForVertical('PHARMACY')
+          .find((role) => role.key === key)!
+          .capabilities.map((capability): Permission => ({ capability, effect: 'ALLOW' })),
+      });
+      await expect(
+        can({ ...employee, role: 'ADMIN' }, 'pharmacy:discount', undefined, { db })
+      ).resolves.toBe(false);
+    }
+    await expect(
+      can({ ...employee, role: 'ADMIN' }, 'pharmacy:discount', undefined, {
+        db: authorizationDb({ overrides: [{ capability: '*', effect: 'ALLOW' }] }),
+      })
+    ).resolves.toBe(false);
+  });
+
+  it('is held once the owner grants it to the role or the person, and a DENY wins', async () => {
+    await expect(
+      can(cashier, 'pharmacy:discount', undefined, {
+        db: cashierRole([{ capability: 'pharmacy:discount', effect: 'ALLOW' }]),
+      })
+    ).resolves.toBe(true);
+    await expect(
+      can(cashier, 'pharmacy:discount', undefined, {
+        db: authorizationDb({
+          overrides: [{ capability: 'pharmacy:discount', effect: 'ALLOW' }],
+        }),
+      })
+    ).resolves.toBe(true);
+    await expect(
+      can(cashier, 'pharmacy:discount', undefined, {
+        db: authorizationDb({
+          overrides: [{ capability: 'pharmacy:discount', effect: 'DENY' }],
+          rolePermissions: [{ capability: 'pharmacy:discount', effect: 'ALLOW' }],
+        }),
+      })
+    ).resolves.toBe(false);
   });
 });

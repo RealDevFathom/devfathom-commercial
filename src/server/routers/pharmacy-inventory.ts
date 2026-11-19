@@ -14,6 +14,12 @@ import { z } from 'zod';
 
 import { Prisma } from '@/generated/prisma/client';
 import { arrangementFor, PharmacyInventoryError } from '@/lib/pharmacy/inventory';
+import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
+import {
+  assertBranchTransferAllowed,
+  branchTransfersEnabled,
+  BranchTransferPolicyError,
+} from '@/lib/pharmacy/branch-transfer-policy';
 import {
   confirmPriceChange,
   confirmDrapRecall,
@@ -66,7 +72,11 @@ import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { lockStockBalances, lockStockRowsFrom } from '@/lib/pharmacy/stock-lock-order';
 import { PharmacyStockSignalError } from '@/lib/pharmacy/stock-signals';
 import { PharmacyCounterError } from '@/lib/pharmacy/counter';
-import { readShelfLabelSheet, ShelfLabelSourceError } from '@/lib/pharmacy/shelf-label-source';
+import {
+  printedExpiryLabel,
+  readShelfLabelSheet,
+  ShelfLabelSourceError,
+} from '@/lib/pharmacy/shelf-label-source';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
 import {
   expiryRiskBuckets,
@@ -74,6 +84,11 @@ import {
   supplierReturnDates,
 } from '@/lib/pharmacy/expiry-growth';
 import { EXPIRY_CLAIM_MAX_POSITIONS } from '@/lib/pharmacy/expiry-claim';
+import {
+  PharmacyUnrecordedBatchError,
+  recordUnrecordedBatch,
+  UNRECORDED_BATCH_MESSAGES,
+} from '@/lib/pharmacy/record-unrecorded-batch';
 import { createPurchaseReturn } from '@/lib/pharmacy/supplier-returns-operations';
 import {
   acknowledgeSignal,
@@ -120,6 +135,7 @@ import { can, subjectFromSession } from '@/lib/abac';
 import { maskPhone } from '@/lib/pharmacy/patient-prescriptions';
 import { afterTenantTransaction } from '@/lib/side-effects/scope';
 
+import { annotateAudit } from '../audit';
 import { auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
 import { assertInOrganization } from '../org-refs';
 import type { TRPCContext } from '../trpc';
@@ -132,6 +148,7 @@ const regulatory = capabilityProcedure('pharmacy:safety');
 const inventoryControl = capabilityProcedure('pharmacy:inventory');
 const SOLO_COUNT_APPROVAL_REFUSED =
   'Only the pharmacy owner who works alone can approve their own count, with their current PIN.';
+const BRANCH_TRANSFER_SWITCH_REFUSED = 'Only the owner can switch branch transfers on or off.';
 const SOLO_TRANSFER_APPROVAL_REFUSED =
   'Only the pharmacy owner who works alone can approve their own transfer, with their current PIN.';
 const drapNotice = z.discriminatedUnion('kind', [
@@ -168,6 +185,8 @@ function txDb(tx: unknown): ScopedDb {
 function domainError(error: unknown): never {
   if (error instanceof CounterApprovalDenied)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+  if (error instanceof BranchTransferPolicyError)
+    throw new TRPCError({ code: 'FORBIDDEN', message: error.reason });
   if (error instanceof PharmacyInventoryError) {
     const code =
       error.reason === 'NOT_FOUND'
@@ -378,6 +397,53 @@ async function recordAdminBranchException(
  * branch they are not assigned to. Only the `pharmacy:safety` procedures
  * (quarantinePart, acknowledgeRecall) keep the tenant-only scopeFor.
  */
+/** DEV-908: the live identity the owner check reads, never the session role. */
+function ownerParty(db: ScopedDb, organizationId: string, userId: string) {
+  return db.user.findFirst({
+    where: { id: userId, organizationId },
+    select: {
+      role: true,
+      status: true,
+      organizationRole: {
+        select: {
+          key: true,
+          isSystem: true,
+          permissions: { select: { capability: true, effect: true } },
+        },
+      },
+      permissionOverrides: {
+        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+        select: { capability: true, effect: true },
+      },
+    },
+  });
+}
+
+/**
+ * DEV-908: the transfer-policy check for a stored transfer the caller's branch
+ * sends. A transfer that is not this branch's to send is left to the operation
+ * itself, which refuses it with its own reason.
+ */
+async function assertTransferRowAllowed(
+  db: ScopedDb,
+  scope: LedgerScope,
+  transferId: string,
+  requireSwitch: boolean
+) {
+  const transfer = await db.pharmacyInterbranchTransfer.findFirst({
+    where: { id: transferId, organizationId: scope.organizationId, fromBranchId: scope.branchId },
+    select: { toBranchId: true, lines: { select: { sourceLotId: true } } },
+  });
+  if (!transfer) return null;
+  return assertBranchTransferAllowed(db, {
+    organizationId: scope.organizationId,
+    fromBranchId: scope.branchId,
+    toBranchId: transfer.toBranchId,
+    sourceLotIds: transfer.lines.map((line) => line.sourceLotId),
+    requireSwitch,
+  });
+}
+
 async function admittedScopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
   const scope = await scopeFor(ctx, branch);
   const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
@@ -434,7 +500,8 @@ export const MARKDOWN_DRAFT_PREFIX = 'DRAFT mark-down ';
 export type ExpiryMarkdownDraft = {
   inventoryLotId: string;
   stockLocationId: string;
-  batchNumber: string;
+  /** DEV-853: null when the batch number was never recorded. */
+  batchNumber: string | null;
   markdownPercent: number;
   printedMrpMinor: number;
   proposedPackPriceMinor: number;
@@ -537,7 +604,16 @@ async function lockExpiringLot(db: ScopedDb, scope: LedgerScope, inventoryLotId:
     },
   });
   if (!lot) throw new TRPCError({ code: 'FORBIDDEN', message: 'Lot is outside this branch.' });
-  return lot;
+  // DEV-853: a lot whose expiry was never recorded is not on the near-expiry
+  // board, so no expiry action applies until staff record its real expiry.
+  const expiresAt = lot.batch.expiresAt;
+  if (expiresAt === null) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Expiry not recorded for this lot. Record its batch and expiry first.',
+    });
+  }
+  return { ...lot, batch: { ...lot.batch, expiresAt } };
 }
 
 function assertOnBoard(expiresAt: Date, at: Date) {
@@ -629,7 +705,9 @@ async function transferBoard(db: ScopedDb, scope: LedgerScope) {
   const branchIds = [...new Set(transfers.flatMap((t) => [t.fromBranchId, t.toBranchId]))];
   const actorIds = [
     ...new Set(
-      transfers.flatMap((t) => [t.allocatedById, t.approvedById, t.dispatchedById]).filter(Boolean)
+      transfers
+        .flatMap((t) => [t.allocatedById, t.approvedById, t.dispatchedById, t.receivedById])
+        .filter(Boolean)
     ),
   ] as string[];
   const [locations, branches, actors, variances] = await Promise.all([
@@ -680,6 +758,10 @@ async function transferBoard(db: ScopedDb, scope: LedgerScope) {
     allocatedByName: actorName(transfer.allocatedById),
     approvedByName: actorName(transfer.approvedById),
     dispatchedByName: actorName(transfer.dispatchedById),
+    // DEV-908: both ends of the record — who received it, and each premises licence.
+    receivedByName: actorName(transfer.receivedById),
+    fromLicenceNumber: transfer.fromLicenceNumber,
+    toLicenceNumber: transfer.toLicenceNumber,
     createdAt: transfer.createdAt,
     dispatchedAt: transfer.dispatchedAt,
     receivedAt: transfer.receivedAt,
@@ -874,7 +956,8 @@ async function receiveTransferWithVariance(
 
   const closed = await db.pharmacyInterbranchTransfer.update({
     where: { id: transfer.id },
-    data: { status: 'RECEIVED', receivedAt: new Date() },
+    // DEV-908: the receiving side names who closed the receipt.
+    data: { status: 'RECEIVED', receivedAt: new Date(), receivedById: scope.actorId },
   });
   return { transfer: closed, variances: postedVariances };
 }
@@ -1664,10 +1747,59 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await allocateTransfer(ctx.db, await admittedScopeFor(ctx, input.branchId), input);
+        const scope = await admittedScopeFor(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          // DEV-908: only when the owner has switched transfers on, never a
+          // controlled drug, and only between this owner's licensed premises.
+          await assertBranchTransferAllowed(db, {
+            organizationId: scope.organizationId,
+            fromBranchId: scope.branchId,
+            toBranchId: input.toBranchId,
+            sourceLotIds: input.lines.map((line) => line.sourceLotId),
+            requireSwitch: true,
+          });
+          return allocateTransfer(db, scope, input);
+        });
       } catch (error) {
         domainError(error);
       }
+    }),
+
+  /**
+   * DEV-908: whether the owner has switched recorded branch transfers on, and
+   * whether the caller is the owner who may change it.
+   */
+  branchTransferSettings: inventoryControl.query(async ({ ctx }) => {
+    const { organizationId, actorId } = actorFor(ctx);
+    const [enabled, actor] = await Promise.all([
+      branchTransfersEnabled(ctx.db, organizationId),
+      ownerParty(ctx.db, organizationId, actorId),
+    ]);
+    return { enabled, canChange: Boolean(actor && hasAllCapabilityAccess(actor)) };
+  }),
+
+  /** DEV-908: the owner alone switches recorded branch transfers on or off. */
+  setBranchTransfersEnabled: inventoryControl
+    .input(z.object({ enabled: z.boolean() }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const { organizationId, actorId } = actorFor(ctx);
+      const actor = await ownerParty(ctx.db, organizationId, actorId);
+      if (!actor || !hasAllCapabilityAccess(actor))
+        throw new TRPCError({ code: 'FORBIDDEN', message: BRANCH_TRANSFER_SWITCH_REFUSED });
+      const saved = await ctx.db.organization.update({
+        where: { id: organizationId },
+        data: { pharmacyBranchTransfersEnabled: input.enabled },
+        select: { pharmacyBranchTransfersEnabled: true },
+      });
+      annotateAudit(ctx, {
+        operation: 'UPDATE',
+        targetType: 'Organization',
+        targetId: organizationId,
+        description: `${saved.pharmacyBranchTransfersEnabled ? 'Switched on' : 'Switched off'} recorded stock transfers between branches`,
+        metadata: { pharmacyBranchTransfersEnabled: saved.pharmacyBranchTransfersEnabled },
+      });
+      return { enabled: saved.pharmacyBranchTransfersEnabled };
     }),
 
   /**
@@ -1680,9 +1812,11 @@ export const pharmacyInventoryRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         const scope = await admittedScopeFor(ctx, input.branchId);
-        return await ctx.db.$transaction(async (tx) =>
-          allocateRequestedTransfer(txDb(tx), scope, input.transferId)
-        );
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          await assertTransferRowAllowed(db, scope, input.transferId, true);
+          return allocateRequestedTransfer(db, scope, input.transferId);
+        });
       } catch (error) {
         domainError(error);
       }
@@ -1769,14 +1903,27 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          dispatchTransfer(
-            txDb(tx),
-            await admittedScopeFor(ctx, input.branchId),
+        const scope = await admittedScopeFor(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          // DEV-908: stock leaves the premises now, so the drug and licence rules
+          // are checked again for every transfer, whatever allocated it.
+          const premises = await assertTransferRowAllowed(db, scope, input.transferId, false);
+          const dispatched = await dispatchTransfer(
+            db,
+            scope,
             input.transferId,
             input.idempotencyKeyPrefix
-          )
-        );
+          );
+          if (!premises) return dispatched;
+          return db.pharmacyInterbranchTransfer.update({
+            where: { id: dispatched.id },
+            data: {
+              fromLicenceNumber: premises.from.licenceNumber,
+              toLicenceNumber: premises.to.licenceNumber,
+            },
+          });
+        });
       } catch (error) {
         domainError(error);
       }
@@ -2235,6 +2382,8 @@ export const pharmacyInventoryRouter = router({
             ...tenant,
             disposition: 'AVAILABLE',
             onHandUnits: { gt: 0 },
+            // DEV-853: a null expiry never matches; those lots are listed in
+            // their own "Expiry not recorded" group below.
             lot: { batch: { expiresAt: { lte: horizon } } },
           },
           select: {
@@ -2289,7 +2438,13 @@ export const pharmacyInventoryRouter = router({
           },
         }),
       ]);
-      const lotIds = [...new Set(balances.map((row) => row.inventoryLotId))];
+      const datedBalances = balances.flatMap((row) => {
+        const expiresAt = row.lot.batch.expiresAt;
+        return expiresAt === null
+          ? []
+          : [{ ...row, lot: { ...row.lot, batch: { ...row.lot.batch, expiresAt } } }];
+      });
+      const lotIds = [...new Set(datedBalances.map((row) => row.inventoryLotId))];
       const [held, claims, returnLines, markdownEvents] = lotIds.length
         ? await Promise.all([
             ctx.db.pharmacyStockBalance.findMany({
@@ -2370,12 +2525,12 @@ export const pharmacyInventoryRouter = router({
       );
 
       const riskBuckets = expiryRiskBuckets(
-        balances.map((row) => ({
+        datedBalances.map((row) => ({
           daysLeft: Math.ceil((row.lot.batch.expiresAt.getTime() - at.getTime()) / DAY_MS),
           valueAtRiskMinor: row.onHandUnits * row.lot.unitCostMinor,
         }))
       );
-      const rows = balances
+      const rows = datedBalances
         .map((row) => {
           const { lot } = row;
           const expiresAt = lot.batch.expiresAt;
@@ -2424,6 +2579,61 @@ export const pharmacyInventoryRouter = router({
             (costVisible ? (right.valueAtRiskMinor ?? 0) - (left.valueAtRiskMinor ?? 0) : 0) ||
             left.key.localeCompare(right.key)
         );
+      // DEV-853: lots whose expiry and/or batch number was never recorded
+      // (legacy opening stock). They are never expired and stay sellable; the
+      // board lists them in their own group so staff can record the real batch
+      // and expiry later. A lot with a known expiry but no batch number is also
+      // on the dated list above; it is listed here too so its batch can be fixed.
+      const unrecordedExpiryRows = (
+        await ctx.db.pharmacyStockBalance.findMany({
+          where: {
+            ...tenant,
+            disposition: 'AVAILABLE',
+            onHandUnits: { gt: 0 },
+            lot: { batch: { OR: [{ expiresAt: null }, { batchNumber: null }] } },
+          },
+          orderBy: [{ inventoryLotId: 'asc' }, { stockLocationId: 'asc' }],
+          take: 500,
+          select: {
+            inventoryLotId: true,
+            stockLocationId: true,
+            onHandUnits: true,
+            location: { select: { name: true } },
+            lot: {
+              select: {
+                supplierName: true,
+                unitsPerPack: true,
+                printedMrpMinor: true,
+                batch: {
+                  select: {
+                    batchNumber: true,
+                    expiresAt: true,
+                    expiryPrecision: true,
+                    medicine: { select: { productName: true, brandName: true } },
+                  },
+                },
+              },
+            },
+          },
+        })
+      )
+        .map((row) => ({
+          key: `${row.inventoryLotId}:${row.stockLocationId}`,
+          inventoryLotId: row.inventoryLotId,
+          stockLocationId: row.stockLocationId,
+          locationName: row.location.name,
+          medicineName: row.lot.batch.medicine.brandName ?? row.lot.batch.medicine.productName,
+          batchNumber: row.lot.batch.batchNumber,
+          /** `YYYY-MM` or `YYYY-MM-DD`; null when the expiry was never recorded. */
+          printedExpiry: printedExpiryLabel(row.lot.batch.expiresAt, row.lot.batch.expiryPrecision),
+          onHandUnits: row.onHandUnits,
+          unitsPerPack: row.lot.unitsPerPack,
+          printedMrpMinor: row.lot.printedMrpMinor,
+        }))
+        .sort(
+          (left, right) =>
+            left.medicineName.localeCompare(right.medicineName) || left.key.localeCompare(right.key)
+        );
       if (!costVisible) {
         return {
           generatedAt: at,
@@ -2431,10 +2641,19 @@ export const pharmacyInventoryRouter = router({
           costVisible,
           riskBuckets: [] as typeof riskBuckets,
           rows: rows.map((row) => ({ ...row, valueAtRiskMinor: null })),
+          unrecordedExpiryRows,
           suppliers,
         };
       }
-      return { generatedAt: at, withinDays, costVisible, riskBuckets, rows, suppliers };
+      return {
+        generatedAt: at,
+        withinDays,
+        costVisible,
+        riskBuckets,
+        rows,
+        unrecordedExpiryRows,
+        suppliers,
+      };
     }),
 
   /**
@@ -2654,7 +2873,8 @@ export const pharmacyInventoryRouter = router({
           const created = await createPurchaseReturn(tx, scope, {
             supplierId: supplier.id,
             kind: 'EXPIRY_CLAIM',
-            reference: `EXP-${stamp}-${lot.batch.batchNumber.slice(0, 24)}-${at.getTime().toString(36).toUpperCase()}`,
+            // DEV-853: a lot with no recorded batch simply leaves the batch out.
+            reference: `EXP-${stamp}-${lot.batch.batchNumber === null ? '' : `${lot.batch.batchNumber.slice(0, 24)}-`}${at.getTime().toString(36).toUpperCase()}`,
             note: 'Drafted from the near-expiry board. A draft reserves nothing; submit it to hold the stock for the supplier.',
             lines: [
               {
@@ -2901,6 +3121,51 @@ export const pharmacyInventoryRouter = router({
         });
       } catch (error) {
         expiryError(error);
+      }
+    }),
+  /**
+   * DEV-853: record the real batch number and/or expiry of a lot that came in
+   * without them (legacy opening stock). One-way — a recorded value is never
+   * rewritten here — and server-enforced; the request itself is audited.
+   */
+  recordUnrecordedBatch: inventoryControl
+    .input(
+      z
+        .object({
+          branchId,
+          inventoryLotId: z.string().min(1).max(128),
+          batchNumber: z.string().trim().min(1).max(160).optional(),
+          printedExpiry: z.date().optional(),
+          expiryPrecision: expiryPrecision.optional(),
+        })
+        .strict()
+        .refine((value) => value.batchNumber !== undefined || value.printedExpiry !== undefined, {
+          message: 'Enter the batch number, the expiry, or both.',
+        })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await admittedScopeFor(ctx, input.branchId);
+      try {
+        return await ctx.db.$transaction(async (transaction) => {
+          const tx = txDb(transaction);
+          await assertBranch(tx, scope);
+          return recordUnrecordedBatch(tx, scope, {
+            inventoryLotId: input.inventoryLotId,
+            batchNumber: input.batchNumber ?? null,
+            expiry:
+              input.printedExpiry === undefined
+                ? null
+                : { printedExpiry: input.printedExpiry, precision: input.expiryPrecision ?? 'DAY' },
+          });
+        });
+      } catch (error) {
+        if (error instanceof PharmacyUnrecordedBatchError) {
+          throw new TRPCError({
+            code: error.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST',
+            message: UNRECORDED_BATCH_MESSAGES[error.reason],
+          });
+        }
+        throw error;
       }
     }),
   /** WHA-1603 INV-07 console: both directions for one branch, slip-ready. */

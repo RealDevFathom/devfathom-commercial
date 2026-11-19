@@ -5,6 +5,9 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { legacyStripOption, packLevelCanonicalUnits } from './counter-pricing';
 import { mrpRoundingIncrementForLot, priceFromLot } from './medicine';
+import { COUNTER_DISCOUNT_NOTICES } from './counter-messages';
+import { maxDiscountMinorFor, minimumPriceForMargin } from './smart-discount';
+import { readDiscountLimits } from './smart-discount-service';
 import {
   branchUnknownLossProbability,
   estimateLossMinor,
@@ -28,8 +31,11 @@ import { checkSafetyLease } from './offline-safety-lease';
 import { SNAPSHOT_SIGNING_KEY_ID, verifySnapshotSignature } from './offline-snapshots';
 import {
   authorizeControlledRestoration,
+  ControlledRestorationDenied,
   type ControlledRestorationPin,
+  type ControlledRestorationWitness,
 } from './controlled-restoration-authorization';
+import { pharmacistCheckOffMarker } from './pharmacist-check-policy';
 import { appendControlledRestorations, lockRegister } from './controlled-register';
 import { lockStockBalances, lockStockRowsFrom } from './stock-lock-order';
 import { assertStoredPharmacyMayOperate } from './regulatory';
@@ -49,6 +55,7 @@ import {
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
 import { releaseVoidedSaleRedemptions } from './loyalty-void-release';
+import { anyCardTerminalTender } from './card-terminal/open-attempts';
 import {
   backInStockQueue,
   backInStockReference,
@@ -59,6 +66,29 @@ import {
   type BackInStockPolicy,
 } from './back-in-stock';
 import { priceCounterPromotion, promotionApprovalPolicy } from './promotions';
+import { hasKnownExpiryPassed } from './unrecorded-batch';
+
+/**
+ * DEV-911: the witness for restoring a controlled sale line (a void or a return at the counter).
+ * With the owner's pharmacist check on, exactly `authorizeControlledRestoration`. With it off,
+ * a refusal there gives way: the restoration is recorded by the acting user and its register
+ * correction carries the owner-switched-off marker, which the database accepts only while the
+ * setting is off at that version. The setting is read only when the witness was refused.
+ */
+export async function controlledSaleRestorationWitness(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input?: ControlledRestorationPin
+): Promise<ControlledRestorationWitness> {
+  try {
+    return await authorizeControlledRestoration(db, scope, input);
+  } catch (error) {
+    if (!(error instanceof ControlledRestorationDenied)) throw error;
+    const marker = await pharmacistCheckOffMarker(db, scope.organizationId);
+    if (!marker) throw error;
+    return { witnessedByUserId: scope.actorId, signatureRef: marker };
+  }
+}
 
 /**
  * Re-exported from `./medicine`, where MED-08 pricing now lives so the counter
@@ -183,6 +213,7 @@ export class PharmacySaleError extends Error {
       | 'INVALID_SALE_UNIT'
       | 'PRICE_ABOVE_MRP'
       | 'MARGIN_GUARDRAIL'
+      | 'DISCOUNT_ABOVE_MAXIMUM'
       | 'APPROVAL_REQUIRED'
       | 'REGULATED_DISCOUNT_REFUSED'
       | 'VOUCHER_CATEGORY_REFUSED'
@@ -194,11 +225,15 @@ export class PharmacySaleError extends Error {
       | 'UNSAFE_STOCK'
       | 'CROSS_BRANCH_REFERENCE'
       | 'BILL_HAS_PAYMENTS'
+      | 'BILL_HAS_CARD_TERMINAL_PAYMENT'
       | 'NOT_BILL_OWNER'
   ) {
     super(reason);
   }
 }
+
+/** DEV-66: why an automatic discount was not applied; the counter shows its sentence. */
+export type PharmacyDiscountNotice = keyof typeof COUNTER_DISCOUNT_NOTICES;
 
 export function validateDiscount(input: {
   regulated: boolean;
@@ -207,6 +242,14 @@ export function validateDiscount(input: {
   costMinor: number;
   approvedByUserId?: string;
   approvalPolicy?: string;
+  /** DEV-66: the branch's configured minimum margin on a discounted line, in bps. */
+  minMarginBps?: number;
+  /**
+   * DEV-66: the owner's maximum discount, in bps of the gross. Every discount (manual,
+   * promotion or voucher) is refused above it, whoever approved it. Required: a caller
+   * that cannot read the owner's maximum cannot give a discount.
+   */
+  maxDiscountBps: number;
 }) {
   if (input.discountMinor < 0 || input.discountMinor > input.grossMinor)
     throw new PharmacySaleError('MARGIN_GUARDRAIL');
@@ -214,7 +257,15 @@ export function validateDiscount(input: {
     throw new PharmacySaleError('REGULATED_DISCOUNT_REFUSED');
   if (input.discountMinor > 0 && (!input.approvedByUserId || !input.approvalPolicy))
     throw new PharmacySaleError('APPROVAL_REQUIRED');
+  if (input.discountMinor > maxDiscountMinorFor(input.grossMinor, input.maxDiscountBps))
+    throw new PharmacySaleError('DISCOUNT_ABOVE_MAXIMUM');
   if (input.grossMinor - input.discountMinor < input.costMinor)
+    throw new PharmacySaleError('MARGIN_GUARDRAIL');
+  if (
+    input.discountMinor > 0 &&
+    input.grossMinor - input.discountMinor <
+      minimumPriceForMargin(input.costMinor, input.minMarginBps ?? 0)
+  )
     throw new PharmacySaleError('MARGIN_GUARDRAIL');
 }
 
@@ -718,10 +769,12 @@ async function addSaleLineWithAllocation(
     ? await db.medicinePackMrp.findMany({
         where: {
           organizationId: scope.organizationId,
-          OR: lots.map((lot) => ({
-            packLevelId: lot.packLevelId,
-            batchReference: lot.batch.batchNumber,
-          })),
+          // DEV-853: a lot with no recorded batch has no batch-specific rule.
+          OR: lots.flatMap((lot) =>
+            lot.batch.batchNumber === null
+              ? []
+              : [{ packLevelId: lot.packLevelId, batchReference: lot.batch.batchNumber }]
+          ),
         },
         select: { packLevelId: true, batchReference: true, roundingIncrementMinor: true },
       })
@@ -754,16 +807,38 @@ async function addSaleLineWithAllocation(
   // #727: priced after allocation has finished waiting for its stock locks. A voucher,
   // manual discount or complimentary line is never combined with an automatic promotion.
   const promotionEvaluatedAt = new Date();
-  const promotion =
-    applyCounterPromotions && !voucher && !input.discountKind && !input.discountMinor
-      ? await priceCounterPromotion(db, scope, {
-          medicineId: input.medicineId,
-          regulated,
-          grossMinor,
-          costMinor,
-          at: promotionEvaluatedAt,
-        })
-      : null;
+  const promotionCandidate =
+    applyCounterPromotions && !voucher && !input.discountKind && !input.discountMinor;
+  // DEV-66: an automatic offer that would breach the branch's minimum margin or the owner's
+  // maximum discount is skipped, never allowed to block an otherwise valid full-price sale.
+  const promotionLimits = promotionCandidate ? await readDiscountLimits(db, scope) : null;
+  const marginFloorMinor = promotionLimits
+    ? minimumPriceForMargin(costMinor, promotionLimits.minMarginBps)
+    : costMinor;
+  const promotionFloorMinor = promotionLimits
+    ? Math.max(
+        marginFloorMinor,
+        grossMinor - maxDiscountMinorFor(grossMinor, promotionLimits.maxDiscountBps)
+      )
+    : costMinor;
+  const pricePromotion = (floorMinor: number) =>
+    priceCounterPromotion(db, scope, {
+      medicineId: input.medicineId,
+      regulated,
+      grossMinor,
+      costMinor: floorMinor,
+      at: promotionEvaluatedAt,
+    });
+  const promotion = promotionLimits ? await pricePromotion(promotionFloorMinor) : null;
+  // DEV-66: a promotion skipped only because of the owner's maximum is never silent: the
+  // counter tells the cashier why the line sold at full price.
+  const promotionNotice: PharmacyDiscountNotice | undefined =
+    promotionLimits &&
+    !promotion &&
+    promotionFloorMinor > marginFloorMinor &&
+    (await pricePromotion(marginFloorMinor))
+      ? 'PROMOTION_ABOVE_MAXIMUM'
+      : undefined;
   const discountMinor = voucher
     ? Math.min(voucher.discountMinor, grossMinor)
     : (promotion?.discountMinor ?? input.discountMinor ?? 0);
@@ -780,7 +855,15 @@ async function addSaleLineWithAllocation(
     : promotion
       ? promotionApprovalPolicy(promotion.promotion.id)
       : input.approvalPolicy;
+  // DEV-66: every discounted line (manual, promotion or voucher) must keep the branch's
+  // configured minimum margin and stay within the owner's maximum discount.
+  const limits =
+    discountMinor > 0
+      ? (promotionLimits ?? (await readDiscountLimits(db, scope)))
+      : { minMarginBps: 0, maxDiscountBps: 0 };
   validateDiscount({
+    minMarginBps: limits.minMarginBps,
+    maxDiscountBps: limits.maxDiscountBps,
     regulated,
     discountMinor,
     grossMinor,
@@ -855,7 +938,7 @@ async function addSaleLineWithAllocation(
         }
       : {}),
   });
-  return { line, allocation, replayed: false };
+  return { line, allocation, replayed: false, ...(promotionNotice ? { promotionNotice } : {}) };
 }
 
 /**
@@ -912,7 +995,7 @@ export async function changeSaleStatus(
     });
   const witness =
     action === 'void' && sale.lines.some((line) => line.medicine.controlled)
-      ? await authorizeControlledRestoration(db, scope, controlledWitness)
+      ? await controlledSaleRestorationWitness(db, scope, controlledWitness)
       : undefined;
   const claimed = await db.pharmacySale.updateMany({
     where: {
@@ -940,15 +1023,28 @@ export async function changeSaleStatus(
         saleId,
         type: { not: 'LOYALTY' },
       },
-      select: { amountMinor: true, refunds: { select: { amountMinor: true } } },
+      select: {
+        id: true,
+        type: true,
+        provider: true,
+        amountMinor: true,
+        refunds: { select: { amountMinor: true } },
+      },
     });
-    const unrefundedMinor = tenders.reduce(
-      (total, tender) =>
-        total +
-        tender.amountMinor -
-        tender.refunds.reduce((refunded, refund) => refunded + refund.amountMinor, 0),
-      0
-    );
+    const unrefunded = (tender: (typeof tenders)[number]) =>
+      tender.amountMinor -
+      tender.refunds.reduce((refunded, refund) => refunded + refund.amountMinor, 0);
+    const unrefundedMinor = tenders.reduce((total, tender) => total + unrefunded(tender), 0);
+    // DEV-743: a card-terminal charge cannot be refunded here (it goes back through the
+    // provider), so the void names that instead of sending the cashier to a refund that refuses.
+    if (
+      await anyCardTerminalTender(
+        db,
+        scope,
+        tenders.filter((tender) => unrefunded(tender) > 0)
+      )
+    )
+      throw new PharmacySaleError('BILL_HAS_CARD_TERMINAL_PAYMENT');
     if (unrefundedMinor > 0) throw new PharmacySaleError('BILL_HAS_PAYMENTS');
     await releaseVoidedSaleRedemptions(db, scope, saleId);
     // DEV-819: a voided unpaid bill gives back the voucher uses its lines took. The sale row is
@@ -1089,7 +1185,8 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
         lotId,
         batchNumber: batch.batchNumber,
         expiresAt: batch.expiresAt,
-        restockAllowed: batch.state === 'ACTIVE' && batch.expiresAt > new Date(),
+        restockAllowed:
+          batch.state === 'ACTIVE' && !hasKnownExpiryPassed(batch.expiresAt, new Date()),
         returnableUnits: Math.min(
           line.canonicalUnits - returnedUnits,
           allocations.reduce((n, row) => n + row.canonicalUnits, 0) -
@@ -1316,7 +1413,7 @@ export async function returnSaleLine(
   });
   if (!line || line.sale.status !== 'COMPLETED') throw new PharmacySaleError('NOT_FOUND');
   const witness = line.medicine.controlled
-    ? await authorizeControlledRestoration(db, scope, input.controlledWitness)
+    ? await controlledSaleRestorationWitness(db, scope, input.controlledWitness)
     : undefined;
   const requestedDisposition = input.disposition ?? 'QUARANTINE';
   const disposition = input.lotId ? requestedDisposition : 'QUARANTINE';
@@ -1529,7 +1626,12 @@ export async function returnSaleLine(
           kind: { notIn: ['QUARANTINE', 'RETURNS'] },
         },
       });
-      if (!lot || lot.batch.state !== 'ACTIVE' || lot.batch.expiresAt <= new Date() || !location)
+      if (
+        !lot ||
+        lot.batch.state !== 'ACTIVE' ||
+        hasKnownExpiryPassed(lot.batch.expiresAt, new Date()) ||
+        !location
+      )
         throw new PharmacySaleError('UNSAFE_STOCK');
     }
     const stockLocationId =
@@ -1876,7 +1978,7 @@ export async function captureSafeRestockArrival(
   if (
     !lot?.receivedAt ||
     lot.batch.state !== 'ACTIVE' ||
-    lot.batch.expiresAt.getTime() <= at.getTime() ||
+    hasKnownExpiryPassed(lot.batch.expiresAt, at) ||
     lot.balances.length === 0
   )
     throw new PharmacySaleError('UNSAFE_STOCK');

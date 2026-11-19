@@ -16,6 +16,9 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { ReportDetails } from '@/components/pharmacy/report-details';
+import { workspaceDateRange, workspaceInstantFromInput, workspaceZoneLabel } from '@/lib/timezone';
+import { amountInputError, amountInputToMinor, amountInputUnit } from '@/lib/money-input';
 import { demandDateAfter, demandDateMs, demandInstantMs } from '@/lib/pharmacy/demand-evidence';
 import type {
   PharmacyReplenishmentReport,
@@ -31,6 +34,8 @@ type Props = {
   initialBranchId: string;
   invalidInitialBranch: boolean;
   today: string;
+  /** The organisation's IANA zone: assumed arrival and expiry are typed on its clock. */
+  timeZone?: string | null;
 };
 type Medicine = { id: string; productName: string };
 type State = 'idle' | 'loading' | 'ready' | 'error' | 'denied' | 'stale';
@@ -40,17 +45,29 @@ const numericFields = [
   ['dailyDemandUnits', 'Assumed daily demand (units)', false, 0],
   ['currentQuantityUnits', 'Current policy order (units)', false, 0],
   ['proposedQuantityUnits', 'Proposed policy order (units)', false, 0],
-  ['currentUnitPriceMinor', 'Current unit selling price (minor units)', false, 0],
-  ['proposedUnitPriceMinor', 'What-if unit selling price (minor units)', false, 0],
-  ['salesGoalMinor', 'Sales goal (minor units)', true, 0],
-  ['marginGoalMinor', 'Margin goal (minor units)', true, 0],
+  ['currentUnitPriceMinor', 'Current selling price per unit', false, 0],
+  ['proposedUnitPriceMinor', 'What-if selling price per unit', false, 0],
+  ['salesGoalMinor', 'Sales goal', true, 0],
+  ['marginGoalMinor', 'Margin goal', true, 0],
   ['packSize', 'Order pack size (units)', false, 1],
   ['minimumOrderUnits', 'Minimum order (units)', false, 0],
-  ['unitCostMinor', 'Unit cost (integer minor units)', true, 0],
-  ['budgetMinor', 'Order budget (integer minor units)', true, 0],
+  ['unitCostMinor', 'Cost per unit', true, 0],
+  ['budgetMinor', 'Order budget', true, 0],
   ['storageLimitUnits', 'Net additional storage capacity (units)', true, 0],
 ] as const;
 type NumericKey = (typeof numericFields)[number][0];
+/**
+ * Money the owner types as an amount with up to two decimals ("125.50"); the
+ * report still receives the integer minor units it always has.
+ */
+const moneyKeys = new Set<NumericKey>([
+  'currentUnitPriceMinor',
+  'proposedUnitPriceMinor',
+  'salesGoalMinor',
+  'marginGoalMinor',
+  'unitCostMinor',
+  'budgetMinor',
+]);
 type Draft = Record<NumericKey, string> & {
   historyStartDate: string;
   originDate: string;
@@ -83,6 +100,15 @@ export function ScenarioConsole(props: Props) {
   );
 }
 
+/**
+ * The first day a scenario may start on: the shop's tomorrow, or, west of UTC late in the
+ * shop's day, the day after, once the planning model's UTC midnight for tomorrow has passed.
+ */
+function firstPlanningDay(today: string): string {
+  const tomorrow = demandDateAfter(today, 1);
+  return demandDateMs(tomorrow) > Date.now() ? tomorrow : demandDateAfter(today, 2);
+}
+
 function ScenarioWorkspace({
   organizationId,
   branches,
@@ -90,6 +116,7 @@ function ScenarioWorkspace({
   initialBranchId,
   invalidInitialBranch,
   today,
+  timeZone,
 }: Props) {
   const utils = trpc.useUtils();
   const reportVersion = useRef(0);
@@ -124,7 +151,7 @@ function ScenarioWorkspace({
     originDate: today,
     horizonDays: '7',
     method: 'RECENT_MEAN',
-    planningOrigin: demandDateAfter(today, 1),
+    planningOrigin: firstPlanningDay(today),
     currency: '',
     arrivalAt: '',
     expiresAt: '',
@@ -219,11 +246,23 @@ function ScenarioWorkspace({
       }
       return number;
     };
+    const money = (key: NumericKey, optional: boolean) => {
+      const parsed = amountInputToMinor(draft[key]);
+      if (parsed.status === 'OK') return parsed.minor;
+      if (parsed.status === 'EMPTY') {
+        if (optional) return null;
+        invalid[key] = 'Enter an amount, for example 125.50.';
+      } else {
+        invalid[key] =
+          amountInputError(parsed.reason) + (optional ? ' Or leave blank for unknown.' : '');
+      }
+      return NaN;
+    };
     const date = (key: keyof Draft) => {
       try {
         return demandDateMs(draft[key]);
       } catch {
-        invalid[key] = 'Enter a valid UTC calendar date.';
+        invalid[key] = 'Choose a valid date.';
         return NaN;
       }
     };
@@ -236,7 +275,11 @@ function ScenarioWorkspace({
     const days = (origin - start) / 86_400_000;
     if (days < 1 || days > 90)
       invalid.historyStartDate = 'Use 1 to 90 history days before the exclusive end.';
-    if (origin > Date.now()) invalid.originDate = 'History must end no later than today (UTC).';
+    // Today is the shop's day: a day has begun once it starts on the organisation's clock,
+    // the same check the server makes.
+    const dayStart = (day: string) => workspaceDateRange(day, day, timeZone).from.getTime();
+    if (Number.isFinite(origin) && dayStart(draft.originDate) > Date.now())
+      invalid.originDate = 'History must end no later than today.';
     const horizonDays = integer('horizonDays', 1, 366)!;
     const input: PharmacyReplenishmentReportInput = {
       branchId,
@@ -248,11 +291,19 @@ function ScenarioWorkspace({
     };
     if (manual && canPlan) {
       const planningOrigin = date('planningOrigin');
-      if (planningOrigin <= Date.now() || planningOrigin > Date.now() + 31 * 86_400_000)
-        invalid.planningOrigin = 'Use a future UTC day within 31 days.';
+      // As the server: the day must not have begun on the shop's clock or at the planning
+      // model's UTC midnight.
+      const planningStart = Number.isFinite(planningOrigin) ? dayStart(draft.planningOrigin) : NaN;
+      if (
+        Math.min(planningStart, planningOrigin) <= Date.now() ||
+        planningStart > Date.now() + 31 * 86_400_000
+      )
+        invalid.planningOrigin = 'Choose a future day within the next 31 days.';
       const values = {} as Record<NumericKey, number | null>;
       for (const [key, , optional, minimum] of numericFields)
-        values[key] = integer(key, minimum, Number.MAX_SAFE_INTEGER, optional);
+        values[key] = moneyKeys.has(key)
+          ? money(key, optional)
+          : integer(key, minimum, Number.MAX_SAFE_INTEGER, optional);
       if (!Number.isSafeInteger(values.dailyDemandUnits! * horizonDays))
         invalid.dailyDemandUnits = 'Demand across the horizon must be a safe whole-number total.';
       if (!/^[A-Z]{3}$/.test(draft.currency))
@@ -260,13 +311,13 @@ function ScenarioWorkspace({
       const instant = (key: 'arrivalAt' | 'expiresAt') => {
         if (!draft[key].trim()) return null;
         try {
-          const ms = demandInstantMs(draft[key].trim());
+          // A date-and-time picker value has no zone: read it on the organisation's clock.
+          const ms = demandInstantMs(workspaceInstantFromInput(draft[key].trim(), timeZone));
           if (key === 'arrivalAt' && ms < planningOrigin)
             invalid[key] = 'Arrival must be on or after the planning origin.';
           return new Date(ms).toISOString();
         } catch {
-          invalid[key] =
-            'Use an ISO instant with timezone, for example 2026-09-16T12:00:00Z, or leave blank for unknown.';
+          invalid[key] = 'Choose a date and time, or leave blank for unknown.';
           return null;
         }
       };
@@ -343,7 +394,7 @@ function ScenarioWorkspace({
       <Input
         id={`replenishment-${key}`}
         name={key}
-        type={type}
+        type={type === 'decimal' ? 'text' : type}
         value={draft[key]}
         onChange={(event) => change(key, event.target.value)}
         className="mt-1 min-h-11"
@@ -351,6 +402,7 @@ function ScenarioWorkspace({
         min={min}
         max={max}
         step={type === 'number' ? 1 : undefined}
+        inputMode={type === 'decimal' ? 'decimal' : undefined}
         aria-invalid={Boolean(errors[key])}
         aria-describedby={
           errors[key]
@@ -551,8 +603,8 @@ function ScenarioWorkspace({
       <form id="replenishment-report-form" onSubmit={submit} noValidate className="space-y-6">
         <SectionCard title="Observation window" titleLevel={2}>
           <div className="grid gap-4 md:grid-cols-2">
-            {field('historyStartDate', 'History start (UTC)', 'date')}
-            {field('originDate', 'Forecast from (UTC date; history ends the day before)', 'date')}
+            {field('historyStartDate', 'History start', 'date')}
+            {field('originDate', 'Forecast from (history ends the day before)', 'date')}
             {field('horizonDays', 'Planning / forecast horizon (days)', 'number', false, 1, 366)}
             <label className="text-sm text-text-body">
               Forecast method
@@ -568,9 +620,15 @@ function ScenarioWorkspace({
             </label>
           </div>
           <p className="mt-4 text-sm text-text-muted">
-            Use 1–90 history days and a 1–366 day horizon. Sales use business dates; demand coverage
-            uses UTC days. Current reads cannot reconstruct historical versions.
+            Use 1–90 history days and a 1–366 day horizon.
           </p>
+          <ReportDetails>
+            <p>
+              Sales use business dates; demand coverage and the history use your organisation&apos;s
+              days ({workspaceZoneLabel(timeZone)}). The planning scenario model counts its days
+              midnight to midnight UTC. Current reads cannot reconstruct historical versions.
+            </p>
+          </ReportDetails>
         </SectionCard>
         <SectionCard title="Manual planning assumptions" titleLevel={2}>
           {!canPlan ? (
@@ -605,17 +663,41 @@ function ScenarioWorkspace({
                 <div className="mt-4 space-y-4">
                   <p id="replenishment-unknown-help" className="text-sm text-text-muted">
                     Leave optional cost, budget, capacity, arrival and expiry blank when unknown. An
-                    explicit 0 is a supplied assumption. Money uses integer minor units in your
-                    supplied currency. Arrival and expiry require an explicit timezone.
+                    explicit 0 is a supplied assumption. Enter money in the scenario currency with
+                    up to 2 decimals, for example 125.50. Arrival and expiry are on your
+                    organisation&apos;s clock ({workspaceZoneLabel(timeZone)}).
                   </p>
                   <div className="grid gap-4 md:grid-cols-2">
-                    {field('planningOrigin', 'Scenario starts on (future UTC day)', 'date')}
+                    {field('planningOrigin', 'Scenario starts on (a future day)', 'date')}
                     {field('currency', 'Scenario currency (three-letter code)')}
                     {numericFields.map(([key, label, optional, min]) =>
-                      field(key, label + (optional ? ' (optional)' : ''), 'number', optional, min)
+                      moneyKeys.has(key)
+                        ? field(
+                            key,
+                            `${label} (${amountInputUnit(draft.currency)}${optional ? ', optional' : ''})`,
+                            'decimal',
+                            optional
+                          )
+                        : field(
+                            key,
+                            label + (optional ? ' (optional)' : ''),
+                            'number',
+                            optional,
+                            min
+                          )
                     )}
-                    {field('arrivalAt', 'Assumed arrival (ISO instant, optional)', 'text', true)}
-                    {field('expiresAt', 'Assumed expiry (ISO instant, optional)', 'text', true)}
+                    {field(
+                      'arrivalAt',
+                      'Assumed arrival (date and time, optional)',
+                      'datetime-local',
+                      true
+                    )}
+                    {field(
+                      'expiresAt',
+                      'Assumed expiry (date and time, optional)',
+                      'datetime-local',
+                      true
+                    )}
                   </div>
                 </div>
               )}
@@ -661,6 +743,7 @@ function ScenarioWorkspace({
         <ReportEvidence
           report={report}
           financial={financial}
+          timeZone={timeZone}
           branchName={branches.find((branch) => branch.id === branchId)?.name ?? branchId}
           medicineName={
             medicines.find((medicine) => medicine.id === medicineId)?.productName ?? medicineId
@@ -683,11 +766,13 @@ function ReportEvidence({
   financial,
   branchName,
   medicineName,
+  timeZone,
 }: {
   report: PharmacyReplenishmentReport;
   financial: boolean;
   branchName: string;
   medicineName: string;
+  timeZone?: string | null;
 }) {
   const { demand, supply, supplyCoverage } = report.observations;
   const decision =
@@ -717,7 +802,7 @@ function ReportEvidence({
           <Stat
             label="Observed demand days"
             value={demand.coverage.observedDemandDays}
-            sub={`Of ${demand.coverage.requestedDays} requested UTC days`}
+            sub={`Of ${demand.coverage.requestedDays} requested days`}
           />
           <Stat label="Unknown demand days" value={demand.coverage.unknownDays} />
           <Stat label="Stockout-censored days" value={demand.coverage.censoredDays} />
@@ -729,18 +814,24 @@ function ReportEvidence({
         <p className="mt-2 text-sm text-text-muted">
           Qualifying lines: {demand.coverage.qualifyingLineCount}; excluded lines:{' '}
           {demand.coverage.excludedLineCount}. Business-date consumption days:{' '}
-          {demand.coverage.businessConsumptionDays}; UTC consumption days:{' '}
-          {demand.coverage.utcConsumptionDays}.
+          {demand.coverage.businessConsumptionDays}.
         </p>
+        <ReportDetails>
+          <p>
+            Consumption days counted by completion time, midnight to midnight on your
+            organisation&apos;s clock ({workspaceZoneLabel(timeZone)}):{' '}
+            {demand.coverage.completionDayConsumptionDays}.
+          </p>
+        </ReportDetails>
         <details className="mt-4">
           <summary className="min-h-11 cursor-pointer py-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
-            Daily UTC evidence
+            Day by day
           </summary>
           {demand.days.length ? (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>UTC day</TableHead>
+                  <TableHead>Day</TableHead>
                   <TableHead>Demand state</TableHead>
                   <TableHead className="text-right">Recorded consumption units</TableHead>
                 </TableRow>
@@ -813,7 +904,7 @@ function ReportEvidence({
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>UTC day</TableHead>
+                  <TableHead>Day</TableHead>
                   <TableHead className="text-right">Conditional units</TableHead>
                 </TableRow>
               </TableHeader>

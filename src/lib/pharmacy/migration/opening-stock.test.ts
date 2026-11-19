@@ -37,7 +37,6 @@ describe('MIG-03 opening line completeness', () => {
   it.each([
     ['sourceRef', 'MISSING_SOURCE_REF'],
     ['manufacturingBatchId', 'MISSING_BATCH'],
-    ['batchNumber', 'MISSING_BATCH'],
     ['expiryDate', 'MISSING_EXPIRY'],
     ['expiryPrecision', 'MISSING_EXPIRY'],
     ['printedMrpMinor', 'MISSING_MRP'],
@@ -65,6 +64,28 @@ describe('MIG-03 opening line completeness', () => {
       printedMrpMinor: null,
     });
     expect(gaps.sort()).toEqual(['MISSING_BATCH', 'MISSING_EXPIRY', 'MISSING_MRP']);
+  });
+
+  /**
+   * DEV-853 owner decision: legacy stock has no batch number and no expiry. Both
+   * are stored as "not recorded" and the lot is still posted and sellable; only
+   * a missing batch row or a half-stated expiry is a gap.
+   */
+  it('posts a line whose batch number and expiry were never recorded', () => {
+    expect(
+      missingAttributes({
+        ...completeLine(),
+        batchNumber: null,
+        expiryDate: null,
+        expiryPrecision: null,
+      })
+    ).toEqual([]);
+  });
+
+  it('still reports a line with no batch row to hang the lot on', () => {
+    expect(
+      missingAttributes({ ...completeLine(), batchNumber: null, manufacturingBatchId: null })
+    ).toEqual(['MISSING_BATCH']);
   });
 
   it('treats a blank source reference as absent rather than as a value', () => {
@@ -166,6 +187,51 @@ describe('opening stock expiry boundaries', () => {
     expect(models.pharmacyInventoryLot.create).not.toHaveBeenCalled();
     expect(models.pharmacyStockMovement.create).not.toHaveBeenCalled();
     expect(models.pharmacyOpeningSession.update).not.toHaveBeenCalled();
+  });
+
+  it('posts a lot with no recorded expiry as null, never an invented date (DEV-853)', async () => {
+    const { db, models } = openingDb('DAY', '2027-06-16T00:00:00.000Z');
+    models.pharmacyOpeningStockLine.findMany.mockResolvedValue([
+      {
+        ...completeLine(),
+        id: 'line',
+        batchNumber: null,
+        expiryDate: null,
+        expiryPrecision: null,
+      },
+    ]);
+    models.pharmacyManufacturingBatch.findFirst.mockResolvedValue({ expiresAt: null });
+
+    const posted = await postOpeningSession(db, SCOPE, {
+      sessionId: 'session',
+      idempotencyKeyPrefix: 'opening',
+    });
+
+    expect(posted.postedLineCount).toBe(1);
+    expect(models.pharmacyInventoryLot.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        manufacturingBatchId: 'batch_1',
+        receivedExpiresAt: null,
+        receivedExpiryPrecision: null,
+      }),
+    });
+    expect(models.pharmacyStockMovement.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        kind: 'OPENING',
+        disposition: 'AVAILABLE',
+        quantityUnits: 40,
+      }),
+    });
+  });
+
+  it('refuses a stated expiry against a batch whose expiry was never recorded', async () => {
+    const { db, models } = openingDb('DAY', '2027-06-16T00:00:00.000Z');
+    models.pharmacyManufacturingBatch.findFirst.mockResolvedValue({ expiresAt: null });
+
+    await expect(
+      postOpeningSession(db, SCOPE, { sessionId: 'session', idempotencyKeyPrefix: 'opening' })
+    ).rejects.toMatchObject({ reason: 'BATCH_EXPIRY_CONFLICT' });
+    expect(models.pharmacyInventoryLot.create).not.toHaveBeenCalled();
   });
 
   it('refuses a batch outside the workspace before posting stock', async () => {

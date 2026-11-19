@@ -94,6 +94,7 @@ describe('Owner / Operator catalogue review', () => {
       const create = vi.fn().mockResolvedValue({ id: 'decision-1', action });
       const updateMany = vi.fn();
       const append = vi.fn().mockResolvedValue({ id: 'reviewed-1' });
+      const audit = vi.fn().mockResolvedValue({ id: 'audit-1' });
       const owner = caller('owner-operator', {
         $queryRaw: vi.fn().mockResolvedValue([{ id: 'assertion-1' }]),
         medicine: { count: vi.fn().mockResolvedValue(1) },
@@ -111,6 +112,7 @@ describe('Owner / Operator catalogue review', () => {
           create: append,
         },
         medicineReviewDecision: { create },
+        auditLog: { create: audit },
       });
 
       await expect(
@@ -126,6 +128,8 @@ describe('Owner / Operator catalogue review', () => {
       });
       expect(updateMany).not.toHaveBeenCalled();
       expect(append).toHaveBeenCalledTimes(action === 'DEFER' ? 0 : 1);
+      // DEV-923: an acceptance carries the catalogue approval audit.
+      expect(audit).toHaveBeenCalledTimes(action === 'ACCEPT' ? 1 : 0);
       if (action !== 'DEFER')
         expect(append).toHaveBeenCalledWith({
           data: expect.objectContaining({

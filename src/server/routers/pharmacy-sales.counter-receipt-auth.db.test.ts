@@ -6,13 +6,17 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { runMigrationSql } from '../../../tests/split-sql-statements';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (databaseUrl) process.env.DATABASE_URL = databaseUrl;
-const describeIfDatabase = databaseUrl ? describe : describe.skip;
+// The receipt print cutover migration is applied the way `prisma migrate deploy` applies it:
+// by the role that owns the schema, never by the restricted runtime role (which has no CREATE).
+const ownerUrl = process.env.PHARMACY_TEST_OWNER_DATABASE_URL;
+const describeIfDatabase = databaseUrl && ownerUrl ? describe : describe.skip;
 
 vi.mock('@/server/audit', async () => {
   const actual = await vi.importActual<typeof import('@/server/audit')>('@/server/audit');
@@ -444,11 +448,21 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
       where: { saleId: { in: [ids.legacyThermalSale, ids.legacyBrowserSale, ids.saleB] } },
     }));
     const cutover = readFileSync(join(process.cwd(),
-      'prisma/migrations/20261110111300_pharmacy_receipt_print_cutover/migration.sql'), 'utf8')
-      // withPlatformDb already owns the test transaction.
-      .replace(/^BEGIN;$/m, '').replace(/^COMMIT;$/m, '');
-    await withPlatformDb((tx) => runMigrationSql(tx, cutover));
-    await withPlatformDb((tx) => runMigrationSql(tx, cutover));
+      'prisma/migrations/20261110111300_pharmacy_receipt_print_cutover/migration.sql'), 'utf8');
+    const correction = readFileSync(join(process.cwd(),
+      'prisma/migrations/20261118124500_pharmacy_receipt_print_state_correction/migration.sql'), 'utf8');
+    // The whole file, with its own transaction and settings, as the schema owner, twice.
+    const owner = new pg.Client({ connectionString: ownerUrl });
+    await owner.connect();
+    try {
+      // Deploy applies the cutover and then its DEV-951 correction; both, twice.
+      for (let run = 0; run < 2; run += 1) {
+        await owner.query(cutover);
+        await owner.query(correction);
+      }
+    } finally {
+      await owner.end();
+    }
     const states = await withTenantDb(ids.orgA, (tx) => tx.pharmacyReceiptPrintState.findMany({
       where: { branchId: ids.branchA, saleId: { in: [ids.legacyThermalSale, ids.legacyBrowserSale, ids.printableSale] } },
     }));

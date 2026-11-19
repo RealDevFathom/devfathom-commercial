@@ -8,6 +8,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import type { drapRecallReviewQueue } from '@/lib/pharmacy/drap-monitoring';
 import { trpc } from '@/lib/trpc';
+import { batchPhrase } from '@/lib/pharmacy/unrecorded-batch';
 
 type QueueData = Awaited<ReturnType<typeof drapRecallReviewQueue>>;
 type QueueItem = QueueData['pending'][number];
@@ -104,7 +105,7 @@ function MatchSummary({ item }: { item: QueueItem }) {
         <ul className="mt-2 space-y-1">
           {item.batches.map((batch) => (
             <li key={batch.id} className="flex justify-between gap-4 tabular-nums">
-              <span>Batch {batch.batchNumber}</span>
+              <span>{batchPhrase(batch.batchNumber)}</span>
               <span>{batch.availableUnits} units available</span>
             </li>
           ))}

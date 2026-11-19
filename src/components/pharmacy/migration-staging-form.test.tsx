@@ -26,7 +26,14 @@ beforeEach(() => {
     },
   });
   mocks.stage.mockResolvedValue({
-    data: { sourceId: 'source_a', batchId: 'batch_a', rowCount: 1, exceptionCount: 0 },
+    data: {
+      sourceId: 'source_a',
+      batchId: 'batch_a',
+      rowCount: 1,
+      exceptionCount: 0,
+      controlledFromClass: 0,
+      controlledMedicinesFlagged: 0,
+    },
   });
 });
 async function upload() {
@@ -66,6 +73,53 @@ describe('staging column mapping', () => {
       );
     }
   );
+  it('shows how many rows the legacy NARCOTICS class set as controlled', async () => {
+    mocks.stage.mockResolvedValue({
+      data: {
+        sourceId: 'source_a',
+        batchId: 'batch_a',
+        rowCount: 4,
+        exceptionCount: 0,
+        controlledFromClass: 3,
+        controlledMedicinesFlagged: 1,
+      },
+    });
+    render(<MigrationStagingForm branchId="branch_a" route="/pharmacy/medicines/staged" />);
+    await upload();
+    fireEvent.change(screen.getByLabelText('Quantity column counts'), {
+      target: { value: 'UNITS' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Stage for review' }));
+    expect(
+      await screen.findByText(
+        /3 set as controlled from legacy class NARCOTICS \(1 catalogue medicine flagged\)/
+      )
+    ).toBeInTheDocument();
+  });
+  it('says how many rows were skipped because a person had corrected them (DEV-925)', async () => {
+    mocks.stage.mockResolvedValue({
+      data: {
+        sourceId: 'source_a',
+        batchId: 'batch_a',
+        rowCount: 4,
+        exceptionCount: 0,
+        controlledFromClass: 3,
+        controlledMedicinesFlagged: 1,
+        controlledSkippedCorrected: 2,
+      },
+    });
+    render(<MigrationStagingForm branchId="branch_a" route="/pharmacy/medicines/staged" />);
+    await upload();
+    fireEvent.change(screen.getByLabelText('Quantity column counts'), {
+      target: { value: 'UNITS' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Stage for review' }));
+    expect(
+      await screen.findByText(
+        /2 skipped: a person had already corrected those medicines to not controlled\./
+      )
+    ).toBeInTheDocument();
+  });
   it('clears the file input after a refused read so the same file can be chosen again', async () => {
     mocks.read.mockResolvedValue({ error: 'The file could not be staged. Try again.' });
     render(<MigrationStagingForm branchId="branch_a" route="/pharmacy/medicines/staged" />);
@@ -101,5 +155,45 @@ describe('staging column mapping', () => {
     expect(screen.getByLabelText('Quantity column counts')).toHaveValue('PACKS');
     expect(screen.getByLabelText('Quantity')).toHaveValue('2');
     expect(mocks.push).not.toHaveBeenCalled();
+  });
+  it('accepts a catalogue-sized file and reports a replayed batch without a duplicate', async () => {
+    mocks.stage.mockResolvedValue({
+      data: {
+        sourceId: 'source_a',
+        batchId: 'batch_a',
+        rowCount: 18_933,
+        exceptionCount: 37_866,
+        replayed: true,
+        controlledFromClass: 0,
+        controlledMedicinesFlagged: 0,
+      },
+    });
+    render(<MigrationStagingForm branchId="branch_a" route="/pharmacy/medicines/staged" />);
+    const text = `Product,Pack,Qty\n${'Example,30,29\n'.repeat(80_000)}`;
+    const file = new File([text], 'catalogue.csv', { type: 'text/csv' });
+    expect(file.size).toBeGreaterThan(1024 * 1024);
+    Object.defineProperty(file, 'arrayBuffer', {
+      value: async () => new TextEncoder().encode(text).buffer,
+    });
+    fireEvent.change(screen.getByLabelText('Source file'), { target: { files: [file] } });
+    await screen.findByLabelText('Quantity column counts');
+    expect(mocks.read).toHaveBeenCalledWith(
+      expect.objectContaining({ fileName: 'catalogue.csv', branchId: 'branch_a' })
+    );
+    fireEvent.change(screen.getByLabelText('Quantity column counts'), {
+      target: { value: 'PACKS' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Stage for review' }));
+    expect(
+      await screen.findByText(/already staged with the same columns: 18,933 rows/)
+    ).toBeInTheDocument();
+  });
+  it('refuses a file above the staging limit before reading it', async () => {
+    render(<MigrationStagingForm branchId="branch_a" route="/pharmacy/medicines/staged" />);
+    const file = new File(['x'], 'huge.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'size', { value: 8 * 1024 * 1024 + 1 });
+    fireEvent.change(screen.getByLabelText('Source file'), { target: { files: [file] } });
+    expect(await screen.findByRole('alert')).toHaveTextContent('up to 8 MiB');
+    expect(mocks.read).not.toHaveBeenCalled();
   });
 });
