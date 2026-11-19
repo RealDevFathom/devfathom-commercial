@@ -6,14 +6,19 @@ import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import {
-  AP_REVERSAL_MAX_PAGE,
   AP_REVERSAL_PAGE_ROWS,
+  type ApReversalCursor,
 } from '@/lib/pharmacy/accounts/ap-invoices-schema';
 import { formatWorkspaceDateTime } from '@/lib/timezone';
 import type { pharmacyApInvoicesRouter } from '@/server/routers/pharmacy-ap-invoices';
 import { ReversalNoticeArea, ReverseApEntryForm } from './ap-entry-forms';
 import { minor } from './payables-panels';
-import type { ReversalSearchField, ReversalSearchQuery } from './query';
+import {
+  reversalCursorParam,
+  type ReversalPageCursor,
+  type ReversalSearchField,
+  type ReversalSearchQuery,
+} from './query';
 
 type Caller = ReturnType<typeof pharmacyApInvoicesRouter.createCaller>;
 export type ReversibleInvoices = Awaited<ReturnType<Caller['reversalSearch']>>['invoices'];
@@ -24,7 +29,8 @@ const AGING_PATH = '/pharmacy/accounts/ap-aging';
 /** The aging request the reversal search keeps when it searches or turns a page. */
 export type AgingContext = { branchId: string; asOf: string; payeeFilter?: string };
 
-function pageHref(context: AgingContext, search: ReversalSearchQuery, page: number) {
+/** Without a cursor, the newest page. */
+function pageHref(context: AgingContext, search: ReversalSearchQuery, cursor?: ReversalPageCursor) {
   const params = new URLSearchParams({ branch: context.branchId, asOf: context.asOf });
   if (context.payeeFilter) params.set('payeeFilter', context.payeeFilter);
   const names: Record<ReversalSearchField, string> = {
@@ -36,7 +42,11 @@ function pageHref(context: AgingContext, search: ReversalSearchQuery, page: numb
   };
   for (const [field, name] of Object.entries(names) as [ReversalSearchField, string][])
     if (search.values[field]) params.set(name, search.values[field]);
-  if (page > 1) params.set('rvPage', String(page));
+  if (cursor)
+    params.set(
+      cursor.direction === 'older' ? 'rvOlder' : 'rvNewer',
+      reversalCursorParam(cursor.at)
+    );
   return `${AGING_PATH}?${params.toString()}#reverse`;
 }
 
@@ -111,11 +121,10 @@ function ReversalSearchForm({
         </Button>
         {filtered ? (
           <Link
-            href={pageHref(
-              context,
-              { ...search, values: { payee: '', reference: '', amount: '', from: '', to: '' } },
-              1
-            )}
+            href={pageHref(context, {
+              ...search,
+              values: { payee: '', reference: '', amount: '', from: '', to: '' },
+            })}
             className={buttonVariants({ variant: 'outline', className: 'min-h-11' })}
           >
             Clear
@@ -126,37 +135,37 @@ function ReversalSearchForm({
   );
 }
 
+/**
+ * DEV-967: each link names the row the next page starts after, so a bill recorded or reversed
+ * meanwhile never repeats or skips a row. A turned page with nothing newer (or nothing at all)
+ * links back to the newest page.
+ */
 function Pager({
   context,
   search,
-  hasOlder,
+  older,
+  newer,
 }: {
   context: AgingContext;
   search: ReversalSearchQuery;
-  hasOlder: boolean;
+  older: ApReversalCursor | null;
+  newer: ApReversalCursor | null;
 }) {
-  if (search.page <= 1 && !hasOlder) return null;
+  if (!older && !newer && !search.cursor) return null;
+  const link = buttonVariants({ variant: 'outline', className: 'min-h-11' });
   return (
     <nav aria-label="Reversal search pages" className="mt-3 flex flex-wrap items-center gap-3">
-      {search.page > 1 ? (
-        <Link
-          href={pageHref(context, search, search.page - 1)}
-          className={buttonVariants({ variant: 'outline', className: 'min-h-11' })}
-        >
+      {newer ? (
+        <Link href={pageHref(context, search, { direction: 'newer', at: newer })} className={link}>
           Newer invoices
         </Link>
+      ) : search.cursor ? (
+        <Link href={pageHref(context, search)} className={link}>
+          Newest invoices
+        </Link>
       ) : null}
-      <span className="font-mono text-xs text-text-muted uppercase">Page {search.page}</span>
-      {hasOlder && search.page >= AP_REVERSAL_MAX_PAGE ? (
-        // The search serves no deeper page; a link would land back on page 1.
-        <span className="text-sm text-text-muted">
-          Older invoices are past page {AP_REVERSAL_MAX_PAGE}. Narrow the search to reach them.
-        </span>
-      ) : hasOlder ? (
-        <Link
-          href={pageHref(context, search, search.page + 1)}
-          className={buttonVariants({ variant: 'outline', className: 'min-h-11' })}
-        >
+      {older ? (
+        <Link href={pageHref(context, search, { direction: 'older', at: older })} className={link}>
           Older invoices
         </Link>
       ) : null}
@@ -178,7 +187,8 @@ export function ReversalPanel({
   timeZone,
   context,
   search,
-  hasOlder,
+  older,
+  newer,
   zone,
 }: {
   branchId: string;
@@ -187,7 +197,9 @@ export function ReversalPanel({
   timeZone: string | null | undefined;
   context: AgingContext;
   search: ReversalSearchQuery;
-  hasOlder: boolean;
+  /** DEV-967: where the older and newer pages start, when there are any. */
+  older: ApReversalCursor | null;
+  newer: ApReversalCursor | null;
   zone: string;
 }) {
   const filtered = Object.values(search.values).some(Boolean);
@@ -219,14 +231,14 @@ export function ReversalPanel({
           <>
             <p className="mt-3 text-sm text-text-muted">
               {filtered
-                ? search.page > 1
+                ? search.cursor
                   ? 'No more posted supplier expense invoices match this search.'
                   : 'No posted supplier expense invoice on this branch matches this search. Change or clear the search.'
-                : search.page > 1
+                : search.cursor
                   ? 'No more posted supplier expense invoices on this branch.'
                   : 'No posted supplier expense invoice on this branch to reverse.'}
             </p>
-            <Pager context={context} search={search} hasOlder={false} />
+            <Pager context={context} search={search} older={null} newer={null} />
           </>
         ) : (
           <>
@@ -303,7 +315,7 @@ export function ReversalPanel({
                 );
               })}
             </ul>
-            <Pager context={context} search={search} hasOlder={hasOlder} />
+            <Pager context={context} search={search} older={older} newer={newer} />
           </>
         )}
       </ReversalNoticeArea>
