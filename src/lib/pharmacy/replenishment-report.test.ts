@@ -543,6 +543,46 @@ describe("DEV-944 replenishment counts the shop's own days", () => {
     expect(acceptsPlanning('2026-12-21', '2026-11-18T19:30:00.000Z', 'Asia/Karachi')).toBe(false);
   });
 
+  it("west of UTC, also needs the scenario day's UTC midnight, where the planning model starts, to lie ahead", () => {
+    // 20:00 on 18 Nov in New York (01:00 UTC on 19 Nov): 19 Nov is a future shop day, but the
+    // model's 19 Nov origin has passed and the simulation would refuse sources dated after it.
+    expect(acceptsPlanning('2026-11-19', '2026-11-19T01:00:00.000Z', 'America/New_York')).toBe(
+      false
+    );
+    expect(acceptsPlanning('2026-11-20', '2026-11-19T01:00:00.000Z', 'America/New_York')).toBe(
+      true
+    );
+    // 18:00 on 18 Nov in New York (23:00 UTC): both clocks still have 19 Nov ahead.
+    expect(acceptsPlanning('2026-11-19', '2026-11-18T23:00:00.000Z', 'America/New_York')).toBe(
+      true
+    );
+  });
+
+  it('produces the New York scenario the validator accepts instead of failing in the model', async () => {
+    const at = new Date('2026-11-19T01:00:00.000Z');
+    vi.setSystemTime(at);
+    const { db } = database();
+    const result = await readPharmacyReplenishmentReport(
+      db,
+      {
+        ...input,
+        historyStartDate: '2026-11-10',
+        originDate: '2026-11-18',
+        timeZone: 'America/New_York',
+        manualScenario: {
+          ...manualScenario,
+          originDate: '2026-11-20',
+          orderTerms: {
+            ...manualScenario.orderTerms,
+            arrivalAt: '2026-11-20T00:00:00Z',
+          },
+        },
+      },
+      at
+    );
+    expect(result.planning.status).toBe('AVAILABLE');
+  });
+
   function sale(id: string, completedAt: string, businessDate: string | null) {
     return {
       ...scope,

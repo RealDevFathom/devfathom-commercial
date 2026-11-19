@@ -498,3 +498,35 @@ describe("DEV-944 history ends on the shop's today", () => {
     expect(screen.getByText('History must end no later than today.')).toBeVisible();
   });
 });
+
+describe('DEV-944 scenario start west of UTC', () => {
+  async function openScenario(now: string, today: string, timeZone: string) {
+    vi.setSystemTime(new Date(now));
+    mocks.replenishment.mockRejectedValue(new Error('not needed'));
+    render(<ScenarioConsole {...props} financial today={today} timeZone={timeZone} />);
+    const input = await typeAndSearch();
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Include a user-supplied scenario' }));
+    return screen.getByLabelText('Scenario starts on (a future day)');
+  }
+
+  it('defaults past a tomorrow whose UTC midnight has passed, and refuses that day as the server does', async () => {
+    // 20:00 on 18 Nov in New York is 01:00 UTC on 19 Nov.
+    const start = await openScenario('2026-11-19T01:00:00.000Z', '2026-11-18', 'America/New_York');
+    expect(start).toHaveValue('2026-11-20');
+    fireEvent.change(start, { target: { value: '2026-11-19' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Read replenishment report' }));
+      await Promise.resolve();
+    });
+    expect(mocks.replenishment).not.toHaveBeenCalled();
+    expect(screen.getByText('Choose a future day within the next 31 days.')).toBeVisible();
+  });
+
+  it("keeps the shop's tomorrow as the default east of UTC", async () => {
+    // 00:30 on 19 Nov in Karachi.
+    const start = await openScenario('2026-11-18T19:30:00.000Z', '2026-11-19', 'Asia/Karachi');
+    expect(start).toHaveValue('2026-11-20');
+  });
+});

@@ -101,12 +101,14 @@ export function validatePharmacyReplenishmentReportInput(
   demandDateAfter(input.originDate, input.horizonDays);
   if (input.manualScenario) {
     const scenario = input.manualScenario;
-    // The planning model itself starts each day at midnight UTC (demand-evidence UTC_DAY_START);
-    // only "a future day within 31 days" is counted on the shop's clock.
+    // The planning model itself starts each day at midnight UTC (demand-evidence UTC_DAY_START)
+    // and refuses sources dated after that origin, so the scenario day must not have begun
+    // on either clock: the shop's (a day east of UTC starts earlier) or the model's UTC
+    // midnight (a day west of UTC starts later). "Within 31 days" counts on the shop's clock.
     const planningOrigin = demandDateMs(scenario.originDate);
     const planningStart = shopDayStartMs(scenario.originDate, timeZone);
     if (
-      planningStart <= readAt.getTime() ||
+      Math.min(planningStart, planningOrigin) <= readAt.getTime() ||
       planningStart > readAt.getTime() + 31 * 86_400_000 ||
       (scenario.orderTerms.arrivalAt !== null &&
         Date.parse(scenario.orderTerms.arrivalAt) < planningOrigin) ||

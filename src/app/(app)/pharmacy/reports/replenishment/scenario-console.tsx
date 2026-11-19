@@ -100,6 +100,15 @@ export function ScenarioConsole(props: Props) {
   );
 }
 
+/**
+ * The first day a scenario may start on: the shop's tomorrow, or, west of UTC late in the
+ * shop's day, the day after, once the planning model's UTC midnight for tomorrow has passed.
+ */
+function firstPlanningDay(today: string): string {
+  const tomorrow = demandDateAfter(today, 1);
+  return demandDateMs(tomorrow) > Date.now() ? tomorrow : demandDateAfter(today, 2);
+}
+
 function ScenarioWorkspace({
   organizationId,
   branches,
@@ -142,7 +151,7 @@ function ScenarioWorkspace({
     originDate: today,
     horizonDays: '7',
     method: 'RECENT_MEAN',
-    planningOrigin: demandDateAfter(today, 1),
+    planningOrigin: firstPlanningDay(today),
     currency: '',
     arrivalAt: '',
     expiresAt: '',
@@ -282,8 +291,13 @@ function ScenarioWorkspace({
     };
     if (manual && canPlan) {
       const planningOrigin = date('planningOrigin');
+      // As the server: the day must not have begun on the shop's clock or at the planning
+      // model's UTC midnight.
       const planningStart = Number.isFinite(planningOrigin) ? dayStart(draft.planningOrigin) : NaN;
-      if (planningStart <= Date.now() || planningStart > Date.now() + 31 * 86_400_000)
+      if (
+        Math.min(planningStart, planningOrigin) <= Date.now() ||
+        planningStart > Date.now() + 31 * 86_400_000
+      )
         invalid.planningOrigin = 'Choose a future day within the next 31 days.';
       const values = {} as Record<NumericKey, number | null>;
       for (const [key, , optional, minimum] of numericFields)
