@@ -14,7 +14,8 @@ import {
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
-import { workspaceDateOffset, workspaceDateRange, workspaceZoneLabel } from '@/lib/timezone';
+import { workspaceZoneLabel } from '@/lib/timezone';
+import { pharmacyCalendarDayOffset, pharmacyCalendarDayRange } from '@/lib/pharmacy/business-day';
 import { AccountActivityExportButton } from './export-button';
 
 export const metadata: Metadata = { title: screenCopy.accountActivity.accountActivityBridge };
@@ -93,8 +94,8 @@ export default async function AccountActivityBridgePage({
   const timeZone = ctx.organization?.timezone;
   const zone = workspaceZoneLabel(timeZone);
   const now = new Date();
-  const fallbackTo = workspaceDateOffset(timeZone, 1, now);
-  const fallbackFrom = workspaceDateOffset(timeZone, -30, now);
+  const fallbackTo = pharmacyCalendarDayOffset(timeZone, 1, now);
+  const fallbackFrom = pharmacyCalendarDayOffset(timeZone, -30, now);
   const from = query.from ?? fallbackFrom;
   const to = query.to ?? fallbackTo;
   if (!validDate(from) || !validDate(to) || from >= to)
@@ -114,8 +115,8 @@ export default async function AccountActivityBridgePage({
   try {
     // The picked days are read on the organization's clock.
     const window = {
-      from: workspaceDateRange(from, from, timeZone).from,
-      to: workspaceDateRange(to, to, timeZone).from,
+      from: pharmacyCalendarDayRange(from, from, timeZone).from,
+      to: pharmacyCalendarDayRange(to, to, timeZone).from,
     };
     statement = await pharmacyFinanceRouter.createCaller(ctx).financialStatements({
       branchId: branch.id,

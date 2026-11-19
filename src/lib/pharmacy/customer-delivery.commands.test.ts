@@ -361,7 +361,12 @@ it.each([
     try {
       const { db } = fixture();
       const findUnique = vi.fn().mockResolvedValue({ timezone });
-      const scoped = { ...db, organization: { findUnique } };
+      // DEV-958A: no branch day-end hour stored reads as midnight.
+      const scoped = {
+        ...db,
+        organization: { findUnique },
+        pharmacyBranch: { findFirst: async () => null },
+      };
       const { businessDate: _omitted, ...withoutDate } = physicalReturn;
       void _omitted;
       await recordDeliveryCommand(scoped as never, scope, withoutDate, {
@@ -406,7 +411,12 @@ it.each([
       const { db, order } = fixture();
       order.deliveryEvidence = [{ action: 'COLLECT', amountMinor: 400, requestKey: 'collect-a' }];
       const findUnique = vi.fn().mockResolvedValue({ timezone });
-      const scoped = { ...db, organization: { findUnique } };
+      // DEV-958A: no branch day-end hour stored reads as midnight.
+      const scoped = {
+        ...db,
+        organization: { findUnique },
+        pharmacyBranch: { findFirst: async () => null },
+      };
       await recordDeliveryCommand(scoped as never, scope, {
         branchId: scope.branchId,
         orderId: 'order-a',

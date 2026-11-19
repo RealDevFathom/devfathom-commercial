@@ -14,12 +14,8 @@ import { loadCashFlowProjection } from '@/lib/pharmacy/accounts/cash-flow';
 import { financeEntryDescription } from '@/lib/finance/source-labels';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
-import {
-  formatWorkspaceDateTime,
-  workspaceDateOffset,
-  workspaceDateRange,
-  workspaceZoneLabel,
-} from '@/lib/timezone';
+import { formatWorkspaceDateTime, workspaceZoneLabel } from '@/lib/timezone';
+import { pharmacyCalendarDayOffset, pharmacyCalendarDayRange } from '@/lib/pharmacy/business-day';
 
 export const metadata: Metadata = { title: screenCopy.cashFlow.cashFlow };
 
@@ -41,9 +37,9 @@ export default async function CashFlowPage({
   // the default window is counted on the UTC clock.
   let timeZone: string | null | undefined;
   const defaults = () => ({
-    from: query.from ?? workspaceDateOffset(timeZone, -30, now),
+    from: query.from ?? pharmacyCalendarDayOffset(timeZone, -30, now),
     // Exclusive upper bound defaults to tomorrow so today's postings are included.
-    to: query.to ?? workspaceDateOffset(timeZone, 1, now),
+    to: query.to ?? pharmacyCalendarDayOffset(timeZone, 1, now),
   });
   const requestedPage = Number.parseInt(query.page ?? '1', 10);
   let branches: Array<{ id: string; name: string }> = [];
@@ -78,8 +74,8 @@ export default async function CashFlowPage({
       }
       // The picked days are read on the organization's clock: the window starts at the
       // start of `from` and ends at the start of `to` (exclusive), both in that zone.
-      const start = workspaceDateRange(from, from, timeZone).from;
-      const end = workspaceDateRange(to, to, timeZone).from;
+      const start = pharmacyCalendarDayRange(from, from, timeZone).from;
+      const end = pharmacyCalendarDayRange(to, to, timeZone).from;
       const branchId = query.branch;
       // One repeatable-read transaction: authorization, canonical controls and the projection
       // share a snapshot, so a concurrent posting cannot surface as a false discrepancy.

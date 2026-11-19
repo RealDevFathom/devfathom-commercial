@@ -164,6 +164,8 @@ function fakeDb(
     },
     // DEV-631: today's business day, and whether its latest close still stands.
     organization: { findUnique: async () => ({ timezone: 'UTC' }) },
+    // DEV-958A: the branch's "day ends at" hour; none stored reads as midnight.
+    pharmacyBranch: { findFirst: async () => null },
     pharmacyDailyClose: { findFirst: vi.fn(async () => options.dayClose ?? null) },
     pharmacyCustomer: {
       findFirst: async () => ({

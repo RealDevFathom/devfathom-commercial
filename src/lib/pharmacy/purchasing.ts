@@ -13,7 +13,7 @@
  * revenue.** A free pack costs nothing, so it is absent from every money term
  * below and present in every quantity term.
  */
-import { workspaceToday } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 
 export class PharmacyPurchasingError extends Error {
   constructor(
@@ -559,7 +559,7 @@ export function compareQuotes(input: {
   timeZone?: string | null;
 }): readonly QuoteComparisonRow[] {
   const { requiredPacks, candidates, at, policy } = input;
-  const today = workspaceToday(input.timeZone, at);
+  const today = pharmacyCalendarDay(input.timeZone, at);
   if (!Number.isSafeInteger(requiredPacks) || requiredPacks <= 0) {
     throw new PharmacyPurchasingError('INVALID_QUANTITY');
   }

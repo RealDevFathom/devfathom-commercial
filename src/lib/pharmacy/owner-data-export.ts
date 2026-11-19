@@ -8,7 +8,8 @@ import { Prisma, type PlatformJob } from '@/generated/prisma/client';
 import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
 import { deleteUpload, getUploadStream, putUploadFile } from '@/lib/storage';
 import { withPlatformDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
-import { workspaceDateRange, workspaceTimezone } from '@/lib/timezone';
+import { workspaceTimezone } from '@/lib/timezone';
+import { pharmacyCalendarDayRange } from '@/lib/pharmacy/business-day';
 import { ZipFileWriter, ZipSizeLimitError } from '@/lib/zip';
 import {
   OWNER_DATA_EXPORT_FILES,
@@ -72,7 +73,7 @@ export function parseSalesRange(input: { from?: unknown; to?: unknown }): SalesR
 function rangeBounds(range: SalesRange, timeZone: string | null | undefined) {
   const anchor = range.from ?? range.to;
   if (!anchor) return { from: null, toExclusive: null };
-  const bounds = workspaceDateRange(range.from ?? anchor, range.to ?? anchor, timeZone);
+  const bounds = pharmacyCalendarDayRange(range.from ?? anchor, range.to ?? anchor, timeZone);
   return {
     from: range.from ? bounds.from : null,
     // Inclusive end date: everything before the next day starts.

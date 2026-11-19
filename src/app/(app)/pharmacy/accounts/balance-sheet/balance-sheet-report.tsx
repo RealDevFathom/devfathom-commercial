@@ -13,7 +13,8 @@ import {
 } from '@/components/ui/table';
 import { classifyBalanceSheet } from '@/lib/pharmacy/accounts/balance-sheet';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
-import { formatWorkspaceDateTime, workspaceDateRange, workspaceZoneLabel } from '@/lib/timezone';
+import { formatWorkspaceDateTime, workspaceZoneLabel } from '@/lib/timezone';
+import { pharmacyCalendarDayRange } from '@/lib/pharmacy/business-day';
 import { plainReportSource } from '@/lib/pharmacy/report-labels';
 
 const money = (minor: string) => {
@@ -46,11 +47,11 @@ export async function BalanceSheetReport({
 }) {
   const zone = workspaceZoneLabel(timeZone);
   // The cutoff is the start of the picked day on the organization's clock.
-  const to = workspaceDateRange(cutoff, cutoff, timeZone).from;
+  const to = pharmacyCalendarDayRange(cutoff, cutoff, timeZone).from;
   const previousDay = new Date(Date.parse(`${cutoff}T00:00:00.000Z`) - 86_400_000)
     .toISOString()
     .slice(0, 10);
-  const from = workspaceDateRange(previousDay, previousDay, timeZone).from;
+  const from = pharmacyCalendarDayRange(previousDay, previousDay, timeZone).from;
   let result: Awaited<ReturnType<typeof caller.financialStatements>>;
   try {
     result = await caller.financialStatements({

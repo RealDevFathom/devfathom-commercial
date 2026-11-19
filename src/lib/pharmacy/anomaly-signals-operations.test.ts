@@ -196,3 +196,59 @@ describe('anomaly signals on the workspace day (DEV-902)', () => {
     );
   });
 });
+
+describe('anomaly signals across branches on different hours (DEV-958A)', () => {
+  it('reads each branch on its own window and keeps one order before the 200-row cut', async () => {
+    const signal = (id: string, status: string, severity: string, computedAt: string) => ({
+      id,
+      status,
+      severity,
+      computedAt: new Date(computedAt),
+      scope: {},
+    });
+    // The late branch ends its days at 05:00; the other at midnight: two windows, two reads.
+    const late = [
+      signal('late-notice', 'OPEN', 'NOTICE', '2026-09-04T10:00:00.000Z'),
+      signal('late-snoozed', 'SNOOZED', 'URGENT', '2026-09-04T11:00:00.000Z'),
+      ...Array.from({ length: 150 }, (_, index) =>
+        signal(`late-review-${index}`, 'OPEN', 'REVIEW', '2026-09-04T09:00:00.000Z')
+      ),
+    ];
+    const midnight = [
+      signal('midnight-urgent', 'OPEN', 'URGENT', '2026-09-04T08:00:00.000Z'),
+      signal('midnight-acknowledged', 'ACKNOWLEDGED', 'URGENT', '2026-09-04T12:00:00.000Z'),
+      ...Array.from({ length: 150 }, (_, index) =>
+        signal(`midnight-review-${index}`, 'OPEN', 'REVIEW', '2026-09-04T07:00:00.000Z')
+      ),
+    ];
+    const findMany = vi.fn(async ({ where }: { where: { branchId: { in: string[] } } }) =>
+      where.branchId.in.includes('branch_late') ? late : midnight
+    );
+    const rows = await readPharmacyAnomalySignals(
+      {
+        pharmacyAnomalySignal: { findMany },
+        medicineStrengthComponent: { findMany: vi.fn() },
+      } as never,
+      {
+        branchIds: ['branch_late', 'branch_1'],
+        from: '2026-09-04',
+        to: '2026-09-04',
+        timeZone: 'Asia/Karachi',
+        dayEnds: { branch_late: [{ from: '2026-01-01', hour: 5 }] },
+      }
+    );
+    expect(findMany).toHaveBeenCalledTimes(2);
+    expect(rows).toHaveLength(200);
+    // Open before acknowledged before snoozed; urgent before review before notice; newest first.
+    expect(rows.slice(0, 3).map((row) => row.id)).toEqual([
+      'midnight-urgent',
+      'late-review-0',
+      'late-review-1',
+    ]);
+    expect(rows.findIndex((row) => row.id === 'midnight-review-0')).toBe(151);
+    // The cut drops the lowest-ranked rows, never a whole branch's urgent ones.
+    expect(rows.map((row) => row.id)).not.toContain('late-notice');
+    expect(rows.map((row) => row.id)).not.toContain('midnight-acknowledged');
+    expect(rows.map((row) => row.id)).not.toContain('late-snoozed');
+  });
+});

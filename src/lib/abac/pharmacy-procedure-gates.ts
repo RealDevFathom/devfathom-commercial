@@ -2172,6 +2172,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
       'run-branches/close-day-branches-unless',
     ],
   },
+  'pharmacySales.dayEndHour': {
+    gate: 'protectedProcedure + requireDrawerManagerAccess -> pharmacy:manage (counter family not DENIED), assigned branch or ADMIN',
+    lines: ['run-branches/set-when-business-day'],
+  },
   'pharmacySales.dayReopenAccess': {
     gate: 'protectedProcedure; returns {authorized} from requireDrawerManagerAccess without throwing',
     none: 'any signed-in member (only reports whether they may reopen the day)',
@@ -2424,6 +2428,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
   'pharmacySales.saveBillDiscountSetting': {
     gate: "protectedProcedure + owner (readMaxDiscountSettings canChange) + the owner's fresh PIN; support sessions refused; audited",
     none: 'owner only, with a fresh PIN',
+  },
+  'pharmacySales.saveDayEndHour': {
+    gate: 'auditedProtectedProcedure + requireDrawerManagerAccess -> pharmacy:manage (counter family not DENIED), assigned branch or ADMIN; revision-checked and audited; no PIN',
+    lines: ['run-branches/set-when-business-day'],
   },
   'pharmacySales.saveDiscountMaximum': {
     gate: "protectedProcedure + isOrganizationOwner + owner's PIN; support sessions refused",

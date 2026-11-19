@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
-import { workspaceToday } from '@/lib/timezone';
+import { pharmacyBusinessDay } from '@/lib/pharmacy/business-day';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { createTRPCContext } from '@/server/trpc';
 import { ScenarioConsole } from './scenario-console';
@@ -48,7 +48,11 @@ export default async function ReplenishmentPage({
       // The shop's own day: the replenishment reader counts the history and demand coverage
       // on the organisation's clock and accepts a history ending on the shop's today
       // (`validatePharmacyReplenishmentReportInput`), so label and server window agree.
-      today: workspaceToday(actor.organization?.timezone),
+      // DEV-958A: on the chosen branch's clock, whose day ends at its "day ends at" hour.
+      today: pharmacyBusinessDay({
+        timeZone: actor.organization?.timezone,
+        dayEnd: scope.branches.find((branch) => branch.id === branchId)?.businessDayEndsAtHistory,
+      }),
       timeZone: actor.organization?.timezone ?? null,
     };
   } catch {

@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
-import { workspaceToday } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { createTRPCContext } from '@/server/trpc';
 
@@ -23,7 +23,7 @@ export default async function BranchComparisonPage({
   const query = await searchParams;
   const ctx = await createTRPCContext();
   // The owner's business day, not the UTC one (00:00–04:59 PKT is still "today").
-  const today = workspaceToday(ctx.organization?.timezone);
+  const today = pharmacyCalendarDay(ctx.organization?.timezone);
   const from = query.from ?? today;
   const to = query.to ?? today;
   const caller = pharmacyReportsRouter.createCaller(ctx);
