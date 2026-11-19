@@ -580,6 +580,46 @@ suite('DEV-956 whole-bill discount on PostgreSQL', () => {
     expect((await lines(f.sale.id)).map((line) => line.billDiscountMinor)).toEqual([30, 33, 0, 40]);
   });
 
+  it('a line add that waited on the sale lock while a discount was given still clears it', async () => {
+    await setEnabled(true);
+    await setMaximum(10_000);
+    const f = await bill();
+    const extra = await tenant((db) => item(db, [400], [100]));
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let locked!: () => void;
+    const lockTaken = new Promise<void>((resolve) => (locked = resolve));
+    // The discount takes the sale lock and holds it, uncommitted, while the add starts.
+    const discount = tenant(async (db) => {
+      await applyBillDiscount(db, scope, {
+        saleId: f.sale.id,
+        request: { kind: 'AMOUNT', minor: 60 },
+        approval,
+      });
+      locked();
+      await held;
+    });
+    await lockTaken;
+    const add = tenant((db) =>
+      addSaleLine(db, scope, {
+        saleId: f.sale.id,
+        medicineId: extra.medicine.id,
+        presentationId: extra.presentation.id,
+        packLevelId: extra.pack.id,
+        saleUnit: 'UNIT',
+        quantity: 1,
+        canonicalUnitsPerSaleUnit: 1,
+        idempotencyKey: randomUUID(),
+      })
+    );
+    // Let the add read the bill (no share yet) and block on the lock, then commit the discount.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    release();
+    await discount;
+    await expect(add).resolves.toMatchObject({ billDiscountClearedMinor: 60 });
+    expect((await lines(f.sale.id)).map((line) => line.billDiscountMinor)).toEqual([0, 0, 0, 0]);
+  });
+
   it('voids an unpaid discounted bill and gives its stock back', async () => {
     await setEnabled(true);
     await setMaximum(10_000);
