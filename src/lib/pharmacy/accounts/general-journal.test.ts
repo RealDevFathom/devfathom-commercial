@@ -284,6 +284,42 @@ describe('draft lifecycle', () => {
     expect(data.data.lines.create).toHaveLength(2);
   });
 
+  // DEV-947: the line's relation to its voucher is the composite (organizationId,
+  // branchId, voucherId), so Prisma copies the scope from the parent and its checked
+  // nested input refuses those keys on a real database.
+  const expectedLineRows = [
+    { lineNumber: 1, ...debit, memo: null },
+    { lineNumber: 2, ...credit, memo: null },
+  ];
+
+  it('creates nested lines without the scope keys Prisma copies from the voucher', async () => {
+    const { db, raw } = fakeDb();
+    await createJournalVoucherDraft(db, scope, draftInput, NOW);
+    const data = raw.pharmacyJournalVoucher.create.mock.calls[0]![0] as {
+      data: { lines: { create: Record<string, unknown>[] } };
+    };
+    expect(data.data.lines.create).toStrictEqual(expectedLineRows);
+  });
+
+  it('recreates edited lines without the scope keys Prisma copies from the voucher', async () => {
+    const { db, raw } = fakeDb({ voucher: voucher() });
+    await updateJournalVoucherDraft(
+      db,
+      scope,
+      { ...draftInput, voucherId: 'jv_1', expectedVersion: 2 },
+      NOW
+    );
+    const update = raw.pharmacyJournalVoucher.update.mock.calls[0]![0] as {
+      where: { id: string };
+      data: { lines: { create: Record<string, unknown>[] } };
+    };
+    expect(update.where).toEqual({ id: 'jv_1' });
+    expect(update.data.lines.create).toStrictEqual(expectedLineRows);
+    expect(raw.pharmacyJournalVoucherLine.deleteMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', voucherId: 'jv_1' },
+    });
+  });
+
   it('refuses to create a draft with a disallowed account before writing', async () => {
     const { db, raw } = fakeDb();
     await expect(
