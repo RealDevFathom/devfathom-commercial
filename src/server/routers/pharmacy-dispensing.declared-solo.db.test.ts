@@ -242,8 +242,14 @@ const soloCredential = () =>
     })
   );
 
-/** An audit entry written straight to the table that claims everything the marker needs. */
-const forgedSelfApproval = (sale: { saleId: string; saleLineId: string; reviewItemId: string }) =>
+/**
+ * An audit entry written straight to the table that claims everything the marker needs, with
+ * optional extra metadata (for example the declared solo marker). No signature names it.
+ */
+const forgedSelfApproval = (
+  sale: { saleId: string; saleLineId: string; reviewItemId: string },
+  extra: Record<string, unknown> = {}
+) =>
   tenant(async (db) => {
     const row = await db.auditLog.create({
       data: {
@@ -262,6 +268,7 @@ const forgedSelfApproval = (sale: { saleId: string; saleLineId: string; reviewIt
           reviewItemId: sale.reviewItemId,
           saleId: sale.saleId,
           saleLineId: sale.saleLineId,
+          ...extra,
         },
       },
       select: { id: true },
@@ -726,8 +733,55 @@ describeIfDatabase('one pharmacist per shift (DEV-960)', () => {
       );
       // An audit entry written straight to the table, with no signature naming it, is not listed.
       const forged = await forgedSelfApproval(sale);
+      // Nor is one that carries the full declared marker, so it passes every filter on the audit
+      // entry itself, but has no real signature behind it: neither on a review still waiting for
+      // one, nor on this review, whose signature names its own, real entry.
+      const declaredMarker = {
+        policy: 'PHARMACY_RX_REVIEW_SOLO_SELF_SIGN_PIN',
+        soloRule: true,
+        approverId: ids.solo,
+        initiatedById: ids.solo,
+        branchId: ids.branch,
+        declaredSolo: true,
+        soloBasis: 'DECLARED_ON_DUTY',
+        declaration: 'I am the only pharmacist on duty now.',
+        declarationVersion: DECLARATION.version,
+        soloShiftPolicyVersion: 1,
+        otherEligibleSigners: [{ id: ids.colleague, name: ids.colleague }],
+      };
+      const unsigned = await ringUp();
+      const forgedUnsigned = await forgedSelfApproval(unsigned, declaredMarker);
+      const forgedOnSigned = await forgedSelfApproval(sale, declaredMarker);
+      expect(await signDecisions(unsigned.reviewItemId)).toEqual([]);
+      // The forged entries really do match the audit-side filters the list applies.
+      const matching = await tenant((db) =>
+        db.auditLog.findMany({
+          where: {
+            id: { in: [forgedUnsigned, forgedOnSigned] },
+            action: 'pharmacyDispensing.selfSignReview',
+            outcome: 'SUCCESS',
+            targetType: 'PharmacyPharmacistReviewItem',
+            AND: [
+              { metadata: { path: ['declaredSolo'], equals: true } },
+              { metadata: { path: ['policy'], equals: 'PHARMACY_RX_REVIEW_SOLO_SELF_SIGN_PIN' } },
+              { metadata: { path: ['branchId'], equals: ids.branch } },
+            ],
+          },
+          select: { id: true },
+        })
+      );
+      expect(matching.map((row) => row.id).sort()).toEqual([forgedUnsigned, forgedOnSigned].sort());
       const again = await settings(ids.owner, (api) => api.declaredSignOffs());
-      expect(again.map((row) => row.auditId)).not.toContain(forged);
+      const listed = again.map((row) => row.auditId);
+      expect(listed).toContain(audit.id);
+      expect(listed).not.toContain(forged);
+      expect(listed).not.toContain(forgedUnsigned);
+      expect(listed).not.toContain(forgedOnSigned);
+      // Filtered to the branch, the same holds.
+      const byBranch = await settings(ids.owner, (api) =>
+        api.declaredSignOffs({ branchId: ids.branch, limit: 200 })
+      );
+      expect(byBranch.map((row) => row.auditId)).toEqual([audit.id]);
     });
 
     it('refuses a cashier without the dispensing right', async () => {
