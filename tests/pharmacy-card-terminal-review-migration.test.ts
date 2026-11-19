@@ -34,11 +34,19 @@ describe('DEV-743 card-terminal review resolution migration contract', () => {
     const migrations = readdirSync('prisma/migrations')
       .filter((entry) => /^\d{14}_/.test(entry))
       .sort();
-    expect(migrations.at(-1)).toBe(NAME);
+    // Ordered after the terminal migrations. A later migration may follow it, and every one
+    // that does is stamped after it (migration-timestamp-order.test.ts enforces the ledger).
+    expect(migrations.indexOf(NAME)).toBeGreaterThan(migrations.indexOf(COUNTER));
+    for (const later of migrations.slice(migrations.indexOf(NAME) + 1))
+      expect(later.slice(0, 14) > NAME.slice(0, 14)).toBe(true);
     const ledger = readFileSync('tests/fixtures/new-migration-order.txt', 'utf8')
       .trim()
       .split('\n');
-    expect(ledger.at(-1)).toBe(NAME);
+    expect(ledger.filter((name) => name === NAME)).toHaveLength(1);
+    const position = ledger.indexOf(NAME);
+    expect(ledger[position - 1]).toBe(COUNTER);
+    for (const later of ledger.slice(position + 1))
+      expect(later.slice(0, 14) > NAME.slice(0, 14)).toBe(true);
     expect(ledger.indexOf(NAME)).toBeGreaterThan(ledger.indexOf(COUNTER));
   });
 

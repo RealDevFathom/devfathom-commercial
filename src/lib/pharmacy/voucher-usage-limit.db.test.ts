@@ -7,6 +7,9 @@
  * suite is skipped.
  */
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+
+import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -14,6 +17,9 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
 const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
+// DEV-951: the corrective migration runs as the schema owner, as deploy runs it.
+const OWNER_DATABASE_URL = process.env.PHARMACY_TEST_OWNER_DATABASE_URL;
+const describeIfOwner = TEST_DATABASE_URL && OWNER_DATABASE_URL ? describe : describe.skip;
 
 const suffix = randomUUID().slice(0, 8);
 const org = `dev780_${suffix}`;
@@ -253,5 +259,39 @@ describeIfDatabase('DEV-780 voucher use limit (database)', () => {
     for (let use = redeemed; use < limit; use++) await redeem(item, voucher.id);
     await expect(redeem(item, voucher.id)).rejects.toThrow('VOUCHER_INVALID');
     expect(await counts()).toEqual({ used: limit, lines: limit });
+  });
+});
+
+describeIfOwner('DEV-951 voucher use count correction (database)', () => {
+  it('refuses at the counter a voucher whose earlier use was never counted', async () => {
+    const item = await frontShopItem(3);
+    const voucher = await issueVoucher(1);
+    await redeem(item, voucher.id);
+    // A redemption from before DEV-819 whose count the original backfill missed: the line
+    // exists, the stored count says the voucher was never used.
+    await tenant((db) =>
+      db.pharmacyVoucher.update({ where: { id: voucher.id }, data: { usedCount: 0 } })
+    );
+
+    const owner = new pg.Client({ connectionString: OWNER_DATABASE_URL });
+    await owner.connect();
+    try {
+      // The whole file, with its own transaction and settings, as the schema owner.
+      await owner.query(
+        readFileSync(
+          'prisma/migrations/20261118124400_pharmacy_voucher_use_count_correction/migration.sql',
+          'utf8'
+        )
+      );
+    } finally {
+      await owner.end();
+    }
+
+    await expect(redeem(item, voucher.id)).rejects.toThrow('VOUCHER_INVALID');
+    await tenant(async (db) => {
+      const stored = await db.pharmacyVoucher.findFirstOrThrow({ where: { id: voucher.id } });
+      expect(stored).toMatchObject({ usedCount: 1, maxUses: 1, active: true, revokedAt: null });
+      expect(await db.pharmacySaleLine.count({ where: { voucherId: voucher.id } })).toBe(1);
+    });
   });
 });
