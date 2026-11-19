@@ -52,8 +52,9 @@ export const payApInvoiceSchema = z
   .strict();
 
 /**
- * DEV-103: a manager or owner reverses with their own fresh PIN (never stored). `at` is
- * optional: without it the server dates the reversal now.
+ * DEV-103: a manager or owner reverses with their own fresh PIN (never stored). The server dates
+ * every reversal now: the schema is strict and has no date, so a caller that sends `at` (to
+ * backdate one inside an open period) is refused before anything is read.
  */
 export const reverseApSettlementSchema = z
   .object({
@@ -61,14 +62,14 @@ export const reverseApSettlementSchema = z
     settlementId: id,
     commandKey,
     reason: z.string().trim().min(1).max(500),
-    at: instant.optional(),
     pin: z.string().regex(/^\d{4,8}$/),
   })
   .strict();
 
 /**
- * DEV-103: a manager or owner reverses with their own fresh PIN (never stored). `at` is
- * optional: without it the server dates the reversal now.
+ * DEV-103: a manager or owner reverses with their own fresh PIN (never stored). The server dates
+ * every reversal now: the schema is strict and has no date, so a caller that sends `at` (to
+ * backdate one inside an open period) is refused before anything is read.
  */
 export const reverseApInvoiceSchema = z
   .object({
@@ -76,7 +77,6 @@ export const reverseApInvoiceSchema = z
     invoiceId: id,
     commandKey,
     reason: z.string().trim().min(1).max(500),
-    at: instant.optional(),
     pin: z.string().regex(/^\d{4,8}$/),
   })
   .strict();
@@ -88,6 +88,35 @@ export const listApInvoicesSchema = z
     take: z.number().int().min(1).max(100).default(50),
   })
   .strict();
+
+/** DEV-103: rows per page of the reversal search. */
+export const AP_REVERSAL_PAGE_ROWS = 25;
+/** DEV-103: the deepest page the reversal search serves; narrow the search to go further back. */
+export const AP_REVERSAL_MAX_PAGE = 400;
+
+/**
+ * DEV-103: find a posted supplier expense invoice, or a payment in force against one, to reverse.
+ * Every filter is optional and they all apply together. `payee` and `reference` match part of the
+ * name or reference, ignoring case (`reference` matches our reference or the supplier's invoice
+ * number). `amountMinor` (typed amounts go through `amountInputToMinor`) matches the invoice
+ * amount or a payment in force exactly. `from`/`to` are calendar days on the shop's clock, both
+ * included, and match the invoice date or the day a payment in force was made.
+ */
+export const searchApReversalsSchema = z
+  .object({
+    branchId: id,
+    payee: z.string().trim().min(1).max(160).optional(),
+    reference: z.string().trim().min(1).max(80).optional(),
+    amountMinor: amountMinor.optional(),
+    from: calendarDate.optional(),
+    to: calendarDate.optional(),
+    page: z.number().int().min(1).max(AP_REVERSAL_MAX_PAGE).default(1),
+  })
+  .strict()
+  .refine((input) => !input.from || !input.to || input.from <= input.to, {
+    message: 'The from day must be on or before the to day.',
+    path: ['to'],
+  });
 
 export const apAgingSchema = z
   .object({
@@ -153,6 +182,7 @@ export type PayApInvoiceInput = z.infer<typeof payApInvoiceSchema>;
 export type ReverseApSettlementInput = z.infer<typeof reverseApSettlementSchema>;
 export type ReverseApInvoiceInput = z.infer<typeof reverseApInvoiceSchema>;
 export type ListApInvoicesInput = z.infer<typeof listApInvoicesSchema>;
+export type SearchApReversalsInput = z.infer<typeof searchApReversalsSchema>;
 export type RequestApCreditSetOffInput = z.infer<typeof requestApCreditSetOffSchema>;
 export type ApproveApCreditSetOffInput = z.infer<typeof approveApCreditSetOffSchema>;
 export type RejectApCreditSetOffInput = z.infer<typeof rejectApCreditSetOffSchema>;
