@@ -251,9 +251,11 @@ function OwnerUsePins() {
         Use permanent PINs for approvals?
       </h2>
       <p className="text-sm text-text-body">
-        Approvals will take each person&apos;s permanent PIN. Anyone who sees or is told a PIN can
-        approve refunds, discounts and other actions with it until it is changed. Nobody will be
-        asked to set up the app. This change is recorded in the audit log.
+        Approvals will take each person&apos;s permanent PIN, including people who set up the app:
+        app codes are not accepted while it is off. Anyone who sees or is told a PIN can approve
+        refunds, discounts and other actions with it until it is changed. Nobody will be asked to
+        set up the app, and anyone who can approve and has no PIN yet is asked to set one. You can
+        turn the authenticator back on in Settings. This change is recorded in the audit log.
       </p>
       <label className="block text-sm text-text-body">
         Your current password

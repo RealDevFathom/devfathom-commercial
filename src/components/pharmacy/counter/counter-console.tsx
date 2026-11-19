@@ -46,6 +46,7 @@ import { CounterSaleReadiness, CounterSetupNextStep } from './counter-sale-readi
 import { CounterDrawerOperator } from './counter-drawer-operator';
 import { CounterOpenBills, type CounterOpenBill } from './counter-open-bills';
 import { CounterPackApprovalDialog } from './counter-pack-approval-dialog';
+import { ApprovalSecretKindContext, approvalSecretKind } from './counter-approval-copy';
 import type { CounterApprovalPin } from '@/lib/pharmacy/counter-line-approval';
 import { CounterVoidDialog } from './counter-void-dialog';
 import type { SaleVoidReason } from '@/lib/pharmacy/sale-void-reasons';
@@ -520,23 +521,39 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
     );
   }
   return (
-    <ScopedPharmacyCounterConsole
-      {...props}
-      key={JSON.stringify([
-        user.organizationId,
-        user.id,
-        user.role,
-        user.status,
-        [...entitlements.enabledModules].sort(),
-      ])}
-      organizationId={user.organizationId}
-      accountId={user.id}
-      evidenceAuthorized={user.role === 'ADMIN'}
-      keymapPreviewAuthorized={user.role === 'ADMIN'}
-      safetyLicensed={isModuleGranted('pharmacy-safety', entitlements.enabledModules)}
-      dispensingLicensed={isModuleGranted('pharmacy-dispensing', entitlements.enabledModules)}
-      accountEmail={user.email}
-    />
+    <CounterApprovalMode>
+      <ScopedPharmacyCounterConsole
+        {...props}
+        key={JSON.stringify([
+          user.organizationId,
+          user.id,
+          user.role,
+          user.status,
+          [...entitlements.enabledModules].sort(),
+        ])}
+        organizationId={user.organizationId}
+        accountId={user.id}
+        evidenceAuthorized={user.role === 'ADMIN'}
+        keymapPreviewAuthorized={user.role === 'ADMIN'}
+        safetyLicensed={isModuleGranted('pharmacy-safety', entitlements.enabledModules)}
+        dispensingLicensed={isModuleGranted('pharmacy-dispensing', entitlements.enabledModules)}
+        accountEmail={user.email}
+      />
+    </CounterApprovalMode>
+  );
+}
+
+/**
+ * DEV-961: the counter's approval fields follow the owner's "Authenticator for approvals"
+ * setting: "Approval code" while it is on (the default, and until it is read), "Approver PIN"
+ * while the owner has it off. The server decides either way; this is the wording only.
+ */
+function CounterApprovalMode({ children }: { children: React.ReactNode }) {
+  const mode = trpc.approvalAuthenticator.mode.useQuery(undefined, { staleTime: 60_000 });
+  return (
+    <ApprovalSecretKindContext.Provider value={approvalSecretKind(mode?.data?.required)}>
+      {children}
+    </ApprovalSecretKindContext.Provider>
   );
 }
 

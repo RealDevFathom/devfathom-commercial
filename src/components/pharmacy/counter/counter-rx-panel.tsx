@@ -14,7 +14,7 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
-import { COUNTER_APPROVAL_CODE_HINT } from './counter-approval-copy';
+import { useCounterApprovalCopy } from './counter-approval-copy';
 import { CounterDuplicateSaltAcknowledge } from './counter-duplicate-salt-acknowledge';
 import type { CounterAlert } from '@/lib/pharmacy/counter-alerts';
 import type { CounterPatientPanel } from '@/lib/pharmacy/counter-prescriptions';
@@ -594,6 +594,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
     },
     ref
   ) {
+    const approvalCopy = useCounterApprovalCopy();
     const blocks = alerts.filter((alert) => alert.severity === 'SAFETY_BLOCK');
     const advice = alerts.filter((alert) => alert.severity === 'CLINICAL_ADVICE');
     const commercial = alerts.filter((alert) => alert.severity === 'COMMERCIAL');
@@ -1039,7 +1040,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
               onChange={(event) => controlled.onChange('pin', event.target.value)}
             />
             <p id="controlled-pin-hint" className="text-xs text-text-muted">
-              {COUNTER_APPROVAL_CODE_HINT}
+              {approvalCopy.hint}
             </p>
             <label
               className="flex min-h-11 items-center gap-2 text-sm text-text-body"

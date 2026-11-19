@@ -55,6 +55,18 @@ async function requestSession(): Promise<Session | null> {
   return auth();
 }
 
+/**
+ * DEV-961: whether the current request is a server action (Next sends the action id in the
+ * `Next-Action` header). Outside a request (a job, a script) there is nothing to refuse.
+ */
+async function isServerActionRequest(): Promise<boolean> {
+  try {
+    return (await headers()).has('next-action');
+  } catch {
+    return false;
+  }
+}
+
 async function currentRequestHost(): Promise<string | null> {
   const requestHeaders = await headers();
   return (
@@ -198,12 +210,17 @@ async function resolveTenantActorUncached(
       throw new PasswordChangeRequiredError();
     }
     // DEV-961: until a member who can approve sets up their approval authenticator, every
-    // API route refuses them (the set-up screen's own tRPC calls and sign-out excepted).
+    // request that is not a page render refuses them here: every route handler (under /api
+    // or not: exports, downloads, uploads) and every server action. Only the set-up screen's
+    // own tRPC calls and sign-out are exempt. A page render is not refused here: the (app)
+    // layout sends it to the set-up screen. This is the one place every route handler and
+    // server action resolves its signed-in member (`tests/approval-authenticator-route-gate`
+    // enumerates them); API tokens are gated the same way in `authenticateApiRequest`.
     if (
       session.user.approvalAuthenticatorSetupRequired === true &&
-      options.request &&
-      new URL(options.request.url).pathname.startsWith('/api/') &&
-      !isApprovalAuthenticatorSetupApiExempt(options.request)
+      (options.request
+        ? !isApprovalAuthenticatorSetupApiExempt(options.request)
+        : await isServerActionRequest())
     ) {
       throw new ApprovalAuthenticatorSetupRequiredError();
     }

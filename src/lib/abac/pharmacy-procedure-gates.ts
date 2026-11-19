@@ -5,9 +5,12 @@
  * Data only: nothing here grants or checks anything.
  *
  * DEV-961: an "approval code" below is what the shared approval path
- * (`verifyApprovalSecret`) accepts: the approver's authenticator code by default, and their
- * permanent PIN only where the owner turned the authenticator off (or for a staff profile
- * with no web login). Entries about setting or viewing one's own PIN are about the PIN itself.
+ * (`verifyApprovalSecret`) accepts, following the owner's one setting, "Authenticator for
+ * approvals": while it is on (the default), the approver's current authenticator code (a staff
+ * profile with no web login keeps its PIN); while the owner has it off, everyone's permanent
+ * PIN, and no app code. A person who holds no approver right and confirms their own action
+ * with their own PIN (a cashier redeeming a voucher) keeps that PIN in both modes. Entries
+ * about setting or viewing one's own PIN are about the PIN itself.
  */
 export type PharmacyProcedureGate =
   { gate: string; lines: readonly string[] } | { gate: string; none: string };

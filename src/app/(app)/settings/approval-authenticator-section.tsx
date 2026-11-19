@@ -66,7 +66,7 @@ export function RecoveryCodeList({ codes }: { codes: string[] }) {
  * their fixed approval PIN; the owner or an administrator handles recovery; the owner can
  * require an authenticator for every approval in the organization.
  * DEV-961: required by default; set-up issues recovery codes; the owner confirms turning
- * the requirement off with his own code, or his password and an acknowledgement.
+ * the requirement off with their own code, or their password and an acknowledgement.
  */
 export function ApprovalAuthenticatorSection() {
   const utils = trpc.useUtils();
@@ -96,8 +96,12 @@ export function ApprovalAuthenticatorSection() {
     },
     onError: (e) => setError(e.message),
   });
+  const [withoutPin, setWithoutPin] = useState<{ id: string; name: string }[]>([]);
   const setRequired = trpc.approvalAuthenticator.setRequired.useMutation({
-    onSuccess: () => void utils.approvalAuthenticator.getStatus.invalidate(),
+    onSuccess: (result) => {
+      setWithoutPin(result.withoutPin);
+      void utils.approvalAuthenticator.getStatus.invalidate();
+    },
     onError: (e) => setError(e.message),
   });
   const [turningOff, setTurningOff] = useState(false);
@@ -116,7 +120,8 @@ export function ApprovalAuthenticatorSection() {
         <p className="mt-1 text-xs text-muted-foreground">
           Approve refunds, discounts and other manager or owner actions with a code that changes
           every 30 seconds, instead of a fixed PIN. You can read the code to the cashier by phone.
-          Approvals need the counter to be online.
+          Approvals need the counter to be online. While the owner has it turned off, approvals
+          take each person&apos;s permanent PIN instead.
         </p>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -142,7 +147,9 @@ export function ApprovalAuthenticatorSection() {
             <div className="flex flex-wrap items-center gap-3">
               <StatusPill status="active" label="Set up" />
               <p className="text-sm text-muted-foreground">
-                Your PIN is no longer accepted for approvals. Enter the code from your app instead.
+                {data.required
+                  ? 'Your PIN is no longer accepted for approvals. Enter the code from your app instead.'
+                  : 'The owner has turned the authenticator off, so approvals take your permanent PIN for now. Your app stays set up: its codes work again as soon as the owner turns it back on.'}{' '}
                 If you lose your phone, use a recovery code below or ask the owner or an
                 administrator to reset it.
               </p>
@@ -273,7 +280,8 @@ export function ApprovalAuthenticatorSection() {
               <p className="text-xs text-muted-foreground">
                 On by default. Approvals take a code from each person&apos;s authenticator app, not
                 a fixed PIN. Anyone who can approve must set up the app before their account works.
-                Staff with no login keep their PIN.
+                Staff with no login keep their PIN. Off: everyone approves with their permanent
+                PIN, and app codes are not accepted; apps stay set up for when you turn it back on.
               </p>
             </div>
             <Switch
@@ -305,6 +313,21 @@ export function ApprovalAuthenticatorSection() {
           />
         )}
 
+        {data?.isOwner && !data.required && withoutPin.length > 0 && (
+          <div role="status" className="space-y-1 border-t border-border pt-4">
+            <p className="text-sm font-medium text-foreground">These people have no PIN yet</p>
+            <p className="text-xs text-muted-foreground">
+              They can approve but have no permanent PIN, so they cannot approve until they set
+              one. Each was sent a notice asking them to set one.
+            </p>
+            <ul className="text-sm text-text-body">
+              {withoutPin.map((member) => (
+                <li key={member.id}>{member.name}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {data?.canManage && <ApprovalAuthenticatorRecovery />}
       </CardContent>
     </Card>
@@ -312,8 +335,8 @@ export function ApprovalAuthenticatorSection() {
 }
 
 /**
- * DEV-961: what turning the requirement off means, confirmed by the owner with his own current
- * code, or (before he has set up an app) his password and an acknowledgement.
+ * DEV-961: what turning the requirement off means, confirmed by the owner with their own current
+ * code, or (before they have set up an app) their password and an acknowledgement.
  */
 function TurnOffAuthenticator({
   ownerEnrolled,
@@ -341,10 +364,12 @@ function TurnOffAuthenticator({
         Turn off the authenticator for approvals?
       </p>
       <p className="text-xs text-text-body">
-        Approvals will take each person&apos;s permanent PIN again. Anyone who sees or is told a PIN
-        can approve refunds, discounts and other actions with it until it is changed. Members will
-        no longer be asked to set up the app. People who already set one up keep using their code.
-        This change is recorded in the audit log.
+        Approvals will take each person&apos;s permanent PIN again, including people who set up the
+        app: app codes are not accepted while it is off. Anyone who sees or is told a PIN can
+        approve refunds, discounts and other actions with it until it is changed. Members will no
+        longer be asked to set up the app; apps already set up stay set up, so turning it back on
+        restores codes without a new set-up. Anyone who can approve and has no PIN yet is asked to
+        set one. This change is recorded in the audit log.
       </p>
       {ownerEnrolled ? (
         <label className="block text-xs font-medium text-foreground">

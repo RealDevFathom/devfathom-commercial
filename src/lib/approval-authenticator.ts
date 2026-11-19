@@ -6,42 +6,49 @@ import {
   type ApprovalApproverRight,
 } from '@/lib/approval-approver-rights';
 import type { ApprovalAuthenticatorParty } from '@/lib/approval-authenticator-party';
+import { holdsAnyApprovalRight } from '@/lib/approval-authenticator-gate';
 import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
 import { decryptSecret } from '@/lib/secret-crypto';
 import { matchTotpStep } from '@/lib/totp';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 /**
- * DEV-879 — manager and owner approvals accept a rotating authenticator code.
+ * DEV-879 / DEV-961 — how an approval is proven.
  *
  * Every approval that takes a person's PIN (refunds, returns, discounts, Khata over-limit,
  * FEFO overrides, witnesses, purchase approvals, co-authorization, solo self-approval and
  * the rest) still locates the approver's live PIN credential first: it names who approves
  * and carries the durable failed-attempt counters and lockout. Only the secret check is
- * replaced by `verifyApprovalSecret`:
+ * replaced by `verifyApprovalSecret`, and it follows the organization's one setting,
+ * "Authenticator for approvals" (`requireApprovalAuthenticator`, on by default):
  *
- *  - an approver who has enrolled an approval authenticator must enter its current
- *    6-digit code; their fixed PIN is no longer accepted;
- *  - an approver who has not enrolled keeps using their PIN, unless the owner turned on
- *    "Require authenticator for approvals" for the organization, which refuses every PIN.
+ *  - ON: an approver with a web login approves with the current 6-digit code from their
+ *    authenticator app; their permanent PIN is refused (an approver who has not set up the
+ *    app is held on the set-up screen and cannot approve). A staff profile with no web login
+ *    (a terminal-only operator) cannot set up an app, so it keeps its PIN; the owner sees
+ *    such profiles listed as "Cannot use an authenticator: no login".
+ *  - OFF (only the owner can turn it off): everyone approves with their permanent PIN,
+ *    whether or not they set up an app. App codes are not accepted while it is off; the
+ *    apps stay set up, so turning it on again restores codes without a new set-up.
+ *
+ * A person re-entering their own PIN to confirm their own action (`purpose: 'OWN_ACTION'`,
+ * for example a cashier redeeming a voucher) is a separate case: someone who holds no
+ * approver right keeps their own PIN in both modes; someone who holds one confirms the same
+ * way they approve.
  *
  * A code is verified here, on the server, against the AES-GCM encrypted secret; the secret
  * never leaves the server. It matches the current 30-second step or one step either side,
  * no wider, and is single use: the accepted step is recorded and any code at or below it
  * is refused, so the same code cannot approve two actions. A refusal returns null and the
- * caller strikes the PIN credential's lockout counter exactly as it does for a wrong PIN.
- * Each accepted code writes an audit row naming the approver, the action and the time;
- * the code itself is never stored or logged.
+ * caller strikes the PIN credential's lockout counter exactly as it does for a wrong PIN,
+ * in both modes. Each accepted approval writes one audit row naming the approver, the
+ * action, the time and the method (AUTHENTICATOR or PIN); no code or PIN is stored or logged.
  *
  * Self-approval rules are unchanged: every caller decides who may approve (including the
- * solo-owner and sole-pharmacist exceptions) before the secret is checked.
- *
- * DEV-961: the requirement is on by default. Each caller names the approver right its own
- * permission check required (`approverRight`); a right outside the shared registry
- * (`src/lib/approval-approver-rights.ts`) is refused, so the members asked to set up an
- * authenticator are exactly the members who can approve. A staff profile with no web login
- * (a terminal-only operator) cannot enrol an authenticator, so it keeps its PIN while the
- * requirement is on; the owner sees such profiles listed as "cannot use an authenticator".
+ * solo-owner and sole-pharmacist exceptions) before the secret is checked. Each caller names
+ * the approver right its own permission check required (`approverRight`); a right outside the
+ * shared registry (`src/lib/approval-approver-rights.ts`) is refused, so the members asked to
+ * set up an authenticator are exactly the members who can approve.
  */
 
 /** Steps accepted either side of the server's current time step. */
@@ -61,6 +68,12 @@ export type ApprovalSecretInput = {
   action: string;
   /** DEV-961: the approver right the caller's own permission check required of the approver. */
   approverRight: ApprovalApproverRight;
+  /**
+   * DEV-961: APPROVAL (the default) — the person approves an action, their own or someone
+   * else's, under an approver right. OWN_ACTION — the signed-in person re-enters their own
+   * PIN to confirm their own action; a person with no approver right keeps the PIN for it.
+   */
+  purpose?: 'APPROVAL' | 'OWN_ACTION';
   /** The signed-in member who asked for the approval, when known. */
   requestedById?: string | null;
   /** The terminal operator who asked for the approval, when known. */
@@ -82,33 +95,42 @@ export async function verifyApprovalSecret(
   // DEV-961: an approval whose right is not in the shared registry is refused, so no route
   // can approve with a right the forced set-up does not know about.
   if (!isApprovalApproverRight(input.approverRight)) return null;
-  const [organization, authenticator] = await Promise.all([
-    db.organization.findFirst({
-      where: { id: input.organizationId },
-      select: { requireApprovalAuthenticator: true },
-    }),
-    approverUserId
-      ? db.approvalAuthenticator.findFirst({
-          where: {
-            organizationId: input.organizationId,
-            userId: approverUserId,
-            enabledAt: { not: null },
-          },
-          select: { id: true, encryptedSecret: true },
-        })
-      : null,
-  ]);
-  if (authenticator && approverUserId) {
-    return (await consumeApprovalCode(db, input, authenticator, approverUserId, now))
-      ? 'AUTHENTICATOR'
-      : null;
+  const organization = await db.organization.findFirst({
+    where: { id: input.organizationId },
+    select: { requireApprovalAuthenticator: true },
+  });
+  // Fail closed when the organization cannot be read.
+  if (!organization) return null;
+  const pinAccepted =
+    // OFF: everyone approves with their permanent PIN, whether or not they set up an app.
+    !organization.requireApprovalAuthenticator ||
+    // ON: a staff profile with no web login cannot set up an app, so it keeps its PIN.
+    approverUserId === null ||
+    // ON: a person with no approver right confirming their own action keeps their own PIN.
+    (input.purpose === 'OWN_ACTION' &&
+      !(await holdsAnyApprovalRight(db, {
+        organizationId: input.organizationId,
+        userId: approverUserId,
+        now,
+      })));
+  if (pinAccepted) {
+    if (!(await verifyOperatorCredential('PIN', input.secret, input.credentialHash))) return null;
+    await recordApproval(db, input, 'PIN', approverUserId, now);
+    return 'PIN';
   }
-  // Fail closed when the organization cannot be read, and when the owner switched fixed
-  // approval PINs off: an approver with a web login must enrol an authenticator first.
-  // DEV-961: a staff profile with no web login cannot enrol one, so it keeps its PIN.
-  if (!organization || (organization.requireApprovalAuthenticator && approverUserId !== null))
-    return null;
-  return (await verifyOperatorCredential('PIN', input.secret, input.credentialHash)) ? 'PIN' : null;
+  // ON, an approver with a web login: only the current code from their app.
+  const authenticator = await db.approvalAuthenticator.findFirst({
+    where: {
+      organizationId: input.organizationId,
+      userId: approverUserId,
+      enabledAt: { not: null },
+    },
+    select: { id: true, encryptedSecret: true },
+  });
+  if (!authenticator) return null;
+  return (await consumeApprovalCode(db, input, authenticator, approverUserId, now))
+    ? 'AUTHENTICATOR'
+    : null;
 }
 
 /**
@@ -143,15 +165,7 @@ export async function consumeMemberApprovalCode(
 
 async function consumeApprovalCode(
   db: ScopedDb,
-  input: Pick<
-    ApprovalSecretInput,
-    | 'organizationId'
-    | 'secret'
-    | 'action'
-    | 'approverRight'
-    | 'requestedById'
-    | 'requestedByStaffProfileId'
-  >,
+  input: ApprovalRecordInput & Pick<ApprovalSecretInput, 'secret'>,
   authenticator: { id: string; encryptedSecret: string },
   approverUserId: string,
   now: Date
@@ -175,6 +189,26 @@ async function consumeApprovalCode(
     data: { lastUsedStep: step },
   });
   if (consumed.count !== 1) return false;
+  await recordApproval(db, input, 'AUTHENTICATOR', approverUserId, now);
+  return true;
+}
+
+type ApprovalRecordInput = Pick<
+  ApprovalSecretInput,
+  'organizationId' | 'action' | 'approverRight' | 'purpose' | 'requestedById' | 'requestedByStaffProfileId'
+>;
+
+/**
+ * DEV-961: the one audit row every accepted approval writes, whichever way it was proven,
+ * so a PIN approval reads exactly like a code approval except for `approvalMethod`.
+ */
+async function recordApproval(
+  db: ScopedDb,
+  input: ApprovalRecordInput,
+  method: ApprovalSecretMethod,
+  approverUserId: string | null,
+  now: Date
+): Promise<void> {
   await db.auditLog.create({
     data: {
       organizationId: input.organizationId,
@@ -183,12 +217,14 @@ async function consumeApprovalCode(
       category: 'AUTH',
       operation: 'EXECUTE',
       action: input.action,
-      description: 'Approved with an authenticator code',
-      targetType: 'User',
+      description:
+        method === 'AUTHENTICATOR' ? 'Approved with an authenticator code' : 'Approved with a PIN',
+      targetType: approverUserId ? 'User' : null,
       targetId: approverUserId,
       outcome: 'SUCCESS',
       metadata: {
-        approvalMethod: 'AUTHENTICATOR',
+        approvalMethod: method,
+        approvalPurpose: input.purpose ?? 'APPROVAL',
         approverId: approverUserId,
         approvedAction: input.action,
         approverRight: input.approverRight,
@@ -198,7 +234,6 @@ async function consumeApprovalCode(
       },
     },
   });
-  return true;
 }
 
 export {

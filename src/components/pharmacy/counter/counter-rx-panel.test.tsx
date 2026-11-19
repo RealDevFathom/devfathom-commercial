@@ -329,7 +329,8 @@ describe('CounterRxPanel checks', () => {
     const pin = screen.getByLabelText('Pharmacist PIN');
     expect(pin).toHaveAttribute('type', 'password');
     expect(pin).toHaveAttribute('autocomplete', 'off');
-    expect(pin).toHaveAccessibleDescription(/authenticator for approvals, enter its 6-digit code/);
+    // DEV-961: on by default, the pharmacist enters the current code from their app.
+    expect(pin).toHaveAccessibleDescription(/6-digit code from their authenticator app/);
     for (const [label, field, value] of [
       ['Patient address', 'patientAddress', 'Model Town'],
       ['Prescription line', 'prescriptionLineId', 'rx-line-1'],

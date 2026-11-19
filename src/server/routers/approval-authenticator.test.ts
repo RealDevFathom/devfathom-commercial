@@ -20,6 +20,19 @@ vi.mock('@/server/audit', () => ({
   diffChanges: vi.fn(() => ({})),
 }));
 vi.mock('@/lib/rate-limit', () => ({ rateLimit: vi.fn(async () => ({ ok: true })) }));
+// DEV-961: who can approve, decided by the real classifier unless a case names the holders.
+const gateMocks = vi.hoisted(() => ({ holders: null as string[] | null }));
+vi.mock('@/lib/approval-authenticator-gate', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/approval-authenticator-gate')>();
+  return {
+    ...actual,
+    holdsAnyApprovalRight: vi.fn(async (db: never, input: { userId: string }) =>
+      gateMocks.holders
+        ? gateMocks.holders.includes(input.userId)
+        : actual.holdsAnyApprovalRight(db, input as never)
+    ),
+  };
+});
 
 import { hashSync } from 'bcryptjs';
 import { router, type TRPCContext } from '../trpc';
@@ -102,6 +115,7 @@ function setup(userId: keyof typeof MEMBERS, sessionExtra: Record<string, unknow
         Object.values(MEMBERS).map((member) => ({ id: member.id, name: member.id }))
       ),
     },
+    notification: { createMany: vi.fn() },
     organization: {
       findFirst: vi.fn(async () => ({ ...organization })),
       update: vi.fn(async ({ data }: { data: { requireApprovalAuthenticator: boolean } }) => {
@@ -367,6 +381,7 @@ describe('approvalAuthenticator recovery and the owner setting (DEV-879)', () =>
     const owner = setup('owner');
     await expect(owner.caller.setRequired({ required: true })).resolves.toEqual({
       required: true,
+      withoutPin: [],
     });
     expect(owner.organization.requireApprovalAuthenticator).toBe(true);
     expect(audit.annotateAudit).toHaveBeenCalledWith(
@@ -499,14 +514,14 @@ describe('DEV-961 recovery codes', () => {
 });
 
 describe('DEV-961 turning the authenticator off', () => {
-  it('needs the owner’s own current code when he has set one up', async () => {
+  it('needs the owner’s own current code when they have set one up', async () => {
     const { caller, organization, db } = setup('owner');
     organization.requireApprovalAuthenticator = true;
     const { secret } = await enrol(caller);
     await expect(caller.setRequired({ required: false, code: '000000' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
-    // A password is not enough once he has an authenticator.
+    // A password is not enough once they have an authenticator.
     await expect(
       caller.setRequired({ required: false, currentPassword: PASSWORD, acknowledged: true })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
@@ -515,13 +530,17 @@ describe('DEV-961 turning the authenticator off', () => {
     const next = Math.floor(Date.now() / 30_000) + 1;
     await expect(
       caller.setRequired({ required: false, code: codeAt(secret, next) })
-    ).resolves.toEqual({ required: false });
+    ).resolves.toEqual({ required: false, withoutPin: [] });
     expect(organization.requireApprovalAuthenticator).toBe(false);
     expect(audit.annotateAudit).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         targetType: 'Organization',
-        metadata: { requireApprovalAuthenticator: false, confirmedWith: 'AUTHENTICATOR' },
+        metadata: {
+          requireApprovalAuthenticator: false,
+          confirmedWith: 'AUTHENTICATOR',
+          askedToSetPin: [],
+        },
       })
     );
     // The confirming code is single use.
@@ -547,13 +566,73 @@ describe('DEV-961 turning the authenticator off', () => {
     expect(organization.requireApprovalAuthenticator).toBe(true);
     await expect(
       caller.setRequired({ required: false, currentPassword: PASSWORD, acknowledged: true })
-    ).resolves.toEqual({ required: false });
+    ).resolves.toEqual({ required: false, withoutPin: [] });
     expect(audit.annotateAudit).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        metadata: { requireApprovalAuthenticator: false, confirmedWith: 'PASSWORD' },
+        metadata: {
+          requireApprovalAuthenticator: false,
+          confirmedWith: 'PASSWORD',
+          askedToSetPin: [],
+        },
       })
     );
+  });
+
+  it('asks everyone who can approve and has no PIN to set one, and tells the owner who', async () => {
+    const { caller, organization, db } = setup('owner');
+    organization.requireApprovalAuthenticator = true;
+    // The query returns members with no live PIN; of those, only the manager can approve.
+    gateMocks.holders = ['manager'];
+    try {
+      await expect(
+        caller.setRequired({ required: false, currentPassword: PASSWORD, acknowledged: true })
+      ).resolves.toEqual({ required: false, withoutPin: [{ id: 'manager', name: 'manager' }] });
+    } finally {
+      gateMocks.holders = null;
+    }
+    expect(db.user.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: 'ACTIVE',
+          restaurantStaffProfiles: {
+            none: {
+              status: 'ACTIVE',
+              credentials: { some: { type: 'PIN', revokedAt: null, deviceId: null } },
+            },
+          },
+        }),
+      })
+    );
+    expect(db.notification.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          userId: 'manager',
+          type: 'approval_pin_needed',
+          title: 'Set your approval PIN',
+        }),
+      ],
+    });
+    expect(audit.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        metadata: expect.objectContaining({ askedToSetPin: ['manager'] }),
+      })
+    );
+  });
+
+  it('asks nobody to set a PIN when the owner turns it back on', async () => {
+    const { caller, db } = setup('owner');
+    gateMocks.holders = ['manager'];
+    try {
+      await expect(caller.setRequired({ required: true })).resolves.toEqual({
+        required: true,
+        withoutPin: [],
+      });
+    } finally {
+      gateMocks.holders = null;
+    }
+    expect(db.notification.createMany).not.toHaveBeenCalled();
   });
 
   it('refuses anyone but the owner, and rate-limits the confirmation', async () => {

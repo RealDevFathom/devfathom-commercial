@@ -24,6 +24,7 @@ function fakeDb(userId: string | null, required = true) {
   return {
     organization: { findFirst: vi.fn(async () => ({ requireApprovalAuthenticator: required })) },
     approvalAuthenticator: { findFirst: vi.fn(async () => null) },
+    auditLog: { create: vi.fn() },
     restaurantStaffProfile: {
       findUnique: vi.fn(async () => ({
         id: 'staff-approver',
@@ -66,10 +67,23 @@ beforeEach(() => vi.clearAllMocks());
 
 describe('DEV-961 restaurant terminal approvals with the authenticator on by default', () => {
   it('keeps a terminal-only approver (no web login) approving with the PIN', async () => {
-    await expect(approve(fakeDb(null))).resolves.toEqual({
+    const accepted = fakeDb(null);
+    await expect(approve(accepted)).resolves.toEqual({
       ok: true,
       credentialId: 'cred',
       staffProfileId: 'staff-approver',
+    });
+    // The same approval row as a code approval, with the method PIN and no web login.
+    expect(accepted.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        actorId: null,
+        action: 'restaurant.terminal.coAuthorize',
+        metadata: expect.objectContaining({
+          approvalMethod: 'PIN',
+          approverRight: 'coauth:approve',
+          requestedByStaffProfileId: 'staff-cashier',
+        }),
+      }),
     });
     const db = fakeDb(null);
     await expect(approve(db, '0000')).resolves.toEqual({ ok: false, reason: 'INVALID' });

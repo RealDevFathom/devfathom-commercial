@@ -136,7 +136,7 @@ describe('resolveTenantActor', () => {
     ).resolves.toMatchObject({ organization: { id: 'org_other' } });
   });
 
-  it('DEV-961: refuses every API route until a gated approver sets up the authenticator', async () => {
+  it('DEV-961: refuses every route handler until a gated approver sets up the authenticator', async () => {
     mocks.requireOrganizationForRequest.mockResolvedValue({ id: 'org_other' });
     const gated = sessionFor({ status: 'ACTIVE', approvalAuthenticatorSetupRequired: true });
     const call = (path: string, method = 'POST') =>
@@ -154,7 +154,16 @@ describe('resolveTenantActor', () => {
       // A batch cannot carry a blocked call alongside the set-up calls.
       '/api/trpc/approvalAuthenticator.getStatus,pharmacySales.refund?batch=1',
       '/api/trpc/approvalAuthenticator.getStatus%2CpharmacySales.refund?batch=1',
+      // Route handlers outside /api: exports and downloads are refused the same way.
+      '/pharmacy/accounts/fiscal-exceptions/csv',
+      '/pharmacy/accounts/tax-profile-review/export',
+      '/dashboard',
     ])
+      await expect(call(path, 'GET')).rejects.toMatchObject({
+        code: 'APPROVAL_AUTHENTICATOR_SETUP_REQUIRED',
+        status: 403,
+      });
+    for (const path of ['/api/upload', '/pharmacy/accounts/fiscal-exceptions/csv'])
       await expect(call(path)).rejects.toMatchObject({
         code: 'APPROVAL_AUTHENTICATOR_SETUP_REQUIRED',
         status: 403,
@@ -165,10 +174,37 @@ describe('resolveTenantActor', () => {
       '/api/trpc/approvalAuthenticator.getStatus,approvalAuthenticator.beginEnrollment?batch=1',
       '/api/trpc/approvalAuthenticator.confirmEnrollment',
       '/api/auth/signout',
-      // Pages build the actor; the workspace layout then sends them to the set-up screen.
-      '/dashboard',
     ])
       await expect(call(path)).resolves.toMatchObject({ organization: { id: 'org_other' } });
+  });
+
+  it('DEV-961: refuses a server action, but lets a page render reach the set-up redirect', async () => {
+    // A page render or server action carries no Request; the workspace comes from the host.
+    mocks.isSharedHost.mockReturnValue(true);
+    mocks.resolveOrganizationById.mockResolvedValue({ id: 'org_other', status: 'ACTIVE' });
+    const gated = sessionFor({ status: 'ACTIVE', approvalAuthenticatorSetupRequired: true });
+    // A server action carries no Request; Next names the action in the Next-Action header.
+    vi.mocked(headers).mockResolvedValue(
+      new Headers({ host: 'devfathom.localhost:3000', 'next-action': '7f00ab' }) as never
+    );
+    await expect(resolveTenantActor({ session: gated })).rejects.toMatchObject({
+      code: 'APPROVAL_AUTHENTICATOR_SETUP_REQUIRED',
+      status: 403,
+    });
+    // A page render builds the actor; the workspace layout then sends them to the set-up screen.
+    vi.mocked(headers).mockResolvedValue(
+      new Headers({ host: 'devfathom.localhost:3000' }) as never
+    );
+    await expect(resolveTenantActor({ session: gated })).resolves.toMatchObject({
+      organization: { id: 'org_other' },
+    });
+    // A member who is not asked is never refused, in a server action either.
+    vi.mocked(headers).mockResolvedValue(
+      new Headers({ host: 'devfathom.localhost:3000', 'next-action': '7f00ab' }) as never
+    );
+    await expect(
+      resolveTenantActor({ session: sessionFor({ status: 'ACTIVE' }) })
+    ).resolves.toMatchObject({ organization: { id: 'org_other' } });
   });
 
   it('still builds an actor for an ON_LEAVE session', async () => {

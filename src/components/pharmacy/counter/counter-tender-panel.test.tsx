@@ -742,17 +742,18 @@ describe('family Khata tender', () => {
     fireEvent.change(screen.getByLabelText('Reason for exceeding the limit'), {
       target: { value: 'Paying on Friday' },
     });
-    expect(screen.getByLabelText('Approver PIN')).toBeDisabled();
-    expect(screen.getByLabelText('Approver PIN')).toHaveAccessibleDescription(
-      /authenticator for approvals, enter its 6-digit code/
+    expect(screen.getByLabelText('Approval code')).toBeDisabled();
+    expect(screen.getByLabelText('Approval code')).toHaveAccessibleDescription(
+      // DEV-961: on by default, the approver enters the current code from their app.
+      /6-digit code from their authenticator app/
     );
     fireEvent.change(screen.getByLabelText('Approving manager or owner'), {
       target: { value: 'staff-manager' },
     });
-    fireEvent.change(screen.getByLabelText('Approver PIN'), { target: { value: '12a' } });
-    expect(screen.getByLabelText('Approver PIN')).toHaveValue('12');
+    fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: '12a' } });
+    expect(screen.getByLabelText('Approval code')).toHaveValue('12');
     expect(take).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Approver PIN'), { target: { value: '2468' } });
+    fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: '246813' } });
     expect(take).toBeEnabled();
     fireEvent.click(take);
     await screen.findByText('Payment recorded.');
@@ -764,11 +765,11 @@ describe('family Khata tender', () => {
         familyAccountId: 'family-a',
         ownerOverride: true,
         overrideReason: 'Paying on Friday',
-        overLimitApproval: { staffProfileId: 'staff-manager', pin: '2468' },
+        overLimitApproval: { staffProfileId: 'staff-manager', pin: '246813' },
       },
       { amount: '', cashReceived: '' }
     );
-    expect(screen.getByLabelText('Approver PIN')).toHaveValue('');
+    expect(screen.getByLabelText('Approval code')).toHaveValue('');
   });
   it('DEV-290: offers a solo owner their own profile and explains a missing approver', async () => {
     const loadKhataApprovers = vi

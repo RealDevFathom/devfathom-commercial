@@ -13,7 +13,10 @@ import {
   currentPasswordInput,
   requirePasswordReauthentication as requireAccountPassword,
 } from '@/lib/password-reauthentication';
-import { approvalAuthenticatorGate } from '@/lib/approval-authenticator-gate';
+import {
+  approvalAuthenticatorGate,
+  holdsAnyApprovalRight,
+} from '@/lib/approval-authenticator-gate';
 import { rateLimit } from '@/lib/rate-limit';
 import { decryptSecret, encryptionConfigured, encryptSecret } from '@/lib/secret-crypto';
 import {
@@ -35,7 +38,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 // DEV-961: the requirement is on by default. Confirming set-up issues one-time recovery codes,
 // shown once and stored hashed; using one (with the member's password) removes the
 // authenticator, so a lost phone is recovered by setting up a new one. Turning the
-// requirement off needs the owner's own current code, or, before he has set one up, his
+// requirement off needs the owner's own current code, or, before they have set one up, their
 // password and a plain acknowledgement of what turning it off means.
 
 const ENROLMENT_UNAVAILABLE =
@@ -138,6 +141,35 @@ async function requireSetupReauthentication(
   if (!password)
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Your current password is incorrect.' });
   await requirePasswordReauthentication(ctx, organizationId, password);
+}
+
+/**
+ * DEV-961: the ACTIVE members who can approve (the same derivation as the forced set-up) and
+ * have no live permanent PIN on their staff profile, so cannot approve while the setting is off.
+ */
+async function approversWithoutPin(
+  db: ScopedDb,
+  organizationId: string
+): Promise<{ id: string; name: string }[]> {
+  const members = await db.user.findMany({
+    where: {
+      organizationId,
+      status: 'ACTIVE',
+      restaurantStaffProfiles: {
+        none: {
+          status: 'ACTIVE',
+          credentials: { some: { type: 'PIN', revokedAt: null, deviceId: null } },
+        },
+      },
+    },
+    select: { id: true, name: true },
+    orderBy: [{ name: 'asc' }, { id: 'asc' }],
+  });
+  const approvers: { id: string; name: string }[] = [];
+  for (const member of members)
+    if (await holdsAnyApprovalRight(db, { organizationId, userId: member.id }))
+      approvers.push(member);
+  return approvers;
 }
 
 export const approvalAuthenticatorRouter = router({
@@ -362,6 +394,16 @@ export const approvalAuthenticatorRouter = router({
 
   // DEV-961: staff profiles with a PIN but no web login cannot set up an authenticator, so
   // they keep approving with their PIN while the requirement is on. Listed for the owner.
+  // DEV-961: what approvals take in this organization, for the wording of approval fields
+  // (the counter's "Approval code" or "Approver PIN"). Any signed-in member may read it.
+  mode: protectedProcedure.query(async ({ ctx }) => {
+    const organization = await ctx.db.organization.findFirst({
+      where: { id: organizationOf(ctx) },
+      select: { requireApprovalAuthenticator: true },
+    });
+    return { required: organization?.requireApprovalAuthenticator ?? true };
+  }),
+
   terminalOnlyApprovers: protectedProcedure.query(async ({ ctx }) => {
     const organizationId = organizationOf(ctx);
     await requireManager(ctx, organizationId);
@@ -412,7 +454,7 @@ export const approvalAuthenticatorRouter = router({
 
   // Owner only: refuse every fixed PIN for approvals across the organization (the default,
   // DEV-961). Turning it off is confirmed with the owner's own current authenticator code, or,
-  // when he has not set one up, his password and an acknowledgement of what it means.
+  // when they have not set one up, their password and an acknowledgement of what it means.
   setRequired: protectedProcedure
     .input(
       z.union([
@@ -472,6 +514,24 @@ export const approvalAuthenticatorRouter = router({
         data: { requireApprovalAuthenticator: input.required },
         select: { requireApprovalAuthenticator: true },
       });
+      // DEV-961: while it is off everyone approves with their permanent PIN, so anyone who can
+      // approve and has none yet is asked to set one, and the owner is shown who they are.
+      const withoutPin = saved.requireApprovalAuthenticator
+        ? []
+        : await approversWithoutPin(ctx.db, organizationId);
+      if (withoutPin.length > 0)
+        await ctx.db.notification.createMany({
+          data: withoutPin.map((member) => ({
+            organizationId,
+            userId: member.id,
+            type: 'approval_pin_needed',
+            title: 'Set your approval PIN',
+            message:
+              'The owner turned off the authenticator for approvals, so approvals now take your permanent PIN. You have none yet: set one under My approval PIN, or ask a manager to issue one.',
+            entityType: 'User',
+            entityId: member.id,
+          })),
+        });
       annotateAudit(ctx, {
         operation: 'UPDATE',
         targetType: 'Organization',
@@ -482,8 +542,11 @@ export const approvalAuthenticatorRouter = router({
         metadata: {
           requireApprovalAuthenticator: saved.requireApprovalAuthenticator,
           ...(confirmedWith ? { confirmedWith } : {}),
+          ...(saved.requireApprovalAuthenticator
+            ? {}
+            : { askedToSetPin: withoutPin.map((member) => member.id) }),
         },
       });
-      return { required: saved.requireApprovalAuthenticator };
+      return { required: saved.requireApprovalAuthenticator, withoutPin };
     }),
 });

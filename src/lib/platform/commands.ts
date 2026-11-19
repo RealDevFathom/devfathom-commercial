@@ -3236,8 +3236,8 @@ async function runCommand(
       };
     }
     // DEV-961 — recovery of last resort for an approval authenticator. A sole owner who
-    // lost both his phone and his recovery codes has nobody inside the organization who can
-    // reset it, and while the organization requires an authenticator his account does not
+    // lost both their phone and their recovery codes has nobody inside the organization who can
+    // reset it, and while the organization requires an authenticator their account does not
     // work. The operator removes the enrolment (never sees or sets the secret) with a
     // mandatory reason; the member sets up a new authenticator at the next request, and the
     // member and the organization's administrators are told who did it and why.

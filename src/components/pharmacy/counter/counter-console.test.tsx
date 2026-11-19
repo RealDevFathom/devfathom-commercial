@@ -231,6 +231,8 @@ vi.mock('@/lib/trpc', async () => {
       pharmacyAccess: router(['navigation']),
       // DEV-950: prescription lines waiting for a signature at payment.
       pharmacyDispensing: router(['counterSignStatus', 'selfSignReview']),
+      // DEV-961: the owner's authenticator setting, for the wording of approval fields.
+      approvalAuthenticator: router(['mode']),
     },
   };
 });
@@ -551,6 +553,9 @@ beforeEach(() => {
     'counterSignStatus',
   ])
     mocks.queries[name] = query();
+  // DEV-961: these approvals are written for permanent PINs (the owner turned the
+  // authenticator off); a test about the default says so.
+  mocks.queries.mode = query({ required: false });
   // DEV-929: no maximum discount is set unless a test says otherwise.
   mocks.queries.discountMaximum = query({ maxDiscountBps: 10_000, canChange: false });
   // DEV-956: the whole-bill discount is off unless a test switches it on.
@@ -2206,6 +2211,24 @@ it.each([404, 200])(
     );
   }
 );
+
+it('DEV-961: asks for an approval code while the authenticator setting is on (the default)', async () => {
+  mocks.queries.mode = query({ required: true });
+  mocks.khataAccounts.mockResolvedValue([
+    { id: 'family-a', displayName: 'Family A', balanceMinor: 0, creditLimitMinor: 0 },
+  ]);
+  mocks.khataApprovers.mockResolvedValue([
+    { id: 'staff-manager', name: 'Manager Sana', self: false },
+  ]);
+  renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+  chooseTender('KHATA');
+  await screen.findByText(/Ledger balance/);
+  fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
+  await screen.findByRole('option', { name: 'Manager Sana' });
+  const field = screen.getByLabelText('Approval code');
+  expect(field).toHaveAccessibleDescription(/6-digit code from their authenticator app/);
+  expect(screen.queryByLabelText('Approver PIN')).not.toBeInTheDocument();
+});
 
 it('DEV-290: sends a manager PIN approval with the tender but never stores it', async () => {
   mocks.khataAccounts.mockResolvedValue([
