@@ -1,7 +1,7 @@
 import 'server-only';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { workspaceDateRange, workspaceToday } from '@/lib/timezone';
+import { pharmacyBusinessDay, pharmacyBusinessDayRange } from './business-day';
 import {
   demandDateAfter,
   demandDateMs,
@@ -25,6 +25,8 @@ export type PharmacyDemandEvidenceReaderInput = DemandScope & {
    * completion and stockout capture days are that clock's days. UTC when absent or refused.
    */
   timeZone?: string | null;
+  /** DEV-958A: the hour the branch's business day ends at (midnight when absent). */
+  dayEndsAtHour?: number | null;
 };
 
 type ConsumptionDay = {
@@ -126,13 +128,14 @@ export async function readPharmacyDemandEvidence(
   // Business dates are stored day labels: they compare as UTC-midnight dates. Completion and
   // stockout capture instants are bounded by the same days on the organisation's clock.
   const labels = { gte: new Date(start), lt: new Date(end) };
-  const shopDays = workspaceDateRange(
+  // DEV-958A: the branch's business days, which end at its "day ends at" hour.
+  const shopDays = pharmacyBusinessDayRange(
     input.historyStartDate,
     demandDateAfter(input.originDate, -1),
-    input.timeZone
+    input
   );
   const instants = { gte: shopDays.from, lt: shopDays.to };
-  const shopDay = (at: Date) => workspaceToday(input.timeZone, at);
+  const shopDay = (at: Date) => pharmacyBusinessDay(input, at);
   const branch = await db.pharmacyBranch.findFirst({
     where: { id: scope.branchId, organizationId: scope.organizationId, active: true },
     select: { id: true, organizationId: true, active: true },

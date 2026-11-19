@@ -1,6 +1,8 @@
 import { pricePrepaidSale } from './prepaid-discount';
 import { assertPrepaidPin, movePrepaid, PREPAID_PROVIDER } from './prepaid-tiers';
 import { requestCounterEvidence } from './counter-evidence';
+import { isPharmacyCurrentBusinessDate, pharmacyBusinessDate } from './business-day';
+import { readPharmacyDayClock } from './business-day-clock';
 import 'server-only';
 
 import { createHash, randomUUID } from 'node:crypto';
@@ -8,7 +10,6 @@ import { z } from 'zod';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { workspaceToday } from '@/lib/timezone';
 import { assertPostingPeriodsOpen } from '@/lib/finance/journal';
 
 import { reverseRefundedEarnedPoints } from './customer-loyalty-earned-reversal';
@@ -381,7 +382,7 @@ export async function requirePharmacyDayOpen(db: ScopedDb, scope: LedgerScope, d
 
 /**
  * DEV-631: a counter bill is not opened, and no line reserves stock, while today's
- * business day (in the workspace zone) is closed for trading. Hold the same day
+ * business day (DEV-958A: on the branch clock) is closed for trading. Hold the same day
  * lock as close/reopen and money writes through the caller's transaction so a
  * close cannot race bill creation or stock reservation.
  */
@@ -390,32 +391,24 @@ export async function requirePharmacyTodayOpenForTrading(
   scope: LedgerScope,
   now: Date = new Date()
 ) {
-  const organization = await db.organization.findUnique({
-    where: { id: scope.organizationId },
-    select: { timezone: true },
-  });
-  const today = new Date(`${workspaceToday(organization?.timezone, now)}T00:00:00.000Z`);
+  const today = pharmacyBusinessDate(await readPharmacyDayClock(db, scope), now);
   await requirePharmacyDayOpen(db, scope, today);
 }
 
 /**
  * DEV-630: an online money write (drawer open, tender, refund) books on the branch's
- * current business day: today in the workspace zone, the day the counter stamps and the
- * close opens on. A client-sent future or earlier date is refused, so cash cannot be
+ * current business day (DEV-958A: on the branch clock, `business-day.ts`), the day the
+ * counter stamps and the close opens on. A client-sent future or earlier date is refused, so cash cannot be
  * moved out of the day being counted. Offline replay keeps its audited original date
  * and does not call this.
  */
 export async function requireCurrentPharmacyBusinessDate(
   db: ScopedDb,
-  scope: { organizationId: string },
+  scope: { organizationId: string; branchId?: string },
   date: Date,
   now: Date = new Date()
 ) {
-  const organization = await db.organization.findUnique({
-    where: { id: scope.organizationId },
-    select: { timezone: true },
-  });
-  if (date.toISOString().slice(0, 10) !== workspaceToday(organization?.timezone, now))
+  if (!isPharmacyCurrentBusinessDate(date, await readPharmacyDayClock(db, scope), now))
     throw new PharmacySettlementError('BUSINESS_DATE_NOT_CURRENT');
 }
 
@@ -426,16 +419,12 @@ export async function requireCurrentPharmacyBusinessDate(
  */
 export async function requireTodaysPharmacyDrawer(
   db: ScopedDb,
-  scope: { organizationId: string },
+  scope: { organizationId: string; branchId?: string },
   drawer: { businessDate: Date },
   now: Date = new Date()
 ) {
-  const organization = await db.organization.findUnique({
-    where: { id: scope.organizationId },
-    select: { timezone: true },
-  });
-  const today = workspaceToday(organization?.timezone, now);
-  if (drawer.businessDate.toISOString().slice(0, 10) !== today)
+  const clock = await readPharmacyDayClock(db, scope);
+  if (!isPharmacyCurrentBusinessDate(drawer.businessDate, clock, now))
     throw new PharmacySettlementError('DRAWER_FROM_EARLIER_DAY');
 }
 

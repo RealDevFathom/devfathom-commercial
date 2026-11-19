@@ -1,5 +1,5 @@
 /** DEV-103: the aging page's query contract (branch + inclusive as-of day on the organization's clock). */
-import { workspaceToday } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 
 export type AgingQuery = {
   branch?: string | string[];
@@ -19,9 +19,9 @@ export function parseAgingQuery(
   timeZone?: string | null
 ): { branchId?: string; asOf: string; invalid?: boolean } {
   const asOfRaw = query.asOf;
-  const asOf = asOfRaw === undefined ? workspaceToday(timeZone, now) : typeof asOfRaw === 'string' ? asOfRaw : '';
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf) || asOf > workspaceToday(timeZone, now) || asOf < '2000-01-01') {
-    return { asOf: workspaceToday(timeZone, now), invalid: true };
+  const asOf = asOfRaw === undefined ? pharmacyCalendarDay(timeZone, now) : typeof asOfRaw === 'string' ? asOfRaw : '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf) || asOf > pharmacyCalendarDay(timeZone, now) || asOf < '2000-01-01') {
+    return { asOf: pharmacyCalendarDay(timeZone, now), invalid: true };
   }
   if (query.branch === undefined) return { asOf };
   if (typeof query.branch !== 'string') return { asOf, invalid: true };

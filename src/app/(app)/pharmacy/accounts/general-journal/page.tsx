@@ -15,7 +15,8 @@ import {
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyGeneralJournalRouter } from '@/server/routers/pharmacy-general-journal';
 import { createTRPCContext } from '@/server/trpc';
-import { formatWorkspaceDateTime, workspaceToday, workspaceZoneLabel } from '@/lib/timezone';
+import { formatWorkspaceDateTime, workspaceZoneLabel } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 
 export const metadata: Metadata = { title: 'General journal vouchers · Pharmacy accounts' };
 
@@ -217,7 +218,7 @@ function Register({
                         label={voucher.status.toLowerCase()}
                       />
                     </td>
-                    <td className="p-3">{workspaceToday(timeZone, voucher.occurredAt)}</td>
+                    <td className="p-3">{pharmacyCalendarDay(timeZone, voucher.occurredAt)}</td>
                     <td className="p-3">{debit ? financeAccountLabel(debit.accountCode) : '—'}</td>
                     <td className="p-3">
                       {credit ? financeAccountLabel(credit.accountCode) : '—'}

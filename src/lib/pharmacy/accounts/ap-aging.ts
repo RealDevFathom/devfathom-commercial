@@ -24,7 +24,7 @@
  * the reader is asked to narrow the view by payee. The page, its CSV and the
  * payables drafts render the same view.
  */
-import { workspaceDateRange, workspaceToday } from '@/lib/timezone';
+import { pharmacyCalendarDay, pharmacyCalendarDayRange } from '@/lib/pharmacy/business-day';
 import { formulaSafeCell } from '@/lib/pharmacy/reference-connectors';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { normalizePayeeKey, PharmacyApInvoiceError } from './ap-invoices';
@@ -69,9 +69,9 @@ export function apAgingWindow(asOf: string, now: Date, timeZone?: string | null)
   if (Number.isNaN(day.getTime()) || day.toISOString().slice(0, 10) !== asOf) {
     throw new PharmacyApInvoiceError('INVALID_DATE');
   }
-  const today = new Date(`${workspaceToday(timeZone, now)}T00:00:00.000Z`);
+  const today = new Date(`${pharmacyCalendarDay(timeZone, now)}T00:00:00.000Z`);
   if (day < EARLIEST || day > today) throw new PharmacyApInvoiceError('INVALID_DATE');
-  return { day, cutoff: workspaceDateRange(asOf, asOf, timeZone).to };
+  return { day, cutoff: pharmacyCalendarDayRange(asOf, asOf, timeZone).to };
 }
 
 export type ApAgingInvoiceInput = {

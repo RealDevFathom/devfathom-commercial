@@ -155,6 +155,8 @@ describe('DEV-631 customer-order checkout on a closed business day', () => {
     const db = {
       $queryRaw: vi.fn(async () => []),
       organization: { findUnique: async () => ({ timezone: 'UTC' }) },
+      // DEV-958A: the branch's "day ends at" hour; none stored reads as midnight.
+      pharmacyBranch: { findFirst: async () => null },
       pharmacyDailyClose: { findFirst: vi.fn(async () => dayClose) },
       pharmacyCustomerOrder: {
         findFirst: async () => ({

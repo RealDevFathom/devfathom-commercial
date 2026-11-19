@@ -3,7 +3,7 @@
 import { useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 import { CalendarClock, Plus, Upload } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
-import { workspaceToday } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import type { PrescriptionUpload } from '@/lib/pharmacy/prescription-files';
 import {
   formatPrescriptionDate,
@@ -413,7 +413,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                         required
                         name="validFrom"
                         type="date"
-                        defaultValue={workspaceToday(workspace.data.timezone)}
+                        defaultValue={pharmacyCalendarDay(workspace.data.timezone)}
                         className={fieldClass}
                       />
                     </Field>

@@ -341,7 +341,7 @@ describe('pharmacyReports.branches role scope (DEV-20)', () => {
     expect(mocks.branchFindMany).toHaveBeenCalledWith({
       where: { organizationId: 'org_1', active: true },
       orderBy: { name: 'asc' },
-      select: { id: true, name: true },
+      select: { id: true, name: true, businessDayEndsAtHour: true },
     });
     expect(mocks.assignmentFindMany).not.toHaveBeenCalled();
   });
@@ -362,7 +362,7 @@ describe('pharmacyReports.branches role scope (DEV-20)', () => {
       expect(mocks.branchFindMany).toHaveBeenCalledWith({
         where: { organizationId: 'org_1', active: true, id: { in: ['branch_1'] } },
         orderBy: { name: 'asc' },
-        select: { id: true, name: true },
+        select: { id: true, name: true, businessDayEndsAtHour: true },
       });
     }
   );
@@ -467,7 +467,7 @@ describe('pharmacy owner digest capability boundary', () => {
     expect(mocks.branchFindMany).toHaveBeenCalledWith({
       where: { organizationId: 'org_1', active: true },
       orderBy: { name: 'asc' },
-      select: { id: true, name: true },
+      select: { id: true, name: true, businessDayEndsAtHour: true },
     });
     expect(mocks.comparisonRead).toHaveBeenCalledWith(
       mocks.comparisonTx,

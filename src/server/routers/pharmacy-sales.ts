@@ -117,7 +117,15 @@ import {
 import { listOpenBills } from '@/lib/pharmacy/open-bills';
 import { readPharmacyCashCloseCheck } from '@/lib/pharmacy/cash-close-check-operations';
 import { readPharmacyShiftHandover } from '@/lib/pharmacy/shift-handover-operations';
-import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
+import { workspaceTimezone } from '@/lib/timezone';
+import { pharmacyBusinessDay } from '@/lib/pharmacy/business-day';
+import { readPharmacyDayClock } from '@/lib/pharmacy/business-day-clock';
+import {
+  PharmacyDayEndHourError,
+  pharmacyDayEndHourSchema,
+  readPharmacyDayEndHourSetting,
+  savePharmacyDayEndHour,
+} from '@/lib/pharmacy/business-day-settings';
 import { prescriptionIsCurrent } from '@/lib/pharmacy/prescription-calendar';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { TRPCError } from '@trpc/server';
@@ -794,6 +802,25 @@ const HOSTED_RECEIPT_ERROR_MESSAGES: Record<HostedReceiptError['reason'], string
 
 /** DEV-743: the card-terminal router answers a tender guard's refusal exactly as a tender does. */
 export function failPharmacySale(error: unknown): never {
+  return fail(error);
+}
+
+/** DEV-958A: the day-end hour setting's refusals, in the owner's words. */
+function failDayEndHour(error: unknown): never {
+  if (error instanceof PharmacyDayEndHourError) {
+    if (error.reason === 'BRANCH_NOT_FOUND')
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Choose an active branch.' });
+    if (error.reason === 'DRAWERS_OPEN')
+      throw new TRPCError({
+        code: 'PRECONDITION_FAILED',
+        message:
+          'Close every open drawer at this branch (day close) before changing when its day ends.',
+      });
+    throw new TRPCError({
+      code: 'CONFLICT',
+      message: 'This setting changed while you were editing it. Reload and try again.',
+    });
+  }
   return fail(error);
 }
 
@@ -1991,11 +2018,8 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId }).strict())
     .query(async ({ ctx, input }) => {
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
-      const organization = await ctx.db.organization.findUnique({
-        where: { id: scope.organizationId },
-        select: { timezone: true },
-      });
-      const businessDate = workspaceToday(organization?.timezone);
+      // DEV-958A: the branch's business day, which ends at its "day ends at" hour.
+      const businessDate = pharmacyBusinessDay(await readPharmacyDayClock(ctx.db, scope));
       return {
         businessDate,
         dayClosed: await pharmacyDayClosedForTrading(
@@ -2105,6 +2129,54 @@ export const pharmacySalesRouter = router({
         return await ctx.db.$transaction(async (tx) => closePharmacyDrawer(txDb(tx), scope, input));
       } catch (error) {
         fail(error);
+      }
+    }),
+  /**
+   * DEV-958A: the hour this branch's business day ends at (midnight by default), the business
+   * day it gives now, and how many drawers are open. Owner or manager at the branch.
+   */
+  dayEndHour: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        const scope = await requireDrawerManagerAccess(ctx, input.branchId);
+        return await readPharmacyDayEndHourSetting(ctx.db, scope);
+      } catch (error) {
+        failDayEndHour(error);
+      }
+    }),
+  /**
+   * DEV-958A: an owner, or a manager at the branch (the drawer-manager gate), sets when the
+   * branch's business day ends. Refused while any drawer of the branch is open; audited with
+   * the before and after hour. Nothing already recorded moves.
+   */
+  saveDayEndHour: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          revision: z.number().int().nonnegative(),
+          dayEndsAtHour: pharmacyDayEndHourSchema,
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const scope = await requireDrawerManagerAccess(ctx, input.branchId);
+        const user = ctx.session!.user;
+        return await ctx.db.$transaction(async (tx) =>
+          savePharmacyDayEndHour(txDb(tx), scope, input, {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            role: user.role,
+            isSupportSession: user.isSupportSession,
+            supportSessionId: user.supportSessionId,
+            platformUserId: user.platformUserId,
+          })
+        );
+      } catch (error) {
+        failDayEndHour(error);
       }
     }),
   /**
@@ -4210,7 +4282,16 @@ export const pharmacySalesRouter = router({
                 },
               }),
         },
-        select: { id: true, code: true, name: true, city: true, provinceCode: true },
+        // DEV-958A: the hour each branch's business day ends at, so the counter stamps the
+        // same day the server checks.
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          city: true,
+          provinceCode: true,
+          businessDayEndsAtHour: true,
+        },
         orderBy: [{ name: 'asc' }, { id: 'asc' }],
       }),
       ctx.db.organization.findUnique({
@@ -4256,7 +4337,8 @@ export const pharmacySalesRouter = router({
           active: true,
           ...(allowed === 'ALL' ? {} : { id: { in: allowed } }),
         },
-        select: { id: true, code: true, name: true, city: true },
+        // DEV-958A: the close picks "today" on each branch's own clock.
+        select: { id: true, code: true, name: true, city: true, businessDayEndsAtHour: true },
         orderBy: [{ name: 'asc' }, { id: 'asc' }],
       }),
       ctx.db.organization.findUnique({

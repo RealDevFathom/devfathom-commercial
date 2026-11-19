@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
-import { workspaceDateRange } from '@/lib/timezone';
+import { pharmacyBusinessDayRange } from './business-day';
 
 import { grossMarginQuery } from './finance-reports';
 import {
@@ -26,6 +26,11 @@ export type PharmacyReportFilters = {
   batchId?: string;
   /** Workspace IANA zone: event timestamps are bounded by its midnights (UTC when absent). */
   timeZone?: string | null;
+  /**
+   * DEV-958A: the hour the branches' business day ends at (`readPharmacyReportDayEndHour`), so
+   * the window's days are the days their closes count. Absent: midnight, as before.
+   */
+  dayEndsAtHour?: number | null;
 };
 
 export type PharmacyMetricContract = {
@@ -336,8 +341,9 @@ export async function readPharmacyOwnerCommandCentre(
 ) {
   const parsed = validatePharmacyReportFilters(filters);
   // Business-date columns compare against `parsed`; event and posting timestamps use the
-  // workspace day, so 00:00–04:59 PKT counts on the Karachi date it happened on.
-  const eventWindow = workspaceDateRange(filters.from, filters.to, filters.timeZone);
+  // workspace day, so 00:00–04:59 PKT counts on the Karachi date it happened on (DEV-958A: the
+  // branches' business day, which ends at their "day ends at" hour).
+  const eventWindow = pharmacyBusinessDayRange(filters.from, filters.to, filters);
   const at = new Date();
   const branches = Prisma.join(filters.branchIds);
   // Supplier, ingredient and batch filters narrow every metric that can be traced to stock;

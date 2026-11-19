@@ -1,11 +1,23 @@
+import {
+  pharmacyBusinessDayRange,
+  pharmacyDayEndHour,
+  PHARMACY_DEFAULT_DAY_END_HOUR,
+} from './business-day';
+
 const DAY_MS = 86_400_000;
 
 /** UTC bounds of the workspace calendar day used by cash-close void evidence. */
 export function pharmacyCashCloseDayBounds(
   businessDate: Date,
-  timeZone: string
+  timeZone: string,
+  /** DEV-958A: the hour the branch's business day ends at; midnight (the default) as before. */
+  dayEndsAtHour?: number | null
 ): { start: Date; end: Date } {
   const day = businessDate.toISOString().slice(0, 10);
+  if (pharmacyDayEndHour(dayEndsAtHour) !== PHARMACY_DEFAULT_DAY_END_HOUR) {
+    const range = pharmacyBusinessDayRange(day, day, { timeZone, dayEndsAtHour });
+    return { start: range.from, end: range.to };
+  }
   const anchor = Date.parse(`${day}T00:00:00.000Z`);
   const nextDay = new Date(anchor + DAY_MS).toISOString().slice(0, 10);
   const formatter = new Intl.DateTimeFormat('en-US', {

@@ -4,7 +4,7 @@ import { TRPCError } from '@trpc/server';
 import { can, subjectFromSession } from '@/lib/abac';
 import { evaluateSessionUser, temporaryPasswordBlocks } from '@/lib/auth/session-state';
 import { hasModule } from '@/lib/entitlements';
-import { workspaceDateRange } from '@/lib/timezone';
+import { pharmacyBusinessDayRange } from '@/lib/pharmacy/business-day';
 import type { TRPCContext } from '@/server/trpc';
 import {
   fiscalExceptionDocument,
@@ -59,10 +59,11 @@ export async function readFiscalExceptions(
     select: { id: true },
   });
   if (!organization) throw denied();
-  const branch = await ctx.db.pharmacyBranch.findFirst({
+  const branchRow = await ctx.db.pharmacyBranch.findFirst({
     where: { organizationId, id: filters.branchId, active: true },
-    select: { id: true, name: true },
+    select: { id: true, name: true, businessDayEndsAtHour: true },
   });
+  const branch = branchRow ? { id: branchRow.id, name: branchRow.name } : null;
   if (!branch) throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your active report scope.' });
 
   const config = await ctx.db.pharmacyFiscalConfiguration.findFirst({
@@ -72,11 +73,13 @@ export async function readFiscalExceptions(
   if (configuredMode !== 'OFF' && configuredMode !== 'SANDBOX') throw denied();
   const readAt = new Date().toISOString();
   // The picked days are the organisation's days: shop midnight to shop midnight. For a UTC
-  // organisation (or none) these are the same UTC midnights as before.
+  // organisation (or none) these are the same UTC midnights as before. DEV-958A: each day ends
+  // at the branch's "day ends at" hour (midnight by default).
   const timeZone = ctx.organization?.timezone ?? null;
+  const clock = { timeZone, dayEndsAtHour: branchRow?.businessDayEndsAtHour };
   const window = {
-    from: workspaceDateRange(filters.from, filters.from, timeZone).from,
-    to: workspaceDateRange(filters.to, filters.to, timeZone).from,
+    from: pharmacyBusinessDayRange(filters.from, filters.from, clock).from,
+    to: pharmacyBusinessDayRange(filters.to, filters.to, clock).from,
   };
   const documents = await ctx.db.pharmacyFiscalDocument.findMany({
     where: {

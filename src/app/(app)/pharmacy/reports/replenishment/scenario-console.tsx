@@ -17,7 +17,8 @@ import {
 } from '@/components/ui/table';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { ReportDetails } from '@/components/pharmacy/report-details';
-import { workspaceDateRange, workspaceInstantFromInput, workspaceZoneLabel } from '@/lib/timezone';
+import { pharmacyBusinessDayRange } from '@/lib/pharmacy/business-day';
+import { workspaceInstantFromInput, workspaceZoneLabel } from '@/lib/timezone';
 import { amountInputError, amountInputToMinor, amountInputUnit } from '@/lib/money-input';
 import { demandDateAfter, demandDateMs, demandInstantMs } from '@/lib/pharmacy/demand-evidence';
 import type {
@@ -29,7 +30,7 @@ import { SeasonalCalendarPanel } from './seasonal-calendar-panel';
 
 type Props = {
   organizationId: string;
-  branches: { id: string; name: string }[];
+  branches: { id: string; name: string; businessDayEndsAtHour?: number | null }[];
   financial: boolean;
   initialBranchId: string;
   invalidInitialBranch: boolean;
@@ -277,7 +278,10 @@ function ScenarioWorkspace({
       invalid.historyStartDate = 'Use 1 to 90 history days before the exclusive end.';
     // Today is the shop's day: a day has begun once it starts on the organisation's clock,
     // the same check the server makes.
-    const dayStart = (day: string) => workspaceDateRange(day, day, timeZone).from.getTime();
+    // DEV-958A: the chosen branch's business day, which ends at its "day ends at" hour.
+    const dayEndsAtHour = branches.find((branch) => branch.id === branchId)?.businessDayEndsAtHour;
+    const dayStart = (day: string) =>
+      pharmacyBusinessDayRange(day, day, { timeZone, dayEndsAtHour }).from.getTime();
     if (Number.isFinite(origin) && dayStart(draft.originDate) > Date.now())
       invalid.originDate = 'History must end no later than today.';
     const horizonDays = integer('horizonDays', 1, 366)!;

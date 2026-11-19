@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
-import { workspaceToday } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 
 import { ingestDrapNotice } from './drap-monitoring';
 import {
@@ -58,7 +58,7 @@ export async function processDueDrapRecallFeed(
     return organizations
       .map((organization) => ({
         organizationId: organization.id,
-        businessDate: workspaceToday(organization.timezone, now),
+        businessDate: pharmacyCalendarDay(organization.timezone, now),
       }))
       .filter((item) => !done.has(`${item.organizationId}:${item.businessDate}`))
       .slice(0, Math.max(1, Math.min(100, Math.floor(limit))));

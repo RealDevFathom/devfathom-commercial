@@ -2,7 +2,7 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { workspaceDateRange } from '@/lib/timezone';
+import { pharmacyBusinessDayRange } from './business-day';
 import { MAX_PHARMACY_REPORT_BRANCHES, MAX_PHARMACY_REPORT_DAYS } from './reports';
 
 export const PHARMACY_GROWTH_CATEGORIES = ['OTC', 'COSMETICS'] as const;
@@ -47,6 +47,8 @@ export type CategoryGrowthReportInput = {
    * exclusive cutoff `to` are that clock's days. UTC when absent or one Intl refuses.
    */
   timeZone?: string | null;
+  /** DEV-958A: the branches' day-end hour (`readPharmacyReportDayEndHour`); midnight when absent. */
+  dayEndsAtHour?: number | null;
 };
 
 export function validateCategoryGrowthConfiguration(configuration: CategoryGrowthConfig[]) {
@@ -100,8 +102,9 @@ export async function readPharmacyCategoryGrowthReport(
   if (from >= cutoff) throw new Error('The exclusive report cutoff must follow the start date.');
   // The checks above count calendar days; the instants below start each day on the shop's clock,
   // so the window covers the same number of whole shop days a UTC window would.
-  const startsAt = workspaceDateRange(input.from, input.from, input.timeZone).from;
-  const endsBefore = workspaceDateRange(input.to, input.to, input.timeZone).from;
+  // DEV-958A: a shop day starts at the branches' "day ends at" hour (midnight by default).
+  const startsAt = pharmacyBusinessDayRange(input.from, input.from, input).from;
+  const endsBefore = pharmacyBusinessDayRange(input.to, input.to, input).from;
 
   const rows = await db.$queryRaw<CategoryTotalRow[]>(Prisma.sql`
     WITH scoped AS (

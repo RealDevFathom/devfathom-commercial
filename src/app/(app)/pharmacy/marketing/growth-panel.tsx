@@ -9,7 +9,8 @@ import {
   recentCompletedDays,
   timeZoneLabel,
 } from '@/lib/pharmacy/marketing-dates';
-import { formatWorkspaceDateTime, workspaceTimezone, workspaceToday } from '@/lib/timezone';
+import { formatWorkspaceDateTime, workspaceTimezone } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import { MarketingActionForm } from './action-form';
 
 type History = Awaited<ReturnType<typeof listGrowthInsights>>;
@@ -88,7 +89,11 @@ function localDays(period: { from: string; cutoff: string }, zone: string) {
     month: 'short',
     year: 'numeric',
   }).formatRange(first, last);
-  return { firstDay: workspaceToday(zone, first), lastDay: workspaceToday(zone, last), label };
+  return {
+    firstDay: pharmacyCalendarDay(zone, first),
+    lastDay: pharmacyCalendarDay(zone, last),
+    label,
+  };
 }
 
 function FactLine({

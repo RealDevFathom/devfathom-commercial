@@ -2,7 +2,7 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { workspaceDateRange } from '@/lib/timezone';
+import { pharmacyBusinessDayRange } from './business-day';
 
 const DAY = 86_400_000;
 const QUERY_TIMEOUT_MS = 10_000;
@@ -11,7 +11,14 @@ export const REPEAT_DEFINITION =
 export const REPEAT_LIMITS =
   'Qualification requires a receipt number, completion timestamp, positive original line value and remaining original units after posted returns, with posted refunds below original line value, all as of cutoff. Partial reversals can qualify. Returns and refunds have no direct matching link: these are independent exclusion tests, not a reconciled net-revenue measure. Current sale status and commercial identity are used; past status/identity changes cannot be reconstructed. Data start, missing receipts, ingestion delays, outages and off-system purchases are unknown; elapsed follow-up does not prove complete observation. No adherence, competitor churn or uplift inference. Anonymous receipts remain in coverage totals, outside person rates. All available selected history is aggregated in the database; receipt and detail counts are not truncated. Reports exceeding the 10-second database execution budget fail without partial rates. Large branch or chain histories may still exceed this budget; narrower enrollment dates do not reduce the history required.';
 
-export type RepeatFilters = { branchIds: string[]; from: string; to: string; asOf: string };
+export type RepeatFilters = {
+  branchIds: string[];
+  from: string;
+  to: string;
+  asOf: string;
+  /** DEV-958A: the branches' day-end hour (midnight when absent). */
+  dayEndsAtHour?: number | null;
+};
 export function validateRepeatFilters(
   input: RepeatFilters,
   now = new Date(),
@@ -20,6 +27,7 @@ export function validateRepeatFilters(
   const from = new Date(`${input.from}T00:00:00.000Z`);
   const to = new Date(`${input.to}T00:00:00.000Z`);
   const asOf = new Date(input.asOf);
+  const clock = { timeZone, dayEndsAtHour: input.dayEndsAtHour };
   if (
     !input.branchIds.length ||
     input.branchIds.length > 100 ||
@@ -32,13 +40,13 @@ export function validateRepeatFilters(
     !Number.isFinite(asOf.getTime()) ||
     asOf > now ||
     from > to ||
-    workspaceDateRange(input.to, input.to, timeZone).from > asOf ||
+    pharmacyBusinessDayRange(input.to, input.to, clock).from > asOf ||
     to.getTime() - from.getTime() >= 90 * DAY
   )
     throw new Error(
       'Use valid enrollment dates (maximum 90 days), ending on or before a nonfuture as-of cutoff, and 1–100 authorized branches.'
     );
-  const bounds = workspaceDateRange(input.from, input.to, timeZone);
+  const bounds = pharmacyBusinessDayRange(input.from, input.to, clock);
   return { from: bounds.from, toExclusive: bounds.to, asOf };
 }
 

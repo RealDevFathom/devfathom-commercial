@@ -2,7 +2,7 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { workspaceDateRange } from '@/lib/timezone';
+import { pharmacyBusinessDayRange } from './business-day';
 import {
   detectPharmacyAnomalies,
   type AnomalyCandidate,
@@ -95,7 +95,8 @@ export async function readPharmacyAnomalyFacts(
   const window = validatePharmacyReportFilters(filters);
   // Business-date columns compare against `window`; event timestamps (count approvals, sale
   // events, receipt postings) use the workspace day, so 00:30 in Karachi counts on that date.
-  const events = workspaceDateRange(filters.from, filters.to, filters.timeZone);
+  // DEV-958A: the branches' business days, ending at their "day ends at" hour.
+  const events = pharmacyBusinessDayRange(filters.from, filters.to, filters);
   const branches = Prisma.join(filters.branchIds);
   const ingredient = medicineFilter(filters.ingredientId);
   const batch = filters.batchId
@@ -289,7 +290,7 @@ function scopeMatches(
 export async function readPharmacyAnomalySignals(db: ScopedDb, filters: PharmacyReportFilters) {
   validatePharmacyReportFilters(filters);
   // Signals are stored with the workspace-day window refresh evaluated (readPharmacyAnomalyFacts).
-  const window = workspaceDateRange(filters.from, filters.to, filters.timeZone);
+  const window = pharmacyBusinessDayRange(filters.from, filters.to, filters);
   const [rows, ingredientMedicines] = await Promise.all([
     db.pharmacyAnomalySignal.findMany({
       where: {

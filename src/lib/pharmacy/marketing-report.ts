@@ -3,10 +3,17 @@ import 'server-only';
 import { reconcileCapture } from './marketing-delivery';
 import { eligibleMarketingReceipts, ATTRIBUTION_METHOD } from './marketing-attribution';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { workspaceDateRange, workspaceTimezone } from '@/lib/timezone';
+import { workspaceTimezone } from '@/lib/timezone';
+import { pharmacyBusinessDayRange } from './business-day';
 
 const DAY = 86_400_000;
-export type MarketingReportFilters = { branchIds: string[]; from: string; to: string };
+export type MarketingReportFilters = {
+  branchIds: string[];
+  from: string;
+  to: string;
+  /** DEV-958A: the branches' day-end hour (`readPharmacyReportDayEndHour`); midnight when absent. */
+  dayEndsAtHour?: number | null;
+};
 
 export function validateMarketingReportFilters(input: MarketingReportFilters) {
   const from = new Date(`${input.from}T00:00:00.000Z`);
@@ -97,6 +104,7 @@ export function summarizeStoredMarketingAttribution(rows: StoredMarketingAttribu
  * DEV-943: the inclusive dates are the organisation's own days, shop midnight to shop
  * midnight in `timeZone` (the caller's organisation zone, never an input), as every other
  * owner report counts them. A UTC organisation, or none, reads the same UTC days as before.
+ * DEV-958A: each day ends at the branches' "day ends at" hour (midnight by default).
  */
 export async function readPharmacyMarketingReport(
   db: ScopedDb,
@@ -106,7 +114,10 @@ export async function readPharmacyMarketingReport(
 ) {
   validateMarketingReportFilters(input);
   const zone = workspaceTimezone(timeZone);
-  const window = workspaceDateRange(input.from, input.to, zone);
+  const window = pharmacyBusinessDayRange(input.from, input.to, {
+    timeZone: zone,
+    dayEndsAtHour: input.dayEndsAtHour,
+  });
   const report = await readPharmacyMarketingReportWindow(db, organizationId, input.branchIds, {
     gte: window.from,
     lt: window.to,

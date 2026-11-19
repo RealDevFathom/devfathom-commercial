@@ -9,12 +9,8 @@ import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { createTRPCContext } from '@/server/trpc';
 import { ProfitAndLossReport } from './report';
-import {
-  formatWorkspaceDateTime,
-  workspaceDateOffset,
-  workspaceDateRange,
-  workspaceZoneLabel,
-} from '@/lib/timezone';
+import { formatWorkspaceDateTime, workspaceZoneLabel } from '@/lib/timezone';
+import { pharmacyCalendarDayOffset, pharmacyCalendarDayRange } from '@/lib/pharmacy/business-day';
 import { plainReportSource } from '@/lib/pharmacy/report-labels';
 
 export const metadata: Metadata = { title: 'Profit and loss · Pharmacy accounts' };
@@ -34,8 +30,8 @@ export default async function ProfitAndLossPage({
   const fromQuery = scalar(query.from);
   const toQuery = scalar(query.to);
   const defaults = () => ({
-    from: fromQuery ?? workspaceDateOffset(timeZone, -30, now),
-    to: toQuery ?? workspaceDateOffset(timeZone, 1, now),
+    from: fromQuery ?? pharmacyCalendarDayOffset(timeZone, -30, now),
+    to: toQuery ?? pharmacyCalendarDayOffset(timeZone, 1, now),
   });
   let branchId = scalar(query.branch);
   let branches: { id: string; name: string }[] = [];
@@ -59,8 +55,8 @@ export default async function ProfitAndLossPage({
       const picked = defaults();
       // `to` is exclusive: the start of that day on the organization's clock.
       const window = {
-        from: workspaceDateRange(picked.from, picked.from, timeZone).from,
-        to: workspaceDateRange(picked.to, picked.to, timeZone).from,
+        from: pharmacyCalendarDayRange(picked.from, picked.from, timeZone).from,
+        to: pharmacyCalendarDayRange(picked.to, picked.to, timeZone).from,
       };
       result = await pharmacyFinanceRouter.createCaller(ctx).financialStatements({
         branchId,

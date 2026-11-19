@@ -18,7 +18,8 @@ import {
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
-import { formatWorkspaceDateTime, workspaceDateRange, workspaceZoneLabel } from '@/lib/timezone';
+import { formatWorkspaceDateTime, workspaceZoneLabel } from '@/lib/timezone';
+import { pharmacyCalendarDayRange } from '@/lib/pharmacy/business-day';
 import { ExportCsv } from './export-csv';
 
 export const metadata: Metadata = { title: 'Posted cash coverage · Pharmacy accounts' };
@@ -293,7 +294,7 @@ export default async function LiquidityKpiPage({ searchParams }: { searchParams:
         // The cutoff is the start of the picked day on the organization's clock. Closing
         // balances include every posting before it, so a one-day window suffices.
         const zoneName = timeZone;
-        const cutoff = workspaceDateRange(
+        const cutoff = pharmacyCalendarDayRange(
           parsed.controls.cutoff,
           parsed.controls.cutoff,
           zoneName
@@ -301,7 +302,7 @@ export default async function LiquidityKpiPage({ searchParams }: { searchParams:
         const previousDay = new Date(Date.parse(`${parsed.controls.cutoff}T00:00:00.000Z`) - DAY_MS)
           .toISOString()
           .slice(0, 10);
-        const from = workspaceDateRange(previousDay, previousDay, zoneName).from;
+        const from = pharmacyCalendarDayRange(previousDay, previousDay, zoneName).from;
         const report = await caller.financialStatements({
           branchId: parsed.controls.branchId,
           from: from.toISOString(),

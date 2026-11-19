@@ -14,12 +14,11 @@ import {
 import type { grossMarginComparison } from '@/lib/pharmacy/finance-reports';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import {
-  formatWorkspaceDateTime,
-  workspaceDateOffset,
-  workspaceDateRange,
-  workspaceToday,
-  workspaceZoneLabel,
-} from '@/lib/timezone';
+  pharmacyBusinessDay,
+  pharmacyBusinessDayOffset,
+  pharmacyBusinessDayRange,
+} from '@/lib/pharmacy/business-day';
+import { formatWorkspaceDateTime, workspaceZoneLabel } from '@/lib/timezone';
 
 type Comparison = Awaited<ReturnType<typeof grossMarginComparison>>;
 const money = (minor: number) =>
@@ -144,7 +143,7 @@ export async function MarginComparisonSection({
   timeZone,
 }: {
   caller: ReturnType<typeof pharmacyFinanceRouter.createCaller>;
-  branch: { id: string; name: string };
+  branch: { id: string; name: string; businessDayEndsAtHour?: number | null };
   from?: string;
   to?: string;
   ledgerFrom?: string;
@@ -155,12 +154,15 @@ export async function MarginComparisonSection({
   /** Workspace IANA zone: picked dates start at its midnight (UTC when absent). */
   timeZone?: string | null;
 }) {
-  const fromDate = from ?? workspaceDateOffset(timeZone, -30);
-  const toDate = to ?? workspaceToday(timeZone);
+  // DEV-958A: picked dates are the branch's business days, ending at its "day ends at" hour.
+  const clock = { timeZone, dayEndsAtHour: branch.businessDayEndsAtHour };
+  const fromDate = from ?? pharmacyBusinessDayOffset(clock, -30);
+  const toDate = to ?? pharmacyBusinessDay(clock);
   const zone = workspaceZoneLabel(timeZone);
-  // A picked date starts at the workspace's midnight, as the Reports page bounds its days.
+  // A picked date starts when the branch's business day does (the workspace's midnight by
+  // default), as the Reports page bounds its days.
   const dayStart = (day: string) =>
-    workspaceDateRange(day, day, timeZone).from.toISOString().replace('.000Z', 'Z');
+    pharmacyBusinessDayRange(day, day, clock).from.toISOString().replace('.000Z', 'Z');
   let report: Comparison | undefined;
   let denied = false;
   try {

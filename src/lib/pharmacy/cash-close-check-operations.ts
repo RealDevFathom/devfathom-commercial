@@ -2,7 +2,8 @@ import 'server-only';
 
 import { TRPCError } from '@trpc/server';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
+import { workspaceTimezone } from '@/lib/timezone';
+import { pharmacyBusinessDay } from './business-day';
 import { foldExpectedCash, saleTotalMinor, type DrawerMovement } from './settlement';
 import { checkPharmacyCashClose, type CashCloseCheck } from './cash-close-check';
 import { pharmacyCashCloseDayBounds } from './cash-close-day';
@@ -24,7 +25,7 @@ export async function readPharmacyCashCloseCheck(
 ): Promise<CashCloseCheck & { branchName: string; timezone: string }> {
   const branch = await db.pharmacyBranch.findFirst({
     where: { id: scope.branchId, organizationId: scope.organizationId, active: true },
-    select: { name: true },
+    select: { name: true, businessDayEndsAtHour: true },
   });
   if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
   const organization = await db.organization.findUnique({
@@ -32,11 +33,17 @@ export async function readPharmacyCashCloseCheck(
     select: { timezone: true, currency: true },
   });
   const timezone = workspaceTimezone(organization?.timezone);
+  // DEV-958A: the branch's business day, which ends at its "day ends at" hour.
+  const dayClock = { timeZone: timezone, dayEndsAtHour: branch.businessDayEndsAtHour };
   const day = businessDate.toISOString().slice(0, 10);
   // A sale is voided while still OPEN, so it has no business date. Its VOIDED
   // event belongs to the day by the workspace zone the counter stamps in: read
   // exactly that local day's UTC interval, every page of it.
-  const { start: dayStart, end: dayEnd } = pharmacyCashCloseDayBounds(businessDate, timezone);
+  const { start: dayStart, end: dayEnd } = pharmacyCashCloseDayBounds(
+    businessDate,
+    timezone,
+    dayClock.dayEndsAtHour
+  );
 
   const where = { organizationId: scope.organizationId, branchId: scope.branchId, businessDate };
   const [close, drawers, sales, refunds, voidEvents] = await Promise.all([
@@ -68,7 +75,9 @@ export async function readPharmacyCashCloseCheck(
     readAllVoidEvents(db, scope, dayStart, dayEnd),
   ]);
   // Belt and braces: the interval already is the local day.
-  const voids = voidEvents.filter((event) => workspaceToday(timezone, event.occurredAt) === day);
+  const voids = voidEvents.filter(
+    (event) => pharmacyBusinessDay(dayClock, event.occurredAt) === day
+  );
 
   const refundedSaleIds = [...new Set(refunds.map((refund) => refund.saleId))];
   const returns = refundedSaleIds.length
