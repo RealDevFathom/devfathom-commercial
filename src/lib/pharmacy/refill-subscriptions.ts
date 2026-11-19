@@ -12,6 +12,7 @@ import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
 
+import { counterBranchAssignmentDenial } from './counter-capability';
 import { activateBranchScope, reservationCandidates } from './customer-ordering';
 import { planAllocation, PharmacyInventoryError } from './inventory';
 import { prescriptionIsCurrent } from './prescription-calendar';
@@ -87,9 +88,15 @@ export class RefillSubscriptionError extends Error {
   }
 }
 
+const REFILL_CYCLE_APPROVAL_MESSAGES = {
+  PIN: 'A prescription refill cycle needs a pharmacist to approve it with their PIN.',
+  BRANCH:
+    'This pharmacist is not assigned to this branch. Only a pharmacist assigned to this branch can approve its refills.',
+} as const;
+
 export class RefillCycleApprovalDenied extends Error {
-  constructor() {
-    super('A prescription refill cycle needs a pharmacist to approve it with their PIN.');
+  constructor(readonly reason: keyof typeof REFILL_CYCLE_APPROVAL_MESSAGES = 'PIN') {
+    super(REFILL_CYCLE_APPROVAL_MESSAGES[reason]);
     this.name = 'RefillCycleApprovalDenied';
   }
 }
@@ -609,6 +616,12 @@ export async function approveRefillCycle(
   if (!approver || !(await can(approver, REFILL_CYCLE_APPROVAL_CAPABILITY, undefined, { db }))) {
     throw new RefillCycleApprovalDenied();
   }
+  // DEV-941: the PIN must belong to a pharmacist who may act at the cycle's branch: an
+  // active assignment to it, or an organisation admin (the counter's branch rule, as a
+  // prescription check is signed). Read live, inside the approval's transaction.
+  if (await counterBranchAssignmentDenial(db, approver, scope.organizationId, cycle.branchId)) {
+    throw new RefillCycleApprovalDenied('BRANCH');
+  }
   const credential = await db.restaurantOperatorCredential.findFirst({
     where: {
       id: approval.credentialId,
@@ -1037,10 +1050,11 @@ export async function listRefillCyclePrescriptionCandidates(
 
 /**
  * Staff profiles the screen may offer to sign a prescription cycle: active members
- * with a live staff PIN who hold the dispensing capability. When nobody else
- * qualifies (the solo rule), the actor's own profile is offered so a sole
- * owner-pharmacist can self-approve by re-entering their PIN; the approval itself
- * re-checks everything and records the self-approval in the audit.
+ * with a live staff PIN who hold the dispensing capability and may act at the
+ * branch (DEV-941: an active assignment to it, or an organisation admin). When
+ * nobody else qualifies (the solo rule), the actor's own profile is offered so a
+ * sole owner-pharmacist can self-approve by re-entering their PIN; the approval
+ * itself re-checks everything and records the self-approval in the audit.
  */
 export async function listRefillCyclePharmacists(db: ScopedDb, scope: LedgerScope) {
   const now = new Date();
@@ -1065,6 +1079,8 @@ export async function listRefillCyclePharmacists(db: ScopedDb, scope: LedgerScop
     const user = profile.user as ActiveUser | null;
     if (!user || user.organizationId !== scope.organizationId || user.status !== 'ACTIVE') continue;
     if (!(await can(user, REFILL_CYCLE_APPROVAL_CAPABILITY, undefined, { db, now }))) continue;
+    if (await counterBranchAssignmentDenial(db, user, scope.organizationId, scope.branchId))
+      continue;
     eligible.push({ id: profile.id, name: profile.displayName, self: user.id === scope.actorId });
   }
   const others = eligible.filter((profile) => !profile.self);

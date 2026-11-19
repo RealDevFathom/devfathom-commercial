@@ -210,6 +210,12 @@ function fakeDb(
     user: {
       findFirst: async () => ({ id: 'pharmacist', organizationId: 'org', status: 'ACTIVE' }),
     },
+    // DEV-941: the pharmacist works at this branch.
+    pharmacyBranchAssignment: {
+      findFirst: vi.fn(async ({ where }: { where: { userId: string; branchId: string } }) =>
+        where.userId === 'pharmacist' && where.branchId === 'branch' ? { branchId: 'branch' } : null
+      ),
+    },
     restaurantOperatorCredential: {
       findFirst: vi.fn(async () => ({
         id: 'cred-1',
@@ -233,6 +239,7 @@ const rx = () => medicine({ otc: false, rx: true });
 
 const awaiting = {
   id: 'cycle-1',
+  branchId: 'branch',
   status: 'AWAITING_PHARMACIST',
   requiresPharmacist: true,
   openedByUserId: 'cashier',
