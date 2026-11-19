@@ -122,6 +122,11 @@ import { prescriptionIsCurrent } from '@/lib/pharmacy/prescription-calendar';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { TRPCError } from '@trpc/server';
 import { NO_PIN_SET_MESSAGE } from '@/lib/pharmacy/own-pin-policy';
+import {
+  applyBillDiscount,
+  readBillDiscountEnabled,
+  saveBillDiscountEnabled,
+} from '@/lib/pharmacy/bill-discount-service';
 import { z } from 'zod';
 import { saleVoidReasonSchema, saleVoidReasonText } from '@/lib/pharmacy/sale-void-reasons';
 import { Prisma } from '@/generated/prisma/client';
@@ -265,6 +270,8 @@ import type { TRPCContext } from '../trpc';
 
 const branchId = z.string().trim().min(1).max(128);
 /** DEV-929: the owner's maximum discount in the audit description ("no maximum" or "10%"). */
+/** DEV-956: only the owner switches the whole-bill discount on or off. */
+const BILL_DISCOUNT_CHANGE_REFUSED = 'Only the owner can change the whole-bill discount setting.';
 const maximumWords = (bps: number) =>
   bps >= NO_MAXIMUM_DISCOUNT_BPS ? 'no maximum' : `${bps / 100}%`;
 // Preserve field order and parsing: settlement hashes JSON.stringify(parsed input).
@@ -2463,6 +2470,164 @@ export const pharmacySalesRouter = router({
     .query(async ({ ctx, input }) => {
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
       return listCounterApprovers(ctx.db as unknown as ScopedDb, scope, 'DISCOUNT');
+    }),
+  /**
+   * DEV-956: whether the owner has switched on the whole-bill discount at the counter, and
+   * whether the caller is the owner who may change it. Anyone at the branch may read it.
+   */
+  billDiscountSetting: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      const [enabled, maximum] = await Promise.all([
+        readBillDiscountEnabled(ctx.db as unknown as ScopedDb, scope.organizationId),
+        readMaxDiscountSettings(ctx.db, scope),
+      ]);
+      // A support or impersonation session may see the setting but never change it.
+      const support = Boolean(ctx.support || ctx.session?.user?.isSupportSession);
+      return { enabled, canChange: maximum.canChange && !support };
+    }),
+  /**
+   * DEV-956: the owner alone turns the whole-bill discount on or off, with their fresh PIN,
+   * as for the maximum discount. Every change is audited with the old and the new value.
+   */
+  saveBillDiscountSetting: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          enabled: z.boolean(),
+          pin: z.string().max(OWNER_EXPORT_PIN_MAX_INPUT),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      // The PIN never reaches the audit row.
+      annotateAudit(ctx, { skipInput: true, targetType: 'Organization' });
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      if (ctx.support || ctx.session?.user?.isSupportSession)
+        throw new TRPCError({ code: 'FORBIDDEN', message: BILL_DISCOUNT_CHANGE_REFUSED });
+      if (!(await readMaxDiscountSettings(ctx.db, scope)).canChange)
+        throw new TRPCError({ code: 'FORBIDDEN', message: BILL_DISCOUNT_CHANGE_REFUSED });
+      if (!input.pin)
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Enter your own PIN to confirm.' });
+      // Its own tenant transaction, so a wrong-PIN strike commits even though we refuse.
+      const pin = await verifyOwnerExportPin({
+        organizationId: scope.organizationId,
+        userId: scope.actorId,
+        pin: input.pin,
+        action: 'pharmacy.billDiscount',
+      });
+      if (pin === 'NO_PIN')
+        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: NO_PIN_SET_MESSAGE });
+      if (pin === 'LOCKED')
+        throw new TRPCError({
+          code: 'TOO_MANY_REQUESTS',
+          message: 'Your PIN is locked after too many wrong tries. Wait and try again.',
+        });
+      if (pin !== 'OK')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'That PIN is not correct.' });
+      const saved = await ctx.db.$transaction((tx) =>
+        saveBillDiscountEnabled(txDb(tx), scope, input.enabled)
+      );
+      annotateAudit(ctx, {
+        operation: 'UPDATE',
+        targetType: 'Organization',
+        targetId: scope.organizationId,
+        description: `${saved.enabled ? 'Turned on' : 'Turned off'} the whole-bill discount at the counter`,
+        changes: {
+          pharmacyBillDiscountEnabled: { before: saved.previous, after: saved.enabled },
+        },
+        metadata: { pinVerified: true },
+      });
+      return { enabled: saved.enabled };
+    }),
+  /**
+   * DEV-956: give, change or remove (zero) the one whole-bill discount on an open, unpaid bill,
+   * as an amount or a percentage. It is approved exactly as an item discount is: the operator's
+   * own discount right, or a manager's or owner's PIN (solo: the sole approver re-enters their
+   * own). The server shares it onto the lines under the owner's maximum, cost and minimum
+   * margin, and refuses what the bill cannot take in full, naming the most it can take.
+   */
+  applyBillDiscount: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().trim().min(1).max(128),
+          discount: z.discriminatedUnion('kind', [
+            z.object({ kind: z.literal('PERCENT'), bps: maxDiscountBpsSchema }).strict(),
+            z
+              .object({
+                kind: z.literal('AMOUNT'),
+                minor: z.number().int().nonnegative().max(2_000_000_000),
+              })
+              .strict(),
+          ]),
+          // #520: the approver is proven by a PIN the server verifies, never named by the caller.
+          discountApproval: counterApprovalPin.optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      // The PIN never reaches the audit row; the bill and the request do.
+      annotateAudit(ctx, {
+        skipInput: true,
+        targetType: 'PharmacySale',
+        targetId: input.saleId,
+        metadata: { branchId: input.branchId, billDiscount: input.discount },
+      });
+      try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        const removal =
+          input.discount.kind === 'PERCENT' ? input.discount.bps === 0 : input.discount.minor === 0;
+        // #520: PINs are verified before the sale transaction takes a connection.
+        const approval = removal
+          ? null
+          : await authorizeCounterApproval(
+              ctx.db as unknown as ScopedDb,
+              scope,
+              'DISCOUNT',
+              input.discountApproval
+            );
+        const outcome = await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          if (approval) await confirmCounterApproval(db, scope, 'DISCOUNT', approval);
+          return applyBillDiscount(db, scope, {
+            saleId: input.saleId,
+            request: input.discount,
+            approval,
+          });
+        });
+        annotateAudit(ctx, {
+          operation: 'UPDATE',
+          description:
+            outcome.status === 'REFUSED'
+              ? 'Counter refused a whole-bill discount the bill cannot take in full.'
+              : removal
+                ? 'Counter removed the whole-bill discount.'
+                : 'Counter gave a whole-bill discount.',
+          metadata: {
+            branchId: input.branchId,
+            billDiscount: input.discount,
+            outcome: outcome.status,
+            ...(outcome.status === 'APPLIED'
+              ? { totalMinor: outcome.totalMinor, previousTotalMinor: outcome.previousTotalMinor }
+              : { reason: outcome.reason, capacityMinor: outcome.capacityMinor }),
+            givenByUserId: scope.actorId,
+            ...(approval
+              ? {
+                  approvedByUserId: approval.approvedByUserId,
+                  approvalPolicy: approval.approvalPolicy,
+                  selfApproved: approval.selfApproved,
+                }
+              : {}),
+          },
+        });
+        return outcome;
+      } catch (error) {
+        fail(error);
+      }
     }),
   /** Eligible manager/owner PIN profiles for a scanned pack's first-expiry approval. */
   scannedPackFefoApprovers: protectedProcedure

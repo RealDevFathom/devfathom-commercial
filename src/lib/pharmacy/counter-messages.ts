@@ -112,6 +112,11 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     "This discount or voucher is above the owner's maximum discount. Give a smaller discount, or ask the owner to raise the maximum.",
   APPROVAL_REQUIRED: 'A supervisor must approve this discount before it can be applied.',
   REGULATED_DISCOUNT_REFUSED: 'Regulated medicines cannot be discounted.',
+  // DEV-956: the whole-bill discount.
+  BILL_DISCOUNT_OFF:
+    'The owner has not turned on the whole-bill discount. Give a discount on an item instead.',
+  BILL_DISCOUNT_AFTER_PAYMENT:
+    'Payment has already been started or taken on this bill, so its whole-bill discount can no longer be given or changed.',
   VOUCHER_CATEGORY_REFUSED:
     'Vouchers apply to non-medicine items only. Remove the voucher from this line.',
   VOUCHER_INVALID: 'That voucher is not valid at this branch. Check the voucher and try again.',

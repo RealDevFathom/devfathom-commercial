@@ -60,6 +60,7 @@ import { CounterRxSelfSign } from './counter-rx-self-sign';
 import { CounterSearchResults } from './counter-search-results';
 import { CounterScanInput } from './counter-scan-input';
 import { CounterVoucherEntry, type CounterHeldVoucher } from './counter-voucher';
+import { CounterBillDiscountEntry } from './counter-bill-discount';
 import {
   CounterDiscountEntry,
   counterDiscountMinor,
@@ -804,6 +805,15 @@ function ScopedPharmacyCounterConsole({
   const loadDiscountApprovers = useCallback(
     () => utils.client.pharmacySales.discountApprovers.query({ branchId }),
     [branchId, utils]
+  );
+  // DEV-956: the whole-bill discount is approved in the same dialog as an item discount.
+  const requestBillDiscountApproval = useCallback(
+    (discount: string) =>
+      new Promise<CounterApprovalPin | null>((resolve) => {
+        packApprovalResolver.current = resolve;
+        setPackApproval({ medicineName: 'Whole bill', discount });
+      }),
+    []
   );
 
   const discardReceiptIntent = useCallback(() => {
@@ -4417,6 +4427,20 @@ function ScopedPharmacyCounterConsole({
                 </div>
               ))}
             </dl>
+            {/* DEV-956: shown only when the owner has turned the whole-bill discount on. */}
+            {currentBill && cart.status === 'OPEN' && lineCount > 0 ? (
+              <CounterBillDiscountEntry
+                branchId={branchId}
+                saleId={cart.saleId}
+                lines={cart.lines}
+                disabled={busy || !branchAuthorized || !online || cart.totals.tenderedMinor > 0}
+                requestApproval={requestBillDiscountApproval}
+                onChanged={(message) => {
+                  setNotice({ tone: 'success', message });
+                  void cartQuery.refetch();
+                }}
+              />
+            ) : null}
             <div className="my-3 grid grid-cols-2 items-center gap-3 border-y border-border-subtle py-3">
               <div>
                 <p className="font-mono text-xs text-text-muted">

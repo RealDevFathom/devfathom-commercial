@@ -227,6 +227,10 @@ export class PharmacySaleError extends Error {
       | 'BILL_HAS_PAYMENTS'
       | 'BILL_HAS_CARD_TERMINAL_PAYMENT'
       | 'NOT_BILL_OWNER'
+      // DEV-956: the owner has not switched the whole-bill discount on.
+      | 'BILL_DISCOUNT_OFF'
+      // DEV-956: a whole-bill discount is given only before any payment on the bill.
+      | 'BILL_DISCOUNT_AFTER_PAYMENT'
   ) {
     super(reason);
   }
@@ -401,9 +405,11 @@ export async function replaySaleLine(db: ScopedDb, scope: LedgerScope, input: Ad
   // Saved lines are never re-priced, so an omitted manual discount means none. Only a
   // voucher or automatic promotion priced the line itself, and either needs no manual discount.
   const manualDiscountRequested = Boolean(input.discountKind || input.discountMinor);
+  // DEV-956: a whole-bill share goes only onto a line added with no discount of its own, so
+  // the line was added with none; the share given later is not part of this request.
   const discountChanged = previous.voucherId
     ? false
-    : previous.promotionId
+    : previous.promotionId || previous.billDiscountMinor > 0
       ? manualDiscountRequested
       : previous.discountKind !== (input.discountKind ?? null) ||
         previous.discountMinor !== (input.discountMinor ?? 0);
