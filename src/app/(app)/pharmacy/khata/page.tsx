@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { workspaceToday } from '@/lib/timezone';
 import { createTRPCContext } from '@/server/trpc';
 import { pharmacyKhataRouter } from './khata-router';
 import { reminderOutcome } from './reminder-outcome';
@@ -17,7 +18,8 @@ const linkClass =
 const selectClass =
   'min-h-11 max-w-full rounded-sm border border-border bg-surface-card px-3 focus-visible:outline-2 focus-visible:outline-ring';
 const money = (minor: number) => `PKR ${formatMinor(minor)}`;
-const day = (date: Date) => date.toISOString().slice(0, 10);
+/** DEV-943: a payment or due instant as the shop's own calendar day, not the UTC day. */
+const day = (date: Date, timeZone: string | null | undefined) => workspaceToday(timeZone, date);
 
 /** Result codes carried on the redirect back to the list. */
 const notices: Record<string, { tone: 'status' | 'alert'; text: string }> = {
@@ -68,14 +70,17 @@ const notices: Record<string, { tone: 'status' | 'alert'; text: string }> = {
 
 async function loadKhata(text: (key: string) => string) {
   try {
-    const caller = pharmacyKhataRouter.createCaller(await createTRPCContext());
+    const ctx = await createTRPCContext();
+    const caller = pharmacyKhataRouter.createCaller(ctx);
     const branches = await caller.branches();
     if (!branches.length) return { state: 'empty' as const };
     const branchId = text('branchId') || branches[0]!.id;
     if (!branches.some((branch) => branch.id === branchId))
       throw new TRPCError({ code: 'NOT_FOUND' });
     const ledger = await caller.ledger({ branchId });
-    return { state: 'ready' as const, branches, branchId, ...ledger };
+    // The caller's own organisation zone: dates on this screen are the shop's days.
+    const timeZone = ctx.organization?.timezone ?? null;
+    return { state: 'ready' as const, branches, branchId, timeZone, ...ledger };
   } catch (error) {
     unstable_rethrow(error);
     return {
@@ -254,7 +259,9 @@ export default async function KhataPage({
                     </td>
                     <td className="p-3 whitespace-nowrap">
                       {a.lastPaymentAt ? (
-                        <time dateTime={a.lastPaymentAt.toISOString()}>{day(a.lastPaymentAt)}</time>
+                        <time dateTime={a.lastPaymentAt.toISOString()}>
+                          {day(a.lastPaymentAt, data.timeZone)}
+                        </time>
                       ) : (
                         'No payment yet'
                       )}
@@ -265,7 +272,7 @@ export default async function KhataPage({
                       ) : a.oldestOverdueAt ? (
                         <StatusPill
                           status="Overdue"
-                          label={`Overdue since ${day(a.oldestOverdueAt)}`}
+                          label={`Overdue since ${day(a.oldestOverdueAt, data.timeZone)}`}
                         />
                       ) : a.balanceMinor > a.creditLimitMinor ? (
                         <StatusPill status="Over limit" tone="warning" />

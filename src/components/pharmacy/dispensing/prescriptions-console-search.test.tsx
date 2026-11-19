@@ -448,3 +448,24 @@ describe('DEV-626 inline patient and prescriber registration', () => {
     expect(mocks.invalidate).not.toHaveBeenCalled();
   });
 });
+
+describe('DEV-943: capture valid-from defaults to the shop’s day', () => {
+  it.each([
+    // 19:30 UTC on 18 Nov is already 00:30 on 19 Nov in Karachi.
+    ['Asia/Karachi', '2026-11-18T19:30:00.000Z', '2026-11-19'],
+    // 18:59 UTC is still 23:59 on 18 Nov in Karachi.
+    ['Asia/Karachi', '2026-11-18T18:59:00.000Z', '2026-11-18'],
+    // A UTC organisation keeps the UTC day, exactly as before.
+    ['UTC', '2026-11-18T19:30:00.000Z', '2026-11-18'],
+  ])('in %s at %s it is %s', (timezone, now, day) => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(now) });
+    try {
+      mocks.workspace.data = { ...(mocks.workspace.data as object), timezone };
+      render(<PrescriptionsConsole />);
+      const form = within(screen.getByRole('form', { name: 'Capture prescription' }));
+      expect(form.getByLabelText('Valid from')).toHaveValue(day);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

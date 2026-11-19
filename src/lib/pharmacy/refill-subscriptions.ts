@@ -21,6 +21,7 @@ import {
   REFILL_SUBSCRIPTION_DEFAULTS,
   REFILL_SUBSCRIPTION_LIMITS,
   refillCycleCampaignKey,
+  refillCycleOpensBy,
 } from './refill-subscription-rules';
 
 import { attachPrescriptionReference } from './rx-prescription-reference';
@@ -407,8 +408,15 @@ export async function listDueRefillSubscriptionIds(
   now = new Date()
 ) {
   await activateBranchScope(db, scope);
+  // DEV-943: due on the shop's own calendar day, as the scheduled job decides
+  // (`refillCycleOpensBy`), so a cycle opening later today counts: one day past the
+  // longest lead time covers every subscription whose opening day is today.
+  const organization = await db.organization.findUnique({
+    where: { id: scope.organizationId },
+    select: { timezone: true },
+  });
   const horizon = new Date(
-    now.getTime() + REFILL_SUBSCRIPTION_LIMITS.reminderLeadDays.max * DAY_MS
+    now.getTime() + (REFILL_SUBSCRIPTION_LIMITS.reminderLeadDays.max + 1) * DAY_MS
   );
   const candidates = await db.pharmacyRefillSubscription.findMany({
     where: {
@@ -422,10 +430,7 @@ export async function listDueRefillSubscriptionIds(
     take: 200,
   });
   return candidates
-    .filter(
-      (subscription) =>
-        subscription.nextDueAt.getTime() - subscription.reminderLeadDays * DAY_MS <= now.getTime()
-    )
+    .filter((subscription) => refillCycleOpensBy(subscription, organization?.timezone, now))
     .map((subscription) => subscription.id);
 }
 

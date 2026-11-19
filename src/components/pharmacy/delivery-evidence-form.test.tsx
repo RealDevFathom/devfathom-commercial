@@ -133,3 +133,20 @@ it('shows recorded totals as money and never says paisa or rupees for another cu
   );
   expect(screen.getByRole('status').textContent).not.toMatch(/minor units|paisa/);
 });
+
+it('DEV-943: sends no UTC business date; the server books on the shop day', async () => {
+  vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-11-18T19:30:00.000Z') });
+  try {
+    fill('PHYSICAL_RETURN');
+    fireEvent.change(screen.getByLabelText(/Open drawer device ID/), {
+      target: { value: 'dev-1' },
+    });
+    fireEvent.change(screen.getByLabelText(/Manager or owner PIN/), { target: { value: '7391' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Record custody evidence' }));
+    await waitFor(() => expect(mocks.command).toHaveBeenCalledOnce());
+    expect(mocks.command.mock.calls[0]![0]).toMatchObject({ deviceId: 'dev-1' });
+    expect(mocks.command.mock.calls[0]![0]).not.toHaveProperty('businessDate');
+  } finally {
+    vi.useRealTimers();
+  }
+});

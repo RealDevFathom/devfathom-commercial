@@ -76,9 +76,9 @@ export function DeliveryEvidenceForm({
               reference,
               requestKey,
               ...(amountMinor !== undefined ? { amountMinor } : {}),
-              ...(action === 'REMIT' || action === 'PHYSICAL_RETURN'
-                ? { deviceId, businessDate: new Date(new Date().toISOString().slice(0, 10)) }
-                : {}),
+              // DEV-943: no business date is sent; the server books on today in the
+              // organisation's own zone, the day the drawer was opened on.
+              ...(action === 'REMIT' || action === 'PHYSICAL_RETURN' ? { deviceId } : {}),
               ...(action === 'PHYSICAL_RETURN' && location
                 ? { quarantineLocationId: location }
                 : {}),

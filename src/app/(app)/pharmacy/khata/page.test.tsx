@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   sendReminder: vi.fn(),
 }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: vi.fn().mockResolvedValue({}) }));
+import { createTRPCContext } from '@/server/trpc';
 vi.mock('./khata-router', () => ({ pharmacyKhataRouter: { createCaller: () => mocks } }));
 import KhataPage from './page';
 import KhataLoading from './loading';
@@ -118,5 +119,34 @@ describe('DEV-730 Khata page', () => {
     expect(screen.queryByRole('main')).not.toBeInTheDocument();
     expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
     expect(screen.getByRole('status')).toHaveTextContent('Loading branch balances');
+  });
+});
+
+describe('DEV-943 Khata dates use the shop’s day', () => {
+  it.each([
+    // 19:30 UTC is already the next day in Karachi; 18:59 UTC is still the same day.
+    ['Asia/Karachi', '2026-11-01T19:30:00Z', '2026-11-02', '2026-10-05T19:30:00Z', '2026-10-06'],
+    ['Asia/Karachi', '2026-11-01T18:59:00Z', '2026-11-01', '2026-10-05T18:59:00Z', '2026-10-05'],
+    // A UTC organisation keeps the UTC day, exactly as before.
+    ['UTC', '2026-11-01T19:30:00Z', '2026-11-01', '2026-10-05T19:30:00Z', '2026-10-05'],
+  ])('in %s a payment at %s reads %s', async (timezone, paidAt, paidDay, overdueAt, overdueDay) => {
+    vi.mocked(createTRPCContext).mockResolvedValueOnce({
+      organization: { timezone },
+    } as never);
+    const ledger = await mocks.ledger();
+    mocks.ledger.mockResolvedValueOnce({
+      ...ledger,
+      accounts: [
+        {
+          ...ledger.accounts[0],
+          lastPaymentAt: new Date(paidAt),
+          oldestOverdueAt: new Date(overdueAt),
+        },
+      ],
+    });
+    await show();
+    const row = within(screen.getByRole('table')).getByRole('row', { name: /Ahmed household/ });
+    expect(within(row).getByText(paidDay)).toBeInTheDocument();
+    expect(within(row).getByText(`Overdue since ${overdueDay}`)).toBeInTheDocument();
   });
 });

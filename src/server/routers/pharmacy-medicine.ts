@@ -77,6 +77,7 @@ import {
 import { STAGING_MAX_ROWS } from '@/lib/pharmacy/migration/staging-input';
 import { admittedInventoryBranchIds } from './pharmacy-inventory';
 import { annotateAudit } from '../audit';
+import { workspaceTimezone } from '@/lib/timezone';
 import {
   adminProcedure,
   auditedProtectedProcedure,
@@ -592,12 +593,14 @@ export const pharmacyMedicineRouter = router({
         { soloOwnerAuthority: !access.reviewer, ownerWithoutOtherReviewer: true }
       );
     }),
-  priceNotices: capabilityProcedure('pharmacy:safety').query(({ ctx }) =>
-    priceIntelligence(ctx.db, {
+  priceNotices: capabilityProcedure('pharmacy:safety').query(async ({ ctx }) => ({
+    ...(await priceIntelligence(ctx.db, {
       organizationId: ctx.entitlements.organizationId,
       actorId: ctx.session.user.id,
-    })
-  ),
+    })),
+    // DEV-943: the caller's own organisation zone, so price dates read as the shop's days.
+    timezone: workspaceTimezone(ctx.organization?.timezone),
+  })),
   confirmPrices: capabilityProcedure('pharmacy:safety')
     .input(z.object({ proposalIds: z.array(z.string().min(1).max(200)).min(1).max(100) }).strict())
     .mutation(({ ctx, input }) =>

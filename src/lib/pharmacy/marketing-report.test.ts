@@ -30,7 +30,11 @@ describe('marketing report evidence', () => {
     { ...filters, branchIds: [] },
     { ...filters, from: '2026-01-01' },
   ])('rejects invalid or unbounded filters before reading', async (input) => {
-    expect(() => validateMarketingReportFilters(input)).toThrow('valid UTC dates');
+    expect(() => validateMarketingReportFilters(input)).toThrow(
+      'Use valid dates spanning at most 90 days and 1–100 authorized branches.'
+    );
+    // DEV-943: the dates are the organisation's days, so the message names no UTC.
+    expect(() => validateMarketingReportFilters(input)).not.toThrow(/UTC/);
     await expect(readPharmacyMarketingReport({} as ScopedDb, 'org-a', input)).rejects.toThrow();
   });
 
@@ -204,4 +208,62 @@ it('separates sandbox outcomes and legacy ambiguity; revalues verified receipt r
       excludedUnverifiedLinks: 1,
     },
   });
+});
+
+describe('DEV-943 marketing report counts the organisation’s days', () => {
+  function windowDb() {
+    const capture = vi.fn().mockResolvedValue([]);
+    const exclusion = vi.fn().mockResolvedValue([]);
+    const optOut = vi.fn().mockResolvedValue(0);
+    const attribution = vi.fn().mockResolvedValue([]);
+    const db = {
+      pharmacyCampaignCapture: { findMany: capture },
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      pharmacyCampaignExclusion: { groupBy: exclusion },
+      pharmacyMessageLog: { count: optOut },
+      pharmacyCampaignAttribution: { findMany: attribution },
+    } as unknown as ScopedDb;
+    return { db, capture, exclusion, optOut, attribution };
+  }
+  const day = { branchIds: ['branch-a'], from: '2026-11-19', to: '2026-11-19' };
+
+  it('reads shop midnight to shop midnight for a Karachi organisation', async () => {
+    const { db, capture, exclusion, optOut, attribution } = windowDb();
+    const report = await readPharmacyMarketingReport(db, 'org-a', day, 'Asia/Karachi');
+    // 19 Nov in Karachi runs from 19:00 UTC on 18 Nov to 19:00 UTC on 19 Nov.
+    const window = {
+      gte: new Date('2026-11-18T19:00:00.000Z'),
+      lt: new Date('2026-11-19T19:00:00.000Z'),
+    };
+    expect(capture.mock.calls[0][0].where.capturedAt).toEqual(window);
+    expect(exclusion.mock.calls[0][0].where.evaluatedAt).toEqual(window);
+    expect(attribution.mock.calls[0][0].where.attributedAt).toEqual(window);
+    expect(optOut.mock.calls[0][0].where.createdAt).toEqual(window);
+    expect(optOut.mock.calls[1][0].where.createdAt).toEqual(window);
+    expect(report.period).toEqual({
+      from: '2026-11-19',
+      to: '2026-11-19',
+      timezone: 'Asia/Karachi',
+    });
+    expect(report.cutoff).toBe('2026-11-19T19:00:00.000Z');
+    // A capture at 19:30 UTC on 18 Nov counts on 19 Nov; one at 18:59 UTC does not.
+    const inWindow = (at: string) => new Date(at) >= window.gte && new Date(at) < window.lt;
+    expect(inWindow('2026-11-18T19:30:00.000Z')).toBe(true);
+    expect(inWindow('2026-11-18T18:59:00.000Z')).toBe(false);
+  });
+
+  it.each([['UTC'], [null], [undefined], ['PKT']])(
+    'keeps the UTC window for a %s organisation, exactly as before',
+    async (zone) => {
+      const { db, capture, attribution } = windowDb();
+      const report = await readPharmacyMarketingReport(db, 'org-a', filters, zone);
+      expect(capture.mock.calls[0][0].where.capturedAt).toEqual(
+        validateMarketingReportFilters(filters)
+      );
+      expect(attribution.mock.calls[0][0].where.attributedAt).toEqual(
+        validateMarketingReportFilters(filters)
+      );
+      expect(report.period.timezone).toBe('UTC');
+    }
+  );
 });

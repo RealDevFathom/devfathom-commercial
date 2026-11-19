@@ -82,3 +82,18 @@ it('names each loading route correctly', () => {
   expect(screen.getByRole('heading', { level: 1, name: 'Expiry board' })).toBeVisible();
   expect(screen.getByRole('status')).toHaveAttribute('aria-label', 'Loading Expiry board');
 });
+
+it.each([
+  // DEV-943: the replenishment reader counts UTC days and refuses a history ending after
+  // the read instant, so its default stays the UTC day even when Karachi is past midnight.
+  ['2026-11-18T19:30:00.000Z', '2026-11-18'],
+  ['2026-11-18T18:59:00.000Z', '2026-11-18'],
+])('keeps the default history end on the UTC day the reader counts at %s', async (now, day) => {
+  vi.useFakeTimers({ toFake: ['Date'], now: new Date(now) });
+  try {
+    render(await Page({ searchParams: Promise.resolve({}) }));
+    expect(mocks.console).toHaveBeenCalledWith(expect.objectContaining({ today: day }));
+  } finally {
+    vi.useRealTimers();
+  }
+});

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { SectionCard } from '@/components/ui/section-card';
 import { buttonVariants } from '@/components/ui/button';
 import type { readPharmacyMarketingReport } from '@/lib/pharmacy/marketing-report';
+import { workspaceZoneLabel } from '@/lib/timezone';
 
 export function MarketingSummary({
   report,
@@ -38,7 +39,7 @@ export function MarketingSummary({
         <div className="space-y-4 text-sm">
           <ReportDetails>
             <p className="text-text-muted">
-              {report.period.from}–{report.period.to} ({report.period.timezone}
+              {report.period.from}–{report.period.to} ({workspaceZoneLabel(report.period.timezone)}
               {screenCopy.marketing.evidenceCutoff} {formatShopTime(report.cutoff)}
               {screenCopy.marketing.branchAndDateFiltersApplySupplierIngredientAnd}
             </p>

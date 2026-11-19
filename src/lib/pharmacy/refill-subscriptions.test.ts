@@ -31,6 +31,7 @@ import {
   approveRefillCycle,
   createRefillSubscription,
   isSubscribableMedicine,
+  listDueRefillSubscriptionIds,
   openRefillCycle,
   RefillCycleApprovalDenied,
   refillSubscriptionReminder,
@@ -855,4 +856,68 @@ describe('DEV-73 reminder text', () => {
 
 it('exposes typed refusals', () => {
   expect(new RefillSubscriptionError('INVALID_STATE').reason).toBe('INVALID_STATE');
+});
+
+describe('DEV-943: "open due cycles now" uses the shop’s day', () => {
+  // Due at 12:00 UTC on 22 Nov (the console's due-date form), with a three-day lead:
+  // the cycle's opening day is 19 Nov.
+  const subscription = {
+    id: 'sub-due',
+    nextDueAt: new Date('2026-11-22T12:00:00.000Z'),
+    reminderLeadDays: 3,
+  };
+  function dueDb(timezone: string | null) {
+    const findMany = vi.fn(async () => [subscription]);
+    const findUnique = vi.fn(async () => ({ timezone }));
+    return {
+      db: {
+        $queryRaw: vi.fn(async () => []),
+        organization: { findUnique },
+        pharmacyRefillSubscription: { findMany },
+      },
+      findMany,
+      findUnique,
+    };
+  }
+
+  it.each([
+    // 19:30 UTC on 18 Nov is already 00:30 on 19 Nov in Karachi: the opening day has come.
+    ['Asia/Karachi', '2026-11-18T19:30:00.000Z', ['sub-due']],
+    // 18:59 UTC is still 23:59 on 18 Nov in Karachi: not yet.
+    ['Asia/Karachi', '2026-11-18T18:59:00.000Z', []],
+    // A UTC organisation's day still turns at UTC midnight.
+    ['UTC', '2026-11-18T19:30:00.000Z', []],
+    ['UTC', '2026-11-19T00:00:00.000Z', ['sub-due']],
+    [null, '2026-11-18T19:30:00.000Z', []],
+  ])('in %s at %s opens %j', async (timezone, now, expected) => {
+    const { db, findMany, findUnique } = dueDb(timezone);
+    await expect(listDueRefillSubscriptionIds(db as never, scope, new Date(now))).resolves.toEqual(
+      expected
+    );
+    // The zone is the caller's own organisation's, never an input.
+    expect(findUnique).toHaveBeenCalledWith({
+      where: { id: scope.organizationId },
+      select: { timezone: true },
+    });
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          status: 'ACTIVE',
+        }),
+      })
+    );
+  });
+
+  it('matches the scheduled job: the same subscriptions open on the same shop day', async () => {
+    const { refillCycleOpensBy } = await import('./refill-subscription-rules');
+    for (const now of ['2026-11-18T18:59:00.000Z', '2026-11-18T19:30:00.000Z']) {
+      const { db } = dueDb('Asia/Karachi');
+      const ids = await listDueRefillSubscriptionIds(db as never, scope, new Date(now));
+      expect(ids.includes('sub-due')).toBe(
+        refillCycleOpensBy(subscription, 'Asia/Karachi', new Date(now))
+      );
+    }
+  });
 });

@@ -416,6 +416,32 @@ describe('prescription capture and private delivery', () => {
     await expect(caller(admin).workspace()).resolves.toMatchObject({ canDispense: true });
   });
 
+  it.each([
+    ['Asia/Karachi', 'Asia/Karachi'],
+    ['UTC', 'UTC'],
+    // A zone Intl refuses, or none, reads as UTC, as every workspace day does.
+    ['PKT', 'UTC'],
+    [undefined, 'UTC'],
+  ])(
+    'DEV-943: the workspace carries the caller organisation zone %s as %s',
+    async (stored, zone) => {
+      mocks.can.mockResolvedValue(true);
+      mocks.medicines.mockResolvedValue([]);
+      const admin = context();
+      admin.session!.user.role = 'ADMIN';
+      (admin as { organization: unknown }).organization = { id: 'org-a', timezone: stored };
+      const db = admin.db as unknown as Record<string, Record<string, unknown>>;
+      const findMany = vi.fn().mockResolvedValue([]);
+      for (const model of ['pharmacyPatient', 'pharmacyPrescriber', 'prescription']) {
+        db[model] = { ...db[model], findMany };
+      }
+      db.pharmacyBranch = { findMany };
+      db.pharmacyRefillReminderCapture = { findMany };
+
+      await expect(caller(admin).workspace()).resolves.toMatchObject({ timezone: zone });
+    }
+  );
+
   it('refuses to record a prescription fill without an exact dispense grant', async () => {
     mocks.can.mockResolvedValue(false);
     const ctx = context();
