@@ -16,7 +16,21 @@ vi.mock('@/lib/approval-authenticator', async () => {
       (await verifyOperatorCredential('PIN', input.secret, input.credentialHash)) ? 'PIN' : null,
   };
 });
-vi.mock('@/lib/abac', () => ({ can: vi.fn() }));
+// The approver rule is `rxReviewSignerDenial`, which also builds the subject from the row.
+vi.mock('@/lib/abac', () => ({
+  can: vi.fn(),
+  subjectFromSession: (user: {
+    id: string;
+    role?: string | null;
+    department?: string | null;
+    status?: string | null;
+  }) => ({
+    id: user.id,
+    role: user.role ?? 'EMPLOYEE',
+    department: user.department ?? null,
+    status: user.status ?? null,
+  }),
+}));
 vi.mock('@/lib/restaurant/operator-credentials', () => ({
   verifyOperatorCredential: vi.fn(),
   isLockedOut: vi.fn(() => false),
@@ -145,6 +159,8 @@ function fakeDb(
     },
     // DEV-631: today's business day, and whether its latest close still stands.
     organization: { findUnique: async () => ({ timezone: 'UTC' }) },
+    // DEV-958A: the branch's "day ends at" hour; none stored reads as midnight.
+    pharmacyBranch: { findFirst: async () => null },
     pharmacyDailyClose: { findFirst: vi.fn(async () => options.dayClose ?? null) },
     pharmacyCustomer: {
       findFirst: async () => ({

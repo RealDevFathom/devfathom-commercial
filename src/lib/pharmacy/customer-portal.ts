@@ -3,7 +3,7 @@ import 'server-only';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { workspaceToday } from '@/lib/timezone';
+import { currentPharmacyBusinessDate } from './business-day-clock';
 
 import { readCustomerSnapshot } from './customer-loyalty';
 import { readKhataBalance } from './family-khata';
@@ -600,11 +600,8 @@ export async function confirmPortalKhataPayment(
   // past or future day the client chose. Without a client date the server uses today.
   let businessDate = input.businessDate;
   if (!businessDate) {
-    const organization = await db.organization.findUnique({
-      where: { id: scope.organizationId },
-      select: { timezone: true },
-    });
-    businessDate = new Date(`${workspaceToday(organization?.timezone, now)}T00:00:00.000Z`);
+    // DEV-958A: today on the branch's clock, whose day ends at its "day ends at" hour.
+    businessDate = await currentPharmacyBusinessDate(db, scope, now);
   }
   await requireCurrentPharmacyBusinessDate(db, scope, businessDate, now);
   if (

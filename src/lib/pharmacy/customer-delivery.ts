@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { workspaceToday } from '@/lib/timezone';
+import { currentPharmacyBusinessDate } from './business-day-clock';
 import type { LedgerScope } from './stock-ledger';
 import { applyPharmacyTender, refundPharmacyTender, saleTotalMinor } from './settlement';
 import { pricePrepaidSale } from './prepaid-discount';
@@ -19,18 +19,17 @@ export class PharmacyDeliveryError extends Error {}
  * DEV-943: the drawer day a remittance or returned-cash refund books on. Without a client
  * date it is today on the caller's own organisation clock (the day the counter stamps and
  * the close opens on), never the UTC day: 00:00–04:59 PKT is already the next shop day.
+ * DEV-958A: on the branch's clock, so a branch whose day ends at 05:00 books 00:30 on the
+ * day before, on the drawer opened that day.
  */
 async function drawerBusinessDate(
   db: ScopedDb,
-  scope: { organizationId: string },
+  scope: { organizationId: string; branchId: string },
   input: { deviceId?: string; businessDate?: Date }
 ): Promise<Date | undefined> {
   if (input.businessDate || !input.deviceId) return input.businessDate;
-  const organization = await db.organization.findUnique({
-    where: { id: scope.organizationId },
-    select: { timezone: true },
-  });
-  return new Date(`${workspaceToday(organization?.timezone)}T00:00:00.000Z`);
+  // DEV-958A: on the branch's clock, whose day ends at its "day ends at" hour.
+  return currentPharmacyBusinessDate(db, scope);
 }
 
 export const deliveryCommandInput = z

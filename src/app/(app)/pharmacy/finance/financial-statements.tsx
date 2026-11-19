@@ -8,11 +8,11 @@ import { financeAccountLabel } from '@/lib/finance/account-labels';
 import { financeEntryDescription, financeSourceLabel } from '@/lib/finance/source-labels';
 import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/plain-language';
 import {
-  formatWorkspaceDateTime,
-  workspaceDateOffset,
-  workspaceDateRange,
-  workspaceZoneLabel,
-} from '@/lib/timezone';
+  pharmacyBusinessDayOffset,
+  pharmacyBusinessDayRange,
+  type PharmacyDayEnd,
+} from '@/lib/pharmacy/business-day';
+import { formatWorkspaceDateTime, workspaceZoneLabel } from '@/lib/timezone';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 
 const money = (value: string | number) => {
@@ -25,7 +25,11 @@ const money = (value: string | number) => {
  * `YYYY-MM-DDTHH:MM:SSZ` form: for a UTC organisation, `${day}T00:00:00Z` exactly as before. A
  * malformed day passes through as before, so the reader still refuses it.
  */
-export function statementDayStart(day: string, timeZone: string | null | undefined): string {
+export function statementDayStart(
+  day: string,
+  timeZone: string | null | undefined,
+  dayEnd?: PharmacyDayEnd
+): string {
   const utc = new Date(`${day}T00:00:00.000Z`);
   // Only a real calendar day is moved: 2026-02-30 would otherwise roll over to 2 March.
   const real =
@@ -33,7 +37,10 @@ export function statementDayStart(day: string, timeZone: string | null | undefin
     Number.isFinite(utc.getTime()) &&
     utc.toISOString().slice(0, 10) === day;
   if (!real) return `${day}T00:00:00Z`;
-  return workspaceDateRange(day, day, timeZone).from.toISOString().replace('.000Z', 'Z');
+  // DEV-958A: the branch's business day, which starts at its "day ends at" hour.
+  return pharmacyBusinessDayRange(day, day, { timeZone, dayEnd })
+    .from.toISOString()
+    .replace('.000Z', 'Z');
 }
 
 export async function FinancialStatements({
@@ -43,6 +50,7 @@ export async function FinancialStatements({
   to,
   page,
   timeZone,
+  dayEnd,
 }: {
   caller: ReturnType<typeof pharmacyFinanceRouter.createCaller>;
   branchId: string;
@@ -51,17 +59,20 @@ export async function FinancialStatements({
   page?: string;
   /** Workspace IANA zone: picked days are the organisation's days (UTC when absent). */
   timeZone?: string | null;
+  /** DEV-958A: the branch's day-end hours by day (`PharmacyDayEnd`; midnight when absent). */
+  dayEnd?: PharmacyDayEnd;
 }) {
   const now = new Date();
-  const start = from || workspaceDateOffset(timeZone, -30, now);
-  const end = to || workspaceDateOffset(timeZone, 1, now);
+  const clock = { timeZone, dayEnd };
+  const start = from || pharmacyBusinessDayOffset(clock, -30, now);
+  const end = to || pharmacyBusinessDayOffset(clock, 1, now);
   const zone = workspaceZoneLabel(timeZone);
   let result;
   try {
     result = await caller.financialStatements({
       branchId,
-      from: statementDayStart(start, timeZone),
-      to: statementDayStart(end, timeZone),
+      from: statementDayStart(start, timeZone, dayEnd),
+      to: statementDayStart(end, timeZone, dayEnd),
       page: Number(page || 1),
     });
   } catch (error) {

@@ -9,7 +9,8 @@ import {
   VOUCHER_TOTAL_VALUE_CAP_MINOR,
   VOUCHER_VALUE_CAP_MINOR,
 } from '@/lib/pharmacy/voucher-controls';
-import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
+import { workspaceTimezone } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import { MarketingActionForm } from './action-form';
 
 const control =
@@ -71,7 +72,7 @@ export function VoucherPanel({
   timeZone?: string;
 }) {
   const zone = workspaceTimezone(timeZone);
-  const today = workspaceToday(zone);
+  const today = pharmacyCalendarDay(zone);
   const lastAllowedDay = shiftDay(today, VOUCHER_MAX_VALIDITY_DAYS - 1);
   const selfOnly = approvers.length > 0 && approvers.every((approver) => approver.self);
   return (

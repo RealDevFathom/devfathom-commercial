@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
+import { workspaceTimezone } from '@/lib/timezone';
+import { isPharmacyCurrentBusinessDate, pharmacyDayEndField } from './business-day';
+import { readPharmacyDayClock } from './business-day-clock';
 import type { LedgerScope } from './stock-ledger';
 import { aggregateTenderTotals } from './manual-payments';
 import {
@@ -23,7 +25,7 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
   const where = { organizationId: scope.organizationId, branchId: scope.branchId, businessDate };
   const branch = await db.pharmacyBranch.findFirst({
     where: { id: scope.branchId, organizationId: scope.organizationId, active: true },
-    select: { name: true },
+    select: { name: true, businessDayEndsAtHistory: true },
   });
   if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
   const [close, drawers, sales, refunds, organization, tenders, unpaid] = await Promise.all([
@@ -145,6 +147,8 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
     close,
     closeFollowsReopen,
     timezone: workspaceTimezone(organization?.timezone),
+    // DEV-958A: the hour this branch's business day ends at, so the screen knows "today".
+    dayEnd: pharmacyDayEndField(branch.businessDayEndsAtHistory).dayEnd ?? [],
     openBills: {
       open: unpaid.filter((sale) => sale.status === 'OPEN').length,
       held: unpaid.filter((sale) => sale.status === 'HELD').length,
@@ -215,11 +219,10 @@ export async function reopenPharmacyDayForTrading(
 ) {
   const reason = input.reason.trim();
   if (!reason) throw new PharmacySettlementError('REOPEN_REASON_REQUIRED');
-  const organization = await db.organization.findUnique({
-    where: { id: scope.organizationId },
-    select: { timezone: true },
-  });
-  if (input.businessDate.toISOString().slice(0, 10) !== workspaceToday(organization?.timezone, now))
+  // DEV-958A: today on the branch's clock, whose day ends at its "day ends at" hour.
+  if (
+    !isPharmacyCurrentBusinessDate(input.businessDate, await readPharmacyDayClock(db, scope), now)
+  )
     throw new PharmacySettlementError('REOPEN_NOT_TODAY');
   await lockPharmacyDay(db, scope, input.businessDate);
   const close = await db.pharmacyDailyClose.findFirst({

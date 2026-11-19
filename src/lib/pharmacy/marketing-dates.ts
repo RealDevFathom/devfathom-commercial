@@ -1,5 +1,6 @@
 import { wallClockToInstant } from '@/lib/meetings/recurrence';
-import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
+import { workspaceTimezone } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 
 /**
  * Marketing forms ask owners for calendar days and local times in the workspace zone, never
@@ -52,7 +53,9 @@ export function localDateTime(value: string, timeZone: string): Date {
 /** Whether an instant is the start of its calendar day in the workspace zone. */
 export function isLocalMidnight(value: Date, timeZone: string): boolean {
   if (!Number.isFinite(value.getTime())) return false;
-  return localDayStart(workspaceToday(timeZone, value), timeZone).getTime() === value.getTime();
+  return (
+    localDayStart(pharmacyCalendarDay(timeZone, value), timeZone).getTime() === value.getTime()
+  );
 }
 
 /**
@@ -62,7 +65,7 @@ export function isLocalMidnight(value: Date, timeZone: string): boolean {
  */
 export function localCalendarDays(from: Date, cutoff: Date, timeZone: string): number | null {
   if (!isLocalMidnight(from, timeZone) || !isLocalMidnight(cutoff, timeZone)) return null;
-  const day = (value: Date) => Date.parse(`${workspaceToday(timeZone, value)}T00:00:00Z`);
+  const day = (value: Date) => Date.parse(`${pharmacyCalendarDay(timeZone, value)}T00:00:00Z`);
   return Math.round((day(cutoff) - day(from)) / 86_400_000);
 }
 
@@ -74,7 +77,7 @@ export function shiftDay(day: string, days: number): string {
 
 /** The latest `days` completed calendar days in the workspace zone, ending yesterday. */
 export function recentCompletedDays(timeZone: string, days: number, now = new Date()) {
-  const lastDay = shiftDay(workspaceToday(timeZone, now), -1);
+  const lastDay = shiftDay(pharmacyCalendarDay(timeZone, now), -1);
   return { firstDay: shiftDay(lastDay, -(days - 1)), lastDay };
 }
 
