@@ -255,6 +255,7 @@ model PharmacyBranch {
   lostDemandAdviceDecisions                PharmacyLostDemandAdviceDecision[]
   ownerDigestCaptures                      PharmacyOwnerDigestCapture[]
   refillReminderCaptures                   PharmacyRefillReminderCapture[]
+  prescriptionFills                        PrescriptionFill[]
   pharmacovigilanceReports                 PharmacyPharmacovigilanceReport[]
   customerOrders                           PharmacyCustomerOrder[]
   visibilityPharmacyAccountingPeriod       PharmacyAccountingPeriod[]        @relation("PharmacyAccountingPeriodVisibilityAnchor")
@@ -13825,12 +13826,17 @@ model PrescriptionFill {
   dispensedByUserId      String
   dispensedAt            DateTime                       @default(now())
   idempotencyKey         String
+  /// DEV-962: the branch that dispensed this fill; only that branch records its refill reminder
+  /// (an organisation admin excepted). NULL for an older fill whose branch could not be proven.
+  branchId               String?
   line                   PrescriptionLine               @relation(fields: [organizationId, prescriptionLineId], references: [organizationId, id], onDelete: Restrict)
+  branch                 PharmacyBranch?                @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
   reminderCapture        PharmacyRefillReminderCapture?
 
   @@unique([organizationId, id])
   @@unique([organizationId, prescriptionLineId, fillSequence])
   @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, branchId])
   @@map("pharmacy_prescription_fills")
 }
 

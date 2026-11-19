@@ -297,7 +297,7 @@ const REVIEWED_ROW_READS: Record<string, Record<string, number>> = {
   'src/lib/pharmacy/offline-devices.ts': { PharmacyRegisteredDevice: 4 },
   'src/lib/pharmacy/owner-data-export-pin.ts': { RestaurantOperatorCredential: 1 },
   'src/lib/pharmacy/purchase-approval.ts': { RestaurantOperatorCredential: 1 },
-  'src/lib/pharmacy/refill-subscriptions.ts': { RestaurantOperatorCredential: 1, User: 1 },
+  'src/lib/pharmacy/refill-subscriptions.ts': { RestaurantOperatorCredential: 1 },
   'src/lib/pharmacy/refund-authorization.ts': { RestaurantOperatorCredential: 1 },
   'src/lib/pharmacy/sop-adapter.ts': { User: 1 },
   'src/lib/pharmacy/supplier-action-links.ts': { PharmacySupplierActionLink: 2 },

@@ -25,10 +25,13 @@ describe('one pharmacist per shift policy migration', () => {
       .trim()
       .split('\n');
     expect(ledger).toContain(NAME);
+    // Later migrations (DEV-962 onwards) follow it in the ledger, each stamped after it.
+    const later = ledger.slice(ledger.indexOf(NAME) + 1);
+    for (const name of later) expect(name.slice(0, 14) > NAME.slice(0, 14), name).toBe(true);
     const stamps = readdirSync('prisma/migrations', { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name.slice(0, 14));
-    expect(stamps.filter((stamp) => stamp > NAME.slice(0, 14))).toEqual([]);
+      .map((entry) => entry.name);
+    expect(stamps.filter((name) => name.slice(0, 14) > NAME.slice(0, 14))).toEqual(later);
   });
 
   it('forces row-level security by organization and branch', () => {

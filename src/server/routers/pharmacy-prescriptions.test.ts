@@ -1419,6 +1419,8 @@ describe('DEV-938 refill reminder branch assignment', () => {
     fillFind.mockResolvedValue({
       id: 'fill-a',
       prescriptionLineId: 'line-a',
+      // DEV-962: dispensed at branch-a, the branch these reminders are recorded at.
+      branchId: 'branch-a',
       dispensedAt: new Date('2026-11-01T00:00:00.000Z'),
       quantityCanonicalUnits: 20,
       line: {
@@ -1518,5 +1520,116 @@ describe('DEV-938 refill reminder branch assignment', () => {
       })
     );
     expect(ctx.audit.detail.metadata).toMatchObject({ branchId: 'branch-a' });
+  });
+
+  // DEV-962: only the branch that dispensed the fill takes its one reminder slot.
+  it.each([
+    ['dispensed at another branch', 'branch-b', 'FILL_DISPENSED_AT_ANOTHER_BRANCH'],
+    ['with no recorded dispensing branch', null, 'FILL_BRANCH_UNKNOWN'],
+  ])(
+    'refuses a pharmacist of this branch a fill %s and writes nothing',
+    async (_case, dispensedAt, message) => {
+      assignmentFind.mockResolvedValue({ branchId: 'branch-a' });
+      fillFind.mockResolvedValue({ id: 'fill-a', branchId: dispensedAt });
+      const ctx = reminderContext('EMPLOYEE');
+      await expect(caller(ctx).captureRefillReminder(reminderInput)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message,
+      });
+      expect(fillFind).toHaveBeenCalledExactlyOnceWith({
+        where: { id: 'fill-a', organizationId: 'org-a' },
+        select: { branchId: true },
+      });
+      expect(consentFind).not.toHaveBeenCalled();
+      expect(reminderCreate).not.toHaveBeenCalled();
+      expect(mocks.audit).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          path: 'pharmacyPrescriptions.captureRefillReminder',
+          outcome: 'FAILURE',
+        })
+      );
+      expect(ctx.audit.detail.metadata).toMatchObject({ branchId: 'branch-a' });
+    }
+  );
+
+  it.each([
+    ['dispensed at another branch', 'branch-b'],
+    ['with no recorded dispensing branch', null],
+  ])('leaves the owner able to record the reminder of a fill %s', async (_case, dispensedAt) => {
+    const ctx = reminderContext('ADMIN', 'owner-a');
+    const fill = await fillFind();
+    fillFind.mockReset();
+    fillFind.mockResolvedValue({ ...fill, branchId: dispensedAt });
+    await expect(caller(ctx).captureRefillReminder(reminderInput)).resolves.toMatchObject({
+      branchId: 'branch-a',
+      capturedByUserId: 'owner-a',
+    });
+    expect(reminderCreate).toHaveBeenCalledOnce();
+  });
+});
+
+describe('DEV-962 a fill records the branch that dispensed it', () => {
+  const branchFind = vi.fn();
+  const assignmentFind = vi.fn();
+  const fillCreate = vi.fn();
+  const fillInput = {
+    id: 'fill-branch',
+    prescriptionLineId: 'line-ordinary',
+    fillSequence: 1,
+    quantityCanonicalUnits: 2,
+    idempotencyKey: 'fill-key-branch',
+  };
+
+  function fillContext(role: 'ADMIN' | 'EMPLOYEE' = 'EMPLOYEE') {
+    const ctx = context('pharmacist-a');
+    ctx.session!.user.role = role;
+    ctx.db = {
+      ...ctx.db,
+      pharmacyBranch: { findFirst: branchFind },
+      pharmacyBranchAssignment: { findFirst: assignmentFind },
+      prescriptionFill: { create: fillCreate },
+    } as unknown as typeof ctx.db;
+    return ctx;
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocks.can.mockResolvedValue(true);
+    mocks.hasModule.mockReturnValue(true);
+    mocks.prescriptionLine.mockResolvedValue({ medicine: { controlled: false } });
+    branchFind.mockImplementation(async ({ where }) =>
+      where.id === 'branch-a' && where.organizationId === 'org-a' && where.active === true
+        ? { id: 'branch-a' }
+        : null
+    );
+    assignmentFind.mockResolvedValue(null);
+    fillCreate.mockImplementation(async ({ data }) => data);
+  });
+
+  it('stores the dispensing branch of a pharmacist assigned to it', async () => {
+    assignmentFind.mockResolvedValue({ branchId: 'branch-a' });
+    await expect(
+      caller(fillContext()).fill({ ...fillInput, branchId: 'branch-a' })
+    ).resolves.toMatchObject({ branchId: 'branch-a', dispensedByUserId: 'pharmacist-a' });
+    expect(fillCreate).toHaveBeenCalledExactlyOnceWith({
+      data: { ...fillInput, branchId: 'branch-a', dispensedByUserId: 'pharmacist-a' },
+    });
+  });
+
+  it('refuses a branch the pharmacist is not assigned to, and a branch not found', async () => {
+    await expect(
+      caller(fillContext()).fill({ ...fillInput, branchId: 'branch-a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+    await expect(
+      caller(fillContext()).fill({ ...fillInput, branchId: 'branch-of-org-b' })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'BRANCH_NOT_FOUND' });
+    expect(fillCreate).not.toHaveBeenCalled();
+  });
+
+  it('lets an organisation admin record a fill at any branch', async () => {
+    await expect(
+      caller(fillContext('ADMIN')).fill({ ...fillInput, branchId: 'branch-a' })
+    ).resolves.toMatchObject({ branchId: 'branch-a' });
+    expect(assignmentFind).not.toHaveBeenCalled();
   });
 });

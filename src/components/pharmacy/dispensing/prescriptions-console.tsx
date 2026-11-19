@@ -185,6 +185,10 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
           'Reminder refused: this Rx item needs a signed pharmacist decision first.',
         AMBIGUOUS_DIRECTIONS:
           'Reminder refused: directions must state a deterministic daily or hourly cadence.',
+        FILL_DISPENSED_AT_ANOTHER_BRANCH:
+          'Reminder refused: this fill was dispensed at another branch. Only that branch can record its refill reminder.',
+        FILL_BRANCH_UNKNOWN:
+          'Reminder refused: the branch that dispensed this fill is not recorded. Ask the owner to record its refill reminder.',
       }[captureReminder.error.message] ?? captureReminder.error.message)
     : null;
 

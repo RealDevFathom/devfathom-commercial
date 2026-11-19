@@ -107,7 +107,6 @@ const WORKSPACE_WIDE: ReadonlyArray<{ reason: string; actions: readonly string[]
       'pharmacyPrescriptions.createPrescriber',
       'pharmacyPrescriptions.draftCartFromSource',
       'pharmacyPrescriptions.extractSource',
-      'pharmacyPrescriptions.fill',
       'pharmacyPrescriptions.recordConsent',
       'pharmacyPrescriptions.uploadSource',
     ],

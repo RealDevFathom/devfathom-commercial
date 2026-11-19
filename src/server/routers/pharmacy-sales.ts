@@ -3171,6 +3171,8 @@ export const pharmacySalesRouter = router({
           await db.prescriptionFill.create({
             data: {
               organizationId: scope.organizationId,
+              // DEV-962: the dispensing branch, so only it records this fill's refill reminder.
+              branchId: scope.branchId,
               prescriptionLineId: rx.id,
               fillSequence: rx.fills.length + 1,
               quantityCanonicalUnits: units,
