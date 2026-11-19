@@ -192,6 +192,26 @@ export function commandPayloadHash(payload: Record<string, string | number>): st
     .digest('hex');
 }
 
+/**
+ * The nested `lines.create` rows. A line's relation to its voucher is the composite
+ * (organizationId, branchId, voucherId), so Prisma copies all three from the parent
+ * voucher row and the checked nested input refuses them ("Unknown argument
+ * organizationId"). Every line therefore carries exactly its voucher's organization
+ * and branch; the composite foreign key and row-level security enforce the same in
+ * the database. The explicit return type keeps tsc from accepting extra keys here.
+ */
+function voucherLineRows(
+  lines: readonly NormalizedVoucherLine[]
+): Prisma.PharmacyJournalVoucherLineCreateWithoutVoucherInput[] {
+  return lines.map((line): Prisma.PharmacyJournalVoucherLineCreateWithoutVoucherInput => ({
+    lineNumber: line.lineNumber,
+    accountCode: line.accountCode,
+    side: line.side,
+    amountMinor: line.amountMinor,
+    memo: line.memo,
+  }));
+}
+
 const voucherInclude = { lines: { orderBy: { lineNumber: 'asc' as const } } };
 
 async function lockVoucher(db: ScopedDb, scope: JournalVoucherScope, voucherId: string) {
@@ -265,13 +285,7 @@ export async function createJournalVoucherDraft(
       createKey: input.createKey,
       createdByUserId: scope.actorId,
       updatedByUserId: scope.actorId,
-      lines: {
-        create: draft.lines.map((line) => ({
-          ...line,
-          organizationId: scope.organizationId,
-          branchId: scope.branchId,
-        })),
-      },
+      lines: { create: voucherLineRows(draft.lines) },
     },
     include: voucherInclude,
   });
@@ -303,13 +317,7 @@ export async function updateJournalVoucherDraft(
       evidenceReference: draft.evidenceReference,
       version: voucher.version + 1,
       updatedByUserId: scope.actorId,
-      lines: {
-        create: draft.lines.map((line) => ({
-          ...line,
-          organizationId: scope.organizationId,
-          branchId: scope.branchId,
-        })),
-      },
+      lines: { create: voucherLineRows(draft.lines) },
     },
     include: voucherInclude,
   });
