@@ -56,6 +56,7 @@ import { CounterCardTerminalPanel } from './counter-card-terminal-panel';
 import { CounterKhataPaymentPanel } from './counter-khata-payment-panel';
 import { CounterReturnPanel } from './counter-return-panel';
 import { CounterRxPanel } from './counter-rx-panel';
+import { CounterRxSelfSign } from './counter-rx-self-sign';
 import { CounterSearchResults } from './counter-search-results';
 import { CounterScanInput } from './counter-scan-input';
 import { CounterVoucherEntry, type CounterHeldVoucher } from './counter-voucher';
@@ -631,6 +632,11 @@ function ScopedPharmacyCounterConsole({
     dispensingLicensed &&
     railAccess.data?.userId === accountId &&
     (railAccess.data?.capabilities ?? []).includes('pharmacy:prescriptions');
+  // DEV-950: who may be offered to sign a prescription line at payment (the server decides).
+  const canSignPrescriptionLines =
+    dispensingLicensed &&
+    railAccess.data?.userId === accountId &&
+    (railAccess.data?.capabilities ?? []).includes('pharmacy:dispense');
   const [patientId, setPatientId] = useState<string | null>(null);
   const [patientAddressDraft, setPatientAddressDraft] = useState<string | null>(null);
   const [customerId, setCustomerId] = useState<string | null>(null);
@@ -4642,6 +4648,16 @@ function ScopedPharmacyCounterConsole({
             Opens the print window after each payment on this computer.
           </p>
         </div>
+        {/* DEV-950: a prescription line still waiting for its pharmacist's signature. */}
+        {canSignPrescriptionLines && paymentOpen ? (
+          <CounterRxSelfSign
+            branchId={branchId}
+            saleId={currentBill ? saleId : null}
+            enabled
+            // The signed line releases the bill: read it again so payment can be taken at once.
+            onSigned={() => void cartQuery.refetch()}
+          />
+        ) : null}
         <CounterTenderPanel
           key={`${branchId}:${saleId ?? 'none'}:${restoredAttempt?.input.idempotencyKey ?? ''}`}
           ref={tenderRef}
