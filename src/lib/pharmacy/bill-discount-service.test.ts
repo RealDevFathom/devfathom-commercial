@@ -170,6 +170,47 @@ describe('applyBillDiscount (DEV-956)', () => {
     expect(fake.pharmacySaleEvent.create).not.toHaveBeenCalled();
   });
 
+  it('counts the whole-line margin floor on a mixed-lot line, so it refuses with the true capacity instead of throwing', async () => {
+    // Two lots at 100 costing 95 and 10, a 20% minimum margin: the lots have 0 + 87 room, but
+    // the line must keep ceil(105 / 0.8) = 132, so it can take only 68.
+    const mixed = {
+      ...line('l1', 200, 0),
+      allocations: [
+        {
+          id: 'l1-a',
+          canonicalUnits: 1,
+          grossMinor: 100,
+          discountMinor: 0,
+          lot: { unitCostMinor: 95 },
+        },
+        {
+          id: 'l1-b',
+          canonicalUnits: 1,
+          grossMinor: 100,
+          discountMinor: 0,
+          lot: { unitCostMinor: 10 },
+        },
+      ],
+    };
+    const fake = db({ lines: [mixed] });
+    fake.pharmacyBranch.findFirst.mockResolvedValue({ discountPolicy: { minMarginBps: 2_000 } });
+    await expect(run(fake, { kind: 'AMOUNT', minor: 80 })).resolves.toMatchObject({
+      status: 'REFUSED',
+      reason: 'ABOVE_LIMIT',
+      capacityMinor: 68,
+    });
+    expect(fake.pharmacySaleLine.update).not.toHaveBeenCalled();
+    await expect(run(fake, { kind: 'AMOUNT', minor: 68 })).resolves.toMatchObject({
+      status: 'APPLIED',
+      totalMinor: 68,
+    });
+    expect(fake.pharmacySaleLine.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ billAllocationDiscounts: { 'l1-a': 0, 'l1-b': 68 } }),
+      })
+    );
+  });
+
   it('writes each share with its lot snapshot and records who gave and who approved it', async () => {
     const voucher = line('l333', 500, 0, {
       discountMinor: 50,

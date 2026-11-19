@@ -114,21 +114,31 @@ describe('planBillDiscount (DEV-956)', () => {
     ]);
     const other = line([[100, 50]]);
     const limits = { minMarginBps: 2_000, maxDiscountBps: 10_000 };
-    // Floors at a 20% margin: ceil(95 / 0.8) = 119 (no room), ceil(10 / 0.8) = 13, ceil(50 / 0.8) = 63.
+    // Lot floors at a 20% margin: ceil(95 / 0.8) = 119 (no room), ceil(10 / 0.8) = 13, so the
+    // lots have 0 + 87 room. The whole line must also keep its margin on its total cost:
+    // ceil(105 / 0.8) = 132, so line A takes at most 200 - 132 = 68. Line B: 100 - 63 = 37.
     const error = refusal(() =>
-      planBillDiscount([tight, other], { kind: 'AMOUNT', minor: 125 }, limits)
+      planBillDiscount([tight, other], { kind: 'AMOUNT', minor: 106 }, limits)
     );
     expect(error.reason).toBe('ABOVE_LIMIT');
-    expect(error.plan?.capacityMinor).toBe(87 + 37);
-    const plan = planBillDiscount([tight, other], { kind: 'AMOUNT', minor: 124 }, limits);
+    expect(error.plan?.capacityMinor).toBe(68 + 37);
+    const plan = planBillDiscount([tight, other], { kind: 'AMOUNT', minor: 105 }, limits);
     expect(plan.shares).toEqual([
       {
         saleLineId: tight.id,
-        discountMinor: 87,
-        allocations: { [`${tight.id}_a0`]: 0, [`${tight.id}_a1`]: 87 },
+        discountMinor: 68,
+        allocations: { [`${tight.id}_a0`]: 0, [`${tight.id}_a1`]: 68 },
       },
       { saleLineId: other.id, discountMinor: 37, allocations: { [`${other.id}_a0`]: 37 } },
     ]);
+    // Every planned share passes the same whole-line rule an item discount meets.
+    for (const share of plan.shares) {
+      const planned = [tight, other].find((candidate) => candidate.id === share.saleLineId)!;
+      const cost = planned.allocations.reduce((sum, a) => sum + a.lot.unitCostMinor, 0);
+      expect(planned.grossMinor - share.discountMinor).toBeGreaterThanOrEqual(
+        Math.ceil((cost * 10_000) / 8_000)
+      );
+    }
   });
 
   it('leaves out, and names, every line that may not take a share', () => {
