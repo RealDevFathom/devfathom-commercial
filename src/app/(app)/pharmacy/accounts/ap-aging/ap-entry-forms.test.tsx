@@ -1,13 +1,25 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ record: vi.fn(), pay: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  record: vi.fn(),
+  pay: vi.fn(),
+  reverseInvoice: vi.fn(),
+  reverseSettlement: vi.fn(),
+}));
 vi.mock('./ap-entry-actions', () => ({
   recordApInvoiceFromForm: mocks.record,
   payApInvoiceFromForm: mocks.pay,
+  reverseApInvoiceFromForm: mocks.reverseInvoice,
+  reverseApSettlementFromForm: mocks.reverseSettlement,
 }));
 
-import { PayApInvoiceForm, RecordApInvoiceForm } from './ap-entry-forms';
+import {
+  PayApInvoiceForm,
+  RecordApInvoiceForm,
+  ReversalNoticeArea,
+  ReverseApEntryForm,
+} from './ap-entry-forms';
 
 const hidden = (container: HTMLElement, name: string) =>
   (container.querySelector(`input[name="${name}"]`) as HTMLInputElement).value;
@@ -80,5 +92,104 @@ describe('DEV-103 supplier expense payment entry form', () => {
     expect(sent.get('amount')).toBe('250');
     expect(sent.get('commandKey')).toBe('ap-payment:first-key');
     expect(hidden(container, 'commandKey')).not.toBe('ap-payment:first-key');
+  });
+});
+
+describe('DEV-103 reversal form', () => {
+  it('sends a payment reversal with the reason and PIN, keeps them after a refusal, and replays the same key', async () => {
+    mocks.reverseSettlement.mockResolvedValueOnce({
+      status: 'error',
+      message: 'Nothing was reversed. Enter your manager or owner PIN.',
+    });
+    const { container } = render(
+      <ReverseApEntryForm
+        kind="payment"
+        branchId="branch_1"
+        targetId="set_1"
+        label="234.56 against AP-0001"
+        initialKey="ap-payment-rev:first-key"
+      />
+    );
+    const form = screen.getByRole('form', { name: 'Reverse payment 234.56 against AP-0001' });
+    fireEvent.change(screen.getByLabelText('Reason to reverse'), {
+      target: { value: 'Paid twice' },
+    });
+    fireEvent.change(screen.getByLabelText('Your manager or owner PIN'), {
+      target: { value: '2468' },
+    });
+    fireEvent.submit(form);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Enter your manager or owner PIN');
+    const sent = mocks.reverseSettlement.mock.calls[0]?.[1] as FormData;
+    expect(sent.get('settlementId')).toBe('set_1');
+    expect(sent.get('invoiceId')).toBeNull();
+    expect(sent.get('reason')).toBe('Paid twice');
+    expect(sent.get('pin')).toBe('2468');
+    expect(sent.get('commandKey')).toBe('ap-payment-rev:first-key');
+    expect(mocks.reverseInvoice).not.toHaveBeenCalled();
+    expect((screen.getByLabelText('Reason to reverse') as HTMLInputElement).value).toBe(
+      'Paid twice'
+    );
+    expect(hidden(container, 'commandKey')).toBe('ap-payment-rev:first-key');
+    expect(screen.getByRole('button', { name: 'Reverse payment' })).toBeEnabled();
+
+    mocks.reverseSettlement.mockResolvedValueOnce({
+      status: 'saved',
+      message: 'Payment reversed.',
+    });
+    fireEvent.submit(form);
+    await waitFor(() => expect(screen.getByText('Payment reversed.')).toBeInTheDocument());
+    expect(hidden(container, 'commandKey')).toMatch(/^ap-payment-rev:/);
+    expect(hidden(container, 'commandKey')).not.toBe('ap-payment-rev:first-key');
+  });
+
+  it('targets the invoice for an invoice reversal', async () => {
+    mocks.reverseInvoice.mockResolvedValueOnce({ status: 'saved', message: 'Invoice reversed.' });
+    render(
+      <ReverseApEntryForm
+        kind="invoice"
+        branchId="branch_1"
+        targetId="inv_1"
+        label="AP-0001"
+        initialKey="ap-invoice-rev:first-key"
+      />
+    );
+    const pin = screen.getByLabelText('Your manager or owner PIN') as HTMLInputElement;
+    expect(pin.type).toBe('password');
+    expect(pin.autocomplete).toBe('off');
+    fireEvent.submit(screen.getByRole('form', { name: 'Reverse invoice AP-0001' }));
+    await waitFor(() => expect(screen.getByText('Invoice reversed.')).toBeInTheDocument());
+    expect((mocks.reverseInvoice.mock.calls[0]?.[1] as FormData).get('invoiceId')).toBe('inv_1');
+    expect(screen.getByRole('button', { name: /Reverse invoice/ })).toHaveClass('min-h-11');
+  });
+});
+
+describe('DEV-103 reversal confirmation', () => {
+  it('keeps the saved message in the panel after the reversed row leaves the list', async () => {
+    mocks.reverseInvoice.mockResolvedValueOnce({
+      status: 'saved',
+      message: 'Invoice AP-0001 reversed.',
+    });
+    const form = (
+      <ReverseApEntryForm
+        kind="invoice"
+        branchId="branch_1"
+        targetId="inv_1"
+        label="AP-0001"
+        initialKey="ap-invoice-rev:first-key"
+      />
+    );
+    const { rerender } = render(<ReversalNoticeArea>{form}</ReversalNoticeArea>);
+    fireEvent.submit(screen.getByRole('form', { name: 'Reverse invoice AP-0001' }));
+    await waitFor(() => expect(mocks.reverseInvoice).toHaveBeenCalled());
+    // The server re-renders the list without the reversed invoice.
+    rerender(
+      <ReversalNoticeArea>
+        <p>Nothing left to reverse.</p>
+      </ReversalNoticeArea>
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('Invoice AP-0001 reversed.')
+    );
+    expect(screen.queryByRole('form')).toBeNull();
   });
 });
