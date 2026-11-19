@@ -27,16 +27,28 @@ for name in "${urls[@]}"; do
 done
 
 # Prints the host (IPv6 without brackets), port and database of a postgres URL, one per line,
-# without credentials. Refuses a host, hostaddr or dbname query parameter: node-postgres and
-# libpq let one override the address's host or database, so the checks below would pass for
-# one server while the suites connect to another.
+# without credentials. Accepts only the postgres: and postgresql: schemes (node-postgres reads
+# socket: as a unix socket path). Refuses a host, hostaddr, port, dbname, db or database query
+# parameter, in any letter case, percent-encoded or repeated: node-postgres and libpq let one
+# override the address's host, port or database, so the checks below would pass for one
+# server while the suites connect to another.
 target() {
   bun -e '
-const u = new URL(process.argv[1]);
-const overriding = [...u.searchParams.keys()].filter((key) =>
-  ["host", "hostaddr", "dbname"].includes(key.toLowerCase()));
+let u;
+try {
+  u = new URL(process.argv[1]);
+} catch {
+  console.error(`${process.argv[2]} is not a valid database URL.`);
+  process.exit(2);
+}
+if (!["postgres:", "postgresql:"].includes(u.protocol)) {
+  console.error(`${process.argv[2]} must use the postgres: or postgresql: scheme.`);
+  process.exit(2);
+}
+const overriding = [...new Set([...u.searchParams.keys()].map((key) => key.toLowerCase()))]
+  .filter((key) => ["host", "hostaddr", "port", "dbname", "db", "database"].includes(key));
 if (overriding.length > 0) {
-  console.error(`${process.argv[2]} carries a ${overriding.join(", ")} parameter; put the host and database in the address itself.`);
+  console.error(`${process.argv[2]} carries a ${overriding.join(", ")} parameter; put the host, port and database in the address itself.`);
   process.exit(2);
 }
 const host = u.hostname.replace(/^\[(.*)\]$/, "$1");

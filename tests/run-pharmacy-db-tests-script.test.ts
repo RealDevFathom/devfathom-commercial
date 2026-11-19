@@ -23,28 +23,45 @@ function run(address: string) {
 }
 
 describe('scripts/run-pharmacy-db-tests.sh address checks', () => {
+  const base = 'postgresql://u:placeholder@localhost:5432/devfathom_pharmacy_test';
   it.each([
-    [
-      'host',
-      'postgresql://u:placeholder@localhost:5432/devfathom_pharmacy_test?host=db.example.com',
-    ],
-    [
-      'hostaddr',
-      'postgresql://u:placeholder@localhost:5432/devfathom_pharmacy_test?hostaddr=10.0.0.9',
-    ],
-    [
-      'dbname',
-      'postgresql://u:placeholder@localhost:5432/devfathom_pharmacy_test?dbname=devfathom',
-    ],
-    [
-      'HOST',
-      'postgresql://u:placeholder@localhost:5432/devfathom_pharmacy_test?sslmode=disable&HOST=db.example.com',
-    ],
-  ])('refuses an address carrying a %s parameter', (parameter, address) => {
+    ['host', `${base}?host=db.example.com`],
+    ['hostaddr', `${base}?hostaddr=10.0.0.9`],
+    ['dbname', `${base}?dbname=devfathom`],
+    // node-postgres reads port from the query string, over the port in the address.
+    ['port', 'postgresql://u:placeholder@localhost:5650/devfathom_test?port=5432'],
+    ['db', `${base}?db=devfathom`],
+    ['database', `${base}?database=devfathom`],
+    // Any letter case, percent-encoded, or repeated: each is the same parameter to the driver.
+    ['host', `${base}?sslmode=disable&HOST=db.example.com`],
+    ['port', `${base}?Port=5433`],
+    ['port', `${base}?%70ort=5433`],
+    ['host', `${base}?host=localhost&host=db.example.com`],
+  ])('refuses an address carrying a %s parameter (%s)', (parameter, address) => {
     const { status, stderr } = run(address);
     expect(status).toBe(2);
-    expect(stderr).toContain(`carries a ${parameter} parameter`);
-    expect(stderr).not.toContain('placeholder');
+    expect(stderr).toBe(
+      `PHARMACY_DB_TEST_RUNTIME_URL carries a ${parameter} parameter; put the host, port and database in the address itself.\n`
+    );
+  });
+
+  it.each([
+    // node-postgres reads socket: as a unix socket path (/tmp) and db= as the database.
+    'socket://u:placeholder@localhost/tmp?db=devfathom',
+    'socket://u:placeholder@localhost/devfathom_pharmacy_test',
+    'mysql://u:placeholder@localhost:5432/devfathom_pharmacy_test',
+  ])('refuses a scheme other than postgres: or postgresql: (%s)', (address) => {
+    expect(run(address)).toEqual({
+      status: 2,
+      stderr: 'PHARMACY_DB_TEST_RUNTIME_URL must use the postgres: or postgresql: scheme.\n',
+    });
+  });
+
+  it('refuses an address that is not a URL without echoing it', () => {
+    expect(run('not a url placeholder')).toEqual({
+      status: 2,
+      stderr: 'PHARMACY_DB_TEST_RUNTIME_URL is not a valid database URL.\n',
+    });
   });
 
   it('accepts the IPv6 loopback address as local and goes on to check the database name', () => {
