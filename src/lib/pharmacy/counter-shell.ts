@@ -83,13 +83,26 @@ export async function armCounterShell(): Promise<boolean> {
 
 /** Forget the stored counter page and files, and stop the shell. Never throws. */
 export async function clearCounterShell(): Promise<void> {
+  const container = serviceWorkers();
+  // Tell each running counter worker first, so a store it has in flight cannot
+  // put the page back after the caches below are deleted.
+  try {
+    const registrations = container ? await container.getRegistrations() : [];
+    await Promise.all(
+      registrations
+        .filter((registration) => new URL(registration.scope).pathname === COUNTER_SHELL_SCOPE)
+        .flatMap((registration) => (registration.active ? [registration.active] : []))
+        .map((worker) => ask(worker, { type: 'clear' }, 5_000))
+    );
+  } catch {
+    // Best-effort: the caches are deleted below either way.
+  }
   try {
     if (typeof caches !== 'undefined')
       await Promise.all(COUNTER_SHELL_CACHES.map((name) => caches.delete(name)));
   } catch {
     // Storage may be blocked; nothing is stored then either.
   }
-  const container = serviceWorkers();
   if (!container) return;
   try {
     const registrations = await container.getRegistrations();

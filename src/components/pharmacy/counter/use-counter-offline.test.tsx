@@ -117,6 +117,16 @@ describe('DEV-957 useCounterOffline', () => {
     expect(h.arm).not.toHaveBeenCalled();
   });
 
+  it('treats a line that drops during the price-list download as offline too', async () => {
+    h.snapshots.mockRejectedValue(new CounterRequestError(0, 'offline'));
+    const { result } = renderHook(() =>
+      useCounterOffline({ organizationId: FIXTURE_SCOPE.organizationId, branchId: FIXTURE_SCOPE.branchId, online: true })
+    );
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(result.current.serverUnreachable).toBe(true);
+    expect(h.arm).not.toHaveBeenCalled();
+  });
+
   it('is "other-branch" at a branch this computer is not enrolled for', () => {
     const { result } = renderHook(() =>
       useCounterOffline({ organizationId: FIXTURE_SCOPE.organizationId, branchId: 'branch_else', online: true })

@@ -14,6 +14,7 @@ import {
   fixturePublicKey,
   signedSnapshot,
 } from '@/lib/test-support/pharmacy-offline-snapshots';
+import { terminalScopeKey } from '@/lib/retail-terminal/local-store';
 import { createMemoryDriver } from './counter-offline-runtime';
 import {
   browserSnapshotPayloadHash,
@@ -165,6 +166,20 @@ describe('DEV-957 installing snapshots on an enrolled counter', () => {
     );
     // The server named another device: no session is trusted.
     expect(mismatched.sessionToken).toBeNull();
+  });
+});
+
+describe('DEV-957 an unreadable stored document', () => {
+  it('gets no session, so neither a lease nor a snapshot can overwrite it', async () => {
+    const { deps: d, transport } = deps();
+    const scopeKey = terminalScopeKey(FIXTURE_SCOPE);
+    const foreign = { schemaVersion: 999, scope: FIXTURE_SCOPE, queue: { deviceId: 'x' } };
+    d.driver = createMemoryDriver([[scopeKey, foreign]]);
+    const opened = await openCounterRuntime(ENROLMENT, d, true);
+    expect(opened.hydrated).toBe('unrecoverable');
+    expect(opened.sessionToken).toBeNull();
+    expect(transport.lease).not.toHaveBeenCalled();
+    expect(await d.driver.read(scopeKey)).toEqual(foreign);
   });
 });
 

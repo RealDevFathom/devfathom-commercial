@@ -193,7 +193,7 @@ export function useCounterOffline(input: {
       runtimeRef.current?.close();
       runtimeRef.current = counter.runtime;
       sessionTokenRef.current = counter.sessionToken;
-      const unreachable =
+      let unreachable =
         isOnline && counter.error instanceof CounterRequestError && counter.error.status === 0;
       let message = isOnline && counter.error ? counterSetupMessage(counter.error) : null;
       if (counter.sessionToken) {
@@ -204,8 +204,10 @@ export function useCounterOffline(input: {
               'Part of the signed price list failed its check and was not used. The counter keeps the last list it checked.';
         } catch (error) {
           message = counterSetupMessage(error);
+          // The line dropped between establishing and downloading the list.
+          if (error instanceof CounterRequestError && error.status === 0) unreachable = true;
         }
-        void armCounterShell();
+        if (!unreachable) void armCounterShell();
       }
       finish({ status: 'ready', message, state: counter.runtime.snapshot(), unreachable });
     },

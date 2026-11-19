@@ -85,6 +85,12 @@ export async function openCounterRuntime(
     publicKey
   );
   const hydrated = await runtime.hydrate();
+  // A document this runtime cannot read (another counter's queue, another
+  // schema, corrupt) must never be overwritten by a lease or a snapshot: with
+  // no session nothing can be reserved or installed, and the caller shows
+  // recovery guidance instead.
+  if (hydrated === 'unrecoverable')
+    return { runtime, sessionToken: null, error: new Error('unrecoverable_document'), hydrated };
   return { runtime, sessionToken, error, hydrated };
 }
 

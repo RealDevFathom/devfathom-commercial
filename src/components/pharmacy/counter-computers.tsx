@@ -105,6 +105,8 @@ async function unsentOnThisComputer(enrolment: CounterEnrolment): Promise<number
     const opened = await openCounterRuntime(enrolment, browserCounterOfflineDeps(), false);
     const queue = opened.runtime.snapshot().queue;
     opened.runtime.close();
+    // An unreadable document may hold unsent sales nobody can count: say so.
+    if (opened.hydrated === 'unrecoverable') return null;
     return queue ? unsettledCommands(queue).length : 0;
   } catch {
     return null;
@@ -262,6 +264,14 @@ function PrepareThisComputer({
       }
       const deps = browserCounterOfflineDeps();
       const opened = await openCounterRuntime(record, deps, true);
+      if (opened.hydrated === 'unrecoverable') {
+        opened.runtime.close();
+        setNotice({
+          tone: 'alert',
+          text: 'The offline data on this computer cannot be read, so nothing was reserved or changed. Revoke this counter and enrol the computer again.',
+        });
+        return;
+      }
       if (!opened.sessionToken) {
         opened.runtime.close();
         setNotice({ tone: 'alert', text: counterSetupMessage(opened.error) });

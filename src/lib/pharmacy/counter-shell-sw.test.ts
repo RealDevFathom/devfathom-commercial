@@ -44,10 +44,12 @@ function harness() {
   let online = true;
   let nonce = 0;
   let counterAnswer: 'page' | 'redirect' | 'error' = 'page';
+  let hold: Promise<void> | null = null;
   const fetched: string[] = [];
   const network = async (input: RequestInfo | URL) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, ORIGIN);
     fetched.push(url.pathname);
+    if (hold) await hold;
     if (!online) throw new TypeError('Failed to fetch');
     if (url.pathname === '/pharmacy/counter' && counterAnswer !== 'page') {
       const answer = new Response(counterAnswer === 'redirect' ? 'sign in' : 'oops', {
@@ -100,6 +102,9 @@ function harness() {
     return { handled: true as const, response: await responded };
   }
   async function message(data: unknown) {
+    return send(data).done;
+  }
+  function send(data: unknown) {
     let waited: Promise<unknown> = Promise.resolve();
     let reply: unknown = null;
     listeners.get('message')!({
@@ -108,16 +113,24 @@ function harness() {
       ports: [{ postMessage: (value: unknown) => (reply = value) }],
       waitUntil: (value: Promise<unknown>) => (waited = value),
     });
-    await waited;
-    return reply;
+    return { done: waited.then(() => reply) };
   }
   return {
     stores,
     fetched,
     request,
     message,
+    send,
     setOnline: (value: boolean) => (online = value),
     answerCounterWith: (value: typeof counterAnswer) => (counterAnswer = value),
+    holdNetwork: () => {
+      let release!: () => void;
+      hold = new Promise<void>((resolve) => (release = resolve));
+      return () => {
+        hold = null;
+        release();
+      };
+    },
   };
 }
 
@@ -130,8 +143,28 @@ describe('DEV-957 counter service worker', () => {
   it('stores nothing until the enrolled counter arms it', async () => {
     await sw.request('/pharmacy/counter', { mode: 'navigate' });
     await sw.request('/_next/static/chunks/app.js');
-    expect(sw.stores.size).toBe(1); // only the (empty) asset cache was opened
-    expect([...sw.stores.values()].every((cache) => cache.rows.size === 0)).toBe(true);
+    expect(sw.stores.size).toBe(0);
+    sw.setOnline(false);
+    await expect(sw.request('/pharmacy/counter', { mode: 'navigate' })).rejects.toThrow();
+    // An offline miss must not create the shell cache, which would arm the worker.
+    expect(sw.stores.size).toBe(0);
+    sw.setOnline(true);
+    await sw.request('/pharmacy/counter', { mode: 'navigate' });
+    expect(sw.stores.size).toBe(0);
+  });
+
+  it('never lets a store that was in flight during a clear put the page back', async () => {
+    await sw.message({ type: 'arm', assets: [] });
+    // A navigation's refresh is on the wire when the person signs out.
+    const release = sw.holdNetwork();
+    const navigation = sw.request('/pharmacy/counter', { mode: 'navigate' });
+    const arming = sw.send({ type: 'arm', assets: ['/_next/static/chunks/app.js'] });
+    expect(await sw.message({ type: 'clear' })).toEqual({ type: 'cleared' });
+    release();
+    await navigation;
+    expect(await arming.done).toEqual({ type: 'armed', ok: false });
+    expect(sw.stores.has('devfathom-pharmacy-counter-shell-v1')).toBe(false);
+    expect(sw.stores.has('devfathom-pharmacy-counter-assets-v1')).toBe(false);
     sw.setOnline(false);
     await expect(sw.request('/pharmacy/counter', { mode: 'navigate' })).rejects.toThrow();
   });

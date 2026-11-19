@@ -23,6 +23,12 @@ const SHELL_CACHE = 'devfathom-pharmacy-counter-shell-v1';
 const ASSET_CACHE = 'devfathom-pharmacy-counter-assets-v1';
 const SHELL_PATH = '/pharmacy/counter';
 const OWN_CACHES = [SHELL_CACHE, ASSET_CACHE];
+/*
+ * Bumped by every clear (sign-out, revocation). A store that started before a
+ * clear never writes after it, and one that raced it is undone, so an in-flight
+ * fetch can never put the previous person's page back.
+ */
+let generation = 0;
 
 function sameOrigin(url) {
   return url.origin === self.location.origin;
@@ -67,38 +73,61 @@ async function armed() {
   return self.caches.has(SHELL_CACHE);
 }
 
-async function storeShell(response) {
-  const cache = await self.caches.open(SHELL_CACHE);
-  await cache.put(SHELL_PATH, response);
+/** Write only if no clear happened since `started`; undo a write that raced one. */
+async function guardedPut(cacheName, key, response, started) {
+  if (started !== generation) return false;
+  const cache = await self.caches.open(cacheName);
+  if (started !== generation) {
+    await clearAll();
+    return false;
+  }
+  await cache.put(key, response);
+  if (started !== generation) {
+    await clearAll();
+    return false;
+  }
+  return true;
+}
+
+function storeShell(response, started) {
+  return guardedPut(SHELL_CACHE, SHELL_PATH, response, started);
 }
 
 async function shellResponse(request) {
+  const started = generation;
   try {
     const response = await fetch(request);
-    if (storableShell(response) && (await armed())) await storeShell(response.clone());
+    if (storableShell(response) && (await armed()))
+      await storeShell(response.clone(), started);
     return response;
   } catch (error) {
-    const cache = await self.caches.open(SHELL_CACHE);
-    const stored = await cache.match(SHELL_PATH);
+    // `has` first: opening a cache creates it, and an existing shell cache is
+    // what marks this worker as armed.
+    const stored = (await self.caches.has(SHELL_CACHE))
+      ? await (await self.caches.open(SHELL_CACHE)).match(SHELL_PATH)
+      : undefined;
     if (stored) return stored;
     throw error;
   }
 }
 
 async function assetResponse(request) {
-  const cache = await self.caches.open(ASSET_CACHE);
-  const stored = await cache.match(request);
+  const started = generation;
+  const stored = (await self.caches.has(ASSET_CACHE))
+    ? await (await self.caches.open(ASSET_CACHE)).match(request)
+    : undefined;
   if (stored) return stored;
   const response = await fetch(request);
-  if (storableAsset(response) && (await armed())) await cache.put(request, response.clone());
+  if (storableAsset(response) && (await armed()))
+    await guardedPut(ASSET_CACHE, request, response.clone(), started);
   return response;
 }
 
 async function arm(assets) {
+  const started = generation;
   const shell = await fetch(SHELL_PATH, { credentials: 'same-origin', cache: 'no-store' });
   if (!storableShell(shell)) return false;
-  await storeShell(shell);
-  const cache = await self.caches.open(ASSET_CACHE);
+  if (!(await storeShell(shell, started))) return false;
   for (const href of Array.isArray(assets) ? assets.slice(0, 400) : []) {
     let url;
     try {
@@ -107,18 +136,21 @@ async function arm(assets) {
       continue;
     }
     if (!sameOrigin(url) || !url.pathname.startsWith('/_next/static/') || url.search) continue;
-    if (await cache.match(url.href)) continue;
+    if (started !== generation) return false;
+    if (await (await self.caches.open(ASSET_CACHE)).match(url.href)) continue;
     try {
       const response = await fetch(url.href, { credentials: 'same-origin' });
-      if (storableAsset(response)) await cache.put(url.href, response);
+      if (storableAsset(response) && !(await guardedPut(ASSET_CACHE, url.href, response, started)))
+        return false;
     } catch {
       // A missing asset only means that file is fetched again next time online.
     }
   }
-  return true;
+  return started === generation;
 }
 
 async function clearAll() {
+  generation += 1;
   await Promise.all(OWN_CACHES.map((name) => self.caches.delete(name)));
 }
 
