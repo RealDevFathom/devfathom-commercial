@@ -3,6 +3,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { AllocationCandidate } from './inventory';
 import {
   readPharmacyReplenishmentReport,
+  validatePharmacyReplenishmentReportInput,
   type PharmacyReplenishmentReportReaderInput,
 } from './replenishment-report';
 
@@ -467,5 +468,218 @@ describe('live replenishment report composition', () => {
     ).rejects.toThrow();
     expect(reads.pharmacyBranch.findFirst).not.toHaveBeenCalled();
     expect(mocks.stock).not.toHaveBeenCalled();
+  });
+});
+
+describe("DEV-944 replenishment counts the shop's own days", () => {
+  const request = {
+    branchId: input.branchId,
+    medicineId: input.medicineId,
+    historyStartDate: input.historyStartDate,
+    originDate: input.originDate,
+    horizonDays: input.horizonDays,
+    method: input.method,
+  };
+  const accepts = (originDate: string, at: string, zone?: string | null) => {
+    try {
+      validatePharmacyReplenishmentReportInput(
+        { ...request, historyStartDate: '2026-11-10', originDate },
+        new Date(at),
+        zone
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const acceptsPlanning = (originDate: string, at: string, zone?: string | null) => {
+    try {
+      validatePharmacyReplenishmentReportInput(
+        {
+          ...request,
+          historyStartDate: '2026-11-10',
+          originDate: '2026-11-18',
+          manualScenario: {
+            ...manualScenario,
+            originDate,
+            orderTerms: { ...manualScenario.orderTerms, arrivalAt: null },
+          },
+        },
+        new Date(at),
+        zone
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  it("lets the history end on the shop's today at 19:30 UTC and not before Karachi midnight", () => {
+    // 00:30 on 19 Nov in Karachi.
+    expect(accepts('2026-11-19', '2026-11-18T19:30:00.000Z', 'Asia/Karachi')).toBe(true);
+    // 23:59 on 18 Nov in Karachi: 19 Nov has not begun.
+    expect(accepts('2026-11-19', '2026-11-18T18:59:00.000Z', 'Asia/Karachi')).toBe(false);
+    expect(accepts('2026-11-18', '2026-11-18T18:59:00.000Z', 'Asia/Karachi')).toBe(true);
+  });
+
+  it.each([undefined, null, 'UTC', 'PKT'])(
+    'keeps the UTC days for an organisation on UTC (zone %s)',
+    (zone) => {
+      for (const at of ['2026-11-18T19:30:00.000Z', '2026-11-18T18:59:00.000Z']) {
+        expect(accepts('2026-11-18', at, zone)).toBe(true);
+        expect(accepts('2026-11-19', at, zone)).toBe(false);
+        expect(acceptsPlanning('2026-11-19', at, zone)).toBe(true);
+      }
+      expect(acceptsPlanning('2026-11-18', '2026-11-18T00:00:00.000Z', zone)).toBe(false);
+    }
+  );
+
+  it('needs the scenario to start on a later shop day, within 31 days', () => {
+    // 00:30 on 19 Nov in Karachi: 19 Nov is today, not a future day.
+    expect(acceptsPlanning('2026-11-19', '2026-11-18T19:30:00.000Z', 'Asia/Karachi')).toBe(false);
+    expect(acceptsPlanning('2026-11-20', '2026-11-18T19:30:00.000Z', 'Asia/Karachi')).toBe(true);
+    expect(acceptsPlanning('2026-11-19', '2026-11-18T18:59:00.000Z', 'Asia/Karachi')).toBe(true);
+    expect(acceptsPlanning('2026-12-20', '2026-11-18T19:30:00.000Z', 'Asia/Karachi')).toBe(true);
+    expect(acceptsPlanning('2026-12-21', '2026-11-18T19:30:00.000Z', 'Asia/Karachi')).toBe(false);
+  });
+
+  it("west of UTC, also needs the scenario day's UTC midnight, where the planning model starts, to lie ahead", () => {
+    // 20:00 on 18 Nov in New York (01:00 UTC on 19 Nov): 19 Nov is a future shop day, but the
+    // model's 19 Nov origin has passed and the simulation would refuse sources dated after it.
+    expect(acceptsPlanning('2026-11-19', '2026-11-19T01:00:00.000Z', 'America/New_York')).toBe(
+      false
+    );
+    expect(acceptsPlanning('2026-11-20', '2026-11-19T01:00:00.000Z', 'America/New_York')).toBe(
+      true
+    );
+    // 18:00 on 18 Nov in New York (23:00 UTC): both clocks still have 19 Nov ahead.
+    expect(acceptsPlanning('2026-11-19', '2026-11-18T23:00:00.000Z', 'America/New_York')).toBe(
+      true
+    );
+  });
+
+  it('produces the New York scenario the validator accepts instead of failing in the model', async () => {
+    const at = new Date('2026-11-19T01:00:00.000Z');
+    vi.setSystemTime(at);
+    const { db } = database();
+    const result = await readPharmacyReplenishmentReport(
+      db,
+      {
+        ...input,
+        historyStartDate: '2026-11-10',
+        originDate: '2026-11-18',
+        timeZone: 'America/New_York',
+        manualScenario: {
+          ...manualScenario,
+          originDate: '2026-11-20',
+          orderTerms: {
+            ...manualScenario.orderTerms,
+            arrivalAt: '2026-11-20T00:00:00Z',
+          },
+        },
+      },
+      at
+    );
+    expect(result.planning.status).toBe('AVAILABLE');
+  });
+
+  function sale(id: string, completedAt: string, businessDate: string | null) {
+    return {
+      ...scope,
+      id,
+      canonicalUnits: 5,
+      createdAt: new Date(completedAt),
+      sale: {
+        organizationId: 'org',
+        branchId: 'branch',
+        status: 'COMPLETED',
+        businessDate: businessDate ? new Date(`${businessDate}T00:00:00Z`) : null,
+        completedAt: new Date(completedAt),
+        createdAt: new Date(completedAt),
+        updatedAt: new Date(completedAt),
+      },
+    };
+  }
+  const lines = [
+    // 00:30 on 10 Sep in Karachi; the UTC date is 9 Sep.
+    sale('after_midnight', '2026-09-09T19:30:00Z', '2026-09-10'),
+    // 23:59 on 12 Sep in Karachi.
+    sale('late_evening', '2026-09-12T18:59:00Z', '2026-09-12'),
+    // 00:30 on 13 Sep in Karachi: the origin day, outside the history.
+    sale('origin_day', '2026-09-12T19:30:00Z', '2026-09-13'),
+  ];
+
+  async function evidence(timeZone: string | null | undefined) {
+    const { db, reads } = database();
+    reads.pharmacySaleLine.findMany.mockResolvedValue(lines);
+    reads.unfulfilledDemandEvent.findMany.mockResolvedValue([
+      {
+        id: 'stockout',
+        organizationId: 'org',
+        branchId: 'branch',
+        requestedMedicineId: 'medicine',
+        reason: 'STOCKOUT',
+        createdAt: new Date('2026-09-09T19:30:00Z'),
+      },
+    ]);
+    const result = await readPharmacyReplenishmentReport(db, { ...input, timeZone }, readAt);
+    return { demand: result.observations.demand, reads };
+  }
+  const byDay = (days: Array<{ date: string; observedCanonicalUnits: number | null }>) =>
+    Object.fromEntries(days.map((day) => [day.date, day.observedCanonicalUnits]));
+
+  it('reads and groups completions and stockouts on the Karachi day', async () => {
+    const { demand, reads } = await evidence('Asia/Karachi');
+    const window = { gte: new Date('2026-09-09T19:00:00Z'), lt: new Date('2026-09-12T19:00:00Z') };
+    expect(reads.pharmacySaleLine.findMany.mock.calls[0]![0].where.sale.OR).toEqual([
+      {
+        businessDate: {
+          gte: new Date('2026-09-10T00:00:00Z'),
+          lt: new Date('2026-09-13T00:00:00Z'),
+        },
+      },
+      { completedAt: window },
+    ]);
+    expect(reads.unfulfilledDemandEvent.findMany.mock.calls[0]![0].where.createdAt).toEqual({
+      ...window,
+      lte: readAt,
+    });
+    expect(byDay(demand.days)).toEqual({
+      '2026-09-10': 5,
+      '2026-09-11': null,
+      '2026-09-12': 5,
+    });
+    expect(demand.days[0]).toMatchObject({
+      timeBasis: 'WORKSPACE_DAY',
+      state: 'STOCKOUT_CENSORED',
+    });
+    expect(byDay(demand.consumption.days)).toEqual(byDay(demand.days));
+    expect(demand.coverage).toMatchObject({
+      qualifyingLineCount: 2,
+      excludedLineCount: 1,
+      completionDayConsumptionDays: 2,
+      businessCompletionDateMismatchLineCount: 0,
+    });
+  });
+
+  it.each([undefined, 'UTC'])('keeps the UTC days for zone %s', async (zone) => {
+    const { demand, reads } = await evidence(zone);
+    const window = { gte: new Date('2026-09-10T00:00:00Z'), lt: new Date('2026-09-13T00:00:00Z') };
+    expect(reads.pharmacySaleLine.findMany.mock.calls[0]![0].where.sale.OR).toEqual([
+      { businessDate: window },
+      { completedAt: window },
+    ]);
+    // By completion time on the UTC clock: 9 Sep is outside, 12 Sep has two lines.
+    expect(byDay(demand.days)).toEqual({
+      '2026-09-10': null,
+      '2026-09-11': null,
+      '2026-09-12': 10,
+    });
+    expect(demand.days.every((day) => day.state === 'UNKNOWN')).toBe(true);
+    expect(demand.coverage).toMatchObject({
+      qualifyingLineCount: 3,
+      completionDayConsumptionDays: 1,
+      businessCompletionDateMismatchLineCount: 2,
+    });
   });
 });

@@ -1712,6 +1712,39 @@ describe('category growth report input boundaries', () => {
   );
 });
 
+describe('DEV-944 category growth reads the session organisation days', () => {
+  const input = { from: '2026-10-01', to: '2026-10-07', configuration: [] };
+  beforeEach(() => {
+    mocks.can.mockResolvedValue(true);
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.queryRaw.mockReset();
+    mocks.queryRaw.mockResolvedValue([]);
+  });
+  it.each([
+    ['Asia/Karachi', '2026-09-30T19:00:00.000Z', '2026-10-07T19:00:00.000Z'],
+    ['UTC', '2026-10-01T00:00:00.000Z', '2026-10-08T00:00:00.000Z'],
+    [undefined, '2026-10-01T00:00:00.000Z', '2026-10-08T00:00:00.000Z'],
+  ])('bounds the inclusive range on the %s clock', async (stored, from, to) => {
+    const ctx = context();
+    (ctx as { organization: unknown }).organization = {
+      id: 'org_1',
+      ...(stored ? { timezone: stored } : {}),
+    };
+    await pharmacyReportsRouter.createCaller(ctx).categoryGrowth(input);
+    expect(mocks.queryRaw.mock.calls[0][0].values.slice(-2)).toEqual([
+      new Date(from),
+      new Date(to),
+    ]);
+  });
+  it('takes no zone from input', async () => {
+    await expect(
+      caller().categoryGrowth({ ...input, timeZone: 'Asia/Karachi' } as typeof input)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.queryRaw).not.toHaveBeenCalled();
+  });
+});
+
 describe('DEV-74 branch seasonal calendar', () => {
   const window = {
     branchId: 'branch_1',

@@ -114,6 +114,8 @@ function db(lots: Array<{ id: string; batch: { state: string } }>) {
     findMany,
     db: {
       $queryRaw: vi.fn(async () => []),
+      // The sale's business day is read on the organisation's stored clock.
+      organization: { findUnique: vi.fn(async () => ({ timezone: 'UTC' })) },
       pharmacyInventoryLot: { findMany },
       pharmacyOfflineCommand: { findFirst: vi.fn(async () => null) },
       // DEV-637: a retry answers with the number the sale was issued.

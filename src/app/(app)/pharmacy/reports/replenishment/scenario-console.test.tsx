@@ -460,3 +460,73 @@ describe('scenario money typed as an amount', () => {
     expect(screen.getByText('Arrival must be on or after the planning origin.')).toBeVisible();
   });
 });
+
+describe("DEV-944 history ends on the shop's today", () => {
+  async function read(now: string, today: string, timeZone?: string) {
+    vi.setSystemTime(new Date(now));
+    mocks.replenishment.mockRejectedValue(new Error('not needed'));
+    render(<ScenarioConsole {...props} today={today} timeZone={timeZone} />);
+    const input = await typeAndSearch();
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Read replenishment report' }));
+      await Promise.resolve();
+    });
+  }
+
+  it('sends a history ending on the Karachi today at 19:30 UTC, as the server accepts', async () => {
+    // 00:30 on 19 Nov in Karachi.
+    await read('2026-11-18T19:30:00.000Z', '2026-11-19', 'Asia/Karachi');
+    expect(mocks.replenishment).toHaveBeenCalledOnce();
+    expect(mocks.replenishment.mock.calls[0]![0]).toMatchObject({ originDate: '2026-11-19' });
+    expect(document.body.textContent).toContain(
+      "demand coverage and the history use your organisation's days (PKT)"
+    );
+  });
+
+  it('refuses a history ending on a Karachi day that has not begun at 18:59 UTC', async () => {
+    // 23:59 on 18 Nov in Karachi.
+    await read('2026-11-18T18:59:00.000Z', '2026-11-19', 'Asia/Karachi');
+    expect(mocks.replenishment).not.toHaveBeenCalled();
+    expect(screen.getByText('History must end no later than today.')).toBeVisible();
+  });
+
+  it.each([undefined, 'UTC'])('keeps the UTC day for zone %s', async (zone) => {
+    await read('2026-11-18T19:30:00.000Z', '2026-11-19', zone);
+    expect(mocks.replenishment).not.toHaveBeenCalled();
+    expect(screen.getByText('History must end no later than today.')).toBeVisible();
+  });
+});
+
+describe('DEV-944 scenario start west of UTC', () => {
+  async function openScenario(now: string, today: string, timeZone: string) {
+    vi.setSystemTime(new Date(now));
+    mocks.replenishment.mockRejectedValue(new Error('not needed'));
+    render(<ScenarioConsole {...props} financial today={today} timeZone={timeZone} />);
+    const input = await typeAndSearch();
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Include a user-supplied scenario' }));
+    return screen.getByLabelText('Scenario starts on (a future day)');
+  }
+
+  it('defaults past a tomorrow whose UTC midnight has passed, and refuses that day as the server does', async () => {
+    // 20:00 on 18 Nov in New York is 01:00 UTC on 19 Nov.
+    const start = await openScenario('2026-11-19T01:00:00.000Z', '2026-11-18', 'America/New_York');
+    expect(start).toHaveValue('2026-11-20');
+    fireEvent.change(start, { target: { value: '2026-11-19' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Read replenishment report' }));
+      await Promise.resolve();
+    });
+    expect(mocks.replenishment).not.toHaveBeenCalled();
+    expect(screen.getByText('Choose a future day within the next 31 days.')).toBeVisible();
+  });
+
+  it("keeps the shop's tomorrow as the default east of UTC", async () => {
+    // 00:30 on 19 Nov in Karachi.
+    const start = await openScenario('2026-11-18T19:30:00.000Z', '2026-11-19', 'Asia/Karachi');
+    expect(start).toHaveValue('2026-11-20');
+  });
+});
