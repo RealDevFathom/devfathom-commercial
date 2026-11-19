@@ -84,12 +84,55 @@ function blankStrings(sql: string): string {
   return sql.replace(/'(?:[^']|'')*'/g, (literal) => `'${' '.repeat(literal.length - 2)}'`);
 }
 
-/** A set_config / SET of the tenant setting to a real value (not a reset to '' or NULL). */
-const SETS_TENANT = new RegExp(
-  String.raw`set_config\s*\(\s*'app\.current_organization_id'\s*,(?!\s*''\s*,)(?!\s*NULL\b)|` +
-    String.raw`\bSET\s+(?:LOCAL\s+|SESSION\s+)?"?app\.current_organization_id"?\s*(?:=|TO)(?!\s*(?:''|NULL\b|DEFAULT\b))`,
-  'i'
+/**
+ * Every write of the tenant setting: set_config(name, value, is_local), SET [LOCAL|SESSION]
+ * name = value, and RESET name / RESET ALL. A value of '' or NULL (or DEFAULT) clears it.
+ */
+const TENANT_SETTING = new RegExp(
+  String.raw`set_config\s*\(\s*'app\.current_organization_id'\s*,\s*([^,]*?)\s*,\s*([^)]*?)\s*\)|` +
+    String.raw`\bSET\s+(LOCAL\s+|SESSION\s+)?"?app\.current_organization_id"?\s*(?:=|TO)\s*('(?:[^']|'')*'|[^;\s]+)|` +
+    String.raw`\bRESET\s+(?:"?app\.current_organization_id"?|ALL)\b`,
+  'gi'
 );
+
+/** A change of the tenant setting at an offset; `expire` is the end of a transaction. */
+type ContextEvent = { at: number } & (
+  { kind: 'set'; active: boolean; local: boolean } | { kind: 'reset' } | { kind: 'expire' }
+);
+
+function clears(value: string): boolean {
+  return /^(?:''|NULL|DEFAULT)$/i.test(value.trim());
+}
+
+function contextEvents(statement: string, offset: number): ContextEvent[] {
+  const events: ContextEvent[] = [];
+  for (const m of statement.matchAll(TENANT_SETTING)) {
+    const at = offset + m.index!;
+    if (m[1] !== undefined)
+      events.push({
+        at,
+        kind: 'set',
+        active: !clears(m[1]),
+        local: !/^false$/i.test(m[2]!.trim()),
+      });
+    else if (m[4] !== undefined)
+      events.push({ at, kind: 'set', active: !clears(m[4]), local: /^LOCAL/i.test(m[3] ?? '') });
+    else events.push({ at, kind: 'reset' });
+  }
+  return events;
+}
+
+/** Whether the tenant is set at `position`, given the events of the file so far. */
+function tenantSetAt(events: ContextEvent[], position: number): boolean {
+  let active = false;
+  let local = false;
+  for (const event of events) {
+    if (event.at >= position) break;
+    if (event.kind === 'set') ({ active, local } = event);
+    else if (event.kind === 'reset' || local) active = false;
+  }
+  return active;
+}
 
 const PLATFORM = /app\.is_platform_admin/i;
 
@@ -227,7 +270,7 @@ export class MigrationTenantContextAnalyzer {
     }
   }
 
-  private flag(migration: string, text: string, offset: number, contextAt: number): void {
+  private flag(migration: string, text: string, offset: number, events: ContextEvent[]): void {
     const blanked = blankStrings(text);
     const refs = new RegExp(
       String.raw`\b(?:FROM|JOIN|INTO|UPDATE|USING)\s+(?:ONLY\s+)?(${QUALIFIED})`,
@@ -236,7 +279,7 @@ export class MigrationTenantContextAnalyzer {
     for (const m of blanked.matchAll(refs)) {
       const table = unquote(m[1]!);
       if (!this.isTenantOnly(this.tables.get(table))) continue;
-      if (contextAt !== -1 && contextAt < offset + m.index!) continue;
+      if (tenantSetAt(events, offset + m.index!)) continue;
       if (!this.offenders.some((o) => o.migration === migration && o.table === table))
         this.offenders.push({ migration, table });
     }
@@ -246,15 +289,16 @@ export class MigrationTenantContextAnalyzer {
   analyze(migration: string, sql: string, knownTables: Set<string>): void {
     const executed = stripSqlComments(sql);
     let consumed = 0;
-    // Offset (in the executed text) of the first statement that sets the tenant, or -1.
-    let contextAt = -1;
+    // Every set, clear and transaction end of the tenant setting, in file order.
+    const events: ContextEvent[] = [];
     for (const statement of splitSqlStatements(executed)) {
       const offset = executed.indexOf(statement, consumed);
       consumed = offset + statement.length;
       const head = statement.replace(/^\s+/, '');
       if (/^CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\b/i.test(head)) continue;
-      const setAt = statement.search(SETS_TENANT);
-      if (contextAt === -1 && setAt !== -1) contextAt = offset + setAt;
+      events.push(...contextEvents(statement, offset));
+      // A transaction-local setting ends with its transaction.
+      if (/^(?:COMMIT|ROLLBACK|END)\b/i.test(head)) events.push({ at: offset, kind: 'expire' });
       if (/^DO\b/i.test(head)) {
         const body = /\$([A-Za-z0-9_]*)\$([\s\S]*)\$\1\$/.exec(statement);
         if (!body) continue;
@@ -267,7 +311,7 @@ export class MigrationTenantContextAnalyzer {
           if (start !== -1) this.applyDdl(inner.slice(start));
         }
         this.applyDynamicDdl(body[2]!, knownTables);
-        this.flag(migration, body[2]!, bodyOffset, contextAt);
+        this.flag(migration, body[2]!, bodyOffset, events);
         continue;
       }
       if (
@@ -276,7 +320,7 @@ export class MigrationTenantContextAnalyzer {
           head
         )
       ) {
-        this.flag(migration, statement, offset, contextAt);
+        this.flag(migration, statement, offset, events);
         continue;
       }
       this.applyDdl(head);

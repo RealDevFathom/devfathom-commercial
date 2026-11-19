@@ -134,6 +134,33 @@ describe('tenant-context detector', () => {
     ).toEqual(['0002_probe:tenant_rows']);
   });
 
+  it('does not carry a tenant past a later reset or the end of its transaction', () => {
+    expect(
+      offendersOf(`SELECT set_config('app.current_organization_id', 'org', true);
+        SELECT set_config('app.current_organization_id', '', true);
+        UPDATE "tenant_rows" SET "id" = "id";`)
+    ).toEqual(['0002_probe:tenant_rows']);
+    expect(
+      offendersOf(`BEGIN;
+        SELECT set_config('app.current_organization_id', 'org', true);
+        COMMIT;
+        BEGIN;
+        UPDATE "tenant_rows" SET "id" = "id";
+        COMMIT;`)
+    ).toEqual(['0002_probe:tenant_rows']);
+    expect(
+      offendersOf(`SET app.current_organization_id = 'org';
+        RESET app.current_organization_id;
+        DELETE FROM "tenant_rows";`)
+    ).toEqual(['0002_probe:tenant_rows']);
+    // A session-level setting outlives the transaction.
+    expect(
+      offendersOf(`SELECT set_config('app.current_organization_id', 'org', false);
+        COMMIT;
+        DELETE FROM "tenant_rows";`)
+    ).toEqual([]);
+  });
+
   it('ignores function bodies, DDL and tables whose policy admits the platform', () => {
     expect(
       offendersOf(`
