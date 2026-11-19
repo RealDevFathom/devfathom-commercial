@@ -56,9 +56,11 @@ export default async function RxSoloShiftSettingPage() {
         </SectionCard>
       </div>
     );
+  // A failed read is null, never an empty list: an empty list would tell the owner there is
+  // nothing to review when the records simply could not be read.
   const [signOffs, history] = await Promise.all([
-    caller.declaredSignOffs().catch((): RxDeclaredSoloSignOff[] => []),
-    caller.history().catch((): RxSoloShiftHistoryEntry[] => []),
+    caller.declaredSignOffs().catch((): RxDeclaredSoloSignOff[] | null => null),
+    caller.history().catch((): RxSoloShiftHistoryEntry[] | null => null),
   ]);
 
   return (

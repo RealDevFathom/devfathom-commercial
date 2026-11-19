@@ -51,8 +51,10 @@ export function RxSoloShiftSetting({
 }: {
   branches: readonly RxSoloShiftBranchView[];
   disclaimerVersion: string;
-  signOffs: readonly RxDeclaredSoloSignOff[];
-  history: readonly RxSoloShiftHistoryEntry[];
+  /** null when the list could not be read: shown as unavailable, never as empty. */
+  signOffs: readonly RxDeclaredSoloSignOff[] | null;
+  /** null when the history could not be read: shown as unavailable, never as empty. */
+  history: readonly RxSoloShiftHistoryEntry[] | null;
   timeZone?: string | null;
 }) {
   const branchName = new Map(branches.map((branch) => [branch.branchId, branch.branchName]));
@@ -80,7 +82,12 @@ export function RxSoloShiftSetting({
           Each prescription check a pharmacist signed alone by declaring they were the only
           pharmacist on duty, with the other pharmacists who were on the staff list at that moment.
         </p>
-        {signOffs.length === 0 ? (
+        {signOffs === null ? (
+          <p role="status" className="text-sm text-text-body">
+            The declared sign-offs could not be read just now. They are kept on the server; reload
+            the page to see them.
+          </p>
+        ) : signOffs.length === 0 ? (
           <p className="text-sm text-text-muted">
             No declared solo sign-offs yet. They appear here as soon as a pharmacist signs one at a
             branch where “One pharmacist per shift” is on.
@@ -148,7 +155,12 @@ export function RxSoloShiftSetting({
       </SectionCard>
 
       <SectionCard eyebrow="Audit" title="Change history" titleLevel={2}>
-        {history.length === 0 ? (
+        {history === null ? (
+          <p role="status" className="text-sm text-text-body">
+            The change history could not be read just now. It is kept on the server; reload the page
+            to see it.
+          </p>
+        ) : history.length === 0 ? (
           <p className="text-sm text-text-muted">
             Never changed. “One pharmacist per shift” has been off at every branch.
           </p>

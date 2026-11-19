@@ -29,13 +29,17 @@ const branch = (patch: Partial<RxSoloShiftBranchView> = {}): RxSoloShiftBranchVi
   ...patch,
 });
 
-function renderSetting(branches: RxSoloShiftBranchView[], signOffs = [] as never[]) {
+function renderSetting(
+  branches: RxSoloShiftBranchView[],
+  signOffs: never[] | null = [],
+  history: never[] | null = []
+) {
   return render(
     <RxSoloShiftSetting
       branches={branches}
       disclaimerVersion={RX_SOLO_SHIFT_DISCLAIMER.version}
       signOffs={signOffs}
-      history={[]}
+      history={history}
       timeZone="UTC"
     />
   );
@@ -126,5 +130,13 @@ describe('RxSoloShiftSetting (DEV-960)', () => {
     renderSetting([]);
     expect(screen.getByText('No active branches')).toBeInTheDocument();
     expect(screen.getByText(/No declared solo sign-offs yet/)).toBeInTheDocument();
+  });
+
+  it('says the lists could not be read instead of claiming they are empty', () => {
+    renderSetting([branch()], null, null);
+    expect(screen.getByText(/declared sign-offs could not be read/)).toBeInTheDocument();
+    expect(screen.getByText(/change history could not be read/)).toBeInTheDocument();
+    expect(screen.queryByText(/No declared solo sign-offs yet/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Never changed/)).not.toBeInTheDocument();
   });
 });
