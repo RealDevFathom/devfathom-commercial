@@ -29,7 +29,7 @@ beforeEach(() => {
 });
 
 describe('DEV-103 otherApReversalApprovers', () => {
-  it('starts from the card-terminal solo rule and keeps only active owner-level users', async () => {
+  it('starts from the shared solo rule with its branch gate, not the counter gate, and keeps only active owner-level users', async () => {
     mocks.reviewers.mockResolvedValue([
       { id: 'manager_2', name: 'Hina' },
       { id: 'cashier_3', name: 'Ali' },
@@ -38,7 +38,7 @@ describe('DEV-103 otherApReversalApprovers', () => {
     await expect(otherApReversalApprovers(db, scope)).resolves.toEqual([
       { id: 'manager_2', name: 'Hina' },
     ]);
-    expect(mocks.reviewers).toHaveBeenCalledWith(db, scope, expect.any(Date));
+    expect(mocks.reviewers).toHaveBeenCalledWith(db, scope, expect.any(Date), { gate: 'branch' });
     expect(mocks.findMany.mock.calls[0]![0].where).toEqual({
       organizationId: 'org_1',
       id: { in: ['manager_2', 'cashier_3'] },

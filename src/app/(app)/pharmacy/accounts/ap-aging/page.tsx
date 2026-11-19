@@ -34,13 +34,9 @@ import {
   type PayablesDrafts,
   type PendingSetOffs,
 } from './payables-panels';
-import { parseAgingQuery, type AgingQuery as Query } from './query';
-import {
-  REVERSAL_PANEL_ROWS,
-  ReversalPanel,
-  type ReversalAccess,
-  type ReversibleInvoices,
-} from './reversal-panel';
+import { BranchSelect, loadBranchOptions, type BranchOption } from '../branch-picker';
+import { parseAgingQuery, parseReversalSearch, type AgingQuery as Query } from './query';
+import { ReversalPanel, type ReversalAccess, type ReversibleInvoices } from './reversal-panel';
 
 export const metadata: Metadata = { title: 'Supplier expense invoice aging · Pharmacy accounts' };
 
@@ -55,7 +51,7 @@ type State =
 type Reversals =
   | { kind: 'none' }
   | { kind: 'failure' }
-  | { kind: 'loaded'; invoices: ReversibleInvoices; access: ReversalAccess };
+  | { kind: 'loaded'; invoices: ReversibleInvoices; hasOlder: boolean; access: ReversalAccess };
 
 /** DEV-694: the payables drafts load separately, so their failure never hides the aging. */
 type Payables =
@@ -82,8 +78,6 @@ function payeeFilterQuery(query: Query) {
   return value && value.length <= 160 ? value : undefined;
 }
 
-type BranchOption = { id: string; name: string };
-
 function QueryForm({
   branchId,
   branches,
@@ -102,21 +96,7 @@ function QueryForm({
       <form method="get" className="grid gap-4 md:grid-cols-[1fr_1fr_1fr_auto] md:items-end">
         <label className="grid gap-2 text-sm">
           Branch
-          <select
-            className="min-h-11 w-full min-w-0 rounded-md border border-input bg-surface-card px-2.5 text-sm text-foreground transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-            name="branch"
-            defaultValue={branchId ?? ''}
-            required
-            aria-describedby="aging-help"
-          >
-            {/* Not disabled: a branch in the URL that is not listed must show this prompt, never another branch. */}
-            <option value="">Choose a branch</option>
-            {branches.map((branch) => (
-              <option key={branch.id} value={branch.id}>
-                {branch.name}
-              </option>
-            ))}
-          </select>
+          <BranchSelect branchId={branchId} branches={branches} describedBy="aging-help" />
         </label>
         <label className="grid gap-2 text-sm">
           As of ({zone} day)
@@ -334,29 +314,11 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
   const draftQuery = paymentDraftQuery(query);
   const payeeFilter = payeeFilterQuery(query);
   const narrow = payeeFilter ? { payeeFilter } : {};
+  const reversalSearch = parseReversalSearch(query);
 
-  let branches: BranchOption[] = [];
   // The picker lists only active branches of the signed-in organization. A branch typed into
   // the URL that is not listed is still sent to the router, which refuses it.
-  try {
-    const actor = await resolveTenantActor();
-    if (actor) {
-      const listCtx = await createTRPCContext({
-        session: actor.session,
-        organization: actor.organization,
-        support: actor.support,
-      });
-      if (listCtx.session?.user?.role === 'ADMIN') {
-        branches = await listCtx.db.pharmacyBranch.findMany({
-          where: { organizationId: actor.organization.id, active: true },
-          orderBy: { name: 'asc' },
-          select: { id: true, name: true },
-        });
-      }
-    }
-  } catch {
-    branches = [];
-  }
+  const branches = await loadBranchOptions();
 
   if (parsed.branchId && !parsed.invalid) {
     try {
@@ -418,8 +380,15 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
         }
         try {
           const caller = pharmacyApInvoicesRouter.createCaller(ctx);
+          // A search with an invalid field reads nothing; the panel names the field instead.
           const [list, access] = await Promise.all([
-            caller.list({ branchId: parsed.branchId, status: 'POSTED', take: REVERSAL_PANEL_ROWS }),
+            reversalSearch.search
+              ? caller.reversalSearch({ branchId: parsed.branchId, ...reversalSearch.search })
+              : Promise.resolve({
+                  scope: { organizationId: actor.organization.id, branchId: parsed.branchId },
+                  invoices: [] as ReversibleInvoices,
+                  hasOlder: false,
+                }),
             caller.reversalAccess({ branchId: parsed.branchId }),
           ]);
           if (
@@ -430,7 +399,12 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
           ) {
             throw new Error('Reversal scope mismatch.');
           }
-          reversals = { kind: 'loaded', invoices: list.invoices, access };
+          reversals = {
+            kind: 'loaded',
+            invoices: list.invoices,
+            hasOlder: list.hasOlder === true,
+            access,
+          };
         } catch {
           reversals = { kind: 'failure' };
         }
@@ -535,6 +509,10 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
               invoices={reversals.invoices}
               access={reversals.access}
               timeZone={timeZone}
+              context={{ branchId: state.branchId, asOf: state.view.asOf, payeeFilter }}
+              search={reversalSearch}
+              hasOlder={reversals.hasOlder}
+              zone={zone}
             />
           ) : reversals.kind === 'failure' ? (
             <SectionCard title="Reversals could not be loaded" titleLevel={2}>
