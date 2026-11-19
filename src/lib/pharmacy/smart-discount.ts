@@ -69,6 +69,26 @@ export function minimumPriceForMargin(costMinor: number, minMarginBps: number) {
   return Math.max(costMinor, Math.ceil((costMinor * BPS) / (BPS - minMarginBps)));
 }
 
+/**
+ * DEV-956: the most a whole line may be discounted under the same limits an item discount meets
+ * in `validateDiscount`: the owner's maximum on the line's price, and the line kept at or above
+ * the minimum-margin price on its total cost (which is never below cost). Zero when none.
+ */
+export function lineDiscountRoomMinor(input: {
+  grossMinor: number;
+  costMinor: number;
+  minMarginBps: number;
+  maxDiscountBps: number;
+}) {
+  return Math.max(
+    0,
+    Math.min(
+      maxDiscountMinorFor(input.grossMinor, input.maxDiscountBps),
+      input.grossMinor - minimumPriceForMargin(input.costMinor, input.minMarginBps)
+    )
+  );
+}
+
 export type DiscountDemandObservation = {
   /** Calendar day key of the sale (e.g. 2026-11-15). */
   day: string;
