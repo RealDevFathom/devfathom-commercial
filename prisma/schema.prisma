@@ -13897,6 +13897,9 @@ model PharmacyPharmacistReviewDecision {
   actorUserId      String
   reason           String?
   signedAt         DateTime?
+  /// DEV-950: the audit entry of a solo self-signature (the requester signs with a fresh own
+  /// PIN). The database admits a requester's SIGN only with this marker (20261118124600).
+  selfApprovalAuditId String?
   createdAt        DateTime                        @default(now())
   reviewItem       PharmacyPharmacistReviewItem    @relation(fields: [organizationId, reviewItemId], references: [organizationId, id], onDelete: Restrict)
   reminderCaptures PharmacyRefillReminderCapture[]
