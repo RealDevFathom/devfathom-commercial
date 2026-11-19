@@ -213,6 +213,12 @@ function fakeDb(
     user: {
       findFirst: async () => ({ id: 'pharmacist', organizationId: 'org', status: 'ACTIVE' }),
     },
+    // DEV-941: the pharmacist works at this branch.
+    pharmacyBranchAssignment: {
+      findFirst: vi.fn(async ({ where }: { where: { userId: string; branchId: string } }) =>
+        where.userId === 'pharmacist' && where.branchId === 'branch' ? { branchId: 'branch' } : null
+      ),
+    },
     restaurantOperatorCredential: {
       findFirst: vi.fn(async () => ({
         id: 'cred-1',
@@ -351,6 +357,7 @@ describe('DEV-73 Rx cycle pharmacist approval', () => {
 
   const awaiting = {
     id: 'cycle-1',
+    branchId: 'branch',
     status: 'AWAITING_PHARMACIST',
     requiresPharmacist: true,
     openedByUserId: 'cashier',
@@ -456,6 +463,61 @@ describe('DEV-73 Rx cycle pharmacist approval', () => {
         COVERING
       )
     ).rejects.toBeInstanceOf(RefillCycleApprovalDenied);
+  });
+
+  it('DEV-941: refuses the PIN of a pharmacist not assigned to the cycle’s branch, and writes nothing', async () => {
+    vi.mocked(can).mockResolvedValue(true);
+    const { db, writes } = fakeDb({ cycle: awaiting });
+    db.user.findFirst = async () => ({
+      id: 'elsewhere',
+      organizationId: 'org',
+      status: 'ACTIVE',
+    });
+    await expect(
+      approveRefillCycle(
+        db as never,
+        scope,
+        'cycle-1',
+        { approvedByUserId: 'elsewhere', credentialId: 'cred-1' },
+        COVERING
+      )
+    ).rejects.toMatchObject({
+      name: 'RefillCycleApprovalDenied',
+      reason: 'BRANCH',
+      message:
+        'This pharmacist is not assigned to this branch. Only a pharmacist assigned to this branch can approve its refills.',
+    });
+    expect(db.pharmacyBranchAssignment.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org',
+          userId: 'elsewhere',
+          branchId: 'branch',
+          active: true,
+        }),
+      })
+    );
+    expect(writes.some(([name]) => name === 'cycle.update' || name === 'audit.create')).toBe(false);
+  });
+
+  it('DEV-941: accepts an organisation admin’s PIN at a branch they hold no assignment to', async () => {
+    vi.mocked(can).mockResolvedValue(true);
+    const { db } = fakeDb({ cycle: awaiting });
+    db.user.findFirst = async () => ({
+      id: 'admin',
+      organizationId: 'org',
+      status: 'ACTIVE',
+      role: 'ADMIN',
+    });
+    await expect(
+      approveRefillCycle(
+        db as never,
+        scope,
+        'cycle-1',
+        { approvedByUserId: 'admin', credentialId: 'cred-1' },
+        COVERING
+      )
+    ).resolves.toMatchObject({ status: 'RESERVED', approvedByUserId: 'admin' });
   });
 
   it("DEV-631: refuses checkout while today's business day is closed, before any hold is consumed", async () => {
@@ -612,6 +674,7 @@ describe('DEV-73 an Rx cycle is held until a valid prescription covers it and a 
 
   const awaiting = {
     id: 'cycle-1',
+    branchId: 'branch',
     status: 'AWAITING_PHARMACIST',
     requiresPharmacist: true,
     openedByUserId: 'cashier',

@@ -107,10 +107,18 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
       );
     }
   }
-  if (input.labelIds.length > 0) {
-    const found = await ctx.db.label.count({ where: { id: { in: input.labelIds } } });
-    if (found !== new Set(input.labelIds).size) {
-      return NextResponse.json({ error: 'One or more labelIds do not exist.' }, { status: 400 });
+  const uniqueLabelIds = [...new Set(input.labelIds)];
+  if (uniqueLabelIds.length > 0) {
+    // The column's project has been authorized; only its exact board's labels
+    // may be attached, including when another board is in the same project.
+    const found = await ctx.db.label.count({
+      where: { id: { in: uniqueLabelIds }, boardId: column.boardId },
+    });
+    if (found !== uniqueLabelIds.length) {
+      return NextResponse.json(
+        { error: 'All labels must belong to the task board.' },
+        { status: 400 }
+      );
     }
   }
 
@@ -138,8 +146,8 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
           ? { create: mergedAssignees.map((id) => ({ userId: id })) }
           : undefined,
       labels:
-        input.labelIds.length > 0
-          ? { create: input.labelIds.map((id) => ({ labelId: id })) }
+        uniqueLabelIds.length > 0
+          ? { create: uniqueLabelIds.map((id) => ({ labelId: id })) }
           : undefined,
     },
     include: {
