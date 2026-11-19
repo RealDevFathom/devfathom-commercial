@@ -38,6 +38,7 @@ import {
   type ReverseApInvoiceInput,
   type ReverseApSettlementInput,
   AP_REVERSAL_PAGE_ROWS,
+  type ApReversalCursor,
   type SearchApReversalsInput,
 } from './ap-invoices-schema';
 import { commandPayloadHash } from './general-journal';
@@ -751,29 +752,60 @@ export function listApInvoices(
   });
 }
 
-/**
- * DEV-103: the reversal search. Posted supplier expense invoices of one branch of one tenant that
- * match every filter given (see `searchApReversalsSchema`), each with its payments, in a stable
- * order (newest invoice date first, then id) one page at a time. One row more than a page is read
- * to tell whether an older page exists; nothing outside the tenant and branch is ever read.
- */
 /** A schema-checked YYYY-MM-DD day as the UTC midnight an invoice date is stored at. */
 const utcDay = (day: string) => new Date(`${day}T00:00:00.000Z`);
 
+/**
+ * DEV-967: a part-of-text match that reads `%`, `_` and `\` as typed. `contains` becomes an
+ * ILIKE pattern whose escape character is the backslash, so each of them is escaped first.
+ */
+const literalContains = (value: string) => ({
+  contains: value.replace(/[\\%_]/g, (character) => `\\${character}`),
+  mode: 'insensitive' as const,
+});
+
+/** DEV-967: the rows after `cursor` in the list order (newest invoice date first, then id). */
+const olderThan = (cursor: ApReversalCursor): Prisma.PharmacyApInvoiceWhereInput => {
+  const at = new Date(cursor.invoiceDate);
+  return { OR: [{ invoiceDate: { lt: at } }, { invoiceDate: at, id: { gt: cursor.id } }] };
+};
+
+/** DEV-967: the rows before `cursor` in the list order. */
+const newerThan = (cursor: ApReversalCursor): Prisma.PharmacyApInvoiceWhereInput => {
+  const at = new Date(cursor.invoiceDate);
+  return { OR: [{ invoiceDate: { gt: at } }, { invoiceDate: at, id: { lt: cursor.id } }] };
+};
+
+const reversalCursor = (row: { invoiceDate: Date; id: string }): ApReversalCursor => ({
+  invoiceDate: row.invoiceDate.toISOString(),
+  id: row.id,
+});
+
+/**
+ * DEV-103: the reversal search. Posted supplier expense invoices of one branch of one tenant that
+ * match every filter given (see `searchApReversalsSchema`), each with its payments, in a stable
+ * order (newest invoice date first, then id) one page at a time. Nothing outside the tenant and
+ * branch is ever read.
+ *
+ * DEV-967: a page is keyed by a row, never by a position: `older` reads the rows just after that
+ * row, `newer` the rows just before it. A bill recorded or reversed between two page reads
+ * therefore never shows another row twice or skips it. One row more than a page is read to tell
+ * whether the list goes on that way; one more row is looked up to tell whether it goes on the
+ * other way. `older`/`newer` in the result are the cursors for those pages, when they exist.
+ */
 export async function searchApReversals(
   db: ScopedDb,
   scope: { organizationId: string; branchId: string },
   input: Omit<SearchApReversalsInput, 'branchId'>,
   timeZone: string | null | undefined
 ) {
-  const page = input.page ?? 1;
   const where: Prisma.PharmacyApInvoiceWhereInput[] = [];
-  if (input.payee) where.push({ payeeName: { contains: input.payee, mode: 'insensitive' } });
+  if (input.payee) where.push({ payeeName: literalContains(input.payee) });
   if (input.reference) {
     where.push({
       OR: [
-        { reference: { contains: input.reference, mode: 'insensitive' } },
-        { supplierInvoiceRef: { contains: input.reference, mode: 'insensitive' } },
+        { reference: literalContains(input.reference) },
+        { supplierInvoiceRef: literalContains(input.reference) },
       ],
     });
   }
@@ -810,21 +842,50 @@ export async function searchApReversals(
       ],
     });
   }
+  const matching: Prisma.PharmacyApInvoiceWhereInput = {
+    organizationId: scope.organizationId,
+    branchId: scope.branchId,
+    status: 'POSTED',
+    ...(where.length ? { AND: where } : {}),
+  };
+  if (input.older && input.newer) fail('INVALID_STATE');
+  const towardNewer = input.newer !== undefined;
+  const cursor = input.newer ?? input.older;
   const rows = await db.pharmacyApInvoice.findMany({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      status: 'POSTED',
-      ...(where.length ? { AND: where } : {}),
-    },
+    where: cursor
+      ? { AND: [matching, towardNewer ? newerThan(cursor) : olderThan(cursor)] }
+      : matching,
     include: { settlements: { orderBy: [{ paidAt: 'asc' }, { id: 'asc' }] } },
-    orderBy: [{ invoiceDate: 'desc' }, { id: 'asc' }],
-    skip: (page - 1) * AP_REVERSAL_PAGE_ROWS,
+    // Read toward the cursor's side, nearest row first; a newer page is turned back below.
+    orderBy: towardNewer
+      ? [{ invoiceDate: 'asc' }, { id: 'desc' }]
+      : [{ invoiceDate: 'desc' }, { id: 'asc' }],
     take: AP_REVERSAL_PAGE_ROWS + 1,
   });
+  const more = rows.length > AP_REVERSAL_PAGE_ROWS;
+  const invoices = rows.slice(0, AP_REVERSAL_PAGE_ROWS);
+  if (towardNewer) invoices.reverse();
+  // The newest page has nothing newer; any other page looks one row past its other edge.
+  const edge = towardNewer ? invoices.at(-1) : invoices[0];
+  const beyond =
+    cursor && edge
+      ? (await db.pharmacyApInvoice.findFirst({
+          where: {
+            AND: [
+              matching,
+              towardNewer ? olderThan(reversalCursor(edge)) : newerThan(reversalCursor(edge)),
+            ],
+          },
+          select: { id: true },
+        })) !== null
+      : false;
+  const hasOlder = towardNewer ? beyond : more;
+  const hasNewer = towardNewer ? more : beyond;
   return {
-    invoices: rows.slice(0, AP_REVERSAL_PAGE_ROWS),
-    page,
-    hasOlder: rows.length > AP_REVERSAL_PAGE_ROWS,
+    invoices,
+    hasOlder,
+    hasNewer,
+    older: hasOlder ? reversalCursor(invoices.at(-1)!) : null,
+    newer: hasNewer ? reversalCursor(invoices[0]!) : null,
   };
 }

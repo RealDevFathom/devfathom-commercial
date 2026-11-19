@@ -24,6 +24,7 @@ import {
   workspaceZoneLabel,
 } from '@/lib/timezone';
 import { parseMajorToMinor } from '@/lib/pharmacy/khata-payment-slip';
+import type { ApReversalCursor } from '@/lib/pharmacy/accounts/ap-invoices-schema';
 import { PayApInvoiceForm, RecordApInvoiceForm } from './ap-entry-forms';
 import { ExportCsv } from './export-csv';
 import {
@@ -51,7 +52,13 @@ type State =
 type Reversals =
   | { kind: 'none' }
   | { kind: 'failure' }
-  | { kind: 'loaded'; invoices: ReversibleInvoices; hasOlder: boolean; access: ReversalAccess };
+  | {
+      kind: 'loaded';
+      invoices: ReversibleInvoices;
+      older: ApReversalCursor | null;
+      newer: ApReversalCursor | null;
+      access: ReversalAccess;
+    };
 
 /** DEV-694: the payables drafts load separately, so their failure never hides the aging. */
 type Payables =
@@ -387,7 +394,8 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
               : Promise.resolve({
                   scope: { organizationId: actor.organization.id, branchId: parsed.branchId },
                   invoices: [] as ReversibleInvoices,
-                  hasOlder: false,
+                  older: null,
+                  newer: null,
                 }),
             caller.reversalAccess({ branchId: parsed.branchId }),
           ]);
@@ -402,7 +410,8 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
           reversals = {
             kind: 'loaded',
             invoices: list.invoices,
-            hasOlder: list.hasOlder === true,
+            older: list.older ?? null,
+            newer: list.newer ?? null,
             access,
           };
         } catch {
@@ -511,7 +520,8 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
               timeZone={timeZone}
               context={{ branchId: state.branchId, asOf: state.view.asOf, payeeFilter }}
               search={reversalSearch}
-              hasOlder={reversals.hasOlder}
+              older={reversals.older}
+              newer={reversals.newer}
               zone={zone}
             />
           ) : reversals.kind === 'failure' ? (

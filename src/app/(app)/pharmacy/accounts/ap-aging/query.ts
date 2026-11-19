@@ -2,7 +2,8 @@
 import { amountInputError, amountInputToMinor } from '@/lib/money-input';
 import {
   AP_INVOICE_MAX_MINOR,
-  AP_REVERSAL_MAX_PAGE,
+  apReversalCursorSchema,
+  type ApReversalCursor,
 } from '@/lib/pharmacy/accounts/ap-invoices-schema';
 import { workspaceToday } from '@/lib/timezone';
 
@@ -21,9 +22,10 @@ export type AgingQuery = {
   rvAmount?: string | string[];
   rvFrom?: string | string[];
   rvTo?: string | string[];
-  rvPage?: string | string[];
+  /** DEV-967: the page of rows older, or newer, than one row (see `reversalCursorParam`). */
+  rvOlder?: string | string[];
+  rvNewer?: string | string[];
 };
-
 
 export function parseAgingQuery(
   query: AgingQuery,
@@ -31,8 +33,17 @@ export function parseAgingQuery(
   timeZone?: string | null
 ): { branchId?: string; asOf: string; invalid?: boolean } {
   const asOfRaw = query.asOf;
-  const asOf = asOfRaw === undefined ? workspaceToday(timeZone, now) : typeof asOfRaw === 'string' ? asOfRaw : '';
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf) || asOf > workspaceToday(timeZone, now) || asOf < '2000-01-01') {
+  const asOf =
+    asOfRaw === undefined
+      ? workspaceToday(timeZone, now)
+      : typeof asOfRaw === 'string'
+        ? asOfRaw
+        : '';
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(asOf) ||
+    asOf > workspaceToday(timeZone, now) ||
+    asOf < '2000-01-01'
+  ) {
     return { asOf: workspaceToday(timeZone, now), invalid: true };
   }
   if (query.branch === undefined) return { asOf };
@@ -44,11 +55,15 @@ export function parseAgingQuery(
 
 export type ReversalSearchField = 'payee' | 'reference' | 'amount' | 'from' | 'to';
 
+/** DEV-967: the page turned to, if any: the rows older or newer than one row. */
+export type ReversalPageCursor = { direction: 'older' | 'newer'; at: ApReversalCursor };
+
 export type ReversalSearchQuery = {
   /** What the person typed, kept for the form after a refusal. */
   values: Record<ReversalSearchField, string>;
   errors: Partial<Record<ReversalSearchField, string>>;
-  page: number;
+  /** Absent on the newest page. */
+  cursor?: ReversalPageCursor;
   /** The filters to send, only when every typed value is valid. */
   search?: {
     payee?: string;
@@ -56,9 +71,36 @@ export type ReversalSearchQuery = {
     amountMinor?: number;
     from?: string;
     to?: string;
-    page: number;
+    older?: ApReversalCursor;
+    newer?: ApReversalCursor;
   };
 };
+
+/** DEV-967: a cursor in a page link, `<invoice date instant>~<id>`. */
+export function reversalCursorParam(cursor: ApReversalCursor) {
+  return `${cursor.invoiceDate}~${cursor.id}`;
+}
+
+function parseReversalCursor(raw: string | string[] | undefined): ApReversalCursor | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const split = raw.indexOf('~');
+  if (split < 0) return undefined;
+  const parsed = apReversalCursorSchema.safeParse({
+    invoiceDate: raw.slice(0, split),
+    id: raw.slice(split + 1),
+  });
+  return parsed.success && parsed.data.id === raw.slice(split + 1) ? parsed.data : undefined;
+}
+
+/** DEV-967: a malformed cursor, or one each way, starts again from the newest page. */
+function parseReversalPage(query: AgingQuery): ReversalPageCursor | undefined {
+  const older = parseReversalCursor(query.rvOlder);
+  const newer = parseReversalCursor(query.rvNewer);
+  if (query.rvOlder !== undefined && query.rvNewer !== undefined) return undefined;
+  if (older) return { direction: 'older', at: older };
+  if (newer) return { direction: 'newer', at: newer };
+  return undefined;
+}
 
 const AMOUNT_RANGE = 'Enter an amount above 0 and at most 9,999,999.99.';
 
@@ -106,23 +148,20 @@ export function parseReversalSearch(query: AgingQuery): ReversalSearchQuery {
   if (values.to && !day(values.to)) errors.to = 'Choose a date.';
   if (!errors.from && !errors.to && values.from && values.to && values.from > values.to)
     errors.to = 'Choose a day on or after the from day.';
-  const rawPage = one(query.rvPage);
-  const page =
-    /^\d{1,4}$/.test(rawPage) && Number(rawPage) >= 1 && Number(rawPage) <= AP_REVERSAL_MAX_PAGE
-      ? Number(rawPage)
-      : 1;
-  if (Object.keys(errors).length) return { values, errors, page };
+  const cursor = parseReversalPage(query);
+  if (Object.keys(errors).length) return { values, errors, ...(cursor ? { cursor } : {}) };
   return {
     values,
     errors,
-    page,
+    ...(cursor ? { cursor } : {}),
     search: {
       ...(values.payee ? { payee: values.payee } : {}),
       ...(values.reference ? { reference: values.reference } : {}),
       ...(amountMinor !== undefined ? { amountMinor } : {}),
       ...(values.from ? { from: values.from } : {}),
       ...(values.to ? { to: values.to } : {}),
-      page,
+      ...(cursor?.direction === 'older' ? { older: cursor.at } : {}),
+      ...(cursor?.direction === 'newer' ? { newer: cursor.at } : {}),
     },
   };
 }
