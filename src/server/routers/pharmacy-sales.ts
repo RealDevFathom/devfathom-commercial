@@ -1890,7 +1890,10 @@ export const pharmacySalesRouter = router({
     )
     .query(async ({ ctx, input }) => {
       try {
-        const scope = await assignedBranchScope(ctx, input.branchId);
+        // DEV-965: a customer's credit, balance and history are a counter read: the
+        // counter's member, capability (counter or dispense) and branch-assignment gate.
+        await assignedBranchScope(ctx, input.branchId);
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         return await readCustomerSnapshot(
           ctx.db,
           scope,
@@ -4492,7 +4495,10 @@ export const pharmacySalesRouter = router({
   authenticatePack: auditedProtectedProcedure
     .input(z.object({ branchId, payload: z.string().max(512) }).strict())
     .mutation(async ({ ctx, input }) => {
-      const scope = await assignedBranchScope(ctx, input.branchId);
+      // DEV-965: the scan record feeds the flag reports, so only a member who may sell or
+      // dispense at this branch (the counter gate) writes one.
+      await assignedBranchScope(ctx, input.branchId);
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
       ctx.audit.detail = { category: 'PHARMACY_SAFETY', action: 'dispensing_pack_scan' };
       return authenticatePharmacyPack(ctx.db, {
         ...scope,

@@ -516,8 +516,11 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['manage-stock/work-stock-alerts', 'manage-stock/workspace-administrator-reach-stock'],
   },
   'pharmacyInventory.nearExpiryBoard': {
-    gate: 'auditedProtectedProcedure + admittedScopeFor: any signed-in member assigned to the branch; workspace admin with pharmacy:inventory at any branch',
-    lines: ['manage-stock/workspace-administrator-reach-stock'],
+    gate: 'auditedProtectedProcedure + admittedScopeFor: any signed-in member assigned to the branch; workspace admin with pharmacy:inventory at any branch; value at risk only with reports:financial (null otherwise)',
+    lines: [
+      'manage-stock/workspace-administrator-reach-stock',
+      'financial-reports/see-stock-cost-value',
+    ],
   },
   'pharmacyInventory.onHand': {
     gate: 'auditedProtectedProcedure + admittedScopeFor: any signed-in member assigned to the branch; workspace admin with pharmacy:inventory at any branch',
@@ -535,8 +538,8 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['controlled-medicines/manage-recalls-whole-pharmacy'],
   },
   'pharmacyInventory.recallTrace': {
-    gate: 'auditedProtectedProcedure, no branch or capability check',
-    none: 'any signed-in member',
+    gate: 'regulatory = capabilityProcedure(pharmacy:safety); rows limited to active branch assignments, every branch for a verified tenant ADMIN with pharmacy:inventory',
+    lines: ['controlled-medicines/trace-recall-their-branches'],
   },
   'pharmacyInventory.receiveLot': {
     gate: 'inventoryControl -> pharmacy:inventory (assigned branch / admin exception)',
@@ -631,7 +634,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['manage-stock/workspace-administrator-reach-stock'],
   },
   'pharmacyInventory.stockSignalDigest': {
-    gate: 'auditedProtectedProcedure + admittedScopeFor: any signed-in member assigned to the branch; workspace admin with pharmacy:inventory at any branch',
+    gate: "auditedProtectedProcedure + admittedScopeFor: a member assigned to the branch (workspace admin with pharmacy:inventory at any branch); only their own digest unless admin:access for another person's",
     lines: ['manage-stock/workspace-administrator-reach-stock'],
   },
   'pharmacyInventory.temperatureZoneStatuses': {
@@ -728,134 +731,134 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     none: 'workspace administrators only (admin:access)',
   },
   'pharmacyMarketing.approve': {
-    gate: 'protectedProcedure + owner() (session role ADMIN) + pharmacy-crm module',
-    none: 'workspace administrators only (role ADMIN) with the Pharmacy CRM module',
+    gate: 'protectedProcedure + owner() (admin:access through can(), deny-wins) + pharmacy-crm module',
+    none: 'workspace administrators only (admin:access) with the Pharmacy CRM module',
   },
   'pharmacyMarketing.approveTemplate': {
-    gate: 'owner() role ADMIN + CRM module',
-    none: 'workspace administrators only (role ADMIN) with the Pharmacy CRM module',
+    gate: 'owner() admin:access + CRM module',
+    none: 'workspace administrators only (admin:access) with the Pharmacy CRM module',
   },
   'pharmacyMarketing.assist': {
-    gate: 'owner() role ADMIN + CRM module (+ Ask Fathom setting)',
-    none: 'workspace administrators only (role ADMIN) with the Pharmacy CRM module',
+    gate: 'owner() admin:access + CRM module (+ Ask Fathom setting)',
+    none: 'workspace administrators only (admin:access) with the Pharmacy CRM module',
   },
   'pharmacyMarketing.attributeReceipts': {
-    gate: 'owner() role ADMIN + CRM module',
-    none: 'workspace administrators only (role ADMIN) with the Pharmacy CRM module',
+    gate: 'owner() admin:access + CRM module',
+    none: 'workspace administrators only (admin:access) with the Pharmacy CRM module',
   },
   'pharmacyMarketing.basketHistory': {
-    gate: 'growthExecute: role ADMIN + CRM module + reports:operational AND reports:financial',
+    gate: 'growthExecute: owner() admin:access + live active ADMIN record + CRM module + reports:operational AND reports:financial',
     lines: [
       'financial-reports/workspace-administrator-use-operational-6',
       'operational-reports/workspace-administrator-use-financial-5',
     ],
   },
   'pharmacyMarketing.branches': {
-    gate: 'owner() role ADMIN + CRM module',
-    none: 'workspace administrators only (role ADMIN) with the Pharmacy CRM module',
+    gate: 'owner() admin:access + CRM module',
+    none: 'workspace administrators only (admin:access) with the Pharmacy CRM module',
   },
   'pharmacyMarketing.capture': {
-    gate: 'owner() role ADMIN + CRM module',
-    none: 'workspace administrators only (role ADMIN) with the Pharmacy CRM module',
+    gate: 'owner() admin:access + CRM module',
+    none: 'workspace administrators only (admin:access) with the Pharmacy CRM module',
   },
   'pharmacyMarketing.createDraft': {
-    gate: 'owner() role ADMIN + CRM module',
-    none: 'workspace administrators only (role ADMIN) with the Pharmacy CRM module',
+    gate: 'owner() admin:access + CRM module',
+    none: 'workspace administrators only (admin:access) with the Pharmacy CRM module',
   },
   'pharmacyMarketing.deliveryHistory': {
-    gate: 'owner() role ADMIN + CRM module',
-    none: 'workspace administrators only (role ADMIN) with the Pharmacy CRM module',
+    gate: 'owner() admin:access + CRM module',
+    none: 'workspace administrators only (admin:access) with the Pharmacy CRM module',
   },
   'pharmacyMarketing.generateBaskets': {
-    gate: 'growthExecute: role ADMIN + CRM module + reports:operational AND reports:financial',
+    gate: 'growthExecute: owner() admin:access + live active ADMIN record + CRM module + reports:operational AND reports:financial',
     lines: [
       'financial-reports/workspace-administrator-use-operational-6',
       'operational-reports/workspace-administrator-use-financial-5',
     ],
   },
   'pharmacyMarketing.generateGrowth': {
-    gate: 'growthExecute: role ADMIN + CRM module + reports:operational AND reports:financial (+ Ask Fathom on)',
+    gate: 'growthExecute: owner() admin:access + live active ADMIN record + CRM module + reports:operational AND reports:financial (+ Ask Fathom on)',
     lines: [
       'financial-reports/workspace-administrator-use-operational-6',
       'operational-reports/workspace-administrator-use-financial-5',
     ],
   },
   'pharmacyMarketing.growthHistory': {
-    gate: 'growthExecute: role ADMIN + CRM module + reports:operational AND reports:financial',
+    gate: 'growthExecute: owner() admin:access + live active ADMIN record + CRM module + reports:operational AND reports:financial',
     lines: [
       'financial-reports/workspace-administrator-use-operational-6',
       'operational-reports/workspace-administrator-use-financial-5',
     ],
   },
   'pharmacyMarketing.history': {
-    gate: 'owner() role ADMIN + CRM module',
-    none: 'workspace administrators only (role ADMIN) with the Pharmacy CRM module',
+    gate: 'owner() admin:access + CRM module',
+    none: 'workspace administrators only (admin:access) with the Pharmacy CRM module',
   },
   'pharmacyMarketing.issueVoucher': {
-    gate: "owner() role ADMIN + CRM module; above the value cap a second approver's PIN (DISCOUNT approver) or solo owner's fresh PIN",
-    none: "workspace administrators only (role ADMIN) with the Pharmacy CRM module; the second approver's part is run-branches/be-second-approver-highvalue, not the issuer's",
+    gate: "owner() admin:access + CRM module; above the value cap a second approver's PIN (DISCOUNT approver) or solo owner's fresh PIN",
+    none: "workspace administrators only (admin:access) with the Pharmacy CRM module; the second approver's part is run-branches/be-second-approver-highvalue, not the issuer's",
   },
   'pharmacyMarketing.preview': {
-    gate: 'owner() role ADMIN + CRM module',
-    none: 'workspace administrators only (role ADMIN) with the Pharmacy CRM module',
+    gate: 'owner() admin:access + CRM module',
+    none: 'workspace administrators only (admin:access) with the Pharmacy CRM module',
   },
   'pharmacyMarketing.profileHealth': {
-    gate: 'owner() role ADMIN + CRM module',
-    none: 'workspace administrators only (role ADMIN) with the Pharmacy CRM module',
+    gate: 'owner() admin:access + CRM module',
+    none: 'workspace administrators only (admin:access) with the Pharmacy CRM module',
   },
   'pharmacyMarketing.resumeSending': {
-    gate: 'owner() role ADMIN + CRM module',
-    none: 'workspace administrators only (role ADMIN) with the Pharmacy CRM module',
+    gate: 'owner() admin:access + CRM module',
+    none: 'workspace administrators only (admin:access) with the Pharmacy CRM module',
   },
   'pharmacyMarketing.review': {
-    gate: 'owner() role ADMIN + CRM module',
-    none: 'workspace administrators only (role ADMIN) with the Pharmacy CRM module',
+    gate: 'owner() admin:access + CRM module',
+    none: 'workspace administrators only (admin:access) with the Pharmacy CRM module',
   },
   'pharmacyMarketing.reviewBasket': {
-    gate: 'growthExecute: role ADMIN + CRM module + reports:operational AND reports:financial',
+    gate: 'growthExecute: owner() admin:access + live active ADMIN record + CRM module + reports:operational AND reports:financial',
     lines: [
       'financial-reports/workspace-administrator-use-operational-6',
       'operational-reports/workspace-administrator-use-financial-5',
     ],
   },
   'pharmacyMarketing.reviewGrowth': {
-    gate: 'growthExecute: role ADMIN + CRM module + reports:operational AND reports:financial',
+    gate: 'growthExecute: owner() admin:access + live active ADMIN record + CRM module + reports:operational AND reports:financial',
     lines: [
       'financial-reports/workspace-administrator-use-operational-6',
       'operational-reports/workspace-administrator-use-financial-5',
     ],
   },
   'pharmacyMarketing.reviewReply': {
-    gate: 'owner() role ADMIN + CRM module',
-    none: 'workspace administrators only (role ADMIN) with the Pharmacy CRM module',
+    gate: 'owner() admin:access + CRM module',
+    none: 'workspace administrators only (admin:access) with the Pharmacy CRM module',
   },
   'pharmacyMarketing.revokeVoucher': {
-    gate: 'owner() role ADMIN + CRM module',
-    none: 'workspace administrators only (role ADMIN) with the Pharmacy CRM module',
+    gate: 'owner() admin:access + CRM module',
+    none: 'workspace administrators only (admin:access) with the Pharmacy CRM module',
   },
   'pharmacyMarketing.sandbox': {
-    gate: 'owner() role ADMIN + CRM module; sandbox transaction re-checks active ADMIN',
-    none: 'workspace administrators only (role ADMIN) with the Pharmacy CRM module',
+    gate: 'owner() admin:access + CRM module; sandbox transaction re-checks active ADMIN',
+    none: 'workspace administrators only (admin:access and a live active ADMIN record) with the Pharmacy CRM module',
   },
   'pharmacyMarketing.sandboxDue': {
-    gate: 'owner() role ADMIN + CRM module; sandbox transaction re-checks active ADMIN',
-    none: 'workspace administrators only (role ADMIN) with the Pharmacy CRM module',
+    gate: 'owner() admin:access + CRM module; sandbox transaction re-checks active ADMIN',
+    none: 'workspace administrators only (admin:access and a live active ADMIN record) with the Pharmacy CRM module',
   },
   'pharmacyMarketing.sendPolicy': {
-    gate: 'owner() role ADMIN + CRM module',
-    none: 'workspace administrators only (role ADMIN) with the Pharmacy CRM module',
+    gate: 'owner() admin:access + CRM module',
+    none: 'workspace administrators only (admin:access) with the Pharmacy CRM module',
   },
   'pharmacyMarketing.updateSendPolicy': {
-    gate: 'owner() role ADMIN + CRM module',
-    none: 'workspace administrators only (role ADMIN) with the Pharmacy CRM module',
+    gate: 'owner() admin:access + CRM module',
+    none: 'workspace administrators only (admin:access) with the Pharmacy CRM module',
   },
   'pharmacyMarketing.voucherApprovers': {
-    gate: 'owner() role ADMIN + CRM module',
-    none: 'workspace administrators only (role ADMIN) with the Pharmacy CRM module',
+    gate: 'owner() admin:access + CRM module',
+    none: 'workspace administrators only (admin:access) with the Pharmacy CRM module',
   },
   'pharmacyMarketing.vouchers': {
-    gate: 'owner() role ADMIN + CRM module',
-    none: 'workspace administrators only (role ADMIN) with the Pharmacy CRM module',
+    gate: 'owner() admin:access + CRM module',
+    none: 'workspace administrators only (admin:access) with the Pharmacy CRM module',
   },
   'pharmacyMedicine.addAlias': {
     gate: 'catalogueCommandProcedure -> admin:access AND pharmacy:catalogue-edit to submit (queued); applied on approval replay under pharmacy:catalogue-review (or owner fallback)',
@@ -2000,8 +2003,11 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['take-payment/follow-up-outofstock-requests'],
   },
   'pharmacySales.authenticatePack': {
-    gate: 'assignedBranchScope only (active branch assignment or session ADMIN); no capability checked',
-    none: 'any signed-in member assigned to the branch (or a workspace administrator); no permission action is checked',
+    gate: 'assignedBranchScope then requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense',
+    lines: [
+      'take-payment/ring-up-medicines',
+      'dispense-prescriptions/ring-up-medicines-without-counter',
+    ],
   },
   'pharmacySales.captureDemand': {
     gate: 'requireCounterReceiptAccess(canonical true) -> pharmacy:counter, assigned branch or ADMIN',
@@ -2143,8 +2149,11 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     none: 'workspace administrators only (admin:access)',
   },
   'pharmacySales.customerSnapshot': {
-    gate: 'assignedBranchScope only; no capability checked (points history limited to assigned branches unless ADMIN)',
-    none: 'any signed-in member assigned to the branch (or a workspace administrator); no permission action is checked',
+    gate: 'assignedBranchScope then requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense (points history limited to assigned branches unless ADMIN)',
+    lines: [
+      'take-payment/open-hold-resume-void',
+      'dispense-prescriptions/use-counter-without-counter',
+    ],
   },
   'pharmacySales.dailyClose': {
     gate: 'requireCloseAccess -> ADMIN, pharmacy:close, or pharmacy:manage at assigned branch unless close DENIED',

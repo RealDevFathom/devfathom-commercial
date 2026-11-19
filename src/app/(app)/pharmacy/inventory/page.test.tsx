@@ -1036,3 +1036,24 @@ describe('opening stock entry point (DEV-46)', () => {
       expect(link.getAttribute('href') ?? '').not.toMatch(/\/pharmacy\/inventory\/counts/);
   });
 });
+
+describe('near-expiry value at risk (DEV-965)', () => {
+  const bucket = { bucketDays: 30, units: 1250, withinSupplierReturnWindow: false };
+
+  it('shows units, not a PKR figure, when the server withholds the value', async () => {
+    nearExpiry.mockResolvedValue([{ ...bucket, valueAtRiskMinor: null }]);
+    await show();
+    const card = screen.getByText('Expires within 30 days').parentElement!;
+    expect(within(card).getByText('1,250 units')).toBeVisible();
+    expect(within(card).getByText(/^At risk ·/)).toBeVisible();
+    expect(card.textContent).not.toMatch(/PKR|Rs/);
+  });
+
+  it('keeps the PKR value for a caller the server sends it to', async () => {
+    nearExpiry.mockResolvedValue([{ ...bucket, valueAtRiskMinor: 480_000 }]);
+    await show();
+    const card = screen.getByText('Expires within 30 days').parentElement!;
+    expect(within(card).getByText(/1250 units at risk/)).toBeVisible();
+    expect(within(card).queryByText('1,250 units')).toBeNull();
+  });
+});
