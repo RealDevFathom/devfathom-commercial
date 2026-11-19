@@ -59,6 +59,29 @@ const optionalText = (max: number) =>
     .optional()
     .transform((value) => value || undefined);
 
+/** DEV-941: the plain refusal for a branch the caller is not assigned to. */
+const REFILL_BRANCH_REFUSAL =
+  'You are not assigned to this branch. Only a pharmacist assigned to this branch can see its refill reminders.';
+
+/**
+ * DEV-941: one branch's refill reminder records, read with the database's own branch rule
+ * (`tenant_branch_isolation` on `pharmacy_refill_reminder_captures`) switched on for this read
+ * only. The request runs in one transaction, so the previous binding is restored afterwards.
+ */
+async function branchReminderCaptures(db: ScopedDb, organizationId: string, branchId: string) {
+  const [previous] = await db.$queryRaw<{ branch: string | null }[]>`
+    SELECT current_setting('app.current_branch_id', true) AS branch`;
+  await db.$queryRaw`SELECT set_config('app.current_branch_id', ${branchId}, true)`;
+  try {
+    return await db.pharmacyRefillReminderCapture.findMany({
+      where: { organizationId, branchId },
+      orderBy: { capturedAt: 'desc' },
+    });
+  } finally {
+    await db.$queryRaw`SELECT set_config('app.current_branch_id', ${previous?.branch ?? ''}, true)`;
+  }
+}
+
 function prescriberConflict() {
   return new TRPCError({
     code: 'CONFLICT',
@@ -192,16 +215,36 @@ export const pharmacyPrescriptionsRouter = router({
         .optional()
     )
     .query(async ({ ctx, input }) => {
-      const branches = await ctx.db.pharmacyBranch.findMany({
-        where: { active: true },
+      const organizationId = ctx.entitlements.organizationId;
+      const user = ctx.session.user;
+      const activeBranches = await ctx.db.pharmacyBranch.findMany({
+        where: { organizationId, active: true },
         orderBy: { name: 'asc' },
         select: { id: true, name: true },
       });
+      // DEV-941: refill reminders belong to a branch. A pharmacist sees only the branches
+      // they are assigned to, an organisation admin every branch: the counter's branch rule,
+      // as `captureRefillReminder` writes them and `decideReview` signs at a branch.
+      const visible = await Promise.all(
+        activeBranches.map(
+          async (branch) =>
+            !(await counterBranchAssignmentDenial(ctx.db, user, organizationId, branch.id))
+        )
+      );
+      const branches = activeBranches.filter((_, index) => visible[index]);
+      if (input?.branchId) {
+        const requested = activeBranches.find((branch) => branch.id === input.branchId);
+        if (!requested)
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
+        // Tag the entry, so a refused read is visible at the branch it targeted.
+        annotateAuditBranch(ctx, requested.id);
+        if (!branches.some((branch) => branch.id === requested.id))
+          throw new TRPCError({ code: 'FORBIDDEN', message: REFILL_BRANCH_REFUSAL });
+      }
       const selectedBranch = input?.branchId
         ? branches.find((branch) => branch.id === input.branchId)
         : branches[0];
-      if (input?.branchId && !selectedBranch)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
+      const visibleBranchIds = new Set(branches.map((branch) => branch.id));
 
       // Prescription access is narrower than dispensing (tenant admins may
       // capture without an exact dispense grant). Report whether the caller can
@@ -213,38 +256,33 @@ export const pharmacyPrescriptionsRouter = router({
         undefined,
         { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }
       );
-      const [patients, prescribers, medicines, prescriptions, reminderCaptures] = await Promise.all(
-        [
-          ctx.db.pharmacyPatient.findMany({ orderBy: { displayName: 'asc' } }),
-          ctx.db.pharmacyPrescriber.findMany({ orderBy: { name: 'asc' } }),
-          ctx.db.medicine.findMany({
-            where: { saleable: true },
-            orderBy: { productName: 'asc' },
-            include: { presentations: { orderBy: { presentation: 'asc' } } },
-          }),
-          ctx.db.prescription.findMany({
-            orderBy: { capturedAt: 'desc' },
-            include: {
-              patient: true,
-              prescriber: true,
-              lines: {
-                orderBy: { lineNumber: 'asc' },
-                include: {
-                  medicine: true,
-                  presentation: true,
-                  fills: { include: { reminderCapture: true }, orderBy: { dispensedAt: 'desc' } },
-                },
+      const [patients, prescribers, medicines, prescriptions] = await Promise.all([
+        ctx.db.pharmacyPatient.findMany({ orderBy: { displayName: 'asc' } }),
+        ctx.db.pharmacyPrescriber.findMany({ orderBy: { name: 'asc' } }),
+        ctx.db.medicine.findMany({
+          where: { saleable: true },
+          orderBy: { productName: 'asc' },
+          include: { presentations: { orderBy: { presentation: 'asc' } } },
+        }),
+        ctx.db.prescription.findMany({
+          orderBy: { capturedAt: 'desc' },
+          include: {
+            patient: true,
+            prescriber: true,
+            lines: {
+              orderBy: { lineNumber: 'asc' },
+              include: {
+                medicine: true,
+                presentation: true,
+                fills: { include: { reminderCapture: true }, orderBy: { dispensedAt: 'desc' } },
               },
             },
-          }),
-          selectedBranch
-            ? ctx.db.pharmacyRefillReminderCapture.findMany({
-                where: { branchId: selectedBranch.id },
-                orderBy: { capturedAt: 'desc' },
-              })
-            : Promise.resolve([]),
-        ]
-      );
+          },
+        }),
+      ]);
+      const reminderCaptures = selectedBranch
+        ? await branchReminderCaptures(ctx.db, organizationId, selectedBranch.id)
+        : [];
       return {
         branches,
         selectedBranchId: selectedBranch?.id ?? null,
@@ -260,6 +298,14 @@ export const pharmacyPrescriptionsRouter = router({
           patient: maskedPatient(prescription.patient),
           lines: prescription.lines.map((line) => ({
             ...line,
+            // DEV-941: another branch's reminder record is not shown.
+            fills: line.fills.map((fill) => ({
+              ...fill,
+              reminderCapture:
+                fill.reminderCapture && visibleBranchIds.has(fill.reminderCapture.branchId)
+                  ? fill.reminderCapture
+                  : null,
+            })),
             remainingAuthorizedUnits: Math.max(
               0,
               line.authorizedCanonicalUnits * (prescription.authorizedRepeats + 1) -

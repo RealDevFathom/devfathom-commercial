@@ -790,7 +790,8 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
               </WorkspaceState>
             ) : workspace.data.branches.length === 0 ? (
               <WorkspaceState title="No active pharmacy branch">
-                Activate a branch before capturing refill reminders.
+                Refill reminders are captured at a branch you are assigned to. Ask the owner to
+                assign you to an active branch.
               </WorkspaceState>
             ) : dispensedFills.length === 0 ? (
               <WorkspaceState title="No dispensed items yet">
