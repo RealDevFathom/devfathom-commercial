@@ -34,10 +34,13 @@ describe('DEV-743 card-terminal review resolution migration contract', () => {
     const migrations = readdirSync('prisma/migrations')
       .filter((entry) => /^\d{14}_/.test(entry))
       .sort();
-    // DEV-950: later migrations follow it (20261118124600), so it is ordered after the terminal
-    // migrations, as the counter migration's own contract checks, rather than being the newest.
+    // Ordered after the terminal migrations. A later migration may follow it (DEV-951's
+    // 20261118124400 and 20261118124500, DEV-950's 20261118124600), and every one that does is
+    // stamped after it (migration-timestamp-order.test.ts enforces the ledger).
     expect(migrations.indexOf(NAME)).toBeGreaterThan(migrations.indexOf(COUNTER));
     expect(migrations.indexOf(COUNTER)).toBeGreaterThan(migrations.indexOf(ATTEMPTS));
+    for (const later of migrations.slice(migrations.indexOf(NAME) + 1))
+      expect(later.slice(0, 14) > NAME.slice(0, 14)).toBe(true);
     // Its attempt guard is still the live one: no later migration replaces that function.
     for (const later of migrations.slice(migrations.indexOf(NAME) + 1))
       expect(readFileSync(`prisma/migrations/${later}/migration.sql`, 'utf8'), later).not.toContain(
@@ -46,7 +49,11 @@ describe('DEV-743 card-terminal review resolution migration contract', () => {
     const ledger = readFileSync('tests/fixtures/new-migration-order.txt', 'utf8')
       .trim()
       .split('\n');
-    expect(ledger.indexOf(COUNTER)).toBeGreaterThanOrEqual(0);
+    expect(ledger.filter((name) => name === NAME)).toHaveLength(1);
+    const position = ledger.indexOf(NAME);
+    expect(ledger[position - 1]).toBe(COUNTER);
+    for (const later of ledger.slice(position + 1))
+      expect(later.slice(0, 14) > NAME.slice(0, 14)).toBe(true);
     expect(ledger.indexOf(NAME)).toBeGreaterThan(ledger.indexOf(COUNTER));
   });
 

@@ -449,12 +449,17 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
     }));
     const cutover = readFileSync(join(process.cwd(),
       'prisma/migrations/20261110111300_pharmacy_receipt_print_cutover/migration.sql'), 'utf8');
+    const correction = readFileSync(join(process.cwd(),
+      'prisma/migrations/20261118124500_pharmacy_receipt_print_state_correction/migration.sql'), 'utf8');
     // The whole file, with its own transaction and settings, as the schema owner, twice.
     const owner = new pg.Client({ connectionString: ownerUrl });
     await owner.connect();
     try {
-      await owner.query(cutover);
-      await owner.query(cutover);
+      // Deploy applies the cutover and then its DEV-951 correction; both, twice.
+      for (let run = 0; run < 2; run += 1) {
+        await owner.query(cutover);
+        await owner.query(correction);
+      }
     } finally {
       await owner.end();
     }
