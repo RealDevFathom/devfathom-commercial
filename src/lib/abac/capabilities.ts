@@ -29,3 +29,23 @@ export function capabilityMatches(
   if (rule === '*') return true;
   return wildcardPattern.test(rule) && action.startsWith(rule.slice(0, -1));
 }
+
+type CapabilityRule = { capability: string; effect: string };
+
+/** The persisted-rule half of an ABAC decision: false on any matching DENY, true on a
+ * matching ALLOW, null when no rule matches (the static policy then decides). Prescription
+ * capture is narrower than dispensing, so dispense rules (ALLOW and DENY) also decide
+ * `pharmacy:prescriptions`.
+ */
+export function decideFromRules(rules: readonly CapabilityRule[], action: string): boolean | null {
+  const matchingActions =
+    action === 'pharmacy:prescriptions' ? [action, 'pharmacy:dispense'] : [action];
+  const matchingRules = rules.filter((rule) =>
+    matchingActions.some((candidate) =>
+      capabilityMatches(rule.capability, candidate, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
+    )
+  );
+  if (matchingRules.some((rule) => rule.effect === 'DENY')) return false;
+  if (matchingRules.some((rule) => rule.effect === 'ALLOW')) return true;
+  return null;
+}
