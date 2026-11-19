@@ -117,7 +117,11 @@ async function holds(db: ScopedDb, party: Party, action: Action, now: Date): Pro
   });
 }
 
-/** The live all-capability owners of the organization (`hasAllCapabilityAccess`). */
+/**
+ * The live all-capability owners of the organization (`hasAllCapabilityAccess`) who can also
+ * administer it (`admin:access`): an owner who cannot reach the administrator screens cannot
+ * keep the organization running, so they never count towards "one owner remains".
+ */
 async function activeOwnerIds(db: ScopedDb, organizationId: string, now: Date) {
   const candidates = (await db.user.findMany({
     where: {
@@ -127,7 +131,11 @@ async function activeOwnerIds(db: ScopedDb, organizationId: string, now: Date) {
     },
     select: partySelect(now),
   })) as Party[];
-  return candidates.filter((party) => hasAllCapabilityAccess(party)).map((party) => party.id);
+  const owners: string[] = [];
+  for (const party of candidates)
+    if (hasAllCapabilityAccess(party) && (await holds(db, party, 'admin:access', now)))
+      owners.push(party.id);
+  return owners;
 }
 
 export type SubRoleEditor = {
@@ -513,6 +521,13 @@ export async function applyPharmacyMemberRoleTemplate(
         throw new TRPCError({
           code: 'BAD_REQUEST',
           message: 'This ready-made role is not set up.',
+        });
+      // The Owner role is ownership only for a workspace administrator: without
+      // admin:access the new owner could not administer the workspace at all.
+      if (input.roleKey === 'owner' && loaded.target.role !== 'ADMIN')
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Make this person a workspace administrator before giving them the Owner role.',
         });
       const cleared = await tx.userPermissionOverride.findMany({
         where: {

@@ -379,12 +379,30 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
         [orgA]
       );
       expect(owners).toEqual([{ id: id('owner') }]);
-      // Only an owner makes someone an owner.
+      // Only an owner makes someone an owner: never an administrator who is not the owner.
       await expect(
         callers
           .admin('manager')
-          .applyMemberRoleTemplate({ userId: id('cashier2'), roleKey: 'owner', pin: PIN })
+          .applyMemberRoleTemplate({ userId: id('owner2'), roleKey: 'owner', pin: PIN })
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      // The Owner role goes only to a workspace administrator, who can run the workspace;
+      // an employee given it would count as an owner without admin access.
+      for (const who of ['owner', 'manager'] as const)
+        await expect(
+          callers
+            .admin(who)
+            .applyMemberRoleTemplate({ userId: id('cashier2'), roleKey: 'owner', pin: PIN })
+        ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      const [cashier2] = await rows(
+        `SELECT r.key FROM users u JOIN organization_roles r ON r.id=u."organizationRoleId" WHERE u.id=$1`,
+        [id('cashier2')]
+      );
+      expect(cashier2.key).toBe('cashier');
+      // The owner may make an administrator an owner again, with their PIN.
+      await callers
+        .admin('owner')
+        .applyMemberRoleTemplate({ userId: id('owner2'), roleKey: 'owner', pin: PIN });
+      expect(await allowed('owner2', 'admin:access')).toBe(true);
     });
 
     it('lets a refusal win over a tick', async () => {
