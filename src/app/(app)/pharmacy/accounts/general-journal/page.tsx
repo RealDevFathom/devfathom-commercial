@@ -2,7 +2,6 @@ import type { Metadata } from 'next';
 import { TRPCError } from '@trpc/server';
 
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill, type StatusTone } from '@/components/ui/status-pill';
@@ -17,6 +16,7 @@ import { pharmacyGeneralJournalRouter } from '@/server/routers/pharmacy-general-
 import { createTRPCContext } from '@/server/trpc';
 import { formatWorkspaceDateTime, workspaceZoneLabel } from '@/lib/timezone';
 import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
+import { BranchSelect, loadBranchOptions, type BranchOption } from '../branch-picker';
 
 export const metadata: Metadata = { title: 'General journal vouchers · Pharmacy accounts' };
 
@@ -65,20 +65,13 @@ function parseBranch(query: Query): { branchId?: string; invalid?: boolean } {
   return { branchId };
 }
 
-function BranchForm({ branchId }: { branchId?: string }) {
+function BranchForm({ branchId, branches }: { branchId?: string; branches: BranchOption[] }) {
   return (
     <SectionCard title="Branch" titleLevel={2}>
       <form method="get" className="grid gap-4 md:grid-cols-[1fr_auto] md:items-end">
         <label className="grid gap-2 text-sm">
-          Branch ID
-          <Input
-            className="min-h-11"
-            name="branch"
-            defaultValue={branchId}
-            maxLength={128}
-            required
-            aria-describedby="branch-help"
-          />
+          Branch
+          <BranchSelect branchId={branchId} branches={branches} describedBy="branch-help" />
         </label>
         <Button type="submit" className="min-h-11">
           Show vouchers
@@ -142,9 +135,9 @@ function Notice({ state }: { state: Exclude<State, { kind: 'loaded' }> }) {
   const content = {
     initial: [
       'Choose a branch',
-      'Enter one branch to list its journal vouchers. No voucher has been read.',
+      'Choose one branch to list its journal vouchers. No voucher has been read.',
     ],
-    invalid: ['Branch needs attention', 'Enter one branch ID of at most 128 characters.'],
+    invalid: ['Branch needs attention', 'Choose one branch from the list.'],
     denied: [
       'Journal vouchers unavailable',
       'Your authenticated tenant, active branch, Pharmacy Finance licence and owner finance permissions must all allow this read.',
@@ -249,7 +242,6 @@ export default async function GeneralJournalPage({
   // The organization zone is known only after the actor resolves; before any read the
   // form names it generically.
   let timeZone: string | null | undefined;
-
   if (parsed.branchId) {
     try {
       const actor = await resolveTenantActor();
@@ -285,6 +277,9 @@ export default async function GeneralJournalPage({
     }
   }
 
+  // The picker lists the branches an owner may act at; the router still checks the chosen one.
+  const branches = await loadBranchOptions();
+
   return (
     <div className="min-w-0 space-y-6">
       <PageHeader
@@ -292,7 +287,10 @@ export default async function GeneralJournalPage({
         heading="General journal vouchers"
         description="Review non-trade operating accrual vouchers for one branch and the only accounts they may use."
       />
-      <BranchForm branchId={typeof query.branch === 'string' ? query.branch : undefined} />
+      <BranchForm
+        branchId={typeof query.branch === 'string' ? query.branch : undefined}
+        branches={branches}
+      />
       {state.kind === 'loaded' ? (
         <Register state={state} timeZone={timeZone} />
       ) : (

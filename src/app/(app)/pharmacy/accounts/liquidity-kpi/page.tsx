@@ -15,6 +15,7 @@ import {
   type LiquidityKpiCurrency,
   type LiquidityKpiFlag,
 } from '@/lib/pharmacy/accounts/liquidity-kpi';
+import { BranchSelect, loadBranchOptions, type BranchOption } from '../branch-picker';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
@@ -84,23 +85,22 @@ const FLAG_LABEL: Record<LiquidityKpiFlag, string> = {
 function ControlForm({
   controls,
   timeZone,
+  branches,
 }: {
   controls?: Partial<Controls>;
   timeZone?: string | null;
+  branches: BranchOption[];
 }) {
   const zone = timeZone ? workspaceZoneLabel(timeZone) : 'workspace timezone';
   return (
     <SectionCard title="Report controls" titleLevel={2}>
       <form method="get" className="grid gap-4 md:grid-cols-3 md:items-end">
         <label className="grid gap-2 text-sm">
-          Branch ID
-          <Input
-            className="min-h-11"
-            name="branch"
-            defaultValue={controls?.branchId}
-            maxLength={128}
-            required
-            aria-describedby="branch-help"
+          Branch
+          <BranchSelect
+            branchId={controls?.branchId}
+            branches={branches}
+            describedBy="branch-help"
           />
         </label>
         <label className="grid gap-2 text-sm">
@@ -277,7 +277,6 @@ export default async function LiquidityKpiPage({ searchParams }: { searchParams:
   // The organization zone is known only after the actor resolves; before any read the
   // form names it generically.
   let timeZone: string | null | undefined;
-
   if (parsed.controls) {
     try {
       const actor = await resolveTenantActor();
@@ -335,6 +334,9 @@ export default async function LiquidityKpiPage({ searchParams }: { searchParams:
     }
   }
 
+  // The picker lists the branches an owner may act at; the router still checks the chosen one.
+  const branches = await loadBranchOptions();
+
   return (
     <div className="min-w-0 space-y-6">
       <PageHeader
@@ -342,7 +344,7 @@ export default async function LiquidityKpiPage({ searchParams }: { searchParams:
         heading="Posted cash coverage"
         description="Compare posted cash and bank balances with posted payables and goods-received accruals, per recorded currency."
       />
-      <ControlForm controls={formControls} timeZone={timeZone} />
+      <ControlForm controls={formControls} timeZone={timeZone} branches={branches} />
       {state.kind === 'loaded' ? (
         <Results state={state} timeZone={timeZone} />
       ) : (

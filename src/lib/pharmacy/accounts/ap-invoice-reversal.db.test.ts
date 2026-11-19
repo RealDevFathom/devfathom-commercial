@@ -506,3 +506,127 @@ describeDb('DEV-103 AP invoice and payment reversal', () => {
     expect(await outstanding(bill.id)).toMatchObject({ outstandingMinor: 8_000 });
   }, 90_000);
 });
+
+describeDb('DEV-103 reversal search and paging', () => {
+  const tag = `ARQ-${suffix}`;
+  async function bill(n: number, invoiceDate: string, amountMinor: number, payeeName: string) {
+    const result = await inTenant((db) =>
+      deps.ap.recordApInvoice(db, owner, {
+        branchId,
+        createKey: `aprev-search-${suffix}-${n}`,
+        reference: `${tag}-${String(n).padStart(2, '0')}`,
+        payeeName,
+        supplierInvoiceRef: `SUP-${suffix}-${n}`,
+        invoiceDate,
+        dueDate: invoiceDate,
+        amountMinor,
+        currency: 'PKR',
+        description: 'Search fixture',
+        evidenceReference: 'Bill scan',
+      })
+    );
+    return result.invoice;
+  }
+  const search = (
+    input: Parameters<Deps['ap']['searchApReversals']>[2],
+    scope: { organizationId: string; branchId: string } = { organizationId, branchId },
+    org = organizationId
+  ) => inTenant((db) => deps.ap.searchApReversals(db, scope, input, 'Asia/Karachi'), org);
+
+  it('finds an older invoice or payment by reference, payee, amount and day, a stable page at a time', async () => {
+    // 27 bills on three dates; two share a date, so ties fall back to the id.
+    const made = [];
+    for (let n = 1; n <= 27; n += 1) {
+      made.push(
+        await bill(n, day(-(n % 3) - 20), 100_000 + n, n === 5 ? 'Search Payee Five' : 'Payee')
+      );
+    }
+    const paid = made[6]!;
+    const payment = await pay(paid.id, 'search', 23_456);
+    const reversed = made[8]!;
+    await inTenant((db) =>
+      deps.ap.reverseApInvoice(
+        db,
+        manager,
+        {
+          branchId,
+          invoiceId: reversed.id,
+          commandKey: `aprev-search-rev-${suffix}`,
+          reason: 'Entered twice',
+        },
+        segregated
+      )
+    );
+
+    // Paging: 26 posted bills match, 25 on page one and 1 on page two, in one total order.
+    const first = await search({ reference: tag, page: 1 });
+    const second = await search({ reference: tag, page: 2 });
+    expect(first.invoices).toHaveLength(25);
+    expect(first.hasOlder).toBe(true);
+    expect(second.invoices).toHaveLength(1);
+    expect(second.hasOlder).toBe(false);
+    const listed = [...first.invoices, ...second.invoices];
+    expect(new Set(listed.map((row) => row.id)).size).toBe(26);
+    expect(listed.map((row) => row.id)).not.toContain(reversed.id);
+    const expectedOrder = made
+      .filter((row) => row.id !== reversed.id)
+      .sort(
+        (a, b) =>
+          b.invoiceDate.getTime() - a.invoiceDate.getTime() ||
+          (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+      )
+      .map((row) => row.id);
+    expect(listed.map((row) => row.id)).toEqual(expectedOrder);
+    // The same page read twice is the same page.
+    expect((await search({ reference: tag, page: 1 })).invoices.map((row) => row.id)).toEqual(
+      first.invoices.map((row) => row.id)
+    );
+
+    // Payee, ignoring case; the supplier's invoice number; an invoice amount; a payment amount.
+    expect(
+      (await search({ payee: 'search payee five', page: 1 })).invoices.map((r) => r.id)
+    ).toEqual([made[4]!.id]);
+    expect(
+      (await search({ reference: `SUP-${suffix}-12`, page: 1 })).invoices.map((r) => r.id)
+    ).toEqual([made[11]!.id]);
+    expect(
+      (await search({ reference: tag, amountMinor: 100_013, page: 1 })).invoices.map((r) => r.id)
+    ).toEqual([made[12]!.id]);
+    const byPayment = await search({ reference: tag, amountMinor: 23_456, page: 1 });
+    expect(byPayment.invoices.map((r) => r.id)).toEqual([paid.id]);
+    expect(byPayment.invoices[0]!.settlements.map((s) => s.id)).toEqual([payment.id]);
+
+    // Days on the shop's clock: the invoice date, or the day a payment in force was made.
+    const oldest = day(-22);
+    const onOldest = await search({ reference: tag, from: oldest, to: oldest, page: 1 });
+    expect(onOldest.invoices.map((r) => r.id).sort()).toEqual(
+      made
+        .filter((row) => row.invoiceDate.toISOString().slice(0, 10) === oldest)
+        .map((row) => row.id)
+        .sort()
+    );
+    const paidDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(
+      payment.paidAt
+    );
+    expect(
+      (await search({ reference: tag, from: paidDay, to: paidDay, page: 1 })).invoices.map(
+        (r) => r.id
+      )
+    ).toEqual([paid.id]);
+
+    // Nothing outside this branch or this tenant.
+    expect(
+      (await search({ reference: tag, page: 1 }, { organizationId, branchId: closedBranchId }))
+        .invoices
+    ).toEqual([]);
+    expect(
+      (
+        await search(
+          { reference: tag, page: 1 },
+          { organizationId: otherOrganizationId, branchId },
+          otherOrganizationId
+        )
+      ).invoices
+    ).toEqual([]);
+  }, 180_000);
+});

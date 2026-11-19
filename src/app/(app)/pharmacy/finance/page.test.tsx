@@ -20,6 +20,9 @@ vi.mock('@/components/pharmacy/counter/discount-maximum-panel', () => ({
 vi.mock('@/components/pharmacy/counter/day-end-hour-panel', () => ({
   DayEndHourPanel: () => null,
 }));
+vi.mock('@/components/pharmacy/counter/bill-discount-setting-panel', () => ({
+  BillDiscountSettingPanel: () => null,
+}));
 
 const mocks = vi.hoisted(() => ({
   financialStatements: vi.fn(),

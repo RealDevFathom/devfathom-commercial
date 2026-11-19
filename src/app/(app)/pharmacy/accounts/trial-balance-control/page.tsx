@@ -12,6 +12,7 @@ import {
   projectTrialBalanceControl,
   type TrialBalanceControl,
 } from '@/lib/pharmacy/accounts/trial-balance-control';
+import { BranchSelect, loadBranchOptions, type BranchOption } from '../branch-picker';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
@@ -80,23 +81,22 @@ function minor(value: bigint): string {
 function ControlForm({
   controls,
   timeZone,
+  branches,
 }: {
   controls?: Partial<Controls>;
   timeZone?: string | null;
+  branches: BranchOption[];
 }) {
   const zone = timeZone ? workspaceZoneLabel(timeZone) : 'workspace timezone';
   return (
     <SectionCard title="Report controls" titleLevel={2}>
       <form method="get" className="grid gap-4 md:grid-cols-4 md:items-end">
         <label className="grid gap-2 text-sm">
-          Branch ID
-          <Input
-            className="min-h-11"
-            name="branch"
-            defaultValue={controls?.branchId}
-            maxLength={128}
-            required
-            aria-describedby="branch-help"
+          Branch
+          <BranchSelect
+            branchId={controls?.branchId}
+            branches={branches}
+            describedBy="branch-help"
           />
         </label>
         <label className="grid gap-2 text-sm">
@@ -302,7 +302,6 @@ export default async function TrialBalanceControlPage({
   // The organization zone is known only after the actor resolves; before any read the
   // form names it generically.
   let timeZone: string | null | undefined;
-
   if (parsed.controls) {
     try {
       const actor = await resolveTenantActor();
@@ -363,6 +362,9 @@ export default async function TrialBalanceControlPage({
     }
   }
 
+  // The picker lists the branches an owner may act at; the router still checks the chosen one.
+  const branches = await loadBranchOptions();
+
   return (
     <div className="min-w-0 space-y-6">
       <PageHeader
@@ -370,7 +372,7 @@ export default async function TrialBalanceControlPage({
         heading="Trial-balance control"
         description="Review every returned account code through per-currency opening, movement and supplied-closing controls."
       />
-      <ControlForm controls={formControls} timeZone={timeZone} />
+      <ControlForm controls={formControls} timeZone={timeZone} branches={branches} />
       {state.kind === 'loaded' ? (
         <Results state={state} timeZone={timeZone} />
       ) : (

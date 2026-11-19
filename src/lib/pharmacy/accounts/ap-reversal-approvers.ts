@@ -9,19 +9,27 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  * at this branch. Owner decision (19 Nov 2026): a manager or owner approves with their own PIN,
  * and a solo owner approves their own, as elsewhere.
  *
- * The solo rule is the card-terminal review's (`otherCardTerminalReviewers`): someone counts only
- * if they hold an unrevoked own PIN on an active profile, pass this branch's operator gate and
- * hold `pharmacy:manage`. On top of that, a reversal runs through the AP router, which only an
- * owner-level (ADMIN) user with `admin:access` and `finance:read` can reach, so a manager who
- * could never open this screen does not count either: counting them would leave the solo owner
- * with nobody to ask.
+ * The set is exactly the people the reversal procedures (`reverseInvoice`, `reverseSettlement`)
+ * would let approve, with the same gates, and nobody else:
+ *   - `adminProcedure`: an active session and `admin:access`;
+ *   - `authorizeGeneralJournal`: an owner-level (ADMIN) member of this organization with
+ *     `finance:read`, at an active branch of it (an ADMIN may act at every such branch);
+ *   - `actorMayRefund`: `pharmacy:manage`;
+ *   - `authenticateRefundPin`: an unrevoked own PIN (an enrolled authenticator rides on it) on an
+ *     ACTIVE staff profile of an ACTIVE member, so someone on leave, inactive or without a PIN
+ *     does not count.
+ * The PIN, `pharmacy:manage` and branch parts are the shared solo rule
+ * (`otherCardTerminalReviewers`) with its `branch` gate: the reversal procedures never apply the
+ * counter operator gate (`pharmacy:counter`), so a second owner without a counter grant, or with
+ * a counter DENY, still counts. Counting fewer people than could approve would let the recorder
+ * self-approve while someone else could; counting more would leave a solo owner nobody to ask.
  */
 export async function otherApReversalApprovers(
   db: ScopedDb,
   scope: { organizationId: string; branchId: string; actorId: string },
   now = new Date()
 ): Promise<{ id: string; name: string | null }[]> {
-  const reviewers = await otherCardTerminalReviewers(db, scope, now);
+  const reviewers = await otherCardTerminalReviewers(db, scope, now, { gate: 'branch' });
   if (!reviewers.length) return [];
   const users = await db.user.findMany({
     where: {

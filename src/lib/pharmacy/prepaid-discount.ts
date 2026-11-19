@@ -1,6 +1,7 @@
 import 'server-only';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { lockPrepaidCustomer, readPrepaidAccount } from './prepaid-tiers';
+import { billAllocationDiscount } from './bill-discount';
 import { BPS, maxDiscountMinorFor, minimumPriceForMargin } from './smart-discount';
 import { readDiscountLimits } from './smart-discount-service';
 
@@ -13,6 +14,8 @@ type Line = {
   grossMinor: number;
   discountMinor: number;
   tierAllocationDiscounts?: unknown;
+  /** DEV-956: each allocation's share of the whole-bill discount, already in discountMinor. */
+  billAllocationDiscounts?: unknown;
   tierDiscountMinor?: number;
   tierName?: string | null;
   discountKind?: string | null;
@@ -58,11 +61,13 @@ export function prepaidLineDiscount(
     return { amountMinor: 0, allocations: line.allocations.map(() => 0) };
   const desired =
     billShareMinor ?? Math.floor(((line.grossMinor - line.discountMinor) * basisPoints) / 10000);
+  // DEV-956: a lot's whole-bill share is already taken off its price before the tier prices it.
   const capacities = line.allocations.map((a) =>
     Math.max(
       0,
       (a.grossMinor ?? 0) -
         (a.discountMinor ?? 0) -
+        billAllocationDiscount(line.billAllocationDiscounts, a.id) -
         minimumPriceForMargin(a.canonicalUnits * a.lot.unitCostMinor, limits.minMarginBps)
     )
   );
