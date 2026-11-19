@@ -748,9 +748,12 @@ async function addSaleLineWithAllocation(
   if (locked.count !== 1) throw new PharmacySaleError('INVALID_STATE');
   // DEV-956: a whole-bill discount was given on the bill as it stood. A new line changes the
   // bill, so the discount is cleared (it never silently covers only some items) and the cashier
-  // is told to give it again. Rolled back with the add if the add fails.
-  const billDiscountClearedMinor = (sale.lines ?? []).some((row) => row.billDiscountMinor > 0)
-    ? await clearBillDiscountForNewLine(db, scope, sale)
+  // is told to give it again. Rolled back with the add if the add fails. The lines are read
+  // again now the sale row is locked: a discount committed while this add waited for the lock
+  // is seen here, never missed through the earlier read.
+  const lockedSale = await saleInScope(db, scope, input.saleId);
+  const billDiscountClearedMinor = (lockedSale.lines ?? []).some((row) => row.billDiscountMinor > 0)
+    ? await clearBillDiscountForNewLine(db, scope, lockedSale)
     : 0;
   if (
     !Number.isSafeInteger(input.quantity) ||
