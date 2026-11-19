@@ -74,7 +74,7 @@ describe('what this person can do', () => {
       roleName: 'Cashier',
       customRole: false,
       exceptionCount: 0,
-      workspaceAdmin: false,
+      administrator: null,
     });
     expect(update).not.toHaveBeenCalled();
   });
@@ -130,7 +130,29 @@ describe('what this person can do', () => {
       ].sort()
     );
     expect(result.member.roleName).toBeNull();
-    expect(result.member.workspaceAdmin).toBe(true);
+    expect(result.member.administrator).toBe('full');
+  });
+
+  it('decides administrator access with the engine, not the role name alone', async () => {
+    const custom = fakeDb({
+      role: 'EMPLOYEE',
+      organizationRole: {
+        name: 'Office',
+        isSystem: false,
+        permissions: [{ capability: 'admin:access', effect: 'ALLOW' }],
+      },
+    });
+    expect((await readPharmacyMemberAccess(custom.db, 'org_1', 'u_1')).member.administrator).toBe(
+      'access-only'
+    );
+    const denied = fakeDb({
+      role: 'ADMIN',
+      organizationRole: null,
+      overrides: [{ capability: 'admin:access', effect: 'DENY' }],
+    });
+    expect((await readPharmacyMemberAccess(denied.db, 'org_1', 'u_1')).member.administrator).toBe(
+      'role-only'
+    );
   });
 
   it('refuses a person outside the organization', async () => {

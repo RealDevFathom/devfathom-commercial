@@ -25,11 +25,12 @@ export type MemberAccess = {
     /** Live per-person exceptions on top of the role. */
     exceptionCount: number;
     /**
-     * A workspace administrator. Some pharmacy checks let an administrator through
-     * before any permission is read (for example day close), so the ticks do not
-     * show everything they can do until phase 2 makes the ticks binding.
+     * How this person is an administrator, if at all. `admin:access` (decided by `can()`,
+     * so a custom role or exception counts) opens the administrator screens; the tenant
+     * ADMIN role is what about 46 pharmacy checks let through before reading any
+     * permission (every branch, day close and reopening). The ticks show neither.
      */
-    workspaceAdmin: boolean;
+    administrator: 'full' | 'access-only' | 'role-only' | null;
   };
   groups: PharmacySubRoleGroup[];
 };
@@ -68,6 +69,8 @@ export async function readPharmacyMemberAccess(
   for (const action of PHARMACY_SUB_ROLE_ACTIONS) {
     if (await can(subject, action, undefined, { db, now, source: 'TRPC' })) allowed.add(action);
   }
+  const adminAccess = await can(subject, 'admin:access', undefined, { db, now, source: 'TRPC' });
+  const adminRole = member.role === 'ADMIN';
 
   return {
     member: {
@@ -77,7 +80,14 @@ export async function readPharmacyMemberAccess(
       roleName: member.organizationRole?.name ?? null,
       customRole: member.organizationRole ? !member.organizationRole.isSystem : false,
       exceptionCount: member.permissionOverrides.length,
-      workspaceAdmin: member.role === 'ADMIN',
+      administrator:
+        adminAccess && adminRole
+          ? 'full'
+          : adminAccess
+            ? 'access-only'
+            : adminRole
+              ? 'role-only'
+              : null,
     },
     groups: pharmacySubRoleGroups(allowed),
   };

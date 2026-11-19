@@ -16,7 +16,10 @@ import {
   PHARMACY_SUB_ROLE_ACTIONS,
 } from './pharmacy-sub-roles';
 
-const ROOTS = ['src/server', 'src/lib', 'src/app/api'];
+/** Server code: the server and libraries, plus every non-client file under src/app
+ * (API routes, server pages and layouts, server actions and the routers they call). */
+const ROOTS = ['src/server', 'src/lib', 'src/app'];
+const isClientComponent = (text: string) => /^\s*(['"])use client\1/.test(text);
 /** Where actions are defined or the engine itself lives, and other business types. */
 const NOT_A_USE_SITE = [
   /^src\/lib\/abac\//,
@@ -40,13 +43,18 @@ const root = process.cwd();
 const FILES = ROOTS.flatMap((dir) => sourceFiles(join(root, dir)))
   .map((full) => ({ path: relative(root, full).split('\\').join('/'), full }))
   .filter(({ path }) => !NOT_A_USE_SITE.some((pattern) => pattern.test(path)))
-  .map(({ path, full }) => ({ path, text: readFileSync(full, 'utf8') }));
+  .map(({ path, full }) => ({ path, text: readFileSync(full, 'utf8') }))
+  .filter(({ path, text }) => !path.startsWith('src/app/') || !isClientComponent(text));
 
 const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** Occurrences of the quoted action name, per file. */
+/** Occurrences of the quoted action name, per file. Pharmacy actions also count in the
+ * legacy dotted form (`pharmacy.counter`) that the counter gate still accepts. */
 function useSites(action: string): Record<string, number> {
-  const pattern = new RegExp(`(['"\`])${escape(action)}\\1`, 'g');
+  const name = action.startsWith('pharmacy:')
+    ? `pharmacy[:.]${escape(action.slice('pharmacy:'.length))}`
+    : escape(action);
+  const pattern = new RegExp(`(['"\`])${name}\\1`, 'g');
   const counts: Record<string, number> = {};
   for (const file of FILES) {
     const found = file.text.match(pattern)?.length ?? 0;
@@ -87,15 +95,14 @@ describe('every pharmacy check is explained by its sub-role', () => {
     }
   });
 
-  it('backs every line an owner reads with at least one real use', () => {
+  it('gives every sub-role distinct lines', () => {
+    // Each line is backed by a use here or a procedure (pharmacy-procedure-gates.test.ts).
     for (const subRole of PHARMACY_SUB_ROLES) {
       expect(subRole.allows.length).toBeGreaterThan(0);
-      for (const item of subRole.allows) {
-        const total = Object.values(item.sites).reduce((sum, count) => sum + count, 0);
-        expect(total, `${subRole.key}: ${item.text}`).toBeGreaterThan(0);
-      }
       const texts = subRole.allows.map((item) => item.text);
       expect(new Set(texts).size).toBe(texts.length);
+      const ids = subRole.allows.map((item) => item.id);
+      expect(new Set(ids).size).toBe(ids.length);
     }
   });
 

@@ -91,6 +91,8 @@ describe('pharmacy sub-role catalogue', () => {
     for (const subRole of PHARMACY_SUB_ROLES) {
       expect(subRole.actions.length).toBeGreaterThan(0);
       expect(subRole.label.length).toBeGreaterThan(0);
+      // Plain words: a label never carries a raw action name.
+      expect(subRole.label).not.toMatch(/:/);
       expect(subRole.allows.length).toBeGreaterThan(0);
       for (const { text } of subRole.allows) {
         expect(text).not.toMatch(/\n/);

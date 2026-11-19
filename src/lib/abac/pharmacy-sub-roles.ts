@@ -20,6 +20,8 @@ import type { Action } from './policies';
 
 /** One thing a sub-role allows, and the uses in the code that back it. */
 export type PharmacySubRoleAllowance = {
+  /** Stable within its sub-role; procedures refer to a line as `subRoleKey/id`. */
+  id: string;
   text: string;
   /** Which of the sub-role's actions this line is about; required when it holds several. */
   action?: Action;
@@ -53,26 +55,32 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     actions: ['pharmacy:counter'],
     allows: [
       {
+        id: 'search-patients-open-patients',
         text: "Search patients and open a patient's masked prescription panel from the counter, at every branch",
         sites: { 'src/server/routers/pharmacy-prescriptions.ts': 1 },
       },
       {
+        id: 'view-khata-accounts-statements',
         text: "View khata accounts and statements, sign customers up for khata, record repayments and charge sales to khata at their branches (going over the limit needs a manager's PIN)",
         sites: { 'src/server/routers/pharmacy-sales.ts': 1 },
       },
       {
+        id: 'take-payment-branches-by',
         text: 'Take payment at their branches by cash, card, wallet or manual methods, open the cash drawer, and record requests for out-of-stock items',
         sites: { 'src/server/routers/pharmacy-sales.ts': 1 },
       },
       {
+        id: 'see-customerapp-request-queue',
         text: 'See the customer-app request queue and confirm or reject payments customers report against their khata',
         sites: { 'src/server/routers/pharmacy-ordering.ts': 3 },
       },
       {
+        id: 'open-hold-resume-void',
         text: "Open, hold, resume and void their counter bills, search medicines, use vouchers, link customers and loyalty cards, and reprint or send receipts (refunds need a manager's PIN; prescription-only lines need Dispense prescriptions)",
-        sites: { 'src/lib/pharmacy/counter-capability.ts': 1 },
+        sites: { 'src/lib/pharmacy/counter-capability.ts': 2 },
       },
       {
+        id: 'handle-customer-orders-run',
         text: 'With Handle customer orders, run an offline counter; be named as the cashier of a till someone else opens',
         sites: { 'src/lib/pharmacy/counter-capability.ts': 1 },
       },
@@ -85,18 +93,22 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     actions: ['pharmacy:orders'],
     allows: [
       {
+        id: 'work-customer-order-queue',
         text: 'Work the customer order queue at their branches: accept, pack, dispatch, cancel and complete orders, assign delivery runners, record delivery cash, and send customers a sign-in link',
         sites: { 'src/server/routers/pharmacy-ordering.ts': 2 },
       },
       {
+        id: 'create-pause-cancel-repeatrefill',
         text: 'Create, pause and cancel repeat-refill subscriptions and check out refill cycles',
         sites: { 'src/server/routers/pharmacy-ordering.ts': 1 },
       },
       {
+        id: 'place-orders-customer-see',
         text: 'Place orders for a customer and see the customer-app request queue',
         sites: { 'src/server/routers/pharmacy-ordering.ts': 1 },
       },
       {
+        id: 'take-payment-use-offline',
         text: 'With Take payment, use an offline counter: start it, download stock, upload offline sales and renew its receipt numbers',
         sites: { 'src/server/routers/pharmacy-offline.ts': 2 },
       },
@@ -109,6 +121,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     actions: ['pharmacy:discount'],
     allows: [
       {
+        id: 'give-counter-discounts-without',
         text: "Give counter discounts without a manager's PIN, within the owner's maximum and minimum margin, never on prescription-only, restricted or controlled items",
         sites: { 'src/lib/pharmacy/counter-line-approval.ts': 3 },
       },
@@ -121,18 +134,22 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     actions: ['sop:complete'],
     allows: [
       {
+        id: 'start-claim-tick-off',
         text: 'Start, claim, tick off, attach proof to and submit their own procedure checklists at their branches',
         sites: { 'src/server/routers/pharmacy-sop.ts': 1 },
       },
       {
+        id: 'see-procedures-board-open',
         text: 'See their procedures board and open procedures they own or can claim',
         sites: { 'src/server/routers/pharmacy-sop.ts': 2 },
       },
       {
+        id: 'see-which-branches-use',
         text: 'See which of their branches use procedures and set up their own procedures profile',
         sites: { 'src/server/routers/pharmacy-sop.ts': 2 },
       },
       {
+        id: 'open-proof-photos-procedures',
         text: 'Open proof photos on procedures they own, claimed or uploaded',
         sites: { 'src/lib/pharmacy/sop-evidence.ts': 1 },
       },
@@ -145,6 +162,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     actions: ['pharmacy:dispense'],
     allows: [
       {
+        id: 'check-query-refuse-sign',
         text: 'Check, query, refuse and sign prescription lines in the pharmacist queue at their branch, and record substitution evidence',
         sites: {
           'src/server/routers/pharmacy-dispensing.ts': 1,
@@ -152,38 +170,47 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         },
       },
       {
+        id: 'open-substitution-workspace',
         text: 'Open the substitution workspace',
         sites: { 'src/server/routers/pharmacy-dispensing.ts': 1 },
       },
       {
+        id: 'record-fills-noncontrolled-prescriptions',
         text: 'Record fills of non-controlled prescriptions and log refill reminders',
         sites: { 'src/server/routers/pharmacy-prescriptions.ts': 2 },
       },
       {
+        id: 'search-counter-patients-open',
         text: 'Search counter patients and open their masked patient panel',
         sites: { 'src/server/routers/pharmacy-prescriptions.ts': 1 },
       },
       {
+        id: 'use-counter-without-counter',
         text: 'Use the counter without counter permission: open, hold, void and print bills, search stock and link customers (taking payment still needs Take payment)',
-        sites: { 'src/lib/pharmacy/counter-capability.ts': 2 },
+        sites: { 'src/lib/pharmacy/counter-capability.ts': 3 },
       },
       {
+        id: 'sell-prescriptiononly-restricted-medicines',
         text: 'Sell prescription-only and restricted medicines',
         sites: { 'src/lib/pharmacy/rx-sale-gate.ts': 1 },
       },
       {
+        id: 'ring-up-sale-line',
         text: "Ring up a sale line against a patient's prescription for a pharmacist's sign-off",
         sites: { 'src/server/routers/pharmacy-sales.ts': 1 },
       },
       {
+        id: 'sell-controlled-medicines-counter',
         text: "Sell controlled medicines at the counter, with a different pharmacist's PIN",
         sites: { 'src/server/routers/pharmacy-sales.ts': 1 },
       },
       {
+        id: 'witness-colleagues-controlledmedicine-sale',
         text: "Witness a colleague's controlled-medicine sale with their PIN",
         sites: { 'src/server/routers/pharmacy-sales.ts': 1 },
       },
       {
+        id: 'witness-controlledregister-corrections-controlled',
         text: 'Witness controlled-register corrections and controlled purchases with their PIN',
         sites: {
           'src/server/routers/pharmacy-safety.ts': 1,
@@ -191,22 +218,27 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         },
       },
       {
+        id: 'witness-controlled-stock-going',
         text: 'Witness controlled stock going back into stock with their PIN, alone with a fresh PIN when they are the only pharmacist',
         sites: { 'src/lib/pharmacy/controlled-restoration-authorization.ts': 1 },
       },
       {
+        id: 'void-return-controlledmedicine-sale',
         text: "Void or return a controlled-medicine sale line, with a different pharmacist's PIN",
         sites: { 'src/lib/pharmacy/controlled-restoration-authorization.ts': 1 },
       },
       {
+        id: 'see-which-pharmacists-can',
         text: 'See which pharmacists can witness controlled-medicine entries',
         sites: { 'src/server/routers/pharmacy-safety.ts': 1 },
       },
       {
+        id: 'order-receive-stock-see',
         text: 'With Order and receive stock, see who can witness a controlled delivery',
         sites: { 'src/server/routers/pharmacy-purchasing.ts': 1 },
       },
       {
+        id: 'sign-controlledmedicine-delivery-pin',
         text: 'Sign for a controlled-medicine delivery with their PIN',
         sites: {
           'src/lib/pharmacy/goods-receipt.ts': 1,
@@ -214,38 +246,47 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         },
       },
       {
+        id: 'witness-own-stock-writeoff',
         text: 'Witness their own stock write-off with a fresh PIN when they are the only pharmacist',
         sites: { 'src/lib/pharmacy/write-off-witness.ts': 1 },
       },
       {
+        id: 'approve-refillsubscription-cycles-pin',
         text: 'Approve refill-subscription cycles with their PIN',
         sites: { 'src/lib/pharmacy/refill-subscriptions.ts': 1 },
       },
       {
+        id: 'see-online-customer-requests',
         text: 'See online customer requests and verify or reject refill and prescription-photo orders',
         sites: { 'src/server/routers/pharmacy-ordering.ts': 2 },
       },
       {
+        id: 'handle-customer-orders-see',
         text: 'With Handle customer orders, see the prescriptions that could cover a refill',
         sites: { 'src/server/routers/pharmacy-ordering.ts': 1 },
       },
       {
+        id: 'approve-selling-from-batch',
         text: 'Approve selling from a batch that is not the earliest to expire',
         sites: { 'src/lib/pharmacy/counter-line-approval.ts': 1 },
       },
       {
+        id: 'see-brand-margins-branch',
         text: 'See brand margins at their branch: discount suggestions and higher-margin brand ranking',
         sites: { 'src/server/routers/pharmacy-sales.ts': 3 },
       },
       {
+        id: 'redeem-customers-loyalty-points',
         text: "Redeem a customer's loyalty points to settle a sale",
         sites: { 'src/server/routers/pharmacy-sales.ts': 1 },
       },
       {
+        id: 'file-adversereaction-medicationerror-reports',
         text: 'File adverse-reaction and medication-error reports',
         sites: { 'src/server/routers/pharmacy-reports.ts': 1 },
       },
       {
+        id: 'check-procedure-tasks-others',
         text: 'Check procedure tasks others did, as the qualified person',
         sites: { 'src/lib/pharmacy/sop-adapter.ts': 2 },
       },
@@ -258,26 +299,32 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     actions: ['pharmacy:prescriptions'],
     allows: [
       {
+        id: 'open-prescription-workspace-register',
         text: 'Open the prescription workspace: register patients and prescribers, upload and view prescription photos, and capture prescriptions',
         sites: { 'src/server/routers/pharmacy-prescriptions.ts': 1 },
       },
       {
+        id: 'record-patients-consent-dispensing',
         text: "Record a patient's consent for dispensing, reminders, loyalty or marketing",
         sites: { 'src/server/routers/pharmacy-prescriptions.ts': 1 },
       },
       {
+        id: 'view-patients-masked-record',
         text: "View a patient's masked record",
         sites: { 'src/server/routers/pharmacy-prescriptions.ts': 1 },
       },
       {
+        id: 'export-patients-record-consents',
         text: "Export a patient's record with consents, prescriptions and fills",
         sites: { 'src/server/routers/pharmacy-prescriptions.ts': 1 },
       },
       {
+        id: 'see-patient-names-substitution',
         text: 'See patient names in the substitution workspace',
         sites: { 'src/server/routers/pharmacy-dispensing.ts': 1 },
       },
       {
+        id: 'controlled-medicines-safety-see',
         text: "With Controlled medicines and safety, see patients' full phone numbers in recall contact lists",
         sites: { 'src/server/routers/pharmacy-inventory.ts': 1 },
       },
@@ -290,10 +337,12 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     actions: ['pharmacy:catalogue-review'],
     allows: [
       {
+        id: 'approve-reject-others-catalogue',
         text: "Approve or reject others' catalogue edits, which applies them (prices, packs, printed MRP, barcodes, ingredients), and publish or withdraw reviewed medicines",
         sites: { 'src/server/routers/pharmacy-medicine.ts': 1 },
       },
       {
+        id: 'confirm-reject-imported-referencedata',
         text: 'Confirm or reject imported reference-data proposals they did not import',
         sites: { 'src/server/routers/pharmacy-medicine.ts': 2 },
       },
@@ -306,6 +355,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     actions: ['pharmacy:close'],
     allows: [
       {
+        id: 'review-reconciliation-close-day',
         text: 'Review the reconciliation and close the day at every branch, with or without a branch assignment',
         sites: { 'src/server/routers/pharmacy-sales.ts': 3 },
       },
@@ -313,18 +363,20 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
   },
   {
     key: 'run-branches',
-    label: 'Manage their branches: cash, refunds and approvals',
+    label: 'Manage their branches (cash, refunds and approvals)',
     homeRole: 'manager',
     actions: ['pharmacy:manage'],
     allows: [
       {
+        id: 'run-cash-drawers-branches',
         text: 'Run the cash drawers at their branches: open a till with a float, pay cash in or out, close a drawer with a count, hand a till to another cashier, and manage customer loyalty points and cards',
         sites: {
-          'src/server/routers/pharmacy-sales.ts': 4,
-          'src/lib/pharmacy/counter-capability.ts': 3,
+          'src/server/routers/pharmacy-sales.ts': 5,
+          'src/lib/pharmacy/counter-capability.ts': 4,
         },
       },
       {
+        id: 'close-day-branches-unless',
         text: 'Close the day at their branches, unless day close is denied to them',
         sites: {
           'src/server/routers/pharmacy-sales.ts': 2,
@@ -332,14 +384,17 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         },
       },
       {
+        id: 'reopen-closed-day-branches',
         text: 'Reopen a closed day at their branches with a reason and their PIN',
         sites: { 'src/server/routers/pharmacy-sales.ts': 2 },
       },
       {
+        id: 'see-demand-lostsales-restockrecovery',
         text: 'See demand, lost-sales and restock-recovery reports, and change the lost-sales settings, at their branches',
         sites: { 'src/server/routers/pharmacy-sales.ts': 1 },
       },
       {
+        id: 'read-reports-centre-replenishment',
         text: 'Read the Reports centre, replenishment report, daily work pack and supplier list for their branches',
         sites: {
           'src/server/routers/pharmacy-reports.ts': 1,
@@ -347,26 +402,32 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         },
       },
       {
+        id: 'see-discount-policy-log',
         text: 'See the discount policy, log competitor prices and see discount suggestions at their branches',
         sites: { 'src/server/routers/pharmacy-sales.ts': 3 },
       },
       {
+        id: 'see-brand-margins-highermargin',
         text: 'See brand margins and higher-margin brand suggestions at their branches',
         sites: { 'src/server/routers/pharmacy-sales.ts': 3 },
       },
       {
+        id: 'create-view-switch-off',
         text: 'Create, view and switch off promotions at their branches',
         sites: { 'src/server/routers/pharmacy-sales.ts': 4, 'src/lib/pharmacy/promotions.ts': 2 },
       },
       {
+        id: 'approve-someone-elses-counter',
         text: "Approve someone else's counter discount with their PIN, within the owner's limits",
         sites: { 'src/lib/pharmacy/counter-line-approval.ts': 2 },
       },
       {
+        id: 'be-second-approver-highvalue',
         text: 'Be the second approver for a high-value voucher with their PIN',
         sites: { 'src/lib/pharmacy/voucher-controls.ts': 1 },
       },
       {
+        id: 'approve-charging-customers-khata',
         text: "Approve charging a customer's khata past its limit with their PIN",
         sites: {
           'src/server/routers/pharmacy-sales.ts': 2,
@@ -374,22 +435,27 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         },
       },
       {
+        id: 'approve-selling-pack-that',
         text: 'Approve selling a pack that is not from the batch that expires first, with their PIN',
         sites: { 'src/lib/pharmacy/counter-line-approval.ts': 2 },
       },
       {
+        id: 'approve-discarding-card-payment',
         text: 'Approve discarding a card payment whose result is unknown, with their PIN',
         sites: { 'src/lib/pharmacy/counter-line-approval.ts': 2 },
       },
       {
+        id: 'refund-sales-take-returns',
         text: "Refund sales, take returns and void another cashier's bill, with their PIN each time",
         sites: { 'src/lib/pharmacy/refund-authorization.ts': 2 },
       },
       {
+        id: 'settle-cardmachine-payments-under',
         text: 'Settle card-machine payments under review with their PIN',
         sites: { 'src/lib/pharmacy/card-terminal/review-approvers.ts': 2 },
       },
       {
+        id: 'workspace-administrator-finance-access',
         text: 'As a workspace administrator with finance access: approve supplier credit set-offs and reverse supplier invoices and payments with their PIN',
         sites: {
           'src/server/routers/pharmacy-ap-invoices.ts': 1,
@@ -397,10 +463,12 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         },
       },
       {
+        id: 'see-purchase-price-paid',
         text: 'See the purchase price paid for a medicine',
         sites: { 'src/server/routers/pharmacy-medicine.ts': 2 },
       },
       {
+        id: 'owner-workspace-administrator-turn',
         text: 'As the owner or a workspace administrator: turn supplier compliance checks on or off',
         sites: { 'src/lib/pharmacy/supplier-compliance-policy.ts': 2 },
       },
@@ -413,14 +481,17 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     actions: ['pharmacy:procurement-approve'],
     allows: [
       {
+        id: 'approve-reject-purchase-orders',
         text: 'Approve or reject purchase orders someone else raised, send approved orders and set reorder thresholds at their branches, even without Order and receive stock',
         sites: { 'src/server/routers/pharmacy-purchasing.ts': 1 },
       },
       {
+        id: 'order-receive-stock-authorize',
         text: 'With Order and receive stock, authorize or withdraw a supplier and set their purchase-approval PIN',
         sites: { 'src/server/routers/pharmacy-purchasing.ts': 1 },
       },
       {
+        id: 'order-receive-stock-approve',
         text: "With Order and receive stock, approve a colleague's direct purchase with their PIN; a solo owner also approves their own orders, counts and transfers with a PIN",
         sites: { 'src/lib/pharmacy/procurement-access.ts': 1 },
       },
@@ -433,22 +504,27 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     actions: ['sop:manage'],
     allows: [
       {
+        id: 'branches-view-change-procedure',
         text: 'At their branches, view and change procedure set-up: turn procedures on, create, pause and resume schedules, give and remove staff procedure roles, create due work and set alerts; install the procedure library for the whole pharmacy',
         sites: { 'src/server/routers/pharmacy-sop.ts': 1 },
       },
       {
+        id: 'view-procedures-compliance-report',
         text: "View the procedures compliance report for a branch, which names each person's work",
         sites: { 'src/server/routers/pharmacy-sop.ts': 1 },
       },
       {
+        id: 'do-check-procedure-checklists',
         text: 'With Do or Check procedure checklists, open any procedure at their branches',
         sites: { 'src/server/routers/pharmacy-sop.ts': 1 },
       },
       {
+        id: 'see-which-branches-use',
         text: 'See which of their branches use procedures and set up their own procedures profile',
         sites: { 'src/server/routers/pharmacy-sop.ts': 2 },
       },
       {
+        id: 'open-proof-photos-any',
         text: 'Open proof photos for any procedure at their branches',
         sites: { 'src/lib/pharmacy/sop-evidence.ts': 1 },
       },
@@ -461,22 +537,27 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     actions: ['sop:verify'],
     allows: [
       {
+        id: 'approve-send-back-submitted',
         text: 'Approve or send back submitted procedures, with a checking role at the branch and never for work they took part in',
         sites: { 'src/server/routers/pharmacy-sop.ts': 1 },
       },
       {
+        id: 'see-review-queue-open',
         text: 'See the review queue and open submitted procedures their checking role covers',
         sites: { 'src/server/routers/pharmacy-sop.ts': 4 },
       },
       {
+        id: 'view-procedures-compliance-report',
         text: "View the procedures compliance report for a branch, which names each person's work",
         sites: { 'src/server/routers/pharmacy-sop.ts': 1 },
       },
       {
+        id: 'see-which-branches-use',
         text: 'See which of their branches use procedures and set up their own procedures profile',
         sites: { 'src/server/routers/pharmacy-sop.ts': 2 },
       },
       {
+        id: 'open-proof-photos-procedures',
         text: 'Open proof photos on procedures they own, claimed, uploaded or check',
         sites: { 'src/lib/pharmacy/sop-evidence.ts': 1 },
       },
@@ -489,34 +570,42 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     actions: ['pharmacy:procurement'],
     allows: [
       {
+        id: 'link-suppliers-branch-issue',
         text: 'Link suppliers to a branch, issue supplier response links, record supplier replies, and accept or reject supplier proposals at their branches',
         sites: { 'src/server/routers/pharmacy-supplier-links.ts': 1 },
       },
       {
+        id: 'see-highermargin-brand-suggestions',
         text: 'See higher-margin brand suggestions, with cost and margin, for their branches',
         sites: { 'src/server/routers/pharmacy-sales.ts': 1 },
       },
       {
+        id: 'import-supplier-price-lists',
         text: 'Import supplier price lists and review price alerts for the whole pharmacy',
         sites: { 'src/server/routers/pharmacy-supplier-price-lists.ts': 1 },
       },
       {
+        id: 'run-purchasing-branches-add',
         text: 'Run purchasing at their branches: add suppliers and their licences, raise requisitions, compare quotes, create and submit purchase orders, receive, post and reverse deliveries, authenticate packs and request transfers',
         sites: { 'src/server/routers/pharmacy-purchasing.ts': 1 },
       },
       {
+        id: 'approve-purchase-orders-authorize',
         text: 'With Approve purchase orders, authorize or withdraw a supplier and set their purchase-approval PIN',
         sites: { 'src/server/routers/pharmacy-purchasing.ts': 1 },
       },
       {
+        id: 'use-financial-reports-return',
         text: 'With Use financial reports, return stock to suppliers, issue debit notes and record supplier credit',
         sites: { 'src/server/routers/pharmacy-purchasing.ts': 1 },
       },
       {
+        id: 'open-purchasing-screens-read',
         text: 'Open the purchasing screens and read supplier invoices from photos into a delivery',
-        sites: { 'src/lib/pharmacy/procurement-access.ts': 1 },
+        sites: { 'src/lib/pharmacy/procurement-access.ts': 2 },
       },
       {
+        id: 'manage-stock-turn-stock',
         text: 'With Manage stock, turn a stock alert into a draft purchase request or supplier claim',
         sites: { 'src/lib/pharmacy/stock-signals-operations.ts': 1 },
       },
@@ -529,18 +618,22 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     actions: ['pharmacy:inventory'],
     allows: [
       {
+        id: 'set-reorder-levels-when',
         text: 'Set reorder levels when medicines are requested from an imported file',
         sites: { 'src/server/routers/pharmacy-medicine.ts': 1 },
       },
       {
+        id: 'run-stock-branches-locations',
         text: "Run stock at their branches: locations, temperature logs, batches, stock counts (approving others'), write-offs, releasing quarantine, transfers, supplier claims, shelf labels and expiry markdowns",
         sites: { 'src/server/routers/pharmacy-inventory.ts': 1 },
       },
       {
+        id: 'workspace-administrator-reach-stock',
         text: 'As a workspace administrator, reach stock at every branch, with each access logged',
         sites: { 'src/server/routers/pharmacy-inventory.ts': 1 },
       },
       {
+        id: 'turn-stock-alert-into',
         text: 'Turn a stock alert into a draft transfer from another branch',
         sites: { 'src/lib/pharmacy/stock-signals-operations.ts': 1 },
       },
@@ -553,10 +646,12 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     actions: ['reports:financial'],
     allows: [
       {
+        id: 'workspace-administrator-use-operational',
         text: 'As a workspace administrator with Use operational reports: view growth, marketing, branch comparison, anomaly and expiry-advice reports, and also change data there: save and delete seasonal windows, propose expiry returns, refresh, acknowledge and snooze anomalies, acknowledge pack-authentication flags and set the daily digest',
         sites: { 'src/server/routers/pharmacy-reports.ts': 1 },
       },
       {
+        id: 'workspace-administrator-run-orderplanning',
         text: 'As a workspace administrator: run order-planning scenarios and see anomaly and expiry items in the daily work pack, also through the assistant; read supplier-credit follow-up through the assistant',
         sites: {
           'src/server/routers/pharmacy-reports.ts': 2,
@@ -564,6 +659,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         },
       },
       {
+        id: 'see-sales-margin-cash',
         text: 'See sales, margin, cash, refund, payables, receivables and khata figures in the Reports centre and the assistant',
         sites: {
           'src/server/routers/pharmacy-reports.ts': 1,
@@ -572,50 +668,62 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         },
       },
       {
+        id: 'workspace-administrator-use-operational-2',
         text: 'As a workspace administrator with Use operational reports: view the accounts reports (cash-flow forecast, statements, stock valuation, margins, leakage)',
         sites: { 'src/server/routers/pharmacy-finance.ts': 2 },
       },
       {
+        id: 'workspace-administrator-use-operational-3',
         text: 'As a workspace administrator with Use operational reports: look up accounting journal entries',
         sites: { 'src/lib/pharmacy/accounts/journal-entry-lookup.ts': 1 },
       },
       {
+        id: 'workspace-administrator-use-operational-4',
         text: 'As a workspace administrator with Use operational reports: view the fiscal exceptions register',
         sites: { 'src/lib/pharmacy/accounts/fiscal-exceptions.reader.ts': 1 },
       },
       {
+        id: 'workspace-administrator-use-operational-5',
         text: 'As a workspace administrator with Use operational reports: ask the assistant for stock capital, leakage, margin and repeat-purchase insights',
         sites: { 'src/lib/ai/tools/pharmacy-reports.ts': 2 },
       },
       {
+        id: 'workspace-administrator-ask-assistant',
         text: "As a workspace administrator: ask the assistant to check a day's cash close for variances, refunds and voids",
         sites: { 'src/lib/ai/tools/pharmacy-reports.ts': 1 },
       },
       {
+        id: 'workspace-administrator-use-operational-6',
         text: 'As a workspace administrator with Use operational reports and the CRM module: generate, review and view basket and growth suggestions',
         sites: { 'src/server/routers/pharmacy-marketing.ts': 1 },
       },
       {
+        id: 'workspace-administrator-use-operational-7',
         text: 'As a workspace administrator with Use operational reports: receive the daily owner digest',
         sites: { 'src/lib/pharmacy/owner-digest.ts': 1 },
       },
       {
+        id: 'see-stock-cost-value',
         text: 'See stock cost and value at risk on the expiry board',
         sites: { 'src/server/routers/pharmacy-inventory.ts': 1 },
       },
       {
+        id: 'view-customer-khata-accounts',
         text: 'View customer khata accounts, statements and khata payments at their branches, even without Take payment',
         sites: { 'src/server/routers/pharmacy-sales.ts': 1 },
       },
       {
+        id: 'workspace-administrator-run-dayclose',
         text: 'As a workspace administrator: run the day-close cash anomaly check and read draft shift handover notes',
         sites: { 'src/server/routers/pharmacy-sales.ts': 1 },
       },
       {
+        id: 'view-supplier-returns-claims',
         text: 'View supplier returns, claims and supplier credits at their branches',
         sites: { 'src/server/routers/pharmacy-purchasing.ts': 2 },
       },
       {
+        id: 'order-receive-stock-issue',
         text: 'With Order and receive stock: issue debit notes, create and dispatch supplier returns, and record and allocate supplier credits',
         sites: { 'src/server/routers/pharmacy-purchasing.ts': 1 },
       },
@@ -628,42 +736,52 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     actions: ['reports:operational'],
     allows: [
       {
+        id: 'run-seasonal-calendar-demandspike',
         text: 'Run the seasonal calendar, demand-spike and staffing reports for every branch; as a workspace administrator with Use financial reports, also view growth, marketing, branch comparison, anomaly and expiry-advice reports and change data there: save and delete seasonal windows, propose expiry returns, refresh, acknowledge and snooze anomalies, acknowledge pack-authentication flags and set the daily digest',
         sites: { 'src/server/routers/pharmacy-reports.ts': 1 },
       },
       {
+        id: 'open-reports-centre-replenishment',
         text: 'Open the Reports centre, replenishment report, daily work pack and supplier list for every branch, and save their dashboard layout',
         sites: { 'src/server/routers/pharmacy-reports.ts': 1 },
       },
       {
+        id: 'see-stock-alert-lost',
         text: 'See stock alert, lost demand, reorder, expiry value, recall, quarantine, supplier claim, receiving and safety queue figures',
         sites: { 'src/lib/pharmacy/reports.ts': 16 },
       },
       {
+        id: 'ask-assistant-about-report',
         text: 'Ask the assistant about report figures and daily work packs for any branch',
         sites: { 'src/lib/ai/tools/pharmacy-reports.ts': 2 },
       },
       {
+        id: 'workspace-administrator-use-financial',
         text: 'As a workspace administrator with Use financial reports: view the accounts reports (cash-flow forecast, statements, stock valuation, margins, leakage)',
         sites: { 'src/server/routers/pharmacy-finance.ts': 2 },
       },
       {
+        id: 'workspace-administrator-use-financial-2',
         text: 'As a workspace administrator with Use financial reports: look up accounting journal entries',
         sites: { 'src/lib/pharmacy/accounts/journal-entry-lookup.ts': 1 },
       },
       {
+        id: 'workspace-administrator-use-financial-3',
         text: 'As a workspace administrator with Use financial reports: view the fiscal exceptions register',
         sites: { 'src/lib/pharmacy/accounts/fiscal-exceptions.reader.ts': 1 },
       },
       {
+        id: 'workspace-administrator-use-financial-4',
         text: 'As a workspace administrator with Use financial reports: ask the assistant for stock capital, leakage, margin and repeat-purchase insights',
         sites: { 'src/lib/ai/tools/pharmacy-reports.ts': 2 },
       },
       {
+        id: 'workspace-administrator-use-financial-5',
         text: 'As a workspace administrator with Use financial reports and the CRM module: generate, review and view basket and growth suggestions',
         sites: { 'src/server/routers/pharmacy-marketing.ts': 1 },
       },
       {
+        id: 'workspace-administrator-use-financial-6',
         text: 'As a workspace administrator with Use financial reports: receive the daily owner digest',
         sites: { 'src/lib/pharmacy/owner-digest.ts': 1 },
       },
@@ -676,42 +794,52 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     actions: ['pharmacy:safety'],
     allows: [
       {
+        id: 'view-controlled-medicines-register',
         text: "View the controlled medicines register and export inspection packs for their branches, and correct entries with another pharmacist's PIN; for the whole pharmacy, approve register incidents, place legal holds, extend record keeping and install the procedures library",
         sites: { 'src/server/routers/pharmacy-safety.ts': 1 },
       },
       {
+        id: 'see-which-pharmacists-can',
         text: 'See which pharmacists can witness controlled-medicine entries',
         sites: { 'src/server/routers/pharmacy-safety.ts': 1 },
       },
       {
+        id: 'view-official-price-notices',
         text: 'View official price notices and price alerts',
         sites: { 'src/server/routers/pharmacy-medicine.ts': 2 },
       },
       {
+        id: 'upload-official-price-notices',
         text: 'Upload official price notices and dismiss official price alerts',
         sites: { 'src/server/routers/pharmacy-medicine.ts': 2 },
       },
       {
+        id: 'manage-recalls-whole-pharmacy',
         text: 'Manage recalls for the whole pharmacy, see recall contact lists, block or unblock batches and quarantine stock at any branch',
         sites: { 'src/server/routers/pharmacy-inventory.ts': 1 },
       },
       {
+        id: 'open-substitution-workspace-review',
         text: 'Open the substitution workspace to review substitutions',
         sites: { 'src/server/routers/pharmacy-dispensing.ts': 1 },
       },
       {
+        id: 'review-mark-ready-submit',
         text: 'Review, mark ready, submit and export adverse-reaction, medication-error and product-quality reports for their branches',
         sites: { 'src/server/routers/pharmacy-reports.ts': 1 },
       },
       {
+        id: 'file-adversereaction-medicationerror-productquality',
         text: 'File adverse-reaction, medication-error and product-quality reports for their branches',
         sites: { 'src/server/routers/pharmacy-reports.ts': 1 },
       },
       {
+        id: 'order-receive-stock-see',
         text: 'With Order and receive stock, see who can witness a controlled delivery and see official price alerts while purchasing',
         sites: { 'src/server/routers/pharmacy-purchasing.ts': 3 },
       },
       {
+        id: 'order-receive-stock-reverse',
         text: "With Order and receive stock, reverse a delivery that included controlled medicines, with another pharmacist's PIN",
         sites: { 'src/lib/pharmacy/goods-receipt.ts': 1 },
       },
@@ -724,6 +852,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     actions: ['pharmacy:catalogue-edit'],
     allows: [
       {
+        id: 'only-workspace-administrator-add',
         text: 'Only as a workspace administrator: add new medicines as unsaleable drafts and propose catalogue changes for review',
         sites: { 'src/server/routers/pharmacy-medicine.ts': 1 },
       },
@@ -748,6 +877,7 @@ export const PHARMACY_ACTION_NON_GRANTING_SITES: Readonly<
     'src/lib/pharmacy/staff-home.ts': { count: 1, reason: 'home-page link' },
     'src/lib/pharmacy/landing.ts': { count: 2, reason: 'comment and landing page' },
     'src/lib/pharmacy/counter-capability.ts': { count: 1, reason: 'comment' },
+    'src/lib/pharmacy/procurement-access.ts': { count: 1, reason: 'comment' },
   },
   'pharmacy:orders': {
     'src/server/routers/pharmacy-purchasing.ts': { count: 1, reason: 'comment' },
@@ -774,8 +904,9 @@ export const PHARMACY_ACTION_NON_GRANTING_SITES: Readonly<
       reason: 'comments and the menu list; each page checks separately',
     },
     'src/server/routers/pharmacy-sales.ts': {
-      count: 2,
-      reason: 'a type annotation, and a filter that keeps dispensing out of khata access',
+      count: 3,
+      reason:
+        'a type annotation, and a filter that keeps dispensing out of khata access; the legacy dotted name in the same khata filter',
     },
     'src/server/routers/pharmacy-ordering.ts': { count: 1, reason: 'type annotation' },
     'src/lib/pharmacy/counter-messages.ts': { count: 2, reason: 'comment and refusal messages' },
@@ -803,17 +934,29 @@ export const PHARMACY_ACTION_NON_GRANTING_SITES: Readonly<
       count: 1,
       reason: 'a dispensing deny closes the whole counter; revokes, grants nothing',
     },
+    'src/app/(app)/dashboard/pharmacist-home.tsx': {
+      count: 2,
+      reason: 'home-screen choice; the data comes from checked procedures',
+    },
   },
   'pharmacy:prescriptions': {
     'src/server/routers/pharmacy-prescriptions.ts': { count: 1, reason: 'comment' },
     'src/server/routers/pharmacy-access.ts': { count: 2, reason: 'comment and the menu list' },
     'src/server/routers/pharmacy-dispensing.ts': { count: 1, reason: 'comment' },
     'src/server/routers/pharmacy-inventory.ts': { count: 1, reason: 'comment' },
+    'src/app/(app)/dashboard/pharmacist-home.tsx': {
+      count: 2,
+      reason: 'home-screen choice; the data comes from checked procedures',
+    },
   },
   'pharmacy:catalogue-review': {
     'src/lib/pharmacy/catalogue-approvals.ts': {
       count: 1,
       reason: "counts other reviewers to switch off the owner's solo-approval fallback",
+    },
+    'src/app/(app)/pharmacy/medicines/page.tsx': {
+      count: 1,
+      reason: 'page guard; the procedures behind the page check separately',
     },
   },
   'pharmacy:close': {
@@ -837,6 +980,20 @@ export const PHARMACY_ACTION_NON_GRANTING_SITES: Readonly<
     'src/lib/pharmacy/supplier-compliance-policy.ts': {
       count: 3,
       reason: 'a deny list and comments',
+    },
+    'src/app/(app)/pharmacy/reports/page.tsx': {
+      count: 1,
+      reason: 'page guard; the procedures behind the page check separately',
+    },
+  },
+  'pharmacy:procurement-approve': {
+    'src/app/(app)/pharmacy/purchasing/orders/page.tsx': {
+      count: 1,
+      reason: 'decides which buttons the page offers; the server checks',
+    },
+    'src/app/(app)/pharmacy/purchasing/suppliers/page.tsx': {
+      count: 1,
+      reason: 'decides which buttons the page offers; the server checks',
     },
   },
   'sop:manage': {
@@ -868,6 +1025,18 @@ export const PHARMACY_ACTION_NON_GRANTING_SITES: Readonly<
     'src/server/routers/pharmacy-access.ts': { count: 2, reason: 'comment and the menu list' },
     'src/server/routers/pharmacy-inventory.ts': { count: 7, reason: 'comments' },
     'src/lib/pharmacy/staff-home.ts': { count: 1, reason: 'home-page link' },
+    'src/app/(app)/pharmacy/inventory/labels/page.tsx': {
+      count: 1,
+      reason: 'page guard; the procedures behind the page check separately',
+    },
+    'src/app/(app)/pharmacy/inventory/page.tsx': {
+      count: 4,
+      reason: 'comments, which forms the page offers, and refusal wording; the server checks',
+    },
+    'src/app/(app)/pharmacy/inventory/transfers/page.tsx': {
+      count: 1,
+      reason: 'page guard; the procedures behind the page check separately',
+    },
   },
   'reports:financial': {
     'src/server/routers/pharmacy-reports.ts': {
@@ -884,6 +1053,31 @@ export const PHARMACY_ACTION_NON_GRANTING_SITES: Readonly<
     },
     'src/lib/pharmacy/advice-access.ts': { count: 2, reason: 'comment and whether to show a link' },
     'src/lib/pharmacy/reports.ts': { count: 1, reason: 'type declaration' },
+    'src/app/(app)/pharmacy/accounts/account-code-reference/page.tsx': {
+      count: 1,
+      reason: 'page guard; the procedures behind the page check separately',
+    },
+    'src/app/(app)/pharmacy/accounts/journal-evidence-export/page.tsx': {
+      count: 1,
+      reason: 'page guard; the procedures behind the page check separately',
+    },
+    'src/app/(app)/pharmacy/accounts/tax-profile-review/_lib/access.ts': {
+      count: 1,
+      reason: 'page guard; the procedures behind the page check separately',
+    },
+    'src/app/(app)/pharmacy/accounts/cheque-maturity/page.tsx': {
+      count: 1,
+      reason: 'page guard; the procedures behind the page check separately',
+    },
+    'src/app/(app)/pharmacy/inventory/expiry/page.tsx': { count: 1, reason: 'comment' },
+    'src/app/(app)/pharmacy/purchasing/returns/page.tsx': {
+      count: 2,
+      reason: 'comment and page guard; the procedures behind the page check separately',
+    },
+    'src/app/(app)/pharmacy/reports/supplier-credit-follow-up/page.tsx': {
+      count: 1,
+      reason: 'page guard; the procedures behind the page check separately',
+    },
   },
   'reports:operational': {
     'src/server/routers/pharmacy-reports.ts': {
@@ -901,6 +1095,30 @@ export const PHARMACY_ACTION_NON_GRANTING_SITES: Readonly<
     },
     'src/lib/pharmacy/advice-access.ts': { count: 2, reason: 'comment and whether to show a link' },
     'src/lib/pharmacy/reports.ts': { count: 1, reason: 'type declaration' },
+    'src/app/(app)/dashboard/pharmacist-home.tsx': {
+      count: 3,
+      reason: 'home-screen choice; the data comes from checked procedures',
+    },
+    'src/app/(app)/dashboard/page.tsx': {
+      count: 2,
+      reason: 'home-screen choice; the data comes from checked procedures',
+    },
+    'src/app/(app)/pharmacy/reports/page.tsx': {
+      count: 1,
+      reason: 'page guard; the procedures behind the page check separately',
+    },
+    'src/app/(app)/pharmacy/accounts/account-code-reference/page.tsx': {
+      count: 1,
+      reason: 'page guard; the procedures behind the page check separately',
+    },
+    'src/app/(app)/pharmacy/accounts/journal-evidence-export/page.tsx': {
+      count: 1,
+      reason: 'page guard; the procedures behind the page check separately',
+    },
+    'src/app/(app)/pharmacy/accounts/tax-profile-review/_lib/access.ts': {
+      count: 1,
+      reason: 'page guard; the procedures behind the page check separately',
+    },
   },
   'pharmacy:safety': {
     'src/server/routers/pharmacy-safety.ts': { count: 1, reason: 'a flag returned to the screen' },

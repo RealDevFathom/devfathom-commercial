@@ -10,7 +10,7 @@ vi.mock('@/lib/trpc', () => ({
   trpc: { organizationAdmin: { memberAccess: { useQuery: state.query } } },
 }));
 import {
-  MEMBER_ACCESS_ADMIN_NOTE,
+  MEMBER_ACCESS_ADMIN_NOTES,
   MEMBER_ACCESS_READ_ONLY_NOTE,
   MemberAccessPanel,
 } from './member-access-panel';
@@ -22,7 +22,7 @@ const member = {
   roleName: 'Cashier',
   customRole: false,
   exceptionCount: 0,
-  workspaceAdmin: false,
+  administrator: null as 'full' | 'access-only' | 'role-only' | null,
 };
 
 function loaded(allowed: string[], overrides: Partial<typeof member> = {}) {
@@ -132,14 +132,20 @@ describe('what this person can do', () => {
     ).toBeVisible();
   });
 
-  it('tells the owner an administrator can do more than the ticks show', () => {
-    loaded([], { workspaceAdmin: true });
-    const { unmount } = render(<MemberAccessPanel userId="u_1" />);
-    expect(screen.getByText(MEMBER_ACCESS_ADMIN_NOTE)).toBeVisible();
-    unmount();
+  it.each(['full', 'access-only', 'role-only'] as const)(
+    'tells the owner what a %s administrator can do beyond the ticks',
+    (administrator) => {
+      loaded([], { administrator });
+      render(<MemberAccessPanel userId="u_1" />);
+      expect(screen.getByText(MEMBER_ACCESS_ADMIN_NOTES[administrator])).toBeVisible();
+    }
+  );
+
+  it('adds no administrator note for anyone else', () => {
     loaded([]);
     render(<MemberAccessPanel userId="u_1" />);
-    expect(screen.queryByText(MEMBER_ACCESS_ADMIN_NOTE)).toBeNull();
+    for (const note of Object.values(MEMBER_ACCESS_ADMIN_NOTES))
+      expect(screen.queryByText(note)).toBeNull();
   });
 
   it('shows loading, then an error that says nothing changed and can be retried', () => {
