@@ -320,6 +320,61 @@ describe('draft lifecycle', () => {
     });
   });
 
+  // DEV-949: the same create key replays only the same normalised draft.
+  it('replays a create with the same key and the same normalised details', async () => {
+    const { db, raw } = fakeDb();
+    const saved = voucher({ version: 1 });
+    raw.pharmacyJournalVoucher.findFirst.mockResolvedValueOnce(saved as never);
+    await expect(
+      createJournalVoucherDraft(
+        db,
+        scope,
+        { ...draftInput, reference: ' JV-0001 ', lines: [credit, debit] },
+        NOW
+      )
+    ).resolves.toBe(saved);
+    expect(raw.pharmacyJournalVoucher.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['reference', { reference: 'JV-0002' }],
+    ['currency', { currency: 'USD' as const }],
+    ['occurredAt', { occurredAt: '2026-11-11T09:00:00.000Z' }],
+    ['reason', { reason: 'December electricity bill' }],
+    ['evidenceReference', { evidenceReference: 'K-Electric bill 2026-12' }],
+    [
+      'amount',
+      {
+        lines: [
+          { ...debit, amountMinor: 60_000 },
+          { ...credit, amountMinor: 60_000 },
+        ],
+      },
+    ],
+    ['memo', { lines: [{ ...debit, memo: 'Meter 2' }, credit] }],
+  ])('refuses a create with the same key and a different %s', async (_field, overrides) => {
+    const { db, raw } = fakeDb();
+    raw.pharmacyJournalVoucher.findFirst.mockResolvedValueOnce(voucher({ version: 1 }) as never);
+    await expect(
+      createJournalVoucherDraft(db, scope, { ...draftInput, ...overrides }, NOW)
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+    expect(raw.pharmacyJournalVoucher.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a create key another actor or branch already used', async () => {
+    for (const saved of [
+      voucher({ version: 1, createdByUserId: 'clerk_1' }),
+      voucher({ version: 1, branchId: 'branch_2' }),
+    ]) {
+      const { db, raw } = fakeDb();
+      raw.pharmacyJournalVoucher.findFirst.mockResolvedValueOnce(saved as never);
+      await expect(createJournalVoucherDraft(db, scope, draftInput, NOW)).rejects.toMatchObject({
+        reason: 'IDEMPOTENCY_CONFLICT',
+      });
+      expect(raw.pharmacyJournalVoucher.create).not.toHaveBeenCalled();
+    }
+  });
+
   it('refuses to create a draft with a disallowed account before writing', async () => {
     const { db, raw } = fakeDb();
     await expect(
