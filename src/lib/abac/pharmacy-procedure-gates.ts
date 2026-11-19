@@ -56,6 +56,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'adminProcedure + authorizeGeneralJournal + actorMayRefund -> pharmacy:manage + own PIN',
     lines: ['run-branches/reject-undo-credit-set-offs'],
   },
+  'pharmacyApInvoices.reversalSearch': {
+    gate: 'adminProcedure (admin:access) + authorizeGeneralJournal (owner-level ADMIN role, Pharmacy Finance module, finance:read, an active branch)',
+    none: 'workspace administrators with finance access only',
+  },
   'pharmacyApInvoices.reverseInvoice': {
     gate: 'adminProcedure + authorizeGeneralJournal + authorizeReversal -> pharmacy:manage + own PIN (own entry refused while another approver exists)',
     lines: ['run-branches/workspace-administrator-finance-access'],

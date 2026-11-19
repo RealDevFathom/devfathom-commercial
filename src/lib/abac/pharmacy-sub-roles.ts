@@ -577,10 +577,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       {
         id: 'workspace-administrator-finance-access',
         text: 'As a workspace administrator with finance access: approve supplier credit set-offs and reverse supplier invoices and payments with their PIN',
-        sites: {
-          'src/server/routers/pharmacy-ap-invoices.ts': 1,
-          'src/lib/pharmacy/accounts/ap-reversal-approvers.ts': 1,
-        },
+        sites: { 'src/server/routers/pharmacy-ap-invoices.ts': 1 },
       },
       {
         id: 'see-purchase-price-paid',
@@ -1130,6 +1127,14 @@ export const PHARMACY_ACTION_NON_GRANTING_SITES: Readonly<
 > = {
   'pharmacy:counter': {
     'src/server/routers/pharmacy-access.ts': { count: 3, reason: 'comment and the menu list' },
+    'src/lib/pharmacy/accounts/ap-reversal-approvers.ts': {
+      count: 1,
+      reason: 'comment: supplier reversals never apply the counter gate',
+    },
+    'src/lib/pharmacy/card-terminal/review-approvers.ts': {
+      count: 1,
+      reason: 'comment on the branch-only gate other controls use',
+    },
     'src/server/routers/pharmacy-sales.ts': {
       count: 9,
       reason:
@@ -1234,6 +1239,10 @@ export const PHARMACY_ACTION_NON_GRANTING_SITES: Readonly<
   },
   'pharmacy:manage': {
     'src/server/routers/pharmacy-supplier-compliance.ts': { count: 1, reason: 'comment' },
+    'src/lib/pharmacy/accounts/ap-reversal-approvers.ts': {
+      count: 2,
+      reason: 'comments; the approver count uses the shared card-review rule',
+    },
     'src/server/routers/pharmacy-access.ts': {
       count: 2,
       reason: 'menu list; each page checks separately',
