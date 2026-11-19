@@ -439,6 +439,9 @@ beforeAll(async () => {
     for (let sequence = 1; sequence <= 2; sequence += 1) {
       const fill = await tx.prescriptionFill.create({
         data: {
+          // DEV-962: the first fill was dispensed at north, the second at south; each
+          // branch records the reminder of its own fill below.
+          branchId: sequence === 1 ? X.north : X.south,
           prescriptionLineId: otcPrescription.lines[0]!.id,
           fillSequence: sequence,
           quantityCanonicalUnits: 20,

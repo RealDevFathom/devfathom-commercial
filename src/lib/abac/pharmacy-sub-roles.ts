@@ -504,6 +504,11 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         },
       },
       {
+        id: 'set-when-business-day',
+        text: "Set when the business day ends at their branches, from midnight to 6:00 AM. A change starts with tomorrow's business day, so today and earlier days, their closes and their reports never move",
+        sites: {},
+      },
+      {
         id: 'reopen-closed-day-branches',
         text: 'Reopen a closed day at their branches with a reason and their authenticator code (or PIN, if the owner turned the authenticator off)',
         sites: { 'src/server/routers/pharmacy-sales.ts': 2 },

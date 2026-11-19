@@ -7,7 +7,8 @@
  * an owner-configurable assumption, never a fact baked into the code.
  */
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { workspaceDateRange, workspaceTimezone } from '@/lib/timezone';
+import { workspaceTimezone } from '@/lib/timezone';
+import { pharmacyBusinessDayRange, type PharmacyDayEnd } from './business-day';
 
 export type StaffingConfig = {
   /** Assumed receipts one staff member can serve in an hour. Owner-configurable estimate. */
@@ -136,13 +137,15 @@ export async function readStaffingSuggestions(
     from: string;
     to: string;
     timeZone: string | null | undefined;
+    /** DEV-958A: the branch's day-end hours by day (`PharmacyDayEnd`; midnight when absent). */
+    dayEnd?: PharmacyDayEnd;
     config: StaffingConfig;
   }
 ) {
   const days = windowDays(input.from, input.to);
   if (!validConfig(input.config))
     throw new StaffingSuggestionError('Invalid staffing configuration.');
-  const window = workspaceDateRange(input.from, input.to, input.timeZone);
+  const window = pharmacyBusinessDayRange(input.from, input.to, input);
   const sales = await db.pharmacySale.findMany({
     where: {
       organizationId,

@@ -2,7 +2,7 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import { withPlatformDb, withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
-import { workspaceToday } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import { computeChurnScore, CHURN_SCORING_POLICY } from './churn-score';
 
 const DAY = 86_400_000;
@@ -125,7 +125,7 @@ export async function processDueChurnScoring(now = new Date(), limit = 25) {
     return organizations
       .map((organization) => ({
         organizationId: organization.id,
-        businessDate: workspaceToday(organization.timezone, now),
+        businessDate: pharmacyCalendarDay(organization.timezone, now),
       }))
       .filter((item) => !done.has(`${item.organizationId}:${item.businessDate}`))
       .slice(0, Math.max(1, Math.min(100, Math.floor(limit))));

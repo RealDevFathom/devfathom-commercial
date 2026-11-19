@@ -17,7 +17,8 @@ import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
 import { financeAccountLabel } from '@/lib/finance/account-labels';
-import { formatWorkspaceDateTime, workspaceDateRange, workspaceZoneLabel } from '@/lib/timezone';
+import { formatWorkspaceDateTime, workspaceZoneLabel } from '@/lib/timezone';
+import { pharmacyCalendarDayRange } from '@/lib/pharmacy/business-day';
 
 export const metadata: Metadata = { title: 'Trial-balance control · Pharmacy accounts' };
 
@@ -316,12 +317,12 @@ export default async function TrialBalanceControlPage({
         const caller = pharmacyFinanceRouter.createCaller(ctx);
         // `to` is exclusive: the start of that day on the organization's clock.
         const zoneName = timeZone;
-        const requestedFrom = workspaceDateRange(
+        const requestedFrom = pharmacyCalendarDayRange(
           parsed.controls.from,
           parsed.controls.from,
           zoneName
         ).from;
-        const requestedTo = workspaceDateRange(
+        const requestedTo = pharmacyCalendarDayRange(
           parsed.controls.to,
           parsed.controls.to,
           zoneName

@@ -20,7 +20,12 @@ import { formatMinor, type CounterReceiptLocale } from '@/lib/pharmacy/counter-r
 import { printCounterBrowserZReport } from '@/lib/pharmacy/counter-browser-print';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { amountInputError, amountInputToMinor } from '@/lib/money-input';
-import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
+import {
+  pharmacyBusinessDay,
+  pharmacyDayEndHourOn,
+  pharmacyDayEndLabel,
+} from '@/lib/pharmacy/business-day';
+import { workspaceTimezone } from '@/lib/timezone';
 import {
   clearDayCloseDraft,
   dayCloseDraftKey,
@@ -209,12 +214,17 @@ function DayCloseBranches({
     initial?.date && DAY.test(initial.date) ? initial.date : null
   );
   const timeZone = branches.data?.timezone;
-  // Until the operator picks a day: today in the workspace's zone, settled once
-  // the zone is known, so a page left open past midnight keeps its day.
-  const today = useMemo(() => (timeZone ? workspaceToday(timeZone) : ''), [timeZone]);
-  const date = picked ?? today;
   const linked = branches.data?.branches.find((b) => b.id === initial?.branch)?.id;
   const branchId = selected || linked || branches.data?.branches[0]?.id || '';
+  const dayEnd = branches.data?.branches.find((b) => b.id === branchId)?.businessDayEndsAtHistory;
+  // Until the operator picks a day: today's business day on the branch's clock (the
+  // workspace's zone and, DEV-958A, the branch's "day ends at" hour), settled once the
+  // zone is known, so a page left open past the day's end keeps its day.
+  const today = useMemo(
+    () => (timeZone ? pharmacyBusinessDay({ timeZone, dayEnd }) : ''),
+    [timeZone, dayEnd]
+  );
+  const date = picked ?? today;
   const currency = branches.data?.currency;
   if (branches.error?.data?.code === 'FORBIDDEN') {
     return (
@@ -257,6 +267,13 @@ function DayCloseBranches({
             />
           </label>
         </div>
+        {date && pharmacyDayEndHourOn({ dayEnd }, date) ? (
+          <p className="mt-3 text-sm text-text-muted">
+            This branch&apos;s business day starts at{' '}
+            {pharmacyDayEndLabel(pharmacyDayEndHourOn({ dayEnd }, date))}: sales after midnight and
+            before then count on the day before.
+          </p>
+        ) : null}
         {branches.isLoading && <p role="status">Loading pharmacy branches…</p>}
         {branches.error && (
           <p role="alert">
@@ -348,8 +365,8 @@ function DayCloseForm({
     );
   const data = preview.data;
   // Only today's business day can be reopened. Read from the clock on every render, not
-  // memoized, so a page left open past midnight never offers yesterday's reopen.
-  const isToday = date === workspaceToday(data.timezone);
+  // memoized, so a page left open past the day's end never offers yesterday's reopen.
+  const isToday = date === pharmacyBusinessDay({ timeZone: data.timezone, dayEnd: data.dayEnd });
   const reopenPinValid = /^\d{4,8}$/.test(reopenPin);
   // A close cut after a reopen records the variance note, not a re-cut reason.
   const followsReopen = close.data ? Boolean(data.close?.reopen) : Boolean(data.closeFollowsReopen);

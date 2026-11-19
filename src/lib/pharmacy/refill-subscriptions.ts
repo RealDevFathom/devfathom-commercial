@@ -12,7 +12,6 @@ import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
 
-import { counterBranchAssignmentDenial } from './counter-capability';
 import { activateBranchScope, reservationCandidates } from './customer-ordering';
 import { planAllocation, PharmacyInventoryError } from './inventory';
 import { prescriptionIsCurrent } from './prescription-calendar';
@@ -26,6 +25,7 @@ import {
 } from './refill-subscription-rules';
 
 import { attachPrescriptionReference } from './rx-prescription-reference';
+import { rxReviewSignerDenial, rxReviewSignerRowDenial } from './rx-review-self-sign';
 import { assertRxSaleAllowed } from './rx-sale-gate';
 import {
   isPharmacistCheckOffMarker,
@@ -607,22 +607,17 @@ export async function approveRefillCycle(
   if (!awaiting && !reclassified && !replacing) {
     throw new RefillSubscriptionError('INVALID_STATE');
   }
-  const approver = (await db.user.findFirst({
-    where: {
-      id: approval.approvedByUserId,
-      organizationId: scope.organizationId,
-      status: 'ACTIVE',
-    },
-  })) as ActiveUser | null;
-  if (!approver || !(await can(approver, REFILL_CYCLE_APPROVAL_CAPABILITY, undefined, { db }))) {
-    throw new RefillCycleApprovalDenied();
-  }
-  // DEV-941: the PIN must belong to a pharmacist who may act at the cycle's branch: an
-  // active assignment to it, or an organisation admin (the counter's branch rule, as a
-  // prescription check is signed). Read live, inside the approval's transaction.
-  if (await counterBranchAssignmentDenial(db, approver, scope.organizationId, cycle.branchId)) {
-    throw new RefillCycleApprovalDenied('BRANCH');
-  }
+  // DEV-941 / DEV-962: the PIN must belong to someone who may sign a prescription check at
+  // the cycle's branch: an ACTIVE member holding the dispensing permission with an active
+  // assignment to it, or an organisation admin. The shared rule (`rxReviewSignerDenial`),
+  // read live inside the approval's transaction, so the two never drift.
+  const approverDenial = await rxReviewSignerDenial(db, {
+    organizationId: scope.organizationId,
+    branchId: cycle.branchId,
+    userId: approval.approvedByUserId,
+  });
+  if (approverDenial === 'BRANCH') throw new RefillCycleApprovalDenied('BRANCH');
+  if (approverDenial) throw new RefillCycleApprovalDenied();
   const credential = await db.restaurantOperatorCredential.findFirst({
     where: {
       id: approval.credentialId,
@@ -1077,11 +1072,9 @@ export async function listRefillCyclePharmacists(db: ScopedDb, scope: LedgerScop
   });
   const eligible: Array<{ id: string; name: string; self: boolean }> = [];
   for (const profile of profiles) {
-    const user = profile.user as ActiveUser | null;
-    if (!user || user.organizationId !== scope.organizationId || user.status !== 'ACTIVE') continue;
-    if (!(await can(user, REFILL_CYCLE_APPROVAL_CAPABILITY, undefined, { db, now }))) continue;
-    if (await counterBranchAssignmentDenial(db, user, scope.organizationId, scope.branchId))
-      continue;
+    const user = profile.user;
+    // The approval's own rule (`rxReviewSignerDenial`), on the row already read.
+    if (!user || (await rxReviewSignerRowDenial(db, user, scope, now))) continue;
     eligible.push({ id: profile.id, name: profile.displayName, self: user.id === scope.actorId });
   }
   const others = eligible.filter((profile) => !profile.self);

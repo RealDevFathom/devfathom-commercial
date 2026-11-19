@@ -17,12 +17,8 @@ import {
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyApInvoicesRouter } from '@/server/routers/pharmacy-ap-invoices';
 import { createTRPCContext } from '@/server/trpc';
-import {
-  formatWorkspaceDateTime,
-  workspaceMinuteInput,
-  workspaceToday,
-  workspaceZoneLabel,
-} from '@/lib/timezone';
+import { formatWorkspaceDateTime, workspaceMinuteInput, workspaceZoneLabel } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import { parseMajorToMinor } from '@/lib/pharmacy/khata-payment-slip';
 import { PayApInvoiceForm, RecordApInvoiceForm } from './ap-entry-forms';
 import { ExportCsv } from './export-csv';
@@ -279,7 +275,7 @@ function EntryForms({
         <RecordApInvoiceForm
           branchId={branchId}
           initialKey={`ap-invoice:${randomUUID()}`}
-          today={workspaceToday(timeZone, now)}
+          today={pharmacyCalendarDay(timeZone, now)}
         />
       </SectionCard>
       <SectionCard title="Record a payment" titleLevel={2}>

@@ -1341,7 +1341,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyPrescriptions.captureRefillReminder': {
-    gate: "capabilityProcedure('pharmacy:dispense') + branch assignment (counterBranchAssignmentDenial)",
+    gate: "capabilityProcedure('pharmacy:dispense') + branch assignment (counterBranchAssignmentDenial) + the fill's dispensing branch (DEV-962; ADMIN excepted)",
     lines: ['dispense-prescriptions/record-fills-noncontrolled-prescriptions'],
   },
   'pharmacyPrescriptions.counterPatientPanel': {
@@ -1394,7 +1394,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyPrescriptions.fill': {
-    gate: "capabilityProcedure('pharmacy:dispense'); non-controlled lines only",
+    gate: "capabilityProcedure('pharmacy:dispense'); non-controlled lines only; + branch assignment (counterBranchAssignmentDenial) when a dispensing branchId is sent (DEV-962)",
     lines: ['dispense-prescriptions/record-fills-noncontrolled-prescriptions'],
   },
   'pharmacyPrescriptions.readPatient': {
@@ -2180,6 +2180,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
       'run-branches/close-day-branches-unless',
     ],
   },
+  'pharmacySales.dayEndHour': {
+    gate: 'protectedProcedure + requireDrawerManagerAccess -> pharmacy:manage (counter family not DENIED), assigned branch or ADMIN',
+    lines: ['run-branches/set-when-business-day'],
+  },
   'pharmacySales.dayReopenAccess': {
     gate: 'protectedProcedure; returns {authorized} from requireDrawerManagerAccess without throwing',
     none: 'any signed-in member (only reports whether they may reopen the day)',
@@ -2432,6 +2436,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
   'pharmacySales.saveBillDiscountSetting': {
     gate: "protectedProcedure + owner (readMaxDiscountSettings canChange) + the owner's fresh approval code; support sessions refused; audited",
     none: 'owner only, with a fresh approval code',
+  },
+  'pharmacySales.saveDayEndHour': {
+    gate: 'auditedProtectedProcedure + requireDrawerManagerAccess -> pharmacy:manage (counter family not DENIED), assigned branch or ADMIN; revision-checked and audited; no PIN',
+    lines: ['run-branches/set-when-business-day'],
   },
   'pharmacySales.saveDiscountMaximum': {
     gate: "protectedProcedure + isOrganizationOwner + owner's approval code; support sessions refused",
