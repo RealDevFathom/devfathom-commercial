@@ -302,11 +302,12 @@ function PrepareThisComputer({
   return (
     <div className="space-y-4">
       <p className="max-w-prose text-sm text-text-muted">
-        Reserves a block of receipt numbers for this counter and sets aside, for each listed
+        Reserves a block of receipt numbers for this counter and earmarks, for each listed
         over-the-counter batch, the units this counter may sell while the connection is down
-        (suggested: half the units on hand, at most 20). Other counters and online sales cannot use
-        units set aside here. Prescription-only, controlled, restricted, high-alert and look-alike
-        medicines are never listed.
+        (suggested: half the units on hand, at most 20). Other counters cannot be given the same
+        units. Until offline selling is switched on, online sales can still sell them.
+        Prescription-only, controlled, restricted, high-alert and look-alike medicines are never
+        listed. Revoking the counter hands its earmarked units back.
       </p>
       {plan.isLoading ? (
         <p className="text-sm text-text-muted" role="status">

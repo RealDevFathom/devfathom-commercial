@@ -26,12 +26,17 @@ const ids = {
   ownerA: `user_dev957_own_a_${suffix}`,
   ownerB: `user_dev957_own_b_${suffix}`,
   cashierA: `user_dev957_cash_a_${suffix}`,
+  managerRole: `role_dev957_mgr_${suffix}`,
+  managerA: `user_dev957_mgr_a_${suffix}`,
+  branchA2: `br_dev957_a2_${suffix}`,
 };
 
 type Person = { id: string; role: 'ADMIN' | 'EMPLOYEE'; org: string };
 const ownerA: Person = { id: ids.ownerA, role: 'ADMIN', org: ids.orgA };
 const ownerB: Person = { id: ids.ownerB, role: 'ADMIN', org: ids.orgB };
 const cashierA: Person = { id: ids.cashierA, role: 'EMPLOYEE', org: ids.orgA };
+/** Not an organization ADMIN, but granted admin:access by role; assigned to branch A2 only. */
+const managerA: Person = { id: ids.managerA, role: 'EMPLOYEE', org: ids.orgA };
 
 let withTenantDb: typeof import('@/lib/tenancy/scoped-db').withTenantDb;
 let withPlatformDb: typeof import('@/lib/tenancy/scoped-db').withPlatformDb;
@@ -255,6 +260,30 @@ beforeAll(async () => {
       },
     });
     await tx.pharmacyBranchAssignment.create({ data: { userId: ids.cashierA, branchId: ids.branchA } });
+    await tx.pharmacyBranch.create({
+      data: { id: ids.branchA2, code: 'SECOND', name: 'Second', ...address },
+    });
+    await tx.organizationRole.create({
+      data: {
+        id: ids.managerRole,
+        key: `branch-manager-${suffix}`,
+        name: 'Branch manager',
+        permissions: { create: [{ capability: 'admin:access', effect: 'ALLOW' as const }] },
+      },
+    });
+    await tx.user.create({
+      data: {
+        id: ids.managerA,
+        name: ids.managerA,
+        email: `${ids.managerA}@example.test`,
+        department: 'PHARMACY',
+        title: 'Manager',
+        role: 'EMPLOYEE',
+        status: 'ACTIVE',
+        organizationRoleId: ids.managerRole,
+      },
+    });
+    await tx.pharmacyBranchAssignment.create({ data: { userId: ids.managerA, branchId: ids.branchA2 } });
     const location = await tx.pharmacyStockLocation.create({
       data: { branchId: ids.branchA, code: `FRONT-${suffix}`, name: 'Front shelf', kind: 'RACK_BIN' },
     });
@@ -313,7 +342,7 @@ describeIfDatabase('DEV-957 counter enrolment procedures (runtime role, real ABA
     const revoked = await act(ownerA, (api) =>
       api.revoke({ branchId: ids.branchA, deviceId: enrolled.device.id })
     );
-    expect(revoked).toEqual({ deviceId: enrolled.device.id, status: 'REVOKED' });
+    expect(revoked).toEqual({ deviceId: enrolled.device.id, status: 'REVOKED', quotasReleased: 0 });
     expect(
       await refusal(
         act(ownerA, (api) => api.rotate({ branchId: ids.branchA, deviceId: enrolled.device.id }))
@@ -374,6 +403,77 @@ describeIfDatabase('DEV-957 counter enrolment procedures (runtime role, real ABA
     );
     expect(device?.status).toBe('ACTIVE');
     expect(device?.deviceSecretHash).toBeDefined();
+  });
+
+  it('refuses a non-ADMIN with admin:access at a branch they are not assigned to (branch_forbidden)', async () => {
+    const attempts: Array<(api: OfflineCaller) => Promise<unknown>> = [
+      (api) => api.enroll({ branchId: ids.branchA, name: 'Unassigned manager' }),
+      (api) => api.counters({ branchId: ids.branchA }),
+    ];
+    for (const attempt of attempts)
+      expect(await refusal(act(managerA, attempt))).toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'branch_forbidden',
+      });
+    const atOwnBranch = await act(managerA, (api) =>
+      api.enroll({ branchId: ids.branchA2, name: 'Assigned manager counter' })
+    );
+    expect(atOwnBranch.device.branchId).toBe(ids.branchA2);
+    const unassigned = await withTenantDb(ids.orgA, (tx) =>
+      tx.pharmacyRegisteredDevice.findMany({ where: { name: 'Unassigned manager' } })
+    );
+    expect(unassigned).toEqual([]);
+  });
+
+  it('releases every open quota of a revoked counter, audited, so the units can be granted again once', async () => {
+    const { grantDeviceLotQuota } = await import('@/lib/pharmacy/offline-quotas');
+    const lot = await stock('release', {}, { units: 12 });
+    const first = await act(ownerA, (api) =>
+      api.enroll({ branchId: ids.branchA, name: 'Releasing counter' })
+    );
+    const second = await act(ownerA, (api) =>
+      api.enroll({ branchId: ids.branchA, name: 'Receiving counter' })
+    );
+    const scope = { organizationId: ids.orgA, branchId: ids.branchA, actorId: ids.ownerA };
+    const bucket = { inventoryLotId: lot.lotId, stockLocationId: locationId };
+    const grant = (deviceId: string, units: number) =>
+      withTenantDb(ids.orgA, (tx) => grantDeviceLotQuota(tx, scope, { ...bucket, deviceId, units }));
+    await grant(first.device.id, 10);
+    // 12 on hand, 10 held: the second counter cannot take more than 2.
+    await expect(grant(second.device.id, 3)).rejects.toMatchObject({
+      reason: 'QUOTA_EXCEEDS_ON_HAND',
+    });
+
+    const revoked = await act(ownerA, (api) =>
+      api.revoke({ branchId: ids.branchA, deviceId: first.device.id })
+    );
+    expect(revoked).toMatchObject({ status: 'REVOKED', quotasReleased: 1 });
+    const rows = await withTenantDb(ids.orgA, (tx) =>
+      tx.pharmacyDeviceLotQuota.findMany({ where: { deviceId: first.device.id } })
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.releasedAt).toBeInstanceOf(Date);
+    const audit = await withTenantDb(ids.orgA, (tx) =>
+      tx.auditLog.findFirst({
+        where: { action: 'pharmacyOffline.releaseOfflineQuotas', targetId: first.device.id },
+      })
+    );
+    expect(audit?.actorId).toBe(ids.ownerA);
+    expect(audit?.metadata).toMatchObject({ quotasReleased: 1, unitsReleased: 10 });
+
+    // The 10 released units are free again, exactly once: 12 can be granted, 13 cannot.
+    await expect(grant(second.device.id, 13)).rejects.toMatchObject({
+      reason: 'QUOTA_EXCEEDS_ON_HAND',
+    });
+    await grant(second.device.id, 12);
+    await expect(grant(second.device.id, 1)).rejects.toMatchObject({
+      reason: 'QUOTA_EXCEEDS_ON_HAND',
+    });
+    // A second revoke finds nothing open and releases nothing twice.
+    const again = await act(ownerA, (api) =>
+      api.revoke({ branchId: ids.branchA, deviceId: first.device.id })
+    );
+    expect(again.quotasReleased).toBe(0);
   });
 
   it('plans only safe over-the-counter stock, at half on hand capped at 20, net of other counters', async () => {

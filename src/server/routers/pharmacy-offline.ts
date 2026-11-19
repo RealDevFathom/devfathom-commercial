@@ -33,6 +33,7 @@ import {
   grantDeviceLotQuota,
   consumeDeviceLotQuota,
   openDeviceLotQuota,
+  releaseDeviceLotQuota,
 } from '@/lib/pharmacy/offline-quotas';
 import {
   recordOfflineCommand,
@@ -263,10 +264,51 @@ export const pharmacyOfflineRouter = router({
         actorId: ctx.session.user.id,
       };
       await managedBranch(db, ctx.session.user, scope.organizationId, scope.branchId);
-      const device = await revokePharmacyCounter(db, scope, input.deviceId, new Date()).catch(
+      const now = new Date();
+      const device = await revokePharmacyCounter(db, scope, input.deviceId, now).catch(
         deviceRefusal
       );
-      return { deviceId: device.id, status: device.status };
+      // DEV-957: a revoked counter can never sell what it was earmarked, so its
+      // open quotas go back to the branch in the same transaction. The rows stay
+      // (release is final and audited), so nothing is counted twice.
+      const open = await db.pharmacyDeviceLotQuota.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          deviceId: device.id,
+          releasedAt: null,
+        },
+        select: { id: true, quotaUnits: true, consumedUnits: true },
+        orderBy: { id: 'asc' },
+      });
+      for (const quota of open) await releaseDeviceLotQuota(db, scope, quota.id, now);
+      if (open.length) {
+        await db.auditLog.create({
+          data: {
+            organizationId: scope.organizationId,
+            actorId: scope.actorId,
+            actorName: ctx.session.user.name ?? null,
+            actorEmail: ctx.session.user.email ?? null,
+            actorRole: ctx.session.user.role ?? null,
+            source: 'TRPC',
+            category: 'PHARMACY',
+            operation: 'UPDATE',
+            action: 'pharmacyOffline.releaseOfflineQuotas',
+            targetType: 'PharmacyRegisteredDevice',
+            targetId: device.id,
+            metadata: {
+              branchId: scope.branchId,
+              deviceId: device.id,
+              quotasReleased: open.length,
+              unitsReleased: open.reduce(
+                (total, quota) => total + quota.quotaUnits - quota.consumedUnits,
+                0
+              ),
+            },
+          },
+        });
+      }
+      return { deviceId: device.id, status: device.status, quotasReleased: open.length };
     })
   ),
 });
