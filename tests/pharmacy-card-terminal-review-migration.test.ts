@@ -34,7 +34,7 @@ describe('DEV-743 card-terminal review resolution migration contract', () => {
     const migrations = readdirSync('prisma/migrations')
       .filter((entry) => /^\d{14}_/.test(entry))
       .sort();
-    // DEV-950: later migrations follow it (20261118124300), so it is ordered after the terminal
+    // DEV-950: later migrations follow it (20261118124600), so it is ordered after the terminal
     // migrations, as the counter migration's own contract checks, rather than being the newest.
     expect(migrations.indexOf(NAME)).toBeGreaterThan(migrations.indexOf(COUNTER));
     expect(migrations.indexOf(COUNTER)).toBeGreaterThan(migrations.indexOf(ATTEMPTS));

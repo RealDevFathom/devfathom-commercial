@@ -29,7 +29,7 @@ import { counterBranchAssignmentDenial } from './counter-capability';
  *   - the review is not signed yet.
  * The audit entry (who, when, which sale and line, marked self-approved) is written first, in the
  * same transaction, and the signature names it. The database admits a requester's signature only
- * with that entry (migration 20261118124300), so the entry cannot be skipped.
+ * with that entry (migration 20261118124600), so the entry cannot be skipped.
  */
 
 export const RX_SELF_SIGN_AUDIT_ACTION = 'pharmacyDispensing.selfSignReview';
