@@ -13,6 +13,8 @@ import { regulatoryProfileInForceWhere, regulatoryStartInstant } from './regulat
 
 /** DEV-863: an allocation's share of the line's prepaid tier discount (0 when none). */
 const PREPAID_ALLOCATION_TIER_DISCOUNT = Prisma.sql`COALESCE((l."tierAllocationDiscounts" ->> a."id")::int, 0)`;
+/** DEV-956: an allocation's share of the line's whole-bill discount (0 when none). */
+const BILL_ALLOCATION_DISCOUNT = Prisma.sql`COALESCE((l."billAllocationDiscounts" ->> a."id")::int, 0)`;
 
 export const MAX_PHARMACY_REPORT_DAYS = 90;
 export const MAX_PHARMACY_REPORT_BRANCHES = 100;
@@ -370,7 +372,7 @@ export async function readPharmacyOwnerCommandCentre(
   // DEV-863: a prepaid tier discount is kept per allocation in the line's own snapshot, since
   // allocation rows are append-only; subtract it so the filtered total matches the charged bill.
   const salesQuery = lotScoped
-    ? Prisma.sql`(SELECT CASE WHEN BOOL_OR(a."grossMinor" IS NULL OR a."discountMinor" IS NULL) THEN NULL ELSE COALESCE(SUM(a."grossMinor" - a."discountMinor" - ${PREPAID_ALLOCATION_TIER_DISCOUNT}),0) END FROM "pharmacy_sale_line_allocations" a JOIN "pharmacy_sale_lines" l ON l."organizationId"=a."organizationId" AND l."branchId"=a."branchId" AND l."id"=a."saleLineId" JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" JOIN "pharmacy_inventory_lots" lot ON lot."organizationId"=a."organizationId" AND lot."branchId"=a."branchId" AND lot."id"=a."inventoryLotId" WHERE ${saleWindow} ${ingredientOf(Prisma.sql`l."organizationId"`, Prisma.sql`l."medicineId"`)} ${lotDimension(lot, filters, false)})::int`
+    ? Prisma.sql`(SELECT CASE WHEN BOOL_OR(a."grossMinor" IS NULL OR a."discountMinor" IS NULL) THEN NULL ELSE COALESCE(SUM(a."grossMinor" - a."discountMinor" - ${PREPAID_ALLOCATION_TIER_DISCOUNT} - ${BILL_ALLOCATION_DISCOUNT}),0) END FROM "pharmacy_sale_line_allocations" a JOIN "pharmacy_sale_lines" l ON l."organizationId"=a."organizationId" AND l."branchId"=a."branchId" AND l."id"=a."saleLineId" JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" JOIN "pharmacy_inventory_lots" lot ON lot."organizationId"=a."organizationId" AND lot."branchId"=a."branchId" AND lot."id"=a."inventoryLotId" WHERE ${saleWindow} ${ingredientOf(Prisma.sql`l."organizationId"`, Prisma.sql`l."medicineId"`)} ${lotDimension(lot, filters, false)})::int`
     : Prisma.sql`COALESCE((SELECT SUM(l."grossMinor" - l."discountMinor") FROM "pharmacy_sale_lines" l JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" WHERE ${saleWindow} ${ingredientOf(Prisma.sql`l."organizationId"`, Prisma.sql`l."medicineId"`)}),0)::int`;
   const tenderMoney = dimensional
     ? Prisma.sql`NULL::int AS "cashMinor", NULL::int AS "refundsMinor", NULL::int AS "cashVarianceMinor"`

@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 // DEV-960: the owner setting "One pharmacist per shift", per branch, in the database.
@@ -14,7 +14,7 @@ function section(start: string, end: string): string {
 }
 
 describe('one pharmacist per shift policy migration', () => {
-  it('is transactional, idempotent and listed last in the migration ledger', () => {
+  it('is transactional, idempotent and listed in the migration ledger', () => {
     expect(sql.trim().startsWith('BEGIN;')).toBe(true);
     expect(sql.trim().endsWith('COMMIT;')).toBe(true);
     expect(sql).toContain(`CREATE TABLE IF NOT EXISTS ${TABLE}`);
@@ -25,13 +25,10 @@ describe('one pharmacist per shift policy migration', () => {
       .trim()
       .split('\n');
     expect(ledger).toContain(NAME);
-    // Later migrations (DEV-962 onwards) follow it in the ledger, each stamped after it.
-    const later = ledger.slice(ledger.indexOf(NAME) + 1);
-    for (const name of later) expect(name.slice(0, 14) > NAME.slice(0, 14), name).toBe(true);
-    const stamps = readdirSync('prisma/migrations', { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
-    expect(stamps.filter((name) => name.slice(0, 14) > NAME.slice(0, 14))).toEqual(later);
+    // A later migration is appended after it, and every later entry is stamped after it
+    // (migration-timestamp-order.test.ts enforces both for every migration).
+    const after = ledger.slice(ledger.indexOf(NAME) + 1);
+    expect(after.every((entry) => entry.slice(0, 14) > NAME.slice(0, 14))).toBe(true);
   });
 
   it('forces row-level security by organization and branch', () => {

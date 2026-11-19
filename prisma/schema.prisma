@@ -1108,6 +1108,8 @@ enum PharmacySaleEventKind {
   VOIDED
   RETURNED
   EXCHANGED
+  /// DEV-956: a whole-bill discount given, changed or removed on an open, unpaid bill.
+  BILL_DISCOUNT
 }
 
 enum PharmacyFiscalIntegratorMode {
@@ -2073,6 +2075,10 @@ model PharmacySaleLine {
   tierAllocationDiscounts Json?
   tierDiscountMinor Int @default(0)
   tierName String?
+  /// DEV-956: this line's share of the bill's whole-bill discount, already inside
+  /// discountMinor, and each allocation's part of it (allocation id -> minor units).
+  billDiscountMinor Int @default(0)
+  billAllocationDiscounts Json?
   id                        String                           @id @default(cuid())
   organizationId            String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId                  String
@@ -6136,6 +6142,9 @@ model Organization {
   /// undiscounted price. The stored default 10000 means no maximum is set yet; once the
   /// owner sets one it is enforced on the server for everyone.
   pharmacyMaxDiscountBps        Int                            @default(10000)
+  /// DEV-956: the owner's switch for one whole-bill discount at the pharmacy counter.
+  /// Off by default; with it off nothing at the counter changes.
+  pharmacyBillDiscountEnabled   Boolean                        @default(false)
   lastDemoResetAt               DateTime?
   gracePeriodDays               Int                            @default(0)
   activatedAt                   DateTime?
