@@ -12,7 +12,21 @@ vi.mock('@/lib/approval-authenticator', async () => {
       (await verifyOperatorCredential('PIN', input.secret, input.credentialHash)) ? 'PIN' : null,
   };
 });
-vi.mock('@/lib/abac', () => ({ can: vi.fn() }));
+// The approver rule is `rxReviewSignerDenial`, which also builds the subject from the row.
+vi.mock('@/lib/abac', () => ({
+  can: vi.fn(),
+  subjectFromSession: (user: {
+    id: string;
+    role?: string | null;
+    department?: string | null;
+    status?: string | null;
+  }) => ({
+    id: user.id,
+    role: user.role ?? 'EMPLOYEE',
+    department: user.department ?? null,
+    status: user.status ?? null,
+  }),
+}));
 vi.mock('@/lib/restaurant/operator-credentials', () => ({
   verifyOperatorCredential: vi.fn(),
   isLockedOut: vi.fn(() => false),

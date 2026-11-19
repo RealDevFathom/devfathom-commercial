@@ -1333,7 +1333,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyPrescriptions.captureRefillReminder': {
-    gate: "capabilityProcedure('pharmacy:dispense') + branch assignment (counterBranchAssignmentDenial)",
+    gate: "capabilityProcedure('pharmacy:dispense') + branch assignment (counterBranchAssignmentDenial) + the fill's dispensing branch (DEV-962; ADMIN excepted)",
     lines: ['dispense-prescriptions/record-fills-noncontrolled-prescriptions'],
   },
   'pharmacyPrescriptions.counterPatientPanel': {
@@ -1386,7 +1386,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyPrescriptions.fill': {
-    gate: "capabilityProcedure('pharmacy:dispense'); non-controlled lines only",
+    gate: "capabilityProcedure('pharmacy:dispense'); non-controlled lines only; + branch assignment (counterBranchAssignmentDenial) when a dispensing branchId is sent (DEV-962)",
     lines: ['dispense-prescriptions/record-fills-noncontrolled-prescriptions'],
   },
   'pharmacyPrescriptions.readPatient': {

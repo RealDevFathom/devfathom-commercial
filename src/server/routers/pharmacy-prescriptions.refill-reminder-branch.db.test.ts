@@ -257,6 +257,8 @@ beforeAll(async () => {
       for (let sequence = 1; sequence <= 4; sequence += 1) {
         const fill = await tx.prescriptionFill.create({
           data: {
+            // DEV-962: dispensed at north, the pharmacist's branch.
+            branchId: X.north,
             prescriptionLineId: prescription.lines[0]!.id,
             fillSequence: sequence,
             quantityCanonicalUnits: 20,
