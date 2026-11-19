@@ -6,6 +6,7 @@ import {
   postBookkeepingTransaction,
 } from '@/lib/pharmacy/bookkeeping';
 import {
+  apReversalAuditRecorderId,
   apSettlementPaymentKey,
   invoiceSettlementClocks,
   normalizeApInvoice,
@@ -17,6 +18,7 @@ import {
   recordApInvoice,
   reverseApInvoice,
   reverseApSettlement,
+  searchApReversals,
 } from './ap-invoices';
 import { payApInvoiceSchema, recordApInvoiceSchema } from './ap-invoices-schema';
 
@@ -966,5 +968,133 @@ describe('DEV-694: approved credit-note set-offs settle the bill', () => {
         SOLO
       )
     ).rejects.toMatchObject({ reason: 'INVALID_DATE' });
+  });
+});
+
+describe('DEV-103 apReversalAuditRecorderId', () => {
+  it('reads the recorder from new entries and from entries written under the old name', () => {
+    expect(apReversalAuditRecorderId({ recordedById: 'clerk_1', approverId: 'owner_1' })).toBe(
+      'clerk_1'
+    );
+    expect(apReversalAuditRecorderId({ initiatedById: 'clerk_2', approverId: 'owner_1' })).toBe(
+      'clerk_2'
+    );
+    expect(apReversalAuditRecorderId({ recordedById: 'clerk_1', initiatedById: 'old' })).toBe(
+      'clerk_1'
+    );
+  });
+
+  it('returns null for an entry without a recorder', () => {
+    for (const metadata of [
+      null,
+      undefined,
+      'x',
+      [],
+      {},
+      { recordedById: '' },
+      { initiatedById: 7 },
+    ])
+      expect(apReversalAuditRecorderId(metadata)).toBeNull();
+  });
+});
+
+describe('DEV-103 searchApReversals', () => {
+  const scope = { organizationId: 'org_1', branchId: 'branch_1' };
+  const rows = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `inv_${i}` }));
+  const search = async (input: Parameters<typeof searchApReversals>[2], found = rows(0)) => {
+    const findMany = vi.fn().mockResolvedValue(found);
+    const db = { pharmacyApInvoice: { findMany } } as unknown as ScopedDb;
+    const result = await searchApReversals(db, scope, input, 'Asia/Karachi');
+    return { result, args: findMany.mock.calls[0]![0] };
+  };
+
+  it('reads posted invoices of this tenant and branch only, in a stable order', async () => {
+    const { args } = await search({ page: 1 });
+    expect(args.where).toEqual({ organizationId: 'org_1', branchId: 'branch_1', status: 'POSTED' });
+    expect(args.orderBy).toEqual([{ invoiceDate: 'desc' }, { id: 'asc' }]);
+    expect(args.include).toEqual({
+      settlements: { orderBy: [{ paidAt: 'asc' }, { id: 'asc' }] },
+    });
+    expect(args).toMatchObject({ skip: 0, take: 26 });
+  });
+
+  it('pages by 25 and reports an older page only when one exists', async () => {
+    const full = await search({ page: 3 }, rows(26));
+    expect(full.args).toMatchObject({ skip: 50, take: 26 });
+    expect(full.result.invoices).toHaveLength(25);
+    expect(full.result).toMatchObject({ page: 3, hasOlder: true });
+    const last = await search({ page: 3 }, rows(25));
+    expect(last.result.invoices).toHaveLength(25);
+    expect(last.result.hasOlder).toBe(false);
+  });
+
+  it('applies every filter together, still inside the tenant and branch', async () => {
+    const { args } = await search({
+      payee: 'K-Elec',
+      reference: 'KE-1',
+      amountMinor: 23_456,
+      from: '2026-08-01',
+      to: '2026-09-30',
+      page: 1,
+    });
+    expect(args.where).toMatchObject({
+      organizationId: 'org_1',
+      branchId: 'branch_1',
+      status: 'POSTED',
+    });
+    expect(args.where.AND).toEqual([
+      { payeeName: { contains: 'K-Elec', mode: 'insensitive' } },
+      {
+        OR: [
+          { reference: { contains: 'KE-1', mode: 'insensitive' } },
+          { supplierInvoiceRef: { contains: 'KE-1', mode: 'insensitive' } },
+        ],
+      },
+      {
+        OR: [
+          { amountMinor: 23_456 },
+          { settlements: { some: { status: 'ACTIVE', amountMinor: 23_456 } } },
+        ],
+      },
+      {
+        OR: [
+          {
+            invoiceDate: {
+              gte: new Date('2026-08-01T00:00:00.000Z'),
+              lte: new Date('2026-09-30T00:00:00.000Z'),
+            },
+          },
+          {
+            settlements: {
+              some: {
+                status: 'ACTIVE',
+                // Karachi is UTC+5: the shop's 1 August starts at 19:00 UTC the day before, and
+                // its 30 September ends at 19:00 UTC on 30 September.
+                paidAt: {
+                  gte: new Date('2026-07-31T19:00:00.000Z'),
+                  lt: new Date('2026-09-30T19:00:00.000Z'),
+                },
+              },
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('leaves an open end of the day range open', async () => {
+    const { args } = await search({ from: '2026-08-01', page: 1 });
+    expect(args.where.AND).toEqual([
+      {
+        OR: [
+          { invoiceDate: { gte: new Date('2026-08-01T00:00:00.000Z') } },
+          {
+            settlements: {
+              some: { status: 'ACTIVE', paidAt: { gte: new Date('2026-07-31T19:00:00.000Z') } },
+            },
+          },
+        ],
+      },
+    ]);
   });
 });
