@@ -159,7 +159,7 @@ const WORKSPACE_WIDE_ACTIONS = new Map(
  * procedure calling one tags it too. Each is checked below to really do so.
  */
 const BRANCH_TAGGING_HELPERS: Readonly<Record<string, readonly string[]>> = {
-  'pharmacy-dispensing.ts': ['tagSaleLineBranch'],
+  'pharmacy-dispensing.ts': ['assertSaleLineBranch'],
 };
 
 type AnyProcedure = {

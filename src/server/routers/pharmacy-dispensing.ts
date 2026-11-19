@@ -12,7 +12,9 @@ import { counterBranchAssignmentDenial } from '@/lib/pharmacy/counter-capability
 import {
   assertRxSelfSignAllowed,
   otherRxReviewSigners,
+  RX_REVIEW_SIGNER_MESSAGES,
   RX_SELF_SIGN_AUDIT_ACTION,
+  rxReviewSignerDenial,
   RX_SELF_SIGN_POLICY,
   RxSelfSignError,
   selfSignRxReview,
@@ -25,14 +27,28 @@ const dispense = capabilityProcedure('pharmacy:dispense');
  * DEV-913: a review or substitution is about one counter sale line, so its audit
  * entry carries that sale's branch. Read only for the entry; a line that does not
  * resolve leaves it workspace-wide and the write decides the outcome as before.
+ * DEV-955: a line that does resolve is at a branch, and the caller must be allowed
+ * to act there (the counter's branch rule: an active assignment, or an organization
+ * ADMIN). A pharmacist of another branch of this organization is refused.
  */
-async function tagSaleLineBranch(ctx: TRPCContext, saleLineId: string | null | undefined) {
-  if (!saleLineId) return;
+async function assertSaleLineBranch(ctx: TRPCContext, saleLineId: string) {
   const line = await ctx.db.pharmacySaleLine.findFirst({
     where: { id: saleLineId },
     select: { branchId: true },
   });
   annotateAuditBranch(ctx, line?.branchId);
+  if (!line) return;
+  const organizationId = ctx.entitlements?.organizationId;
+  if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  if (
+    await counterBranchAssignmentDenial(
+      ctx.db as unknown as ScopedDb,
+      ctx.session!.user,
+      organizationId,
+      line.branchId
+    )
+  )
+    throw new TRPCError({ code: 'FORBIDDEN', message: RX_REVIEW_SIGNER_MESSAGES.BRANCH });
 }
 
 // DEV-832: dispensing queues show who the prescription is for, nothing more.
@@ -176,7 +192,7 @@ export const pharmacyDispensingRouter = router({
       z.object({ prescriptionLineId: z.string().min(1), saleLineId: z.string().min(1) }).strict()
     )
     .mutation(async ({ ctx, input }) => {
-      await tagSaleLineBranch(ctx, input.saleLineId);
+      await assertSaleLineBranch(ctx, input.saleLineId);
       return ctx.db.pharmacyPharmacistReviewItem.create({
         data: { ...input, requestedByUserId: ctx.session!.user.id },
       });
@@ -192,11 +208,34 @@ export const pharmacyDispensingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements?.organizationId;
+      if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
       const item = await ctx.db.pharmacyPharmacistReviewItem.findFirst({
-        where: { id: input.reviewItemId },
+        where: { id: input.reviewItemId, organizationId },
         select: { saleLineId: true },
       });
-      await tagSaleLineBranch(ctx, item?.saleLineId);
+      const line = item
+        ? await ctx.db.pharmacySaleLine.findFirst({
+            where: { id: item.saleLineId, organizationId },
+            select: { branchId: true },
+          })
+        : null;
+      annotateAuditBranch(ctx, line?.branchId);
+      if (!line)
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'This prescription review was not found.',
+        });
+      // DEV-955: the decider must be allowed to sign at the sale's branch, by the same rule the
+      // solo rule counts other signers with (`otherRxReviewSigners`): ACTIVE (not on leave), the
+      // dispensing right, and an active assignment to the branch or organization ADMIN.
+      const denial = await rxReviewSignerDenial(ctx.db as unknown as ScopedDb, {
+        organizationId,
+        branchId: line.branchId,
+        userId: ctx.session!.user.id,
+      });
+      if (denial)
+        throw new TRPCError({ code: 'FORBIDDEN', message: RX_REVIEW_SIGNER_MESSAGES[denial] });
       return ctx.db.pharmacyPharmacistReviewDecision.create({
         data: {
           ...input,
@@ -351,7 +390,7 @@ export const pharmacyDispensingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      await tagSaleLineBranch(ctx, input.saleLineId);
+      await assertSaleLineBranch(ctx, input.saleLineId);
       return ctx.db.pharmacySubstitutionRecord.create({
         data: { ...input, actorUserId: ctx.session!.user.id },
       });

@@ -14,9 +14,9 @@ import { counterBranchAssignmentDenial } from './counter-capability';
  * database refuses a decision by the requester (`pharmacy_review_no_self_approval`). A different
  * pharmacist still signs it from the pharmacist queue (`decideReview`), as before. The requester
  * may sign it only when all of this holds, checked again inside the write's transaction:
- *   - they hold `pharmacy:dispense` and may act at the line's branch;
- *   - nobody else could sign it there: no other ACTIVE member of the organization who may act at
- *     that branch (an active assignment to it, or a session ADMIN) holds `pharmacy:dispense`.
+ *   - they may decide a review at the line's branch (`rxReviewSignerDenial`: ACTIVE, not on
+ *     leave, `pharmacy:dispense`, an active assignment to it or a session ADMIN);
+ *   - nobody else could sign it there: no other member `rxReviewSignerDenial` accepts there.
  *     Whether they have a PIN does not matter: a second pharmacist signs the review from the
  *     pharmacist queue without one (`decideReview`), so anyone who could do that is someone else
  *     who could sign. This is the solo rule's "nobody else could act here" test, with the
@@ -38,15 +38,93 @@ export const RX_SELF_SIGN_POLICY = 'PHARMACY_RX_REVIEW_SOLO_SELF_SIGN_PIN';
 export type RxSelfSignScope = { organizationId: string; branchId: string; actorId: string };
 
 /**
+ * DEV-955 — who may decide (sign, override, verify or any other decision) a prescription review
+ * at a branch. One rule, used by `decideReview`, by the self-signer's own check and by the solo
+ * rule's "who else could sign here" (`otherRxReviewSigners`), so the three never disagree:
+ *   - a member of this organization, read live;
+ *   - ACTIVE: a person on leave (or inactive, or invited) is not available. Sessions and other
+ *     permission checks admit ON_LEAVE; this legally weighted signature does not, so a pharmacist
+ *     on leave neither signs nor counts as someone else who could sign;
+ *   - holds `pharmacy:dispense` (deny wins);
+ *   - may act at the branch: an active assignment to it, or a session ADMIN of the organization
+ *     (`counterBranchAssignmentDenial`, the counter's branch rule).
+ * A suspended staff profile does not change it: that profile carries the PIN, and a review is
+ * decided from the pharmacist queue without one.
+ */
+export type RxReviewSignerRefusal = 'NOT_MEMBER' | 'NOT_ACTIVE' | 'NO_RIGHT' | 'BRANCH';
+
+export const RX_REVIEW_SIGNER_MESSAGES: Record<RxReviewSignerRefusal, string> = {
+  NOT_MEMBER: 'You do not have permission for this action.',
+  NOT_ACTIVE: 'You are on leave or not active, so you cannot sign or decide a prescription check.',
+  NO_RIGHT: 'You do not have permission for this action.',
+  BRANCH:
+    'You are not assigned to this branch. Only a pharmacist assigned to this branch can sign or decide its prescription checks.',
+};
+
+const SIGNER_SELECT = {
+  id: true,
+  name: true,
+  organizationId: true,
+  role: true,
+  department: true,
+  status: true,
+} as const;
+
+type SignerRow = {
+  id: string;
+  name: string | null;
+  organizationId: string;
+  role: string;
+  department: string | null;
+  status: string;
+};
+
+async function signerRowDenial(
+  db: ScopedDb,
+  row: SignerRow,
+  scope: { organizationId: string; branchId: string },
+  now: Date
+): Promise<RxReviewSignerRefusal | null> {
+  if (row.organizationId !== scope.organizationId) return 'NOT_MEMBER';
+  if (row.status !== 'ACTIVE') return 'NOT_ACTIVE';
+  if (
+    !(await can(subjectFromSession(row), 'pharmacy:dispense', undefined, {
+      db,
+      now,
+      source: 'TRPC',
+    }))
+  )
+    return 'NO_RIGHT';
+  if (await counterBranchAssignmentDenial(db, row, scope.organizationId, scope.branchId))
+    return 'BRANCH';
+  return null;
+}
+
+/** Why this person may not decide a prescription review at this branch; null when they may. */
+export async function rxReviewSignerDenial(
+  db: ScopedDb,
+  input: { organizationId: string; branchId: string; userId: string },
+  now = new Date()
+): Promise<RxReviewSignerRefusal | null> {
+  const row = await db.user.findFirst({
+    where: { id: input.userId, organizationId: input.organizationId },
+    select: SIGNER_SELECT,
+  });
+  if (!row) return 'NOT_MEMBER';
+  return signerRowDenial(db, row, input, now);
+}
+
+/**
  * The other people who could sign a prescription review at this branch; empty means solo. Every
- * other ACTIVE member assigned to the branch (or a session ADMIN) who holds `pharmacy:dispense`,
- * with or without a PIN. Never the actor. Stable order, so the refusal names the same person.
+ * other member `rxReviewSignerDenial` accepts at the branch, with or without a PIN. Never the
+ * actor. Stable order, so the refusal names the same person.
  */
 export async function otherRxReviewSigners(
   db: ScopedDb,
   scope: RxSelfSignScope,
   now = new Date()
 ): Promise<{ id: string; name: string | null }[]> {
+  // A narrowing only: everyone the rule accepts is ACTIVE and is an ADMIN or assigned here.
   const members = await db.user.findMany({
     where: {
       organizationId: scope.organizationId,
@@ -66,24 +144,14 @@ export async function otherRxReviewSigners(
         },
       ],
     },
-    // Only what the checks below read.
-    select: { id: true, name: true, role: true, department: true, status: true },
+    select: SIGNER_SELECT,
     orderBy: { id: 'asc' },
   });
   const signers: { id: string; name: string | null }[] = [];
   for (const other of members) {
     if (other.id === scope.actorId) continue;
-    // The same branch gate the actor passes, read live.
-    if (await counterBranchAssignmentDenial(db, other, scope.organizationId, scope.branchId))
-      continue;
-    if (
-      !(await can(subjectFromSession(other), 'pharmacy:dispense', undefined, {
-        db,
-        now,
-        source: 'TRPC',
-      }))
-    )
-      continue;
+    // The same rule `decideReview` applies, read live.
+    if (await signerRowDenial(db, other, scope, now)) continue;
     signers.push({ id: other.id, name: other.name });
   }
   return signers;
@@ -156,13 +224,13 @@ export async function assertRxSelfSignAllowed(
   });
   if (!line) throw new RxSelfSignError('NOT_FOUND');
   if (item.requestedByUserId !== actor.id) throw new RxSelfSignError('NOT_REQUESTER');
+  // DEV-955: the same rule as any other signer (on leave cannot sign), read live.
   if (
-    !(await can(subjectFromSession(actor), 'pharmacy:dispense', undefined, {
+    await rxReviewSignerDenial(
       db,
-      now,
-      source: 'TRPC',
-    })) ||
-    (await counterBranchAssignmentDenial(db, actor, organizationId, line.branchId))
+      { organizationId, branchId: line.branchId, userId: actor.id },
+      now
+    )
   )
     throw new RxSelfSignError('NOT_ALLOWED');
   if (line.medicine.controlled) throw new RxSelfSignError('CONTROLLED');

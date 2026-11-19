@@ -36,11 +36,36 @@ const manager = allow(PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'manag
 
 const PEOPLE: Record<
   string,
-  { role: 'ADMIN' | 'EMPLOYEE'; roleKey: string; rules: Rule[]; branches: string[] }
+  {
+    role: 'ADMIN' | 'EMPLOYEE';
+    roleKey: string;
+    rules: Rule[];
+    branches: string[];
+    status?: 'ACTIVE' | 'ON_LEAVE';
+  }
 > = {
   owner: { role: 'ADMIN', roleKey: 'admin', rules: allow(['*']), branches: [] },
   northAdmin: { role: 'ADMIN', roleKey: 'manager', rules: manager, branches: ['branch_north'] },
-  pharmacist: { role: 'EMPLOYEE', roleKey: 'pharmacist', rules: [], branches: ['branch_north'] },
+  // DEV-955: assigned to both branches whose records they act on.
+  pharmacist: {
+    role: 'EMPLOYEE',
+    roleKey: 'pharmacist',
+    rules: [],
+    branches: ['branch_north', 'branch_south'],
+  },
+  northPharmacist: {
+    role: 'EMPLOYEE',
+    roleKey: 'pharmacist',
+    rules: [],
+    branches: ['branch_north'],
+  },
+  onLeave: {
+    role: 'EMPLOYEE',
+    roleKey: 'pharmacist',
+    rules: [],
+    branches: ['branch_north', 'branch_south'],
+    status: 'ON_LEAVE',
+  },
 };
 
 /** The records the mutations load, each at one branch. */
@@ -94,7 +119,7 @@ function makeDb() {
     if (!person) return null;
     return {
       id,
-      status: 'ACTIVE',
+      status: person.status ?? 'ACTIVE',
       role: person.role,
       organizationId: ORG,
       organizationRole: { key: person.roleKey, isSystem: true, permissions: person.rules },
@@ -113,6 +138,11 @@ function makeDb() {
     pharmacyBranchAssignment: {
       findMany: vi.fn(async ({ where }: { where: { userId: string } }) =>
         (PEOPLE[where.userId]?.branches ?? []).map((branchId) => ({ branchId }))
+      ),
+      findFirst: vi.fn(async ({ where }: { where: { userId: string; branchId: string } }) =>
+        PEOPLE[where.userId]?.branches.includes(where.branchId)
+          ? { branchId: where.branchId }
+          : null
       ),
     },
     pharmacyBranch: {
@@ -173,7 +203,13 @@ function caller(userId: string) {
     },
     session: {
       expires: 'later',
-      user: { id: userId, name: userId, role: person.role, status: 'ACTIVE', organizationId: ORG },
+      user: {
+        id: userId,
+        name: userId,
+        role: person.role,
+        status: person.status ?? 'ACTIVE',
+        organizationId: ORG,
+      },
     },
     organization: null,
     support: null,
@@ -267,5 +303,51 @@ describe('DEV-913 newly branch-tagged pharmacy entries', () => {
     expect(rows).toHaveLength(1);
     expect((rows[0]!.metadata as Record<string, unknown>).branchId).toBeUndefined();
     expect((await caller('northAdmin').audit.list({})).items).toEqual([]);
+  });
+});
+
+describe('DEV-955 a prescription check is decided only at the decider’s branch', () => {
+  it('refuses a pharmacist of another branch, and one on leave, before writing anything', async () => {
+    const refusals: Array<[string, RegExp]> = [
+      ['northPharmacist', /^You are not assigned to this branch\./],
+      ['onLeave', /^You are on leave or not active/],
+    ];
+    for (const [who, message] of refusals)
+      for (const kind of ['SIGN', 'OVERRIDE', 'VERIFY'] as const)
+        await expect(
+          caller(who).pharmacyDispensing.decideReview({
+            reviewItemId: 'review_south',
+            kind,
+            reason: 'Checked with the prescriber.',
+          })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN', message: expect.stringMatching(message) });
+    const north = caller('northPharmacist').pharmacyDispensing;
+    await expect(
+      north.enqueueReview({ prescriptionLineId: 'rx_line_south', saleLineId: 'line_south' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      north.recordSubstitution({
+        prescriptionLineId: 'rx_line_south',
+        saleLineId: 'line_south',
+        ...substitution,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyPharmacistReviewDecision.create).not.toHaveBeenCalled();
+    expect(db.pharmacyPharmacistReviewItem.create).not.toHaveBeenCalled();
+    expect(db.pharmacySubstitutionRecord.create).not.toHaveBeenCalled();
+  });
+
+  it('still lets a pharmacist assigned to that branch decide it', async () => {
+    await caller('northPharmacist').pharmacyDispensing.recordSubstitution({
+      prescriptionLineId: 'rx_line_north',
+      saleLineId: 'line_north',
+      ...substitution,
+    });
+    await caller('pharmacist').pharmacyDispensing.decideReview({
+      reviewItemId: 'review_south',
+      kind: 'SIGN',
+    });
+    expect(db.pharmacySubstitutionRecord.create).toHaveBeenCalledTimes(1);
+    expect(db.pharmacyPharmacistReviewDecision.create).toHaveBeenCalledTimes(1);
   });
 });
