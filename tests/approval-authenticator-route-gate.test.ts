@@ -3,8 +3,14 @@ import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  calledNames,
+  directDatabaseUse,
+  functionsOf,
+  gatedFunctionNames,
   moduleClosure,
   routeHandlers,
+  sameModuleClosure,
+  sourceModules,
   sourceOf,
   SRC,
 } from './approval-authenticator-route-gate.helpers';
@@ -145,31 +151,87 @@ describe('DEV-961 every route handler passes the approval-authenticator gate', (
     expect([...offenders]).toEqual([]);
   });
 
-  it('reads the Auth.js session only in the gated resolver', () => {
+  it('reads the signed-in member only in the gated resolver', () => {
+    // Auth.js's session (`auth()`), the raw session token (`getToken`, `next-auth/jwt`) and the
+    // support session are read only where the gate runs.
+    const reader = /(^|[^.\w])(auth\(\s*\)|getToken\(|getSupportSession\()|['"]next-auth\/jwt['"]/;
+    const allowed = new Set([
+      TENANT_ACTOR,
+      join(SRC, 'lib/auth.ts'),
+      join(SRC, 'lib/tenancy/support-session.ts'),
+      // The platform's own support-session endpoint (listed above as PLATFORM).
+      join(SRC, 'app/api/support-session/route.ts'),
+      // Compares two encodings of the same token to throttle cookie refresh; resolves no one.
+      join(SRC, 'lib/auth/session-cookie-throttle.ts'),
+    ]);
     const readers = sourceFiles(SRC)
-      .filter((file) => file !== TENANT_ACTOR && file !== join(SRC, 'lib/auth.ts'))
+      .filter(
+        (file) =>
+          !allowed.has(file) &&
+          !file.endsWith('.d.ts') &&
+          !file.startsWith(join(SRC, 'app/platform/'))
+      )
       .filter((file) =>
         sourceOf(file)
           .split('\n')
-          .some((line) => !/^\s*(\/\/|\*)/.test(line) && /(^|[^.\w])auth\(\s*\)/.test(line))
+          .some((line) => !/^\s*(\/\/|\*)/.test(line) && reader.test(line))
       )
       .map((file) => relative(SRC, file));
     expect(readers).toEqual([]);
   });
+});
+
+/**
+ * DEV-961 — every server action, one function at a time. A server action can be posted as a
+ * plain form with no `Next-Action` header, so each action must itself go through the gated
+ * resolver (`resolveTenantActor` or `createTRPCContext`, directly or through a helper that does)
+ * and must not open the database around it: no `withTenantDb`, `withPlatformDb`,
+ * `createTenantDb`, raw SQL or the raw Prisma client, in the action or in any function of its
+ * module it calls. Database work goes through a tRPC caller or the gated context's `db`.
+ */
+describe('DEV-961 every server action passes the approval-authenticator gate', () => {
+  // The DevFathom operator console's actions run on the platform session, never a member's.
+  const memberModules = sourceModules().filter(
+    (file) => !file.startsWith(join(SRC, 'app/platform/'))
+  );
+  const all = memberModules.flatMap(functionsOf);
+  const actions = all.filter((fn) => fn.action);
+  const gated = gatedFunctionNames(all);
+  const label = (fn: (typeof all)[number]) => `${relative(SRC, fn.file)} ${fn.name}`;
+
+  it('finds the server actions, module-level and inline', () => {
+    expect(actions.length).toBeGreaterThan(50);
+    expect(actions.map(label)).toContain(
+      'app/(app)/pharmacy/accounts/ap-aging/ap-entry-actions.ts payApInvoiceFromForm'
+    );
+    expect(actions.map(label)).toContain('app/(app)/restaurant/inventory/page.tsx createCount');
+  });
 
   it('resolves the member of every server action through the gated resolver', () => {
-    // The DevFathom operator console's actions run on the platform session, never a member's.
-    const actions = sourceFiles(SRC).filter(
-      (file) =>
-        /['"]use server['"]/.test(sourceOf(file)) && !file.startsWith(join(SRC, 'app/platform/'))
-    );
-    expect(actions.length).toBeGreaterThan(10);
     const ungated = actions
-      .filter((file) => {
-        const closure = moduleClosure(relative(join(SRC, 'app'), file));
-        return !closure.has(TENANT_ACTOR);
-      })
-      .map((file) => relative(SRC, file));
-    expect(ungated).toEqual([]);
+      .filter((action) =>
+        sameModuleClosure(action, all).every(
+          (fn) => ![...calledNames(fn.body, true)].some((name) => gated.has(name))
+        )
+      )
+      .map(label);
+    expect(
+      ungated,
+      'A server action must call resolveTenantActor or createTRPCContext (directly or through a helper)'
+    ).toEqual([]);
+  });
+
+  it('never opens the database around the gate in a server action', () => {
+    const direct = actions.flatMap((action) =>
+      sameModuleClosure(action, all).flatMap((fn) =>
+        directDatabaseUse(fn).map(
+          (use) => `${label(action)}: ${use}${fn === action ? '' : ` (in ${fn.name})`}`
+        )
+      )
+    );
+    expect(
+      direct,
+      'Database work in a server action goes through a tRPC caller or the gated context db'
+    ).toEqual([]);
   });
 });

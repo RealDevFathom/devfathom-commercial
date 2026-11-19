@@ -108,7 +108,7 @@ export function ApprovalAuthenticatorSetupForm({
             {signOut}
           </div>
         </form>
-        {isOwner && !passwordless ? <OwnerUsePins /> : null}
+        {isOwner ? <OwnerUsePins passwordless={passwordless} /> : null}
       </>
     );
   }
@@ -213,7 +213,7 @@ export function ApprovalAuthenticatorSetupForm({
  * DEV-961: the owner may switch the whole organization to permanent PINs instead of setting
  * up an app. Checked on the server: owner only, password and acknowledgement, audited.
  */
-function OwnerUsePins() {
+function OwnerUsePins({ passwordless }: { passwordless: boolean }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [password, setPassword] = useState('');
@@ -257,16 +257,23 @@ function OwnerUsePins() {
         set up the app, and anyone who can approve and has no PIN yet is asked to set one. You can
         turn the authenticator back on in Settings. This change is recorded in the audit log.
       </p>
-      <label className="block text-sm text-text-body">
-        Your current password
-        <Input
-          className="mt-1.5 block min-h-11"
-          type="password"
-          autoComplete="current-password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-        />
-      </label>
+      {passwordless ? (
+        <p className="text-sm text-text-body">
+          You sign in with your organization&apos;s single sign-on, so a sign-in in the last 15
+          minutes confirms it is you.
+        </p>
+      ) : (
+        <label className="block text-sm text-text-body">
+          Your current password
+          <Input
+            className="mt-1.5 block min-h-11"
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+        </label>
+      )}
       <label className="flex items-start gap-2 text-sm text-text-body">
         <Checkbox
           className="mt-0.5"
@@ -288,9 +295,13 @@ function OwnerUsePins() {
           type="button"
           variant="destructive"
           className="min-h-11"
-          disabled={!password || !acknowledged || turnOff.isPending}
+          disabled={(!passwordless && !password) || !acknowledged || turnOff.isPending}
           onClick={() =>
-            turnOff.mutate({ required: false, currentPassword: password, acknowledged: true })
+            turnOff.mutate(
+              passwordless
+                ? { required: false, acknowledged: true }
+                : { required: false, currentPassword: password, acknowledged: true }
+            )
           }
         >
           {turnOff.isPending ? 'Turning off…' : 'Turn off and use PINs'}

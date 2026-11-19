@@ -120,8 +120,8 @@ export function ApprovalAuthenticatorSection() {
         <p className="mt-1 text-xs text-muted-foreground">
           Approve refunds, discounts and other manager or owner actions with a code that changes
           every 30 seconds, instead of a fixed PIN. You can read the code to the cashier by phone.
-          Approvals need the counter to be online. While the owner has it turned off, approvals
-          take each person&apos;s permanent PIN instead.
+          Approvals need the counter to be online. While the owner has it turned off, approvals take
+          each person&apos;s permanent PIN instead.
         </p>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -280,8 +280,8 @@ export function ApprovalAuthenticatorSection() {
               <p className="text-xs text-muted-foreground">
                 On by default. Approvals take a code from each person&apos;s authenticator app, not
                 a fixed PIN. Anyone who can approve must set up the app before their account works.
-                Staff with no login keep their PIN. Off: everyone approves with their permanent
-                PIN, and app codes are not accepted; apps stay set up for when you turn it back on.
+                Staff with no login keep their PIN. Off: everyone approves with their permanent PIN,
+                and app codes are not accepted; apps stay set up for when you turn it back on.
               </p>
             </div>
             <Switch
@@ -302,6 +302,7 @@ export function ApprovalAuthenticatorSection() {
         {data?.isOwner && data.required && turningOff && (
           <TurnOffAuthenticator
             ownerEnrolled={data.enrolled}
+            passwordless={data.passwordless === true}
             pending={setRequired.isPending}
             onCancel={() => setTurningOff(false)}
             onConfirm={(confirmation) =>
@@ -317,8 +318,8 @@ export function ApprovalAuthenticatorSection() {
           <div role="status" className="space-y-1 border-t border-border pt-4">
             <p className="text-sm font-medium text-foreground">These people have no PIN yet</p>
             <p className="text-xs text-muted-foreground">
-              They can approve but have no permanent PIN, so they cannot approve until they set
-              one. Each was sent a notice asking them to set one.
+              They can approve but have no permanent PIN, so they cannot approve until they set one.
+              Each was sent a notice asking them to set one.
             </p>
             <ul className="text-sm text-text-body">
               {withoutPin.map((member) => (
@@ -328,7 +329,9 @@ export function ApprovalAuthenticatorSection() {
           </div>
         )}
 
-        {data?.canManage && <ApprovalAuthenticatorRecovery />}
+        {data?.canManage && (
+          <ApprovalAuthenticatorRecovery passwordless={data.passwordless === true} />
+        )}
       </CardContent>
     </Card>
   );
@@ -340,15 +343,18 @@ export function ApprovalAuthenticatorSection() {
  */
 function TurnOffAuthenticator({
   ownerEnrolled,
+  passwordless,
   pending,
   onCancel,
   onConfirm,
 }: {
   ownerEnrolled: boolean;
+  /** DEV-961: signs in only by single sign-on: a fresh sign-in stands in for the password. */
+  passwordless: boolean;
   pending: boolean;
   onCancel: () => void;
   onConfirm: (
-    confirmation: { code: string } | { currentPassword: string; acknowledged: true }
+    confirmation: { code: string } | { currentPassword?: string; acknowledged: true }
   ) => void;
 }) {
   const [code, setCode] = useState('');
@@ -385,16 +391,23 @@ function TurnOffAuthenticator({
         </label>
       ) : (
         <>
-          <label className="block text-xs font-medium text-foreground">
-            Your current password
-            <Input
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="mt-1 block sm:w-56"
-            />
-          </label>
+          {passwordless ? (
+            <p className="text-xs text-text-body">
+              You sign in with your organization&apos;s single sign-on, so a sign-in in the last 15
+              minutes confirms it is you.
+            </p>
+          ) : (
+            <label className="block text-xs font-medium text-foreground">
+              Your current password
+              <Input
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="mt-1 block sm:w-56"
+              />
+            </label>
+          )}
           <label className="flex items-start gap-2 text-xs text-text-body">
             <Checkbox
               className="mt-0.5"
@@ -408,9 +421,18 @@ function TurnOffAuthenticator({
       <div className="flex flex-wrap gap-2">
         <Button
           variant="destructive"
-          disabled={pending || (ownerEnrolled ? code.length !== 6 : !password || !acknowledged)}
+          disabled={
+            pending ||
+            (ownerEnrolled ? code.length !== 6 : (!passwordless && !password) || !acknowledged)
+          }
           onClick={() =>
-            onConfirm(ownerEnrolled ? { code } : { currentPassword: password, acknowledged: true })
+            onConfirm(
+              ownerEnrolled
+                ? { code }
+                : passwordless
+                  ? { acknowledged: true }
+                  : { currentPassword: password, acknowledged: true }
+            )
           }
         >
           {pending ? 'Turning off…' : 'Turn off and use PINs'}
@@ -509,7 +531,7 @@ function UseRecoveryCode({
 }
 
 /** Owner and administrators: reset a member's approval authenticator when they lose their phone. */
-function ApprovalAuthenticatorRecovery() {
+function ApprovalAuthenticatorRecovery({ passwordless }: { passwordless: boolean }) {
   const utils = trpc.useUtils();
   const members = trpc.approvalAuthenticator.members.useQuery();
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -551,20 +573,29 @@ function ApprovalAuthenticatorRecovery() {
               <span className="text-sm text-foreground">{member.name}</span>
               {confirming === member.id ? (
                 <span className="flex flex-wrap items-center gap-2">
-                  <Input
-                    type="password"
-                    autoComplete="current-password"
-                    aria-label="Your current password"
-                    placeholder="Your current password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="h-7 w-44 text-xs"
-                  />
+                  {/* DEV-961: with single sign-on only, a fresh sign-in confirms it is you. */}
+                  {!passwordless && (
+                    <Input
+                      type="password"
+                      autoComplete="current-password"
+                      aria-label="Your current password"
+                      placeholder="Your current password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="h-7 w-44 text-xs"
+                    />
+                  )}
                   <Button
                     size="sm"
                     variant="destructive"
-                    disabled={!password || reset.isPending}
-                    onClick={() => reset.mutate({ userId: member.id, currentPassword: password })}
+                    disabled={(!passwordless && !password) || reset.isPending}
+                    onClick={() =>
+                      reset.mutate(
+                        passwordless
+                          ? { userId: member.id }
+                          : { userId: member.id, currentPassword: password }
+                      )
+                    }
                   >
                     Confirm reset
                   </Button>

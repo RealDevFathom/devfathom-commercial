@@ -127,4 +127,19 @@ describe('DEV-961 the owner may use permanent PINs instead', () => {
     act(() => mocks.options['approvalAuthenticator.setRequired'].onSuccess?.({} as never));
     expect(mocks.router.replace).toHaveBeenCalledWith('/dashboard');
   });
+
+  it('DEV-961: offers an owner who signs in by single sign-on the switch on a fresh sign-in', () => {
+    render(<ApprovalAuthenticatorSetupForm isOwner passwordless />);
+    fireEvent.click(screen.getByRole('button', { name: 'Use permanent PINs instead' }));
+    expect(screen.queryAllByLabelText('Your current password')).toHaveLength(0);
+    expect(screen.getByText(/a sign-in in the last 15\s+minutes confirms it is you/)).toBeTruthy();
+    const off = screen.getByRole('button', { name: 'Turn off and use PINs' }) as HTMLButtonElement;
+    expect(off.disabled).toBe(true);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(off);
+    expect(mocks.mutations['approvalAuthenticator.setRequired']).toHaveBeenCalledWith({
+      required: false,
+      acknowledged: true,
+    });
+  });
 });

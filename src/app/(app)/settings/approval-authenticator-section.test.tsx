@@ -116,6 +116,46 @@ describe('ApprovalAuthenticatorSection (DEV-879)', () => {
     expect(screen.queryByText('Require authenticator for approvals')).toBeNull();
   });
 
+  it('DEV-961: an owner who signs in by single sign-on turns it off with a fresh sign-in', () => {
+    mocks.status = {
+      ...baseStatus,
+      isOwner: true,
+      required: true,
+      enrolled: false,
+      passwordless: true,
+    };
+    render(<ApprovalAuthenticatorSection />);
+    fireEvent.click(screen.getByRole('switch', { name: 'Require authenticator for approvals' }));
+    expect(screen.getByText(/a sign-in in the last 15\s+minutes confirms it is you/)).toBeTruthy();
+    expect(screen.queryAllByLabelText('Your current password')).toHaveLength(0);
+    const off = screen.getByRole('button', { name: 'Turn off and use PINs' }) as HTMLButtonElement;
+    expect(off.disabled).toBe(true);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(off);
+    expect(mocks.mutations['approvalAuthenticator.setRequired']).toHaveBeenCalledWith(
+      { required: false, acknowledged: true },
+      expect.anything()
+    );
+  });
+
+  it('DEV-961: an owner who signs in by single sign-on resets a member with no password', () => {
+    mocks.status = {
+      ...baseStatus,
+      isOwner: true,
+      canManage: true,
+      enrolled: true,
+      passwordless: true,
+    };
+    mocks.members = [{ id: 'manager', name: 'Ayesha Manager', enrolled: true }];
+    render(<ApprovalAuthenticatorSection />);
+    fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
+    expect(screen.queryByLabelText('Your current password')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm reset' }));
+    expect(mocks.mutations['approvalAuthenticator.resetForMember']).toHaveBeenCalledWith({
+      userId: 'manager',
+    });
+  });
+
   it('lets the owner require an authenticator and reset a member after confirming', () => {
     mocks.status = { ...baseStatus, isOwner: true, canManage: true, enrolled: true };
     mocks.members = [
@@ -183,7 +223,7 @@ describe('ApprovalAuthenticatorSection (DEV-961)', () => {
     });
   });
 
-  it('asks an enrolled owner for his current code before turning the authenticator off', () => {
+  it('asks an enrolled owner for their current code before turning the authenticator off', () => {
     mocks.status = { ...baseStatus, isOwner: true, required: true, enrolled: true };
     render(<ApprovalAuthenticatorSection />);
     fireEvent.click(screen.getByRole('switch', { name: 'Require authenticator for approvals' }));
@@ -201,7 +241,7 @@ describe('ApprovalAuthenticatorSection (DEV-961)', () => {
     );
   });
 
-  it('asks an owner with no authenticator for his password and a plain acknowledgement', () => {
+  it('asks an owner with no authenticator for their password and a plain acknowledgement', () => {
     mocks.status = { ...baseStatus, isOwner: true, required: true, enrolled: false };
     render(<ApprovalAuthenticatorSection />);
     fireEvent.click(screen.getByRole('switch', { name: 'Require authenticator for approvals' }));

@@ -5,8 +5,9 @@
  * setting is on (it cannot set up an app). Against migrated PostgreSQL with FORCE row level
  * security, as the NOSUPERUSER NOBYPASSRLS runtime role, with the real job-role and staff
  * functions behind `restaurantStaff`:
- *  - a manager cannot give a profile with no login an approver right (`coauth:approve`) nor
- *    remove the login from a profile that can approve, their own included; nothing changes;
+ *  - a manager, or an administrator who is not the owner, cannot give a profile with no login an
+ *    approver right (`coauth:approve`) nor remove the login from a profile that can approve,
+ *    their own included; nothing changes;
  *  - the owner can, and each change writes an audit row and notifies every owner.
  *
  * Skipped (never silently passed) unless TEST_DATABASE_URL names a disposable database.
@@ -40,6 +41,8 @@ const ORG = `org_d961_terminal_${suffix}`;
 const BRANCH = `branch_d961_${suffix}`;
 const OWNER = `user_d961_owner_${suffix}`;
 const MANAGER = `user_d961_mgr_${suffix}`;
+/** An administrator who is not the owner: role ADMIN, without the owner's all-capability grant. */
+const ADMIN = `user_d961_admin_${suffix}`;
 
 let withTenantDb: Scoped['withTenantDb'];
 let withPlatformDb: Scoped['withPlatformDb'];
@@ -161,6 +164,7 @@ describeIfDatabase('DEV-961 terminal-only approvers are the owner’s decision',
       for (const [id, roleId] of [
         [OWNER, ownerRoleId],
         [MANAGER, `role_mgr_${suffix}`],
+        [ADMIN, `role_mgr_${suffix}`],
       ] as const)
         await tx.user.create({
           data: {
@@ -169,7 +173,7 @@ describeIfDatabase('DEV-961 terminal-only approvers are the owner’s decision',
             email: `${id}@example.test`,
             department: 'LEADERSHIP',
             title: 'Restaurant staff',
-            role: id === OWNER ? 'ADMIN' : 'EMPLOYEE',
+            role: id === MANAGER ? 'EMPLOYEE' : 'ADMIN',
             status: 'ACTIVE',
             organizationRoleId: roleId,
           },
@@ -240,6 +244,33 @@ describeIfDatabase('DEV-961 terminal-only approvers are the owner’s decision',
       })
     );
     expect(profile.userId).toBe(MANAGER);
+  });
+
+  it('refuses an administrator who is not the owner, in both directions, and changes nothing', async () => {
+    await expect(
+      setRoles(ADMIN, ids.terminalOnly, [ids.waiterRole, ids.approverRole])
+    ).rejects.toThrow(guard.TERMINAL_ONLY_APPROVER_OWNER_ONLY);
+    await expect(removeLogin(ADMIN, ids.managerProfile)).rejects.toThrow(
+      guard.TERMINAL_ONLY_APPROVER_OWNER_ONLY
+    );
+    const [held, profile] = await Promise.all([
+      tenant((db) =>
+        db.restaurantStaffJobRole.findMany({
+          where: { staffProfileId: ids.terminalOnly },
+          select: { jobRoleId: true },
+        })
+      ),
+      tenant((db) =>
+        db.restaurantStaffProfile.findUniqueOrThrow({
+          where: { id: ids.managerProfile },
+          select: { userId: true },
+        })
+      ),
+    ]);
+    expect(held.map((row) => row.jobRoleId)).toEqual([ids.waiterRole]);
+    expect(profile.userId).toBe(MANAGER);
+    expect(await auditRows(ids.terminalOnly)).toEqual([]);
+    expect(await ownerNotices(ids.terminalOnly)).toEqual([]);
   });
 
   it('lets the owner give the right, with an audit row and a notice to every owner', async () => {

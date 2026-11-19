@@ -120,6 +120,27 @@ describe('platform host routing', () => {
   });
 });
 
+describe('DEV-961 the request method for the approval-authenticator gate', () => {
+  it('forwards the real method on every request, overwriting any value the client sent', async () => {
+    for (const method of ['GET', 'POST', 'PUT']) {
+      const response = await proxy(
+        new Request('http://acme.localhost:3000/pharmacy/inventory', {
+          method,
+          headers: {
+            host: 'acme.localhost:3000',
+            cookie: 'authjs.session-token=opaque-session-token',
+            // A client claiming a page render while it posts a form.
+            'x-devfathom-request-method': 'GET',
+            ...(method === 'GET' ? {} : { 'content-type': 'multipart/form-data; boundary=x' }),
+          },
+          ...(method === 'GET' ? {} : { body: '--x--' }),
+        })
+      );
+      expect(response.headers.get('x-middleware-request-x-devfathom-request-method')).toBe(method);
+    }
+  });
+});
+
 describe('public paths', () => {
   it('stays public for an entry and every path beneath it', async () => {
     for (const path of [

@@ -36,7 +36,7 @@ vi.mock('@/lib/approval-authenticator-gate', async (importOriginal) => {
 
 import { hashSync } from 'bcryptjs';
 import { router, type TRPCContext } from '../trpc';
-import { approvalAuthenticatorRouter } from './approval-authenticator';
+import { approvalAuthenticatorRouter, pinNeededMessage } from './approval-authenticator';
 import { decryptSecret } from '@/lib/secret-crypto';
 import { rateLimit } from '@/lib/rate-limit';
 
@@ -76,6 +76,8 @@ const MEMBERS: Record<string, Party> = {
   manager: party('manager', 'EMPLOYEE', 'manager'),
   // DEV-961: provisioned by single sign-on or SCIM, with no password.
   sso: party('sso', 'EMPLOYEE', 'manager'),
+  // DEV-961: an owner who signs in only by single sign-on.
+  ssoOwner: party('ssoOwner', 'EMPLOYEE', 'owner'),
 };
 
 type AuthRow = {
@@ -107,7 +109,7 @@ function setup(userId: keyof typeof MEMBERS, sessionExtra: Record<string, unknow
           ? {
               ...MEMBERS[where.id],
               email: `${where.id}@example.test`,
-              password: where.id === 'sso' ? null : PASSWORD_HASH,
+              password: where.id === 'sso' || where.id === 'ssoOwner' ? null : PASSWORD_HASH,
             }
           : null
       ),
@@ -694,8 +696,7 @@ describe('DEV-961 members with no password (single sign-on, SCIM)', () => {
       const { caller, rows } = setup('sso', extra);
       await expect(caller.beginEnrollment({})).rejects.toMatchObject({
         code: 'FORBIDDEN',
-        message:
-          'For your security, sign out and sign in again, then set up the app straight away.',
+        message: 'For your security, sign out and sign in again, then try again straight away.',
       });
       expect(rows.has('sso')).toBe(false);
     }
@@ -709,5 +710,153 @@ describe('DEV-961 members with no password (single sign-on, SCIM)', () => {
     });
     expect(rows.has('manager')).toBe(false);
     await expect(caller.getStatus()).resolves.toMatchObject({ passwordless: false });
+  });
+});
+
+describe('DEV-961 an owner who signs in only by single sign-on', () => {
+  const freshly = { signedInAt: Date.now() - 60_000 };
+  const stale = { signedInAt: Date.now() - 16 * 60_000 };
+  const enrolledManager = (rows: Map<string, AuthRow>) =>
+    rows.set('manager', {
+      id: 'auth_manager',
+      organizationId: 'org',
+      userId: 'manager',
+      encryptedSecret: 'v1.x.y.z',
+      enabledAt: new Date(),
+      lastUsedStep: 1,
+    });
+
+  it('switches approvals to PINs with a fresh sign-in and the acknowledgement', async () => {
+    const { caller, organization } = setup('ssoOwner', freshly);
+    organization.requireApprovalAuthenticator = true;
+    await expect(
+      caller.setRequired({ required: false, acknowledged: true })
+    ).resolves.toMatchObject({ required: false });
+    expect(audit.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          requireApprovalAuthenticator: false,
+          confirmedWith: 'FRESH_SIGN_IN',
+        }),
+      })
+    );
+  });
+
+  it('refuses the switch when the sign-in is stale, and still needs the acknowledgement', async () => {
+    const { caller, organization } = setup('ssoOwner', stale);
+    organization.requireApprovalAuthenticator = true;
+    await expect(caller.setRequired({ required: false, acknowledged: true })).rejects.toMatchObject(
+      { code: 'FORBIDDEN' }
+    );
+    await expect(caller.setRequired({ required: false } as never)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(organization.requireApprovalAuthenticator).toBe(true);
+  });
+
+  it('never lets an owner who has a password skip it, however fresh the sign-in', async () => {
+    const { caller, organization } = setup('owner', freshly);
+    organization.requireApprovalAuthenticator = true;
+    await expect(caller.setRequired({ required: false, acknowledged: true })).rejects.toMatchObject(
+      { code: 'FORBIDDEN' }
+    );
+    expect(organization.requireApprovalAuthenticator).toBe(true);
+  });
+
+  it('resets a member’s app with a fresh sign-in, recording how it was confirmed', async () => {
+    const { caller, rows } = setup('ssoOwner', freshly);
+    enrolledManager(rows);
+    await expect(caller.resetForMember({ userId: 'manager' })).resolves.toEqual({ reset: true });
+    expect(rows.has('manager')).toBe(false);
+    expect(audit.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          resetById: 'ssoOwner',
+          confirmedWith: 'FRESH_SIGN_IN',
+        }),
+      })
+    );
+  });
+
+  it('refuses the reset when the sign-in is stale, and a password owner without the password', async () => {
+    const stalely = setup('ssoOwner', stale);
+    enrolledManager(stalely.rows);
+    await expect(stalely.caller.resetForMember({ userId: 'manager' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(stalely.rows.has('manager')).toBe(true);
+    const withPassword = setup('owner', freshly);
+    enrolledManager(withPassword.rows);
+    await expect(withPassword.caller.resetForMember({ userId: 'manager' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(withPassword.rows.has('manager')).toBe(true);
+  });
+});
+
+describe('DEV-961 an administrator who is not the owner', () => {
+  const enrol = (rows: Map<string, AuthRow>, userId: string) =>
+    rows.set(userId, {
+      id: `auth_${userId}`,
+      organizationId: 'org',
+      userId,
+      encryptedSecret: 'v1.x.y.z',
+      enabledAt: new Date(),
+      lastUsedStep: 1,
+    });
+
+  it('cannot turn the authenticator off, even with their password', async () => {
+    const { caller, organization } = setup('admin');
+    organization.requireApprovalAuthenticator = true;
+    await expect(
+      caller.setRequired({ required: false, currentPassword: PASSWORD, acknowledged: true })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Only the owner can change this setting.',
+    });
+    expect(organization.requireApprovalAuthenticator).toBe(true);
+  });
+
+  it('can reset a member below them, but never the owner, another administrator or themselves', async () => {
+    const { caller, rows, db } = setup('admin');
+    for (const userId of ['owner', 'admin', 'manager']) enrol(rows, userId);
+    for (const userId of ['owner', 'admin'])
+      await expect(
+        caller.resetForMember({ userId, currentPassword: PASSWORD })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(rows.has('owner')).toBe(true);
+    expect(rows.has('admin')).toBe(true);
+    expect(db.approvalAuthenticator.deleteMany).not.toHaveBeenCalled();
+    await expect(
+      caller.resetForMember({ userId: 'manager', currentPassword: PASSWORD })
+    ).resolves.toEqual({ reset: true });
+    expect(rows.has('manager')).toBe(false);
+  });
+
+  it('may read the list of staff with no login, which administrators manage', async () => {
+    const { caller } = setup('admin');
+    await expect(caller.terminalOnlyApprovers()).resolves.toEqual([
+      { id: 'staff_floor', displayName: 'Floor operator' },
+    ]);
+  });
+});
+
+describe('DEV-961 how a member without a PIN is told to get one', () => {
+  const view = (enabledModules: string[]) => ({
+    entitlements: { enabledModules, modules: [] } as never,
+  });
+
+  it('where "Your PIN" exists, the person sets their own; nobody else can', () => {
+    const message = pinNeededMessage(view(['pharmacy-core']));
+    expect(message).toMatch(/Set it yourself under Your PIN; nobody else can set it for you\./);
+    expect(message).not.toMatch(/manager/);
+  });
+
+  it('elsewhere, someone who manages staff issues it on the staff screen', () => {
+    expect(pinNeededMessage(view([]))).toMatch(
+      /Ask the owner or someone who manages staff to issue one on the staff screen\./
+    );
   });
 });

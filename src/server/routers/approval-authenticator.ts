@@ -17,6 +17,8 @@ import {
   approvalAuthenticatorGate,
   holdsAnyApprovalRight,
 } from '@/lib/approval-authenticator-gate';
+import { hasModule } from '@/lib/entitlements';
+import type { EntitlementView } from '@/lib/module-catalog';
 import { rateLimit } from '@/lib/rate-limit';
 import { decryptSecret, encryptionConfigured, encryptSecret } from '@/lib/secret-crypto';
 import {
@@ -109,20 +111,21 @@ async function requirePasswordReauthentication(ctx: Ctx, organizationId: string,
 export const PASSWORDLESS_REAUTHENTICATION_MS = 15 * 60_000;
 
 export const PASSWORDLESS_REAUTHENTICATION_MESSAGE =
-  'For your security, sign out and sign in again, then set up the app straight away.';
+  'For your security, sign out and sign in again, then try again straight away.';
 
 /**
  * DEV-961: setting up (or recovering) the authenticator is forced on every approver, including
- * members provisioned by single sign-on or SCIM, who have no password to re-enter. For such an
- * account only, a fresh sign-in through the identity provider (the server-issued sign-in time
- * on the session, at most 15 minutes old) stands in for the password. An account that has a
- * password must always enter it.
+ * members provisioned by single sign-on or SCIM, who have no password to re-enter; and an owner
+ * who signs in only that way must still be able to switch approvals to PINs and reset a member's
+ * app. For such an account only, a fresh sign-in through the identity provider (the
+ * server-issued sign-in time on the session, at most 15 minutes old) stands in for the password.
+ * An account that has a password must always enter it. Returns which proof was taken.
  */
 async function requireSetupReauthentication(
   ctx: Ctx,
   organizationId: string,
   password: string | undefined
-) {
+): Promise<'PASSWORD' | 'FRESH_SIGN_IN'> {
   const account = await ctx.db.user.findFirst({
     where: { id: ctx.session.user.id, organizationId, status: 'ACTIVE' },
     select: { password: true },
@@ -136,11 +139,12 @@ async function requireSetupReauthentication(
       signedInAt > Date.now()
     )
       throw new TRPCError({ code: 'FORBIDDEN', message: PASSWORDLESS_REAUTHENTICATION_MESSAGE });
-    return;
+    return 'FRESH_SIGN_IN';
   }
   if (!password)
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Your current password is incorrect.' });
   await requirePasswordReauthentication(ctx, organizationId, password);
+  return 'PASSWORD';
 }
 
 /**
@@ -170,6 +174,20 @@ async function approversWithoutPin(
     if (await holdsAnyApprovalRight(db, { organizationId, userId: member.id }))
       approvers.push(member);
   return approvers;
+}
+
+/**
+ * DEV-961: how a member gets a permanent PIN, which follows the PIN rules of the workspace.
+ * Where the "Your PIN" page exists (`OWN_PIN_PATH`, module `pharmacy-core`), a person sets their
+ * own PIN there, signed in and confirming with their password; nobody else can set it for them.
+ * Elsewhere PINs are issued on the staff screen by someone who manages staff.
+ */
+export function pinNeededMessage(ctx: { entitlements: EntitlementView }): string {
+  const lead =
+    'The owner turned off the authenticator for approvals, so approvals now take your permanent PIN, and you have none yet.';
+  return hasModule(ctx.entitlements, 'pharmacy-core')
+    ? `${lead} Set it yourself under Your PIN; nobody else can set it for you.`
+    : `${lead} Ask the owner or someone who manages staff to issue one on the staff screen.`;
 }
 
 export const approvalAuthenticatorRouter = router({
@@ -422,10 +440,17 @@ export const approvalAuthenticatorRouter = router({
 
   // Recovery: remove a member's approval authenticator so they can enrol a new phone.
   resetForMember: protectedProcedure
-    .input(z.strictObject({ userId: z.string().min(1), currentPassword: reauthentication }))
+    .input(
+      z.strictObject({ userId: z.string().min(1), currentPassword: reauthentication.optional() })
+    )
     .mutation(async ({ ctx, input }) => {
       const organizationId = organizationOf(ctx);
-      await requirePasswordReauthentication(ctx, organizationId, input.currentPassword);
+      // DEV-961: a member with no password (single sign-on) proves it is them with a fresh sign-in.
+      const confirmedWith = await requireSetupReauthentication(
+        ctx,
+        organizationId,
+        input.currentPassword
+      );
       const [actor, target] = await Promise.all([
         liveParty(ctx, organizationId, ctx.session.user.id),
         liveParty(ctx, organizationId, input.userId),
@@ -447,7 +472,12 @@ export const approvalAuthenticatorRouter = router({
         targetType: 'User',
         targetId: target.id,
         description: 'Reset a member approval authenticator',
-        metadata: { approvalAuthenticator: 'reset', resetById: actor.id, removed: removed.count },
+        metadata: {
+          approvalAuthenticator: 'reset',
+          resetById: actor.id,
+          removed: removed.count,
+          confirmedWith,
+        },
       });
       return { reset: removed.count > 0 };
     }),
@@ -462,7 +492,8 @@ export const approvalAuthenticatorRouter = router({
         z.strictObject({ required: z.literal(false), code: approvalCode }),
         z.strictObject({
           required: z.literal(false),
-          currentPassword: reauthentication,
+          // Omitted only by an owner with no password, who confirms with a fresh sign-in.
+          currentPassword: reauthentication.optional(),
           acknowledged: z.literal(true),
         }),
       ])
@@ -477,7 +508,7 @@ export const approvalAuthenticatorRouter = router({
           code: 'FORBIDDEN',
           message: 'Only the owner can change this setting.',
         });
-      let confirmedWith: 'AUTHENTICATOR' | 'PASSWORD' | null = null;
+      let confirmedWith: 'AUTHENTICATOR' | 'PASSWORD' | 'FRESH_SIGN_IN' | null = null;
       if (!input.required) {
         if (!(await rateLimit(`approval-authenticator-off:${userId}`, 5, 15 * 60_000)).ok)
           throw tooManyAttempts();
@@ -505,8 +536,12 @@ export const approvalAuthenticatorRouter = router({
               code: 'BAD_REQUEST',
               message: 'Confirm with the current code from your authenticator app.',
             });
-          await requirePasswordReauthentication(ctx, organizationId, input.currentPassword);
-          confirmedWith = 'PASSWORD';
+          // DEV-961: an owner who signs in only by single sign-on confirms with a fresh sign-in.
+          confirmedWith = await requireSetupReauthentication(
+            ctx,
+            organizationId,
+            input.currentPassword
+          );
         }
       }
       const saved = await ctx.db.organization.update({
@@ -526,8 +561,7 @@ export const approvalAuthenticatorRouter = router({
             userId: member.id,
             type: 'approval_pin_needed',
             title: 'Set your approval PIN',
-            message:
-              'The owner turned off the authenticator for approvals, so approvals now take your permanent PIN. You have none yet: set one under My approval PIN, or ask a manager to issue one.',
+            message: pinNeededMessage(ctx),
             entityType: 'User',
             entityId: member.id,
           })),
