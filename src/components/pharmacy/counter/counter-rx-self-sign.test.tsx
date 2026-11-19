@@ -8,12 +8,14 @@ type Line = {
   controlled: boolean;
   rungUpByYou: boolean;
   maySelfSign: boolean;
+  mayDeclareSolo?: boolean;
   askName: string | null;
 };
+type Declaration = { version: string; text: string };
 type Pin = { state: 'SET' | 'NOT_SET' | 'RESET'; locked: boolean; lockedUntil: Date | null };
 
 const mocks = vi.hoisted(() => ({
-  data: undefined as { lines: Line[]; pin: Pin | null } | undefined,
+  data: undefined as { lines: Line[]; pin: Pin | null; declaration?: Declaration } | undefined,
   queryInput: vi.fn(),
   refetch: vi.fn(),
   selfSign: vi.fn(),
@@ -164,5 +166,70 @@ describe('CounterRxSelfSign (DEV-950)', () => {
     render(<CounterRxSelfSign branchId="b" saleId="s" enabled />);
     expect(screen.queryByLabelText('Your PIN')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'pharmacist queue' })).toBeInTheDocument();
+  });
+});
+
+describe('CounterRxSelfSign declared solo sign-off (DEV-960)', () => {
+  const declaration: Declaration = {
+    version: 'rx-only-pharmacist-on-duty@1',
+    text: 'I am the only pharmacist on duty now.',
+  };
+  const declared = () => ({
+    lines: [line({ maySelfSign: false, mayDeclareSolo: true, askName: 'Synthetic Pharmacist' })],
+    pin: pinSet,
+    declaration,
+  });
+
+  it('asks for the on-duty declaration and the PIN, and sends both', async () => {
+    mocks.data = declared();
+    mocks.selfSign.mockResolvedValue({ decisionId: 'd-1' });
+    const onSigned = vi.fn();
+    render(<CounterRxSelfSign branchId="b" saleId="s" enabled onSigned={onSigned} />);
+    expect(screen.getByText(/declared solo sign-off/)).toBeInTheDocument();
+    // The colleague on the staff list is still named, with the queue.
+    expect(screen.getByText(/ask Synthetic Pharmacist to sign it/)).toBeInTheDocument();
+    const box = screen.getByRole('checkbox', { name: 'I am the only pharmacist on duty now.' });
+    const sign = screen.getByRole('button', { name: 'Sign with my PIN' });
+    fireEvent.change(screen.getByLabelText('Your PIN'), { target: { value: '4826' } });
+    // Not without the declaration.
+    expect(sign).toBeDisabled();
+    fireEvent.click(box);
+    expect(sign).toBeEnabled();
+    fireEvent.click(sign);
+    await waitFor(() =>
+      expect(mocks.selfSign).toHaveBeenCalledWith({
+        reviewItemId: 'review-1',
+        pin: '4826',
+        declaration: { onlyPharmacistOnDuty: true, version: declaration.version },
+      })
+    );
+    await waitFor(() => expect(onSigned).toHaveBeenCalled());
+    expect(screen.getByLabelText('Your PIN')).toHaveValue('');
+  });
+
+  it('offers no declaration when the server does not allow one (the setting is off)', () => {
+    mocks.data = {
+      lines: [line({ maySelfSign: false, mayDeclareSolo: false, askName: 'Synthetic Pharmacist' })],
+      pin: null,
+    };
+    render(<CounterRxSelfSign branchId="b" saleId="s" enabled />);
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Your PIN')).not.toBeInTheDocument();
+    expect(screen.getByText(/Ask Synthetic Pharmacist to sign it/)).toBeInTheDocument();
+  });
+
+  it('sends a pharmacist without a PIN to set one up, or to the colleague', () => {
+    mocks.data = { ...declared(), pin: { state: 'NOT_SET', locked: false, lockedUntil: null } };
+    render(<CounterRxSelfSign branchId="b" saleId="s" enabled />);
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Set up your PIN' })).toBeInTheDocument();
+    expect(screen.getByText(/ask Synthetic Pharmacist to sign it/)).toBeInTheDocument();
+  });
+
+  it('keeps a lone pharmacist on the plain solo form, with no declaration', () => {
+    mocks.data = { lines: [line()], pin: pinSet, declaration };
+    render(<CounterRxSelfSign branchId="b" saleId="s" enabled />);
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.getByText(/recorded as self-approved/)).toBeInTheDocument();
   });
 });

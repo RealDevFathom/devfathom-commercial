@@ -614,6 +614,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
   it.each([
     ['/pharmacy', 'Onboarding'],
     ['/pharmacy/settings/data-export', 'Onboarding'],
+    ['/pharmacy/settings/one-pharmacist-per-shift', 'Onboarding'],
     ['/pharmacy/accounts/balance-sheet', 'Finance'],
     ['/pharmacy/orders', 'Counter'],
     ['/pharmacy/counter/close', 'Day close'],

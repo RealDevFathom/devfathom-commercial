@@ -11,6 +11,7 @@ import { NO_PIN_SET_MESSAGE } from '@/lib/pharmacy/own-pin-policy';
 import { counterBranchAssignmentDenial } from '@/lib/pharmacy/counter-capability';
 import {
   assertRxSelfSignAllowed,
+  declaredSoloMetadata,
   otherRxReviewSigners,
   RX_REVIEW_SIGNER_MESSAGES,
   RX_SELF_SIGN_AUDIT_ACTION,
@@ -19,6 +20,8 @@ import {
   RxSelfSignError,
   selfSignRxReview,
 } from '@/lib/pharmacy/rx-review-self-sign';
+import { RX_ON_DUTY_DECLARATION } from '@/lib/pharmacy/rx-solo-shift';
+import { readRxSoloShiftPolicy } from '@/lib/pharmacy/rx-solo-shift-policy';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const dispense = capabilityProcedure('pharmacy:dispense');
@@ -63,6 +66,7 @@ const RX_SELF_SIGN_CODES: Record<RxSelfSignError['reason'], TRPCError['code']> =
   CONTROLLED: 'FORBIDDEN',
   ALREADY_SIGNED: 'CONFLICT',
   SECOND_PHARMACIST: 'FORBIDDEN',
+  STALE_DECLARATION: 'BAD_REQUEST',
 };
 
 function rxSelfSignFailure(error: unknown): never {
@@ -282,6 +286,17 @@ export const pharmacyDispensingRouter = router({
         branchId: input.branchId,
         actorId: user.id,
       });
+      // DEV-960: with others on the staff list, the owner's "One pharmacist per shift" setting at
+      // this branch lets the requester sign a non-controlled line by declaring they are the only
+      // pharmacist on duty. The setting is read only when it could matter.
+      const declarable =
+        Boolean(other) &&
+        waiting.some(
+          (item) =>
+            item.requestedByUserId === user.id &&
+            !saleLines.find((saleLine) => saleLine.id === item.saleLineId)!.medicine.controlled
+        ) &&
+        (await readRxSoloShiftPolicy(db, organizationId, input.branchId)).enabled;
       const lines = waiting.map((item) => {
         const line = saleLines.find((saleLine) => saleLine.id === item.saleLineId)!;
         const mine = item.requestedByUserId === user.id;
@@ -293,13 +308,19 @@ export const pharmacyDispensingRouter = router({
           rungUpByYou: mine,
           // The solo rule: nobody else at this branch could sign it, and it is not controlled.
           maySelfSign: mine && !line.medicine.controlled && !other,
+          // DEV-960: others are on the staff list, but the owner allows a declared solo sign-off.
+          mayDeclareSolo: mine && !line.medicine.controlled && Boolean(other) && declarable,
           askName: mine && other ? other.name : null,
         };
       });
-      const pin = lines.some((line) => line.maySelfSign)
+      const pin = lines.some((line) => line.maySelfSign || line.mayDeclareSolo)
         ? await readOwnPinState(db, organizationId, user.id)
         : null;
-      return { lines, pin };
+      return {
+        lines,
+        pin,
+        ...(declarable ? { declaration: { ...RX_ON_DUTY_DECLARATION } } : {}),
+      };
     }),
   // DEV-950: the requester signs their own review under the solo rule, with their own PIN
   // re-entered now. Everything is refused before the PIN is checked when the rule does not apply,
@@ -312,6 +333,16 @@ export const pharmacyDispensingRouter = router({
           // The signed-in pharmacist's own PIN, re-entered for every self-signature. The request
           // audit redacts it by key.
           pin: z.string().regex(/^\d{4,8}$/),
+          // DEV-960: "I am the only pharmacist on duty now", confirmed for this signature. Only
+          // used when others are on the staff list and the owner turned "One pharmacist per
+          // shift" on at the branch; refused otherwise.
+          declaration: z
+            .object({
+              onlyPharmacistOnDuty: z.literal(true),
+              version: z.string().trim().min(1).max(100),
+            })
+            .strict()
+            .optional(),
         })
         .strict()
     )
@@ -326,6 +357,7 @@ export const pharmacyDispensingRouter = router({
           organizationId,
           actor,
           reviewItemId: input.reviewItemId,
+          declaration: input.declaration,
         });
       } catch (error) {
         rxSelfSignFailure(error);
@@ -358,6 +390,7 @@ export const pharmacyDispensingRouter = router({
           organizationId,
           actor,
           reviewItemId: input.reviewItemId,
+          declaration: input.declaration,
         });
         annotateAudit(ctx, {
           metadata: {
@@ -368,6 +401,7 @@ export const pharmacyDispensingRouter = router({
             reviewItemId: signed.reviewItemId,
             saleId: signed.saleId,
             saleLineId: signed.saleLineId,
+            ...(signed.declared ? declaredSoloMetadata(signed.declared) : {}),
           },
         });
         return { decisionId: signed.decision.id, signedAt: signed.decision.signedAt };
