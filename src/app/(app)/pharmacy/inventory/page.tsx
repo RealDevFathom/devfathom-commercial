@@ -1472,11 +1472,14 @@ export default async function PharmacyInventoryPage({
                 <p className="font-mono text-xs uppercase text-text-muted">
                   Expires within {bucket.bucketDays} days
                 </p>
+                {/* DEV-965: the PKR value is landed cost, sent only with financial reports. */}
                 <p className="mt-2 text-2xl font-semibold tabular-nums text-text-strong">
-                  {money(bucket.valueAtRiskMinor)}
+                  {bucket.valueAtRiskMinor === null
+                    ? `${bucket.units.toLocaleString('en-PK')} units`
+                    : money(bucket.valueAtRiskMinor)}
                 </p>
                 <p className="text-sm text-text-muted">
-                  {bucket.units} units at risk ·{' '}
+                  {bucket.valueAtRiskMinor === null ? 'At risk' : `${bucket.units} units at risk`} ·{' '}
                   {bucket.withinSupplierReturnWindow
                     ? 'return claim reserved'
                     : 'no reserved return claim'}

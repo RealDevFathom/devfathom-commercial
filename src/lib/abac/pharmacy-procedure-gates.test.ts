@@ -111,7 +111,7 @@ function claimedGate(text: string): string[] {
   const claims = new Set<string>();
   if (/\badminProcedure\b/.test(text)) claims.add('admin:access');
   if (/\b(?:protectedProcedure|auditedProtectedProcedure)\b/.test(text)) claims.add('signed-in');
-  for (const match of text.matchAll(/\bcapabilityProcedure\('([a-z-]+:[a-zA-Z-]+)'\)/g))
+  for (const match of text.matchAll(/\bcapabilityProcedure\('?([a-z-]+:[a-zA-Z-]+)'?\)/g))
     claims.add(match[1]);
   const meta = /^meta [A-Z_]+ -> ([a-z-]+:[a-zA-Z-]+(?: AND [a-z-]+:[a-zA-Z-]+)*)/.exec(text);
   for (const action of meta?.[1].split(' AND ') ?? []) claims.add(action);

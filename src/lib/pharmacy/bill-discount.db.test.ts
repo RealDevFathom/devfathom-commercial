@@ -16,11 +16,14 @@ import {
 } from '@/lib/test-support/pharmacy-regulatory';
 import { applyBillDiscount } from './bill-discount-service';
 import { readCounterCart, readCounterReceipt } from './counter';
+import { COUNTER_ERROR_MESSAGES, counterSaleErrorMessage } from './counter-messages';
 import { receiptTierLines } from './counter-receipt';
+import { recordDeliveryCommand } from './customer-delivery';
 import { movePrepaid, publishPrepaidSettings } from './prepaid-tiers';
 import {
   addSaleLine,
   changeSaleStatus,
+  PharmacySaleError,
   createSale,
   readReturnHistory,
   returnSaleLine,
@@ -523,6 +526,138 @@ suite('DEV-956 whole-bill discount on PostgreSQL', () => {
       db.pharmacySale.findFirstOrThrow({ where: { id: f.sale.id } })
     );
     expect(sale.status).toBe('COMPLETED');
+  });
+
+  it('DEV-966: a cash-on-delivery bill the rider has collected, with a bill and a tier share, refuses a new item in words and keeps its totals', async () => {
+    await setEnabled(true);
+    await setMaximum(10_000);
+    const customerId = await tenant(async (db) => {
+      const patient = await db.pharmacyPatient.create({
+        data: { organizationId: org, displayName: 'Delivery customer' },
+      });
+      const customer = await db.pharmacyCustomer.create({
+        data: { organizationId: org, patientId: patient.id, displayName: 'Delivery customer' },
+      });
+      await publishPrepaidSettings(db, scope, {
+        refundable: true,
+        tiers: [{ name: 'Bronze', upfrontMinor: 1000, discountBasisPoints: 1000 }],
+      });
+      await movePrepaid(db, scope, {
+        customerId: customer.id,
+        kind: 'PAYMENT',
+        amountMinor: 5000,
+        idempotencyKey: randomUUID(),
+      });
+      return customer.id;
+    });
+    const f = await bill();
+    await tenant((db) =>
+      db.pharmacySale.update({ where: { id: f.sale.id }, data: { customerId } })
+    );
+    await tenant((db) =>
+      applyBillDiscount(db, scope, {
+        saleId: f.sale.id,
+        request: { kind: 'AMOUNT', minor: 400 },
+        approval,
+      })
+    );
+    // A cash-on-delivery order out with its rider (the cashier here) for this bill. Orders are
+    // visible only to staff holding the orders permission.
+    await withPlatformDb(async (db) => {
+      await db.$executeRaw(Prisma.sql`INSERT INTO organization_roles
+        (id, "organizationId", key, name, "isSystem", "updatedAt")
+        VALUES (${org + '_orders'}, ${org}, 'order-staff', 'Order staff', true, now())`);
+      await db.$executeRaw(Prisma.sql`INSERT INTO organization_role_permissions
+        (id, "organizationId", "organizationRoleId", capability, effect)
+        VALUES (${org + '_orders_allow'}, ${org}, ${org + '_orders'}, 'pharmacy:orders', 'ALLOW')`);
+      await db.$executeRaw(Prisma.sql`UPDATE users SET "organizationRoleId" = ${org + '_orders'}
+        WHERE id = ${scope.actorId} AND "organizationId" = ${org}`);
+    });
+    const rider = <T>(fn: (db: ScopedDb) => Promise<T>) =>
+      withTenantDb(org, fn, { timeout: 30000, userId: scope.actorId });
+    const orderId = org + '_cod_' + randomUUID().slice(0, 8);
+    await rider((db) =>
+      db.$executeRaw(Prisma.sql`INSERT INTO pharmacy_customer_orders
+        (id, "organizationId", "branchId", "customerId", "placedByUserId", fulfillment, status,
+         "intendedPaymentMethod", "runnerUserId", "reservationExpiresAt", "counterSaleId",
+         "outForDeliveryAt", "updatedAt")
+        VALUES (${orderId}, ${org}, ${scope.branchId}, ${customerId}, ${scope.actorId}, 'DELIVER',
+          'OUT_FOR_DELIVERY', 'CASH', ${scope.actorId}, now() + interval '30 minutes',
+          ${f.sale.id}, now(), now())`)
+    );
+    const quoted = await tenant((db) => readCounterCart(db, scope, f.sale.id));
+    expect(quoted.totals.netMinor).toBe(652);
+    // The rider collects the cash: that freezes the prepaid tier price on the bill, with no tender.
+    await rider((db) =>
+      recordDeliveryCommand(db, scope, {
+        branchId: scope.branchId,
+        orderId,
+        action: 'COLLECT',
+        amountMinor: 652,
+        reference: 'COD-966',
+        requestKey: randomUUID(),
+      })
+    );
+    const collected = await lines(f.sale.id);
+    expect(collected.map((line) => [line.billDiscountMinor, line.tierDiscountMinor])).toEqual([
+      [190, 10],
+      [210, 12],
+      [0, 49],
+    ]);
+    const extra = await tenant((db) => item(db, [400], [100]));
+    const addOne = () =>
+      tenant((db) =>
+        addSaleLine(db, scope, {
+          saleId: f.sale.id,
+          medicineId: extra.medicine.id,
+          presentationId: extra.presentation.id,
+          packLevelId: extra.pack.id,
+          saleUnit: 'UNIT',
+          quantity: 1,
+          canonicalUnitsPerSaleUnit: 1,
+          idempotencyKey: randomUUID(),
+        })
+      );
+    const refusal = await addOne().catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(PharmacySaleError);
+    expect(refusal).toMatchObject({ reason: 'BILL_DISCOUNT_LOCKED_BY_PREPAID_TIER' });
+    expect(counterSaleErrorMessage(refusal)).toBe(
+      COUNTER_ERROR_MESSAGES.BILL_DISCOUNT_LOCKED_BY_PREPAID_TIER
+    );
+    // Changing or removing the whole-bill discount is refused the same way.
+    for (const request of [
+      { kind: 'AMOUNT', minor: 0 },
+      { kind: 'AMOUNT', minor: 100 },
+    ] as const) {
+      await expect(
+        tenant((db) =>
+          applyBillDiscount(db, scope, {
+            saleId: f.sale.id,
+            request,
+            approval: request.minor ? approval : null,
+          })
+        )
+      ).rejects.toMatchObject({ reason: 'BILL_DISCOUNT_LOCKED_BY_PREPAID_TIER' });
+    }
+    // Nothing moved: the lines, the bill total the rider collected and the stock are as they were.
+    expect(await lines(f.sale.id)).toEqual(collected);
+    const after = await tenant((db) => readCounterCart(db, scope, f.sale.id));
+    expect(after.totals.netMinor).toBe(652);
+    expect(after.lines.reduce((sum, line) => sum + line.lineTotalMinor, 0)).toBe(652);
+    expect(
+      await tenant((db) =>
+        db.pharmacySaleEvent.count({
+          where: { saleId: f.sale.id, kind: 'BILL_DISCOUNT', reason: 'CLEARED' },
+        })
+      )
+    ).toBe(0);
+    expect(
+      await tenant((db) =>
+        db.pharmacySaleLineAllocation.count({
+          where: { inventoryLotId: { in: extra.lots.map((lot) => lot.id) } },
+        })
+      )
+    ).toBe(0);
   });
 
   it('clears the discount when an item is added afterwards, and refuses the item once paid', async () => {

@@ -1,5 +1,6 @@
 import { signOut } from 'next-auth/react';
 
+import { clearCounterReadinessOkay } from '@/lib/pharmacy/counter-readiness-okay';
 import { clearCounterShell } from '@/lib/pharmacy/counter-shell';
 
 /**
@@ -18,6 +19,8 @@ export async function signOutEverything(callbackUrl = '/login') {
   // DEV-957: the offline counter page is stored for the person signed in now;
   // the next person at this computer must never be shown it. Never throws.
   const shellCleared = clearCounterShell();
+  // DEV-970: the next person (or the next sign-in) sees the counter's sale checks in full.
+  clearCounterReadinessOkay();
   try {
     await fetch('/api/login', { method: 'DELETE', credentials: 'include' });
   } catch {

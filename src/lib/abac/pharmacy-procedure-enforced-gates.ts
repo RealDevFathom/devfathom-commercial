@@ -120,7 +120,7 @@ export const PHARMACY_PROCEDURE_ENFORCED_GATES: Readonly<Record<string, readonly
   'pharmacyInventory.onHand': ['signed-in'],
   'pharmacyInventory.quarantineExpiring': ['pharmacy:inventory'],
   'pharmacyInventory.quarantinePart': ['pharmacy:safety'],
-  'pharmacyInventory.recallTrace': ['signed-in'],
+  'pharmacyInventory.recallTrace': ['pharmacy:safety'],
   'pharmacyInventory.receiveLot': ['pharmacy:inventory'],
   'pharmacyInventory.receiveTransferLine': ['pharmacy:inventory'],
   'pharmacyInventory.receiveTransferWithVariance': ['pharmacy:inventory'],

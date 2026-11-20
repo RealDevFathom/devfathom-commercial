@@ -936,8 +936,8 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'see-stock-cost-value',
-        text: "See each lot's value at risk, and the value at risk in each expiry window, on the expiry board's lot list (the near-expiry summary shows value at risk by window to anyone assigned to that branch, with or without this)",
-        sites: { 'src/server/routers/pharmacy-inventory.ts': 1 },
+        text: "See stock cost and value at risk on the expiry board and the inventory page's near-expiry summary",
+        sites: { 'src/server/routers/pharmacy-inventory.ts': 2 },
       },
       {
         id: 'view-customer-khata-accounts',
@@ -1074,6 +1074,11 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         id: 'manage-recalls-whole-pharmacy',
         text: 'Manage recalls for the whole pharmacy, see recall contact lists, block or unblock batches and quarantine stock at any branch',
         sites: { 'src/server/routers/pharmacy-inventory.ts': 1 },
+      },
+      {
+        id: 'trace-recall-their-branches',
+        text: "Trace a recall's stock and units sold at their branches; a workspace administrator with Manage stock sees every branch",
+        sites: {},
       },
       {
         id: 'open-substitution-workspace-review',
