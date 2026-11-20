@@ -603,8 +603,13 @@ export async function isPharmacyOrganization(db: ScopedDb, organizationId: strin
 export const INVITATION_NEEDS_OWNER_MESSAGE =
   'This invitation needs to be confirmed again. Ask the pharmacy owner to send you a new invitation.';
 
-/** The audit actions that issue (or re-send) an invitation with the issuer's own approval. */
-export const INVITATION_ISSUE_ACTIONS = ['team.inviteMember'] as const;
+/**
+ * The audit actions that issue (or re-send) an invitation with the issuer's own approval.
+ * DEV-974: an email change made by someone else sends the member back to invited and issues
+ * their invitation again, to the new address (`team.adminUpdateMember`); its audit row names
+ * that issue with `INVITATION_ISSUED_AT_KEY` exactly as an invite does.
+ */
+export const INVITATION_ISSUE_ACTIONS = ['team.inviteMember', 'team.adminUpdateMember'] as const;
 
 /**
  * The metadata key an invitation's issue records, set to the invitation row's `updatedAt`
