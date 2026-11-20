@@ -10,6 +10,70 @@ import {
   withScimAuth,
 } from '@/lib/scim';
 import { emailSchema, normalizeEmail } from '@/lib/email-address';
+import {
+  applyMemberEmailChangeEffects,
+  directoryEmailChangeDenial,
+  sendMemberEmailChangeNotices,
+  type MemberEmailChange,
+} from '@/lib/auth/member-email-change';
+
+const USER_SELECT = {
+  id: true,
+  name: true,
+  email: true,
+  role: true,
+  status: true,
+  createdAt: true,
+  updatedAt: true,
+} as const;
+
+type ScimRouteContext = Parameters<Parameters<typeof withScimAuth>[1]>[0];
+
+/**
+ * DEV-974: a SCIM `userName` is the member's sign-in email. A directory may not
+ * re-address an owner or administrator; for anyone else the change cancels pending
+ * reset links and must be confirmed from the new address (see member-email-change).
+ */
+async function guardDirectoryEmailChange(ctx: ScimRouteContext, id: string) {
+  const denial = await directoryEmailChangeDenial(ctx.db, id);
+  return denial ? scimError(403, denial, 'mutability') : null;
+}
+
+async function finishDirectoryEmailChange(
+  ctx: ScimRouteContext,
+  user: { id: string; name: string; email: string; status: string },
+  from: string
+): Promise<MemberEmailChange> {
+  const change = await applyMemberEmailChangeEffects(ctx.db, {
+    userId: user.id,
+    name: user.name,
+    from,
+    to: user.email,
+    status: user.status,
+    selfChange: false,
+    changedById: null,
+  });
+  // Who (the SCIM token), for whom, old and new address; in the request's transaction.
+  await ctx.db.auditLog.create({
+    data: {
+      organizationId: ctx.organizationId,
+      actorType: 'SYSTEM',
+      actorName: 'SCIM directory',
+      source: 'SYSTEM',
+      category: 'TEAM',
+      operation: 'UPDATE',
+      action: 'scim.user.email',
+      description: `Directory changed the sign-in email of ${user.name}`,
+      targetType: 'User',
+      targetId: user.id,
+      targetLabel: user.name,
+      outcome: 'SUCCESS',
+      changes: { email: { before: from, after: user.email } },
+      metadata: { emailChange: emailChangeAudit(ctx, change) },
+    },
+  });
+  return change;
+}
 
 const replaceSchema = z.object({
   // D10: normalized at the schema layer — see the create route.
@@ -35,6 +99,18 @@ const patchSchema = z.object({
     .min(1)
     .max(50),
 });
+
+/** Who (the SCIM token), for whom, old and new address — recorded on the SCIM event. */
+function emailChangeAudit(ctx: ScimRouteContext, change: MemberEmailChange) {
+  return {
+    changedBy: { scimTokenId: ctx.tokenId },
+    userId: change.userId,
+    from: change.from,
+    to: change.to,
+    confirmationRequired: change.confirmationToken !== null,
+    pendingResetsCancelled: true,
+  };
+}
 
 async function loadUser(ctx: Parameters<Parameters<typeof withScimAuth>[1]>[0], id: string) {
   return ctx.db.user.findUnique({
@@ -77,7 +153,12 @@ export async function PUT(request: Request, route: { params: Promise<{ id: strin
         select: { id: true },
       });
       if (clash) return scimError(409, 'A user with this userName already exists.', 'uniqueness');
-      const user = await ctx.db.user.update({
+      const changingEmail = email !== current.email;
+      if (changingEmail) {
+        const refused = await guardDirectoryEmailChange(ctx, id);
+        if (refused) return refused;
+      }
+      let user = await ctx.db.user.update({
         where: { id },
         data: {
           email,
@@ -86,22 +167,24 @@ export async function PUT(request: Request, route: { params: Promise<{ id: strin
           status: input.active ? 'ACTIVE' : 'INACTIVE',
           tokenVersion: !input.active ? { increment: 1 } : undefined,
         },
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
-          status: true,
-          createdAt: true,
-          updatedAt: true,
-        },
+        select: USER_SELECT,
       });
+      const emailChange = changingEmail
+        ? await finishDirectoryEmailChange(ctx, user, current.email)
+        : null;
+      if (emailChange) {
+        user = await ctx.db.user.findUniqueOrThrow({ where: { id }, select: USER_SELECT });
+      }
       await recordScimEvent(ctx, request, {
         operation: 'REPLACE',
         resourceType: 'User',
         status: 'SUCCEEDED',
-        payload: { userId: user.id },
+        payload: {
+          userId: user.id,
+          ...(emailChange ? { emailChange: emailChangeAudit(ctx, emailChange) } : {}),
+        },
       });
+      if (emailChange) await sendMemberEmailChangeNotices(emailChange, null);
       const body = scimUser(user, requestBaseUrl(request));
       return scimJson(body, 200, { ETag: body.meta.version });
     } catch (error) {
@@ -150,25 +233,36 @@ export async function PATCH(request: Request, route: { params: Promise<{ id: str
           return scimError(400, `Unsupported PATCH path: ${operation.path}`, 'invalidPath');
         }
       }
-      const user = await ctx.db.user.update({
-        where: { id },
-        data,
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
-          status: true,
-          createdAt: true,
-          updatedAt: true,
-        },
-      });
+      const changingEmail = data.email !== undefined && data.email !== current.email;
+      if (changingEmail) {
+        const refused = await guardDirectoryEmailChange(ctx, id);
+        if (refused) return refused;
+        const clash = await ctx.db.user.findFirst({
+          where: { email: data.email, id: { not: id } },
+          select: { id: true },
+        });
+        if (clash) {
+          return scimError(409, 'A user with this userName already exists.', 'uniqueness');
+        }
+      }
+      let user = await ctx.db.user.update({ where: { id }, data, select: USER_SELECT });
+      const emailChange = changingEmail
+        ? await finishDirectoryEmailChange(ctx, user, current.email)
+        : null;
+      if (emailChange) {
+        user = await ctx.db.user.findUniqueOrThrow({ where: { id }, select: USER_SELECT });
+      }
       await recordScimEvent(ctx, request, {
         operation: 'PATCH',
         resourceType: 'User',
         status: 'SUCCEEDED',
-        payload: { userId: user.id, paths: input.Operations.map((item) => item.path) },
+        payload: {
+          userId: user.id,
+          paths: input.Operations.map((item) => item.path),
+          ...(emailChange ? { emailChange: emailChangeAudit(ctx, emailChange) } : {}),
+        },
       });
+      if (emailChange) await sendMemberEmailChangeNotices(emailChange, null);
       const body = scimUser(user, requestBaseUrl(request));
       return scimJson(body, 200, { ETag: body.meta.version });
     } catch (error) {

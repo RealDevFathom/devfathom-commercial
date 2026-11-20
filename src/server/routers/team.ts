@@ -20,6 +20,13 @@ import { emailSchema } from '@/lib/email-address';
 import { assertInOrganization, workspaceId } from '../org-refs';
 import { passwordSchema } from '@/lib/password-policy';
 import { adminPasswordResetData, passwordResetDenial } from '@/lib/auth/admin-password-reset';
+import {
+  applyMemberEmailChangeEffects,
+  emailChangeDenial,
+  sendMemberEmailChangeNotices,
+  type MemberEmailChange,
+} from '@/lib/auth/member-email-change';
+import { requirePasswordReauthentication } from '@/lib/password-reauthentication';
 import { createMemberInvitation } from '@/lib/member-invitation';
 import { inviteRoleRefusal } from '@/lib/vertical-catalog';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -892,7 +899,10 @@ export const teamRouter = router({
       z.object({
         id: z.string(),
         name: z.string().min(1).optional(),
-        email: z.string().email().optional(),
+        // DEV-974: stored in the one canonical (trimmed, lower-case) form.
+        email: emailSchema.optional(),
+        // DEV-974: required only when a member changes their OWN email.
+        currentPassword: z.string().min(1).max(256).optional(),
         role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']).optional(),
         department: z
           .string()
@@ -909,7 +919,40 @@ export const teamRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const { id, ...data } = input;
+      const { id, currentPassword, ...data } = input;
+      const actorId = ctx.session.user.id;
+      const organizationId = workspaceId(ctx);
+      // DEV-974: the email is the sign-in identity. A support session never changes
+      // it, and a member changing their own proves it is them with their password
+      // (checked before the transaction: bcrypt must not pin a pooled connection).
+      if (input.email !== undefined) {
+        if (ctx.support || ctx.session.user.isSupportSession) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'A support session cannot change a sign-in email.',
+          });
+        }
+        if (id === actorId) {
+          const current = await ctx.db.user.findUnique({
+            where: { id },
+            select: { email: true },
+          });
+          if (current && current.email !== input.email) {
+            if (!currentPassword) {
+              throw new TRPCError({
+                code: 'FORBIDDEN',
+                message: 'Enter your current password to change your sign-in email.',
+              });
+            }
+            await requirePasswordReauthentication(ctx.db, {
+              organizationId,
+              userId: id,
+              password: currentPassword,
+              purpose: 'email-change',
+            });
+          }
+        }
+      }
       if (input.department) {
         const department = await ctx.db.organizationDepartment.findFirst({
           where: { key: input.department, active: true },
@@ -931,11 +974,10 @@ export const teamRouter = router({
       ] as const;
       const demoting = input.role !== undefined && input.role !== 'ADMIN';
       const deactivating = input.status !== undefined && input.status !== 'ACTIVE';
-      const organizationId = workspaceId(ctx);
       // Coordinate promotions/reactivations as well as removals. Read the
       // target only after locking so a stale role/status cannot skip the guard.
       const rosterChange = input.role !== undefined || input.status !== undefined;
-      const { before, updated } = await withAdminRosterLock(
+      const { before, updated, emailChange } = await withAdminRosterLock(
         ctx.db,
         organizationId,
         rosterChange,
@@ -947,6 +989,27 @@ export const teamRouter = router({
               true
             >,
           });
+          const changingEmail =
+            before !== null && input.email !== undefined && input.email !== before.email;
+          if (changingEmail) {
+            // DEV-974: nobody else changes an owner's email, and an administrator
+            // changes only the email of a member below them.
+            const denial = await emailChangeDenial(tx, { actorId, targetId: id });
+            if (denial === 'Member not found.') {
+              throw new TRPCError({ code: 'NOT_FOUND', message: denial });
+            }
+            if (denial) throw new TRPCError({ code: 'FORBIDDEN', message: denial });
+            const clash = await tx.user.findFirst({
+              where: { email: input.email, id: { not: id } },
+              select: { id: true },
+            });
+            if (clash) {
+              throw new TRPCError({
+                code: 'CONFLICT',
+                message: 'Another member already uses this email.',
+              });
+            }
+          }
           // The edit form always sends the current role; only an actual
           // grant or revoke needs `team:setRole`. Checked against the locked row.
           if (input.role !== undefined && before?.role !== input.role) {
@@ -993,20 +1056,54 @@ export const teamRouter = router({
               lastActiveAt: true,
             },
           });
-          return { before, updated };
+          // DEV-974: cancel pending resets; a change made by someone else must be
+          // confirmed from the new address before it can sign in or get a reset.
+          let emailChange: MemberEmailChange | null = null;
+          if (changingEmail) {
+            emailChange = await applyMemberEmailChangeEffects(tx, {
+              userId: id,
+              name: updated.name,
+              from: before.email,
+              to: updated.email,
+              status: updated.status,
+              selfChange: id === actorId,
+              changedById: actorId,
+            });
+            if (emailChange.confirmationToken) updated.status = 'INVITED';
+          }
+          return { before, updated, emailChange };
         }
       );
+      if (emailChange) {
+        await sendMemberEmailChangeNotices(emailChange, ctx.session.user.name ?? null);
+      }
       annotateAudit(ctx, {
         targetType: 'User',
         targetId: id,
         targetLabel: updated.name,
-        description: `Updated team member ${updated.name}`,
+        description: emailChange
+          ? `Changed the sign-in email of ${updated.name}`
+          : `Updated team member ${updated.name}`,
         changes:
           diffChanges(
             before as Record<string, unknown> | null,
             updated as unknown as Record<string, unknown>,
             [...auditFields]
           ) ?? undefined,
+        ...(emailChange
+          ? {
+              metadata: {
+                emailChange: {
+                  from: emailChange.from,
+                  to: emailChange.to,
+                  changedById: actorId,
+                  selfChange: emailChange.selfChange,
+                  confirmationRequired: emailChange.confirmationToken !== null,
+                  pendingResetsCancelled: true,
+                },
+              },
+            }
+          : {}),
       });
       return updated;
     }),
