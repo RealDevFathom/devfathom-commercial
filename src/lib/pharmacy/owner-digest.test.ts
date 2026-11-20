@@ -219,6 +219,12 @@ describe('RPT-03 owner digest', () => {
       to: '2026-09-04',
       timeZone: 'Asia/Karachi',
     });
+    expect(mocks.readPharmacyAnomalySignals).toHaveBeenCalledWith(expect.anything(), {
+      branchIds: ['branch_1'],
+      from: '2026-09-04',
+      to: '2026-09-04',
+      timeZone: 'Asia/Karachi',
+    });
   });
 
   it('includes explainable anomaly events in the existing owner digest', async () => {
@@ -355,6 +361,75 @@ describe('RPT-03 owner digest', () => {
     );
     expect(digest.rendered).toContain('Weekly summary 2026-09-01 to 2026-09-07');
     expect(digest.whatsappBody).toContain('Weekly summary 2026-09-01 to 2026-09-07');
+  });
+
+  it("DEV-944: reads the weekly ledger, lost demand and recoveries on the shop's own days", async () => {
+    // 2026-09-07 is a Monday, the default weekly weekday. Karachi is UTC+5.
+    await composeOwnerDigest({} as never, {
+      organizationId: 'org_1',
+      userId: 'user_1',
+      branchId: 'branch_1',
+      branchName: 'Main',
+      businessDate: '2026-09-07',
+      timeZone: 'Asia/Karachi',
+    });
+    expect(mocks.readPharmacyOwnerCommandCentre).toHaveBeenCalledWith(expect.anything(), {
+      branchIds: ['branch_1'],
+      from: '2026-09-01',
+      to: '2026-09-07',
+      timeZone: 'Asia/Karachi',
+    });
+    expect(mocks.readOwnerBriefingDemand).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        cadence: 'DAILY',
+        startsAt: new Date('2026-09-06T19:00:00.000Z'),
+        endsBefore: new Date('2026-09-07T19:00:00.000Z'),
+      }),
+      expect.anything()
+    );
+    expect(mocks.readOwnerBriefingDemand).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        cadence: 'WEEKLY',
+        startsAt: new Date('2026-08-31T19:00:00.000Z'),
+        endsBefore: new Date('2026-09-07T19:00:00.000Z'),
+      }),
+      expect.anything()
+    );
+  });
+
+  it('DEV-944: keeps the UTC windows for an organisation on UTC', async () => {
+    await composeOwnerDigest({} as never, {
+      organizationId: 'org_1',
+      userId: 'user_1',
+      branchId: 'branch_1',
+      branchName: 'Main',
+      businessDate: '2026-09-07',
+      timeZone: 'UTC',
+    });
+    expect(mocks.readPharmacyOwnerCommandCentre).toHaveBeenCalledWith(expect.anything(), {
+      branchIds: ['branch_1'],
+      from: '2026-09-01',
+      to: '2026-09-07',
+      timeZone: 'UTC',
+    });
+    for (const [cadence, from] of [
+      ['DAILY', '2026-09-07'],
+      ['WEEKLY', '2026-09-01'],
+    ])
+      expect(mocks.readOwnerBriefingDemand).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({
+          cadence,
+          startsAt: new Date(`${from}T00:00:00.000Z`),
+          endsBefore: new Date('2026-09-08T00:00:00.000Z'),
+        }),
+        expect.anything()
+      );
   });
 
   it('keeps the in-app digest when the WhatsApp body fails its guard', async () => {

@@ -1,5 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import { annotateAuditBranch } from '../audit-branch';
 import { assertProcurementBranch } from '../pharmacy-procurement-scope';
 import { assertInOrganization } from '../org-refs';
 import {
@@ -134,6 +135,7 @@ export const pharmacySupplierLinksRouter = router({
         select: { id: true, branchId: true },
       });
       if (!link) throw genericLinkError();
+      annotateAuditBranch(ctx, link.branchId);
       await assertBranch(ctx, link.branchId);
       return ctx.db.pharmacySupplierActionLink.update({
         where: {

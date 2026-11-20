@@ -2,6 +2,7 @@ import 'server-only';
 
 import { z } from 'zod';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { pharmacyBusinessDayRange, type PharmacyDayEnd } from './business-day';
 import { demandDateAfter, demandDateMs, forecastDemandEvidence } from './demand-evidence';
 import {
   readPharmacyDemandEvidence,
@@ -68,20 +69,43 @@ export const pharmacyReplenishmentReportInput = z
 /** Public request: tenant, branch authority, timestamps and provenance are server-owned. */
 export type PharmacyReplenishmentReportInput = z.infer<typeof pharmacyReplenishmentReportInput>;
 export type PharmacyReplenishmentReportReaderInput = PharmacyReplenishmentReportInput &
-  Pick<PharmacyDemandEvidenceReaderInput, 'organizationId' | 'authorizedBranchIds'> & {
+  Pick<
+    PharmacyDemandEvidenceReaderInput,
+    'organizationId' | 'authorizedBranchIds' | 'timeZone' | 'dayEnd'
+  > & {
     financial: boolean;
   };
 
+/**
+ * When the business day `date` starts on the branch's clock (UTC when absent): the organisation's
+ * midnight, or DEV-958A the branch's "day ends at" hour.
+ */
+function shopDayStartMs(
+  date: string,
+  timeZone: string | null | undefined,
+  dayEnd?: PharmacyDayEnd
+): number {
+  return pharmacyBusinessDayRange(date, date, { timeZone, dayEnd }).from.getTime();
+}
+
+/**
+ * `timeZone` is the caller's own organisation zone, loaded on the server: the history may end
+ * on the shop's today and the scenario starts on a later shop day, the same days the screen
+ * offers. An organisation on UTC keeps UTC days.
+ */
 export function validatePharmacyReplenishmentReportInput(
   input: PharmacyReplenishmentReportInput,
-  readAt: Date
+  readAt: Date,
+  timeZone?: string | null,
+  /** DEV-958A: the branch's day-end hours by day (`PharmacyDayEnd`; midnight when absent). */
+  dayEnd?: PharmacyDayEnd
 ): void {
   pharmacyReplenishmentReportInput.parse(input);
   const origin = demandDateMs(input.originDate);
   const historyDays = (origin - demandDateMs(input.historyStartDate)) / 86_400_000;
   if (
     !Number.isFinite(readAt.getTime()) ||
-    origin > readAt.getTime() ||
+    shopDayStartMs(input.originDate, timeZone, dayEnd) > readAt.getTime() ||
     historyDays < 1 ||
     historyDays > 90
   )
@@ -89,10 +113,15 @@ export function validatePharmacyReplenishmentReportInput(
   demandDateAfter(input.originDate, input.horizonDays);
   if (input.manualScenario) {
     const scenario = input.manualScenario;
+    // The planning model itself starts each day at midnight UTC (demand-evidence UTC_DAY_START)
+    // and refuses sources dated after that origin, so the scenario day must not have begun
+    // on either clock: the shop's (a day east of UTC starts earlier) or the model's UTC
+    // midnight (a day west of UTC starts later). "Within 31 days" counts on the shop's clock.
     const planningOrigin = demandDateMs(scenario.originDate);
+    const planningStart = shopDayStartMs(scenario.originDate, timeZone, dayEnd);
     if (
-      planningOrigin <= readAt.getTime() ||
-      planningOrigin > readAt.getTime() + 31 * 86_400_000 ||
+      Math.min(planningStart, planningOrigin) <= readAt.getTime() ||
+      planningStart > readAt.getTime() + 31 * 86_400_000 ||
       (scenario.orderTerms.arrivalAt !== null &&
         Date.parse(scenario.orderTerms.arrivalAt) < planningOrigin) ||
       !Number.isSafeInteger(scenario.dailyDemandUnits * input.horizonDays) ||
@@ -117,8 +146,8 @@ export async function readPharmacyReplenishmentReport(
   input: PharmacyReplenishmentReportReaderInput,
   readAt: Date = new Date()
 ) {
-  const { organizationId, authorizedBranchIds, financial, ...request } = input;
-  validatePharmacyReplenishmentReportInput(request, readAt);
+  const { organizationId, authorizedBranchIds, financial, timeZone, dayEnd, ...request } = input;
+  validatePharmacyReplenishmentReportInput(request, readAt, timeZone, dayEnd);
   if (!organizationId.trim() || organizationId.length > 128)
     throw new RangeError('A valid organization scope is required.');
   if (!authorizedBranchIds.includes(input.branchId))
@@ -127,7 +156,7 @@ export async function readPharmacyReplenishmentReport(
   // Demand reader verifies active branch and medicine before any supply reads.
   const evidence = await readPharmacyDemandEvidence(
     db,
-    { ...scope, ...request, authorizedBranchIds },
+    { ...scope, ...request, authorizedBranchIds, timeZone, dayEnd },
     readAt
   );
   const supply = await loadForecastingInputs(db, scope);

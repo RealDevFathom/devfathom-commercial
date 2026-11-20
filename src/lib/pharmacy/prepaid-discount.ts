@@ -1,6 +1,12 @@
 import 'server-only';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { lockPrepaidCustomer, readPrepaidAccount } from './prepaid-tiers';
+import { billAllocationDiscount } from './bill-discount';
+import { BPS, maxDiscountMinorFor, minimumPriceForMargin } from './smart-discount';
+import { readDiscountLimits } from './smart-discount-service';
+
+/** DEV-66: the owner's maximum discount and the branch's minimum margin. */
+type DiscountLimits = { minMarginBps: number; maxDiscountBps: number };
 
 type Line = {
   id: string;
@@ -8,6 +14,8 @@ type Line = {
   grossMinor: number;
   discountMinor: number;
   tierAllocationDiscounts?: unknown;
+  /** DEV-956: each allocation's share of the whole-bill discount, already in discountMinor. */
+  billAllocationDiscounts?: unknown;
   tierDiscountMinor?: number;
   tierName?: string | null;
   discountKind?: string | null;
@@ -25,13 +33,24 @@ type Line = {
 type Sale = {
   id: string;
   organizationId: string;
+  branchId: string;
   customerId?: string | null;
   status: string;
   tenders: { createdAt: Date }[];
   lines: Line[];
 };
-/** The floor applies to every allocated lot, including mixed-cost packs. Regulated lines keep their no-discount rule. */
-export function prepaidLineDiscount(line: Line, basisPoints: number, billShareMinor?: number) {
+/**
+ * The floor applies to every allocated lot, including mixed-cost packs. Regulated lines keep
+ * their no-discount rule. DEV-66: the bill-wide tier discount, added to the line's own
+ * discount, never exceeds the owner's maximum and never leaves less than the branch's
+ * minimum margin on any lot. The sale path always passes the stored limits.
+ */
+export function prepaidLineDiscount(
+  line: Line,
+  basisPoints: number,
+  billShareMinor?: number,
+  limits: DiscountLimits = { minMarginBps: 0, maxDiscountBps: BPS }
+) {
   if (
     line.medicine.rx ||
     line.medicine.restricted ||
@@ -42,14 +61,22 @@ export function prepaidLineDiscount(line: Line, basisPoints: number, billShareMi
     return { amountMinor: 0, allocations: line.allocations.map(() => 0) };
   const desired =
     billShareMinor ?? Math.floor(((line.grossMinor - line.discountMinor) * basisPoints) / 10000);
+  // DEV-956: a lot's whole-bill share is already taken off its price before the tier prices it.
   const capacities = line.allocations.map((a) =>
     Math.max(
       0,
-      (a.grossMinor ?? 0) - (a.discountMinor ?? 0) - a.canonicalUnits * a.lot.unitCostMinor
+      (a.grossMinor ?? 0) -
+        (a.discountMinor ?? 0) -
+        billAllocationDiscount(line.billAllocationDiscounts, a.id) -
+        minimumPriceForMargin(a.canonicalUnits * a.lot.unitCostMinor, limits.minMarginBps)
     )
   );
   const capacity = capacities.reduce((sum, n) => sum + n, 0);
-  const amountMinor = Math.min(desired, capacity);
+  const underMaximum = Math.max(
+    0,
+    maxDiscountMinorFor(line.grossMinor, limits.maxDiscountBps) - line.discountMinor
+  );
+  const amountMinor = Math.min(desired, capacity, underMaximum);
   let cumulative = 0;
   const allocations = capacities.map((n) => {
     const before = cumulative;
@@ -94,6 +121,7 @@ export async function pricePrepaidSale<T extends Sale>(
     select: { actorId: true },
   });
   if (!version) throw new Error('Prepaid tier author unavailable.');
+  const limits = await readDiscountLimits(db, sale);
   // The whole-bill share is apportioned in line order, so rounding never loses a paisa.
   const basisPoints = BigInt(account.discountBasisPoints);
   const shares = new Map<string, number>();
@@ -111,7 +139,7 @@ export async function pricePrepaidSale<T extends Sale>(
   const lines = [];
   for (const line of sale.lines) {
     const discount = pending(line)
-      ? prepaidLineDiscount(line, account.discountBasisPoints, shares.get(line.id))
+      ? prepaidLineDiscount(line, account.discountBasisPoints, shares.get(line.id), limits)
       : { amountMinor: 0, allocations: [] };
     if (!discount.amountMinor) {
       lines.push(line);

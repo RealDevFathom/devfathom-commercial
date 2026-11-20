@@ -12,7 +12,8 @@ import {
   PHARMACY_SOP_SCHEDULE_LIMITS,
 } from '@/lib/pharmacy/sop-shared';
 import { ianaTimezoneOptions } from '@/lib/platform/timezones';
-import { isIanaTimezone, workspaceTimezone, workspaceToday } from '@/lib/timezone';
+import { isIanaTimezone, workspaceTimezone } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import { trpc } from '@/lib/trpc';
 
 import {
@@ -646,7 +647,7 @@ function ScheduleForm({
   const [graceMinutes, setGraceMinutes] = useState(
     String(Math.min(suggestion.graceMinutes, MAX_GRACE))
   );
-  const [startDate, setStartDate] = useState(workspaceToday(branch.timezone));
+  const [startDate, setStartDate] = useState(pharmacyCalendarDay(branch.timezone));
   const [endDate, setEndDate] = useState('');
   const [fieldErrors, setFieldErrors] = useState<ScheduleErrors>({});
   const [error, setError] = useState<string | null>(null);

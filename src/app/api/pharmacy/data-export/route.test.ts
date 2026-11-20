@@ -62,6 +62,7 @@ vi.mock('@/server/trpc', () => ({
 
 import { clearRateLimit } from '@/lib/rate-limit';
 import { OWNER_DATA_EXPORT_DOWNLOAD_LIMIT } from '@/lib/pharmacy/owner-data-export';
+import { NO_PIN_SET_MESSAGE } from '@/lib/pharmacy/own-pin-policy';
 import { GET, POST } from './route';
 
 const OWNER = {
@@ -324,6 +325,13 @@ describe('owner data export PIN, rate limit and list audit (DEV-783)', () => {
       }),
       expect.anything()
     );
+  });
+
+  it('answers a missing PIN with the shared message that links to Your PIN (DEV-931)', async () => {
+    m.verifyPin.mockResolvedValue('NO_PIN');
+    const response = await POST(post({ pin: '0000' }));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: NO_PIN_SET_MESSAGE, code: 'PIN_NOT_SET' });
   });
 
   it.each([

@@ -253,9 +253,7 @@ export function CounterUnitToggle({
           }
         >
           <div>
-            <dt className="font-mono text-xs tracking-wide text-text-muted uppercase">
-              Units
-            </dt>
+            <dt className="font-mono text-xs tracking-wide text-text-muted uppercase">Units</dt>
             <dd className="font-mono tabular-nums text-text-strong">{preview.canonicalUnits}</dd>
           </div>
           <div>
@@ -282,26 +280,30 @@ export function CounterUnitToggle({
               {formatMinor(preview.grossMinor)}
             </dd>
           </div>
+          {/* DEV-930: every group in a description list is a term and its description. */}
           <div className={inline ? 'basis-full' : 'col-span-2 sm:col-span-4'}>
-            {preview.sufficient ? (
-              <StatusPill
-                status="in-stock"
-                tone="success"
-                label={`Covered · ${preview.availableUnits} units on hand`}
-              />
-            ) : (
-              <span role="alert" className="flex flex-wrap items-center gap-2">
+            <dt className="sr-only">Stock</dt>
+            <dd>
+              {preview.sufficient ? (
                 <StatusPill
-                  status="short"
-                  tone="warning"
-                  label={`Short by ${preview.shortfallUnits} units`}
+                  status="in-stock"
+                  tone="success"
+                  label={`Covered · ${preview.availableUnits} units on hand`}
                 />
-                <span className="text-sm text-text-body">
-                  Only {onHandInSaleUnitLabel(preview)} on hand. Reduce the quantity or record the
-                  shortage.
+              ) : (
+                <span role="alert" className="flex flex-wrap items-center gap-2">
+                  <StatusPill
+                    status="short"
+                    tone="warning"
+                    label={`Short by ${preview.shortfallUnits} units`}
+                  />
+                  <span className="text-sm text-text-body">
+                    Only {onHandInSaleUnitLabel(preview)} on hand. Reduce the quantity or record the
+                    shortage.
+                  </span>
                 </span>
-              </span>
-            )}
+              )}
+            </dd>
           </div>
         </dl>
       ) : null}

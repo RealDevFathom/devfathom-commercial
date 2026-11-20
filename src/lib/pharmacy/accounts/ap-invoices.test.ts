@@ -6,20 +6,26 @@ import {
   postBookkeepingTransaction,
 } from '@/lib/pharmacy/bookkeeping';
 import {
+  apReversalAuditRecorderId,
   apSettlementPaymentKey,
+  invoiceSettlementClocks,
   normalizeApInvoice,
   normalizePayeeKey,
   outstandingMinor,
   parseCalendarDate,
+  payableMinorFrom,
   payApInvoice,
   recordApInvoice,
   reverseApInvoice,
   reverseApSettlement,
+  searchApReversals,
 } from './ap-invoices';
 import { payApInvoiceSchema, recordApInvoiceSchema } from './ap-invoices-schema';
 
 const NOW = new Date('2026-11-15T12:00:00.000Z');
 const scope = { organizationId: 'org_1', branchId: 'branch_1', actorId: 'owner_1' };
+/** The recorder reverses their own entry: allowed only because nobody else could approve. */
+const SOLO = { soleApprover: async () => true, now: NOW };
 
 const recordInput = {
   branchId: 'branch_1',
@@ -500,20 +506,20 @@ describe('native reversal interlock', () => {
       reason: 'Bank rejected transfer',
       at: '2026-11-12T00:00:00.000Z',
     };
-    const result = await reverseApSettlement(scoped, scope, input, NOW);
+    const result = await reverseApSettlement(scoped, scope, input, SOLO);
     expect(result.settlement).toMatchObject({
       status: 'REVERSED',
       reverseCommandKey: 'reverse-pay-0001',
     });
     expect(transactions[0]).toMatchObject({ status: 'REVERSED' });
     expect(entries.filter((entry) => entry.reversesEntryId)).toHaveLength(1);
-    const replay = await reverseApSettlement(scoped, scope, input, NOW);
+    const replay = await reverseApSettlement(scoped, scope, input, SOLO);
     expect(replay.replayed).toBe(true);
     await expect(
-      reverseApSettlement(scoped, scope, { ...input, reason: 'Other' }, NOW)
+      reverseApSettlement(scoped, scope, { ...input, reason: 'Other' }, SOLO)
     ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
     await expect(
-      reverseApSettlement(scoped, scope, { ...input, commandKey: 'reverse-pay-0002' }, NOW)
+      reverseApSettlement(scoped, scope, { ...input, commandKey: 'reverse-pay-0002' }, SOLO)
     ).rejects.toMatchObject({ reason: 'ALREADY_REVERSED' });
     expect(entries.filter((entry) => entry.reversesEntryId)).toHaveLength(1);
     expect(
@@ -534,7 +540,7 @@ describe('native reversal interlock', () => {
           reason: 'Early',
           at: '2026-11-09T00:00:00.000Z',
         },
-        NOW
+        SOLO
       )
     ).rejects.toMatchObject({ reason: 'INVALID_DATE' });
     expect(transactions[0]).toMatchObject({ status: 'POSTED' });
@@ -549,7 +555,7 @@ describe('native reversal interlock', () => {
       reason: 'Duplicate bill',
       at: '2026-11-13T00:00:00.000Z',
     };
-    await expect(reverseApInvoice(scoped, scope, reverseInvoiceInput, NOW)).rejects.toMatchObject({
+    await expect(reverseApInvoice(scoped, scope, reverseInvoiceInput, SOLO)).rejects.toMatchObject({
       reason: 'ACTIVE_SETTLEMENTS',
     });
     await reverseApSettlement(
@@ -562,9 +568,9 @@ describe('native reversal interlock', () => {
         reason: 'Duplicate bill',
         at: '2026-11-12T00:00:00.000Z',
       },
-      NOW
+      SOLO
     );
-    const result = await reverseApInvoice(scoped, scope, reverseInvoiceInput, NOW);
+    const result = await reverseApInvoice(scoped, scope, reverseInvoiceInput, SOLO);
     expect(result.invoice).toMatchObject({ status: 'REVERSED', reversalReason: 'Duplicate bill' });
     const reversal = entries.find((entry) => entry.reversesEntryId === invoice.journalEntryId)!;
     expect(reversal).toMatchObject({ sourceKind: 'PHARMACY_AP_INVOICE', sourceId: invoice.id });
@@ -573,7 +579,7 @@ describe('native reversal interlock', () => {
         scoped,
         scope,
         { ...reverseInvoiceInput, commandKey: 'reverse-inv-0002' },
-        NOW
+        SOLO
       )
     ).rejects.toMatchObject({ reason: 'ALREADY_REVERSED' });
   });
@@ -590,7 +596,7 @@ describe('native reversal interlock', () => {
         reason: 'x',
         at: '2026-11-12T00:00:00.000Z',
       },
-      NOW
+      SOLO
     );
     await reverseApInvoice(
       scoped,
@@ -602,7 +608,7 @@ describe('native reversal interlock', () => {
         reason: 'x',
         at: '2026-11-12T00:00:00.000Z',
       },
-      NOW
+      SOLO
     );
     const corrected = await recordApInvoice(
       scoped,
@@ -611,6 +617,128 @@ describe('native reversal interlock', () => {
       NOW
     );
     expect(corrected.replayed).toBe(false);
+  });
+});
+
+describe('DEV-103: who may approve a reversal', () => {
+  const manager = { ...scope, actorId: 'manager_2' };
+  async function paid() {
+    const memory = memoryDb();
+    const { invoice } = await recordApInvoice(memory.scoped, scope, recordInput, NOW);
+    const { settlement } = await payApInvoice(memory.scoped, scope, payInput(invoice.id), NOW);
+    return { ...memory, invoice, settlement };
+  }
+  const reversePay = (settlementId: string, commandKey = 'reverse-pay-0001') => ({
+    branchId: 'branch_1',
+    settlementId,
+    commandKey,
+    reason: 'Paid twice by mistake',
+  });
+  const reverseInv = (invoiceId: string) => ({
+    branchId: 'branch_1',
+    invoiceId,
+    commandKey: 'reverse-inv-0001',
+    reason: 'Entered against the wrong payee',
+  });
+
+  it('refuses the recorder reversing their own payment while someone else could approve; nothing moves', async () => {
+    const { scoped, settlement, transactions, entries } = await paid();
+    const soleApprover = vi.fn(async () => false);
+    await expect(
+      reverseApSettlement(scoped, scope, reversePay(settlement.id), { soleApprover, now: NOW })
+    ).rejects.toMatchObject({ reason: 'SELF_APPROVAL' });
+    expect(soleApprover).toHaveBeenCalledTimes(1);
+    expect(transactions[0]).toMatchObject({ status: 'POSTED' });
+    expect(entries.filter((entry) => entry.reversesEntryId)).toHaveLength(0);
+    expect(settlement).toMatchObject({ status: 'ACTIVE' });
+  });
+
+  it('refuses the recorder reversing their own invoice while someone else could approve; nothing moves', async () => {
+    const { scoped, invoice, settlement, entries } = await paid();
+    await reverseApSettlement(scoped, manager, reversePay(settlement.id), {
+      soleApprover: async () => false,
+      now: NOW,
+    });
+    await expect(
+      reverseApInvoice(scoped, scope, reverseInv(invoice.id), {
+        soleApprover: async () => false,
+        now: NOW,
+      })
+    ).rejects.toMatchObject({ reason: 'SELF_APPROVAL' });
+    expect(invoice).toMatchObject({ status: 'POSTED' });
+    expect(
+      entries.filter((entry) => entry.reversesEntryId === invoice.journalEntryId)
+    ).toHaveLength(0);
+  });
+
+  it('a different manager reverses without the solo rule, and is recorded as the approver', async () => {
+    const { scoped, invoice, settlement } = await paid();
+    const soleApprover = vi.fn(async () => false);
+    const pay = await reverseApSettlement(scoped, manager, reversePay(settlement.id), {
+      soleApprover,
+      now: NOW,
+    });
+    expect(pay).toMatchObject({ policy: 'PHARMACY_AP_REVERSAL_MANAGER_PIN' });
+    expect(pay.settlement).toMatchObject({
+      status: 'REVERSED',
+      reversedByUserId: 'manager_2',
+      createdByUserId: 'owner_1',
+    });
+    const inv = await reverseApInvoice(scoped, manager, reverseInv(invoice.id), {
+      soleApprover,
+      now: NOW,
+    });
+    expect(inv).toMatchObject({ policy: 'PHARMACY_AP_REVERSAL_MANAGER_PIN' });
+    expect(inv.invoice).toMatchObject({ status: 'REVERSED', reversedByUserId: 'manager_2' });
+    expect(soleApprover).not.toHaveBeenCalled();
+  });
+
+  it('a solo owner reverses their own entries under the sole-approver policy', async () => {
+    const { scoped, invoice, settlement } = await paid();
+    const pay = await reverseApSettlement(scoped, scope, reversePay(settlement.id), SOLO);
+    expect(pay).toMatchObject({ policy: 'PHARMACY_AP_REVERSAL_SOLE_APPROVER_PIN' });
+    const inv = await reverseApInvoice(scoped, scope, reverseInv(invoice.id), SOLO);
+    expect(inv).toMatchObject({ policy: 'PHARMACY_AP_REVERSAL_SOLE_APPROVER_PIN' });
+  });
+
+  it('an undated reversal takes the server clock and replays a double submit exactly once', async () => {
+    const { scoped, settlement, entries, invoice, settlements } = await paid();
+    const first = await reverseApSettlement(scoped, manager, reversePay(settlement.id), {
+      soleApprover: async () => false,
+      now: NOW,
+    });
+    expect(first.settlement).toMatchObject({ reversedAt: NOW });
+    const later = new Date(NOW.getTime() + 5_000);
+    const again = await reverseApSettlement(scoped, manager, reversePay(settlement.id), {
+      soleApprover: async () => false,
+      now: later,
+    });
+    expect(again.replayed).toBe(true);
+    expect(entries.filter((entry) => entry.reversesEntryId)).toHaveLength(1);
+    // The same key for another payment is a conflict, never a replay.
+    await expect(
+      reverseApSettlement(scoped, manager, reversePay('settlement_other'), {
+        soleApprover: async () => false,
+        now: later,
+      })
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+    // The invoice owes the full amount again, exactly.
+    expect(
+      outstandingMinor({ amountMinor: invoice.amountMinor, settlements: settlements as never })
+    ).toBe(invoice.amountMinor);
+  });
+
+  it('a reversal dated in a closed period is refused and changes nothing', async () => {
+    const memory = memoryDb();
+    const { invoice } = await recordApInvoice(memory.scoped, scope, recordInput, NOW);
+    // The period of the reversal day closes after the invoice was recorded.
+    memory.db.pharmacyAccountingPeriod.findFirst.mockResolvedValue({ id: 'closed' });
+    const soleApprover = vi.fn(async () => true);
+    await expect(
+      reverseApInvoice(memory.scoped, scope, reverseInv(invoice.id), { soleApprover, now: NOW })
+    ).rejects.toMatchObject({ reason: 'PERIOD_CLOSED' });
+    expect(invoice).toMatchObject({ status: 'POSTED' });
+    expect(memory.entries.filter((entry) => entry.reversesEntryId)).toHaveLength(0);
   });
 });
 
@@ -635,7 +763,7 @@ describe('historical settlement timeline (two clocks)', () => {
         reason: 'Bank rejected transfer',
         at: '2026-11-10T00:00:00.000Z',
       },
-      NOW
+      SOLO
     );
     return { ...memory, invoice };
   }
@@ -707,7 +835,7 @@ describe('historical settlement timeline (two clocks)', () => {
       reason: 'Duplicate bill',
     };
     await expect(
-      reverseApInvoice(scoped, scope, { ...input, at: '2026-11-05T00:00:00.000Z' }, NOW)
+      reverseApInvoice(scoped, scope, { ...input, at: '2026-11-05T00:00:00.000Z' }, SOLO)
     ).rejects.toMatchObject({ reason: 'INVALID_DATE' });
     expect(
       entries.filter((entry) => entry.reversesEntryId === invoice.journalEntryId)
@@ -716,8 +844,373 @@ describe('historical settlement timeline (two clocks)', () => {
       scoped,
       scope,
       { ...input, at: '2026-11-10T00:00:00.000Z' },
-      NOW
+      SOLO
     );
     expect(result.invoice.status).toBe('REVERSED');
+  });
+});
+
+describe('DEV-694: approved credit-note set-offs settle the bill', () => {
+  const at = new Date('2026-11-15T00:00:00.000Z');
+  const setOffInvoice = {
+    id: 'inv_9',
+    branchId: 'branch_1',
+    reference: 'AP-9',
+    status: 'POSTED',
+    amountMinor: 100,
+    invoiceDate: new Date('2026-11-01T00:00:00.000Z'),
+    journalEntryId: 'entry_9',
+    settlements: [],
+    creditSetOffs: [{ amountMinor: 40, decidedAt: new Date('2026-11-10T00:00:00.000Z') }],
+  };
+  const lockedDb = () =>
+    ({
+      $queryRaw: vi.fn(async () => []),
+      pharmacyApInvoice: {
+        // The command-key replay lookup finds nothing; the locked read finds the bill.
+        findFirst: vi.fn(async (args: { where: Record<string, unknown> }) =>
+          'reverseCommandKey' in args.where ? null : setOffInvoice
+        ),
+      },
+      pharmacyApInvoiceSettlement: { findFirst: vi.fn(async () => null) },
+    }) as unknown as ScopedDb;
+
+  it('counts them as active settlement clocks from their approval instant', () => {
+    const clocks = invoiceSettlementClocks(setOffInvoice);
+    expect(payableMinorFrom({ amountMinor: 100, settlements: clocks }, at)).toBe(60);
+    // A payment backdated before the set-off still cannot over-settle the bill.
+    expect(
+      payableMinorFrom(
+        { amountMinor: 100, settlements: clocks },
+        new Date('2026-11-05T00:00:00.000Z')
+      )
+    ).toBe(60);
+  });
+
+  it('refuses a payment above what the set-off left owing', async () => {
+    await expect(
+      payApInvoice(
+        lockedDb(),
+        scope,
+        {
+          branchId: 'branch_1',
+          invoiceId: 'inv_9',
+          commandKey: 'pay-key-0009',
+          reference: 'PAY-9',
+          amountMinor: 61,
+          paidAt: '2026-11-15T00:00:00.000Z',
+          fundingAccount: 'CASH',
+        },
+        NOW
+      )
+    ).rejects.toMatchObject({ reason: 'OVERPAYMENT' });
+  });
+
+  it('refuses to reverse a bill a credit note was set off against', async () => {
+    await expect(
+      reverseApInvoice(
+        lockedDb(),
+        scope,
+        {
+          branchId: 'branch_1',
+          invoiceId: 'inv_9',
+          commandKey: 'rev-inv-0009',
+          reason: 'Duplicate',
+          at: '2026-11-15T00:00:00.000Z',
+        },
+        SOLO
+      )
+    ).rejects.toMatchObject({ reason: 'ACTIVE_SETTLEMENTS' });
+  });
+
+  it('allows reversing the bill once its set-off is reversed, but not before that instant', async () => {
+    const reversedInvoice = {
+      ...setOffInvoice,
+      creditSetOffs: [
+        {
+          amountMinor: 40,
+          decidedAt: new Date('2026-11-10T00:00:00.000Z'),
+          status: 'REVERSED',
+          reversedAt: new Date('2026-11-12T00:00:00.000Z'),
+        },
+      ],
+    };
+    const db = () =>
+      ({
+        $queryRaw: vi.fn(async () => []),
+        pharmacyApInvoice: {
+          findFirst: vi.fn(async (args: { where: Record<string, unknown> }) =>
+            'reverseCommandKey' in args.where ? null : reversedInvoice
+          ),
+        },
+        pharmacyAccountingPeriod: { findFirst: vi.fn(async () => null) },
+      }) as unknown as ScopedDb;
+    const clocks = invoiceSettlementClocks(reversedInvoice);
+    // In force on 11-11, gone after its reversal on 11-12.
+    expect(
+      payableMinorFrom({ amountMinor: 100, settlements: clocks }, new Date('2026-11-11T00:00:00Z'))
+    ).toBe(60);
+    expect(
+      payableMinorFrom({ amountMinor: 100, settlements: clocks }, new Date('2026-11-15T00:00:00Z'))
+    ).toBe(100);
+    // The bill cannot be reversed at an instant before the set-off's reversal.
+    await expect(
+      reverseApInvoice(
+        db(),
+        scope,
+        {
+          branchId: 'branch_1',
+          invoiceId: 'inv_9',
+          commandKey: 'rev-inv-0010',
+          reason: 'Duplicate',
+          at: '2026-11-11T00:00:00.000Z',
+        },
+        SOLO
+      )
+    ).rejects.toMatchObject({ reason: 'INVALID_DATE' });
+  });
+});
+
+describe('DEV-103 apReversalAuditRecorderId', () => {
+  it('reads the recorder from new entries and from entries written under the old name', () => {
+    expect(apReversalAuditRecorderId({ recordedById: 'clerk_1', approverId: 'owner_1' })).toBe(
+      'clerk_1'
+    );
+    expect(apReversalAuditRecorderId({ initiatedById: 'clerk_2', approverId: 'owner_1' })).toBe(
+      'clerk_2'
+    );
+    expect(apReversalAuditRecorderId({ recordedById: 'clerk_1', initiatedById: 'old' })).toBe(
+      'clerk_1'
+    );
+  });
+
+  it('returns null for an entry without a recorder', () => {
+    for (const metadata of [
+      null,
+      undefined,
+      'x',
+      [],
+      {},
+      { recordedById: '' },
+      { initiatedById: 7 },
+    ])
+      expect(apReversalAuditRecorderId(metadata)).toBeNull();
+  });
+});
+
+describe('DEV-103 searchApReversals', () => {
+  const scope = { organizationId: 'org_1', branchId: 'branch_1' };
+  const dated = new Date('2026-09-01T00:00:00.000Z');
+  const rows = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      id: `inv_${String(i).padStart(2, '0')}`,
+      invoiceDate: dated,
+    }));
+  const search = async (
+    input: Parameters<typeof searchApReversals>[2],
+    found = rows(0),
+    beyond: { id: string } | null = null
+  ) => {
+    const findMany = vi.fn().mockResolvedValue(found);
+    const findFirst = vi.fn().mockResolvedValue(beyond);
+    const db = { pharmacyApInvoice: { findMany, findFirst } } as unknown as ScopedDb;
+    const result = await searchApReversals(db, scope, input, 'Asia/Karachi');
+    return { result, args: findMany.mock.calls[0]![0], findFirst };
+  };
+  const matching = { organizationId: 'org_1', branchId: 'branch_1', status: 'POSTED' };
+  const cursor = { invoiceDate: '2026-09-05T00:00:00.000Z', id: 'inv_cursor' };
+  const at = new Date(cursor.invoiceDate);
+
+  it('reads posted invoices of this tenant and branch only, in a stable order', async () => {
+    const { args, findFirst } = await search({});
+    expect(args.where).toEqual(matching);
+    expect(args.orderBy).toEqual([{ invoiceDate: 'desc' }, { id: 'asc' }]);
+    expect(args.include).toEqual({
+      settlements: { orderBy: [{ paidAt: 'asc' }, { id: 'asc' }] },
+    });
+    expect(args).toMatchObject({ take: 26 });
+    // DEV-967: never by position.
+    expect(args).not.toHaveProperty('skip');
+    expect(args).not.toHaveProperty('cursor');
+    expect(findFirst).not.toHaveBeenCalled();
+  });
+
+  it('pages by 25 from the newest page and names the row the older page starts after', async () => {
+    const full = await search({}, rows(26));
+    expect(full.result.invoices).toHaveLength(25);
+    expect(full.result).toMatchObject({
+      hasOlder: true,
+      hasNewer: false,
+      older: { invoiceDate: dated.toISOString(), id: 'inv_24' },
+      newer: null,
+    });
+    const last = await search({}, rows(25));
+    expect(last.result.invoices).toHaveLength(25);
+    expect(last.result).toMatchObject({ hasOlder: false, older: null, newer: null });
+  });
+
+  it('DEV-967 reads the rows after an older cursor, by invoice date then id, never by offset', async () => {
+    const { args, result, findFirst } = await search({ older: cursor }, rows(26), { id: 'x' });
+    expect(args.where).toEqual({
+      AND: [
+        matching,
+        { OR: [{ invoiceDate: { lt: at } }, { invoiceDate: at, id: { gt: 'inv_cursor' } }] },
+      ],
+    });
+    expect(args.orderBy).toEqual([{ invoiceDate: 'desc' }, { id: 'asc' }]);
+    expect(args).not.toHaveProperty('skip');
+    expect(args).toMatchObject({ take: 26 });
+    // Whether anything is newer is asked one row before this page's first row, inside the scope.
+    expect(findFirst).toHaveBeenCalledWith({
+      where: {
+        AND: [
+          matching,
+          { OR: [{ invoiceDate: { gt: dated } }, { invoiceDate: dated, id: { lt: 'inv_00' } }] },
+        ],
+      },
+      select: { id: true },
+    });
+    expect(result).toMatchObject({
+      hasOlder: true,
+      hasNewer: true,
+      older: { invoiceDate: dated.toISOString(), id: 'inv_24' },
+      newer: { invoiceDate: dated.toISOString(), id: 'inv_00' },
+    });
+  });
+
+  it('DEV-967 reads the rows before a newer cursor nearest first and returns them in list order', async () => {
+    // Read toward the newest: the nearest row to the cursor comes back first.
+    const nearestFirst = rows(26).reverse();
+    const { args, result, findFirst } = await search({ newer: cursor }, nearestFirst, null);
+    expect(args.where).toEqual({
+      AND: [
+        matching,
+        { OR: [{ invoiceDate: { gt: at } }, { invoiceDate: at, id: { lt: 'inv_cursor' } }] },
+      ],
+    });
+    expect(args.orderBy).toEqual([{ invoiceDate: 'asc' }, { id: 'desc' }]);
+    expect(args).not.toHaveProperty('skip');
+    // The 25 nearest rows, in list order; a 26th means a newer page exists.
+    expect(result.invoices.map((row) => row.id)).toEqual(
+      nearestFirst
+        .slice(0, 25)
+        .reverse()
+        .map((row) => row.id)
+    );
+    expect(findFirst).toHaveBeenCalledWith({
+      where: {
+        AND: [
+          matching,
+          { OR: [{ invoiceDate: { lt: dated } }, { invoiceDate: dated, id: { gt: 'inv_25' } }] },
+        ],
+      },
+      select: { id: true },
+    });
+    expect(result).toMatchObject({
+      hasNewer: true,
+      hasOlder: false,
+      newer: { invoiceDate: dated.toISOString(), id: 'inv_01' },
+      older: null,
+    });
+  });
+
+  it('DEV-967 reports nothing either way on an empty turned page', async () => {
+    const { result, findFirst } = await search({ older: cursor }, rows(0), { id: 'x' });
+    expect(result).toMatchObject({
+      invoices: [],
+      hasOlder: false,
+      hasNewer: false,
+      older: null,
+      newer: null,
+    });
+    expect(findFirst).not.toHaveBeenCalled();
+  });
+
+  it('DEV-967 refuses a cursor each way', async () => {
+    await expect(search({ older: cursor, newer: cursor })).rejects.toMatchObject({
+      reason: 'INVALID_STATE',
+    });
+  });
+
+  it('DEV-967 matches percent, underscore and backslash as typed', async () => {
+    const { args } = await search({ payee: '100%_off\\', reference: 'a_b%' });
+    expect(args.where.AND).toEqual([
+      { payeeName: { contains: '100\\%\\_off\\\\', mode: 'insensitive' } },
+      {
+        OR: [
+          { reference: { contains: 'a\\_b\\%', mode: 'insensitive' } },
+          { supplierInvoiceRef: { contains: 'a\\_b\\%', mode: 'insensitive' } },
+        ],
+      },
+    ]);
+  });
+
+  it('applies every filter together, still inside the tenant and branch', async () => {
+    const { args } = await search({
+      payee: 'K-Elec',
+      reference: 'KE-1',
+      amountMinor: 23_456,
+      from: '2026-08-01',
+      to: '2026-09-30',
+    });
+    expect(args.where).toMatchObject({
+      organizationId: 'org_1',
+      branchId: 'branch_1',
+      status: 'POSTED',
+    });
+    expect(args.where.AND).toEqual([
+      { payeeName: { contains: 'K-Elec', mode: 'insensitive' } },
+      {
+        OR: [
+          { reference: { contains: 'KE-1', mode: 'insensitive' } },
+          { supplierInvoiceRef: { contains: 'KE-1', mode: 'insensitive' } },
+        ],
+      },
+      {
+        OR: [
+          { amountMinor: 23_456 },
+          { settlements: { some: { status: 'ACTIVE', amountMinor: 23_456 } } },
+        ],
+      },
+      {
+        OR: [
+          {
+            invoiceDate: {
+              gte: new Date('2026-08-01T00:00:00.000Z'),
+              lte: new Date('2026-09-30T00:00:00.000Z'),
+            },
+          },
+          {
+            settlements: {
+              some: {
+                status: 'ACTIVE',
+                // Karachi is UTC+5: the shop's 1 August starts at 19:00 UTC the day before, and
+                // its 30 September ends at 19:00 UTC on 30 September.
+                paidAt: {
+                  gte: new Date('2026-07-31T19:00:00.000Z'),
+                  lt: new Date('2026-09-30T19:00:00.000Z'),
+                },
+              },
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('leaves an open end of the day range open', async () => {
+    const { args } = await search({ from: '2026-08-01' });
+    expect(args.where.AND).toEqual([
+      {
+        OR: [
+          { invoiceDate: { gte: new Date('2026-08-01T00:00:00.000Z') } },
+          {
+            settlements: {
+              some: { status: 'ACTIVE', paidAt: { gte: new Date('2026-07-31T19:00:00.000Z') } },
+            },
+          },
+        ],
+      },
+    ]);
   });
 });

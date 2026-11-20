@@ -35,6 +35,13 @@ const nextConfig: NextConfig = {
     // image builder's total memory before changing the worker count.
     cpus: 1,
     optimizePackageImports: ['@base-ui/react', 'cmdk'],
+    serverActions: {
+      // DEV-851: a whole legacy catalogue export (about 19,000 products) is
+      // staged in one action as a gzip-compressed, base64 file of at most
+      // 2.5 MiB (STAGING_MAX_UPLOAD_BYTES), which encodes to about 3.4 MB.
+      // Keep this the smallest value that fits it; the default is 1 MB.
+      bodySizeLimit: '4mb',
+    },
   },
   headers: async () => [
     {
@@ -54,6 +61,13 @@ const nextConfig: NextConfig = {
           value: 'max-age=63072000; includeSubDomains; preload',
         },
       ],
+    },
+    {
+      // DEV-973: defence in depth for the print window. It is opened with
+      // noopener, which isolates it on plain http too, where browsers ignore
+      // this header.
+      source: '/pharmacy/counter/print-window.html',
+      headers: [{ key: 'Cross-Origin-Opener-Policy', value: 'same-origin' }],
     },
   ],
   poweredByHeader: false,

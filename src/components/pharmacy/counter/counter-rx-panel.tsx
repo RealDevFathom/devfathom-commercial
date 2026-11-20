@@ -14,11 +14,13 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
+import { COUNTER_APPROVAL_CODE_HINT } from './counter-approval-copy';
 import { CounterDuplicateSaltAcknowledge } from './counter-duplicate-salt-acknowledge';
 import type { CounterAlert } from '@/lib/pharmacy/counter-alerts';
 import type { CounterPatientPanel } from '@/lib/pharmacy/counter-prescriptions';
 import { formatReceiptDate } from '@/lib/pharmacy/counter-receipt';
 import type { RxOcrPrefill } from '@/lib/pharmacy/rx-ocr';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 
@@ -56,8 +58,17 @@ function PrescriptionThumbnail({ url, label }: { url: string; label: string }) {
   );
 }
 
-const isoDay = (offsetDays = 0) =>
-  new Date(Date.now() + offsetDays * 86_400_000).toISOString().slice(0, 10);
+/**
+ * DEV-943: a calendar day counted from today on the shop's clock (the organisation zone
+ * the prescription workspace returns), not the UTC day: 00:00–04:59 PKT is already the
+ * next day in Karachi.
+ */
+export const isoDay = (timeZone: string | null | undefined, offsetDays = 0, now = new Date()) =>
+  new Date(
+    Date.parse(`${pharmacyCalendarDay(timeZone, now)}T00:00:00.000Z`) + offsetDays * 86_400_000
+  )
+    .toISOString()
+    .slice(0, 10);
 
 /**
  * PH-A3 — photograph a paper Rx at the counter without leaving the bill.
@@ -176,7 +187,7 @@ function CounterRxPhotoCapture({
         sourceKind: 'PAPER_IMAGE',
         sourceFileRef,
         custodyState: String(data.get('custodyState')) as 'NOT_HELD' | 'HELD_AT_PHARMACY',
-        validFrom: new Date(isoDay()),
+        validFrom: new Date(isoDay(workspace.data?.timezone)),
         validUntil: new Date(String(data.get('validUntil'))),
         authorizedRepeats: 0,
         lines: [
@@ -359,12 +370,14 @@ function CounterRxPhotoCapture({
               <div className="space-y-1.5">
                 <Label htmlFor="counter-rx-valid-until">Valid until</Label>
                 <Input
+                  // Remount once the shop's zone arrives so the default is the shop's day.
+                  key={workspace.data?.timezone ?? 'zone-loading'}
                   id="counter-rx-valid-until"
                   name="validUntil"
                   type="date"
                   required
-                  min={isoDay(1)}
-                  defaultValue={isoDay(30)}
+                  min={isoDay(workspace.data?.timezone, 1)}
+                  defaultValue={isoDay(workspace.data?.timezone, 30)}
                   className="h-11"
                 />
               </div>
@@ -1022,10 +1035,14 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
               autoComplete="off"
               maxLength={8}
               className="h-11"
+              aria-describedby="controlled-pin-hint"
               disabled={disabled || !controlled.staffProfileId}
               value={controlled.pin}
               onChange={(event) => controlled.onChange('pin', event.target.value)}
             />
+            <p id="controlled-pin-hint" className="text-xs text-text-muted">
+              {COUNTER_APPROVAL_CODE_HINT}
+            </p>
             <label
               className="flex min-h-11 items-center gap-2 text-sm text-text-body"
               htmlFor="controlled-rx-serial"

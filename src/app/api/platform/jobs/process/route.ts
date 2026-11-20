@@ -5,6 +5,8 @@ import { processDueChurnScoring } from '@/lib/pharmacy/churn-scoring';
 import { processDueDrapRecallFeed } from '@/lib/pharmacy/drap-recall-feed-job';
 import { processDueOwnerDigests } from '@/lib/pharmacy/owner-digest';
 import { processDuePharmacyLoyaltyExpiries } from '@/lib/pharmacy/loyalty-expiry';
+import { processDueRefillSubscriptionCycles } from '@/lib/pharmacy/refill-cycle-job';
+import { processDueCardTerminalRecovery } from '@/lib/pharmacy/card-terminal/sweep';
 
 export const maxDuration = 300;
 
@@ -23,7 +25,15 @@ export async function POST(request: Request) {
   const input = (await request.json().catch(() => ({}))) as { maxJobs?: unknown };
   const maxJobs =
     typeof input.maxJobs === 'number' && Number.isFinite(input.maxJobs) ? input.maxJobs : 25;
-  const [jobs, ownerDigests, churnScoring, drapRecallFeed, loyaltyExpiry] = await Promise.all([
+  const [
+    jobs,
+    ownerDigests,
+    churnScoring,
+    drapRecallFeed,
+    loyaltyExpiry,
+    refillCycles,
+    cardTerminalRecovery,
+  ] = await Promise.all([
     processPlatformJobs(maxJobs),
     processDueOwnerDigests(new Date(), maxJobs),
     processDueChurnScoring(new Date(), maxJobs),
@@ -31,6 +41,10 @@ export async function POST(request: Request) {
     processDueDrapRecallFeed(new Date(), maxJobs),
     // DEV-764: pharmacy points expire as the owner's program says, one ledger entry per lot.
     processDuePharmacyLoyaltyExpiries(new Date(), maxJobs),
+    // DEV-73: open due refill-subscription cycles on each organization's own day.
+    processDueRefillSubscriptionCycles(new Date(), maxJobs),
+    // DEV-743: card-terminal attempts a counter left open are recovered by status query.
+    processDueCardTerminalRecovery(new Date(), maxJobs),
   ]);
   return NextResponse.json({
     ...jobs,
@@ -38,6 +52,8 @@ export async function POST(request: Request) {
     churnScoring,
     drapRecallFeed,
     loyaltyExpiry,
+    refillCycles,
+    cardTerminalRecovery,
   });
 }
 

@@ -33,6 +33,7 @@ import {
   Trash2,
   Send,
   Gauge,
+  ScrollText,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -46,13 +47,16 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { SectionCard } from '@/components/ui/section-card';
 import { PageHeader } from '@/components/ui/page-header';
 import { Textarea } from '@/components/ui/textarea';
 import { useEntitlements } from '@/components/entitlements-provider';
+import { isModuleGranted } from '@/lib/module-catalog';
 import { trpc } from '@/lib/trpc';
 import { inviteCopyForVertical } from '@/lib/team/invite-copy';
 import { useBreadcrumbLabel } from '@/lib/breadcrumb-store';
 import { cn } from '@/lib/utils';
+import { MemberAccessPanel } from '../member-access-panel';
 import { format } from 'date-fns';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
@@ -95,6 +99,17 @@ type Member = NonNullable<RouterOutput['team']['getById']>;
 type PersonalStats = RouterOutput['teamStats']['getForUser'];
 type PerformanceNotes = RouterOutput['team']['listPerformanceNotes'];
 type LeaveBalances = RouterOutput['team']['getLeaveBalances'];
+
+/** DEV-959A: the read-only sub-role view, in pharmacy workspaces only. */
+function PharmacyMemberAccessCard({ memberId }: { memberId: string }) {
+  const { vertical } = useEntitlements();
+  if (vertical !== 'PHARMACY') return null;
+  return (
+    <SectionCard title="What this person can do">
+      <MemberAccessPanel userId={memberId} />
+    </SectionCard>
+  );
+}
 
 export function MemberDetailContent({ memberId }: { memberId: string }) {
   const { data: session } = useSession();
@@ -222,17 +237,26 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
             </span>
           }
           actions={
-            isAdmin && memberId !== session?.user?.id ? (
+            isAdmin ? (
               <>
-                <Button variant="outline" size="lg" onClick={() => setIsEditing(true)}>
-                  <Pencil className="h-3.5 w-3.5" /> Edit
-                </Button>
-                <Button variant="outline" size="lg" onClick={() => setShowResetPw(!showResetPw)}>
-                  <Lock className="h-3.5 w-3.5" /> Reset Password
-                </Button>
-                <Button variant="destructive" size="lg" onClick={() => setShowLayOff(true)}>
-                  <UserX className="h-3.5 w-3.5" /> Lay off
-                </Button>
+                <MemberAuditLink memberId={memberId} />
+                {memberId !== session?.user?.id && (
+                  <>
+                    <Button variant="outline" size="lg" onClick={() => setIsEditing(true)}>
+                      <Pencil className="h-3.5 w-3.5" /> Edit
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="lg"
+                      onClick={() => setShowResetPw(!showResetPw)}
+                    >
+                      <Lock className="h-3.5 w-3.5" /> Reset Password
+                    </Button>
+                    <Button variant="destructive" size="lg" onClick={() => setShowLayOff(true)}>
+                      <UserX className="h-3.5 w-3.5" /> Lay off
+                    </Button>
+                  </>
+                )}
               </>
             ) : undefined
           }
@@ -286,6 +310,9 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
       {canViewPersonal && (
         <LeaveBalancesBlock data={balancesQuery.data} isLoading={balancesQuery.isLoading} />
       )}
+
+      {/* DEV-959A: read-only sub-roles, for the administrators who manage members */}
+      {isAdmin && <PharmacyMemberAccessCard memberId={memberId} />}
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
         {/* Projects */}
@@ -592,7 +619,7 @@ function LayOffDialog({
   );
 }
 
-function ResetPasswordForm({
+export function ResetPasswordForm({
   memberId,
   memberName,
   onClose,
@@ -638,9 +665,11 @@ function ResetPasswordForm({
               className="w-full rounded-xl border border-border bg-background px-4 py-2.5 pr-10 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
             <button
+              type="button"
               onClick={() => setShowPw(!showPw)}
+              aria-label={showPw ? 'Hide password' : 'Show password'}
+              aria-pressed={showPw}
               className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              tabIndex={-1}
             >
               {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </button>
@@ -1305,5 +1334,25 @@ function StatTile({
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * DEV-913: an administrator opens this person's actions in the audit log, on
+ * any workspace that has it (every pharmacy does).
+ */
+function MemberAuditLink({ memberId }: { memberId: string }) {
+  const entitlements = useEntitlements();
+  if (!isModuleGranted('audit', entitlements.enabledModules, entitlements.vertical)) return null;
+  return (
+    <Button
+      variant="outline"
+      size="lg"
+      nativeButton={false}
+      role="link"
+      render={<Link href={`/audit-logs?${new URLSearchParams({ actorId: memberId })}`} />}
+    >
+      <ScrollText className="h-3.5 w-3.5" /> See their actions
+    </Button>
   );
 }

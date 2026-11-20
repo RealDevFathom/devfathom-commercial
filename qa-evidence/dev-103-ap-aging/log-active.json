@@ -1,0 +1,838 @@
+[
+  {
+    "name": "default",
+    "width": 375,
+    "theme": "light",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "",
+    "alerts": [],
+    "cardTitles": [
+      "Branch and date",
+      "Choose a branch"
+    ]
+  },
+  {
+    "name": "default",
+    "width": 375,
+    "theme": "dark",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "",
+    "alerts": [],
+    "cardTitles": [
+      "Branch and date",
+      "Choose a branch"
+    ]
+  },
+  {
+    "name": "default",
+    "width": 768,
+    "theme": "light",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "",
+    "alerts": [],
+    "cardTitles": [
+      "Branch and date",
+      "Choose a branch"
+    ]
+  },
+  {
+    "name": "default",
+    "width": 768,
+    "theme": "dark",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "",
+    "alerts": [],
+    "cardTitles": [
+      "Branch and date",
+      "Choose a branch"
+    ]
+  },
+  {
+    "name": "default",
+    "width": 1024,
+    "theme": "light",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "",
+    "alerts": [],
+    "cardTitles": [
+      "Branch and date",
+      "Choose a branch"
+    ]
+  },
+  {
+    "name": "default",
+    "width": 1024,
+    "theme": "dark",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "",
+    "alerts": [],
+    "cardTitles": [
+      "Branch and date",
+      "Choose a branch"
+    ]
+  },
+  {
+    "name": "default",
+    "width": 1440,
+    "theme": "light",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "",
+    "alerts": [],
+    "cardTitles": [
+      "Branch and date",
+      "Choose a branch"
+    ]
+  },
+  {
+    "name": "default",
+    "width": 1440,
+    "theme": "dark",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "",
+    "alerts": [],
+    "cardTitles": [
+      "Branch and date",
+      "Choose a branch"
+    ]
+  },
+  {
+    "name": "selected",
+    "width": 375,
+    "theme": "light",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=branch_apqa_main&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "branch_apqa_main",
+    "alerts": [
+      "As of the end of 2026-11-18 (PKT). Retrieved 18 Nov 2026, 8:45 PM PKT. Only supplier expense invoices recorded here and "
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "View limits",
+      "Nothing outstanding",
+      "Due-bill reminders",
+      "Set off supplier credit notes",
+      "Set-offs awaiting approval",
+      "Approved set-offs",
+      "Record a supplier expense invoice",
+      "Record a payment"
+    ]
+  },
+  {
+    "name": "selected",
+    "width": 375,
+    "theme": "dark",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=branch_apqa_main&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "branch_apqa_main",
+    "alerts": [
+      "As of the end of 2026-11-18 (PKT). Retrieved 18 Nov 2026, 8:45 PM PKT. Only supplier expense invoices recorded here and "
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "View limits",
+      "Nothing outstanding",
+      "Due-bill reminders",
+      "Set off supplier credit notes",
+      "Set-offs awaiting approval",
+      "Approved set-offs",
+      "Record a supplier expense invoice",
+      "Record a payment"
+    ]
+  },
+  {
+    "name": "selected",
+    "width": 768,
+    "theme": "light",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=branch_apqa_main&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "branch_apqa_main",
+    "alerts": [
+      "As of the end of 2026-11-18 (PKT). Retrieved 18 Nov 2026, 8:45 PM PKT. Only supplier expense invoices recorded here and "
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "View limits",
+      "Nothing outstanding",
+      "Due-bill reminders",
+      "Set off supplier credit notes",
+      "Set-offs awaiting approval",
+      "Approved set-offs",
+      "Record a supplier expense invoice",
+      "Record a payment"
+    ]
+  },
+  {
+    "name": "selected",
+    "width": 768,
+    "theme": "dark",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=branch_apqa_main&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "branch_apqa_main",
+    "alerts": [
+      "As of the end of 2026-11-18 (PKT). Retrieved 18 Nov 2026, 8:45 PM PKT. Only supplier expense invoices recorded here and "
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "View limits",
+      "Nothing outstanding",
+      "Due-bill reminders",
+      "Set off supplier credit notes",
+      "Set-offs awaiting approval",
+      "Approved set-offs",
+      "Record a supplier expense invoice",
+      "Record a payment"
+    ]
+  },
+  {
+    "name": "selected",
+    "width": 1024,
+    "theme": "light",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=branch_apqa_main&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "branch_apqa_main",
+    "alerts": [
+      "As of the end of 2026-11-18 (PKT). Retrieved 18 Nov 2026, 8:45 PM PKT. Only supplier expense invoices recorded here and "
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "View limits",
+      "Nothing outstanding",
+      "Due-bill reminders",
+      "Set off supplier credit notes",
+      "Set-offs awaiting approval",
+      "Approved set-offs",
+      "Record a supplier expense invoice",
+      "Record a payment"
+    ]
+  },
+  {
+    "name": "selected",
+    "width": 1024,
+    "theme": "dark",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=branch_apqa_main&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "branch_apqa_main",
+    "alerts": [
+      "As of the end of 2026-11-18 (PKT). Retrieved 18 Nov 2026, 8:45 PM PKT. Only supplier expense invoices recorded here and "
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "View limits",
+      "Nothing outstanding",
+      "Due-bill reminders",
+      "Set off supplier credit notes",
+      "Set-offs awaiting approval",
+      "Approved set-offs",
+      "Record a supplier expense invoice",
+      "Record a payment"
+    ]
+  },
+  {
+    "name": "selected",
+    "width": 1440,
+    "theme": "light",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=branch_apqa_main&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "branch_apqa_main",
+    "alerts": [
+      "As of the end of 2026-11-18 (PKT). Retrieved 18 Nov 2026, 8:45 PM PKT. Only supplier expense invoices recorded here and "
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "View limits",
+      "Nothing outstanding",
+      "Due-bill reminders",
+      "Set off supplier credit notes",
+      "Set-offs awaiting approval",
+      "Approved set-offs",
+      "Record a supplier expense invoice",
+      "Record a payment"
+    ]
+  },
+  {
+    "name": "selected",
+    "width": 1440,
+    "theme": "dark",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=branch_apqa_main&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "branch_apqa_main",
+    "alerts": [
+      "As of the end of 2026-11-18 (PKT). Retrieved 18 Nov 2026, 8:45 PM PKT. Only supplier expense invoices recorded here and "
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "View limits",
+      "Nothing outstanding",
+      "Due-bill reminders",
+      "Set off supplier credit notes",
+      "Set-offs awaiting approval",
+      "Approved set-offs",
+      "Record a supplier expense invoice",
+      "Record a payment"
+    ]
+  },
+  {
+    "name": "invalid-branch-url",
+    "width": 375,
+    "theme": "light",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=not_a_branch&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "",
+    "alerts": [
+      "Your authenticated tenant, active branch, Pharmacy Finance licence and owner finance permissions must all allow this rea"
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "Aging unavailable"
+    ]
+  },
+  {
+    "name": "invalid-branch-url",
+    "width": 375,
+    "theme": "dark",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=not_a_branch&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "",
+    "alerts": [
+      "Your authenticated tenant, active branch, Pharmacy Finance licence and owner finance permissions must all allow this rea"
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "Aging unavailable"
+    ]
+  },
+  {
+    "name": "invalid-branch-url",
+    "width": 768,
+    "theme": "light",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=not_a_branch&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "",
+    "alerts": [
+      "Your authenticated tenant, active branch, Pharmacy Finance licence and owner finance permissions must all allow this rea"
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "Aging unavailable"
+    ]
+  },
+  {
+    "name": "invalid-branch-url",
+    "width": 768,
+    "theme": "dark",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=not_a_branch&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "",
+    "alerts": [
+      "Your authenticated tenant, active branch, Pharmacy Finance licence and owner finance permissions must all allow this rea"
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "Aging unavailable"
+    ]
+  },
+  {
+    "name": "invalid-branch-url",
+    "width": 1024,
+    "theme": "light",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=not_a_branch&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "",
+    "alerts": [
+      "Your authenticated tenant, active branch, Pharmacy Finance licence and owner finance permissions must all allow this rea"
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "Aging unavailable"
+    ]
+  },
+  {
+    "name": "invalid-branch-url",
+    "width": 1024,
+    "theme": "dark",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=not_a_branch&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "",
+    "alerts": [
+      "Your authenticated tenant, active branch, Pharmacy Finance licence and owner finance permissions must all allow this rea"
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "Aging unavailable"
+    ]
+  },
+  {
+    "name": "invalid-branch-url",
+    "width": 1440,
+    "theme": "light",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=not_a_branch&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "",
+    "alerts": [
+      "Your authenticated tenant, active branch, Pharmacy Finance licence and owner finance permissions must all allow this rea"
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "Aging unavailable"
+    ]
+  },
+  {
+    "name": "invalid-branch-url",
+    "width": 1440,
+    "theme": "dark",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=not_a_branch&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "",
+    "alerts": [
+      "Your authenticated tenant, active branch, Pharmacy Finance licence and owner finance permissions must all allow this rea"
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "Aging unavailable"
+    ]
+  },
+  {
+    "name": "denied-non-owner",
+    "width": 375,
+    "theme": "light",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=branch_apqa_main&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch"
+    ],
+    "selectValue": "",
+    "alerts": [
+      "Your authenticated tenant, active branch, Pharmacy Finance licence and owner finance permissions must all allow this rea"
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "Aging unavailable"
+    ]
+  },
+  {
+    "name": "denied-non-owner",
+    "width": 375,
+    "theme": "dark",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=branch_apqa_main&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch"
+    ],
+    "selectValue": "",
+    "alerts": [
+      "Your authenticated tenant, active branch, Pharmacy Finance licence and owner finance permissions must all allow this rea"
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "Aging unavailable"
+    ]
+  },
+  {
+    "name": "denied-non-owner",
+    "width": 768,
+    "theme": "light",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=branch_apqa_main&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch"
+    ],
+    "selectValue": "",
+    "alerts": [
+      "Your authenticated tenant, active branch, Pharmacy Finance licence and owner finance permissions must all allow this rea"
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "Aging unavailable"
+    ]
+  },
+  {
+    "name": "denied-non-owner",
+    "width": 768,
+    "theme": "dark",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=branch_apqa_main&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch"
+    ],
+    "selectValue": "",
+    "alerts": [
+      "Your authenticated tenant, active branch, Pharmacy Finance licence and owner finance permissions must all allow this rea"
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "Aging unavailable"
+    ]
+  },
+  {
+    "name": "denied-non-owner",
+    "width": 1024,
+    "theme": "light",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=branch_apqa_main&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch"
+    ],
+    "selectValue": "",
+    "alerts": [
+      "Your authenticated tenant, active branch, Pharmacy Finance licence and owner finance permissions must all allow this rea"
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "Aging unavailable"
+    ]
+  },
+  {
+    "name": "denied-non-owner",
+    "width": 1024,
+    "theme": "dark",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=branch_apqa_main&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch"
+    ],
+    "selectValue": "",
+    "alerts": [
+      "Your authenticated tenant, active branch, Pharmacy Finance licence and owner finance permissions must all allow this rea"
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "Aging unavailable"
+    ]
+  },
+  {
+    "name": "denied-non-owner",
+    "width": 1440,
+    "theme": "light",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=branch_apqa_main&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch"
+    ],
+    "selectValue": "",
+    "alerts": [
+      "Your authenticated tenant, active branch, Pharmacy Finance licence and owner finance permissions must all allow this rea"
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "Aging unavailable"
+    ]
+  },
+  {
+    "name": "denied-non-owner",
+    "width": 1440,
+    "theme": "dark",
+    "reduced": false,
+    "url": "/pharmacy/accounts/ap-aging?branch=branch_apqa_main&asOf=2026-11-18",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch"
+    ],
+    "selectValue": "",
+    "alerts": [
+      "Your authenticated tenant, active branch, Pharmacy Finance licence and owner finance permissions must all allow this rea"
+    ],
+    "cardTitles": [
+      "Branch and date",
+      "Aging unavailable"
+    ]
+  },
+  {
+    "name": "default",
+    "width": 1024,
+    "theme": "light",
+    "reduced": true,
+    "url": "/pharmacy/accounts/ap-aging",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "",
+    "alerts": [],
+    "cardTitles": [
+      "Branch and date",
+      "Choose a branch"
+    ]
+  },
+  {
+    "name": "default",
+    "width": 1024,
+    "theme": "dark",
+    "reduced": true,
+    "url": "/pharmacy/accounts/ap-aging",
+    "errors": [],
+    "overflowX": false,
+    "h1": "Supplier expense invoice aging",
+    "selectOptions": [
+      "Choose a branch",
+      "Gulshan Branch",
+      "Main Branch"
+    ],
+    "selectValue": "",
+    "alerts": [],
+    "cardTitles": [
+      "Branch and date",
+      "Choose a branch"
+    ]
+  },
+  {
+    "name": "keyboard",
+    "theme": "light",
+    "focus": {
+      "active": true,
+      "outline": "solid 3px oklab(0.70341 0.161113 0.0991175 / 0.5)",
+      "boxShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklab(0.70341 0.161113 0.0991175 / 0.5) 0px 0px 0px 3px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "bg": "rgb(255, 255, 255)",
+      "color": "rgb(17, 17, 16)"
+    },
+    "tabAfterSelect": [
+      "asOf",
+      "asOf",
+      "asOf",
+      "asOf"
+    ]
+  },
+  {
+    "name": "keyboard",
+    "theme": "dark",
+    "focus": {
+      "active": true,
+      "outline": "solid 3px oklab(0.70341 0.161113 0.0991175 / 0.5)",
+      "boxShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklab(0.70341 0.161113 0.0991175 / 0.5) 0px 0px 0px 3px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "bg": "rgb(36, 36, 34)",
+      "color": "rgb(247, 247, 244)"
+    },
+    "tabAfterSelect": [
+      "asOf",
+      "asOf",
+      "asOf",
+      "asOf"
+    ]
+  }
+]

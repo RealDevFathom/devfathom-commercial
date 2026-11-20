@@ -73,6 +73,9 @@ function fixture() {
   const transaction = vi.fn(async (callback: (tx: unknown) => unknown) => callback(db));
   const lotRead = vi.fn();
   const db = {
+    // DEV-631: a counter bill or line is refused while today's business day is closed.
+    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'UTC' }) },
+    pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacySaleLine: { findFirst: vi.fn(async () => null) },
     $transaction: transaction,
     $queryRaw: vi.fn(async () => []),
@@ -132,6 +135,16 @@ beforeEach(() => {
 });
 
 describe('pharmacySales.addLine batch override (PH-A4)', () => {
+  it('preserves the shelf-label lot constraint without granting an override', async () => {
+    const f = fixture();
+    vi.mocked(addSaleLine).mockResolvedValue({ line: { id: 'line-1' }, allocation: {} } as never);
+    await f.caller.addLine({ ...line, shelfLabelLotId: 'lot-fefo' });
+    expect(vi.mocked(addSaleLine).mock.calls[0]?.[2]).toMatchObject({
+      shelfLabelLotId: 'lot-fefo',
+    });
+    expect(vi.mocked(addSaleLine).mock.calls[0]?.[2].override).toBeUndefined();
+  });
+
   it('passes the override to the domain and labels the audit row with the override id', async () => {
     const f = fixture();
     vi.mocked(addSaleLine).mockResolvedValue({
@@ -240,6 +253,28 @@ describe('DEV-889 scanned-pack approver directory', () => {
     await expect(
       f.caller.scannedPackFefoApprovers({ branchId: 'branch-other' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(listCounterApprovers).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-929 discount approver directory', () => {
+  it('lists the discount approvers under the counter branch gate', async () => {
+    const f = fixture();
+    const profiles = [{ id: 'owner-profile', name: 'Owner', self: true }];
+    vi.mocked(listCounterApprovers).mockResolvedValueOnce(profiles);
+    await expect(f.caller.discountApprovers({ branchId: 'branch-1' })).resolves.toEqual(profiles);
+    expect(listCounterApprovers).toHaveBeenCalledWith(
+      expect.anything(),
+      { organizationId: 'org-1', branchId: 'branch-1', actorId: 'actor-1' },
+      'DISCOUNT'
+    );
+  });
+
+  it('refuses an unassigned branch before listing approvers', async () => {
+    const f = fixture();
+    await expect(f.caller.discountApprovers({ branchId: 'branch-other' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
     expect(listCounterApprovers).not.toHaveBeenCalled();
   });
 });
@@ -430,6 +465,8 @@ describe('pharmacySales.addLine discount approval (#520)', () => {
 
   it('refuses a discount with no manager PIN approval', async () => {
     const f = fixture();
+    // DEV-66: by default nobody holds the owner-granted discount right.
+    vi.mocked(can).mockImplementation(async (_subject, action) => action !== 'pharmacy:discount');
     await expect(
       f.caller.addLine({ ...line, discountKind: 'DISCOUNT', discountMinor: 1 })
     ).rejects.toMatchObject({
@@ -437,6 +474,23 @@ describe('pharmacySales.addLine discount approval (#520)', () => {
       message: 'A discount needs a manager to approve it with their PIN.',
     });
     expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('DEV-66: lets an operator the owner granted the discount right discount without a PIN', async () => {
+    const f = fixture();
+    vi.mocked(addSaleLine).mockResolvedValue({
+      line: { id: 'line-1' },
+      allocation: { overrideId: null, recommendedLotId: 'lot-fefo' },
+    } as never);
+    await f.caller.addLine({ ...line, discountKind: 'DISCOUNT', discountMinor: 1 });
+    const [, , input] = vi.mocked(addSaleLine).mock.calls[0]!;
+    expect(input).toMatchObject({ approvedByUserId: 'actor-1', approvalPolicy: 'DISCOUNT_RIGHT' });
+    expect(can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'actor-1' }),
+      'pharmacy:discount',
+      undefined,
+      expect.anything()
+    );
   });
 
   it('adds an undiscounted line with no approver recorded', async () => {
@@ -637,5 +691,31 @@ describe('pharmacySales.counterLotOptions (PH-A4)', () => {
         .pharmacySales.counterLotOptions({ branchId: 'branch-1', medicineId: 'medicine-1' })
     ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
     expect(onHand).not.toHaveBeenCalled();
+  });
+});
+
+describe('pharmacySales.addLine closed business day (DEV-631)', () => {
+  it('refuses a line while today is closed, before any stock is allocated', async () => {
+    const f = fixture();
+    const db = f.context.db as unknown as {
+      pharmacyDailyClose: { findFirst: ReturnType<typeof vi.fn> };
+    };
+    db.pharmacyDailyClose.findFirst.mockResolvedValue({ id: 'close-1', reopen: null });
+    await expect(f.caller.addLine(line)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'DAY_CLOSED',
+    });
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('adds the line once the owner reopened the day for trading', async () => {
+    const f = fixture();
+    const db = f.context.db as unknown as {
+      pharmacyDailyClose: { findFirst: ReturnType<typeof vi.fn> };
+    };
+    db.pharmacyDailyClose.findFirst.mockResolvedValue({ id: 'close-1', reopen: { id: 'r-1' } });
+    vi.mocked(addSaleLine).mockResolvedValue({ line: { id: 'line-1' }, allocation: {} } as never);
+    await f.caller.addLine(line);
+    expect(addSaleLine).toHaveBeenCalledOnce();
   });
 });

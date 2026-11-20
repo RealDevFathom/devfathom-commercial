@@ -12,7 +12,8 @@ import {
   type PurchasingReadPage,
 } from '@/lib/pharmacy/purchasing-console';
 import { supplierCreditFollowUp } from '@/lib/pharmacy/supplier-credit-follow-up';
-import { workspaceDateRange, workspaceToday, workspaceZoneLabel } from '@/lib/timezone';
+import { workspaceZoneLabel } from '@/lib/timezone';
+import { pharmacyCalendarDay, pharmacyCalendarDayRange } from '@/lib/pharmacy/business-day';
 import { pharmacyPurchasingRouter } from '@/server/routers/pharmacy-purchasing';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { tenantContext } from '../../purchasing/_lib/console';
@@ -210,7 +211,7 @@ export default async function SupplierCreditFollowUpPage({
 
   // The owner's business day, not the UTC one (00:00–04:59 PKT is still "today").
   const timeZone = ctx.organization?.timezone;
-  const today = workspaceToday(timeZone);
+  const today = pharmacyCalendarDay(timeZone);
   const start = new Date(`${today}T00:00:00.000Z`);
   start.setUTCDate(start.getUTCDate() - 29);
   const from = value(query.from) ?? start.toISOString().slice(0, 10);
@@ -228,7 +229,7 @@ export default async function SupplierCreditFollowUpPage({
   let sourcePages: SourcePages | null = null;
   let readFailed = false;
   if (branch && !invalidRange && !invalidQuery && !invalidPage) {
-    const returnWindow = workspaceDateRange(from, to, timeZone);
+    const returnWindow = pharmacyCalendarDayRange(from, to, timeZone);
     try {
       const caller = pharmacyPurchasingRouter.createCaller(ctx);
       const [returnPage, creditPage] = await Promise.all([
@@ -306,6 +307,7 @@ export default async function SupplierCreditFollowUpPage({
         from,
         to,
         preparedAt: queue.asOf,
+        timeZone,
         currency: currency && /^[A-Z]{3}$/.test(currency) ? currency : null,
         coverage: queue.coverage,
         excluded: queue.excluded + returns.filter((row) => !iso(row.createdAt)).length,

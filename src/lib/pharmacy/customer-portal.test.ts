@@ -84,11 +84,11 @@ describe('DEV-15 customer PWA sign-in', () => {
   });
 
   it('sends the code to the customer’s stored phone with no medicine wording', async () => {
-    const update = vi.fn(async () => ({}));
+    const update = vi.fn(async () => ({ count: 1 }));
     const sent: Array<{ to: string; body: string }> = [];
     const db = asDb({
       pharmacyCustomer: { findFirst: async () => customerRow },
-      pharmacyCustomerPortalLink: { findUnique: async () => linkRow(), update },
+      pharmacyCustomerPortalLink: { findUnique: async () => linkRow(), updateMany: update },
     });
     const result = await startPortalSignIn(db, ORG, TOKEN, async (message) => {
       sent.push(message);
@@ -104,16 +104,151 @@ describe('DEV-15 customer PWA sign-in', () => {
   });
 
   it('does not reset the failed-guess counter when a code is resent', async () => {
-    const update = vi.fn(async (_args: { data: Record<string, unknown> }) => ({}));
+    const update = vi.fn(async (_args: { data: Record<string, unknown> }) => ({ count: 1 }));
+    const send = vi.fn(async () => {});
     const db = asDb({
       pharmacyCustomer: { findFirst: async () => customerRow },
       pharmacyCustomerPortalLink: {
-        findUnique: async () => linkRow({ otpFailedAttempts: 5 }),
-        update,
+        findUnique: async () => linkRow({ otpFailedAttempts: 4 }),
+        updateMany: update,
       },
     });
-    await startPortalSignIn(db, ORG, TOKEN, async () => {});
+    await startPortalSignIn(db, ORG, TOKEN, send);
+    expect(send).toHaveBeenCalledTimes(1);
     expect(update.mock.calls[0][0].data).not.toHaveProperty('otpFailedAttempts');
+  });
+
+  it('DEV-906: refuses to send a code for a link locked by five wrong codes', async () => {
+    for (const otpFailedAttempts of [5, 6]) {
+      const updateMany = vi.fn();
+      const send = vi.fn(async () => {});
+      const db = asDb({
+        pharmacyCustomer: { findFirst: async () => customerRow },
+        pharmacyCustomerPortalLink: {
+          findUnique: async () => linkRow({ otpFailedAttempts }),
+          update: vi.fn(),
+          updateMany,
+        },
+      });
+      await expect(startPortalSignIn(db, ORG, TOKEN, send)).rejects.toMatchObject({
+        reason: 'LINK_LOCKED',
+      });
+      expect(send).not.toHaveBeenCalled();
+      expect(updateMany).not.toHaveBeenCalled();
+    }
+  });
+
+  it('DEV-906: sends nothing when the link locks while the resend is in flight', async () => {
+    const updateMany = vi.fn(async () => ({ count: 0 }));
+    const send = vi.fn(async () => {});
+    const db = asDb({
+      pharmacyCustomer: { findFirst: async () => customerRow },
+      pharmacyCustomerPortalLink: {
+        findUnique: async () => linkRow({ otpFailedAttempts: 4 }),
+        updateMany,
+      },
+    });
+    await expect(startPortalSignIn(db, ORG, TOKEN, send)).rejects.toMatchObject({
+      reason: 'LINK_LOCKED',
+    });
+    expect(updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'link-1', otpFailedAttempts: { lt: 5 } },
+      })
+    );
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('DEV-906: a locked link stops sending codes; a fresh staff link has its own count', async () => {
+    // A small in-memory link table that applies the same where clauses as the database.
+    type Row = ReturnType<typeof linkRow> & { tokenHash: string; otpHash: string | null };
+    const rows: Row[] = [];
+    const matches = (row: Row, where: Record<string, unknown>) =>
+      Object.entries(where).every(([key, value]) =>
+        value && typeof value === 'object' && 'lt' in value
+          ? (row[key as keyof Row] as number) < (value as { lt: number }).lt
+          : row[key as keyof Row] === value
+      );
+    const apply = (row: Row, data: Record<string, unknown>) => {
+      for (const [key, value] of Object.entries(data))
+        (row as Record<string, unknown>)[key] =
+          value && typeof value === 'object' && 'increment' in value
+            ? (row[key as keyof Row] as number) + (value as { increment: number }).increment
+            : value;
+    };
+    const db = asDb({
+      pharmacyCustomer: { findFirst: async () => customerRow },
+      pharmacyCustomerPortalLink: {
+        create: async ({ data }: { data: Record<string, unknown> }) => {
+          const row = {
+            ...linkRow({ id: `link-${rows.length + 1}` }),
+            ...data,
+            otpHash: null,
+          } as Row;
+          rows.push(row);
+          return { id: row.id, expiresAt: row.expiresAt };
+        },
+        findUnique: async ({ where }: { where: { tokenHash: string } }) =>
+          rows.find((row) => row.tokenHash === where.tokenHash) ?? null,
+        update: async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) =>
+          apply(rows.find((row) => row.id === where.id)!, data),
+        updateMany: async ({
+          where,
+          data,
+        }: {
+          where: Record<string, unknown>;
+          data: Record<string, unknown>;
+        }) => {
+          const hit = rows.filter((row) => matches(row, where));
+          hit.forEach((row) => apply(row, data));
+          return { count: hit.length };
+        },
+      },
+      pharmacyCustomerPortalSession: { create: vi.fn(async () => ({})) },
+    });
+    const tokenOf = (path: string) => path.split('/').pop()!;
+    const sent: string[] = [];
+    const send = async (message: { otp: string }) => {
+      sent.push(message.otp);
+    };
+    const wrong = (otp: string) => (otp === '000000' ? '000001' : '000000');
+
+    const first = tokenOf((await mintPortalLink(db, scope, 'c-1')).path);
+    await startPortalSignIn(db, ORG, first, send);
+    for (let guess = 0; guess < 2; guess += 1)
+      expect(await verifyPortalSignIn(db, ORG, first, wrong(sent.at(-1)!))).toEqual({ ok: false });
+    // A resend on an unlocked link still works and keeps the guess count (DEV-882).
+    await startPortalSignIn(db, ORG, first, send);
+    expect(sent).toHaveLength(2);
+    expect(rows[0].otpFailedAttempts).toBe(2);
+    for (let guess = 0; guess < 3; guess += 1)
+      expect(await verifyPortalSignIn(db, ORG, first, wrong(sent.at(-1)!))).toEqual({ ok: false });
+    expect(rows[0].otpFailedAttempts).toBe(5);
+
+    // Locked: the next resend request is refused and nothing is sent.
+    const lockedHash = rows[0].otpHash;
+    await expect(startPortalSignIn(db, ORG, first, send)).rejects.toMatchObject({
+      reason: 'LINK_LOCKED',
+    });
+    expect(sent).toHaveLength(2);
+    expect(rows[0].otpHash).toBe(lockedHash);
+    // Even the right code no longer opens a session on the locked link.
+    expect(await verifyPortalSignIn(db, ORG, first, sent.at(-1)!)).toEqual({ ok: false });
+
+    // Staff issue a fresh link: it starts with a clean count and works.
+    const fresh = tokenOf((await mintPortalLink(db, scope, 'c-1')).path);
+    expect(rows[1].otpFailedAttempts).toBe(0);
+    await startPortalSignIn(db, ORG, fresh, send);
+    expect(sent).toHaveLength(3);
+    expect(await verifyPortalSignIn(db, ORG, fresh, wrong(sent.at(-1)!))).toEqual({ ok: false });
+    expect(rows[1].otpFailedAttempts).toBe(1);
+    expect(rows[0].otpFailedAttempts).toBe(5);
+    expect((await verifyPortalSignIn(db, ORG, fresh, sent.at(-1)!)).ok).toBe(true);
+    // The old link stays locked.
+    await expect(startPortalSignIn(db, ORG, first, send)).rejects.toMatchObject({
+      reason: 'LINK_LOCKED',
+    });
+    expect(sent).toHaveLength(3);
   });
 
   it('refuses a link from another tenant, revoked or expired', async () => {
@@ -311,6 +446,8 @@ describe('DEV-15 staff decisions', () => {
           updateMany,
         },
         organization: { findUnique: vi.fn(async () => ({ timezone: 'Asia/Karachi' })) },
+        // DEV-958A: the branch's "day ends at" hour; none stored reads as midnight.
+        pharmacyBranch: { findFirst: async () => null },
       }),
     };
   }

@@ -132,8 +132,43 @@ export function supportsRestaurantPrintSettings(vertical: string | null | undefi
  * Every other band (PLATFORM and VERTICAL_*) is granted only by the resolved
  * entitlement list, so this stays fail-closed for everything that is sold.
  */
-export function isModuleGranted(moduleKey: string, enabledModules: readonly string[]): boolean {
-  return MODULES_BY_KEY.get(moduleKey)?.band === 'BASELINE' || enabledModules.includes(moduleKey);
+export function isModuleGranted(
+  moduleKey: string,
+  enabledModules: readonly string[],
+  vertical?: OrganizationVertical | null
+): boolean {
+  return (
+    MODULES_BY_KEY.get(moduleKey)?.band === 'BASELINE' ||
+    isVerticalBaselineModule(vertical, moduleKey) ||
+    enabledModules.includes(moduleKey)
+  );
+}
+
+/**
+ * DEV-913: shared modules that are part of one vertical's core, whatever the
+ * plan. Every pharmacy workspace keeps its audit log ("who did what") for the
+ * owner and administrators: a package, contract or override can neither omit
+ * nor disable it there. Other verticals still buy `audit` as before.
+ * `resolveOrganizationEntitlements` reports these as BASELINE for the vertical,
+ * so the tRPC module gate, the route gate and the navigation agree.
+ */
+const VERTICAL_BASELINE_MODULES: Readonly<
+  Partial<Record<OrganizationVertical, readonly string[]>>
+> = {
+  PHARMACY: ['audit'],
+};
+
+export function verticalBaselineModules(
+  vertical: OrganizationVertical | null | undefined
+): readonly string[] {
+  return (vertical && VERTICAL_BASELINE_MODULES[vertical]) || [];
+}
+
+export function isVerticalBaselineModule(
+  vertical: OrganizationVertical | null | undefined,
+  moduleKey: string
+): boolean {
+  return verticalBaselineModules(vertical).includes(moduleKey);
 }
 
 export const PROCEDURE_MODULES: Record<string, string> = {
@@ -254,6 +289,8 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   // open the pharmacy SOP surface, and a pharmacy package does not sell it.
   pharmacySop: 'pharmacy-safety',
   pharmacySales: 'pharmacy-counter',
+  // DEV-743: integrated card-terminal payments at the counter.
+  pharmacyCardTerminal: 'pharmacy-counter',
   pharmacyPrinting: 'pharmacy-counter',
   pharmacyBranchAssignments: 'pharmacy-core',
   // #979: the rail's capability read belongs to every pharmacy workspace.
@@ -270,6 +307,14 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   // DEV-753: the owner switch for supplier compliance checks belongs to the
   // purchasing lane it governs.
   pharmacySupplierCompliance: 'pharmacy-procurement',
+  // DEV-911: the owner switch for the pharmacist check at each sale. Every pharmacy has it,
+  // and the counter reads it, so it belongs to mandatory Pharmacy Core.
+  pharmacyPharmacistCheck: 'pharmacy-core',
+  // DEV-960: the owner's per-branch "One pharmacist per shift" setting and the list of declared
+  // solo sign-offs. The counter's prescription self-sign reads it, so Pharmacy Core.
+  pharmacyRxSoloShift: 'pharmacy-core',
+  // DEV-931: every pharmacy member's own approval PIN ("Your PIN" in Settings).
+  pharmacyPin: 'pharmacy-core',
   hotelProperty: 'hotel-core',
   // H1-07 (MEAL-01): the meal plans a property sells are commercial
   // configuration every hospitality tenant holds, so they gate on the mandatory
@@ -422,7 +467,11 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   ['/pharmacy/medicines', 'pharmacy-core'],
   ['/pharmacy/settings/branches', 'pharmacy-core'],
   ['/pharmacy/settings/data-export', 'pharmacy-core'],
+  ['/pharmacy/settings/pharmacist-check', 'pharmacy-core'],
+  ['/pharmacy/settings/one-pharmacist-per-shift', 'pharmacy-core'],
+  ['/pharmacy/settings/pin', 'pharmacy-core'],
   ['/pharmacy/settings/printers', 'pharmacy-counter'],
+  ['/pharmacy/settings/counters', 'pharmacy-counter'],
   ['/pharmacy/marketing', 'pharmacy-crm'],
   ['/pharmacy/loyalty', 'pharmacy-crm'],
   ['/pharmacy/khata', 'pharmacy-counter'],

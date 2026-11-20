@@ -1,8 +1,32 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 
+const thermal = vi.hoisted(() => ({ props: vi.fn() }));
+vi.mock('./counter-thermal-print', () => ({
+  CounterThermalPrint: (props: unknown) => {
+    thermal.props(props);
+    return <p>Thermal print queue</p>;
+  },
+}));
+
+import { PRINT_WINDOW_READY_TIMEOUT_MS } from '@/lib/browser-print/print-window';
+import { installFakePrintWindows } from '@/lib/testing/print-window';
 import { CounterReceiptView, type CounterReceiptViewProps } from './counter-receipt-view';
 
+// #708: the cash memo is held off by a hard-coded constant until counsel confirms it. Tests
+// read the real constant unless one sets `cashMemoHold.live` to check the post-hold memo.
+const cashMemoHold = vi.hoisted(() => ({ live: undefined as boolean | undefined }));
+vi.mock('@/lib/pharmacy/sindh-cash-memo-hold', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pharmacy/sindh-cash-memo-hold')>();
+  return {
+    get SINDH_CASH_MEMO_LIVE() {
+      return cashMemoHold.live ?? actual.SINDH_CASH_MEMO_LIVE;
+    },
+  };
+});
+afterEach(() => {
+  cashMemoHold.live = undefined;
+});
 afterEach(cleanup);
 
 function props(overrides: Partial<CounterReceiptViewProps> = {}): CounterReceiptViewProps {
@@ -249,7 +273,7 @@ it.each(['UNAVAILABLE', undefined] as const)(
     };
     render(<CounterReceiptView {...input} />);
     const region = within(screen.getByRole('region', { name: 'رسید 12' }));
-    expect(region.getByText('تاریخی شناخت دستیاب نہیں')).toBeTruthy();
+    expect(region.getByText('اصل آئٹم کی تفصیل دستیاب نہیں')).toBeTruthy();
     expect(
       region.getByText('بیچ: دستیاب نہیں · میعاد: دستیاب نہیں · گولیاں/یونٹس: 7')
     ).toBeTruthy();
@@ -272,52 +296,56 @@ it('keeps Rx printing disabled when receipt has no sourced directions or licence
   expect(screen.getByText(/sourced Rx directions/)).toBeTruthy();
 });
 
-it.each([false, true])('opens isolated Rx labels with reprint=%s and exposes popup failure with retry available', (reprint) => {
-  const input = props({ reprint });
-  input.receipt!.lines[0]!.identityStatus = 'ISSUED';
-  input.receipt!.lines[0]!.allocations = [
-    {
-      allocationId: 'a',
-      inventoryLotId: 'a',
-      batchNumber: 'TEST',
-      expiresAt: '2027-01-01',
-      canonicalUnits: 1,
-    },
-  ];
-  input.dispensingLabelSources = [
-    {
-      saleId: 'sale-1',
-      saleLineId: 'line-1',
-      rx: true,
-      pharmacistRegistration: 'REG',
-      licenceNumber: 'TEST',
-      directionsEnglish: 'English fixture',
-      directionsUrdu: 'اردو',
-    },
-  ];
-  const open = vi.spyOn(window, 'open').mockReturnValue(null);
-  render(<CounterReceiptView {...input} />);
-  const button = screen.getByRole('button', { name: /Print Rx labels/ });
-  expect(button).toBeEnabled();
-  fireEvent.click(button);
-  expect(screen.getByRole('alert')).toHaveTextContent('Allow pop-ups');
-  const popup = {
-    opener: window,
-    document: { open: vi.fn(), write: vi.fn(), close: vi.fn(), querySelectorAll: () => [] },
-    focus: vi.fn(),
-    print: vi.fn(),
-    close: vi.fn(),
-  };
-  open.mockReturnValue(popup as unknown as Window);
-  fireEvent.click(button);
-  expect(popup.document.write).toHaveBeenCalledWith(expect.stringContaining('size: 50mm 30mm'));
-  expect(popup.print).toHaveBeenCalledOnce();
-  expect(input.onPrint).not.toHaveBeenCalled();
-  expect(screen.queryByRole('alert')).toBeNull();
-  open.mockRestore();
-});
+it.each([false, true])(
+  'opens isolated Rx labels with reprint=%s and exposes popup failure with retry available',
+  async (reprint) => {
+    const input = props({ reprint });
+    input.receipt!.lines[0]!.identityStatus = 'ISSUED';
+    input.receipt!.lines[0]!.allocations = [
+      {
+        allocationId: 'a',
+        inventoryLotId: 'a',
+        batchNumber: 'TEST',
+        expiresAt: '2027-01-01',
+        canonicalUnits: 1,
+      },
+    ];
+    input.dispensingLabelSources = [
+      {
+        saleId: 'sale-1',
+        saleLineId: 'line-1',
+        rx: true,
+        pharmacistRegistration: 'REG',
+        licenceNumber: 'TEST',
+        directionsEnglish: 'English fixture',
+        directionsUrdu: 'اردو',
+      },
+    ];
+    // DEV-973: with noopener, a blocked window is the one whose print page never loads.
+    vi.useFakeTimers();
+    const blocked = installFakePrintWindows({ blocked: true });
+    render(<CounterReceiptView {...input} />);
+    const button = screen.getByRole('button', { name: /Print Rx labels/ });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    await act(() => vi.advanceTimersByTimeAsync(PRINT_WINDOW_READY_TIMEOUT_MS));
+    expect(screen.getByRole('alert')).toHaveTextContent('Allow pop-ups');
+    vi.useRealTimers();
+    blocked.open.mockRestore();
+    const windows = installFakePrintWindows();
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(windows.last().html()).toEqual(expect.stringContaining('size: 50mm 30mm'));
+    expect(windows.last().printRequests()).toBe(1);
+    // DEV-973: the isolated window prints itself; the counter never calls print() on it.
+    expect(windows.last().proxy.print).not.toHaveBeenCalled();
+    expect(input.onPrint).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull();
+    windows.closeAll();
+  }
+);
 
-it('selects only the clicked line source from the production receipt payload', () => {
+it('selects only the clicked line source from the production receipt payload', async () => {
   const input = props();
   const line = input.receipt!.lines[0]!;
   input.receipt!.lines = ['first', 'second'].map((saleLineId) => ({
@@ -343,19 +371,13 @@ it('selects only the clicked line source from the production receipt payload', (
     directionsEnglish: `${saleLineId} directions`,
     directionsUrdu: 'اردو',
   }));
-  const popup = {
-    opener: window,
-    document: { open: vi.fn(), write: vi.fn(), close: vi.fn(), querySelectorAll: () => [] },
-    focus: vi.fn(),
-    print: vi.fn(),
-    close: vi.fn(),
-  };
-  const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+  const windows = installFakePrintWindows();
   render(<CounterReceiptView {...input} />);
   fireEvent.click(screen.getAllByRole('button', { name: /Print Rx labels/ })[1]!);
-  expect(popup.document.write).toHaveBeenCalledWith(expect.stringContaining('second directions'));
-  expect(popup.document.write.mock.calls[0]![0]).not.toContain('first directions');
-  open.mockRestore();
+  await waitFor(() => expect(windows.last().printRequests()).toBe(1));
+  expect(windows.last().html()).toEqual(expect.stringContaining('second directions'));
+  expect(windows.last().html()).not.toContain('first directions');
+  windows.open.mockRestore();
 });
 
 const still = 'data:image/png;base64,iVBORw0KGgo=';
@@ -388,20 +410,31 @@ it('shows the refund still beside the receipt, outside the printable document', 
   );
   const evidence = within(screen.getByRole('region', { name: 'Camera evidence' }));
   const image = evidence.getByRole('img', {
-    name: 'Camera still at refund, 2026-09-06 08:31 UTC',
+    name: 'Camera still at refund, 2026-09-06 13:31 PKT',
   });
   expect(image).toHaveAttribute('src', still);
   expect(evidence.getByText('Still removed under the camera retention period.')).toBeTruthy();
-  expect(evidence.getByText('Captured 2026-09-06 08:31 UTC')).toBeTruthy();
+  expect(evidence.getByText('Captured 2026-09-06 13:31 PKT')).toBeTruthy();
   const receipt = screen.getByRole('region', { name: 'Receipt 12' });
   expect(within(receipt).queryByRole('img')).toBeNull();
   expect(container.querySelector('pre')?.textContent ?? '').not.toContain('Camera');
 });
 
 it.each([
-  ['PENDING', 'Still pending capture.', 'Requested 2026-09-06 08:30 UTC'],
-  ['FAILED', 'No still was captured.', 'Requested 2026-09-06 08:30 UTC'],
-] as const)('explains %s evidence without an image', (status, message, time) => {
+  // 00:30 on 6 Sep in Karachi is 19:30 UTC on 5 Sep: the shop clock's date is shown.
+  [
+    'PENDING',
+    'Still pending capture.',
+    'Requested 2026-09-06 00:30 PKT',
+    '2026-09-05T19:30:00.000Z',
+  ],
+  [
+    'FAILED',
+    'No still was captured.',
+    'Requested 2026-09-06 13:30 PKT',
+    '2026-09-06T08:30:00.000Z',
+  ],
+] as const)('explains %s evidence without an image', (status, message, time, requestedAt) => {
   render(
     <CounterReceiptView
       {...props({
@@ -410,7 +443,7 @@ it.each([
             id: 'e',
             kind: 'REFUND',
             status,
-            requestedAt: '2026-09-06T08:30:00.000Z',
+            requestedAt,
             capturedAt: null,
             image: null,
           },
@@ -422,6 +455,9 @@ it.each([
   expect(evidence.getByText(message)).toBeTruthy();
   expect(evidence.getByText(time)).toBeTruthy();
   expect(evidence.queryByRole('img')).toBeNull();
+  expect(screen.getByRole('region', { name: 'Camera evidence' }).textContent).not.toMatch(
+    /\bUTC\b/
+  );
 });
 
 it.each([undefined, null, []])('renders no evidence section for %j', (evidence) => {
@@ -483,7 +519,6 @@ it('states quantity and gross when historical per-lot pricing is unavailable', (
   expect(screen.getAllByRole('listitem')[0]).not.toHaveTextContent('3 unit × 1.00');
 });
 
-
 it.each([true, false])(
   'routes automatic printing through the copy allocation handler and reports success=%s once',
   async (printed) => {
@@ -494,14 +529,18 @@ it.each([true, false])(
       onPrint,
       onSettlementPresented,
       settlement: {
-        status: 'confirmed', saleId: 'sale-1', receiptNumber: 12,
-        autoPrint: true, printReservation: reservation,
+        status: 'confirmed',
+        saleId: 'sale-1',
+        receiptNumber: 12,
+        autoPrint: true,
+        printReservation: reservation,
       },
     });
     const view = render(<CounterReceiptView {...input} />);
     await waitFor(() =>
       expect(onSettlementPresented).toHaveBeenCalledExactlyOnceWith({
-        saleId: 'sale-1', receiptNumber: 12,
+        saleId: 'sale-1',
+        receiptNumber: 12,
         printStatus: printed ? 'dialog-requested' : 'manual-required',
       })
     );
@@ -510,13 +549,63 @@ it.each([true, false])(
     view.rerender(<CounterReceiptView {...input} />);
     expect(onPrint).toHaveBeenCalledTimes(1);
     expect(onSettlementPresented).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(printed
-      ? 'Browser print dialog requested. Physical printing is not confirmed.'
-      : 'The browser print dialog could not open. Retry Print receipt.'
-    )).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        printed
+          ? 'Browser print dialog requested. Physical printing is not confirmed.'
+          : 'The browser print dialog could not open. Retry Print receipt.'
+      )
+    ).toBeInTheDocument();
   }
 );
 
+it('#708 shows the Sindh cash memo facts on the receipt preview, reprint included', () => {
+  cashMemoHold.live = true; // As the memo will behave once counsel lifts the hold.
+  const input = props({ reprint: true });
+  const receipt = input.receipt!;
+  receipt.buyerName = 'Ayesha Khan';
+  receipt.lines[0]!.identityStatus = 'ISSUED';
+  receipt.lines[0]!.manufacturer = 'GSK Pakistan';
+  receipt.taxIdentity = {
+    ntn: null,
+    strn: null,
+    licenceNumber: 'DSL-SD-77',
+    provinceCode: 'PK-SD',
+    licenceValidFrom: '2026-01-01T00:00:00.000Z',
+    licenceValidTo: '2027-12-31T00:00:00.000Z',
+    pharmacistRegistration: 'PCP-9001',
+  };
+  render(<CounterReceiptView {...input} />);
+  const preview = within(screen.getByRole('region', { name: 'Receipt 12' }));
+  expect(preview.getByText('Sindh cash memo')).toBeTruthy();
+  expect(
+    preview.getByText('Drug-sale licence: DSL-SD-77 (valid 2026-01-01 to 2027-12-31)')
+  ).toBeTruthy();
+  expect(preview.getByText('Pharmacist registration: PCP-9001')).toBeTruthy();
+  expect(preview.getByText('Buyer: Ayesha Khan')).toBeTruthy();
+  expect(preview.getByText('Manufacturer: GSK Pakistan')).toBeTruthy();
+  expect(preview.getByText('Signature of qualified person: ________________')).toBeTruthy();
+});
+
+it('#708 keeps a Punjab receipt preview free of cash memo facts', () => {
+  const input = props();
+  const receipt = input.receipt!;
+  receipt.buyerName = 'Ayesha Khan';
+  receipt.lines[0]!.identityStatus = 'ISSUED';
+  receipt.lines[0]!.manufacturer = 'GSK Pakistan';
+  receipt.taxIdentity = {
+    ntn: null,
+    strn: null,
+    licenceNumber: 'DSL-PB-42',
+    provinceCode: 'PK-PB',
+  };
+  render(<CounterReceiptView {...input} />);
+  const preview = within(screen.getByRole('region', { name: 'Receipt 12' }));
+  expect(preview.queryByText(/Cash memo/)).toBeNull();
+  expect(preview.queryByText(/Ayesha Khan/)).toBeNull();
+  expect(preview.queryByText(/GSK Pakistan/)).toBeNull();
+  expect(preview.queryByText(/Signature of qualified person/)).toBeNull();
+});
 it('DEV-16: sends a WhatsApp receipt only after the cashier confirms the customer asked', async () => {
   const onSendWhatsApp = vi.fn(async () => ({
     ok: true,
@@ -535,7 +624,9 @@ it('DEV-16: sends a WhatsApp receipt only after the cashier confirms the custome
   fireEvent.click(send);
 
   expect(onSendWhatsApp).toHaveBeenCalledExactlyOnceWith('sale-1');
-  expect(await screen.findByText('WhatsApp receipt queued. Delivery is not confirmed at the counter.')).toBeTruthy();
+  expect(
+    await screen.findByText('WhatsApp receipt queued. Delivery is not confirmed at the counter.')
+  ).toBeTruthy();
 });
 
 it('DEV-16: surfaces a refused WhatsApp receipt and hides the control on an unsettled bill', async () => {
@@ -578,4 +669,74 @@ it('previews the issue time and cashier in the on-screen header (DEF-15)', () =>
   const header = screen.getByRole('heading', { level: 4 }).closest('header')!;
   expect(within(header).getByText(/Date:.*15:00/)).toBeTruthy();
   expect(within(header).getByText('Cashier: Ayesha Khan')).toBeTruthy();
+});
+
+it('#708 hold: a Sindh profile shows the ordinary receipt preview and hides the memo facts', () => {
+  const input = props({ reprint: true });
+  const receipt = input.receipt!;
+  receipt.buyerName = 'Ayesha Khan';
+  receipt.lines[0]!.identityStatus = 'ISSUED';
+  receipt.lines[0]!.manufacturer = 'GSK Pakistan';
+  receipt.taxIdentity = {
+    ntn: null,
+    strn: null,
+    licenceNumber: 'DSL-SD-77',
+    provinceCode: 'PK-SD',
+    licenceValidFrom: '2026-01-01T00:00:00.000Z',
+    licenceValidTo: '2027-12-31T00:00:00.000Z',
+    pharmacistRegistration: 'PCP-9001',
+  };
+  render(<CounterReceiptView {...input} />);
+  const preview = within(screen.getByRole('region', { name: 'Receipt 12' }));
+  expect(preview.queryByText(/cash memo/i)).toBeNull();
+  expect(preview.queryByText(/Ayesha Khan/)).toBeNull();
+  expect(preview.queryByText(/GSK Pakistan/)).toBeNull();
+  expect(preview.queryByText(/Pharmacist registration/)).toBeNull();
+  expect(preview.queryByText(/Signature of qualified person/)).toBeNull();
+});
+
+it('sends a settled receipt to the thermal print queue instead of offering a file download', () => {
+  thermal.props.mockClear();
+  render(<CounterReceiptView {...props({ branchId: 'branch-1', format: 'THERMAL_58' })} />);
+  expect(screen.getByText('Thermal print queue')).toBeTruthy();
+  expect(thermal.props).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      branchId: 'branch-1',
+      saleId: 'sale-1',
+      locale: 'en',
+      format: 'THERMAL_58',
+      disabled: false,
+    })
+  );
+  expect(screen.queryByText('Save ESC/POS job')).toBeNull();
+  expect(screen.queryByRole('button', { name: /ESC\/POS/ })).toBeNull();
+});
+
+it('offers no thermal queue for an unsettled bill or without a branch', () => {
+  thermal.props.mockClear();
+  const unsettled = props({ branchId: 'branch-1' });
+  unsettled.receipt!.receiptNumber = null;
+  render(<CounterReceiptView {...unsettled} />);
+  cleanup();
+  render(<CounterReceiptView {...props()} />);
+  expect(thermal.props).not.toHaveBeenCalled();
+});
+
+it('DEV-958A shows when the payment really happened, not the business day it books on', () => {
+  // 00:30 on 6 Sep in Karachi, at a branch whose day ends at 05:00: business day 5 Sep.
+  const input = props();
+  render(
+    <CounterReceiptView
+      {...input}
+      receipt={{
+        ...input.receipt!,
+        businessDate: '2026-09-05',
+        completedAt: '2026-09-05T19:30:00Z',
+      }}
+    />
+  );
+  const recorded = within(screen.getAllByRole('status')[0]!);
+  expect(recorded.getByRole('heading', { name: 'Payment recorded' })).toBeTruthy();
+  expect(recorded.getByText('Branch · 2026-09-06 00:30 PKT')).toBeTruthy();
+  expect(recorded.queryByText(/2026-09-05/)).toBeNull();
 });

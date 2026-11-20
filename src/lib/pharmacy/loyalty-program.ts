@@ -62,8 +62,10 @@ export async function currentLoyaltyProgram(db: ScopedDb, organizationId: string
  * ceiling cannot change under a redemption or adjustment that is using it.
  */
 export async function lockedLoyaltyProgram(db: ScopedDb, organizationId: string) {
+  // DEV-930: Prisma cannot read the shared lock's void result (every redemption failed), so
+  // select it as text, as lockPharmacyLedgerScope does.
   await db.$queryRaw(
-    Prisma.sql`SELECT pg_advisory_xact_lock_shared(hashtextextended(${`pharmacy-loyalty-program:${organizationId}`}, 0))`
+    Prisma.sql`SELECT pg_advisory_xact_lock_shared(hashtextextended(${`pharmacy-loyalty-program:${organizationId}`}, 0))::text AS locked`
   );
   return currentLoyaltyProgram(db, organizationId);
 }

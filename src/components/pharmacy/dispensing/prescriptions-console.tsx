@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 import { CalendarClock, Plus, Upload } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import type { PrescriptionUpload } from '@/lib/pharmacy/prescription-files';
 import {
   formatPrescriptionDate,
@@ -15,8 +16,6 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { AccessDeniedState, Field, WorkspaceState, fieldClass, isAccessDenied } from './field';
 import { MedicationCard } from './medication-card';
 import { PrescriptionDirectoryCard } from './prescription-directory';
-
-const today = () => new Date().toISOString().slice(0, 10);
 
 /** Private, authenticated, no-store evidence thumbnail; next/image would cache it. */
 function EvidenceThumbnail({ url, label }: { url: string; label: string }) {
@@ -186,6 +185,10 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
           'Reminder refused: this Rx item needs a signed pharmacist decision first.',
         AMBIGUOUS_DIRECTIONS:
           'Reminder refused: directions must state a deterministic daily or hourly cadence.',
+        FILL_DISPENSED_AT_ANOTHER_BRANCH:
+          'Reminder refused: this fill was dispensed at another branch. Only that branch can record its refill reminder.',
+        FILL_BRANCH_UNKNOWN:
+          'Reminder refused: the branch that dispensed this fill is not recorded. Ask the owner to record its refill reminder.',
       }[captureReminder.error.message] ?? captureReminder.error.message)
     : null;
 
@@ -414,7 +417,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                         required
                         name="validFrom"
                         type="date"
-                        defaultValue={today()}
+                        defaultValue={pharmacyCalendarDay(workspace.data.timezone)}
                         className={fieldClass}
                       />
                     </Field>
@@ -791,7 +794,8 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
               </WorkspaceState>
             ) : workspace.data.branches.length === 0 ? (
               <WorkspaceState title="No active pharmacy branch">
-                Activate a branch before capturing refill reminders.
+                Refill reminders are captured at a branch you are assigned to. Ask the owner to
+                assign you to an active branch.
               </WorkspaceState>
             ) : dispensedFills.length === 0 ? (
               <WorkspaceState title="No dispensed items yet">

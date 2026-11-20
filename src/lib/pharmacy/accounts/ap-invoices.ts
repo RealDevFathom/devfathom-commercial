@@ -28,6 +28,7 @@ import {
   reverseBookkeepingTransaction,
 } from '@/lib/pharmacy/bookkeeping';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { pharmacyCalendarDayRange } from '@/lib/pharmacy/business-day';
 import {
   AP_INVOICE_MAX_MINOR,
   AP_INVOICE_MAX_TERM_DAYS,
@@ -36,10 +37,66 @@ import {
   type RecordApInvoiceInput,
   type ReverseApInvoiceInput,
   type ReverseApSettlementInput,
+  AP_REVERSAL_PAGE_ROWS,
+  type ApReversalCursor,
+  type SearchApReversalsInput,
 } from './ap-invoices-schema';
 import { commandPayloadHash } from './general-journal';
 
 export type ApInvoiceScope = { organizationId: string; branchId: string; actorId: string };
+
+/**
+ * DEV-103: reversing an invoice or a payment needs a manager or owner with their own fresh PIN
+ * (checked in the router). The person who recorded it may approve its reversal only when nobody
+ * else could (`otherApReversalApprovers`); `soleApprover` re-checks that inside the write.
+ */
+export const AP_REVERSAL_SEGREGATED_POLICY = 'PHARMACY_AP_REVERSAL_MANAGER_PIN';
+export const AP_REVERSAL_SOLE_APPROVER_POLICY = 'PHARMACY_AP_REVERSAL_SOLE_APPROVER_PIN';
+export type ApReversalOptions = { soleApprover: () => Promise<boolean>; now?: Date };
+
+/**
+ * DEV-103: what a reversal command receives: the wire input without the PIN. `at` is never on
+ * the wire (the API refuses it, so the server dates every reversal now); only server code, such
+ * as the date-rule tests, may pass one.
+ */
+export type ApSettlementReversalCommand = Omit<ReverseApSettlementInput, 'pin'> & { at?: string };
+export type ApInvoiceReversalCommand = Omit<ReverseApInvoiceInput, 'pin'> & { at?: string };
+
+/**
+ * DEV-103: the reversal audit entries name the person who recorded the reversed invoice or
+ * payment `recordedById`. Earlier entries named the same person `initiatedById`; this reads both,
+ * preferring the new name.
+ */
+export function apReversalAuditRecorderId(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  const record = metadata as Record<string, unknown>;
+  const value = record.recordedById ?? record.initiatedById;
+  return typeof value === 'string' && value ? value : null;
+}
+
+async function reversalPolicy(
+  recordedById: string,
+  scope: ApInvoiceScope,
+  options: ApReversalOptions
+) {
+  if (recordedById !== scope.actorId) return AP_REVERSAL_SEGREGATED_POLICY;
+  if (!(await options.soleApprover())) fail('SELF_APPROVAL');
+  return AP_REVERSAL_SOLE_APPROVER_POLICY;
+}
+
+/**
+ * A reversal dated by server code keeps that instant in its payload; one dated now (every API
+ * call: the wire carries no date) takes the server clock and leaves it out, so a double submit
+ * of the same command key replays instead of conflicting.
+ */
+function reversalInstant(
+  input: { at?: string },
+  now: Date
+): { at: Date; hashed: Record<string, string> } {
+  if (!input.at) return { at: now, hashed: {} };
+  const at = parseApInstant(input.at, now);
+  return { at, hashed: { at: at.toISOString() } };
+}
 
 export type ApInvoiceErrorReason =
   | 'INVALID_AMOUNT'
@@ -53,7 +110,13 @@ export type ApInvoiceErrorReason =
   | 'PERIOD_CLOSED'
   | 'DUPLICATE_REFERENCE'
   | 'DUPLICATE_INVOICE'
-  | 'IDEMPOTENCY_CONFLICT';
+  | 'IDEMPOTENCY_CONFLICT'
+  // DEV-694: supplier credit-note set-off.
+  | 'SET_OFF_EXCEEDS_CREDIT'
+  | 'SET_OFF_EXCEEDS_BILL'
+  | 'SUPPLIER_MISMATCH'
+  | 'ALREADY_DECIDED'
+  | 'SELF_APPROVAL';
 
 export class PharmacyApInvoiceError extends Error {
   constructor(readonly reason: ApInvoiceErrorReason) {
@@ -132,7 +195,11 @@ async function assertOpenPeriod(db: ScopedDb, scope: ApInvoiceScope, at: Date) {
   }
 }
 
-async function lockInvoice(db: ScopedDb, scope: ApInvoiceScope, invoiceId: string) {
+export async function lockInvoice(
+  db: ScopedDb,
+  scope: Pick<ApInvoiceScope, 'organizationId' | 'branchId'>,
+  invoiceId: string
+) {
   await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_ap_invoices
     WHERE id=${invoiceId} AND "organizationId"=${scope.organizationId}
       AND "branchId"=${scope.branchId} FOR UPDATE`);
@@ -140,10 +207,44 @@ async function lockInvoice(db: ScopedDb, scope: ApInvoiceScope, invoiceId: strin
     where: { organizationId: scope.organizationId, branchId: scope.branchId, id: invoiceId },
     // Every settlement, reversed ones included: the payment and reversal
     // checks validate the whole historical timeline, not only today's state.
-    include: { settlements: true },
+    // DEV-694: approved credit-note set-offs reduce the payable like payments.
+    include: {
+      settlements: true,
+      creditSetOffs: {
+        where: { status: { in: ['APPROVED', 'REVERSED'] } },
+        select: { amountMinor: true, decidedAt: true, status: true, reversedAt: true },
+      },
+    },
   });
   if (!invoice) fail('NOT_FOUND');
   return invoice;
+}
+
+type SetOffClock = {
+  amountMinor: number;
+  decidedAt: Date | null;
+  status?: string;
+  reversedAt?: Date | null;
+};
+
+/**
+ * DEV-694: an invoice's settlement clocks — its payments plus every approved
+ * credit-note set-off, which reduces the payable from its approval instant until
+ * its reversal instant, exactly like a payment and its reversal.
+ */
+export function invoiceSettlementClocks(invoice: {
+  settlements: readonly SettlementClock[];
+  creditSetOffs?: readonly SetOffClock[];
+}): SettlementClock[] {
+  return [
+    ...invoice.settlements,
+    ...(invoice.creditSetOffs ?? []).map((setOff) => ({
+      amountMinor: setOff.amountMinor,
+      paidAt: setOff.decidedAt ?? new Date(0),
+      status: setOff.status === 'REVERSED' ? 'REVERSED' : 'ACTIVE',
+      reversedAt: setOff.status === 'REVERSED' ? (setOff.reversedAt ?? null) : null,
+    })),
+  ];
 }
 
 async function lockSettlement(db: ScopedDb, scope: ApInvoiceScope, settlementId: string) {
@@ -408,7 +509,11 @@ export async function payApInvoice(
   const invoice = await lockInvoice(db, scope, input.invoiceId);
   if (invoice.status !== 'POSTED') fail('INVALID_STATE');
   if (paidAt < invoice.invoiceDate) fail('INVALID_DATE');
-  if (input.amountMinor > payableMinorFrom(invoice, paidAt)) fail('OVERPAYMENT');
+  const clocks = {
+    amountMinor: invoice.amountMinor,
+    settlements: invoiceSettlementClocks(invoice),
+  };
+  if (input.amountMinor > payableMinorFrom(clocks, paidAt)) fail('OVERPAYMENT');
 
   let transaction;
   try {
@@ -477,24 +582,29 @@ export async function payApInvoice(
 export async function reverseApSettlement(
   db: ScopedDb,
   scope: ApInvoiceScope,
-  input: ReverseApSettlementInput,
-  now: Date = new Date()
+  input: ApSettlementReversalCommand,
+  options: ApReversalOptions
 ) {
+  const now = options.now ?? new Date();
   const reason = input.reason.trim();
   if (!reason) fail('MISSING_REASON');
-  const at = parseApInstant(input.at, now);
+  const { at, hashed } = reversalInstant(input, now);
   await lockPharmacyLedgerScope(db, scope);
   const payloadHash = commandPayloadHash({
     branchId: scope.branchId,
     settlementId: input.settlementId,
     reason,
-    at: at.toISOString(),
+    ...hashed,
   });
   const replay = await db.pharmacyApInvoiceSettlement.findFirst({
     where: { organizationId: scope.organizationId, reverseCommandKey: input.commandKey },
   });
   if (replay) {
-    if (replay.branchId !== scope.branchId || replay.reversePayloadHash !== payloadHash) {
+    if (
+      replay.branchId !== scope.branchId ||
+      replay.id !== input.settlementId ||
+      replay.reversePayloadHash !== payloadHash
+    ) {
       fail('IDEMPOTENCY_CONFLICT');
     }
     return { settlement: replay, replayed: true as const };
@@ -503,6 +613,7 @@ export async function reverseApSettlement(
   const settlement = await lockSettlement(db, scope, input.settlementId);
   if (settlement.status === 'REVERSED') fail('ALREADY_REVERSED');
   if (at < settlement.paidAt) fail('INVALID_DATE');
+  const policy = await reversalPolicy(settlement.createdByUserId, scope, options);
 
   let transaction;
   try {
@@ -542,30 +653,35 @@ export async function reverseApSettlement(
       reversePayloadHash: payloadHash,
     },
   });
-  return { settlement: reversed, transaction, replayed: false as const };
+  return { settlement: reversed, transaction, policy, replayed: false as const };
 }
 
 export async function reverseApInvoice(
   db: ScopedDb,
   scope: ApInvoiceScope,
-  input: ReverseApInvoiceInput,
-  now: Date = new Date()
+  input: ApInvoiceReversalCommand,
+  options: ApReversalOptions
 ) {
+  const now = options.now ?? new Date();
   const reason = input.reason.trim();
   if (!reason) fail('MISSING_REASON');
-  const at = parseApInstant(input.at, now);
+  const { at, hashed } = reversalInstant(input, now);
   await lockPharmacyLedgerScope(db, scope);
   const payloadHash = commandPayloadHash({
     branchId: scope.branchId,
     invoiceId: input.invoiceId,
     reason,
-    at: at.toISOString(),
+    ...hashed,
   });
   const replay = await db.pharmacyApInvoice.findFirst({
     where: { organizationId: scope.organizationId, reverseCommandKey: input.commandKey },
   });
   if (replay) {
-    if (replay.branchId !== scope.branchId || replay.reversePayloadHash !== payloadHash) {
+    if (
+      replay.branchId !== scope.branchId ||
+      replay.id !== input.invoiceId ||
+      replay.reversePayloadHash !== payloadHash
+    ) {
       fail('IDEMPOTENCY_CONFLICT');
     }
     return { invoice: replay, replayed: true as const };
@@ -573,19 +689,22 @@ export async function reverseApInvoice(
 
   const invoice = await lockInvoice(db, scope, input.invoiceId);
   if (invoice.status === 'REVERSED') fail('ALREADY_REVERSED');
-  if (invoice.settlements.some((settlement) => settlement.status === 'ACTIVE')) {
+  const clocks = invoiceSettlementClocks(invoice);
+  // DEV-694: an approved set-off still in force blocks the reversal like a payment.
+  if (clocks.some((settlement) => settlement.status === 'ACTIVE')) {
     fail('ACTIVE_SETTLEMENTS');
   }
   if (at < invoice.invoiceDate) fail('INVALID_DATE');
   // The invoice clock may not end before its payment clocks did: an invoice
   // reversal dated before a payment or that payment's reversal would make the
   // aging view and the ledger disagree for the days in between.
-  for (const settlement of invoice.settlements) {
+  for (const settlement of clocks) {
     if (at < settlement.paidAt || (settlement.reversedAt && at < settlement.reversedAt)) {
       fail('INVALID_DATE');
     }
   }
   await assertOpenPeriod(db, scope, at);
+  const policy = await reversalPolicy(invoice.createdByUserId, scope, options);
 
   const reversal = await reverseJournalEntry(db, scope, {
     entryId: invoice.journalEntryId,
@@ -613,7 +732,7 @@ export async function reverseApInvoice(
       reversalEntryId: reversal.id,
     },
   });
-  return { invoice: reversed, entry: reversal, replayed: false as const };
+  return { invoice: reversed, entry: reversal, policy, replayed: false as const };
 }
 
 export function listApInvoices(
@@ -631,4 +750,146 @@ export function listApInvoices(
     orderBy: [{ invoiceDate: 'desc' }, { id: 'asc' }],
     take: input.take,
   });
+}
+
+/** A schema-checked YYYY-MM-DD day as the UTC midnight an invoice date is stored at. */
+const utcDay = (day: string) => new Date(`${day}T00:00:00.000Z`);
+
+/**
+ * DEV-967: a part-of-text match that reads `%`, `_` and `\` as typed. `contains` becomes an
+ * ILIKE pattern whose escape character is the backslash, so each of them is escaped first.
+ */
+const literalContains = (value: string) => ({
+  contains: value.replace(/[\\%_]/g, (character) => `\\${character}`),
+  mode: 'insensitive' as const,
+});
+
+/** DEV-967: the rows after `cursor` in the list order (newest invoice date first, then id). */
+const olderThan = (cursor: ApReversalCursor): Prisma.PharmacyApInvoiceWhereInput => {
+  const at = new Date(cursor.invoiceDate);
+  return { OR: [{ invoiceDate: { lt: at } }, { invoiceDate: at, id: { gt: cursor.id } }] };
+};
+
+/** DEV-967: the rows before `cursor` in the list order. */
+const newerThan = (cursor: ApReversalCursor): Prisma.PharmacyApInvoiceWhereInput => {
+  const at = new Date(cursor.invoiceDate);
+  return { OR: [{ invoiceDate: { gt: at } }, { invoiceDate: at, id: { lt: cursor.id } }] };
+};
+
+const reversalCursor = (row: { invoiceDate: Date; id: string }): ApReversalCursor => ({
+  invoiceDate: row.invoiceDate.toISOString(),
+  id: row.id,
+});
+
+/**
+ * DEV-103: the reversal search. Posted supplier expense invoices of one branch of one tenant that
+ * match every filter given (see `searchApReversalsSchema`), each with its payments, in a stable
+ * order (newest invoice date first, then id) one page at a time. Nothing outside the tenant and
+ * branch is ever read.
+ *
+ * DEV-967: a page is keyed by a row, never by a position: `older` reads the rows just after that
+ * row, `newer` the rows just before it. A bill recorded or reversed between two page reads
+ * therefore never shows another row twice or skips it. One row more than a page is read to tell
+ * whether the list goes on that way; one more row is looked up to tell whether it goes on the
+ * other way. `older`/`newer` in the result are the cursors for those pages, when they exist.
+ */
+export async function searchApReversals(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string },
+  input: Omit<SearchApReversalsInput, 'branchId'>,
+  timeZone: string | null | undefined
+) {
+  const where: Prisma.PharmacyApInvoiceWhereInput[] = [];
+  if (input.payee) where.push({ payeeName: literalContains(input.payee) });
+  if (input.reference) {
+    where.push({
+      OR: [
+        { reference: literalContains(input.reference) },
+        { supplierInvoiceRef: literalContains(input.reference) },
+      ],
+    });
+  }
+  if (input.amountMinor !== undefined) {
+    where.push({
+      OR: [
+        { amountMinor: input.amountMinor },
+        { settlements: { some: { status: 'ACTIVE', amountMinor: input.amountMinor } } },
+      ],
+    });
+  }
+  if (input.from || input.to) {
+    // An invoice date is a calendar day already; a payment is an instant, read on the shop's clock.
+    const paid = pharmacyCalendarDayRange(
+      input.from ?? input.to!,
+      input.to ?? input.from!,
+      timeZone
+    );
+    where.push({
+      OR: [
+        {
+          invoiceDate: {
+            ...(input.from ? { gte: utcDay(input.from) } : {}),
+            ...(input.to ? { lte: utcDay(input.to) } : {}),
+          },
+        },
+        {
+          settlements: {
+            some: {
+              status: 'ACTIVE',
+              paidAt: {
+                ...(input.from ? { gte: paid.from } : {}),
+                ...(input.to ? { lt: paid.to } : {}),
+              },
+            },
+          },
+        },
+      ],
+    });
+  }
+  const matching: Prisma.PharmacyApInvoiceWhereInput = {
+    organizationId: scope.organizationId,
+    branchId: scope.branchId,
+    status: 'POSTED',
+    ...(where.length ? { AND: where } : {}),
+  };
+  if (input.older && input.newer) fail('INVALID_STATE');
+  const towardNewer = input.newer !== undefined;
+  const cursor = input.newer ?? input.older;
+  const rows = await db.pharmacyApInvoice.findMany({
+    where: cursor
+      ? { AND: [matching, towardNewer ? newerThan(cursor) : olderThan(cursor)] }
+      : matching,
+    include: { settlements: { orderBy: [{ paidAt: 'asc' }, { id: 'asc' }] } },
+    // Read toward the cursor's side, nearest row first; a newer page is turned back below.
+    orderBy: towardNewer
+      ? [{ invoiceDate: 'asc' }, { id: 'desc' }]
+      : [{ invoiceDate: 'desc' }, { id: 'asc' }],
+    take: AP_REVERSAL_PAGE_ROWS + 1,
+  });
+  const more = rows.length > AP_REVERSAL_PAGE_ROWS;
+  const invoices = rows.slice(0, AP_REVERSAL_PAGE_ROWS);
+  if (towardNewer) invoices.reverse();
+  // The newest page has nothing newer; any other page looks one row past its other edge.
+  const edge = towardNewer ? invoices.at(-1) : invoices[0];
+  const beyond =
+    cursor && edge
+      ? (await db.pharmacyApInvoice.findFirst({
+          where: {
+            AND: [
+              matching,
+              towardNewer ? olderThan(reversalCursor(edge)) : newerThan(reversalCursor(edge)),
+            ],
+          },
+          select: { id: true },
+        })) !== null
+      : false;
+  const hasOlder = towardNewer ? beyond : more;
+  const hasNewer = towardNewer ? more : beyond;
+  return {
+    invoices,
+    hasOlder,
+    hasNewer,
+    older: hasOlder ? reversalCursor(invoices.at(-1)!) : null,
+    newer: hasNewer ? reversalCursor(invoices[0]!) : null,
+  };
 }

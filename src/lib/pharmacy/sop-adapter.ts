@@ -9,6 +9,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { isIanaTimezone } from '@/lib/timezone';
 import { formatLotExpiry } from './product-class';
 import { pharmacySopPackForTemplateName } from './sop-library';
+import { batchPhrase } from './unrecorded-batch';
 
 /**
  * DEV-751 — the pharmacy adapter onto the shared SOP engine.
@@ -1179,6 +1180,7 @@ const BATCH_DETAIL_SELECT = {
   id: true,
   batchNumber: true,
   expiresAt: true,
+  createdAt: true,
   state: true,
   medicine: { select: { productName: true } },
 } as const;
@@ -1201,7 +1203,8 @@ type RegisterDetailRow = {
   id: string;
   serial: number;
   entryKind: string;
-  batchNumber: string;
+  /** DEV-853: null when the lot's batch number was never recorded. */
+  batchNumber: string | null;
   runningBalance: number;
   createdAt: Date;
   medicine?: { productName: string } | null;
@@ -1216,8 +1219,11 @@ type ReceiptDetailRow = {
 };
 type BatchDetailRow = {
   id: string;
-  batchNumber: string;
-  expiresAt: Date;
+  /** DEV-853: null when the batch number was never recorded. */
+  batchNumber: string | null;
+  /** DEV-853: null when the expiry was never recorded. */
+  expiresAt: Date | null;
+  createdAt: Date;
   state: string;
   medicine?: { productName: string } | null;
 };
@@ -1251,7 +1257,7 @@ function registerDetail(row: RegisterDetailRow): PharmacySopRecordDetail {
       `Register entry ${row.serial}`,
       kind,
       row.medicine?.productName,
-      `batch ${row.batchNumber}`,
+      `${batchPhrase(row.batchNumber, 'batch')}`,
       `balance ${row.runningBalance}`
     ),
     value: `Balance ${row.runningBalance}`,
@@ -1277,7 +1283,7 @@ function receiptDetail(row: ReceiptDetailRow): PharmacySopRecordDetail {
 function batchDetail(row: BatchDetailRow, timeZone: string): PharmacySopRecordDetail {
   return {
     kind: 'MANUFACTURING_BATCH',
-    label: joinLabel(`Batch ${row.batchNumber}`, row.medicine?.productName),
+    label: joinLabel(`${batchPhrase(row.batchNumber)}`, row.medicine?.productName),
     value: formatLotExpiry(row.expiresAt, (value) => `Expires ${localDate(value, timeZone)}`),
     location: null,
     recordedAt: null,
@@ -1479,7 +1485,10 @@ export async function listPharmacySopLinkableRecords(
         take,
         select: BATCH_DETAIL_SELECT,
       })) as BatchDetailRow[];
-      return rows.map((row) => candidate(row.id, row.expiresAt, batchDetail(row, timezone)));
+      // DEV-853: a batch with no recorded expiry is dated by when it was recorded.
+      return rows.map((row) =>
+        candidate(row.id, row.expiresAt ?? row.createdAt, batchDetail(row, timezone))
+      );
     }
     case 'RECALL_NOTICE': {
       const rows = (await db.pharmacyRecallNotice.findMany({

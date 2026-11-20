@@ -21,9 +21,14 @@ vi.mock('@/lib/pharmacy/regulatory', async (original) => ({
   assertStoredPharmacyMayOperate: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/sale-readiness', () => ({ evaluateCounterSaleReadiness: vi.fn() }));
+vi.mock('@/lib/pharmacy/onboarding', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/onboarding')>()),
+  readPharmacyApprovalStatus: vi.fn(),
+}));
 
 import { assertStoredPharmacyMayOperate } from '@/lib/pharmacy/regulatory';
 import { evaluateCounterSaleReadiness } from '@/lib/pharmacy/sale-readiness';
+import { readPharmacyApprovalStatus } from '@/lib/pharmacy/onboarding';
 import { RefusalReason } from '@/server/refusal-reason';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
@@ -47,6 +52,9 @@ function fixture({
 } = {}) {
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
+    // DEV-631: a counter bill is refused while today's business day is closed.
+    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'UTC' }) },
+    pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     user: {
       findUnique: vi.fn().mockResolvedValue({
         status: 'ACTIVE',
@@ -123,6 +131,7 @@ async function refusal(run: Promise<unknown>) {
 beforeEach(() => {
   vi.mocked(assertStoredPharmacyMayOperate).mockReset().mockResolvedValue(undefined);
   vi.mocked(evaluateCounterSaleReadiness).mockReset().mockResolvedValue(READY);
+  vi.mocked(readPharmacyApprovalStatus).mockReset().mockResolvedValue(null);
 });
 
 describe('sale refusals name their reason (DEV-860)', () => {
@@ -248,5 +257,50 @@ describe('pharmacySales.saleReadiness (DEV-860)', () => {
       code: 'FORBIDDEN',
     });
     expect(evaluateCounterSaleReadiness).not.toHaveBeenCalled();
+  });
+});
+
+// DEV-905: a pharmacy that cannot sell because it is still onboarding hears whether it is
+// waiting for DevFathom approval or which steps are open, not a generic "not active".
+describe('pharmacySales.saleReadiness approval answer (DEV-905)', () => {
+  const NOT_ACTIVE = { ready: false, blockers: ['ORGANIZATION_NOT_ACTIVE'], warnings: [] };
+
+  it('says the pharmacy is waiting for approval', async () => {
+    vi.mocked(evaluateCounterSaleReadiness).mockResolvedValueOnce(NOT_ACTIVE as never);
+    vi.mocked(readPharmacyApprovalStatus).mockResolvedValueOnce({ state: 'AWAITING_APPROVAL' });
+    const f = fixture({ role: 'ADMIN' });
+    await expect(f.caller.saleReadiness({ branchId: 'branch-1' })).resolves.toEqual({
+      ...NOT_ACTIVE,
+      canFixSetup: true,
+      approval: { state: 'AWAITING_APPROVAL' },
+    });
+    expect(readPharmacyApprovalStatus).toHaveBeenCalledWith(f.db, 'org-1');
+  });
+
+  it('names the onboarding steps still open', async () => {
+    vi.mocked(evaluateCounterSaleReadiness).mockResolvedValueOnce(NOT_ACTIVE as never);
+    vi.mocked(readPharmacyApprovalStatus).mockResolvedValueOnce({
+      state: 'ONBOARDING_OPEN',
+      openSteps: ['Legal business'],
+    });
+    const f = fixture();
+    await expect(f.caller.saleReadiness({ branchId: 'branch-1' })).resolves.toMatchObject({
+      approval: { state: 'ONBOARDING_OPEN', openSteps: ['Legal business'] },
+    });
+  });
+
+  it('reads no approval state for a workspace that is active', async () => {
+    const f = fixture();
+    const answer = await f.caller.saleReadiness({ branchId: 'branch-1' });
+    expect(answer).not.toHaveProperty('approval');
+    expect(readPharmacyApprovalStatus).not.toHaveBeenCalled();
+  });
+
+  it('keeps the generic answer when the approval read fails', async () => {
+    vi.mocked(evaluateCounterSaleReadiness).mockResolvedValueOnce(NOT_ACTIVE as never);
+    vi.mocked(readPharmacyApprovalStatus).mockRejectedValueOnce(new Error('db down'));
+    const f = fixture();
+    const answer = await f.caller.saleReadiness({ branchId: 'branch-1' });
+    expect(answer).toEqual({ ...NOT_ACTIVE, canFixSetup: false });
   });
 });

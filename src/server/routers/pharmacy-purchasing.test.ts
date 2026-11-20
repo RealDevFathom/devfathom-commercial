@@ -101,6 +101,8 @@ function makeDb() {
     $queryRaw: vi.fn().mockResolvedValue([]),
     medicineBarcode: model(),
     pharmacyStockLocation: model(),
+    // DEV-769: quote validity reads the organisation's zone (none stored here: UTC).
+    organization: model(),
   };
   return Object.assign(db, {
     $queryRaw: vi.fn().mockResolvedValue([{ id: 'po_a' }]),
@@ -1317,7 +1319,10 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
   };
 
   it('DEV-877 refuses a delivery posted into a closed accounting period with PERIOD_CLOSED', async () => {
-    db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ id: 'assignment_a', branchId: 'branch_a' });
+    db.pharmacyBranchAssignment.findFirst.mockResolvedValue({
+      id: 'assignment_a',
+      branchId: 'branch_a',
+    });
     db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_a' });
     vi.mocked(verifyControlledPurchaseWitness).mockResolvedValueOnce({} as never);
     vi.mocked(postGoodsReceipt).mockRejectedValueOnce(new FinancePostingError('PERIOD_CLOSED'));
@@ -3779,11 +3784,22 @@ describe('purchasing list branch boundaries', () => {
   });
 });
 
+const BUYER_PASSWORD = 'buyer current password';
+/** DEV-931: the buyer's PIN and their account password, re-entered. */
+function ownPin(pin: string, currentPassword = BUYER_PASSWORD) {
+  return { pin, currentPassword };
+}
+/** The signed-in buyer as the password re-entry reads them. */
+function buyerAccount(phone: string | null = null) {
+  db.user.findFirst.mockResolvedValue({ password: hashSync(BUYER_PASSWORD, 4), phone });
+}
+
 describe('pharmacy-only approval PIN provisioning', () => {
+  beforeEach(() => buyerAccount());
   it('issues only the current buyer a hashed PIN with no restaurant entitlement', async () => {
     db.restaurantStaffProfile.create.mockResolvedValue({ id: 'my-profile' });
     db.restaurantStaffProfile.findUnique.mockResolvedValue({ id: 'my-profile', status: 'ACTIVE' });
-    await expect(caller().provisionMyPurchasePin({ pin: '4821' })).resolves.toEqual({
+    await expect(caller().provisionMyPurchasePin(ownPin('4821'))).resolves.toEqual({
       id: 'new',
       staffProfileId: 'my-profile',
     });
@@ -3805,21 +3821,50 @@ describe('pharmacy-only approval PIN provisioning', () => {
     db.restaurantStaffProfile.findFirst.mockResolvedValue({ id: 'my-profile' });
     db.restaurantStaffProfile.findUnique.mockResolvedValue({ id: 'my-profile', status: 'ACTIVE' });
     db.restaurantOperatorCredential.findFirst.mockResolvedValue({ id: 'existing' });
-    await expect(caller().provisionMyPurchasePin({ pin: '4821' })).rejects.toMatchObject({
+    await expect(caller().provisionMyPurchasePin(ownPin('4821'))).rejects.toMatchObject({
       code: 'CONFLICT',
     });
     expect(db.restaurantOperatorCredential.create).not.toHaveBeenCalled();
     expect(db.restaurantOperatorCredential.update).not.toHaveBeenCalled();
   });
   it('rejects users without procurement or the pharmacy module before creating profiles', async () => {
-    await expect(
-      caller('user_a', []).provisionMyPurchasePin({ pin: '4821' })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller('user_a', []).provisionMyPurchasePin(ownPin('4821'))).rejects.toMatchObject(
+      { code: 'FORBIDDEN' }
+    );
     db.user.findUnique.mockResolvedValue(null);
-    await expect(caller().provisionMyPurchasePin({ pin: '4821' })).rejects.toMatchObject({
+    await expect(caller().provisionMyPurchasePin(ownPin('4821'))).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
     expect(db.restaurantStaffProfile.create).not.toHaveBeenCalled();
+  });
+  // DEV-931: the same gate as "Your PIN": a stolen session alone cannot create a PIN.
+  it('refuses a wrong account password and writes nothing', async () => {
+    await expect(
+      caller().provisionMyPurchasePin(ownPin('4821', 'not my password'))
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Your current password is incorrect.' });
+    expect(db.restaurantStaffProfile.create).not.toHaveBeenCalled();
+    expect(db.restaurantOperatorCredential.create).not.toHaveBeenCalled();
+  });
+  it('refuses a call without the account password', async () => {
+    await expect(caller().provisionMyPurchasePin({ pin: '4821' } as never)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(db.restaurantOperatorCredential.create).not.toHaveBeenCalled();
+  });
+  it.each(['1234', '0000', '1212', '1990'])('refuses the easy PIN %s', async (pin) => {
+    await expect(caller().provisionMyPurchasePin(ownPin(pin))).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'That PIN is too easy to guess. Choose a different one.',
+    });
+    expect(db.restaurantOperatorCredential.create).not.toHaveBeenCalled();
+  });
+  it("refuses the end of the buyer's own phone number", async () => {
+    buyerAccount('+92 300 1234821');
+    await expect(caller().provisionMyPurchasePin(ownPin('4821'))).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'That PIN is the end of your phone number. Choose a different one.',
+    });
+    expect(db.restaurantOperatorCredential.create).not.toHaveBeenCalled();
   });
 });
 
@@ -3893,16 +3938,18 @@ it.each(['requisitions', 'purchaseOrders'] as const)(
 );
 
 it('does not let self-provisioning replace a revoked PIN', async () => {
+  buyerAccount();
   db.restaurantOperatorCredential.findFirst.mockResolvedValue({ id: 'revoked', revokedAt: PAST });
-  await expect(caller().provisionMyPurchasePin({ pin: '4821' })).rejects.toMatchObject({
+  await expect(caller().provisionMyPurchasePin(ownPin('4821'))).rejects.toMatchObject({
     code: 'CONFLICT',
   });
   expect(db.restaurantStaffProfile.create).not.toHaveBeenCalled();
   expect(db.restaurantOperatorCredential.create).not.toHaveBeenCalled();
 });
 it('does not let self-provisioning reactivate an archived staff profile', async () => {
+  buyerAccount();
   db.restaurantStaffProfile.findFirst.mockResolvedValue({ id: 'archived', status: 'ARCHIVED' });
-  await expect(caller().provisionMyPurchasePin({ pin: '4821' })).rejects.toMatchObject({
+  await expect(caller().provisionMyPurchasePin(ownPin('4821'))).rejects.toMatchObject({
     code: 'FORBIDDEN',
   });
   expect(db.restaurantStaffProfile.create).not.toHaveBeenCalled();
@@ -3934,5 +3981,155 @@ describe('DEV-693 official price hints at goods-in', () => {
         where: { organizationId: 'org_a', dismissedAt: null, medicineId: { in: ['med_a'] } },
       })
     );
+  });
+});
+
+describe('DEV-936 central purchasing honours the branch assignment', () => {
+  const OWNER = {
+    id: 'user_a',
+    role: 'ADMIN',
+    status: 'ACTIVE',
+    organizationRole: { permissions: [{ capability: '*', effect: 'ALLOW' }] },
+    permissionOverrides: [],
+  };
+
+  const createFor = (receivingBranchId: string) =>
+    caller().createCentralPurchaseOrder({
+      reference: 'CPO-DEV-936',
+      supplierId: 'supplier_a',
+      receivingBranchId,
+      lines: [ORDER_LINE],
+    });
+
+  const allocateTo = (...destinations: string[]) =>
+    caller().allocateCentralReceipt({
+      goodsReceiptId: 'receipt_central',
+      allocations: destinations.map((destinationBranchId, index) => ({
+        goodsReceiptLineId: `line_${index}`,
+        destinationBranchId,
+        destinationStockLocationId: `store_${destinationBranchId}`,
+        quantityUnits: 10,
+      })),
+    });
+
+  let allocationEvidence: ReturnType<typeof model> & { count: ReturnType<typeof vi.fn> };
+  let transfers: ReturnType<typeof model> & { findFirstOrThrow: ReturnType<typeof vi.fn> };
+  let transferLines: { createMany: ReturnType<typeof vi.fn> };
+
+  /** Branches the query's organization and active filters would not return. */
+  const UNRESOLVABLE = ['branch_other_org', 'branch_missing', 'branch_inactive'];
+  const receiptAt = (branchId: string) => ({
+    id: 'receipt_central',
+    branchId,
+    lines: [0, 1].map((index) => ({
+      id: `line_${index}`,
+      acceptedCanonicalUnits: 10,
+      inventoryLotId: `lot_${index}`,
+      stockLocationId: 'store_central',
+    })),
+  });
+
+  beforeEach(() => {
+    // An organization-wide central purchaser assigned to branch_a and the central
+    // branch, where the receipt was posted.
+    db.pharmacyCentralPurchasingAccess.findMany.mockResolvedValue([{ branchId: null }]);
+    db.pharmacyBranchAssignment.findFirst.mockImplementation(async ({ where }) =>
+      ['branch_a', 'branch_central'].includes(where.branchId) ? { id: 'assignment' } : null
+    );
+    db.pharmacyBranch.findFirst.mockImplementation(async ({ where }) =>
+      UNRESOLVABLE.includes(where.id) ? null : { id: where.id }
+    );
+    db.$queryRaw.mockResolvedValue([]);
+    orderableSupplier();
+    resolvableCatalog();
+    db.pharmacyGoodsReceipt.findFirst.mockResolvedValue(receiptAt('branch_central'));
+    allocationEvidence = Object.assign(model(), { count: vi.fn().mockResolvedValue(0) });
+    transfers = Object.assign(model(), {
+      findFirstOrThrow: vi.fn(async () => ({ id: 'transfer', lines: [{ id: 'transfer_line' }] })),
+    });
+    transferLines = { createMany: vi.fn(async () => ({ count: 1 })) };
+    Object.assign(db, {
+      pharmacyCentralPurchaseAllocation: allocationEvidence,
+      pharmacyInventoryLot: { findFirst: vi.fn(async () => ({ id: 'lot' })) },
+      pharmacyInterbranchTransfer: transfers,
+      pharmacyInterbranchTransferLine: transferLines,
+    });
+    db.pharmacyStockLocation.findFirst.mockImplementation(async ({ where }) => ({
+      id: where.id,
+      branchId: where.branchId,
+    }));
+  });
+
+  function expectNothingWritten() {
+    expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
+    expect(transfers.create).not.toHaveBeenCalled();
+    expect(transferLines.createMany).not.toHaveBeenCalled();
+    expect(allocationEvidence.create).not.toHaveBeenCalled();
+  }
+
+  it('refuses a central order for a receiving branch the buyer is not assigned to', async () => {
+    await expect(createFor('branch_b')).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    expectNothingWritten();
+  });
+
+  it('refuses an allocation when any destination branch is unassigned', async () => {
+    await expect(allocateTo('branch_a', 'branch_b')).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    expectNothingWritten();
+  });
+
+  it('refuses an allocation out of a receipt posted at a branch the buyer is not assigned to', async () => {
+    db.pharmacyGoodsReceipt.findFirst.mockResolvedValue(receiptAt('branch_south'));
+    await expect(allocateTo('branch_a', 'branch_a')).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    expectNothingWritten();
+    // The receipt's branch is read inside the allocation transaction, in this tenant.
+    expect(db.pharmacyGoodsReceipt.findFirst).toHaveBeenCalledWith({
+      where: { id: 'receipt_central', organizationId: 'org_a' },
+      select: { branchId: true },
+    });
+    expect(allocationEvidence.count).not.toHaveBeenCalled();
+  });
+
+  it.each(['buyer', 'owner'] as const)(
+    'refuses a branch of another organization, a missing branch and an inactive branch for the %s',
+    async (who) => {
+      if (who === 'owner') db.user.findUnique.mockResolvedValue(OWNER);
+      for (const branchId of UNRESOLVABLE) {
+        await expect(createFor(branchId)).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: 'Branch is outside your scope.',
+        });
+        await expect(allocateTo('branch_a', branchId)).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: 'Branch is outside your scope.',
+        });
+        expect(db.pharmacyBranch.findFirst).toHaveBeenCalledWith({
+          where: { id: branchId, organizationId: 'org_a', active: true },
+          select: { id: true },
+        });
+      }
+      expectNothingWritten();
+    }
+  );
+
+  it('still lets the assigned buyer act for their own branch', async () => {
+    await expect(createFor('branch_a')).resolves.toMatchObject({ branchId: 'branch_a' });
+    await expect(allocateTo('branch_a', 'branch_a')).resolves.toHaveLength(2);
+  });
+
+  it('lets the owner order and allocate for a branch without an assignment', async () => {
+    db.user.findUnique.mockResolvedValue(OWNER);
+    db.pharmacyGoodsReceipt.findFirst.mockResolvedValue(receiptAt('branch_south'));
+    await expect(createFor('branch_b')).resolves.toMatchObject({ branchId: 'branch_b' });
+    await expect(allocateTo('branch_b', 'branch_c')).resolves.toHaveLength(2);
+    expect(allocationEvidence.create).toHaveBeenCalledTimes(2);
   });
 });

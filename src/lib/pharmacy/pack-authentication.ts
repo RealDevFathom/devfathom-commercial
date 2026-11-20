@@ -11,7 +11,13 @@ export type PackAuthenticationIssue =
 export type PackAuthenticationFacts = {
   parsed: Gs1DataMatrixParseResult;
   knownMedicineId: string | null;
-  recordedBatch: { id: string; batchNumber: string; expiry: string; recalled: boolean } | null;
+  /** DEV-853: `expiry` is null when the batch's expiry was never recorded. */
+  recordedBatch: {
+    id: string;
+    batchNumber: string;
+    expiry: string | null;
+    recalled: boolean;
+  } | null;
   serialSeenOnDifferentPack: boolean;
 };
 
@@ -42,6 +48,8 @@ export function evaluatePackAuthentication(
   if (
     facts.parsed.fields.expiry &&
     facts.recordedBatch &&
+    // An unrecorded expiry cannot contradict the pack.
+    facts.recordedBatch.expiry !== null &&
     facts.parsed.fields.expiry !== facts.recordedBatch.expiry
   )
     issues.push('EXPIRY_MISMATCH');

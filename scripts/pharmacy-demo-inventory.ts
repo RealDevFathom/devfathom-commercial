@@ -634,7 +634,7 @@ export function previewInventoryDemoFefo(input: {
     input.candidates.length > 32 ||
     input.candidates.some(
       (lot) =>
-        !Number.isFinite(lot.expiresAt.getTime()) ||
+        (lot.expiresAt !== null && !Number.isFinite(lot.expiresAt.getTime())) ||
         (lot.receivedAt !== null && !Number.isFinite(lot.receivedAt.getTime()))
     )
   ) {

@@ -129,6 +129,10 @@ function db() {
   };
   return {
     $queryRaw: vi.fn(async () => []),
+    // The sale's business day is read on the organisation's stored clock.
+    organization: { findUnique: vi.fn(async () => ({ timezone: 'UTC' })) },
+    // DEV-958A: the branch's "day ends at" hour; none stored reads as midnight.
+    pharmacyBranch: { findFirst: async () => null },
     pharmacyInventoryLot: {
       findMany: vi.fn(async () => [{ id: 'lot_1', batch: { state: 'ACTIVE' } }]),
       // No lot of this medicine was received as a one-tablet pack.
@@ -209,5 +213,28 @@ describe('DEV-874 offline add-line lock ordering', () => {
     );
     expect(stock).toBeGreaterThanOrEqual(0);
     for (const key of keys) expect(key.index).toBeLessThan(stock);
+  });
+});
+
+describe('DEV-631 offline replay lock order', () => {
+  it('takes the sale day lock before any stock lock, as the online counter does', async () => {
+    const target = db();
+    await expect(replay(target, command(10))).rejects.toThrow('REACHED_LINE');
+    const queries = (target.$queryRaw as unknown as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([query]) => {
+        const sql = query as { sql?: string; strings?: string[]; values?: unknown[] };
+        return { text: sql.sql ?? sql.strings?.join('?') ?? '', values: sql.values ?? [] };
+      }
+    );
+    const dayLock = queries.findIndex(
+      (query) =>
+        query.text.includes('pg_advisory_xact_lock') &&
+        query.values.includes(`${SCOPE.organizationId}:${SCOPE.branchId}:${SALE_AT.slice(0, 10)}`)
+    );
+    const firstStockLock = queries.findIndex((query) =>
+      /pharmacy_inventory_lots|pharmacy_stock_balances|manufacturing_batches/.test(query.text)
+    );
+    expect(dayLock).toBeGreaterThanOrEqual(0);
+    expect(firstStockLock).toBeGreaterThan(dayLock);
   });
 });

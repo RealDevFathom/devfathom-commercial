@@ -1,6 +1,7 @@
 import 'server-only';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { pharmacyBusinessDay, pharmacyBusinessDayRange, type PharmacyDayEnd } from './business-day';
 import {
   demandDateAfter,
   demandDateMs,
@@ -19,6 +20,13 @@ export type PharmacyDemandEvidenceReaderInput = DemandScope & {
   originDate: string;
   horizonDays: DemandEvidenceInput['horizonDays'];
   method: DemandEvidenceInput['method'];
+  /**
+   * The caller's own organisation zone, loaded on the server (never request input): the
+   * completion and stockout capture days are that clock's days. UTC when absent or refused.
+   */
+  timeZone?: string | null;
+  /** DEV-958A: the branch's day-end hours by day (`PharmacyDayEnd`; midnight when absent). */
+  dayEnd?: PharmacyDayEnd;
 };
 
 type ConsumptionDay = {
@@ -43,9 +51,12 @@ export type PharmacyDemandEvidence = {
     days: ConsumptionDay[];
     observedCanonicalUnits: number | null;
   };
-  /** Completion instants and stockout capture instants use UTC, not business-date labels. */
+  /**
+   * Completion instants and stockout capture instants, grouped by their calendar day on the
+   * organisation's clock (UTC for an organisation on UTC), not by business-date labels.
+   */
   days: (ConsumptionDay & {
-    timeBasis: 'UTC_DAY';
+    timeBasis: 'WORKSPACE_DAY';
     state: 'UNKNOWN' | 'STOCKOUT_CENSORED';
     stockoutEventCount: number;
     estimatedDemandUnits: null;
@@ -55,7 +66,7 @@ export type PharmacyDemandEvidence = {
   coverage: {
     requestedDays: number;
     businessConsumptionDays: number;
-    utcConsumptionDays: number;
+    completionDayConsumptionDays: number;
     observedDemandDays: 0;
     unknownDays: number;
     censoredDays: number;
@@ -69,7 +80,7 @@ export type PharmacyDemandEvidence = {
     factsAfterReadAtLineCount: number;
     /** Current facts dated at/after origin; this is not an ingestion watermark. */
     factsAtOrAfterOriginLineCount: number;
-    businessUtcDateMismatchLineCount: number;
+    businessCompletionDateMismatchLineCount: number;
   };
   missingInputs: string[];
   forecastInput: DemandEvidenceInput | null;
@@ -114,7 +125,17 @@ export async function readPharmacyDemandEvidence(
     );
   demandDateAfter(input.originDate, input.horizonDays);
   const cutoff = new Date(readAt.getTime());
-  const range = { gte: new Date(start), lt: new Date(end) };
+  // Business dates are stored day labels: they compare as UTC-midnight dates. Completion and
+  // stockout capture instants are bounded by the same days on the organisation's clock.
+  const labels = { gte: new Date(start), lt: new Date(end) };
+  // DEV-958A: the branch's business days, which end at its "day ends at" hour.
+  const shopDays = pharmacyBusinessDayRange(
+    input.historyStartDate,
+    demandDateAfter(input.originDate, -1),
+    input
+  );
+  const instants = { gte: shopDays.from, lt: shopDays.to };
+  const shopDay = (at: Date) => pharmacyBusinessDay(input, at);
   const branch = await db.pharmacyBranch.findFirst({
     where: { id: scope.branchId, organizationId: scope.organizationId, active: true },
     select: { id: true, organizationId: true, active: true },
@@ -145,7 +166,7 @@ export async function readPharmacyDemandEvidence(
         organizationId: scope.organizationId,
         branchId: scope.branchId,
         status: 'COMPLETED',
-        OR: [{ businessDate: range }, { completedAt: range }],
+        OR: [{ businessDate: labels }, { completedAt: instants }],
       },
     },
     select: {
@@ -178,7 +199,7 @@ export async function readPharmacyDemandEvidence(
       branchId: scope.branchId,
       requestedMedicineId: scope.medicineId,
       reason: 'STOCKOUT',
-      createdAt: { ...range, lte: cutoff },
+      createdAt: { ...instants, lte: cutoff },
     },
     select: {
       id: true,
@@ -203,14 +224,14 @@ export async function readPharmacyDemandEvidence(
       { date, observedCanonicalUnits: null, lineCount: 0 } as ConsumptionDay,
     ])
   );
-  const utcDays = new Map(
+  const completionDays = new Map(
     dates.map((date) => [
       date,
       {
         date,
         observedCanonicalUnits: null,
         lineCount: 0,
-        timeBasis: 'UTC_DAY' as const,
+        timeBasis: 'WORKSPACE_DAY' as const,
         state: 'UNKNOWN' as 'UNKNOWN' | 'STOCKOUT_CENSORED',
         stockoutEventCount: 0,
         estimatedDemandUnits: null,
@@ -221,7 +242,7 @@ export async function readPharmacyDemandEvidence(
   const coverage: PharmacyDemandEvidence['coverage'] = {
     requestedDays,
     businessConsumptionDays: 0,
-    utcConsumptionDays: 0,
+    completionDayConsumptionDays: 0,
     observedDemandDays: 0,
     unknownDays: requestedDays,
     censoredDays: 0,
@@ -234,7 +255,7 @@ export async function readPharmacyDemandEvidence(
     missingCompletedAtLineCount: 0,
     factsAfterReadAtLineCount: 0,
     factsAtOrAfterOriginLineCount: 0,
-    businessUtcDateMismatchLineCount: 0,
+    businessCompletionDateMismatchLineCount: 0,
   };
   const lineIds = new Set<string>();
   const add = (day: ConsumptionDay | undefined, units: number) => {
@@ -274,23 +295,24 @@ export async function readPharmacyDemandEvidence(
       coverage.excludedLineCount += 1;
       continue;
     }
-    const utcDate = sale.completedAt.toISOString().slice(0, 10);
+    const completedDate = shopDay(sale.completedAt);
     const businessDate = sale.businessDate?.toISOString().slice(0, 10) ?? null;
     if (sale.businessDate && instant(sale.businessDate) !== demandDateMs(businessDate!))
       throw new RangeError('Expected a stored business-date label, not an instant');
-    if (!utcDays.has(utcDate) && (!businessDate || !businessDays.has(businessDate))) {
+    if (!completionDays.has(completedDate) && (!businessDate || !businessDays.has(businessDate))) {
       coverage.excludedLineCount += 1;
       continue;
     }
     safeDemandTotal([line.canonicalUnits]);
     coverage.qualifyingLineCount += 1;
-    if (factTimes.some((ms) => ms >= end)) coverage.factsAtOrAfterOriginLineCount += 1;
+    if (factTimes.some((ms) => ms >= shopDays.to.getTime()))
+      coverage.factsAtOrAfterOriginLineCount += 1;
     if (!businessDate) coverage.missingBusinessDateLineCount += 1;
     else {
-      if (businessDate !== utcDate) coverage.businessUtcDateMismatchLineCount += 1;
+      if (businessDate !== completedDate) coverage.businessCompletionDateMismatchLineCount += 1;
       add(businessDays.get(businessDate), line.canonicalUnits);
     }
-    add(utcDays.get(utcDate), line.canonicalUnits);
+    add(completionDays.get(completedDate), line.canonicalUnits);
   }
   const stockoutIds = new Set<string>();
   for (const event of stockouts) {
@@ -306,7 +328,7 @@ export async function readPharmacyDemandEvidence(
     }
     if (stockoutIds.has(event.id)) throw new Error('Duplicate stockout source event');
     stockoutIds.add(event.id);
-    const day = utcDays.get(event.createdAt.toISOString().slice(0, 10));
+    const day = completionDays.get(shopDay(event.createdAt));
     if (!day) {
       coverage.excludedStockoutCount += 1;
       continue;
@@ -315,9 +337,9 @@ export async function readPharmacyDemandEvidence(
     day.stockoutEventCount += 1;
   }
   const consumptionDays = [...businessDays.values()];
-  const days = [...utcDays.values()];
+  const days = [...completionDays.values()];
   coverage.businessConsumptionDays = consumptionDays.filter((day) => day.lineCount > 0).length;
-  coverage.utcConsumptionDays = days.filter((day) => day.lineCount > 0).length;
+  coverage.completionDayConsumptionDays = days.filter((day) => day.lineCount > 0).length;
   coverage.censoredDays = days.filter((day) => day.state === 'STOCKOUT_CENSORED').length;
   coverage.unknownDays -= coverage.censoredDays;
   // Validate each view's complete sum, not just individual days.
@@ -328,7 +350,7 @@ export async function readPharmacyDemandEvidence(
     'Trading calendar: accounting daily closes do not establish closed-for-business days.',
     'Observation completeness: no-sale days and missing/offline facts are unknown, not zero demand.',
     'Historical versions and first-availability timestamps for exact observations are unavailable.',
-    'Business-day to UTC interval mapping is unavailable; business labels and UTC completion/capture dates remain separate.',
+    "Business-day to clock interval mapping is unavailable; business labels and completion/capture days on the organisation's clock remain separate.",
     ...(coverage.censoredDays
       ? [
           'Stockout quantities lack frozen canonical conversion and are not added to consumption or estimated demand.',

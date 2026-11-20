@@ -218,7 +218,12 @@ describe('command palette navigation access', () => {
     mocks.session.user.role = 'ADMIN';
     mocks.pharmacyCapabilities = ['pharmacy:counter'];
     mocks.enabledModules = [
-      'pharmacy-core', 'pharmacy-counter', 'projects', 'clients', 'finance', 'hotel-core',
+      'pharmacy-core',
+      'pharmacy-counter',
+      'projects',
+      'clients',
+      'finance',
+      'hotel-core',
     ];
     render(<Topbar />);
     const nav = openNavigation();
@@ -227,8 +232,19 @@ describe('command palette navigation access', () => {
       expect(nav.getByRole('button', { name: label })).toBeInTheDocument();
     }
     for (const label of [
-      'Projects', 'Import', 'Clients', 'Finance', 'HR', 'HR & Leave', 'Insights',
-      'Property', 'Rooms', 'Meal plans', 'Notes', 'Procedures', 'Prescriptions',
+      'Projects',
+      'Import',
+      'Clients',
+      'Finance',
+      'HR',
+      'HR & Leave',
+      'Insights',
+      'Property',
+      'Rooms',
+      'Meal plans',
+      'Notes',
+      'Procedures',
+      'Prescriptions',
     ]) {
       expect(nav.queryByRole('button', { name: label })).toBeNull();
     }
@@ -240,14 +256,24 @@ describe('command palette navigation access', () => {
   it('requires server capabilities for licensed pharmacy commands and updates when grants change', () => {
     mocks.vertical = 'PHARMACY';
     mocks.enabledModules = [
-      'pharmacy-core', 'pharmacy-counter', 'pharmacy-procurement', 'pharmacy-dispensing',
-      'pharmacy-reports', 'pharmacy-safety',
+      'pharmacy-core',
+      'pharmacy-counter',
+      'pharmacy-procurement',
+      'pharmacy-dispensing',
+      'pharmacy-reports',
+      'pharmacy-safety',
     ];
     const view = render(<Topbar />);
     const nav = openNavigation();
     const restricted = [
-      'Counter', 'Purchasing', 'Prescriptions', 'Pharmacist queue', 'Substitution',
-      'Reports & Insights', 'Controlled register', 'Procedures',
+      'Counter',
+      'Purchasing',
+      'Prescriptions',
+      'Pharmacist queue',
+      'Substitution',
+      'Reports & Insights',
+      'Controlled register',
+      'Procedures',
     ];
     for (const label of restricted) {
       expect(nav.queryByRole('button', { name: label })).toBeNull();
@@ -257,7 +283,10 @@ describe('command palette navigation access', () => {
     }
     mocks.pharmacyCapabilities = [
       'pharmacy:counter',
-      'pharmacy:procurement', 'pharmacy:prescriptions', 'pharmacy:dispense', 'reports:operational',
+      'pharmacy:procurement',
+      'pharmacy:prescriptions',
+      'pharmacy:dispense',
+      'reports:operational',
     ];
     mocks.safetyAllowed = true;
     mocks.sopAllowed = true;
@@ -323,16 +352,31 @@ describe('command palette navigation access', () => {
     mocks.session.user.role = 'HR';
     view.rerender(<Topbar />);
     expect(nav.getByRole('button', { name: 'HR' })).toBeInTheDocument();
-    expect(nav.queryByRole('button', { name: 'Audit Log' })).toBeNull();
+    expect(nav.queryByRole('button', { name: 'Audit log: who did what' })).toBeNull();
 
     mocks.session.user.role = 'ADMIN';
     view.rerender(<Topbar />);
+    expect(nav.getByRole('button', { name: 'Audit log: who did what' })).toBeInTheDocument();
+    mocks.enabledModules = [];
+    view.rerender(<Topbar />);
+    for (const label of ['Notes', 'HR']) {
+      expect(nav.queryByRole('button', { name: label })).toBeNull();
+    }
+    // DEV-913: the audit log is part of every pharmacy workspace, licensed or not.
+    expect(nav.getByRole('button', { name: 'Audit log: who did what' })).toBeInTheDocument();
+  });
+
+  it('still licenses the audit log outside a pharmacy (DEV-913)', () => {
+    mocks.vertical = 'AGENCY';
+    mocks.enabledModules = ['audit'];
+    mocks.session.user.role = 'ADMIN';
+    const view = render(<Topbar />);
+    const nav = openNavigation();
     expect(nav.getByRole('button', { name: 'Audit Log' })).toBeInTheDocument();
     mocks.enabledModules = [];
     view.rerender(<Topbar />);
-    for (const label of ['Notes', 'HR', 'Audit Log']) {
-      expect(nav.queryByRole('button', { name: label })).toBeNull();
-    }
+    expect(nav.queryByRole('button', { name: 'Audit Log' })).toBeNull();
+    expect(nav.queryByRole('button', { name: 'Audit log: who did what' })).toBeNull();
   });
 });
 
@@ -469,7 +513,6 @@ it.each([
   expect(screen.getByText(`Workspace role: ${label}`)).toBeVisible();
   expect(screen.queryByText('An unrelated job title')).not.toBeInTheDocument();
 });
-
 
 it('does not invent a workspace role for an unrecognized session role', () => {
   mocks.session.user.role = 'UNRECOGNIZED';

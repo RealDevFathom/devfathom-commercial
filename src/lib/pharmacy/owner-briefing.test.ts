@@ -353,3 +353,94 @@ describe('DEV-78 owner briefing', () => {
     expect(renderOwnerBriefingApp(briefing)).toContain('Expiry at risk (90 days) PKR 2,000');
   });
 });
+
+describe("DEV-944 owner briefing reads the shop's own day", () => {
+  // Karachi is UTC+5: 4 Sep in Karachi runs from 3 Sep 19:00 UTC to 4 Sep 19:00 UTC.
+  const shopDay = {
+    medicines: [],
+    saleLines: [
+      { id: 'line_after_midnight', grossMinor: 40_000, discountMinor: 0 },
+      { id: 'line_late_evening', grossMinor: 7_000, discountMinor: 0 },
+    ],
+    events: [
+      // 00:30 on 4 Sep in Karachi: the UTC day is still 3 Sep.
+      event('2026-09-03', {
+        createdAt: new Date('2026-09-03T19:30:00.000Z'),
+        requestedText: 'After midnight',
+        estimatedValueMinor: 10_000,
+      }),
+      // 23:59 on 4 Sep in Karachi: the last minute of the shop's day.
+      event('2026-09-04', {
+        createdAt: new Date('2026-09-04T18:59:00.000Z'),
+        requestedText: 'Late evening',
+        estimatedValueMinor: 2_000,
+      }),
+      // 00:30 on 5 Sep in Karachi: still 4 Sep in UTC, but the next shop day.
+      event('2026-09-04', {
+        createdAt: new Date('2026-09-04T19:30:00.000Z'),
+        requestedText: 'Next shop day',
+        estimatedValueMinor: 500_000,
+      }),
+      event('2026-08-20', {
+        status: 'RECOVERED',
+        recoveredAt: new Date('2026-09-03T19:30:00.000Z'),
+        recoveredSaleLineId: 'line_after_midnight',
+      }),
+      event('2026-08-20', {
+        status: 'RECOVERED',
+        recoveredAt: new Date('2026-09-04T19:30:00.000Z'),
+        recoveredSaleLineId: 'line_late_evening',
+      }),
+    ],
+  };
+
+  it('bounds a Karachi day and week at local midnight', () => {
+    expect(ownerBriefingWindow('2026-09-04', 'DAILY', undefined, 'Asia/Karachi')).toEqual({
+      cadence: 'DAILY',
+      days: 1,
+      from: '2026-09-04',
+      to: '2026-09-04',
+      startsAt: new Date('2026-09-03T19:00:00.000Z'),
+      endsBefore: new Date('2026-09-04T19:00:00.000Z'),
+    });
+    expect(ownerBriefingWindow('2026-09-07', 'WEEKLY', undefined, 'Asia/Karachi')).toMatchObject({
+      from: '2026-09-01',
+      to: '2026-09-07',
+      startsAt: new Date('2026-08-31T19:00:00.000Z'),
+      endsBefore: new Date('2026-09-07T19:00:00.000Z'),
+    });
+  });
+
+  it.each([undefined, null, 'UTC', 'PKT'])(
+    'keeps the UTC window for an organisation on UTC (zone %s)',
+    (zone) => {
+      for (const cadence of ['DAILY', 'WEEKLY'] as const)
+        expect(ownerBriefingWindow('2026-09-04', cadence, undefined, zone)).toMatchObject({
+          startsAt: new Date(`${cadence === 'DAILY' ? '2026-09-04' : '2026-08-29'}T00:00:00.000Z`),
+          endsBefore: new Date('2026-09-05T00:00:00.000Z'),
+        });
+    }
+  );
+
+  it('counts lost demand and recovered sales at 19:30 and 18:59 UTC on the Karachi day', async () => {
+    const window = ownerBriefingWindow('2026-09-04', 'DAILY', undefined, 'Asia/Karachi');
+    const demand = await readOwnerBriefingDemand(seededDb(shopDay) as never, scope, window);
+    expect(demand).toMatchObject({
+      lostDemandMinor: 12_000,
+      walkOuts: 2,
+      recoveredMinor: 40_000,
+      recoveredCount: 1,
+    });
+  });
+
+  it('keeps the UTC day for an organisation on UTC', async () => {
+    const window = ownerBriefingWindow('2026-09-04', 'DAILY', undefined, 'UTC');
+    const demand = await readOwnerBriefingDemand(seededDb(shopDay) as never, scope, window);
+    expect(demand).toMatchObject({
+      lostDemandMinor: 502_000,
+      walkOuts: 2,
+      recoveredMinor: 7_000,
+      recoveredCount: 1,
+    });
+  });
+});

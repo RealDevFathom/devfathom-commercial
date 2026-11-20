@@ -11,6 +11,7 @@ import { clientIp, rateLimit } from '@/lib/rate-limit';
 import { hashDeviceSecret } from '@/lib/retail-terminal/device-secret';
 import {
   enrollPharmacyCounter,
+  PharmacyDeviceError,
   rotatePharmacyCounterSecret,
   revokePharmacyCounter,
   resolvePharmacyCounterBySecret,
@@ -23,6 +24,7 @@ import {
 } from '@/lib/pharmacy/offline-snapshots';
 import { checkEnvelope } from '@/lib/pharmacy/offline-snapshot-envelope';
 import { checkSafetyLease } from '@/lib/pharmacy/offline-safety-lease';
+import { COUNTER_LEASE_RENEWAL_SIZE } from '@/lib/pharmacy/counter-offline-runtime';
 import {
   reserveReceiptNumberBlock,
   MAX_RECEIPT_LEASE_SIZE,
@@ -31,6 +33,7 @@ import {
   grantDeviceLotQuota,
   consumeDeviceLotQuota,
   openDeviceLotQuota,
+  releaseDeviceLotQuota,
 } from '@/lib/pharmacy/offline-quotas';
 import {
   recordOfflineCommand,
@@ -47,7 +50,7 @@ import {
   PharmacySaleError,
 } from '@/lib/pharmacy/sales';
 import { BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
-import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
+import { applyPharmacyTender, lockPharmacyDay } from '@/lib/pharmacy/settlement';
 import {
   manualTenderCaptureSchema,
   validateManualTenderPolicy,
@@ -60,6 +63,17 @@ import {
 } from '@/lib/pharmacy/counter-capability';
 import { lockSaleCandidates, type LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { lockStockRowsFrom } from '@/lib/pharmacy/stock-lock-order';
+import { pharmacyBusinessDate } from '@/lib/pharmacy/business-day';
+import { readPharmacyDayClock } from '@/lib/pharmacy/business-day-clock';
+import {
+  cookieCredentialAllowed,
+  counterDeviceCredential,
+  exactSameOrigin,
+} from '@/lib/pharmacy/counter-device-cookie';
+import {
+  OFFLINE_PREPARATION_LOT_LIMIT,
+  offlinePreparationPlan,
+} from '@/lib/pharmacy/offline-preparation';
 import { adminProcedure, router } from '../trpc';
 
 const id = z.string().min(1).max(160);
@@ -71,7 +85,134 @@ async function activeBranch(db: ScopedDb, organizationId: string, branchId: stri
   });
   if (!branch) throw new TRPCError({ code: 'FORBIDDEN', message: 'branch_unavailable' });
 }
+/**
+ * DEV-957: enrolment acts on one branch's counters, so the administrator must
+ * also be assigned to that branch (an organization ADMIN spans the
+ * organization), exactly as the counter route's manager operations (DEV-850).
+ */
+async function managedBranch(
+  db: ScopedDb,
+  user: Parameters<typeof counterBranchAssignmentDenial>[1],
+  organizationId: string,
+  branchId: string
+) {
+  await activeBranch(db, organizationId, branchId);
+  const denial = await counterBranchAssignmentDenial(db, user, organizationId, branchId);
+  if (denial) throw new TRPCError({ code: 'FORBIDDEN', message: denial });
+}
+
+/** The device service's refusals as tRPC answers, never a 500. */
+function deviceRefusal(error: unknown): never {
+  if (error instanceof PharmacyDeviceError) {
+    throw new TRPCError({
+      code:
+        error.reason === 'NOT_FOUND'
+          ? 'NOT_FOUND'
+          : error.reason === 'INVALID_NAME'
+            ? 'BAD_REQUEST'
+            : 'CONFLICT',
+      message: error.reason,
+    });
+  }
+  throw error;
+}
+
 export const pharmacyOfflineRouter = router({
+  /**
+   * DEV-957: the branch's counters for the enrolment screen. Only identifiers,
+   * status and runway counts: never a secret hash, a snapshot or a payload.
+   */
+  counters: adminProcedure.input(branchInput).query(({ ctx, input }) =>
+    ctx.db.$transaction(async (tx) => {
+      const db = tx as ScopedDb;
+      const organizationId = ctx.entitlements.organizationId;
+      await managedBranch(db, ctx.session.user, organizationId, input.branchId);
+      const devices = await db.pharmacyRegisteredDevice.findMany({
+        where: { organizationId, branchId: input.branchId, kind: 'PHARMACY_COUNTER' },
+        select: {
+          id: true,
+          name: true,
+          status: true,
+          revokedAt: true,
+          lastSeenAt: true,
+          createdAt: true,
+        },
+        orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
+        take: 100,
+      });
+      const ids = devices.map((device) => device.id);
+      const [leases, quotas, pending] = ids.length
+        ? await Promise.all([
+            db.pharmacyReceiptNumberLease.findMany({
+              where: { organizationId, branchId: input.branchId, deviceId: { in: ids } },
+              select: { deviceId: true, blockEnd: true, nextNumber: true },
+            }),
+            db.pharmacyDeviceLotQuota.findMany({
+              where: {
+                organizationId,
+                branchId: input.branchId,
+                deviceId: { in: ids },
+                releasedAt: null,
+              },
+              select: { deviceId: true, quotaUnits: true, consumedUnits: true },
+            }),
+            db.pharmacyOfflineCommand.groupBy({
+              by: ['deviceId'],
+              where: {
+                organizationId,
+                branchId: input.branchId,
+                deviceId: { in: ids },
+                status: 'PENDING',
+              },
+              _count: { _all: true },
+            }),
+          ])
+        : [[], [], []];
+      return devices.map((device) => ({
+        id: device.id,
+        name: device.name,
+        status: device.status,
+        revokedAt: device.revokedAt?.toISOString() ?? null,
+        lastSeenAt: device.lastSeenAt?.toISOString() ?? null,
+        enrolledAt: device.createdAt.toISOString(),
+        receiptNumbersLeft: leases
+          .filter((lease) => lease.deviceId === device.id)
+          .reduce((total, lease) => total + Math.max(0, lease.blockEnd - lease.nextNumber + 1), 0),
+        offlineUnitsLeft: quotas
+          .filter((quota) => quota.deviceId === device.id)
+          .reduce((total, quota) => total + Math.max(0, quota.quotaUnits - quota.consumedUnits), 0),
+        failedOfflineSales:
+          pending.find((row) => row.deviceId === device.id)?._count._all ?? 0,
+      }));
+    })
+  ),
+  /**
+   * DEV-957: what "Prepare this counter for offline" proposes to grant. Read
+   * only; the grant itself still goes through the counter route's manager-only
+   * quota operation and the database capacity guard.
+   */
+  preparationPlan: adminProcedure
+    .input(branchInput.extend({ deviceId: id }))
+    .query(({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const db = tx as ScopedDb;
+        const organizationId = ctx.entitlements.organizationId;
+        await managedBranch(db, ctx.session.user, organizationId, input.branchId);
+        const device = await db.pharmacyRegisteredDevice.findFirst({
+          where: { id: input.deviceId, organizationId, branchId: input.branchId },
+          select: { id: true, status: true, revokedAt: true },
+        });
+        if (!device) throw new TRPCError({ code: 'NOT_FOUND' });
+        if (device.status !== 'ACTIVE' || device.revokedAt)
+          throw new TRPCError({ code: 'CONFLICT', message: 'REVOKED' });
+        const lots = await offlinePreparationPlan(
+          db,
+          { organizationId, branchId: input.branchId },
+          { deviceId: device.id, now: new Date() }
+        );
+        return { lots, limit: OFFLINE_PREPARATION_LOT_LIMIT };
+      })
+    ),
   enroll: adminProcedure
     .input(branchInput.extend({ name: z.string().trim().min(1).max(100) }))
     .mutation(({ ctx, input }) =>
@@ -82,8 +223,10 @@ export const pharmacyOfflineRouter = router({
           branchId: input.branchId,
           actorId: ctx.session.user.id,
         };
-        await activeBranch(db, scope.organizationId, scope.branchId);
-        const { device, secret } = await enrollPharmacyCounter(db, scope, input);
+        await managedBranch(db, ctx.session.user, scope.organizationId, scope.branchId);
+        const { device, secret } = await enrollPharmacyCounter(db, scope, input).catch(
+          deviceRefusal
+        );
         return { device: { id: device.id, name: device.name, branchId: device.branchId }, secret };
       })
     ),
@@ -95,7 +238,7 @@ export const pharmacyOfflineRouter = router({
         branchId: input.branchId,
         actorId: ctx.session.user.id,
       };
-      await activeBranch(db, scope.organizationId, scope.branchId);
+      await managedBranch(db, ctx.session.user, scope.organizationId, scope.branchId);
       const current = await db.pharmacyRegisteredDevice.findFirst({
         where: {
           id: input.deviceId,
@@ -109,23 +252,64 @@ export const pharmacyOfflineRouter = router({
         scope,
         current.id,
         current.deviceSecretHash
-      );
+      ).catch(deviceRefusal);
       return { deviceId: device.id, secret };
     })
   ),
   revoke: adminProcedure.input(branchInput.extend({ deviceId: id })).mutation(({ ctx, input }) =>
     ctx.db.$transaction(async (tx) => {
-      const device = await revokePharmacyCounter(
-        tx as ScopedDb,
-        {
-          organizationId: ctx.entitlements.organizationId,
-          branchId: input.branchId,
-          actorId: ctx.session.user.id,
-        },
-        input.deviceId,
-        new Date()
+      const db = tx as ScopedDb;
+      const scope = {
+        organizationId: ctx.entitlements.organizationId,
+        branchId: input.branchId,
+        actorId: ctx.session.user.id,
+      };
+      await managedBranch(db, ctx.session.user, scope.organizationId, scope.branchId);
+      const now = new Date();
+      const device = await revokePharmacyCounter(db, scope, input.deviceId, now).catch(
+        deviceRefusal
       );
-      return { deviceId: device.id, status: device.status };
+      // DEV-957: a revoked counter can never sell what it was earmarked, so its
+      // open quotas go back to the branch in the same transaction. The rows stay
+      // (release is final and audited), so nothing is counted twice.
+      const open = await db.pharmacyDeviceLotQuota.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          deviceId: device.id,
+          releasedAt: null,
+        },
+        select: { id: true, quotaUnits: true, consumedUnits: true },
+        orderBy: { id: 'asc' },
+      });
+      for (const quota of open) await releaseDeviceLotQuota(db, scope, quota.id, now);
+      if (open.length) {
+        await db.auditLog.create({
+          data: {
+            organizationId: scope.organizationId,
+            actorId: scope.actorId,
+            actorName: ctx.session.user.name ?? null,
+            actorEmail: ctx.session.user.email ?? null,
+            actorRole: ctx.session.user.role ?? null,
+            source: 'TRPC',
+            category: 'PHARMACY',
+            operation: 'UPDATE',
+            action: 'pharmacyOffline.releaseOfflineQuotas',
+            targetType: 'PharmacyRegisteredDevice',
+            targetId: device.id,
+            metadata: {
+              branchId: scope.branchId,
+              deviceId: device.id,
+              quotasReleased: open.length,
+              unitsReleased: open.reduce(
+                (total, quota) => total + quota.quotaUnits - quota.consumedUnits,
+                0
+              ),
+            },
+          },
+        });
+      }
+      return { deviceId: device.id, status: device.status, quotasReleased: open.length };
     })
   ),
 });
@@ -313,12 +497,28 @@ export async function replayCounterCommand(
     clientOriginAt: new Date(command.leasedReceipt.originalSaleAt),
     receiptNumber: command.leasedReceipt.receiptNumber,
   });
-  if (recorded.command.status === 'ACCEPTED')
+  if (recorded.command.status === 'ACCEPTED') {
+    // DEV-637: answer with the number the sale was issued, which differs from the printed
+    // one when replay had to renumber it.
+    const issued = recorded.command.serverRef
+      ? await db.pharmacySale.findFirst({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            id: recorded.command.serverRef,
+          },
+          select: { receiptNumber: true, offlineReceiptReference: true },
+        })
+      : null;
     return {
       saleId: recorded.command.serverRef,
-      receiptNumber: recorded.command.receiptNumber,
+      receiptNumber: issued?.receiptNumber ?? recorded.command.receiptNumber,
+      ...(issued?.offlineReceiptReference
+        ? { offlineReference: issued.offlineReceiptReference }
+        : {}),
       replayed: true,
     };
+  }
   if (recorded.command.status !== 'PENDING')
     throw new CounterTransportError('command_rejected', 409);
   // #519: recall state is derived, never assumed. A lot the signed lease told
@@ -369,6 +569,20 @@ export async function replayCounterCommand(
     select: { id: true },
   });
   if (earlier) throw new CounterTransportError('earlier_command_pending', 409);
+  // The sale books on the shop's day of its own signed sale time, on the organisation's
+  // stored clock (never a zone the device sends): 00:30 in Karachi is that day, not the
+  // UTC day before. An organisation on UTC, or with no usable zone, keeps the UTC date.
+  // Only a PENDING command reaches here, so a sale already replayed is never moved.
+  // DEV-958A: on the branch's clock, whose day ends at its "day ends at" hour, so a sale
+  // signed at 00:30 at a branch whose day ends at 05:00 books on the day before.
+  const businessDate = pharmacyBusinessDate(
+    await readPharmacyDayClock(db, scope),
+    new Date(command.leasedReceipt.originalSaleAt)
+  );
+  // DEV-631: take the sale's day lock before any stock lock, the same order the online
+  // counter uses (day, then stock), so a replay and a counter line cannot deadlock.
+  // The tender below re-enters this lock and still refuses a closed day.
+  await lockPharmacyDay(db, scope, businessDate);
   // addSaleLine re-enters these request locks after the command's stock locks.
   // Hold every line key up front so a concurrent online retry cannot invert that order.
   for (let index = 0; index < command.lines.length; index += 1)
@@ -392,9 +606,17 @@ export async function replayCounterCommand(
   for (const [index, line] of command.lines.entries()) {
     const medicine = await db.medicine.findFirst({
       where: { id: line.medicineId, organizationId: scope.organizationId },
-      select: { controlled: true, rx: true, restricted: true },
+      select: { controlled: true, rx: true, restricted: true, highAlert: true, lasa: true },
     });
-    if (!medicine || medicine.controlled || medicine.rx || medicine.restricted)
+    // DEV-957: the replay refuses exactly what the signed catalogue leaves out.
+    if (
+      !medicine ||
+      medicine.controlled ||
+      medicine.rx ||
+      medicine.restricted ||
+      medicine.highAlert ||
+      medicine.lasa
+    )
       throw new CounterTransportError('medicine_not_offline_otc', 403);
     const pack = await db.packLevel.findFirst({
       where: {
@@ -453,7 +675,7 @@ export async function replayCounterCommand(
     {
       saleId: sale.id,
       deviceId,
-      businessDate: new Date(command.leasedReceipt.originalSaleAt.slice(0, 10) + 'T00:00:00Z'),
+      businessDate,
       type: command.manualCapture?.type ?? 'CASH',
       amountMinor: command.amountMinor,
       cashReceivedMinor: command.cashReceivedMinor,
@@ -481,11 +703,25 @@ export async function replayCounterCommand(
       commandId: recorded.command.id,
       outcome: 'ACCEPTED',
       serverRef: sale.id,
+      // The command log keeps the number the counter printed.
       receiptNumber: command.leasedReceipt.receiptNumber,
     },
     new Date()
   );
-  return { saleId: sale.id, receiptNumber: command.leasedReceipt.receiptNumber, replayed: false };
+  // DEV-637: a number printed from a block leased before branch-wide numbering may have
+  // been replaced by a fresh branch number; the printed one is kept as the reference.
+  const issued =
+    'receiptNumber' in result && typeof result.receiptNumber === 'number'
+      ? result.receiptNumber
+      : command.leasedReceipt.receiptNumber;
+  return {
+    saleId: sale.id,
+    receiptNumber: issued,
+    ...(issued !== command.leasedReceipt.receiptNumber
+      ? { offlineReference: command.leasedReceipt.receiptNumber }
+      : {}),
+    replayed: false,
+  };
 }
 
 const sessionSchema = z
@@ -546,23 +782,175 @@ export type CounterOperation = 'establish' | 'snapshot' | 'replay' | 'lease' | '
 
 /** Live web actor plus enrolled device, with an actor/device-bound terminal
  * token after establishment. Errors are mapped only outside the transaction. */
+type CounterAuditEntry = {
+  action: string;
+  operation: 'CREATE' | 'UPDATE' | 'EXECUTE';
+  targetType: string;
+  targetId: string | null;
+  metadata: Record<string, string | number | boolean | null>;
+};
+
+/** Filled in by the counter route once the actor, branch and terminal are verified. */
+type CounterAuditTarget = {
+  scope?: { organizationId: string; branchId: string; actorId: string };
+  deviceId?: string;
+};
+
+function field(value: unknown, key: string): unknown {
+  return value && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined;
+}
+
+function scalar(value: unknown): string | number | boolean | null {
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+    ? value
+    : null;
+}
+
+function text(value: unknown): string | null {
+  const found = scalar(value);
+  return found === null ? null : String(found);
+}
+
+/**
+ * DEV-913: what the audit log records for a successful counter operation, or
+ * null when nothing new happened (a replay of a sale that was already posted).
+ * Only identifiers and counts are kept: never the device secret, the terminal
+ * session token, signatures or signed payloads.
+ */
+export function counterAuditEntry(
+  operation: Exclude<CounterOperation, 'reject'>,
+  body: unknown,
+  outcome: unknown
+): CounterAuditEntry | null {
+  switch (operation) {
+    case 'establish':
+      return {
+        action: 'openCounterSession',
+        operation: 'EXECUTE',
+        targetType: 'PharmacyRegisteredDevice',
+        targetId: text(field(field(outcome, 'device'), 'id')),
+        metadata: {},
+      };
+    case 'lease':
+      return {
+        action: 'reserveReceiptNumbers',
+        operation: 'CREATE',
+        targetType: 'PharmacyReceiptNumberLease',
+        targetId: text(field(outcome, 'id')),
+        metadata: { size: scalar(field(body, 'size')) },
+      };
+    case 'quota':
+      return {
+        action: 'grantOfflineLotQuota',
+        operation: 'UPDATE',
+        targetType: 'PharmacyInventoryLot',
+        targetId: text(field(body, 'inventoryLotId')),
+        metadata: {
+          stockLocationId: scalar(field(body, 'stockLocationId')),
+          units: scalar(field(body, 'units')),
+        },
+      };
+    case 'snapshot':
+      return {
+        action: 'issueOfflineSnapshot',
+        operation: 'EXECUTE',
+        targetType: 'PharmacyRegisteredDevice',
+        targetId: null,
+        metadata: {},
+      };
+    case 'replay':
+      if (field(outcome, 'replayed') === true) return null;
+      return {
+        action: 'replayOfflineSale',
+        operation: 'CREATE',
+        targetType: 'PharmacySale',
+        targetId: text(field(outcome, 'saleId')),
+        metadata: {
+          receiptNumber: scalar(field(outcome, 'receiptNumber')),
+          // DEV-637: the number printed offline, when replay had to renumber the sale.
+          ...(scalar(field(outcome, 'offlineReference')) !== null
+            ? { offlineReference: scalar(field(outcome, 'offlineReference')) }
+            : {}),
+          sequence: scalar(field(body, 'sequence')),
+          commandAction: scalar(field(body, 'action')),
+        },
+      };
+  }
+}
+
+/**
+ * DEV-913: every counter operation that changes money, stock or the receipt
+ * runway leaves an entry naming the person, branch and terminal, written in the
+ * same transaction as the change so neither commits without the other.
+ * Recovery (`reject`) writes its own entry inside the work.
+ */
+function withCounterAudit<T>(
+  operation: CounterOperation,
+  request: Request,
+  user: { name?: string | null; email?: string | null; role?: string | null },
+  body: unknown,
+  target: CounterAuditTarget,
+  work: (db: ScopedDb) => Promise<T>
+) {
+  return async (db: ScopedDb): Promise<T> => {
+    const outcome = await work(db);
+    const entry = operation === 'reject' ? null : counterAuditEntry(operation, body, outcome);
+    if (entry && target.scope) {
+      await db.auditLog.create({
+        data: {
+          organizationId: target.scope.organizationId,
+          actorId: target.scope.actorId,
+          actorName: user.name ?? null,
+          actorEmail: user.email ?? null,
+          actorRole: user.role ?? null,
+          source: 'REST_API',
+          category: 'PHARMACY',
+          operation: entry.operation,
+          action: `pharmacyOffline.${entry.action}`,
+          targetType: entry.targetType,
+          targetId: entry.targetId,
+          httpMethod: 'POST',
+          path: new URL(request.url).pathname,
+          ip: clientIp(request),
+          userAgent: request.headers.get('user-agent'),
+          metadata: {
+            branchId: target.scope.branchId,
+            deviceId: target.deviceId ?? null,
+            ...entry.metadata,
+          },
+        },
+      });
+    }
+    return outcome;
+  };
+}
+
 export function pharmacyCounterRoute(operation: CounterOperation) {
   return async (request: Request): Promise<Response> => {
     try {
       if (!(await rateLimit(`pharmacy-counter:${clientIp(request)}`, 120, 60_000)).ok)
         throw new CounterTransportError('rate_limited', 429);
       const origin = request.headers.get('origin');
-      if (origin && origin !== new URL(request.url).origin)
+      // DEV-957: a browser on the public host (behind a proxy, or `next start`
+      // reporting its bind address in request.url) is this site too; any other
+      // Origin is still refused, as before.
+      if (origin && origin !== new URL(request.url).origin && !exactSameOrigin(request))
         throw new CounterTransportError('origin_denied', 403);
       const actor = await resolveTenantActor({ request });
       if (!actor || actor.support) throw new CounterTransportError('unauthorized', 401);
-      const secret = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? '';
-      if (!/^pcd_[A-Za-z0-9_-]{43}$/.test(secret))
-        throw new CounterTransportError('unauthorized_device', 401);
+      // DEV-957: an enrolled browser sends its credential in the httpOnly cookie;
+      // tools and tests keep the bearer header. Never both, and the cookie only
+      // with this site's exact Origin, so another site cannot ride on it.
+      const credential = counterDeviceCredential(request);
+      if (!credential.ok) throw new CounterTransportError('unauthorized_device', 401);
+      if (credential.cookie && !cookieCredentialAllowed(request))
+        throw new CounterTransportError('origin_denied', 403);
+      const secret = credential.secret;
       const raw = await request.text();
       if (Buffer.byteLength(raw) > 256_000) throw new CounterTransportError('body_too_large', 413);
       const body: unknown = JSON.parse(raw || '{}');
-      const result = await withTenantDb(actor.organization.id, async (db) => {
+      const audit: CounterAuditTarget = {};
+      const counterWork = async (db: ScopedDb) => {
         if (
           !hasModule(
             await resolveOrganizationEntitlements(actor.organization.id, db),
@@ -570,15 +958,19 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           )
         )
           throw new CounterTransportError('module_disabled', 403);
-        const manager = operation === 'lease' || operation === 'quota' || operation === 'reject';
-        if (
-          !(await can(
-            subjectFromSession(actor.session.user),
-            manager ? 'admin:access' : 'pharmacy:orders',
-            undefined,
-            { db, source: 'REST', ip: clientIp(request) }
-          ))
-        )
+        const allows = (action: 'admin:access' | 'pharmacy:orders') =>
+          can(subjectFromSession(actor.session.user), action, undefined, {
+            db,
+            source: 'REST',
+            ip: clientIp(request),
+          });
+        // DEV-767: a manager leases on `admin:access`; a cashier may still renew
+        // their own terminal's receipt runway through the counter operator gate
+        // below (live counter grant and assignment to this terminal's branch),
+        // capped at one renewal block. Quota and reject stay manager-only.
+        const leasingManager = operation === 'lease' && (await allows('admin:access'));
+        const manager = leasingManager || operation === 'quota' || operation === 'reject';
+        if (!leasingManager && !(await allows(manager ? 'admin:access' : 'pharmacy:orders')))
           throw new CounterTransportError('forbidden', 403);
         const device = await resolvePharmacyCounterBySecret(db, secret);
         if (!device || device.status !== 'ACTIVE' || device.revokedAt)
@@ -594,6 +986,8 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           deviceSecret: secret,
         };
         await activeBranch(db, ctx.scope.organizationId, ctx.scope.branchId);
+        audit.scope = ctx.scope;
+        audit.deviceId = device.id;
         // DEV-831: an enrolled terminal does not lend its branch to the actor.
         // Establishment, snapshots and replay take the online counter's live
         // grant and branch-assignment gate before any token, snapshot or sale.
@@ -632,7 +1026,13 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
         verifyToken(request.headers.get('x-terminal-session') ?? '', ctx);
         if (operation === 'lease') {
           const input = z
-            .object({ size: z.number().int().positive().max(MAX_RECEIPT_LEASE_SIZE) })
+            .object({
+              size: z
+                .number()
+                .int()
+                .positive()
+                .max(manager ? MAX_RECEIPT_LEASE_SIZE : COUNTER_LEASE_RENEWAL_SIZE),
+            })
             .strict()
             .parse(body);
           return reserveReceiptNumberBlock(db, ctx.scope, {
@@ -688,6 +1088,11 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
               rx: false,
               controlled: false,
               restricted: false,
+              // DEV-957: as the online barcode cache (counter-catalogue-cache.ts),
+              // high-alert and look-alike sound-alike medicines need the online
+              // counter's checks, so they are never signed for offline selling.
+              highAlert: false,
+              lasa: false,
             },
             select: {
               id: true,
@@ -837,7 +1242,11 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           request.headers.get('x-command-signature') ?? '',
           request.headers.get('x-receipt-signature') ?? ''
         );
-      });
+      };
+      const result = await withTenantDb(
+        actor.organization.id,
+        withCounterAudit(operation, request, actor.session.user, body, audit, counterWork)
+      );
       return Response.json(result, {
         status: operation === 'establish' ? 201 : 200,
         headers: { 'Cache-Control': 'no-store' },

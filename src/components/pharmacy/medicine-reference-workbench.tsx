@@ -5,6 +5,7 @@ import { browserUuid } from '@/lib/browser-uuid';
 import { memo, useRef, useState } from 'react';
 import { Download, FileSpreadsheet, Loader2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
+import { PinAwareMessage } from '@/components/pharmacy/pin-aware-message';
 
 import { MedicinePackSetup } from './medicine-pack-setup';
 
@@ -27,6 +28,7 @@ import {
   type NormalizedMedicineReferenceRow,
   type ReferenceUploadChunk,
 } from '@/lib/pharmacy/reference-connectors';
+import { notRecordedFields, STRENGTH_NOT_RECORDED } from '@/lib/pharmacy/medicine';
 import { trpc } from '@/lib/trpc';
 
 type ConnectorHealth = {
@@ -243,6 +245,48 @@ function usePendingKeys() {
   return { has: (key: string) => pending.has(key), run };
 }
 
+type CatalogueMatchMedicine = {
+  productName: string;
+  strength: string | null;
+  dosageForm: string | null;
+  drapRegistrationNumber: string | null;
+  rx: boolean;
+  controlled: boolean;
+};
+
+/** DEV-683: the catalogue medicine a confirmation would update, shown next to the proposal. */
+function CatalogueMatch({ medicine }: { medicine: CatalogueMatchMedicine }) {
+  const rows: Array<[string, string]> = [
+    ['Name', medicine.productName],
+    ['Strength', medicine.strength ?? 'Not recorded'],
+    ['Dosage form', medicine.dosageForm ?? 'Not recorded'],
+    ['Registration', medicine.drapRegistrationNumber ?? 'Not recorded'],
+    ['Prescription only', medicine.rx ? 'Yes' : 'No'],
+    ['Controlled', medicine.controlled ? 'Yes' : 'No'],
+  ];
+  return (
+    <section
+      aria-label="Catalogue medicine this updates"
+      className="min-w-0 space-y-2 rounded-sm border border-border-subtle p-3"
+    >
+      <h4 className="text-sm font-semibold text-text-strong">Catalogue medicine this updates</h4>
+      <dl className="grid min-w-0 gap-2 sm:grid-cols-3">
+        {rows.map(([label, value]) => (
+          <div key={label} className="min-w-0">
+            <dt className="font-mono text-xs uppercase text-text-muted">{label}</dt>
+            <dd className="mt-1 break-words text-sm text-text-body">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="text-xs text-text-muted">
+        Confirming keeps this name. A different name, strength or form is refused: reject the row or
+        correct the medicine first. A stated flag can raise this medicine to prescription-only or
+        controlled, never lower it.
+      </p>
+    </section>
+  );
+}
+
 const CATALOGUE_REVIEW_DENIED =
   'Confirming connector proposals needs the pharmacy:catalogue-review permission granted to your role by name. Wildcard grants such as * or pharmacy:* do not include it.';
 
@@ -273,7 +317,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
     },
     onError: (error) => {
       setSoloReviewPin('');
-      toast.error(error.message);
+      toast.error(<PinAwareMessage message={error.message} />);
     },
   });
   const importBatch = trpc.pharmacyMedicine.runReferenceConnectorNow.useMutation();
@@ -285,7 +329,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
     },
     onError: (error) => {
       setSoloReviewPin('');
-      toast.error(error.message);
+      toast.error(<PinAwareMessage message={error.message} />);
     },
   });
   const publish = trpc.pharmacyMedicine.publishAssertions.useMutation({
@@ -539,9 +583,10 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
             <div>
               <h3 className="text-sm font-semibold text-text-strong">Column mapping</h3>
               <p className="mt-1 text-xs text-text-muted">
-                Strength, dosage form, and pack have no defaults. Missing values stay blocked in
-                review. Pack must state a unit count, such as 10 tablets or 3 x 10; publishing
-                creates that pack size.
+                Strength, dosage form, and pack have no defaults. Dosage form and pack must be
+                present. A manual import without strength or registration number can still be
+                published and sold; those values are recorded as not recorded. Pack must state a
+                unit count, such as 10 tablets or 3 x 10; publishing creates that pack size.
               </p>
               <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                 {[
@@ -685,7 +730,9 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                     {sourceLabel ? (
                       <p className="mt-1 text-xs text-text-muted">
                         Source: {sourceLabel}
-                        {proposal.targetMedicine ? ' · updates an existing medicine' : ''}
+                        {proposal.targetMedicine || proposal.catalogueMatch
+                          ? ' · updates an existing medicine'
+                          : ''}
                       </p>
                     ) : null}
                   </div>
@@ -701,6 +748,9 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                     </div>
                   ))}
                 </dl>
+                {proposal.catalogueMatch ? (
+                  <CatalogueMatch medicine={proposal.catalogueMatch} />
+                ) : null}
                 <Button
                   className="min-h-11"
                   disabled={isConfirming}
@@ -784,6 +834,11 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                   </div>
                   <StatusPill status={referenceState.label} tone={referenceState.tone} />
                 </div>
+                {notRecordedFields(candidate).length ? (
+                  <p className="mt-3 text-sm text-text-muted">
+                    {notRecordedFields(candidate).join(' · ')}
+                  </p>
+                ) : null}
                 <dl className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                   {candidate.provenance.map((assertion) => {
                     const envelope = assertionEnvelope(assertion.assertedValue);
@@ -891,7 +946,12 @@ const ReferencePreview = memo(function ReferencePreview({
             <tr key={row.rowSourceKey} className="hover:bg-surface-sunken/60">
               <td className="px-3 py-3 font-mono text-xs">{row.rowSourceKey}</td>
               <td className="px-3 py-3">{row.values.productName ?? 'Missing'}</td>
-              <td className="px-3 py-3">{row.values.strength ?? 'Missing'}</td>
+              <td className="px-3 py-3">
+                {row.values.strength ??
+                  (row.blockingIssues.includes('MISSING_STRENGTH')
+                    ? 'Missing'
+                    : STRENGTH_NOT_RECORDED)}
+              </td>
               <td className="px-3 py-3">{row.values.dosageForm ?? 'Missing'}</td>
               <td className="px-3 py-3">{row.values.pack ?? 'Missing'}</td>
               <td className="px-3 py-3">

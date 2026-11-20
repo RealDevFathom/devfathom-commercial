@@ -358,7 +358,7 @@ export async function readReorderFacts(
       JOIN pharmacy_manufacturing_batches b ON b."organizationId"=lot."organizationId" AND b.id=lot."manufacturingBatchId"
       WHERE sb."organizationId"=${organizationId} AND sb."branchId"=${branchId}
         AND sb.disposition='AVAILABLE' AND sb."onHandUnits">0
-        AND b.state='ACTIVE' AND b."expiresAt">${readAt}
+        AND b.state='ACTIVE' AND (b."expiresAt" IS NULL OR b."expiresAt">${readAt})
         AND lot."receivedAt" IS NOT NULL AND lot."receivedAt"<=${readAt}
         AND b."medicineId" IN (SELECT "medicineId" FROM sold)
       GROUP BY b."medicineId"

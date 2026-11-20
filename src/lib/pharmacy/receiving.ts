@@ -24,6 +24,7 @@
  * module is a safe integer count of canonical base units. Packs are an input;
  * canonical units are their projection, never an independently supplied number.
  */
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import {
   allocateByWeight,
   assertSupplierEligible,
@@ -491,6 +492,11 @@ export type ReceivedTerms = {
   bonusCanonicalUnits?: number;
   /** DEV-690: when the goods arrived, judged against the scheme's validity. */
   receivedAt?: Date;
+  /**
+   * DEV-769: the organisation's zone. The arrival is read as a day in it, so goods that
+   * arrive on the scheme's last valid day are inside it. Missing means UTC.
+   */
+  timeZone?: string | null;
   /** DEV-691: paid packs that physically arrived on this line. */
   receivedPacks?: number;
   /** DEV-691: the batch and expiry printed on the packs that arrived. */
@@ -595,17 +601,19 @@ export function matchReceiptLine(input: {
         });
       }
     }
-    if (
-      ordered.schemeValidUntil &&
-      received.receivedAt &&
-      received.receivedAt.getTime() > ordered.schemeValidUntil.getTime()
-    ) {
+    // DEV-769: 'valid until' is a calendar day (stored as its UTC midnight) and the scheme
+    // holds through all of it, so the arrival is compared as a day in the organisation's zone.
+    const validUntilDay = ordered.schemeValidUntil?.toISOString().slice(0, 10);
+    const arrivalDay = received.receivedAt
+      ? pharmacyCalendarDay(received.timeZone, received.receivedAt)
+      : undefined;
+    if (validUntilDay && arrivalDay && arrivalDay > validUntilDay) {
       exceptions.push({
         kind: 'SCHEME_EXPIRED',
         detail:
           `Scheme of ${ordered.bonusCanonicalUnits} free canonical units was valid until ` +
-          `${ordered.schemeValidUntil.toISOString().slice(0, 10)}; goods arrived ` +
-          `${received.receivedAt.toISOString().slice(0, 10)}. Confirm the distributor still honours it.`,
+          `${validUntilDay}; goods arrived ` +
+          `${arrivalDay}. Confirm the distributor still honours it.`,
         expectedUnits: null,
         observedUnits: null,
         expectedMinor: null,

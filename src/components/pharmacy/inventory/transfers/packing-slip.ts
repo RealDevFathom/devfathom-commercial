@@ -7,13 +7,17 @@
  * out. The slip carries physical facts only — medicine, batch, expiry, packs and
  * locations — and no cost, price or patient data.
  */
+import { printInWindow } from '@/lib/browser-print/print-window';
 import type { CounterReceiptFormat } from '@/lib/pharmacy/counter-browser-print';
 import { formatLotExpiry } from '@/lib/pharmacy/product-class';
+import { batchPhrase } from '@/lib/pharmacy/unrecorded-batch';
 
 export type PackingSlipLine = {
   medicineName: string;
-  batchNumber: string;
-  expiresAt: string;
+  /** DEV-853: null when the batch number was never recorded. */
+  batchNumber: string | null;
+  /** DEV-853: null when the expiry was never recorded. */
+  expiresAt: string | null;
   sourceLocation: string;
   destinationLocation: string;
   quantityUnits: number;
@@ -73,7 +77,7 @@ export function buildPackingSlipText(slip: PackingSlip, columns: number): string
   slip.lines.forEach((line, index) => {
     out.push(
       `${index + 1}. ${line.medicineName}`,
-      `   Batch ${line.batchNumber} · ${formatLotExpiry(line.expiresAt, (value) => `exp ${day(value)}`)}`,
+      `   ${batchPhrase(line.batchNumber)} · ${formatLotExpiry(line.expiresAt, (value) => `exp ${day(value)}`)}`,
       `   ${line.quantityUnits} units = ${line.sealedPacks} sealed × ${line.unitsPerPack} + ${line.looseUnits} loose`,
       `   Pick: ${line.sourceLocation}`,
       `   Put:  ${line.destinationLocation}`,
@@ -109,19 +113,12 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }</style>
 }
 
 /** Opens only the isolated slip. Returning does not confirm physical printing. */
-export function printPackingSlip(slip: PackingSlip, format: CounterReceiptFormat): void {
+export function printPackingSlip(slip: PackingSlip, format: CounterReceiptFormat): Promise<void> {
   const html = buildPackingSlipHtml(slip, format);
-  const popup = window.open('', '_blank', 'popup,width=640,height=820');
-  if (!popup) throw new Error('Allow pop-ups for this site, then retry Print packing slip.');
-  popup.opener = null;
-  try {
-    popup.document.open();
-    popup.document.write(html);
-    popup.document.close();
-    popup.focus();
-    popup.print();
-  } catch {
-    popup.close();
-    throw new Error('The browser print dialog could not open. Retry Print packing slip.');
-  }
+  // DEV-973: an isolated window that prints itself, so this page never freezes.
+  return printInWindow(html, {
+    features: 'popup,width=640,height=820',
+    blockedMessage: 'Allow pop-ups for this site, then retry Print packing slip.',
+    failedMessage: 'The browser print dialog could not open. Retry Print packing slip.',
+  });
 }

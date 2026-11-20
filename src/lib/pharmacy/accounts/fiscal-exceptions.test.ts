@@ -14,7 +14,8 @@ const document = {
 function register(): FiscalExceptionRegister {
   return {
     organizationId: 'org-1', branch: { id: 'branch-1', name: 'Main' },
-    filters: fiscalExceptionInput.parse(input), configuredMode: 'OFF',
+    filters: fiscalExceptionInput.parse(input), configuredMode: 'OFF', timeZone: null,
+    window: { from: '2026-07-01T00:00:00.000Z', to: '2026-10-01T00:00:00.000Z' },
     readAt: '2026-10-01T00:00:00.000Z', coverage: 'UNKNOWN',
     hasMoreAtRead: false, pageCapReached: false, nextPage: null,
     rows: [{ ...fiscalExceptionDocument.parse(document), nextAttemptAt: null,
@@ -93,7 +94,11 @@ describe('page CSV safety and honest coverage', () => {
     expect(rows[1]).toContain('COVERAGE');
     expect(rows[1]).toContain('OFF');
     expect(rows[1]).toContain('UNKNOWN');
-    expect(rows[1]).toContain('2026-10-01');
+    // The *_utc bound columns hold the UTC instants of the window that was read.
+    expect(rows[0][3]).toBe('from_inclusive_utc');
+    expect(rows[1][3]).toBe('2026-07-01T00:00:00.000Z');
+    expect(rows[0][4]).toBe('to_exclusive_utc');
+    expect(rows[1][4]).toBe('2026-10-01T00:00:00.000Z');
     expect(rows[1][10]).toBe('0');
     expect(rows[1][11]).toBe('true');
     expect(rows[1][12]).toBe('true');
@@ -106,5 +111,15 @@ describe('page CSV safety and honest coverage', () => {
     const rows = parseCsv(fiscalExceptionsCsv(register()));
     expect(rows[2][6]).toBe('OFF');
     expect(rows[2][17]).toBe('SANDBOX');
+  });
+});
+
+describe('page CSV window on the organisation clock (DEV-722)', () => {
+  it('writes the UTC instants of the Karachi days into the UTC bound columns', () => {
+    const report = { ...register(), timeZone: 'Asia/Karachi',
+      window: { from: '2026-06-30T19:00:00.000Z', to: '2026-09-30T19:00:00.000Z' } };
+    const rows = parseCsv(fiscalExceptionsCsv(report));
+    expect(rows[1].slice(3, 5)).toEqual(['2026-06-30T19:00:00.000Z', '2026-09-30T19:00:00.000Z']);
+    expect(rows[2].slice(3, 5)).toEqual(['2026-06-30T19:00:00.000Z', '2026-09-30T19:00:00.000Z']);
   });
 });

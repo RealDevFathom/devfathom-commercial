@@ -64,6 +64,8 @@ function fixture() {
       create: vi.fn(),
       update: vi.fn(),
     },
+    // DEV-743: no card-terminal payment is open on the day unless a test says so.
+    pharmacyCardTerminalAttempt: { count: vi.fn().mockResolvedValue(0) },
     pharmacyDrawerSession: {
       count: vi.fn().mockResolvedValue(0),
       findFirst: vi.fn().mockResolvedValue(null),
@@ -103,6 +105,15 @@ describe('pharmacy close family refusals', () => {
     await expect(f.caller.dailyClose({ branchId: BRANCH, businessDate })).rejects.toMatchObject({
       code: 'CONFLICT',
       message: 'OPEN_DRAWER',
+    });
+    expect(f.db.pharmacyDailyClose.create).not.toHaveBeenCalled();
+  });
+
+  it('answers a daily close with a card-terminal payment still open as a CONFLICT, writing no close', async () => {
+    f.db.pharmacyCardTerminalAttempt.count.mockResolvedValue(1);
+    await expect(f.caller.dailyClose({ branchId: BRANCH, businessDate })).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'CARD_TERMINAL_PAYMENT_OPEN',
     });
     expect(f.db.pharmacyDailyClose.create).not.toHaveBeenCalled();
   });

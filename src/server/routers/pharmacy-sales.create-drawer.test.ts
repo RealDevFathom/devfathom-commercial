@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // DEV-725: opening the drawer is the first step of the shift. The counter used to
 // let a cashier build a whole bill on a device with no OPEN drawer and only refused
@@ -36,6 +36,9 @@ const COUNTER: Rule[] = [{ capability: 'pharmacy:counter', effect: 'ALLOW' }];
 
 function fixture(openDrawer: { id: string; businessDate: Date } | null, permissions = COUNTER) {
   const db = {
+    // DEV-631: a counter bill or line is refused while today's business day is closed.
+    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'UTC' }) },
+    pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     $queryRaw: vi.fn().mockResolvedValue([]),
     // DEV-607: create takes the counter gate (member, pharmacy:counter, branch assignment).
     user: {
@@ -86,6 +89,13 @@ const drawer = { id: 'drawer-1', businessDate: new Date('2026-11-15T00:00:00.000
 
 beforeEach(() => {
   vi.mocked(assertStoredPharmacyMayOperate).mockReset().mockResolvedValue(undefined);
+  // The fixture drawer was opened on today's business day (the workspace zone is UTC).
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-11-15T10:00:00.000Z'));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('pharmacySales.create drawer gate (DEV-725)', () => {
@@ -153,12 +163,55 @@ describe('pharmacySales.create drawer gate (DEV-725)', () => {
     expect(f.db.pharmacySale.create).not.toHaveBeenCalled();
   });
 
+  it('DEV-769: refuses a counter bill on a drawer left open from an earlier business day', async () => {
+    // Cash is only taken into today's drawer, so a bill started on yesterday's could not be paid.
+    const f = fixture({ id: 'drawer-1', businessDate: new Date('2026-11-14T00:00:00.000Z') });
+    await expect(
+      f.caller.create({ branchId: 'branch-1', quotation: false, deviceId: 'counter-device' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'DRAWER_FROM_EARLIER_DAY' });
+    expect(f.db.pharmacySale.create).not.toHaveBeenCalled();
+    expect(f.db.pharmacySaleEvent.create).not.toHaveBeenCalled();
+  });
+
+  it("DEV-769: reads 'today' for the drawer in the workspace zone, not UTC", async () => {
+    // 20:00 UTC on 14 Nov is already 15 Nov in Karachi: a drawer opened for the 15th is today's.
+    vi.setSystemTime(new Date('2026-11-14T20:00:00.000Z'));
+    const f = fixture(drawer);
+    f.db.organization.findUnique.mockResolvedValue({ timezone: 'Asia/Karachi' });
+    await expect(
+      f.caller.create({ branchId: 'branch-1', quotation: false, deviceId: 'counter-device' })
+    ).resolves.toMatchObject({ id: 'sale-new', status: 'OPEN' });
+  });
+
   it('keeps quotations free of the drawer: they take no payment', async () => {
     const f = fixture(null);
     await expect(f.caller.create({ branchId: 'branch-1', quotation: true })).resolves.toMatchObject(
       { status: 'QUOTATION' }
     );
     expect(f.db.pharmacyDrawerSession.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("DEV-631: refuses a counter bill while today's business day is closed, before any bill is written", async () => {
+    const f = fixture(drawer);
+    f.db.pharmacyDailyClose.findFirst.mockResolvedValue({ id: 'close-1', reopen: null });
+    await expect(
+      f.caller.create({ branchId: 'branch-1', quotation: false, deviceId: 'counter-device' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'DAY_CLOSED' });
+    // Today in the workspace zone, read for the scope's organization.
+    expect(f.db.organization.findUnique).toHaveBeenCalledWith({
+      where: { id: 'org-1' },
+      select: { timezone: true },
+    });
+    expect(f.db.pharmacySale.create).not.toHaveBeenCalled();
+    expect(f.db.pharmacySaleEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('DEV-631: starts the bill again once the owner reopened the day for trading', async () => {
+    const f = fixture(drawer);
+    f.db.pharmacyDailyClose.findFirst.mockResolvedValue({ id: 'close-1', reopen: { id: 'r-1' } });
+    await expect(
+      f.caller.create({ branchId: 'branch-1', quotation: false, deviceId: 'counter-device' })
+    ).resolves.toMatchObject({ id: 'sale-new', status: 'OPEN' });
   });
 
   it('lets the regulatory refusal (and its audit) win over a closed drawer', async () => {

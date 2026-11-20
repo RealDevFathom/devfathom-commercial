@@ -13,6 +13,12 @@ import {
   LOGIN_INTENT_COOKIE,
   loginIntentCookieOptions,
 } from '@/lib/auth/login-intent';
+import {
+  LOGIN_INTENT_RATE_LIMIT,
+  LOGIN_INTENT_RATE_WINDOW_MS,
+  loginIntentAccountRateLimitKey,
+  loginIntentRateLimitKey,
+} from '@/lib/auth/login-rate-limits';
 import { resolveSharedLogin } from '@/lib/auth/shared-login';
 import { parseCookie } from '@/lib/platform/security';
 
@@ -112,8 +118,27 @@ export async function POST(request: Request) {
   const accountGate = await rateLimit(`login:acct:${parsed.email}`, 10, 5 * 60_000);
   // Minting intents is limited separately so a valid credential cannot be used to
   // fill the intent table.
-  const intentGate = await rateLimit(`login:intent:${ip ?? 'unknown'}`, 20, 5 * 60_000);
-  const blocked = [ipGate, accountGate, intentGate].filter((gate) => !gate.ok);
+  //
+  // DEV-932: `login:intent:<ip>` is the strictest per-address budget (20, below
+  // `login:ip`), so it is what caps failed guesses — on one account or sprayed
+  // across many — from one address. It still counts every attempt here, but a
+  // fully verified sign-in refunds its own ONE unit at workspace selection
+  // (src/lib/auth.ts). It is never cleared, so failures and unfinished attempts
+  // from the address keep counting while staff sharing one connection no longer
+  // use up each other's allowance. `login:intent-account:<ip>:<email>` is never
+  // refunded: one credential still cannot mint more than 20 intents from one
+  // address in the window.
+  const intentGate = await rateLimit(
+    loginIntentRateLimitKey(ip),
+    LOGIN_INTENT_RATE_LIMIT,
+    LOGIN_INTENT_RATE_WINDOW_MS
+  );
+  const intentAccountGate = await rateLimit(
+    loginIntentAccountRateLimitKey(ip, parsed.email),
+    LOGIN_INTENT_RATE_LIMIT,
+    LOGIN_INTENT_RATE_WINDOW_MS
+  );
+  const blocked = [ipGate, accountGate, intentGate, intentAccountGate].filter((gate) => !gate.ok);
   if (blocked.length > 0) {
     // The BODY stays byte-identical to the 401 — a limiter must not become an
     // enumeration oracle. The status and Retry-After describe the limiter, not

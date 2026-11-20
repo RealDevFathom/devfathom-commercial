@@ -12,7 +12,11 @@ vi.mock('@/server/audit', () => ({
   recordTrpcAudit: vi.fn(),
   annotateAudit: vi.fn(),
 }));
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { pharmacyStagedReviewRouter } from './pharmacy-staged-review';
+import { syntheticLegacyCatalogue } from '@/lib/pharmacy/migration/fixtures/synthetic-legacy-catalogue';
 import type { TRPCContext } from '../trpc';
 
 const scope = { branchId: 'branch_a', sourceId: 'source_a', batchId: 'batch_a' };
@@ -29,6 +33,7 @@ function makeDb() {
   };
   return {
     $transaction: vi.fn(async (run) => run(db)),
+    $executeRaw: vi.fn().mockResolvedValue(0),
     pharmacyMigrationSource: {
       findFirst: vi.fn().mockResolvedValue(null),
       create: vi
@@ -65,6 +70,7 @@ function makeDb() {
       createMany: vi.fn().mockResolvedValue({}),
       groupBy: vi.fn().mockResolvedValue([]),
     },
+    $queryRaw: vi.fn().mockResolvedValue([]),
   };
 }
 let db = makeDb();
@@ -163,7 +169,7 @@ describe('staged review authorization and reads', () => {
             some: {
               organizationId: 'org_a',
               status: 'OPEN',
-              bucket: { in: ['MISSING_BATCH', 'MISSING_EXPIRY'] },
+              bucket: { in: ['MISSING_BATCH', 'MISSING_EXPIRY', 'EXPIRED_STOCK'] },
             },
           },
         }),
@@ -221,6 +227,109 @@ const staging = {
   quantityUnit: 'PACKS' as const,
 };
 describe('production batch staging', () => {
+  it('imports a NARCOTICS-class row as controlled with no review hold (DEV-854)', async () => {
+    const csv = [
+      'Name,classname,saleprice,purprice,QTY',
+      'Synthetic Opioid 50mg, narcotics ,450.00,380.50,12',
+      'Synthetic Paracetamol,Example Distributors,35.00,28.00,120',
+    ].join('\n');
+    db.$queryRaw.mockResolvedValue([{ id: 'med_opioid' }]);
+    const saved = await caller().stageBatch({
+      ...staging,
+      content: Buffer.from(csv).toString('base64'),
+      mapping: { product: 0, mrp: 2, cost: 3, quantity: 4 },
+      quantityUnit: 'UNITS',
+    });
+    expect(saved).toMatchObject({ controlledFromClass: 1, controlledMedicinesFlagged: 1 });
+    // One tenant-scoped update, keyed only by the NARCOTICS row's normalized name.
+    expect(db.$queryRaw).toHaveBeenCalledOnce();
+    const [, ...params] = db.$queryRaw.mock.calls[0]!;
+    expect(params).toContain('org_a');
+    expect(JSON.stringify(params)).toContain('"synthetic opioid 50mg"');
+    expect(JSON.stringify(params)).not.toContain('paracetamol');
+    // Prices are imported as values, not held for confirmation.
+    expect(db.pharmacyMigrationRow.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({ mrpMinor: BigInt(45000), costMinor: BigInt(38050) }),
+        expect.objectContaining({ mrpMinor: BigInt(3500), costMinor: BigInt(2800) }),
+      ],
+    });
+    // Nothing is held: no exception is raised for the controlled class or its prices.
+    const held = JSON.stringify(
+      db.pharmacyMigrationException.createMany.mock.calls,
+      (_key, value) => (typeof value === 'bigint' ? value.toString() : value)
+    );
+    expect(held).not.toMatch(/MISSING_MRP|controlled|narcotic/i);
+  });
+  it('counts rows skipped because a person corrected the medicine to not controlled (DEV-925)', async () => {
+    const csv = [
+      'Name,classname,QTY',
+      'Synthetic Opioid 50mg,NARCOTICS,12',
+      'Synthetic Sedative 10mg,NARCOTICS,4',
+    ].join('\n');
+    db.$queryRaw.mockResolvedValue([
+      { id: 'med_sedative', correctedKey: null },
+      { id: 'med_opioid', correctedKey: 'synthetic opioid 50mg' },
+    ]);
+    const saved = await caller().stageBatch({
+      ...staging,
+      content: Buffer.from(csv).toString('base64'),
+      mapping: { product: 0, quantity: 2 },
+      quantityUnit: 'UNITS',
+    });
+    expect(saved).toMatchObject({
+      controlledFromClass: 2,
+      controlledMedicinesFlagged: 1,
+      controlledSkippedCorrected: 1,
+    });
+  });
+  it('still applies the NARCOTICS rule when a re-staged file replays its first batch', async () => {
+    const csv = ['Name,classname,QTY', 'Synthetic Opioid 50mg,NARCOTICS,12'].join('\n');
+    db.pharmacyMigrationBatch.findMany.mockResolvedValue([
+      { id: 'batch_prev', rowCount: 1, exceptionCount: 3 },
+    ]);
+    db.$queryRaw.mockResolvedValue([{ id: 'med_created_since' }]);
+    const saved = await caller().stageBatch({
+      ...staging,
+      content: Buffer.from(csv).toString('base64'),
+      mapping: { product: 0, quantity: 2 },
+      quantityUnit: 'UNITS',
+    });
+    expect(saved).toMatchObject({
+      batchId: 'batch_prev',
+      replayed: true,
+      controlledFromClass: 1,
+      controlledMedicinesFlagged: 1,
+    });
+    expect(db.$queryRaw).toHaveBeenCalledOnce();
+    expect(db.pharmacyMigrationBatch.create).not.toHaveBeenCalled();
+    expect(db.pharmacyMigrationRow.createMany).not.toHaveBeenCalled();
+  });
+  it('counts corrected rows when the same file is staged again and replays its batch (DEV-925)', async () => {
+    const csv = ['Name,classname,QTY', 'Synthetic Opioid 50mg,NARCOTICS,12'].join('\n');
+    db.pharmacyMigrationBatch.findMany.mockResolvedValue([
+      { id: 'batch_prev', rowCount: 1, exceptionCount: 0 },
+    ]);
+    db.$queryRaw.mockResolvedValue([{ id: 'med_opioid', correctedKey: 'synthetic opioid 50mg' }]);
+    const saved = await caller().stageBatch({
+      ...staging,
+      content: Buffer.from(csv).toString('base64'),
+      mapping: { product: 0, quantity: 2 },
+      quantityUnit: 'UNITS',
+    });
+    expect(saved).toMatchObject({
+      batchId: 'batch_prev',
+      replayed: true,
+      controlledFromClass: 1,
+      controlledMedicinesFlagged: 0,
+      controlledSkippedCorrected: 1,
+    });
+  });
+  it('flags nothing when no row is in the NARCOTICS class', async () => {
+    const saved = await caller().stageBatch(staging);
+    expect(saved).toMatchObject({ controlledFromClass: 0, controlledMedicinesFlagged: 0 });
+    expect(db.$queryRaw).not.toHaveBeenCalled();
+  });
   it.each(['PACKS', 'UNITS'] as const)(
     'persists the explicit %s choice on the batch',
     async (quantityUnit) => {
@@ -298,6 +407,116 @@ describe('production batch staging', () => {
     await expect(caller().stageBatch({ ...staging, mapping })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
     });
+    expect(db.pharmacyMigrationBatch.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-851 legacy catalogue staging', () => {
+  const legacy = readFileSync(
+    join(process.cwd(), 'src/lib/pharmacy/migration/fixtures/legacy-catalogue-export-synthetic.csv')
+  );
+  const catalogue = Buffer.from(syntheticLegacyCatalogue(18_933));
+  const legacyStaging = {
+    branchId: 'branch_a',
+    fileName: 'legacy-catalogue.csv',
+    content: gzipSync(catalogue).toString('base64'),
+    encoding: 'gzip' as const,
+    mapping: { product: 0, pack: 3, mrp: 4, cost: 5, quantity: 6 },
+    quantityUnit: 'PACKS' as const,
+  };
+
+  it('suggests the column mapping for the legacy export headers', async () => {
+    const read = await caller().stagingUpload({
+      branchId: 'branch_a',
+      fileName: 'legacy.csv',
+      content: legacy.toString('base64'),
+    });
+    expect(read).toEqual({
+      headers: [
+        'Name',
+        'aliasname',
+        'Company',
+        'PackUnits',
+        'saleprice',
+        'purprice',
+        'QTY',
+        'active',
+      ],
+      rowCount: 6,
+      mapping: { product: 0, pack: 3, quantity: 6, mrp: 4, cost: 5 },
+    });
+  });
+
+  it('stages all 18,933 products in one batch, in bounded inserts, with no stock', async () => {
+    const saved = await caller().stageBatch(legacyStaging);
+
+    expect(saved).toMatchObject({ batchId: 'batch_new', rowCount: 18_933, replayed: false });
+    const rowCalls = db.pharmacyMigrationRow.createMany.mock.calls as unknown as [
+      { data: { productName: string; rawPayload: Record<string, string> }[] },
+    ][];
+    expect(rowCalls).toHaveLength(19);
+    expect(rowCalls.every(([call]) => call.data.length <= 1_000)).toBe(true);
+    const staged = rowCalls.flatMap(([call]) => call.data);
+    expect(staged).toHaveLength(18_933);
+    expect(staged[18_932]).toMatchObject({
+      rawPayload: expect.objectContaining({ aliasname: 'LC-018933' }),
+    });
+    // The whole stage is one transaction with room for a catalogue-sized write.
+    expect(db.$transaction).toHaveBeenCalledOnce();
+    expect((db.$transaction.mock.calls[0] as unknown[])[1]).toMatchObject({ timeout: 180_000 });
+    expect(db.pharmacyMigrationBatch.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        profilerVersion: 'manual-columns/3;cost=5,mrp=4,pack=3,product=0,quantity=6',
+        quantityUnit: 'PACKS',
+      }),
+    });
+  });
+
+  it('replays an earlier batch for the same file, columns and quantity choice', async () => {
+    db.pharmacyMigrationSource.findFirst.mockResolvedValue({
+      id: 'source_prev',
+      kind: 'EXCEL_CSV',
+      fileName: 'legacy-catalogue.csv',
+      byteSize: BigInt(catalogue.length),
+      contentHash: 'b'.repeat(64),
+    });
+    db.pharmacyMigrationBatch.findMany.mockResolvedValue([
+      { id: 'batch_prev', rowCount: 18_933, exceptionCount: 37_866 },
+    ]);
+
+    const saved = await caller().stageBatch(legacyStaging);
+
+    expect(saved).toMatchObject({
+      sourceId: 'source_prev',
+      batchId: 'batch_prev',
+      rowCount: 18_933,
+      replayed: true,
+    });
+    expect(db.$executeRaw).toHaveBeenCalledOnce();
+    expect(db.pharmacyMigrationBatch.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org_a',
+          sourceId: 'source_prev',
+          profilerVersion: 'manual-columns/3;cost=5,mrp=4,pack=3,product=0,quantity=6',
+          quantityUnit: 'PACKS',
+          status: 'PROFILED',
+        },
+      })
+    );
+    expect(db.pharmacyMigrationSource.create).not.toHaveBeenCalled();
+    expect(db.pharmacyMigrationBatch.create).not.toHaveBeenCalled();
+    expect(db.pharmacyMigrationRow.createMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses a compressed upload that expands past the file limit before any writes', async () => {
+    await expect(
+      caller().stageBatch({
+        ...legacyStaging,
+        content: gzipSync(Buffer.alloc(9 * 1024 * 1024, 0x61)).toString('base64'),
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.$transaction).not.toHaveBeenCalled();
     expect(db.pharmacyMigrationBatch.create).not.toHaveBeenCalled();
   });
 });

@@ -4,6 +4,8 @@ import { tenderTotalsSchema } from './manual-payments';
 import { buildReceiptPreview } from '@/lib/receipts/preview';
 
 import {
+  cashMemoManufacturer,
+  counterReceiptCashMemo,
   COUNTER_RECEIPT_STRINGS,
   formatMinor,
   formatReceiptExpiry,
@@ -11,6 +13,7 @@ import {
   localizeReceiptNumber,
   receiptTitle,
   receiptCashReceived,
+  receiptOfflineReferenceLine,
   receiptPromotionLabel,
   type CounterReceipt,
   type CounterReceiptLine,
@@ -19,13 +22,13 @@ import {
 
 const labels = {
   en: {
-    unavailable: 'Historical identity unavailable',
+    unavailable: 'Original item details unavailable',
     unknown: 'Unavailable',
     units: 'Tablets/units',
     payments: 'Payment details unavailable',
   },
   ur: {
-    unavailable: 'تاریخی شناخت دستیاب نہیں',
+    unavailable: 'اصل آئٹم کی تفصیل دستیاب نہیں',
     unknown: 'دستیاب نہیں',
     units: 'گولیاں/یونٹس',
     payments: 'ادائیگی کی تفصیل دستیاب نہیں',
@@ -114,9 +117,19 @@ export function counterLinePresentation(line: CounterReceiptLine, locale: Counte
       ? [line.medicineName, line.strength, line.presentation].filter(Boolean).join(' · ')
       : text.unavailable,
     allocations: (line.allocations ?? []).map((allocation) => {
-      const batch = issued ? allocation.batchNumber : null;
-      const expiry = issued ? allocation.expiresAt : null;
-      return `${strings.batch}: ${batch ?? text.unknown} · ${strings.expiry}: ${expiry ? formatReceiptExpiry(expiry, locale) : text.unknown} · ${text.units}: ${allocation.canonicalUnits}`;
+      // DEV-853: an issued line whose lot never recorded a batch or expiry says
+      // so in plain words; "Unavailable" is kept for unissued identity only.
+      const batch = !issued
+        ? `${strings.batch}: ${text.unknown}`
+        : allocation.batchNumber === null
+          ? strings.batchNotRecorded
+          : `${strings.batch}: ${allocation.batchNumber}`;
+      const expiry = !issued
+        ? `${strings.expiry}: ${text.unknown}`
+        : allocation.expiresAt === null
+          ? strings.expiryNotRecorded
+          : `${strings.expiry}: ${formatReceiptExpiry(allocation.expiresAt, locale)}`;
+      return `${batch} · ${expiry} · ${text.units}: ${allocation.canonicalUnits}`;
     }),
   };
 }
@@ -136,9 +149,14 @@ export function buildCounterReceiptPreview(
   if (!amounts.every(Number.isSafeInteger)) throw new Error('Receipt amounts are invalid.');
   const strings = COUNTER_RECEIPT_STRINGS[locale];
   const cashReceived = receiptCashReceived(receipt.tenders);
-  const ntn = receipt.taxIdentity?.ntn?.trim();
-  const strn = receipt.taxIdentity?.strn?.trim();
-  const identity = receipt.taxIdentity;
+  // #708: a cash memo reprints every identity fact frozen at issuance; other receipts
+  // (and older snapshots without the frozen identity) keep the profile read for the sale.
+  const identity = receipt.cashMemoIdentity ?? receipt.taxIdentity;
+  const ntn = identity?.ntn?.trim();
+  const strn = identity?.strn?.trim();
+  // #708: Sindh branches print the r.18 cash memo; every other branch is unchanged.
+  const memo = counterReceiptCashMemo(receipt, identity, locale);
+  const offlineReference = receiptOfflineReferenceLine(receipt, locale);
   return buildReceiptPreview(
     { ...DEFAULT_RECEIPT_LAYOUT, paperWidth, footerText: reprint ? strings.reprint : '' },
     {
@@ -147,14 +165,17 @@ export function buildCounterReceiptPreview(
         receipt.receiptNumber === null
           ? receiptTitle(receipt, locale)
           : String(receipt.receiptNumber),
-      invoiceLabel: strings.invoice,
-      issuedAt: `${strings.date}: ${formatReceiptIssuedAt(receipt.completedAt)}${receipt.counterLabel ? `\n${receipt.counterLabel}` : ''}${receipt.cashierName ? `\n${strings.cashier}: ${receipt.cashierName}` : ''}`,
+      invoiceLabel: memo ? memo.title : strings.invoice,
+      issuedAt: `${memo ? `${memo.licence.join('\n')}\n${memo.buyer}\n` : ''}${strings.date}: ${formatReceiptIssuedAt(receipt.completedAt)}${receipt.counterLabel ? `\n${receipt.counterLabel}` : ''}${offlineReference ? `\n${offlineReference}` : ''}${receipt.cashierName ? `\n${strings.cashier}: ${receipt.cashierName}` : ''}`,
       lines: receipt.lines.map((line) => {
         const presentation = counterLinePresentation(line, locale);
         const promotion = receiptPromotionLabel(line, locale);
         return [
           presentation.identity,
-          counterLinePricing(line, locale),
+          ...(memo ? [cashMemoManufacturer(line, locale)] : []),
+          memo
+            ? `${strings.quantity} × ${strings.unitPrice}: ${counterLinePricing(line, locale)}`
+            : counterLinePricing(line, locale),
           ...presentation.allocations,
           ...(promotion ? [promotion] : []),
           `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor, locale)}`,
@@ -165,9 +186,11 @@ export function buildCounterReceiptPreview(
       taxLines: [
         ...(identity?.address?.trim() ? [identity.address.trim()] : []),
         ...(identity?.phone?.trim() ? [`${strings.phone}: ${identity.phone.trim()}`] : []),
-        ...(identity?.licenceNumber?.trim()
-          ? [`${strings.licence}: ${identity.licenceNumber.trim()}`]
-          : []),
+        ...(memo
+          ? []
+          : identity?.licenceNumber?.trim()
+            ? [`${strings.licence}: ${identity.licenceNumber.trim()}`]
+            : []),
         ...(ntn ? [`NTN: ${ntn}`] : []),
         ...(strn ? [`STRN: ${strn}`] : []),
       ],
@@ -183,12 +206,16 @@ export function buildCounterReceiptPreview(
           : []),
         `${strings.change}: ${formatMinor(receipt.totals.changeMinor, locale)}`,
       ],
-      payments: receipt.tenders.length
-        ? receipt.tenders.map(
-            (tender) =>
-              `${strings.tenderName[tender.type] ?? tender.type}: ${formatMinor(tender.amountMinor, locale)}`
-          )
-        : [labels[locale].payments],
+      payments: [
+        ...(receipt.tenders.length
+          ? receipt.tenders.map(
+              (tender) =>
+                `${strings.tenderName[tender.type] ?? tender.type}: ${formatMinor(tender.amountMinor, locale)}`
+            )
+          : [labels[locale].payments]),
+        // The qualified person signs the printed memo by hand.
+        ...(memo ? [`\n${memo.signature}`] : []),
+      ],
     }
   );
 }

@@ -49,6 +49,28 @@ export const routeLabels: Record<string, string> = {
   '/pharmacy/sop': 'Procedures',
   // DEV-111: the slug is hyphenated; the breadcrumb uses the page heading.
   '/pharmacy/pharmacist-queue': 'Pharmacist queue',
+  // DEV-960: the owner's per-branch setting, named by its page heading.
+  '/pharmacy/settings/one-pharmacist-per-shift': 'One pharmacist per shift',
+  // DEV-44: the other pharmacy destinations, named as the pharmacy menu names them.
+  '/pharmacy/medicines': 'Medicine catalog',
+  '/pharmacy/counter': 'Counter',
+  '/pharmacy/counter/close': 'Day close',
+  '/pharmacy/inventory': 'Inventory',
+  '/pharmacy/purchasing': 'Purchasing',
+  '/pharmacy/finance': 'Finance',
+  '/pharmacy/reports': 'Reports & Insights',
+  '/pharmacy/cameras': 'Cameras',
+  '/pharmacy/khata': 'Khata',
+  '/pharmacy/loyalty': 'Loyalty points',
+  '/pharmacy/marketing': 'Marketing & growth',
+  '/pharmacy/prescriptions': 'Prescriptions',
+  '/pharmacy/substitution': 'Substitution',
+  '/pharmacy/controlled-register': 'Controlled register',
+  '/pharmacy/regulatory': 'Regulatory profile',
+  '/pharmacy/settings/branches': 'Branch assignments',
+  '/pharmacy/settings/pin': 'Your PIN',
+  '/pharmacy/settings/printers': 'Printer settings',
+  '/pharmacy/settings/counters': 'Counter computers',
 };
 
 const linkableDetailRoute = /^\/(projects|clients|notes|team|meetings)\/[^/]+$/;
@@ -79,6 +101,9 @@ export function TopbarBreadcrumbs() {
     return {
       label:
         routeLabels[href] ||
+        // DEV-44: `/pharmacy` is the Onboarding page only when it is the current
+        // page; above another pharmacy page it is the workspace, "Pharmacy".
+        (href === '/pharmacy' && index === segments.length - 1 ? 'Onboarding' : undefined) ||
         breadcrumbLabels[segment] ||
         segment.charAt(0).toUpperCase() + segment.slice(1),
       href,

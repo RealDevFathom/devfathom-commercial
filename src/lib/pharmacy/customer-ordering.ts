@@ -6,7 +6,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { blockReasonFor, planAllocation, PharmacyInventoryError } from './inventory';
 import { priceFromLot } from './medicine';
 import { deliveryTotals } from './customer-delivery';
-import { saleTotalMinor } from './settlement';
+import { requirePharmacyTodayOpenForTrading, saleTotalMinor } from './settlement';
 import { MAX_DELIVERY_DISTANCE_METERS } from './delivery-radius-profitability';
 import { addReservedSaleLine, createSale } from './sales';
 import type { LedgerScope } from './stock-ledger';
@@ -65,7 +65,7 @@ type ReservationCandidate = {
   batchState: 'ACTIVE' | 'RECALLED' | 'QUARANTINED';
   disposition:
     'AVAILABLE' | 'QUARANTINE' | 'DAMAGED' | 'DESTROYED' | 'IN_TRANSIT' | 'RETURN_TO_SUPPLIER';
-  expiresAt: Date;
+  expiresAt: Date | null;
   receivedAt: Date | null;
   packLevelId: string;
   availableUnits: number;
@@ -134,7 +134,8 @@ export async function listStorefrontCatalog(
         AND balance."disposition" = 'AVAILABLE'
         AND lot."receivedAt" IS NOT NULL
         AND batch."state" = 'ACTIVE'
-        AND batch."expiresAt" > CURRENT_TIMESTAMP
+        -- DEV-853: an unrecorded expiry is never treated as expired.
+        AND (batch."expiresAt" IS NULL OR batch."expiresAt" > CURRENT_TIMESTAMP)
     ), catalog AS (
       SELECT medicine."id" AS "medicineId", medicine."productName", medicine."brandName",
              presentation."id" AS "presentationId", presentation."presentation",
@@ -146,7 +147,7 @@ export async function listStorefrontCatalog(
              )::integer AS "totalAvailableUnits",
              ROW_NUMBER() OVER (
                PARTITION BY medicine."id", presentation."id", pack."id"
-               ORDER BY stock."expiresAt", stock."receivedAt" NULLS FIRST, stock."inventoryLotId"
+               ORDER BY stock."expiresAt" NULLS LAST, stock."receivedAt" NULLS FIRST, stock."inventoryLotId"
              ) AS price_rank
       FROM safe_stock stock
       JOIN "pharmacy_medicines" medicine
@@ -227,7 +228,7 @@ export async function reservationCandidates(
                    AND reservation."stockLocationId" = balance."stockLocationId"
                    AND reservation."status" = 'RESERVED'), 0))::integer AS "availableUnits"
     ${candidates}
-    ORDER BY batch."expiresAt", lot."receivedAt" NULLS FIRST,
+    ORDER BY batch."expiresAt" NULLS LAST, lot."receivedAt" NULLS FIRST,
              balance."inventoryLotId", balance."stockLocationId"
   `);
 }
@@ -840,6 +841,9 @@ export async function startCustomerOrderCheckout(
   )
     throw new PharmacyCustomerOrderError('INVALID_STATE');
   if (order.counterSaleId) return { saleId: order.counterSaleId, replayed: true };
+  // DEV-631: no counter bill is opened, and no hold is released into one, while today's
+  // business day is closed for trading. Takes the day lock before any stock lock.
+  await requirePharmacyTodayOpenForTrading(db, scope);
   const reservations = await revalidateOrderReservations(db, scope, order.id);
   if (order.reservationExpiresAt.getTime() <= Date.now()) {
     throw new PharmacyCustomerOrderError('RESERVATION_UNAVAILABLE');

@@ -45,6 +45,8 @@ function makeDb() {
   const db = {
     state,
     $transaction: async (run: (tx: unknown) => unknown) => run(db),
+    // The staging advisory lock; one in-memory tenant has nothing to serialize.
+    $executeRaw: async () => 0,
     user: { findUnique: async () => ({ organizationRole: null, permissionOverrides: [] }) },
     pharmacyBranch: {
       findFirst: async () => ({ id: 'branch_a' }),
@@ -70,6 +72,8 @@ function makeDb() {
       findMany: async () => state.batches.map((batch) => ({ ...batch, source: state.sources[0] })),
       findFirst: async () => ({ ...state.batches[0], source: state.sources[0] }),
     },
+    // DEV-912: no catalogue medicine has been created from these rows yet.
+    pharmacyStagedMedicineLink: { findFirst: async () => null },
     pharmacyMigrationRow: {
       createMany: async ({ data }: { data: Record<string, unknown>[] }) => {
         data.forEach((row, index) => state.rows.push({ id: `row_${index + 1}`, ...row }));
@@ -159,6 +163,11 @@ describe('staged page → server action → router → review (connected)', () =
     expect(db.state.rows[0]).toMatchObject({ quantityCanonical: BigInt(29) });
     expect(screen.getAllByText('29 units').length).toBeGreaterThan(0);
     expect(screen.queryByText(/packs ×/)).toBeNull();
+  });
+  it('shows plain batch status words and no raw status codes', async () => {
+    await stageAndReopen('UNITS');
+    expect(screen.queryByText(/^(PROFILING|PROFILED|FAILED)$/)).toBeNull();
+    expect(screen.queryByText(/staged as raw count\)$/, { selector: 'td' })).toBeNull();
   });
   it('shows an unresolved pack count from a nonstandard quantity header', async () => {
     const csv = 'Product,Pack,Exported count\nExample Tablet,,29';

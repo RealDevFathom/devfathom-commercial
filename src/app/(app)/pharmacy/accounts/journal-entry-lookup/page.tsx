@@ -1,3 +1,4 @@
+import { ReportDetails } from '@/components/pharmacy/report-details';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { TRPCError } from '@trpc/server';
@@ -11,35 +12,61 @@ import {
   type JournalEntryLookupResult,
 } from '@/lib/pharmacy/accounts/journal-entry-lookup';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
+import { BranchSelect, loadBranchOptions } from '../branch-picker';
 import { createTRPCContext } from '@/server/trpc';
+import {
+  formatWorkspaceDateTime,
+  workspaceInstantFromInput,
+  workspaceZoneLabel,
+} from '@/lib/timezone';
 
 export const metadata: Metadata = { title: 'Journal entry lookup · Pharmacy accounts' };
 type Query = Record<string, string | string[] | undefined>;
 type ViewState =
-  | JournalEntryLookupResult
-  | { status: 'INITIAL' | 'INVALID' | 'DENIED' | 'FAILURE' };
+  JournalEntryLookupResult | { status: 'INITIAL' | 'INVALID' | 'DENIED' | 'FAILURE' };
 const scalar = (value: string | string[] | undefined) => (typeof value === 'string' ? value : null);
+const MAX_WINDOW_MS = 92 * 86_400_000;
+// The owner picks a calendar date and a clock time with the browser's own pickers; the page reads
+// them on the organisation's clock and sends the server the same ISO instants it always took.
+const dateField = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine((value) => {
+    const ms = Date.parse(`${value}T00:00:00.000Z`);
+    return Number.isFinite(ms) && new Date(ms).toISOString().slice(0, 10) === value;
+  });
+const timeField = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/);
+const idField = z.string().trim().min(1).max(128);
 const pageInput = z
   .object({
-    branchId: z.string().trim().min(1).max(128),
-    entryId: z.string().trim().min(1).max(128),
-    from: z.iso.datetime({ offset: true }),
-    to: z.iso.datetime({ offset: true }),
+    branchId: idField,
+    entryId: idField,
+    fromDate: dateField,
+    fromTime: timeField,
+    toDate: dateField,
+    toTime: timeField,
   })
   .strict();
-type FieldName = 'branchId' | 'entryId' | 'from' | 'to';
-const fields: { name: FieldName; label: string }[] = [
-  { name: 'branchId', label: 'Branch ID' },
-  { name: 'entryId', label: 'Journal entry ID' },
-  { name: 'from', label: 'From (RFC3339 UTC)' },
-  { name: 'to', label: 'To, exclusive (RFC3339 UTC)' },
+type FieldName = keyof z.infer<typeof pageInput>;
+const fields: { name: FieldName; label: string; type: 'branch' | 'text' | 'date' | 'time' }[] = [
+  { name: 'branchId', label: 'Branch', type: 'branch' },
+  { name: 'entryId', label: 'Journal entry ID', type: 'text' },
+  { name: 'fromDate', label: 'From date', type: 'date' },
+  { name: 'fromTime', label: 'From time', type: 'time' },
+  { name: 'toDate', label: 'Until date', type: 'date' },
+  { name: 'toTime', label: 'Until time (not included)', type: 'time' },
 ];
-const idField = z.string().trim().min(1).max(128);
-const instantField = z.iso.datetime({ offset: true });
+const fieldSchema: Record<FieldName, z.ZodType> = pageInput.shape;
+const fieldMessage: Record<'branch' | 'text' | 'date' | 'time', string> = {
+  branch: 'Choose a branch from the list.',
+  text: 'Use at most 128 characters.',
+  date: 'Choose a date.',
+  time: 'Choose a time.',
+};
 
 function fieldErrors(query: Query): Partial<Record<FieldName, string>> {
   const errors: Partial<Record<FieldName, string>> = {};
-  for (const { name } of fields) {
+  for (const { name, type } of fields) {
     const raw = query[name];
     if (Array.isArray(raw)) {
       errors[name] = 'Provide this field only once.';
@@ -49,19 +76,14 @@ function fieldErrors(query: Query): Partial<Record<FieldName, string>> {
       errors[name] = 'This field is required.';
       continue;
     }
-    if (name === 'branchId' || name === 'entryId') {
-      if (!idField.safeParse(raw).success) errors[name] = 'Use at most 128 characters.';
-    } else if (!instantField.safeParse(raw).success) {
-      errors[name] = 'Use an RFC3339 instant with an offset, for example 2026-08-01T00:00:00Z.';
-    }
-  }
-  if (!errors.from && !errors.to) {
-    const duration = Date.parse(query.to as string) - Date.parse(query.from as string);
-    if (!(duration > 0 && duration <= 92 * 86_400_000)) {
-      errors.to = 'Must be after From and no more than 92 days later.';
-    }
+    if (!fieldSchema[name].safeParse(raw).success) errors[name] = fieldMessage[type];
   }
   return errors;
+}
+
+/** The searched window in plain words on the organisation's clock. */
+function windowWords(from: string, to: string, timeZone: string | null | undefined) {
+  return `From ${formatWorkspaceDateTime(from, timeZone)} up to, but not including, ${formatWorkspaceDateTime(to, timeZone)}`;
 }
 
 export default async function JournalEntryLookupPage({
@@ -70,34 +92,45 @@ export default async function JournalEntryLookupPage({
   searchParams: Promise<Query>;
 }) {
   const query = await searchParams;
-  const values = {
-    branchId: scalar(query.branchId),
-    entryId: scalar(query.entryId),
-    from: scalar(query.from),
-    to: scalar(query.to),
-  };
+  const values = Object.fromEntries(
+    fields.map(({ name }) => [name, scalar(query[name])])
+  ) as Record<FieldName, string | null>;
   const supplied = Object.values(query).some((value) => value !== undefined);
   const parsed = pageInput.safeParse(query);
-  const displayValues = parsed.success ? parsed.data : values;
-  const duration = parsed.success ? Date.parse(parsed.data.to) - Date.parse(parsed.data.from) : NaN;
-  const valid = parsed.success && duration > 0 && duration <= 92 * 86_400_000;
+  const displayValues: Record<FieldName, string | null> = parsed.success ? parsed.data : values;
   let state: ViewState = supplied ? { status: 'INVALID' } : { status: 'INITIAL' };
-  const errors = supplied && !valid ? fieldErrors(query) : {};
-  if (valid && parsed.success) {
+  let errors: Partial<Record<FieldName, string>> =
+    supplied && !parsed.success ? fieldErrors(query) : {};
+  // Known once the tenant actor resolves; until then the page names it in words.
+  let timeZone: string | null | undefined;
+  let window: { from: string; to: string } | null = null;
+  if (parsed.success) {
     try {
       const actor = await resolveTenantActor();
       if (!actor) throw new TRPCError({ code: 'UNAUTHORIZED' });
-      const ctx = await createTRPCContext({
-        session: actor.session,
-        organization: actor.organization,
-        support: actor.support,
-      });
-      state = await journalEntryLookupRouter.createCaller(ctx).lookup({
-        branchId: parsed.data.branchId,
-        entryId: parsed.data.entryId,
-        from: parsed.data.from,
-        to: parsed.data.to,
-      });
+      timeZone = actor.organization?.timezone ?? 'UTC';
+      const from = workspaceInstantFromInput(
+        `${parsed.data.fromDate}T${parsed.data.fromTime}`,
+        timeZone
+      );
+      const to = workspaceInstantFromInput(`${parsed.data.toDate}T${parsed.data.toTime}`, timeZone);
+      const duration = Date.parse(to) - Date.parse(from);
+      if (!(duration > 0 && duration <= MAX_WINDOW_MS)) {
+        errors = { toDate: 'Must be after the From date and time and no more than 92 days later.' };
+      } else {
+        window = { from, to };
+        const ctx = await createTRPCContext({
+          session: actor.session,
+          organization: actor.organization,
+          support: actor.support,
+        });
+        state = await journalEntryLookupRouter.createCaller(ctx).lookup({
+          branchId: parsed.data.branchId,
+          entryId: parsed.data.entryId,
+          from,
+          to,
+        });
+      }
     } catch (error) {
       state =
         error instanceof TRPCError && (error.code === 'FORBIDDEN' || error.code === 'UNAUTHORIZED')
@@ -105,14 +138,20 @@ export default async function JournalEntryLookupPage({
           : { status: 'FAILURE' };
     }
   }
+  // The picker lists the branches an owner may act at; the router still checks the chosen one.
+  const branches = await loadBranchOptions();
+  const zoneWords = timeZone
+    ? `Dates and times are on your organisation's clock (${workspaceZoneLabel(timeZone)}).`
+    : "Dates and times are on your organisation's clock.";
   const message: Partial<Record<ViewState['status'], string>> = {
-    INITIAL: 'Enter an exact posted journal ID, active branch, and UTC window.',
+    INITIAL:
+      'Choose the branch, then enter the journal entry ID and the dates and times to search.',
     INVALID:
-      'Provide each field once. Use nonempty IDs and RFC3339 instants in a window of no more than 92 days.',
+      'Enter each field once, with an ID and a window that ends after it starts and is no more than 92 days long.',
     DENIED: 'You do not have access to this financial report scope.',
     FAILURE: 'The journal lookup is unavailable. Retry; no stale details are shown.',
     NOT_FOUND: 'No journal entry was found in this exact branch and window.',
-    INVALID_SOURCE: 'The posted source failed validation. No partial details or totals are shown.',
+    INVALID_SOURCE: 'The records could not be checked, so no details or totals are shown.',
     TRUNCATED: 'This branch slice exceeds 200 lines. No partial details or totals are shown.',
   };
   return (
@@ -120,7 +159,7 @@ export default async function JournalEntryLookupPage({
       <PageHeader
         eyebrow="Pharmacy accounts"
         heading="Journal entry lookup"
-        description="Inspect one posted journal entry within an authorized branch and bounded UTC window."
+        description="Look up one journal entry for a branch and a date range."
       />
       <Link
         className="text-sm underline focus-visible:outline-2 focus-visible:outline-ring"
@@ -134,21 +173,36 @@ export default async function JournalEntryLookupPage({
           action="/pharmacy/accounts/journal-entry-lookup"
           className="grid gap-4 md:grid-cols-2"
         >
-          {fields.map(({ name, label }) => {
+          <p className="text-sm text-text-muted md:col-span-2">{zoneWords}</p>
+          {fields.map(({ name, label, type }) => {
             const error = errors[name];
             const errorId = `journal-lookup-${name}-error`;
             return (
               <div key={name} className="text-sm text-text-body">
                 <label htmlFor={`journal-lookup-${name}`}>{label}</label>
-                <Input
-                  id={`journal-lookup-${name}`}
-                  name={name}
-                  className="mt-1 min-h-11"
-                  defaultValue={displayValues[name] ?? ''}
-                  aria-invalid={error ? true : undefined}
-                  aria-describedby={error ? errorId : undefined}
-                  required
-                />
+                {type === 'branch' ? (
+                  <div className="mt-1">
+                    <BranchSelect
+                      id={`journal-lookup-${name}`}
+                      name={name}
+                      branchId={displayValues[name]}
+                      branches={branches}
+                      invalid={Boolean(error)}
+                      describedBy={error ? errorId : undefined}
+                    />
+                  </div>
+                ) : (
+                  <Input
+                    id={`journal-lookup-${name}`}
+                    name={name}
+                    type={type}
+                    className="mt-1 min-h-11"
+                    defaultValue={displayValues[name] ?? ''}
+                    aria-invalid={error ? true : undefined}
+                    aria-describedby={error ? errorId : undefined}
+                    required
+                  />
+                )}
                 {error ? (
                   <p id={errorId} className="mt-1 text-sm text-destructive">
                     {error}
@@ -175,8 +229,8 @@ export default async function JournalEntryLookupPage({
         <EntryDetail
           result={state}
           branchId={displayValues.branchId!}
-          from={displayValues.from!}
-          to={displayValues.to!}
+          windowLabel={window ? windowWords(window.from, window.to, timeZone) : ''}
+          timeZone={timeZone}
         />
       )}
     </div>
@@ -186,21 +240,23 @@ export default async function JournalEntryLookupPage({
 function EntryDetail({
   result,
   branchId,
-  from,
-  to,
+  windowLabel,
+  timeZone,
 }: {
   result: Extract<JournalEntryLookupResult, { status: 'FOUND' }>;
   branchId: string;
-  from: string;
-  to: string;
+  windowLabel: string;
+  timeZone: string | null | undefined;
 }) {
   const { entry } = result;
   return (
     <SectionCard title="Authorized branch slice" titleLevel={2}>
-      <p className="mb-4 text-sm text-text-muted">
-        This is only the selected branch slice, not a complete journal or global-balance assertion.
-        A nonzero difference can be legitimate for an interbranch entry.
-      </p>
+      <ReportDetails>
+        <p className="mb-4 text-sm text-text-muted">
+          This is only the selected branch slice, not a complete journal or global-balance
+          assertion. A nonzero difference can be legitimate for an interbranch entry.
+        </p>
+      </ReportDetails>
       <dl className="mb-5 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
         <div>
           <dt className="font-mono text-xs uppercase text-text-muted">Entry</dt>
@@ -218,13 +274,15 @@ function EntryDetail({
         </div>
         <div>
           <dt className="font-mono text-xs uppercase text-text-muted">Occurred</dt>
-          <dd>{entry.occurredAt}</dd>
+          <dd>{formatWorkspaceDateTime(entry.occurredAt, timeZone)}</dd>
         </div>
         <div>
-          <dt className="font-mono text-xs uppercase text-text-muted">Branch / window</dt>
-          <dd className="break-all">
-            {branchId} · [{from}, {to})
-          </dd>
+          <dt className="font-mono text-xs uppercase text-text-muted">Branch</dt>
+          <dd className="break-all">{branchId}</dd>
+        </div>
+        <div>
+          <dt className="font-mono text-xs uppercase text-text-muted">Searched window</dt>
+          <dd>{windowLabel}</dd>
         </div>
         <div>
           <dt className="font-mono text-xs uppercase text-text-muted">Currency</dt>

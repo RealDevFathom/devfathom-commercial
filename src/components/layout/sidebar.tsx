@@ -52,7 +52,9 @@ import {
   DoorOpen,
   MessageSquareText,
   Printer,
+  MonitorSmartphone,
   X,
+  KeyRound,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -105,6 +107,11 @@ interface NavItem {
    * would be a dead end (#979). Other products are unchanged.
    */
   memberModule?: string;
+  /**
+   * DEV-913: the label a pharmacy workspace shows for this entry, where the
+   * shared name would not say what the page is for at the counter.
+   */
+  pharmacyLabel?: string;
   /**
    * DEV-497: highlight this entry only on its own route, never on the routes
    * nested under it (the `/pharmacy` front door is a prefix of every page).
@@ -328,14 +335,21 @@ export const navigation: NavItem[] = [
     group: 'Pharmacy',
     module: 'pharmacy-core',
     exact: true,
-    // The owner's data export is offered from the onboarding page.
-    activePrefixes: ['/pharmacy/settings/data-export'],
+    // The owner's data export, pharmacist-check and one-pharmacist-per-shift settings are offered
+    // from the onboarding page.
+    activePrefixes: [
+      '/pharmacy/settings/data-export',
+      '/pharmacy/settings/pharmacist-check',
+      '/pharmacy/settings/one-pharmacist-per-shift',
+    ],
   },
   {
     label: 'Medicine catalog',
     href: '/pharmacy/medicines',
     icon: Pill,
     adminOnly: true,
+    // DEV-19: a pharmacist reviewer opens the catalogue approval queue there.
+    memberCapabilities: ['pharmacy:catalogue-review'],
     group: 'Pharmacy',
     module: 'pharmacy-core',
   },
@@ -493,10 +507,26 @@ export const navigation: NavItem[] = [
     group: 'Pharmacy',
     module: 'pharmacy-core',
   },
+  // DEV-931: every pharmacy member creates or changes their own approval PIN here.
+  {
+    label: 'Your PIN',
+    href: '/pharmacy/settings/pin',
+    icon: KeyRound,
+    group: 'Pharmacy',
+    module: 'pharmacy-core',
+  },
   {
     label: 'Printer settings',
     href: '/pharmacy/settings/printers',
     icon: Printer,
+    adminOnly: true,
+    group: 'Pharmacy',
+    module: 'pharmacy-counter',
+  },
+  {
+    label: 'Counter computers',
+    href: '/pharmacy/settings/counters',
+    icon: MonitorSmartphone,
     adminOnly: true,
     group: 'Pharmacy',
     module: 'pharmacy-counter',
@@ -591,6 +621,8 @@ export const navigation: NavItem[] = [
     icon: ScrollText,
     adminOnly: true,
     group: 'Firm',
+    // DEV-913: part of every pharmacy workspace, with its own entry in the bar.
+    pharmacyLabel: 'Audit log: who did what',
   },
   {
     label: 'Organization',
@@ -644,7 +676,20 @@ export interface NavSection {
  * an entry the member cannot open is already filtered out, so a menu holds only
  * pages the member can use, and a menu left with none is not shown.
  */
-const PHARMACY_MENUS: readonly (Omit<NavSection, 'items'> & { hrefs: readonly string[] })[] = [
+type PharmacyMenu = Omit<NavSection, 'items'> & { hrefs: readonly string[] };
+
+/**
+ * DEV-930: while the pharmacy is still onboarding, setup is the owner's own entry
+ * in the bar, one click away. Once the pharmacy is active it moves back into
+ * Settings, so an established pharmacy's bar does not grow (DEV-497 / DEV-44).
+ */
+const PHARMACY_ONBOARDING_MENU: PharmacyMenu = {
+  label: 'Onboarding',
+  icon: ListChecks,
+  hrefs: ['/pharmacy'],
+};
+
+const PHARMACY_MENUS: readonly PharmacyMenu[] = [
   {
     label: 'Sell',
     icon: Monitor,
@@ -672,8 +717,10 @@ const PHARMACY_MENUS: readonly (Omit<NavSection, 'items'> & { hrefs: readonly st
   {
     label: 'Reports',
     icon: BarChart3,
-    hrefs: ['/pharmacy/reports', '/pharmacy/cameras', '/team/stats', '/audit-logs'],
+    hrefs: ['/pharmacy/reports', '/pharmacy/cameras', '/team/stats'],
   },
+  // DEV-913: one destination, so the bar shows it as its own entry.
+  { label: 'Audit log: who did what', icon: ScrollText, hrefs: ['/audit-logs'] },
   { label: 'Accounts', icon: Landmark, hrefs: ['/pharmacy/finance'] },
   {
     label: 'Settings',
@@ -683,6 +730,8 @@ const PHARMACY_MENUS: readonly (Omit<NavSection, 'items'> & { hrefs: readonly st
       '/pharmacy/regulatory',
       '/pharmacy/settings/branches',
       '/pharmacy/settings/printers',
+      '/pharmacy/settings/counters',
+      '/pharmacy/settings/pin',
       '/organization',
       '/settings',
     ],
@@ -694,7 +743,10 @@ const PHARMACY_MENUS: readonly (Omit<NavSection, 'items'> & { hrefs: readonly st
  * the member can open under More. A section with one entry is shown as that
  * entry, so nobody opens a menu to reach a single page.
  */
-export function groupPharmacyNavigation(items: readonly VisibleNavItem[]): NavSection[] {
+export function groupPharmacyNavigation(
+  items: readonly VisibleNavItem[],
+  { onboarding = false }: { onboarding?: boolean } = {}
+): NavSection[] {
   const byHref = new Map(items.map((item) => [item.href, item]));
   const placed = new Set<string>();
   const take = (href: string) => {
@@ -707,7 +759,10 @@ export function groupPharmacyNavigation(items: readonly VisibleNavItem[]): NavSe
   const dashboard = take('/dashboard');
   if (dashboard.length)
     sections.push({ label: 'Dashboard', icon: LayoutDashboard, items: dashboard });
-  for (const { hrefs, ...menu } of PHARMACY_MENUS) {
+  // `take` places each entry once, so the onboarding entry leaves Settings without it.
+  for (const { hrefs, ...menu } of onboarding
+    ? [PHARMACY_ONBOARDING_MENU, ...PHARMACY_MENUS]
+    : PHARMACY_MENUS) {
     const menuItems = hrefs.flatMap(take);
     if (menuItems.length) sections.push({ ...menu, items: menuItems });
   }
@@ -744,7 +799,11 @@ export function visibleNavigation(
       const moduleVertical = moduleKey ? verticalForModuleKey(moduleKey) : null;
       if (moduleVertical && entitlements.vertical && moduleVertical !== entitlements.vertical)
         return false;
-      if (moduleKey && !isModuleGranted(moduleKey, entitlements.enabledModules)) return false;
+      if (
+        moduleKey &&
+        !isModuleGranted(moduleKey, entitlements.enabledModules, entitlements.vertical)
+      )
+        return false;
       if (item.group === 'Hospitality')
         return (item.hotelCapabilities ?? []).some((capability) =>
           hotelCapabilities.includes(capability)
@@ -766,6 +825,11 @@ export function visibleNavigation(
         return isModuleGranted(item.memberModule, entitlements.enabledModules);
       return true;
     })
+    .map((item) =>
+      entitlements.vertical === 'PHARMACY' && item.pharmacyLabel
+        ? { ...item, label: item.pharmacyLabel }
+        : item
+    )
     .sort((left, right) => GROUP_ORDER.indexOf(left.group) - GROUP_ORDER.indexOf(right.group));
 }
 
@@ -863,6 +927,8 @@ interface SidebarProps {
   collapsible?: boolean;
   /** Renders a close control in the header; used by the mobile drawer. */
   onClose?: () => void;
+  /** DEV-930: the pharmacy is still onboarding, so Onboarding is its own entry. */
+  pharmacyOnboarding?: boolean;
 }
 
 export function Sidebar({
@@ -872,6 +938,7 @@ export function Sidebar({
   onCollapsedChange,
   collapsible = true,
   onClose,
+  pharmacyOnboarding = false,
 }: SidebarProps = {}) {
   const [localCollapsed, setLocalCollapsed] = useState(false);
   const collapsed = controlledCollapsed ?? localCollapsed;
@@ -881,7 +948,7 @@ export function Sidebar({
   const numbered = icons !== 'architectural' && !pharmacy;
   // DEV-497: a pharmacy drawer uses the same task menus as the desktop bar.
   const sections = pharmacy
-    ? groupPharmacyNavigation(filteredNav).map((section) => ({
+    ? groupPharmacyNavigation(filteredNav, { onboarding: pharmacyOnboarding }).map((section) => ({
         key: section.label,
         heading:
           section.items.length > 1 || section.items[0]?.label !== section.label
@@ -1106,9 +1173,13 @@ export function Sidebar({
   );
 }
 
-export function TopNavigation() {
+export function TopNavigation({ pharmacyOnboarding = false }: { pharmacyOnboarding?: boolean }) {
   const { vertical } = useEntitlements();
-  return vertical === 'PHARMACY' ? <GroupedTopNavigation /> : <FlatTopNavigation />;
+  return vertical === 'PHARMACY' ? (
+    <GroupedTopNavigation onboarding={pharmacyOnboarding} />
+  ) : (
+    <FlatTopNavigation />
+  );
 }
 
 const topNavigationPill =
@@ -1131,10 +1202,10 @@ function ActivePill() {
  * is ever cut off. The menu holding the current page wears the active pill and
  * the page itself is the one link marked `aria-current`.
  */
-function GroupedTopNavigation() {
+function GroupedTopNavigation({ onboarding }: { onboarding: boolean }) {
   const pathname = usePathname();
   const { bestMatch, filteredNav } = useVisibleNavigation();
-  const sections = groupPharmacyNavigation(filteredNav);
+  const sections = groupPharmacyNavigation(filteredNav, { onboarding });
   const navRef = useRef<HTMLElement>(null);
   const baseId = useId();
   // Remembered with the route it was opened on, so navigating closes it.

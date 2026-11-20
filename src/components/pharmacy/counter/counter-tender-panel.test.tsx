@@ -743,6 +743,9 @@ describe('family Khata tender', () => {
       target: { value: 'Paying on Friday' },
     });
     expect(screen.getByLabelText('Approver PIN')).toBeDisabled();
+    expect(screen.getByLabelText('Approver PIN')).toHaveAccessibleDescription(
+      /authenticator for approvals, enter its 6-digit code/
+    );
     fireEvent.change(screen.getByLabelText('Approving manager or owner'), {
       target: { value: 'staff-manager' },
     });
@@ -788,6 +791,11 @@ describe('family Khata tender', () => {
     fireEvent.click(override);
     fireEvent.click(override);
     await screen.findByText(/No manager or owner has an active staff PIN/);
+    // DEV-931: the notice says where a manager or owner creates their own PIN.
+    expect(screen.getByRole('link', { name: 'Set up your PIN' })).toHaveAttribute(
+      'href',
+      '/pharmacy/settings/pin'
+    );
     expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
   });
   it('allows an exact-limit charge and requests only the selected statement', async () => {
@@ -990,6 +998,84 @@ describe('DEV-716 inline Khata signup', () => {
   });
 });
 
+describe('#708 Sindh cash memo buyer name', () => {
+  it('validates the buyer before entering payment recovery and allows correction', async () => {
+    const { props } = setup({ cashMemo: true });
+    const buyer = screen.getByLabelText('Buyer name (cash memo, optional)');
+    fireEvent.change(buyer, { target: { value: '<invalid>' } });
+    expect(buyer).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    expect(props.onTender).not.toHaveBeenCalled();
+    fireEvent.change(buyer, { target: { value: 'Synthetic Buyer' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await waitFor(() =>
+      expect(props.onTender).toHaveBeenCalledWith(
+        { type: 'CASH', amountMinor: 25000, buyerName: 'Synthetic Buyer' },
+        { amount: '', cashReceived: '' }
+      )
+    );
+  });
+
+  it('offers no buyer field outside Sindh and sends no buyer name', async () => {
+    const { props } = setup({
+      khataSignupPatient: { patientId: 'patient-a', displayName: 'Bilal' },
+    });
+    expect(screen.queryByLabelText('Buyer name (cash memo, optional)')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await waitFor(() =>
+      expect(props.onTender).toHaveBeenCalledWith(
+        { type: 'CASH', amountMinor: 25000 },
+        { amount: '', cashReceived: '' }
+      )
+    );
+  });
+
+  it('fills the buyer from the selected patient and sends the typed name at tender', async () => {
+    const { props } = setup({
+      cashMemo: true,
+      khataSignupPatient: { patientId: 'patient-a', displayName: 'Bilal Ahmed' },
+    });
+    const buyer = screen.getByLabelText('Buyer name (cash memo, optional)');
+    expect(buyer).toHaveValue('Bilal Ahmed');
+    fireEvent.change(buyer, { target: { value: '  Ayesha Khan ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await waitFor(() =>
+      expect(props.onTender).toHaveBeenCalledWith(
+        { type: 'CASH', amountMinor: 25000, buyerName: 'Ayesha Khan' },
+        { amount: '', cashReceived: '' }
+      )
+    );
+  });
+
+  it('preserves the full 200-character name accepted by patient creation', async () => {
+    const longName = `${'A'.repeat(99)}BC${'D'.repeat(99)}`;
+    const { props } = setup({
+      cashMemo: true,
+      khataSignupPatient: { patientId: 'patient-a', displayName: longName },
+    });
+    expect(screen.getByLabelText('Buyer name (cash memo, optional)')).toHaveValue(longName);
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await waitFor(() =>
+      expect(props.onTender).toHaveBeenCalledWith(
+        { type: 'CASH', amountMinor: 25000, buyerName: longName },
+        { amount: '', cashReceived: '' }
+      )
+    );
+  });
+
+  it('lets a walk-in pay without a buyer name', async () => {
+    const { props } = setup({ cashMemo: true });
+    expect(screen.getByLabelText('Buyer name (cash memo, optional)')).toHaveValue('');
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await waitFor(() =>
+      expect(props.onTender).toHaveBeenCalledWith(
+        { type: 'CASH', amountMinor: 25000 },
+        { amount: '', cashReceived: '' }
+      )
+    );
+  });
+});
+
 describe('#722 split tender rows', () => {
   it('takes Rs 600 cash, then offers the Rs 400 remainder to a Khata account within its limit', async () => {
     const loadKhataAccounts = vi
@@ -998,9 +1084,9 @@ describe('#722 split tender rows', () => {
         { id: 'family-a', displayName: 'Family A', balanceMinor: 0, creditLimitMinor: 40000 },
       ]);
     const { props, rerender } = setup({ balanceMinor: 100000, loadKhataAccounts });
-    expect(screen.queryByLabelText('Recorded tenders')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Recorded payments')).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '600' } });
-    expect(screen.getByText(/Remaining after this tender/)).toHaveTextContent('400.00');
+    expect(screen.getByText(/Remaining after this payment/)).toHaveTextContent('400.00');
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
     await screen.findByText('Payment recorded.');
     expect(props.onTender).toHaveBeenNthCalledWith(
@@ -1011,16 +1097,16 @@ describe('#722 split tender rows', () => {
 
     const cash = { tenderId: 'cash-a', type: 'CASH', amountMinor: 60000 };
     rerender(<CounterTenderPanel {...props} balanceMinor={40000} tenders={[cash]} />);
-    const rows = within(screen.getByRole('list', { name: 'Recorded tenders' }));
+    const rows = within(screen.getByRole('list', { name: 'Recorded payments' }));
     expect(rows.getByRole('listitem')).toHaveTextContent(/1\. Cash · Recorded\s*600\.00/);
     chooseTender('KHATA');
     await screen.findByText(/Ledger balance/);
     // The limit is checked against this row's remainder, not the whole bill.
     expect(screen.queryByText(/exceeds the family credit limit/)).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '300' } });
-    expect(screen.getByText(/Tender 2\. Remaining after this/)).toHaveTextContent('100.00');
+    expect(screen.getByText(/Payment 2\. Remaining after this/)).toHaveTextContent('100.00');
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '' } });
-    expect(screen.queryByText(/Remaining after this tender/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Remaining after this payment/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
     await waitFor(() => expect(props.onTender).toHaveBeenCalledTimes(2));
     expect(props.onTender).toHaveBeenLastCalledWith(
@@ -1037,7 +1123,7 @@ describe('#722 split tender rows', () => {
       />
     );
     expect(screen.getByText('Settled')).toBeInTheDocument();
-    const settled = within(screen.getByRole('list', { name: 'Recorded tenders' }));
+    const settled = within(screen.getByRole('list', { name: 'Recorded payments' }));
     expect(settled.getAllByRole('listitem').map((row) => row.textContent)).toEqual([
       '1. Cash · Recorded600.00',
       '2. Khata · Recorded400.00',

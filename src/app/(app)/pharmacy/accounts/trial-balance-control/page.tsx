@@ -1,3 +1,5 @@
+import { ReportDetails } from '@/components/pharmacy/report-details';
+import { PHARMACY_COPY } from '@/lib/pharmacy/plain-language';
 import type { Metadata } from 'next';
 import { TRPCError } from '@trpc/server';
 
@@ -10,11 +12,13 @@ import {
   projectTrialBalanceControl,
   type TrialBalanceControl,
 } from '@/lib/pharmacy/accounts/trial-balance-control';
+import { BranchSelect, loadBranchOptions, type BranchOption } from '../branch-picker';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
 import { financeAccountLabel } from '@/lib/finance/account-labels';
-import { formatWorkspaceDateTime, workspaceDateRange, workspaceZoneLabel } from '@/lib/timezone';
+import { formatWorkspaceDateTime, workspaceZoneLabel } from '@/lib/timezone';
+import { pharmacyCalendarDayRange } from '@/lib/pharmacy/business-day';
 
 export const metadata: Metadata = { title: 'Trial-balance control · Pharmacy accounts' };
 
@@ -77,23 +81,22 @@ function minor(value: bigint): string {
 function ControlForm({
   controls,
   timeZone,
+  branches,
 }: {
   controls?: Partial<Controls>;
   timeZone?: string | null;
+  branches: BranchOption[];
 }) {
   const zone = timeZone ? workspaceZoneLabel(timeZone) : 'workspace timezone';
   return (
     <SectionCard title="Report controls" titleLevel={2}>
       <form method="get" className="grid gap-4 md:grid-cols-4 md:items-end">
         <label className="grid gap-2 text-sm">
-          Branch ID
-          <Input
-            className="min-h-11"
-            name="branch"
-            defaultValue={controls?.branchId}
-            maxLength={128}
-            required
-            aria-describedby="branch-help"
+          Branch
+          <BranchSelect
+            branchId={controls?.branchId}
+            branches={branches}
+            describedBy="branch-help"
           />
         </label>
         <label className="grid gap-2 text-sm">
@@ -155,25 +158,27 @@ function Results({
 }) {
   const { controls } = state;
   const status = controls.empty
-    ? 'No matching posted account rows'
+    ? PHARMACY_COPY.account.noTotals
     : controls.inconsistent
-      ? 'Source algebra is inconsistent'
+      ? PHARMACY_COPY.account.totalsMismatch
       : controls.allZero
-        ? 'All supplied account values are zero'
-        : 'Account controls calculated';
+        ? PHARMACY_COPY.account.allZero
+        : PHARMACY_COPY.account.totalsChecked;
   return (
     <SectionCard title={status} titleLevel={2}>
-      <p className="text-sm text-text-muted">
-        Posted branch journal lines only; coverage and completeness remain unknown. Window{' '}
-        {formatWorkspaceDateTime(state.from, timeZone)} to{' '}
-        {formatWorkspaceDateTime(state.to, timeZone)} (end exclusive). Source: posted accounts.
-        Retrieved {formatWorkspaceDateTime(state.retrievedAt, timeZone)}.
-      </p>
-      <p className="mt-2 text-sm text-text-muted">
-        A nonzero control may be legitimate for an interbranch scope. Zero is not evidence of
-        completeness, statutory compliance, reconciliation or an adapter pass. Row and bridge
-        differences are source-algebra consistency checks, not independent checks.
-      </p>
+      <ReportDetails>
+        <p className="text-sm text-text-muted">
+          Posted branch journal lines only; coverage and completeness remain unknown. Window{' '}
+          {formatWorkspaceDateTime(state.from, timeZone)} to{' '}
+          {formatWorkspaceDateTime(state.to, timeZone)} (end exclusive). Source: posted accounts.
+          Retrieved {formatWorkspaceDateTime(state.retrievedAt, timeZone)}.
+        </p>
+        <p className="mt-2 text-sm text-text-muted">
+          A nonzero control may be legitimate for an interbranch scope. Zero is not evidence of
+          completeness, statutory compliance, reconciliation or an adapter pass. Row and bridge
+          differences are source-algebra consistency checks, not independent checks.
+        </p>
+      </ReportDetails>
       {controls.empty ? (
         <p className="mt-4 text-sm">
           No matching postings were returned; this does not prove zero activity.
@@ -297,7 +302,6 @@ export default async function TrialBalanceControlPage({
   // The organization zone is known only after the actor resolves; before any read the
   // form names it generically.
   let timeZone: string | null | undefined;
-
   if (parsed.controls) {
     try {
       const actor = await resolveTenantActor();
@@ -313,12 +317,12 @@ export default async function TrialBalanceControlPage({
         const caller = pharmacyFinanceRouter.createCaller(ctx);
         // `to` is exclusive: the start of that day on the organization's clock.
         const zoneName = timeZone;
-        const requestedFrom = workspaceDateRange(
+        const requestedFrom = pharmacyCalendarDayRange(
           parsed.controls.from,
           parsed.controls.from,
           zoneName
         ).from;
-        const requestedTo = workspaceDateRange(
+        const requestedTo = pharmacyCalendarDayRange(
           parsed.controls.to,
           parsed.controls.to,
           zoneName
@@ -358,6 +362,9 @@ export default async function TrialBalanceControlPage({
     }
   }
 
+  // The picker lists the branches an owner may act at; the router still checks the chosen one.
+  const branches = await loadBranchOptions();
+
   return (
     <div className="min-w-0 space-y-6">
       <PageHeader
@@ -365,7 +372,7 @@ export default async function TrialBalanceControlPage({
         heading="Trial-balance control"
         description="Review every returned account code through per-currency opening, movement and supplied-closing controls."
       />
-      <ControlForm controls={formControls} timeZone={timeZone} />
+      <ControlForm controls={formControls} timeZone={timeZone} branches={branches} />
       {state.kind === 'loaded' ? (
         <Results state={state} timeZone={timeZone} />
       ) : (

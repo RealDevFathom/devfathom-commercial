@@ -26,8 +26,8 @@ import {
   PHARMACY_ONBOARDING_STEPS,
   evaluatePharmacyReadiness,
   pharmacyOnboardingStep,
+  reconcileTenantPackageGate,
   type PharmacyOnboardingGate,
-  type PharmacyReadiness,
 } from '@/lib/pharmacy/onboarding';
 import {
   pharmacyActivationSummary,
@@ -50,7 +50,17 @@ import {
   isLegacyPlaceholderProfile,
   normalizeRegulatoryPremises,
   normalizeRegulatoryProvince,
+  presenceHoursCheckEnabled,
 } from '@/lib/pharmacy/regulatory';
+import {
+  PHARMACIST_COVERAGE_DEFAULT_TIME_ZONE,
+  PHARMACIST_COVERAGE_HOURS_SET_ACTION,
+  normalizeCoverageWindows,
+  pharmacistCoverageWindowsSchema,
+  storedCoverageWindows,
+} from '@/lib/pharmacy/pharmacist-coverage-hours';
+import { Prisma } from '@/generated/prisma/client';
+import { isIanaTimezone } from '@/lib/timezone';
 import {
   regulatoryProfileInForceWhere,
   regulatoryStartInstant,
@@ -94,6 +104,13 @@ const gateInput = z.enum(
 
 function badRequest(field: string, message: string): TRPCError {
   return new TRPCError({ code: 'BAD_REQUEST', message, cause: fieldError(field, message) });
+}
+
+const coverageBranchInput = z.object({ branchId: z.string().trim().min(1).max(128) }).strict();
+
+/** The zone recorded hours are read in: the workspace's, else the gate's default. */
+function coverageTimeZone(value: string | null | undefined): string {
+  return value && isIanaTimezone(value) ? value : PHARMACIST_COVERAGE_DEFAULT_TIME_ZONE;
 }
 
 const fbrTier1Choice = z.enum(['YES', 'NO', 'UNSURE'], {
@@ -162,45 +179,6 @@ function midnightUtc(isoDate: string): Date {
   return new Date(`${isoDate}T00:00:00.000Z`);
 }
 
-/**
- * `evaluatePharmacyReadiness` answers the commercial-package gate by reading the
- * assigned package's own vertical. `platform_packages` is FORCE row-level
- * security and carries no tenant policy, so under a *tenant* connection that
- * read returns nothing and the gate is reported outstanding — while
- * `assertActivationReady`, which runs on the platform connection, sees it
- * satisfied and activates. The tenant surface would then be telling the operator
- * to fix something that is not broken, and naming a step activation does not
- * hold against them.
- *
- * The two facts a tenant CAN see are sufficient to settle it: the organization's
- * own vertical, and that a package is assigned. A package of another vertical
- * can never be assigned to this organization — `assertPackageCompatibleWithVertical`
- * refuses that pairing at creation and at every package change — so a pharmacy
- * organization with a package has a pharmacy package.
- *
- * This only ever moves the tenant surface *towards* the platform's own verdict;
- * it can never report ready where activation would refuse, because activation
- * re-evaluates on the connection that can see the package.
- */
-function reconcilePackageGate(
-  readiness: PharmacyReadiness,
-  organization: { vertical: string | null; packageId: string | null } | null
-): PharmacyReadiness {
-  const packageAssigned = Boolean(organization?.packageId) && organization?.vertical === 'PHARMACY';
-  const gate = readiness.gates.find((candidate) => candidate.gate === 'COMMERCIAL_PACKAGE');
-  if (!packageAssigned || !gate || gate.status === 'PASSED') return readiness;
-
-  const gates = readiness.gates.map((candidate) =>
-    candidate.gate === 'COMMERCIAL_PACKAGE'
-      ? { ...candidate, status: 'PASSED' as const, downgradeReason: null }
-      : candidate
-  );
-  const blocking = gates
-    .filter((candidate) => candidate.p0 && candidate.status !== 'PASSED')
-    .map((candidate) => candidate.gate);
-  return { ...readiness, gates, blocking, ready: blocking.length === 0 };
-}
-
 /** The checklist, activation summary and organization state, in one read. */
 async function readOverview(ctx: TRPCContext) {
   const organizationId = ctx.entitlements.organizationId;
@@ -221,7 +199,7 @@ async function readOverview(ctx: TRPCContext) {
       orderBy: { effectiveFrom: 'desc' },
     }),
   ]);
-  const readiness = reconcilePackageGate(evaluated, organization);
+  const readiness = reconcileTenantPackageGate(evaluated, organization);
   const checklist = pharmacyOnboardingChecklist(readiness, {
     at: now,
     licenceValidTo: currentProfile?.licenceValidTo,
@@ -594,6 +572,150 @@ export const pharmacyOnboardingRouter = router({
           };
         }),
       };
+    }),
+
+  /**
+   * DEV-846 (DEV-86) — the pharmacist coverage hours the owner has recorded for
+   * one branch, and whether the live-sale hours check is on for it. The check is
+   * on only when the rule set of the branch's profile in force publishes
+   * presence hours; recorded hours never turn it on.
+   */
+  pharmacistCoverage: adminProcedure.input(coverageBranchInput).query(async ({ ctx, input }) => {
+    const organizationId = ctx.entitlements.organizationId;
+    const now = new Date();
+    const branch = await ctx.db.pharmacyBranch.findFirst({
+      where: { organizationId, id: input.branchId, active: true },
+      select: { id: true, pharmacistCoverageHours: true, pharmacistCoverageRevision: true },
+    });
+    if (!branch) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Choose an active branch.' });
+    }
+    const organization = await ctx.db.organization.findFirst({
+      where: { id: organizationId },
+      select: { timezone: true },
+    });
+    const profile = await ctx.db.branchRegulatoryProfile.findFirst({
+      where: {
+        organizationId,
+        branchId: branch.id,
+        ...regulatoryProfileInForceWhere(now, organization?.timezone),
+      },
+      orderBy: { version: 'desc' },
+      select: { jurisdictionRuleSet: { select: { pharmacistCoverageRule: true } } },
+    });
+    const stored = branch.pharmacistCoverageHours as { timeZone?: unknown } | null;
+    return {
+      branchId: branch.id,
+      timeZone:
+        typeof stored?.timeZone === 'string'
+          ? stored.timeZone
+          : coverageTimeZone(organization?.timezone),
+      windows: storedCoverageWindows(branch.pharmacistCoverageHours),
+      revision: branch.pharmacistCoverageRevision,
+      liveSaleHoursCheck: presenceHoursCheckEnabled(
+        profile?.jurisdictionRuleSet.pharmacistCoverageRule
+      ),
+    };
+  }),
+
+  /**
+   * DEV-846 — record a branch's pharmacist coverage hours. Owner/admin only
+   * (adminProcedure), optimistic on the branch's coverage revision, and audited
+   * with the before and after hours in the same transaction. Saving no windows
+   * clears the record. This never changes what a sale is allowed to do.
+   */
+  savePharmacistCoverage: adminProcedure
+    .input(
+      coverageBranchInput
+        .extend({
+          revision: z.number().int().nonnegative(),
+          windows: pharmacistCoverageWindowsSchema,
+          timeZone: z.string().trim().min(1).max(64).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements.organizationId;
+      const user = ctx.session.user;
+      const branch = await ctx.db.pharmacyBranch.findFirst({
+        where: { organizationId, id: input.branchId, active: true },
+        select: { id: true, name: true, pharmacistCoverageHours: true },
+      });
+      if (!branch) {
+        throw badRequest('branchId', 'Choose one of this workspace’s active branches.');
+      }
+      const organization = await ctx.db.organization.findFirst({
+        where: { id: organizationId },
+        select: { timezone: true },
+      });
+      const windows = normalizeCoverageWindows(input.windows);
+      // A save never changes the zone already stored for the branch.
+      const storedZone = (branch.pharmacistCoverageHours as { timeZone?: unknown } | null)
+        ?.timeZone;
+      const keptTimeZone =
+        typeof storedZone === 'string' && isIanaTimezone(storedZone)
+          ? storedZone
+          : input.timeZone && isIanaTimezone(input.timeZone)
+            ? input.timeZone
+            : coverageTimeZone(organization?.timezone);
+      const hours = windows.length ? { timeZone: keptTimeZone, windows } : null;
+      const revision = input.revision + 1;
+      await ctx.db.$transaction(async (tx) => {
+        const updated = await tx.pharmacyBranch.updateMany({
+          where: {
+            organizationId,
+            id: branch.id,
+            active: true,
+            pharmacistCoverageRevision: input.revision,
+          },
+          data: {
+            pharmacistCoverageHours: hours ?? Prisma.DbNull,
+            pharmacistCoverageRevision: { increment: 1 },
+          },
+        });
+        if (updated.count !== 1) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'These hours changed while you were editing them. Reload and try again.',
+          });
+        }
+        await recordAudit(
+          {
+            organizationId,
+            actorType: 'USER',
+            actorId: user.id,
+            actorName: user.name ?? null,
+            actorEmail: user.email ?? null,
+            actorRole: user.role ?? null,
+            source: 'TRPC',
+            category: 'PHARMACY',
+            operation: 'UPDATE',
+            action: PHARMACIST_COVERAGE_HOURS_SET_ACTION,
+            description: hours
+              ? `Pharmacist coverage hours recorded (${windows.length} window${windows.length === 1 ? '' : 's'})`
+              : 'Pharmacist coverage hours cleared',
+            targetType: 'PharmacyBranch',
+            targetId: branch.id,
+            targetLabel: branch.name,
+            changes: {
+              pharmacistCoverageHours: { before: branch.pharmacistCoverageHours, after: hours },
+            },
+            metadata: {
+              revision,
+              ...(user.isSupportSession
+                ? {
+                    supportSessionId: user.supportSessionId ?? null,
+                    platformUserId: user.platformUserId ?? null,
+                    actingAsTenantUserId: user.id,
+                  }
+                : {}),
+            },
+            path: 'pharmacyOnboarding.savePharmacistCoverage',
+          },
+          tx as unknown as ScopedDb
+        );
+      });
+      return { branchId: branch.id, windows, revision };
     }),
 
   /**

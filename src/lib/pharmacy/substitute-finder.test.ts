@@ -72,6 +72,31 @@ describe('AI-05 deterministic substitute finder', () => {
     expect(rows).toEqual([]);
   });
 
+  it('DEV-852: never treats two medicines without recorded strength as exact equivalents', async () => {
+    const input = {
+      medicineId: 'requested',
+      presentationId: 'presentation-requested',
+      quantityCanonicalUnits: 10,
+      referencePriceMinor: 1_000,
+    };
+    const strengthless = lot({
+      id: 'strengthless',
+      batch: { medicine: { id: 'panadol', productName: 'Panadol', strengths: [] } },
+    });
+    const db = {
+      medicine: { findFirst: async () => ({ ...requested, strengths: [] }) },
+      pharmacyInventoryLot: { findMany: async () => [strengthless, lot()] },
+    };
+    expect(await findSubstituteProposals(db as never, scope, input)).toEqual([]);
+    // A requested medicine with a strength is never matched to a strengthless one either.
+    const rows = await findSubstituteProposals(
+      dbWith([strengthless, lot()]) as never,
+      scope,
+      input
+    );
+    expect(rows.map((row) => row.inventoryLotId)).toEqual(['lot-a']);
+  });
+
   it('never returns unsaleable stock and sends all safety predicates to the database', async () => {
     let where: unknown;
     const db = {
@@ -98,7 +123,8 @@ describe('AI-05 deterministic substitute finder', () => {
       receivedAt: { not: null },
       batch: {
         state: 'ACTIVE',
-        expiresAt: { gt: new Date('2026-09-05T00:00:00Z') },
+        // DEV-853: an unrecorded expiry is never treated as expired.
+        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date('2026-09-05T00:00:00Z') } }],
         medicine: { saleable: true },
       },
       balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
@@ -312,7 +338,11 @@ describe('#745 same-salt brand margin optimiser', () => {
     expect(args?.where).toMatchObject({
       organizationId: 'org-a',
       branchId: 'branch-a',
-      batch: { state: 'ACTIVE', expiresAt: { gt: at }, medicine: { saleable: true } },
+      batch: {
+        state: 'ACTIVE',
+        OR: [{ expiresAt: null }, { expiresAt: { gt: at } }],
+        medicine: { saleable: true },
+      },
     });
 
     // The gain threshold is configurable, never a hardcoded figure.

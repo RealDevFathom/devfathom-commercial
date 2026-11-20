@@ -348,3 +348,117 @@ it('DEV-786: needs no authorizer when every completed-sale line is already retur
     expect.objectContaining({ data: { status: 'RETURNED' } })
   );
 });
+it.each([
+  // DEV-943: 19:30 UTC is already 00:30 the next day in Karachi; 18:59 UTC is still 23:59.
+  ['Asia/Karachi', '2026-11-18T19:30:00.000Z', '2026-11-19'],
+  ['Asia/Karachi', '2026-11-18T18:59:00.000Z', '2026-11-18'],
+  // A UTC organisation books on the UTC day, as before.
+  ['UTC', '2026-11-18T19:30:00.000Z', '2026-11-18'],
+])(
+  'DEV-943: a %s return refund at %s books on the shop day %s when no date is sent',
+  async (timezone, now, day) => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(now) });
+    try {
+      const { db } = fixture();
+      const findUnique = vi.fn().mockResolvedValue({ timezone });
+      // DEV-958A: no branch day-end hour stored reads as midnight.
+      const scoped = {
+        ...db,
+        organization: { findUnique },
+        pharmacyBranch: { findFirst: async () => null },
+      };
+      const { businessDate: _omitted, ...withoutDate } = physicalReturn;
+      void _omitted;
+      await recordDeliveryCommand(scoped as never, scope, withoutDate, {
+        authorizeRefund: async () => {},
+      });
+      // The zone is read from the caller's own organisation, never from input.
+      expect(findUnique).toHaveBeenCalledWith({
+        where: { id: scope.organizationId },
+        select: { timezone: true },
+      });
+      expect(refundPharmacyTender).toHaveBeenCalledWith(
+        scoped,
+        scope,
+        expect.objectContaining({ businessDate: new Date(`${day}T00:00:00.000Z`) }),
+        { drawerOperator: { kind: 'COUNTER', actorIsManager: true } }
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+);
+it('DEV-943: a return without a drawer device still asks for the drawer', async () => {
+  const { db } = fixture();
+  const { businessDate: _date, deviceId: _device, ...withoutDrawer } = physicalReturn;
+  void _date;
+  void _device;
+  await expect(
+    recordDeliveryCommand(db as never, scope, withoutDrawer, { authorizeRefund: async () => {} })
+  ).rejects.toThrow('DRAWER_REQUIRED');
+  expect(refundPharmacyTender).not.toHaveBeenCalled();
+});
+it.each([
+  // DEV-943: a remittance with no client date books on the shop day; a UTC organisation, as before.
+  ['Asia/Karachi', '2026-11-18T19:30:00.000Z', '2026-11-19'],
+  ['Asia/Karachi', '2026-11-18T18:59:00.000Z', '2026-11-18'],
+  ['UTC', '2026-11-18T19:30:00.000Z', '2026-11-18'],
+])(
+  'DEV-943: a %s remittance at %s books on the shop day %s when no date is sent',
+  async (timezone, now, day) => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(now) });
+    try {
+      const { db, order } = fixture();
+      order.deliveryEvidence = [{ action: 'COLLECT', amountMinor: 400, requestKey: 'collect-a' }];
+      const findUnique = vi.fn().mockResolvedValue({ timezone });
+      // DEV-958A: no branch day-end hour stored reads as midnight.
+      const scoped = {
+        ...db,
+        organization: { findUnique },
+        pharmacyBranch: { findFirst: async () => null },
+      };
+      await recordDeliveryCommand(scoped as never, scope, {
+        branchId: scope.branchId,
+        orderId: 'order-a',
+        action: 'REMIT',
+        amountMinor: 300,
+        reference: 'cash-received',
+        requestKey: 'remit-a',
+        deviceId: 'device-a',
+      });
+      // The zone is read from the caller's own organisation, never from input.
+      expect(findUnique).toHaveBeenCalledWith({
+        where: { id: scope.organizationId },
+        select: { timezone: true },
+      });
+      expect(applyPharmacyTender).toHaveBeenCalledWith(
+        scoped,
+        scope,
+        expect.objectContaining({
+          type: 'CASH',
+          amountMinor: 300,
+          businessDate: new Date(`${day}T00:00:00.000Z`),
+        }),
+        undefined,
+        { drawerOperator: { kind: 'COUNTER', actorIsManager: false }, prepaidPricingFrozen: true }
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+);
+it('DEV-943: a remittance without a drawer device is still refused before any tender', async () => {
+  const { db, order } = fixture();
+  order.deliveryEvidence = [{ action: 'COLLECT', amountMinor: 400, requestKey: 'collect-a' }];
+  await expect(
+    recordDeliveryCommand(db as never, scope, {
+      branchId: scope.branchId,
+      orderId: 'order-a',
+      action: 'REMIT',
+      amountMinor: 300,
+      reference: 'cash-received',
+      requestKey: 'remit-a',
+    })
+  ).rejects.toThrow('DRAWER_REQUIRED');
+  expect(applyPharmacyTender).not.toHaveBeenCalled();
+});

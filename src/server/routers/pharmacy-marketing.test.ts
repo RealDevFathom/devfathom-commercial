@@ -101,8 +101,18 @@ beforeEach(() => {
     enabledModules: ['pharmacy-crm'],
   });
   mocks.actor.mockResolvedValue({ id: 'owner-a' });
+  // DEV-965: the pharmacy Owner template's rules. Marketing checks `admin:access`, which
+  // `*` grants outright, so a `*` fixture would admit every role named in these tests;
+  // the session role (ADMIN or not) decides here, as it does for a real Owner.
   mocks.permissions.mockResolvedValue({
-    organizationRole: { permissions: [{ capability: '*', effect: 'ALLOW' }] },
+    organizationRole: {
+      permissions: [
+        { capability: 'pharmacy:*', effect: 'ALLOW' },
+        { capability: 'reports:operational', effect: 'ALLOW' },
+        { capability: 'reports:financial', effect: 'ALLOW' },
+        { capability: 'pharmacy:safety', effect: 'ALLOW' },
+      ],
+    },
     permissionOverrides: [],
   });
   mocks.branchMatch.mockResolvedValue([{ allowed: true }]);
@@ -320,7 +330,9 @@ describe('growth current authorization', () => {
     expect(transactionDb).not.toHaveProperty('$transaction');
     expect(mocks.growthHistory.mock.calls[0][0]).toBe(transactionDb);
     expect(transactionDb.user.findUnique).toBe(mocks.permissions);
-    expect(mocks.permissions).toHaveBeenCalledTimes(2);
+    // DEV-965: `admin:access` in owner(), then reports:operational and reports:financial,
+    // all three read through the transaction client.
+    expect(mocks.permissions).toHaveBeenCalledTimes(3);
     expect(mocks.actor).toHaveBeenCalledWith({
       where: { id: 'owner-a', organizationId: 'org-a', role: 'ADMIN', status: 'ACTIVE' },
       select: { id: true },
@@ -493,5 +505,90 @@ describe('Google Business Profile health and review replies (DEV-13)', () => {
       caller().reviewReply({ ...input, rating: 5, tone: 'FRIENDLY' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.reviewReply).not.toHaveBeenCalled();
+  });
+});
+
+describe('voucher procedures (DEV-780)', () => {
+  it.each(['MANAGER', 'CASHIER', 'PHARMACIST'])(
+    'refuses %s before listing vouchers or the approvers for one above the cap',
+    async (role) => {
+      await expect(caller(role).vouchers(input)).rejects.toThrow('An owner account is required');
+      await expect(caller(role).voucherApprovers(input)).rejects.toThrow(
+        'An owner account is required'
+      );
+      expect(mocks.transaction).not.toHaveBeenCalled();
+    }
+  );
+});
+
+describe('marketing follows the admin permission, not the session role (DEV-965)', () => {
+  type Router = ReturnType<typeof caller>;
+  const OWNER_REQUIRED = {
+    code: 'FORBIDDEN',
+    message: 'An owner account is required. Ask a workspace owner to open Marketing.',
+  };
+  const calls: [string, (api: Router) => Promise<unknown>][] = [
+    ['history', (api) => api.history(input)],
+    ['approve', (api) => api.approve({ ...input, campaignId: 'campaign-a' })],
+    [
+      'approveTemplate',
+      (api) => api.approveTemplate({ ...input, name: 'Refill', body: 'Hello', reviewed: true }),
+    ],
+    ['vouchers', (api) => api.vouchers(input)],
+    ['sendPolicy', (api) => api.sendPolicy(input)],
+    ['branches', (api) => api.branches()],
+  ];
+
+  it.each(calls)(
+    '%s refuses an ADMIN whose admin permission is explicitly denied',
+    async (_name, run) => {
+      mocks.permissions.mockResolvedValue({
+        organizationRole: { permissions: [{ capability: 'pharmacy:*', effect: 'ALLOW' }] },
+        permissionOverrides: [{ capability: 'admin:access', effect: 'DENY' }],
+      });
+      await expect(run(caller('ADMIN'))).rejects.toMatchObject(OWNER_REQUIRED);
+      expect(mocks.organization).not.toHaveBeenCalled();
+      expect(mocks.history).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses an ADMIN under a wildcard DENY before any marketing read', async () => {
+    mocks.permissions.mockResolvedValue({
+      organizationRole: { permissions: [] },
+      permissionOverrides: [{ capability: '*', effect: 'DENY' }],
+    });
+    await expect(caller('ADMIN').history(input)).rejects.toMatchObject(OWNER_REQUIRED);
+    expect(mocks.history).not.toHaveBeenCalled();
+  });
+
+  it.each(['EMPLOYEE', 'MANAGER'])(
+    'refuses a %s member holding no admin permission',
+    async (role) => {
+      mocks.permissions.mockResolvedValue({
+        organizationRole: { permissions: [{ capability: 'pharmacy:manage', effect: 'ALLOW' }] },
+        permissionOverrides: [],
+      });
+      await expect(caller(role).history(input)).rejects.toMatchObject(OWNER_REQUIRED);
+      expect(mocks.organization).not.toHaveBeenCalled();
+    }
+  );
+
+  it('lets a member explicitly granted the admin permission open Marketing', async () => {
+    mocks.permissions.mockResolvedValue({
+      organizationRole: { permissions: [] },
+      permissionOverrides: [{ capability: 'admin:access', effect: 'ALLOW' }],
+    });
+    await expect(caller('EMPLOYEE').history(input)).resolves.toEqual({ campaigns: [] });
+    expect(mocks.history).toHaveBeenCalledWith(expect.anything(), {
+      organizationId: 'org-a',
+      branchId: 'branch-a',
+      actorId: 'owner-a',
+      timezone: 'Asia/Karachi',
+    });
+  });
+
+  it('still lets an ADMIN with no rules about it open Marketing', async () => {
+    mocks.permissions.mockResolvedValue({ organizationRole: null, permissionOverrides: [] });
+    await expect(caller('ADMIN').history(input)).resolves.toEqual({ campaigns: [] });
   });
 });

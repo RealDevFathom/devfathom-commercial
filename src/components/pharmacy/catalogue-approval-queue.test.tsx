@@ -11,6 +11,11 @@ const m = vi.hoisted(() => ({
     isFetching: false,
     error: null,
   },
+  access: {
+    data: { canEdit: true, canDecide: true, ownerPinApproval: false, isOwner: false } as
+      | undefined
+      | { canEdit: boolean; canDecide: boolean; ownerPinApproval: boolean; isOwner: boolean },
+  },
   decide: { mutate: vi.fn(), isPending: false, error: null },
   propose: { mutate: vi.fn(), isPending: false, error: null, isSuccess: false },
   onSuccess: undefined as
@@ -25,6 +30,7 @@ vi.mock('@/lib/trpc', () => ({
     }),
     pharmacyMedicine: {
       catalogueEdits: { useQuery: () => m.queue },
+      catalogueQueueAccess: { useQuery: () => m.access },
       search: { useQuery: () => m.search },
       decideCatalogueEdit: {
         useMutation: (options: {
@@ -47,6 +53,7 @@ beforeEach(() => {
   m.queue.isPending = false;
   m.queue.error = null;
   m.decide.isPending = false;
+  m.access.data = { canEdit: true, canDecide: true, ownerPinApproval: false, isOwner: false };
   m.queue.data = [
     {
       id: 'edit',
@@ -57,6 +64,40 @@ beforeEach(() => {
       targets: [],
     },
   ];
+});
+describe('DEV-19 catalogue queue permissions', () => {
+  it('hides the decision controls from an editor without the review permission and says why', () => {
+    m.access.data = { canEdit: true, canDecide: false, ownerPinApproval: false, isOwner: false };
+    render(<CatalogueApprovalQueue />);
+    expect(screen.getByRole('heading', { name: 'Fixture lotion' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Approve edit' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reject edit' })).toBeNull();
+    expect(screen.queryByLabelText('Solo owner PIN (for self-approval)')).toBeNull();
+    expect(screen.getByRole('note')).toHaveTextContent('needs the catalogue review permission');
+    expect(screen.getByRole('button', { name: 'Submit edit for review' })).toBeVisible();
+  });
+  it('does not tell the owner to ask the owner when another member reviews', () => {
+    m.access.data = { canEdit: true, canDecide: false, ownerPinApproval: false, isOwner: true };
+    render(<CatalogueApprovalQueue />);
+    const note = screen.getByRole('note');
+    expect(note).toHaveTextContent('Another member holds the catalogue review permission');
+    expect(note).not.toHaveTextContent('Ask the owner');
+    expect(screen.queryByRole('button', { name: 'Approve edit' })).toBeNull();
+  });
+  it('lets a reviewer who cannot edit decide without offering the edit form', () => {
+    m.access.data = { canEdit: false, canDecide: true, ownerPinApproval: false, isOwner: false };
+    render(<CatalogueApprovalQueue />);
+    expect(screen.getByRole('button', { name: 'Approve edit' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Reject edit' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Submit edit for review' })).toBeNull();
+    expect(screen.queryByRole('note')).toBeNull();
+  });
+  it('offers no controls until the permissions are known', () => {
+    m.access.data = undefined;
+    render(<CatalogueApprovalQueue />);
+    expect(screen.queryByRole('button', { name: 'Approve edit' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Submit edit for review' })).toBeNull();
+  });
 });
 describe('DEV-766 catalogue approval queue', () => {
   it('shows the item, editor and proposed changes with a visible pending status', () => {
@@ -155,6 +196,104 @@ describe('DEV-766 catalogue approval queue', () => {
     expect(screen.getByText('STRIP (10 per pack), 3 x 10 tablets')).toBeVisible();
     expect(screen.getByText('5012345678900')).toBeVisible();
     expect(screen.queryByText('pack_strip')).not.toBeInTheDocument();
+  });
+  it('shows a queued pack price with its MRP, selling price and branch (DEV-923)', () => {
+    m.queue.data = [
+      {
+        id: 'price-edit',
+        operation: 'setPackPrice',
+        medicine: { productName: 'Fixture tablets' },
+        editor: { name: 'Editor' },
+        changes: {
+          json: { packLevelId: 'pack_strip', mrpMinor: 50000, sellingPriceMinor: null },
+        },
+        stale: false,
+        targets: [
+          { label: 'Pack', value: 'STRIP (10 per pack), 3 x 10 tablets' },
+          { label: 'Applies to', value: 'All branches' },
+        ],
+      },
+    ];
+    render(<CatalogueApprovalQueue />);
+    expect(screen.getByText('Set pack price')).toBeVisible();
+    expect(screen.getByText('MRP')).toBeVisible();
+    expect(screen.getByText('Rs 500.00')).toBeVisible();
+    expect(screen.queryByText('50000')).not.toBeInTheDocument();
+    expect(screen.getByText('Selling price')).toBeVisible();
+    expect(document.body.textContent).not.toMatch(/paisa/i);
+    expect(screen.getByText('Sell at MRP')).toBeVisible();
+    expect(screen.getByText('All branches')).toBeVisible();
+    expect(screen.queryByText('pack_strip')).not.toBeInTheDocument();
+  });
+  it('shows every queued catalogue price in rupees with two decimals, never paisa (DEV-722)', () => {
+    m.queue.data = [
+      {
+        id: 'retail-edit',
+        operation: 'UPDATE_MEDICINE',
+        medicine: { productName: 'Fixture lotion' },
+        editor: { name: 'Editor' },
+        changes: { retailPriceMinor: 12550 },
+        stale: false,
+        targets: [],
+      },
+      {
+        id: 'mrp-edit',
+        operation: 'recordPrintedMrp',
+        medicine: { productName: 'Fixture tablets' },
+        editor: { name: 'Editor' },
+        changes: { json: { printedMrpMinor: 5, roundingIncrementMinor: 100 } },
+        stale: false,
+        targets: [],
+      },
+      {
+        id: 'sell-edit',
+        operation: 'setPackPrice',
+        medicine: { productName: 'Fixture syrup' },
+        editor: { name: 'Editor' },
+        changes: { json: { mrpMinor: 100000000, sellingPriceMinor: 99999 } },
+        stale: false,
+        targets: [],
+      },
+    ];
+    render(<CatalogueApprovalQueue />);
+    expect(screen.getByText('Retail price')).toBeVisible();
+    expect(screen.getByText('Rs 125.50')).toBeVisible();
+    expect(screen.getByText('Printed MRP')).toBeVisible();
+    expect(screen.getByText('Rs 0.05')).toBeVisible();
+    expect(screen.getByText('Rounding increment')).toBeVisible();
+    expect(screen.getByText('Rs 1.00')).toBeVisible();
+    expect(screen.getByText('Rs 1000000.00')).toBeVisible();
+    expect(screen.getByText('Rs 999.99')).toBeVisible();
+    expect(document.body.textContent).not.toMatch(/paisa|12550|99999/i);
+  });
+  it('shows a bulk creation by file, count and upload time, never the file hash (DEV-912)', () => {
+    m.queue.data = [
+      {
+        id: 'bulk-edit',
+        operation: 'createStagedMedicines',
+        medicine: { productName: 'New medicines from an imported file' },
+        editor: { name: 'Editor' },
+        changes: {
+          json: {
+            batchId: 'batch_1',
+            fileName: 'abuzar-products.csv',
+            uploadedAt: '2026-11-18T07:00:00.000Z',
+            sourceSha256: 'a'.repeat(64),
+            medicines: 18999,
+          },
+        },
+        stale: false,
+        targets: [],
+      },
+    ];
+    render(<CatalogueApprovalQueue />);
+    expect(screen.getByText('Create medicines from an imported file')).toBeVisible();
+    expect(screen.getByText('abuzar-products.csv')).toBeVisible();
+    expect(screen.getByText('18999')).toBeVisible();
+    expect(screen.getByText('Uploaded')).toBeVisible();
+    expect(screen.queryByText('a'.repeat(64))).not.toBeInTheDocument();
+    expect(screen.queryByText(/SHA/)).not.toBeInTheDocument();
+    expect(screen.queryByText('batch_1')).not.toBeInTheDocument();
   });
   it('says how many other pending edits an approval made stale', async () => {
     render(<CatalogueApprovalQueue />);

@@ -2,7 +2,9 @@ import { APPROVAL_BLOCKED } from '@/lib/pharmacy/purchase-approval';
 import { ZodError } from 'zod';
 
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
-import { formatWorkspaceDateTime, workspaceToday } from '@/lib/timezone';
+import { amountInputError, amountInputToMinor } from '@/lib/money-input';
+import { formatWorkspaceDateTime } from '@/lib/timezone';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import { pharmacyPurchasingRouter } from '@/server/routers/pharmacy-purchasing';
 import { createTRPCContext } from '@/server/trpc';
 
@@ -392,21 +394,21 @@ export function optionalIntegerField(
 
 /**
  * Money is captured in rupees because that is what is printed on the invoice,
- * and stored in paisa because §8A forbids a float anywhere near a cost. Two
- * decimal places exactly; a third would be silently dropped.
+ * and stored in paisa because §8A forbids a float anywhere near a cost. DEV-942:
+ * read by the shared exact reader in `src/lib/money-input.ts`; a third decimal,
+ * a sign or an amount past the safe-integer limit is refused with its reason.
  */
 export function moneyFieldMinor(form: FormData, name: string, label: string): number {
-  const raw = field(form, name);
-  if (!/^\d+(\.\d{1,2})?$/.test(raw)) {
-    throw Object.assign(
-      new PurchasingValidationError(`${label}: enter an amount like 1250 or 1250.75.`),
-      {
-        field: name,
-      }
-    );
-  }
-  const [rupees, paisa = ''] = raw.split('.');
-  return Number(rupees) * 100 + Number(paisa.padEnd(2, '0'));
+  const parsed = amountInputToMinor(field(form, name));
+  if (parsed.status === 'OK') return parsed.minor;
+  throw Object.assign(
+    new PurchasingValidationError(
+      parsed.status === 'EMPTY'
+        ? `${label}: enter an amount like 1250 or 1250.75.`
+        : `${label}: ${amountInputError(parsed.reason)}`
+    ),
+    { field: name }
+  );
 }
 
 export function optionalMoneyFieldMinor(
@@ -488,5 +490,5 @@ export function dateInputValue(value: Date): string {
 
 /** Today in the workspace's zone: a GRN keyed in 00:00–04:59 PKT is today's, not yesterday's. */
 export function today(timeZone: string | null | undefined): string {
-  return workspaceToday(timeZone);
+  return pharmacyCalendarDay(timeZone);
 }

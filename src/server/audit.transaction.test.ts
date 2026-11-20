@@ -63,6 +63,14 @@ beforeEach(() => {
 });
 
 describe('transaction-bound seed audits', () => {
+  it('redacts cash-memo buyer names, including rejected nested inputs, without hiding sale identity', () => {
+    expect(
+      toAuditJson({ saleId: 'synthetic-sale', input: { buyerName: '<invalid buyer>' } })
+    ).toEqual({
+      saleId: 'synthetic-sale',
+      input: { buyerName: '[REDACTED]' },
+    });
+  });
   it.each(['1234', '0000', 'invalid'])(
     'redacts witness PIN %s before auditing success or refusal',
     async (pin) => {
@@ -235,6 +243,24 @@ it('redacts owner PIN before resolver execution including validation and capabil
     pin: '[REDACTED]',
     nested: { PIN: '[REDACTED]' },
     reportId: 'pv_1',
+  });
+});
+
+it('redacts a card-terminal review slip reference and reason, typed by hand (DEV-743)', () => {
+  expect(
+    toAuditJson({
+      attemptKey: 'card-terminal:k-1',
+      outcome: 'REVERSED',
+      slipRef: '4242424242424242',
+      resolutionReason: 'card 4242424242424242 was charged',
+      managerPin: '2468',
+    })
+  ).toEqual({
+    attemptKey: 'card-terminal:k-1',
+    outcome: 'REVERSED',
+    slipRef: '[REDACTED]',
+    resolutionReason: '[REDACTED]',
+    managerPin: '[REDACTED]',
   });
 });
 

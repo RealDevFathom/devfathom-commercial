@@ -119,7 +119,9 @@ const priorHrefs = [
   '/pharmacy/sop',
   '/pharmacy/regulatory',
   '/pharmacy/settings/branches',
+  '/pharmacy/settings/pin',
   '/pharmacy/settings/printers',
+  '/pharmacy/settings/counters',
   '/reviews',
   '/team/stats',
   '/hr',
@@ -173,11 +175,11 @@ beforeEach(() => {
 afterEach(cleanup);
 describe('Hotel navigation composition', () => {
   it('retains Menu import and every accepted link alongside the six hospitality routes', () => {
-    expect(priorHrefs).toHaveLength(61);
-    expect(navigation).toHaveLength(67);
+    expect(priorHrefs).toHaveLength(63);
+    expect(navigation).toHaveLength(69);
     expect(navigation).toHaveLength(priorHrefs.length + hospitalityHrefs.length);
     const hrefs = navigation.map((n) => n.href);
-    expect(new Set(hrefs).size).toBe(67);
+    expect(new Set(hrefs).size).toBe(69);
     expect(new Set(hrefs)).toEqual(new Set([...priorHrefs, ...hospitalityHrefs]));
     expect(hrefs).toEqual(expect.arrayContaining(priorHrefs));
     expect(navigation.find((n) => n.href === MENU_IMPORT)).toMatchObject({

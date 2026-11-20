@@ -74,6 +74,7 @@ const PORTAL_ERROR_MESSAGES: Record<PharmacyPortalError['reason'], string> = {
   CUSTOMER_NOT_FOUND: 'This link is no longer active.',
   PHONE_REQUIRED: 'Ask the pharmacy to add your phone number first.',
   LINK_INVALID: 'This link is no longer active.',
+  LINK_LOCKED: 'Too many wrong codes. Ask the pharmacy to send you a new link.',
   CODE_INVALID: 'That code is not valid. Request a new code.',
   SEND_FAILED: 'We could not send a code right now. Try again shortly.',
   SALE_NOT_FOUND: 'Choose one of your receipts.',

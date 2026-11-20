@@ -22,6 +22,7 @@
 import { duplicateSaltGroups, type DuplicateSaltGroup } from './duplicate-salt';
 import type { BlockReason } from './inventory';
 import { prescriptionIsCurrent } from './prescription-calendar';
+import { PHARMACIST_CHECK_OFF_NOTE } from './pharmacist-check';
 
 export const COUNTER_ALERT_SEVERITIES = ['SAFETY_BLOCK', 'CLINICAL_ADVICE', 'COMMERCIAL'] as const;
 export type CounterAlertSeverity = (typeof COUNTER_ALERT_SEVERITIES)[number];
@@ -117,6 +118,12 @@ export type CounterAlertContext = {
   timeZone?: string | null;
   /** Days before expiry at which the counter starts warning commercially. */
   nearExpiryDays?: number;
+  /**
+   * DEV-911: the owner switched the pharmacist check at each sale off. A prescription-only or
+   * controlled line then carries a plain note instead of the prescription block; the server
+   * makes the same decision from the stored setting. Absent means on.
+   */
+  pharmacistCheckOff?: boolean;
 };
 
 const DAY_MS = 86_400_000;
@@ -150,7 +157,16 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
   }
 
   const needsPrescription = medicine.rx || medicine.controlled || medicine.restricted;
-  if (needsPrescription) {
+  if (needsPrescription && context.pharmacistCheckOff === true) {
+    push(alerts, {
+      key: `pharmacist-check-off:${line.ref}`,
+      severity: 'CLINICAL_ADVICE',
+      code: 'PHARMACIST_CHECK_SWITCHED_OFF',
+      message: `${name}: ${PHARMACIST_CHECK_OFF_NOTE}.`,
+      saleLineRef: line.ref,
+      remedy: null,
+    });
+  } else if (needsPrescription) {
     const prescription = line.prescription;
     if (!prescription && medicine.controlled && line.emergencySupply) {
       push(alerts, {

@@ -92,7 +92,14 @@ function fakeDb(state: { voucher?: ReturnType<typeof voucher> | null; closed?: b
   const db = {
     $queryRaw: track('queryRaw', (sql: unknown) => {
       const text = String((sql as { strings?: string[] }).strings?.join('?') ?? '');
-      calls.push(text.includes('pg_advisory_xact_lock') ? 'ledger-lock' : 'voucher-lock');
+      const key = String((sql as { values?: unknown[] }).values?.[0] ?? '');
+      calls.push(
+        !text.includes('pg_advisory_xact_lock')
+          ? 'voucher-lock'
+          : key.startsWith('pharmacy-jv-')
+            ? `identity-lock:${key}`
+            : 'ledger-lock'
+      );
       return Promise.resolve([]);
     }),
     pharmacyAccountingPeriod: {
@@ -282,6 +289,131 @@ describe('draft lifecycle', () => {
     expect(data.data.organizationId).toBe('org_1');
     expect(data.data.branchId).toBe('branch_1');
     expect(data.data.lines.create).toHaveLength(2);
+  });
+
+  // DEV-947: the line's relation to its voucher is the composite (organizationId,
+  // branchId, voucherId), so Prisma copies the scope from the parent and its checked
+  // nested input refuses those keys on a real database.
+  const expectedLineRows = [
+    { lineNumber: 1, ...debit, memo: null },
+    { lineNumber: 2, ...credit, memo: null },
+  ];
+
+  it('creates nested lines without the scope keys Prisma copies from the voucher', async () => {
+    const { db, raw } = fakeDb();
+    await createJournalVoucherDraft(db, scope, draftInput, NOW);
+    const data = raw.pharmacyJournalVoucher.create.mock.calls[0]![0] as {
+      data: { lines: { create: Record<string, unknown>[] } };
+    };
+    expect(data.data.lines.create).toStrictEqual(expectedLineRows);
+  });
+
+  it('recreates edited lines without the scope keys Prisma copies from the voucher', async () => {
+    const { db, raw } = fakeDb({ voucher: voucher() });
+    await updateJournalVoucherDraft(
+      db,
+      scope,
+      { ...draftInput, voucherId: 'jv_1', expectedVersion: 2 },
+      NOW
+    );
+    const update = raw.pharmacyJournalVoucher.update.mock.calls[0]![0] as {
+      where: { id: string };
+      data: { lines: { create: Record<string, unknown>[] } };
+    };
+    expect(update.where).toEqual({ id: 'jv_1' });
+    expect(update.data.lines.create).toStrictEqual(expectedLineRows);
+    expect(raw.pharmacyJournalVoucherLine.deleteMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', voucherId: 'jv_1' },
+    });
+  });
+
+  // DEV-953: racing creates queue on the key, then on the reference, before they look.
+  it('locks the create key before its look-up and the reference before its check', async () => {
+    const { db, calls } = fakeDb();
+    await createJournalVoucherDraft(db, scope, draftInput, NOW);
+    const keyLock = calls.indexOf(
+      `identity-lock:pharmacy-jv-create-key:org_1:${draftInput.createKey}`
+    );
+    const referenceLock = calls.indexOf(
+      `identity-lock:pharmacy-jv-reference:org_1:${draftInput.reference.trim()}`
+    );
+    const keyLookup = calls.indexOf('voucher.findFirst');
+    const referenceLookup = calls.lastIndexOf('voucher.findFirst');
+    expect(keyLock).toBeGreaterThan(-1);
+    expect(keyLock).toBeLessThan(keyLookup);
+    expect(keyLookup).toBeLessThan(referenceLock);
+    expect(referenceLock).toBeLessThan(referenceLookup);
+    expect(referenceLookup).toBeLessThan(calls.indexOf('voucher.create'));
+    expect(calls).not.toContain('ledger-lock');
+  });
+
+  it('locks a changed reference after the voucher lock and before its check on edit', async () => {
+    const { db, calls } = fakeDb({ voucher: voucher() });
+    await updateJournalVoucherDraft(
+      db,
+      scope,
+      { ...draftInput, reference: 'JV-0002', voucherId: 'jv_1', expectedVersion: 2 },
+      NOW
+    );
+    const referenceLock = calls.indexOf('identity-lock:pharmacy-jv-reference:org_1:JV-0002');
+    expect(calls.indexOf('voucher-lock')).toBeLessThan(referenceLock);
+    expect(referenceLock).toBeLessThan(calls.lastIndexOf('voucher.findFirst'));
+    expect(referenceLock).toBeLessThan(calls.indexOf('voucher.update'));
+  });
+
+  // DEV-949: the same create key replays only the same normalised draft.
+  it('replays a create with the same key and the same normalised details', async () => {
+    const { db, raw } = fakeDb();
+    const saved = voucher({ version: 1 });
+    raw.pharmacyJournalVoucher.findFirst.mockResolvedValueOnce(saved as never);
+    await expect(
+      createJournalVoucherDraft(
+        db,
+        scope,
+        { ...draftInput, reference: ' JV-0001 ', lines: [credit, debit] },
+        NOW
+      )
+    ).resolves.toBe(saved);
+    expect(raw.pharmacyJournalVoucher.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['reference', { reference: 'JV-0002' }],
+    ['currency', { currency: 'USD' as const }],
+    ['occurredAt', { occurredAt: '2026-11-11T09:00:00.000Z' }],
+    ['reason', { reason: 'December electricity bill' }],
+    ['evidenceReference', { evidenceReference: 'K-Electric bill 2026-12' }],
+    [
+      'amount',
+      {
+        lines: [
+          { ...debit, amountMinor: 60_000 },
+          { ...credit, amountMinor: 60_000 },
+        ],
+      },
+    ],
+    ['memo', { lines: [{ ...debit, memo: 'Meter 2' }, credit] }],
+  ])('refuses a create with the same key and a different %s', async (_field, overrides) => {
+    const { db, raw } = fakeDb();
+    raw.pharmacyJournalVoucher.findFirst.mockResolvedValueOnce(voucher({ version: 1 }) as never);
+    await expect(
+      createJournalVoucherDraft(db, scope, { ...draftInput, ...overrides }, NOW)
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+    expect(raw.pharmacyJournalVoucher.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a create key another actor or branch already used', async () => {
+    for (const saved of [
+      voucher({ version: 1, createdByUserId: 'clerk_1' }),
+      voucher({ version: 1, branchId: 'branch_2' }),
+    ]) {
+      const { db, raw } = fakeDb();
+      raw.pharmacyJournalVoucher.findFirst.mockResolvedValueOnce(saved as never);
+      await expect(createJournalVoucherDraft(db, scope, draftInput, NOW)).rejects.toMatchObject({
+        reason: 'IDEMPOTENCY_CONFLICT',
+      });
+      expect(raw.pharmacyJournalVoucher.create).not.toHaveBeenCalled();
+    }
   });
 
   it('refuses to create a draft with a disallowed account before writing', async () => {

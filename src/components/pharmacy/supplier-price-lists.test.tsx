@@ -7,7 +7,8 @@ const line = {
   previousTradePriceMinor: 80000, tradeChangeMinor: 5000, tradeChangeBps: 625,
   listMrpMinor: 110000, currentMrpMinor: 100000, mrpChangeMinor: 10000, mrpChangeBps: 1000,
   currentSellingPriceMinor: 95000, draftStatus: 'DRAFT', draftMrpMinor: 110000,
-  draftSellingPriceMinor: 95000, tradeAboveMrp: false, stale: false,
+  draftSellingPriceMinor: 95000, tradeAboveMrp: false, tradeChanged: true, mrpChanged: true,
+  stale: false,
 };
 const mocks = vi.hoisted(() => ({
   options: { data: { suppliers: [{ id: 'sup', name: 'Distributor' }] }, isPending: false, error: null as unknown, refetch: vi.fn() },
@@ -86,6 +87,37 @@ describe('supplier price lists console', () => {
     await waitFor(() =>
       expect(mocks.decide.mutateAsync).toHaveBeenCalledWith({ lineIds: ['line-1'], decision: 'APPROVE', pin: '1234' })
     );
+  });
+
+  it('flags each changed row on the page and can show only the flagged rows', () => {
+    const unchanged = {
+      ...line, id: 'line-2', rowNumber: 3, productText: 'Brufen 400mg', tradeChangeMinor: 0, tradeChangeBps: 0,
+      mrpChangeMinor: 0, mrpChangeBps: 0, draftStatus: 'NONE', draftMrpMinor: null, draftSellingPriceMinor: null,
+      tradeChanged: false, mrpChanged: false,
+    };
+    const tradeOnly = { ...unchanged, id: 'line-3', rowNumber: 4, productText: 'Arinac', tradeChanged: true };
+    mocks.review.data = { id: 'list-1', supplierName: 'Distributor', fileName: 'list.csv', createdAt: new Date(), importedById: 'manager', lines: [line, unchanged, tradeOnly] };
+    render(<SupplierPriceListsConsole canApprove actorId="owner" soloOwner={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+    expect(screen.getByText('2 of 3 rows flagged: the trade price or MRP differs from your records.')).toBeVisible();
+    expect(screen.getByText('TP and MRP changed')).toBeVisible();
+    expect(screen.getByText('TP changed')).toBeVisible();
+    const filter = screen.getByRole('button', { name: 'Show flagged rows only' });
+    expect(filter).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(filter);
+    expect(screen.queryByText('Brufen 400mg')).toBeNull();
+    expect(screen.getByText('Panadol 500mg', { selector: 'span.block' })).toBeVisible();
+    expect(screen.getByText('Arinac')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Show all rows' }));
+    expect(screen.getByText('Brufen 400mg')).toBeVisible();
+  });
+
+  it('says so when no row changes a price', () => {
+    mocks.review.data = { id: 'list-1', supplierName: 'Distributor', fileName: 'list.csv', createdAt: new Date(), importedById: 'manager', lines: [{ ...line, tradeChanged: false, mrpChanged: false }] };
+    render(<SupplierPriceListsConsole canApprove actorId="owner" soloOwner={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+    expect(screen.getByText('No row changes a trade price or MRP against your records.')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Show flagged rows only' })).toBeDisabled();
   });
 
   it('blocks a stale draft instead of offering approval', () => {

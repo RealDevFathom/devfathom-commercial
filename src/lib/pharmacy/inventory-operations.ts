@@ -10,6 +10,7 @@ import {
 import { arrangementFor, PharmacyInventoryError } from './inventory';
 import type { LedgerScope } from './stock-ledger';
 import { lockStockBalances, lockStockRowsFrom } from './stock-lock-order';
+import { hasKnownExpiryPassed } from './unrecorded-batch';
 
 /** Serialize recall-authority decisions that can overlap at batch or medicine scope. */
 export async function lockRecallAuthority(db: ScopedDb, organizationId: string) {
@@ -207,7 +208,8 @@ export type DailyCycleCountItem = {
   inventoryLotId: string;
   stockLocationId: string;
   medicineName: string;
-  batchNumber: string;
+  /** DEV-853: null when the batch number was never recorded. */
+  batchNumber: string | null;
   locationName: string;
   unitsPerPack: number;
   /** Canonical units sold from this position in the sales window. */
@@ -221,7 +223,8 @@ type DailyCycleCountRow = {
   inventoryLotId: string;
   stockLocationId: string;
   medicineName: string;
-  batchNumber: string;
+  /** DEV-853: null when the batch number was never recorded. */
+  batchNumber: string | null;
   locationName: string;
   unitsPerPack: number;
   soldUnits: number | bigint;
@@ -915,14 +918,15 @@ export async function dispatchTransfer(
   );
   for (const [i, line] of transfer.lines.entries()) {
     const balances = await db.$queryRaw<
-      Array<{ onHandUnits: number; unitsPerPack: number; state: string; expiresAt: Date }>
+      Array<{ onHandUnits: number; unitsPerPack: number; state: string; expiresAt: Date | null }>
     >(
       Prisma.sql`SELECT (b."onHandUnits"-COALESCE((SELECT SUM(c."reservedUnits") FROM "pharmacy_supplier_claims" c WHERE c."organizationId"=b."organizationId" AND c."inventoryLotId"=b."inventoryLotId" AND c.status='RESERVED'),0))::int AS "onHandUnits",l."unitsPerPack",mb.state::text,mb."expiresAt" FROM "pharmacy_stock_balances" b JOIN "pharmacy_inventory_lots" l ON l.id=b."inventoryLotId" JOIN "pharmacy_manufacturing_batches" mb ON mb.id=l."manufacturingBatchId" WHERE b."organizationId"=${scope.organizationId} AND b."branchId"=${scope.branchId} AND b."inventoryLotId"=${line.sourceLotId} AND b."stockLocationId"=${line.sourceStockLocationId} AND b."disposition"='AVAILABLE'`
     );
     const balance = balances[0];
     if (!balance || Number(balance.onHandUnits) < line.quantityUnits)
       throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
-    if (balance.state !== 'ACTIVE' || balance.expiresAt <= new Date())
+    // DEV-853: an unrecorded expiry is never treated as expired.
+    if (balance.state !== 'ACTIVE' || hasKnownExpiryPassed(balance.expiresAt, new Date()))
       throw new PharmacyInventoryError('BLOCKED_STOCK');
     const a = arrangementFor(line.quantityUnits, balance.unitsPerPack);
     const common = {
@@ -1067,6 +1071,8 @@ export async function receiveTransferLine(
             ? 'PARTIALLY_RECEIVED'
             : 'EXCEPTION',
       receivedAt: totalReceived === totalExpected ? new Date() : null,
+      // DEV-908: the receiving side names who closed the receipt.
+      receivedById: totalReceived === totalExpected ? scope.actorId : null,
     },
   });
 }
@@ -1122,11 +1128,24 @@ export async function lockRecallBatches(
   `);
 }
 
-export async function recallTrace(db: ScopedDb, organizationId: string, recallNoticeId: string) {
+/**
+ * DEV-965: `branchIds` limits the trace to those branches; it is omitted only for a
+ * caller who may see every branch of the organization. An empty list reads nothing.
+ */
+export async function recallTrace(
+  db: ScopedDb,
+  organizationId: string,
+  recallNoticeId: string,
+  branchIds?: readonly string[]
+) {
   const notice = await db.pharmacyRecallNotice.findFirst({
     where: { id: recallNoticeId, organizationId },
   });
   if (!notice) throw new PharmacyInventoryError('NOT_FOUND');
+  if (branchIds?.length === 0) return [];
+  const branchFilter = branchIds
+    ? Prisma.sql` AND l."branchId" IN (${Prisma.join(branchIds)})`
+    : Prisma.empty;
   return db.$queryRaw<
     Array<{
       branchId: string;
@@ -1142,7 +1161,7 @@ export async function recallTrace(db: ScopedDb, organizationId: string, recallNo
     // still held by a sale that never completed (OPEN, HELD, VOID) is not sold.
     // A SALE movement with no sale line behind it is kept, so the recall trace
     // never under-reports stock that left the shelf.
-    Prisma.sql`SELECT l."branchId",l.id AS "inventoryLotId",b.disposition::text,SUM(b."onHandUnits")::int AS units,COALESCE((SELECT -SUM(m."quantityUnits") FROM "pharmacy_stock_movements" m WHERE m."organizationId"=l."organizationId" AND m."inventoryLotId"=l.id AND m.kind='SALE' AND NOT EXISTS (SELECT 1 FROM "pharmacy_stock_movements" r WHERE r."organizationId"=m."organizationId" AND r."reversesMovementId"=m.id) AND NOT EXISTS (SELECT 1 FROM "pharmacy_sale_line_allocations" a JOIN "pharmacy_sale_lines" sl ON sl."organizationId"=a."organizationId" AND sl.id=a."saleLineId" JOIN "pharmacy_sales" s ON s."organizationId"=sl."organizationId" AND s.id=sl."saleId" WHERE a."organizationId"=m."organizationId" AND a."stockMovementId"=m.id AND s.status<>'COMPLETED')),0)::int AS "soldUnits" FROM "pharmacy_inventory_lots" l JOIN "pharmacy_manufacturing_batches" mb ON mb.id=l."manufacturingBatchId" JOIN "pharmacy_stock_balances" b ON b."inventoryLotId"=l.id AND b."organizationId"=l."organizationId" WHERE l."organizationId"=${organizationId} AND (${notice.batchId}::text IS NULL OR mb.id=${notice.batchId}) AND (${notice.medicineId}::text IS NULL OR mb."medicineId"=${notice.medicineId}) GROUP BY l."organizationId",l."branchId",l.id,b.disposition`
+    Prisma.sql`SELECT l."branchId",l.id AS "inventoryLotId",b.disposition::text,SUM(b."onHandUnits")::int AS units,COALESCE((SELECT -SUM(m."quantityUnits") FROM "pharmacy_stock_movements" m WHERE m."organizationId"=l."organizationId" AND m."inventoryLotId"=l.id AND m.kind='SALE' AND NOT EXISTS (SELECT 1 FROM "pharmacy_stock_movements" r WHERE r."organizationId"=m."organizationId" AND r."reversesMovementId"=m.id) AND NOT EXISTS (SELECT 1 FROM "pharmacy_sale_line_allocations" a JOIN "pharmacy_sale_lines" sl ON sl."organizationId"=a."organizationId" AND sl.id=a."saleLineId" JOIN "pharmacy_sales" s ON s."organizationId"=sl."organizationId" AND s.id=sl."saleId" WHERE a."organizationId"=m."organizationId" AND a."stockMovementId"=m.id AND s.status<>'COMPLETED')),0)::int AS "soldUnits" FROM "pharmacy_inventory_lots" l JOIN "pharmacy_manufacturing_batches" mb ON mb.id=l."manufacturingBatchId" JOIN "pharmacy_stock_balances" b ON b."inventoryLotId"=l.id AND b."organizationId"=l."organizationId" WHERE l."organizationId"=${organizationId} AND (${notice.batchId}::text IS NULL OR mb.id=${notice.batchId}) AND (${notice.medicineId}::text IS NULL OR mb."medicineId"=${notice.medicineId})${branchFilter} GROUP BY l."organizationId",l."branchId",l.id,b.disposition`
   );
 }
 

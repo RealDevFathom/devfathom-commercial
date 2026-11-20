@@ -34,6 +34,14 @@ vi.mock('@/lib/pharmacy/counter-browser-print', async (importOriginal) => ({
   printPrinterTestPage: mocks.print,
 }));
 
+const bridges = vi.hoisted(() => ({ props: vi.fn() }));
+vi.mock('./print-bridges', () => ({
+  PharmacyPrintBridges: (props: { branchName: string }) => {
+    bridges.props(props);
+    return <p>Print bridges for {props.branchName}</p>;
+  },
+}));
+
 import { layoutWithPaper, PharmacyPrinterSettingsConsole } from './printer-settings';
 
 const ok = (data: unknown) => ({ data, isLoading: false, isError: false, refetch: vi.fn() });
@@ -112,7 +120,7 @@ describe('PharmacyPrinterSettingsConsole', () => {
     expect(mocks.print).toHaveBeenCalledWith('THERMAL', 'en', 'Main');
   });
 
-  it('prints an Urdu test page on the selected paper without claiming the printer printed', () => {
+  it('prints an Urdu test page on the selected paper without claiming the printer printed', async () => {
     render(<PharmacyPrinterSettingsConsole canSave />);
     fireEvent.change(screen.getByLabelText('Receipt printer and paper'), {
       target: { value: 'THERMAL_58' },
@@ -120,22 +128,23 @@ describe('PharmacyPrinterSettingsConsole', () => {
     fireEvent.change(screen.getByLabelText('Test language'), { target: { value: 'ur' } });
     fireEvent.click(screen.getByRole('button', { name: 'Print test page' }));
     expect(mocks.print).toHaveBeenCalledWith('THERMAL_58', 'ur', 'Main');
-    expect(screen.getByRole('status')).toHaveTextContent(
+    expect(await screen.findByRole('status')).toHaveTextContent(
       /cannot see whether the page printed or the dialog was cancelled/
     );
   });
 
-  it('shows a failed test print and lets the operator retry', () => {
-    mocks.print.mockImplementationOnce(() => {
-      throw new Error('Allow pop-ups for this site, then retry Print test page.');
-    });
+  it('shows a failed test print and lets the operator retry', async () => {
+    // DEV-973: a blocked print window is reported once its page fails to load.
+    mocks.print.mockRejectedValueOnce(
+      new Error('Allow pop-ups for this site, then retry Print test page.')
+    );
     render(<PharmacyPrinterSettingsConsole canSave />);
     fireEvent.click(screen.getByRole('button', { name: 'Print test page' }));
-    expect(screen.getByRole('alert')).toHaveTextContent('Allow pop-ups');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Allow pop-ups');
     fireEvent.click(screen.getByRole('button', { name: 'Print test page' }));
     expect(mocks.print).toHaveBeenCalledTimes(2);
+    expect(await screen.findByRole('status')).toHaveTextContent(/Print dialog opened/);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent(/Print dialog opened/);
   });
 
   it('switches branch and offers retry when saved settings cannot be read', () => {
@@ -154,6 +163,20 @@ describe('PharmacyPrinterSettingsConsole', () => {
     mocks.branches = ok({ branches: [] });
     render(<PharmacyPrinterSettingsConsole canSave />);
     expect(screen.getByText(/No active pharmacy branch/)).toBeInTheDocument();
+  });
+
+  it('shows the print bridge section to administrators for the selected branch only', () => {
+    bridges.props.mockClear();
+    const { unmount } = render(<PharmacyPrinterSettingsConsole canSave />);
+    expect(screen.getByRole('heading', { name: 'Thermal print bridges' })).toBeInTheDocument();
+    expect(bridges.props).toHaveBeenLastCalledWith({ branchId: 'b1', branchName: 'Main' });
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'b2' } });
+    expect(bridges.props).toHaveBeenLastCalledWith({ branchId: 'b2', branchName: 'Second' });
+    unmount();
+    bridges.props.mockClear();
+    render(<PharmacyPrinterSettingsConsole canSave={false} />);
+    expect(screen.queryByRole('heading', { name: 'Thermal print bridges' })).toBeNull();
+    expect(bridges.props).not.toHaveBeenCalled();
   });
 
   it('offers no restaurant kitchen routing', () => {

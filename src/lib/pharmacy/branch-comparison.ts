@@ -1,9 +1,10 @@
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { readPharmacyOwnerCommandCentre } from '@/lib/pharmacy/reports';
-import { workspaceDateRange } from '@/lib/timezone';
+import { pharmacyBranchDayEndsField, pharmacyBusinessDayRange } from '@/lib/pharmacy/business-day';
 
 export type PharmacyBranchComparisonInput = {
-  branches: readonly { id: string; name: string }[];
+  /** DEV-958A: each branch's own day-end hours bound its days (midnight when absent). */
+  branches: readonly { id: string; name: string; businessDayEndsAtHistory?: unknown }[];
   from: string;
   to: string;
   /** Workspace zone: demand-event timestamps are bounded by its midnights (UTC when absent). */
@@ -20,13 +21,16 @@ export async function readPharmacyBranchComparison(
   input: PharmacyBranchComparisonInput
 ) {
   const rows = [];
-  const eventWindow = workspaceDateRange(input.from, input.to, input.timeZone);
   for (const branch of input.branches) {
+    // DEV-958A: each branch is read on its own business days.
+    const clock = { timeZone: input.timeZone, dayEnd: branch.businessDayEndsAtHistory };
+    const eventWindow = pharmacyBusinessDayRange(input.from, input.to, clock);
     const report = await readPharmacyOwnerCommandCentre(db, {
       branchIds: [branch.id],
       from: input.from,
       to: input.to,
       timeZone: input.timeZone,
+      ...pharmacyBranchDayEndsField([{ id: branch.id, dayEnd: branch.businessDayEndsAtHistory }]),
     });
     const demand = await db.unfulfilledDemandEvent.aggregate({
       where: {

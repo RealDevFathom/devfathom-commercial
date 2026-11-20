@@ -10,6 +10,8 @@ import {
   counterMedicineGenericName,
 } from '@/lib/pharmacy/counter-display-name';
 import { formatMinor, formatShortExpiry } from '@/lib/pharmacy/counter-receipt';
+import { STRENGTH_NOT_RECORDED } from '@/lib/pharmacy/medicine';
+import { BATCH_NOT_RECORDED } from '@/lib/pharmacy/unrecorded-batch';
 import { formatStockBreakdown } from '@/lib/pharmacy/stock-breakdown';
 
 export type CounterSearchResultsProps = {
@@ -47,6 +49,20 @@ const MATCH_LABEL: Record<CounterSearchRow['matchedOn'], string> = {
 };
 
 /**
+ * DEV-907: "Gulberg", "Gulberg and DHA", "Gulberg, DHA and other branches".
+ * The server sends branch names only; nothing else about the other branch.
+ */
+export function otherBranchAvailabilityText(
+  availability: NonNullable<CounterSearchRow['otherBranchAvailability']>
+): string {
+  const names = availability.more
+    ? [...availability.branchNames, 'other branches']
+    : availability.branchNames;
+  if (names.length <= 1) return names[0] ?? '';
+  return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+}
+
+/**
  * POS-02 result rows.
  *
  * Every field the requirement names is on the row itself — presentation,
@@ -57,6 +73,9 @@ const MATCH_LABEL: Record<CounterSearchRow['matchedOn'], string> = {
  * Rendered as a list of buttons rather than a table: each row is one keyboard
  * stop that stages the medicine, which is what makes the whole search
  * mouse-free (POS-01).
+ *
+ * DEV-972: the row is dense (the details run on as one wrapping line) so at least five results
+ * show at 1366 x 768; every field above is still on the row.
  */
 export function CounterSearchResults({
   rows,
@@ -208,7 +227,7 @@ export function CounterSearchResults({
                 aria-describedby={reason ? reasonId : undefined}
                 aria-pressed={active}
                 onClick={() => onSelect(row)}
-                className={`grid min-h-11 w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 px-4 py-3 text-start focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 ${
+                className={`grid min-h-11 w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 px-4 py-1.5 text-start focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 ${
                   active ? 'bg-surface-sunken' : 'hover:bg-surface-sunken'
                 }`}
               >
@@ -232,12 +251,18 @@ export function CounterSearchResults({
                   <span className="sr-only">Pack MRP </span>
                   {row.printedMrpMinor === null ? '—' : formatMinor(row.printedMrpMinor)}
                 </span>
-                <span className="col-span-2 min-w-0 break-words text-xs leading-relaxed text-text-muted">
+                <span className="col-span-2 flex min-w-0 flex-wrap gap-x-3 break-words text-xs text-text-muted">
                   <span className="block">
-                    <span>Strength:</span>{' '}
-                    <span className="ms-1">
-                      <bdi dir="auto">{row.strength ?? 'Unavailable'}</bdi>
-                    </span>
+                    {row.strength ? (
+                      <>
+                        <span>Strength:</span>{' '}
+                        <span className="ms-1">
+                          <bdi dir="auto">{row.strength}</bdi>
+                        </span>
+                      </>
+                    ) : (
+                      STRENGTH_NOT_RECORDED
+                    )}
                   </span>
                   <span className="block">
                     <span>Form:</span> {row.presentation}
@@ -252,8 +277,15 @@ export function CounterSearchResults({
                     <span>Stock:</span>{' '}
                     {formatStockBreakdown(row.onHandUnits, row.saleableUnits, row.dosageForm)}
                   </span>
-                  {row.batchNumber ? ` · Batch ${row.batchNumber}` : ''}
-                  {row.nearestSafeExpiry ? ` · ${formatShortExpiry(row.nearestSafeExpiry)}` : ''}
+                  {row.batchNumber
+                    ? ` · Batch ${row.batchNumber}`
+                    : row.recommendedLotId
+                      ? ` · ${BATCH_NOT_RECORDED}`
+                      : ''}
+                  {/* DEV-853: a sellable lot with no expiry says "Expiry not recorded". */}
+                  {row.nearestSafeExpiry || row.recommendedLotId
+                    ? ` · ${formatShortExpiry(row.nearestSafeExpiry)}`
+                    : ''}
                   {notes.length ? ` · ${notes.join(' · ')}` : ''}
                   {` · ${MATCH_LABEL[row.matchedOn]}`}
                 </span>
@@ -276,6 +308,18 @@ export function CounterSearchResults({
                   </span>
                 ) : null}
               </button>
+              {row.otherBranchAvailability?.branchNames.length ? (
+                <p className="border-t border-border-subtle px-4 py-2 text-sm text-text-body">
+                  Also in stock at{' '}
+                  <bdi dir="auto" className="font-semibold text-text-strong">
+                    {otherBranchAvailabilityText(row.otherBranchAvailability)}
+                  </bdi>
+                  .{' '}
+                  <span className="text-text-muted">
+                    The customer buys and collects it at that branch.
+                  </span>
+                </p>
+              ) : null}
               {row.stockAlternatives ? (
                 <section
                   aria-label={`Alternatives for ${counterMedicineDisplayName(row)}`}

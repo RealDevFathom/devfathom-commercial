@@ -36,6 +36,7 @@ const reads = vi.hoisted(() => {
     findSubstituteProposals: read([]),
     findUpsellSuggestions: read([]),
     authenticatePharmacyPack: read({ status: 'UNVERIFIED' }),
+    lookupCounterVoucher: read({ id: 'voucher-1', status: 'READY' }),
   };
 });
 vi.mock('@/lib/pharmacy/counter', async (original) => ({
@@ -62,6 +63,11 @@ vi.mock('@/lib/pharmacy/substitute-finder', async (original) => ({
 vi.mock('@/lib/pharmacy/upsell-suggestions', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/upsell-suggestions')>()),
   findUpsellSuggestions: reads.findUpsellSuggestions,
+}));
+// DEV-780: the counter's voucher lookup.
+vi.mock('@/lib/pharmacy/vouchers', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/vouchers')>()),
+  lookupCounterVoucher: reads.lookupCounterVoucher,
 }));
 vi.mock('@/lib/pharmacy/pack-authentication-operations', () => ({
   authenticatePharmacyPack: reads.authenticatePharmacyPack,
@@ -136,6 +142,11 @@ const procedures: Array<[string, Read, (caller: Caller, branchId: string) => Pro
     'authenticatePharmacyPack',
     (c, branchId) => c.authenticatePack({ branchId, payload: '0100' }),
   ],
+  [
+    'counterVoucher',
+    'lookupCounterVoucher',
+    (c, branchId) => c.counterVoucher({ branchId, code: 'GIFT10' }),
+  ],
 ];
 
 const activeBranches = new Set([MAIN, DHA]);
@@ -144,6 +155,7 @@ let db: {
   pharmacyBranch: { findMany: ReturnType<typeof vi.fn>; findFirst: ReturnType<typeof vi.fn> };
   pharmacyBranchAssignment: { findMany: ReturnType<typeof vi.fn> };
   pharmacyInventoryLot: { findMany: ReturnType<typeof vi.fn> };
+  organization: { findUnique: ReturnType<typeof vi.fn> };
   user: { findUnique: ReturnType<typeof vi.fn>; findFirst: ReturnType<typeof vi.fn> };
 };
 
@@ -191,6 +203,8 @@ beforeEach(() => {
       ),
     },
     pharmacyInventoryLot: { findMany: vi.fn(async () => []) },
+    // DEV-907: counterSearch reads the owner's other-branch switch (off here).
+    organization: { findUnique: vi.fn(async () => null) },
     // A counter member with the canonical counter grant, so any refusal is the branch.
     user: {
       findUnique: vi.fn(async () => ({
@@ -247,4 +261,98 @@ describe('counter reads stay inside the cashier’s branch assignment (DEV-876)'
       expect(scopeOf(read)).toMatchObject({ organizationId: 'org-1', branchId: DHA });
     }
   );
+});
+
+describe('the counter customer snapshot limits points history by branch (DEV-909)', () => {
+  /** The branches whose points history the library read was told to list (its fifth argument). */
+  const visibleBranches = () => reads.readCustomerSnapshot.mock.calls[0]?.[4];
+  const snapshot = (c: Caller, branchId: string) =>
+    c.customerSnapshot({ branchId, customerId: 'customer-1' });
+
+  it('shows staff, managers included, the history of their assigned branches only', async () => {
+    await expect(snapshot(caller(), MAIN)).resolves.toBeDefined();
+    expect(visibleBranches()).toEqual([MAIN]);
+    expect(db.pharmacyBranchAssignment.findMany).toHaveBeenLastCalledWith({
+      where: {
+        organizationId: 'org-1',
+        userId: 'cashier-1',
+        active: true,
+        branch: { organizationId: 'org-1', active: true },
+      },
+      select: { branchId: true },
+    });
+  });
+
+  it('shows a session ADMIN of the organization every branch', async () => {
+    await expect(snapshot(caller('ADMIN'), DHA)).resolves.toBeDefined();
+    expect(reads.readCustomerSnapshot.mock.calls[0]).toHaveLength(5);
+    expect(visibleBranches()).toBeUndefined();
+  });
+});
+
+describe('the customer snapshot and pack scan need the counter permission (DEV-965)', () => {
+  const PERMISSION = { code: 'FORBIDDEN', message: 'You do not have permission for this action.' };
+  const gated: Array<[string, Read, (caller: Caller, branchId: string) => Promise<unknown>]> =
+    procedures.filter(([name]) => name === 'customerSnapshot' || name === 'authenticatePack');
+  /** The member's own role rules, as the counter gate reads them. */
+  const holding = (...capabilities: string[]) =>
+    db.user.findUnique.mockResolvedValue({
+      status: 'ACTIVE',
+      organizationId: 'org-1',
+      organizationRole: {
+        permissions: capabilities.map((capability) => ({ capability, effect: 'ALLOW' })),
+      },
+      permissionOverrides: [],
+    });
+
+  it('covers both procedures', () => {
+    expect(gated.map(([name]) => name)).toEqual(['customerSnapshot', 'authenticatePack']);
+  });
+
+  it.each(gated)(
+    '%s refuses a member assigned to the branch who holds no counter or dispense permission',
+    async (_name, read, run) => {
+      holding('pharmacy:inventory', 'pharmacy:procurement');
+      await expect(run(caller(), MAIN)).rejects.toMatchObject(PERMISSION);
+      expect(reads[read]).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(gated)(
+    '%s refuses a workspace ADMIN whose role holds no counter or dispense permission',
+    async (_name, read, run) => {
+      holding('reports:financial');
+      await expect(run(caller('ADMIN'), MAIN)).rejects.toMatchObject(PERMISSION);
+      expect(reads[read]).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(gated)(
+    '%s refuses a member whose counter grant is explicitly denied',
+    async (_name, read, run) => {
+      db.user.findUnique.mockResolvedValue({
+        status: 'ACTIVE',
+        organizationId: 'org-1',
+        organizationRole: { permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }] },
+        permissionOverrides: [{ capability: 'pharmacy:counter', effect: 'DENY' }],
+      });
+      await expect(run(caller(), MAIN)).rejects.toMatchObject(PERMISSION);
+      expect(reads[read]).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(gated)(
+    '%s still works for a cashier holding the counter permission',
+    async (_n, read, run) => {
+      holding('pharmacy:counter', 'pharmacy:orders');
+      await expect(run(caller(), MAIN)).resolves.toBeDefined();
+      expect(scopeOf(read)).toMatchObject({ branchId: MAIN, actorId: 'cashier-1' });
+    }
+  );
+
+  it.each(gated)('%s still works for a pharmacist holding dispense only', async (_n, read, run) => {
+    holding('pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close');
+    await expect(run(caller(), MAIN)).resolves.toBeDefined();
+    expect(scopeOf(read)).toMatchObject({ branchId: MAIN, actorId: 'cashier-1' });
+  });
 });

@@ -2,6 +2,7 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { pharmacyBranchDayWindows } from './business-day';
 import {
   detectPharmacyAnomalies,
   type AnomalyCandidate,
@@ -92,6 +93,11 @@ export async function readPharmacyAnomalyFacts(
   observedAt = new Date()
 ): Promise<{ facts: AnomalyFactSet; windowStart: Date; windowEnd: Date }> {
   const window = validatePharmacyReportFilters(filters);
+  // Business-date columns compare against `window`; event timestamps (count approvals, sale
+  // events, receipt postings) use the workspace day, so 00:30 in Karachi counts on that date.
+  // DEV-958A: the branches' business days, ending at their "day ends at" hour. One window per
+  // call: refresh and read split a mixed set of branches into groups that share one.
+  const events = singleWindow(filters);
   const branches = Prisma.join(filters.branchIds);
   const ingredient = medicineFilter(filters.ingredientId);
   const batch = filters.batchId
@@ -112,7 +118,7 @@ export async function readPharmacyAnomalyFacts(
           JOIN "pharmacy_manufacturing_batches" mb ON mb."organizationId"=il."organizationId" AND mb."id"=il."manufacturingBatchId"
         ) lot ON lot."organizationId"=cl."organizationId" AND lot."branchId"=cl."branchId" AND lot."id"=cl."inventoryLotId"
         WHERE cl."branchId" IN (${branches}) AND c."status"='APPROVED' AND cl."varianceUnits" IS NOT NULL
-          AND c."approvedAt">=${window.from} AND c."approvedAt"<${window.to} ${ingredient} ${batch}
+          AND c."approvedAt">=${events.from} AND c."approvedAt"<${events.to} ${ingredient} ${batch}
         ORDER BY c."approvedAt" DESC LIMIT 500`);
 
   const discountOverride =
@@ -150,7 +156,7 @@ export async function readPharmacyAnomalyFacts(
                    COUNT(*) FILTER (WHERE e."kind"='VOIDED')::int AS "voidEvents",
                    0::int AS "completedSales", MAX(e."occurredAt") AS "occurredAt"
             FROM "pharmacy_sale_events" e
-            WHERE e."branchId" IN (${branches}) AND e."occurredAt">=${window.from} AND e."occurredAt"<${window.to}
+            WHERE e."branchId" IN (${branches}) AND e."occurredAt">=${events.from} AND e."occurredAt"<${events.to}
             GROUP BY e."branchId", e."actorId"
             UNION ALL
             SELECT s."branchId", s."createdByUserId", 0::int, COUNT(*)::int, MAX(s."completedAt")
@@ -164,6 +170,8 @@ export async function readPharmacyAnomalyFacts(
           FROM staff_activity GROUP BY "branchId", "userId"
           ORDER BY MAX("occurredAt") DESC LIMIT 200`);
 
+  // A close that was superseded, or reopened for trading (DEV-631) and so awaiting the
+  // close that restates the day, is not the day's standing close.
   const cashVariance =
     filters.supplierId || filters.ingredientId || filters.batchId
       ? []
@@ -174,6 +182,7 @@ export async function readPharmacyAnomalyFacts(
           WHERE c."branchId" IN (${branches}) AND c."isFinal"=true
             AND c."businessDate">=${window.from} AND c."businessDate"<${window.to}
             AND NOT EXISTS (SELECT 1 FROM "pharmacy_daily_closes" newer WHERE newer."organizationId"=c."organizationId" AND newer."branchId"=c."branchId" AND newer."businessDate"=c."businessDate" AND newer."sequence">c."sequence")
+            AND NOT EXISTS (SELECT 1 FROM "pharmacy_day_reopens" reopen WHERE reopen."organizationId"=c."organizationId" AND reopen."closeId"=c."id")
           ORDER BY c."businessDate" DESC LIMIT 200`);
 
   const tenderMismatch =
@@ -209,6 +218,7 @@ export async function readPharmacyAnomalyFacts(
           WHERE c."branchId" IN (${branches}) AND c."isFinal"=true
             AND c."businessDate">=${window.from} AND c."businessDate"<${window.to}
             AND NOT EXISTS (SELECT 1 FROM "pharmacy_daily_closes" newer WHERE newer."organizationId"=c."organizationId" AND newer."branchId"=c."branchId" AND newer."businessDate"=c."businessDate" AND newer."sequence">c."sequence")
+            AND NOT EXISTS (SELECT 1 FROM "pharmacy_day_reopens" reopen WHERE reopen."organizationId"=c."organizationId" AND reopen."closeId"=c."id")
           ORDER BY c."businessDate" DESC LIMIT 200`);
 
   const supplier = filters.supplierId
@@ -235,14 +245,14 @@ export async function readPharmacyAnomalyFacts(
         AND previous_gr."postedAt">=gr."postedAt"-interval '30 days'
     ) baseline ON baseline."comparisonReceipts">0
     WHERE line."branchId" IN (${branches}) AND gr."status"='POSTED'
-      AND gr."postedAt">=${window.from} AND gr."postedAt"<${window.to} ${supplier} ${ingredient} ${batch}
+      AND gr."postedAt">=${events.from} AND gr."postedAt"<${events.to} ${supplier} ${ingredient} ${batch}
     ORDER BY gr."postedAt" DESC LIMIT 500`);
 
   const stamp = <T extends object>(rows: T[]) =>
     rows.map((row) => ({ ...row, sourceObservedAt: observedAt }));
   return {
-    windowStart: window.from,
-    windowEnd: window.to,
+    windowStart: events.from,
+    windowEnd: events.to,
     facts: {
       shrinkage: stamp(shrinkage),
       discountOverride: stamp(discountOverride),
@@ -278,8 +288,58 @@ function scopeMatches(
   return true;
 }
 
-export async function readPharmacyAnomalySignals(db: ScopedDb, filters: PharmacyReportFilters) {
-  const window = validatePharmacyReportFilters(filters);
+/**
+ * DEV-958A: the one window of `filters`' branches. Signals are stored per branch with the
+ * window they were computed over, so a call covers branches that share one; `byWindow` splits a
+ * mixed set into such groups.
+ */
+function singleWindow(filters: PharmacyReportFilters) {
+  const windows = pharmacyBranchDayWindows(filters.from, filters.to, filters.branchIds, filters);
+  if (windows.length !== 1) throw new RangeError('Read anomaly facts one shared window at a time.');
+  return windows[0]!;
+}
+
+/** `filters` split into groups of branches whose own business days give the same window. */
+function byWindow(filters: PharmacyReportFilters): PharmacyReportFilters[] {
+  return pharmacyBranchDayWindows(filters.from, filters.to, filters.branchIds, filters).map(
+    (window) => ({ ...filters, branchIds: window.branchIds })
+  );
+}
+
+export async function readPharmacyAnomalySignals(
+  db: ScopedDb,
+  filters: PharmacyReportFilters
+): Promise<Awaited<ReturnType<typeof readPharmacyAnomalySignalsInWindow>>> {
+  validatePharmacyReportFilters(filters);
+  const groups = byWindow(filters);
+  if (groups.length === 1) return readPharmacyAnomalySignalsInWindow(db, filters);
+  // DEV-958A: each branch's signals on its own business days, in the one order a single read
+  // gives, before the same 200-row cut.
+  const rows = (
+    await Promise.all(groups.map((group) => readPharmacyAnomalySignalsInWindow(db, group)))
+  ).flat();
+  return rows.sort(compareSignals).slice(0, 200);
+}
+
+/** Postgres orders an enum by declaration order: these mirror the schema's enums. */
+const STATUS_ORDER = ['OPEN', 'ACKNOWLEDGED', 'SNOOZED', 'CLOSED', 'STALE'];
+const SEVERITY_ORDER = ['NOTICE', 'REVIEW', 'URGENT'];
+
+/** The read's own order: status ascending, severity descending, newest computed first. */
+function compareSignals(
+  a: { status: string; severity: string; computedAt: Date },
+  b: { status: string; severity: string; computedAt: Date }
+) {
+  return (
+    STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status) ||
+    SEVERITY_ORDER.indexOf(b.severity) - SEVERITY_ORDER.indexOf(a.severity) ||
+    b.computedAt.getTime() - a.computedAt.getTime()
+  );
+}
+
+async function readPharmacyAnomalySignalsInWindow(db: ScopedDb, filters: PharmacyReportFilters) {
+  // Signals are stored with the workspace-day window refresh evaluated (readPharmacyAnomalyFacts).
+  const window = singleWindow(filters);
   const [rows, ingredientMedicines] = await Promise.all([
     db.pharmacyAnomalySignal.findMany({
       where: {
@@ -304,6 +364,27 @@ export async function readPharmacyAnomalySignals(db: ScopedDb, filters: Pharmacy
 }
 
 export async function refreshPharmacyAnomalySignals(
+  db: ScopedDb,
+  filters: PharmacyReportFilters,
+  actorId: string,
+  at = new Date()
+): Promise<Awaited<ReturnType<typeof refreshPharmacyAnomalySignalsInWindow>>> {
+  const groups = byWindow(filters);
+  if (groups.length === 1) return refreshPharmacyAnomalySignalsInWindow(db, filters, actorId, at);
+  // DEV-958A: each branch's signals computed on its own business days.
+  const merged: Awaited<ReturnType<typeof refreshPharmacyAnomalySignalsInWindow>> = {
+    evaluated: 0,
+    signals: [],
+  };
+  for (const group of groups) {
+    const result = await refreshPharmacyAnomalySignalsInWindow(db, group, actorId, at);
+    merged.evaluated += result.evaluated;
+    merged.signals.push(...result.signals);
+  }
+  return merged;
+}
+
+async function refreshPharmacyAnomalySignalsInWindow(
   db: ScopedDb,
   filters: PharmacyReportFilters,
   actorId: string,

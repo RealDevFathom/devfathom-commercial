@@ -2,7 +2,8 @@ import 'server-only';
 
 import { TRPCError } from '@trpc/server';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
+import { workspaceTimezone } from '@/lib/timezone';
+import { pharmacyBusinessDay } from './business-day';
 import { foldExpectedCash, saleTotalMinor, type DrawerMovement } from './settlement';
 import { checkPharmacyCashClose, type CashCloseCheck } from './cash-close-check';
 import { pharmacyCashCloseDayBounds } from './cash-close-day';
@@ -24,7 +25,7 @@ export async function readPharmacyCashCloseCheck(
 ): Promise<CashCloseCheck & { branchName: string; timezone: string }> {
   const branch = await db.pharmacyBranch.findFirst({
     where: { id: scope.branchId, organizationId: scope.organizationId, active: true },
-    select: { name: true },
+    select: { name: true, businessDayEndsAtHistory: true },
   });
   if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
   const organization = await db.organization.findUnique({
@@ -32,15 +33,26 @@ export async function readPharmacyCashCloseCheck(
     select: { timezone: true, currency: true },
   });
   const timezone = workspaceTimezone(organization?.timezone);
+  // DEV-958A: the branch's business day, which ends at its "day ends at" hour.
+  const dayClock = { timeZone: timezone, dayEnd: branch.businessDayEndsAtHistory };
   const day = businessDate.toISOString().slice(0, 10);
   // A sale is voided while still OPEN, so it has no business date. Its VOIDED
   // event belongs to the day by the workspace zone the counter stamps in: read
   // exactly that local day's UTC interval, every page of it.
-  const { start: dayStart, end: dayEnd } = pharmacyCashCloseDayBounds(businessDate, timezone);
+  const { start: dayStart, end: dayEnd } = pharmacyCashCloseDayBounds(
+    businessDate,
+    timezone,
+    dayClock.dayEnd
+  );
 
   const where = { organizationId: scope.organizationId, branchId: scope.branchId, businessDate };
   const [close, drawers, sales, refunds, voidEvents] = await Promise.all([
-    db.pharmacyDailyClose.findFirst({ where, orderBy: { sequence: 'desc' } }),
+    db.pharmacyDailyClose.findFirst({
+      where,
+      orderBy: { sequence: 'desc' },
+      // DEV-631: a close the owner or a manager reopened for trading no longer stands.
+      include: { reopen: { select: { id: true } } },
+    }),
     db.pharmacyDrawerSession.findMany({
       where,
       include: { movements: true },
@@ -63,7 +75,9 @@ export async function readPharmacyCashCloseCheck(
     readAllVoidEvents(db, scope, dayStart, dayEnd),
   ]);
   // Belt and braces: the interval already is the local day.
-  const voids = voidEvents.filter((event) => workspaceToday(timezone, event.occurredAt) === day);
+  const voids = voidEvents.filter(
+    (event) => pharmacyBusinessDay(dayClock, event.occurredAt) === day
+  );
 
   const refundedSaleIds = [...new Set(refunds.map((refund) => refund.saleId))];
   const returns = refundedSaleIds.length
@@ -111,16 +125,19 @@ export async function readPharmacyCashCloseCheck(
     // #487: amounts are stated in the organization's currency, never a fixed PKR;
     // the fallback mirrors the day-close console's `counterBranches` reader.
     currency: organization?.currency ?? 'PKR',
-    close: close
-      ? {
-          id: close.id,
-          sequence: close.sequence,
-          cashExpectedMinor: close.cashExpectedMinor,
-          cashCountedMinor: close.cashCountedMinor,
-          cashVarianceMinor: close.cashVarianceMinor,
-          varianceNote: close.reason,
-        }
-      : null,
+    // DEV-631: a reopened day is trading again; its next close restates the day, so
+    // the reopened close is not checked as the day's standing close.
+    close:
+      close && !close.reopen
+        ? {
+            id: close.id,
+            sequence: close.sequence,
+            cashExpectedMinor: close.cashExpectedMinor,
+            cashCountedMinor: close.cashCountedMinor,
+            cashVarianceMinor: close.cashVarianceMinor,
+            varianceNote: close.reason,
+          }
+        : null,
     // Goods gross from line totals (the stored line gross `grossMinor` − discount),
     // matching the Z-report. Service charge and tax are not included, so against a
     // Z-report gross that carries them the refund rate can read slightly high —

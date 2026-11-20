@@ -1716,6 +1716,16 @@ const ASSIGNMENT_GATED: ReadonlyArray<{
     capability: 'pharmacy:inventory',
     invoke: () => caller().expiryBoardLots({ branchId: 'branch_a', withinDays: 90 }),
   },
+  // DEV-90 — shelf and price sticker content is a branch stock read.
+  {
+    name: 'shelfLabels',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().shelfLabels({
+        branchId: 'branch_a',
+        source: { kind: 'RECEIPT', goodsReceiptId: 'receipt_1' },
+      }),
+  },
   {
     name: 'stockSignalDashboard',
     capability: 'pharmacy:inventory',
@@ -2036,6 +2046,19 @@ const ASSIGNMENT_GATED: ReadonlyArray<{
         requestKey: 'quarantine-1',
       }),
   },
+  {
+    // DEV-853: record the real batch and expiry of a legacy lot.
+    name: 'recordUnrecordedBatch',
+    capability: 'pharmacy:inventory',
+    invoke: () =>
+      caller().recordUnrecordedBatch({
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        batchNumber: 'B-REAL',
+        printedExpiry: new Date('2027-06-01T00:00:00.000Z'),
+        expiryPrecision: 'MONTH',
+      }),
+  },
 ];
 
 /** The user-record lookup that confirms a session ADMIN is a live ADMIN of this tenant. */
@@ -2130,6 +2153,7 @@ const READS = new Set([
   'onHand',
   'temperatureZoneStatuses',
   'expiryBoardLots',
+  'shelfLabels',
   'stockSignalDashboard',
   'stockSignalDigest',
   'transferBoard',
@@ -2546,7 +2570,7 @@ describe('DEV-660 — every branch-scoped procedure is classified', () => {
 
     expect(new Set(classified).size).toBe(classified.length);
     expect(branchScoped).toEqual(classified);
-    expect(ASSIGNMENT_GATED).toHaveLength(42);
+    expect(ASSIGNMENT_GATED).toHaveLength(44);
   });
 });
 
@@ -3401,5 +3425,174 @@ describe('DEV-608 — location transfer role matrix', () => {
       })
     ).rejects.toMatchObject({ code: 'CONFLICT', message: 'IDEMPOTENCY_CONFLICT' });
     expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-965 — recall trace, near-expiry value at risk and the stock digest', () => {
+  const BUCKET = {
+    bucketDays: 30,
+    units: 12,
+    valueAtRiskMinor: 4_800,
+    withinSupplierReturnWindow: false,
+  };
+  /** The SQL text and bound values of the last raw read. */
+  const lastRawRead = () => {
+    const calls = db.$queryRaw.mock.calls;
+    const sql = calls[calls.length - 1]![0] as Prisma.Sql;
+    return { text: sql.text, values: sql.values };
+  };
+  const notice = () =>
+    db.pharmacyRecallNotice.findFirst.mockResolvedValue({
+      id: 'recall_1',
+      organizationId: 'org_a',
+      batchId: 'batch_1',
+      medicineId: null,
+    });
+
+  describe('recallTrace', () => {
+    it('refuses a member without the safety permission before reading the notice', async () => {
+      sessionRole = 'EMPLOYEE';
+      grant([allow('pharmacy:inventory'), allow('pharmacy:counter')]);
+      notice();
+      await expect(caller().recallTrace({ recallNoticeId: 'recall_1' })).rejects.toMatchObject(
+        CAPABILITY_REFUSAL
+      );
+      expect(db.pharmacyRecallNotice.findFirst).not.toHaveBeenCalled();
+      expect(db.$queryRaw).not.toHaveBeenCalled();
+    });
+
+    it('refuses an ADMIN whose safety permission is explicitly denied', async () => {
+      grant([allow('pharmacy:safety'), allow('pharmacy:inventory')], [deny('pharmacy:safety')]);
+      confirmAdmin();
+      notice();
+      await expect(caller().recallTrace({ recallNoticeId: 'recall_1' })).rejects.toMatchObject(
+        CAPABILITY_REFUSAL
+      );
+      expect(db.$queryRaw).not.toHaveBeenCalled();
+    });
+
+    it('limits a safety holder to the branches they are assigned to', async () => {
+      sessionRole = 'EMPLOYEE';
+      grant([allow('pharmacy:safety')]);
+      notice();
+      db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_a' }]);
+      await caller().recallTrace({ recallNoticeId: 'recall_1' });
+      expect(db.pharmacyBranchAssignment.findMany).toHaveBeenCalledWith({
+        where: {
+          organizationId: 'org_a',
+          userId: 'user_a',
+          active: true,
+          branch: { organizationId: 'org_a', active: true },
+        },
+        select: { branchId: true },
+      });
+      const { text, values } = lastRawRead();
+      expect(text).toContain('l."branchId" IN (');
+      expect(values).toContain('branch_a');
+    });
+
+    it('reads nothing for a safety holder with no branch assignment', async () => {
+      sessionRole = 'EMPLOYEE';
+      grant([allow('pharmacy:safety')]);
+      notice();
+      db.pharmacyBranchAssignment.findMany.mockResolvedValue([]);
+      await expect(caller().recallTrace({ recallNoticeId: 'recall_1' })).resolves.toEqual([]);
+      expect(db.$queryRaw).not.toHaveBeenCalled();
+    });
+
+    it('shows a head-office ADMIN with inventory reach every branch', async () => {
+      grant([allow('pharmacy:safety'), allow('pharmacy:inventory')]);
+      confirmAdmin();
+      notice();
+      db.pharmacyBranchAssignment.findMany.mockResolvedValue([]);
+      await caller().recallTrace({ recallNoticeId: 'recall_1' });
+      expect(lastRawRead().text).not.toContain('l."branchId" IN (');
+    });
+
+    it('keeps an ADMIN without inventory reach to their assigned branches', async () => {
+      grant([allow('pharmacy:safety')]);
+      confirmAdmin();
+      notice();
+      db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_b' }]);
+      await caller().recallTrace({ recallNoticeId: 'recall_1' });
+      const { text, values } = lastRawRead();
+      expect(text).toContain('l."branchId" IN (');
+      expect(values).toContain('branch_b');
+      expect(values).not.toContain('branch_a');
+    });
+  });
+
+  describe('nearExpiryBoard', () => {
+    it('withholds the cost-based value at risk without financial reports', async () => {
+      sessionRole = 'EMPLOYEE';
+      grant([allow('pharmacy:counter')]);
+      db.$queryRaw.mockResolvedValue([BUCKET]);
+      await expect(caller().nearExpiryBoard({ branchId: 'branch_a' })).resolves.toEqual([
+        { ...BUCKET, valueAtRiskMinor: null },
+      ]);
+    });
+
+    it('withholds it from an ADMIN whose financial reports are explicitly denied', async () => {
+      grant([allow('pharmacy:inventory'), allow('reports:financial')], [deny('reports:financial')]);
+      db.$queryRaw.mockResolvedValue([BUCKET]);
+      await expect(caller().nearExpiryBoard({ branchId: 'branch_a' })).resolves.toEqual([
+        { ...BUCKET, valueAtRiskMinor: null },
+      ]);
+    });
+
+    it('still shows it to a member holding financial reports', async () => {
+      sessionRole = 'EMPLOYEE';
+      grant([allow('reports:financial')]);
+      db.$queryRaw.mockResolvedValue([BUCKET]);
+      await expect(caller().nearExpiryBoard({ branchId: 'branch_a' })).resolves.toEqual([BUCKET]);
+    });
+  });
+
+  describe('stockSignalDigest', () => {
+    const DIGEST_REFUSAL = {
+      code: 'FORBIDDEN',
+      message: 'Only the owner of this digest or an administrator can read it.',
+    };
+
+    it("refuses a branch member reading someone else's digest before any signal read", async () => {
+      sessionRole = 'EMPLOYEE';
+      grant([allow('pharmacy:inventory')]);
+      await expect(
+        caller().stockSignalDigest({ branchId: 'branch_a', ownerUserId: 'user_b' })
+      ).rejects.toMatchObject(DIGEST_REFUSAL);
+      expect(db.pharmacyStockSignal.findMany).not.toHaveBeenCalled();
+    });
+
+    it('refuses an ADMIN whose admin permission is explicitly denied', async () => {
+      grant([allow('pharmacy:inventory')], [deny('admin:access')]);
+      await expect(
+        caller().stockSignalDigest({ branchId: 'branch_a', ownerUserId: 'user_b' })
+      ).rejects.toMatchObject(DIGEST_REFUSAL);
+      expect(db.pharmacyStockSignal.findMany).not.toHaveBeenCalled();
+    });
+
+    it('lets a member read their own digest', async () => {
+      sessionRole = 'EMPLOYEE';
+      grant([]);
+      await caller().stockSignalDigest({ branchId: 'branch_a', ownerUserId: 'user_a' });
+      expect(db.pharmacyStockSignal.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ ownerUserId: 'user_a' }) })
+      );
+    });
+
+    it("lets an administrator read another person's digest", async () => {
+      grant([allow('pharmacy:inventory')]);
+      await caller().stockSignalDigest({ branchId: 'branch_a', ownerUserId: 'user_b' });
+      expect(db.pharmacyStockSignal.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ ownerUserId: 'user_b' }) })
+      );
+    });
+
+    it('lets a member explicitly granted the admin permission read it', async () => {
+      sessionRole = 'EMPLOYEE';
+      grant([], [allow('admin:access')]);
+      await caller().stockSignalDigest({ branchId: 'branch_a', ownerUserId: 'user_b' });
+      expect(db.pharmacyStockSignal.findMany).toHaveBeenCalledTimes(1);
+    });
   });
 });

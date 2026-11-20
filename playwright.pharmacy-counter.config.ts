@@ -12,7 +12,14 @@ export default defineConfig({
   testDir: './tests/e2e',
   // The counter spec owns this lane. Every sibling spec in tests/e2e belongs to
   // a different database and host, so the glob is what keeps them out.
-  testMatch: ['pharmacy-counter.spec.ts', 'time-to-first-sale.spec.ts'],
+  // DEV-751: the procedures (SOP) spec shares the seeded pharmacy workspace.
+  // DEV-957: the offline counter spec enrols its own browser profile on the same workspace.
+  testMatch: [
+    'pharmacy-counter.spec.ts',
+    'time-to-first-sale.spec.ts',
+    'pharmacy-sop.spec.ts',
+    'pharmacy-counter-offline.spec.ts',
+  ],
   outputDir: './playwright-artifacts/pharmacy-counter',
   // Serial: the three bills draw from one seeded stock balance, so a parallel
   // worker would race the same lot and make a failure meaningless.
@@ -27,7 +34,24 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
   },
-  projects: [{ name: 'pharmacy-counter-serial', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    {
+      name: 'pharmacy-counter-serial',
+      testIgnore: 'pharmacy-sop.spec.ts',
+      use: { ...devices['Desktop Chrome'] },
+    },
+    // DEV-751: procedures run on desktop and on a phone (touch, small screen).
+    {
+      name: 'pharmacy-sop-desktop',
+      testMatch: 'pharmacy-sop.spec.ts',
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'pharmacy-sop-mobile',
+      testMatch: 'pharmacy-sop.spec.ts',
+      use: { ...devices['Pixel 7'] },
+    },
+  ],
   webServer: [
     uploads.server,
     {

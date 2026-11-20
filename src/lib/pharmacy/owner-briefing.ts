@@ -1,6 +1,7 @@
 import 'server-only';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { pharmacyBusinessDayRange, type PharmacyDayEnd } from './business-day';
 
 /**
  * DEV-78 — the owner's five-line briefing (daily, plus a weekly summary).
@@ -76,21 +77,30 @@ function shiftDate(date: string, days: number) {
   return value.toISOString().slice(0, 10);
 }
 
-/** Inclusive date labels plus the matching half-open UTC instant window. */
+/**
+ * Inclusive date labels plus the matching half-open instant window on the
+ * workspace's clock: the shop's own days, the same days the labels name. UTC
+ * when the zone is absent or one Intl refuses, which is the window this always
+ * used before it followed the shop's day.
+ */
 export function ownerBriefingWindow(
   businessDate: string,
   cadence: OwnerBriefingCadence,
-  config: OwnerBriefingConfig = DEFAULT_OWNER_BRIEFING_CONFIG
+  config: OwnerBriefingConfig = DEFAULT_OWNER_BRIEFING_CONFIG,
+  timeZone?: string | null,
+  /** DEV-958A: the branch's day-end hours by day (`PharmacyDayEnd`; midnight when absent). */
+  { dayEnd }: { dayEnd?: PharmacyDayEnd } = {}
 ) {
   const days = cadence === 'WEEKLY' ? config.weeklyDays : 1;
   const from = shiftDate(businessDate, -(days - 1));
+  const range = pharmacyBusinessDayRange(from, businessDate, { timeZone, dayEnd });
   return {
     cadence,
     days,
     from,
     to: businessDate,
-    startsAt: new Date(`${from}T00:00:00.000Z`),
-    endsBefore: new Date(`${shiftDate(businessDate, 1)}T00:00:00.000Z`),
+    startsAt: range.from,
+    endsBefore: range.to,
   };
 }
 

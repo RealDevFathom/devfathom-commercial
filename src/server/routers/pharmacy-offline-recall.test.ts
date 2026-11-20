@@ -114,8 +114,16 @@ function db(lots: Array<{ id: string; batch: { state: string } }>) {
     findMany,
     db: {
       $queryRaw: vi.fn(async () => []),
+      // The sale's business day is read on the organisation's stored clock.
+      organization: { findUnique: vi.fn(async () => ({ timezone: 'UTC' })) },
+      // DEV-958A: the branch's "day ends at" hour; none stored reads as midnight.
+      pharmacyBranch: { findFirst: async () => null },
       pharmacyInventoryLot: { findMany },
       pharmacyOfflineCommand: { findFirst: vi.fn(async () => null) },
+      // DEV-637: a retry answers with the number the sale was issued.
+      pharmacySale: {
+        findFirst: vi.fn(async () => ({ receiptNumber: 900, offlineReceiptReference: null })),
+      },
     } as unknown as ScopedDb,
   };
 }

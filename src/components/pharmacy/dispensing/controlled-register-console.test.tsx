@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type Branch = { id: string; name: string };
@@ -31,6 +31,7 @@ vi.mock('@/lib/trpc', () => ({
   },
 }));
 
+import { installFakePrintWindows } from '@/lib/testing/print-window';
 import { ControlledRegisterConsole } from './controlled-register-console';
 
 const entry = {
@@ -143,22 +144,18 @@ describe('DEV-672 controlled register branch list', () => {
     expect(h.registerInputs.at(-1)).toEqual({ input: { branchId: 'br-2' }, enabled: true });
   });
 
-  it('prints the register table with the branch name', () => {
+  it('prints the register table with the branch name', async () => {
     h.branches = { isLoading: false, error: null, data: [{ id: 'br-1', name: 'Gulberg' }] };
-    const popup = document.implementation.createHTMLDocument('print');
-    const print = vi.fn();
-    const open = vi.spyOn(window, 'open').mockReturnValue({
-      document: popup,
-      opener: {},
-      focus: vi.fn(),
-      print,
-    } as unknown as Window);
+    const windows = installFakePrintWindows();
 
     render(<ControlledRegisterConsole />);
     fireEvent.click(screen.getByRole('button', { name: 'Print register' }));
 
-    expect(open).toHaveBeenCalledOnce();
-    expect(print).toHaveBeenCalledOnce();
+    expect(windows.open).toHaveBeenCalledOnce();
+    await waitFor(() => expect(windows.last().printRequests()).toBe(1));
+    // DEV-973: the isolated window prints itself; this page never calls print() on it.
+    expect(windows.last().proxy.print).not.toHaveBeenCalled();
+    const popup = windows.last().document()!;
     expect(popup.querySelector('h1')?.textContent).toBe('Controlled medicine register');
     expect(popup.body.textContent).toContain('Gulberg');
     expect(popup.querySelector('table')?.textContent).toContain('Register Tablet 5mg');

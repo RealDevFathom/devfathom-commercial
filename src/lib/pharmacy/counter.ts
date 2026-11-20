@@ -33,7 +33,9 @@ import {
 import { counterReceiptTotals, type CounterReceipt } from './counter-receipt';
 import { mrpRoundingIncrementForLot, normalizeMedicineText } from './medicine';
 import { readReceiptIdentity } from './receipt-identity';
+import { parseShelfLabelCode } from './shelf-label-code';
 import type { LedgerScope } from './stock-ledger';
+import { BATCH_NOT_RECORDED, compareKnownExpiryFirst } from './unrecorded-batch';
 
 export class PharmacyCounterError extends Error {
   constructor(readonly reason: 'NOT_FOUND' | 'CROSS_BRANCH_REFERENCE' | 'INVALID_QUERY') {
@@ -66,11 +68,20 @@ export type CounterCatalogRow = {
   unitsPerPack: number | null;
   printedMrpMinor: number | null;
   roundingIncrementMinor: number;
+  /** DEV-853: also null when the shown lot's batch number was never recorded. */
   batchNumber: string | null;
-  /** ISO instant of the nearest SAFE expiry; null when nothing is sellable. */
+  /**
+   * ISO instant of the nearest SAFE expiry; null when nothing is sellable or
+   * (DEV-853) when the shown lot's expiry was never recorded.
+   */
   nearestSafeExpiry: string | null;
   /** Safe canonical units on hand for this branch (blocked stock excluded). */
   onHandUnits: number;
+  /**
+   * DEV-90: set only on a shelf-label scan, where `onHandUnits` is that lot's own
+   * units. The medicine-wide safe total, for shortage capture and substitutes.
+   */
+  medicineOnHandUnits?: number;
   /** The saleable arrangement, per available sale unit (POS-02). */
   saleableUnits: Array<{
     kind: SaleUnitKind;
@@ -105,6 +116,25 @@ export type CounterCatalogRow = {
   };
   /** Why otherwise-present stock cannot be sold, deduplicated (INV-03). */
   blocked: BlockReason[];
+  /**
+   * DEV-90: the exact lot a scanned shelf sticker names. Set only when the query
+   * was a shelf-label code of this branch. When it differs from
+   * `recommendedLotId`, selling it is a FEFO override like any other.
+   */
+  labelLot?: CounterLabelLot | null;
+};
+
+export type CounterLabelLot = {
+  inventoryLotId: string;
+  /** DEV-853: null when the batch number was never recorded. */
+  batchNumber: string | null;
+  /** DEV-853: null when the expiry was never recorded. */
+  expiresAt: string | null;
+  printedMrpMinor: number;
+  /** Safe canonical units of this lot alone. */
+  sellableUnits: number;
+  /** Why the lot cannot be sold; null when it can. */
+  blockedBy: BlockReason | null;
 };
 
 export type CounterSearchRow = CounterCatalogRow & {
@@ -116,6 +146,17 @@ export type CounterSearchRow = CounterCatalogRow & {
     /** More same-ingredient brands may be in stock than were checked. */
     truncated: boolean;
   };
+  /**
+   * DEV-907: owner-enabled "also in stock at another branch" line. Set only when
+   * the owner switched it on, this branch has none of the medicine, and it is not
+   * a controlled drug. Branch names of the same organization only — never a
+   * quantity, price, batch, customer or any other detail of the other branch.
+   */
+  otherBranchAvailability?: {
+    branchNames: string[];
+    /** More branches hold it than are named. */
+    more: boolean;
+  };
 };
 
 type LotRow = {
@@ -124,7 +165,7 @@ type LotRow = {
   unitsPerPack: number;
   printedMrpMinor: number;
   receivedAt: Date | null;
-  batch: { batchNumber: string; expiresAt: Date; state: string; medicineId: string };
+  batch: { batchNumber: string | null; expiresAt: Date | null; state: string; medicineId: string };
 };
 
 type BalanceRow = {
@@ -138,6 +179,8 @@ const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
 /** DEV-878: bound on same-ingredient candidates checked per distinct ingredient set. */
 const MAX_ALTERNATIVE_CANDIDATES = 20;
+/** DEV-907: branch names named on one availability line. */
+const MAX_OTHER_BRANCH_NAMES = 3;
 
 /**
  * A strength component as a counter reads it: `500 mg`, `2.5 mg`, `500 mg + 30 mg`.
@@ -151,7 +194,9 @@ export function renderStrengthValue(value: unknown): string {
   return raw.includes('.') ? raw.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '') : raw;
 }
 
-function renderStrength(components: readonly { value: unknown; unit: string }[]): string | null {
+export function renderStrength(
+  components: readonly { value: unknown; unit: string }[]
+): string | null {
   if (components.length === 0) return null;
   return components
     .map((component) => `${renderStrengthValue(component.value)} ${component.unit}`)
@@ -185,7 +230,10 @@ async function matchMedicineIds(
   scope: CounterScope,
   query: string,
   limit: number
-): Promise<Map<string, { kind: CounterMatchKind; rank: number }>> {
+): Promise<{
+  matches: Map<string, { kind: CounterMatchKind; rank: number }>;
+  labelLotId: string | null;
+}> {
   const trimmed = query.trim();
   if (trimmed.length < 2) throw new PharmacyCounterError('INVALID_QUERY');
   const normalized = normalizeMedicineText(trimmed);
@@ -210,7 +258,26 @@ async function matchMedicineIds(
     // fuzzy lookups keeps scan-to-cart to one indexed read, and a lone row lets
     // the scanner path add it without a pick list.
     remember(barcode.presentation.medicineId, 'BARCODE', 0);
-    return matches;
+    return { matches, labelLotId: null };
+  }
+
+  // A shelf code resolves only inside this organization and branch. Invalid
+  // internal codes also fail closed instead of entering fuzzy catalogue search.
+  if (/^71\d{14}$/.test(trimmed)) {
+    const labelNumber = parseShelfLabelCode(trimmed);
+    const lot =
+      labelNumber === null
+        ? null
+        : await db.pharmacyInventoryLot.findFirst({
+            where: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              shelfLabelNumber: labelNumber,
+            },
+            select: { id: true, batch: { select: { medicineId: true } } },
+          });
+    if (lot) remember(lot.batch.medicineId, 'BARCODE', 0);
+    return { matches, labelLotId: lot?.id ?? null };
   }
 
   // Read prefixes before substrings so a limited alphabetical substring read
@@ -305,7 +372,7 @@ async function matchMedicineIds(
     for (const medicine of producerContains) remember(medicine.id, 'NAME', 5.5);
   }
 
-  return matches;
+  return { matches, labelLotId: null };
 }
 
 function candidateFrom(scope: CounterScope, lot: LotRow, balance: BalanceRow): AllocationCandidate {
@@ -333,11 +400,17 @@ function candidateFrom(scope: CounterScope, lot: LotRow, balance: BalanceRow): A
 export async function searchCounterCatalog(
   db: ScopedDb,
   scope: CounterScope,
-  input: { query: string; limit?: number; at?: Date }
+  input: {
+    query: string;
+    limit?: number;
+    at?: Date;
+    /** DEV-907: the owner's switch, read by the server; never taken from the client. */
+    otherBranchAvailability?: boolean;
+  }
 ): Promise<{ rows: CounterSearchRow[]; truncated: boolean }> {
   const limit = Math.min(Math.max(input.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
   const at = input.at ?? new Date();
-  const matches = await matchMedicineIds(db, scope, input.query, limit);
+  const { matches, labelLotId } = await matchMedicineIds(db, scope, input.query, limit);
   const medicineIds = [...matches.keys()];
   if (medicineIds.length > limit) {
     // Relevance must decide admission too, before hydration. Keep the original
@@ -347,7 +420,14 @@ export async function searchCounterCatalog(
   }
   if (medicineIds.length === 0) return { rows: [], truncated: false };
 
-  const { rows, medicines } = await hydrateCounterRows(db, scope, matches, medicineIds, at);
+  const { rows, medicines } = await hydrateCounterRows(
+    db,
+    scope,
+    matches,
+    medicineIds,
+    at,
+    labelLotId
+  );
   const unavailable = rows.filter((row) => !hasSellableUnit(row));
   const sourceById = new Map(medicines.map((medicine) => [medicine.id, medicine]));
   const ingredientSets = unavailable.flatMap((row) => {
@@ -377,7 +457,8 @@ export async function searchCounterCatalog(
             batches: {
               some: {
                 state: 'ACTIVE',
-                expiresAt: { gt: at },
+                // DEV-853: an unrecorded expiry is never treated as expired.
+                OR: [{ expiresAt: null }, { expiresAt: { gt: at } }],
                 lots: {
                   some: {
                     branchId: scope.branchId,
@@ -450,7 +531,89 @@ export async function searchCounterCatalog(
       truncated: candidatesBySet.get(ingredientSetKey(source.strengths))?.truncated ?? false,
     };
   }
+  if (input.otherBranchAvailability) {
+    // Only a medicine this branch has none of, and never a controlled drug: the
+    // row flag is checked here and the stored flag again in the read itself.
+    const outOfStock = unavailable.filter(
+      (row) => (row.medicineOnHandUnits ?? row.onHandUnits) === 0 && !row.restriction.controlled
+    );
+    const elsewhere = await readOtherBranchAvailability(
+      db,
+      scope,
+      outOfStock.map((row) => row.medicineId),
+      at
+    );
+    for (const row of outOfStock) {
+      const names = elsewhere.get(row.medicineId);
+      if (!names?.length) continue;
+      row.otherBranchAvailability = {
+        branchNames: names.slice(0, MAX_OTHER_BRANCH_NAMES),
+        more: names.length > MAX_OTHER_BRANCH_NAMES,
+      };
+    }
+  }
   return { rows, truncated: matches.size > medicineIds.length };
+}
+
+/**
+ * DEV-907: the names of the other active branches of this organization that hold
+ * sellable-looking stock of each medicine: an active, unexpired batch of a
+ * non-controlled medicine, received, with an AVAILABLE balance above zero.
+ *
+ * The read is pinned to the caller's organization (and RLS pins it again), so
+ * another organization's stock can never appear. Only branch names leave this
+ * function; quantities, prices, batches and lots are never selected.
+ */
+export async function readOtherBranchAvailability(
+  db: ScopedDb,
+  scope: CounterScope,
+  medicineIds: readonly string[],
+  at: Date
+): Promise<Map<string, string[]>> {
+  const result = new Map<string, string[]>();
+  if (medicineIds.length === 0) return result;
+  const lotFilter = {
+    organizationId: scope.organizationId,
+    receivedAt: { not: null, lte: at },
+    batch: {
+      organizationId: scope.organizationId,
+      medicineId: { in: [...medicineIds] },
+      state: 'ACTIVE' as const,
+      // DEV-853: an unrecorded expiry is never treated as expired.
+      OR: [{ expiresAt: null }, { expiresAt: { gt: at } }],
+      medicine: { organizationId: scope.organizationId, controlled: false },
+    },
+    balances: {
+      some: {
+        organizationId: scope.organizationId,
+        disposition: 'AVAILABLE' as const,
+        onHandUnits: { gt: 0 },
+      },
+    },
+  };
+  const branches = await db.pharmacyBranch.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      active: true,
+      id: { not: scope.branchId },
+      inventoryLots: { some: lotFilter },
+    },
+    select: {
+      id: true,
+      name: true,
+      inventoryLots: { where: lotFilter, select: { batch: { select: { medicineId: true } } } },
+    },
+    orderBy: [{ name: 'asc' }, { id: 'asc' }],
+  });
+  for (const branch of branches) {
+    if (branch.id === scope.branchId) continue;
+    for (const medicineId of new Set(branch.inventoryLots.map((lot) => lot.batch.medicineId))) {
+      const names = result.get(medicineId) ?? [];
+      names.push(branch.name);
+      result.set(medicineId, names);
+    }
+  }
+  return result;
 }
 
 /**
@@ -459,7 +622,7 @@ export async function searchCounterCatalog(
  */
 function fefoBefore(lot: LotRow, best: LotRow) {
   return (
-    (lot.batch.expiresAt.getTime() - best.batch.expiresAt.getTime() ||
+    (compareKnownExpiryFirst(lot.batch.expiresAt, best.batch.expiresAt) ||
       (lot.receivedAt?.getTime() ?? 0) - (best.receivedAt?.getTime() ?? 0) ||
       lot.id.localeCompare(best.id)) < 0
   );
@@ -515,7 +678,8 @@ function comparePerUnitPrice(left: CounterSearchRow, right: CounterSearchRow) {
 
 function compareStockAlternatives(left: CounterSearchRow, right: CounterSearchRow) {
   return (
-    (left.nearestSafeExpiry ?? '').localeCompare(right.nearestSafeExpiry ?? '') ||
+    // DEV-853: an unrecorded expiry sorts after every known one.
+    (left.nearestSafeExpiry ?? '\uffff').localeCompare(right.nearestSafeExpiry ?? '\uffff') ||
     comparePerUnitPrice(left, right) ||
     left.displayName.localeCompare(right.displayName) ||
     left.presentationId.localeCompare(right.presentationId)
@@ -528,7 +692,9 @@ async function hydrateCounterRows(
   scope: CounterScope,
   matches: ReadonlyMap<string, { kind: CounterMatchKind; rank: number }>,
   medicineIds: string[],
-  at: Date
+  at: Date,
+  // DEV-90: the lot a scanned shelf sticker names; alternatives never carry one.
+  labelLotId: string | null = null
 ) {
   const [medicines, lots, packLevels, mrps] = await Promise.all([
     db.medicine.findMany({
@@ -637,26 +803,59 @@ async function hydrateCounterRows(
     let onHandUnits = 0;
     const blocked = new Set<BlockReason>();
     let best: { lot: LotRow; locationId: string } | null = null;
+    let labelLot: CounterLabelLot | null = null;
+    let labelLotRow: LotRow | null = null;
+    let labelLotLocationId: string | null = null;
     const sellableLots = new Map<string, LotRow>();
 
     for (const lot of medicineLots) {
+      if (lot.id === labelLotId) {
+        labelLotRow = lot;
+        labelLot = {
+          inventoryLotId: lot.id,
+          batchNumber: lot.batch.batchNumber,
+          expiresAt: lot.batch.expiresAt?.toISOString() ?? null,
+          printedMrpMinor: lot.printedMrpMinor,
+          sellableUnits: 0,
+          blockedBy: null,
+        };
+      }
+      let lotBlockedBy: BlockReason | null = null;
       for (const balance of balancesByLot.get(lot.id) ?? []) {
         const candidate = candidateFrom(scope, lot, balance);
         const reason = blockReasonFor(candidate, scope_);
         if (reason !== null) {
+          if (lotBlockedBy === null || lotBlockedBy === 'EMPTY') lotBlockedBy = reason;
           // EMPTY is an exhausted bucket, not a condition an operator acts on.
           if (reason !== 'EMPTY') blocked.add(reason);
           continue;
+        }
+        if (labelLot?.inventoryLotId === lot.id) {
+          labelLot.sellableUnits += balance.onHandUnits;
+          labelLotLocationId ??= balance.stockLocationId;
         }
         onHandUnits += balance.onHandUnits;
         sellableLots.set(lot.id, lot);
         const better = best === null || fefoBefore(lot, best.lot);
         if (better) best = { lot, locationId: balance.stockLocationId };
       }
+      if (labelLot?.inventoryLotId === lot.id && labelLot.sellableUnits === 0) {
+        labelLot.blockedBy = lotBlockedBy ?? 'EMPTY';
+      }
     }
 
+    // A lot disappearing between the exact lookup and catalogue read is not a
+    // licence to return an ordinary medicine row and bill a different lot.
+    if (labelLotId && !labelLot) continue;
+    const availableUnits = labelLot ? labelLot.sellableUnits : onHandUnits;
+
+    // DEV-90: a sellable shelf-label lot is the one being sold, so its own pack
+    // conversion and price drive the sale units, even when it is not FEFO's lot.
+    const priced: LotRow | null =
+      labelLotRow && labelLot?.blockedBy === null ? labelLotRow : (best?.lot ?? null);
+
     const presentationId =
-      (best && presentationByPackLevel.get(best.lot.packLevelId)) ??
+      (priced && presentationByPackLevel.get(priced.packLevelId)) ??
       medicine.presentations[0]?.id ??
       null;
     if (!presentationId) continue;
@@ -666,17 +865,17 @@ async function hydrateCounterRows(
 
     let saleUnits: SaleUnitOption[] = [];
     let packMismatch: CounterPackMismatch | null = null;
-    if (best) {
+    if (priced) {
       // A lot whose received pack disagrees with the medicine's pack setup is
       // still sold through that setup, priced from the same lot exactly as the
       // server prices the line; only a setup that cannot price it reports why.
       ({ saleUnits, packMismatch } = resolveCounterSaleUnits({
         packLevels: packLevelsByPresentation.get(presentationId) ?? [],
-        lotPackLevelId: best.lot.packLevelId,
-        lotPackLevelLabel: levelLabelByPackLevel.get(best.lot.packLevelId) ?? null,
-        lotUnitsPerPack: best.lot.unitsPerPack,
-        otherLotUnitsPerPack: [...sellableLots.values()]
-          .filter((lot) => lot.id !== best!.lot.id)
+        lotPackLevelId: priced.packLevelId,
+        lotPackLevelLabel: levelLabelByPackLevel.get(priced.packLevelId) ?? null,
+        lotUnitsPerPack: priced.unitsPerPack,
+        otherLotUnitsPerPack: (labelLotId ? [] : [...sellableLots.values()])
+          .filter((lot) => lot.id !== priced!.id)
           .map((lot) => lot.unitsPerPack),
         dosageForm: presentation.dosageForm,
         presentation: presentation.presentation,
@@ -686,35 +885,40 @@ async function hydrateCounterRows(
 
     // The same (pack level, batch) lookup the sale writer uses, so the quoted
     // price is the charged price even when batches carry different increments.
-    const roundingIncrementMinor = best
+    const roundingIncrementMinor = priced
       ? mrpRoundingIncrementForLot(mrps, {
-          packLevelId: best.lot.packLevelId,
-          batchNumber: best.lot.batch.batchNumber,
+          packLevelId: priced.packLevelId,
+          batchNumber: priced.batch.batchNumber,
         })
       : 1;
 
-    const saleableUnits = best
+    const saleableUnits = priced
       ? saleUnits.map((option) => {
           const preview = previewSaleLine({
             option,
             quantity: 1,
-            printedMrpMinor: best!.lot.printedMrpMinor,
-            unitsPerPack: best!.lot.unitsPerPack,
+            printedMrpMinor: priced!.printedMrpMinor,
+            unitsPerPack: priced!.unitsPerPack,
             roundingIncrementMinor,
-            availableUnits: onHandUnits,
+            availableUnits,
           });
           return {
             kind: option.kind,
             levelLabel: option.levelLabel,
             canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
-            wholeUnits: Math.floor(onHandUnits / option.canonicalUnitsPerSaleUnit),
+            wholeUnits: Math.floor(availableUnits / option.canonicalUnitsPerSaleUnit),
             unitPriceMinor: preview.unitPriceMinor,
             proRataCeilingMinor: preview.proRataCeilingMinor,
           };
         })
       : [];
 
-    const location = best ? locationById.get(best.locationId) : undefined;
+    // A sellable scanned lot is shown as itself: its batch, expiry and shelf.
+    const shown: { lot: LotRow; locationId: string | null } | null =
+      labelLotRow && labelLot?.blockedBy === null
+        ? { lot: labelLotRow, locationId: labelLotLocationId }
+        : best;
+    const location = shown?.locationId ? locationById.get(shown.locationId) : undefined;
     rows.push({
       medicineId: medicine.id,
       displayName: medicine.productName,
@@ -728,13 +932,14 @@ async function hydrateCounterRows(
       route: presentation.route,
       matchedOn: matches.get(medicine.id)?.kind ?? 'NAME',
       recommendedLotId: best?.lot.id ?? null,
-      packLevelId: best?.lot.packLevelId ?? null,
-      unitsPerPack: best?.lot.unitsPerPack ?? null,
-      printedMrpMinor: best?.lot.printedMrpMinor ?? null,
+      packLevelId: priced?.packLevelId ?? null,
+      unitsPerPack: priced?.unitsPerPack ?? null,
+      printedMrpMinor: priced?.printedMrpMinor ?? null,
       roundingIncrementMinor,
-      batchNumber: best?.lot.batch.batchNumber ?? null,
-      nearestSafeExpiry: best?.lot.batch.expiresAt.toISOString() ?? null,
-      onHandUnits,
+      batchNumber: shown?.lot.batch.batchNumber ?? null,
+      nearestSafeExpiry: shown?.lot.batch.expiresAt?.toISOString() ?? null,
+      onHandUnits: availableUnits,
+      ...(labelLotId ? { medicineOnHandUnits: onHandUnits } : {}),
       saleableUnits,
       saleUnits,
       packMismatch,
@@ -753,6 +958,7 @@ async function hydrateCounterRows(
         locationName: location?.name ?? null,
       },
       blocked: [...blocked].sort(),
+      ...(labelLotId ? { labelLot } : {}),
     });
   }
 
@@ -781,6 +987,8 @@ export type CounterCartLine = {
   discountMinor: number;
   tierDiscountMinor?: number;
   tierName?: string | null;
+  /** DEV-956: this line's share of the whole-bill discount, already inside discountMinor. */
+  billDiscountMinor?: number;
   /** #727: the automatic promotion that priced this line, as issued. */
   promotionName?: string | null;
   lineTotalMinor: number;
@@ -801,8 +1009,10 @@ export type CounterCartLine = {
   /** What FEFO actually took, batch by batch (POS-03: cart shows allocation). */
   allocations: Array<{
     inventoryLotId: string;
-    batchNumber: string;
-    expiresAt: string;
+    /** DEV-853: null when the batch number was never recorded. */
+    batchNumber: string | null;
+    /** DEV-853: null when the expiry was never recorded. */
+    expiresAt: string | null;
     canonicalUnits: number;
     stockLocationCode: string | null;
     /** True when this lot is not the one FEFO recommended first. */
@@ -900,13 +1110,13 @@ export async function readCounterCart(
   const lines: CounterCartLine[] = sale.lines.map((line) => {
     // The earliest expiry among this line's own allocations is what FEFO would
     // have taken first; anything later on the same line was a batch override.
-    const earliest = line.allocations.reduce<Date | null>(
-      (best, allocation) =>
-        best === null || allocation.lot.batch.expiresAt.getTime() < best.getTime()
-          ? allocation.lot.batch.expiresAt
-          : best,
-      null
-    );
+    // DEV-853: only known expiries take part; an unrecorded one is never an override.
+    const earliest = line.allocations.reduce<Date | null>((best, allocation) => {
+      const expiresAt = allocation.lot.batch.expiresAt;
+      return expiresAt !== null && (best === null || expiresAt.getTime() < best.getTime())
+        ? expiresAt
+        : best;
+    }, null);
     return {
       saleLineId: line.id,
       medicineId: line.medicineId,
@@ -922,6 +1132,7 @@ export async function readCounterCart(
       discountMinor: line.discountMinor,
       tierDiscountMinor: line.tierDiscountMinor,
       tierName: line.tierName,
+      billDiscountMinor: line.billDiscountMinor,
       promotionName: line.promotionName,
       lineTotalMinor: line.grossMinor - line.discountMinor,
       rx: line.medicine.rx,
@@ -940,11 +1151,13 @@ export async function readCounterCart(
       allocations: line.allocations.map((allocation) => ({
         inventoryLotId: allocation.inventoryLotId,
         batchNumber: allocation.lot.batch.batchNumber,
-        expiresAt: allocation.lot.batch.expiresAt.toISOString(),
+        expiresAt: allocation.lot.batch.expiresAt?.toISOString() ?? null,
         canonicalUnits: allocation.canonicalUnits,
         stockLocationCode: locationById.get(allocation.stockLocationId) ?? null,
         overridden:
-          earliest !== null && allocation.lot.batch.expiresAt.getTime() > earliest.getTime(),
+          earliest !== null &&
+          allocation.lot.batch.expiresAt !== null &&
+          allocation.lot.batch.expiresAt.getTime() > earliest.getTime(),
       })),
     };
   });
@@ -1034,14 +1247,16 @@ export async function readCounterReceipt(
     return {
       saleLineId: line.id,
       identityStatus: identity ? ('ISSUED' as const) : ('UNAVAILABLE' as const),
-      medicineName: identity?.medicineName ?? 'Historical identity unavailable',
+      medicineName: identity?.medicineName ?? 'Original item details unavailable',
+      manufacturer: identity?.manufacturer ?? null,
       strength: identity?.strength ?? null,
-      presentation: identity?.presentation ?? 'Historical identity unavailable',
+      presentation: identity?.presentation ?? 'Original item details unavailable',
       allocations,
       // Compatibility fields never associate the first lot with the entire line.
       batchNumber:
         identity?.allocations
-          .map((row) => `${row.batchNumber} (${row.canonicalUnits} units)`)
+          // DEV-853: an unrecorded batch reads exactly "Batch not recorded".
+          .map((row) => `${row.batchNumber ?? BATCH_NOT_RECORDED} (${row.canonicalUnits} units)`)
           .join('; ') ?? 'Historical batches unavailable',
       expiresAt: identity?.allocations.length === 1 ? identity.allocations[0]!.expiresAt : '',
       saleUnit: line.saleUnit as SaleUnitKind,
@@ -1051,6 +1266,7 @@ export async function readCounterReceipt(
       discountMinor: line.discountMinor,
       tierDiscountMinor: line.tierDiscountMinor,
       tierName: line.tierName,
+      billDiscountMinor: line.billDiscountMinor,
       promotionName: line.promotionName,
       lineTotalMinor: line.grossMinor - line.discountMinor,
     };
@@ -1077,10 +1293,15 @@ export async function readCounterReceipt(
     saleId: sale.id,
     receiptNumber: sale.receiptNumber,
     counterLabel: counterLabel(sale.receiptDeviceId, device?.name),
+    offlineReference: sale.offlineReceiptReference ?? null,
     branchName: branch.name,
     businessDate: sale.businessDate ? sale.businessDate.toISOString().slice(0, 10) : null,
     completedAt: sale.completedAt ? sale.completedAt.toISOString() : null,
     cashierName: cashier?.name ?? null,
+    buyerName: snapshot?.buyerName ?? null,
+    ...(snapshot?.cashMemoIdentity !== undefined
+      ? { cashMemoIdentity: snapshot.cashMemoIdentity }
+      : {}),
     currency: branch.currency,
     lines,
     tenders,

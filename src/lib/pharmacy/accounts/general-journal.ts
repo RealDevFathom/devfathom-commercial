@@ -192,6 +192,26 @@ export function commandPayloadHash(payload: Record<string, string | number>): st
     .digest('hex');
 }
 
+/**
+ * The nested `lines.create` rows. A line's relation to its voucher is the composite
+ * (organizationId, branchId, voucherId), so Prisma copies all three from the parent
+ * voucher row and the checked nested input refuses them ("Unknown argument
+ * organizationId"). Every line therefore carries exactly its voucher's organization
+ * and branch; the composite foreign key and row-level security enforce the same in
+ * the database. The explicit return type keeps tsc from accepting extra keys here.
+ */
+function voucherLineRows(
+  lines: readonly NormalizedVoucherLine[]
+): Prisma.PharmacyJournalVoucherLineCreateWithoutVoucherInput[] {
+  return lines.map((line): Prisma.PharmacyJournalVoucherLineCreateWithoutVoucherInput => ({
+    lineNumber: line.lineNumber,
+    accountCode: line.accountCode,
+    side: line.side,
+    amountMinor: line.amountMinor,
+    memo: line.memo,
+  }));
+}
+
 const voucherInclude = { lines: { orderBy: { lineNumber: 'asc' as const } } };
 
 async function lockVoucher(db: ScopedDb, scope: JournalVoucherScope, voucherId: string) {
@@ -206,12 +226,37 @@ async function lockVoucher(db: ScopedDb, scope: JournalVoucherScope, voucherId: 
   return voucher;
 }
 
+/**
+ * DEV-953: a transaction-scoped advisory lock on one voucher identity in an
+ * organisation, held until commit or rollback. Creates racing on one create key,
+ * and creates or edits racing on one reference, queue here; the next holder's
+ * look-up is a new statement, so under READ COMMITTED (the default) it sees the
+ * voucher the previous holder committed and replays it or reports the clash.
+ *
+ * Locking first is chosen over catching P2002 from the unique index: a failed
+ * INSERT aborts the whole PostgreSQL transaction, so the comparison could not be
+ * re-run in it without a savepoint, and the caller's transaction would be lost.
+ *
+ * Order: create key, then reference. Updates take only the reference lock, after
+ * their voucher row lock; nothing takes them the other way round.
+ */
+async function lockVoucherIdentity(
+  db: ScopedDb,
+  scope: JournalVoucherScope,
+  kind: 'create-key' | 'reference',
+  value: string
+) {
+  const key = `pharmacy-jv-${kind}:${scope.organizationId}:${value}`;
+  await db.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
+}
+
 async function assertReferenceFree(
   db: ScopedDb,
   scope: JournalVoucherScope,
   reference: string,
   exceptId?: string
 ) {
+  await lockVoucherIdentity(db, scope, 'reference', reference);
   const clash = await db.pharmacyJournalVoucher.findFirst({
     where: {
       organizationId: scope.organizationId,
@@ -234,6 +279,50 @@ async function assertOpenPeriod(db: ScopedDb, scope: JournalVoucherScope, at: Da
   }
 }
 
+/**
+ * Whether a saved voucher holds exactly this normalised draft: reference, purpose,
+ * currency, business instant, reason, evidence reference and every line.
+ */
+function sameVoucherDraft(
+  saved: {
+    reference: string;
+    purpose: string;
+    currency: string;
+    occurredAt: Date;
+    reason: string;
+    evidenceReference: string;
+    lines: readonly {
+      lineNumber: number;
+      accountCode: string;
+      side: string;
+      amountMinor: number;
+      memo: string | null;
+    }[];
+  },
+  draft: NormalizedVoucherDraft
+): boolean {
+  return (
+    saved.reference === draft.reference &&
+    saved.purpose === draft.purpose &&
+    saved.currency === draft.currency &&
+    saved.occurredAt.getTime() === draft.occurredAt.getTime() &&
+    saved.reason === draft.reason &&
+    saved.evidenceReference === draft.evidenceReference &&
+    saved.lines.length === draft.lines.length &&
+    draft.lines.every((line, index) => {
+      const savedLine = saved.lines[index];
+      return (
+        savedLine !== undefined &&
+        savedLine.lineNumber === line.lineNumber &&
+        savedLine.accountCode === line.accountCode &&
+        savedLine.side === line.side &&
+        savedLine.amountMinor === line.amountMinor &&
+        savedLine.memo === line.memo
+      );
+    })
+  );
+}
+
 export async function createJournalVoucherDraft(
   db: ScopedDb,
   scope: JournalVoucherScope,
@@ -241,6 +330,7 @@ export async function createJournalVoucherDraft(
   now: Date = new Date()
 ) {
   const draft = normalizeVoucherDraft(input, now);
+  await lockVoucherIdentity(db, scope, 'create-key', input.createKey);
   const replay = await db.pharmacyJournalVoucher.findFirst({
     where: { organizationId: scope.organizationId, createKey: input.createKey },
     include: voucherInclude,
@@ -249,6 +339,8 @@ export async function createJournalVoucherDraft(
     if (replay.branchId !== scope.branchId || replay.createdByUserId !== scope.actorId) {
       fail('IDEMPOTENCY_CONFLICT');
     }
+    // The same key replays only the same draft; changed details are refused, never dropped.
+    if (!sameVoucherDraft(replay, draft)) fail('IDEMPOTENCY_CONFLICT');
     return replay;
   }
   await assertReferenceFree(db, scope, draft.reference);
@@ -265,13 +357,7 @@ export async function createJournalVoucherDraft(
       createKey: input.createKey,
       createdByUserId: scope.actorId,
       updatedByUserId: scope.actorId,
-      lines: {
-        create: draft.lines.map((line) => ({
-          ...line,
-          organizationId: scope.organizationId,
-          branchId: scope.branchId,
-        })),
-      },
+      lines: { create: voucherLineRows(draft.lines) },
     },
     include: voucherInclude,
   });
@@ -303,13 +389,7 @@ export async function updateJournalVoucherDraft(
       evidenceReference: draft.evidenceReference,
       version: voucher.version + 1,
       updatedByUserId: scope.actorId,
-      lines: {
-        create: draft.lines.map((line) => ({
-          ...line,
-          organizationId: scope.organizationId,
-          branchId: scope.branchId,
-        })),
-      },
+      lines: { create: voucherLineRows(draft.lines) },
     },
     include: voucherInclude,
   });

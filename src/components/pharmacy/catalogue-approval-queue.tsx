@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import { trpc } from '@/lib/trpc';
+import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { PinAwareMessage } from '@/components/pharmacy/pin-aware-message';
 import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { Input } from '@/components/ui/input';
@@ -11,7 +13,7 @@ const editLabels: Record<string, string> = {
   productName: 'Product name',
   brandName: 'Brand',
   manufacturer: 'Manufacturer',
-  retailPriceMinor: 'Retail price (minor units)',
+  retailPriceMinor: 'Retail price',
   retailCategory: 'Retail category',
   marketingAuthorizationHolder: 'Marketing authorization holder',
   drapRegistrationNumber: 'Registration number',
@@ -29,24 +31,48 @@ const editLabels: Record<string, string> = {
   unitsPerParent: 'Individual units per pack',
   effectiveFrom: 'Effective from',
   batchReference: 'Batch reference',
-  printedMrpMinor: 'Printed MRP (minor units)',
-  roundingIncrementMinor: 'Rounding increment (minor units)',
+  printedMrpMinor: 'Printed MRP',
+  roundingIncrementMinor: 'Rounding increment',
+  mrpMinor: 'MRP',
+  sellingPriceMinor: 'Selling price',
   value: 'Alias',
+  name: 'Ingredient',
+  fileName: 'File',
+  uploadedAt: 'Uploaded',
+  medicines: 'Medicines to create',
+  reorderBranch: 'Reorder levels set at',
 };
+/** Catalogue prices are stored in paisa; the person approving reads them in rupees. */
+const RUPEE_FIELDS = new Set([
+  'retailPriceMinor',
+  'printedMrpMinor',
+  'roundingIncrementMinor',
+  'mrpMinor',
+  'sellingPriceMinor',
+]);
+/** Checked on the server only; a file hash or branch id means nothing to the person approving. */
+const HIDDEN_FIELDS = new Set(['sourceSha256', 'reorderBranchId']);
 const operationLabels: Record<string, string> = {
   UPDATE_MEDICINE: 'Product details',
+  setPackPrice: 'Set pack price',
+  createIngredient: 'Add ingredient',
   createPackLevel: 'Add pack',
   revisePackLevel: 'Revise pack',
   recordPrintedMrp: 'Record printed MRP',
   addBarcode: 'Add barcode',
   setPackBarcode: 'Attach pack barcode',
   addAlias: 'Add alias',
+  createStagedMedicines: 'Create medicines from an imported file',
 };
 
 function displayChange(field: string, value: unknown): string {
-  if (value === null) return 'Clear value';
+  // A pack price without a selling price sells at the MRP.
+  if (value === null && field === 'reorderBranch') return 'Not set from this file';
+  if (value === null) return field === 'sellingPriceMinor' ? 'Sell at MRP' : 'Clear value';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
-  if (field === 'effectiveFrom' && typeof value === 'string') {
+  if (RUPEE_FIELDS.has(field) && typeof value === 'number' && Number.isSafeInteger(value))
+    return `Rs ${formatMinor(value)}`;
+  if ((field === 'effectiveFrom' || field === 'uploadedAt') && typeof value === 'string') {
     const date = new Date(value);
     if (Number.isFinite(date.getTime()))
       return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(
@@ -80,6 +106,12 @@ export function CatalogueApprovalQueue() {
   const queue = trpc.pharmacyMedicine.catalogueEdits.useQuery(undefined, {
     retry: false,
   });
+  // DEV-19: show only the controls the server will accept for this member.
+  const access = trpc.pharmacyMedicine.catalogueQueueAccess.useQuery(undefined, {
+    retry: false,
+  });
+  const canEdit = access.data?.canEdit === true;
+  const canDecide = access.data?.canDecide === true;
   const decide = trpc.pharmacyMedicine.decideCatalogueEdit.useMutation({
     onSuccess: async (result) => {
       setPin('');
@@ -102,91 +134,104 @@ export function CatalogueApprovalQueue() {
   return (
     <SectionCard title="Catalogue edits awaiting approval" titleLevel={2}>
       <p className="mb-4 text-sm text-text-muted">
-        Edits stay pending until another catalogue administrator approves them. A solo owner may
-        approve their own edit by entering their own fresh PIN. Every approval is audited.
+        Edits stay pending until a catalogue reviewer approves them. A solo owner may approve by
+        entering their own fresh PIN. Every approval is audited.
       </p>
-      <form
-        className="mb-6 space-y-3"
-        onSubmit={(event) => {
-          event.preventDefault();
-          propose.mutate({ medicineId, changes: { productName } });
-        }}
-      >
-        <label className="block max-w-sm space-y-2 text-sm">
-          <span>Find catalogue item to edit</span>
-          <Input
-            className="min-h-11"
-            value={query}
-            maxLength={200}
-            onChange={(event) => {
-              setQuery(event.target.value);
-              setMedicineId('');
-            }}
-          />
-        </label>
-        {search.isFetching ? <p role="status">Finding items…</p> : null}
-        {search.error ? (
-          <p role="alert" className="text-destructive">
-            {search.error.message}
-          </p>
-        ) : null}
-        {search.data?.length === 0 ? <p>No matching catalogue items.</p> : null}
-        {search.data?.length ? (
-          <label className="block max-w-sm space-y-2 text-sm">
-            <span>Catalogue item</span>
-            <select
-              className="min-h-11 w-full rounded-sm border border-border bg-surface-card px-3 focus-visible:outline-ring"
-              required
-              value={medicineId}
-              onChange={(event) => setMedicineId(event.target.value)}
-            >
-              <option value="">Choose an item</option>
-              {search.data.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.productName}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-        <label className="block max-w-sm space-y-2 text-sm">
-          <span>Proposed product name</span>
-          <Input
-            className="min-h-11"
-            required
-            maxLength={300}
-            value={productName}
-            onChange={(event) => setProductName(event.target.value)}
-          />
-        </label>
-        <Button
-          size="touch"
-          disabled={!medicineId || !productName.trim() || propose.isPending}
-          type="submit"
+      {canEdit && !canDecide ? (
+        <p role="note" className="mb-4 text-sm">
+          {access.data?.isOwner
+            ? 'Another member holds the catalogue review permission, so they approve or reject these edits. To decide them yourself, give your own role that permission.'
+            : 'You can submit edits, but approving or rejecting them needs the catalogue review permission. Ask the owner to give you the Pharmacist role or that permission.'}
+        </p>
+      ) : null}
+      {canEdit ? (
+        <form
+          className="mb-6 space-y-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            propose.mutate({ medicineId, changes: { productName } });
+          }}
         >
-          {propose.isPending ? 'Submitting…' : 'Submit edit for review'}
-        </Button>
-        {propose.error ? (
-          <p role="alert" className="text-destructive">
-            {propose.error.message}
-          </p>
-        ) : null}
-        {propose.isSuccess ? (
-          <p role="status">Edit submitted for review. The published item changes after approval.</p>
-        ) : null}
-      </form>
-      <label className="mb-4 block max-w-sm space-y-2 text-sm">
-        <span>Solo owner PIN (for self-approval)</span>
-        <Input
-          className="min-h-11"
-          type="password"
-          inputMode="numeric"
-          autoComplete="off"
-          maxLength={64}
-          value={pin}
-          onChange={(event) => setPin(event.target.value)}
-        />
-      </label>
+          <label className="block max-w-sm space-y-2 text-sm">
+            <span>Find catalogue item to edit</span>
+            <Input
+              className="min-h-11"
+              value={query}
+              maxLength={200}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setMedicineId('');
+              }}
+            />
+          </label>
+          {search.isFetching ? <p role="status">Finding items…</p> : null}
+          {search.error ? (
+            <p role="alert" className="text-destructive">
+              {search.error.message}
+            </p>
+          ) : null}
+          {search.data?.length === 0 ? <p>No matching catalogue items.</p> : null}
+          {search.data?.length ? (
+            <label className="block max-w-sm space-y-2 text-sm">
+              <span>Catalogue item</span>
+              <select
+                className="min-h-11 w-full rounded-sm border border-border bg-surface-card px-3 focus-visible:outline-ring"
+                required
+                value={medicineId}
+                onChange={(event) => setMedicineId(event.target.value)}
+              >
+                <option value="">Choose an item</option>
+                {search.data.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.productName}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          <label className="block max-w-sm space-y-2 text-sm">
+            <span>Proposed product name</span>
+            <Input
+              className="min-h-11"
+              required
+              maxLength={300}
+              value={productName}
+              onChange={(event) => setProductName(event.target.value)}
+            />
+          </label>
+          <Button
+            size="touch"
+            disabled={!medicineId || !productName.trim() || propose.isPending}
+            type="submit"
+          >
+            {propose.isPending ? 'Submitting…' : 'Submit edit for review'}
+          </Button>
+          {propose.error ? (
+            <p role="alert" className="text-destructive">
+              {propose.error.message}
+            </p>
+          ) : null}
+          {propose.isSuccess ? (
+            <p role="status">
+              Edit submitted for review. The published item changes after approval.
+            </p>
+          ) : null}
+        </form>
+      ) : null}
+      {canDecide ? (
+        <label className="mb-4 block max-w-sm space-y-2 text-sm">
+          <span>Solo owner PIN (for self-approval)</span>
+          <Input
+            className="min-h-11"
+            type="password"
+            inputMode="numeric"
+            autoComplete="off"
+            maxLength={64}
+            value={pin}
+            onChange={(event) => setPin(event.target.value)}
+          />
+        </label>
+      ) : null}
       {queue.isPending ? <p role="status">Loading catalogue edits…</p> : null}
       {queue.error ? (
         <p role="alert" className="text-destructive">
@@ -195,7 +240,7 @@ export function CatalogueApprovalQueue() {
       ) : null}
       {decide.error ? (
         <p role="alert" className="mb-4 text-destructive">
-          {decide.error.message}
+          <PinAwareMessage message={decide.error.message} />
         </p>
       ) : null}
       {decisionNotice && !decide.error ? (
@@ -239,7 +284,9 @@ export function CatalogueApprovalQueue() {
                   ? edit.changes
                   : (edit.changes as { json: unknown }).json) as Record<string, unknown>
               )
-                .filter(([field]) => field !== 'id' && !field.endsWith('Id'))
+                .filter(
+                  ([field]) => field !== 'id' && !field.endsWith('Id') && !HIDDEN_FIELDS.has(field)
+                )
                 .map(([field, value]) => (
                   <div key={field} className="flex min-w-0 flex-wrap gap-2">
                     <dt className="font-semibold">{editLabels[field] ?? field}</dt>
@@ -247,29 +294,31 @@ export function CatalogueApprovalQueue() {
                   </div>
                 ))}
             </dl>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                size="touch"
-                disabled={decide.isPending || edit.stale}
-                onClick={() =>
-                  decide.mutate({
-                    editId: edit.id,
-                    decision: 'APPROVE',
-                    soloPin: pin || undefined,
-                  })
-                }
-              >
-                {decide.isPending ? 'Saving…' : 'Approve edit'}
-              </Button>
-              <Button
-                size="touch"
-                variant="destructive"
-                disabled={decide.isPending}
-                onClick={() => decide.mutate({ editId: edit.id, decision: 'REJECT' })}
-              >
-                Reject edit
-              </Button>
-            </div>
+            {canDecide ? (
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="touch"
+                  disabled={decide.isPending || edit.stale}
+                  onClick={() =>
+                    decide.mutate({
+                      editId: edit.id,
+                      decision: 'APPROVE',
+                      soloPin: pin || undefined,
+                    })
+                  }
+                >
+                  {decide.isPending ? 'Saving…' : 'Approve edit'}
+                </Button>
+                <Button
+                  size="touch"
+                  variant="destructive"
+                  disabled={decide.isPending}
+                  onClick={() => decide.mutate({ editId: edit.id, decision: 'REJECT' })}
+                >
+                  Reject edit
+                </Button>
+              </div>
+            ) : null}
           </article>
         ))}
       </div>

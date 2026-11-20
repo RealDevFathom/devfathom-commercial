@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   recordOfflineCommand: vi.fn(),
   createSale: vi.fn(),
   assignmentLookup: vi.fn(),
+  resolveBySecret: vi.fn(),
 }));
 
 vi.mock('@/lib/tenancy/tenant-actor', () => ({
@@ -58,13 +59,7 @@ vi.mock('@/lib/pharmacy/offline-devices', () => ({
   enrollPharmacyCounter: vi.fn(),
   rotatePharmacyCounterSecret: vi.fn(),
   revokePharmacyCounter: vi.fn(),
-  resolvePharmacyCounterBySecret: vi.fn(async () => ({
-    id: DEVICE,
-    branchId: BRANCH,
-    organizationId: ORG,
-    status: 'ACTIVE',
-    revokedAt: null,
-  })),
+  resolvePharmacyCounterBySecret: mocks.resolveBySecret,
 }));
 vi.mock('@/lib/pharmacy/offline-snapshots', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pharmacy/offline-snapshots')>()),
@@ -102,6 +97,7 @@ const fakeDb = {
   medicine: { findMany: vi.fn(async () => []) },
   pharmacyDeviceLotQuota: { findMany: vi.fn(async () => []) },
   pharmacyTaxProfileVersion: { findMany: vi.fn(async () => []) },
+  auditLog: { create: vi.fn(async () => ({})) },
 };
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: vi.fn(async (_org: string, work: (db: unknown) => Promise<unknown>) =>
@@ -138,6 +134,13 @@ beforeEach(() => {
   mocks.issueOfflineSnapshot.mockImplementation(async (_db, _scope, input: { kind: string }) => ({
     kind: input.kind,
   }));
+  mocks.resolveBySecret.mockResolvedValue({
+    id: DEVICE,
+    branchId: BRANCH,
+    organizationId: ORG,
+    status: 'ACTIVE',
+    revokedAt: null,
+  });
   mocks.reserveReceiptNumberBlock.mockResolvedValue({ id: 'lease_1', blockStart: 1 });
   mocks.recordOfflineCommand.mockRejectedValue(new Error('REACHED_COMMAND_LOG'));
   mocks.createSale.mockRejectedValue(new Error('REACHED_SALE'));
@@ -242,13 +245,17 @@ describe('DEV-831 offline counter operator authorization', () => {
     expect((await call('snapshot', token)).status).toBe(200);
   });
 
-  it('keeps manager-only grant operations on admin:access', async () => {
+  it('keeps quota and reject on admin:access', async () => {
     const token = await establish();
     state.grants = new Set(['pharmacy:orders', 'pharmacy:counter']);
-    expect((await call('lease', token, { size: 1 })).status).toBe(403);
-    expect(mocks.reserveReceiptNumberBlock).not.toHaveBeenCalled();
+    for (const operation of ['quota', 'reject'] as const) {
+      const response = await call(operation, token, {});
+      expect(response.status, operation).toBe(403);
+      expect(await response.json(), operation).toEqual({ error: 'forbidden' });
+    }
+    expect(mocks.recordOfflineCommand).not.toHaveBeenCalled();
     state.grants.add('admin:access');
-    expect((await call('lease', token, { size: 1 })).status).toBe(200);
+    expect((await call('lease', token, { size: 1000 })).status).toBe(200);
     expect(mocks.reserveReceiptNumberBlock).toHaveBeenCalledTimes(1);
   });
 
@@ -270,5 +277,148 @@ describe('DEV-831 offline counter operator authorization', () => {
     state.grants = new Set(['admin:access']);
     state.assignedBranches.clear();
     expect((await call('lease', token, { size: 1 })).status).toBe(200);
+  });
+});
+
+describe('DEV-767 background receipt-lease renewal by the counter operator', () => {
+  const leaseFor = (deviceId: string, branchId: string) => {
+    mocks.resolveBySecret.mockResolvedValue({
+      id: deviceId,
+      branchId,
+      organizationId: ORG,
+      status: 'ACTIVE',
+      revokedAt: null,
+    });
+  };
+
+  it("lets an assigned cashier renew their own terminal's lease without admin:access", async () => {
+    const token = await establish();
+    const response = await call('lease', token, { size: 100 });
+    expect(response.status).toBe(200);
+    expect(mocks.reserveReceiptNumberBlock).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      { organizationId: ORG, branchId: BRANCH, actorId: ACTOR },
+      { deviceId: DEVICE, size: 100 }
+    );
+  });
+
+  it('caps a cashier renewal at one renewal block', async () => {
+    const token = await establish();
+    const response = await call('lease', token, { size: 101 });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'invalid_body' });
+    expect(mocks.reserveReceiptNumberBlock).not.toHaveBeenCalled();
+  });
+
+  it("refuses another branch's terminal to a cashier assigned elsewhere", async () => {
+    const token = await establish();
+    leaseFor('device_other_branch', 'branch_other');
+    const response = await call('lease', token, { size: 100 });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: 'branch_forbidden' });
+    expect(mocks.reserveReceiptNumberBlock).not.toHaveBeenCalled();
+  });
+
+  it("refuses another terminal's lease with this terminal's session", async () => {
+    const token = await establish();
+    leaseFor('device_other_terminal', BRANCH);
+    const response = await call(
+      'lease',
+      token,
+      { size: 100 },
+      {
+        authorization: `Bearer pcd_${'b'.repeat(43)}`,
+      }
+    );
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: 'invalid_terminal_session' });
+    expect(mocks.reserveReceiptNumberBlock).not.toHaveBeenCalled();
+  });
+
+  it('refuses renewal once the counter grant or branch assignment is revoked', async () => {
+    const token = await establish();
+    state.grants.delete('pharmacy:counter');
+    expect((await call('lease', token, { size: 100 })).status).toBe(403);
+    grantCashier();
+    state.assignedBranches.clear();
+    const response = await call('lease', token, { size: 100 });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: 'branch_forbidden' });
+    expect(mocks.reserveReceiptNumberBlock).not.toHaveBeenCalled();
+  });
+
+  it('refuses a signed-in user with neither the manager nor the orders grant', async () => {
+    const token = await establish();
+    state.grants = new Set(['pharmacy:counter']);
+    const response = await call('lease', token, { size: 100 });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: 'forbidden' });
+    expect(mocks.reserveReceiptNumberBlock).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-913 offline counter audit entries', () => {
+  it('records who opened the terminal, took a snapshot and reserved receipt numbers, at which branch', async () => {
+    const token = await establish();
+    expect((await call('snapshot', token)).status).toBe(200);
+    expect((await call('lease', token, { size: 100 })).status).toBe(200);
+    const entries = fakeDb.auditLog.create.mock.calls.map(
+      (args) => (args as unknown as [{ data: Record<string, unknown> }])[0].data
+    );
+    expect(entries.map((entry) => entry.action)).toEqual([
+      'pharmacyOffline.openCounterSession',
+      'pharmacyOffline.issueOfflineSnapshot',
+      'pharmacyOffline.reserveReceiptNumbers',
+    ]);
+    for (const entry of entries)
+      expect(entry).toMatchObject({
+        organizationId: ORG,
+        actorId: ACTOR,
+        source: 'REST_API',
+        category: 'PHARMACY',
+        metadata: expect.objectContaining({ branchId: BRANCH, deviceId: DEVICE }),
+      });
+    expect(entries[2]?.metadata).toMatchObject({ size: 100 });
+    // Never the device secret, the terminal session token or a signature.
+    const stored = JSON.stringify(entries);
+    expect(stored).not.toContain(SECRET);
+    expect(stored).not.toContain(token);
+  });
+
+  it('records nothing for a refused request', async () => {
+    state.assignedBranches.clear();
+    expect((await call('establish')).status).toBe(403);
+    expect(fakeDb.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('records each newly posted offline sale once, not its replays', () => {
+    const body = { sequence: 3, action: 'CASH_OTC_SALE', leasedReceipt: { receiptNumber: 9 } };
+    expect(
+      router.counterAuditEntry('replay', body, {
+        saleId: 'sale_1',
+        receiptNumber: 9,
+        replayed: false,
+      })
+    ).toEqual({
+      action: 'replayOfflineSale',
+      operation: 'CREATE',
+      targetType: 'PharmacySale',
+      targetId: 'sale_1',
+      metadata: { receiptNumber: 9, sequence: 3, commandAction: 'CASH_OTC_SALE' },
+    });
+    expect(
+      router.counterAuditEntry('replay', body, {
+        saleId: 'sale_1',
+        receiptNumber: 9,
+        replayed: true,
+      })
+    ).toBeNull();
+    expect(
+      router.counterAuditEntry(
+        'quota',
+        { inventoryLotId: 'lot_1', stockLocationId: 'loc_1', units: 5 },
+        {}
+      )
+    ).toMatchObject({ targetId: 'lot_1', metadata: { stockLocationId: 'loc_1', units: 5 } });
   });
 });

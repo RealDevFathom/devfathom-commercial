@@ -20,6 +20,7 @@ import { ianaTimezone } from '@/lib/timezone';
 import { annotateAudit } from '@/server/audit';
 import { adminProcedure, protectedProcedure, router } from '@/server/trpc';
 import { readUploadRegistryReport } from '@/lib/uploads/registry-report';
+import { readPharmacyMemberAccess } from '@/lib/team/member-access';
 
 const optionalUrl = z
   .union([z.url().max(2_000), z.literal('')])
@@ -189,6 +190,20 @@ export const organizationAdminRouter = router({
       select: { id: true, key: true, name: true },
     });
   }),
+
+  // DEV-959A: read-only "What this person can do" for the team screen. Same
+  // administrator gate as the member list it opens from; nothing is changed.
+  memberAccess: adminProcedure
+    .input(z.object({ userId: z.string().trim().min(1).max(128) }))
+    .query(async ({ ctx, input }) => {
+      if (ctx.entitlements.vertical !== 'PHARMACY') {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Sub-roles are available for pharmacies only.',
+        });
+      }
+      return readPharmacyMemberAccess(ctx.db, organizationId(ctx), input.userId);
+    }),
 
   upsertDepartment: adminProcedure
     .input(

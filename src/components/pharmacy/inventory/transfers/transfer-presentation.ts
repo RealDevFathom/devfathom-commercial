@@ -80,7 +80,7 @@ export function packingSlipFor(transfer: TransferBoardRow): PackingSlip {
     lines: transfer.lines.map((line) => ({
       medicineName: line.medicineName,
       batchNumber: line.batchNumber,
-      expiresAt: new Date(line.expiresAt).toISOString(),
+      expiresAt: line.expiresAt === null ? null : new Date(line.expiresAt).toISOString(),
       sourceLocation: line.sourceLocation?.name ?? 'Unknown location',
       destinationLocation: line.destinationLocation?.name ?? 'Unknown location',
       quantityUnits: line.quantityUnits,
@@ -117,6 +117,14 @@ export function transferErrorMessage(action: TransferAction, error: unknown): st
       return 'These units do not split into the sealed packs and loose units that were dispatched. Adjust the quantity.';
     case 'INVALID_STATE':
       return 'This transfer moved on since the page loaded. Refresh and try again.';
+    case 'BRANCH_TRANSFERS_DISABLED':
+      return 'Branch transfers are switched off. Only the owner can switch them on.';
+    case 'CONTROLLED_DRUG_TRANSFER':
+      return 'Controlled drugs cannot be transferred between branches. Remove that stock from the transfer.';
+    case 'PREMISES_NOT_LICENSED':
+      return 'Both branches need a current premises licence on their regulatory profile before stock can move between them.';
+    case 'BRANCH_NOT_SAME_OWNER':
+      return 'Stock can only move between active branches of this pharmacy, using its own stock.';
     case 'CROSS_BRANCH_REFERENCE':
     case 'CROSS_TENANT_REFERENCE':
     case 'NOT_FOUND':

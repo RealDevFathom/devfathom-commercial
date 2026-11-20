@@ -1,5 +1,6 @@
 'use client';
 
+import { OwnPinLink } from '@/components/pharmacy/pin-aware-message';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
@@ -12,17 +13,23 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import type { CounterApprovalPin } from '@/lib/pharmacy/counter-line-approval';
+import { COUNTER_APPROVAL_CODE_HINT } from './counter-approval-copy';
 
 type Approver = { id: string; name: string; self: boolean };
+
+/** DEV-929: the same manager/owner PIN dialog approves a manual discount, in its own words. */
+export type CounterApprovalDialogCopy = { title: string; description: string; confirm: string };
 
 /** Uses the counter's shared dialog and manager/owner PIN approval controls. */
 export function CounterPackApprovalDialog({
   medicineName,
+  copy,
   loadApprovers,
   onCancel,
   onConfirm,
 }: {
   medicineName: string;
+  copy?: CounterApprovalDialogCopy;
   loadApprovers: () => Promise<Approver[]>;
   onCancel: () => void;
   onConfirm: (approval: CounterApprovalPin) => void;
@@ -67,11 +74,10 @@ export function CounterPackApprovalDialog({
             onConfirm(approval);
           }}
         >
-          <DialogTitle>Approve this scanned pack?</DialogTitle>
+          <DialogTitle>{copy?.title ?? 'Approve this scanned pack?'}</DialogTitle>
           <DialogDescription>
-            {medicineName}: this pack is not from the earliest-expiry batch. A manager or owner must
-            enter a fresh PIN. A solo owner can enter their own PIN. The approval is recorded in the
-            audit.
+            {copy?.description ??
+              `${medicineName}: this pack is not from the earliest-expiry batch. A manager or owner must enter a fresh PIN. A solo owner can enter their own PIN. The approval is recorded in the audit.`}
           </DialogDescription>
           <div className="grid gap-2">
             <Label htmlFor="pack-approver">Approving manager or owner</Label>
@@ -113,7 +119,8 @@ export function CounterPackApprovalDialog({
               <p role="status">Loading approvers…</p>
             ) : rows.length === 0 ? (
               <p role="status">
-                No manager or owner has an active staff PIN. Ask your administrator to set one up.
+                No manager or owner has an active staff PIN. A manager or owner creates their own
+                under Settings, Your PIN. <OwnPinLink />
               </p>
             ) : null}
             <Label htmlFor="pack-approver-pin">Approver PIN</Label>
@@ -124,17 +131,21 @@ export function CounterPackApprovalDialog({
               autoComplete="off"
               maxLength={8}
               className="h-11"
+              aria-describedby="pack-approver-pin-hint"
               value={pin}
               disabled={!eligible}
               onChange={(event) => setPin(event.target.value.replace(/\D/g, ''))}
             />
+            <p id="pack-approver-pin-hint" className="text-sm text-text-muted">
+              {COUNTER_APPROVAL_CODE_HINT}
+            </p>
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" className="h-11" onClick={onCancel}>
               Cancel
             </Button>
             <Button type="submit" className="h-11" disabled={!ready}>
-              Approve pack
+              {copy?.confirm ?? 'Approve pack'}
             </Button>
           </DialogFooter>
         </form>

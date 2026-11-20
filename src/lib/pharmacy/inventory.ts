@@ -17,6 +17,8 @@
  * unsafe value is a programming error and raises rather than rounding.
  */
 
+import { compareKnownExpiryFirst, hasKnownExpiryPassed } from './unrecorded-batch';
+
 export class PharmacyInventoryError extends Error {
   constructor(
     readonly reason:
@@ -24,6 +26,7 @@ export class PharmacyInventoryError extends Error {
       | 'INVALID_ARRANGEMENT'
       | 'INSUFFICIENT_STOCK'
       | 'BLOCKED_STOCK'
+      | 'LABEL_LOT_MISMATCH'
       | 'OVERRIDE_EVIDENCE_MISSING'
       | 'NOT_FOUND'
       | 'CROSS_TENANT_REFERENCE'
@@ -87,8 +90,12 @@ export type AllocationCandidate = {
    * The instant at which the batch becomes expired. Receiving normalises a
    * MONTH-precision printed expiry to the first instant after that month, so
    * comparing `at >= expiresAt` never sells a lot into its expiry period.
+   *
+   * DEV-853: `null` when the expiry was never recorded (legacy opening stock).
+   * An unknown expiry is never treated as expired, never blocks a sale, and
+   * sorts after every known expiry in FEFO order.
    */
-  expiresAt: Date;
+  expiresAt: Date | null;
   /** `null` until the goods are actually received; unreceived stock is blocked. */
   receivedAt: Date | null;
   availableUnits: number;
@@ -247,7 +254,7 @@ export function blockReasonFor(
   if (candidate.receivedAt === null || candidate.receivedAt.getTime() > scope.at.getTime()) {
     return 'UNRECEIVED';
   }
-  if (candidate.expiresAt.getTime() <= scope.at.getTime()) return 'EXPIRED';
+  if (hasKnownExpiryPassed(candidate.expiresAt, scope.at)) return 'EXPIRED';
   if (!Number.isSafeInteger(candidate.availableUnits) || candidate.availableUnits <= 0) {
     return 'EMPTY';
   }
@@ -257,14 +264,15 @@ export function blockReasonFor(
 // ── INV-02: FEFO ─────────────────────────────────────────────────────────────
 
 /**
- * FEFO order: earliest safe expiry first, then the oldest receipt, then the lot
+ * FEFO order: earliest safe expiry first (DEV-853: a lot whose expiry was
+ * never recorded comes after every lot with a known expiry), then the oldest receipt, then the lot
  * and location identifiers. The last two keys exist so two lots sharing an
  * expiry always allocate in the same order — an unordered tiebreak makes the
  * "recommended batch" recorded on an override non-reproducible.
  */
 function byFefo(a: AllocationCandidate, b: AllocationCandidate): number {
   return (
-    a.expiresAt.getTime() - b.expiresAt.getTime() ||
+    compareKnownExpiryFirst(a.expiresAt, b.expiresAt) ||
     (a.receivedAt?.getTime() ?? 0) - (b.receivedAt?.getTime() ?? 0) ||
     a.inventoryLotId.localeCompare(b.inventoryLotId) ||
     a.stockLocationId.localeCompare(b.stockLocationId)

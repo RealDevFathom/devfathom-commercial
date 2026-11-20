@@ -10,7 +10,7 @@
  *   if (!(await can(subject, 'resignation:review', { type: 'Resignation', ... })))
  *     throw new TRPCError({ code: 'FORBIDDEN' });
  */
-import { capabilityMatches } from './capabilities';
+import { decideFromRules } from './capabilities';
 import type { AuthzDb } from '@/lib/authz';
 import { POLICIES, RESOURCE_CONSTRAINTS, type Action } from './policies';
 import type { Environment, ResourceAttributes, Subject } from './types';
@@ -47,25 +47,12 @@ async function customDecision(
   if (!user) return { decision: false, hasOrganizationRole: false };
   // Prescription capture is narrower than dispensing. Existing pharmacist
   // grants remain authoritative for it, including DENYs, without granting
-  // tenant administrators the wider dispensing capability.
-  const matchingActions =
-    action === 'pharmacy:prescriptions' ? [action, 'pharmacy:dispense'] : [action];
-  const matchingRules = [
-    ...user.permissionOverrides,
-    ...(user.organizationRole?.permissions ?? []),
-  ].filter((rule) =>
-    matchingActions.some((candidate) =>
-      capabilityMatches(rule.capability, candidate, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
-    )
+  // tenant administrators the wider dispensing capability (`decideFromRules`).
+  const decision = decideFromRules(
+    [...user.permissionOverrides, ...(user.organizationRole?.permissions ?? [])],
+    action
   );
-  const hasOrganizationRole = user.organizationRole !== null;
-  if (matchingRules.some((rule) => rule.effect === 'DENY')) {
-    return { decision: false, hasOrganizationRole };
-  }
-  if (matchingRules.some((rule) => rule.effect === 'ALLOW')) {
-    return { decision: true, hasOrganizationRole };
-  }
-  return { decision: null, hasOrganizationRole };
+  return { decision, hasOrganizationRole: user.organizationRole !== null };
 }
 
 /**
@@ -75,6 +62,7 @@ async function customDecision(
 const ROLE_BOUNDED_ADMIN_ACTIONS: ReadonlySet<Action> = new Set([
   'pharmacy:procurement',
   'pharmacy:procurement-approve',
+  'pharmacy:catalogue-edit',
 ]);
 
 /** Grants require action eligibility and all mandatory resource constraints. */

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   AP_AGING_MAX_INVOICES,
+  AP_PAYABLES_PAGE_ROWS,
   agingBucket,
   apAgingCsv,
   apAgingWindow,
@@ -230,6 +231,111 @@ describe('computeApAging', () => {
   });
 });
 
+describe('computeApAging — DEV-694 credit-note set-offs', () => {
+  it('reduces the bill by approved set-offs from their approval instant, apart from payments', () => {
+    const input = invoice({
+      settlements: [
+        {
+          amountMinor: 10_000,
+          paidAt: d('2026-09-01T00:00:00Z'),
+          status: 'ACTIVE',
+          reversedAt: null,
+        },
+      ],
+      creditSetOffs: [{ amountMinor: 25_000, decidedAt: d('2026-11-10T09:00:00Z') }],
+    });
+    const after = computeApAging([input], apAgingWindow('2026-11-15', NOW), true);
+    expect(after.rows).toMatchObject([
+      { paidMinor: 10_000, setOffMinor: 25_000, outstandingMinor: 65_000 },
+    ]);
+    expect(after.totals[0]!.TOTAL).toBe(65_000);
+    const before = computeApAging([input], apAgingWindow('2026-11-09', NOW), true);
+    expect(before.rows).toMatchObject([
+      { paidMinor: 10_000, setOffMinor: 0, outstandingMinor: 90_000 },
+    ]);
+  });
+
+  it('omits a bill that payments and set-offs clear together', () => {
+    const view = computeApAging(
+      [
+        invoice({
+          settlements: [
+            {
+              amountMinor: 60_000,
+              paidAt: d('2026-09-01T00:00:00Z'),
+              status: 'ACTIVE',
+              reversedAt: null,
+            },
+          ],
+          creditSetOffs: [{ amountMinor: 40_000, decidedAt: d('2026-11-01T00:00:00Z') }],
+        }),
+      ],
+      apAgingWindow('2026-11-15', NOW),
+      true
+    );
+    expect(view.rows).toEqual([]);
+  });
+
+  it('reads only approved (or later reversed) set-offs decided before the as-of cutoff', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const db = { pharmacyApInvoice: { findMany } } as unknown as ScopedDb;
+    await readApAging(db, { organizationId: 'org_1', branchId: 'branch_1' }, '2026-11-15', NOW);
+    expect(findMany.mock.calls[0]![0].select.creditSetOffs.where).toEqual({
+      status: { in: ['APPROVED', 'REVERSED'] },
+      decidedAt: { lt: d('2026-11-16T00:00:00.000Z') },
+    });
+  });
+
+  it('stops counting a reversed set-off from its reversal instant', () => {
+    const input = invoice({
+      creditSetOffs: [
+        {
+          amountMinor: 25_000,
+          decidedAt: d('2026-11-01T09:00:00Z'),
+          status: 'REVERSED',
+          reversedAt: d('2026-11-10T09:00:00Z'),
+        },
+      ],
+    });
+    expect(computeApAging([input], apAgingWindow('2026-11-05', NOW), true).rows[0]).toMatchObject({
+      setOffMinor: 25_000,
+      outstandingMinor: 75_000,
+    });
+    expect(computeApAging([input], apAgingWindow('2026-11-15', NOW), true).rows[0]).toMatchObject({
+      setOffMinor: 0,
+      outstandingMinor: 100_000,
+    });
+  });
+
+  it('reads every invoice in pages of 5,000 before ageing them', async () => {
+    const first = Array.from({ length: AP_PAYABLES_PAGE_ROWS }, (_, index) =>
+      invoice({ id: `inv_${index}`, reference: `AP-${String(index).padStart(5, '0')}` })
+    );
+    const findMany = vi
+      .fn()
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce([invoice({ id: 'inv_last', reference: 'AP-99999' })]);
+    const db = { pharmacyApInvoice: { findMany } } as unknown as ScopedDb;
+    const view = await readApAging(
+      db,
+      { organizationId: 'org_1', branchId: 'branch_1' },
+      '2026-11-15',
+      NOW,
+      null
+    );
+    expect(findMany).toHaveBeenCalledTimes(2);
+    expect(findMany.mock.calls[0]![0]).toMatchObject({ take: 5_000 });
+    expect(findMany.mock.calls[0]![0].cursor).toBeUndefined();
+    expect(findMany.mock.calls[1]![0]).toMatchObject({
+      take: 5_000,
+      cursor: { id: `inv_${AP_PAYABLES_PAGE_ROWS - 1}` },
+      skip: 1,
+    });
+    expect(view).toMatchObject({ complete: true, scannedInvoices: AP_PAYABLES_PAGE_ROWS + 1 });
+    expect(view.rows).toHaveLength(AP_PAYABLES_PAGE_ROWS + 1);
+  });
+});
+
 describe('readApAging', () => {
   it('reads only native invoices in the scoped branch with a bounded, eligibility-filtered query', async () => {
     const findMany = vi.fn().mockResolvedValue([invoice()]);
@@ -249,29 +355,48 @@ describe('readApAging', () => {
           invoiceDate: { lt: cutoff },
           OR: [{ status: 'POSTED' }, { reversedAt: { gte: cutoff } }],
         },
-        take: AP_AGING_MAX_INVOICES + 1,
+        take: AP_PAYABLES_PAGE_ROWS,
       })
     );
     expect(findMany.mock.calls[0]![0].select.settlements.where).toEqual({ paidAt: { lt: cutoff } });
     expect(view).toMatchObject({ complete: true, scannedInvoices: 1 });
   });
 
-  it('reports an incomplete view when the bound is exceeded and never ages past it', async () => {
-    const rows = Array.from({ length: AP_AGING_MAX_INVOICES + 1 }, (_, index) =>
-      invoice({ id: `inv_${index}`, reference: `AP-${String(index).padStart(5, '0')}` })
-    );
-    const db = {
-      pharmacyApInvoice: { findMany: vi.fn().mockResolvedValue(rows) },
-    } as unknown as ScopedDb;
+  it('refuses a view above the ceiling with no rows and no totals, never a partial one', async () => {
+    const page = (start: number) =>
+      Array.from({ length: AP_PAYABLES_PAGE_ROWS }, (_, index) =>
+        invoice({ id: `inv_${start + index}`, reference: `AP-${start + index}` })
+      );
+    const findMany = vi
+      .fn()
+      .mockResolvedValueOnce(page(0))
+      .mockResolvedValueOnce(page(AP_PAYABLES_PAGE_ROWS))
+      .mockResolvedValueOnce([invoice({ id: 'inv_over', reference: 'AP-over' })]);
+    const db = { pharmacyApInvoice: { findMany } } as unknown as ScopedDb;
     const view = await readApAging(
       db,
       { organizationId: 'org_1', branchId: 'branch_1' },
       '2026-11-15',
       NOW
     );
-    expect(view.complete).toBe(false);
-    expect(view.scannedInvoices).toBe(AP_AGING_MAX_INVOICES);
-    expect(view.rows).toHaveLength(AP_AGING_MAX_INVOICES);
+    expect(AP_AGING_MAX_INVOICES).toBe(2 * AP_PAYABLES_PAGE_ROWS);
+    expect(findMany).toHaveBeenCalledTimes(3);
+    expect(view).toMatchObject({ complete: false, rows: [], totals: [] });
+    expect(view.scannedInvoices).toBe(AP_AGING_MAX_INVOICES + 1);
+  });
+
+  it('narrows the read to one payee by its normalized key', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const db = { pharmacyApInvoice: { findMany } } as unknown as ScopedDb;
+    await readApAging(
+      db,
+      { organizationId: 'org_1', branchId: 'branch_1' },
+      '2026-11-15',
+      NOW,
+      null,
+      { payeeName: '  K-Electric   LTD ' }
+    );
+    expect(findMany.mock.calls[0]![0].where.payeeKey).toBe('k-electric ltd');
   });
 
   it('refuses a future as-of day before reading', async () => {
@@ -294,7 +419,7 @@ describe('apAgingCsv', () => {
     const lines = apAgingCsv(view, 'branch_1').split('\r\n');
     expect(lines).toHaveLength(2);
     expect(lines[0]).toBe(
-      '"branch_id","as_of_date","view_complete","reference","payee","supplier_invoice_ref","invoice_date","due_date","days_past_due","bucket","currency","invoice_amount_minor","paid_minor","outstanding_minor"'
+      '"branch_id","as_of_date","view_complete","reference","payee","supplier_invoice_ref","invoice_date","due_date","days_past_due","bucket","currency","invoice_amount_minor","paid_minor","outstanding_minor","set_off_minor"'
     );
     expect(lines[1]).toContain('"branch_1","2026-11-15","false","AP-0001"');
     expect(lines[1]).not.toContain('"=HYPERLINK');

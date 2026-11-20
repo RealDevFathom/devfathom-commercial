@@ -68,6 +68,13 @@ import {
 import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
 import { managerBranchIds } from '../pharmacy-manager-branches';
 import {
+  pharmacyBranchDayEndsField,
+  pharmacyDayEndField,
+  withClientPharmacyDayEnd,
+  type PharmacyDayEndChange,
+} from '@/lib/pharmacy/business-day';
+
+import {
   PHARMACY_GROWTH_CATEGORIES,
   readPharmacyCategoryGrowthReport,
 } from '@/lib/pharmacy/category-growth-report';
@@ -234,9 +241,35 @@ async function scope(ctx: TRPCContext) {
   const branches = await ctx.db.pharmacyBranch.findMany({
     where: { organizationId, active: true },
     orderBy: { name: 'asc' },
-    select: { id: true, name: true },
+    // DEV-958A: each branch's day-end history, which bounds its report days. Only the days and
+    // hours leave the server: never who made a change, or when.
+    select: { id: true, name: true, businessDayEndsAtHistory: true },
   });
-  return { branches, organizationId };
+  return { branches: branches.map(withClientPharmacyDayEnd), organizationId };
+}
+
+/**
+ * DEV-958A: each chosen branch's own day-end history, for a report across branches to read
+ * every branch on its own business days (their sum). Only branches not on midnight are
+ * listed, and none at all when every branch is, so default reads pass what they always did.
+ */
+function reportDayEnds(
+  available: { branches: { id: string; businessDayEndsAtHistory?: unknown }[] },
+  branchIds: readonly string[]
+): { dayEnds?: Record<string, PharmacyDayEndChange[]> } {
+  return pharmacyBranchDayEndsField(
+    available.branches
+      .filter((branch) => branchIds.includes(branch.id))
+      .map((branch) => ({ id: branch.id, dayEnd: branch.businessDayEndsAtHistory }))
+  );
+}
+
+/** DEV-958A: one chosen branch's own day-end history. */
+function branchDayEnd(
+  available: { branches: { id: string; businessDayEndsAtHistory?: unknown }[] },
+  branchId: string
+): unknown {
+  return available.branches.find((branch) => branch.id === branchId)?.businessDayEndsAtHistory;
 }
 
 async function requireFinancialReports(ctx: TRPCContext) {
@@ -265,7 +298,7 @@ async function ownerFilters(ctx: TRPCContext, input: z.infer<typeof filters>) {
     branchIds.some((id) => !available.branches.some((branch) => branch.id === id))
   )
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
-  return { ...input, branchIds };
+  return { ...input, branchIds, ...reportDayEnds(available, branchIds) };
 }
 
 /** The supplier, ingredient and batch filters a reader must apply (DEV-256); unset ones omitted. */
@@ -338,6 +371,9 @@ export const pharmacyReportsRouter = router({
         // Public report filters are inclusive; the evidence reader uses an exclusive cutoff.
         to: period.to.toISOString().slice(0, 10),
         configuration: input.configuration,
+        // The caller's own organisation's days, as the other pharmacy reports read them.
+        timeZone: ctx.organization?.timezone,
+        ...(scoped.dayEnds ? { dayEnds: scoped.dayEnds } : {}),
       });
     }),
   marketing: reports
@@ -352,7 +388,13 @@ export const pharmacyReportsRouter = router({
           message: error instanceof Error ? error.message : 'Invalid marketing report dates.',
         });
       }
-      return readPharmacyMarketingReport(ctx.db, ctx.entitlements.organizationId, scoped);
+      // DEV-943: the selected dates are the caller organisation's own days.
+      return readPharmacyMarketingReport(
+        ctx.db,
+        ctx.entitlements.organizationId,
+        scoped,
+        ctx.organization?.timezone
+      );
     }),
   /** DEV-79: estimated lost, recovered and net demand value by branch, salt and distributor. */
   lostSalesRecovery: reports
@@ -367,7 +409,12 @@ export const pharmacyReportsRouter = router({
           message: error instanceof Error ? error.message : 'Invalid report dates.',
         });
       }
-      return readLostSalesRecovery(ctx.db, ctx.entitlements.organizationId, scoped);
+      return readLostSalesRecovery(
+        ctx.db,
+        ctx.entitlements.organizationId,
+        scoped,
+        ctx.organization?.timezone
+      );
     }),
   createPharmacovigilanceReport: auditedProtectedProcedure
     .input(
@@ -699,9 +746,9 @@ export const pharmacyReportsRouter = router({
     const branches = await ctx.db.pharmacyBranch.findMany({
       where: { organizationId, active: true, id: { in: assigned } },
       orderBy: { name: 'asc' },
-      select: { id: true, name: true },
+      select: { id: true, name: true, businessDayEndsAtHistory: true },
     });
-    return { branches, organizationId };
+    return { branches: branches.map(withClientPharmacyDayEnd), organizationId };
   }),
   suppliers: branchReports.query(async ({ ctx }) => {
     const { organizationId } = await scope(ctx);
@@ -726,8 +773,12 @@ export const pharmacyReportsRouter = router({
           ip: ctx.requestMeta.ip,
         }));
       const readAt = new Date();
+      // The caller's own organisation's days; the screen offers the same days. DEV-958A: each
+      // ends at the branch's "day ends at" hour.
+      const timeZone = ctx.organization?.timezone;
+      const dayEnd = branchDayEnd(available, input.branchId);
       try {
-        validatePharmacyReplenishmentReportInput(input, readAt);
+        validatePharmacyReplenishmentReportInput(input, readAt, timeZone, dayEnd);
       } catch {
         throw new TRPCError({
           code: 'BAD_REQUEST',
@@ -742,6 +793,8 @@ export const pharmacyReportsRouter = router({
             organizationId: available.organizationId,
             authorizedBranchIds: available.branches.map((branch) => branch.id),
             financial,
+            timeZone,
+            ...pharmacyDayEndField(dayEnd),
           },
           readAt
         );
@@ -839,6 +892,8 @@ export const pharmacyReportsRouter = router({
         organizationId: available.organizationId,
         actorId: ctx.session!.user.id,
         financial,
+        timeZone: ctx.organization?.timezone,
+        ...reportDayEnds(available, branchIds),
       };
       const readAt = new Date();
       try {
@@ -928,6 +983,7 @@ export const pharmacyReportsRouter = router({
           from: input.from,
           to: input.to,
           timeZone: ctx.organization?.timezone,
+          ...pharmacyDayEndField(branchDayEnd(available, input.branchId)),
           config: {
             receiptsPerStaffHour: input.receiptsPerStaffHour,
             minimumStaff: input.minimumStaff,
@@ -983,6 +1039,7 @@ export const pharmacyReportsRouter = router({
           ...input,
           branchIds,
           timeZone: ctx.organization?.timezone,
+          ...reportDayEnds(available, branchIds),
         })
       );
       const financial = await can(
@@ -1020,7 +1077,10 @@ export const pharmacyReportsRouter = router({
   }),
   anomalySignals: reports.input(filters).query(async ({ ctx, input }) => {
     const bounded = await ownerFilters(ctx, input);
-    return readPharmacyAnomalySignals(ctx.db, bounded);
+    return readPharmacyAnomalySignals(ctx.db, {
+      ...bounded,
+      timeZone: ctx.organization?.timezone,
+    });
   }),
   expiryAdvice: reports.input(filters).query(async ({ ctx, input }) => {
     const bounded = await ownerFilters(ctx, input);
@@ -1075,7 +1135,11 @@ export const pharmacyReportsRouter = router({
     }),
   refreshAnomalies: reports.input(filters).mutation(async ({ ctx, input }) => {
     const bounded = await ownerFilters(ctx, input);
-    return refreshPharmacyAnomalySignals(ctx.db, bounded, ctx.session!.user.id);
+    return refreshPharmacyAnomalySignals(
+      ctx.db,
+      { ...bounded, timeZone: ctx.organization?.timezone },
+      ctx.session!.user.id
+    );
   }),
   acknowledgeAnomaly: reports.input(anomalyDecision).mutation(async ({ ctx, input }) => {
     await requireFinancialReports(ctx);

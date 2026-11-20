@@ -1,6 +1,8 @@
 import { pricePrepaidSale } from './prepaid-discount';
 import { assertPrepaidPin, movePrepaid, PREPAID_PROVIDER } from './prepaid-tiers';
 import { requestCounterEvidence } from './counter-evidence';
+import { isPharmacyCurrentBusinessDate, pharmacyBusinessDate } from './business-day';
+import { readPharmacyDayClock } from './business-day-clock';
 import 'server-only';
 
 import { createHash, randomUUID } from 'node:crypto';
@@ -8,7 +10,6 @@ import { z } from 'zod';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { workspaceToday } from '@/lib/timezone';
 import { assertPostingPeriodsOpen } from '@/lib/finance/journal';
 
 import { reverseRefundedEarnedPoints } from './customer-loyalty-earned-reversal';
@@ -36,6 +37,7 @@ import {
 } from './manual-payments';
 import { readManualPaymentSettings } from './manual-payment-settings';
 import { counterOperatorDenial } from './counter-capability';
+import { anyCardTerminalTender, countOpenCardTerminalAttempts } from './card-terminal/open-attempts';
 
 export type PharmacyTenderType = 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET' | 'CREDIT' | ManualTenderType;
 
@@ -50,6 +52,7 @@ export class PharmacySettlementError extends Error {
       | 'INVALID_AMOUNT'
       | 'OVER_TENDER'
       | 'DRAWER_NOT_OPEN'
+      | 'DRAWER_FROM_EARLIER_DAY'
       | 'DRAWER_NOT_YOURS'
       | 'CASHIER_NOT_ASSIGNED'
       | 'REFUND_EXCEEDS_TENDER'
@@ -59,8 +62,12 @@ export class PharmacySettlementError extends Error {
       | 'OPEN_DRAWER'
       | 'REOPEN_REASON_REQUIRED'
       | 'INVALID_MANUAL_CAPTURE'
+      | 'DAY_NOT_CLOSED'
+      | 'REOPEN_NOT_TODAY'
       | 'PREPAID_REFUND_RESTORES_BALANCE'
       | 'TENDER_ATTEMPT_DISCARDED'
+      | 'CARD_TERMINAL_PAYMENT_OPEN'
+      | 'CARD_TERMINAL_REFUND_VIA_PROVIDER'
   ) {
     super(reason);
   }
@@ -353,34 +360,72 @@ export async function lockPharmacyDay(db: ScopedDb, scope: LedgerScope, date: Da
   );
 }
 
-export async function requirePharmacyDayOpen(db: ScopedDb, scope: LedgerScope, date: Date) {
-  await lockPharmacyDay(db, scope, date);
+/**
+ * DEV-631: a day is closed for trading while its latest close stands. An owner's
+ * reopen of that close opens the day again until the next close supersedes it.
+ * Reads without the day lock: callers that write take it first.
+ */
+export async function pharmacyDayClosedForTrading(db: ScopedDb, scope: LedgerScope, date: Date) {
   const close = await db.pharmacyDailyClose.findFirst({
     where: { organizationId: scope.organizationId, branchId: scope.branchId, businessDate: date },
-    select: { id: true },
+    orderBy: { sequence: 'desc' },
+    select: { id: true, reopen: { select: { id: true } } },
   });
-  if (close) throw new PharmacySettlementError('DAY_CLOSED');
+  return Boolean(close && !close.reopen);
+}
+
+export async function requirePharmacyDayOpen(db: ScopedDb, scope: LedgerScope, date: Date) {
+  await lockPharmacyDay(db, scope, date);
+  if (await pharmacyDayClosedForTrading(db, scope, date))
+    throw new PharmacySettlementError('DAY_CLOSED');
+}
+
+/**
+ * DEV-631: a counter bill is not opened, and no line reserves stock, while today's
+ * business day (DEV-958A: on the branch clock) is closed for trading. Hold the same day
+ * lock as close/reopen and money writes through the caller's transaction so a
+ * close cannot race bill creation or stock reservation.
+ */
+export async function requirePharmacyTodayOpenForTrading(
+  db: ScopedDb,
+  scope: LedgerScope,
+  now: Date = new Date()
+) {
+  const today = pharmacyBusinessDate(await readPharmacyDayClock(db, scope), now);
+  await requirePharmacyDayOpen(db, scope, today);
 }
 
 /**
  * DEV-630: an online money write (drawer open, tender, refund) books on the branch's
- * current business day: today in the workspace zone, the day the counter stamps and the
- * close opens on. A client-sent future or earlier date is refused, so cash cannot be
+ * current business day (DEV-958A: on the branch clock, `business-day.ts`), the day the
+ * counter stamps and the close opens on. A client-sent future or earlier date is refused, so cash cannot be
  * moved out of the day being counted. Offline replay keeps its audited original date
  * and does not call this.
  */
 export async function requireCurrentPharmacyBusinessDate(
   db: ScopedDb,
-  scope: { organizationId: string },
+  scope: { organizationId: string; branchId: string },
   date: Date,
   now: Date = new Date()
 ) {
-  const organization = await db.organization.findUnique({
-    where: { id: scope.organizationId },
-    select: { timezone: true },
-  });
-  if (date.toISOString().slice(0, 10) !== workspaceToday(organization?.timezone, now))
+  if (!isPharmacyCurrentBusinessDate(date, await readPharmacyDayClock(db, scope), now))
     throw new PharmacySettlementError('BUSINESS_DATE_NOT_CURRENT');
+}
+
+/**
+ * DEV-769: a counter bill starts only on a drawer opened for today's business day. Cash
+ * goes only into today's drawer ({@link resolveOperatingPharmacyDrawer}), so a bill started
+ * on a drawer left open from an earlier day could never be paid in cash.
+ */
+export async function requireTodaysPharmacyDrawer(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string },
+  drawer: { businessDate: Date },
+  now: Date = new Date()
+) {
+  const clock = await readPharmacyDayClock(db, scope);
+  if (!isPharmacyCurrentBusinessDate(drawer.businessDate, clock, now))
+    throw new PharmacySettlementError('DRAWER_FROM_EARLIER_DAY');
 }
 
 /**
@@ -389,8 +434,7 @@ export async function requireCurrentPharmacyBusinessDate(
  * branch. An enrolled offline counter replays under its own authenticated device.
  */
 export type PharmacyDrawerOperator =
-  | { kind: 'COUNTER'; actorIsManager: boolean }
-  | { kind: 'REGISTERED_DEVICE_REPLAY' };
+  { kind: 'COUNTER'; actorIsManager: boolean } | { kind: 'REGISTERED_DEVICE_REPLAY' };
 
 /** Options for an online counter call; replay and delivery paths omit them. */
 export type PharmacySettlementOptions = {
@@ -481,6 +525,8 @@ export async function applyPharmacyTender(
     referenceSkipped?: boolean;
     /** Manual card: the approval code on the standalone terminal slip. */
     approvalCode?: string;
+    /** #708: the buyer the Sindh cash memo names, recorded only on the completing tender. */
+    buyerName?: string;
     idempotencyKey: string;
     adapter?: PharmacyPaymentAdapter;
     leasedReceipt?: PharmacyLeasedReceipt;
@@ -544,7 +590,7 @@ export async function applyPharmacyTender(
   );
   // DEV-629: an Rx/restricted line is never paid for without a pharmacist-attached prescription
   // and a pharmacist's signed review of that line.
-  await assertRxLinesPrescribed(db, sale.lines);
+  await assertRxLinesPrescribed(db, sale.lines, scope);
   // #659: before any lease, provider charge, tender or posting. A batch recalled,
   // quarantined or expired since add-to-cart refuses the payment.
   await assertSaleBatchesSellable(db, scope, sale.id);
@@ -562,6 +608,7 @@ export async function applyPharmacyTender(
   // the cursor, so a second command cannot consume the same number. Reserved
   // numbers never return to the online sequence, including on rejection.
   let receiptNumber: number | null = null;
+  let printedReceiptNumber: number | null = null;
   if (input.leasedReceipt) {
     const { leaseId, receiptNumber: leasedNumber } = input.leasedReceipt;
     const consumed = await db.$queryRaw<Array<{ receipt_number: number }>>(Prisma.sql`
@@ -584,6 +631,7 @@ export async function applyPharmacyTender(
       RETURNING lease."nextNumber" - 1 AS receipt_number`);
     if (!consumed[0]) throw new PharmacySettlementError('INVALID_RECEIPT_LEASE');
     receiptNumber = consumed[0].receipt_number;
+    printedReceiptNumber = receiptNumber;
   }
 
   let drawerSessionId: string | undefined;
@@ -742,6 +790,10 @@ export async function applyPharmacyTender(
     tenderId: tender.id,
     settled,
     receiptNumber,
+    // DEV-637: the number printed offline, when the sale had to take a fresh branch number.
+    ...(printedReceiptNumber !== null && receiptNumber !== printedReceiptNumber
+      ? { offlineReference: printedReceiptNumber }
+      : {}),
     remainingMinor: totalMinor - tenderedMinor - input.amountMinor,
   };
   await db.pharmacyMoneyIdempotencyKey.update({
@@ -813,6 +865,10 @@ export async function refundPharmacyTender(
   // reversed). Nothing is left on a released tender to refund.
   if (tender.type === 'LOYALTY' && tender.sale.status === 'VOID')
     throw new PharmacySettlementError('REFUND_EXCEEDS_TENDER');
+  // DEV-743: an integrated card-terminal charge is refunded through the provider's own process.
+  // No terminal refund is built yet, so it is refused here, and never paid out as cash instead.
+  if (!input.adapter && (await anyCardTerminalTender(db, scope, [tender])))
+    throw new PharmacySettlementError('CARD_TERMINAL_REFUND_VIA_PROVIDER');
   assertRefundWithinTender(
     tender.amountMinor,
     tender.refunds.reduce((sum, row) => sum + row.amountMinor, 0),
@@ -1242,7 +1298,8 @@ export function movementsByOtherThanOperator(
   const firstCashier = shifts[0]?.fromCashierId ?? drawerOperatingCashierId(drawer);
   const cashierAt = (at: Date) =>
     shifts.reduce(
-      (cashier, handover) => (handover.createdAt.getTime() <= at.getTime() ? handover.toCashierId : cashier),
+      (cashier, handover) =>
+        handover.createdAt.getTime() <= at.getTime() ? handover.toCashierId : cashier,
       firstCashier
     );
   return movements
@@ -1326,6 +1383,10 @@ export async function cutPharmacyDailyClose(
     },
   });
   if (openDrawers > 0) throw new PharmacySettlementError('OPEN_DRAWER');
+  // DEV-743: a terminal payment still open on this day may already have charged the customer, so
+  // the Z report would miss it. Attempts are committed under this same day lock.
+  if ((await countOpenCardTerminalAttempts(db, scope, input.businessDate)) > 0)
+    throw new PharmacySettlementError('CARD_TERMINAL_PAYMENT_OPEN');
   const prior = await db.pharmacyDailyClose.findFirst({
     where: {
       organizationId: scope.organizationId,
@@ -1333,8 +1394,11 @@ export async function cutPharmacyDailyClose(
       businessDate: input.businessDate,
     },
     orderBy: { sequence: 'desc' },
+    include: { reopen: { select: { id: true } } },
   });
-  if (prior && !input.reopenReason?.trim())
+  // DEV-631: closing a day the owner reopened for trading is a normal close; the
+  // reopen already carries its reason. Re-cutting a standing close still needs one.
+  if (prior && !prior.reopen && !input.reopenReason?.trim())
     throw new PharmacySettlementError('REOPEN_REASON_REQUIRED');
   const [sales, refunds, drawers, tenders] = await Promise.all([
     db.pharmacySale.findMany({
@@ -1363,7 +1427,11 @@ export async function cutPharmacyDailyClose(
       include: { movements: true },
     }),
     db.pharmacyTender.findMany({
-      where: { organizationId: scope.organizationId, branchId: scope.branchId, businessDate: input.businessDate },
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        businessDate: input.businessDate,
+      },
       select: { id: true, type: true, amountMinor: true, confirmedById: true },
     }),
   ]);

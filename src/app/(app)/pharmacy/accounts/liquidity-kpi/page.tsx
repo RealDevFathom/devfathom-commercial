@@ -15,10 +15,12 @@ import {
   type LiquidityKpiCurrency,
   type LiquidityKpiFlag,
 } from '@/lib/pharmacy/accounts/liquidity-kpi';
+import { BranchSelect, loadBranchOptions, type BranchOption } from '../branch-picker';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
-import { formatWorkspaceDateTime, workspaceDateRange, workspaceZoneLabel } from '@/lib/timezone';
+import { formatWorkspaceDateTime, workspaceZoneLabel } from '@/lib/timezone';
+import { pharmacyCalendarDayRange } from '@/lib/pharmacy/business-day';
 import { ExportCsv } from './export-csv';
 
 export const metadata: Metadata = { title: 'Posted cash coverage · Pharmacy accounts' };
@@ -83,23 +85,22 @@ const FLAG_LABEL: Record<LiquidityKpiFlag, string> = {
 function ControlForm({
   controls,
   timeZone,
+  branches,
 }: {
   controls?: Partial<Controls>;
   timeZone?: string | null;
+  branches: BranchOption[];
 }) {
   const zone = timeZone ? workspaceZoneLabel(timeZone) : 'workspace timezone';
   return (
     <SectionCard title="Report controls" titleLevel={2}>
       <form method="get" className="grid gap-4 md:grid-cols-3 md:items-end">
         <label className="grid gap-2 text-sm">
-          Branch ID
-          <Input
-            className="min-h-11"
-            name="branch"
-            defaultValue={controls?.branchId}
-            maxLength={128}
-            required
-            aria-describedby="branch-help"
+          Branch
+          <BranchSelect
+            branchId={controls?.branchId}
+            branches={branches}
+            describedBy="branch-help"
           />
         </label>
         <label className="grid gap-2 text-sm">
@@ -203,7 +204,7 @@ function Results({
                   'Bank',
                   'Accounts payable',
                   'Goods-received accrual',
-                  'Coverage (minor units)',
+                  'Cash and bank vs bills owed',
                   'Coverage',
                   'Status',
                   'Flags',
@@ -231,7 +232,7 @@ function Results({
                     </td>
                   ))}
                   <td className="p-3 text-right font-mono">
-                    {row.numeratorMinor} / {row.denominatorMinor}
+                    {minor(row.numeratorMinor)} / {minor(row.denominatorMinor)}
                   </td>
                   <td className="p-3 text-right font-mono">{row.ratioDecimal ?? '—'}</td>
                   <td className="p-3 text-right">
@@ -276,7 +277,6 @@ export default async function LiquidityKpiPage({ searchParams }: { searchParams:
   // The organization zone is known only after the actor resolves; before any read the
   // form names it generically.
   let timeZone: string | null | undefined;
-
   if (parsed.controls) {
     try {
       const actor = await resolveTenantActor();
@@ -293,7 +293,7 @@ export default async function LiquidityKpiPage({ searchParams }: { searchParams:
         // The cutoff is the start of the picked day on the organization's clock. Closing
         // balances include every posting before it, so a one-day window suffices.
         const zoneName = timeZone;
-        const cutoff = workspaceDateRange(
+        const cutoff = pharmacyCalendarDayRange(
           parsed.controls.cutoff,
           parsed.controls.cutoff,
           zoneName
@@ -301,7 +301,7 @@ export default async function LiquidityKpiPage({ searchParams }: { searchParams:
         const previousDay = new Date(Date.parse(`${parsed.controls.cutoff}T00:00:00.000Z`) - DAY_MS)
           .toISOString()
           .slice(0, 10);
-        const from = workspaceDateRange(previousDay, previousDay, zoneName).from;
+        const from = pharmacyCalendarDayRange(previousDay, previousDay, zoneName).from;
         const report = await caller.financialStatements({
           branchId: parsed.controls.branchId,
           from: from.toISOString(),
@@ -334,6 +334,9 @@ export default async function LiquidityKpiPage({ searchParams }: { searchParams:
     }
   }
 
+  // The picker lists the branches an owner may act at; the router still checks the chosen one.
+  const branches = await loadBranchOptions();
+
   return (
     <div className="min-w-0 space-y-6">
       <PageHeader
@@ -341,7 +344,7 @@ export default async function LiquidityKpiPage({ searchParams }: { searchParams:
         heading="Posted cash coverage"
         description="Compare posted cash and bank balances with posted payables and goods-received accruals, per recorded currency."
       />
-      <ControlForm controls={formControls} timeZone={timeZone} />
+      <ControlForm controls={formControls} timeZone={timeZone} branches={branches} />
       {state.kind === 'loaded' ? (
         <Results state={state} timeZone={timeZone} />
       ) : (

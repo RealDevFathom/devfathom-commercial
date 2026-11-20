@@ -3,7 +3,9 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   proposals: {
-    data: [] as Array<{ id: string; payload: unknown; targetMedicine: null }> | undefined,
+    data: [] as
+      | Array<{ id: string; payload: unknown; targetMedicine: null; catalogueMatch?: unknown }>
+      | undefined,
     isPending: false,
     error: null as { message: string; data?: { code: string } } | null,
     refetch: vi.fn(),
@@ -90,6 +92,37 @@ it('confirms the exact proposed draft and refreshes its review queue without pub
   });
   expect(mocks.invalidateProposals).toHaveBeenCalledOnce();
   expect(mocks.invalidateCandidates).toHaveBeenCalledOnce();
+});
+it('shows the catalogue medicine a DRAP row would update next to the proposal (DEV-683)', () => {
+  mocks.proposals.data = [
+    {
+      id: 'proposal-drap',
+      payload: {
+        values: {
+          productName: 'Synthamol',
+          drapRegistrationNumber: 'SYN-0001',
+          controlled: 'true',
+        },
+        source: { label: 'DRAP registry file' },
+      },
+      targetMedicine: null,
+      catalogueMatch: {
+        id: 'medicine-a',
+        productName: 'Synthamol',
+        strength: '500 mg',
+        dosageForm: 'Tablet',
+        drapRegistrationNumber: 'SYN-0001',
+        rx: true,
+        controlled: false,
+      },
+    },
+  ];
+  render(<MedicineReferenceWorkbench health={[]} />);
+  expect(screen.getByText(/updates an existing medicine/)).toBeVisible();
+  const match = screen.getByRole('region', { name: 'Catalogue medicine this updates' });
+  expect(within(match).getByText('Tablet')).toBeVisible();
+  expect(within(match).getByText('500 mg')).toBeVisible();
+  expect(within(match).getByText(/never lower it/)).toBeVisible();
 });
 it('keeps only the confirming proposal disabled while its command is pending', async () => {
   mocks.proposals.data = [
@@ -436,4 +469,20 @@ it('names the source of each proposal', () => {
   ];
   render(<MedicineReferenceWorkbench health={[]} />);
   expect(screen.getByText('Source: DRAP registry file')).toBeVisible();
+});
+it('DEV-852: names an imported candidate’s missing strength and registration in plain words', () => {
+  const imported = candidate('legacy', ['ACCEPTED']);
+  mocks.candidates.data = [
+    {
+      ...imported,
+      provenance: imported.provenance.map((item) => ({ ...item, sourceType: 'IMPORT' })),
+    },
+    candidate('regulator', ['ACCEPTED']),
+  ];
+  render(<MedicineReferenceWorkbench health={[]} />);
+  const [legacyCard, regulatorCard] = screen.getAllByRole('article');
+  expect(legacyCard).toHaveTextContent('Strength not recorded · Registration number not recorded');
+  expect(within(legacyCard!).queryByRole('alert')).not.toBeInTheDocument();
+  expect(within(legacyCard!).getByRole('button', { name: 'Publish assertions' })).toBeEnabled();
+  expect(regulatorCard).not.toHaveTextContent('not recorded');
 });

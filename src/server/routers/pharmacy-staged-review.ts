@@ -4,10 +4,17 @@ import {
   stagingUploadInput,
   STAGING_FIELDS,
 } from '@/lib/pharmacy/migration/staging-input';
-import { OwnerImportError, parseOwnerUpload } from '@/lib/pharmacy/migration/owner-import-upload';
+import { OwnerImportError } from '@/lib/pharmacy/migration/owner-import-upload';
+import { parseStagingUpload, stagingSourceBytes } from '@/lib/pharmacy/migration/staging-upload';
 import { excelCsvProfiler } from '@/lib/pharmacy/migration/excel-csv-profiler';
 import { profileTable } from '@/lib/pharmacy/migration/profiler';
-import { recordSource, persistProfile } from '@/lib/pharmacy/migration/workbench';
+import {
+  hashSourceBytes,
+  openExceptionCounts,
+  persistProfile,
+  recordSource,
+} from '@/lib/pharmacy/migration/workbench';
+import { applyLegacyControlledClass } from '@/lib/pharmacy/migration/legacy-controlled';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { adminProcedure, router, type TRPCContext } from '../trpc';
@@ -35,16 +42,40 @@ function organizationId(ctx: TRPCContext): string {
 /** Headers the staging path writes itself; an upload may not shadow its own lineage evidence. */
 const RESERVED_HEADERS = ['__source_sha256', '__source_row', '__review_flags'];
 
-async function readUpload(input: { fileName: string; content: string }) {
+/**
+ * A catalogue-sized batch (about 19,000 rows and their exceptions) is written in
+ * one transaction; allow it longer than the 30 second request default.
+ */
+const STAGE_TRANSACTION = { maxWait: 10_000, timeout: 180_000 } as const;
+
+/**
+ * The batch's profiler version records the exact column mapping, so a batch
+ * says which columns produced its rows and a re-run can be recognised.
+ */
+function stagingProfilerVersion(mapping: Record<string, number | undefined>) {
+  const fields = Object.entries(mapping)
+    .filter((entry): entry is [string, number] => entry[1] !== undefined)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([field, index]) => `${field}=${index}`)
+    .join(',');
+  return `manual-columns/3;${fields}`;
+}
+
+async function readUpload(input: {
+  fileName: string;
+  content: string;
+  encoding?: 'identity' | 'gzip';
+}) {
   try {
-    const table = await parseOwnerUpload(input.fileName, Buffer.from(input.content, 'base64'));
+    const bytes = stagingSourceBytes(input);
+    const table = await parseStagingUpload(input.fileName, bytes);
     const clash = table.headers.find((header) => RESERVED_HEADERS.includes(header.trim()));
     if (clash)
       throw new TRPCError({
         code: 'BAD_REQUEST',
         message: `Rename the reserved column "${clash}" before staging this file.`,
       });
-    return table;
+    return { table, bytes };
   } catch (error) {
     if (error instanceof TRPCError) throw error;
     if (error instanceof OwnerImportError)
@@ -59,7 +90,7 @@ export const pharmacyStagedReviewRouter = router({
     stagingUpload: adminProcedure.input(stagingUploadInput).mutation(async ({ ctx, input }) => {
       annotateAudit(ctx, { skipInput: true });
       await assertReviewBranch(ctx.db, organizationId(ctx), input.branchId);
-      const table = await readUpload(input);
+      const { table } = await readUpload(input);
       const suggested = excelCsvProfiler.resolveColumns(table) ?? {};
       const mapping = Object.fromEntries(
         STAGING_FIELDS.flatMap(([field]) =>
@@ -72,7 +103,7 @@ export const pharmacyStagedReviewRouter = router({
       annotateAudit(ctx, { skipInput: true });
       const org = organizationId(ctx);
       await assertReviewBranch(ctx.db, org, input.branchId);
-      const table = await readUpload(input);
+      const { table, bytes } = await readUpload(input);
       const indices = Object.values(input.mapping).filter(
         (index): index is number => index !== undefined
       );
@@ -86,42 +117,88 @@ export const pharmacyStagedReviewRouter = router({
         });
       const profiler = {
         ...excelCsvProfiler,
-        version: 'manual-columns/2',
+        version: stagingProfilerVersion(input.mapping),
         resolveColumns: () => input.mapping,
       };
-      const result = profileTable(profiler, table, { quantityUnit: input.quantityUnit });
+      // DEV-912: with no quantity column there is nothing to count, so no packs-or-units choice.
+      const quantityUnit = input.mapping.quantity === undefined ? null : input.quantityUnit!;
+      const result = profileTable(profiler, table, { quantityUnit: quantityUnit ?? undefined });
       const saved = await ctx.db.$transaction(async (tx) => {
+        // One stage per file, mapping and quantity choice: concurrent or repeated
+        // submissions of the same handover wait here and replay the first batch.
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`pharmacy-migration-stage:${org}:${hashSourceBytes(bytes)}`}, 0))`;
         const source = await recordSource(tx, {
           kind: profiler.kind,
           fileName: input.fileName,
-          bytes: Buffer.from(input.content, 'base64'),
+          bytes,
         });
+        const [previous] = await tx.pharmacyMigrationBatch.findMany({
+          where: {
+            organizationId: org,
+            sourceId: source.id,
+            profilerVersion: profiler.version,
+            quantityUnit,
+            status: 'PROFILED',
+          },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          take: 1,
+          select: { id: true, rowCount: true, exceptionCount: true },
+        });
+        if (previous) {
+          // DEV-854 still applies on a replay: a medicine created since the first stage
+          // must not escape the NARCOTICS rule. The flag only ever tightens.
+          const replayLegacy = await applyLegacyControlledClass(tx, org, result.rows);
+          return {
+            sourceId: source.id,
+            batchId: previous.id,
+            rowCount: previous.rowCount,
+            exceptionCount: previous.exceptionCount,
+            buckets: await openExceptionCounts(tx as typeof ctx.db, previous.id),
+            replayed: true,
+            controlledFromClass: replayLegacy.controlledRows,
+            controlledMedicineIds: replayLegacy.medicineIds,
+            controlledSkippedCorrected: replayLegacy.skippedCorrectedRows,
+          };
+        }
         // Bind every row to the exact uploaded bytes, including repeated product names.
         for (const row of result.rows) {
           row.sourceKey = `sha256:${source.contentHash}:row:${row.rowNumber}`;
           row.rawPayload.__source_sha256 = source.contentHash;
           row.rawPayload.__source_row = String(row.rowNumber);
         }
+        const persisted = await persistProfile(tx, {
+          sourceId: source.id,
+          label: input.fileName,
+          profiler,
+          result,
+        });
+        // DEV-854: a NARCOTICS-class row is imported as controlled, with no review hold.
+        const legacy = await applyLegacyControlledClass(tx, org, result.rows);
         return {
           sourceId: source.id,
-          ...(await persistProfile(tx, {
-            sourceId: source.id,
-            label: input.fileName,
-            profiler,
-            result,
-          })),
+          ...persisted,
+          replayed: false,
+          controlledFromClass: legacy.controlledRows,
+          controlledMedicineIds: legacy.medicineIds,
+          controlledSkippedCorrected: legacy.skippedCorrectedRows,
         };
-      });
+      }, STAGE_TRANSACTION);
       annotateAudit(ctx, {
         targetType: 'PharmacyMigrationBatch',
         targetId: saved.batchId,
         metadata: {
-          quantityUnit: input.quantityUnit,
+          quantityUnit,
           mapping: input.mapping,
           sourceId: saved.sourceId,
+          rowCount: saved.rowCount,
+          replayed: saved.replayed,
+          controlledFromClass: saved.controlledFromClass,
+          controlledMedicineIds: saved.controlledMedicineIds,
+          controlledSkippedCorrected: saved.controlledSkippedCorrected,
         },
       });
-      return saved;
+      const { controlledMedicineIds, ...summary } = saved;
+      return { ...summary, controlledMedicinesFlagged: controlledMedicineIds.length };
     }),
     stagedBranches: adminProcedure.query(({ ctx }) =>
       ctx.db.pharmacyBranch.findMany({

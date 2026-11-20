@@ -16,6 +16,7 @@ import {
   searchCounterPatients,
 } from '@/lib/pharmacy/counter-prescriptions';
 import { auditPatientRead, maskedPatient } from '@/lib/pharmacy/patient-prescriptions';
+import { counterBranchAssignmentDenial } from '@/lib/pharmacy/counter-capability';
 import { captureRefillReminder, RefillSupportError } from '@/lib/pharmacy/refill-support';
 import {
   configuredRxOcrAdapterName,
@@ -25,7 +26,9 @@ import {
 } from '@/lib/pharmacy/rx-ocr';
 import { buildRxDraftCart } from '@/lib/pharmacy/rx-draft-cart';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { workspaceTimezone } from '@/lib/timezone';
 import type { TRPCContext } from '../trpc';
+import { annotateAuditBranch } from '../audit-branch';
 import {
   auditedProtectedProcedure,
   capabilityProcedure,
@@ -55,6 +58,29 @@ const optionalText = (max: number) =>
     .max(max)
     .optional()
     .transform((value) => value || undefined);
+
+/** DEV-941: the plain refusal for a branch the caller is not assigned to. */
+const REFILL_BRANCH_REFUSAL =
+  'You are not assigned to this branch. Only a pharmacist assigned to this branch can see its refill reminders.';
+
+/**
+ * DEV-941: one branch's refill reminder records, read with the database's own branch rule
+ * (`tenant_branch_isolation` on `pharmacy_refill_reminder_captures`) switched on for this read
+ * only. The request runs in one transaction, so the previous binding is restored afterwards.
+ */
+async function branchReminderCaptures(db: ScopedDb, organizationId: string, branchId: string) {
+  const [previous] = await db.$queryRaw<{ branch: string | null }[]>`
+    SELECT current_setting('app.current_branch_id', true) AS branch`;
+  await db.$queryRaw`SELECT set_config('app.current_branch_id', ${branchId}, true)`;
+  try {
+    return await db.pharmacyRefillReminderCapture.findMany({
+      where: { organizationId, branchId },
+      orderBy: { capturedAt: 'desc' },
+    });
+  } finally {
+    await db.$queryRaw`SELECT set_config('app.current_branch_id', ${previous?.branch ?? ''}, true)`;
+  }
+}
 
 function prescriberConflict() {
   return new TRPCError({
@@ -189,16 +215,36 @@ export const pharmacyPrescriptionsRouter = router({
         .optional()
     )
     .query(async ({ ctx, input }) => {
-      const branches = await ctx.db.pharmacyBranch.findMany({
-        where: { active: true },
+      const organizationId = ctx.entitlements.organizationId;
+      const user = ctx.session.user;
+      const activeBranches = await ctx.db.pharmacyBranch.findMany({
+        where: { organizationId, active: true },
         orderBy: { name: 'asc' },
         select: { id: true, name: true },
       });
+      // DEV-941: refill reminders belong to a branch. A pharmacist sees only the branches
+      // they are assigned to, an organisation admin every branch: the counter's branch rule,
+      // as `captureRefillReminder` writes them and `decideReview` signs at a branch.
+      const visible = await Promise.all(
+        activeBranches.map(
+          async (branch) =>
+            !(await counterBranchAssignmentDenial(ctx.db, user, organizationId, branch.id))
+        )
+      );
+      const branches = activeBranches.filter((_, index) => visible[index]);
+      if (input?.branchId) {
+        const requested = activeBranches.find((branch) => branch.id === input.branchId);
+        if (!requested)
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
+        // Tag the entry, so a refused read is visible at the branch it targeted.
+        annotateAuditBranch(ctx, requested.id);
+        if (!branches.some((branch) => branch.id === requested.id))
+          throw new TRPCError({ code: 'FORBIDDEN', message: REFILL_BRANCH_REFUSAL });
+      }
       const selectedBranch = input?.branchId
         ? branches.find((branch) => branch.id === input.branchId)
         : branches[0];
-      if (input?.branchId && !selectedBranch)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
+      const visibleBranchIds = new Set(branches.map((branch) => branch.id));
 
       // Prescription access is narrower than dispensing (tenant admins may
       // capture without an exact dispense grant). Report whether the caller can
@@ -210,41 +256,38 @@ export const pharmacyPrescriptionsRouter = router({
         undefined,
         { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }
       );
-      const [patients, prescribers, medicines, prescriptions, reminderCaptures] = await Promise.all(
-        [
-          ctx.db.pharmacyPatient.findMany({ orderBy: { displayName: 'asc' } }),
-          ctx.db.pharmacyPrescriber.findMany({ orderBy: { name: 'asc' } }),
-          ctx.db.medicine.findMany({
-            where: { saleable: true },
-            orderBy: { productName: 'asc' },
-            include: { presentations: { orderBy: { presentation: 'asc' } } },
-          }),
-          ctx.db.prescription.findMany({
-            orderBy: { capturedAt: 'desc' },
-            include: {
-              patient: true,
-              prescriber: true,
-              lines: {
-                orderBy: { lineNumber: 'asc' },
-                include: {
-                  medicine: true,
-                  presentation: true,
-                  fills: { include: { reminderCapture: true }, orderBy: { dispensedAt: 'desc' } },
-                },
+      const [patients, prescribers, medicines, prescriptions] = await Promise.all([
+        ctx.db.pharmacyPatient.findMany({ orderBy: { displayName: 'asc' } }),
+        ctx.db.pharmacyPrescriber.findMany({ orderBy: { name: 'asc' } }),
+        ctx.db.medicine.findMany({
+          where: { saleable: true },
+          orderBy: { productName: 'asc' },
+          include: { presentations: { orderBy: { presentation: 'asc' } } },
+        }),
+        ctx.db.prescription.findMany({
+          orderBy: { capturedAt: 'desc' },
+          include: {
+            patient: true,
+            prescriber: true,
+            lines: {
+              orderBy: { lineNumber: 'asc' },
+              include: {
+                medicine: true,
+                presentation: true,
+                fills: { include: { reminderCapture: true }, orderBy: { dispensedAt: 'desc' } },
               },
             },
-          }),
-          selectedBranch
-            ? ctx.db.pharmacyRefillReminderCapture.findMany({
-                where: { branchId: selectedBranch.id },
-                orderBy: { capturedAt: 'desc' },
-              })
-            : Promise.resolve([]),
-        ]
-      );
+          },
+        }),
+      ]);
+      const reminderCaptures = selectedBranch
+        ? await branchReminderCaptures(ctx.db, organizationId, selectedBranch.id)
+        : [];
       return {
         branches,
         selectedBranchId: selectedBranch?.id ?? null,
+        // DEV-943: the caller's own organisation zone, so date defaults use the shop's day.
+        timezone: workspaceTimezone(ctx.organization?.timezone),
         canDispense,
         patients: patients.map(maskedPatient),
         prescribers,
@@ -255,6 +298,14 @@ export const pharmacyPrescriptionsRouter = router({
           patient: maskedPatient(prescription.patient),
           lines: prescription.lines.map((line) => ({
             ...line,
+            // DEV-941: another branch's reminder record is not shown.
+            fills: line.fills.map((fill) => ({
+              ...fill,
+              reminderCapture:
+                fill.reminderCapture && visibleBranchIds.has(fill.reminderCapture.branchId)
+                  ? fill.reminderCapture
+                  : null,
+            })),
             remainingAuthorizedUnits: Math.max(
               0,
               line.authorizedCanonicalUnits * (prescription.authorizedRepeats + 1) -
@@ -567,10 +618,26 @@ export const pharmacyPrescriptionsRouter = router({
           fillSequence: z.number().int().positive(),
           quantityCanonicalUnits: z.number().int().positive(),
           idempotencyKey: z.string().trim().min(1).max(200),
+          // DEV-962: the branch dispensing the fill. Only that branch may later record the
+          // fill's refill reminder; a fill recorded without one leaves that to an admin.
+          branchId: z.string().trim().min(1).max(128).optional(),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      if (input.branchId) {
+        const organizationId = ctx.entitlements.organizationId;
+        const branch = await ctx.db.pharmacyBranch.findFirst({
+          where: { id: input.branchId, organizationId, active: true },
+          select: { id: true },
+        });
+        if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'BRANCH_NOT_FOUND' });
+        annotateAuditBranch(ctx, branch.id);
+        if (
+          await counterBranchAssignmentDenial(ctx.db, ctx.session.user, organizationId, branch.id)
+        )
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+      }
       const line = await ctx.db.prescriptionLine.findFirst({
         where: {
           id: input.prescriptionLineId,
@@ -607,14 +674,41 @@ export const pharmacyPrescriptionsRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements.organizationId;
+      const user = ctx.session!.user;
+      // DEV-938: a reminder is recorded only at a branch the caller works at, as
+      // every other branch-scoped dispensing action. A branch of another
+      // organization, an inactive one and a missing one get the same refusal;
+      // only a session ADMIN of this organization may use any of its branches.
+      const branch = await ctx.db.pharmacyBranch.findFirst({
+        where: { id: input.branchId, organizationId, active: true },
+        select: { id: true },
+      });
+      if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'BRANCH_NOT_FOUND' });
+      // Tag the entry now, so a refused attempt is visible at the branch it targeted.
+      annotateAuditBranch(ctx, branch.id);
+      if (await counterBranchAssignmentDenial(ctx.db, user, organizationId, branch.id))
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+      // DEV-962: a fill has one reminder slot, and only the branch that dispensed the fill may
+      // take it, so another branch cannot use it up. A fill whose dispensing branch is not
+      // recorded (older than this rule, branch not provable) is left to an organisation admin.
+      // The session ADMIN exception is the same as the branch rule above. A missing fill is
+      // reported by `captureRefillReminder` as before.
+      if (user.role !== 'ADMIN') {
+        const fill = await ctx.db.prescriptionFill.findFirst({
+          where: { id: input.fillId, organizationId },
+          select: { branchId: true },
+        });
+        if (fill && fill.branchId !== branch.id)
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: fill.branchId ? 'FILL_DISPENSED_AT_ANOTHER_BRANCH' : 'FILL_BRANCH_UNKNOWN',
+          });
+      }
       try {
         return await captureRefillReminder(
           ctx.db,
-          {
-            organizationId: ctx.entitlements.organizationId,
-            branchId: input.branchId,
-            actorId: ctx.session!.user.id,
-          },
+          { organizationId, branchId: branch.id, actorId: user.id },
           input
         );
       } catch (error) {

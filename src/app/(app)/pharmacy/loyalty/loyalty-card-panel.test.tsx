@@ -1,5 +1,7 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PRINT_WINDOW_READY_TIMEOUT_MS } from '@/lib/browser-print/print-window';
+import { installFakePrintWindows } from '@/lib/testing/print-window';
 
 const actions = vi.hoisted(() => ({ issue: vi.fn(), revoke: vi.fn() }));
 vi.mock('./loyalty-card-actions', () => ({
@@ -37,15 +39,19 @@ describe('DEV-748 loyalty card panel', () => {
     expect(preview.querySelector('path')).toHaveAttribute('fill', '#000');
     expect(preview.querySelector('rect')).toHaveAttribute('fill', '#fff');
 
-    const popup = document.implementation.createHTMLDocument('');
-    const print = vi.fn();
-    const open = vi
-      .spyOn(window, 'open')
-      .mockReturnValue({ document: popup, print, opener: window } as unknown as Window);
+    const windows = installFakePrintWindows();
+    const open = windows.open;
     fireEvent.click(screen.getByRole('button', { name: 'Print card' }));
-    expect(open).toHaveBeenCalledWith('', '_blank', 'popup,width=420,height=560');
-    expect(print).toHaveBeenCalled();
-    const printed = popup.body;
+    // DEV-973: the isolated print page, which prints itself; never print() from here.
+    expect(open).toHaveBeenCalledWith(
+      expect.stringMatching(/^\/pharmacy\/counter\/print-window\.html#[0-9a-f-]{36}$/),
+      '_blank',
+      'noopener,popup,width=420,height=560'
+    );
+    await waitFor(() => expect(windows.last().printRequests()).toBe(1));
+    expect(windows.last().proxy.print).not.toHaveBeenCalled();
+    expect(windows.last().document()!.title).toBe('Loyalty card');
+    const printed = windows.last().document()!.body;
     // Elements of the print window's own document: compare attributes directly.
     expect(printed.querySelector('path')?.getAttribute('fill')).toBe('#000');
     expect(printed.querySelector('path')?.getAttribute('d')).toBe(qrSvgPath(encodeQr(CODE), 4));
@@ -66,9 +72,13 @@ describe('DEV-748 loyalty card panel', () => {
     render(<LoyaltyCardPanel branchId="branch-a" customerId="customer-a" activeCard={null} />);
     fireEvent.click(screen.getByRole('button', { name: 'Issue card' }));
     await screen.findByText('Card issued.');
-    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    // DEV-973: with noopener, a blocked window is the one whose print page never loads.
+    vi.useFakeTimers();
+    const { open } = installFakePrintWindows({ blocked: true });
     fireEvent.click(screen.getByRole('button', { name: 'Print card' }));
+    await act(() => vi.advanceTimersByTimeAsync(PRINT_WINDOW_READY_TIMEOUT_MS));
     expect(screen.getByRole('alert')).toHaveTextContent('Allow pop-ups');
+    vi.useRealTimers();
     open.mockRestore();
   });
 
@@ -93,6 +103,23 @@ describe('DEV-748 loyalty card panel', () => {
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
   });
 
+  it('shows the issue date on the organisation clock, without UTC wording (DEV-722)', () => {
+    // 00:30 in Karachi on 1 Nov is still 31 Oct on the UTC calendar.
+    const card = { issuedAt: '2026-10-31T19:30:00.000Z' };
+    const { rerender } = render(
+      <LoyaltyCardPanel
+        branchId="branch-a"
+        customerId="customer-a"
+        activeCard={card}
+        timeZone="Asia/Karachi"
+      />
+    );
+    expect(screen.getByText('Issued 1 Nov 2026')).toBeInTheDocument();
+    rerender(<LoyaltyCardPanel branchId="branch-a" customerId="customer-a" activeCard={card} />);
+    expect(screen.getByText('Issued 31 Oct 2026')).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/\bUTC\b/);
+  });
+
   it('shows a refusal without a code', async () => {
     actions.issue.mockResolvedValue({
       status: 'error',
@@ -104,5 +131,73 @@ describe('DEV-748 loyalty card panel', () => {
       'text-destructive'
     );
     expect(screen.queryByRole('button', { name: 'Print card' })).not.toBeInTheDocument();
+  });
+  it('DEV-747: offers the same card as Apple and Google Wallet test passes', async () => {
+    const walletTestPasses = {
+      mode: 'TEST',
+      notice: 'Test pass: not signed by an issuer.',
+      balancePoints: 1250,
+      pointValueMinor: 100,
+      apple: { serialNumber: 'plw_1', barcodes: [{ message: CODE }] },
+      google: { id: 'test-issuer.plw_1', barcode: { value: CODE } },
+    };
+    actions.issue.mockResolvedValue({
+      status: 'issued',
+      message: 'Card issued.',
+      code: CODE,
+      walletTestPasses,
+    });
+    render(<LoyaltyCardPanel branchId="branch-a" customerId="customer-a" activeCard={null} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Issue card' }));
+    await screen.findByText('Card issued.');
+    expect(screen.getByRole('heading', { name: 'Wallet passes' })).toBeInTheDocument();
+    expect(screen.getByText('Test only')).toBeInTheDocument();
+    expect(screen.getByText(/1 point = PKR 1\./)).toHaveTextContent('1,250 points');
+
+    const saved: Blob[] = [];
+    const names: string[] = [];
+    const create = vi.fn((blob: Blob) => {
+      saved.push(blob);
+      return 'blob:pass';
+    });
+    const revoke = vi.fn();
+    Object.assign(URL, { createObjectURL: create, revokeObjectURL: revoke });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement
+    ) {
+      names.push(this.download);
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Download Apple Wallet test pass' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Download Google Wallet test pass' }));
+    expect(names).toEqual([
+      'loyalty-card-apple-wallet-test-pass.json',
+      'loyalty-card-google-wallet-test-pass.json',
+    ]);
+    expect(revoke).toHaveBeenCalledTimes(2);
+    const [apple, google] = await Promise.all(
+      saved.map(async (blob) => JSON.parse(await blob.text()))
+    );
+    expect(apple).toEqual({
+      mode: 'TEST',
+      platform: 'APPLE_WALLET',
+      notice: walletTestPasses.notice,
+      pass: walletTestPasses.apple,
+    });
+    expect(google).toMatchObject({
+      mode: 'TEST',
+      platform: 'GOOGLE_WALLET',
+      pass: walletTestPasses.google,
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    click.mockRestore();
+    Reflect.deleteProperty(URL, 'createObjectURL');
+    Reflect.deleteProperty(URL, 'revokeObjectURL');
+  });
+
+  it('DEV-747: offers no wallet pass when none came with the card', async () => {
+    render(<LoyaltyCardPanel branchId="branch-a" customerId="customer-a" activeCard={null} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Issue card' }));
+    await screen.findByText('Card issued.');
+    expect(screen.queryByRole('button', { name: /Wallet test pass/ })).not.toBeInTheDocument();
   });
 });

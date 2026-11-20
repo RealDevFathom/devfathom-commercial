@@ -633,6 +633,34 @@ describe('DEV-690 — bonus-scheme check at goods-in', () => {
     expect(exception?.detail).toContain('2026-11-01');
   });
 
+  it("DEV-769: keeps a scheme valid through its last day in the organisation's zone", () => {
+    // 'Valid until' 15 Nov is stored as that day's UTC midnight; goods arriving at 3 PM in
+    // Karachi on the 15th are inside the scheme.
+    const ordered = { ...ORDERED, schemeValidUntil: new Date('2026-11-15T00:00:00.000Z') };
+    expect(
+      matchReceiptLine({
+        ordered,
+        received: {
+          ...RECEIVED,
+          receivedAt: new Date('2026-11-15T10:00:00.000Z'),
+          timeZone: 'Asia/Karachi',
+        },
+      })
+    ).toEqual([]);
+    // 1 AM in Karachi on the 16th is the next day there, though still the 15th in UTC.
+    const [exception, ...rest] = matchReceiptLine({
+      ordered,
+      received: {
+        ...RECEIVED,
+        receivedAt: new Date('2026-11-15T20:00:00.000Z'),
+        timeZone: 'Asia/Karachi',
+      },
+    });
+    expect(rest).toEqual([]);
+    expect(exception?.kind).toBe('SCHEME_EXPIRED');
+    expect(exception?.detail).toContain('valid until 2026-11-15; goods arrived 2026-11-16');
+  });
+
   it('checks nothing on a line with no scheme', () => {
     expect(
       matchReceiptLine({

@@ -191,4 +191,18 @@ describe('supplier draft packet evidence', () => {
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:draft');
     expect(screen.getByText('Draft CSV exported. Review before sharing.')).toBeVisible();
   });
+
+  it("names the organisation's zone for the return dates instead of UTC (DEV-722)", () => {
+    const data = { ...packet(), timeZone: 'Asia/Karachi' };
+    render(<FollowUpPacket packet={data} />);
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('2026-09-01 to 2026-09-03, both dates included, in PKT');
+    expect(text).toContain('Prepared at: 4 Sep 2026, 5:00 PM PKT');
+    expect(text).not.toMatch(/inclusive UTC|2026-09-04T12:00/);
+    const csv = packetCsv(data, 'supplier-1');
+    expect(csv).toContain(
+      '"Return created date, both dates included, in PKT; allocations current at preparation"'
+    );
+    expect(csv).not.toContain('inclusive UTC');
+  });
 });

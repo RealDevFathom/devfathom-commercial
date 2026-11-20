@@ -1,3 +1,8 @@
+import {
+  currentPasswordInput,
+  requirePasswordReauthentication,
+} from '@/lib/password-reauthentication';
+import { ownPinProblem } from '@/lib/pharmacy/own-pin-policy';
 import { findDuplicateSupplierInvoice } from '@/lib/pharmacy/supplier-invoice-duplicate';
 import { Prisma } from '@/generated/prisma/client';
 import {
@@ -131,6 +136,7 @@ import {
   loadLostDemandTriggerConfig,
   readLostDemandAdvice,
 } from '@/lib/pharmacy/lost-demand-advice-reader';
+import { annotateAuditBranch } from '../audit-branch';
 import { denyByDefaultProcedure, router } from '../trpc';
 import type { ProcedureMeta, TRPCContext } from '../trpc';
 import {
@@ -432,6 +438,9 @@ async function purchasingOrderScope(ctx: TRPCContext) {
  * a branch-scoped buyer must not reach them by guessing an ID.
  */
 async function purchasingRecordScope(ctx: TRPCContext, branch: string | null | undefined) {
+  // Authorization only. It also runs for related records (an order's requisition
+  // or quote), so it never tags the audit entry: each mutation tags the branch of
+  // its own record with annotateAuditBranch (DEV-913).
   if (branch) {
     await receivingScope(ctx, branch);
     return;
@@ -580,7 +589,11 @@ const purchasingRouter = router({
   /** Pharmacy-only tenants can establish their own approval PIN without restaurant modules. */
   provisionMyPurchasePin: purchasing
     .meta(PROCUREMENT_AND_APPROVAL)
-    .input(z.object({ pin: z.string().regex(/^\d{4,8}$/) }).strict())
+    .input(
+      z
+        .object({ pin: z.string().regex(/^\d{4,8}$/), currentPassword: currentPasswordInput })
+        .strict()
+    )
     .mutation(async ({ ctx, input }) => {
       ctx.audit.detail.skipInput = true;
       if (!hasModule(ctx.entitlements, 'pharmacy-procurement')) {
@@ -588,6 +601,27 @@ const purchasingRouter = router({
       }
       const { organizationId } = tenantScope(ctx);
       const userId = ctx.session.user.id;
+      // DEV-931: the same gate as "Your PIN" (src/lib/pharmacy/own-pin.ts): no support
+      // session, the one PIN rule (easy PINs and the person's own phone number refused), and
+      // the account password re-entered and checked on the server, rate limited, before any
+      // write. A stolen session alone cannot create a PIN.
+      if (ctx.support || ctx.session.user.isSupportSession)
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'A support session cannot set or reset a PIN.',
+        });
+      const person = await ctx.db.user.findFirst({
+        where: { id: userId, organizationId },
+        select: { phone: true },
+      });
+      const problem = ownPinProblem(input.pin, input.pin, { phone: person?.phone });
+      if (problem) throw new TRPCError({ code: 'BAD_REQUEST', message: problem });
+      await requirePasswordReauthentication(ctx.db, {
+        organizationId,
+        userId,
+        password: input.currentPassword,
+        purpose: 'pharmacy-pin',
+      });
       return ctx.db.$transaction(async (tx) => {
         // Serialize initial profile/credential creation for this person.
         await tx.$queryRaw`SELECT id FROM users WHERE id=${userId} AND "organizationId"=${organizationId} FOR UPDATE`;
@@ -840,6 +874,7 @@ const purchasingRouter = router({
           where: { id: input.requisitionId },
         });
         if (!requisition) throw new PharmacyPurchasingError('NOT_FOUND');
+        annotateAuditBranch(ctx, requisition.branchId);
         await purchasingRecordScope(ctx, requisition.branchId);
         assertRequisitionTransition(requisition.status, 'SUBMITTED');
         return await ctx.db.pharmacyRequisition.update({
@@ -903,6 +938,7 @@ const purchasingRouter = router({
           include: { lines: true },
         });
         if (!requisition) throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
+        annotateAuditBranch(ctx, requisition.branchId);
         await purchasingRecordScope(ctx, requisition.branchId);
         const ownLines = new Set(requisition.lines.map((line) => line.id));
         for (const line of input.lines) {
@@ -949,6 +985,11 @@ const purchasingRouter = router({
           quoteLines.flatMap((line) => line.quote.supplier.licences.map((licence) => licence.id))
         );
         const policy = await readSupplierCompliancePolicy(ctx.db, organizationId);
+        // DEV-769: quote validity is judged by the organisation's own day.
+        const organization = await ctx.db.organization.findUnique({
+          where: { id: organizationId },
+          select: { timezone: true },
+        });
         const candidates: QuoteCandidate[] = quoteLines.map((line) => ({
           quoteId: line.quoteId,
           supplierId: line.quote.supplierId,
@@ -977,6 +1018,7 @@ const purchasingRouter = router({
             candidates,
             at,
             policy,
+            timeZone: organization?.timezone,
           }),
           supplierChecksEnabled: policy.checksEnabled,
         };
@@ -1237,6 +1279,7 @@ const purchasingRouter = router({
           include: { requisition: { select: { branchId: true } } },
         });
         if (!order) throw new PharmacyPurchasingError('NOT_FOUND');
+        annotateAuditBranch(ctx, order.branchId);
         await assertOrderBranches(ctx, {
           branchId: order.branchId,
           requisitionBranchId: order.requisition?.branchId ?? null,
@@ -1280,6 +1323,7 @@ const purchasingRouter = router({
             include: { requisition: true },
           });
           if (!order) throw new PharmacyPurchasingError('NOT_FOUND');
+          annotateAuditBranch(ctx, order.branchId);
           // #683 rule, implemented here: the approver must be assigned to the
           // order's branch (and its requisition's), not merely hold the capability.
           await assertOrderBranches(
@@ -1417,6 +1461,7 @@ const purchasingRouter = router({
           include: { requisition: { select: { branchId: true } } },
         });
         if (!order) throw new PharmacyPurchasingError('NOT_FOUND');
+        annotateAuditBranch(ctx, order.branchId);
         await assertOrderBranches(ctx, {
           branchId: order.branchId,
           requisitionBranchId: order.requisition?.branchId ?? null,
@@ -1462,6 +1507,7 @@ const purchasingRouter = router({
           },
         });
         if (!order) throw new PharmacyPurchasingError('NOT_FOUND');
+        annotateAuditBranch(ctx, order.branchId);
         await assertOrderBranches(ctx, {
           branchId: order.branchId,
           requisitionBranchId: order.requisition?.branchId ?? null,
@@ -2815,6 +2861,10 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      annotateAuditBranch(ctx, input.receivingBranchId);
+      // DEV-936: an organization-wide central grant says *what*; the receiving
+      // branch still needs an assignment (or the live owner exception).
+      await assertProcurementBranch(ctx, input.receivingBranchId);
       try {
         return await createCentralPurchaseOrder(
           ctx.db,
@@ -2854,16 +2904,37 @@ const purchasingRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction((tx) =>
-          allocateCentralReceipt(
-            txDb(tx),
+        // DEV-913: the receiving branch of the goods receipt, for the audit entry.
+        const receipt = await ctx.db.pharmacyGoodsReceipt.findFirst({
+          where: { id: input.goodsReceiptId },
+          select: { branchId: true },
+        });
+        annotateAuditBranch(ctx, receipt?.branchId);
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const { organizationId } = tenantScope(ctx);
+          // DEV-936: the branch the stock leaves (the receipt's branch), read on the
+          // transaction client, and every destination branch are checked before
+          // anything is written. Any posted receipt may be allocated (INV-10 keeps no
+          // central-order marker), so the source branch is the boundary.
+          const source = await db.pharmacyGoodsReceipt.findFirst({
+            where: { id: input.goodsReceiptId, organizationId },
+            select: { branchId: true },
+          });
+          if (source) await assertProcurementBranch(ctx, source.branchId, db);
+          const destinations = new Set(input.allocations.map((a) => a.destinationBranchId));
+          for (const destination of destinations) {
+            await assertProcurementBranch(ctx, destination, db);
+          }
+          return allocateCentralReceipt(
+            db,
             {
-              organizationId: tenantScope(ctx).organizationId,
+              organizationId,
               actorId: ctx.session.user.id,
             },
             input
-          )
-        );
+          );
+        });
       } catch (error) {
         domainError(error);
       }

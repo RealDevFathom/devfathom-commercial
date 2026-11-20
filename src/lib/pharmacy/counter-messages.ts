@@ -58,6 +58,22 @@ const NO_PERMISSION_SERVER_MESSAGE = 'You do not have permission for this action
 /** DEV-712: the refusal a payment gets when a supervisor discarded its attempt. */
 export const TENDER_ATTEMPT_DISCARDED = 'TENDER_ATTEMPT_DISCARDED';
 
+/**
+ * DEV-66: why an automatic discount was not applied to a line that was still added. The
+ * add-line response carries the key; the counter shows the sentence to the cashier.
+ */
+/**
+ * DEV-929: the refusal a manual discount gets when the operator does not hold the discount
+ * right and no manager's PIN came with it. The counter asks for the PIN when it sees it.
+ */
+export const COUNTER_DISCOUNT_APPROVAL_REQUIRED =
+  'A discount needs a manager to approve it with their PIN.';
+
+export const COUNTER_DISCOUNT_NOTICES = {
+  PROMOTION_ABOVE_MAXIMUM:
+    "This promotion is above the owner's maximum discount, so the item was added at full price.",
+} as const;
+
 export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // Inventory (INV) — arrangement, stock and safety.
   // Raised in BOTH directions — too few loose units for a strip sale, and a
@@ -67,6 +83,8 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   INVALID_ARRANGEMENT:
     'This quantity does not match how the batch sits on the shelf. Sell the open loose units first, or break a pack in Inventory before selling strips or loose units.',
   INSUFFICIENT_STOCK: 'There is not enough safe stock on hand for this quantity.',
+  LABEL_LOT_MISMATCH:
+    "This shelf label's batch can no longer cover this line. Rescan the label or choose another batch.",
   BLOCKED_STOCK:
     'This batch cannot be dispensed — it is expired, quarantined or recalled. Choose another batch.',
   // #659: a batch on the bill changed after its line was added; payment is refused.
@@ -87,9 +105,23 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     'That unit does not match how this item is packed. Search for it again and choose the unit from the list.',
   // Sale aggregate (POS).
   PRICE_ABOVE_MRP: 'That price is above the printed MRP, which is not allowed.',
-  MARGIN_GUARDRAIL: 'That discount falls below the permitted margin.',
+  MARGIN_GUARDRAIL:
+    "This discount would take the item below its cost or the branch's minimum margin. Give a smaller discount.",
+  // DEV-66: the owner's maximum discount applies to everyone.
+  DISCOUNT_ABOVE_MAXIMUM:
+    "This discount or voucher is above the owner's maximum discount. Give a smaller discount, or ask the owner to raise the maximum.",
   APPROVAL_REQUIRED: 'A supervisor must approve this discount before it can be applied.',
   REGULATED_DISCOUNT_REFUSED: 'Regulated medicines cannot be discounted.',
+  // DEV-956: the whole-bill discount.
+  BILL_DISCOUNT_OFF:
+    'The owner has not turned on the whole-bill discount. Give a discount on an item instead.',
+  BILL_DISCOUNT_AFTER_PAYMENT:
+    'Payment has already been started or taken on this bill, so its whole-bill discount can no longer be given or changed.',
+  BILL_DISCOUNT_LOCKED_BY_PAYMENT:
+    'This bill has a whole-bill discount and a payment has been taken, so no item can be added to it. Finish this bill, then start a new one for more items.',
+  // DEV-966: a cash-on-delivery bill priced by the prepaid tier when the rider collected.
+  BILL_DISCOUNT_LOCKED_BY_PREPAID_TIER:
+    "The customer's prepaid discount has already been priced on top of this bill's whole-bill discount, so the bill can no longer change. Finish this bill as it is, then start a new bill for any other item.",
   VOUCHER_CATEGORY_REFUSED:
     'Vouchers apply to non-medicine items only. Remove the voucher from this line.',
   VOUCHER_INVALID: 'That voucher is not valid at this branch. Check the voucher and try again.',
@@ -132,7 +164,10 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // `PharmacySettlementError` can raise, because these are the failures a
   // cashier hits mid-bill rather than during setup.
   DAY_CLOSED:
-    'This business day is closed. New payments and drawer changes are blocked. Use an open business day.',
+    'This business day is closed. New payments and drawer changes are blocked. The owner or a manager can reopen today for trading on Day close.',
+  // DEV-631: the owner's reopen-for-trading action on Day close.
+  DAY_NOT_CLOSED: 'This business day is not closed, so there is nothing to reopen.',
+  REOPEN_NOT_TODAY: "Only today's business day can be reopened for trading.",
   // DEV-630: the server books money on today in the workspace zone only.
   BUSINESS_DATE_NOT_CURRENT:
     'Payments, refunds and drawers use today’s business date only. Refresh the counter and try again.',
@@ -140,7 +175,29 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // and drawer counts/close, so it names cash in or out, not one operation.
   DRAWER_NOT_OPEN:
     'The cash drawer for this counter is not open. Open it before taking or paying out cash.',
+  // DEV-769: the server refuses a bill on a drawer from an earlier business day.
+  DRAWER_FROM_EARLIER_DAY:
+    'This counter’s cash drawer is still open from an earlier business day. Close that drawer first, then start the bill.',
   OPEN_DRAWER: 'A drawer is already open on this counter. Close it before opening another.',
+  // DEV-743: the day cannot close while a terminal payment on it may have charged the customer.
+  CARD_TERMINAL_PAYMENT_OPEN:
+    'A card terminal payment on this day is still open. Check its status on the counter, or have a manager review it, before closing the day.',
+  // DEV-743: a terminal charge goes back through the card provider, never as cash.
+  CARD_TERMINAL_REFUND_VIA_PROVIDER:
+    'This payment was taken on the card terminal, so it cannot be refunded here. Do not give cash. Refund it through the card provider’s own refund process, and keep the provider’s refund slip with this bill.',
+  BILL_HAS_CARD_TERMINAL_PAYMENT:
+    'This bill was paid on the card terminal, so it cannot be voided or refunded here. Do not give cash. Refund the card payment through the card provider’s own refund process, and keep the provider’s refund slip with this bill.',
+  // DEV-743: resolving a card terminal payment under review.
+  REVIEW_NOT_OPEN:
+    'This card terminal payment is no longer waiting for review. It may already have been resolved. Refresh the bill to see where it stands.',
+  CHARGE_EVIDENCE_RECORDED:
+    'The terminal reported a charge for this payment, so it cannot be recorded as not charged. If the slip shows the money was taken, record it as taken and refund it through the card provider.',
+  SLIP_REFERENCE_MISMATCH:
+    'That reference is not the one the terminal reported for this payment. Enter the reference printed on the terminal slip.',
+  OWN_CHARGE_NEEDS_ANOTHER_APPROVER:
+    'Another manager or owner must resolve a payment you took. Ask another manager or owner at this branch to resolve it.',
+  SLIP_REFERENCE_IN_USE:
+    'That slip reference is already recorded on another card terminal payment. Check the slip and enter its reference again.',
   // DEV-821: cash goes only into a till the signed-in user runs.
   DRAWER_NOT_YOURS:
     'Another cashier runs the cash drawer on this counter. Ask a manager or owner to hand it over to you, then take the cash.',
@@ -172,7 +229,7 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     'This payment came from the customer’s prepaid balance. The refund goes back to that balance; do not give cash.',
   MOCK_PROVIDER_IN_RELEASE:
     'Card payments are not configured on this deployment. Take another tender.',
-  REOPEN_REASON_REQUIRED: 'Reopening a closed drawer needs a recorded reason.',
+  REOPEN_REASON_REQUIRED: 'Reopening a closed day needs a recorded reason.',
   INVALID_RECEIPT_LEASE:
     "This counter's offline receipt numbers are out of date. Reconnect the counter so it can renew them, then try again.",
   LEASE_REQUIRES_SETTLEMENT:

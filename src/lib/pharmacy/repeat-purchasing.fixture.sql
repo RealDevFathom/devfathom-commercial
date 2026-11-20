@@ -19,12 +19,14 @@ VALUES ('batch','org_a','m','Synthetic','2030-01-01',now());
 INSERT INTO pharmacy_inventory_lots(id,"organizationId","branchId","manufacturingBatchId","packLevelId","unitsPerPack","supplierName","supplierInvoiceRef","unitCostMinor","printedMrpMinor","receivedExpiresAt","receivedExpiryPrecision","receivedAt","updatedAt")
 SELECT b,'org_a',b,'batch','pack',1,'Synthetic',b,50,100,'2030-01-01','DAY','2020-01-01',now()
 FROM (VALUES ('b1'),('semantics')) v(b);
+-- DEV-637 (20261118121900): a receipt number is unique within its branch, so every
+-- numbered receipt below carries its own number. The reader only tests for a missing number.
 INSERT INTO pharmacy_sales(id,"organizationId","branchId",status,"createdByUserId","completedAt","receiptNumber","customerId","createdAt","updatedAt")
-SELECT id,o,b,'COMPLETED','synthetic',d::timestamp,1,c,d::timestamp,d::timestamp FROM (VALUES
- ('a','org_a','b1','2026-01-01','c1'),('b','org_a','b2','2026-01-31','c1'),
- ('anon','org_a','b1','2026-01-02',NULL),('foreign','org_b','b3','2026-01-02','c2'),
- ('new-first','org_a','history','2026-01-01','new'),('new-repeat','org_a','history','2026-01-31','new'),
- ('old-later','org_a','history','2026-01-03','old')) v(id,o,b,d,c);
+SELECT id,o,b,'COMPLETED','synthetic',d::timestamp,n,c,d::timestamp,d::timestamp FROM (VALUES
+ ('a','org_a','b1','2026-01-01','c1',1),('b','org_a','b2','2026-01-31','c1',1),
+ ('anon','org_a','b1','2026-01-02',NULL,2),('foreign','org_b','b3','2026-01-02','c2',1),
+ ('new-first','org_a','history','2026-01-01','new',10002),('new-repeat','org_a','history','2026-01-31','new',10003),
+ ('old-later','org_a','history','2026-01-03','old',10004)) v(id,o,b,d,c,n);
 INSERT INTO pharmacy_sales(id,"organizationId","branchId",status,"createdByUserId","completedAt","receiptNumber","customerId","createdAt","updatedAt")
 SELECT 'old-'||i,'org_a','history','COMPLETED','synthetic',timestamp '2025-01-01'+i*interval '1 minute',i,'old',
  timestamp '2025-01-01'+i*interval '1 minute',now() FROM generate_series(1,10001) i;
@@ -72,16 +74,16 @@ INSERT INTO pharmacy_sales(id,"organizationId","branchId",status,"createdByUserI
 SELECT 'case-'||id,'org_a','semantics',
  CASE WHEN id='void' THEN 'VOID' ELSE 'COMPLETED' END::"PharmacySaleStatus",'synthetic',
  CASE WHEN id='missing-time' THEN NULL ELSE timestamp '2026-01-01' END,
- CASE WHEN id='missing-number' THEN NULL ELSE 1 END,
+ CASE WHEN id='missing-number' THEN NULL ELSE row_number() OVER (ORDER BY id) END,
  CASE WHEN id='anonymous' THEN NULL ELSE 'case-'||id END,
  CASE WHEN id='late-import' THEN timestamp '2026-05-02' ELSE timestamp '2026-01-01' END,now(),NULL
 FROM repeat_cases WHERE id<>'derived';
 INSERT INTO pharmacy_sales(id,"organizationId","branchId",status,"createdByUserId","completedAt","receiptNumber","customerId","createdAt","updatedAt","originalSaleId")
-VALUES ('case-derived','org_a','semantics','COMPLETED','synthetic','2026-01-01',1,'case-derived','2026-01-01',now(),'case-normal');
+VALUES ('case-derived','org_a','semantics','COMPLETED','synthetic','2026-01-01',100,'case-derived','2026-01-01',now(),'case-normal');
 INSERT INTO pharmacy_sales(id,"organizationId","branchId",status,"createdByUserId","completedAt","receiptNumber","customerId","createdAt","updatedAt")
 SELECT 'repeat-'||id,'org_a','semantics','COMPLETED','synthetic',
  CASE WHEN id='same-time' THEN timestamp '2026-01-01' WHEN id='boundary-ms' THEN timestamp '2026-01-31 00:00:00.001' ELSE timestamp '2026-01-31' END,
- 2,CASE WHEN id='anonymous' THEN NULL ELSE 'case-'||id END,'2026-01-01',now() FROM repeat_cases;
+ 200+row_number() OVER (ORDER BY id),CASE WHEN id='anonymous' THEN NULL ELSE 'case-'||id END,'2026-01-01',now() FROM repeat_cases;
 INSERT INTO pharmacy_sale_lines(id,"organizationId","branchId","saleId","medicineId","presentationId","packLevelId","saleUnit",quantity,"canonicalUnitsPerSaleUnit","canonicalUnits","unitPriceMinor","grossMinor","proRataCeilingMinor","unitCostMinor","idempotencyKey","createdAt")
 SELECT s.id||'-line','org_a','semantics',s.id,'m','p','pack','PACK',2,1,2,
  CASE WHEN s.id='case-zero' THEN 0 ELSE 100 END,

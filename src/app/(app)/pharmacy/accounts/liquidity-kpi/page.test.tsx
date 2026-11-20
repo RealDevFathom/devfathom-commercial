@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   resolveTenantActor: vi.fn(),
   createTRPCContext: vi.fn(),
   financialStatements: vi.fn(),
+  branches: vi.fn(),
   mutation: vi.fn(),
 }));
 
@@ -64,16 +65,36 @@ describe('LiquidityKpiPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.resolveTenantActor.mockResolvedValue(actor);
-    mocks.createTRPCContext.mockResolvedValue({ session: actor.session });
+    mocks.createTRPCContext.mockResolvedValue({
+      session: actor.session,
+      db: { pharmacyBranch: { findMany: mocks.branches } },
+    });
+    mocks.branches.mockResolvedValue([
+      { id: 'branch-1', name: 'Main Branch' },
+      { id: 'branch-2', name: 'Gulshan Branch' },
+    ]);
     mocks.financialStatements.mockResolvedValue(report());
   });
 
-  it('renders initial controls without authenticating or reading finance', async () => {
+  // DEV-103: the branch picker reads the owner's branch names, and nothing else, before a branch
+  // is chosen: one actor resolution and one branch list, never a financial source.
+  const expectOnlyTheBranchList = () => {
+    expect(mocks.resolveTenantActor).toHaveBeenCalledTimes(1);
+    expect(mocks.createTRPCContext).toHaveBeenCalledTimes(1);
+    expect(mocks.branches).toHaveBeenCalledTimes(1);
+    expect(mocks.branches).toHaveBeenCalledWith({
+      where: { organizationId: 'org-1', active: true },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true },
+    });
+    expect(mocks.financialStatements).not.toHaveBeenCalled();
+  };
+
+  it('renders initial controls reading only the branch list, no financial source', async () => {
     const output = await html({});
     expect(output).toContain('No financial source has been read');
     expect(output).toContain('name="cutoff"');
-    expect(mocks.resolveTenantActor).not.toHaveBeenCalled();
-    expect(mocks.financialStatements).not.toHaveBeenCalled();
+    expectOnlyTheBranchList();
   });
 
   it.each([
@@ -84,8 +105,7 @@ describe('LiquidityKpiPage', () => {
     { branch: 'x'.repeat(129), cutoff: '2026-02-01' },
   ])('rejects invalid controls before any read', async (params) => {
     expect(await html(params)).toContain('role="alert"');
-    expect(mocks.resolveTenantActor).not.toHaveBeenCalled();
-    expect(mocks.financialStatements).not.toHaveBeenCalled();
+    expectOnlyTheBranchList();
   });
 
   it('reads the guarded report once and renders per-currency exact coverage', async () => {
@@ -109,9 +129,9 @@ describe('LiquidityKpiPage', () => {
     });
     expect(mocks.mutation).not.toHaveBeenCalled();
     expect(output).toContain('9007199254740993.01');
-    expect(output).toContain('900719925474099310 / 400');
+    expect(output).toContain('9007199254740993.10 / 4.00');
     expect(output).toContain('2251799813685248.2750');
-    expect(output).toContain('50 / 200');
+    expect(output).toContain('0.50 / 2.00');
     expect(output).toContain('0.2500');
     expect(output).toContain('Export KPI CSV');
     expect(output).toMatch(/Retrieved\s+2 Feb 2026, 3:04 AM UTC/);
@@ -200,5 +220,41 @@ describe('LiquidityKpiPage', () => {
       page: 1,
     });
     expect(output).toContain('Cutoff, exclusive (PKT)');
+  });
+
+  describe('DEV-103 branch picker', () => {
+    it('offers the active branches of the signed-in organization by name, not a typed ID', async () => {
+      const output = await html({});
+      expect(output).toContain('<select');
+      expect(output).toContain('>Main Branch</option>');
+      expect(output).toContain('>Gulshan Branch</option>');
+      expect(output).not.toContain('Branch ID');
+      expect(output).not.toMatch(/<input[^>]*name="branch"/);
+    });
+
+    it('selects the requested branch', async () => {
+      expect(await html(query)).toMatch(/<option value="branch-1" selected="">/);
+    });
+
+    it('shows the prompt, not another branch, for an unlisted branch and leaves it to the router', async () => {
+      mocks.financialStatements.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN' }));
+      const output = await html({ ...query, branch: 'branch-other' });
+      expect(output).toContain('<option value="">Choose a branch</option>');
+      expect(output).not.toMatch(/<option value="branch-[12]" selected/);
+      expect(mocks.financialStatements).toHaveBeenCalledWith(
+        expect.objectContaining({ branchId: 'branch-other' })
+      );
+      expect(output).toContain('Posted cash coverage unavailable');
+    });
+
+    it('offers no branches to someone who is not an owner', async () => {
+      mocks.createTRPCContext.mockResolvedValue({
+        session: { user: { id: 'u', organizationId: 'org-1', role: 'EMPLOYEE' } },
+        db: { pharmacyBranch: { findMany: mocks.branches } },
+      });
+      const output = await html({});
+      expect(mocks.branches).not.toHaveBeenCalled();
+      expect(output).not.toContain('Main Branch');
+    });
   });
 });

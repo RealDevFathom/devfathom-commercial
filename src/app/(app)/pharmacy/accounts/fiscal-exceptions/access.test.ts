@@ -42,4 +42,22 @@ describe('isolated fiscal evidence sensitive-read audit', () => {
     });
     expect(JSON.stringify(mocks.audit.mock.calls)).not.toContain('sensitive raw SQL');
   });
+
+  it('fills a missing window from the organisation\'s today, keeping typed dates (DEV-722)', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-07-31T19:30:00Z')); // 00:30 on 1 Aug in Karachi
+      mocks.context.mockResolvedValue({ session: { user: { id: 'owner' } }, audit: { detail: {} },
+        organization: { timezone: 'Asia/Karachi' } });
+      mocks.read.mockResolvedValue({ rows: [] });
+      await loadFiscalExceptionRegister({ branchId: 'b', from: undefined, to: undefined });
+      expect(mocks.read).toHaveBeenLastCalledWith(expect.anything(),
+        { branchId: 'b', from: '2026-07-26', to: '2026-08-02' });
+      await loadFiscalExceptionRegister({ branchId: 'b', from: '2026-01-01', to: '2026-01-02' });
+      expect(mocks.read).toHaveBeenLastCalledWith(expect.anything(),
+        { branchId: 'b', from: '2026-01-01', to: '2026-01-02' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

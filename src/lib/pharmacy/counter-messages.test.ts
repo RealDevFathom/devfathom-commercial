@@ -93,6 +93,8 @@ describe('counterErrorMessage', () => {
       'INVALID_AMOUNT',
       'OVER_TENDER',
       'DRAWER_NOT_OPEN',
+      // DEV-769: a drawer still open from an earlier business day.
+      'DRAWER_FROM_EARLIER_DAY',
       'REFUND_EXCEEDS_TENDER',
       'IDEMPOTENCY_CONFLICT',
       'UNCERTIFIED_PROVIDER',
@@ -109,6 +111,10 @@ describe('counterErrorMessage', () => {
       'CASHIER_NOT_ASSIGNED',
       // DEV-712: a payment whose attempt a supervisor discarded.
       'TENDER_ATTEMPT_DISCARDED',
+      // DEV-743: a terminal payment still open on the day being closed.
+      'CARD_TERMINAL_PAYMENT_OPEN',
+      // DEV-743: a terminal charge is refunded through the provider, never in cash.
+      'CARD_TERMINAL_REFUND_VIA_PROVIDER',
     ] as const;
 
     for (const reason of settlementReasons) {

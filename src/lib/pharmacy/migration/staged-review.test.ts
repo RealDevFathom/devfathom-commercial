@@ -52,6 +52,24 @@ describe('staged medicine evidence', () => {
     expect(JSON.stringify(view)).not.toContain('privateUnrelatedField');
     expect(JSON.stringify(row)).toBe(before);
   });
+  it('shows a NARCOTICS-class row as a controlled medicine and an ordinary row as not (DEV-854)', () => {
+    const narcotics = stagedReference(
+      {
+        ...fixture(),
+        rawPayload: { ...(fixture().rawPayload as object), classname: ' Narcotics ' },
+      },
+      source,
+      'batch_1'
+    );
+    expect(narcotics).toMatchObject({ legacyClass: 'Narcotics', controlled: true });
+    const ordinary = stagedReference(
+      { ...fixture(), rawPayload: { ...(fixture().rawPayload as object), classname: 'NARCOTIC' } },
+      source,
+      'batch_1'
+    );
+    expect(ordinary).toMatchObject({ legacyClass: 'NARCOTIC', controlled: false });
+    expect(stagedReference(fixture(), source, 'batch_1').controlled).toBe(false);
+  });
   it('does not invent original text from JSON numbers or missing cells', () => {
     const view = stagedReference({ ...fixture(), rawPayload: { QTY: 1 } }, source, 'batch_1');
     expect(view.references.QTY).toBeNull();
@@ -89,29 +107,31 @@ describe('staged medicine evidence', () => {
     expect(view.sellable).toBe(false);
     expect(view.canonicalQuantity).toBeNull();
     expect(view.exceptions[0].severity).toBe('BLOCKING');
-    expect(
-      missingAttributes({
-        sourceRef: 'ref',
-        manufacturingBatchId: null,
-        batchNumber: null,
-        expiryDate: null,
-        expiryPrecision: null,
-        printedMrpMinor: null,
-        unitCostMinor: null,
-        stockLocationId: null,
-        packLevelId: null,
-        unitsPerPack: null,
-        countedUnits: null,
-      })
-    ).toEqual(
+    const gaps = missingAttributes({
+      sourceRef: 'ref',
+      manufacturingBatchId: null,
+      batchNumber: null,
+      expiryDate: null,
+      expiryPrecision: null,
+      printedMrpMinor: null,
+      unitCostMinor: null,
+      stockLocationId: null,
+      packLevelId: null,
+      unitsPerPack: null,
+      countedUnits: null,
+    });
+    expect(gaps).toEqual(
       expect.arrayContaining([
         'MISSING_BATCH',
-        'MISSING_EXPIRY',
         'MISSING_MRP',
         'MISSING_COST',
+        'MISSING_LOCATION',
         'MISSING_COUNT',
       ])
     );
+    // DEV-853 owner decision: an expiry the old system never had is stored as
+    // "not recorded" and does not block opening stock.
+    expect(gaps).not.toContain('MISSING_EXPIRY');
   });
   it.each(['=1+1', '+SUM(A1)', '-1', '@formula', ' \t=CMD()', '\n=1', '\ttext'])(
     'escapes spreadsheet interpretation: %j',
@@ -202,5 +222,40 @@ describe('unresolved supplied quantities', () => {
       'QTY'
     );
     expect(view.quantityReview.label).toBeNull();
+  });
+});
+
+describe('DEV-927 — batch and expiry the old system did not record', () => {
+  it('shows a missing batch and expiry as information, not as an exception', () => {
+    const view = stagedReference(
+      { ...fixture(), batchNumber: null, expiryDate: null, exceptions: [] },
+      source,
+      'batch_1'
+    );
+    expect(view).toMatchObject({
+      batchLabel: 'Batch not recorded',
+      expiryLabel: 'Expiry not recorded',
+      batchNotRecorded: true,
+      expiryNotRecorded: true,
+      exceptions: [],
+    });
+  });
+
+  it('shows a recorded batch and expiry as recorded', () => {
+    const view = stagedReference(
+      { ...fixture(), batchNumber: 'B-17', expiryDate: new Date(Date.UTC(2027, 2, 31)) },
+      source,
+      'batch_1'
+    );
+    expect(view).toMatchObject({
+      batchLabel: 'B-17',
+      expiryLabel: '2027-03-31',
+      batchNotRecorded: false,
+      expiryNotRecorded: false,
+    });
+  });
+
+  it('routes a passed expiry to the opening stock review', () => {
+    expect(exceptionWorkflow('EXPIRED_STOCK')).toBe('Opening stock');
   });
 });

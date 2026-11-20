@@ -22,6 +22,8 @@ export const intendedPharmacyGrants = {
     'pharmacy:close',
     'pharmacy:manage',
     'pharmacy:procurement-approve',
+    // DEV-19: the proprietor submits catalogue edits for review.
+    'pharmacy:catalogue-edit',
   ],
   pharmacist: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
   manager: [
@@ -186,5 +188,27 @@ describe('sensitive pharmacy actions need an exact grant', () => {
     expect(capabilityMatches('pharmacy:*', 'reports:financial')).toBe(false);
     expect(capabilityMatches('pharmacy:counter', 'pharmacy:counter')).toBe(true);
     expect(capabilityMatches('pharmacy:counter', 'pharmacy:manage')).toBe(false);
+  });
+});
+
+describe('DEV-66 discount without a manager approval', () => {
+  it('is a checked pharmacy action the owner can grant to any role by name', () => {
+    expect(ALL_ACTIONS).toContain('pharmacy:discount');
+    expect(PHARMACY_CHECKED_CAPABILITIES).toContain('pharmacy:discount');
+    expect(capabilityMatches('pharmacy:discount', 'pharmacy:discount')).toBe(true);
+  });
+
+  it('is never reached by a wildcard, so by default every discount needs a manager', () => {
+    expect(EXACT_GRANT_ONLY_ACTIONS.has('pharmacy:discount')).toBe(true);
+    expect(capabilityMatches('*', 'pharmacy:discount')).toBe(false);
+    expect(capabilityMatches('pharmacy:*', 'pharmacy:discount')).toBe(false);
+    expect(capabilityMatches('pharmacy:*', 'pharmacy:discount', 'DENY')).toBe(true);
+  });
+
+  it('is granted by no role template until the owner chooses', () => {
+    for (const role of PHARMACY_ROLE_TEMPLATES)
+      expect(role.capabilities.some((grant) => capabilityMatches(grant, 'pharmacy:discount'))).toBe(
+        false
+      );
   });
 });

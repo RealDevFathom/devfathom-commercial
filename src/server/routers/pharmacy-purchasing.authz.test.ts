@@ -293,7 +293,8 @@ const RECEIPT_LINE = {
 };
 
 const CALLS = {
-  provisionMyPurchasePin: (c: Caller) => c.provisionMyPurchasePin({ pin: '4821' }),
+  provisionMyPurchasePin: (c: Caller) =>
+    c.provisionMyPurchasePin({ pin: '4821', currentPassword: 'current password' }),
   createSupplier: (c: Caller) => c.createSupplier({ name: 'Karachi Distributors' }),
   recordSupplierLicence: (c: Caller) =>
     c.recordSupplierLicence({
@@ -601,6 +602,9 @@ const BRANCH_SCOPED: ProcedureName[] = [
   'ignoreLostDemandAdvice',
   'requestLostDemandTransfer',
   'reorderDrafts',
+  // DEV-936: receiving and destination branches of central purchasing.
+  'createCentralPurchaseOrder',
+  'allocateCentralReceipt',
 ];
 const ORDER_SCOPED: ProcedureName[] = [
   'submitPurchaseOrder',

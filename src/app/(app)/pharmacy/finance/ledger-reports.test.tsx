@@ -129,8 +129,10 @@ describe('ledger reports show names and the organization currency', () => {
       },
       rows: [],
     } as unknown as LeakageProps;
-    const { container } = render(<LeakageLedger report={report} branchName="Main" />);
-    expect(container.textContent).toContain('1 Sept 2026, 05:00 PKT');
+    const { container } = render(
+      <LeakageLedger report={report} branchName="Main" timeZone="Asia/Karachi" />
+    );
+    expect(container.textContent).toContain('1 Sep 2026, 5:00 AM PKT');
     expect(container.textContent).not.toMatch(/T\d\d:\d\d|finance_journal_lines|UTC/);
   });
 

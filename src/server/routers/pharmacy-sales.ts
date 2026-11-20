@@ -23,6 +23,8 @@ import {
   type CounterApprovalPin,
 } from '@/lib/pharmacy/counter-line-approval';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
+import { readPharmacistCheckPolicy } from '@/lib/pharmacy/pharmacist-check-policy';
+import { pharmacistCheckOffSignature } from '@/lib/pharmacy/pharmacist-check';
 import { PharmacyDispensingError } from '@/lib/pharmacy/dispensing';
 import {
   PharmacyRxReferenceError,
@@ -43,6 +45,24 @@ import {
   saveManualPaymentSettings,
 } from '@/lib/pharmacy/manual-payment-settings';
 import {
+  discountPolicySchema,
+  maxDiscountBpsSchema,
+  NO_MAXIMUM_DISCOUNT_BPS,
+} from '@/lib/pharmacy/smart-discount';
+import {
+  OWNER_EXPORT_PIN_MAX_INPUT,
+  verifyOwnerExportPin,
+} from '@/lib/pharmacy/owner-data-export-pin';
+import {
+  MAX_DISCOUNT_CHANGE_REFUSED,
+  readDiscountPolicySettings,
+  readDiscountSuggestions,
+  readMaxDiscountSettings,
+  recordCompetitorPrice,
+  saveDiscountPolicy,
+  saveMaxDiscountBps,
+} from '@/lib/pharmacy/smart-discount-service';
+import {
   readKhataReminderSettings,
   saveKhataReminderSettings,
 } from '@/lib/pharmacy/khata-reminder-branch-settings';
@@ -55,7 +75,8 @@ import {
 import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission';
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
-import { BRANCH_NOT_ASSIGNED } from '@/lib/pharmacy/counter-setup';
+import { BRANCH_NOT_ASSIGNED, NO_INDEPENDENT_PHARMACIST } from '@/lib/pharmacy/counter-setup';
+import { readPharmacyApprovalStatus } from '@/lib/pharmacy/onboarding';
 import { RefusalReason } from '@/server/refusal-reason';
 import {
   evaluateCounterSaleReadiness,
@@ -76,21 +97,45 @@ import {
 } from '@/lib/pharmacy/controlled-register';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { annotateAudit } from '@/server/audit';
-import { authenticateVoucherCashierPin } from '@/lib/pharmacy/vouchers';
+import { annotateAuditBranch } from '@/server/audit-branch';
+import {
+  authenticateVoucherCashierPin,
+  counterVoucherInput,
+  lookupCounterVoucher,
+} from '@/lib/pharmacy/vouchers';
 import {
   isLockedOut,
   registerFailedAttempt,
   clearLockout,
 } from '@/lib/restaurant/operator-credentials';
 import { verifyApprovalSecret } from '@/lib/approval-authenticator';
-import { closePharmacyDay, readPharmacyClose } from '@/lib/pharmacy/day-close';
+import {
+  closePharmacyDay,
+  readPharmacyClose,
+  reopenPharmacyDayForTrading,
+} from '@/lib/pharmacy/day-close';
 import { listOpenBills } from '@/lib/pharmacy/open-bills';
 import { readPharmacyCashCloseCheck } from '@/lib/pharmacy/cash-close-check-operations';
 import { readPharmacyShiftHandover } from '@/lib/pharmacy/shift-handover-operations';
 import { workspaceTimezone } from '@/lib/timezone';
+import { pharmacyBusinessDay, withClientPharmacyDayEnd } from '@/lib/pharmacy/business-day';
+import { readPharmacyDayClock } from '@/lib/pharmacy/business-day-clock';
+import {
+  PharmacyDayEndHourError,
+  pharmacyDayEndHourSchema,
+  readPharmacyDayEndHourSetting,
+  savePharmacyDayEndHour,
+} from '@/lib/pharmacy/business-day-settings';
 import { prescriptionIsCurrent } from '@/lib/pharmacy/prescription-calendar';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { TRPCError } from '@trpc/server';
+import { NO_PIN_SET_MESSAGE } from '@/lib/pharmacy/own-pin-policy';
+import {
+  applyBillDiscount,
+  BILL_DISCOUNT_CHANGE_REFUSED,
+  readBillDiscountEnabled,
+  saveBillDiscountEnabled,
+} from '@/lib/pharmacy/bill-discount-service';
 import { z } from 'zod';
 import { saleVoidReasonSchema, saleVoidReasonText } from '@/lib/pharmacy/sale-void-reasons';
 import { Prisma } from '@/generated/prisma/client';
@@ -189,7 +234,10 @@ import {
   cutPharmacyDailyClose,
   lockOpenPharmacyDrawer,
   openPharmacyDrawer,
+  pharmacyDayClosedForTrading,
   readOpenPharmacyDrawer,
+  requireTodaysPharmacyDrawer,
+  requirePharmacyTodayOpenForTrading,
   PharmacySettlementError,
   readPharmacyTenderOutcome,
   discardPharmacyTenderAttempt,
@@ -201,10 +249,14 @@ import {
   actorMayRefund,
   authenticateRefundPin,
   REFUND_FORBIDDEN,
-  REFUND_PIN_POLICY,
+  refundApprovalAudit,
   RETURN_FORBIDDEN,
   RETURN_PIN_BLOCKED,
 } from '@/lib/pharmacy/refund-authorization';
+import {
+  authenticateDayReopenPin,
+  DAY_REOPEN_PIN_POLICY,
+} from '@/lib/pharmacy/day-reopen-authorization';
 
 import { assertInOrganization } from '../org-refs';
 import { managerBranchIds } from '../pharmacy-manager-branches';
@@ -226,6 +278,9 @@ import {
 import type { TRPCContext } from '../trpc';
 
 const branchId = z.string().trim().min(1).max(128);
+/** DEV-929: the owner's maximum discount in the audit description ("no maximum" or "10%"). */
+const maximumWords = (bps: number) =>
+  bps >= NO_MAXIMUM_DISCOUNT_BPS ? 'no maximum' : `${bps / 100}%`;
 // Preserve field order and parsing: settlement hashes JSON.stringify(parsed input).
 const counterApprovalPin = z
   .object({ staffProfileId: z.string().trim().min(1).max(128), pin: z.string().regex(/^\d{4,8}$/) })
@@ -272,9 +327,20 @@ const tenderInput = z
      * server; never stored, hashed into the payment or replayed.
      */
     prepaidPin: prepaidPin.optional(),
+    // #708: the buyer the Sindh cash memo names. Last, so existing payload hashes hold.
+    buyerName: z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .regex(/^[^\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069<>]*$/u, 'Use a plain name.')
+      .optional(),
   })
   .strict()
-  .refine(hasValidTenderProviderReference, { path: ['providerRef'], message: 'Invalid payment reference.' });
+  .refine(hasValidTenderProviderReference, {
+    path: ['providerRef'],
+    message: 'Invalid payment reference.',
+  });
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
 const demandReason = z.enum([
   'STOCKOUT',
@@ -408,6 +474,29 @@ async function assignedBranchScope(ctx: TRPCContext, branch: string): Promise<Le
   return scope;
 }
 
+/**
+ * DEV-909: a customer's detailed points history is shown for every branch only to a session
+ * ADMIN of the organization (the owner). Other staff, branch managers included, see it for the
+ * active branches they are assigned to; the shared points balance is not limited.
+ */
+async function visibleLoyaltyBranches(
+  ctx: TRPCContext,
+  scope: LedgerScope
+): Promise<string[] | undefined> {
+  const user = ctx.session!.user;
+  if (user.role === 'ADMIN' && user.organizationId === scope.organizationId) return undefined;
+  const rows = await ctx.db.pharmacyBranchAssignment.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      userId: user.id,
+      active: true,
+      branch: { organizationId: scope.organizationId, active: true },
+    },
+    select: { branchId: true },
+  });
+  return [...new Set([scope.branchId, ...rows.map((row) => row.branchId)])];
+}
+
 type SaleLineInput = Parameters<typeof addSaleLine>[2];
 /** #727: the online counter prices each line against the branch's live promotions. */
 const COUNTER_LINE_PRICING = { applyCounterPromotions: true } as const;
@@ -492,6 +581,7 @@ async function approvedLineInput(
   const approvals: Array<{ kind: CounterApprovalKind; approval: CounterApproval }> = [];
   const lineInput: SaleLineInput = {
     saleId: input.saleId,
+    ...(input.shelfLabelLotId ? { shelfLabelLotId: input.shelfLabelLotId } : {}),
     medicineId: input.medicineId,
     presentationId: input.presentationId,
     packLevelId: input.packLevelId,
@@ -716,6 +806,24 @@ const HOSTED_RECEIPT_ERROR_MESSAGES: Record<HostedReceiptError['reason'], string
   NOT_NEUTRAL: 'The receipt message would name a medicine, so it was not sent.',
 };
 
+/** DEV-743: the card-terminal router answers a tender guard's refusal exactly as a tender does. */
+export function failPharmacySale(error: unknown): never {
+  return fail(error);
+}
+
+/** DEV-958A: the day-end hour setting's refusals, in the owner's words. */
+function failDayEndHour(error: unknown): never {
+  if (error instanceof PharmacyDayEndHourError) {
+    if (error.reason === 'BRANCH_NOT_FOUND')
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Choose an active branch.' });
+    throw new TRPCError({
+      code: 'CONFLICT',
+      message: 'This setting changed while you were editing it. Reload and try again.',
+    });
+  }
+  return fail(error);
+}
+
 function fail(error: unknown): never {
   if (error instanceof PrepaidPinError)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
@@ -782,10 +890,11 @@ function fail(error: unknown): never {
     });
   }
   if (error instanceof PharmacySettlementError) {
-    // A drawer that is already open is a state conflict, not a malformed request.
+    // A drawer that is already open, or a terminal payment still open on the day being closed
+    // (DEV-743), is a state conflict, not a malformed request.
     throw new TRPCError({
       code:
-        error.reason === 'OPEN_DRAWER'
+        error.reason === 'OPEN_DRAWER' || error.reason === 'CARD_TERMINAL_PAYMENT_OPEN'
           ? 'CONFLICT'
           : error.reason === 'DRAWER_NOT_YOURS'
             ? 'FORBIDDEN'
@@ -1355,6 +1464,146 @@ export const pharmacySalesRouter = router({
       const scope = await branchScopeOrForbidden(ctx, input.branchId);
       return ctx.db.$transaction((tx) => saveKhataReminderSettings(txDb(tx), scope, input));
     }),
+  /**
+   * DEV-66: the owner's maximum discount for the organization (none set until the owner sets one), and
+   * whether the caller is the owner who may change it. Anyone at the branch may read it.
+   */
+  discountMaximum: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      const settings = await readMaxDiscountSettings(ctx.db, scope);
+      // A support or impersonation session may see the setting but never change it.
+      const support = Boolean(ctx.support || ctx.session?.user?.isSupportSession);
+      return { ...settings, canChange: settings.canChange && !support };
+    }),
+  /**
+   * DEV-66: the owner alone sets the maximum discount; it binds everyone. Every change needs
+   * the owner's fresh PIN (as the other owner settings do) and is audited with the old and
+   * the new value. A support or impersonation session is refused.
+   */
+  saveDiscountMaximum: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          maxDiscountBps: maxDiscountBpsSchema,
+          pin: z.string().max(OWNER_EXPORT_PIN_MAX_INPUT),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      // The PIN never reaches the audit row.
+      annotateAudit(ctx, { skipInput: true, targetType: 'Organization' });
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      if (ctx.support || ctx.session?.user?.isSupportSession)
+        throw new TRPCError({ code: 'FORBIDDEN', message: MAX_DISCOUNT_CHANGE_REFUSED });
+      if (!(await readMaxDiscountSettings(ctx.db, scope)).canChange)
+        throw new TRPCError({ code: 'FORBIDDEN', message: MAX_DISCOUNT_CHANGE_REFUSED });
+      if (!input.pin)
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Enter your own PIN to confirm.' });
+      // Its own tenant transaction, so a wrong-PIN strike commits even though we refuse.
+      const pin = await verifyOwnerExportPin({
+        organizationId: scope.organizationId,
+        userId: scope.actorId,
+        pin: input.pin,
+        action: 'pharmacy.maxDiscount',
+      });
+      if (pin === 'NO_PIN')
+        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: NO_PIN_SET_MESSAGE });
+      if (pin === 'LOCKED')
+        throw new TRPCError({
+          code: 'TOO_MANY_REQUESTS',
+          message: 'Your PIN is locked after too many wrong tries. Wait and try again.',
+        });
+      if (pin !== 'OK')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'That PIN is not correct.' });
+      const saved = await ctx.db.$transaction((tx) =>
+        saveMaxDiscountBps(txDb(tx), scope, input.maxDiscountBps)
+      );
+      annotateAudit(ctx, {
+        operation: 'UPDATE',
+        targetType: 'Organization',
+        targetId: scope.organizationId,
+        description: `Changed the maximum discount from ${maximumWords(saved.previousMaxDiscountBps)} to ${maximumWords(saved.maxDiscountBps)}`,
+        changes: {
+          pharmacyMaxDiscountBps: {
+            before: saved.previousMaxDiscountBps,
+            after: saved.maxDiscountBps,
+          },
+        },
+        metadata: { pinVerified: true },
+      });
+      return { maxDiscountBps: saved.maxDiscountBps };
+    }),
+  /** DEV-66: smart-discount policy (minimum margin, evidence windows). */
+  discountPolicy: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await marginScopeFor(ctx, input.branchId, ['pharmacy:manage']);
+      return readDiscountPolicySettings(ctx.db, scope);
+    }),
+  saveDiscountPolicy: adminProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          revision: z.number().int().nonnegative(),
+          policy: discountPolicySchema,
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, {
+        targetType: 'PharmacyBranch',
+        targetId: input.branchId,
+        metadata: { revision: input.revision, discountPolicy: input.policy },
+      });
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      return ctx.db.$transaction((tx) => saveDiscountPolicy(txDb(tx), scope, input));
+    }),
+  /** DEV-66: append-only competitor discount log (price per sealed pack). */
+  recordCompetitorPrice: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          medicineId: z.string().trim().min(1).max(128),
+          packLevelId: z.string().trim().min(1).max(128),
+          competitorLabel: z.string().trim().min(1).max(80),
+          observedPriceMinor: z.number().int().positive().max(1_000_000_000),
+          observedAt: z.coerce.date(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await marginScopeFor(ctx, input.branchId, ['pharmacy:manage']);
+      annotateAudit(ctx, {
+        targetType: 'PharmacyCompetitorPriceObservation',
+        metadata: { medicineId: input.medicineId },
+      });
+      return recordCompetitorPrice(ctx.db, scope, input);
+    }),
+  /**
+   * DEV-66: discount suggestions capped at MRP, floored by the minimum-margin
+   * guard, never for regulated (Rx-only, restricted, controlled) stock.
+   */
+  discountSuggestions: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          medicineIds: z.array(z.string().trim().min(1).max(128)).min(1).max(50),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = await marginScopeFor(ctx, input.branchId, [
+        'pharmacy:dispense',
+        'pharmacy:manage',
+      ]);
+      return readDiscountSuggestions(ctx.db, scope, { medicineIds: input.medicineIds });
+    }),
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });
     try {
@@ -1565,6 +1814,57 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
+  // DEV-631: the owner or a manager reopens today's closed business day for trading,
+  // with a reason and a fresh re-authentication (their own staff PIN). The DEV-31
+  // manager gate: `pharmacy:manage` (deny wins) on an assigned branch, or the audited
+  // organization-administrator exception; a cashier is refused before any PIN check.
+  // The reopen row records who, when and why; the request is audited.
+  reopenDay: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          businessDate: closeDate,
+          closeId: z.string().min(1).max(128),
+          reason: z.string().trim().min(1).max(1000),
+          // The actor's own staff PIN, re-entered for this reopen (redacted from audit input).
+          ownerPin: z.string().regex(/^\d{4,8}$/),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const scope = await requireDrawerManagerAccess(ctx, input.branchId);
+        // Fresh re-authentication, in its own transaction so a refusal keeps its strike.
+        const pin = await authenticateDayReopenPin({
+          organizationId: scope.organizationId,
+          actorId: scope.actorId,
+          pin: input.ownerPin,
+        });
+        annotateAudit(ctx, {
+          metadata: { policy: DAY_REOPEN_PIN_POLICY, pinVerified: 'verified' in pin },
+        });
+        if ('blocked' in pin) throw new TRPCError({ code: 'FORBIDDEN', message: pin.blocked });
+        const reopen = await ctx.db.$transaction(async (tx) =>
+          reopenPharmacyDayForTrading(txDb(tx), scope, {
+            businessDate: input.businessDate,
+            closeId: input.closeId,
+            reason: input.reason,
+          })
+        );
+        annotateAudit(ctx, {
+          targetType: 'PharmacyDailyClose',
+          targetId: reopen.closeId,
+          metadata: {
+            reopenId: reopen.id,
+            businessDate: input.businessDate.toISOString().slice(0, 10),
+          },
+        });
+        return reopen;
+      } catch (error) {
+        fail(error);
+      }
+    }),
   // #728: the owner's read-only cash-close anomaly check (close variance, refunds,
   // voids) with its narrative. Owner-only like the anomaly signals it sits beside;
   // a query that takes no day lock and writes nothing, so a flag never blocks or
@@ -1611,11 +1911,16 @@ export const pharmacySalesRouter = router({
     )
     .query(async ({ ctx, input }) => {
       try {
+        // DEV-965: a customer's credit, balance and history are a counter read: the
+        // counter's member, capability (counter or dispense) and branch-assignment gate.
+        await assignedBranchScope(ctx, input.branchId);
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         return await readCustomerSnapshot(
           ctx.db,
-          await assignedBranchScope(ctx, input.branchId),
+          scope,
           input.customerId,
-          input.page
+          input.page,
+          await visibleLoyaltyBranches(ctx, scope)
         );
       } catch (error) {
         fail(error);
@@ -1710,6 +2015,22 @@ export const pharmacySalesRouter = router({
       } catch (error) {
         fail(error);
       }
+    }),
+  /** Closed-day status is also available to dispensers who do not operate a drawer. */
+  tradingDayStatus: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      // DEV-958A: the branch's business day, which ends at its "day ends at" hour.
+      const businessDate = pharmacyBusinessDay(await readPharmacyDayClock(ctx.db, scope));
+      return {
+        businessDate,
+        dayClosed: await pharmacyDayClosedForTrading(
+          ctx.db,
+          scope,
+          new Date(`${businessDate}T00:00:00.000Z`)
+        ),
+      };
     }),
   /** The OPEN drawer for this counter device, so the counter never offers a second open. */
   drawerStatus: protectedProcedure
@@ -1814,6 +2135,55 @@ export const pharmacySalesRouter = router({
       }
     }),
   /**
+   * DEV-958A: the hour this branch's business day ends at today (midnight by default), any change
+   * already set for a later day, and the first day a change made now applies to. Owner or
+   * manager at the branch.
+   */
+  dayEndHour: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        const scope = await requireDrawerManagerAccess(ctx, input.branchId);
+        return await readPharmacyDayEndHourSetting(ctx.db, scope);
+      } catch (error) {
+        failDayEndHour(error);
+      }
+    }),
+  /**
+   * DEV-958A: an owner, or a manager at the branch (the drawer-manager gate), sets when the
+   * branch's business day ends. It applies from the day after the next business day, so no day
+   * that has begun, and no past day or report, moves; audited with the before and after hour.
+   */
+  saveDayEndHour: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          revision: z.number().int().nonnegative(),
+          dayEndsAtHour: pharmacyDayEndHourSchema,
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const scope = await requireDrawerManagerAccess(ctx, input.branchId);
+        const user = ctx.session!.user;
+        return await ctx.db.$transaction(async (tx) =>
+          savePharmacyDayEndHour(txDb(tx), scope, input, {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            role: user.role,
+            isSupportSession: user.isSupportSession,
+            supportSessionId: user.supportSessionId,
+            platformUserId: user.platformUserId,
+          })
+        );
+      } catch (error) {
+        failDayEndHour(error);
+      }
+    }),
+  /**
    * DEV-821: the cashiers a manager or owner may name to run a till on this branch:
    * active members with an active assignment to it.
    */
@@ -1894,7 +2264,11 @@ export const pharmacySalesRouter = router({
       }
     }),
   tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
-    if (isManualTender(input.type) || input.approvalCode !== undefined)
+    if (
+      isManualTender(input.type) ||
+      input.approvalCode !== undefined ||
+      input.buyerName !== undefined
+    )
       annotateAudit(ctx, { skipInput: true });
     const scope =
       input.type === 'KHATA' || input.type === 'CREDIT' || input.familyAccountId
@@ -1933,6 +2307,7 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { attempt } = input;
+      annotateAuditBranch(ctx, attempt.branchId);
       // Manual capture references stay out of the audit input, as on the tender itself.
       if (isManualTender(attempt.type) || attempt.approvalCode !== undefined)
         annotateAudit(ctx, { skipInput: true });
@@ -1977,7 +2352,11 @@ export const pharmacySalesRouter = router({
       }
     }),
   tender: protectedProcedure.input(tenderInput).mutation(async ({ ctx, input }) => {
-    if (isManualTender(input.type) || input.approvalCode !== undefined)
+    if (
+      isManualTender(input.type) ||
+      input.approvalCode !== undefined ||
+      input.buyerName !== undefined
+    )
       annotateAudit(ctx, { skipInput: true });
     try {
       if (input.type !== 'KHATA' && input.type !== 'CREDIT') {
@@ -2150,6 +2529,179 @@ export const pharmacySalesRouter = router({
       const scope = await khataScope(ctx, input.branchId, 'write');
       return listCounterApprovers(ctx.db as unknown as ScopedDb, scope, 'KHATA_OVER_LIMIT');
     }),
+  /**
+   * DEV-929: who can approve a manual discount at this till with their PIN: other active
+   * managers or owners with a live counter PIN, or, when there is nobody else (solo rule),
+   * the signed-in user's own profile. Names and staff profile ids only.
+   */
+  discountApprovers: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      return listCounterApprovers(ctx.db as unknown as ScopedDb, scope, 'DISCOUNT');
+    }),
+  /**
+   * DEV-956: whether the owner has switched on the whole-bill discount at the counter, and
+   * whether the caller is the owner who may change it. Anyone at the branch may read it.
+   */
+  billDiscountSetting: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      const [enabled, maximum] = await Promise.all([
+        readBillDiscountEnabled(ctx.db as unknown as ScopedDb, scope.organizationId),
+        readMaxDiscountSettings(ctx.db, scope),
+      ]);
+      // A support or impersonation session may see the setting but never change it.
+      const support = Boolean(ctx.support || ctx.session?.user?.isSupportSession);
+      return { enabled, canChange: maximum.canChange && !support };
+    }),
+  /**
+   * DEV-956: the owner alone turns the whole-bill discount on or off, with their fresh PIN,
+   * as for the maximum discount. Every change is audited with the old and the new value.
+   */
+  saveBillDiscountSetting: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          enabled: z.boolean(),
+          pin: z.string().max(OWNER_EXPORT_PIN_MAX_INPUT),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      // The PIN never reaches the audit row.
+      annotateAudit(ctx, { skipInput: true, targetType: 'Organization' });
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      if (ctx.support || ctx.session?.user?.isSupportSession)
+        throw new TRPCError({ code: 'FORBIDDEN', message: BILL_DISCOUNT_CHANGE_REFUSED });
+      if (!(await readMaxDiscountSettings(ctx.db, scope)).canChange)
+        throw new TRPCError({ code: 'FORBIDDEN', message: BILL_DISCOUNT_CHANGE_REFUSED });
+      if (!input.pin)
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Enter your own PIN to confirm.' });
+      // Its own tenant transaction, so a wrong-PIN strike commits even though we refuse.
+      const pin = await verifyOwnerExportPin({
+        organizationId: scope.organizationId,
+        userId: scope.actorId,
+        pin: input.pin,
+        action: 'pharmacy.billDiscount',
+      });
+      if (pin === 'NO_PIN')
+        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: NO_PIN_SET_MESSAGE });
+      if (pin === 'LOCKED')
+        throw new TRPCError({
+          code: 'TOO_MANY_REQUESTS',
+          message: 'Your PIN is locked after too many wrong tries. Wait and try again.',
+        });
+      if (pin !== 'OK')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'That PIN is not correct.' });
+      const saved = await ctx.db.$transaction((tx) =>
+        saveBillDiscountEnabled(txDb(tx), scope, input.enabled)
+      );
+      annotateAudit(ctx, {
+        operation: 'UPDATE',
+        targetType: 'Organization',
+        targetId: scope.organizationId,
+        description: `${saved.enabled ? 'Turned on' : 'Turned off'} the whole-bill discount at the counter`,
+        changes: {
+          pharmacyBillDiscountEnabled: { before: saved.previous, after: saved.enabled },
+        },
+        metadata: { pinVerified: true },
+      });
+      return { enabled: saved.enabled };
+    }),
+  /**
+   * DEV-956: give, change or remove (zero) the one whole-bill discount on an open, unpaid bill,
+   * as an amount or a percentage. It is approved exactly as an item discount is: the operator's
+   * own discount right, or a manager's or owner's PIN (solo: the sole approver re-enters their
+   * own). The server shares it onto the lines under the owner's maximum, cost and minimum
+   * margin, and refuses what the bill cannot take in full, naming the most it can take.
+   */
+  applyBillDiscount: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().trim().min(1).max(128),
+          discount: z.discriminatedUnion('kind', [
+            z.object({ kind: z.literal('PERCENT'), bps: maxDiscountBpsSchema }).strict(),
+            z
+              .object({
+                kind: z.literal('AMOUNT'),
+                minor: z.number().int().nonnegative().max(2_000_000_000),
+              })
+              .strict(),
+          ]),
+          // #520: the approver is proven by a PIN the server verifies, never named by the caller.
+          discountApproval: counterApprovalPin.optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      // The PIN never reaches the audit row; the bill and the request do.
+      annotateAudit(ctx, {
+        skipInput: true,
+        targetType: 'PharmacySale',
+        targetId: input.saleId,
+        metadata: { branchId: input.branchId, billDiscount: input.discount },
+      });
+      try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        // A switched-off feature never reaches a PIN check, so a wrong PIN is never a lockout
+        // strike for it. The domain re-checks the switch inside the sale transaction.
+        if (!(await readBillDiscountEnabled(ctx.db as unknown as ScopedDb, scope.organizationId)))
+          throw new PharmacySaleError('BILL_DISCOUNT_OFF');
+        const removal =
+          input.discount.kind === 'PERCENT' ? input.discount.bps === 0 : input.discount.minor === 0;
+        // #520: PINs are verified before the sale transaction takes a connection.
+        const approval = removal
+          ? null
+          : await authorizeCounterApproval(
+              ctx.db as unknown as ScopedDb,
+              scope,
+              'DISCOUNT',
+              input.discountApproval
+            );
+        const outcome = await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          if (approval) await confirmCounterApproval(db, scope, 'DISCOUNT', approval);
+          return applyBillDiscount(db, scope, {
+            saleId: input.saleId,
+            request: input.discount,
+            approval,
+          });
+        });
+        annotateAudit(ctx, {
+          operation: 'UPDATE',
+          description:
+            outcome.status === 'REFUSED'
+              ? 'Counter refused a whole-bill discount the bill cannot take in full.'
+              : removal
+                ? 'Counter removed the whole-bill discount.'
+                : 'Counter gave a whole-bill discount.',
+          metadata: {
+            branchId: input.branchId,
+            billDiscount: input.discount,
+            outcome: outcome.status,
+            ...(outcome.status === 'APPLIED'
+              ? { totalMinor: outcome.totalMinor, previousTotalMinor: outcome.previousTotalMinor }
+              : { reason: outcome.reason, capacityMinor: outcome.capacityMinor }),
+            givenByUserId: scope.actorId,
+            ...(approval
+              ? {
+                  approvedByUserId: approval.approvedByUserId,
+                  approvalPolicy: approval.approvalPolicy,
+                  selfApproved: approval.selfApproved,
+                }
+              : {}),
+          },
+        });
+        return outcome;
+      } catch (error) {
+        fail(error);
+      }
+    }),
   /** Eligible manager/owner PIN profiles for a scanned pack's first-expiry approval. */
   scannedPackFefoApprovers: protectedProcedure
     .input(z.object({ branchId }).strict())
@@ -2198,11 +2750,11 @@ export const pharmacySalesRouter = router({
           action: 'pharmacySales.refundTender',
         });
         annotateAudit(ctx, {
-          metadata: {
-            policy: REFUND_PIN_POLICY,
+          metadata: refundApprovalAudit({
+            initiatedById: scope.actorId,
             approverId: scope.actorId,
-            pinVerified: 'verified' in pin,
-          },
+            pin,
+          }),
         });
         if ('blocked' in pin) return pin;
         return await ctx.db.$transaction((tx) =>
@@ -2250,7 +2802,31 @@ export const pharmacySalesRouter = router({
         deviceId: input.deviceId ?? null,
         takesPayment,
       });
-      return { ...readiness, canFixSetup: orgAdmin };
+      // DEV-905: a workspace that is not active may simply be waiting for DevFathom
+      // approval, or still have onboarding steps open. Say which, instead of the generic
+      // "not active". The read is additive: if it fails, the generic message stays.
+      const approval = readiness.blockers.includes('ORGANIZATION_NOT_ACTIVE')
+        ? await readPharmacyApprovalStatus(
+            ctx.db as unknown as ScopedDb,
+            scope.organizationId
+          ).catch(() => null)
+        : null;
+      // DEV-911: the counter shows the owner's switch; the gates read it again themselves.
+      // Only an explicit stored OFF is reported, so a missing or unreadable setting means on.
+      const pharmacistCheck = await readPharmacistCheckPolicy(
+        ctx.db as unknown as ScopedDb,
+        scope.organizationId
+      );
+      if (pharmacistCheck.enabled)
+        return { ...readiness, canFixSetup: orgAdmin, ...(approval ? { approval } : {}) };
+      return {
+        ...readiness,
+        // Nobody needs to countersign while the check is off.
+        warnings: readiness.warnings.filter((warning) => warning !== NO_INDEPENDENT_PHARMACIST),
+        canFixSetup: orgAdmin,
+        ...(approval ? { approval } : {}),
+        pharmacistCheckOff: true as const,
+      };
     }),
   create: protectedProcedure
     .input(
@@ -2288,9 +2864,14 @@ export const pharmacySalesRouter = router({
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           return createSale(db, scope, input.quotation, async () => {
+            if (input.quotation) return;
+            // DEV-631: no counter bill is opened while today's business day is closed.
+            await requirePharmacyTodayOpenForTrading(db, scope);
             if (!takesPayment) return;
             if (!input.deviceId) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
-            await lockOpenPharmacyDrawer(db, scope, input.deviceId);
+            const drawer = await lockOpenPharmacyDrawer(db, scope, input.deviceId);
+            // DEV-769: cash is refused on a drawer from an earlier day, so the bill is too.
+            await requireTodaysPharmacyDrawer(db, scope, drawer);
           });
         });
       } catch (error) {
@@ -2361,6 +2942,8 @@ export const pharmacySalesRouter = router({
             })
             .strict()
             .optional(),
+          // DEV-90: a constraint only; it cannot authorize a batch override.
+          shelfLabelLotId: z.string().trim().min(1).max(128).optional(),
           // DEV-92: the raw DataMatrix of one serialized pack; the server re-reads it.
           scannedPack: z
             .object({
@@ -2431,6 +3014,8 @@ export const pharmacySalesRouter = router({
               throw new PharmacyRxReferenceError('CONTROLLED_AUTHORIZATION_NOT_APPLICABLE');
             // #518: an Rx/restricted line needs the exact dispense grant (DENY wins).
             if (medicine) await assertRxSaleAllowed(db, scope, [medicine]);
+            // No stock is reserved while today's business day is closed.
+            await requirePharmacyTodayOpenForTrading(db, scope);
             const { prescription } = input;
             // Recording a prescription fill is a pharmacist's act, whatever the medicine.
             if (
@@ -2486,17 +3071,66 @@ export const pharmacySalesRouter = router({
           // #518: a controlled line takes its prescription only through controlledAuthorization.
           if (input.prescription)
             throw new PharmacyRxReferenceError('CONTROLLED_PRESCRIPTION_IN_AUTHORIZATION');
-          if (
-            !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
-              db,
-            }))
-          ) {
+          const mayDispense = await can(
+            subjectFromSession(ctx.session!.user),
+            'pharmacy:dispense',
+            undefined,
+            { db }
+          );
+          const authorization = input.controlledAuthorization;
+          // DEV-911: the pharmacist check at each sale is on unless the owner switched it off.
+          // It is read only where today's gate would refuse (no dispense grant, or no
+          // pharmacist authorization), so with the check on nothing below changes. While it is
+          // off the line sells like any other item, and the controlled register still gets its
+          // entry, marked as written with the check switched off by the owner.
+          if (!mayDispense || !authorization) {
+            const pharmacistCheck = await readPharmacistCheckPolicy(db, scope.organizationId);
+            if (!pharmacistCheck.enabled) {
+              await requirePharmacyTodayOpenForTrading(db, scope);
+              const replay = await replaySaleLine(db, scope, lineInput);
+              if (replay) return replay;
+              for (const { kind, approval } of approvals)
+                await confirmCounterApproval(db, scope, kind, approval);
+              // DEV-825: the sale row is a document lock, so it precedes the register lock.
+              await lockSaleForControlledLine(db, scope, input.saleId);
+              await lockRegister(db, scope.organizationId, scope.branchId);
+              const result = await addSaleLine(db, scope, lineInput, COUNTER_LINE_PRICING);
+              await appendControlledSaleEntries(db, {
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+                movementIds: result.allocation.movementIds,
+                patientId: null,
+                patientAddress: null,
+                medicineId: medicine.id,
+                manufacturer: medicine.manufacturer,
+                prescriberId: null,
+                prescriberName: null,
+                prescriberRegNo: null,
+                prescriptionId: null,
+                prescriptionLineId: null,
+                emergency: false,
+                rxSerialWritten: false,
+                refEntryId: null,
+                recordedByUserId: scope.actorId,
+                witnessedByUserId: scope.actorId,
+                signatureRef: pharmacistCheckOffSignature(pharmacistCheck.version),
+              });
+              annotateAudit(ctx, {
+                metadata: {
+                  pharmacistCheck: 'SWITCHED_OFF_BY_OWNER',
+                  pharmacistCheckPolicyVersion: pharmacistCheck.version,
+                  controlledSaleLineId: result.line.id,
+                },
+              });
+              return result;
+            }
+          }
+          if (!mayDispense) {
             throw new TRPCError({
               code: 'FORBIDDEN',
               message: 'You do not have permission to dispense a controlled medicine.',
             });
           }
-          const authorization = input.controlledAuthorization;
           const blocked = {
             blocked:
               'Controlled medicine requires the patient address, an independent pharmacist PIN, and either a valid prescription or an emergency supply with the prescriber name.',
@@ -2548,6 +3182,9 @@ export const pharmacySalesRouter = router({
             where: { id: credential.id },
             data: clearLockout(),
           });
+          // Check the actor and witness before taking the day lock. The day lock
+          // still precedes document/register locks and every stock allocation.
+          await requirePharmacyTodayOpenForTrading(db, scope);
           // A retry is validated like a new request before replay, so an unknown earlier
           // serial is refused either way.
           const refEntry = await earlierRegisterEntry(db, scope, authorization.refSerial);
@@ -2772,6 +3409,8 @@ export const pharmacySalesRouter = router({
           await db.prescriptionFill.create({
             data: {
               organizationId: scope.organizationId,
+              // DEV-962: the dispensing branch, so only it records this fill's refill reminder.
+              branchId: scope.branchId,
               prescriptionLineId: rx.id,
               fillSequence: rx.fills.length + 1,
               quantityCanonicalUnits: units,
@@ -3019,7 +3658,16 @@ export const pharmacySalesRouter = router({
     .query(async ({ ctx, input }) => {
       try {
         const scope = await requireCounterReceiptAccess(ctx, input.branchId);
-        return await readReturnHistory(ctx.db, scope, input.saleId);
+        const history = await readReturnHistory(ctx.db, scope, input.saleId);
+        // DEV-911: the return panel asks for no pharmacist witness while the owner has the
+        // check off. The server reads the setting again when the return is recorded.
+        const pharmacistCheck = await readPharmacistCheckPolicy(
+          ctx.db as unknown as ScopedDb,
+          scope.organizationId
+        );
+        return pharmacistCheck.enabled
+          ? history
+          : { ...history, pharmacistCheckOff: true as const };
       } catch (error) {
         fail(error);
       }
@@ -3065,11 +3713,11 @@ export const pharmacySalesRouter = router({
           action: 'pharmacySales.returnLine',
         });
         annotateAudit(ctx, {
-          metadata: {
-            policy: REFUND_PIN_POLICY,
+          metadata: refundApprovalAudit({
+            initiatedById: scope.actorId,
             approverId: scope.actorId,
-            pinVerified: 'verified' in pin,
-          },
+            pin,
+          }),
         });
         if ('blocked' in pin) return { blocked: RETURN_PIN_BLOCKED };
         return await ctx.db.$transaction(async (tx) => {
@@ -3139,11 +3787,11 @@ export const pharmacySalesRouter = router({
           action: 'pharmacySales.returnAndRefund',
         });
         annotateAudit(ctx, {
-          metadata: {
-            policy: REFUND_PIN_POLICY,
+          metadata: refundApprovalAudit({
+            initiatedById: scope.actorId,
             approverId: scope.actorId,
-            pinVerified: 'verified' in pin,
-          },
+            pin,
+          }),
         });
         if ('blocked' in pin) return { blocked: RETURN_PIN_BLOCKED };
         return await ctx.db.$transaction(async (tx) => {
@@ -3760,6 +4408,24 @@ export const pharmacySalesRouter = router({
   refundAccess: protectedProcedure.query(async ({ ctx }) => ({
     authorized: await actorMayRefund(ctx.db, ctx.session.user),
   })),
+  /**
+   * DEV-631: whether Day close offers "Reopen day for trading" on this branch: the
+   * same branch-scoped owner-or-manager gate as `reopenDay` (`pharmacy:manage`,
+   * deny wins, an active branch assignment or the audited administrator exception),
+   * so the form is never offered where the reopen would be refused. `reopenDay`
+   * still re-checks all of it and the PIN.
+   */
+  dayReopenAccess: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        await requireDrawerManagerAccess(ctx, input.branchId);
+        return { authorized: true };
+      } catch (error) {
+        if (error instanceof TRPCError && error.code === 'FORBIDDEN') return { authorized: false };
+        throw error;
+      }
+    }),
 
   /**
    * The branches this counter may open a bill against, with the money format.
@@ -3784,7 +4450,16 @@ export const pharmacySalesRouter = router({
                 },
               }),
         },
-        select: { id: true, code: true, name: true, city: true },
+        // DEV-958A: the hour each branch's business day ends at, so the counter stamps the
+        // same day the server checks.
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          city: true,
+          provinceCode: true,
+          businessDayEndsAtHistory: true,
+        },
         orderBy: [{ name: 'asc' }, { id: 'asc' }],
       }),
       ctx.db.organization.findUnique({
@@ -3793,7 +4468,8 @@ export const pharmacySalesRouter = router({
       }),
     ]);
     return {
-      branches,
+      // DEV-958A: each branch's day-end history as days and hours only, never who set it.
+      branches: branches.map(withClientPharmacyDayEnd),
       currency: organization?.currency ?? 'PKR',
       // The workspace's zone: the day close picks "today" in it before any
       // close has been read. A stored value Intl refuses is handed over as UTC.
@@ -3830,7 +4506,8 @@ export const pharmacySalesRouter = router({
           active: true,
           ...(allowed === 'ALL' ? {} : { id: { in: allowed } }),
         },
-        select: { id: true, code: true, name: true, city: true },
+        // DEV-958A: the close picks "today" on each branch's own clock.
+        select: { id: true, code: true, name: true, city: true, businessDayEndsAtHistory: true },
         orderBy: [{ name: 'asc' }, { id: 'asc' }],
       }),
       ctx.db.organization.findUnique({
@@ -3839,7 +4516,8 @@ export const pharmacySalesRouter = router({
       }),
     ]);
     return {
-      branches,
+      // DEV-958A: each branch's day-end history as days and hours only, never who set it.
+      branches: branches.map(withClientPharmacyDayEnd),
       currency: organization?.currency ?? 'PKR',
       timezone: workspaceTimezone(organization?.timezone),
     };
@@ -3861,14 +4539,34 @@ export const pharmacySalesRouter = router({
         // DEV-876's branch-assignment read scope first (its refusals stay as they
         // are), then DEV-878's counter grant before any catalogue or alternative read.
         await assignedBranchScope(ctx, input.branchId);
-        return await searchCounterCatalog(
-          ctx.db,
-          await requireCounterReceiptAccess(ctx, input.branchId),
-          {
-            query: input.query,
-            limit: input.limit,
-          }
-        );
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        // DEV-907: the owner's switch decides whether the other-branch line is
+        // computed at all; the client cannot ask for it.
+        const organization = await ctx.db.organization.findUnique({
+          where: { id: scope.organizationId },
+          select: { pharmacyOtherBranchAvailability: true },
+        });
+        return await searchCounterCatalog(ctx.db, scope, {
+          query: input.query,
+          limit: input.limit,
+          otherBranchAvailability: organization?.pharmacyOtherBranchAvailability === true,
+        });
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  /**
+   * DEV-780: the counter reads a typed or scanned voucher code before applying it to the next
+   * item. Read-only: the voucher is redeemed (and every rule re-checked) only by `addLine`.
+   */
+  counterVoucher: protectedProcedure
+    .input(counterVoucherInput.extend({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        await assignedBranchScope(ctx, input.branchId);
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        return await lookupCounterVoucher(ctx.db as unknown as ScopedDb, scope, input.code);
       } catch (error) {
         fail(error);
       }
@@ -3878,7 +4576,10 @@ export const pharmacySalesRouter = router({
   authenticatePack: auditedProtectedProcedure
     .input(z.object({ branchId, payload: z.string().max(512) }).strict())
     .mutation(async ({ ctx, input }) => {
-      const scope = await assignedBranchScope(ctx, input.branchId);
+      // DEV-965: the scan record feeds the flag reports, so only a member who may sell or
+      // dispense at this branch (the counter gate) writes one.
+      await assignedBranchScope(ctx, input.branchId);
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
       ctx.audit.detail = { category: 'PHARMACY_SAFETY', action: 'dispensing_pack_scan' };
       return authenticatePharmacyPack(ctx.db, {
         ...scope,
@@ -3923,7 +4624,7 @@ export const pharmacySalesRouter = router({
           {
             inventoryLotId,
             batchNumber: lot.batch.batchNumber,
-            expiresAt: lot.batch.expiresAt.toISOString(),
+            expiresAt: lot.batch.expiresAt?.toISOString() ?? null,
             sellableUnits,
             blockedBy:
               sellableUnits > 0

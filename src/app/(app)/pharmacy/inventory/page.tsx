@@ -40,6 +40,8 @@ import {
 import { renderStockComposition } from '@/lib/pharmacy/counter';
 import { createTRPCContext } from '@/server/trpc';
 
+import { BATCH_NOT_RECORDED, batchNumberLabel, batchPhrase } from '@/lib/pharmacy/unrecorded-batch';
+
 import { BreakPackForm } from './break-pack-form';
 
 export const metadata: Metadata = { title: 'Pharmacy inventory' };
@@ -594,6 +596,12 @@ export default async function PharmacyInventoryPage({
             >
               Imported stock references
             </Link>
+            <Link
+              href={`/pharmacy/inventory/labels?${new URLSearchParams({ branch: branch.id })}`}
+              className={buttonVariants({ variant: 'secondary' })}
+            >
+              Shelf labels
+            </Link>
           </>
         }
       />
@@ -700,8 +708,18 @@ export default async function PharmacyInventoryPage({
                         </span>
                       ) : null}
                       <span className="block text-xs text-text-muted">
-                        Batch {lot.batch.batchNumber} · {lot.supplierName}
+                        {lot.batch.batchNumber === null
+                          ? BATCH_NOT_RECORDED
+                          : `${batchPhrase(lot.batch.batchNumber)}`}{' '}
+                        · {lot.supplierName}
                       </span>
+                      <Link
+                        className={buttonVariants({ variant: 'ghost', size: 'sm' })}
+                        href={`/pharmacy/inventory/labels?${new URLSearchParams({ branch: branch.id, medicine: lot.batch.medicineId })}`}
+                        aria-label={`Print shelf labels for ${lot.batch.medicine.productName}`}
+                      >
+                        Print labels
+                      </Link>
                     </TableCell>
                     <TableCell>{formatLotExpiry(lot.batch.expiresAt, when)}</TableCell>
                     <TableCell>{balance.location.name}</TableCell>
@@ -735,7 +753,7 @@ export default async function PharmacyInventoryPage({
                         looseUnits={balance.looseUnits}
                         unitsPerPack={lot.unitsPerPack}
                         onHandUnits={balance.onHandUnits}
-                        expiresAt={lot.batch.expiresAt.toISOString()}
+                        expiresAt={lot.batch.expiresAt?.toISOString() ?? null}
                         observedAt={observedAt}
                         unavailableReason={
                           breakPackPermission ??
@@ -916,7 +934,7 @@ export default async function PharmacyInventoryPage({
                       key={`${lot.id}:${balance.stockLocationId}`}
                       value={`${lot.id}:${balance.stockLocationId}`}
                     >
-                      {lotProductLabel(lot)} · batch {lot.batch.batchNumber} ·{' '}
+                      {lotProductLabel(lot)} · {batchPhrase(lot.batch.batchNumber, 'batch')} ·{' '}
                       {balance.location.name}
                     </option>
                   ))}
@@ -1059,7 +1077,7 @@ export default async function PharmacyInventoryPage({
                             </span>
                           ) : null}
                           <span className="block text-xs text-text-muted">
-                            batch {item.batchNumber} · {item.unitsPerPack} per pack
+                            {batchPhrase(item.batchNumber, 'batch')} · {item.unitsPerPack} per pack
                           </span>
                         </TableCell>
                         <TableCell>{item.locationName}</TableCell>
@@ -1076,7 +1094,7 @@ export default async function PharmacyInventoryPage({
                         </TableCell>
                         <TableCell className="text-right">
                           <Input
-                            aria-label={`Counted sealed packs, ${item.medicineName} batch ${item.batchNumber} at ${item.locationName}`}
+                            aria-label={`Counted sealed packs, ${item.medicineName} ${batchPhrase(item.batchNumber, 'batch')} at ${item.locationName}`}
                             className="ml-auto w-24"
                             min="0"
                             name="cycleSealed"
@@ -1086,7 +1104,7 @@ export default async function PharmacyInventoryPage({
                         </TableCell>
                         <TableCell className="text-right">
                           <Input
-                            aria-label={`Counted loose units, ${item.medicineName} batch ${item.batchNumber} at ${item.locationName}`}
+                            aria-label={`Counted loose units, ${item.medicineName} ${batchPhrase(item.batchNumber, 'batch')} at ${item.locationName}`}
                             className="ml-auto w-24"
                             min="0"
                             name="cycleLoose"
@@ -1137,8 +1155,8 @@ export default async function PharmacyInventoryPage({
                     key={`${lot.id}:${balance.stockLocationId}:${balance.disposition}`}
                     value={`${lot.id}:${balance.stockLocationId}:${balance.disposition}`}
                   >
-                    {lotProductLabel(lot)} · {lot.batch.batchNumber} · {balance.location.name} ·{' '}
-                    {label(balance.disposition)}
+                    {lotProductLabel(lot)} · {batchNumberLabel(lot.batch.batchNumber)} ·{' '}
+                    {balance.location.name} · {label(balance.disposition)}
                   </option>
                 ))}
               </select>
@@ -1215,7 +1233,8 @@ export default async function PharmacyInventoryPage({
                     key={`${lot.id}:${balance.stockLocationId}`}
                     value={`${lot.id}:${balance.stockLocationId}`}
                   >
-                    {lotProductLabel(lot)} · {lot.batch.batchNumber} · {balance.location.name}
+                    {lotProductLabel(lot)} · {batchNumberLabel(lot.batch.batchNumber)} ·{' '}
+                    {balance.location.name}
                   </option>
                 ))}
               </select>
@@ -1254,7 +1273,8 @@ export default async function PharmacyInventoryPage({
                     key={`${lot.id}:${balance.stockLocationId}`}
                     value={`${lot.id}:${balance.stockLocationId}`}
                   >
-                    {lotProductLabel(lot)} · {lot.batch.batchNumber} · {balance.location.name}
+                    {lotProductLabel(lot)} · {batchNumberLabel(lot.batch.batchNumber)} ·{' '}
+                    {balance.location.name}
                   </option>
                 ))}
               </select>
@@ -1358,7 +1378,7 @@ export default async function PharmacyInventoryPage({
                 <select className={inputClass} name="batchId">
                   {lots.map((lot) => (
                     <option key={lot.batch.id} value={lot.batch.id}>
-                      {lotProductLabel(lot)} · batch {lot.batch.batchNumber}
+                      {lotProductLabel(lot)} · {batchPhrase(lot.batch.batchNumber, 'batch')}
                     </option>
                   ))}
                 </select>
@@ -1452,11 +1472,14 @@ export default async function PharmacyInventoryPage({
                 <p className="font-mono text-xs uppercase text-text-muted">
                   Expires within {bucket.bucketDays} days
                 </p>
+                {/* DEV-965: the PKR value is landed cost, sent only with financial reports. */}
                 <p className="mt-2 text-2xl font-semibold tabular-nums text-text-strong">
-                  {money(bucket.valueAtRiskMinor)}
+                  {bucket.valueAtRiskMinor === null
+                    ? `${bucket.units.toLocaleString('en-PK')} units`
+                    : money(bucket.valueAtRiskMinor)}
                 </p>
                 <p className="text-sm text-text-muted">
-                  {bucket.units} units at risk ·{' '}
+                  {bucket.valueAtRiskMinor === null ? 'At risk' : `${bucket.units} units at risk`} ·{' '}
                   {bucket.withinSupplierReturnWindow
                     ? 'return claim reserved'
                     : 'no reserved return claim'}

@@ -1,16 +1,20 @@
 'use client';
 
+import { OwnPinLink } from '@/components/pharmacy/pin-aware-message';
+import { PHARMACY_COPY as copy } from '@/lib/pharmacy/plain-language';
 import { forwardRef, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Check } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { COUNTER_APPROVAL_CODE_HINT } from './counter-approval-copy';
 import { Textarea } from '@/components/ui/textarea';
 import { CounterChangeDue } from './counter-change-due';
 import { CounterTenderDiscard, type CounterTenderDiscardInput } from './counter-tender-discard';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { amountInputError, amountInputToMinor } from '@/lib/money-input';
 import type { TenderDraft } from './tender-attempt-storage';
 import {
   isManualTender,
@@ -93,6 +97,11 @@ export type CounterTenderPanelProps = {
   signUpKhata?: (input: KhataSignupInput) => Promise<void>;
   /** The counter's selected patient, offered as the Khata payer. */
   khataSignupPatient?: { patientId: string; displayName: string } | null;
+  /**
+   * #708: the branch prints the Sindh r.18 cash memo, so the buyer can be named
+   * here. Optional for walk-ins; the selected patient's name is offered first.
+   */
+  cashMemo?: boolean;
   /** Only a known, current bill has a balance; zero alone is not settlement. */
   balanceMinor: number | null;
   state: CounterTenderBillState;
@@ -108,6 +117,7 @@ export type CounterTenderPanelProps = {
     providerRef?: string;
     referenceSkipped?: boolean;
     approvalCode?: string;
+    buyerName?: string;
   };
   recoveryOutcome?: CounterTenderResult | null;
   checkingOutcome?: boolean;
@@ -131,6 +141,7 @@ export type CounterTenderPanelProps = {
       payerName?: string;
       referenceSkipped?: boolean;
       approvalCode?: string;
+      buyerName?: string;
     },
     draft: TenderDraft
   ) => Promise<CounterTenderResult>;
@@ -139,16 +150,6 @@ export type CounterTenderPanelProps = {
 /** DEV-290: a manager or owner the till may ask for an over-limit Khata PIN approval. */
 export type KhataApprover = { id: string; name: string; self: boolean };
 const APPROVER_PIN = /^\d{4,8}$/;
-
-/** A typed money amount (up to two decimals) in minor units, or null when it is not one. */
-export function parseAmountMinor(value: string): number | null {
-  const match = /^(\d{1,12})(?:\.(\d{1,2}))?$/.exec(value.trim());
-  if (!match) return null;
-  const major = Number.parseInt(match[1]!, 10);
-  const fraction = Number.parseInt((match[2] ?? '0').padEnd(2, '0'), 10);
-  const minor = major * 100 + fraction;
-  return Number.isSafeInteger(minor) ? minor : null;
-}
 
 /**
  * POS-05 tenders, from the counter.
@@ -189,6 +190,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       printKhataStatement,
       signUpKhata,
       khataSignupPatient,
+      cashMemo = false,
       manualSettings,
       manualSettingsLoading = false,
       manualSettingsError = false,
@@ -220,6 +222,12 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const [signupError, setSignupError] = useState('');
     const [providerRef, setProviderRef] = useState(initialDraft?.providerRef ?? '');
     const [payerName, setPayerName] = useState(initialDraft?.payerName ?? '');
+    // Null until edited, so the selected patient's name fills it without an effect.
+    const [buyerDraft, setBuyerDraft] = useState<string | null>(initialDraft?.buyerName ?? null);
+    // Match the existing patient-name limit throughout tender and recovery.
+    const buyerName = (buyerDraft ?? khataSignupPatient?.displayName ?? '').slice(0, 200);
+    const buyerInvalid =
+      cashMemo && /[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069<>]/u.test(buyerName);
     const [referenceSkipped, setReferenceSkipped] = useState(
       initialDraft?.referenceSkipped ?? false
     );
@@ -254,12 +262,16 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
     const prepaidWallet = type === 'WALLET' && prepaidBalanceMinor > 0;
     // DEV-863: an untouched prepaid amount is what the balance can cover; never more than it holds.
+    // DEV-939: typed amounts go through the shared reader (string and BigInt, no floats).
+    const typedAmount = amountInputToMinor(amount);
     const amountMinor =
-      amount.trim() === ''
+      typedAmount.status === 'EMPTY'
         ? prepaidWallet && balanceMinor !== null
           ? Math.min(balanceMinor, prepaidBalanceMinor)
           : balanceMinor
-        : parseAmountMinor(amount);
+        : typedAmount.status === 'OK'
+          ? typedAmount.minor
+          : null;
     const prepaidShort =
       type === 'WALLET' && amountMinor !== null && amountMinor > prepaidBalanceMinor;
     const amountValid =
@@ -268,12 +280,18 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       amountMinor > 0 &&
       amountMinor <= balanceMinor &&
       !prepaidShort;
+    const amountError =
+      typedAmount.status === 'INVALID'
+        ? amountInputError(typedAmount.reason)
+        : 'Enter an amount between 0.01 and the balance due.';
     // Prefilled only while the bill can take payment, so a settled or locked
     // panel never shows a cash figure the cashier did not enter.
     const cashText =
       cashReceived ?? (type === 'CASH' && editable && amountValid ? formatMinor(amountMinor!) : '');
-    const cashReceivedMinor = cashText.trim() === '' ? null : parseAmountMinor(cashText);
-    const cashInvalid = type === 'CASH' && cashText.trim() !== '' && cashReceivedMinor === null;
+    const typedCash = amountInputToMinor(cashText);
+    const cashReceivedMinor = typedCash.status === 'OK' ? typedCash.minor : null;
+    const cashInvalid = type === 'CASH' && typedCash.status === 'INVALID';
+    const cashError = typedCash.status === 'INVALID' ? amountInputError(typedCash.reason) : null;
     const cashShort =
       type === 'CASH' &&
       cashReceivedMinor !== null &&
@@ -417,6 +435,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     }
     const submittable =
       editable &&
+      !buyerInvalid &&
       !blocked &&
       !(type === 'CASH' && cashDrawerClosed) &&
       amountValid &&
@@ -444,56 +463,58 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     // DEV-41: a disabled Take payment button always says why, in cashier words.
     const disabledReason = submittable
       ? null
-      : takingPayment
-        ? null // The button and the payment status already say a payment is being taken.
-        : unknown
-          ? 'Check the payment outcome before taking more money.'
-          : state === 'idle'
-            ? 'Open a bill before taking payment.'
-            : state === 'loading'
-              ? 'Checking the bill balance…'
-              : state === 'settled'
-                ? 'This bill is already paid.'
-                : state === 'stale' || state === 'error' || !balanceKnown
-                  ? 'Refresh the bill to check the balance before taking payment.'
-                  : state === 'unavailable'
-                    ? 'This bill is not available for payment. Add items or resume the bill.'
-                    : disabled
-                      ? 'Wait for the current counter action to finish before taking payment.'
-                      : blocked
-                        ? 'Resolve the safety block in the prescription panel before taking payment.'
-                        : type === 'CASH' && cashDrawerClosed
-                          ? null // The Cash button already shows and describes the drawer reason.
-                          : prepaidShort
-                            ? 'That is more than the customer’s prepaid balance.'
-                            : !amountValid
-                              ? 'Enter an amount between 0.01 and the balance due.'
-                              : type === 'WALLET' && !APPROVER_PIN.test(prepaidPin)
-                                ? 'Ask the customer to enter their prepaid PIN.'
-                                : cashInvalid
-                                  ? 'Enter a valid cash amount with at most two decimal places.'
-                                  : cashShort
-                                    ? 'Cash received is less than the amount tendered.'
-                                    : manual && manualSettingsLoading
-                                      ? 'Loading merchant details…'
-                                      : manual && (manualSettingsError || !merchant)
-                                        ? 'Reload merchant details before taking payment.'
-                                        : manual &&
-                                            (!capture?.success ||
-                                              (referenceSkipped && !merchant?.allowReferenceSkip))
-                                          ? 'Enter the payer’s name and 4–6 transaction ID digits, or use the allowed reference skip.'
-                                          : bankTransfer && !transferCapture?.success
-                                            ? providerRef.trim() !== '' &&
-                                              looksLikeCardNumber(providerRef)
-                                              ? 'This looks like a card number. Enter the bank’s transfer reference instead.'
-                                              : 'Enter the bank transfer reference before taking payment.'
-                                            : manualCard && !cardCapture?.success
-                                              ? 'Enter the card reference and approval code from the terminal slip.'
-                                              : khataLoading
-                                                ? 'Loading Khata accounts…'
-                                                : isKhata && !account
-                                                  ? 'Choose a family Khata account before taking payment.'
-                                                  : 'A manager or owner must approve the credit limit increase first.';
+      : buyerInvalid
+        ? 'Use a plain buyer name without control or markup characters.'
+        : takingPayment
+          ? null // The button and the payment status already say a payment is being taken.
+          : unknown
+            ? 'Check the payment outcome before taking more money.'
+            : state === 'idle'
+              ? 'Open a bill before taking payment.'
+              : state === 'loading'
+                ? 'Checking the bill balance…'
+                : state === 'settled'
+                  ? 'This bill is already paid.'
+                  : state === 'stale' || state === 'error' || !balanceKnown
+                    ? 'Refresh the bill to check the balance before taking payment.'
+                    : state === 'unavailable'
+                      ? 'This bill is not available for payment. Add items or resume the bill.'
+                      : disabled
+                        ? 'Wait for the current counter action to finish before taking payment.'
+                        : blocked
+                          ? 'Resolve the safety block in the prescription panel before taking payment.'
+                          : type === 'CASH' && cashDrawerClosed
+                            ? null // The Cash button already shows and describes the drawer reason.
+                            : prepaidShort
+                              ? 'That is more than the customer’s prepaid balance.'
+                              : !amountValid
+                                ? amountError
+                                : type === 'WALLET' && !APPROVER_PIN.test(prepaidPin)
+                                  ? 'Ask the customer to enter their prepaid PIN.'
+                                  : cashInvalid
+                                    ? cashError
+                                    : cashShort
+                                      ? copy.tender.cashShort
+                                      : manual && manualSettingsLoading
+                                        ? 'Loading merchant details…'
+                                        : manual && (manualSettingsError || !merchant)
+                                          ? 'Reload merchant details before taking payment.'
+                                          : manual &&
+                                              (!capture?.success ||
+                                                (referenceSkipped && !merchant?.allowReferenceSkip))
+                                            ? 'Enter the payer’s name and 4–6 transaction ID digits, or use the allowed reference skip.'
+                                            : bankTransfer && !transferCapture?.success
+                                              ? providerRef.trim() !== '' &&
+                                                looksLikeCardNumber(providerRef)
+                                                ? 'This looks like a card number. Enter the bank’s transfer reference instead.'
+                                                : 'Enter the bank transfer reference before taking payment.'
+                                              : manualCard && !cardCapture?.success
+                                                ? 'Enter the card reference and approval code from the terminal slip.'
+                                                : khataLoading
+                                                  ? 'Loading Khata accounts…'
+                                                  : isKhata && !account
+                                                    ? 'Choose a family Khata account before taking payment.'
+                                                    : 'A manager or owner must approve the credit limit increase first.';
 
     async function submitTender() {
       if (!submittable || amountMinor === null || submissionRef.current) return;
@@ -541,6 +562,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             ...(type === 'CASH' && cashReceived !== null && cashReceivedMinor !== null
               ? { cashReceivedMinor }
               : {}),
+            ...(cashMemo && buyerName.trim() ? { buyerName: buyerName.trim() } : {}),
             ...(manual && capture?.success
               ? {
                   payerName: capture.data.payerName,
@@ -695,7 +717,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         <div className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-border-subtle bg-surface-sunken p-4">
           <p className="space-y-2">
             <span className="block font-mono text-xs tracking-wide text-text-muted uppercase">
-              Balance due
+              {copy.tender.balance}
             </span>
             <span className="block text-3xl font-semibold tracking-tight tabular-nums text-text-strong">
               {balanceKnown && (state === 'ready' || state === 'settled') && !unknown
@@ -714,7 +736,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         <CounterChangeDue minor={confirmedChangeMinor ?? recordedChangeMinor} />
 
         {tenders.length > 0 ? (
-          <ol aria-label="Recorded tenders" className="space-y-2">
+          <ol aria-label={copy.tender.payments} className="space-y-2">
             {tenders.map((tender, index) => (
               <li
                 key={tender.tenderId}
@@ -910,19 +932,39 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           </p>
           {state === 'ready' && amount.trim() !== '' && !amountValid ? (
             <p id="tender-amount-error" className="text-sm text-destructive" role="alert">
-              Enter an amount between 0.01 and the balance due.
+              {amountError}
             </p>
           ) : null}
           {editable && amountValid && amountMinor! < balanceMinor! ? (
             <p className="text-sm text-text-body" aria-live="polite">
-              {tenders.length > 0 ? `Tender ${tenders.length + 1}. ` : ''}Remaining after this
-              tender{' '}
+              {tenders.length > 0 ? `${copy.tender.nextPayment} ${tenders.length + 1}. ` : ''}
+              {copy.tender.remaining}{' '}
               <span className="font-mono tabular-nums text-text-strong">
                 {formatMinor(balanceMinor! - amountMinor!)}
               </span>
             </p>
           ) : null}
         </div>
+
+        {cashMemo ? (
+          <div className="space-y-1.5">
+            <Label htmlFor="tender-buyer-name">Buyer name (cash memo, optional)</Label>
+            <Input
+              id="tender-buyer-name"
+              autoComplete="off"
+              maxLength={200}
+              value={buyerName}
+              aria-invalid={buyerInvalid}
+              disabled={!editable}
+              aria-describedby="tender-buyer-name-help"
+              onChange={(event) => setBuyerDraft(event.target.value)}
+              className="h-11 rounded-sm"
+            />
+            <p id="tender-buyer-name-help" className="text-sm text-text-muted">
+              Printed on the Sindh cash memo. Optional for walk-ins.
+            </p>
+          </div>
+        ) : null}
 
         {bankTransfer ? (
           <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
@@ -1263,8 +1305,8 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                           <p role="status">Loading approvers…</p>
                         ) : approvers.length === 0 ? (
                           <p role="status">
-                            No manager or owner has an active staff PIN. Ask your administrator to
-                            set one up.
+                            No manager or owner has an active staff PIN. A manager or owner creates
+                            their own under Settings, Your PIN. <OwnPinLink />
                           </p>
                         ) : null}
                         <Label htmlFor="khata-approver-pin">Approver PIN</Label>
@@ -1274,6 +1316,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                           inputMode="numeric"
                           autoComplete="off"
                           maxLength={8}
+                          aria-describedby="khata-approver-pin-hint"
                           value={approverPin}
                           disabled={!editable || !approverId}
                           onChange={(event) =>
@@ -1281,6 +1324,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                           }
                           className="h-11 rounded-sm"
                         />
+                        <p id="khata-approver-pin-hint" className="text-sm text-text-muted">
+                          {COUNTER_APPROVAL_CODE_HINT}
+                        </p>
                       </>
                     ) : (
                       <>
@@ -1373,11 +1419,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             </div>
             {cashInvalid ? (
               <p id="tender-cash-error" className="text-sm text-destructive" role="alert">
-                Enter a valid cash amount with at most two decimal places.
+                {cashError}
               </p>
             ) : cashShort ? (
               <p id="tender-cash-error" className="text-sm text-destructive" role="alert">
-                Cash received is less than the amount tendered.
+                {copy.tender.cashShort}
               </p>
             ) : changeMinor !== null ? (
               <p

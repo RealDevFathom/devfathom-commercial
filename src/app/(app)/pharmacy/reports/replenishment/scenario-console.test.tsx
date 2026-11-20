@@ -161,7 +161,7 @@ it('closes on Escape or blur and reopens without committing a hidden option', as
   expect(screen.getByRole('button', { name: 'Read replenishment report' })).toBeDisabled();
   fireEvent.keyDown(input, { key: 'ArrowDown' });
   expect(screen.getByRole('listbox')).toBeVisible();
-  fireEvent.blur(input, { relatedTarget: screen.getByLabelText('History start (UTC)') });
+  fireEvent.blur(input, { relatedTarget: screen.getByLabelText('History start') });
   expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
   fireEvent.focus(input);
   expect(screen.getByRole('listbox')).toBeVisible();
@@ -354,4 +354,179 @@ it('explains why financial planning is unavailable while keeping operational evi
   render(<ScenarioConsole {...props} financial={false} />);
   expect(screen.getByText(/Planning requires financial report access/)).toBeVisible();
   expect(screen.getByText(/monetary results are withheld/)).toBeVisible();
+});
+
+describe('scenario money typed as an amount', () => {
+  async function openScenario(currency: string, timeZone?: string) {
+    vi.setSystemTime(new Date('2026-11-03T12:00:00Z'));
+    mocks.replenishment.mockRejectedValue(new Error('not needed'));
+    render(<ScenarioConsole {...props} financial timeZone={timeZone} />);
+    const input = await typeAndSearch();
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Include a user-supplied scenario' }));
+    const set = (label: string | RegExp, value: string) =>
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    set('Scenario currency (three-letter code)', currency);
+    set('Assumed daily demand (units)', '3');
+    set('Current policy order (units)', '10');
+    set('Proposed policy order (units)', '12');
+    set('Order pack size (units)', '1');
+    set('Minimum order (units)', '0');
+    return set;
+  }
+  async function submit() {
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Read replenishment report' }));
+      await Promise.resolve();
+    });
+  }
+
+  it('sends the exact minor units for rupee amounts with up to two decimals', async () => {
+    const set = await openScenario('PKR');
+    set('Current selling price per unit (rupees)', '125.50');
+    set('What-if selling price per unit (rupees)', '0.05');
+    set('Sales goal (rupees, optional)', '1000000.00');
+    set('Margin goal (rupees, optional)', '');
+    set('Cost per unit (rupees, optional)', '99.9');
+    set('Order budget (rupees, optional)', '0');
+    await submit();
+    expect(mocks.replenishment).toHaveBeenCalledOnce();
+    const scenario = mocks.replenishment.mock.calls[0]![0].manualScenario;
+    expect(scenario.currency).toBe('PKR');
+    expect(scenario.pricing).toEqual({ currentUnitPriceMinor: 12550, proposedUnitPriceMinor: 5 });
+    expect(scenario.goals).toEqual({ salesMinor: 100000000, marginMinor: null });
+    expect(scenario.orderTerms.unitCostMinor).toBe(9990);
+    expect(scenario.orderTerms.budgetMinor).toBe(0);
+  });
+
+  it.each([
+    ['125.505', 'Use at most 2 decimal places'],
+    ['-5', 'Enter an amount of 0 or more.'],
+    ['', 'Enter an amount, for example 125.50.'],
+  ])('refuses %s in a required price and sends nothing', async (raw, message) => {
+    const set = await openScenario('PKR');
+    set('Current selling price per unit (rupees)', raw);
+    set('What-if selling price per unit (rupees)', '10');
+    await submit();
+    expect(mocks.replenishment).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Current selling price per unit (rupees)')).toHaveAttribute(
+      'aria-invalid',
+      'true'
+    );
+    expect(document.body.textContent).toContain(message);
+  });
+
+  it('names the chosen currency, not rupees or paisa, for a non-PKR scenario', async () => {
+    const set = await openScenario('USD');
+    expect(document.body.textContent).not.toMatch(/paisa|rupee|minor units/i);
+    set('Current selling price per unit (USD)', '2.75');
+    set('What-if selling price per unit (USD)', '3');
+    await submit();
+    expect(mocks.replenishment.mock.calls[0]![0].manualScenario.pricing).toEqual({
+      currentUnitPriceMinor: 275,
+      proposedUnitPriceMinor: 300,
+    });
+  });
+
+  it("reads assumed arrival and expiry on the organisation's clock, with no ISO example", async () => {
+    const set = await openScenario('PKR', 'Asia/Karachi');
+    const arrival = screen.getByLabelText('Assumed arrival (date and time, optional)');
+    expect(arrival).toHaveAttribute('type', 'datetime-local');
+    expect(screen.getByLabelText('History start')).toHaveAttribute('type', 'date');
+    expect(screen.getByLabelText('Scenario starts on (a future day)')).toBeVisible();
+    expect(document.body.textContent).toContain("organisation's clock (PKT)");
+    expect(document.body.textContent).not.toMatch(/ISO instant|2026-09-16T12:00:00Z/);
+    set('Current selling price per unit (rupees)', '10');
+    set('What-if selling price per unit (rupees)', '12');
+    // Karachi is UTC+5: 5 Nov 09:00 is 04:00 UTC; 1 Jan 00:30 is 19:30 UTC on 31 Dec.
+    set('Assumed arrival (date and time, optional)', '2026-11-05T09:00');
+    set('Assumed expiry (date and time, optional)', '2027-01-01T00:30');
+    await submit();
+    expect(mocks.replenishment.mock.calls[0]![0].manualScenario.orderTerms).toMatchObject({
+      arrivalAt: '2026-11-05T04:00:00.000Z',
+      expiresAt: '2026-12-31T19:30:00.000Z',
+    });
+  });
+
+  it('refuses an arrival before the scenario starts in plain words', async () => {
+    const set = await openScenario('PKR', 'Asia/Karachi');
+    set('Current selling price per unit (rupees)', '10');
+    set('What-if selling price per unit (rupees)', '12');
+    // 4 Nov 04:00 in Karachi is 3 Nov 23:00 UTC, before the 4 Nov scenario start.
+    set('Assumed arrival (date and time, optional)', '2026-11-04T04:00');
+    await submit();
+    expect(mocks.replenishment).not.toHaveBeenCalled();
+    expect(screen.getByText('Arrival must be on or after the planning origin.')).toBeVisible();
+  });
+});
+
+describe("DEV-944 history ends on the shop's today", () => {
+  async function read(now: string, today: string, timeZone?: string) {
+    vi.setSystemTime(new Date(now));
+    mocks.replenishment.mockRejectedValue(new Error('not needed'));
+    render(<ScenarioConsole {...props} today={today} timeZone={timeZone} />);
+    const input = await typeAndSearch();
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Read replenishment report' }));
+      await Promise.resolve();
+    });
+  }
+
+  it('sends a history ending on the Karachi today at 19:30 UTC, as the server accepts', async () => {
+    // 00:30 on 19 Nov in Karachi.
+    await read('2026-11-18T19:30:00.000Z', '2026-11-19', 'Asia/Karachi');
+    expect(mocks.replenishment).toHaveBeenCalledOnce();
+    expect(mocks.replenishment.mock.calls[0]![0]).toMatchObject({ originDate: '2026-11-19' });
+    expect(document.body.textContent).toContain(
+      "demand coverage and the history use your organisation's days (PKT)"
+    );
+  });
+
+  it('refuses a history ending on a Karachi day that has not begun at 18:59 UTC', async () => {
+    // 23:59 on 18 Nov in Karachi.
+    await read('2026-11-18T18:59:00.000Z', '2026-11-19', 'Asia/Karachi');
+    expect(mocks.replenishment).not.toHaveBeenCalled();
+    expect(screen.getByText('History must end no later than today.')).toBeVisible();
+  });
+
+  it.each([undefined, 'UTC'])('keeps the UTC day for zone %s', async (zone) => {
+    await read('2026-11-18T19:30:00.000Z', '2026-11-19', zone);
+    expect(mocks.replenishment).not.toHaveBeenCalled();
+    expect(screen.getByText('History must end no later than today.')).toBeVisible();
+  });
+});
+
+describe('DEV-944 scenario start west of UTC', () => {
+  async function openScenario(now: string, today: string, timeZone: string) {
+    vi.setSystemTime(new Date(now));
+    mocks.replenishment.mockRejectedValue(new Error('not needed'));
+    render(<ScenarioConsole {...props} financial today={today} timeZone={timeZone} />);
+    const input = await typeAndSearch();
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Include a user-supplied scenario' }));
+    return screen.getByLabelText('Scenario starts on (a future day)');
+  }
+
+  it('defaults past a tomorrow whose UTC midnight has passed, and refuses that day as the server does', async () => {
+    // 20:00 on 18 Nov in New York is 01:00 UTC on 19 Nov.
+    const start = await openScenario('2026-11-19T01:00:00.000Z', '2026-11-18', 'America/New_York');
+    expect(start).toHaveValue('2026-11-20');
+    fireEvent.change(start, { target: { value: '2026-11-19' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Read replenishment report' }));
+      await Promise.resolve();
+    });
+    expect(mocks.replenishment).not.toHaveBeenCalled();
+    expect(screen.getByText('Choose a future day within the next 31 days.')).toBeVisible();
+  });
+
+  it("keeps the shop's tomorrow as the default east of UTC", async () => {
+    // 00:30 on 19 Nov in Karachi.
+    const start = await openScenario('2026-11-18T19:30:00.000Z', '2026-11-19', 'Asia/Karachi');
+    expect(start).toHaveValue('2026-11-20');
+  });
 });

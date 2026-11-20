@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { formatWorkspaceDateTime, workspaceZoneLabel } from '@/lib/timezone';
 import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -13,6 +14,8 @@ export type FollowUpPacketData = {
   from: string;
   to: string;
   preparedAt: string;
+  /** The organisation's IANA zone: the return creation dates are its calendar days. */
+  timeZone?: string | null;
   currency: string | null;
   coverage: 'complete' | 'partial';
   excluded: number;
@@ -45,7 +48,7 @@ const amount = (value: number | null) =>
   value !== null && Number.isSafeInteger(value) && value >= 0 ? formatMinor(value) : 'Unknown';
 const currencyLabel = (packet: FollowUpPacketData) => packet.currency ?? 'Currency unknown';
 const currencyBasis =
-  'Currency is the current organization setting; source records do not establish historical currency. Amounts use integer minor units (100 per major unit).';
+  'Currency is the current organization setting; source records do not establish historical currency. Amounts are shown in rupees with two decimals.';
 const uniqueCredits = (rows: FollowUpPacketData['rows']) => [
   ...new Map(rows.flatMap((row) => row.credits).map((credit) => [credit.id, credit])).values(),
 ];
@@ -69,7 +72,7 @@ export function packetCsv(packet: FollowUpPacketData, supplierId: string) {
     packet.branch.name,
     packet.from,
     packet.to,
-    'Return created date, inclusive UTC; allocations current at preparation',
+    `Return created date, both dates included, in ${workspaceZoneLabel(packet.timeZone)}; allocations current at preparation`,
     currencyLabel(packet),
     currencyBasis,
     packet.preparedAt,
@@ -212,8 +215,10 @@ export function FollowUpPacket({ packet }: { packet: FollowUpPacketData }) {
       <SectionCard title="Draft evidence scope" titleLevel={2}>
         <StatusPill status="draft" label="Draft · read-only" />
         <p className="mt-3 text-sm text-text-body">
-          Branch: {packet.branch.name}. Return creation period: {packet.from} to {packet.to},
-          inclusive UTC. Prepared at: {packet.preparedAt}. Currency: {currencyLabel(packet)}.
+          Branch: {packet.branch.name}. Return creation period: {packet.from} to {packet.to}, both
+          dates included, in {workspaceZoneLabel(packet.timeZone)}. Prepared at:{' '}
+          {formatWorkspaceDateTime(packet.preparedAt, packet.timeZone)}. Currency:{' '}
+          {currencyLabel(packet)}.
         </p>
         <p className="mt-2 text-sm text-text-muted">{currencyBasis}</p>
         <p className="mt-2 text-sm text-text-muted">{DEFINITION}</p>

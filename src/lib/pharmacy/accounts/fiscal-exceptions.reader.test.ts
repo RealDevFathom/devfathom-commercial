@@ -107,7 +107,7 @@ describe('fiscal exception reader access and query isolation', () => {
     db.pharmacyBranch.findFirst.mockResolvedValue(null);
     await expect(readFiscalExceptions(ctx, { ...filters, branchId })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(db.pharmacyBranch.findFirst).toHaveBeenCalledWith({
-      where: { organizationId: 'org-1', id: branchId, active: true }, select: { id: true, name: true },
+      where: { organizationId: 'org-1', id: branchId, active: true }, select: { id: true, name: true, businessDayEndsAtHistory: true },
     });
     expectNoEvidenceRead();
   });
@@ -144,6 +144,28 @@ describe('fiscal exception reader access and query isolation', () => {
     const result = await readFiscalExceptions(ctx, filters);
     expect(result.configuredMode).toBe(config?.integratorMode ?? 'OFF');
     expect(result.rows[0].integratorMode).toBe('SANDBOX');
+  });
+
+  it.each([
+    // 19:30 UTC on 31 Oct is 00:30 on 1 Nov in Karachi; 18:59 UTC is still 31 Oct there.
+    ['Asia/Karachi', '2026-10-31T19:00:00.000Z', '2026-11-01T19:00:00.000Z', true, false],
+    // A UTC organisation (or one with no zone) reads the same UTC midnights as before.
+    ['UTC', '2026-11-01T00:00:00.000Z', '2026-11-02T00:00:00.000Z', false, false],
+    [null, '2026-11-01T00:00:00.000Z', '2026-11-02T00:00:00.000Z', false, false],
+  ] as const)('reads the picked days on the organisation clock (%s) (DEV-722)', async (
+    timezone, gte, lt, at1930, at1859
+  ) => {
+    const base = context(db as unknown as ScopedDb);
+    const ctx = { ...base, organization: { ...base.organization!, timezone } } as FiscalExceptionContext;
+    const result = await readFiscalExceptions(ctx, { ...filters, from: '2026-11-01', to: '2026-11-02' });
+    const window = db.pharmacyFiscalDocument.findMany.mock.calls[0]![0].where.createdAt;
+    expect(window).toEqual({ gte: new Date(gte), lt: new Date(lt) });
+    const inside = (at: string) => new Date(at) >= window.gte && new Date(at) < window.lt;
+    expect(inside('2026-10-31T19:30:00Z')).toBe(at1930);
+    expect(inside('2026-10-31T18:59:00Z')).toBe(at1859);
+    expect(result.window).toEqual({ from: gte, to: lt });
+    expect(result.timeZone).toBe(timezone);
+    expect(result.filters).toMatchObject({ from: '2026-11-01', to: '2026-11-02' });
   });
 
   it('uses a lookahead row, bounds offsets, and never asserts complete coverage', async () => {

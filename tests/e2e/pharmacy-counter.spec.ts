@@ -1254,8 +1254,10 @@ test('[DEF-13] cashier float guidance and refusal preserve empty-drawer access',
 }) => {
   await openCounter(page, PHARMACY_E2E.cashierEmail);
   const openingCash = page.getByLabel('Opening cash', { exact: true });
-  await expect(openingCash).toHaveAttribute('readonly', '');
-  await expect(openingCash).toHaveValue('0');
+  // DEV-933: the count is always typed, a cashier's too (a typed 0 is allowed); it is
+  // never prefilled. The server still refuses a cashier's float, as below.
+  await expect(openingCash).toBeEditable();
+  await expect(openingCash).toHaveValue('');
   await expect(page.getByRole('group', { name: 'Quick amounts' })).toHaveCount(0);
   await expect(page.getByText(/Count the cash in the drawer/)).toHaveCount(0);
   await expect(page.getByText(/Ask a manager or owner to declare any opening float/)).toBeVisible();
@@ -1377,15 +1379,17 @@ test('day close — open sell count lock and print Z-report', async ({ page, con
   await expect(popup.locator('body')).toContainText('One rupee short at nightly count');
   await popup.close();
   await page.goto('/pharmacy/counter');
-  await page.getByLabel('Opening cash', { exact: true }).fill('0');
-  await pressControl(page.getByRole('button', { name: 'Open drawer' }));
-  await expect(
-    page.getByRole('alert').filter({ hasText: /This business day is closed/ })
-  ).toBeVisible();
-  // DEV-725: with the day closed no drawer opens, so no bill can be started that
-  // payment would then refuse: the opening step stays and scan/search is not offered.
-  await expect(page.getByLabel('Opening cash', { exact: true })).toBeVisible();
+  // DEV-631: the counter says the day is closed before a bill is built; no drawer
+  // step or scan/search is offered, so nothing is added that payment would refuse.
+  await expect(page.getByRole('status', { name: 'Business day closed' })).toContainText(
+    'The owner or a manager can reopen today for trading on Day close'
+  );
+  await expect(page.getByLabel('Opening cash', { exact: true })).toHaveCount(0);
   await expect(page.getByLabel('Scan or search', { exact: true })).toHaveCount(0);
+  // The owner's reopen for trading needs their own staff PIN, which this fixture does
+  // not seed; it is covered by the day-close console and router tests.
+  await page.goto('/pharmacy/counter/close');
+  await expect(page.getByRole('form', { name: 'Reopen today for trading' })).toBeVisible();
 });
 
 test('this spec drives the counter without a pointer', async () => {

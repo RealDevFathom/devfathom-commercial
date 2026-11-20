@@ -19,7 +19,13 @@ import { ShiftHandoverPanel } from './shift-handover-panel';
 import { formatMinor, type CounterReceiptLocale } from '@/lib/pharmacy/counter-receipt';
 import { printCounterBrowserZReport } from '@/lib/pharmacy/counter-browser-print';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
-import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
+import { amountInputError, amountInputToMinor } from '@/lib/money-input';
+import {
+  pharmacyBusinessDay,
+  pharmacyDayEndHourOn,
+  pharmacyDayEndLabel,
+} from '@/lib/pharmacy/business-day';
+import { workspaceTimezone } from '@/lib/timezone';
 import {
   clearDayCloseDraft,
   dayCloseDraftKey,
@@ -70,11 +76,22 @@ export function otherOperatorMovementLabel(
   return `${time} · ${kind} · by ${movement.actor ?? 'a former team member'}`;
 }
 
+/** The largest counted cash a drawer close takes, in minor units. */
+const COUNTED_CASH_MAX_MINOR = 2147483647;
+
+/** DEV-939: counted cash read by the shared typed-amount reader, within the close's limit. */
 export function cashMinor(value: string): number | null {
-  if (!/^\d+(?:\.\d{1,2})?$/.test(value)) return null;
-  const [whole, fraction = ''] = value.split('.');
-  const amount = Number(whole) * 100 + Number(fraction.padEnd(2, '0'));
-  return Number.isSafeInteger(amount) && amount <= 2147483647 ? amount : null;
+  const amount = amountInputToMinor(value);
+  return amount.status === 'OK' && amount.minor <= COUNTED_CASH_MAX_MINOR ? amount.minor : null;
+}
+
+/** Why a counted-cash entry is refused, in plain words; null when it is a valid count. */
+export function cashCountError(value: string): string | null {
+  const amount = amountInputToMinor(value);
+  if (amount.status === 'INVALID') return amountInputError(amount.reason);
+  if (amount.status === 'EMPTY')
+    return 'Enter a non-negative amount with at most two decimal places.';
+  return amount.minor > COUNTED_CASH_MAX_MINOR ? amountInputError('TOO_LARGE') : null;
 }
 
 /**
@@ -197,12 +214,17 @@ function DayCloseBranches({
     initial?.date && DAY.test(initial.date) ? initial.date : null
   );
   const timeZone = branches.data?.timezone;
-  // Until the operator picks a day: today in the workspace's zone, settled once
-  // the zone is known, so a page left open past midnight keeps its day.
-  const today = useMemo(() => (timeZone ? workspaceToday(timeZone) : ''), [timeZone]);
-  const date = picked ?? today;
   const linked = branches.data?.branches.find((b) => b.id === initial?.branch)?.id;
   const branchId = selected || linked || branches.data?.branches[0]?.id || '';
+  const dayEnd = branches.data?.branches.find((b) => b.id === branchId)?.businessDayEndsAtHistory;
+  // Until the operator picks a day: today's business day on the branch's clock (the
+  // workspace's zone and, DEV-958A, the branch's "day ends at" hour), settled once the
+  // zone is known, so a page left open past the day's end keeps its day.
+  const today = useMemo(
+    () => (timeZone ? pharmacyBusinessDay({ timeZone, dayEnd }) : ''),
+    [timeZone, dayEnd]
+  );
+  const date = picked ?? today;
   const currency = branches.data?.currency;
   if (branches.error?.data?.code === 'FORBIDDEN') {
     return (
@@ -245,6 +267,13 @@ function DayCloseBranches({
             />
           </label>
         </div>
+        {date && pharmacyDayEndHourOn({ dayEnd }, date) ? (
+          <p className="mt-3 text-sm text-text-muted">
+            This branch&apos;s business day starts at{' '}
+            {pharmacyDayEndLabel(pharmacyDayEndHourOn({ dayEnd }, date))}: sales after midnight and
+            before then count on the day before.
+          </p>
+        ) : null}
         {branches.isLoading && <p role="status">Loading pharmacy branches…</p>}
         {branches.error && (
           <p role="alert">
@@ -287,7 +316,12 @@ function DayCloseForm({
 }) {
   const input = { branchId, businessDate: new Date(`${date}T00:00:00.000Z`) };
   const preview = trpc.pharmacySales.closePreview.useQuery(input, { refetchOnWindowFocus: false });
-  const close = trpc.pharmacySales.closeDay.useMutation();
+  const utils = trpc.useUtils();
+  // DEV-631: the counter reads whether today is closed for trading; refresh it the
+  // moment this screen closes or reopens the day rather than at its next poll.
+  const refreshTradingDay = () =>
+    void utils.pharmacySales.tradingDayStatus.invalidate({ branchId });
+  const close = trpc.pharmacySales.closeDay.useMutation({ onSuccess: refreshTradingDay });
   const [recovery] = useState(() => readDayCloseDraft(draftKey));
   const [draft, setDraft] = useState(recovery.draft);
   const [draftWarning, setDraftWarning] = useState(recovery.warning);
@@ -297,10 +331,20 @@ function DayCloseForm({
     // Save on each edit, not on unmount: navigation/reload may interrupt cleanup.
     setDraftWarning(saveDayCloseDraft(draftKey, next));
   }
+  const reopen = trpc.pharmacySales.reopenDay.useMutation();
+  // DEV-631: the owner or a manager may reopen; the server re-checks branch and PIN.
+  const reopenAccess = trpc.pharmacySales.dayReopenAccess.useQuery(
+    { branchId },
+    { staleTime: 30_000 }
+  );
+  const mayReopen = reopenAccess.data?.authorized === true;
+  const [reopenReason, setReopenReason] = useState('');
+  const [reopenPin, setReopenPin] = useState('');
   const [confirmed, setConfirmed] = useState(false);
   const [locale, setLocale] = useState<CounterReceiptLocale>('en');
   const [printMessage, setPrintMessage] = useState('');
-  const report = close.data ?? preview.data?.close;
+  const reopened = close.data ? null : (preview.data?.close?.reopen ?? null);
+  const report = close.data ?? (reopened ? null : preview.data?.close);
   useEffect(() => {
     if (report) clearDayCloseDraft(draftKey);
   }, [draftKey, report]);
@@ -320,7 +364,15 @@ function DayCloseForm({
       </SectionCard>
     );
   const data = preview.data;
-  const tenderTotals = tenderTotalsSchema.parse((report ? report.tenderTotals : data.tenderTotals) ?? []);
+  // Only today's business day can be reopened. Read from the clock on every render, not
+  // memoized, so a page left open past the day's end never offers yesterday's reopen.
+  const isToday = date === pharmacyBusinessDay({ timeZone: data.timezone, dayEnd: data.dayEnd });
+  const reopenPinValid = /^\d{4,8}$/.test(reopenPin);
+  // A close cut after a reopen records the variance note, not a re-cut reason.
+  const followsReopen = close.data ? Boolean(data.close?.reopen) : Boolean(data.closeFollowsReopen);
+  const tenderTotals = tenderTotalsSchema.parse(
+    (report ? report.tenderTotals : data.tenderTotals) ?? []
+  );
   const expected = report?.cashExpectedMinor ?? data.totals.cashExpectedMinor;
   const open = data.drawers.filter((d) => d.status === 'OPEN');
   const valid = open.every((d) => cashMinor(counts[d.id] ?? '') !== null);
@@ -336,7 +388,7 @@ function DayCloseForm({
     (d) =>
       (d.status === 'OPEN' ? cashMinor(counts[d.id] ?? '') : d.countedMinor) !== d.expectedMinor
   );
-  const busy = close.isPending || preview.isFetching;
+  const busy = close.isPending || reopen.isPending || preview.isFetching;
   // The counted total runs live from whatever has been entered so far, so a
   // partly counted day shows its running sum rather than nothing; the variance
   // waits for every drawer, because a partial count against the full expected
@@ -358,7 +410,7 @@ function DayCloseForm({
             : '',
         confirmed
           ? ''
-          : 'Tick the confirmation that every drawer is counted and the lock is permanent.',
+          : 'Tick the confirmation that every drawer is counted and locking stops trading.',
         preview.isFetching && !close.isPending ? 'Wait for the preview to finish refreshing.' : '',
       ].filter(Boolean);
   return (
@@ -368,8 +420,8 @@ function DayCloseForm({
         titleLevel={2}
         actions={
           <StatusPill
-            status={report ? 'Day closed' : 'Open day'}
-            tone={report ? 'success' : 'neutral'}
+            status={report ? 'Day closed' : reopened ? 'Reopened for trading' : 'Open day'}
+            tone={report ? 'success' : reopened ? 'warning' : 'neutral'}
           />
         }
       >
@@ -402,11 +454,15 @@ function DayCloseForm({
           {tenderTotals.map((row) => (
             <div key={row.type} className="space-y-1">
               <p className="text-sm text-text-body">
-                <span className="font-medium">{row.type}</span> · Received {formatMinor(row.amountMinor)}
-                {' '}· Refunds {formatMinor(row.refundMinor)} · Net {formatMinor(row.netMinor)} {currency}
+                <span className="font-medium">{row.type}</span> · Received{' '}
+                {formatMinor(row.amountMinor)} · Refunds {formatMinor(row.refundMinor)} · Net{' '}
+                {formatMinor(row.netMinor)} {currency}
               </p>
               {row.confirmers?.length ? (
-                <ul className="ps-4 text-sm text-text-muted" aria-label={`${row.type} confirmed by`}>
+                <ul
+                  className="ps-4 text-sm text-text-muted"
+                  aria-label={`${row.type} confirmed by`}
+                >
                   {row.confirmers.map((confirmer, index) => (
                     <li key={confirmer.id ?? `${confirmer.name}-${index}`}>
                       Confirmed by {confirmer.name} · {confirmer.count}{' '}
@@ -425,14 +481,17 @@ function DayCloseForm({
               Day closed. New tenders and drawer changes for this business date are blocked.
             </p>
             <p>
-              The lock is permanent: nobody, including the owner, can reopen this business day for
-              payments, refunds or drawer changes. Record anything late on an open business day.
+              {isToday
+                ? 'The owner or a manager can reopen today for trading with a reason and their PIN; the next close then supersedes this report.'
+                : "Only today's business day can be reopened for trading. Record anything late on an open business day."}{' '}
               Someone with day-close permission can re-record this close report with a reason, but
-              that never reopens the day.
+              that alone never reopens the day.
             </p>
             <p>
-              {report.supersedesCloseId || report.sequence > 1 ? 'Reopen reason' : 'Variance note'}:{' '}
-              {report.reason || 'No variance recorded.'}
+              {(report.supersedesCloseId || report.sequence > 1) && !followsReopen
+                ? 'Reopen reason'
+                : 'Variance note'}
+              : {report.reason || 'No variance recorded.'}
             </p>
             {!report.isFinal && <p>Provisional report: migration reconciliation is pending.</p>}
             <label className="grid gap-2">
@@ -448,9 +507,9 @@ function DayCloseForm({
             </label>
             <Button
               variant="outline"
-              onClick={() => {
+              onClick={async () => {
                 try {
-                  printCounterBrowserZReport(
+                  await printCounterBrowserZReport(
                     { ...report, branchName: data.branchName, businessDate: date, currency },
                     locale
                   );
@@ -467,6 +526,77 @@ function DayCloseForm({
               Print Z-report
             </Button>
             <p role="status">{printMessage}</p>
+            {isToday && mayReopen && (
+              <form
+                className="grid gap-3 rounded-md border border-border-subtle p-4"
+                aria-label="Reopen today for trading"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!reopenReason.trim() || !reopenPinValid || busy) return;
+                  reopen.mutate(
+                    { ...input, closeId: report.id, reason: reopenReason, ownerPin: reopenPin },
+                    {
+                      // The PIN is never kept after an attempt, accepted or refused.
+                      onSettled: () => setReopenPin(''),
+                      onSuccess: () => {
+                        refreshTradingDay();
+                        close.reset();
+                        setReopenReason('');
+                        updateDraft({ counts: {}, note: '' });
+                        setConfirmed(false);
+                        void preview.refetch();
+                      },
+                    }
+                  );
+                }}
+              >
+                <p className="font-medium text-text-strong">Reopen today for trading</p>
+                <p className="text-sm text-text-muted">
+                  Counters can open drawers and take payments for {date} again until you close and
+                  lock the day again. The reopen is recorded with your name, the time and the
+                  reason.
+                </p>
+                <label className="grid gap-2">
+                  Reason for reopening
+                  <Input
+                    className="min-h-11"
+                    maxLength={1000}
+                    value={reopenReason}
+                    disabled={busy}
+                    onChange={(e) => setReopenReason(e.target.value)}
+                  />
+                </label>
+                <label className="grid gap-2">
+                  Your staff PIN
+                  <Input
+                    className="min-h-11"
+                    type="password"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    maxLength={8}
+                    value={reopenPin}
+                    disabled={busy}
+                    aria-invalid={reopenPin !== '' && !reopenPinValid}
+                    aria-describedby="day-reopen-pin-help"
+                    onChange={(e) => setReopenPin(e.target.value.replace(/\D/g, ''))}
+                  />
+                </label>
+                <p id="day-reopen-pin-help" className="-mt-1 text-sm text-text-muted">
+                  Re-enter your 4 to 8 digit staff PIN to confirm this reopen.
+                </p>
+                {reopen.error && <p role="alert">{counterErrorMessage(reopen.error)}</p>}
+                <div>
+                  <Button
+                    className="min-h-11"
+                    type="submit"
+                    variant="outline"
+                    disabled={busy || !reopenReason.trim() || !reopenPinValid}
+                  >
+                    {reopen.isPending ? 'Reopening…' : 'Reopen day for trading'}
+                  </Button>
+                </div>
+              </form>
+            )}
           </div>
         ) : (
           <form
@@ -490,6 +620,20 @@ function DayCloseForm({
                 {openBillsWarning(data.openBills)}
               </p>
             ) : null}
+            {reopened && (
+              <p
+                className="rounded-md border border-warning/30 bg-warning/10 p-4 text-sm text-text-strong"
+                role="status"
+              >
+                Reopened for trading at{' '}
+                {new Date(reopened.createdAt).toLocaleTimeString('en-GB', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  timeZone: workspaceTimezone(data.timezone),
+                })}
+                : {reopened.reason}. Close and lock the day again when trading ends.
+              </p>
+            )}
             {!data.drawers.length && (
               <p>No drawers were opened for this date. You can record and lock an empty day.</p>
             )}
@@ -542,7 +686,7 @@ function DayCloseForm({
                     />
                     {counts[d.id] !== undefined && cashMinor(counts[d.id]) === null && (
                       <span className="text-sm text-destructive">
-                        Enter a non-negative amount with at most two decimal places.
+                        {cashCountError(counts[d.id])}
                       </span>
                     )}
                   </label>
@@ -570,14 +714,15 @@ function DayCloseForm({
             <div
               className="space-y-1 rounded-md border border-warning/30 bg-warning/10 p-4 text-sm text-text-strong"
               role="note"
-              aria-label="Locking is permanent"
+              aria-label="Locking stops trading"
             >
-              <p className="font-medium">Locking this day cannot be undone.</p>
+              <p className="font-medium">Locking this day stops trading on it.</p>
               <p>
-                Once locked, nobody, including the owner, can reopen {date} for new payments,
-                refunds or drawer changes. Record anything late on an open business day. Someone
-                with day-close permission can later re-record the close report with a reason, but
-                that never reopens the day.
+                Once locked, counters cannot take new payments, refunds or drawer changes for {date}
+                . Only the owner or a manager can reopen today&apos;s business day for trading, with
+                a reason and their PIN; earlier days stay locked. Someone with day-close permission
+                can later re-record the close report with a reason, but that alone never reopens the
+                day.
               </p>
             </div>
             <label className="flex items-start gap-3">
@@ -588,11 +733,13 @@ function DayCloseForm({
                 disabled={busy}
                 onChange={(e) => setConfirmed(e.target.checked)}
               />
-              I have counted every drawer and understand that locking this day is permanent.
+              I have counted every drawer and understand that locking this day stops trading on it.
             </label>
             {close.error && <p role="alert">{counterErrorMessage(close.error)}</p>}
             {draftWarning && (
-              <p role="alert" className="text-sm text-destructive">{draftWarning}</p>
+              <p role="alert" className="text-sm text-destructive">
+                {draftWarning}
+              </p>
             )}
             <div className="flex flex-wrap gap-3">
               <Button

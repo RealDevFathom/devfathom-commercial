@@ -74,6 +74,9 @@ export async function findSubstituteProposals(
     (presentation) => presentation.id === input.presentationId
   );
   if (!requested || !requestedPresentation) throw new PharmacySubstituteError('NOT_FOUND');
+  // DEV-852: an imported medicine may have no recorded strength. Without ingredient and
+  // strength evidence nothing can be proposed as an exact equivalent.
+  if (requested.strengths.length === 0) return [];
 
   const historicalReference =
     input.referencePriceMinor === undefined
@@ -106,7 +109,8 @@ export async function findSubstituteProposals(
       batch: {
         medicineId: { not: input.medicineId },
         state: 'ACTIVE',
-        expiresAt: { gt: at },
+        // DEV-853: an unrecorded expiry is never treated as expired.
+        OR: [{ expiresAt: null }, { expiresAt: { gt: at } }],
         medicine: { saleable: true },
       },
       balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
@@ -126,6 +130,7 @@ export async function findSubstituteProposals(
       (lot.printedMrpMinor * input.quantityCanonicalUnits) / lot.unitsPerPack
     );
     if (
+      medicine.strengths.length === 0 ||
       strengthKey(medicine.strengths) !== requestedStrength ||
       normalized(presentation.dosageForm) !== normalized(requestedPresentation.dosageForm) ||
       normalized(presentation.route) !== normalized(requestedPresentation.route) ||
@@ -226,7 +231,12 @@ function saleableLotWhere(scope: { organizationId: string; branchId: string }, a
     organizationId: scope.organizationId,
     branchId: scope.branchId,
     receivedAt: { not: null },
-    batch: { state: 'ACTIVE', expiresAt: { gt: at }, medicine: { saleable: true } },
+    batch: {
+      state: 'ACTIVE',
+      // DEV-853: an unrecorded expiry is never treated as expired.
+      OR: [{ expiresAt: null }, { expiresAt: { gt: at } }],
+      medicine: { saleable: true },
+    },
     balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
   } satisfies Prisma.PharmacyInventoryLotWhereInput;
 }

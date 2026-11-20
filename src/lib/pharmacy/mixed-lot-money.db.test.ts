@@ -112,7 +112,7 @@ async function cart(prices = [100, 200], quantities = [1, 1], costs = prices.map
         supplierInvoiceRef: randomUUID(),
         unitCostMinor: costs[i]!,
         printedMrpMinor: prices[i]!,
-        receivedExpiresAt: batch.expiresAt,
+        receivedExpiresAt: batch.expiresAt as Date,
         receivedExpiryPrecision: 'DAY',
         quantityUnits: quantities[i]!,
         idempotencyKey: randomUUID(),

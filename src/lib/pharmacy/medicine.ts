@@ -150,8 +150,10 @@ export function deriveLooseUnitPrice(input: {
  */
 export function mrpRoundingIncrementForLot(
   rules: readonly { packLevelId: string; batchReference: string; roundingIncrementMinor: number }[],
-  lot: { packLevelId: string; batchNumber: string }
+  lot: { packLevelId: string; batchNumber: string | null }
 ): number {
+  // DEV-853: a lot with no recorded batch has no batch-specific rule.
+  if (lot.batchNumber === null) return 1;
   const rule = rules.find(
     (entry) => entry.packLevelId === lot.packLevelId && entry.batchReference === lot.batchNumber
   );
@@ -207,16 +209,57 @@ export function priceFromLot(input: {
   };
 }
 
+/** DEV-852: how a value a legacy import never carried is shown. Plain words, never an error. */
+export const STRENGTH_NOT_RECORDED = 'Strength not recorded';
+export const REGISTRATION_NOT_RECORDED = 'Registration number not recorded';
+
+/** DEV-852: the medicine's identity (its product name) came from a legacy import. */
+export function isImportedIdentity(
+  assertions: readonly { field: string; sourceType: string }[]
+): boolean {
+  return assertions.some(
+    (assertion) => assertion.field === 'productName' && assertion.sourceType === 'IMPORT'
+  );
+}
+
+/**
+ * DEV-852: an imported medicine without strength or registration number is still publishable.
+ * The gap is shown in plain words so staff can fill it later; it is never an error.
+ */
+export function notRecordedFields(candidate: {
+  productFamily?: string;
+  drapRegistrationNumber?: string | null;
+  strengths?: readonly unknown[];
+  provenance: readonly { field: string; sourceType: string }[];
+}): string[] {
+  if (candidate.productFamily === 'FRONT_SHOP') return [];
+  if (!isImportedIdentity(candidate.provenance)) return [];
+  const fields = new Set(candidate.provenance.map((item) => item.field));
+  const notes: string[] = [];
+  if (!fields.has('strength') && !candidate.strengths?.length) notes.push(STRENGTH_NOT_RECORDED);
+  if (!fields.has('drapRegistrationNumber') && !candidate.drapRegistrationNumber?.trim())
+    notes.push(REGISTRATION_NOT_RECORDED);
+  return notes;
+}
+
 export function assertSaleable(input: {
   productFamily: 'PHARMACEUTICAL' | 'BIOLOGICAL' | 'DEVICE' | 'ALTERNATIVE' | 'FRONT_SHOP';
   hasPresentation: boolean;
   hasStrength: boolean;
   hasRegistration: boolean;
   provenanceFields: ReadonlySet<string>;
+  /**
+   * DEV-852: the medicine's identity came from a legacy import. Legacy exports carry no
+   * strength or DRAP registration number, so a missing one is recorded as not available
+   * instead of blocking sale. A value that is present is still checked as before.
+   */
+  imported?: boolean;
 }): void {
   if (!input.hasPresentation) throw new PharmacyMedicineError('NOT_SALEABLE');
   if (input.productFamily === 'FRONT_SHOP') return;
-  if (!input.hasStrength || !input.hasRegistration) {
+  if (!input.hasStrength && !input.imported) throw new PharmacyMedicineError('NOT_SALEABLE');
+  if (!input.hasRegistration) {
+    if (input.imported) return;
     throw new PharmacyMedicineError('NOT_SALEABLE');
   }
   if (!input.provenanceFields.has('drapRegistrationNumber')) {

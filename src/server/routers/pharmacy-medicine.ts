@@ -4,9 +4,11 @@ import {
   catalogueChanges,
   submitCatalogueEdit,
   decideCatalogueEdit,
+  isOwnerWithoutOtherReviewer,
   requireIndependentCatalogueReviewer,
   recordCatalogueApproval,
   listPendingCatalogueEdits,
+  NO_OTHER_REVIEWER,
 } from '@/lib/pharmacy/catalogue-approvals';
 import {
   confirmPriceChanges,
@@ -28,6 +30,7 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import {
   assertSaleable,
+  isImportedIdentity,
   deriveLooseUnitPrice,
   medicineDuplicateKey,
   normalizeMedicineText,
@@ -47,9 +50,41 @@ import {
   REFERENCE_BATCH_MAX_ROWS,
   type ConnectorRights,
 } from '@/lib/pharmacy/reference-connectors';
+import {
+  addMedicineDraftProvenance,
+  catalogueMedicineSnapshots,
+  findDrapReferenceByRegistration,
+  findMedicinesByRegistration,
+  findMedicinesByRegistrations,
+  loadDrapReference,
+  lockDrapRegistration,
+  normalizeDrapRegistration,
+  registrationIdentityConflicts,
+  searchDrapReference,
+} from '@/lib/pharmacy/drap-reference-autofill';
 import { isEffective } from '@/lib/pharmacy/pack-conversion';
+import { actorIsPharmacyOwner } from '@/lib/pharmacy/procurement-access';
+import { can, subjectFromSession, type Action } from '@/lib/abac';
+import {
+  applyLegacyControlledToMedicine,
+  hasControlledCorrection,
+} from '@/lib/pharmacy/migration/legacy-controlled';
+import {
+  createStagedMedicinesChunk,
+  STAGED_CREATION_OPERATION,
+  stagedCreationProgress,
+} from '@/lib/pharmacy/migration/staged-creation';
+import { STAGING_MAX_ROWS } from '@/lib/pharmacy/migration/staging-input';
+import { admittedInventoryBranchIds } from './pharmacy-inventory';
 import { annotateAudit } from '../audit';
-import { adminProcedure, auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
+import { workspaceTimezone } from '@/lib/timezone';
+import {
+  adminProcedure,
+  auditedProtectedProcedure,
+  capabilityProcedure,
+  contextualCapabilityProcedure,
+  router,
+} from '../trpc';
 
 const family = z.enum(['PHARMACEUTICAL', 'BIOLOGICAL', 'DEVICE', 'ALTERNATIVE', 'FRONT_SHOP']);
 const boundedId = z.string().min(1).max(200);
@@ -329,14 +364,87 @@ function domainError(error: unknown): never {
 
 // Only this module can attach the replay token; client input is always parsed
 // by the original procedure again when a reviewer approves a queued command.
+// Its value is the approver's authority, which the replayed procedure re-checks.
 const catalogueReplay = Symbol('catalogueApproval');
+/** DEV-928: the member who proposed the edit being replayed. */
+const catalogueProposer = Symbol('catalogueProposer');
+const replayAuthority = (ctx: TRPCContext) =>
+  (ctx as TRPCContext & { [catalogueReplay]?: readonly Action[] })[catalogueReplay];
+const isCatalogueReplay = (ctx: TRPCContext) => Array.isArray(replayAuthority(ctx));
+// DEV-19: submitting any catalogue edit needs the catalogue-edit capability (deny
+// by default) on top of tenant administration; an explicit DENY refuses an admin.
+const CATALOGUE_EDIT_ACTIONS = ['admin:access', 'pharmacy:catalogue-edit'] as const;
+const REVIEWER_AUTHORITY = ['pharmacy:catalogue-review'] as const;
+// An owner approving without the review grant (no other reviewer) is held to the editor's own
+// capabilities; their fresh PIN was verified before the replay.
+const SOLO_OWNER_AUTHORITY = CATALOGUE_EDIT_ACTIONS;
+const catalogueEditProcedure = contextualCapabilityProcedure(() => CATALOGUE_EDIT_ACTIONS);
+// A catalogue command is submitted by a catalogue editor. When an approved edit
+// replays it, the approver's own authority authorizes the write, so a pharmacist
+// reviewer who is not a tenant administrator can apply what they approve.
+const catalogueCommandProcedure = contextualCapabilityProcedure(
+  (ctx) => replayAuthority(ctx) ?? CATALOGUE_EDIT_ACTIONS
+);
+
+/**
+ * Who may see and decide the catalogue queue. A reviewer holds the exact
+ * pharmacy:catalogue-review grant. A pharmacy owner (live owner authority, no
+ * DENY) may decide without it while no other active member holds it, but approves
+ * only with a fresh PIN. An editor may see the queue they submit to.
+ */
+async function catalogueAccess(ctx: TRPCContext) {
+  const user = ctx.session!.user;
+  const subject = subjectFromSession(user);
+  const opts = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
+  const allowed = async (actions: readonly Action[]) => {
+    for (const action of actions) if (!(await can(subject, action, undefined, opts))) return false;
+    return true;
+  };
+  const reviewer = await allowed(REVIEWER_AUTHORITY);
+  const editor = await allowed(CATALOGUE_EDIT_ACTIONS);
+  const scope = {
+    organizationId: ctx.entitlements.organizationId,
+    actorId: user.id,
+    actorOrganizationId: user.organizationId,
+  };
+  const ownerFallback = !reviewer && editor && (await isOwnerWithoutOtherReviewer(ctx.db, scope));
+  const owner =
+    ownerFallback || (await actorIsPharmacyOwner(ctx.db, scope.organizationId, user.id));
+  return { reviewer, editor, ownerFallback, owner };
+}
+/** PUR-07's rule for setting a stock threshold at a branch: stock control, admitted there. */
+async function maySetStockThresholds(ctx: TRPCContext, branchId: string) {
+  const user = ctx.session!.user;
+  if (
+    !(await can(subjectFromSession(user), 'pharmacy:inventory', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    }))
+  )
+    return false;
+  return (await admittedInventoryBranchIds(ctx)).has(branchId);
+}
+
+/** The reorder branch an approved bulk creation request carries; null for none or an older one. */
+function approvedReorderBranch(changes: Prisma.JsonValue): string | null {
+  const json =
+    changes && typeof changes === 'object' && !Array.isArray(changes) ? changes.json : null;
+  const value =
+    json && typeof json === 'object' && !Array.isArray(json) ? json.reorderBranchId : null;
+  return typeof value === 'string' && value ? value : null;
+}
+
 const catalogueCommands = [
+  'setPackPrice',
+  'createIngredient',
   'createPackLevel',
   'revisePackLevel',
   'recordPrintedMrp',
   'addBarcode',
   'setPackBarcode',
   'addAlias',
+  STAGED_CREATION_OPERATION,
 ] as const;
 type CatalogueCommand = (typeof catalogueCommands)[number];
 async function queueCatalogueCommand(
@@ -345,7 +453,7 @@ async function queueCatalogueCommand(
   operation: CatalogueCommand,
   input: unknown
 ) {
-  if ((ctx as TRPCContext & { [catalogueReplay]?: boolean })[catalogueReplay]) return;
+  if (isCatalogueReplay(ctx)) return;
   const medicine = await ctx.db.medicine.findFirst({
     where: { id: medicineId },
   });
@@ -368,14 +476,21 @@ async function applyCatalogueCommand(
   ctx: TRPCContext,
   tx: typeof ctx.db,
   operation: string,
-  payload: Prisma.JsonValue
+  payload: Prisma.JsonValue,
+  authority: readonly Action[],
+  proposerId?: string
 ): Promise<unknown> {
   if (!catalogueCommands.includes(operation as CatalogueCommand))
     throw new TRPCError({
       code: 'BAD_REQUEST',
       message: 'Unsupported catalogue edit.',
     });
-  const replayContext = { ...ctx, db: tx, [catalogueReplay]: true };
+  const replayContext = {
+    ...ctx,
+    db: tx,
+    [catalogueReplay]: authority,
+    [catalogueProposer]: proposerId,
+  };
   const caller = pharmacyMedicineRouter.createCaller(replayContext) as unknown as Record<
     CatalogueCommand,
     (input: unknown) => Promise<unknown>
@@ -385,12 +500,52 @@ async function applyCatalogueCommand(
   );
 }
 
+/**
+ * DEV-923: recording a review decision, publishing reviewed assertions and reversing a
+ * publication are reviewer work. They need the exact pharmacy:catalogue-review grant,
+ * resolved by the ABAC engine (an explicit DENY refuses anyone), with no tenant-admin
+ * requirement, so a Pharmacist reviews. The one exception is DEV-19's owner fallback: an
+ * owner (live owner authority, no DENY) while no other active member can review; their
+ * acceptances then need a fresh PIN.
+ */
+const reviewerProcedure = auditedProtectedProcedure.use(async ({ ctx, next }) => {
+  const access = await catalogueAccess(ctx);
+  if (!access.reviewer && !access.ownerFallback)
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Reviewing and publishing catalogue changes needs the catalogue review permission.',
+    });
+  return next({ ctx: { catalogueOwnerFallback: !access.reviewer } });
+});
+
+const DUPLICATE_INGREDIENT_MESSAGE = 'This ingredient already exists. Use the existing one.';
 const DUPLICATE_PACK_MESSAGE =
   'This pack already exists for this medicine. Use the existing pack instead of adding it again.';
 
 export const pharmacyMedicineRouter = router({
-  catalogueEdits: adminProcedure.query(({ ctx }) => listPendingCatalogueEdits(ctx.db)),
-  proposeCatalogueEdit: adminProcedure
+  // DEV-19: reviewers and the owner with no other reviewer read the queue they decide; editors read
+  // the queue they submit to. Everyone else is refused.
+  catalogueEdits: auditedProtectedProcedure.query(async ({ ctx }) => {
+    const access = await catalogueAccess(ctx);
+    if (!access.reviewer && !access.editor)
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission for this action.',
+      });
+    return listPendingCatalogueEdits(ctx.db);
+  }),
+  /** What the signed-in member may do in the catalogue queue, for the UI only. */
+  catalogueQueueAccess: auditedProtectedProcedure.query(async ({ ctx }) => {
+    const access = await catalogueAccess(ctx);
+    return {
+      canEdit: access.editor,
+      canDecide: access.reviewer || access.ownerFallback,
+      // The owner approves with their own fresh PIN because nobody else can review.
+      ownerPinApproval: access.ownerFallback,
+      isOwner: access.owner,
+    };
+  }),
+  proposeCatalogueEdit: catalogueEditProcedure
     .input(z.object({ medicineId: boundedId, changes: catalogueChanges }).strict())
     .mutation(({ ctx, input }) =>
       submitCatalogueEdit(
@@ -403,7 +558,11 @@ export const pharmacyMedicineRouter = router({
         input.changes
       )
     ),
-  decideCatalogueEdit: adminProcedure
+  // DEV-19: a decision needs the pharmacist review capability, decided by the ABAC
+  // engine like connector proposals: an explicit DENY refuses even an administrator.
+  // The one exception is an owner while no other active member can review: they
+  // approve with a fresh PIN.
+  decideCatalogueEdit: auditedProtectedProcedure
     .input(
       z
         .object({
@@ -413,8 +572,15 @@ export const pharmacyMedicineRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) =>
-      decideCatalogueEdit(
+    .mutation(async ({ ctx, input }) => {
+      const access = await catalogueAccess(ctx);
+      if (!access.reviewer && !access.ownerFallback)
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Approving catalogue edits needs the catalogue review permission.',
+        });
+      const authority = access.reviewer ? REVIEWER_AUTHORITY : SOLO_OWNER_AUTHORITY;
+      return decideCatalogueEdit(
         ctx.db,
         {
           organizationId: ctx.entitlements.organizationId,
@@ -422,15 +588,19 @@ export const pharmacyMedicineRouter = router({
           actorOrganizationId: ctx.session.user.organizationId,
         },
         input,
-        (tx, operation, payload) => applyCatalogueCommand(ctx, tx, operation, payload)
-      )
-    ),
-  priceNotices: capabilityProcedure('pharmacy:safety').query(({ ctx }) =>
-    priceIntelligence(ctx.db, {
+        (tx, operation, payload, proposerId) =>
+          applyCatalogueCommand(ctx, tx, operation, payload, authority, proposerId),
+        { soloOwnerAuthority: !access.reviewer, ownerWithoutOtherReviewer: true }
+      );
+    }),
+  priceNotices: capabilityProcedure('pharmacy:safety').query(async ({ ctx }) => ({
+    ...(await priceIntelligence(ctx.db, {
       organizationId: ctx.entitlements.organizationId,
       actorId: ctx.session.user.id,
-    })
-  ),
+    })),
+    // DEV-943: the caller's own organisation zone, so price dates read as the shop's days.
+    timezone: workspaceTimezone(ctx.organization?.timezone),
+  })),
   confirmPrices: capabilityProcedure('pharmacy:safety')
     .input(z.object({ proposalIds: z.array(z.string().min(1).max(200)).min(1).max(100) }).strict())
     .mutation(({ ctx, input }) =>
@@ -506,7 +676,7 @@ export const pharmacyMedicineRouter = router({
         throw error;
       }
     }),
-  setPackPrice: adminProcedure
+  setPackPrice: catalogueCommandProcedure
     .input(
       z
         .object({
@@ -518,13 +688,31 @@ export const pharmacyMedicineRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) =>
-      setManualPackPrice(
+    // DEV-923: a pack price is what the counter charges, so it is a reviewed catalogue
+    // edit. It is queued and written only when another reviewer approves it (or a solo
+    // owner with their fresh PIN), with the same approval audit as every catalogue edit.
+    .mutation(async ({ ctx, input }) => {
+      if (input.sellingPriceMinor !== null && input.sellingPriceMinor > input.mrpMinor)
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Selling price cannot exceed MRP' });
+      const pack = await ctx.db.packLevel.findFirst({
+        where: { id: input.packLevelId },
+        include: { presentation: true },
+      });
+      if (!pack) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pack not found.' });
+      const queued = await queueCatalogueCommand(
+        ctx,
+        pack.presentation.medicineId,
+        'setPackPrice',
+        input
+      );
+      if (queued) return queued;
+      return setManualPackPrice(
         ctx.db,
         { organizationId: ctx.entitlements.organizationId, actorId: ctx.session.user.id },
-        input
-      )
-    ),
+        input,
+        (ctx as TRPCContext & { [catalogueProposer]?: string })[catalogueProposer]
+      );
+    }),
   priceOverrides: adminProcedure
     .input(z.object({ branchId: z.string().min(1).max(200).optional() }).strict())
     .query(({ ctx, input }) =>
@@ -678,13 +866,47 @@ export const pharmacyMedicineRouter = router({
       );
     }),
 
-  referenceConnectorProposals: capabilityProcedure('pharmacy:catalogue-review').query(({ ctx }) =>
-    ctx.db.pharmacyReferenceConnectorProposal.findMany({
-      where: { status: 'PENDING' },
-      include: { run: true, targetMedicine: true },
-      orderBy: { createdAt: 'asc' },
-      take: 250,
-    })
+  referenceConnectorProposals: capabilityProcedure('pharmacy:catalogue-review').query(
+    async ({ ctx }) => {
+      const proposals = await ctx.db.pharmacyReferenceConnectorProposal.findMany({
+        where: { status: 'PENDING' },
+        include: { run: true, targetMedicine: true },
+        orderBy: { createdAt: 'asc' },
+        take: 250,
+      });
+      // DEV-683: the reviewer sees the catalogue medicine a confirmation would update, next to
+      // the proposal: its target, or for an official row the medicine with its registration.
+      const registrations = new Map<string, string>();
+      for (const proposal of proposals) {
+        if (proposal.targetMedicineId) continue;
+        const parsed = connectorProposalPayload.safeParse(proposal.payload);
+        const registration = parsed.success ? parsed.data.values.drapRegistrationNumber : undefined;
+        if (
+          parsed.success &&
+          registration &&
+          REFERENCE_CONNECTORS[parsed.data.source.connectorId].official
+        )
+          registrations.set(proposal.id, normalizeDrapRegistration(registration));
+      }
+      const byRegistration = await findMedicinesByRegistrations(
+        ctx.db,
+        ctx.entitlements.organizationId,
+        [...registrations.values()]
+      );
+      const matchFor = (proposal: (typeof proposals)[number]) => {
+        if (proposal.targetMedicineId) return proposal.targetMedicineId;
+        const ids = byRegistration.get(registrations.get(proposal.id) ?? '') ?? [];
+        return ids.length === 1 ? ids[0]! : null;
+      };
+      const snapshots = await catalogueMedicineSnapshots(
+        ctx.db,
+        proposals.flatMap((proposal) => matchFor(proposal) ?? [])
+      );
+      return proposals.map((proposal) => ({
+        ...proposal,
+        catalogueMatch: snapshots.get(matchFor(proposal) ?? '') ?? null,
+      }));
+    }
   ),
 
   decideReferenceConnectorProposal: capabilityProcedure('pharmacy:catalogue-review')
@@ -759,10 +981,86 @@ export const pharmacyMedicineRouter = router({
         let medicine = proposal.targetMedicineId
           ? await tx.medicine.findFirst({ where: { id: proposal.targetMedicineId } })
           : null;
+        let keptCorrection = false;
         if (proposal.targetMedicineId && !medicine) {
           throw new TRPCError({ code: 'NOT_FOUND', message: 'Target medicine not found.' });
         }
-        if (!medicine) {
+        // DEV-683: an official row whose registration number is already in the catalogue (for
+        // example a draft saved from it) updates that medicine instead of adding a second one,
+        // under the same registration lock as a draft save. Whether the medicine was found now or
+        // when the file was uploaded, a different product under the same number is refused,
+        // never merged, and a stated flag may only raise the medicine.
+        const notApplied = new Set<string>();
+        const registration = values.drapRegistrationNumber ?? medicine?.drapRegistrationNumber;
+        if (source.official && registration) {
+          const db = tx as typeof ctx.db;
+          const organizationId = ctx.entitlements.organizationId;
+          await lockDrapRegistration(db, organizationId, registration);
+          // Always checked, also for a row matched at upload (exactly, case-sensitively): the
+          // counter finds every case variant, so a twin must be resolved first.
+          const ids = await findMedicinesByRegistration(db, organizationId, registration);
+          if (ids.length > 1)
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: `More than one catalogue medicine carries DRAP registration number ${registration}. Resolve them before confirming this row.`,
+            });
+          if (medicine && ids.length === 1 && ids[0] !== medicine.id)
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: `Another catalogue medicine carries DRAP registration number ${registration}. Resolve it before confirming this row.`,
+            });
+          if (!medicine && ids.length === 1)
+            medicine = await tx.medicine.findFirst({ where: { id: ids[0]! } });
+        }
+        if (medicine && source.official) {
+          // The row validates this medicine: whoever entered the medicine's values may not be the
+          // one who confirms it, unless they are a solo owner with a fresh PIN (same rule as the
+          // importer; not asked twice when the importer check already took the PIN).
+          if (!solo) {
+            const editors = await tx.medicineProvenance.findMany({
+              where: { medicineId: medicine.id, editorId: { not: null } },
+              select: { editorId: true },
+              distinct: ['editorId'],
+            });
+            const editorSolo = await requireIndependentCatalogueReviewer(
+              tx as typeof ctx.db,
+              scope,
+              editors.map((item) => item.editorId),
+              input.soloPin
+            );
+            if (editorSolo)
+              await recordCatalogueApproval(
+                tx as typeof ctx.db,
+                scope,
+                proposal.id,
+                true,
+                'PharmacyReferenceConnectorProposal'
+              );
+          }
+          const current = (
+            await catalogueMedicineSnapshots(tx as typeof ctx.db, [medicine.id])
+          ).get(medicine.id);
+          const conflicts = current ? registrationIdentityConflicts(values, current) : [];
+          if (conflicts.length)
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: `This DRAP row does not match ${medicine.productName}, already in the catalogue with registration number ${registration ?? 'none'}: the ${conflicts.join(', ')} differ. Reject the row, or correct the catalogue medicine first.`,
+            });
+          // The same product: descriptive fields are filled in, the name and registration kept, so
+          // the row's spelling of either is not recorded as accepted.
+          notApplied.add('productName');
+          notApplied.add('drapRegistrationNumber');
+          const flags = {} as Partial<Record<'rx' | 'restricted' | 'controlled', true>>;
+          for (const field of ['rx', 'restricted', 'controlled'] as const) {
+            const stated = proposedBoolean(values[field]);
+            if (stated === true && !medicine[field]) flags[field] = true;
+            if (stated === false && medicine[field]) notApplied.add(field);
+          }
+          medicine = await tx.medicine.update({
+            where: { id: medicine.id },
+            data: { brandName: values.brandName, manufacturer: values.manufacturer, ...flags },
+          });
+        } else if (!medicine) {
           if (!values.productName) {
             throw new TRPCError({
               code: 'BAD_REQUEST',
@@ -783,6 +1081,16 @@ export const pharmacyMedicineRouter = router({
             },
           });
         } else {
+          // DEV-925: an import never sets back a person's correction to "not controlled".
+          keptCorrection =
+            source.sourceType === 'IMPORT' &&
+            !medicine.controlled &&
+            proposedBoolean(values.controlled) === true &&
+            (await hasControlledCorrection(
+              tx as typeof ctx.db,
+              ctx.entitlements.organizationId,
+              medicine.id
+            ));
           medicine = await tx.medicine.update({
             where: { id: medicine.id },
             data: {
@@ -792,13 +1100,24 @@ export const pharmacyMedicineRouter = router({
               drapRegistrationNumber: values.drapRegistrationNumber,
               rx: proposedBoolean(values.rx),
               restricted: proposedBoolean(values.restricted),
-              controlled: proposedBoolean(values.controlled),
+              controlled: keptCorrection ? undefined : proposedBoolean(values.controlled),
             },
           });
         }
 
+        // DEV-854: a staged NARCOTICS-class legacy row makes this medicine controlled, no hold.
+        await applyLegacyControlledToMedicine(
+          tx as typeof ctx.db,
+          ctx.entitlements.organizationId,
+          medicine
+        );
+
         const assertions = [];
         for (const [field, value] of Object.entries(values)) {
+          // The import's controlled value was not applied, so it is not recorded as accepted.
+          if (keptCorrection && field === 'controlled') continue;
+          // DEV-683: a flag that would have lowered the medicine was not applied either.
+          if (notApplied.has(field)) continue;
           assertions.push(
             await tx.medicineProvenance.create({
               data: {
@@ -884,11 +1203,234 @@ export const pharmacyMedicineRouter = router({
     })
   ),
 
-  createIngredient: adminProcedure
+  // DEV-19: a new ingredient is queued for review like every other catalogue edit.
+  createIngredient: catalogueCommandProcedure
     .input(z.object({ name: z.string().trim().min(1).max(200) }).strict())
-    .mutation(({ ctx, input }) => ctx.db.ingredient.create({ data: input })),
+    .mutation(async ({ ctx, input }) => {
+      // Checked when the edit is submitted and again when an approval replays it.
+      if (await ctx.db.ingredient.findFirst({ where: { name: input.name } }))
+        throw new TRPCError({ code: 'CONFLICT', message: DUPLICATE_INGREDIENT_MESSAGE });
+      if (!isCatalogueReplay(ctx))
+        return ctx.db.pharmacyCatalogueEdit.create({
+          data: {
+            medicineId: null,
+            editorId: ctx.session.user.id,
+            operation: 'createIngredient',
+            changes: superjson.serialize(input) as unknown as Prisma.InputJsonObject,
+            // A new ingredient has no prior version for this edit to go stale against.
+            expectedUpdatedAt: new Date(),
+          },
+        });
+      try {
+        return await ctx.db.ingredient.create({ data: input });
+      } catch (error) {
+        if ((error as { code?: string })?.code === 'P2002')
+          throw new TRPCError({ code: 'CONFLICT', message: DUPLICATE_INGREDIENT_MESSAGE });
+        throw error;
+      }
+    }),
 
-  createMedicine: adminProcedure
+  /**
+   * DEV-912: ask for every named row of a staged legacy file to become a catalogue medicine. One
+   * request covers the whole batch and waits in the catalogue review queue; it is approved once,
+   * by a different reviewer, or by the owner with a fresh PIN when nobody else can review. The
+   * approval replays this command, which checks the batch again; `runStagedMedicineCreation`
+   * then creates the medicines in chunks.
+   */
+  createStagedMedicines: catalogueCommandProcedure
+    .input(
+      z
+        .object({
+          batchId: boundedId,
+          // Filled in by the server when the request is made, so the reviewer sees what they approve.
+          fileName: z.string().max(255).optional(),
+          uploadedAt: z.string().max(40).optional(),
+          // Checked again on approval; never shown to the reviewer.
+          sourceSha256: z.string().max(64).optional(),
+          medicines: z.number().int().min(1).max(STAGING_MAX_ROWS).optional(),
+          // The branch the file's reorder levels become approved safety stock at. Kept only
+          // when the requester may set stock thresholds there (PUR-07); otherwise the levels
+          // are reported as not applied.
+          branchId: boundedId.optional(),
+          // Filled in by the server; the reviewer sees the branch name.
+          reorderBranchId: boundedId.nullable().optional(),
+          reorderBranch: z.string().max(200).nullable().optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`pharmacy-staged-medicine-request:${ctx.entitlements.organizationId}:${input.batchId}`}, 0))`;
+        const batch = await tx.pharmacyMigrationBatch.findFirst({
+          where: {
+            id: input.batchId,
+            organizationId: ctx.entitlements.organizationId,
+            status: 'PROFILED',
+          },
+          select: {
+            id: true,
+            createdAt: true,
+            updatedAt: true,
+            source: { select: { fileName: true, contentHash: true } },
+          },
+        });
+        if (!batch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Staged file not found.' });
+        const progress = await stagedCreationProgress(
+          tx,
+          ctx.entitlements.organizationId,
+          batch.id
+        );
+        const replay = isCatalogueReplay(ctx);
+        // PUR-07: a reorder level is an approved stock threshold, which only a member holding
+        // stock control (`pharmacy:inventory`) on that branch may set. On approval the branch
+        // the requester was allowed is checked to still be an active branch.
+        const wantedBranch = replay ? input.reorderBranchId : input.branchId;
+        const branch = wantedBranch
+          ? await tx.pharmacyBranch.findFirst({
+              where: {
+                id: wantedBranch,
+                organizationId: ctx.entitlements.organizationId,
+                active: true,
+              },
+              select: { id: true, name: true },
+            })
+          : null;
+        const reorderBranch =
+          branch && (replay || (await maySetStockThresholds(ctx, branch.id))) ? branch : null;
+        const request = {
+          batchId: batch.id,
+          fileName: batch.source.fileName.slice(0, 255),
+          uploadedAt: batch.createdAt.toISOString(),
+          sourceSha256: batch.source.contentHash,
+          medicines: progress.candidates,
+          reorderBranchId: reorderBranch?.id ?? null,
+          reorderBranch: reorderBranch?.name.slice(0, 200) ?? null,
+        };
+        if (replay) {
+          // The approval names exactly the batch and file the editor asked for.
+          if (
+            input.fileName !== request.fileName ||
+            input.uploadedAt !== request.uploadedAt ||
+            input.sourceSha256 !== request.sourceSha256 ||
+            input.medicines !== request.medicines ||
+            (input.reorderBranchId ?? null) !== request.reorderBranchId
+          )
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'This request no longer matches its staged file. Reject it and ask again.',
+            });
+          return request;
+        }
+        if (!progress.candidates)
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'This file has no medicine names to create.',
+          });
+        // Asking again returns the open or approved request instead of a second one.
+        const existing = await tx.pharmacyCatalogueEdit.findFirst({
+          where: {
+            operation: STAGED_CREATION_OPERATION,
+            status: { in: ['PENDING', 'APPROVED'] },
+            changes: { path: ['json', 'batchId'], equals: batch.id },
+          },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        });
+        if (existing) return existing;
+        return tx.pharmacyCatalogueEdit.create({
+          data: {
+            medicineId: null,
+            editorId: ctx.session.user.id,
+            operation: STAGED_CREATION_OPERATION,
+            changes: superjson.serialize(request) as unknown as Prisma.InputJsonObject,
+            expectedUpdatedAt: batch.updatedAt,
+          },
+        });
+      })
+    ),
+
+  /** DEV-912: where a staged file's bulk creation stands, for an editor or a reviewer. */
+  stagedMedicineCreation: auditedProtectedProcedure
+    .input(z.object({ batchId: boundedId }).strict())
+    .query(async ({ ctx, input }) => {
+      const access = await catalogueAccess(ctx);
+      if (!access.editor && !access.reviewer)
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You do not have permission for this action.',
+        });
+      const [request] = await ctx.db.pharmacyCatalogueEdit.findMany({
+        where: {
+          operation: STAGED_CREATION_OPERATION,
+          changes: { path: ['json', 'batchId'], equals: input.batchId },
+        },
+        // An approved request outranks a pending or rejected one.
+        orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
+        select: { id: true, status: true, editorId: true, reviewerId: true },
+        take: 1,
+      });
+      return {
+        request: request ?? null,
+        canRequest: access.editor,
+        ...(await stagedCreationProgress(ctx.db, ctx.entitlements.organizationId, input.batchId)),
+      };
+    }),
+
+  /**
+   * DEV-912: create the next chunk of medicines from an approved staged file. Running it again,
+   * or for a second batch of the same file, creates nothing twice.
+   */
+  runStagedMedicineCreation: auditedProtectedProcedure
+    .input(z.object({ batchId: boundedId }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const access = await catalogueAccess(ctx);
+      if (!access.editor && !access.reviewer)
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You do not have permission for this action.',
+        });
+      const result = await ctx.db.$transaction(
+        async (tx) => {
+          const approved = await tx.pharmacyCatalogueEdit.findFirst({
+            where: {
+              operation: STAGED_CREATION_OPERATION,
+              status: 'APPROVED',
+              changes: { path: ['json', 'batchId'], equals: input.batchId },
+            },
+            orderBy: [{ reviewedAt: 'asc' }, { id: 'asc' }],
+            select: { id: true, editorId: true, reviewerId: true, changes: true },
+          });
+          if (!approved?.reviewerId)
+            throw new TRPCError({
+              code: 'PRECONDITION_FAILED',
+              message: 'Creating these medicines needs an approved request first.',
+            });
+          return {
+            editId: approved.id,
+            ...(await createStagedMedicinesChunk(
+              tx as typeof ctx.db,
+              { organizationId: ctx.entitlements.organizationId, actorId: ctx.session.user.id },
+              {
+                editId: approved.id,
+                editorId: approved.editorId,
+                reviewerId: approved.reviewerId,
+                batchId: input.batchId,
+                reorderBranchId: approvedReorderBranch(approved.changes),
+              }
+            )),
+          };
+        },
+        { maxWait: 10_000, timeout: 120_000 }
+      );
+      const { medicineIds, ...summary } = result;
+      annotateAudit(ctx, {
+        targetType: 'PharmacyMigrationBatch',
+        targetId: input.batchId,
+        metadata: { ...summary, firstMedicineId: medicineIds[0] ?? null },
+      });
+      return summary;
+    }),
+
+  createMedicine: catalogueEditProcedure
     .input(
       z
         .object({
@@ -997,10 +1539,123 @@ export const pharmacyMedicineRouter = router({
     }),
 
   /**
+   * DEV-683: searches this organisation's imported DRAP reference rows so the add-medicine form
+   * can pre-fill an unsaved draft. Needs the catalogue-edit capability; reads only this tenant's
+   * rows and never returns a price.
+   */
+  drapReferenceSearch: catalogueEditProcedure
+    .input(z.object({ query: z.string().trim().max(100) }).strict())
+    .query(({ ctx, input }) =>
+      searchDrapReference(ctx.db, ctx.entitlements.organizationId, input.query)
+    ),
+
+  /**
+   * DEV-683: saves the add-medicine form as a non-saleable draft whose every field is an
+   * unreviewed assertion, so it is published only through the independent catalogue review
+   * (DEV-19/DEV-923). Whenever the organisation holds a DRAP row for the draft's registration
+   * number (or the form used one), the row's stated prescription-only and controlled flags and
+   * registration number are enforced here; a flag the row does not state needs the person's
+   * explicit choice. Confirming the source row later updates this draft (matched by registration
+   * number) instead of adding a second medicine. No price is accepted.
+   */
+  addMedicineDraft: catalogueEditProcedure
+    .input(
+      z
+        .object({
+          productName: z.string().trim().min(1).max(300),
+          strength: z.string().trim().min(1).max(100),
+          dosageForm: z.string().trim().min(1).max(100),
+          pack: z.string().trim().min(1).max(300),
+          drapRegistrationNumber: z.string().trim().min(1).max(100),
+          // null: the person has not chosen yet. Refused below; never defaulted.
+          rx: z.boolean().nullable(),
+          controlled: z.boolean().nullable(),
+          drapReferenceId: boundedId.optional(),
+        })
+        .strict()
+    )
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const db = tx as typeof ctx.db;
+        const organizationId = ctx.entitlements.organizationId;
+        const { drapReferenceId, ...draft } = input;
+        const registration = draft.drapRegistrationNumber;
+        const reference = drapReferenceId
+          ? await loadDrapReference(db, organizationId, drapReferenceId)
+          : null;
+        if (drapReferenceId && !reference)
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'This DRAP reference row is no longer available. Search again.',
+          });
+        const referenceRegistration = reference?.values.drapRegistrationNumber;
+        if (
+          referenceRegistration !== undefined &&
+          normalizeDrapRegistration(referenceRegistration) !==
+            normalizeDrapRegistration(registration)
+        )
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message:
+              'The DRAP registration number comes from the reference row. Clear the auto-fill to enter another medicine.',
+          });
+        // Serializes drafts and DRAP confirmations for one registration number.
+        await lockDrapRegistration(db, organizationId, registration);
+        const official =
+          reference ?? (await findDrapReferenceByRegistration(db, organizationId, registration));
+        const flags = { rx: draft.rx, controlled: draft.controlled };
+        for (const field of ['rx', 'controlled'] as const) {
+          const stated = official?.values[field];
+          if (stated !== undefined && flags[field] !== stated)
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message:
+                'The prescription-only and controlled flags come from the DRAP reference row and cannot be changed here.',
+            });
+          if (flags[field] === null)
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: official
+                ? 'The DRAP reference does not state whether this medicine is prescription-only or controlled. Choose yes or no for each.'
+                : 'Choose yes or no for prescription-only and controlled.',
+            });
+        }
+        if ((await findMedicinesByRegistration(db, organizationId, registration)).length)
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'A medicine with this DRAP registration number is already in the catalogue.',
+          });
+        const chosen = { ...draft, rx: flags.rx!, controlled: flags.controlled! };
+        // The DRAP row is left untouched (its guard allows only a decision). Confirming it later
+        // finds this draft by registration number and updates it instead of adding another.
+        const medicine = await db.medicine.create({
+          data: {
+            productName: chosen.productName,
+            drapRegistrationNumber: registration,
+            rx: chosen.rx,
+            controlled: chosen.controlled,
+            productFamily: 'PHARMACEUTICAL',
+            // Never saleable on creation: publication follows a recorded review.
+            saleable: false,
+            provenance: {
+              create: addMedicineDraftProvenance(chosen, official, {
+                editorId: ctx.session.user.id,
+                entryId: `add-medicine:${randomUUID()}`,
+                now: new Date(),
+              }),
+            },
+          },
+          select: { id: true, productName: true, saleable: true },
+        });
+        return medicine;
+      })
+    ),
+
+  /**
    * #718: shop-set retail price and category for a NON_DRUG_RETAIL (FRONT_SHOP) item. A medicine
    * keeps its DRAP printed MRP and is refused; `null` clears a field.
    */
-  setRetailDetails: adminProcedure
+  setRetailDetails: catalogueEditProcedure
     .input(
       z
         .object({
@@ -1041,10 +1696,42 @@ export const pharmacyMedicineRouter = router({
         },
       });
       if (!medicine) throw new TRPCError({ code: 'NOT_FOUND', message: 'Medicine not found.' });
-      return medicine;
+      // DEV-912: what the pharmacy pays the distributor is for the owner and managers only
+      // (`pharmacy:manage`): it is read here and never sent to anyone else, not even inside
+      // the import provenance.
+      const purchasePriceVisible = await can(
+        subjectFromSession(ctx.session!.user),
+        'pharmacy:manage',
+        undefined,
+        { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }
+      );
+      if (!purchasePriceVisible)
+        return {
+          ...medicine,
+          provenance: medicine.provenance.filter((item) => item.field !== 'purchasePriceMinor'),
+          purchasePriceVisible,
+          purchasePrice: null,
+        };
+      const imported = await ctx.db.pharmacyStagedMedicineLink.findFirst({
+        where: { medicineId: medicine.id, purchasePriceMinor: { not: null } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        select: { purchasePriceMinor: true, supplierName: true, supplierId: true, createdAt: true },
+      });
+      return {
+        ...medicine,
+        purchasePriceVisible,
+        purchasePrice: imported
+          ? {
+              purchasePriceMinor: imported.purchasePriceMinor!,
+              supplierName: imported.supplierName,
+              supplierMatched: imported.supplierId !== null,
+              recordedAt: imported.createdAt,
+            }
+          : null,
+      };
     }),
 
-  createPackLevel: adminProcedure
+  createPackLevel: catalogueCommandProcedure
     .input(
       z
         .object({
@@ -1102,7 +1789,7 @@ export const pharmacyMedicineRouter = router({
       }
     }),
 
-  revisePackLevel: adminProcedure
+  revisePackLevel: catalogueCommandProcedure
     .input(
       z
         .object({
@@ -1154,7 +1841,7 @@ export const pharmacyMedicineRouter = router({
   // (MED-08), so recording one is a pricing write held to the same gate as
   // `setPackPrice`; otherwise any employee could cut a charge without the
   // discount approval path.
-  recordPrintedMrp: adminProcedure
+  recordPrintedMrp: catalogueCommandProcedure
     .input(
       z
         .object({
@@ -1204,7 +1891,7 @@ export const pharmacyMedicineRouter = router({
       });
     }),
 
-  addBarcode: adminProcedure
+  addBarcode: catalogueCommandProcedure
     .input(
       z
         .object({
@@ -1236,7 +1923,7 @@ export const pharmacyMedicineRouter = router({
    * received by scanning the pack. Barcode rows are append-only, so a pack's
    * code cannot be edited, replaced or moved here.
    */
-  setPackBarcode: adminProcedure
+  setPackBarcode: catalogueCommandProcedure
     .input(
       z
         .object({
@@ -1297,7 +1984,7 @@ export const pharmacyMedicineRouter = router({
       })
     ),
 
-  addAlias: adminProcedure
+  addAlias: catalogueCommandProcedure
     .input(
       z
         .object({
@@ -1419,7 +2106,9 @@ export const pharmacyMedicineRouter = router({
       .map(([duplicateKey, candidates]) => ({ duplicateKey, candidates }));
   }),
 
-  recordReviewDecision: adminProcedure.input(reviewDecisionInput).mutation(({ ctx, input }) =>
+  // DEV-923: this is the review step itself: the reviewer must differ from each
+  // assertion's editor (or be a solo owner with a fresh PIN), so it is not queued again.
+  recordReviewDecision: reviewerProcedure.input(reviewDecisionInput).mutation(({ ctx, input }) =>
     ctx.db.$transaction(async (tx) => {
       const medicineIds = [...new Set(input.medicineIds)];
       const assertionIds = [...new Set(input.payload.assertionIds)];
@@ -1474,21 +2163,27 @@ export const pharmacyMedicineRouter = router({
           code: 'BAD_REQUEST',
           message: 'Resubmit assertions with editor evidence before approval.',
         });
+      const editorIds = assertions.map((assertion) => assertion.editorId);
       const solo =
         (input.action === 'ACCEPT' || input.action === 'CORRECT') &&
         (await requireIndependentCatalogueReviewer(
           tx as typeof ctx.db,
           scope,
-          assertions.map((assertion) => assertion.editorId),
-          input.soloPin
+          // DEV-923: an owner deciding without the review grant (DEV-19 owner fallback)
+          // goes through the fresh-PIN check on every acceptance, whoever the editor was.
+          ctx.catalogueOwnerFallback ? [scope.actorId] : editorIds,
+          input.soloPin,
+          { ownerWithoutOtherReviewer: true, selfApproval: editorIds.includes(scope.actorId) }
         ));
-      if (solo)
+      // DEV-923: every acceptance carries the catalogue approval audit, not only a solo one.
+      if (input.action === 'ACCEPT' || input.action === 'CORRECT')
         await recordCatalogueApproval(
           tx as typeof ctx.db,
           scope,
           assertions[0]!.id,
-          true,
-          'MedicineProvenance'
+          solo,
+          'MedicineProvenance',
+          solo ? NO_OTHER_REVIEWER : undefined
         );
       let reviewedAssertionIds = assertionIds;
       if (input.action !== 'DEFER') {
@@ -1552,7 +2247,10 @@ export const pharmacyMedicineRouter = router({
     })
   ),
 
-  publishAssertions: adminProcedure.input(assertionIdsPayload).mutation(async ({ ctx, input }) =>
+  // DEV-923: publication applies only assertions another reviewer already accepted (checked
+  // below against the review decision evidence), so it is not queued again; releasing them
+  // for sale is reviewer work, gated on the catalogue review permission.
+  publishAssertions: reviewerProcedure.input(assertionIdsPayload).mutation(async ({ ctx, input }) =>
     ctx.db.$transaction(async (tx) => {
       const assertionIds = [...new Set(input.assertionIds)];
       const assertions = await tx.medicineProvenance.findMany({
@@ -1616,8 +2314,11 @@ export const pharmacyMedicineRouter = router({
         const medicine = await tx.medicine.findUniqueOrThrow({
           where: { id: medicineId },
         });
+        // DEV-852: a medicine whose identity came from a legacy import may lack strength and
+        // registration; both are then stored as not recorded. Every other check still applies.
+        const imported = isImportedIdentity(selected);
         const required =
-          medicine.productFamily === 'FRONT_SHOP'
+          medicine.productFamily === 'FRONT_SHOP' || imported
             ? ['productName', 'dosageForm', 'pack']
             : ['productName', 'strength', 'dosageForm', 'pack'];
         for (const field of required) {
@@ -1711,6 +2412,7 @@ export const pharmacyMedicineRouter = router({
             values.get('drapRegistrationNumber') ?? medicine.drapRegistrationNumber
           ),
           provenanceFields: new Set(selected.map((assertion) => assertion.field)),
+          imported,
         });
         for (const field of ['rx', 'restricted', 'controlled'] as const) {
           const value = values.get(field);
@@ -1748,7 +2450,11 @@ export const pharmacyMedicineRouter = router({
     })
   ),
 
-  supersedePublication: adminProcedure
+  // DEV-923: a reversal writes no new value: it restores assertions a reviewer accepted
+  // before and leaves the medicine, its prices and saleability unchanged. The restored
+  // assertions carry no review decision, so they cannot be published again without a new
+  // independent review. It stamps the actor as reviewer, so it needs the review permission.
+  supersedePublication: reviewerProcedure
     .input(z.object({ batchId: z.string().min(1).max(200) }).strict())
     .mutation(async ({ ctx, input }) =>
       ctx.db.$transaction(async (tx) => {

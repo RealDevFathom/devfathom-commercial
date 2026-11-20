@@ -120,9 +120,15 @@ describeIfDatabase('pharmacy regulatory persistence', () => {
     const client = new Client({ connectionString: runtimeUrl });
     await client.connect();
     try {
+      // Rule sets are global and append-only. Other pharmacy suites sharing this database
+      // add one synthetic rule set per branch through pharmacyRegulatoryFixture
+      // (src/lib/test-support/pharmacy-regulatory.ts): id `rules_<branch>`, code
+      // `TEST-<branch>`. Only rows of exactly that shape are set aside; any other row,
+      // whoever wrote it, still fails this check.
       const rules = await client.query<{ code: string; provisional: boolean }>(
         `SELECT code, ("licenceCategories"->>'provisional')::boolean provisional
-           FROM pharmacy_jurisdiction_rule_sets`
+           FROM pharmacy_jurisdiction_rule_sets
+          WHERE NOT (code LIKE 'TEST-%' AND id = 'rules_' || substr(code, 6))`
       );
       expect(rules.rows).toEqual([{ code: 'PK-PB', provisional: true }]);
       await expect(

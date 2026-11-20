@@ -425,13 +425,16 @@ it.each(['batch', 'expiry'])('keeps known metadata when only %s is missing', (mi
     />
   );
   const medicine = screen.getByRole('button', { name: /Paracetamol/ });
-  expect(medicine).not.toHaveTextContent(/Batch —|Exp —/);
+  expect(medicine).not.toHaveTextContent(/Batch —|Exp —|MISSING_|null/);
+  // DEV-853: a sellable lot whose batch or expiry was never recorded says so
+  // in plain words instead of leaving the field out.
   if (missing === 'batch') {
-    expect(medicine).not.toHaveTextContent('Batch');
+    expect(medicine).toHaveTextContent('Batch not recorded');
     expect(medicine).toHaveTextContent('Exp 2028-06-30');
   } else {
     expect(medicine).toHaveTextContent('Batch B-1044');
-    expect(medicine).not.toHaveTextContent('Exp');
+    expect(medicine).toHaveTextContent('Expiry not recorded');
+    expect(medicine).not.toHaveTextContent(/Exp \d/);
   }
 });
 
@@ -727,4 +730,23 @@ it('separates strength, form and stock into labeled lines below the medicine ide
   expect(within(result).getByText('Strength:').parentElement).toHaveTextContent('500 mg');
   expect(within(result).getByText('Form:').parentElement).toHaveTextContent('Tablet');
   expect(within(result).getByText('Stock:').parentElement).toHaveTextContent('240 tabs');
+});
+
+it('DEV-852: shows a missing strength in plain words, not as an error', () => {
+  render(
+    <CounterSearchResults
+      rows={[{ ...row, brandName: 'Panadol', strength: null }]}
+      state="ready"
+      query="panadol"
+      activeMedicineId={null}
+      onSelect={vi.fn()}
+      onCaptureDemand={vi.fn()}
+      onRetry={vi.fn()}
+    />
+  );
+  const result = screen.getByRole('button', { name: /Panadol.*Paracetamol/ });
+  expect(within(result).getByText('Strength not recorded')).toBeInTheDocument();
+  expect(within(result).queryByText('Strength:')).not.toBeInTheDocument();
+  expect(within(result).queryByText(/Unavailable/)).not.toBeInTheDocument();
+  expect(within(result).queryByRole('alert')).not.toBeInTheDocument();
 });
