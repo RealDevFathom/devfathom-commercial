@@ -13,7 +13,8 @@ const txDb = (tx: unknown) => tx as ScopedDb;
 const branchInput = z.object({ branchId: z.string().trim().min(1).max(128) });
 const accountInput = branchInput.extend({ familyAccountId: z.string().trim().min(1).max(128) });
 
-/** Owner-only, same tenant, Khata licensed through the counter package. */
+/** Same tenant, Khata licensed through the counter package; every procedure is an
+ * `adminProcedure`, so the caller also holds the admin permission (`admin:access`). */
 function tenantScope(ctx: TRPCContext) {
   const organizationId = ctx.session?.user.organizationId;
   const actorId = ctx.session?.user.id;
