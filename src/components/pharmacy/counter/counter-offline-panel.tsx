@@ -11,7 +11,12 @@ import { searchOfflineCatalogue } from '@/lib/pharmacy/counter-offline-catalogue
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 
 import type { CounterOfflineView } from './use-counter-offline';
-import { CounterOfflineSale, OfflineQueue } from './counter-offline-sale';
+import {
+  CounterOfflineSale,
+  OfflinePaidCard,
+  OfflineQueue,
+  type OfflinePaid,
+} from './counter-offline-sale';
 
 /** Whole hours (rounded down) between two instants, never negative. */
 function wholeHours(fromMs: number, toMs: number): number {
@@ -43,6 +48,9 @@ const SETTINGS_HREF = '/pharmacy/settings/counters';
  */
 export function CounterOfflinePanel({ offline }: { offline: CounterOfflineView }) {
   const { status, readiness, nowMs } = offline;
+  // DEV-957 phase 2: the last offline sale's receipt and change stay on screen even when
+  // that sale used the last receipt number or unit and no further sale can be taken.
+  const [paid, setPaid] = useState<OfflinePaid | null>(null);
   if (status === 'unenrolled' && offline.revokedNotice)
     return (
       <p className="text-text-body" role="alert" data-counter-offline-mode="revoked">
@@ -144,9 +152,10 @@ export function CounterOfflinePanel({ offline }: { offline: CounterOfflineView }
       ) : null}
       {offline.message ? <p className="text-text-body">{offline.message}</p> : null}
       {selling ? (
-        <CounterOfflineSale offline={offline} />
+        <CounterOfflineSale offline={offline} paid={paid} onPaid={setPaid} />
       ) : (
         <>
+          {paid ? <OfflinePaidCard paid={paid} onNext={() => setPaid(null)} /> : null}
           {readiness.snapshotsReady && offline.rows.length > 0 ? (
             <OfflinePriceCheck offline={offline} />
           ) : null}

@@ -263,3 +263,45 @@ describe('DEV-957 phase 2: the offline sale screen', () => {
     expect(screen.getByLabelText('Receipt 501')).toHaveTextContent('Counter Front counter, sold offline');
   });
 });
+
+describe('DEV-957 phase 2: the paid sale stays on screen when it ends offline selling', () => {
+  it('keeps Paid, the receipt and the change after the sale that used the last receipt number', async () => {
+    // A counter holding exactly one receipt number.
+    h.driver = createMemoryDriver();
+    const runtime = new PharmacyCounterRuntime(
+      FIXTURE_SCOPE,
+      h.driver as never,
+      webCryptoSnapshotVerifier(),
+      fixturePublicKey()
+    );
+    await runtime.hydrate();
+    await runtime.adoptLeases([{ leaseId: 'lease_one', blockStart: 777, blockEnd: 777, nextNumber: 777 }]);
+    await preparedOnline();
+
+    function Counter() {
+      return <CounterOfflinePanel offline={useCounterOffline(props(false))} />;
+    }
+    render(<Counter />);
+    await waitFor(() =>
+      expect(screen.getByLabelText('Add a medicine to the offline bill')).toBeInTheDocument()
+    );
+    fireEvent.change(screen.getByLabelText('Add a medicine to the offline bill'), {
+      target: { value: 'pana' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add tablet' }));
+    fireEvent.change(await screen.findByLabelText(/Cash received/), { target: { value: '5' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take cash Rs 3.50' }));
+
+    expect(await screen.findByText('Paid')).toBeInTheDocument();
+    // No receipt number is left, so no further offline sale can be started …
+    await waitFor(() =>
+      expect(screen.queryByLabelText('Add a medicine to the offline bill')).not.toBeInTheDocument()
+    );
+    // … but the sale just taken still shows its receipt and the change to hand back.
+    expect(screen.getByText('Paid')).toBeInTheDocument();
+    expect(screen.getByText(/Receipt 777/)).toBeInTheDocument();
+    expect(screen.getByText('Rs 1.50')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Next customer' }));
+    expect(screen.queryByText('Paid')).not.toBeInTheDocument();
+  });
+});

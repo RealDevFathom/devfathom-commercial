@@ -14,6 +14,7 @@ import {
   addToOfflineDraft,
   newOfflineDraft,
   priceOfflineBill,
+  pruneOfflineDraft,
   setOfflineDraftQuantity,
 } from '@/lib/pharmacy/counter-offline-sale';
 import { saleUnitLabel } from '@/lib/pharmacy/counter-pricing';
@@ -27,7 +28,8 @@ import type { CounterQueuedCommand } from '@/lib/pharmacy/counter-command-queue'
 
 import type { CounterOfflineView } from './use-counter-offline';
 
-type Paid = { receipt: CounterReceipt; changeMinor: number };
+/** The last sale written on this computer: its receipt and the change to hand back. */
+export type OfflinePaid = { receipt: CounterReceipt; changeMinor: number };
 
 function money(amountMinor: number): string {
   return `Rs ${formatMinor(amountMinor)}`;
@@ -41,7 +43,19 @@ function money(amountMinor: number): string {
  * after the sale is written to this computer; until then, and on any refusal, the bill
  * stays as it is and the reason is said in plain words.
  */
-export function CounterOfflineSale({ offline }: { offline: CounterOfflineView }) {
+export function CounterOfflineSale({
+  offline,
+  paid,
+  onPaid,
+}: {
+  offline: CounterOfflineView;
+  /**
+   * Kept by the panel, not here: a sale that uses the last receipt number or the last
+   * offline unit ends offline selling, and its receipt and change must stay on screen.
+   */
+  paid: OfflinePaid | null;
+  onPaid: (paid: OfflinePaid | null) => void;
+}) {
   const { actions, rows, operator } = offline;
   const searchId = useId();
   const cashId = useId();
@@ -50,7 +64,6 @@ export function CounterOfflineSale({ offline }: { offline: CounterOfflineView })
   const [cash, setCash] = useState('');
   const [message, setMessage] = useState<string | null>(null);
   const [paying, setPaying] = useState(false);
-  const [paid, setPaid] = useState<Paid | null>(null);
   const restored = useRef(false);
 
   // A reload brings back the newest bill this cashier was building.
@@ -86,6 +99,15 @@ export function CounterOfflineSale({ offline }: { offline: CounterOfflineView })
       );
   }
 
+  /** Nothing was sold: the bill is dropped from this computer and a new one starts. */
+  async function discard() {
+    if (!actions || !draft) return;
+    await actions.discardDraft(draft.draftId);
+    setDraft(newOfflineDraft(operator?.userId ?? null, new Date()));
+    setCash('');
+    setMessage(null);
+  }
+
   async function pay() {
     if (!actions || !draft || !bill || cashMinor === null || paying) return;
     setPaying(true);
@@ -96,7 +118,7 @@ export function CounterOfflineSale({ offline }: { offline: CounterOfflineView })
         setMessage(result.message);
         return;
       }
-      setPaid({ receipt: result.receipt, changeMinor: result.changeMinor });
+      onPaid({ receipt: result.receipt, changeMinor: result.changeMinor });
       setDraft(newOfflineDraft(operator?.userId ?? null, new Date()));
       setCash('');
       setQuery('');
@@ -129,7 +151,7 @@ export function CounterOfflineSale({ offline }: { offline: CounterOfflineView })
           : 'the person who was signed in when this counter last connected.'}
       </p>
 
-      {paid ? <OfflinePaid paid={paid} onNext={() => setPaid(null)} /> : null}
+      {paid ? <OfflinePaidCard paid={paid} onNext={() => onPaid(null)} /> : null}
 
       <div className="space-y-2">
         <Label htmlFor={searchId}>Add a medicine to the offline bill</Label>
@@ -202,11 +224,23 @@ export function CounterOfflineSale({ offline }: { offline: CounterOfflineView })
 
       <section aria-label="Offline bill" className="space-y-2">
         <h3 className="text-sm font-semibold text-text-strong">Offline bill</h3>
-        {bill.problems.map((problem) => (
-          <p key={problem} className="text-sm text-text-body" role="status">
-            {problem}
-          </p>
-        ))}
+        {bill.problems.length ? (
+          <div className="space-y-2" role="status">
+            {bill.problems.map((problem) => (
+              <p key={problem} className="text-sm text-text-body">
+                {problem}
+              </p>
+            ))}
+            <Button
+              type="button"
+              variant="outline"
+              className="min-h-11"
+              onClick={() => void change(pruneOfflineDraft(draft, rows, new Date()))}
+            >
+              Take these off the bill
+            </Button>
+          </div>
+        ) : null}
         {bill.lines.length === 0 ? (
           <p className="text-sm text-text-muted">
             No items yet. Search above and add a pack, strip or unit.
@@ -291,6 +325,16 @@ export function CounterOfflineSale({ offline }: { offline: CounterOfflineView })
             offline selling; this bill needs {quotaProblem.units}. Lower the quantity.
           </p>
         ) : null}
+        {draft.lines.length > 0 ? (
+          <Button
+            type="button"
+            variant="ghost"
+            className="min-h-11"
+            onClick={() => void discard()}
+          >
+            Discard this bill
+          </Button>
+        ) : null}
         <div className="flex flex-wrap items-baseline justify-between gap-2 border-t border-border-subtle pt-2">
           <span className="eyebrow">Total</span>
           <span className="text-xl font-semibold tabular-nums text-text-strong">
@@ -349,7 +393,7 @@ export function CounterOfflineSale({ offline }: { offline: CounterOfflineView })
   );
 }
 
-function OfflinePaid({ paid, onNext }: { paid: Paid; onNext: () => void }) {
+export function OfflinePaidCard({ paid, onNext }: { paid: OfflinePaid; onNext: () => void }) {
   let preview: string | null = null;
   try {
     preview = buildCounterReceiptPreview(paid.receipt, 'en', 80);

@@ -29,6 +29,7 @@ import {
   offlineLinePrice,
   offlineSaleReceipt,
   priceOfflineBill,
+  pruneOfflineDraft,
 } from './counter-offline-sale';
 import { buildCounterReplayRequest, type CounterLeaseCursor } from './counter-command-queue';
 import { priceFromLot } from './medicine';
@@ -453,5 +454,50 @@ describe('DEV-957 phase 2: what can never be sold offline', () => {
       ok: false,
       message: 'The cash received is less than the total. Take the full amount.',
     });
+  });
+});
+
+describe('DEV-957 phase 2: a bill with an item that can no longer be sold offline', () => {
+  it('refuses payment until that item is taken off, then the rest can be paid', async () => {
+    const { runtime } = await openCounter();
+    await prepare(runtime);
+    const valid = bill(runtime, [['lot_panadol_a', 'UNIT', 2]]);
+    // A line whose lot has since left the signed list (expired, recalled or quota gone).
+    const stale: CounterDraft = {
+      ...valid,
+      lines: [
+        ...valid.lines,
+        {
+          inventoryLotId: 'lot_gone',
+          stockLocationId: 'loc_front',
+          medicineId: 'med_gone',
+          presentationId: 'pres_gone',
+          packLevelId: 'pack_gone',
+          saleUnit: 'PACK',
+          canonicalUnitsPerSaleUnit: 10,
+          quantity: 1,
+        },
+      ],
+    };
+    const blocked = composeOfflineCashSale({
+      state: runtime.snapshot(),
+      rows: rowsOf(runtime),
+      draft: stale,
+      cashReceivedMinor: 1_000,
+      nowMs: Date.now(),
+    });
+    expect(blocked).toEqual({
+      ok: false,
+      message:
+        'A medicine on this bill can no longer be sold offline from this counter. Take it off to pay for the rest.',
+    });
+    const pruned = pruneOfflineDraft(stale, rowsOf(runtime), new Date());
+    expect(pruned.lines).toEqual(valid.lines);
+    expect(priceOfflineBill(pruned, rowsOf(runtime)).problems).toEqual([]);
+    // The trimmed bill is saved (a reload brings back only the sellable lines) and pays.
+    expect(await runtime.saveDraft(pruned)).toBe(true);
+    expect(runtime.drafts()[0]!.lines).toEqual(valid.lines);
+    const sold = await sell(runtime, pruned, 1_000);
+    expect(sold.ok && sold.command.payload.amountMinor).toBe(700);
   });
 });

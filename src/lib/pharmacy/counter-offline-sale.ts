@@ -115,7 +115,7 @@ export function priceOfflineBill(
     const row = byBucket.get(bucketKey(line));
     if (!row || row.medicineId !== line.medicineId) {
       problems.push(
-        'A medicine on this bill can no longer be sold offline from this counter, so it was taken off.'
+        'A medicine on this bill can no longer be sold offline from this counter. Take it off to pay for the rest.'
       );
       continue;
     }
@@ -127,7 +127,7 @@ export function priceOfflineBill(
     );
     if (!option || row.roundingIncrementMinor === null) {
       problems.push(
-        `${row.medicineName} cannot be sold in that unit offline any more, so it was taken off.`
+        `${row.medicineName} cannot be sold in that unit offline any more. Take it off to pay for the rest.`
       );
       continue;
     }
@@ -158,6 +158,23 @@ export function priceOfflineBill(
     problems,
     totalMinor: lines.reduce((total, line) => total + line.lineTotalMinor, 0),
     overQuota,
+  };
+}
+
+/**
+ * The bill without the lines `priceOfflineBill` could not price (the lot left the signed
+ * list, its quota is gone, or the unit is no longer offered), so the rest can be paid.
+ */
+export function pruneOfflineDraft(
+  draft: CounterDraft,
+  rows: readonly OfflineSaleRow[],
+  now: Date
+): CounterDraft {
+  const priced = new Set(priceOfflineBill(draft, rows).lines.map((line) => line.line));
+  return {
+    ...draft,
+    lines: draft.lines.filter((line) => priced.has(line)),
+    updatedAt: now.toISOString(),
   };
 }
 
