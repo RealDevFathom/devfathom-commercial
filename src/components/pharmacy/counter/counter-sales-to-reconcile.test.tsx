@@ -114,6 +114,24 @@ describe('DEV-957 phase 2: Sales to reconcile', () => {
     expect(settle).not.toHaveBeenCalled();
   });
 
+  it('says who already recorded the sale, and how, when another manager did first (review round 3)', async () => {
+    const settle = vi.fn(async () => undefined);
+    const message =
+      'Receipt 501 was already recorded by Bilal Ahmed on 20 Nov 2026, 15:20 as "Money given back to the customer", with the note "Refunded at the door". Nothing was changed.';
+    h.record.mockRejectedValue({ data: { code: 'CONFLICT' }, message });
+    render(<CounterSalesToReconcileList view={view([sale()], settle)} branchId="branch" online />);
+    fireEvent.click(screen.getByRole('button', { name: 'Record what was done' }));
+    fireEvent.change(screen.getByLabelText('Note'), { target: { value: 'Entered as bill 4512' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Record' }));
+    });
+    // The first record stands on the server, so this computer's copy goes, and says why.
+    await waitFor(() => expect(settle).toHaveBeenCalledWith(sale()));
+    expect(screen.getByRole('status')).toHaveTextContent(
+      `${message} It is no longer kept on this computer.`
+    );
+  });
+
   it('cannot record anything while offline, but still shows and exports the sales', () => {
     render(<CounterSalesToReconcileList view={view([sale()])} branchId="branch" online={false} />);
     expect(screen.getByRole('button', { name: 'Record what was done' })).toBeDisabled();

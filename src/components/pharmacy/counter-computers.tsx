@@ -587,6 +587,9 @@ function BranchCounters({
   }
 
   const rows: CounterRow[] = counters.data ?? [];
+  // Off unless the server says otherwise; the same read as the switch below.
+  const cashSelling = trpc.pharmacyOffline.offlineCashSelling.useQuery({ branchId }, { retry: false });
+  const sellingOn = cashSelling.data?.enabled === true;
   const pending = rotate.isPending || revoke.isPending;
 
   return (
@@ -642,7 +645,7 @@ function BranchCounters({
                     Enrolled {when(row.enrolledAt, 'unknown')} ·{' '}
                     {row.status === 'REVOKED'
                       ? `revoked ${when(row.revokedAt, 'unknown')}`
-                      : `${row.receiptNumbersLeft} receipt numbers and ${row.offlineUnitsLeft} offline units held`}{' '}
+                      : counterHoldsLine(row, sellingOn)}{' '}
                     · last seen {when(row.lastSeenAt, 'not recorded yet')}
                   </p>
                   {row.status === 'ACTIVE' ? (
@@ -758,6 +761,21 @@ function BranchCounters({
       <ReceiptNumberGaps branchId={branchId} />
     </div>
   );
+}
+
+/**
+ * What a counter holds, said truly for the switch: while offline cash selling is off no
+ * stock is set aside, and units an earlier preparation set aside hold nothing back.
+ */
+export function counterHoldsLine(
+  row: Pick<CounterRow, 'receiptNumbersLeft' | 'offlineUnitsLeft'>,
+  sellingOn: boolean
+): string {
+  if (sellingOn)
+    return `${row.receiptNumbersLeft} receipt numbers and ${row.offlineUnitsLeft} offline units held`;
+  if (row.offlineUnitsLeft > 0)
+    return `${row.receiptNumbersLeft} receipt numbers reserved; the ${row.offlineUnitsLeft} units an earlier preparation set aside are not held back while offline cash selling is off`;
+  return `${row.receiptNumbersLeft} receipt numbers reserved; no stock is set aside while offline cash selling is off`;
 }
 
 /**

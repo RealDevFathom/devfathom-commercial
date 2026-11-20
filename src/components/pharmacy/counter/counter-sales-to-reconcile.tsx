@@ -107,7 +107,15 @@ function RecordOutcome({
                 : `The server already holds receipt ${sale.receiptNumber ?? '—'}, so it is no longer kept on this computer.`
             )
           )
-          .catch((failure: unknown) => setError(recordError(failure)));
+          .catch((failure: unknown) => {
+            // Review round 3: already recorded on the server, by someone, with another
+            // outcome or note. The server names who and what; its record stands, so this
+            // computer's copy is no longer needed.
+            const refused = failure as { data?: { code?: string }; message?: string } | null;
+            if (refused?.data?.code === 'CONFLICT' && refused.message)
+              return onRecorded(`${refused.message} It is no longer kept on this computer.`);
+            setError(recordError(failure));
+          });
       }}
     >
       <div className="grid gap-2 sm:grid-cols-2">

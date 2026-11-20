@@ -113,6 +113,12 @@ test('with offline cash selling off, a prepared counter checks prices offline an
   await expect(selling).toContainText('Available when sending offline sales is ready.');
   await page.screenshot({ path: `${EVIDENCE}/settings-counters-1440-light.png`, fullPage: true });
   await selling.screenshot({ path: `${EVIDENCE}/settings-offline-selling-switch-1440-light.png` });
+  // Review round 3: the list never says a counter holds stock while selling is off.
+  const counterList = page.getByRole('list', { name: /^Counters of / });
+  await expect(counterList).toContainText('no stock is set aside while offline cash selling is off');
+  await expect(counterList).not.toContainText('offline units held');
+  await counterList.scrollIntoViewIfNeeded();
+  await counterList.screenshot({ path: `${EVIDENCE}/settings-counter-list-1440-light.png` });
 
   await page.goto(`/pharmacy/counter?branchId=${PHARMACY_E2E.branchId}`);
   await expect(page.getByRole('heading', { name: 'Counter', level: 1 })).toBeVisible();
@@ -134,6 +140,15 @@ test('with offline cash selling off, a prepared counter checks prices offline an
       { timeout: 60_000 }
     )
     .toBe(true);
+  // Who is signed in now; the stored page keeps this session, and offline it must never
+  // present this person as the one at the computer (review round 3).
+  const signedInName = await page.evaluate(
+    async () =>
+      ((await (await fetch('/api/auth/session')).json()) as { user?: { name?: string } })?.user
+        ?.name ?? ''
+  );
+  expect(signedInName).not.toBe('');
+  await expect(page.locator('[data-counter-top-bar]')).toContainText(signedInName);
   // Nothing waits on this computer, so neither list is shown online.
   await expect(page.locator('[data-counter-sales-to-reconcile]')).toHaveCount(0);
   await expect(page.locator('[data-counter-offline-waiting-online]')).toHaveCount(0);
@@ -217,6 +232,25 @@ test('with offline cash selling off, a prepared counter checks prices offline an
   ({ context, page } = await openOffline());
   await expect(page.getByRole('searchbox', { name: 'Offline price check' })).toBeVisible();
   await expect(page.getByRole('button', { name: /Take cash/ })).toHaveCount(0);
+  // Shared till (review round 3): the menu drawer this bar opens names nobody either.
+  for (const [width, height, theme] of [
+    [1440, 900, 'light'],
+    [375, 812, 'dark'],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    await page.evaluate((value) => {
+      window.localStorage.setItem('theme', value);
+      document.documentElement.setAttribute('data-theme', value);
+    }, theme);
+    await page.getByRole('button', { name: width < 768 ? 'Open menu' : 'Menu', exact: true }).click();
+    const drawer = page.getByRole('navigation', { name: 'Main navigation' });
+    await expect(drawer).toBeVisible();
+    await expect(drawer.locator('[data-sidebar-identity="offline"]')).toContainText('Sign-in not checked');
+    await expect(page.locator('body')).not.toContainText(signedInName);
+    await page.screenshot({ path: `${EVIDENCE}/counter-offline-menu-drawer-${width}-${theme}.png` });
+    await page.keyboard.press('Escape');
+    await expect(drawer).toBeHidden();
+  }
   await context.close();
 
   // Sales to reconcile (review B2): the unsent sale a revoked counter kept on this computer,

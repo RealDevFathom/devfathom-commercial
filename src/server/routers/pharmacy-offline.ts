@@ -85,6 +85,7 @@ import {
 } from '@/lib/pharmacy/offline-sale-seal';
 import { offlineSaleSealValid, recordedSaleSealHash } from '@/lib/pharmacy/offline-sale-seal-node';
 import { readPharmacyDayClock } from '@/lib/pharmacy/business-day-clock';
+import { formatKarachiDateTime } from '@/lib/pharmacy/karachi-time';
 import {
   cookieCredentialAllowed,
   counterDeviceCookieOptions,
@@ -140,6 +141,13 @@ function deviceRefusal(error: unknown): never {
   }
   throw error;
 }
+
+/** The words the Sales to reconcile form uses for each outcome. */
+const UNSENT_SALE_OUTCOME_LABELS = {
+  ENTERED_ONLINE: 'Entered as a sale online',
+  MONEY_RETURNED: 'Money given back to the customer',
+  OTHER: 'Something else',
+} as const;
 
 export const pharmacyOfflineRouter = router({
   /**
@@ -371,9 +379,20 @@ export const pharmacyOfflineRouter = router({
             targetId: device.id,
             metadata: { path: ['commandId'], equals: input.commandId },
           },
-          select: { id: true },
+          select: { actorName: true, createdAt: true, metadata: true },
         });
-        if (already) return { recorded: true as const, serverStatus: null };
+        if (already) {
+          // Review round 3: a retry that says the same thing is the same record. One that says
+          // something else never silently keeps the first answer: it is refused, naming who
+          // recorded the sale, when, and what.
+          const first = (already.metadata ?? {}) as { outcome?: unknown; note?: unknown };
+          if (first.outcome === input.outcome && first.note === input.note)
+            return { recorded: true as const, serverStatus: null };
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: `Receipt ${input.receiptNumber} was already recorded by ${already.actorName ?? 'another manager'} on ${formatKarachiDateTime(already.createdAt)} as "${UNSENT_SALE_OUTCOME_LABELS[first.outcome as keyof typeof UNSENT_SALE_OUTCOME_LABELS] ?? 'another outcome'}", with the note "${typeof first.note === 'string' ? first.note : ''}". Nothing was changed.`,
+          });
+        }
         await db.auditLog.create({
           data: {
             organizationId: scope.organizationId,

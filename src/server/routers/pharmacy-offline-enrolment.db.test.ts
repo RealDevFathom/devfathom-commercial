@@ -608,6 +608,27 @@ describeIfDatabase('DEV-957 counter enrolment procedures (runtime role, real ABA
         })
       )
     ).toBe(1);
+    // Review round 3: a retry that says something else never silently keeps the first
+    // answer. It is refused, naming who recorded it and what, and nothing is written.
+    for (const changed of [
+      { ...input, outcome: 'MONEY_RETURNED' as const },
+      { ...input, note: 'Money given back at the door' },
+    ]) {
+      const refused = await refusal(act(ownerA, (api) => api.recordUnsentOfflineSale(changed)));
+      expect(refused.code).toBe('CONFLICT');
+      expect(refused.message).toMatch(
+        new RegExp(
+          `^Receipt 501 was already recorded by ${ids.ownerA} on .+ as "Entered as a sale online", with the note "Entered as bill 4512"\\. Nothing was changed\\.$`
+        )
+      );
+    }
+    expect(
+      await withTenantDb(ids.orgA, (tx) =>
+        tx.auditLog.count({
+          where: { action: 'pharmacyOffline.recordUnsentOfflineSale', targetId: counter.device.id },
+        })
+      )
+    ).toBe(1);
     expect(audits[0]).toMatchObject({
       actorId: ids.ownerA,
       metadata: {
