@@ -91,6 +91,7 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { PageHeader } from '@/components/ui/page-header';
+import { Eyebrow } from '@/components/ui/eyebrow';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import {
@@ -3884,7 +3885,18 @@ function ScopedPharmacyCounterConsole({
             aria-label="Counter bill"
           >
             <div className="border-b border-border-subtle p-4">
-              <h2 className="mb-2 text-sm font-semibold text-text-strong">Scan or search</h2>
+              {/* DEV-972: the search help sits beside the heading, so the medicines found start
+                  directly under the search box. */}
+              <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                <h2 className="text-sm font-semibold text-text-strong">Scan or search</h2>
+                {!dayClosed && !drawerRequired ? (
+                  <p id="counter-search-help" className="text-xs text-text-muted">
+                    {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
+                    selected medicine, or a barcode. {formatBinding(keymap.bindings.openTender)}{' '}
+                    opens pay.
+                  </p>
+                ) : null}
+              </div>
               {notice ? (
                 <div
                   role={notice.tone === 'success' || notice.tone === 'info' ? 'status' : 'alert'}
@@ -4183,43 +4195,6 @@ function ScopedPharmacyCounterConsole({
                             : 'h-12 [--ring:var(--text-muted)]'
                         }
                       />
-                      <p id="counter-search-help" className="text-xs text-text-muted">
-                        {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
-                        selected medicine, or a barcode. {formatBinding(keymap.bindings.openTender)}{' '}
-                        opens pay.
-                      </p>
-                    </div>
-                    <div className="mt-3">
-                      <CounterVoucherEntry
-                        branchId={branchId}
-                        held={heldVoucher}
-                        disabled={busy || !branchAuthorized || !online || Boolean(heldDiscount)}
-                        onHold={(voucher) => {
-                          setHeldVoucher({ ...voucher, branchId });
-                          setNotice({
-                            tone: 'success',
-                            message: `Voucher ${voucher.code} will be used on the next item you add.`,
-                          });
-                          focusSearch();
-                        }}
-                        onClear={() => setHeldVoucher(null)}
-                      />
-                    </div>
-                    <div className="mt-3">
-                      <CounterDiscountEntry
-                        branchId={branchId}
-                        held={heldDiscount}
-                        disabled={busy || !branchAuthorized || !online || Boolean(heldVoucher)}
-                        onHold={(discount) => {
-                          setHeldDiscount({ ...discount, branchId });
-                          setNotice({
-                            tone: 'success',
-                            message: `A discount of ${describeCounterDiscount(discount)} will come off the next item you add.`,
-                          });
-                          focusSearch();
-                        }}
-                        onClear={() => setHeldDiscount(null)}
-                      />
                     </div>
                   </div>
 
@@ -4476,16 +4451,55 @@ function ScopedPharmacyCounterConsole({
               onRetry={() => void refreshTenderBill()}
             />
           </section>
-          <SectionCard
-            className="shrink-0 rounded-xl p-3"
-            compact
-            eyebrow="Bill total"
-            actions={
-              <span className="text-xs text-text-muted">
-                {lineCount} {lineCount === 1 ? 'line' : 'lines'}
-              </span>
-            }
-          >
+          <SectionCard className="shrink-0 rounded-xl p-3" compact>
+            {/* DEV-972: the next item's voucher and discount sit in the bill total's own header
+                row, never between the search box and its results, and add no row above Pay. */}
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <Eyebrow>Bill total</Eyebrow>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {!dayClosed && !drawerRequired ? (
+                  <div
+                    role="group"
+                    aria-label="Voucher and discount for the next item"
+                    className="flex flex-wrap items-center gap-2"
+                  >
+                    <CounterVoucherEntry
+                      branchId={branchId}
+                      held={heldVoucher}
+                      disabled={busy || !branchAuthorized || !online || Boolean(heldDiscount)}
+                      returnFocus={searchRef}
+                      onHold={(voucher) => {
+                        setHeldVoucher({ ...voucher, branchId });
+                        setNotice({
+                          tone: 'success',
+                          message: `Voucher ${voucher.code} will be used on the next item you add.`,
+                        });
+                        focusSearch();
+                      }}
+                      onClear={() => setHeldVoucher(null)}
+                    />
+                    <CounterDiscountEntry
+                      branchId={branchId}
+                      held={heldDiscount}
+                      disabled={busy || !branchAuthorized || !online || Boolean(heldVoucher)}
+                      returnFocus={searchRef}
+                      onHold={(discount) => {
+                        setHeldDiscount({ ...discount, branchId });
+                        setNotice({
+                          tone: 'success',
+                          message: `A discount of ${describeCounterDiscount(discount)} will come off the next item you add.`,
+                        });
+                        focusSearch();
+                      }}
+                      onClear={() => setHeldDiscount(null)}
+                    />
+                  </div>
+                ) : null}
+                <span className="text-xs text-text-muted">
+                  {lineCount} {lineCount === 1 ? 'line' : 'lines'}
+                </span>
+              </div>
+            </div>
             <dl className="grid grid-cols-3 gap-3 text-xs">
               {(
                 [
