@@ -24,6 +24,11 @@ import { demoApproverEmail } from '@/lib/demo/approval';
 import { demoSharedDeploymentOrigin } from '@/lib/platform/activation-gates';
 import { emailSchema } from '@/lib/email-address';
 import { organizationRolePermissionsSchema } from '@/lib/organization-role';
+import {
+  AccessChangeError,
+  guardPharmacyAccessChanges,
+  isPharmacyOrganization,
+} from '@/lib/team/pharmacy-access-guard';
 import { ianaTimezone } from '@/lib/timezone';
 import { isReservedHostLabel, RESERVED_HOST_LABELS } from '@/lib/tenancy/host-routing';
 import { OrganizationVertical } from '@/generated/prisma/enums';
@@ -208,6 +213,44 @@ type CommandResult = {
 };
 
 /** Structural JSON cast. Redacts nothing: persistence must keep what it stores. */
+/**
+ * DEV-959B: in a pharmacy, a platform command that changes what people may do (their role,
+ * status, custom role or an exception) passes the same access guard as the tenant screens.
+ * The platform operator is not the owner and gives no fresh tenant approval, so it may never
+ * give a weighty sub-role, make an administrator or an owner, or leave the pharmacy without
+ * an owner; the change and its audit share the command's transaction.
+ */
+async function platformAccessChange<T>(
+  db: ScopedDb,
+  organizationId: string,
+  targets: string[] | (() => Promise<string[]>),
+  action: string,
+  write: () => Promise<T>
+): Promise<T> {
+  if (!(await isPharmacyOrganization(db, organizationId))) return write();
+  // A list function runs under the organisation lock, so nobody joins it before the write.
+  let targetIds: string[] = Array.isArray(targets) ? targets : [];
+  try {
+    const { value } = await guardPharmacyAccessChanges(
+      db,
+      {
+        organizationId,
+        actor: { kind: 'system', source: 'PLATFORM' },
+        targetIds: Array.isArray(targets) ? targets : async () => (targetIds = await targets()),
+        pinVerified: false,
+        mode: 'role',
+        action,
+        describe: (name) => `Platform operator changed ${name}`,
+      },
+      async () => ({ targetIds, value: await write() })
+    );
+    return value;
+  } catch (error) {
+    if (error instanceof AccessChangeError) throw new PlatformSecurityError(error.message, 400);
+    throw error;
+  }
+}
+
 function toJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
 }
@@ -3031,21 +3074,39 @@ async function runCommand(
       if (existing?.isSystem) {
         throw new PlatformSecurityError('System roles cannot be modified.', 400);
       }
-      const saved = roleId
-        ? await db.organizationRole.update({ where: { id: roleId }, data: role })
-        : await db.organizationRole.create({ data: role });
-      await db.organizationRolePermission.deleteMany({
-        where: { organizationRoleId: saved.id },
-      });
-      if (permissions.length) {
-        await db.organizationRolePermission.createMany({
-          data: permissions.map((permission) => ({
-            organizationId: input.organizationId,
-            organizationRoleId: saved.id,
-            ...permission,
-          })),
-        });
-      }
+      const holders = async () =>
+        roleId
+          ? (
+              await db.user.findMany({
+                where: { organizationId: input.organizationId, organizationRoleId: roleId },
+                select: { id: true },
+              })
+            ).map((user) => user.id)
+          : [];
+      const saved = await platformAccessChange(
+        db,
+        input.organizationId,
+        holders,
+        'platform.organization.role',
+        async () => {
+          const row = roleId
+            ? await db.organizationRole.update({ where: { id: roleId }, data: role })
+            : await db.organizationRole.create({ data: role });
+          await db.organizationRolePermission.deleteMany({
+            where: { organizationRoleId: row.id },
+          });
+          if (permissions.length) {
+            await db.organizationRolePermission.createMany({
+              data: permissions.map((permission) => ({
+                organizationId: input.organizationId,
+                organizationRoleId: row.id,
+                ...permission,
+              })),
+            });
+          }
+          return row;
+        }
+      );
       return {
         targetType: 'OrganizationRole',
         targetId: saved.id,
@@ -3091,16 +3152,23 @@ async function runCommand(
           expiresAt: optionalDate.optional(),
         })
         .parse(payload);
-      const saved = await db.userPermissionOverride.upsert({
-        where: {
-          userId_capability: {
-            userId: input.userId,
-            capability: input.capability,
-          },
-        },
-        update: { ...input, createdById: actor.id },
-        create: { ...input, createdById: actor.id },
-      });
+      const saved = await platformAccessChange(
+        db,
+        input.organizationId,
+        [input.userId],
+        'platform.organization.permission',
+        () =>
+          db.userPermissionOverride.upsert({
+            where: {
+              userId_capability: {
+                userId: input.userId,
+                capability: input.capability,
+              },
+            },
+            update: { ...input, createdById: actor.id },
+            create: { ...input, createdById: actor.id },
+          })
+      );
       return {
         targetType: 'UserPermissionOverride',
         targetId: saved.id,
@@ -3113,7 +3181,13 @@ async function runCommand(
       const input = z.object({ id }).parse(payload);
       const before = await db.userPermissionOverride.findUnique({ where: { id: input.id } });
       if (!before) throw new PlatformSecurityError('Permission override not found.', 400);
-      await db.userPermissionOverride.delete({ where: { id: before.id } });
+      await platformAccessChange(
+        db,
+        before.organizationId,
+        [before.userId],
+        'platform.organization.permission.remove',
+        () => db.userPermissionOverride.delete({ where: { id: before.id } })
+      );
       return {
         targetType: 'UserPermissionOverride',
         targetId: before.id,
@@ -3151,16 +3225,23 @@ async function runCommand(
         }
       }
       const auditableBefore = omit(before, 'password', 'twoFactorSecret');
-      const saved = await db.user.update({
-        where: { id: userId },
-        data: {
-          ...data,
-          tokenVersion:
-            data.status && !['ACTIVE', 'ON_LEAVE'].includes(data.status)
-              ? { increment: 1 }
-              : undefined,
-        },
-      });
+      const saved = await platformAccessChange(
+        db,
+        before.organizationId,
+        [userId],
+        'platform.organization.user',
+        () =>
+          db.user.update({
+            where: { id: userId },
+            data: {
+              ...data,
+              tokenVersion:
+                data.status && !['ACTIVE', 'ON_LEAVE'].includes(data.status)
+                  ? { increment: 1 }
+                  : undefined,
+            },
+          })
+      );
       return {
         targetType: 'User',
         targetId: saved.id,

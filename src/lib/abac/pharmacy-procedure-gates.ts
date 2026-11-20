@@ -2048,7 +2048,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacySales.closeShift': {
-    gate: "auditedProtectedProcedure + cashShiftScope: requireDrawerManagerAccess (pharmacy:manage, counter family not DENIED, assigned branch or ADMIN) closes any shift of the branch; otherwise requireCounterReceiptAccess(canonical true) -> pharmacy:counter, own shift only; over or short above the tolerance -> approver passes actorManagesBranchDrawers (not the shift's cashier unless nobody else holds it; solo rule) + their PIN through verifyApprovalSecret",
+    gate: "auditedProtectedProcedure + cashShiftScope: requireDrawerManagerAccess (pharmacy:manage, counter family not DENIED, assigned branch or ADMIN) closes any shift of the branch; otherwise requireCounterReceiptAccess(canonical true) -> pharmacy:counter, own shift only; over or short above the tolerance -> the caller's right to close that shift is checked before any PIN; approver passes actorManagesBranchDrawers + their PIN or code through verifyApprovalSecret, and is neither the shift's cashier nor the caller unless no other approver with a live PIN exists (solo policy, or the solo-pharmacy rule); guesses typed by someone else never strike the approver's credential and are capped per approver",
     lines: ['take-payment/open-close-own-cash-shift', 'run-branches/run-cash-shifts-branches'],
   },
   'pharmacySales.counterBranches': {
@@ -2490,7 +2490,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     none: 'any signed-in member (only reports whether they may take payment)',
   },
   'pharmacySales.shiftApprovers': {
-    gate: "cashShiftScope: requireDrawerManagerAccess (pharmacy:manage), else requireCounterReceiptAccess(canonical true) -> pharmacy:counter; lists members passing actorManagesBranchDrawers with a PIN other than the shift's cashier, or the cashier when nobody else can",
+    gate: "cashShiftScope: requireDrawerManagerAccess (pharmacy:manage), else requireCounterReceiptAccess(canonical true) -> pharmacy:counter; lists members passing actorManagesBranchDrawers with a live PIN other than the shift's cashier and the caller, or those two when nobody else can",
     lines: ['take-payment/open-close-own-cash-shift', 'run-branches/run-cash-shifts-branches'],
   },
   'pharmacySales.shiftHandoverNote': {

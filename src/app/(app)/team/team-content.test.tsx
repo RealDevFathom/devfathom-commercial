@@ -57,13 +57,20 @@ vi.mock('@/lib/trpc', () => ({
   trpc: {
     useUtils: () => ({
       team: { getAll: { invalidate: state.invalidateDirectory } },
-      organizationAdmin: { overview: { invalidate: state.invalidateOverview } },
+      organizationAdmin: {
+        overview: { invalidate: state.invalidateOverview },
+        memberAccess: { invalidate: vi.fn() },
+      },
     }),
     organizationAdmin: {
       overview: { useQuery: state.overviewQuery },
       departments: { useQuery: () => state.departments },
       roles: { useQuery: () => state.roles },
       memberAccess: { useQuery: state.memberAccess },
+      setMemberSubRole: { useMutation: () => ({ mutateAsync: vi.fn(), isPending: false }) },
+      applyMemberRoleTemplate: {
+        useMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
+      },
     },
     team: {
       getAll: { useQuery: state.directory },
