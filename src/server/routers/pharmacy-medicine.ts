@@ -76,6 +76,7 @@ import {
   STAGED_CREATION_BUSY,
   STAGED_CREATION_OPERATION,
   STAGED_CREATION_STOPPED,
+  StagedCreationSystemicRefusal,
   stagedCreationProgress,
 } from '@/lib/pharmacy/migration/staged-creation';
 import { STAGING_MAX_ROWS } from '@/lib/pharmacy/migration/staging-input';
@@ -545,6 +546,17 @@ const DUPLICATE_PACK_MESSAGE =
  */
 function stagedCreationStopped(ctx: TRPCContext, batchId: string, error: unknown): never {
   if (error instanceof TRPCError) throw error;
+  if (error instanceof StagedCreationSystemicRefusal) {
+    // Many rows refused for one reason: the step was undone and nothing was recorded.
+    const failure = { systemic: true, rows: error.rows, ...failureDetail(error.refusal) };
+    console.error('[pharmacy] staged medicine creation step stopped', { batchId, ...failure });
+    annotateAudit(ctx, {
+      targetType: 'PharmacyMigrationBatch',
+      targetId: batchId,
+      metadata: { stopped: failure },
+    });
+    throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: error.message });
+  }
   const passing = isPassingFailure(error);
   const failure = { passing, ...failureDetail(error) };
   console.error('[pharmacy] staged medicine creation step stopped', { batchId, ...failure });

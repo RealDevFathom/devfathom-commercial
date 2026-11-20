@@ -1,13 +1,16 @@
 'use client';
 
+import Link from 'next/link';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import {
+  readNotCreatedStagedRows,
   requestStagedMedicineCreation,
   runStagedMedicineCreationStep,
 } from './staged-medicine-creation-actions';
+import type { NotCreatedRow } from './staged-not-created';
 
 export type StagedCreationState = {
   request: { id: string; status: string } | null;
@@ -22,7 +25,29 @@ export type StagedCreationState = {
   barcodesNotAttached: number;
   suppliersNotMatched: number;
   reorderLevelsNotApplied: number;
+  /** Rows whose old code or generic name was left off because it cannot be searched. */
+  aliasesNotAdded: number;
 };
+
+/** DEV-1002: where the review lists rows, and the first rows that could not be created. */
+export type StagedCreationReview = {
+  sourceId: string;
+  /** The review page with this file selected, e.g. `/pharmacy/medicines?branchId=…`. */
+  path: string;
+  notCreated: { total: number; rows: NotCreatedRow[] };
+};
+
+const linkClass =
+  'inline-flex min-h-11 items-center rounded-sm text-sm underline hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-ring';
+
+/** The review page with one more parameter set, the row choice and paging cleared. */
+function reviewHref(path: string, key: string, value: string) {
+  const [route, query = ''] = path.split('?');
+  const params = new URLSearchParams(query);
+  for (const stale of ['rowId', 'page', 'filter', 'query']) params.delete(stale);
+  params.set(key, value);
+  return `${route}?${params.toString()}`;
+}
 
 const count = (value: number) => value.toLocaleString('en-US');
 
@@ -34,13 +59,17 @@ export function StagedMedicineCreation({
   batchId,
   branchId,
   initial,
+  review,
 }: {
   batchId: string;
   /** The branch the file's reorder levels are set at, when the requester may set them there. */
   branchId?: string;
   initial: StagedCreationState;
+  /** Present on the staged review page, where the rows that were not created can be listed. */
+  review?: StagedCreationReview;
 }) {
   const [state, setState] = useState(initial);
+  const [notCreatedRows, setNotCreatedRows] = useState(review?.notCreated ?? null);
   const [busy, setBusy] = useState<'request' | 'create' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const status = state.request?.status ?? null;
@@ -75,7 +104,17 @@ export function StagedMedicineCreation({
         barcodesNotAttached: step.barcodesNotAttached,
         suppliersNotMatched: step.suppliersNotMatched,
         reorderLevelsNotApplied: step.reorderLevelsNotApplied,
+        aliasesNotAdded: step.aliasesNotAdded,
       }));
+      // DEV-1002: list the rows this step could not create, through the review's own read.
+      if (step.refused > 0 && review && branchId) {
+        const listed = await readNotCreatedStagedRows({
+          branchId,
+          sourceId: review.sourceId,
+          batchId,
+        });
+        if ('data' in listed && listed.data) setNotCreatedRows(listed.data);
+      }
       if (step.remaining === 0 || step.created + step.matched + step.refused === 0) break;
     }
     setBusy(null);
@@ -98,10 +137,43 @@ export function StagedMedicineCreation({
           {state.unnamed ? ` · ${count(state.unnamed)} rows have no name and are skipped` : ''}
         </p>
         {state.notCreated > 0 && (
+          <div className="space-y-2">
+            <p>
+              {count(state.notCreated)} rows could not be created, and the other medicines were
+              created without them. Correct those rows in the file and upload it again: medicines
+              already created are matched, never made twice.
+            </p>
+            {review && notCreatedRows && notCreatedRows.rows.length > 0 && (
+              <>
+                <ul aria-label="Rows that could not be created" className="space-y-1">
+                  {notCreatedRows.rows.map((row) => (
+                    <li key={row.rowId}>
+                      <Link
+                        className={linkClass}
+                        href={reviewHref(review.path, 'rowId', row.rowId)}
+                      >
+                        Row {count(row.rowNumber)}: {row.productName || 'Unnamed row'}
+                      </Link>
+                      <span className="block text-text-muted">{row.reason}</span>
+                    </li>
+                  ))}
+                </ul>
+                {notCreatedRows.total > notCreatedRows.rows.length && (
+                  <Link
+                    className={linkClass}
+                    href={reviewHref(review.path, 'filter', 'not-created')}
+                  >
+                    Show all {count(notCreatedRows.total)} rows that could not be created
+                  </Link>
+                )}
+              </>
+            )}
+          </div>
+        )}
+        {state.aliasesNotAdded > 0 && (
           <p>
-            {count(state.notCreated)} rows could not be created, and the other medicines were
-            created without them. Open a row to see why, correct those rows in the file and upload
-            it again: medicines already created are matched, never made twice.
+            {count(state.aliasesNotAdded)} rows have an old code or generic name that was not added:
+            the catalogue cannot search its characters. Open a row to see which.
           </p>
         )}
         {state.matchedEarlier > 0 && (
@@ -142,7 +214,7 @@ export function StagedMedicineCreation({
           (state.notCreated ? (
             <StatusPill
               status="warning"
-              label={`Finished — ${count(state.notCreated)} rows not created`}
+              label={`Finished: ${count(state.notCreated)} rows not created`}
             />
           ) : (
             <StatusPill status="done" label="All medicines created" />

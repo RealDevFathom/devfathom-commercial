@@ -8,8 +8,11 @@ import {
   normalizeMatchText,
   notCreatedReason,
   planStagedMedicine,
+  refusalCause,
   STAGED_CREATION_BUSY,
   STAGED_CREATION_STOPPED,
+  STAGED_SYSTEMIC_REFUSALS,
+  StagedCreationSystemicRefusal,
   stagedLevelPrices,
   stagedMatchKey,
   stagedReorderUnits,
@@ -358,5 +361,19 @@ describe('DEV-1002 a row never stops the rest of its file', () => {
     expect(JSON.stringify(quoted)).not.toContain('Panadol');
     expect(STAGED_CREATION_STOPPED).not.toMatch(/Nothing was changed/);
     expect(STAGED_CREATION_BUSY).not.toMatch(/Nothing was changed/);
+  });
+
+  it('stops a step, recording nothing, when many rows share one cause', () => {
+    expect(STAGED_SYSTEMIC_REFUSALS).toBe(25);
+    expect(refusalCause(refusal('23503'))).toBe('a value is not accepted by the catalogue');
+    expect(refusalCause(refusal('23505'))).toBe(
+      'a code or barcode is already used in your catalogue'
+    );
+    const stop = new StagedCreationSystemicRefusal(refusal('23503'), 26);
+    expect(stop.rows).toBe(26);
+    expect(stop.message).toBe(
+      'Creating stopped: many rows were refused for the same reason: a value is not accepted by the catalogue. Nothing was recorded for these rows, and medicines already created are kept. Tell your administrator.'
+    );
+    expect(stop.message).not.toMatch(/Nothing was changed|—/);
   });
 });

@@ -46,6 +46,8 @@ function ownerFile() {
     'Fixture Dash Code,-,10,30.00,20.00,1,TABLETS,-,,',
     // Characters the application and the database normalise differently.
     'Fixture Cobalamin Tab,X²,10,30.00,20.00,1,TABLETS,Cyanocobalamin B₁₂,,',
+    // An old code and a generic name the database normalises to nothing: left off, reported.
+    'Fixture Unsearchable Codes,①,10,30.00,20.00,1,TABLETS,½,,',
     'Fixture Fraction Barcode,FB-1,10,30.00,20.00,1,TABLETS,,,AB½12',
     // A name over 300 characters whose cut falls inside an emoji.
     `${LONG_NAME},LN-1,10,30.00,20.00,1,TABLETS,,,`,
@@ -97,10 +99,10 @@ function ownerFile() {
             `INSERT INTO pharmacy_branches (id,"organizationId",code,name,"addressLine",city,"provinceCode","updatedAt") VALUES ($1,$2,'MAIN','Main','Fixture street','Lahore','PB',now())`,
             [id('branch'), id('org')]
           );
-          for (const who of ['editor', 'reviewer'])
+          for (const who of ['editor', 'reviewer', 'cashier'])
             await c.query(
-              `INSERT INTO users (id,"organizationId",name,email,department,title,role,"updatedAt") VALUES ($1,$2,$1,$1,'Pharmacy','Staff','ADMIN',now())`,
-              [id(who), id('org')]
+              `INSERT INTO users (id,"organizationId",name,email,department,title,role,"updatedAt") VALUES ($1,$2,$1,$1,'Pharmacy','Staff',$3,now())`,
+              [id(who), id('org'), who === 'cashier' ? 'EMPLOYEE' : 'ADMIN']
             );
           await c.query(
             `INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"updatedAt") VALUES ($1,$2,$3,'pharmacy:catalogue-review','ALLOW','fixture',now())`,
@@ -125,7 +127,12 @@ function ownerFile() {
               },
               session: {
                 expires: 'later',
-                user: { id: id(who), organizationId: id('org'), role: 'ADMIN', status: 'ACTIVE' },
+                user: {
+                  id: id(who),
+                  organizationId: id('org'),
+                  role: who === 'cashier' ? 'EMPLOYEE' : 'ADMIN',
+                  status: 'ACTIVE',
+                },
               },
               organization: null,
               support: null,
@@ -229,6 +236,36 @@ function ownerFile() {
           });
           assert.equal(detail.catalogueMedicine?.outcome, 'NOT_CREATED');
           assert.equal(detail.catalogueMedicine?.notCreatedReason, refusedLink.notCreatedReason);
+          // The review lists exactly the rows that could not be created, with their reasons...
+          const notCreatedList = await staging.stagedRows({
+            branchId: id('branch'),
+            sourceId: staged.sourceId,
+            batchId,
+            filter: 'not-created',
+          });
+          assert.deepEqual(
+            [
+              notCreatedList.total,
+              notCreatedList.rows.map((row) => [
+                row.rowNumber,
+                row.productName,
+                row.notCreatedReason,
+              ]),
+            ],
+            [1, [[refusedRow.rowNumber, REFUSED, refusedLink.notCreatedReason]]]
+          );
+          // ...to exactly who may read the staged review: a cashier may not.
+          await assert.rejects(
+            pharmacyStagedReviewRouter
+              .createCaller(context('cashier'))
+              .pharmacyMedicine.stagedRows({
+                branchId: id('branch'),
+                sourceId: staged.sourceId,
+                batchId,
+                filter: 'not-created',
+              }),
+            (error: unknown) => (error as { code?: string }).code === 'FORBIDDEN'
+          );
 
           // The technical detail goes to the audit record and the server log: row number and
           // codes, never the row's cells.
@@ -280,6 +317,19 @@ function ownerFile() {
               ['LEGACY_CODE', 'X²', normalized[0]!.code],
             ]
           );
+          const unsearchable = await runtime.medicine.findFirstOrThrow({
+            where: { productName: 'Fixture Unsearchable Codes' },
+            include: { aliases: true },
+          });
+          assert.deepEqual(unsearchable.aliases, []);
+          const unsearchableLink = await runtime.pharmacyStagedMedicineLink.findFirstOrThrow({
+            where: { medicineId: unsearchable.id },
+          });
+          assert.deepEqual(
+            [unsearchableLink.legacyCode, unsearchableLink.aliasesNotAdded],
+            ['①', ['½', '①']]
+          );
+          assert.equal(last.aliasesNotAdded, 1);
           const fraction = await runtime.medicineBarcode.findFirstOrThrow({
             where: { code: 'AB½12' },
           });

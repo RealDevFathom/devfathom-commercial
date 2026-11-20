@@ -1,7 +1,10 @@
 import Link from 'next/link';
 import { MigrationStagingForm } from './migration-staging-form';
 import { StagedMedicineCreation } from './staged-medicine-creation';
-import { readStagedMedicineCreation } from './staged-medicine-creation-actions';
+import {
+  readNotCreatedStagedRows,
+  readStagedMedicineCreation,
+} from './staged-medicine-creation-actions';
 import { MedicineImportTemplate } from './medicine-import-template';
 import { TRPCError } from '@trpc/server';
 import { PageHeader } from '@/components/ui/page-header';
@@ -52,7 +55,7 @@ async function loadReview(
       ...selected,
       query: text('query'),
       page: Number(text('page') || '1'),
-      filter: (text('filter') || 'all') as 'all' | 'stock' | 'price' | 'collision',
+      filter: (text('filter') || 'all') as 'all' | 'stock' | 'price' | 'collision' | 'not-created',
     });
     const explicit = {
       branchId: text('branchId'),
@@ -156,6 +159,9 @@ export async function StagedMedicineCatalogue({
   const creationRead =
     result && selected.batchId ? await readStagedMedicineCreation(selected.batchId) : null;
   const creation = creationRead && 'data' in creationRead ? creationRead.data : null;
+  // DEV-1002: the first rows that could not be created, read through the review itself.
+  const notCreatedRead =
+    creation && creation.notCreated > 0 ? await readNotCreatedStagedRows(selected) : null;
   return (
     <div className="min-w-0 space-y-6">
       {header}
@@ -265,6 +271,14 @@ export async function StagedMedicineCatalogue({
                 batchId={selected.batchId}
                 branchId={selected.branchId}
                 initial={creation}
+                review={{
+                  sourceId: selected.sourceId,
+                  path: href({ rowId: '', page: '', filter: '', query: '' }),
+                  notCreated:
+                    notCreatedRead && 'data' in notCreatedRead && notCreatedRead.data
+                      ? notCreatedRead.data
+                      : { total: 0, rows: [] },
+                }}
               />
             </div>
           )}
@@ -288,6 +302,7 @@ export async function StagedMedicineCatalogue({
                 <option value="stock">Open batch / expiry gaps</option>
                 <option value="price">Open verified price gaps</option>
                 <option value="collision">Name collisions</option>
+                <option value="not-created">Could not be created</option>
               </select>
             </label>
             <Button type="submit" className="min-h-11">
@@ -336,6 +351,7 @@ export async function StagedMedicineCatalogue({
                         Row {row.rowNumber}
                         {row.collision ? ' · Name collision — keep separate' : ''}
                         {row.controlled ? ' · Controlled medicine (legacy class NARCOTICS)' : ''}
+                        {row.notCreatedReason ? ` · Not created: ${row.notCreatedReason}` : ''}
                         {row.batchNotRecorded ? ` · ${row.batchLabel}` : ''}
                         {row.expiryNotRecorded ? ` · ${row.expiryLabel}` : ''}
                       </p>
@@ -402,6 +418,9 @@ export async function StagedMedicineCatalogue({
                 : detail.catalogueMedicine.supplierId
                   ? `${detail.catalogueMedicine.supplierName} — matched to your supplier`
                   : `${detail.catalogueMedicine.supplierName} — not one of your suppliers, so it was not linked. Add the supplier in Purchasing if you buy from them.`,
+              'Search names not added': detail.catalogueMedicine?.aliasesNotAdded.length
+                ? `${detail.catalogueMedicine.aliasesNotAdded.join(', ')}: the catalogue cannot search these characters, so they were not added as an old code or generic name`
+                : null,
               'Reorder level':
                 detail.catalogueMedicine?.reorderLevelPacks == null
                   ? null

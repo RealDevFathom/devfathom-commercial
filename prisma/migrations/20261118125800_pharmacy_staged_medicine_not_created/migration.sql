@@ -11,6 +11,16 @@ ALTER TABLE "pharmacy_staged_medicine_links"
   ALTER COLUMN "medicineId" DROP NOT NULL;
 ALTER TABLE "pharmacy_staged_medicine_links"
   ADD COLUMN IF NOT EXISTS "notCreatedReason" TEXT;
+-- An old code or generic name the catalogue cannot search (its characters normalise to nothing
+-- in the database, such as "½" or "①") is left off the medicine and reported here, as a
+-- barcode that was not added is.
+ALTER TABLE "pharmacy_staged_medicine_links"
+  ADD COLUMN IF NOT EXISTS "aliasesNotAdded" TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE "pharmacy_staged_medicine_links"
+  DROP CONSTRAINT IF EXISTS "pharmacy_staged_medicine_links_aliases_not_added_check";
+ALTER TABLE "pharmacy_staged_medicine_links"
+  ADD CONSTRAINT "pharmacy_staged_medicine_links_aliases_not_added_check"
+  CHECK (cardinality("aliasesNotAdded") <= 2);
 
 ALTER TABLE "pharmacy_staged_medicine_links"
   DROP CONSTRAINT IF EXISTS "pharmacy_staged_medicine_links_outcome_check";

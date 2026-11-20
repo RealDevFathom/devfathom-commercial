@@ -303,6 +303,8 @@ export type StagedCreationProgress = {
   suppliersNotMatched: number;
   /** Rows whose reorder level did not become a safety stock (no branch, pack size or match). */
   reorderLevelsNotApplied: number;
+  /** Rows whose old code or generic name was left off: the catalogue cannot search it. */
+  aliasesNotAdded: number;
 };
 
 export async function stagedCreationProgress(
@@ -318,13 +320,21 @@ export async function stagedCreationProgress(
       FROM "pharmacy_migration_rows" r
      WHERE r."organizationId" = ${organizationId} AND r."batchId" = ${batchId}`;
   const [outcomes] = await db.$queryRaw<
-    { matched: bigint; notCreated: bigint; barcodes: bigint; suppliers: bigint; reorders: bigint }[]
+    {
+      matched: bigint;
+      notCreated: bigint;
+      barcodes: bigint;
+      suppliers: bigint;
+      reorders: bigint;
+      aliases: bigint;
+    }[]
   >`
     SELECT count(*) FILTER (WHERE l."outcome" = 'MATCHED') AS "matched",
            count(*) FILTER (WHERE l."outcome" = 'NOT_CREATED') AS "notCreated",
            count(*) FILTER (WHERE l."barcodeAttached" = false) AS "barcodes",
            count(*) FILTER (WHERE l."supplierName" IS NOT NULL AND l."supplierId" IS NULL) AS "suppliers",
-           count(*) FILTER (WHERE l."reorderLevelApplied" = false) AS "reorders"
+           count(*) FILTER (WHERE l."reorderLevelApplied" = false) AS "reorders",
+           count(*) FILTER (WHERE cardinality(l."aliasesNotAdded") > 0) AS "aliases"
       FROM "pharmacy_staged_medicine_links" l
       JOIN "pharmacy_migration_rows" r
         ON r."organizationId" = l."organizationId" AND r."sourceKey" = l."sourceKey"
@@ -342,6 +352,7 @@ export async function stagedCreationProgress(
     barcodesNotAttached: Number(outcomes?.barcodes ?? 0),
     suppliersNotMatched: Number(outcomes?.suppliers ?? 0),
     reorderLevelsNotApplied: Number(outcomes?.reorders ?? 0),
+    aliasesNotAdded: Number(outcomes?.aliases ?? 0),
   };
 }
 
@@ -487,6 +498,44 @@ export function notCreatedReason(error: unknown): string {
 
 const NO_NAME_REASON = `This row has no medicine name the catalogue can use.${CORRECT_AND_UPLOAD}`;
 
+/** The cause of a refusal in a few plain words, for the message when many rows share it. */
+export function refusalCause(error: unknown): string {
+  const state = sqlState(error) ?? '';
+  if (state === '23505') return 'a code or barcode is already used in your catalogue';
+  if (state === '22001' || state.startsWith('54')) return 'a cell is too long for the catalogue';
+  if (state === '22003') return 'a number is too large for the catalogue';
+  if (state.startsWith('22')) return 'a cell has characters the catalogue cannot store';
+  return 'a value is not accepted by the catalogue';
+}
+
+/**
+ * DEV-1002: more rows than this refused for one and the same reason in a step (or every row of
+ * a step of two or more) is not a few bad rows in the file but a cause that would refuse any row,
+ * such as a broken rule in the database. A NOT_CREATED record is permanent, so such a step is
+ * undone and nothing is recorded; it stops as soon as the bound is passed.
+ */
+export const STAGED_SYSTEMIC_REFUSALS = 25;
+export const STAGED_CREATION_SYSTEMIC_PREFIX = 'Creating stopped:';
+
+/** A step stopped because many rows were refused for the same reason: nothing is recorded. */
+export class StagedCreationSystemicRefusal extends Error {
+  constructor(
+    readonly refusal: unknown,
+    readonly rows: number
+  ) {
+    super(
+      `${STAGED_CREATION_SYSTEMIC_PREFIX} many rows were refused for the same reason: ${refusalCause(refusal)}. Nothing was recorded for these rows, and medicines already created are kept. Tell your administrator.`
+    );
+    this.name = 'StagedCreationSystemicRefusal';
+  }
+}
+
+/** One key per cause: the same code on the same table and constraint. */
+const causeKey = (error: unknown) => {
+  const detail = failureDetail(error);
+  return [detail.prismaCode, detail.sqlState, detail.model, detail.constraint].join('|');
+};
+
 /**
  * What a failure was, for the server log and the audit record: codes and the constraint's name,
  * never a cell value (a database message can quote one).
@@ -578,7 +627,8 @@ async function writeIsolated(
   tx: ScopedDb,
   organizationId: string,
   writes: readonly RowWrite[],
-  refused: { write: RowWrite; error: unknown }[]
+  refused: { write: RowWrite; error: unknown }[],
+  causes = new Map<string, number>()
 ): Promise<RowWrite[]> {
   if (!writes.length) return [];
   await tx.$executeRaw`SAVEPOINT staged_medicine_rows`;
@@ -589,13 +639,18 @@ async function writeIsolated(
     await tx.$executeRaw`ROLLBACK TO SAVEPOINT staged_medicine_rows`;
     await tx.$executeRaw`RELEASE SAVEPOINT staged_medicine_rows`;
     if (writes.length === 1) {
+      const key = causeKey(error);
+      const count = (causes.get(key) ?? 0) + 1;
+      causes.set(key, count);
+      // Stop early: the cause is not this row, and isolating every row would only take longer.
+      if (count > STAGED_SYSTEMIC_REFUSALS) throw new StagedCreationSystemicRefusal(error, count);
       refused.push({ write: writes[0]!, error });
       return [];
     }
     const half = Math.ceil(writes.length / 2);
     return [
-      ...(await writeIsolated(tx, organizationId, writes.slice(0, half), refused)),
-      ...(await writeIsolated(tx, organizationId, writes.slice(half), refused)),
+      ...(await writeIsolated(tx, organizationId, writes.slice(0, half), refused, causes)),
+      ...(await writeIsolated(tx, organizationId, writes.slice(half), refused, causes)),
     ];
   }
   await tx.$executeRaw`RELEASE SAVEPOINT staged_medicine_rows`;
@@ -742,12 +797,16 @@ export async function createStagedMedicinesChunk(
     }
     const outerId = (levels[0]?.id as string | undefined) ?? null;
     const aliases: Prisma.MedicineAliasCreateManyInput[] = [];
+    // A value the catalogue cannot search ("½", "①") is left off and reported on the link.
+    const aliasesNotAdded: string[] = [];
     for (const [type, value] of [
       ['GENERIC', plan.genericName],
       ['LEGACY_CODE', plan.legacyCode],
     ] as const) {
-      const normalizedValue = value ? normalized(value) : '';
-      if (value && normalizedValue) aliases.push({ medicineId, type, value, normalizedValue });
+      if (!value) continue;
+      const normalizedValue = normalized(value);
+      if (normalizedValue) aliases.push({ medicineId, type, value, normalizedValue });
+      else aliasesNotAdded.push(value);
     }
     let barcode: RowWrite['barcode'];
     if (plan.barcode) {
@@ -806,6 +865,7 @@ export async function createStagedMedicinesChunk(
         barcode: plan.barcode,
         barcodeAttached: plan.barcode ? Boolean(barcode) : null,
         reorderLevelApplied: plan.reorderLevelPacks === null ? null : reorderUnits !== null,
+        aliasesNotAdded,
       },
       medicine: {
         id: medicineId,
@@ -852,6 +912,9 @@ export async function createStagedMedicinesChunk(
   }
   const refused: { write: RowWrite; error: unknown }[] = [];
   const written = await writeIsolated(tx, organizationId, writes, refused);
+  // Every row of a step refused is a cause that would refuse any row: undo, record nothing.
+  if (writes.length > 1 && refused.length === writes.length)
+    throw new StagedCreationSystemicRefusal(refused[0]!.error, refused.length);
   for (const { write, error } of refused)
     notCreated.push({
       row: write.row,

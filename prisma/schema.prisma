@@ -13088,6 +13088,8 @@ model PharmacyStagedMedicineLink {
   /// NOT_CREATED when the database refused the row (DEV-1002): no medicine, a plain reason.
   outcome            String   @default("CREATED")
   notCreatedReason   String?
+  /// Old code or generic name left off because the catalogue cannot search its characters.
+  aliasesNotAdded    String[] @default([])
   /// The supplier cell as read; `supplierId` is the existing supplier with exactly that
   /// normalised name, null when none or several match (reported, never created).
   supplierName       String?
