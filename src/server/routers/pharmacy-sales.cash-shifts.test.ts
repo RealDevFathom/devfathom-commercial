@@ -31,6 +31,7 @@ vi.mock('@/lib/pharmacy/cash-shifts', () => ({
     replayed: false,
   })),
   authorizeCashShiftVariance: vi.fn(async () => ({
+    shiftId: 'shift-1',
     approverId: 'manager-b',
     policy: 'PHARMACY_SHIFT_VARIANCE_MANAGER_PIN',
     selfApproved: false,
@@ -183,6 +184,7 @@ describe('DEV-958B cash shift procedures', () => {
       order.push('approve');
       expect(f.db.$transaction).not.toHaveBeenCalled();
       return {
+        shiftId: 'shift-1',
         approverId: 'manager-b',
         policy: 'PHARMACY_SHIFT_VARIANCE_MANAGER_PIN',
         selfApproved: false,

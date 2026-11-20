@@ -473,10 +473,10 @@ export async function authorizeCashShiftVariance(
         staffProfile: { organizationId: scope.organizationId, userId: input.approverId },
       },
       orderBy: { id: 'asc' },
-      select: { lockedUntil: true },
+      select: { failedAttempts: true, lockedUntil: true },
     });
     throw new PharmacySettlementError(
-      credential && isLockedOut({ lockedUntil: credential.lockedUntil }, new Date())
+      credential && isLockedOut(credential, new Date())
         ? 'SHIFT_APPROVAL_LOCKED'
         : 'SHIFT_APPROVAL_REFUSED'
     );
