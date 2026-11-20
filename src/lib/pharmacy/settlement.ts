@@ -107,6 +107,24 @@ export function cashShiftRefusal(error: unknown): PharmacySettlementError | null
   return match ? new PharmacySettlementError(match[1]) : null;
 }
 
+/**
+ * DEV-958B: before a provider is asked to move money, the counter must be able to take it: on a
+ * branch that runs cash shifts, its drawer's shift is open on this business day. The database
+ * answers with the same rule the money insert applies, and keeps the shift row share-locked until
+ * the transaction ends, so the shift cannot close between the charge and its tender.
+ */
+export async function requireCashShiftForProvider(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string },
+  input: { deviceId: string; businessDate: Date }
+) {
+  await withCashShiftRefusal(
+    db.$queryRaw(
+      Prisma.sql`SELECT pharmacy_require_cash_shift(${scope.organizationId}, ${scope.branchId}, ${input.deviceId}, ${input.businessDate}::date) AS "shiftId"`
+    )
+  );
+}
+
 /** Runs a money write; a cash-shift refusal from the database guard becomes its typed reason. */
 export async function withCashShiftRefusal<T>(write: Promise<T>): Promise<T> {
   try {
@@ -763,6 +781,8 @@ export async function applyPharmacyTender(
     // Use the same instant for the persisted posting, including across midnight.
     providerPostingAt = new Date();
     await assertPostingPeriodsOpen(db, scope.organizationId, providerPostingAt, scope.branchId);
+    // DEV-958B: never charge a customer for a payment no open shift can take.
+    await requireCashShiftForProvider(db, scope, input);
     const result = await adapter.execute({
       capability: 'SALE',
       amountMinor: input.amountMinor,
@@ -997,6 +1017,8 @@ export async function refundPharmacyTender(
     // Use the same instant for the persisted posting, including across midnight.
     providerPostingAt = new Date();
     await assertPostingPeriodsOpen(db, scope.organizationId, providerPostingAt, scope.branchId);
+    // DEV-958B: never pay a provider refund out that no open shift can record.
+    await requireCashShiftForProvider(db, scope, input);
     const result = await adapter.execute({
       capability: 'REFUND',
       amountMinor: input.amountMinor,

@@ -13,7 +13,7 @@
  */
 import { randomUUID } from 'node:crypto';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -874,6 +874,117 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
     );
     expect(close.cashVarianceMinor).toBe(preview.shiftTotals!.cashVarianceMinor);
     expect(report.sumCashShifts).toBeTypeOf('function');
+  });
+
+  it('asks no card provider or terminal to charge between shifts', async () => {
+    const s = await shop('provider', { shifts: true, toleranceMinor: 1_000_000 });
+    const device = `device-${randomUUID()}`;
+    const drawer = await openDrawer(s, device, 0);
+    const [first] = await shiftsOf(s, drawer.id);
+    const execute = vi.fn(async () => ({ approved: true, providerRef: `ref-${randomUUID()}` }));
+    const adapter = { name: 'QA_TERMINAL', certified: true, execute };
+    const charge = (saleId: string, amountMinor: number) =>
+      tenant(s.as(s.cashier), (db) =>
+        settlement.applyPharmacyTender(db, s.as(s.cashier), {
+          saleId,
+          deviceId: device,
+          businessDate: s.today,
+          type: 'CARD',
+          amountMinor,
+          idempotencyKey: randomUUID(),
+          adapter,
+        })
+      );
+    const a = await bill(s, 300);
+    await charge(a.sale.id, 300);
+    expect(execute).toHaveBeenCalledTimes(1);
+
+    await closeShift(s, s.cashier, first!.id, 0);
+    const b = await bill(s, 200);
+    // Between shifts: refused before the provider is asked to move any money.
+    await expect(charge(b.sale.id, 200)).rejects.toMatchObject({ reason: 'SHIFT_NOT_OPEN' });
+    expect(execute).toHaveBeenCalledTimes(1);
+    // The card-terminal preflight stops at the same point, and so before a terminal is sent a charge.
+    const { preflightTerminalCharge } = await import('./card-terminal/store');
+    await expect(
+      tenant(s.as(s.cashier), (db) =>
+        preflightTerminalCharge(db, s.as(s.cashier), {
+          saleId: b.sale.id,
+          deviceId: device,
+          businessDate: s.today,
+          amountMinor: 200,
+          attemptKey: randomUUID(),
+          provider: 'QA_TERMINAL',
+          terminalId: 'counter-1',
+          currency: 'PKR',
+        })
+      )
+    ).rejects.toMatchObject({ reason: 'SHIFT_NOT_OPEN' });
+    // Another organization's check is refused outright.
+    await expect(
+      tenant(s.as(s.cashier), (db) =>
+        settlement.requireCashShiftForProvider(
+          db,
+          { organizationId: 'another-org', branchId: s.owner.branchId },
+          { deviceId: device, businessDate: s.today }
+        )
+      )
+    ).rejects.toThrow(/another organization/);
+
+    // The database refuses the terminal attempt itself between shifts, whatever wrote it.
+    const attempt = (saleId: string) =>
+      tenant(s.as(s.cashier), (db) =>
+        db.pharmacyCardTerminalAttempt.create({
+          data: {
+            organizationId: s.owner.organizationId,
+            branchId: s.owner.branchId,
+            saleId,
+            deviceId: device,
+            terminalId: 'counter-1',
+            provider: 'QA_TERMINAL',
+            attemptKey: randomUUID(),
+            amountMinor: 200,
+            currency: 'PKR',
+            businessDate: s.today,
+            actorId: s.cashier,
+          },
+        })
+      );
+    await expect(attempt(b.sale.id)).rejects.toThrow(/PHARMACY_SHIFT_NOT_OPEN/);
+
+    const second = await openShift(s, s.cashier2, drawer.id, 0);
+    // With a shift open the attempt is written, and the shift cannot close under it.
+    const open = await attempt(b.sale.id);
+    await expect(closeShift(s, s.cashier2, second.shift.id, 0)).rejects.toMatchObject({
+      reason: 'CARD_TERMINAL_PAYMENT_OPEN',
+    });
+    await tenant(s.owner, (db) =>
+      db.pharmacyCardTerminalAttempt.update({
+        where: { id: open.id },
+        data: { status: 'ABANDONED' },
+      })
+    );
+    await charge(b.sale.id, 200);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves provider charges on a branch without shifts as before', async () => {
+    const s = await shop('provider_single', { shifts: false });
+    const execute = vi.fn(async () => ({ approved: true, providerRef: `ref-${randomUUID()}` }));
+    const a = await bill(s, 300);
+    // No drawer open on this counter at all, as a card payment never needed one.
+    await tenant(s.as(s.cashier), (db) =>
+      settlement.applyPharmacyTender(db, s.as(s.cashier), {
+        saleId: a.sale.id,
+        deviceId: `device-${randomUUID()}`,
+        businessDate: s.today,
+        type: 'CARD',
+        amountMinor: 300,
+        idempotencyKey: randomUUID(),
+        adapter: { name: 'QA_TERMINAL', certified: true, execute },
+      })
+    );
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it("refuses another branch's and another organization's shifts", async () => {

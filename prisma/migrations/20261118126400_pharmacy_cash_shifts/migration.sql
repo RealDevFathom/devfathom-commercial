@@ -388,6 +388,24 @@ END $$;
 REVOKE ALL ON FUNCTION pharmacy_cash_shift_for(text, text, text, text, date, timestamp, text, text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION pharmacy_cash_shift_expected(text, text, integer) FROM PUBLIC;
 
+-- Before a provider is asked to move money (an integrated card or wallet charge or refund, and the
+-- card-terminal preflight), the application asks whether this counter may take money now: on a
+-- branch that runs shifts, its drawer's shift must be open on that business day. It raises exactly
+-- what the insert would, and holds a share lock on the shift row until the transaction ends, so the
+-- shift cannot close in between.
+CREATE OR REPLACE FUNCTION pharmacy_require_cash_shift(org text, branch text, device text, business_date date)
+RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  attributed record;
+BEGIN
+  IF org IS DISTINCT FROM current_setting('app.current_organization_id', true) THEN
+    RAISE EXCEPTION 'PHARMACY_SHIFT_ATTRIBUTION_INVALID: another organization' USING ERRCODE = '42501';
+  END IF;
+  SELECT * INTO attributed FROM pharmacy_cash_shift_for(
+    org, branch, NULL, device, business_date, NULL, NULL, NULL, NULL);
+  RETURN attributed.shift_id;
+END $$;
+
 CREATE OR REPLACE FUNCTION pharmacy_tender_cash_shift() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
@@ -440,6 +458,26 @@ DROP TRIGGER IF EXISTS pharmacy_drawer_movement_cash_shift ON "pharmacy_drawer_m
 CREATE TRIGGER pharmacy_drawer_movement_cash_shift
   BEFORE INSERT ON "pharmacy_drawer_movements"
   FOR EACH ROW EXECUTE FUNCTION pharmacy_drawer_movement_cash_shift();
+
+-- A card-terminal attempt sends a real charge to a terminal. On a branch that runs shifts it is
+-- written only while the counter's shift is open, under a share lock on that shift until the attempt
+-- commits; from then on the open attempt keeps the shift from closing (cash-shifts.ts), so the charge
+-- is always settled into that shift.
+CREATE OR REPLACE FUNCTION pharmacy_card_terminal_attempt_cash_shift() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  attributed record;
+BEGIN
+  SELECT * INTO attributed FROM pharmacy_cash_shift_for(
+    NEW."organizationId", NEW."branchId", NULL, NEW."deviceId", NEW."businessDate",
+    NULL, NULL, NULL, NULL);
+  RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS pharmacy_card_terminal_attempt_cash_shift ON "pharmacy_card_terminal_attempts";
+CREATE TRIGGER pharmacy_card_terminal_attempt_cash_shift
+  BEFORE INSERT ON "pharmacy_card_terminal_attempts"
+  FOR EACH ROW EXECUTE FUNCTION pharmacy_card_terminal_attempt_cash_shift();
 
 -- The day close closes the business day only once every shift of that day at the branch is closed.
 CREATE OR REPLACE FUNCTION pharmacy_daily_close_cash_shift_guard() RETURNS trigger
