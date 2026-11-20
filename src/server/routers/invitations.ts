@@ -147,7 +147,7 @@ export const invitationsRouter = router({
               organizationId: invitation.organizationId,
               userId: invitation.userId,
               invitedById: invitation.invitedById,
-              invitedAt: invitation.createdAt,
+              issuedAt: invitation.updatedAt,
               now,
             },
             activate

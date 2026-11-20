@@ -76,7 +76,11 @@ const db = {
         update: mocks.update,
         count: mocks.count,
       },
-      invitation: { upsert: mocks.invitationUpsert },
+      invitation: {
+        upsert: mocks.invitationUpsert,
+        // DEV-959B: a pharmacy invite reads back when this issue of the invitation was made.
+        findUnique: async () => ({ updatedAt: new Date('2026-11-20T00:00:00.000Z') }),
+      },
       $queryRaw: mocks.queryRaw,
     }),
 };

@@ -1209,6 +1209,171 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
         ).toEqual(expect.arrayContaining(['team.inviteMember', 'invitations.accept']));
       });
 
+      it('never lets a deactivated Pharmacist come back through a re-sent invitation without the owner', async () => {
+        const email = `${id('p3')}@example.test`;
+        const pharmacistInvite = (who: string, pin?: string) =>
+          callers.team(who).inviteMember({
+            name: id('p3'),
+            email,
+            role: 'EMPLOYEE',
+            organizationRoleId: `${orgA}_role_pharmacist`,
+            department: 'COUNTER',
+            title: 'Pharmacist',
+            ...(pin ? { pin } : {}),
+          });
+        const p3 = async () =>
+          (await rows(`SELECT id, status FROM users WHERE email=$1`, [email]))[0] as {
+            id: string;
+            status: string;
+          };
+        const canDispense = async () => {
+          const { can } = await import('@/lib/abac');
+          const { createTenantDb } = await import('@/lib/tenancy/scoped-db');
+          const person = await p3();
+          return can(
+            { id: person.id, role: 'EMPLOYEE', department: 'Pharmacy', status: person.status },
+            'pharmacy:dispense',
+            undefined,
+            { db: createTenantDb(orgA, person.id) as never }
+          );
+        };
+        // The owner invites P as Pharmacist with their PIN, and P accepts.
+        const first = await pharmacistInvite('owner', PIN);
+        await accept(orgA, tokenOf(first.inviteUrl));
+        const { id: pid } = await p3();
+        expect((await p3()).status).toBe('ACTIVE');
+        // The owner deactivates P.
+        await callers.team('owner').adminUpdateMember({ id: pid, status: 'INACTIVE' });
+        // A manager cannot bring P back directly…
+        await expect(
+          callers.team('manager').adminUpdateMember({ id: pid, status: 'ACTIVE' })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        // …nor move P to invited, on the organization page (the reviewer's path)…
+        await expect(
+          callers.admin('manager').updateMember({
+            id: pid,
+            role: 'EMPLOYEE',
+            status: 'INVITED',
+            organizationRoleId: `${orgA}_role_pharmacist`,
+            title: 'Pharmacist',
+            department: 'COUNTER',
+          })
+        ).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: expect.stringMatching(/Only the owner can change/),
+        });
+        // …through SCIM…
+        const { scimAccessChange } = await import('@/lib/scim');
+        const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
+        await expect(
+          withTenantDb(orgA, (db) =>
+            scimAccessChange(
+              { organizationId: orgA, tokenId: 'token', db },
+              [pid],
+              'scim.patchUser',
+              async () => ({
+                targetIds: [pid],
+                value: await db.user.update({
+                  where: { id: pid },
+                  data: { status: 'INVITED' },
+                  select: { id: true },
+                }),
+              })
+            )
+          )
+        ).rejects.toMatchObject({ refusal: { code: 'FORBIDDEN' } });
+        // …or through the platform console.
+        const { executePlatformCommand } = await import('@/lib/platform/commands');
+        await expect(
+          executePlatformCommand(
+            {
+              sessionId: 'session',
+              id: id('platform'),
+              name: 'Platform',
+              email: `${id('platform')}@platform.test`,
+              role: 'SUPER_ADMIN',
+              expiresAt: new Date(Date.now() + 60_000),
+              mfaEnabled: true,
+            } as never,
+            'organization.user',
+            { id: pid, status: 'INVITED' },
+            new Request('https://platform.test/command')
+          )
+        ).rejects.toMatchObject({ message: expect.stringMatching(/extra weight/) });
+        expect((await p3()).status).toBe('INACTIVE');
+        expect(await canDispense()).toBe(true); // the role still gives it; the account is inactive
+
+        // Suppose P were pending again anyway (for example an older change): a re-send by a
+        // manager, on the team screen or through the assistant, is refused…
+        await c.query("SELECT set_config('app.is_platform_admin','true',false)");
+        await c.query(`UPDATE users SET status='INVITED' WHERE id=$1`, [pid]);
+        await expect(pharmacistInvite('manager')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        const { buildPeopleTools } = await import('@/lib/ai/tools/people');
+        const { createTenantDb } = await import('@/lib/tenancy/scoped-db');
+        const assistant = buildPeopleTools({
+          db: createTenantDb(orgA, id('manager')),
+          isAdmin: true,
+          isHr: false,
+          isAdminOrHr: true,
+          ctx: {
+            organizationId: orgA,
+            userId: id('manager'),
+            name: 'Manager',
+            vertical: 'PHARMACY',
+          },
+          can: vi.fn(async () => true),
+          audit: vi.fn(),
+        } as never) as unknown as Record<
+          string,
+          {
+            inputSchema: { parse: (input: Record<string, unknown>) => Record<string, unknown> };
+            execute: (input: Record<string, unknown>) => Promise<{ error?: string }>;
+          }
+        >;
+        const viaAssistant = await assistant.inviteMember.execute(
+          assistant.inviteMember.inputSchema.parse({
+            name: id('p3'),
+            email,
+            role: 'EMPLOYEE',
+            organizationRoleId: `${orgA}_role_pharmacist`,
+            department: 'COUNTER',
+            title: 'Pharmacist',
+          })
+        );
+        expect(viaAssistant.error).toBeTruthy();
+        // …and an invitation re-issued without the owner (here by SQL) cannot be accepted:
+        // the owner's earlier approval was for an earlier issue.
+        const { hashInviteToken } = await import('@/lib/invite-token');
+        const sneaked = `${id('p3_token')}_0123456789abcdef`;
+        await c.query(
+          `UPDATE invitations SET "tokenHash"=$1, "acceptedAt"=NULL, "invitedById"=$2, "expiresAt"=now() + interval '2 days', "updatedAt"=now() WHERE "userId"=$3`,
+          [hashInviteToken(sneaked), id('owner'), pid]
+        );
+        await expect(accept(orgA, sneaked)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        expect((await p3()).status).toBe('INVITED');
+
+        // Only the owner, with their PIN, sends it again; then P can accept.
+        const resent = await pharmacistInvite('owner', PIN);
+        await accept(orgA, tokenOf(resent.inviteUrl));
+        expect((await p3()).status).toBe('ACTIVE');
+        // The acceptance is recorded as done by P, with no PIN, naming the owner approval used.
+        const [issue] = await rows(
+          `SELECT id FROM audit_logs WHERE "targetId"=$1 AND action='team.inviteMember' ORDER BY "createdAt" DESC LIMIT 1`,
+          [pid]
+        );
+        const [accepted] = await rows(
+          `SELECT "actorId", metadata FROM audit_logs WHERE "targetId"=$1 AND action='invitations.accept' ORDER BY "createdAt" DESC LIMIT 1`,
+          [pid]
+        );
+        expect(accepted.actorId).toBe(pid);
+        expect(accepted.metadata).toMatchObject({
+          pinVerified: false,
+          acceptedBy: pid,
+          checkedAs: id('owner'),
+          ownerApprovalAuditId: issue.id,
+        });
+      });
+
       it('refuses an invitation from someone who has since lost the right to give it', async () => {
         const email = `${id('lost')}@example.test`;
         const invited = await callers.team('manager').inviteMember({

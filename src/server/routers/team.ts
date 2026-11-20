@@ -23,7 +23,8 @@ import { adminPasswordResetData, passwordResetDenial } from '@/lib/auth/admin-pa
 import { createMemberInvitation } from '@/lib/member-invitation';
 import { inviteRoleRefusal } from '@/lib/vertical-catalog';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { guardMemberEdit, verifyMemberEditPin } from '../pharmacy-access';
+import { guardMemberEdit, isPharmacyContext, verifyMemberEditPin } from '../pharmacy-access';
+import { INVITATION_ISSUED_AT_KEY } from '@/lib/team/pharmacy-access-guard';
 
 // IMP-AUTH-04: per-category × per-channel notification opt-outs. Sparse —
 // anything unset means "opted in" (notify() defaults to ON). Keys mirror
@@ -282,6 +283,7 @@ export const teamRouter = router({
         input.pin,
         'team.inviteMember'
       );
+      let issuedAt: Date | undefined;
       const { user, token } = await ctx.db.$transaction(async (tx) => {
         // DEV-959B: an invite creates (or refreshes) the member with their role now, so in a
         // pharmacy it passes the access rules here; accepting it later changes no role.
@@ -297,6 +299,15 @@ export const teamRouter = router({
             // An owner re-sending an invitation with their PIN approves it again, so it can
             // still be accepted after a refresh that changes nothing.
             recordApproval: true,
+            // Re-sending gives everything again: no earlier approval is carried forward.
+            reissue: true,
+            // Names this exact issue of the invitation, so accepting it can rely only on the
+            // approval given for it (every re-send changes the row's updatedAt).
+            metadata: {
+              get [INVITATION_ISSUED_AT_KEY]() {
+                return issuedAt?.toISOString() ?? null;
+              },
+            },
             action: 'team.inviteMember',
             describe: (name) => `Invited ${name} with their role`,
           },
@@ -323,6 +334,13 @@ export const teamRouter = router({
                 }
               },
             });
+            if (isPharmacyContext(ctx))
+              issuedAt = (
+                await tx.invitation.findUnique({
+                  where: { userId: value.user.id },
+                  select: { updatedAt: true },
+                })
+              )?.updatedAt;
             return { targetId: value.user.id, value };
           }
         );

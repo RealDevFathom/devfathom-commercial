@@ -73,7 +73,8 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
     write: (
       db: ScopedDb,
       atomically: <R>(run: (tx: ScopedDb) => Promise<R>) => Promise<R>
-    ) => Promise<{ targetId: string; value: T }>
+    ) => Promise<{ targetId: string; value: T }>,
+    options: { reissue?: boolean } = {}
   ): Promise<{ value: T } | { error: string }> {
     const vertical = assistantVertical(ctx.vertical);
     const pharmacy = vertical
@@ -96,6 +97,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
             organizationId: ctx.organizationId,
             actor: { kind: 'member', id: ctx.userId, supportSession: ctx.supportSession === true },
             targetId: typeof targetId === 'function' ? () => targetId(tx) : targetId,
+            reissue: options.reissue,
             pinVerified: false,
             mode: 'role',
             action: `assistant.${action}`,
@@ -987,7 +989,9 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
               return u;
             });
             return { targetId: value.id, value };
-          }
+          },
+          // Re-sending gives everything again: no earlier approval is carried forward.
+          { reissue: true }
         );
         if ('error' in invited) return { error: invited.error };
         const user = invited.value;

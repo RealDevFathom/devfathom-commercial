@@ -57,6 +57,10 @@ export async function guardMemberEdit<T>(
     describe: (name: string) => string;
     /** Record the owner's approval even when nothing changes (a re-sent invitation). */
     recordApproval?: boolean;
+    /** The write issues an invitation (again): everything it gives is checked as given now. */
+    reissue?: boolean;
+    /** Extra audit metadata; getters are read when the audit row is written. */
+    metadata?: Record<string, unknown>;
   },
   write: () => Promise<{ targetId: string; value: T }>
 ): Promise<T> {
@@ -77,6 +81,8 @@ export async function guardMemberEdit<T>(
         action: input.action,
         describe: input.describe,
         recordApproval: input.recordApproval,
+        reissue: input.reissue,
+        metadata: input.metadata,
       },
       write
     );

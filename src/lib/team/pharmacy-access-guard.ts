@@ -287,6 +287,19 @@ export type AccessGuardInput = {
    * changes (a re-sent invitation), so accepting it later can rely on that approval.
    */
   recordApproval?: boolean;
+  /**
+   * The write issues an invitation again (a re-send): everything the person would get is
+   * checked as given now, so a re-send never carries an earlier approval forward.
+   */
+  reissue?: boolean;
+  /**
+   * The write is an invitee accepting: the audit row names the invitee as the actor, records
+   * that no PIN was entered, and the owner approval the acceptance relied on.
+   */
+  acceptance?: {
+    invitee: { id: string; name: string; role: string };
+    ownerApprovalAuditId: string | null;
+  };
   now?: Date;
 };
 
@@ -443,17 +456,25 @@ export async function guardPharmacyAccessChanges<T>(
       !!targetBefore &&
       !ACTIVE_STATUSES.has(targetBefore.status) &&
       ACTIVE_STATUSES.has(targetAfter.status);
+    // Moving someone back to invited leads to active again on acceptance: the same rule.
+    const madePending =
+      !!targetBefore && targetBefore.status !== 'INVITED' && targetAfter.status === 'INVITED';
+    const regains = reactivated || madePending;
+    const reissued = input.reissue === true && !!targetBefore;
     const weightyOn = PHARMACY_SUB_ROLES.map((subRole) => subRole.key).filter(
       (key) => isWeightyPharmacySubRole(key) && after.states.get(key) !== 'off'
     );
-    const checkBefore = reactivated
-      ? new Map(
-          [...before.states].map(([key, state]) => [
-            key,
-            isWeightyPharmacySubRole(key) ? ('off' as const) : state,
-          ])
-        )
-      : before.states;
+    const checkBefore = reissued
+      ? new Map([...before.states].map(([key]) => [key, 'off' as const]))
+      : regains
+        ? new Map(
+            [...before.states].map(([key, state]) => [
+              key,
+              isWeightyPharmacySubRole(key) ? ('off' as const) : state,
+            ])
+          )
+        : before.states;
+    const givenAgain = regains || reissued;
     const editorKind = input.recordApproval ? (await editorFor()).kind : null;
     const approving = input.recordApproval === true && input.pinVerified && editorKind === 'owner';
     const relevant =
@@ -462,7 +483,8 @@ export async function guardPharmacyAccessChanges<T>(
       before.owner !== after.owner ||
       before.admin !== after.admin ||
       (statusChanged && (before.owner || before.admin)) ||
-      (reactivated && (weightyOn.length > 0 || after.admin || after.owner)) ||
+      (regains && (weightyOn.length > 0 || after.admin || after.owner)) ||
+      reissued ||
       approving;
     results.set(targetId, {
       changed,
@@ -488,9 +510,9 @@ export async function guardPharmacyAccessChanges<T>(
       editor: await editorFor(),
       before: checkBefore,
       after: after.states,
-      ownerBefore: reactivated ? false : before.owner,
+      ownerBefore: givenAgain ? false : before.owner,
       ownerAfter: after.owner,
-      adminBefore: reactivated ? false : before.admin,
+      adminBefore: givenAgain ? false : before.admin,
       adminAfter: after.admin,
       ownersBefore,
       ownersAfter,
@@ -504,10 +526,14 @@ export async function guardPharmacyAccessChanges<T>(
     await tx.auditLog.create({
       data: {
         organizationId: input.organizationId,
-        actorType: input.actor.kind === 'member' ? 'USER' : 'SYSTEM',
-        actorId: actor?.id ?? null,
-        actorName: actor?.name ?? (input.actor.kind === 'system' ? input.actor.source : null),
-        actorRole: actor?.role ?? null,
+        actorType: input.actor.kind === 'member' || input.acceptance ? 'USER' : 'SYSTEM',
+        // An acceptance is done by the invitee, never by the owner whose approval it used.
+        actorId: input.acceptance?.invitee.id ?? actor?.id ?? null,
+        actorName:
+          input.acceptance?.invitee.name ??
+          actor?.name ??
+          (input.actor.kind === 'system' ? input.actor.source : null),
+        actorRole: input.acceptance?.invitee.role ?? actor?.role ?? null,
         source:
           input.actor.kind === 'member'
             ? 'TRPC'
@@ -542,10 +568,20 @@ export async function guardPharmacyAccessChanges<T>(
           ...input.metadata,
           changedSubRoles: changed,
           ...(reactivated ? { reactivatedWeighty: weightyOn } : {}),
+          ...(madePending ? { madePendingWeighty: weightyOn } : {}),
+          ...(reissued ? { reissued: true } : {}),
+          ...(input.acceptance
+            ? {
+                acceptedBy: input.acceptance.invitee.id,
+                checkedAs: actor?.id ?? null,
+                ownerApprovalAuditId: input.acceptance.ownerApprovalAuditId,
+              }
+            : {}),
           ...(approving ? { approvedSubRoles: weightyOn } : {}),
           owner: { before: before.owner, after: after.owner },
           administrator: { before: before.admin, after: after.admin },
-          pinVerified: input.pinVerified,
+          // Nobody enters a PIN when accepting an invitation.
+          pinVerified: input.acceptance ? false : input.pinVerified,
           changedAt: now.toISOString(),
         },
       },
@@ -567,12 +603,22 @@ export async function isPharmacyOrganization(db: ScopedDb, organizationId: strin
 export const INVITATION_NEEDS_OWNER_MESSAGE =
   'This invitation needs to be confirmed again. Ask the pharmacy owner to send you a new invitation.';
 
+/** The audit actions that issue (or re-send) an invitation with the issuer's own approval. */
+export const INVITATION_ISSUE_ACTIONS = ['team.inviteMember'] as const;
+
+/**
+ * The metadata key an invitation's issue records, set to the invitation row's `updatedAt`
+ * after the write. Every re-send changes `updatedAt`, so an approval names exactly one issue.
+ */
+export const INVITATION_ISSUED_AT_KEY = 'invitationIssuedAt';
+
 /**
  * DEV-959B: accepting an invitation into a pharmacy is checked again, as if the inviter were
  * adding the person now, so an invitation made before these rules shipped, or by someone who
  * has since lost the right, cannot be accepted. Weighty sub-roles also need the owner's own
- * fresh approval recorded since the invitation was made: an audited change by a current owner
- * with their PIN that gave or approved each of them. Refusals throw `AccessChangeError` with
+ * approval of THIS issue of the invitation: the audit row the issue wrote, by the inviter, a
+ * current owner who entered their PIN and approved each weighty sub-role. Approvals of earlier
+ * issues, and acceptances, never count. Refusals throw `AccessChangeError` with
  * `INVITATION_NEEDS_OWNER_MESSAGE`, and the caller's transaction rolls the acceptance back.
  */
 export async function guardPharmacyInvitationAcceptance<T>(
@@ -581,7 +627,8 @@ export async function guardPharmacyInvitationAcceptance<T>(
     organizationId: string;
     userId: string;
     invitedById: string | null;
-    invitedAt: Date;
+    /** The invitation row's `updatedAt`: when this issue (first send or latest re-send) was made. */
+    issuedAt: Date;
     now?: Date;
   },
   write: () => Promise<T>
@@ -597,35 +644,42 @@ export async function guardPharmacyInvitationAcceptance<T>(
     .filter(([key, state]) => state !== 'off' && isWeightyPharmacySubRole(key))
     .map(([key]) => key);
 
-  let actorId = input.invitedById;
+  const actorId = input.invitedById;
   let pinVerified = false;
+  let ownerApprovalAuditId: string | null = null;
   if (weighty.length > 0) {
-    const approvals = await tx.auditLog.findMany({
+    if (!actorId) throw refuse();
+    const approval = await tx.auditLog.findFirst({
       where: {
         organizationId: input.organizationId,
         targetId: input.userId,
         category: 'TEAM',
-        createdAt: { gte: input.invitedAt },
-        metadata: { path: ['pinVerified'], equals: true },
+        action: { in: [...INVITATION_ISSUE_ACTIONS] },
+        actorId,
+        metadata: { path: [INVITATION_ISSUED_AT_KEY], equals: input.issuedAt.toISOString() },
       },
       orderBy: { createdAt: 'desc' },
-      select: { actorId: true, metadata: true },
+      select: { id: true, metadata: true },
     });
-    const covered = new Set<string>();
-    let approvingOwner: string | null = null;
-    for (const approval of approvals) {
-      if (!approval.actorId) continue;
-      const approver = await loadAccessParty(tx, input.organizationId, approval.actorId, now);
-      if (!approver || !(await isAccessOwner(tx, approver, now))) continue;
-      approvingOwner ??= approver.id;
-      const metadata = (approval.metadata ?? {}) as Record<string, unknown>;
-      for (const field of ['changedSubRoles', 'approvedSubRoles'])
-        for (const key of Array.isArray(metadata[field]) ? (metadata[field] as unknown[]) : [])
-          if (typeof key === 'string') covered.add(key);
-    }
-    if (!approvingOwner || weighty.some((key) => !covered.has(key))) throw refuse();
-    actorId = approvingOwner;
+    const metadata = (approval?.metadata ?? {}) as Record<string, unknown>;
+    const approved = new Set(
+      Array.isArray(metadata.approvedSubRoles)
+        ? (metadata.approvedSubRoles as unknown[]).filter(
+            (key): key is string => typeof key === 'string'
+          )
+        : []
+    );
+    const issuer = await loadAccessParty(tx, input.organizationId, actorId, now);
+    if (
+      !approval ||
+      metadata.pinVerified !== true ||
+      weighty.some((key) => !approved.has(key)) ||
+      !issuer ||
+      !(await isAccessOwner(tx, issuer, now))
+    )
+      throw refuse();
     pinVerified = true;
+    ownerApprovalAuditId = approval.id;
   }
   if (!actorId) throw refuse();
   try {
@@ -640,6 +694,10 @@ export async function guardPharmacyInvitationAcceptance<T>(
         mode: 'role',
         action: 'invitations.accept',
         describe: (name) => `${name} accepted their invitation`,
+        acceptance: {
+          invitee: { id: invitee.id, name: invitee.name, role: invitee.role },
+          ownerApprovalAuditId,
+        },
         now,
       },
       async () => ({ targetIds: [input.userId], value: await write() })
