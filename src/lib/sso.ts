@@ -16,7 +16,7 @@ import {
   isPharmacyOrganization,
 } from '@/lib/team/pharmacy-access-guard';
 
-export const SSO_TICKET_COOKIE = 'df_sso_ticket';
+export { SSO_TICKET_COOKIE } from '@/lib/sso-ticket-cookie';
 
 /**
  * F10 / DEV-833 — login CSRF. Every SSO start sets an unpredictable value in

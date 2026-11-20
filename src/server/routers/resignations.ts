@@ -4,10 +4,7 @@ import { router, protectedProcedure, hrProcedure, capabilityProcedure } from '..
 import { can, subjectFromSession } from '@/lib/abac';
 import { annotateAudit } from '../audit';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import {
-  guardPharmacyAccessChanges,
-  isPharmacyOrganization,
-} from '@/lib/team/pharmacy-access-guard';
+import { guardPharmacyAccessChanges } from '@/lib/team/pharmacy-access-guard';
 import { rethrowAccessChange } from '@/lib/team/member-sub-role-edit';
 import { appUrl, templates } from '@/lib/email';
 import { notify } from '@/lib/notifications';
@@ -241,13 +238,14 @@ export const resignationsRouter = router({
         // IMP-HR-02: off-boarding automation. Keep deactivation atomic with the
         // winning decision so a failed off-boarding cannot leave a partial review.
         if (approved && decided.lastWorkingDay && decided.lastWorkingDay <= new Date()) {
-          const deactivate = () =>
-            tx.user.update({
+          const deactivate = async () => {
+            await tx.user.update({
               where: { organizationId_id: { organizationId, id: resignation.userId } },
               data: { status: 'INACTIVE' },
             });
+          };
           const scoped = tx as unknown as ScopedDb;
-          if (!(await isPharmacyOrganization(scoped, organizationId))) await deactivate();
+          if (ctx.entitlements.vertical !== 'PHARMACY') await deactivate();
           else {
             // DEV-959B: in a pharmacy, off-boarding passes the access guard, so it never
             // leaves the pharmacy without an active owner; the audit shares this transaction.

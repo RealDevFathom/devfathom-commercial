@@ -197,6 +197,7 @@ export async function DELETE(request: Request, route: { params: Promise<{ id: st
       value: await ctx.db.user.update({
         where: { id },
         data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
+        select: { id: true },
       }),
     }));
     await recordScimEvent(ctx, request, {
