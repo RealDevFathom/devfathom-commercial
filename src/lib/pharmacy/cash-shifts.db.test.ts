@@ -419,7 +419,9 @@ async function asMember<T>(
   );
 }
 
-describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
+// Each test seeds its own organization and runs many transactions as the restricted role; under
+// the full pharmacy database run they can pass vitest's 5 s default.
+describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_000 }, () => {
   it('leaves a branch without shifts exactly as before: no shift, no attribution, the same close', async () => {
     const s = await shop('single', { shifts: false });
     const device = `device-${randomUUID()}`;
@@ -634,11 +636,12 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
     // the manager's own credential (which their refunds also use); it spends the approver's budget.
     await expect(
       tenant(s.as(s.cashier), (db) =>
-        shifts.authorizeCashShiftVariance(db, s.as(s.cashier), {
-          shiftId: first!.id,
-          approverId: s.manager,
-          pin: '0000',
-        })
+        shifts.authorizeCashShiftVariance(
+          db,
+          s.as(s.cashier),
+          { shiftId: first!.id, approverId: s.manager, pin: '0000' },
+          { actorIsManager: false }
+        )
       )
     ).rejects.toMatchObject({ reason: 'SHIFT_APPROVAL_REFUSED' });
     const strikes = await tenant(s.owner, (db) =>
@@ -651,28 +654,31 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
     // A cashier never approves their own shift while someone else can; another cashier never can.
     await expect(
       tenant(s.as(s.cashier), (db) =>
-        shifts.authorizeCashShiftVariance(db, s.as(s.cashier), {
-          shiftId: first!.id,
-          approverId: s.cashier,
-          pin: MANAGER_PIN,
-        })
+        shifts.authorizeCashShiftVariance(
+          db,
+          s.as(s.cashier),
+          { shiftId: first!.id, approverId: s.cashier, pin: MANAGER_PIN },
+          { actorIsManager: false }
+        )
       )
     ).rejects.toMatchObject({ reason: 'SHIFT_APPROVAL_NEEDS_ANOTHER' });
     await expect(
       tenant(s.as(s.cashier), (db) =>
-        shifts.authorizeCashShiftVariance(db, s.as(s.cashier), {
-          shiftId: first!.id,
-          approverId: s.cashier2,
-          pin: MANAGER_PIN,
-        })
+        shifts.authorizeCashShiftVariance(
+          db,
+          s.as(s.cashier),
+          { shiftId: first!.id, approverId: s.cashier2, pin: MANAGER_PIN },
+          { actorIsManager: false }
+        )
       )
     ).rejects.toMatchObject({ reason: 'SHIFT_APPROVAL_NOT_ELIGIBLE' });
     const approval = await tenant(s.as(s.cashier), (db) =>
-      shifts.authorizeCashShiftVariance(db, s.as(s.cashier), {
-        shiftId: first!.id,
-        approverId: s.manager,
-        pin: MANAGER_PIN,
-      })
+      shifts.authorizeCashShiftVariance(
+        db,
+        s.as(s.cashier),
+        { shiftId: first!.id, approverId: s.manager, pin: MANAGER_PIN },
+        { actorIsManager: false }
+      )
     );
     expect(approval).toMatchObject({ approverId: s.manager, selfApproved: false });
     const closed1 = await closeShift(s, s.cashier, first!.id, 10_550, {
@@ -924,13 +930,34 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
     const device = counter.id;
     const drawer = await openDrawer(s, device, 0);
     const [first] = await shiftsOf(s, drawer.id);
+    // Consumes the counter's next leased receipt number for `saleId` the way applyPharmacyTender
+    // does: the cursor moves past it and the consumption is recorded, in this transaction.
+    const consume = async (db: ScopedDb, saleId: string, soldAt: Date) => {
+      const [{ receipt_number }] = await db.$queryRaw<Array<{ receipt_number: number }>>`
+        UPDATE pharmacy_receipt_number_leases SET "nextNumber" = "nextNumber" + 1
+         WHERE id = ${lease.id} AND "organizationId" = ${s.owner.organizationId}
+        RETURNING "nextNumber" - 1 AS receipt_number`;
+      await settlement.recordLeasedReceiptConsumption(db, s.owner, {
+        leaseId: lease.id,
+        deviceId: device,
+        receiptNumber: receipt_number!,
+        saleId,
+        soldAt,
+      });
+    };
     // Writes a replayed offline cash sale the way applyPharmacyTender does: the transaction consumes
-    // the counter's leased receipt number, the tender carries the signed sale time, and its cash
-    // movement the attribution the database gave the tender.
-    const replay = (saleId: string, amountMinor: number, soldAt: Date) =>
+    // the counter's leased receipt number for this sale, the tender carries the signed sale time,
+    // and its cash movement the attribution the database gave the tender. With `savepoint`, all of
+    // it runs inside a savepoint, as a replay nested in a larger transaction would.
+    const replay = (
+      saleId: string,
+      amountMinor: number,
+      soldAt: Date,
+      options: { savepoint?: boolean } = {}
+    ) =>
       tenant(s.as(s.cashier), async (db) => {
-        await db.$executeRaw`UPDATE pharmacy_receipt_number_leases SET "nextNumber" = "nextNumber" + 1
-          WHERE id = ${lease.id} AND "organizationId" = ${s.owner.organizationId}`;
+        if (options.savepoint) await db.$executeRaw`SAVEPOINT replay`;
+        await consume(db, saleId, soldAt);
         const tender = await db.pharmacyTender.create({
           data: {
             organizationId: s.owner.organizationId,
@@ -958,6 +985,7 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
             ...(tender.lateArrivalShiftId ? { lateArrivalShiftId: tender.lateArrivalShiftId } : {}),
           },
         });
+        if (options.savepoint) await db.$executeRaw`RELEASE SAVEPOINT replay`;
         return tender;
       });
     const soldInShift1 = new Date(first!.openedAt.getTime() + 1);
@@ -968,7 +996,7 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
     await closeShift(s, s.cashier, first!.id, 250, { varianceNote: 'Offline sale counted' });
     const second = await openShift(s, s.cashier2, drawer.id, 250);
     const late = await bill(s, 100);
-    const afterClose = await replay(late.sale.id, 100, soldInShift1);
+    const afterClose = await replay(late.sale.id, 100, soldInShift1, { savepoint: true });
     // Sold in shift 1, replayed after it closed: a late arrival on shift 1, never in shift 2.
     expect(afterClose).toMatchObject({ shiftId: null, lateArrivalShiftId: first!.id });
 
@@ -1024,6 +1052,112 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
     await expect(tender({ lateArrivalShiftId: first!.id })).rejects.toThrow(refusal);
     await expect(tender({ shiftId: first!.id })).rejects.toThrow(refusal);
     await expect(tender({ soldAt: soldInShift1 })).rejects.toThrow(refusal);
+    // A sale time needs a receipt number this transaction really used for this very sale. A
+    // cursor "moved" to where it already was records nothing, and cannot be claimed by hand.
+    const cashier = s.as(s.cashier);
+    const sameTransaction = (work: (db: ScopedDb) => Promise<unknown>) => tenant(cashier, work);
+    const forgedTender = (db: ScopedDb, saleId: string, soldAt: Date) =>
+      db.pharmacyTender.create({
+        data: {
+          organizationId: s.owner.organizationId,
+          branchId: s.owner.branchId,
+          saleId,
+          type: 'CASH',
+          amountMinor: 10,
+          cashReceivedMinor: 10,
+          changeGivenMinor: 0,
+          drawerSessionId: drawer.id,
+          businessDate: s.today,
+          actorId: s.cashier,
+          deviceId: device,
+          soldAt,
+        },
+      });
+    await expect(
+      sameTransaction(async (db) => {
+        await db.$executeRaw`UPDATE pharmacy_receipt_number_leases SET "nextNumber" = "nextNumber"
+          WHERE id = ${lease.id} AND "organizationId" = ${s.owner.organizationId}`;
+        return forgedTender(db, forged.sale.id, soldInShift1);
+      })
+    ).rejects.toThrow(refusal);
+    await expect(
+      sameTransaction(async (db) => {
+        await db.$executeRaw`UPDATE pharmacy_receipt_number_leases SET "nextNumber" = "nextNumber"
+          WHERE id = ${lease.id} AND "organizationId" = ${s.owner.organizationId}`;
+        const [{ next }] = await db.$queryRaw<Array<{ next: number }>>`
+          SELECT "nextNumber" AS next FROM pharmacy_receipt_number_leases WHERE id = ${lease.id}`;
+        return settlement.recordLeasedReceiptConsumption(db, s.owner, {
+          leaseId: lease.id,
+          deviceId: device,
+          receiptNumber: next! - 1,
+          saleId: forged.sale.id,
+          soldAt: soldInShift1,
+        });
+      })
+    ).rejects.toThrow(/PHARMACY_RECEIPT_CONSUMPTION_INVALID/);
+    // A number really used for another sale does not let this one through, and a used number's
+    // consumption is claimed by its own tender once.
+    const otherSale = await bill(s, 10);
+    await expect(
+      sameTransaction(async (db) => {
+        await consume(db, otherSale.sale.id, soldInShift1);
+        return forgedTender(db, forged.sale.id, soldInShift1);
+      })
+    ).rejects.toThrow(refusal);
+    await expect(
+      sameTransaction(async (db) => {
+        await consume(db, otherSale.sale.id, soldInShift1);
+        await forgedTender(db, otherSale.sale.id, soldInShift1);
+        return forgedTender(db, otherSale.sale.id, soldInShift1);
+      })
+    ).rejects.toThrow(refusal);
+    // A replayed late tender's cash lands on the closed shift once; a second movement is refused.
+    await expect(
+      sameTransaction(async (db) => {
+        await consume(db, otherSale.sale.id, soldInShift1);
+        const lateTender = await forgedTender(db, otherSale.sale.id, soldInShift1);
+        expect(lateTender.lateArrivalShiftId).toBe(first!.id);
+        for (let copy = 0; copy < 2; copy += 1)
+          await db.pharmacyDrawerMovement.create({
+            data: {
+              organizationId: s.owner.organizationId,
+              drawerSessionId: drawer.id,
+              kind: 'CASH_SALE',
+              amountMinor: 10,
+              actorId: s.cashier,
+              lateArrivalShiftId: first!.id,
+            },
+          });
+      })
+    ).rejects.toThrow(refusal);
+    // The record of a used number never changes and is never deleted.
+    await expect(
+      sameTransaction(
+        (db) =>
+          db.$executeRaw`UPDATE pharmacy_receipt_number_consumptions SET "saleId" = ${forged.sale.id}`
+      )
+    ).rejects.toThrow(/PHARMACY_RECEIPT_CONSUMPTION_IMMUTABLE/);
+    await expect(
+      sameTransaction(
+        (db) => db.$executeRaw`UPDATE pharmacy_receipt_number_consumptions SET "tenderId" = NULL`
+      )
+    ).rejects.toThrow(/PHARMACY_RECEIPT_CONSUMPTION_IMMUTABLE/);
+    await expect(
+      sameTransaction((db) => db.$executeRaw`DELETE FROM pharmacy_receipt_number_consumptions`)
+    ).rejects.toThrow(/PHARMACY_RECEIPT_CONSUMPTION_IMMUTABLE/);
+    const used = await tenant(s.owner, (db) =>
+      db.pharmacyReceiptNumberConsumption.findMany({
+        select: { saleId: true, receiptNumber: true, tenderId: true, cashMovementId: true },
+        orderBy: { receiptNumber: 'asc' },
+      })
+    );
+    // Only the two genuine replays used numbers; every forgery rolled back with its transaction.
+    expect(used.map((row) => [row.saleId, row.receiptNumber - lease.blockStart])).toEqual([
+      [early.sale.id, 0],
+      [late.sale.id, 1],
+    ]);
+    expect(used.every((row) => row.tenderId !== null)).toBe(true);
+    expect(used[1]!.cashMovementId).not.toBeNull();
     // Nothing of the forgeries was written; the closed shift and its late arrival are as they were.
     const onShift1 = await tenant(s.owner, (db) =>
       db.pharmacyDrawerMovement.findMany({
@@ -1268,9 +1402,16 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
       );
       return (await shiftsOf(s, drawer.id))[0]!;
     };
+    // `actor` is the person closing the shift and counting its cash.
+    const managers = new Set([s.manager]);
     const authorize = (shiftId: string, approverId: string, pin: string, actor = s.manager) =>
       tenant(s.as(actor), (db) =>
-        shifts.authorizeCashShiftVariance(db, s.as(actor), { shiftId, approverId, pin })
+        shifts.authorizeCashShiftVariance(
+          db,
+          s.as(actor),
+          { shiftId, approverId, pin },
+          { actorIsManager: managers.has(actor) }
+        )
       );
     const credentialOf = (userId: string) =>
       tenant(s.owner, (db) =>
@@ -1282,8 +1423,11 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
     const approversFor = (shiftId: string, actor = s.manager) =>
       tenant(s.as(actor), (db) => shifts.shiftVarianceApprovers(db, s.as(actor), shiftId));
 
-    // The only manager at the branch closes their own shift short: nobody else can approve, so they
-    // approve it themselves with a fresh PIN, recorded as their own approval.
+    // A second manager with the approval right but no approval credential cannot approve, so they
+    // never count as "another approver" who would block a self-approval.
+    managers.add(await addMember(s, `${s.owner.organizationId}_nopin`, ['pharmacy:manage']));
+    // The only manager who can approve closes their own shift short: nobody else can, so they
+    // approve it themselves with a fresh PIN, recorded as a solo approval.
     const own = await shiftOf(s.manager);
     expect((await approversFor(own.id)).map((a) => a.id)).toEqual([s.manager]);
     // Their own wrong PIN strikes their own credential, as at a refund.
@@ -1303,6 +1447,25 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
       reason: 'SHIFT_APPROVAL_NEEDS_ANOTHER',
     });
     expect((await approversFor(cashiers.id, s.cashier)).map((a) => a.id)).toEqual([s.manager]);
+    // A manager closing that cashier's shift counts its cash, so they too approve it alone only
+    // while nobody else can, and it is recorded as a solo approval.
+    expect((await approversFor(cashiers.id)).map((a) => a.id)).toEqual([s.manager]);
+    await expect(authorize(cashiers.id, s.manager, MANAGER_PIN)).resolves.toMatchObject({
+      approverId: s.manager,
+      selfApproved: true,
+      policy: shifts.SHIFT_VARIANCE_SOLO_POLICY,
+    });
+    // Someone who may not close the shift is refused before any PIN is checked: another cashier's
+    // guesses cost the manager no strike and no attempt.
+    for (let attempt = 1; attempt <= 6; attempt += 1)
+      await expect(authorize(cashiers.id, s.manager, '0000', s.cashier2)).rejects.toMatchObject({
+        reason: 'DRAWER_NOT_YOURS',
+      });
+    expect(await credentialOf(s.manager)).toMatchObject({ failedAttempts: 0, lockedUntil: null });
+    await expect(authorize(cashiers.id, s.manager, MANAGER_PIN, s.cashier)).resolves.toMatchObject({
+      approverId: s.manager,
+      selfApproved: false,
+    });
 
     // Once a second manager works at the branch, the first may no longer approve their own shift.
     const second = await addMember(
@@ -1313,8 +1476,14 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
         pin: '7391',
       }
     );
+    managers.add(second);
     const ownAgain = await shiftOf(s.manager);
     expect((await approversFor(ownAgain.id)).map((a) => a.id)).toEqual([second]);
+    // Nor a cashier's shift they close: the second manager approves it.
+    await expect(authorize(cashiers.id, s.manager, MANAGER_PIN)).rejects.toMatchObject({
+      reason: 'SHIFT_APPROVAL_NEEDS_ANOTHER',
+    });
+    expect((await approversFor(cashiers.id)).map((a) => a.id)).toEqual([second]);
     await expect(authorize(ownAgain.id, s.manager, MANAGER_PIN)).rejects.toMatchObject({
       reason: 'SHIFT_APPROVAL_NEEDS_ANOTHER',
     });
@@ -1353,13 +1522,17 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
       reason: 'SHIFT_APPROVAL_LOCKED',
     });
     // Those guesses were typed by someone else: the second manager's own credential took no
-    // strike, so they are not locked out of their refunds, and can still approve at their own
-    // counter with their own PIN.
+    // strike, so their own PIN still works for their refunds.
     expect(await credentialOf(second)).toMatchObject({ failedAttempts: 0, lockedUntil: null });
-    await expect(authorize(cashiers.id, second, '7391', second)).resolves.toMatchObject({
-      approverId: second,
-      selfApproved: false,
-    });
+    const { authenticateRefundPin } = await import('./refund-authorization');
+    await expect(
+      authenticateRefundPin({
+        organizationId: s.owner.organizationId,
+        actorId: second,
+        pin: '7391',
+        action: 'pharmacySales.refund',
+      })
+    ).resolves.toEqual({ verified: true });
   });
 
   it('keeps closed shifts frozen when the day is reopened, and adds the new shifts to the next close', async () => {

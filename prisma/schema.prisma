@@ -1358,6 +1358,7 @@ enum PharmacyCustomerOrderEventKind {
 
 model PharmacySale {
   printJobs PharmacyPrintJob[]
+  receiptNumberConsumptions PharmacyReceiptNumberConsumption[]
   portalRefillRequests      PharmacyCustomerPortalRequest[]
   id                        String                       @id @default(cuid())
   organizationId            String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -15352,12 +15353,44 @@ model PharmacyReceiptNumberLease {
   nextNumber      Int
   issuedToActorId String
   issuedAt        DateTime @default(now())
+  /// DEV-958B: the transaction that last moved the cursor forward, set only by the database.
+  lastAdvancedXact BigInt?
 
-  device PharmacyRegisteredDevice @relation(fields: [organizationId, branchId, deviceId], references: [organizationId, branchId, id], onDelete: Restrict)
+  device       PharmacyRegisteredDevice           @relation(fields: [organizationId, branchId, deviceId], references: [organizationId, branchId, id], onDelete: Restrict)
+  consumptions PharmacyReceiptNumberConsumption[]
 
   @@unique([organizationId, id], map: "pharmacy_receipt_number_leases_org_id_key")
   @@unique([organizationId, branchId, deviceId, blockStart], map: "pharmacy_receipt_number_leases_block_key")
   @@map("pharmacy_receipt_number_leases")
+}
+
+/// DEV-958B: which leased receipt number an offline replay used, for which sale. Written in the
+/// replay's transaction right after the lease cursor moves; the database accepts it only for the
+/// number that transaction consumed. The replayed tender, and its cash movement, each claim it once.
+/// Rows never change otherwise and are never deleted.
+model PharmacyReceiptNumberConsumption {
+  id             String   @id
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  deviceId       String
+  leaseId        String
+  receiptNumber  Int
+  saleId         String
+  soldAt         DateTime
+  consumedXact   BigInt
+  tenderId       String?
+  cashMovementId String?
+  createdAt      DateTime @default(now())
+
+  lease PharmacyReceiptNumberLease @relation(fields: [organizationId, leaseId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_receipt_number_consumptions_lease_fkey")
+  sale  PharmacySale               @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_receipt_number_consumptions_sale_fkey")
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, leaseId, receiptNumber], map: "pharmacy_receipt_number_consumptions_number_key")
+  @@unique([organizationId, saleId], map: "pharmacy_receipt_number_consumptions_sale_key")
+  @@unique([organizationId, tenderId], map: "pharmacy_receipt_number_consumptions_tender_key")
+  @@unique([organizationId, cashMovementId], map: "pharmacy_receipt_number_consumptions_movement_key")
+  @@map("pharmacy_receipt_number_consumptions")
 }
 
 /// OFF-03 — the units of one (lot, location) bucket a single counter owns while

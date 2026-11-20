@@ -202,11 +202,12 @@ describe('DEV-958B cash shift procedures', () => {
       approval: { approverId: 'manager-b', approverPin: '4826' },
     });
     expect(order).toEqual(['approve', 'close']);
-    expect(authorizeCashShiftVariance).toHaveBeenCalledWith(expect.anything(), SCOPE, {
-      shiftId: 'shift-1',
-      approverId: 'manager-b',
-      pin: '4826',
-    });
+    expect(authorizeCashShiftVariance).toHaveBeenCalledWith(
+      expect.anything(),
+      SCOPE,
+      { shiftId: 'shift-1', approverId: 'manager-b', pin: '4826' },
+      { actorIsManager: false }
+    );
     expect(closePharmacyCashShift).toHaveBeenCalledWith(
       expect.anything(),
       SCOPE,

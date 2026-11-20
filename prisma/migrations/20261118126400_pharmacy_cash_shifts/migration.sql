@@ -406,15 +406,139 @@ BEGIN
   RETURN attributed.shift_id;
 END $$;
 
+-- Which receipt number an offline replay used, for which sale. A tender may carry a sale time (and
+-- so land in the shift it was sold in, or on that shift as a late arrival) only when its sale has a
+-- row here, written in the same transaction, for a number the transaction really consumed:
+--   * a lease records the transaction that last moved its cursor forward. The database sets it on
+--     every write; a cursor that does not move (a no-op update) records nothing;
+--   * a consumption row is accepted only for the number just behind that cursor, inside the lease's
+--     block, moved in this very transaction, by the lease's own counter and branch, for a sale of
+--     that branch sold no earlier than the lease was issued. A number is consumed once, and a sale
+--     once;
+--   * the transaction is the top-level one (pg_current_xact_id), so a replay inside a savepoint
+--     still matches;
+--   * the replayed tender claims its sale's row, and that tender's cash movement claims it once.
+-- The rows never change otherwise and are never deleted.
+ALTER TABLE "pharmacy_receipt_number_leases" ADD COLUMN IF NOT EXISTS "lastAdvancedXact" BIGINT;
+
+CREATE OR REPLACE FUNCTION pharmacy_receipt_lease_advanced_xact() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW."lastAdvancedXact" := NULL;
+  ELSIF NEW."nextNumber" > OLD."nextNumber" THEN
+    NEW."lastAdvancedXact" := pg_current_xact_id()::text::bigint;
+  ELSE
+    NEW."lastAdvancedXact" := OLD."lastAdvancedXact";
+  END IF;
+  RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS pharmacy_receipt_lease_advanced_xact ON "pharmacy_receipt_number_leases";
+CREATE TRIGGER pharmacy_receipt_lease_advanced_xact
+  BEFORE INSERT OR UPDATE ON "pharmacy_receipt_number_leases"
+  FOR EACH ROW EXECUTE FUNCTION pharmacy_receipt_lease_advanced_xact();
+
+CREATE TABLE IF NOT EXISTS "pharmacy_receipt_number_consumptions" (
+  "id" TEXT NOT NULL,
+  "organizationId" TEXT NOT NULL DEFAULT current_setting('app.current_organization_id', true),
+  "branchId" TEXT NOT NULL,
+  "deviceId" TEXT NOT NULL,
+  "leaseId" TEXT NOT NULL,
+  "receiptNumber" INTEGER NOT NULL,
+  "saleId" TEXT NOT NULL,
+  "soldAt" TIMESTAMP(3) NOT NULL,
+  "consumedXact" BIGINT NOT NULL,
+  "tenderId" TEXT,
+  "cashMovementId" TEXT,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "pharmacy_receipt_number_consumptions_pkey" PRIMARY KEY ("id"),
+  CONSTRAINT "pharmacy_receipt_number_consumptions_lease_fkey" FOREIGN KEY ("organizationId", "leaseId")
+    REFERENCES "pharmacy_receipt_number_leases"("organizationId", "id") ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT "pharmacy_receipt_number_consumptions_sale_fkey" FOREIGN KEY ("organizationId", "branchId", "saleId")
+    REFERENCES "pharmacy_sales"("organizationId", "branchId", "id") ON DELETE RESTRICT ON UPDATE RESTRICT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "pharmacy_receipt_number_consumptions_organizationId_id_key"
+  ON "pharmacy_receipt_number_consumptions"("organizationId", "id");
+CREATE UNIQUE INDEX IF NOT EXISTS "pharmacy_receipt_number_consumptions_number_key"
+  ON "pharmacy_receipt_number_consumptions"("organizationId", "leaseId", "receiptNumber");
+CREATE UNIQUE INDEX IF NOT EXISTS "pharmacy_receipt_number_consumptions_sale_key"
+  ON "pharmacy_receipt_number_consumptions"("organizationId", "saleId");
+CREATE UNIQUE INDEX IF NOT EXISTS "pharmacy_receipt_number_consumptions_tender_key"
+  ON "pharmacy_receipt_number_consumptions"("organizationId", "tenderId");
+CREATE UNIQUE INDEX IF NOT EXISTS "pharmacy_receipt_number_consumptions_movement_key"
+  ON "pharmacy_receipt_number_consumptions"("organizationId", "cashMovementId");
+
+ALTER TABLE "pharmacy_receipt_number_consumptions" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "pharmacy_receipt_number_consumptions" FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON "pharmacy_receipt_number_consumptions";
+CREATE POLICY tenant_isolation ON "pharmacy_receipt_number_consumptions"
+  USING ("organizationId" = current_setting('app.current_organization_id', true))
+  WITH CHECK ("organizationId" = current_setting('app.current_organization_id', true));
+
+CREATE OR REPLACE FUNCTION pharmacy_receipt_number_consumption_guard() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  lease record;
+  xact bigint := pg_current_xact_id()::text::bigint;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'PHARMACY_RECEIPT_CONSUMPTION_IMMUTABLE: a used receipt number stays recorded'
+      USING ERRCODE = '55000';
+  END IF;
+  IF TG_OP = 'UPDATE' THEN
+    -- Only the tender and movement guards below claim a row, once each.
+    IF pg_trigger_depth() < 2
+       OR (NEW."id", NEW."organizationId", NEW."branchId", NEW."deviceId", NEW."leaseId",
+           NEW."receiptNumber", NEW."saleId", NEW."soldAt", NEW."consumedXact", NEW."createdAt")
+          IS DISTINCT FROM
+          (OLD."id", OLD."organizationId", OLD."branchId", OLD."deviceId", OLD."leaseId",
+           OLD."receiptNumber", OLD."saleId", OLD."soldAt", OLD."consumedXact", OLD."createdAt")
+       OR (OLD."tenderId" IS NOT NULL AND NEW."tenderId" IS DISTINCT FROM OLD."tenderId")
+       OR (OLD."cashMovementId" IS NOT NULL AND NEW."cashMovementId" IS DISTINCT FROM OLD."cashMovementId")
+    THEN
+      RAISE EXCEPTION 'PHARMACY_RECEIPT_CONSUMPTION_IMMUTABLE: a used receipt number stays recorded'
+        USING ERRCODE = '55000';
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF NEW."tenderId" IS NOT NULL OR NEW."cashMovementId" IS NOT NULL THEN
+    RAISE EXCEPTION 'PHARMACY_RECEIPT_CONSUMPTION_INVALID: a consumption is claimed by its tender'
+      USING ERRCODE = '23514';
+  END IF;
+  SELECT l.* INTO lease FROM "pharmacy_receipt_number_leases" l
+   WHERE l."organizationId" = NEW."organizationId" AND l."id" = NEW."leaseId"
+   FOR UPDATE;
+  IF NOT FOUND
+     OR lease."branchId" IS DISTINCT FROM NEW."branchId"
+     OR lease."deviceId" IS DISTINCT FROM NEW."deviceId"
+     OR NEW."receiptNumber" NOT BETWEEN lease."blockStart" AND lease."blockEnd"
+     OR lease."nextNumber" IS DISTINCT FROM NEW."receiptNumber" + 1
+     OR lease."lastAdvancedXact" IS DISTINCT FROM xact
+     OR lease."issuedAt" > NEW."soldAt" THEN
+    RAISE EXCEPTION 'PHARMACY_RECEIPT_CONSUMPTION_INVALID: this transaction did not use that receipt number'
+      USING ERRCODE = '23514';
+  END IF;
+  NEW."consumedXact" := xact;
+  RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS pharmacy_receipt_number_consumption_guard ON "pharmacy_receipt_number_consumptions";
+CREATE TRIGGER pharmacy_receipt_number_consumption_guard
+  BEFORE INSERT OR UPDATE OR DELETE ON "pharmacy_receipt_number_consumptions"
+  FOR EACH ROW EXECUTE FUNCTION pharmacy_receipt_number_consumption_guard();
+
 -- The attribution is the database's alone, and a late arrival is exactly what the application's own
 -- offline path writes, nothing wider:
 --   * a tender or refund never names its shift; the database sets it;
---   * a tender carries a sale time ("soldAt") only from an offline replay: the same transaction
---     consumed one of that counter's receipt-number leases, issued no later than the sale time, so a
---     sale time cannot be written by hand to push a payment out of the open shift;
+--   * a tender carries a sale time ("soldAt") only from an offline replay: its sale's receipt-number
+--     consumption, for this counter and this sale time, was recorded in this transaction, and the
+--     tender claims it (once), so a sale time cannot be written by hand to push a payment out of the
+--     open shift;
 --   * a drawer movement names a closed shift as a late arrival only for the cash of such a replayed
---     tender: a cash sale of the same amount on the same drawer, one movement per late tender, both
---     written in this transaction. A paid-in, paid-out, refund or anything else never lands on a
+--     tender: a cash sale of the same amount on the same drawer and late shift, claiming that
+--     tender's consumption (once). A paid-in, paid-out, refund or anything else never lands on a
 --     closed shift.
 CREATE OR REPLACE FUNCTION pharmacy_tender_cash_shift() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
@@ -425,14 +549,16 @@ BEGIN
     RAISE EXCEPTION 'PHARMACY_SHIFT_ATTRIBUTION_INVALID: the database chooses a tender''s shift'
       USING ERRCODE = '23514';
   END IF;
-  IF NEW."soldAt" IS NOT NULL AND NOT EXISTS (
-    SELECT 1 FROM "pharmacy_receipt_number_leases" l
-     WHERE l."organizationId" = NEW."organizationId" AND l."branchId" = NEW."branchId"
-       AND l."deviceId" = NEW."deviceId" AND l."issuedAt" <= NEW."soldAt"
-       AND l.xmin = pg_current_xact_id()::xid
-  ) THEN
-    RAISE EXCEPTION 'PHARMACY_SHIFT_ATTRIBUTION_INVALID: only an offline replay carries a sale time'
-      USING ERRCODE = '23514';
+  IF NEW."soldAt" IS NOT NULL THEN
+    UPDATE "pharmacy_receipt_number_consumptions" c SET "tenderId" = NEW."id"
+     WHERE c."organizationId" = NEW."organizationId" AND c."saleId" = NEW."saleId"
+       AND c."branchId" = NEW."branchId" AND c."deviceId" = NEW."deviceId"
+       AND c."soldAt" = NEW."soldAt" AND c."tenderId" IS NULL
+       AND c."consumedXact" = pg_current_xact_id()::text::bigint;
+    IF NOT FOUND OR NEW."id" IS NULL THEN
+      RAISE EXCEPTION 'PHARMACY_SHIFT_ATTRIBUTION_INVALID: only an offline replay carries a sale time'
+        USING ERRCODE = '23514';
+    END IF;
   END IF;
   SELECT * INTO attributed FROM pharmacy_cash_shift_for(
     NEW."organizationId", NEW."branchId", NEW."drawerSessionId", NEW."deviceId", NEW."businessDate",
@@ -464,21 +590,26 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   attributed record;
 BEGIN
-  IF NEW."lateArrivalShiftId" IS NOT NULL AND (
-    NEW."kind" <> 'CASH_SALE' OR NEW."shiftId" IS NOT NULL
-    OR (SELECT count(*) FROM "pharmacy_tenders" t
-         WHERE t."organizationId" = NEW."organizationId"
-           AND t."drawerSessionId" = NEW."drawerSessionId"
-           AND t."lateArrivalShiftId" = NEW."lateArrivalShiftId" AND t."type" = 'CASH'
-           AND t."amountMinor" = NEW."amountMinor" AND t.xmin = pg_current_xact_id()::xid)
-       <= (SELECT count(*) FROM "pharmacy_drawer_movements" m
-            WHERE m."organizationId" = NEW."organizationId"
-              AND m."drawerSessionId" = NEW."drawerSessionId"
-              AND m."lateArrivalShiftId" = NEW."lateArrivalShiftId" AND m."kind" = 'CASH_SALE'
-              AND m."amountMinor" = NEW."amountMinor" AND m.xmin = pg_current_xact_id()::xid)
-  ) THEN
-    RAISE EXCEPTION 'PHARMACY_SHIFT_ATTRIBUTION_INVALID: only a replayed offline sale''s cash lands on a closed shift'
-      USING ERRCODE = '23514';
+  IF NEW."lateArrivalShiftId" IS NOT NULL THEN
+    IF NEW."kind" <> 'CASH_SALE' OR NEW."shiftId" IS NOT NULL OR NEW."id" IS NULL THEN
+      RAISE EXCEPTION 'PHARMACY_SHIFT_ATTRIBUTION_INVALID: only a replayed offline sale''s cash lands on a closed shift'
+        USING ERRCODE = '23514';
+    END IF;
+    UPDATE "pharmacy_receipt_number_consumptions" c SET "cashMovementId" = NEW."id"
+     WHERE c."id" = (
+       SELECT c2."id" FROM "pharmacy_receipt_number_consumptions" c2
+         JOIN "pharmacy_tenders" t ON t."organizationId" = c2."organizationId" AND t."id" = c2."tenderId"
+        WHERE c2."organizationId" = NEW."organizationId" AND c2."cashMovementId" IS NULL
+          AND c2."consumedXact" = pg_current_xact_id()::text::bigint
+          AND t."drawerSessionId" = NEW."drawerSessionId"
+          AND t."lateArrivalShiftId" = NEW."lateArrivalShiftId"
+          AND t."type" = 'CASH' AND t."amountMinor" = NEW."amountMinor"
+        ORDER BY c2."id" LIMIT 1
+        FOR UPDATE OF c2);
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'PHARMACY_SHIFT_ATTRIBUTION_INVALID: only a replayed offline sale''s cash lands on a closed shift'
+        USING ERRCODE = '23514';
+    END IF;
   END IF;
   SELECT * INTO attributed FROM pharmacy_cash_shift_for(
     NEW."organizationId", NULL, NEW."drawerSessionId", NULL, NULL, NULL,

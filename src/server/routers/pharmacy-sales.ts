@@ -2256,11 +2256,16 @@ export const pharmacySalesRouter = router({
       try {
         const { scope, actorIsManager } = await cashShiftScope(ctx, input.branchId);
         const approval = input.approval
-          ? await authorizeCashShiftVariance(ctx.db, scope, {
-              shiftId: input.shiftId,
-              approverId: input.approval.approverId,
-              pin: input.approval.approverPin,
-            })
+          ? await authorizeCashShiftVariance(
+              ctx.db,
+              scope,
+              {
+                shiftId: input.shiftId,
+                approverId: input.approval.approverId,
+                pin: input.approval.approverPin,
+              },
+              { actorIsManager }
+            )
           : undefined;
         const result = await ctx.db.$transaction(async (tx) =>
           closePharmacyCashShift(

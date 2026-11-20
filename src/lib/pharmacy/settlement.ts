@@ -575,6 +575,24 @@ async function lockDrawerDay(db: ScopedDb, scope: LedgerScope, drawerSessionId: 
   await requirePharmacyDayOpen(db, scope, drawer.businessDate);
 }
 
+/**
+ * DEV-958B: records which leased receipt number this replay used, for which sale, in the same
+ * transaction that moved the lease cursor. The database accepts the row only for the number that
+ * transaction consumed, and lets a tender carry the signed sale time only when its sale has one; so
+ * a sale time cannot be written by hand to move a payment out of the open cash shift.
+ */
+export async function recordLeasedReceiptConsumption(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string },
+  input: { leaseId: string; deviceId: string; receiptNumber: number; saleId: string; soldAt: Date }
+) {
+  await db.$executeRaw(Prisma.sql`
+    INSERT INTO pharmacy_receipt_number_consumptions
+      (id, "organizationId", "branchId", "deviceId", "leaseId", "receiptNumber", "saleId", "soldAt")
+    VALUES (${randomUUID()}, ${scope.organizationId}, ${scope.branchId}, ${input.deviceId},
+      ${input.leaseId}, ${input.receiptNumber}, ${input.saleId}, ${input.soldAt})`);
+}
+
 export async function applyPharmacyTender(
   db: ScopedDb,
   scope: LedgerScope,
@@ -697,6 +715,13 @@ export async function applyPharmacyTender(
     if (!consumed[0]) throw new PharmacySettlementError('INVALID_RECEIPT_LEASE');
     receiptNumber = consumed[0].receipt_number;
     printedReceiptNumber = receiptNumber;
+    await recordLeasedReceiptConsumption(db, scope, {
+      leaseId,
+      deviceId: input.deviceId,
+      receiptNumber,
+      saleId: sale.id,
+      soldAt: new Date(input.leasedReceipt.originalSaleAt),
+    });
   }
 
   let drawerSessionId: string | undefined;

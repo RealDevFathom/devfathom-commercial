@@ -391,55 +391,84 @@ async function branchApprovers(
   return approvers;
 }
 
-/**
- * Whether the shift's own cashier may approve its over or short: only when nobody else at the
- * branch holds the approval right, and then only a manager or owner, or a solo owner or sole
- * pharmacist under the solo-pharmacy rule (the same idea as a pharmacist working alone).
- */
-async function cashierMaySelfApprove(db: ScopedDb, scope: LedgerScope, cashier: BranchMember) {
-  const others = (await branchApprovers(db, scope, { withPin: false })).filter(
-    (member) => member.id !== cashier.id
+/** Whether `userId` has a live approval credential (an unrevoked operator PIN of their own). */
+async function hasApprovalCredential(db: ScopedDb, scope: LedgerScope, userId: string) {
+  return (
+    (await db.restaurantOperatorCredential.count({
+      where: {
+        organizationId: scope.organizationId,
+        type: 'PIN',
+        revokedAt: null,
+        deviceId: null,
+        staffProfile: { organizationId: scope.organizationId, userId, status: 'ACTIVE' },
+      },
+    })) > 0
   );
-  if (others.length > 0) return { allowed: false as const, othersExist: true };
+}
+
+/**
+ * The people at the branch who could approve a shift's over or short as a second person: managers
+ * and owners with the drawer-manager right and a live approval credential, other than the shift's
+ * cashier and the person closing it and counting the cash. Someone with the right but no credential
+ * cannot approve, so they never count as "another approver".
+ */
+async function independentApprovers(
+  db: ScopedDb,
+  scope: LedgerScope,
+  parties: ReadonlySet<string>
+) {
+  return (await branchApprovers(db, scope, { withPin: true })).filter(
+    (member) => !parties.has(member.id)
+  );
+}
+
+/**
+ * Whether one of the shift's own people (its cashier, or the person closing it) may approve its over
+ * or short alone, once nobody else can: a manager or owner, or a solo owner or sole pharmacist under
+ * the solo-pharmacy rule. It is recorded as a solo approval.
+ */
+async function partyMaySelfApprove(db: ScopedDb, scope: LedgerScope, member: BranchMember) {
   if (
-    await actorManagesBranchDrawers(db, cashier, scope.organizationId, scope.branchId, {
+    await actorManagesBranchDrawers(db, member, scope.organizationId, scope.branchId, {
       source: 'TRPC',
     })
   )
-    return { allowed: true as const, othersExist: false };
-  return {
-    allowed: await soloSelfApprovalAllowed(db, { ...scope, actorId: cashier.id }),
-    othersExist: false,
-  };
+    return true;
+  return soloSelfApprovalAllowed(db, { ...scope, actorId: member.id });
 }
 
 /**
  * The approval of an over or short above the tolerance, for one shift, verified before the close's
- * transaction so a refusal's strike or spent attempt and its audit row commit. A second person approves: a manager or owner at
- * the branch (the drawer-manager gate) who is not the shift's cashier. A manager or owner closing
- * their own shift needs another eligible approver whenever one exists; they, or a solo owner or sole
- * pharmacist, approve their own only when nobody else can. Every approval takes the approver's fresh
- * PIN or authenticator code through the shared path, and a refusal says so.
+ * transaction so a refusal's strike or spent attempt and its audit row commit. The caller must be
+ * allowed to close that shift (its own cashier, or a manager or owner of the branch) before any
+ * PIN is checked. A second person approves: a manager or owner at the branch (the drawer-manager
+ * gate) who is neither the shift's cashier nor the person closing it and counting the cash. Either
+ * of those two approves alone only when nobody else with a live approval credential can, and it is
+ * recorded as a solo approval. Every approval takes the approver's fresh PIN or authenticator code
+ * through the shared path, and a refusal says so.
  */
 export async function authorizeCashShiftVariance(
   db: ScopedDb,
   scope: LedgerScope,
-  input: { shiftId: string; approverId: string; pin: string }
+  input: { shiftId: string; approverId: string; pin: string },
+  options: { actorIsManager: boolean }
 ): Promise<CashShiftVarianceApproval> {
   const shift = await findShift(db, scope, input.shiftId);
+  if (!options.actorIsManager && shift.cashierId !== scope.actorId)
+    throw new PharmacySettlementError('DRAWER_NOT_YOURS');
   const approver = await db.user.findFirst({
     where: { id: input.approverId, organizationId: scope.organizationId, status: 'ACTIVE' },
     select: { id: true, name: true, role: true, department: true, status: true },
   });
   if (!approver) throw new PharmacySettlementError('SHIFT_APPROVAL_NOT_ELIGIBLE');
-  const ownShift = approver.id === shift.cashierId;
+  const parties = new Set([shift.cashierId, scope.actorId]);
+  const selfApproved = parties.has(approver.id);
   let policy: CashShiftVarianceApproval['policy'] = SHIFT_VARIANCE_APPROVAL_POLICY;
-  if (ownShift) {
-    const self = await cashierMaySelfApprove(db, scope, approver);
-    if (!self.allowed)
-      throw new PharmacySettlementError(
-        self.othersExist ? 'SHIFT_APPROVAL_NEEDS_ANOTHER' : 'SHIFT_APPROVAL_NOT_ELIGIBLE'
-      );
+  if (selfApproved) {
+    if ((await independentApprovers(db, scope, parties)).length > 0)
+      throw new PharmacySettlementError('SHIFT_APPROVAL_NEEDS_ANOTHER');
+    if (!(await partyMaySelfApprove(db, scope, approver)))
+      throw new PharmacySettlementError('SHIFT_APPROVAL_NOT_ELIGIBLE');
     policy = SHIFT_VARIANCE_SOLO_POLICY;
   } else if (
     !(await actorManagesBranchDrawers(db, approver, scope.organizationId, scope.branchId, {
@@ -460,7 +489,7 @@ export async function authorizeCashShiftVariance(
     throw new PharmacySettlementError(
       outcome === 'LOCKED' ? 'SHIFT_APPROVAL_LOCKED' : 'SHIFT_APPROVAL_REFUSED'
     );
-  return { shiftId: shift.id, approverId: input.approverId, policy, selfApproved: ownShift };
+  return { shiftId: shift.id, approverId: input.approverId, policy, selfApproved };
 }
 
 type ApproverPinOutcome = 'VERIFIED' | 'REFUSED' | 'LOCKED';
@@ -618,31 +647,22 @@ async function soloSelfApprovalAllowed(db: ScopedDb, scope: LedgerScope) {
  */
 export async function shiftVarianceApprovers(db: ScopedDb, scope: LedgerScope, shiftId: string) {
   const shift = await findShift(db, scope, shiftId);
-  const withPin = await branchApprovers(db, scope, { withPin: true });
-  const approvers = withPin.filter((member) => member.id !== shift.cashierId);
-  if (!approvers.length) {
-    const cashier = await db.user.findFirst({
-      where: { id: shift.cashierId, organizationId: scope.organizationId, status: 'ACTIVE' },
-      select: { id: true, name: true, role: true, department: true, status: true },
-    });
-    const hasPin = cashier
-      ? (await db.restaurantOperatorCredential.count({
-          where: {
-            organizationId: scope.organizationId,
-            type: 'PIN',
-            revokedAt: null,
-            deviceId: null,
-            staffProfile: {
-              organizationId: scope.organizationId,
-              userId: cashier.id,
-              status: 'ACTIVE',
-            },
-          },
-        })) > 0
-      : false;
-    if (cashier && hasPin && (await cashierMaySelfApprove(db, scope, cashier)).allowed)
-      approvers.push(cashier);
-  }
+  // The caller is the person who would close the shift and count it.
+  const parties = new Set([scope.actorId, shift.cashierId]);
+  const approvers: BranchMember[] = await independentApprovers(db, scope, parties);
+  if (!approvers.length)
+    for (const id of parties) {
+      const member = await db.user.findFirst({
+        where: { id, organizationId: scope.organizationId, status: 'ACTIVE' },
+        select: { id: true, name: true, role: true, department: true, status: true },
+      });
+      if (
+        member &&
+        (await hasApprovalCredential(db, scope, member.id)) &&
+        (await partyMaySelfApprove(db, scope, member))
+      )
+        approvers.push(member);
+    }
   return approvers.map((member) => ({
     id: member.id,
     name: member.name,
