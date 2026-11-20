@@ -36,6 +36,7 @@ import { readReceiptIdentity } from './receipt-identity';
 import { parseShelfLabelCode } from './shelf-label-code';
 import type { LedgerScope } from './stock-ledger';
 import { BATCH_NOT_RECORDED, compareKnownExpiryFirst } from './unrecorded-batch';
+import { counterSetAsidesInForce } from './offline-cash-selling';
 
 export class PharmacyCounterError extends Error {
   constructor(readonly reason: 'NOT_FOUND' | 'CROSS_BRANCH_REFERENCE' | 'INVALID_QUERY') {
@@ -765,7 +766,8 @@ async function hydrateCounterRows(
 
   // DEV-957 phase 2: units set aside for an enrolled counter to sell offline are not
   // offered here, exactly as the sale allocation leaves them out (stock-ledger.ts).
-  const held = lotIds.length
+  // Review round 2: only while offline cash selling is in force (offline-cash-selling.ts).
+  const held = lotIds.length && (await counterSetAsidesInForce(db, scope.organizationId))
     ? await db.pharmacyDeviceLotQuota.findMany({
         where: {
           organizationId: scope.organizationId,

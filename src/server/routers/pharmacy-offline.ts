@@ -73,7 +73,9 @@ import { isPharmacistCheckPolicyOwner } from '@/lib/pharmacy/pharmacist-check-po
 import {
   OFFLINE_CASH_SELLING_UNAVAILABLE_MESSAGE,
   OfflineCashSellingError,
+  counterSetAsidesInForce,
   readOfflineCashSelling,
+  signedRulesAllowOfflineSelling,
   writeOfflineCashSelling,
 } from '@/lib/pharmacy/offline-cash-selling';
 import {
@@ -231,12 +233,15 @@ export const pharmacyOfflineRouter = router({
         if (!device) throw new TRPCError({ code: 'NOT_FOUND' });
         if (device.status !== 'ACTIVE' || device.revokedAt)
           throw new TRPCError({ code: 'CONFLICT', message: 'REVOKED' });
+        // Review round 2: nothing is set aside while offline cash selling is off.
+        if (!(await counterSetAsidesInForce(db, organizationId)))
+          return { lots: [], limit: OFFLINE_PREPARATION_LOT_LIMIT, settingAside: false };
         const lots = await offlinePreparationPlan(
           db,
           { organizationId, branchId: input.branchId },
           { deviceId: device.id, now: new Date() }
         );
-        return { lots, limit: OFFLINE_PREPARATION_LOT_LIMIT };
+        return { lots, limit: OFFLINE_PREPARATION_LOT_LIMIT, settingAside: true };
       })
     ),
   /**
@@ -356,6 +361,19 @@ export const pharmacyOfflineRouter = router({
           select: { id: true, status: true },
         });
         if (onServer) return { recorded: false as const, serverStatus: onServer.status };
+        // Review round 2: idempotent. Two attempts at once queue on this lock, and a retry of
+        // one already recorded answers as recorded without a second audit row.
+        await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`pharmacy-unsent-sale:${scope.organizationId}:${device.id}:${input.commandId}`}, 0))`;
+        const already = await db.auditLog.findFirst({
+          where: {
+            organizationId: scope.organizationId,
+            action: 'pharmacyOffline.recordUnsentOfflineSale',
+            targetId: device.id,
+            metadata: { path: ['commandId'], equals: input.commandId },
+          },
+          select: { id: true },
+        });
+        if (already) return { recorded: true as const, serverStatus: null };
         await db.auditLog.create({
           data: {
             organizationId: scope.organizationId,
@@ -689,6 +707,30 @@ export async function replayLotsRecalled(
 }
 
 /**
+ * Review round 2: the RULES payload a sale carries, only when its envelope is signed by
+ * this server, names this counter, was in its window when the sale was taken and hashes
+ * to that payload. Null otherwise.
+ */
+function verifiedRulesPayload(
+  command: CounterReplay,
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
+  deviceId: string
+): unknown {
+  const rules = command.snapshots.find((snapshot) => snapshot.envelope.kind === 'RULES');
+  if (!rules) return null;
+  const ok =
+    verifySnapshotSignature(rules.envelope, rules.signature) &&
+    checkEnvelope({
+      envelope: rules.envelope,
+      scope: { organizationId: scope.organizationId, branchId: scope.branchId, deviceId },
+      nowMs: Date.parse(command.leasedReceipt.originalSaleAt),
+      heldVersion: null,
+      payloadHash: snapshotPayloadHash(rules.payload),
+    }).ok;
+  return ok ? rules.payload : null;
+}
+
+/**
  * DEV-957 phase 2 (hardening 4): a sale whose seal does not check out, or that does not
  * follow on from the sale the server last recorded for this counter. Refused, and the
  * route records why in its own transaction (the refused one rolls back).
@@ -839,6 +881,11 @@ export async function replayCounterCommand(
   // (a skipped sequence is SEQUENCE_OUT_OF_ORDER); the seal proves this is the sale the
   // counter signed when it was taken, following on from the sale recorded before it.
   await verifyOfflineSaleChain(ctx, command);
+  // Review round 2: the switch is enforced here, not only at the counter. A sale is
+  // accepted only when the RULES it carries (verified above) say offline cash selling
+  // was on when the counter was handed them.
+  if (!signedRulesAllowOfflineSelling(verifiedRulesPayload(command, scope, deviceId)))
+    throw new CounterTransportError('offline_selling_off', 409);
   // #519: recall state is derived, never assumed. A lot the signed lease told
   // the counter was recalled, or one the server holds as recalled (or cannot
   // see) now, refuses the sale. Checked after the ACCEPTED short-circuit so a
@@ -1479,6 +1526,9 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
             })
             .strict()
             .parse(body);
+          // Review round 2: no stock is set aside while offline cash selling is off.
+          if (!(await counterSetAsidesInForce(db, ctx.scope.organizationId)))
+            throw new CounterTransportError('offline_selling_off', 409);
           return grantDeviceLotQuota(db, ctx.scope, { ...input, deviceId: device.id });
         }
         if (operation === 'snapshot') {
@@ -1687,6 +1737,13 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
               AND lease."issuedAt" <= ${new Date(originalSaleAt)}
             RETURNING lease.id`);
           if (!retired[0]) throw new CounterTransportError('INVALID_RECEIPT_LEASE', 409);
+          // Review round 2: nor can a sale taken while offline selling was off be settled
+          // this way: only one its verified signed RULES allowed (the receipt checks above
+          // run first, and a refusal here rolls the retirement back).
+          if (
+            !signedRulesAllowOfflineSelling(verifiedRulesPayload(command, ctx.scope, device.id))
+          )
+            throw new CounterTransportError('offline_selling_off', 409);
           await settleOfflineCommand(
             db,
             ctx.scope,

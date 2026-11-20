@@ -10,6 +10,12 @@ import { Prisma } from '@/generated/prisma/client';
  * business order would fail.
  */
 
+// DEV-957 phase 2: set-asides hold stock only while offline cash selling is in force; it
+// is forced on here so the lock order of that read is checked.
+vi.mock('./offline-cash-selling', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./offline-cash-selling')>()),
+  counterSetAsidesInForce: vi.fn(async () => true),
+}));
 vi.mock('./finance-postings', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./finance-postings')>()),
   postCountAdjustmentEntry: vi.fn(async () => undefined),

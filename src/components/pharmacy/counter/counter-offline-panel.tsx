@@ -42,6 +42,44 @@ function clock(iso: string): string {
 const SETTINGS_HREF = '/pharmacy/settings/counters';
 
 /**
+ * The counter's Offline banner, under its heading: what happens to the open online bill.
+ * Review round 2: the words about taking cash as offline bills appear only while this
+ * counter can actually sell offline (the owner's switch, as its signed rules carry it).
+ */
+export function CounterOfflineBannerDetail({
+  paymentQueued,
+  tenderPending,
+  offlineSelling,
+}: {
+  paymentQueued: boolean;
+  tenderPending: boolean;
+  offlineSelling: boolean;
+}) {
+  return (
+    <>
+      <p className="text-text-body">
+        {paymentQueued
+          ? '1 payment waiting to send. Keep this bill open and do not take the money again.'
+          : tenderPending
+            ? 'Keep this bill open and do not take the money again until the connection returns.'
+            : offlineSelling
+              ? // DEV-957 phase 2: the open online bill is parked, never copied into an
+                // offline sale; its stock stays held on the server until it is finished
+                // or voided online.
+                'The open online bill waits for the connection. Take new cash sales below as offline bills.'
+              : 'Search, bill changes and payments wait until the connection returns.'}
+      </p>
+      {(paymentQueued || tenderPending) && offlineSelling ? (
+        <p className="text-text-body">
+          The payment on the open online bill is still waiting for the server. Do not ring the
+          same items up again as an offline sale.
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+/**
  * DEV-957 phase 1: what the counter can still do with no connection, inside the
  * counter's Offline banner. Plain words for every state: not set up, set up for
  * another branch, opening, unsupported browser, price list expired, not
@@ -111,7 +149,9 @@ export function CounterOfflinePanel({ offline }: { offline: CounterOfflineView }
             <span className="font-medium text-text-strong">Still works: </span>
             {selling
               ? `cash sales of the ${readiness.itemsAvailable} medicine${readiness.itemsAvailable === 1 ? '' : 's'} this counter holds offline stock for. Each sale is saved and sealed on this computer and waits there: this version does not send offline sales to the server yet.`
-              : `price check of the ${readiness.itemsAvailable} medicine${readiness.itemsAvailable === 1 ? '' : 's'} this counter holds offline stock for.`}
+              : offline.sellingOn
+                ? `price check of the ${readiness.itemsAvailable} medicine${readiness.itemsAvailable === 1 ? '' : 's'} this counter holds offline stock for.`
+                : `price check of the ${readiness.itemsAvailable} medicine batch${readiness.itemsAvailable === 1 ? '' : 'es'} on the signed price list.`}
           </p>
           {!offline.sellingOn ? (
             <p className="text-text-body" data-counter-offline-selling="off">
@@ -222,11 +262,13 @@ function OfflinePriceCheck({ offline }: { offline: CounterOfflineView }) {
                   <span className="font-medium text-text-strong tabular-nums">
                     Rs {formatMinor(row.packPriceMinor)} a pack
                   </span>
-                  <StatusPill
-                    status="quota"
-                    tone="neutral"
-                    label={`${row.unitsLeft} unit${row.unitsLeft === 1 ? '' : 's'} offline`}
-                  />
+                  {offline.sellingOn ? (
+                    <StatusPill
+                      status="quota"
+                      tone="neutral"
+                      label={`${row.unitsLeft} unit${row.unitsLeft === 1 ? '' : 's'} offline`}
+                    />
+                  ) : null}
                 </div>
               </li>
             ))}

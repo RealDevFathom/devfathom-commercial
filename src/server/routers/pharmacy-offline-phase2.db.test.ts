@@ -79,13 +79,16 @@ vi.mock('@/lib/abac', () => ({
   can: vi.fn(async () => true),
   subjectFromSession: (user: unknown) => user,
 }));
+/** Forced on for these tests; a test of the product state sets `selling.on = false`. */
+const selling = vi.hoisted(() => ({ on: true }));
 // DEV-957 phase 2 (review B1): offline cash selling is off and cannot be switched on in the
 // product. These tests exercise the selling code, so they force the owner's switch ON.
 vi.mock('@/lib/pharmacy/offline-cash-selling', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pharmacy/offline-cash-selling')>();
   return {
     ...actual,
-    readOfflineCashSelling: vi.fn(async () => ({ enabled: true, available: true })),
+    readOfflineCashSelling: vi.fn(async () => ({ enabled: selling.on, available: selling.on })),
+    counterSetAsidesInForce: vi.fn(async () => selling.on),
   };
 });
 vi.mock('@/lib/rate-limit', () => ({
@@ -1005,5 +1008,98 @@ describeIfDatabase('DEV-957 phase 2 (hardening 4): the server checks each sale a
     const dropped = await client.replay(sale(4));
     expect(dropped.status).toBe(409);
     expect(await booked()).toBe(2);
+  });
+});
+
+describeIfDatabase('DEV-957 phase 2 (review round 2): with offline cash selling off', () => {
+  it('replay and manager reject refuse a sale whose signed rules say off, and nothing is booked', async () => {
+    const made = await fixture('switch-off', { units: 12, looseUnits: 12 });
+    await readyForReplay(made);
+    // Set aside and leased while it was on, then the owner's switch is off.
+    const { client, lease } = await prepared(made, { leaseSize: 3, quotaUnits: 10 });
+    selling.on = false;
+    try {
+      const refreshed = await client.call('snapshot');
+      expect(refreshed.status).toBe(200);
+      const { snapshots } = (await refreshed.json()) as { snapshots: SignedSnapshot[] };
+      const rules = snapshots.find((snapshot) => snapshot.envelope.kind === 'RULES')!;
+      expect((rules.payload as { offlineCashSelling: boolean }).offlineCashSelling).toBe(false);
+      const sale = unitCommand(made, {
+        lease,
+        receiptNumber: lease.blockStart,
+        sequence: 1,
+        snapshots,
+        units: 2,
+      });
+      const replayed = await client.replay(sale);
+      expect(replayed.status).toBe(409);
+      expect(await replayed.json()).toEqual({ error: 'offline_selling_off' });
+      const sealed = chainOf(made).seal(sale);
+      const rejected = await client.call(
+        'reject',
+        { command: sealed, reason: 'Reviewed' },
+        {
+          'idempotency-key': sealed.idempotencyKey,
+          'x-command-signature': deps.sales.signPharmacyCommand(
+            scopeOf(made),
+            made.deviceId,
+            sealed,
+            made.secret
+          ),
+        }
+      );
+      expect(rejected.status).toBe(409);
+      expect(await rejected.json()).toEqual({ error: 'offline_selling_off' });
+      expect(await onHand(made)).toBe(12);
+      expect(
+        await inOrg((db) => db.pharmacyOfflineCommand.count({ where: { deviceId: made.deviceId } }))
+      ).toBe(0);
+      expect(
+        await inOrg((db) =>
+          db.pharmacySale.count({ where: { branchId: made.branchId } })
+        )
+      ).toBe(0);
+    } finally {
+      selling.on = true;
+    }
+  });
+
+  it('grants no set-aside, and an existing one (a phase-1 grant) holds nothing back from online sales', async () => {
+    const made = await fixture('switch-off-holds', { units: 12, looseUnits: 12 });
+    await readyForReplay(made);
+    // A set-aside granted before (as phase 1 allowed): 10 of 12.
+    const { client } = await prepared(made, { leaseSize: 1, quotaUnits: 10 });
+    expect(await refusal(() => onlineSale(made, 3))).toBe('INSUFFICIENT_STOCK');
+    selling.on = false;
+    try {
+      // No new set-aside.
+      const granted = await client.call('quota', {
+        inventoryLotId: made.lotId,
+        stockLocationId: made.locationId,
+        units: 1,
+      });
+      expect(granted.status).toBe(409);
+      expect(await granted.json()).toEqual({ error: 'offline_selling_off' });
+      // The existing one is ignored, not deleted: an online sale of 3 goes, and the counter
+      // search offers every unit.
+      const { searchCounterCatalog } = await import('@/lib/pharmacy/counter');
+      const name = await inOrg(
+        async (db) =>
+          (await db.medicine.findFirstOrThrow({ where: { id: made.medicineId } })).productName
+      );
+      const offered = (
+        await inOrg((db) => searchCounterCatalog(db, scopeOf(made), { query: name }))
+      ).rows.find((row) => row.medicineId === made.medicineId)?.onHandUnits;
+      expect(offered).toBe(12);
+      await onlineSale(made, 3);
+      expect(await onHand(made)).toBe(9);
+      const quotas = await inOrg((db) =>
+        db.pharmacyDeviceLotQuota.findMany({ where: { deviceId: made.deviceId } })
+      );
+      expect(quotas).toHaveLength(1);
+      expect(quotas[0]).toMatchObject({ quotaUnits: 10, consumedUnits: 0, releasedAt: null });
+    } finally {
+      selling.on = true;
+    }
   });
 });

@@ -106,7 +106,12 @@ export function fixturePayloads() {
     { inventoryLotId: 'lot_ors_recalled', stockLocationId: 'loc_front', quotaUnits: 5, consumedUnits: 0 },
     { inventoryLotId: 'lot_rx_only', stockLocationId: 'loc_front', quotaUnits: 5, consumedUnits: 0 },
   ];
-  const RULES = { controlledMedicinesPermittedOffline: false, rxPermittedOffline: false };
+  // DEV-957 phase 2 (review): offline cash selling forced ON for the tests that sell.
+  const RULES = {
+    controlledMedicinesPermittedOffline: false,
+    rxPermittedOffline: false,
+    offlineCashSelling: true,
+  };
   return { CATALOG, PRICES, TAX: [], RULES, LOT_BALANCES };
 }
 

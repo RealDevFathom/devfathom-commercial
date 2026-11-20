@@ -70,6 +70,7 @@ import type { EnvelopeRejection, OfflineSnapshotEnvelope } from './offline-snaps
 import { applyRecallBulletin, checkSafetyLease } from './offline-safety-lease';
 import { validateManualTenderPolicy } from './manual-payments';
 import { keepUnsentSales, type CounterRetiredReason } from './counter-reconcile';
+import { signedRulesAllowOfflineSelling } from './offline-cash-selling';
 import {
   offlineSaleSealMessage,
   sealLineTotalsValid,
@@ -670,6 +671,15 @@ export class PharmacyCounterRuntime {
     matrix: Omit<CounterMatrixInputs, 'snapshots'>,
     options: CounterEnqueueOptions
   ): Promise<CounterEnqueueResult> {
+    // Review round 2: the owner's switch is checked here too, from the verified signed
+    // RULES only: nothing is queued (no number, no unit) while offline selling is off.
+    if (!signedRulesAllowOfflineSelling(this.payloadFor('RULES')))
+      return {
+        ok: false,
+        reason: 'SELLING_OFF',
+        message: 'Offline cash selling is off, so this counter cannot take a sale offline.',
+        decision: null,
+      };
     let queuedInput = input;
     if (input.action === 'MANUAL_OTC_SALE') {
       // Only the verified RULES snapshot supplies policy. Never accept a

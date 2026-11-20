@@ -99,7 +99,8 @@ function unsealedCommand(recalledBatchIds: string[] = []) {
       signature: signing.signSnapshotEnvelope(receiptEnvelope),
     },
     snapshots: KINDS.map((kind) => {
-      const payload = { kind };
+      // Offline cash selling forced ON in the signed RULES (it is off in the product).
+      const payload = kind === 'RULES' ? { kind, offlineCashSelling: true } : { kind };
       const signed = envelope(kind, payload, recalledBatchIds);
       return { envelope: signed, signature: signing.signSnapshotEnvelope(signed), payload };
     }),

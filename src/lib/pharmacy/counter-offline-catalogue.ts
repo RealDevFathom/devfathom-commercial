@@ -199,6 +199,24 @@ export function offlineCatalogueRows(
  * rounding increment and the identifiers an offline sale line needs.
  */
 export function offlineSaleRows(state: CounterRuntimeState, nowMs: number): OfflineSaleRow[] {
+  return signedLotRows(state, nowMs, 'QUOTA');
+}
+
+/**
+ * Review round 2: the offline price check while offline cash selling is off. No stock is
+ * set aside then, so it lists every lot of the signed price list (one row per lot, not per
+ * shelf location) with no units to sell: `unitsLeft` is 0 and nothing can be added to a
+ * bill from it.
+ */
+export function offlinePriceCheckRows(state: CounterRuntimeState, nowMs: number): OfflineSaleRow[] {
+  return signedLotRows(state, nowMs, 'PRICE_LIST');
+}
+
+function signedLotRows(
+  state: CounterRuntimeState,
+  nowMs: number,
+  source: 'QUOTA' | 'PRICE_LIST'
+): OfflineSaleRow[] {
   const catalog = snapshotOf(state, 'CATALOG');
   const prices = snapshotOf(state, 'PRICES');
   if (!usable(catalog, nowMs) || !usable(prices, nowMs)) return [];
@@ -220,9 +238,18 @@ export function offlineSaleRows(state: CounterRuntimeState, nowMs: number): Offl
   const lots = new Map(pricedLots(prices!.payload).map((lot) => [lot.id, lot]));
 
   const rows: OfflineSaleRow[] = [];
-  for (const quota of (state.queue?.quotas ?? []) as CounterQuota[]) {
+  const buckets: CounterQuota[] =
+    source === 'QUOTA'
+      ? ((state.queue?.quotas ?? []) as CounterQuota[])
+      : [...lots.keys()].map((inventoryLotId) => ({
+          inventoryLotId,
+          stockLocationId: '',
+          quotaUnits: 0,
+          consumedUnits: 0,
+        }));
+  for (const quota of buckets) {
     const unitsLeft = quota.quotaUnits - quota.consumedUnits;
-    if (!Number.isSafeInteger(unitsLeft) || unitsLeft <= 0) continue;
+    if (!Number.isSafeInteger(unitsLeft) || (source === 'QUOTA' && unitsLeft <= 0)) continue;
     const lot = lots.get(quota.inventoryLotId);
     if (!lot || recalled.has(lot.id)) continue;
     const expiresAtMs = lot.receivedExpiresAt ? Date.parse(lot.receivedExpiresAt) : NaN;

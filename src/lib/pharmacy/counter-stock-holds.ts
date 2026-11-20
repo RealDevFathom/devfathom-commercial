@@ -22,6 +22,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { PharmacyInventoryError } from './inventory';
+import { counterSetAsidesInForce } from './offline-cash-selling';
 
 export type CounterHold = { deviceId: string; counterName: string; heldUnits: number };
 
@@ -31,6 +32,8 @@ export async function counterHoldsOn(
   scope: { organizationId: string; branchId: string },
   bucket: { inventoryLotId: string; stockLocationId?: string }
 ): Promise<CounterHold[]> {
+  // Review round 2: a set-aside holds stock only while offline cash selling is in force.
+  if (!(await counterSetAsidesInForce(db, scope.organizationId))) return [];
   const rows = await db.$queryRaw<
     Array<{ deviceId: string; counterName: string; heldUnits: number | bigint }>
   >(Prisma.sql`

@@ -20,9 +20,20 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+
+// DEV-957 phase 2 (review): offline cash selling is off and cannot be switched on in the
+// product; these tests force it on (the selling, replay and set-aside paths), and a test
+// that needs it off sets `selling.on = false`.
+const selling = vi.hoisted(() => ({ on: true }));
+vi.mock('@/lib/pharmacy/offline-cash-selling', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pharmacy/offline-cash-selling')>()),
+  readOfflineCashSelling: vi.fn(async () => ({ enabled: selling.on, available: selling.on })),
+  counterSetAsidesInForce: vi.fn(async () => selling.on),
+}));
+
 
 const TEST_DATABASE_URL = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -498,5 +509,67 @@ describeIfDatabase('DEV-957 phase 2: safety actions always win over units set as
     });
     expect(await onHand(made)).toBe(0);
     await expectReleased(made, 'EXPIRY');
+  });
+});
+
+describeIfDatabase('DEV-957 phase 2 (review round 2): with offline cash selling off a set-aside holds nothing', () => {
+  it('a transfer of 9, a supplier claim of 12 and a write-off of 9 all go past an existing set-aside of 10, which is kept', async () => {
+    selling.on = false;
+    try {
+      const claimed = await fixture('off-claim');
+      await expect(
+        inOrg((db) =>
+          deps.operations.reserveSupplierClaim(db, scopeOf(claimed), {
+            inventoryLotId: claimed.lotId,
+            reservedUnits: 12,
+            returnBy: LATER,
+          })
+        )
+      ).resolves.toMatchObject({ reservedUnits: 12, status: 'RESERVED' });
+
+      const written = await fixture('off-write-off');
+      await expect(writeOff(written, 9)).resolves.toMatchObject({
+        movement: { kind: 'WRITE_OFF', quantityUnits: -9 },
+      });
+      expect(await onHand(written)).toBe(3);
+
+      const moved = await fixture('off-transfer');
+      const destination = await inOrg(async (db) => {
+        const branchId = await branch(db, 'off-transfer-to');
+        return db.pharmacyStockLocation.create({
+          data: { organizationId: ORG, branchId, code: `DEST-${tag('off')}`, name: 'Dest', kind: 'STORE' },
+        });
+      });
+      const transferId = await inOrg(async (db) => {
+        const allocated = await deps.operations.allocateTransfer(db, scopeOf(moved), {
+          toBranchId: destination.branchId,
+          lines: [
+            {
+              sourceLotId: moved.lotId,
+              sourceStockLocationId: moved.locationId,
+              destinationStockLocationId: destination.id,
+              quantityUnits: 9,
+            },
+          ],
+        });
+        await deps.operations.approveTransfer(db, { ...scopeOf(moved), actorId: WITNESS }, allocated.id);
+        return allocated.id;
+      });
+      const dispatched = await inOrg((db) =>
+        deps.operations.dispatchTransfer(db, scopeOf(moved), transferId, tag('dispatch'))
+      );
+      expect(dispatched.status).toBe('DISPATCHED');
+      expect(await onHand(moved)).toBe(3);
+
+      // Nothing was deleted or released: each set-aside is still there, open, untouched.
+      for (const made of [claimed, written, moved]) {
+        const quota = await inOrg((db) =>
+          db.pharmacyDeviceLotQuota.findFirstOrThrow({ where: { id: made.quotaId } })
+        );
+        expect(quota).toMatchObject({ quotaUnits: 10, consumedUnits: 0, releasedAt: null });
+      }
+    } finally {
+      selling.on = true;
+    }
   });
 });

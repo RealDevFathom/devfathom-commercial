@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 
 import {
   counterOfflineReadiness,
+  offlinePriceCheckRows,
   offlineSaleRows,
   type CounterOfflineReadiness,
   type OfflineSaleRow,
@@ -370,15 +371,26 @@ export function useCounterOffline(input: {
     const timer = window.setTimeout(() => setAttempt((value) => value + 1), 60_000);
     return () => window.clearTimeout(timer);
   }, [serverUnreachable]);
-  const readiness = useMemo(
-    () => (current?.state ? counterOfflineReadiness(current.state, nowMs) : null),
-    [current, nowMs]
-  );
-  const rows = useMemo(
-    () => (current?.state ? offlineSaleRows(current.state, nowMs) : []),
-    [current, nowMs]
-  );
   const state = current?.state ?? null;
+  const sellingOn = state ? offlineCashSellingOn(state) : false;
+  // Review round 2: with offline cash selling off nothing is set aside, so the price check
+  // lists the signed price list itself and "prepared" means only that it holds one.
+  const rows = useMemo(
+    () =>
+      current?.state
+        ? sellingOn
+          ? offlineSaleRows(current.state, nowMs)
+          : offlinePriceCheckRows(current.state, nowMs)
+        : [],
+    [current, nowMs, sellingOn]
+  );
+  const readiness = useMemo(() => {
+    if (!current?.state) return null;
+    const ready = counterOfflineReadiness(current.state, nowMs);
+    return sellingOn
+      ? ready
+      : { ...ready, itemsAvailable: rows.length, prepared: ready.snapshotsReady };
+  }, [current, nowMs, sellingOn, rows.length]);
   const operator = useMemo(
     () => (state ? counterOperatorOf(state.catalog?.snapshots ?? []) : null),
     [state]
@@ -396,7 +408,6 @@ export function useCounterOffline(input: {
     [state]
   );
   const ready = current?.status === 'ready' && state !== null;
-  const sellingOn = state ? offlineCashSellingOn(state) : false;
   const enrolmentName = enrolment?.name ?? '';
   const actions = useMemo<CounterOfflineActions | null>(() => {
     if (!ready) return null;

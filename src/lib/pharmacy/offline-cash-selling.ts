@@ -59,3 +59,31 @@ export async function writeOfflineCashSelling(
   if (input.enabled && !setting.enabled) throw new OfflineCashSellingError('NOT_AVAILABLE');
   return { changed: false, setting };
 }
+
+/**
+ * Review round 2: whether units set aside for an offline counter (open device lot quotas)
+ * are held back from online sales, transfers, supplier claims and write-offs. Only while
+ * offline cash selling is in force: with it off no counter can sell them offline, so an
+ * open set-aside (a phase-1 grant included) is ignored, never deleted, and no new one is
+ * granted.
+ */
+export async function counterSetAsidesInForce(
+  db: ScopedDb,
+  organizationId: string
+): Promise<boolean> {
+  return (await readOfflineCashSelling(db, organizationId)).enabled;
+}
+
+/**
+ * Review round 2: the signed RULES a sale carries must say offline cash selling was on
+ * when the counter was handed them. `rules` is a payload whose signature the caller has
+ * already verified.
+ */
+export function signedRulesAllowOfflineSelling(rules: unknown): boolean {
+  return (
+    !!rules &&
+    typeof rules === 'object' &&
+    !Array.isArray(rules) &&
+    (rules as { offlineCashSelling?: unknown }).offlineCashSelling === true
+  );
+}

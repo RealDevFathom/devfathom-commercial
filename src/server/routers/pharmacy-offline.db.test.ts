@@ -15,6 +15,17 @@ import { offlineSaleChain } from '@/lib/test-support/offline-sale-seal';
 type UnsealedReplay = Omit<CounterReplay, 'seal'> & { seal?: CounterReplay['seal'] };
 import type { ManualTenderType } from '@/lib/pharmacy/manual-payments';
 
+// DEV-957 phase 2 (review): offline cash selling is off and cannot be switched on in the
+// product; these tests force it on (the selling, replay and set-aside paths), and a test
+// that needs it off sets `selling.on = false`.
+const selling = vi.hoisted(() => ({ on: true }));
+vi.mock('@/lib/pharmacy/offline-cash-selling', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pharmacy/offline-cash-selling')>()),
+  readOfflineCashSelling: vi.fn(async () => ({ enabled: selling.on, available: selling.on })),
+  counterSetAsidesInForce: vi.fn(async () => selling.on),
+}));
+
+
 const TEST_DATABASE_URL = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');

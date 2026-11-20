@@ -95,10 +95,11 @@ test('with offline cash selling off, a prepared counter checks prices offline an
   await expect(page.getByText(/This counter now holds 200 receipt numbers/)).toBeVisible({
     timeout: 60_000,
   });
-  // What is set aside for this counter is safe from every online path; the page says so.
-  await expect(
-    page.getByText(/online sales at any counter, transfers to another branch, supplier claims and/)
-  ).toBeVisible();
+  // With selling off nothing is set aside, and the page says so (review round 2).
+  await expect(page.locator('[data-counter-prepare-intro="price-check"]')).toContainText(
+    'No stock is set aside for a counter while offline cash selling is off'
+  );
+  await expect(page.getByText(/the units this counter may sell/)).toHaveCount(0);
   await expect(page.locator('[data-counter-revoke-rule]')).toContainText('Sales to reconcile');
   // The owner's switch: off, and it cannot be switched on in this version.
   const selling = page.locator('[data-counter-offline-selling]');
@@ -135,6 +136,9 @@ test('with offline cash selling off, a prepared counter checks prices offline an
   await expect(page.getByText('Sign-in not checked')).toBeVisible();
   const panel = page.locator('[data-counter-offline-mode="ready"]');
   await expect(panel).toContainText('price check of the');
+  await expect(panel).toContainText('on the signed price list');
+  // Nothing offers cash sales as offline bills.
+  await expect(page.getByText(/offline bills/)).toHaveCount(0);
   await expect(panel.locator('[data-counter-offline-selling="off"]')).toContainText(
     'Offline cash selling is off:'
   );

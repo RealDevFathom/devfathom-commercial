@@ -32,7 +32,7 @@ import {
   type CounterDraft,
 } from './counter-offline-runtime';
 import { webCryptoSnapshotVerifier, browserSnapshotPayloadHash } from './counter-snapshot-verifier';
-import { offlineSaleRows } from './counter-offline-catalogue';
+import { offlinePriceCheckRows, offlineSaleRows } from './counter-offline-catalogue';
 import { installCounterSnapshots } from './counter-offline-session';
 import {
   addToOfflineDraft,
@@ -557,6 +557,13 @@ describe('DEV-957 phase 2 (review B1): offline cash selling follows the owner sw
     expect(offlineCashSellingOn(runtime.snapshot())).toBe(false);
     // The price check still lists what this counter holds.
     expect(rowsOf(runtime).length).toBeGreaterThan(0);
+    // Review round 2: with nothing set aside, it lists the signed price list itself, one
+    // row per lot, with no units to sell.
+    const priceCheck = offlinePriceCheckRows(runtime.snapshot(), Date.now());
+    expect(priceCheck.map((row) => row.inventoryLotId).sort()).toEqual(
+      [...new Set(payloads.PRICES.map((lot: { id: string }) => lot.id))].sort()
+    );
+    expect(priceCheck.every((row) => row.unitsLeft === 0)).toBe(true);
     const composed = composeOfflineCashSale({
       state: runtime.snapshot(),
       rows: rowsOf(runtime),
@@ -565,6 +572,24 @@ describe('DEV-957 phase 2 (review B1): offline cash selling follows the owner sw
       nowMs: Date.now(),
     });
     expect(composed).toEqual({ ok: false, message: OFFLINE_SELLING_OFF_MESSAGE });
+    // Review round 2: and the counter's own queue refuses it too, whatever is composed.
+    const forced = await runtime.enqueue(
+      {
+        deviceId: FIXTURE_SCOPE.deviceId,
+        action: 'CASH_OTC_SALE',
+        clientOriginAt: new Date().toISOString(),
+        payload: {},
+        buckets: [{ inventoryLotId: 'lot_brufen', stockLocationId: 'loc_front', units: 1 }],
+      },
+      {
+        nowMs: Date.now(),
+        cachedCreditRemainingMinor: 0,
+        controlledMedicinesPermittedOffline: false,
+        originalSaleAvailable: false,
+        deviceUsable: true,
+      }
+    );
+    expect(forced).toMatchObject({ ok: false, reason: 'SELLING_OFF' });
     expect(runtime.snapshot().queue?.commands).toEqual([]);
     expect(runtime.snapshot().queue?.leases[0]?.nextNumber).toBe(501);
   });

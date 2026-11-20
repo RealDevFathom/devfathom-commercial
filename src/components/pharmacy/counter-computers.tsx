@@ -229,6 +229,37 @@ type PlanLot = {
   suggestedUnits: number;
 };
 
+/**
+ * What "Prepare this counter for offline" does. Review round 2: the words about units the
+ * counter may sell offline appear only while offline cash selling is on and stock is set
+ * aside; with it off, preparing keeps a receipt block and the signed price list only.
+ */
+export function PrepareIntro({ settingAside }: { settingAside: boolean }) {
+  if (!settingAside)
+    return (
+      <p className="max-w-prose text-sm text-text-muted" data-counter-prepare-intro="price-check">
+        Reserves a block of receipt numbers for this counter and stores the signed price list
+        on this computer, for the offline price check. No stock is set aside for a counter while
+        offline cash selling is off, so every unit stays available to online sales, transfers,
+        supplier claims and write-offs. Prescription-only, controlled, restricted, high-alert and
+        look-alike medicines are never listed offline.
+      </p>
+    );
+  return (
+    <p className="max-w-prose text-sm text-text-muted" data-counter-prepare-intro="selling">
+      Reserves a block of receipt numbers for this counter and earmarks, for each listed
+      over-the-counter batch, the units this counter may sell while the connection is down
+      (suggested: half the units on hand, at most 20). Other counters cannot be given the same
+      units, and online sales at any counter, transfers to another branch, supplier claims and
+      write-offs cannot take them either: the server keeps them for this counter until it sells
+      them offline or is revoked. A recall, a quarantine or an expiry removal always goes ahead:
+      it hands the affected units back, and the counter stops selling that batch offline the
+      next time it connects. Prescription-only, controlled, restricted, high-alert and look-alike
+      medicines are never listed. Revoking the counter hands its earmarked units back.
+    </p>
+  );
+}
+
 function PrepareThisComputer({
   enrolment,
   branchName,
@@ -247,6 +278,8 @@ function PrepareThisComputer({
   const [report, setReport] = useState<PrepareReport | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const lots: PlanLot[] = plan.data?.lots ?? [];
+  // Review round 2: nothing is set aside while offline cash selling is off.
+  const settingAside = plan.data?.settingAside ?? false;
   const keyOf = (lot: PlanLot) => `${lot.inventoryLotId}:${lot.stockLocationId}`;
   const unitsFor = (lot: PlanLot) => units[keyOf(lot)] ?? String(lot.suggestedUnits);
   const invalid = lots.filter((lot) => {
@@ -309,18 +342,7 @@ function PrepareThisComputer({
 
   return (
     <div className="space-y-4">
-      <p className="max-w-prose text-sm text-text-muted">
-        Reserves a block of receipt numbers for this counter and earmarks, for each listed
-        over-the-counter batch, the units this counter may sell while the connection is down
-        (suggested: half the units on hand, at most 20). Other counters cannot be given the same
-        units, and online sales at any counter, transfers to another branch, supplier claims and
-        write-offs cannot take them either: the server keeps them for this counter until it sells
-        them offline or is revoked. A recall, a quarantine or an expiry removal always goes
-        ahead: it hands the affected units back, and the counter stops selling that batch
-        offline the next time it connects. Prescription-only, controlled, restricted, high-alert
-        and look-alike medicines are never listed. Revoking the counter hands its earmarked units
-        back.
-      </p>
+      <PrepareIntro settingAside={settingAside} />
       {plan.isLoading ? (
         <p className="text-sm text-text-muted" role="status">
           Loading the stock {branchName} can set aside…
@@ -339,7 +361,7 @@ function PrepareThisComputer({
             Retry
           </Button>
         </div>
-      ) : lots.length === 0 ? (
+      ) : !settingAside ? null : lots.length === 0 ? (
         <p className="text-sm text-text-body">
           No over-the-counter stock at {branchName} can be set aside for offline selling now. Receive
           stock first, or check that medicines are marked saleable.
@@ -427,8 +449,10 @@ function PrepareThisComputer({
               : report.receipts === 'RESERVED'
                 ? 'A new block of receipt numbers was reserved. '
                 : ''}
-            This counter now holds {report.receiptNumbersLeft} receipt numbers and stock of{' '}
-            {report.granted} more batch{report.granted === 1 ? '' : 'es'}.
+            This counter now holds {report.receiptNumbersLeft} receipt numbers
+            {settingAside
+              ? ` and stock of ${report.granted} more batch${report.granted === 1 ? '' : 'es'}.`
+              : ' and the signed price list for the offline price check.'}
           </p>
           {report.refused.length ? (
             <p>
