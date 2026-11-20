@@ -138,6 +138,17 @@ async function scim(method: 'PUT' | 'PATCH', userId: string, body: unknown, toke
   return { status: response.status, body: (await response.json()) as Record<string, unknown> };
 }
 
+async function scimGroupRequest(roleId: string, body: unknown, token: string) {
+  return PATCH_GROUP(
+    new Request(`https://test.invalid/api/scim/v2/Groups/${roleId}`, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/scim+json' },
+      body: JSON.stringify(body),
+    }),
+    { params: Promise.resolve({ id: roleId }) }
+  );
+}
+
 const patchUserName = (value: string) => ({
   schemas: ['urn:ietf:params:scim:api:messages:2.0:PatchOp'],
   Operations: [{ op: 'replace', path: 'userName', value }],
@@ -156,6 +167,8 @@ describe.skipIf(!databaseUrl)('DEV-974 identity-change paths against PostgreSQL'
     await client.query("SELECT set_config('app.is_platform_admin', 'true', false)");
     passwordHash = await hash(PASSWORD, 4);
   });
+
+  const scimGroup = (roleId: string, body: unknown) => scimGroupRequest(roleId, body, scimToken);
 
   beforeEach(async () => {
     sent.length = 0;
@@ -415,6 +428,79 @@ describe.skipIf(!databaseUrl)('DEV-974 identity-change paths against PostgreSQL'
       [ids().admin]: null,
       [ids().staff]: staffRole,
     });
+  });
+
+  it('SCIM groups: a replace cannot clear a restricted wildcard holder into live owner access', async () => {
+    // An administrator with a `*` ALLOW override, held back by a DENY on their custom role:
+    // not live owner-level today. Clearing that role would remove the DENY.
+    const restricted = `${organizationId}_restricted_role`;
+    await client.query(
+      `INSERT INTO organization_roles (id, "organizationId", key, name, "updatedAt")
+       VALUES ($1, $2, 'restricted', 'Restricted', now())`,
+      [restricted, organizationId]
+    );
+    await client.query(
+      `INSERT INTO organization_role_permissions (id, "organizationId", "organizationRoleId", capability, effect)
+       VALUES ($1, $2, $3, 'finance:read', 'DENY')`,
+      [`${restricted}_deny`, organizationId, restricted]
+    );
+    await client.query(
+      `INSERT INTO user_permission_overrides (id, "organizationId", "userId", capability, effect, reason, "updatedAt")
+       VALUES ($1, $2, $3, '*', 'ALLOW', 'break glass', now())`,
+      [`${organizationId}_wildcard`, organizationId, ids().admin2]
+    );
+    await client.query(`UPDATE users SET "organizationRoleId" = $1 WHERE id = $2`, [
+      restricted,
+      ids().admin2,
+    ]);
+    const members = (op: string, userId: string) => ({
+      schemas: ['urn:ietf:params:scim:api:messages:2.0:PatchOp'],
+      Operations: [{ op, path: 'members', value: [{ value: userId }] }],
+    });
+    expect((await scimGroup(restricted, members('remove', ids().admin2))).status).toBe(403);
+    expect((await scimGroup(restricted, members('replace', ids().staff))).status).toBe(403);
+    const after = await withTenantDb(organizationId, (db) =>
+      db.user.findMany({
+        where: { id: { in: [ids().admin2, ids().staff] } },
+        select: { id: true, organizationRoleId: true },
+        orderBy: { id: 'asc' },
+      })
+    );
+    expect(Object.fromEntries(after.map((row) => [row.id, row.organizationRoleId]))).toEqual({
+      [ids().admin2]: restricted,
+      [ids().staff]: null,
+    });
+  });
+
+  it('SCIM groups: a PATCH is all or nothing, and a refused one is still recorded', async () => {
+    const staffRole = `${organizationId}_bulk_role`;
+    await client.query(
+      `INSERT INTO organization_roles (id, "organizationId", key, name, "updatedAt")
+       VALUES ($1, $2, 'bulk', 'Bulk', now())`,
+      [staffRole, organizationId]
+    );
+    const response = await scimGroup(staffRole, {
+      schemas: ['urn:ietf:params:scim:api:messages:2.0:PatchOp'],
+      Operations: [
+        { op: 'add', path: 'members', value: [{ value: ids().staff }] },
+        { op: 'add', path: 'members', value: [{ value: ids().owner }] },
+      ],
+    });
+    expect(response.status).toBe(403);
+    const state = await withTenantDb(organizationId, async (db) => ({
+      staff: await db.user.findUnique({
+        where: { id: ids().staff },
+        select: { organizationRoleId: true },
+      }),
+      events: await db.organizationScimEvent.findMany({
+        where: { resourceType: 'Group', operation: 'PATCH' },
+        select: { status: true, error: true },
+      }),
+    }));
+    expect(state.staff?.organizationRoleId).toBeNull();
+    expect(state.events).toEqual([
+      { status: 'FAILED', error: 'Owner access can only be changed by the owner in DevFathom.' },
+    ]);
   });
 
   it('single sign-on: an unconfirmed changed email cannot sign in through the identity provider', async () => {
