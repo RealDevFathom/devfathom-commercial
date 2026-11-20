@@ -54,7 +54,7 @@ const OWNER_ROLE = {
 };
 /** The acting admin is the owner unless a test says otherwise; pending members are staff. */
 function party(id: string, role = 'EMPLOYEE', organizationRole: unknown = null) {
-  return { role, status: 'ACTIVE', organizationRole, permissionOverrides: [] };
+  return { id, role, status: 'ACTIVE', organizationRole, permissionOverrides: [] };
 }
 function partiesWithOwnerActor({ where }: { where: { id: string } }) {
   return where.id === 'user_admin' ? party(where.id, 'ADMIN', OWNER_ROLE) : party(where.id);
