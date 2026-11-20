@@ -92,6 +92,23 @@ function decisionMessage(result?: { status: string; staleEdits?: number }): stri
     : `Edit approved. ${stale} other pending edits on this item are now out of date and must be rejected and resubmitted.`;
 }
 
+/** How the signed-in member may approve one pending edit (DEV-976). */
+type ApprovalMode = 'DIRECT' | 'PIN' | 'OTHER_REVIEWER' | 'CHECKING';
+
+const MAX_NAMED_REVIEWERS = 5;
+
+/** "Ask Ayesha Khan or Bilal Ahmed to approve this." — names only, from the server. */
+function askReviewers(names: readonly string[]): string {
+  if (!names.length)
+    return 'Nobody else can approve it yet. Give another member the catalogue review permission, then ask them to approve this.';
+  const shown = names.slice(0, MAX_NAMED_REVIEWERS);
+  const rest = names.length - shown.length;
+  const list = new Intl.ListFormat('en', { type: 'disjunction' }).format(
+    rest ? [...shown, rest === 1 ? '1 other reviewer' : `${rest} other reviewers`] : shown
+  );
+  return `Ask ${list} to approve this.`;
+}
+
 export function CatalogueApprovalQueue() {
   const [pin, setPin] = useState('');
   const [query, setQuery] = useState('');
@@ -112,6 +129,25 @@ export function CatalogueApprovalQueue() {
   });
   const canEdit = access.data?.canEdit === true;
   const canDecide = access.data?.canDecide === true;
+  const ownerPinApproval = access.data?.ownerPinApproval === true;
+  // DEV-976: whether this member may approve their own edits, and who else can, decided on the
+  // server by the same rule as the approval itself.
+  const selfApproval = trpc.pharmacyMedicine.catalogueSelfApproval.useQuery(undefined, {
+    enabled: canDecide,
+    retry: false,
+  });
+  const approvalMode = (ownEdit: boolean | undefined): ApprovalMode => {
+    if (!ownEdit) return ownerPinApproval ? 'PIN' : 'DIRECT';
+    if (!selfApproval.data) return 'CHECKING';
+    return selfApproval.data.canSelfApprove ? 'PIN' : 'OTHER_REVIEWER';
+  };
+  const pinEdits = (queue.data ?? []).filter(
+    (edit) => !edit.stale && approvalMode(edit.ownEdit) === 'PIN'
+  );
+  const showPin = canDecide && pinEdits.length > 0;
+  const pinReason = pinEdits.some((edit) => edit.ownEdit)
+    ? 'Nobody else can review, so you approve with your own PIN.'
+    : 'Nobody holds the catalogue review permission, so you approve as the owner with your own PIN.';
   const decide = trpc.pharmacyMedicine.decideCatalogueEdit.useMutation({
     onSuccess: async (result) => {
       setPin('');
@@ -123,6 +159,8 @@ export function CatalogueApprovalQueue() {
       setDecisionNotice('');
       // A refused approval may mean the item changed; refresh so stale edits show.
       void utils.pharmacyMedicine.catalogueEdits.invalidate();
+      // DEV-976: or that who can review changed since the screen loaded.
+      void utils.pharmacyMedicine.catalogueSelfApproval.invalidate();
     },
   });
   const propose = trpc.pharmacyMedicine.proposeCatalogueEdit.useMutation({
@@ -218,19 +256,25 @@ export function CatalogueApprovalQueue() {
           ) : null}
         </form>
       ) : null}
-      {canDecide ? (
-        <label className="mb-4 block max-w-sm space-y-2 text-sm">
-          <span>Solo owner PIN (for self-approval)</span>
-          <Input
-            className="min-h-11"
-            type="password"
-            inputMode="numeric"
-            autoComplete="off"
-            maxLength={64}
-            value={pin}
-            onChange={(event) => setPin(event.target.value)}
-          />
-        </label>
+      {showPin ? (
+        <div className="mb-4 max-w-sm space-y-2 text-sm">
+          <label className="block space-y-2">
+            <span>Solo owner PIN (for self-approval)</span>
+            <Input
+              className="min-h-11"
+              type="password"
+              inputMode="numeric"
+              autoComplete="off"
+              maxLength={64}
+              aria-describedby="catalogue-approval-pin-reason"
+              value={pin}
+              onChange={(event) => setPin(event.target.value)}
+            />
+          </label>
+          <p id="catalogue-approval-pin-reason" className="text-text-muted">
+            {pinReason}
+          </p>
+        </div>
       ) : null}
       {queue.isPending ? <p role="status">Loading catalogue edits…</p> : null}
       {queue.error ? (
@@ -252,75 +296,98 @@ export function CatalogueApprovalQueue() {
         <p className="text-sm text-text-muted">No catalogue edits are awaiting review.</p>
       ) : null}
       <div className="space-y-4">
-        {queue.data?.map((edit) => (
-          <article key={edit.id} className="min-w-0 rounded-md border border-border p-4">
-            <h3 className="mb-2 break-words font-semibold">{edit.medicine.productName}</h3>
-            <p className="mb-2 text-sm text-text-muted">
-              {operationLabels[edit.operation] ?? 'Catalogue edit'}
-            </p>
-            {edit.stale ? (
-              <>
-                <StatusPill status="blocked" label="Out of date" />
-                <p className="my-2 text-sm">
-                  This item changed after the edit was submitted, so it can no longer be approved.
-                  Reject it and submit a new edit.
-                </p>
-              </>
-            ) : (
-              <StatusPill status="pending" label="Pending review" />
-            )}
-            <p className="mb-2 break-words text-sm text-text-muted">
-              Submitted by {edit.editor.name}
-            </p>
-            <dl className="my-4 grid gap-2 text-sm">
-              {edit.targets.map((target, index) => (
-                <div key={`${target.label}-${index}`} className="flex min-w-0 flex-wrap gap-2">
-                  <dt className="font-semibold">{target.label}</dt>
-                  <dd className="break-words">{target.value}</dd>
-                </div>
-              ))}
-              {Object.entries(
-                (edit.operation === 'UPDATE_MEDICINE'
-                  ? edit.changes
-                  : (edit.changes as { json: unknown }).json) as Record<string, unknown>
-              )
-                .filter(
-                  ([field]) => field !== 'id' && !field.endsWith('Id') && !HIDDEN_FIELDS.has(field)
-                )
-                .map(([field, value]) => (
-                  <div key={field} className="flex min-w-0 flex-wrap gap-2">
-                    <dt className="font-semibold">{editLabels[field] ?? field}</dt>
-                    <dd className="break-all">{displayChange(field, value)}</dd>
+        {queue.data?.map((edit) => {
+          const mode = approvalMode(edit.ownEdit);
+          return (
+            <article key={edit.id} className="min-w-0 rounded-md border border-border p-4">
+              <h3 className="mb-2 break-words font-semibold">{edit.medicine.productName}</h3>
+              <p className="mb-2 text-sm text-text-muted">
+                {operationLabels[edit.operation] ?? 'Catalogue edit'}
+              </p>
+              {edit.stale ? (
+                <>
+                  <StatusPill status="blocked" label="Out of date" />
+                  <p className="my-2 text-sm">
+                    This item changed after the edit was submitted, so it can no longer be approved.
+                    Reject it and submit a new edit.
+                  </p>
+                </>
+              ) : (
+                <StatusPill status="pending" label="Pending review" />
+              )}
+              <p className="mb-2 break-words text-sm text-text-muted">
+                Submitted by {edit.editor.name}
+              </p>
+              <dl className="my-4 grid gap-2 text-sm">
+                {edit.targets.map((target, index) => (
+                  <div key={`${target.label}-${index}`} className="flex min-w-0 flex-wrap gap-2">
+                    <dt className="font-semibold">{target.label}</dt>
+                    <dd className="break-words">{target.value}</dd>
                   </div>
                 ))}
-            </dl>
-            {canDecide ? (
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  size="touch"
-                  disabled={decide.isPending || edit.stale}
-                  onClick={() =>
-                    decide.mutate({
-                      editId: edit.id,
-                      decision: 'APPROVE',
-                      soloPin: pin || undefined,
-                    })
-                  }
-                >
-                  {decide.isPending ? 'Saving…' : 'Approve edit'}
-                </Button>
-                <Button
-                  size="touch"
-                  variant="destructive"
-                  disabled={decide.isPending}
-                  onClick={() => decide.mutate({ editId: edit.id, decision: 'REJECT' })}
-                >
-                  Reject edit
-                </Button>
-              </div>
-            ) : null}
-          </article>
-        ))}
+                {Object.entries(
+                  (edit.operation === 'UPDATE_MEDICINE'
+                    ? edit.changes
+                    : (edit.changes as { json: unknown }).json) as Record<string, unknown>
+                )
+                  .filter(
+                    ([field]) =>
+                      field !== 'id' && !field.endsWith('Id') && !HIDDEN_FIELDS.has(field)
+                  )
+                  .map(([field, value]) => (
+                    <div key={field} className="flex min-w-0 flex-wrap gap-2">
+                      <dt className="font-semibold">{editLabels[field] ?? field}</dt>
+                      <dd className="break-all">{displayChange(field, value)}</dd>
+                    </div>
+                  ))}
+              </dl>
+              {canDecide && mode === 'OTHER_REVIEWER' ? (
+                <p role="note" className="mb-4 text-sm">
+                  You submitted this edit, so another reviewer must approve it.{' '}
+                  {askReviewers(selfApproval.data?.reviewers ?? [])}
+                </p>
+              ) : null}
+              {canDecide && mode === 'CHECKING' ? (
+                selfApproval.error ? (
+                  <p role="alert" className="mb-4 text-sm text-destructive">
+                    {selfApproval.error.message}
+                  </p>
+                ) : (
+                  <p className="mb-4 text-sm text-text-muted">
+                    Checking who can approve this edit…
+                  </p>
+                )
+              ) : null}
+              {canDecide ? (
+                <div className="flex flex-wrap gap-2">
+                  {mode === 'DIRECT' || mode === 'PIN' ? (
+                    <Button
+                      size="touch"
+                      disabled={decide.isPending || edit.stale || (mode === 'PIN' && !pin)}
+                      onClick={() =>
+                        decide.mutate({
+                          editId: edit.id,
+                          decision: 'APPROVE',
+                          soloPin: mode === 'PIN' ? pin || undefined : undefined,
+                        })
+                      }
+                    >
+                      {decide.isPending ? 'Saving…' : 'Approve edit'}
+                    </Button>
+                  ) : null}
+                  <Button
+                    size="touch"
+                    variant="destructive"
+                    disabled={decide.isPending}
+                    onClick={() => decide.mutate({ editId: edit.id, decision: 'REJECT' })}
+                  >
+                    Reject edit
+                  </Button>
+                </div>
+              ) : null}
+            </article>
+          );
+        })}
       </div>
     </SectionCard>
   );

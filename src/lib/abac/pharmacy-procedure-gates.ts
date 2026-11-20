@@ -889,6 +889,13 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: "auditedProtectedProcedure; returns only the caller's own flags",
     none: 'any signed-in member (UI flags only)',
   },
+  'pharmacyMedicine.catalogueSelfApproval': {
+    gate: "auditedProtectedProcedure + inline catalogueAccess, as decideCatalogueEdit: pharmacy:catalogue-review, OR owner fallback (admin:access AND pharmacy:catalogue-edit, live owner, no other active reviewer); caller's own organization only; names of this organization's active members who can approve the caller's edits",
+    lines: [
+      'review-catalogue/approve-reject-others-catalogue',
+      'suggest-catalogue-edits/owner-approve-no-reviewer',
+    ],
+  },
   'pharmacyMedicine.configureReferenceConnector': {
     gate: 'adminProcedure -> admin:access',
     none: 'workspace administrators only (admin:access)',

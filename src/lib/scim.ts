@@ -10,6 +10,8 @@ import {
   guardPharmacyAccessChanges,
   isPharmacyOrganization,
 } from '@/lib/team/pharmacy-access-guard';
+import { RESET_PARTY_SELECT } from '@/lib/auth/admin-password-reset';
+import { holdsOwnerLevelAccess } from '@/lib/auth/member-email-change';
 
 export const SCIM_USER_SCHEMA = 'urn:ietf:params:scim:schemas:core:2.0:User';
 export const SCIM_GROUP_SCHEMA = 'urn:ietf:params:scim:schemas:core:2.0:Group';
@@ -137,11 +139,25 @@ export async function scimAccessChange<T>(
 
 export type ScimGroupOperation = { op: 'add' | 'replace' | 'remove'; ids: string[] };
 
+/** DEV-974: a group change that would give or take away owner-level access. */
+export class ScimOwnerAccessRefusal extends Error {
+  constructor() {
+    super('Owner access can only be changed by the owner in DevFathom.');
+  }
+}
+
 /**
  * A SCIM group's membership change: the group is a custom role, so moving people in or out
  * changes what they may do. In a pharmacy, everyone it can change (the group's current members
  * and every member named) passes the access guard together, listed only once the guard holds
  * the organisation lock, so nobody joins the group or the directory unchecked in between.
+ *
+ * DEV-974, in every business type: only the owner adds or removes owner-level access, and any
+ * administrator can mint a SCIM token. Inside the write (so after the lock), the whole PATCH
+ * is simulated on every member it can touch (the named ids and everyone a `replace` clears),
+ * each member whose role would change is judged before and after, and if either side is
+ * owner-level (the system owner role or a `*` grant) `ScimOwnerAccessRefusal` is thrown before
+ * anything is written. Otherwise the final memberships are written together: all or nothing.
  */
 export async function scimPatchGroupMembers(
   ctx: ScimContext,
@@ -162,24 +178,58 @@ export async function scimPatchGroupMembers(
     },
     'scim.patchGroup',
     async () => {
-      for (const operation of operations) {
-        if (operation.op === 'add' || operation.op === 'replace') {
-          if (operation.op === 'replace') {
-            await ctx.db.user.updateMany({
-              where: { organizationRoleId: roleId },
-              data: { organizationRoleId: null },
-            });
-          }
-          await ctx.db.user.updateMany({
-            where: { id: { in: operation.ids } },
-            data: { organizationRoleId: roleId },
-          });
-        } else {
-          await ctx.db.user.updateMany({
-            where: { id: { in: operation.ids }, organizationRoleId: roleId },
-            data: { organizationRoleId: null },
-          });
+      const role = await ctx.db.organizationRole.findUnique({
+        where: { id: roleId },
+        select: {
+          key: true,
+          isSystem: true,
+          permissions: { select: { capability: true, effect: true } },
+        },
+      });
+      const touched = await ctx.db.user.findMany({
+        where: { OR: [{ organizationRoleId: roleId }, { id: { in: named } }] },
+        select: { ...RESET_PARTY_SELECT, id: true, organizationRoleId: true },
+      });
+      const next = new Map(touched.map((member) => [member.id, member.organizationRoleId]));
+      for (const { op, ids } of operations) {
+        if (op === 'replace') {
+          for (const [userId, current] of next) if (current === roleId) next.set(userId, null);
         }
+        for (const userId of ids) {
+          if (!next.has(userId)) continue;
+          if (op === 'remove') {
+            if (next.get(userId) === roleId) next.set(userId, null);
+          } else {
+            next.set(userId, roleId);
+          }
+        }
+      }
+      const changed = touched.filter((member) => next.get(member.id) !== member.organizationRoleId);
+      if (
+        changed.some(
+          (member) =>
+            holdsOwnerLevelAccess(member) ||
+            holdsOwnerLevelAccess({
+              organizationRole: next.get(member.id) === roleId ? role : null,
+              permissionOverrides: member.permissionOverrides,
+            })
+        )
+      ) {
+        throw new ScimOwnerAccessRefusal();
+      }
+      const joining = changed.filter((member) => next.get(member.id) === roleId);
+      const leaving = changed.filter((member) => next.get(member.id) === null);
+      if (joining.length) {
+        await ctx.db.user.updateMany({
+          where: { id: { in: joining.map((member) => member.id) } },
+          data: { organizationRoleId: roleId },
+        });
+      }
+      if (leaving.length) {
+        await ctx.db.user.updateMany({
+          where: { id: { in: leaving.map((member) => member.id) } },
+          data: { organizationRoleId: null },
+        });
       }
       return { targetIds: affected, value: null };
     }
