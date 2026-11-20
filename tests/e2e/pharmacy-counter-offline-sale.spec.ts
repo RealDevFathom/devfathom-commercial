@@ -33,11 +33,14 @@ test.afterAll(async () => {
   if (profile) await rm(profile, { recursive: true, force: true });
 });
 
-function open(): Promise<BrowserContext> {
+function open(options: { offline?: boolean } = {}): Promise<BrowserContext> {
   return chromium.launchPersistentContext(profile, {
     baseURL,
     viewport: { width: 1440, height: 900 },
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined,
+    // Offline from launch: the profile reopens its last tab at once, before a later
+    // setOffline could reach it, and that tab would otherwise load the counter online.
+    offline: options.offline ?? false,
   });
 }
 
@@ -59,12 +62,14 @@ async function signIn(page: Page) {
 }
 
 async function openOffline(): Promise<{ context: BrowserContext; page: Page }> {
-  const context = await open();
-  // Cut the network for every page and the counter's service worker: offline emulation
-  // alone does not reach a persistent profile's first page or service-worker fetches.
+  const context = await open({ offline: true });
+  // Cut the network for every page and the counter's service worker too: offline emulation
+  // alone does not reach service-worker fetches.
   await context.route('**/*', (route) => route.abort('internetdisconnected'));
   await context.setOffline(true);
+  // The tab the profile restored is closed only once it exists, so none is left behind.
   const page = await context.newPage();
+  await expect.poll(() => context.pages().length).toBeGreaterThan(0);
   for (const other of context.pages()) if (other !== page) await other.close();
   await page.goto('/pharmacy/counter');
   await expect(page.locator('[data-counter-offline-mode="ready"]')).toBeVisible({ timeout: 30_000 });
@@ -111,12 +116,20 @@ test('with offline cash selling off, a prepared counter checks prices offline an
 
   await page.goto(`/pharmacy/counter?branchId=${PHARMACY_E2E.branchId}`);
   await expect(page.getByRole('heading', { name: 'Counter', level: 1 })).toBeVisible();
+  // The worker stores the page first and its scripts after it, so wait for both: a browser
+  // closed between the two reopens a page that cannot start.
   await expect
     .poll(
       () =>
         page.evaluate(async () => {
           const shell = await caches.open('devfathom-pharmacy-counter-shell-v1');
-          return Boolean(await shell.match('/pharmacy/counter'));
+          if (!(await shell.match('/pharmacy/counter'))) return false;
+          const assets = await caches.open('devfathom-pharmacy-counter-assets-v1');
+          const scripts = [...document.querySelectorAll('script[src]')]
+            .map((node) => new URL(node.getAttribute('src')!, document.baseURI))
+            .filter((url) => url.origin === location.origin && url.pathname.startsWith('/_next/static/'));
+          for (const url of scripts) if (!(await assets.match(url.origin + url.pathname))) return false;
+          return scripts.length > 0;
         }),
       { timeout: 60_000 }
     )
