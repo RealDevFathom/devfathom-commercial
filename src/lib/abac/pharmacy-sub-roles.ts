@@ -71,7 +71,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'open-close-own-cash-shift',
-        text: "At a branch that runs cash shifts, open their own shift on a counter's drawer with the cash they count, close it with a count, and see their own shift report (an over or short above the owner's limit needs a manager's PIN)",
+        text: "At a branch that runs cash shifts, open their own shift on a counter's drawer with the cash they count, close it with a count, and see their own shift report (an over or short above the owner's limit needs the PIN of another manager or owner)",
         sites: {},
       },
       {
@@ -510,8 +510,8 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'run-cash-shifts-branches',
-        text: "At their branches that run cash shifts, open a shift for another cashier, close anyone's shift before the day close, see every shift report, and approve a shift's over or short above the owner's limit with their PIN (their own shift's only when no other manager or owner works at the branch)",
-        sites: {},
+        text: "At their branches that run cash shifts, open a shift for another cashier, close anyone's shift before the day close, see every shift report, and approve another person's shift's over or short above the owner's limit with their PIN. A shift they are the cashier of, or are closing and counting themselves, they approve only when no other manager or owner with an approval PIN works at the branch",
+        sites: { 'src/lib/pharmacy/cash-shifts.ts': 1 },
       },
       {
         id: 'set-when-business-day',

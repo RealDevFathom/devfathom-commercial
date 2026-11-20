@@ -1055,16 +1055,16 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
     // A sale time needs a receipt number this transaction really used for this very sale. A
     // cursor "moved" to where it already was records nothing, and cannot be claimed by hand.
     const cashier = s.as(s.cashier);
-    const sameTransaction = (work: (db: ScopedDb) => Promise<unknown>) => tenant(cashier, work);
-    const forgedTender = (db: ScopedDb, saleId: string, soldAt: Date) =>
+    const sameTransaction = <T>(work: (db: ScopedDb) => Promise<T>) => tenant(cashier, work);
+    const forgedTender = (db: ScopedDb, saleId: string, soldAt: Date, amountMinor = 10) =>
       db.pharmacyTender.create({
         data: {
           organizationId: s.owner.organizationId,
           branchId: s.owner.branchId,
           saleId,
           type: 'CASH',
-          amountMinor: 10,
-          cashReceivedMinor: 10,
+          amountMinor,
+          cashReceivedMinor: amountMinor,
           changeGivenMinor: 0,
           drawerSessionId: drawer.id,
           businessDate: s.today,
@@ -1130,6 +1130,125 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
           });
       })
     ).rejects.toThrow(refusal);
+    // A replayed sale's tender settles exactly what the sale owes: 5,000 on a sale of 10 is refused.
+    await expect(
+      sameTransaction(async (db) => {
+        await consume(db, otherSale.sale.id, soldInShift1);
+        return forgedTender(db, otherSale.sale.id, soldInShift1, 5_000);
+      })
+    ).rejects.toThrow(refusal);
+
+    // A phantom lease cannot carry a sale back into the closed shift. The database issues a lease
+    // now, by its own clock, only over numbers drawn in the same transaction that no sale carries.
+    const org = s.owner.organizationId;
+    const branch = s.owner.branchId;
+    const allocate = async (db: ScopedDb, count: number) =>
+      (
+        await db.$queryRaw<Array<{ first: number }>>`
+          SELECT pharmacy_allocate_branch_receipt_numbers(${org}::text, ${branch}::text, ${count}::integer) AS first`
+      )[0]!.first;
+    const phantomLease = async (db: ScopedDb, from: number, to: number) =>
+      (
+        await db.$queryRaw<Array<{ id: string; issuedAt: Date }>>`
+          INSERT INTO pharmacy_receipt_number_leases
+            (id, "organizationId", "branchId", "deviceId", "blockStart", "blockEnd", "nextNumber",
+             "issuedToActorId", "issuedAt")
+          VALUES (${randomUUID()}, ${org}, ${branch}, ${device}, ${from}, ${to}, ${from},
+            ${s.cashier}, ${new Date('2000-01-01T00:00:00.000Z')})
+          RETURNING id, "issuedAt"`
+      )[0]!;
+    const before = Date.now() - 60_000;
+    // (a) A supplied issue time is ignored: the lease is issued now.
+    const fresh = await sameTransaction(async (db) => {
+      const first = await allocate(db, 1);
+      return phantomLease(db, first, first);
+    });
+    expect(fresh.issuedAt.getTime()).toBeGreaterThan(before);
+    // So the reviewer's phantom lease, issued and consumed in one go, cannot reach shift 1.
+    await expect(
+      sameTransaction(async (db) => {
+        const first = await allocate(db, 1);
+        const lease = await phantomLease(db, first, first);
+        await db.$executeRaw`UPDATE pharmacy_receipt_number_leases SET "nextNumber" = "nextNumber" + 1
+          WHERE id = ${lease.id}`;
+        await settlement.recordLeasedReceiptConsumption(db, s.owner, {
+          leaseId: lease.id,
+          deviceId: device,
+          receiptNumber: first,
+          saleId: otherSale.sale.id,
+          soldAt: soldInShift1,
+        });
+        await forgedTender(db, otherSale.sale.id, soldInShift1);
+      })
+    ).rejects.toThrow(/PHARMACY_RECEIPT_CONSUMPTION_INVALID/);
+    // (b) Never over a number a sale already carries: an earlier online receipt's number...
+    const online = await sameTransaction(async (db) => {
+      const number = await allocate(db, 1);
+      await db.pharmacySale.create({
+        data: {
+          organizationId: org,
+          branchId: branch,
+          status: 'COMPLETED',
+          createdByUserId: s.cashier,
+          receiptNumber: number,
+          receiptDeviceId: 'counter-online',
+          businessDate: s.today,
+          completedAt: new Date(),
+        },
+      });
+      return number;
+    });
+    await expect(
+      sameTransaction(async (db) => {
+        await allocate(db, 2);
+        return phantomLease(db, online, online);
+      })
+    ).rejects.toThrow(/RECEIPT_LEASE_NOT_ALLOCATED/);
+    // ...or one a sale took inside the very block just drawn.
+    await expect(
+      sameTransaction(async (db) => {
+        const first = await allocate(db, 2);
+        await db.pharmacySale.create({
+          data: {
+            organizationId: org,
+            branchId: branch,
+            status: 'COMPLETED',
+            createdByUserId: s.cashier,
+            receiptNumber: first,
+            receiptDeviceId: 'counter-online',
+            businessDate: s.today,
+            completedAt: new Date(),
+          },
+        });
+        return phantomLease(db, first, first + 1);
+      })
+    ).rejects.toThrow(/RECEIPT_LEASE_NUMBER_USED/);
+    // And only numbers drawn in the same transaction: a block drawn earlier is not a lease.
+    const drawnEarlier = await sameTransaction((db) => allocate(db, 3));
+    await expect(
+      sameTransaction((db) => phantomLease(db, drawnEarlier, drawnEarlier + 2))
+    ).rejects.toThrow(/RECEIPT_LEASE_NOT_ALLOCATED/);
+
+    // Only the database's own guards claim a used number's record: not a trigger of the runtime
+    // role's own, on a temporary table, however deeply nested.
+    await expect(
+      sameTransaction(async (db) => {
+        await consume(db, otherSale.sale.id, soldInShift1);
+        await db.$executeRawUnsafe(`CREATE TEMP TABLE claim_by_hand (x int) ON COMMIT DROP`);
+        await db.$executeRawUnsafe(`
+          CREATE FUNCTION pg_temp.claim_by_hand() RETURNS trigger LANGUAGE plpgsql AS $fn$
+          BEGIN
+            UPDATE pharmacy_receipt_number_consumptions SET "tenderId" = 'by-hand'
+             WHERE "tenderId" IS NULL;
+            RETURN NEW;
+          END $fn$`);
+        await db.$executeRawUnsafe(`
+          CREATE TRIGGER claim_by_hand AFTER INSERT ON pg_temp.claim_by_hand
+            FOR EACH ROW EXECUTE FUNCTION pg_temp.claim_by_hand()`);
+        await db.$executeRawUnsafe(`INSERT INTO pg_temp.claim_by_hand VALUES (1)`);
+      })
+    ).rejects.toThrow(/PHARMACY_RECEIPT_CONSUMPTION_IMMUTABLE/);
+
     // The record of a used number never changes and is never deleted.
     await expect(
       sameTransaction(
@@ -1425,7 +1544,8 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
 
     // A second manager with the approval right but no approval credential cannot approve, so they
     // never count as "another approver" who would block a self-approval.
-    managers.add(await addMember(s, `${s.owner.organizationId}_nopin`, ['pharmacy:manage']));
+    const noPin = await addMember(s, `${s.owner.organizationId}_nopin`, ['pharmacy:manage']);
+    managers.add(noPin);
     // The only manager who can approve closes their own shift short: nobody else can, so they
     // approve it themselves with a fresh PIN, recorded as a solo approval.
     const own = await shiftOf(s.manager);
@@ -1443,6 +1563,10 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
     });
     // A cashier's shift is always approved by someone else: here, that manager.
     const cashiers = await shiftOf(s.cashier);
+    // Someone with the right but no approval PIN is not eligible, whoever types; no guess is spent.
+    await expect(authorize(cashiers.id, noPin, '1234', s.cashier)).rejects.toMatchObject({
+      reason: 'SHIFT_APPROVAL_NOT_ELIGIBLE',
+    });
     await expect(authorize(cashiers.id, s.cashier, MANAGER_PIN, s.cashier)).rejects.toMatchObject({
       reason: 'SHIFT_APPROVAL_NEEDS_ANOTHER',
     });
@@ -1524,6 +1648,12 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
     // Those guesses were typed by someone else: the second manager's own credential took no
     // strike, so their own PIN still works for their refunds.
     expect(await credentialOf(second)).toMatchObject({ failedAttempts: 0, lockedUntil: null });
+    // The budget is the approver's one budget for PINs typed by others, which purchase approval
+    // spends too: it is gone for every such approval, not only for shifts.
+    const budgets = await import('@/lib/approver-pin-guess-budget');
+    expect(
+      (await budgets.spendApproverPinGuessTypedByAnother(s.owner.organizationId, second)).ok
+    ).toBe(false);
     const { authenticateRefundPin } = await import('./refund-authorization');
     await expect(
       authenticateRefundPin({

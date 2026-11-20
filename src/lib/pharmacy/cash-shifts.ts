@@ -477,6 +477,10 @@ export async function authorizeCashShiftVariance(
   ) {
     throw new PharmacySettlementError('SHIFT_APPROVAL_NOT_ELIGIBLE');
   }
+  // Someone with no approval credential cannot approve, whoever types: refused as not eligible,
+  // before any PIN is checked or any guess spent.
+  if (!(await hasApprovalCredential(db, scope, approver.id)))
+    throw new PharmacySettlementError('SHIFT_APPROVAL_NOT_ELIGIBLE');
   // The approver typed their own PIN: the shared self check (PIN or authenticator code through
   // verifyApprovalSecret, with the credential's lockout strikes), in its own transaction so a
   // refusal's strike and FAILURE audit row commit, exactly as a manager's refund. Someone else
@@ -487,12 +491,16 @@ export async function authorizeCashShiftVariance(
       : await verifyOtherApproverPin(scope, input.approverId, input.pin, policy);
   if (outcome !== 'VERIFIED')
     throw new PharmacySettlementError(
-      outcome === 'LOCKED' ? 'SHIFT_APPROVAL_LOCKED' : 'SHIFT_APPROVAL_REFUSED'
+      outcome === 'LOCKED'
+        ? 'SHIFT_APPROVAL_LOCKED'
+        : outcome === 'NOT_ELIGIBLE'
+          ? 'SHIFT_APPROVAL_NOT_ELIGIBLE'
+          : 'SHIFT_APPROVAL_REFUSED'
     );
   return { shiftId: shift.id, approverId: input.approverId, policy, selfApproved };
 }
 
-type ApproverPinOutcome = 'VERIFIED' | 'REFUSED' | 'LOCKED';
+type ApproverPinOutcome = 'VERIFIED' | 'REFUSED' | 'LOCKED' | 'NOT_ELIGIBLE';
 
 const SHIFT_APPROVAL_ACTION = 'pharmacySales.closeShift';
 const SHIFT_APPROVAL_PIN_REFUSED = 'SHIFT_VARIANCE_PIN_REFUSED';
@@ -548,10 +556,11 @@ function approverPinWhere(organizationId: string, approverId: string) {
 /**
  * Someone else typed the approver's PIN at their counter. The PIN is the approver's shared operator
  * credential, so guesses typed by another person must not strike it and lock the approver out of
- * their refunds and other approvals. They are bounded instead by a budget per approver (the same
- * five attempts per lockout window), as purchase approval does. The secret is still checked through
- * the shared path (verifyApprovalSecret: PIN or authenticator code); an approver already locked out
- * stays refused. Runs in its own transaction so the FAILURE audit row commits.
+ * their refunds and other approvals. They spend instead the approver's one budget for guesses typed
+ * by others (five per lockout window), shared with purchase approval (approver-pin-guess-budget.ts).
+ * The secret is still checked through the shared path (verifyApprovalSecret: PIN or authenticator
+ * code); an approver already locked out stays refused, and one with no PIN cannot approve at all.
+ * Runs in its own transaction so the FAILURE audit row commits.
  */
 async function verifyOtherApproverPin(
   scope: LedgerScope,
@@ -559,11 +568,11 @@ async function verifyOtherApproverPin(
   pin: string,
   policy: string
 ): Promise<ApproverPinOutcome> {
-  const [{ withTenantDb }, credentials, { verifyApprovalSecret }, limits] = await Promise.all([
+  const [{ withTenantDb }, credentials, { verifyApprovalSecret }, budgets] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('@/lib/restaurant/operator-credentials'),
     import('@/lib/approval-authenticator'),
-    import('@/lib/rate-limit'),
+    import('@/lib/approver-pin-guess-budget'),
   ]);
   const { organizationId } = scope;
   return withTenantDb(
@@ -580,38 +589,37 @@ async function verifyOtherApproverPin(
             action: SHIFT_APPROVAL_ACTION,
             outcome: 'FAILURE',
             errorCode: SHIFT_APPROVAL_PIN_REFUSED,
-            metadata: { policy, approverId, pinVerified: false, locked: outcome === 'LOCKED' },
+            metadata: { policy, approverId, pinVerified: false, refusal: outcome },
           },
         });
         return outcome;
       };
-      if (!/^\d{4,8}$/.test(pin)) return refuse('REFUSED');
-      const throttleKey = `pharmacy-shift-approver-pin:${organizationId}:${approverId}`;
-      const budget = await limits.rateLimit(
-        throttleKey,
-        credentials.MAX_FAILED_ATTEMPTS,
-        credentials.LOCKOUT_DURATION_MS
-      );
-      if (!budget.ok) return refuse('LOCKED');
       const credential = await db.restaurantOperatorCredential.findFirst({
         where: approverPinWhere(organizationId, approverId),
         orderBy: { id: 'asc' },
         select: { credentialHash: true, failedAttempts: true, lockedUntil: true },
       });
+      if (!credential) return refuse('NOT_ELIGIBLE');
       const now = new Date();
-      if (!credential) return refuse('REFUSED');
       if (credentials.isLockedOut(credential, now)) return refuse('LOCKED');
-      const verified = await verifyApprovalSecret(db, {
+      if (!/^\d{4,8}$/.test(pin)) return refuse('REFUSED');
+      const budget = await budgets.spendApproverPinGuessTypedByAnother(organizationId, approverId);
+      if (!budget.ok) return refuse('LOCKED');
+      // Built before the call, so it also carries the approver right the shared check will
+      // require once DEV-961 (PR 2240) lands: the drawer-manager gate this approver passed.
+      const secretCheck = {
         organizationId,
         approverUserId: approverId,
         credentialHash: credential.credentialHash,
         secret: pin,
         action: 'pharmacy.shiftVarianceApproval',
+        approverRight: 'pharmacy:manage' as const,
         requestedById: scope.actorId,
         now,
-      });
+      };
+      const verified = await verifyApprovalSecret(db, secretCheck);
       if (!verified) return refuse(budget.remaining === 0 ? 'LOCKED' : 'REFUSED');
-      await limits.clearRateLimit(throttleKey);
+      await budgets.clearApproverPinGuessesTypedByAnother(organizationId, approverId);
       return 'VERIFIED';
     },
     { skipDrain: true }

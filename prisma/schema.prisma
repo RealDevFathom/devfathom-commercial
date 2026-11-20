@@ -2032,6 +2032,11 @@ model PharmacyBranchReceiptSequence {
   branchId         String
   nextNumber       Int
   updatedAt        DateTime       @default(now()) @updatedAt
+  /// DEV-958B: the numbers the last draw handed out, and in which transaction; set only by the
+  /// database, so a new receipt lease can be held to numbers drawn in its own transaction.
+  lastAllocatedFrom Int?
+  lastAllocatedTo   Int?
+  lastAllocatedXact BigInt?
   visibilityAnchor PharmacyBranch @relation("PharmacyBranchReceiptSequenceVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_branch_receipt_sequences_visibility_fkey")
 
   @@unique([organizationId, id])

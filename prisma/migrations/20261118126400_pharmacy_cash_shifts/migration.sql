@@ -1,6 +1,11 @@
 -- DEV-958B (phase 2 of DEV-958): cash shifts on a pharmacy drawer.
 BEGIN;
 
+-- The migration locks ten existing tables while it adds columns, constraints and triggers. Give up
+-- rather than queue behind a long transaction (and hold every later writer behind this one): rerun
+-- it in a quiet window.
+SET LOCAL lock_timeout = '10s';
+
 -- Within one business day a branch that runs shifts opens several shifts, one after another, on a
 -- counter's drawer. A cashier opens a shift with a counted opening float and closes it with a
 -- counted closing amount; the shift report is frozen at the close. The day close then closes the
@@ -426,6 +431,9 @@ LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 BEGIN
   IF TG_OP = 'INSERT' THEN
     NEW."lastAdvancedXact" := NULL;
+    -- A lease is issued now, by the database's clock: a supplied time is ignored, so no lease
+    -- can claim to predate a sale it never covered.
+    NEW."issuedAt" := CURRENT_TIMESTAMP;
   ELSIF NEW."nextNumber" > OLD."nextNumber" THEN
     NEW."lastAdvancedXact" := pg_current_xact_id()::text::bigint;
   ELSE
@@ -438,6 +446,74 @@ DROP TRIGGER IF EXISTS pharmacy_receipt_lease_advanced_xact ON "pharmacy_receipt
 CREATE TRIGGER pharmacy_receipt_lease_advanced_xact
   BEFORE INSERT OR UPDATE ON "pharmacy_receipt_number_leases"
   FOR EACH ROW EXECUTE FUNCTION pharmacy_receipt_lease_advanced_xact();
+
+-- A new lease is issued only for numbers the branch sequence handed out in the same transaction
+-- (pharmacy_allocate_branch_receipt_numbers moves the sequence; the database records which numbers
+-- it moved past, and in which transaction), and never over a number any sale of the branch already
+-- carries. The lease guard of DEV-637 still checks the block lies below the sequence and overlaps
+-- no other lease; this one runs after it.
+ALTER TABLE "pharmacy_branch_receipt_sequences" ADD COLUMN IF NOT EXISTS "lastAllocatedFrom" INTEGER;
+ALTER TABLE "pharmacy_branch_receipt_sequences" ADD COLUMN IF NOT EXISTS "lastAllocatedTo" INTEGER;
+ALTER TABLE "pharmacy_branch_receipt_sequences" ADD COLUMN IF NOT EXISTS "lastAllocatedXact" BIGINT;
+
+CREATE OR REPLACE FUNCTION pharmacy_branch_receipt_allocation_stamp() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    -- A branch's first draw starts above everything it issued or leased; the guard below checks
+    -- the numbers directly, so the start is left open.
+    NEW."lastAllocatedFrom" := NULL;
+    NEW."lastAllocatedTo" := NEW."nextNumber" - 1;
+    NEW."lastAllocatedXact" := pg_current_xact_id()::text::bigint;
+  ELSIF NEW."nextNumber" > OLD."nextNumber" THEN
+    NEW."lastAllocatedFrom" := OLD."nextNumber";
+    NEW."lastAllocatedTo" := NEW."nextNumber" - 1;
+    NEW."lastAllocatedXact" := pg_current_xact_id()::text::bigint;
+  ELSE
+    NEW."lastAllocatedFrom" := OLD."lastAllocatedFrom";
+    NEW."lastAllocatedTo" := OLD."lastAllocatedTo";
+    NEW."lastAllocatedXact" := OLD."lastAllocatedXact";
+  END IF;
+  RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS pharmacy_branch_receipt_allocation_stamp ON "pharmacy_branch_receipt_sequences";
+CREATE TRIGGER pharmacy_branch_receipt_allocation_stamp
+  BEFORE INSERT OR UPDATE ON "pharmacy_branch_receipt_sequences"
+  FOR EACH ROW EXECUTE FUNCTION pharmacy_branch_receipt_allocation_stamp();
+
+CREATE OR REPLACE FUNCTION pharmacy_receipt_lease_allocation_guard() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  sequence record;
+BEGIN
+  SELECT q."lastAllocatedFrom", q."lastAllocatedTo", q."lastAllocatedXact" INTO sequence
+    FROM "pharmacy_branch_receipt_sequences" q
+   WHERE q."organizationId" = NEW."organizationId" AND q."branchId" = NEW."branchId";
+  IF NOT FOUND
+     OR sequence."lastAllocatedXact" IS DISTINCT FROM pg_current_xact_id()::text::bigint
+     OR NEW."blockEnd" > sequence."lastAllocatedTo"
+     OR NEW."blockStart" < COALESCE(sequence."lastAllocatedFrom", NEW."blockStart") THEN
+    RAISE EXCEPTION 'RECEIPT_LEASE_NOT_ALLOCATED: a lease covers only numbers this transaction drew from the branch sequence'
+      USING ERRCODE = '55000';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM "pharmacy_sales" sale
+     WHERE sale."organizationId" = NEW."organizationId" AND sale."branchId" = NEW."branchId"
+       AND (sale."receiptNumber" BETWEEN NEW."blockStart" AND NEW."blockEnd"
+            OR sale."offlineReceiptReference" BETWEEN NEW."blockStart" AND NEW."blockEnd")
+  ) THEN
+    RAISE EXCEPTION 'RECEIPT_LEASE_NUMBER_USED: a sale of the branch already carries a number of this block'
+      USING ERRCODE = '55000';
+  END IF;
+  RETURN NEW;
+END $$;
+
+-- Named to fire after the DEV-637 guard ("..._insert_guard"), whose refusals keep their words.
+DROP TRIGGER IF EXISTS pharmacy_receipt_number_leases_same_transaction_guard ON "pharmacy_receipt_number_leases";
+CREATE TRIGGER pharmacy_receipt_number_leases_same_transaction_guard
+  BEFORE INSERT ON "pharmacy_receipt_number_leases"
+  FOR EACH ROW EXECUTE FUNCTION pharmacy_receipt_lease_allocation_guard();
 
 CREATE TABLE IF NOT EXISTS "pharmacy_receipt_number_consumptions" (
   "id" TEXT NOT NULL,
@@ -477,32 +553,39 @@ CREATE POLICY tenant_isolation ON "pharmacy_receipt_number_consumptions"
   USING ("organizationId" = current_setting('app.current_organization_id', true))
   WITH CHECK ("organizationId" = current_setting('app.current_organization_id', true));
 
+-- A used number's record never changes and is never deleted, except that the tender and movement
+-- guards below claim it, once each. Those guards run as the table's owner (SECURITY DEFINER). This
+-- guard runs as the caller (SECURITY INVOKER) and refuses any change made by another role: directly,
+-- or from a trigger or function of the caller's own however deeply nested.
+CREATE OR REPLACE FUNCTION pharmacy_receipt_number_consumption_immutable() RETURNS trigger
+LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $$
+DECLARE
+  owner_role name;
+BEGIN
+  SELECT pg_get_userbyid(c.relowner) INTO owner_role FROM pg_class c WHERE c.oid = TG_RELID;
+  IF TG_OP = 'DELETE'
+     OR current_user IS DISTINCT FROM owner_role
+     OR (NEW."id", NEW."organizationId", NEW."branchId", NEW."deviceId", NEW."leaseId",
+         NEW."receiptNumber", NEW."saleId", NEW."soldAt", NEW."consumedXact", NEW."createdAt")
+        IS DISTINCT FROM
+        (OLD."id", OLD."organizationId", OLD."branchId", OLD."deviceId", OLD."leaseId",
+         OLD."receiptNumber", OLD."saleId", OLD."soldAt", OLD."consumedXact", OLD."createdAt")
+     OR (OLD."tenderId" IS NOT NULL AND NEW."tenderId" IS DISTINCT FROM OLD."tenderId")
+     OR (OLD."cashMovementId" IS NOT NULL AND NEW."cashMovementId" IS DISTINCT FROM OLD."cashMovementId")
+  THEN
+    RAISE EXCEPTION 'PHARMACY_RECEIPT_CONSUMPTION_IMMUTABLE: a used receipt number stays recorded'
+      USING ERRCODE = '55000';
+  END IF;
+  RETURN NEW;
+END $$;
+
+-- A consumption is accepted only for the number this transaction moved its lease's cursor past.
 CREATE OR REPLACE FUNCTION pharmacy_receipt_number_consumption_guard() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   lease record;
   xact bigint := pg_current_xact_id()::text::bigint;
 BEGIN
-  IF TG_OP = 'DELETE' THEN
-    RAISE EXCEPTION 'PHARMACY_RECEIPT_CONSUMPTION_IMMUTABLE: a used receipt number stays recorded'
-      USING ERRCODE = '55000';
-  END IF;
-  IF TG_OP = 'UPDATE' THEN
-    -- Only the tender and movement guards below claim a row, once each.
-    IF pg_trigger_depth() < 2
-       OR (NEW."id", NEW."organizationId", NEW."branchId", NEW."deviceId", NEW."leaseId",
-           NEW."receiptNumber", NEW."saleId", NEW."soldAt", NEW."consumedXact", NEW."createdAt")
-          IS DISTINCT FROM
-          (OLD."id", OLD."organizationId", OLD."branchId", OLD."deviceId", OLD."leaseId",
-           OLD."receiptNumber", OLD."saleId", OLD."soldAt", OLD."consumedXact", OLD."createdAt")
-       OR (OLD."tenderId" IS NOT NULL AND NEW."tenderId" IS DISTINCT FROM OLD."tenderId")
-       OR (OLD."cashMovementId" IS NOT NULL AND NEW."cashMovementId" IS DISTINCT FROM OLD."cashMovementId")
-    THEN
-      RAISE EXCEPTION 'PHARMACY_RECEIPT_CONSUMPTION_IMMUTABLE: a used receipt number stays recorded'
-        USING ERRCODE = '55000';
-    END IF;
-    RETURN NEW;
-  END IF;
   IF NEW."tenderId" IS NOT NULL OR NEW."cashMovementId" IS NOT NULL THEN
     RAISE EXCEPTION 'PHARMACY_RECEIPT_CONSUMPTION_INVALID: a consumption is claimed by its tender'
       USING ERRCODE = '23514';
@@ -526,8 +609,12 @@ END $$;
 
 DROP TRIGGER IF EXISTS pharmacy_receipt_number_consumption_guard ON "pharmacy_receipt_number_consumptions";
 CREATE TRIGGER pharmacy_receipt_number_consumption_guard
-  BEFORE INSERT OR UPDATE OR DELETE ON "pharmacy_receipt_number_consumptions"
+  BEFORE INSERT ON "pharmacy_receipt_number_consumptions"
   FOR EACH ROW EXECUTE FUNCTION pharmacy_receipt_number_consumption_guard();
+DROP TRIGGER IF EXISTS pharmacy_receipt_number_consumption_immutable ON "pharmacy_receipt_number_consumptions";
+CREATE TRIGGER pharmacy_receipt_number_consumption_immutable
+  BEFORE UPDATE OR DELETE ON "pharmacy_receipt_number_consumptions"
+  FOR EACH ROW EXECUTE FUNCTION pharmacy_receipt_number_consumption_immutable();
 
 -- The attribution is the database's alone, and a late arrival is exactly what the application's own
 -- offline path writes, nothing wider:
@@ -550,6 +637,17 @@ BEGIN
       USING ERRCODE = '23514';
   END IF;
   IF NEW."soldAt" IS NOT NULL THEN
+    -- A replayed offline sale is settled in full by this one tender: never more (or less) than
+    -- what its sale still owes, so no extra cash can ride on a used receipt number.
+    IF NEW."amountMinor" IS DISTINCT FROM (
+      SELECT COALESCE((SELECT sum(l."grossMinor" - l."discountMinor") FROM "pharmacy_sale_lines" l
+                        WHERE l."organizationId" = NEW."organizationId" AND l."saleId" = NEW."saleId"), 0)
+           - COALESCE((SELECT sum(t."amountMinor") FROM "pharmacy_tenders" t
+                        WHERE t."organizationId" = NEW."organizationId" AND t."saleId" = NEW."saleId"), 0)
+    ) THEN
+      RAISE EXCEPTION 'PHARMACY_SHIFT_ATTRIBUTION_INVALID: a replayed sale''s tender settles exactly what it owes'
+        USING ERRCODE = '23514';
+    END IF;
     UPDATE "pharmacy_receipt_number_consumptions" c SET "tenderId" = NEW."id"
      WHERE c."organizationId" = NEW."organizationId" AND c."saleId" = NEW."saleId"
        AND c."branchId" = NEW."branchId" AND c."deviceId" = NEW."deviceId"

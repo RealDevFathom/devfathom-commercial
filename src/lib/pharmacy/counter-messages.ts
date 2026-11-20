@@ -221,7 +221,7 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   SHIFT_APPROVAL_NEEDS_ANOTHER:
     'You cannot approve your own shift’s over or short while another manager or owner works at this branch. Ask them to approve it with their PIN.',
   SHIFT_APPROVAL_NOT_ELIGIBLE:
-    'That person cannot approve this over or short. Choose a manager or owner at this branch, other than the shift’s cashier.',
+    'That person cannot approve this over or short. Choose a manager or owner at this branch who has an approval PIN, other than the shift’s cashier and the person closing it.',
   SHIFT_COUNT_MISMATCH:
     'A drawer that runs shifts closes on its last shift’s count. Refresh the day close and try again.',
   SHIFT_CHANGED:
