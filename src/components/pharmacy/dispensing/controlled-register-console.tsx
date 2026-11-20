@@ -4,6 +4,14 @@ import Link from 'next/link';
 import { useRef, useState } from 'react';
 import { PendingLegalReviewNotice } from '../pending-legal-review-notice';
 import { Button } from '@/components/ui/button';
+import {
+  closePrintWindow,
+  createPrintDocument,
+  openPrintWindow,
+  sendToPrintWindow,
+  serializePrintDocument,
+  type PrintWindow,
+} from '@/lib/browser-print/print-window';
 import { formatKarachiDateTime } from '@/lib/pharmacy/karachi-time';
 import { registerPrintTotals } from '@/lib/pharmacy/register-print';
 import { trpc } from '@/lib/trpc';
@@ -51,26 +59,36 @@ export function ControlledRegisterConsole() {
   });
 
   function printRegister() {
-    const popup = window.open('', '_blank', 'width=1100,height=800');
+    // DEV-973: an isolated window that prints itself, so this page never freezes.
+    let popup: PrintWindow | null = null;
+    try {
+      popup = page.current ? openPrintWindow('width=1100,height=800') : null;
+    } catch {
+      popup = null;
+    }
     if (!popup || !page.current) {
       setPrintError(true);
       return;
     }
-    popup.opener = null;
-    popup.document.title = 'Controlled medicine register';
-    const heading = popup.document.createElement('h1');
+    const doc = createPrintDocument('Controlled medicine register');
+    const heading = doc.createElement('h1');
     heading.textContent = 'Controlled medicine register';
     const branchName =
       branches.data?.find((branch) => branch.id === selected)?.name ?? 'This branch';
-    const stamp = popup.document.createElement('p');
+    const stamp = doc.createElement('p');
     stamp.textContent = `Printed ${formatKarachiDateTime(new Date())} · ${branchName}`;
-    const style = popup.document.createElement('style');
+    const style = doc.createElement('style');
     style.textContent =
       '@page { size: landscape; margin: 12mm; } body { font: 11px sans-serif; color: #222; } table { border-collapse: collapse; width: 100%; } th, td { border: 1px solid #222; padding: 4px; text-align: left; vertical-align: top; } thead { display: table-header-group; } tr { break-inside: avoid; }';
-    popup.document.head.append(style);
-    popup.document.body.append(heading, stamp, page.current.cloneNode(true));
-    popup.focus();
-    popup.print();
+    doc.head.append(style);
+    doc.body.append(heading, stamp, doc.importNode(page.current, true));
+    try {
+      sendToPrintWindow(popup, serializePrintDocument(doc));
+    } catch {
+      closePrintWindow(popup);
+      setPrintError(true);
+      return;
+    }
     setPrintError(false);
   }
 

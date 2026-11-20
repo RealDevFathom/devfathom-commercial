@@ -8,6 +8,14 @@ import { formatLoyaltyCardCode } from '@/lib/pharmacy/loyalty-card-code';
 import { formatWorkspaceDate } from '@/lib/timezone';
 import { encodeQr, qrSvgPath } from '@/lib/qr/qr-code';
 import {
+  closePrintWindow,
+  createPrintDocument,
+  openPrintWindow,
+  sendToPrintWindow,
+  serializePrintDocument,
+  type PrintWindow,
+} from '@/lib/browser-print/print-window';
+import {
   issueLoyaltyCard,
   revokeLoyaltyCard,
   type LoyaltyCardFormState,
@@ -24,11 +32,15 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
  * the card carries no name, phone, balance or anything else about the customer.
  */
 function printCard(code: string) {
-  const popup = window.open('', '_blank', 'popup,width=420,height=560');
+  // DEV-973: an isolated window that prints itself, so this page never freezes.
+  let popup: PrintWindow | null;
+  try {
+    popup = openPrintWindow('popup,width=420,height=560');
+  } catch {
+    popup = null;
+  }
   if (!popup) return false;
-  popup.opener = null;
-  const doc = popup.document;
-  doc.title = 'Loyalty card';
+  const doc = createPrintDocument('Loyalty card');
   const modules = encodeQr(code);
   const extent = modules.length + QR_MARGIN * 2;
   const wrap = doc.createElement('div');
@@ -58,7 +70,12 @@ function printCard(code: string) {
   wrap.append(heading, svg, line);
   doc.body.style.margin = '0';
   doc.body.append(wrap);
-  popup.print();
+  try {
+    sendToPrintWindow(popup, serializePrintDocument(doc));
+  } catch {
+    closePrintWindow(popup);
+    return false;
+  }
   return true;
 }
 

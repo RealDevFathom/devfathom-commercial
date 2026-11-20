@@ -6,6 +6,7 @@ import {
   COUNTER_UNKNOWN_ERROR_MESSAGE,
 } from '@/lib/pharmacy/counter-messages';
 import type { ComponentProps } from 'react';
+import { installFakePrintWindows } from '@/lib/testing/print-window';
 import { COUNTER_SETUP_GUIDANCE } from '@/lib/pharmacy/counter-setup';
 import {
   clearCounterReadinessOkay,
@@ -2143,20 +2144,16 @@ describe('PharmacyCounterConsole Khata wiring', () => {
         },
       ],
     });
-    const body = document.createElement('div');
-    const print = vi.fn();
-    vi.spyOn(window, 'open').mockReturnValue({
-      opener: window,
-      document: { title: '', createElement: document.createElement.bind(document), body },
-      focus: vi.fn(),
-      print,
-      close: vi.fn(),
-    } as never);
+    const windows = installFakePrintWindows();
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     chooseTender('KHATA');
     await screen.findByText(/Ledger balance/);
     fireEvent.click(screen.getByRole('button', { name: 'Print Khata statement' }));
-    await waitFor(() => expect(print).toHaveBeenCalledOnce());
+    await waitFor(() => expect(windows.last().printRequests()).toBe(1));
+    // DEV-973: the isolated window prints itself; the counter never calls print() on it.
+    expect(windows.last().proxy.print).not.toHaveBeenCalled();
+    expect(windows.last().document()!.title).toBe('Family Khata statement');
+    const body = windows.last().document()!.body;
     expect(body.textContent).toContain('<script>family</script>');
     expect(body.querySelector('script')).toBeNull();
     expect(body.textContent).not.toContain('private note');

@@ -2,6 +2,7 @@ import { describe, expect, it, vi, afterEach } from 'vitest';
 import { buildDispensingLabels, type DispensingLabelSource } from './dispensing-label';
 import { buildCounterBrowserReceipt, printCounterBrowserReceipt } from './counter-browser-print';
 import type { CounterReceipt } from './counter-receipt';
+import { installFakePrintWindows } from '@/lib/testing/print-window';
 
 // Synthetic text only: these fixtures are not medical instructions or real licences.
 export const source: DispensingLabelSource = {
@@ -143,36 +144,50 @@ describe('50 × 30 mm dispensing labels', () => {
     ).toThrow();
   });
   it.each([false, true])('prints only labels fitting physical paper; overflow=%s', (overflow) => {
-    const popup = {
-      opener: window,
-      document: {
-        open: vi.fn(),
-        write: vi.fn(),
-        close: vi.fn(),
-        querySelectorAll: () => [
-          {
-            clientHeight: 113,
-            scrollHeight: overflow ? 150 : 113,
-            clientWidth: 189,
-            scrollWidth: 189,
-          },
-        ],
-      },
-      focus: vi.fn(),
-      print: vi.fn(),
-      close: vi.fn(),
-    };
-    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    // Labels are laid out (never printed) in this page before the print window gets them.
+    const measured: string[] = [];
+    const size = (label: number, fallback: number) =>
+      function (this: Element) {
+        if (!this.classList.contains('dispensing-label')) return fallback;
+        measured.push(this.textContent ?? '');
+        return label;
+      };
+    // The measuring frame has its own realm, so its layout is stubbed there.
+    const frameDocument = Object.getOwnPropertyDescriptor(
+      HTMLIFrameElement.prototype,
+      'contentDocument'
+    )!.get!;
+    vi.spyOn(HTMLIFrameElement.prototype, 'contentDocument', 'get').mockImplementation(function (
+      this: HTMLIFrameElement
+    ) {
+      const doc = frameDocument.call(this) as Document;
+      const element = doc.defaultView!.Element.prototype;
+      for (const [name, value] of [
+        ['clientHeight', 113],
+        ['scrollHeight', overflow ? 150 : 113],
+        ['clientWidth', 189],
+        ['scrollWidth', 189],
+      ] as const)
+        Object.defineProperty(element, name, { configurable: true, get: size(value, 0) });
+      return doc;
+    });
+    const windows = installFakePrintWindows();
     const print = () =>
       printCounterBrowserReceipt(receipt, 'en', 'LABEL_50x30', false, undefined, [source]);
     if (overflow) {
       expect(print).toThrow('exceeds 50 × 30 mm');
-      expect(popup.print).not.toHaveBeenCalled();
-      expect(popup.close).toHaveBeenCalledOnce();
+      expect(windows.last().printRequests()).toBe(0);
+      expect(windows.last().proxy.close).toHaveBeenCalledOnce();
     } else {
       print();
-      expect(popup.print).toHaveBeenCalledOnce();
-      expect(popup.opener).toBeNull();
+      expect(windows.last().printRequests()).toBe(1);
+      expect(windows.last().html()).toBe(
+        buildCounterBrowserReceipt(receipt, 'en', 'LABEL_50x30', false, [source])
+      );
+      expect(windows.last().proxy.opener).toBeNull();
+      expect(windows.last().proxy.print).not.toHaveBeenCalled();
+      windows.closeAll();
     }
+    expect(measured.length).toBeGreaterThan(0);
   });
 });

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { PRINT_WINDOW_READY_TIMEOUT_MS } from '@/lib/browser-print/print-window';
 import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
+import { FakeBroadcastChannel, installFakePrintWindows } from '@/lib/testing/print-window';
 
 import {
   assertCounterBrowserPrintReady,
@@ -523,70 +525,73 @@ describe('isolated Pharmacy browser receipt', () => {
   });
 
   it('rejects a closed or cancelled reservation before allocating a receipt', () => {
-    const popup = {
-      closed: false,
-      opener: window,
-      document: { open: vi.fn(), write: vi.fn(), close: vi.fn() },
-      focus: vi.fn(),
-      print: vi.fn(),
-      close: vi.fn(),
-    };
-    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    const windows = installFakePrintWindows();
     const reservation = reserveCounterBrowserPrint();
+    const popup = windows.last();
     expect(() => assertCounterBrowserPrintReady(reservation)).not.toThrow();
-    expect(popup.document.write).not.toHaveBeenCalled();
-    expect(popup.print).not.toHaveBeenCalled();
-    popup.closed = true;
+    expect(popup.html()).toBeUndefined();
+    expect(popup.printRequests()).toBe(0);
+    expect(popup.proxy.print).not.toHaveBeenCalled();
+    popup.closeByOperator();
     expect(() => assertCounterBrowserPrintReady(reservation)).toThrow('no longer available');
     reservation.cancel();
     expect(() => assertCounterBrowserPrintReady(reservation)).toThrow('no longer available');
   });
 
-  it('rejects a reserved window whose document is no longer accessible', () => {
-    const popup = {
-      opener: window,
-      get document(): Document {
-        throw new Error('Cross-origin window');
-      },
-      close: vi.fn(),
-    };
-    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
-    const reservation = reserveCounterBrowserPrint();
-    expect(() => assertCounterBrowserPrintReady(reservation)).toThrow('no longer available');
-    reservation.cancel();
+  it('rejects a reserved window whose print page never loaded', () => {
+    vi.useFakeTimers();
+    try {
+      installFakePrintWindows({ ready: false });
+      const reservation = reserveCounterBrowserPrint();
+      expect(() => assertCounterBrowserPrintReady(reservation)).not.toThrow();
+      vi.advanceTimersByTime(PRINT_WINDOW_READY_TIMEOUT_MS);
+      expect(() => assertCounterBrowserPrintReady(reservation)).toThrow('no longer available');
+      reservation.cancel();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('prints the isolated document, disconnects opener and leaves receipt available', () => {
-    const popup = {
-      opener: window,
-      document: { open: vi.fn(), write: vi.fn(), close: vi.fn() },
-      focus: vi.fn(),
-      print: vi.fn(),
-      close: vi.fn(),
-    };
-    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    const windows = installFakePrintWindows();
     printCounterBrowserReceipt(receipt, 'en', 'THERMAL');
-    expect(popup.opener).toBeNull();
-    expect(popup.document.write).toHaveBeenCalledWith(
-      buildCounterBrowserReceipt(receipt, 'en', 'THERMAL')
-    );
-    expect(popup.print).toHaveBeenCalledOnce();
-    expect(popup.close).not.toHaveBeenCalled();
+    const popup = windows.last();
+    expect(popup.proxy.opener).toBeNull();
+    expect(popup.html()).toBe(buildCounterBrowserReceipt(receipt, 'en', 'THERMAL'));
+    expect(popup.printRequests()).toBe(1);
+    expect(popup.proxy.close).not.toHaveBeenCalled();
+    windows.closeAll();
+  });
+
+  it('DEV-973: never calls print() from this page, so the print dialog cannot freeze it', () => {
+    const windows = installFakePrintWindows({ ready: false });
+    const pagePrint = vi.spyOn(window, 'print').mockImplementation(() => {});
+    const reservation = reserveCounterBrowserPrint();
+    const popup = windows.last();
+    // The isolated print page, by URL only: no receipt data in the address.
+    expect(popup.url).toMatch(/^\/print-window\.html#[0-9a-f-]{36}$/);
+    expect(popup.features).toBe('popup,width=480,height=720');
+    printCounterBrowserReceipt(receipt, 'en', 'A4', true, reservation);
+    // Settled before the print page loaded: held until it announces itself.
+    expect(popup.printRequests()).toBe(0);
+    popup.ready();
+    expect(popup.html()).toBe(buildCounterBrowserReceipt(receipt, 'en', 'A4', true));
+    expect(popup.printRequests()).toBe(1);
+    expect(popup.proxy.print).not.toHaveBeenCalled();
+    expect(pagePrint).not.toHaveBeenCalled();
+    windows.closeAll();
   });
 
   it('closes the isolated window on print failure and exposes retry guidance', () => {
-    const popup = {
-      opener: null,
-      document: { open: vi.fn(), write: vi.fn(), close: vi.fn() },
-      focus: vi.fn(),
-      print: vi.fn(() => {
-        throw new Error('unavailable');
-      }),
-      close: vi.fn(),
-    };
-    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
-    expect(() => printCounterBrowserReceipt(receipt, 'en', 'A4')).toThrow('Retry Print receipt');
-    expect(popup.close).toHaveBeenCalledOnce();
+    const windows = installFakePrintWindows();
+    const reservation = reserveCounterBrowserPrint();
+    vi.spyOn(FakeBroadcastChannel.prototype, 'postMessage').mockImplementation(() => {
+      throw new Error('unavailable');
+    });
+    expect(() => printCounterBrowserReceipt(receipt, 'en', 'A4', false, reservation)).toThrow(
+      'Retry Print receipt'
+    );
+    expect(windows.last().proxy.close).toHaveBeenCalledOnce();
   });
 });
 

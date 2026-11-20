@@ -62,6 +62,12 @@ const nextConfig: NextConfig = {
         },
       ],
     },
+    {
+      // DEV-973: the print window gets its own browsing-context group, so its
+      // print dialog never pauses the counter that opened it.
+      source: '/print-window.html',
+      headers: [{ key: 'Cross-Origin-Opener-Policy', value: 'same-origin' }],
+    },
   ],
   poweredByHeader: false,
 };

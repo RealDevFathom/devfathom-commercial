@@ -9,6 +9,7 @@ vi.mock('./counter-thermal-print', () => ({
   },
 }));
 
+import { installFakePrintWindows } from '@/lib/testing/print-window';
 import { CounterReceiptView, type CounterReceiptViewProps } from './counter-receipt-view';
 
 // #708: the cash memo is held off by a hard-coded constant until counsel confirms it. Tests
@@ -325,20 +326,16 @@ it.each([false, true])(
     expect(button).toBeEnabled();
     fireEvent.click(button);
     expect(screen.getByRole('alert')).toHaveTextContent('Allow pop-ups');
-    const popup = {
-      opener: window,
-      document: { open: vi.fn(), write: vi.fn(), close: vi.fn(), querySelectorAll: () => [] },
-      focus: vi.fn(),
-      print: vi.fn(),
-      close: vi.fn(),
-    };
-    open.mockReturnValue(popup as unknown as Window);
+    open.mockRestore();
+    const windows = installFakePrintWindows();
     fireEvent.click(button);
-    expect(popup.document.write).toHaveBeenCalledWith(expect.stringContaining('size: 50mm 30mm'));
-    expect(popup.print).toHaveBeenCalledOnce();
+    expect(windows.last().html()).toEqual(expect.stringContaining('size: 50mm 30mm'));
+    expect(windows.last().printRequests()).toBe(1);
+    // DEV-973: the isolated window prints itself; the counter never calls print() on it.
+    expect(windows.last().proxy.print).not.toHaveBeenCalled();
     expect(input.onPrint).not.toHaveBeenCalled();
     expect(screen.queryByRole('alert')).toBeNull();
-    open.mockRestore();
+    windows.closeAll();
   }
 );
 
@@ -368,19 +365,12 @@ it('selects only the clicked line source from the production receipt payload', (
     directionsEnglish: `${saleLineId} directions`,
     directionsUrdu: 'اردو',
   }));
-  const popup = {
-    opener: window,
-    document: { open: vi.fn(), write: vi.fn(), close: vi.fn(), querySelectorAll: () => [] },
-    focus: vi.fn(),
-    print: vi.fn(),
-    close: vi.fn(),
-  };
-  const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+  const windows = installFakePrintWindows();
   render(<CounterReceiptView {...input} />);
   fireEvent.click(screen.getAllByRole('button', { name: /Print Rx labels/ })[1]!);
-  expect(popup.document.write).toHaveBeenCalledWith(expect.stringContaining('second directions'));
-  expect(popup.document.write.mock.calls[0]![0]).not.toContain('first directions');
-  open.mockRestore();
+  expect(windows.last().html()).toEqual(expect.stringContaining('second directions'));
+  expect(windows.last().html()).not.toContain('first directions');
+  windows.open.mockRestore();
 });
 
 const still = 'data:image/png;base64,iVBORw0KGgo=';

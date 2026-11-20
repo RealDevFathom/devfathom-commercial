@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import type { TerminalRequest } from './checkout-panel';
 import type { Receipt } from './receipt-view';
 import { requestReceiptDialog } from './receipt-browser-print';
+import { PrintWindowNotice } from '@/components/ui/print-window-notice';
 import { RawPrintValidationError } from '@/lib/restaurant/printing/contract';
 
 export type ReceiptPrinting = {
@@ -263,6 +264,8 @@ export function ReceiptPrintControls({
           {dialogStatus}
         </p>
       ) : null}
+      {/* DEV-973: the terminal has no app shell; the print window line lives here. */}
+      <PrintWindowNotice className="rounded-[var(--radius-xs)] border" />
     </section>
   );
 }

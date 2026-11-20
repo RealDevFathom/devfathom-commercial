@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { installFakePrintWindows } from '@/lib/testing/print-window';
 
 const actions = vi.hoisted(() => ({ issue: vi.fn(), revoke: vi.fn() }));
 vi.mock('./loyalty-card-actions', () => ({
@@ -37,15 +38,19 @@ describe('DEV-748 loyalty card panel', () => {
     expect(preview.querySelector('path')).toHaveAttribute('fill', '#000');
     expect(preview.querySelector('rect')).toHaveAttribute('fill', '#fff');
 
-    const popup = document.implementation.createHTMLDocument('');
-    const print = vi.fn();
-    const open = vi
-      .spyOn(window, 'open')
-      .mockReturnValue({ document: popup, print, opener: window } as unknown as Window);
+    const windows = installFakePrintWindows();
+    const open = windows.open;
     fireEvent.click(screen.getByRole('button', { name: 'Print card' }));
-    expect(open).toHaveBeenCalledWith('', '_blank', 'popup,width=420,height=560');
-    expect(print).toHaveBeenCalled();
-    const printed = popup.body;
+    // DEV-973: the isolated print page, which prints itself; never print() from here.
+    expect(open).toHaveBeenCalledWith(
+      expect.stringMatching(/^\/print-window\.html#[0-9a-f-]{36}$/),
+      '_blank',
+      'popup,width=420,height=560'
+    );
+    expect(windows.last().printRequests()).toBe(1);
+    expect(windows.last().proxy.print).not.toHaveBeenCalled();
+    expect(windows.last().document()!.title).toBe('Loyalty card');
+    const printed = windows.last().document()!.body;
     // Elements of the print window's own document: compare attributes directly.
     expect(printed.querySelector('path')?.getAttribute('fill')).toBe('#000');
     expect(printed.querySelector('path')?.getAttribute('d')).toBe(qrSvgPath(encodeQr(CODE), 4));

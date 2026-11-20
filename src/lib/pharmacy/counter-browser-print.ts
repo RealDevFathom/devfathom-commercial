@@ -1,3 +1,12 @@
+import {
+  closePrintWindow,
+  isPrintWindowOpen,
+  openPrintWindow,
+  printContentOverflows,
+  printInWindow,
+  sendToPrintWindow,
+  type PrintWindow,
+} from '@/lib/browser-print/print-window';
 import type { ReceiptLayout } from '@/lib/receipts/configuration';
 
 import { buildDispensingLabels, type DispensingLabelSource } from './dispensing-label';
@@ -31,35 +40,32 @@ export function counterFormatFromLayout(
 /** A one-use, session-only window reserved during an operator gesture. */
 export type CounterBrowserPrintReservation = { cancel: () => void };
 
+const COUNTER_PRINT_WINDOW = 'popup,width=480,height=720';
+
 const reservations = new WeakMap<
   CounterBrowserPrintReservation,
-  { popup: Window | null; consumed: boolean }
+  { handle: PrintWindow | null; unsupported: string | null; consumed: boolean }
 >();
 
-function closePopup(popup: Window | null): void {
-  try {
-    popup?.close();
-  } catch {
-    // Window cleanup must never interrupt payment or reconciliation handling.
-  }
-}
-
-/** Call synchronously from an enabled operator gesture, before awaiting settlement. */
+/**
+ * Call synchronously from an enabled operator gesture, before awaiting settlement.
+ * DEV-973: the window is the isolated print page, which prints itself; this page
+ * only hands it the receipt and is never paused by its print dialog.
+ */
 export function reserveCounterBrowserPrint(): CounterBrowserPrintReservation {
-  let popup: Window | null = null;
+  let handle: PrintWindow | null = null;
+  let unsupported: string | null = null;
   try {
-    popup = window.open('', '_blank', 'popup,width=480,height=720');
-    if (popup) popup.opener = null;
-  } catch {
-    closePopup(popup);
-    popup = null;
+    handle = openPrintWindow(COUNTER_PRINT_WINDOW);
+  } catch (error) {
+    unsupported = error instanceof Error ? error.message : 'Print window unavailable.';
   }
-  const state = { popup, consumed: false };
+  const state = { handle, unsupported, consumed: false };
   const reservation: CounterBrowserPrintReservation = {
     cancel: () => {
       if (state.consumed) return;
       state.consumed = true;
-      closePopup(state.popup);
+      if (state.handle) closePrintWindow(state.handle);
     },
   };
   reservations.set(reservation, state);
@@ -72,21 +78,11 @@ export function assertCounterBrowserPrintReady(reservation: CounterBrowserPrintR
   if (!reserved || reserved.consumed) {
     throw new Error('This print window is no longer available. Retry Print receipt.');
   }
-  if (!reserved.popup) {
+  if (reserved.unsupported) throw new Error(reserved.unsupported);
+  if (!reserved.handle) {
     throw new Error('Allow pop-ups for this site, then retry Print receipt.');
   }
-  try {
-    if (
-      reserved.popup.closed ||
-      typeof reserved.popup.document.open !== 'function' ||
-      typeof reserved.popup.document.write !== 'function' ||
-      typeof reserved.popup.document.close !== 'function' ||
-      typeof reserved.popup.focus !== 'function' ||
-      typeof reserved.popup.print !== 'function'
-    ) {
-      throw new Error('Print window unavailable.');
-    }
-  } catch {
+  if (!isPrintWindowOpen(reserved.handle)) {
     throw new Error('The print window is no longer available. Retry Print receipt.');
   }
 }
@@ -169,29 +165,17 @@ export function printCounterBrowserReceipt(
   assertCounterBrowserPrintReady(printReservation);
   const reserved = reservations.get(printReservation)!;
   reserved.consumed = true;
-  const popup = reserved.popup!;
+  const handle = reserved.handle!;
   try {
-    if (popup.closed) throw new Error('Print window closed.');
-    popup.document.open();
-    popup.document.write(html);
-    popup.document.close();
-    if (format === 'LABEL_50x30') {
-      const labels = popup.document.querySelectorAll<HTMLElement>('.dispensing-label');
-      if (
-        Array.from(labels).some(
-          (label) =>
-            label.scrollHeight > label.clientHeight || label.scrollWidth > label.clientWidth
-        )
-      ) {
-        throw new Error(
-          'Rx label content exceeds 50 × 30 mm. Review directions or use larger paper.'
-        );
-      }
+    if (format === 'LABEL_50x30' && printContentOverflows(html, '.dispensing-label')) {
+      throw new Error(
+        'Rx label content exceeds 50 × 30 mm. Review directions or use larger paper.'
+      );
     }
-    popup.focus();
-    popup.print();
+    // The print window prints itself; this page never calls print() on it.
+    sendToPrintWindow(handle, html);
   } catch (error) {
-    closePopup(popup);
+    closePrintWindow(handle);
     if (error instanceof Error && error.message.startsWith('Rx label content exceeds')) throw error;
     throw new Error('The browser print dialog could not open. Retry Print receipt.');
   }
@@ -202,19 +186,11 @@ export function printCounterBrowserReceipt(
  * so no reserved window is needed). Receipts keep the reserved-window path above.
  */
 function printCounterDocument(html: string, retry = 'Print receipt'): void {
-  const popup = window.open('', '_blank', 'popup,width=480,height=720');
-  if (!popup) throw new Error(`Allow pop-ups for this site, then retry ${retry}.`);
-  popup.opener = null;
-  try {
-    popup.document.open();
-    popup.document.write(html);
-    popup.document.close();
-    popup.focus();
-    popup.print();
-  } catch {
-    closePopup(popup);
-    throw new Error(`The browser print dialog could not open. Retry ${retry}.`);
-  }
+  printInWindow(html, {
+    features: COUNTER_PRINT_WINDOW,
+    blockedMessage: `Allow pop-ups for this site, then retry ${retry}.`,
+    failedMessage: `The browser print dialog could not open. Retry ${retry}.`,
+  });
 }
 
 export type PrinterTestFormat = Exclude<CounterReceiptFormat, 'LABEL_50x30'>;

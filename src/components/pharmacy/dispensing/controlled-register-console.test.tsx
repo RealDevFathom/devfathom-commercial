@@ -31,6 +31,7 @@ vi.mock('@/lib/trpc', () => ({
   },
 }));
 
+import { installFakePrintWindows } from '@/lib/testing/print-window';
 import { ControlledRegisterConsole } from './controlled-register-console';
 
 const entry = {
@@ -145,20 +146,16 @@ describe('DEV-672 controlled register branch list', () => {
 
   it('prints the register table with the branch name', () => {
     h.branches = { isLoading: false, error: null, data: [{ id: 'br-1', name: 'Gulberg' }] };
-    const popup = document.implementation.createHTMLDocument('print');
-    const print = vi.fn();
-    const open = vi.spyOn(window, 'open').mockReturnValue({
-      document: popup,
-      opener: {},
-      focus: vi.fn(),
-      print,
-    } as unknown as Window);
+    const windows = installFakePrintWindows();
 
     render(<ControlledRegisterConsole />);
     fireEvent.click(screen.getByRole('button', { name: 'Print register' }));
 
-    expect(open).toHaveBeenCalledOnce();
-    expect(print).toHaveBeenCalledOnce();
+    expect(windows.open).toHaveBeenCalledOnce();
+    expect(windows.last().printRequests()).toBe(1);
+    // DEV-973: the isolated window prints itself; this page never calls print() on it.
+    expect(windows.last().proxy.print).not.toHaveBeenCalled();
+    const popup = windows.last().document()!;
     expect(popup.querySelector('h1')?.textContent).toBe('Controlled medicine register');
     expect(popup.body.textContent).toContain('Gulberg');
     expect(popup.querySelector('table')?.textContent).toContain('Register Tablet 5mg');

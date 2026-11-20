@@ -7,6 +7,7 @@ import type { TerminalRequest } from './checkout-panel';
 import { buildReceiptPreview, SAMPLE_RECEIPT } from '@/lib/receipts/preview';
 import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
 import { RawPrintValidationError } from '@/lib/restaurant/printing/contract';
+import { installFakePrintWindows } from '@/lib/testing/print-window';
 
 const receipt: Receipt = {
   billId: 'bill-1',
@@ -161,19 +162,15 @@ describe('Receipt print controls', () => {
     expect(request).toHaveBeenCalledWith('/api/restaurant/checkout/receipt?billId=bill-1');
   });
   it('requires duplicate acknowledgement for browser copies and never treats afterprint as success', () => {
-    const popup = {
-      document: document.implementation.createHTMLDocument(),
-      focus: vi.fn(),
-      print: vi.fn(),
-      opener: window,
-    };
-    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    const windows = installFakePrintWindows();
     render(<ReceiptPrintControls receipt={receipt} initial={printed} request={vi.fn()} />);
     const button = screen.getByRole('button', { name: 'Open browser print dialog' });
     expect(button).toBeDisabled();
     fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.click(button);
-    expect(popup.print).toHaveBeenCalledOnce();
+    expect(windows.last().printRequests()).toBe(1);
+    // DEV-973: the isolated window prints itself; the POS never calls print() on it.
+    expect(windows.last().proxy.print).not.toHaveBeenCalled();
     window.dispatchEvent(new Event('afterprint'));
     expect(screen.getByText(/Print dialog requested/)).toHaveTextContent(
       'does not confirm printing'
@@ -183,13 +180,7 @@ describe('Receipt print controls', () => {
 
 describe('Browser receipt fallback', () => {
   it('prints the identical captured shared preview at its captured width after settings change', () => {
-    const popup = {
-      document: document.implementation.createHTMLDocument(),
-      focus: vi.fn(),
-      print: vi.fn(),
-      opener: window,
-    };
-    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    const windows = installFakePrintWindows();
     const text = 'Saved header\nInvoice: 7\nTOTAL 26.05\nSaved footer';
     render(
       <ReceiptPrintControls
@@ -201,8 +192,9 @@ describe('Browser receipt fallback', () => {
     expect(screen.getByText(/Using the queued receipt layout/)).toHaveTextContent('58 mm');
     fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.click(screen.getByRole('button', { name: 'Open browser print dialog' }));
-    expect(popup.document.querySelector('pre')?.textContent).toBe(text);
-    expect(popup.document.querySelector('style')?.textContent).toContain('width: 54mm');
+    const printed = windows.last().document()!;
+    expect(printed.querySelector('pre')?.textContent).toBe(text);
+    expect(printed.querySelector('style')?.textContent).toContain('width: 54mm');
   });
   it('keeps shared Unicode browser output available while disabling unsupported raw dispatch', () => {
     render(
@@ -274,15 +266,11 @@ describe('Browser receipt fallback', () => {
   it.each([58, 80] as const)(
     'requests %s mm paper with canonical facts and inert Unicode text',
     (width) => {
-      const popup = {
-        document: document.implementation.createHTMLDocument(),
-        focus: vi.fn(),
-        print: vi.fn(),
-        opener: window,
-      };
-      vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+      const windows = installFakePrintWindows();
       const text = previewText(width);
       requestReceiptDialog(receipt, width, text);
+      const popup = { document: windows.last().document()!, opener: windows.last().proxy.opener };
+      expect(popup.document.title).toBe(`Receipt ${receipt.receiptNumber ?? 'unissued'}`);
       expect(popup.document.querySelector('pre')?.textContent).toBe(text);
       expect(popup.document.querySelector('style')?.textContent).toContain('white-space: pre-wrap');
       expect(popup.document.querySelector('style')?.textContent).toContain(`width: ${width - 4}mm`);
@@ -297,7 +285,8 @@ describe('Browser receipt fallback', () => {
         expect(popup.document.body.textContent).toContain(fact);
       expect(popup.document.querySelector('img')).toBeNull();
       expect(popup.opener).toBeNull();
-      expect(popup.print).toHaveBeenCalledOnce();
+      expect(windows.last().printRequests()).toBe(1);
+      expect(windows.last().proxy.print).not.toHaveBeenCalled();
     }
   );
   it('reports blocked popups without claiming a dialog', () => {
