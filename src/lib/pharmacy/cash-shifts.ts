@@ -596,6 +596,7 @@ async function verifyOtherApproverPin(
       const credential = await db.restaurantOperatorCredential.findFirst({
         where: approverPinWhere(organizationId, approverId),
         orderBy: { id: 'asc' },
+        select: { credentialHash: true, failedAttempts: true, lockedUntil: true },
       });
       const now = new Date();
       if (!credential) return refuse('REFUSED');
