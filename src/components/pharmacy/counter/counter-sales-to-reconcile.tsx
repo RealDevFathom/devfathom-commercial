@@ -30,7 +30,10 @@ function download(sales: readonly ReconcileSale[]) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `offline-sales-to-reconcile-${new Date().toISOString().slice(0, 10)}.csv`;
+  // Named by the receipt numbers it holds; the export carries no day of its own.
+  const numbers = sales.map((sale) => sale.receiptNumber).filter((n): n is number => n !== null);
+  const range = numbers.length ? `-receipts-${Math.min(...numbers)}-${Math.max(...numbers)}` : '';
+  link.download = `offline-sales-to-reconcile${range}.csv`;
   document.body.appendChild(link);
   link.click();
   link.remove();

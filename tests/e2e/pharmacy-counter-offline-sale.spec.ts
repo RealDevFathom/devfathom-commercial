@@ -275,12 +275,12 @@ test('with offline cash selling off, a prepared counter checks prices offline an
   });
   await expect(reconcile).toContainText('Receipt 9001');
   await expect(reconcile).toContainText('Counter Old till');
-  await expect(reconcile.getByText('Not booked')).toBeVisible();
+  await expect(reconcile.getByText('Not booked').first()).toBeVisible();
   const [download] = await Promise.all([
     page.waitForEvent('download'),
     reconcile.getByRole('button', { name: 'Export (CSV)' }).click(),
   ]);
-  expect(download.suggestedFilename()).toMatch(/^offline-sales-to-reconcile-\d{4}-\d{2}-\d{2}\.csv$/);
+  expect(download.suggestedFilename()).toBe('offline-sales-to-reconcile-receipts-9001-9001.csv');
   for (const [width, height] of [
     [375, 812],
     [1440, 900],
