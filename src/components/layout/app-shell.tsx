@@ -20,6 +20,7 @@ import { isTenantIdentityMismatch, tenantBrandTokens, type TenantBrand } from '@
 import { AdministratorStaffProfileCallout } from '@/components/restaurant/administrator-staff-profile-callout';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { PrintWindowNotice } from '@/components/ui/print-window-notice';
 import { dismissedNoticeKey, useDismissedNotice } from './use-dismissed-notice';
 
 // Lazy-load the assistant panel so @ai-sdk/react + ai stay out of the global
@@ -370,6 +371,8 @@ export function AppShell({
             <EndSupportAccessButton />
           </div>
         ) : null}
+        {/* DEV-973: a print window behind this page is never lost; self-hiding. */}
+        <PrintWindowNotice />
         <Topbar brand={brand} onMenuClick={openMobileMenu} />
         {/* WHA-1181 — a one-time setup step for a restaurant administrator whose
             organization activated before staff profiles were provisioned. Self-

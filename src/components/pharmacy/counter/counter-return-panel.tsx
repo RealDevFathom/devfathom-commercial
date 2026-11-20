@@ -19,6 +19,11 @@ import {
   soldUnitPluralNoun,
 } from '@/lib/pharmacy/stock-breakdown';
 import { buildCounterBrowserReceipt } from '@/lib/pharmacy/counter-browser-print';
+import {
+  parsePrintDocument,
+  printInWindow,
+  serializePrintDocument,
+} from '@/lib/browser-print/print-window';
 import { batchPhrase } from '@/lib/pharmacy/unrecorded-batch';
 
 const returnInputSchema = z.object({
@@ -657,17 +662,15 @@ export function ReturnForm({
     </div>
   );
 
-  function print() {
+  async function print() {
     try {
       if (!receipt.data || !data || stale || receipt.isFetching || receipt.isError)
         throw new Error('Reload receipt and return history before printing.');
-      const popup = window.open('', '_blank', 'popup,width=480,height=720');
-      if (!popup) throw new Error('Allow pop-ups to reprint this receipt.');
-      popup.opener = null;
-      popup.document.open();
-      popup.document.write(buildCounterBrowserReceipt(receipt.data, 'en', 'THERMAL', true));
-      popup.document.close();
-      const appendix = popup.document.createElement('pre');
+      // DEV-973: an isolated window that prints itself, so the counter never freezes.
+      const doc = parsePrintDocument(
+        buildCounterBrowserReceipt(receipt.data, 'en', 'THERMAL', true)
+      );
+      const appendix = doc.createElement('pre');
       appendix.textContent =
         '\nRETURNS & REFUNDS\n' +
         data.returns
@@ -684,9 +687,12 @@ export function ReturnForm({
             )
           )
           .join('\n');
-      popup.document.body.append(appendix);
-      popup.focus();
-      popup.print();
+      doc.body.append(appendix);
+      await printInWindow(serializePrintDocument(doc), {
+        features: 'popup,width=480,height=720',
+        blockedMessage: 'Allow pop-ups to reprint this receipt.',
+        failedMessage: 'Receipt could not print.',
+      });
       setMessage('Browser print dialog requested. Paper delivery is not confirmed.');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Receipt could not print.');
