@@ -848,7 +848,9 @@ async function receiveTransferWithVariance(
   // their own PIN (or a solo owner/pharmacist's own fresh PIN). DEV-825: the
   // shortfall is known from the answers alone, so the witness credential (a
   // document-class lock) is taken before any stock row (stock-lock-order.ts).
-  const short = open.some((line) => line.quantityUnits - line.receivedUnits > answered.get(line.id)!);
+  const short = open.some(
+    (line) => line.quantityUnits - line.receivedUnits > answered.get(line.id)!
+  );
   let witness: Awaited<ReturnType<typeof authorizeWriteOffWitness>> | null = null;
   if (short) {
     if (!input.variance) throw new PharmacyInventoryError('COAUTH_REQUIRED');
@@ -902,7 +904,6 @@ async function receiveTransferWithVariance(
       variance: { sealedPacks: varianceSealedUnits / unitsPerPack, looseUnits: varianceLoose },
     });
   }
-
 
   const postedVariances = [];
   for (const step of plan) {
@@ -1974,11 +1975,26 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  recallTrace: auditedProtectedProcedure
+  /**
+   * DEV-965: a recall trace names stock and units sold per branch, so it needs the
+   * safety permission (like the other recall procedures) and shows only the caller's
+   * active branch assignments. A verified tenant ADMIN with the inventory permission
+   * (the inventory branch exception, `admittedInventoryBranchIds`) sees every branch.
+   */
+  recallTrace: regulatory
     .input(z.object({ recallNoticeId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
       try {
-        return await recallTrace(ctx.db, actorFor(ctx).organizationId, input.recallNoticeId);
+        const { organizationId, actorId } = actorFor(ctx);
+        const branchIds = (await tenantAdminException(ctx, organizationId, actorId))
+          ? undefined
+          : (
+              await ctx.db.pharmacyBranchAssignment.findMany({
+                where: activeAssignmentOf(organizationId, actorId),
+                select: { branchId: true },
+              })
+            ).map((row) => row.branchId);
+        return await recallTrace(ctx.db, organizationId, input.recallNoticeId, branchIds);
       } catch (error) {
         domainError(error);
       }
@@ -2083,11 +2099,27 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
+  /**
+   * DEV-965: the units are an operational read; the PKR value at risk is landed cost,
+   * so, as on the expiry board (DEV-627), it is released only to a caller holding
+   * financial reports and is null for everyone else.
+   */
   nearExpiryBoard: auditedProtectedProcedure
     .input(z.object({ branchId }).strict())
-    .query(async ({ ctx, input }) =>
-      nearExpiryBoard(ctx.db, await admittedScopeFor(ctx, input.branchId), new Date())
-    ),
+    .query(async ({ ctx, input }) => {
+      const scope = await admittedScopeFor(ctx, input.branchId);
+      const costVisible = await can(
+        subjectFromSession(ctx.session!.user),
+        'reports:financial',
+        undefined,
+        { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta?.ip ?? null }
+      );
+      const buckets = await nearExpiryBoard(ctx.db, scope, new Date());
+      return buckets.map((bucket) => ({
+        ...bucket,
+        valueAtRiskMinor: costVisible ? bucket.valueAtRiskMinor : null,
+      }));
+    }),
 
   onHand: auditedProtectedProcedure
     .input(z.object({ branchId, medicineId: z.string().min(1) }).strict())
@@ -2322,11 +2354,27 @@ export const pharmacyInventoryRouter = router({
       );
     }),
 
-  /** PUR-07 owner digest payload. DEV-660: audited, as stockSignalDashboard. */
+  /**
+   * PUR-07 owner digest payload. DEV-660: audited, as stockSignalDashboard.
+   * DEV-965: a person's digest is theirs; reading someone else's needs the admin
+   * permission (deny-wins).
+   */
   stockSignalDigest: auditedProtectedProcedure
     .input(z.object({ branchId, ownerUserId: z.string().trim().min(1).max(200) }).strict())
     .query(async ({ ctx, input }) => {
       const scope = await admittedScopeFor(ctx, input.branchId);
+      if (
+        input.ownerUserId !== scope.actorId &&
+        !(await can(subjectFromSession(ctx.session!.user), 'admin:access', undefined, {
+          db: ctx.db,
+          source: 'TRPC',
+          ip: ctx.requestMeta?.ip ?? null,
+        }))
+      )
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Only the owner of this digest or an administrator can read it.',
+        });
       return ownerDigest(
         ctx.db,
         { organizationId: scope.organizationId, branchId: scope.branchId },

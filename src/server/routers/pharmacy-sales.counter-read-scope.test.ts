@@ -289,3 +289,70 @@ describe('the counter customer snapshot limits points history by branch (DEV-909
     expect(visibleBranches()).toBeUndefined();
   });
 });
+
+describe('the customer snapshot and pack scan need the counter permission (DEV-965)', () => {
+  const PERMISSION = { code: 'FORBIDDEN', message: 'You do not have permission for this action.' };
+  const gated: Array<[string, Read, (caller: Caller, branchId: string) => Promise<unknown>]> =
+    procedures.filter(([name]) => name === 'customerSnapshot' || name === 'authenticatePack');
+  /** The member's own role rules, as the counter gate reads them. */
+  const holding = (...capabilities: string[]) =>
+    db.user.findUnique.mockResolvedValue({
+      status: 'ACTIVE',
+      organizationId: 'org-1',
+      organizationRole: {
+        permissions: capabilities.map((capability) => ({ capability, effect: 'ALLOW' })),
+      },
+      permissionOverrides: [],
+    });
+
+  it('covers both procedures', () => {
+    expect(gated.map(([name]) => name)).toEqual(['customerSnapshot', 'authenticatePack']);
+  });
+
+  it.each(gated)(
+    '%s refuses a member assigned to the branch who holds no counter or dispense permission',
+    async (_name, read, run) => {
+      holding('pharmacy:inventory', 'pharmacy:procurement');
+      await expect(run(caller(), MAIN)).rejects.toMatchObject(PERMISSION);
+      expect(reads[read]).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(gated)(
+    '%s refuses a workspace ADMIN whose role holds no counter or dispense permission',
+    async (_name, read, run) => {
+      holding('reports:financial');
+      await expect(run(caller('ADMIN'), MAIN)).rejects.toMatchObject(PERMISSION);
+      expect(reads[read]).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(gated)(
+    '%s refuses a member whose counter grant is explicitly denied',
+    async (_name, read, run) => {
+      db.user.findUnique.mockResolvedValue({
+        status: 'ACTIVE',
+        organizationId: 'org-1',
+        organizationRole: { permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }] },
+        permissionOverrides: [{ capability: 'pharmacy:counter', effect: 'DENY' }],
+      });
+      await expect(run(caller(), MAIN)).rejects.toMatchObject(PERMISSION);
+      expect(reads[read]).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(gated)(
+    '%s still works for a cashier holding the counter permission',
+    async (_n, read, run) => {
+      holding('pharmacy:counter', 'pharmacy:orders');
+      await expect(run(caller(), MAIN)).resolves.toBeDefined();
+      expect(scopeOf(read)).toMatchObject({ branchId: MAIN, actorId: 'cashier-1' });
+    }
+  );
+
+  it.each(gated)('%s still works for a pharmacist holding dispense only', async (_n, read, run) => {
+    holding('pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close');
+    await expect(run(caller(), MAIN)).resolves.toBeDefined();
+    expect(scopeOf(read)).toMatchObject({ branchId: MAIN, actorId: 'cashier-1' });
+  });
+});
