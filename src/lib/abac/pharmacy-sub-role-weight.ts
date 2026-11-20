@@ -1,8 +1,9 @@
 /**
- * DEV-959B — the pharmacy sub-roles that carry extra weight when an owner ticks them for a
- * person: dispensing, prescriptions, controlled medicines, catalogue review, discounts, cash
- * and approvals, day close and purchase approvals. Ticking one needs the editor's fresh PIN
- * (the shared approval path), and the screen shows the one line here before it is given.
+ * DEV-959B — the pharmacy sub-roles that carry extra weight: dispensing, prescriptions,
+ * controlled medicines, catalogue review, discounts, cash and approvals, day close, purchase
+ * approvals, purchasing and receiving, stock control and financial reports. Only the owner
+ * ticks or unticks one, with the owner's own fresh approval through the shared verifier, and
+ * the screen shows the one line here before the change.
  * Every exact-grant-only (sensitive) sub-role is weighty; `pharmacy-sub-role-weight.test.ts`
  * holds that, and each line to the sub-role's own description.
  */
@@ -21,6 +22,12 @@ export const PHARMACY_WEIGHTY_SUB_ROLES: Readonly<Record<string, string>> = {
   'close-the-day': 'Closes the day for every branch, with or without a branch assignment.',
   'approve-purchase-orders':
     'Approves purchase orders someone else raised and sends approved orders to suppliers.',
+  'receive-stock':
+    'Adds suppliers, raises and submits purchase orders, and receives, posts and reverses deliveries at their branches.',
+  'manage-stock':
+    'Runs stock at their branches, including write-offs, releasing quarantine, transfers and receiving without a purchase order.',
+  'financial-reports':
+    'Sees sales, margin, cash, refund, payables, receivables and khata figures, and stock value at risk.',
 };
 
 export function isWeightyPharmacySubRole(key: string): boolean {

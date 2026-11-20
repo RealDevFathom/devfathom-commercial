@@ -48,7 +48,7 @@ const db: any = {
     ),
     update: vi.fn(),
   },
-  organizationRole: { update: vi.fn(), create: vi.fn() },
+  organizationRole: { update: vi.fn(), create: vi.fn(), findMany: vi.fn(async () => []) },
   organizationRolePermission: { deleteMany: vi.fn(), createMany: vi.fn() },
   userPermissionOverride: { create: vi.fn(), update: vi.fn(), delete: vi.fn() },
 };

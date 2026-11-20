@@ -13,10 +13,17 @@ describe('DEV-959B: sub-roles that carry extra weight when ticked', () => {
     }
   });
 
-  it('covers every exact-grant-only sub-role, and cash, approvals and day close', () => {
+  it('covers every exact-grant-only sub-role, and cash, approvals, day close, stock and money', () => {
     for (const subRole of PHARMACY_SUB_ROLES.filter((candidate) => candidate.sensitive))
       expect(isWeightyPharmacySubRole(subRole.key), subRole.key).toBe(true);
-    for (const key of ['run-branches', 'close-the-day', 'approve-purchase-orders'])
+    for (const key of [
+      'run-branches',
+      'close-the-day',
+      'approve-purchase-orders',
+      'receive-stock',
+      'manage-stock',
+      'financial-reports',
+    ])
       expect(isWeightyPharmacySubRole(key), key).toBe(true);
     expect(isWeightyPharmacySubRole('take-payment')).toBe(false);
     expect(isWeightyPharmacySubRole('toString')).toBe(false);

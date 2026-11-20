@@ -19,6 +19,16 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('server-only', () => ({}));
+// DEV-959B: the pharmacy access guard runs on a real database in
+// tests/pharmacy-member-sub-roles.db.test.ts; here it only has to wrap the write.
+vi.mock('@/lib/team/pharmacy-access-guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/team/pharmacy-access-guard')>()),
+  guardPharmacyAccessChange: async (
+    _tx: unknown,
+    _input: unknown,
+    write: () => Promise<{ value: unknown }>
+  ) => ({ value: (await write()).value }),
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({

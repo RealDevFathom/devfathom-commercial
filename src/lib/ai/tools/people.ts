@@ -25,6 +25,12 @@ import { assertSeatAvailable, resolveOrganizationEntitlements } from '@/lib/enti
 import { generateInviteToken } from '@/lib/invite-token';
 import { inviteRoleRefusal } from '@/lib/vertical-catalog';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import {
+  AccessChangeError,
+  guardPharmacyAccessChange,
+  isPharmacyOrganization,
+} from '@/lib/team/pharmacy-access-guard';
 import {
   adminPasswordResetData,
   passwordResetDenial,
@@ -52,6 +58,61 @@ const departmentKey = z
 export function buildPeopleTools(h: AssistantHelpers): ToolSet {
   const { ctx } = h;
   const tools: ToolSet = {};
+
+  /**
+   * DEV-959B: in a pharmacy, a write that changes a member's role or status runs inside the
+   * access guard, exactly as the team screen does. The assistant cannot take a PIN, so it can
+   * never change a sub-role that carries extra weight; that needs the owner on the team
+   * screen. Returns the guard's refusal as the tool's error.
+   */
+  async function guardedMemberWrite<T>(
+    targetId: string | null,
+    action: string,
+    describe: (name: string) => string,
+    write: (
+      db: ScopedDb,
+      atomically: <R>(run: (tx: ScopedDb) => Promise<R>) => Promise<R>
+    ) => Promise<{ targetId: string; value: T }>
+  ): Promise<{ value: T } | { error: string }> {
+    const vertical = assistantVertical(ctx.vertical);
+    const pharmacy = vertical
+      ? vertical === 'PHARMACY'
+      : await isPharmacyOrganization(h.db, ctx.organizationId);
+    if (!pharmacy)
+      return {
+        value: (
+          await write(h.db, (run) =>
+            h.db.$transaction((transaction) => run(transaction as unknown as ScopedDb))
+          )
+        ).value,
+      };
+    try {
+      const value = await h.db.$transaction(async (transaction) => {
+        const tx = transaction as unknown as ScopedDb;
+        const { value } = await guardPharmacyAccessChange(
+          tx,
+          {
+            organizationId: ctx.organizationId,
+            actor: { kind: 'member', id: ctx.userId, supportSession: false },
+            targetId,
+            pinVerified: false,
+            mode: 'role',
+            action: `assistant.${action}`,
+            describe,
+          },
+          // Already inside the guard's transaction: the write joins it.
+          () => write(tx, (run) => run(tx))
+        );
+        return value;
+      });
+      return { value };
+    } catch (error) {
+      if (error instanceof AccessChangeError) return { error: error.message };
+      if (error instanceof Error && 'code' in error && error.code === 'FORBIDDEN')
+        return { error: error.message };
+      throw error;
+    }
+  }
 
   // ─────────────────────────────── READS ────────────────────────────────────
 
@@ -640,11 +701,21 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         }
 
         const cleanReason = reason.trim();
-        const updated = await h.db.user.update({
-          where: { id: before.id },
-          data: { status: 'INACTIVE' },
-          select: { id: true, name: true },
-        });
+        const written = await guardedMemberWrite(
+          before.id,
+          'layOffMember',
+          (person) => `Laid off ${person}`,
+          async (db) => ({
+            targetId: before.id,
+            value: await db.user.update({
+              where: { id: before.id },
+              data: { status: 'INACTIVE' },
+              select: { id: true, name: true },
+            }),
+          })
+        );
+        if ('error' in written) return { error: written.error };
+        const updated = written.value;
 
         h.audit({
           category: 'TEAM',
@@ -718,11 +789,21 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           return { name: before.name, status, message: `${before.name} is already ${status}.` };
         }
 
-        const updated = await h.db.user.update({
-          where: { id: before.id },
-          data: { status },
-          select: { id: true, name: true, status: true },
-        });
+        const written = await guardedMemberWrite(
+          before.id,
+          'setMemberStatus',
+          (person) => `Set ${person}'s status to ${status}`,
+          async (db) => ({
+            targetId: before.id,
+            value: await db.user.update({
+              where: { id: before.id },
+              data: { status },
+              select: { id: true, name: true, status: true },
+            }),
+          })
+        );
+        if ('error' in written) return { error: written.error };
+        const updated = written.value;
 
         h.audit({
           category: 'TEAM',
@@ -874,28 +955,38 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           skills: skills ?? [],
         };
 
-        const user = await h.db.$transaction(async (tx) => {
-          const u = existing
-            ? await tx.user.update({
-                where: { id: existing.id },
-                data: { ...profile, password: null, status: 'INVITED' },
-              })
-            : await tx.user.create({
-                data: { ...profile, email: lowerEmail, password: null, status: 'INVITED' },
+        const invited = await guardedMemberWrite(
+          existing?.id ?? null,
+          'inviteMember',
+          (person) => `Invited ${person} with their role`,
+          async (_db, atomically) => {
+            const value = await atomically(async (tx) => {
+              const u = existing
+                ? await tx.user.update({
+                    where: { id: existing.id },
+                    data: { ...profile, password: null, status: 'INVITED' },
+                  })
+                : await tx.user.create({
+                    data: { ...profile, email: lowerEmail, password: null, status: 'INVITED' },
+                  });
+              await tx.invitation.upsert({
+                where: { userId: u.id },
+                create: {
+                  userId: u.id,
+                  email: lowerEmail,
+                  tokenHash,
+                  invitedById: ctx.userId,
+                  expiresAt,
+                },
+                update: { tokenHash, expiresAt, acceptedAt: null, invitedById: ctx.userId },
               });
-          await tx.invitation.upsert({
-            where: { userId: u.id },
-            create: {
-              userId: u.id,
-              email: lowerEmail,
-              tokenHash,
-              invitedById: ctx.userId,
-              expiresAt,
-            },
-            update: { tokenHash, expiresAt, acceptedAt: null, invitedById: ctx.userId },
-          });
-          return u;
-        });
+              return u;
+            });
+            return { targetId: value.id, value };
+          }
+        );
+        if ('error' in invited) return { error: invited.error };
+        const user = invited.value;
 
         const inviteUrl = `${appUrl()}/invite/${token}`;
         let emailed = true;
@@ -1043,11 +1134,21 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           return { name: before.name, message: 'No changes provided — nothing was updated.' };
         }
 
-        const updated = await h.db.user.update({
-          where: { id: before.id },
-          data,
-          select: { name: true, role: true, department: true, title: true },
-        });
+        const written = await guardedMemberWrite(
+          before.id,
+          'updateMember',
+          (person) => `Updated team member ${person}`,
+          async (db) => ({
+            targetId: before.id,
+            value: await db.user.update({
+              where: { id: before.id },
+              data,
+              select: { name: true, role: true, department: true, title: true },
+            }),
+          })
+        );
+        if ('error' in written) return { error: written.error };
+        const updated = written.value;
         h.audit({
           category: 'TEAM',
           operation: 'UPDATE',

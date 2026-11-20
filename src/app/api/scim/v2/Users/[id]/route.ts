@@ -3,6 +3,7 @@ import {
   recordScimEvent,
   requestBaseUrl,
   SCIM_PATCH_SCHEMA,
+  scimAccessChange,
   scimError,
   scimJson,
   scimRole,
@@ -77,25 +78,28 @@ export async function PUT(request: Request, route: { params: Promise<{ id: strin
         select: { id: true },
       });
       if (clash) return scimError(409, 'A user with this userName already exists.', 'uniqueness');
-      const user = await ctx.db.user.update({
-        where: { id },
-        data: {
-          email,
-          name: input.displayName ?? input.name?.formatted ?? current.name,
-          role: scimRole(input.roles?.[0]?.value ?? current.role),
-          status: input.active ? 'ACTIVE' : 'INACTIVE',
-          tokenVersion: !input.active ? { increment: 1 } : undefined,
-        },
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
-          status: true,
-          createdAt: true,
-          updatedAt: true,
-        },
-      });
+      const user = await scimAccessChange(ctx, [id], 'scim.replaceUser', async () => ({
+        targetIds: [id],
+        value: await ctx.db.user.update({
+          where: { id },
+          data: {
+            email,
+            name: input.displayName ?? input.name?.formatted ?? current.name,
+            role: scimRole(input.roles?.[0]?.value ?? current.role),
+            status: input.active ? 'ACTIVE' : 'INACTIVE',
+            tokenVersion: !input.active ? { increment: 1 } : undefined,
+          },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+            status: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        }),
+      }));
       await recordScimEvent(ctx, request, {
         operation: 'REPLACE',
         resourceType: 'User',
@@ -150,19 +154,22 @@ export async function PATCH(request: Request, route: { params: Promise<{ id: str
           return scimError(400, `Unsupported PATCH path: ${operation.path}`, 'invalidPath');
         }
       }
-      const user = await ctx.db.user.update({
-        where: { id },
-        data,
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
-          status: true,
-          createdAt: true,
-          updatedAt: true,
-        },
-      });
+      const user = await scimAccessChange(ctx, [id], 'scim.patchUser', async () => ({
+        targetIds: [id],
+        value: await ctx.db.user.update({
+          where: { id },
+          data,
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+            status: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        }),
+      }));
       await recordScimEvent(ctx, request, {
         operation: 'PATCH',
         resourceType: 'User',
@@ -185,10 +192,13 @@ export async function DELETE(request: Request, route: { params: Promise<{ id: st
     const { id } = await route.params;
     const user = await loadUser(ctx, id);
     if (!user) return scimError(404, 'User not found.');
-    await ctx.db.user.update({
-      where: { id },
-      data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
-    });
+    await scimAccessChange(ctx, [id], 'scim.deactivateUser', async () => ({
+      targetIds: [id],
+      value: await ctx.db.user.update({
+        where: { id },
+        data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
+      }),
+    }));
     await recordScimEvent(ctx, request, {
       operation: 'DELETE',
       resourceType: 'User',

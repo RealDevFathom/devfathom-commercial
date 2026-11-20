@@ -40,8 +40,10 @@ export const MEMBER_ACCESS_READ_ONLY_NOTE = 'You cannot change these ticks.';
 export const MEMBER_ACCESS_EDIT_NOTE =
   'Tick or untick to change what this person can do. A change applies from their next action, and every change is recorded with your name.';
 
-/** Why one box cannot be changed by this viewer. */
+/** Why one box cannot be changed by an administrator who is not the owner. */
 export const MEMBER_ACCESS_NOT_HELD_NOTE = 'You cannot change this: you cannot do it yourself.';
+export const MEMBER_ACCESS_OWNER_ONLY_NOTE =
+  'Only the owner can change this: it carries extra weight.';
 
 /** The outcome of a change: why it was refused, or a note about what else it changed. */
 export type MemberAccessOutcome = { error: string | null; note: string | null };
@@ -64,11 +66,15 @@ function noticeOf(outcome: MemberAccessOutcome): Notice {
   return outcome.note ? { text: outcome.note, error: false } : null;
 }
 
-/** Which boxes this viewer may change: giving needs the sub-role; the owner may take any away. */
-function changeable(ticking: Ticking | undefined, subRole: SubRole): boolean {
-  if (!ticking?.editing.allowed) return false;
-  if (subRole.state === 'off') return ticking.viewerHolds.includes(subRole.key);
-  return ticking.viewerIsOwner || ticking.viewerHolds.includes(subRole.key);
+/**
+ * Why this viewer may not change one box, or null when they may. The owner may change every
+ * box; an administrator who is not the owner only the non-weighty sub-roles they hold.
+ */
+function lockedNote(ticking: Ticking | undefined, subRole: SubRole): string | null {
+  if (!ticking?.editing.allowed) return MEMBER_ACCESS_READ_ONLY_NOTE;
+  if (ticking.viewerIsOwner) return null;
+  if (ticking.weighty[subRole.key]) return MEMBER_ACCESS_OWNER_ONLY_NOTE;
+  return ticking.viewerHolds.includes(subRole.key) ? null : MEMBER_ACCESS_NOT_HELD_NOTE;
 }
 
 function roleSummary(member: MemberAccess['member']): string {
@@ -82,15 +88,17 @@ function roleSummary(member: MemberAccess['member']): string {
   return `${role}, plus ${exceptions}`;
 }
 
-/** The one-line warning and the editor's PIN, before a weighty sub-role is given. */
+/** The one-line warning and the owner's PIN, before a weighty sub-role is given or taken away. */
 function PinConfirm({
   subRole,
+  giving,
   line,
   pending,
   onConfirm,
   onCancel,
 }: {
   subRole: SubRole;
+  giving: boolean;
   line: string;
   pending: boolean;
   onConfirm: (pin: string) => Promise<MemberAccessOutcome>;
@@ -111,7 +119,7 @@ function PinConfirm({
       className="mt-2 space-y-2 rounded-xs border border-border-subtle bg-surface-sunken p-3"
     >
       <p id={`${id}-title`} className="text-sm font-medium text-foreground">
-        Give {subRole.label}?
+        {giving ? 'Give' : 'Take away'} {subRole.label}?
       </p>
       <p id={`${id}-line`} className="text-sm text-text-muted">
         {line}
@@ -133,7 +141,7 @@ function PinConfirm({
           />
         </label>
         <Button type="submit" className="min-h-11" disabled={pending}>
-          {pending ? 'Saving…' : 'Give it'}
+          {pending ? 'Saving…' : giving ? 'Give it' : 'Take it away'}
         </Button>
         <Button type="button" variant="outline" className="min-h-11" onClick={onCancel}>
           Cancel
@@ -160,17 +168,18 @@ function SubRoleRow({
   onChanged: (notice: Notice) => void;
 }) {
   const id = useId();
-  const [confirming, setConfirming] = useState(false);
+  const [confirming, setConfirming] = useState<{ giving: boolean } | null>(null);
   const stateLabel =
     subRole.state === 'on' ? 'Allowed' : subRole.state === 'partial' ? 'Partly allowed' : '';
-  const editable = Boolean(editor) && changeable(ticking, subRole);
+  const locked = lockedNote(ticking, subRole);
+  const editable = Boolean(editor) && locked === null;
   const weightyLine = ticking?.weighty[subRole.key];
   const personal = ticking?.personal[subRole.key];
 
   function toggle(checked: boolean) {
     if (!editor || !editable || editor.pending) return;
-    if (checked && weightyLine) {
-      setConfirming(true);
+    if (weightyLine) {
+      setConfirming({ giving: checked });
       return;
     }
     void editor
@@ -213,23 +222,24 @@ function SubRoleRow({
             <li key={line}>{line}</li>
           ))}
         </ul>
-        {ticking?.editing.allowed && !editable ? (
-          <p className="text-xs text-text-muted">{MEMBER_ACCESS_NOT_HELD_NOTE}</p>
+        {ticking?.editing.allowed && locked ? (
+          <p className="text-xs text-text-muted">{locked}</p>
         ) : null}
         {confirming && editor && weightyLine ? (
           <PinConfirm
             subRole={subRole}
+            giving={confirming.giving}
             line={weightyLine}
             pending={editor.pending}
-            onCancel={() => setConfirming(false)}
+            onCancel={() => setConfirming(null)}
             onConfirm={async (pin) => {
               const outcome = await editor.setSubRole({
                 subRoleKey: subRole.key,
-                ticked: true,
+                ticked: confirming.giving,
                 pin,
               });
               if (!outcome.error) {
-                setConfirming(false);
+                setConfirming(null);
                 onChanged(noticeOf(outcome));
               }
               return outcome;
@@ -244,15 +254,22 @@ function SubRoleRow({
 /** Choosing a ready-made role ticks exactly its sub-roles (and clears personal ticks). */
 function StartingRole({
   ticking,
+  groups,
   editor,
   onChanged,
 }: {
   ticking: Ticking;
+  groups: MemberAccess['groups'];
   editor: MemberAccessEditor;
   onChanged: (notice: Notice) => void;
 }) {
   const id = useId();
   const [roleKey, setRoleKey] = useState(ticking.roleKey ?? '');
+  const chosen = ticking.startingRoles.find((role) => role.key === roleKey);
+  const weighty = chosen?.weighty ?? [];
+  const labels = new Map(
+    groups.flatMap((group) => group.subRoles.map((subRole) => [subRole.key, subRole.label]))
+  );
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!roleKey) return;
@@ -293,7 +310,8 @@ function StartingRole({
           inputMode="numeric"
           autoComplete="off"
           maxLength={8}
-          aria-describedby={`${id}-help`}
+          required={weighty.length > 0}
+          aria-describedby={`${id}-help${weighty.length ? ` ${id}-weighty` : ''}`}
           className="min-h-11 w-40"
         />
       </label>
@@ -309,6 +327,27 @@ function StartingRole({
         Ticks exactly that role&apos;s sub-roles and clears this person&apos;s own ticks. Your PIN
         is needed when the role gives a sub-role that carries extra weight.
       </p>
+      {chosen && weighty.length ? (
+        <div
+          id={`${id}-weighty`}
+          className="w-full space-y-1.5 rounded-xs border border-border-subtle bg-surface-sunken p-3"
+        >
+          <p className="text-sm font-medium text-foreground">
+            {chosen.name} gives these sub-roles that carry extra weight:
+          </p>
+          <ul className="list-disc space-y-1 pl-4 text-sm text-text-muted">
+            {weighty.map((key) => (
+              <li key={key}>
+                <span className="font-medium text-foreground">{labels.get(key) ?? key}</span>:{' '}
+                <span>{ticking.weighty[key]}</span>
+              </li>
+            ))}
+          </ul>
+          {ticking.viewerIsOwner ? null : (
+            <p className="text-sm text-text-muted">{MEMBER_ACCESS_OWNER_ONLY_NOTE}</p>
+          )}
+        </div>
+      ) : null}
     </form>
   );
 }
@@ -358,8 +397,7 @@ export function MemberAccessPanel({ userId }: { userId: string }) {
 /** Names the other sub-roles a change moved with it (dispensing carries prescriptions). */
 function alsoChanged(groups: MemberAccess['groups'], keys: string[]): string {
   const label = (key: string) =>
-    groups.flatMap((group) => group.subRoles).find((subRole) => subRole.key === key)?.label ??
-    key;
+    groups.flatMap((group) => group.subRoles).find((subRole) => subRole.key === key)?.label ?? key;
   return `Saved. This also changed: ${keys.map(label).join(', ')}.`;
 }
 
@@ -423,7 +461,7 @@ export function MemberAccessView(access: {
         </p>
       </div>
       {editor && ticking ? (
-        <StartingRole ticking={ticking} editor={editor} onChanged={setNotice} />
+        <StartingRole ticking={ticking} groups={groups} editor={editor} onChanged={setNotice} />
       ) : null}
       <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
         {groups.map((group) => (

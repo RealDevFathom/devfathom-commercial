@@ -27,6 +27,7 @@ import {
   MEMBER_ACCESS_ADMIN_NOTES,
   MEMBER_ACCESS_EDIT_NOTE,
   MEMBER_ACCESS_NOT_HELD_NOTE,
+  MEMBER_ACCESS_OWNER_ONLY_NOTE,
   MEMBER_ACCESS_READ_ONLY_NOTE,
   MemberAccessPanel,
 } from './member-access-panel';
@@ -204,7 +205,11 @@ describe('DEV-959B: ticking for one person', () => {
           viewerHolds: ALL_KEYS,
           personal: {},
           roleKey: 'cashier',
-          startingRoles: PHARMACY_ROLE_TEMPLATES.map(({ key, name }) => ({ key, name })),
+          startingRoles: PHARMACY_ROLE_TEMPLATES.map(({ key, name }) => ({
+            key,
+            name,
+            weighty: key === 'pharmacist' ? ['dispense-prescriptions', 'record-prescriptions'] : [],
+          })),
           weighty: PHARMACY_WEIGHTY_SUB_ROLES,
           ...ticking,
         },
@@ -218,16 +223,16 @@ describe('DEV-959B: ticking for one person', () => {
 
   it('ticks another role’s sub-role on the server and reloads what the server decided', async () => {
     editable(cashier);
-    state.setSubRole.mockResolvedValue({ changed: ['receive-stock'] });
+    state.setSubRole.mockResolvedValue({ changed: ['operational-reports'] });
     render(<MemberAccessPanel userId="u_1" />);
     expect(screen.getByText(MEMBER_ACCESS_EDIT_NOTE)).toBeVisible();
-    const box = screen.getByRole('checkbox', { name: /Order and receive stock/ });
+    const box = screen.getByRole('checkbox', { name: /Use operational reports/ });
     expect(box).not.toHaveAttribute('aria-disabled', 'true');
     fireEvent.click(box);
     await waitFor(() =>
       expect(state.setSubRole).toHaveBeenCalledWith({
         userId: 'u_1',
-        subRoleKey: 'receive-stock',
+        subRoleKey: 'operational-reports',
         ticked: true,
       })
     );
@@ -279,21 +284,67 @@ describe('DEV-959B: ticking for one person', () => {
     expect(screen.queryByRole('form', { name: 'Give Dispense prescriptions?' })).toBeNull();
   });
 
-  it('cannot give what the viewer cannot do, and says why', () => {
+  it('lets an administrator who is not the owner change only non-weighty sub-roles they hold', () => {
     editable(cashier, {
       viewerIsOwner: false,
-      viewerHolds: ['take-payment', 'customer-orders', 'do-procedures', 'manage-stock'],
+      viewerHolds: [
+        'take-payment',
+        'customer-orders',
+        'do-procedures',
+        'operational-reports',
+        'manage-stock',
+      ],
     });
     render(<MemberAccessPanel userId="u_1" />);
     expect(screen.getByRole('checkbox', { name: /Use financial reports/ })).toHaveAttribute(
       'aria-disabled',
       'true'
     );
-    expect(screen.getByRole('checkbox', { name: /Manage stock/ })).not.toHaveAttribute(
+    expect(screen.getByRole('checkbox', { name: /Use operational reports/ })).not.toHaveAttribute(
       'aria-disabled',
       'true'
     );
-    expect(screen.getAllByText(MEMBER_ACCESS_NOT_HELD_NOTE).length).toBe(ALL_KEYS.length - 4);
+    // Held, but weighty: only the owner changes it.
+    expect(screen.getByRole('checkbox', { name: /Manage stock/ })).toHaveAttribute(
+      'aria-disabled',
+      'true'
+    );
+    const weighty = Object.keys(PHARMACY_WEIGHTY_SUB_ROLES).length;
+    expect(screen.getAllByText(MEMBER_ACCESS_OWNER_ONLY_NOTE).length).toBe(weighty);
+    expect(screen.getAllByText(MEMBER_ACCESS_NOT_HELD_NOTE).length).toBe(
+      ALL_KEYS.length - weighty - 4
+    );
+  });
+
+  it('locks no box for the owner, held or not', () => {
+    editable(cashier, { viewerHolds: [] });
+    render(<MemberAccessPanel userId="u_1" />);
+    for (const box of screen.getAllByRole('checkbox'))
+      expect(box).not.toHaveAttribute('aria-disabled', 'true');
+    expect(screen.queryByText(MEMBER_ACCESS_NOT_HELD_NOTE)).toBeNull();
+    expect(screen.queryByText(MEMBER_ACCESS_OWNER_ONLY_NOTE)).toBeNull();
+  });
+
+  it('asks the owner for the PIN before taking a weighty sub-role away', async () => {
+    editable([...cashier, 'pharmacy:dispense']);
+    state.setSubRole.mockResolvedValue({ changed: ['dispense-prescriptions'] });
+    render(<MemberAccessPanel userId="u_1" />);
+    fireEvent.click(screen.getByRole('checkbox', { name: /Dispense prescriptions/ }));
+    expect(state.setSubRole).not.toHaveBeenCalled();
+    const confirm = screen.getByRole('form', { name: 'Take away Dispense prescriptions?' });
+    expect(
+      within(confirm).getByText(PHARMACY_WEIGHTY_SUB_ROLES['dispense-prescriptions'])
+    ).toBeVisible();
+    fireEvent.change(within(confirm).getByLabelText('Your PIN'), { target: { value: '2468' } });
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Take it away' }));
+    await waitFor(() =>
+      expect(state.setSubRole).toHaveBeenCalledWith({
+        userId: 'u_1',
+        subRoleKey: 'dispense-prescriptions',
+        ticked: false,
+        pin: '2468',
+      })
+    );
   });
 
   it('shows the server’s reason and keeps every tick locked when the viewer may not edit', () => {
@@ -324,6 +375,15 @@ describe('DEV-959B: ticking for one person', () => {
     fireEvent.change(within(form).getByLabelText('Start from a ready-made role'), {
       target: { value: 'pharmacist' },
     });
+    // Before confirming, the role's weighty sub-roles are listed with their one-line texts.
+    expect(within(form).getByText(/gives these sub-roles that carry extra weight/)).toBeVisible();
+    expect(
+      within(form).getByText(PHARMACY_WEIGHTY_SUB_ROLES['dispense-prescriptions'])
+    ).toBeVisible();
+    expect(
+      within(form).getByText(PHARMACY_WEIGHTY_SUB_ROLES['record-prescriptions'])
+    ).toBeVisible();
+    expect(within(form).getByLabelText('Your PIN')).toBeRequired();
     fireEvent.change(within(form).getByLabelText('Your PIN'), { target: { value: '2468' } });
     fireEvent.click(within(form).getByRole('button', { name: 'Use this role' }));
     await waitFor(() =>

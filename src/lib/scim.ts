@@ -5,6 +5,11 @@ import { publicRequestOrigin } from '@/lib/http-origin';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
+import {
+  AccessChangeError,
+  guardPharmacyAccessChanges,
+  isPharmacyOrganization,
+} from '@/lib/team/pharmacy-access-guard';
 
 export const SCIM_USER_SCHEMA = 'urn:ietf:params:scim:schemas:core:2.0:User';
 export const SCIM_GROUP_SCHEMA = 'urn:ietf:params:scim:schemas:core:2.0:Group';
@@ -74,25 +79,60 @@ export async function withScimAuth(
     return scimError(401, 'The SCIM bearer token is invalid or expired.');
   }
 
-  return withTenantDb(
-    credential.organizationId,
-    async (db) => {
-      const entitlements = await resolveOrganizationEntitlements(credential.organizationId, db);
-      if (!hasModule(entitlements, 'scim')) {
-        return scimError(403, 'SCIM provisioning is not licensed for this organization.');
-      }
-      await db.organizationScimToken.update({
-        where: { id: credential.id },
-        data: { lastUsedAt: new Date() },
-      });
-      return run({
-        organizationId: credential.organizationId,
-        tokenId: credential.id,
-        db,
-      });
+  // DEV-959B: a pharmacy access change the guard refuses rolls the whole request back.
+  try {
+    return await withTenantDb(
+      credential.organizationId,
+      async (db) => {
+        const entitlements = await resolveOrganizationEntitlements(credential.organizationId, db);
+        if (!hasModule(entitlements, 'scim')) {
+          return scimError(403, 'SCIM provisioning is not licensed for this organization.');
+        }
+        await db.organizationScimToken.update({
+          where: { id: credential.id },
+          data: { lastUsedAt: new Date() },
+        });
+        return run({
+          organizationId: credential.organizationId,
+          tokenId: credential.id,
+          db,
+        });
+      },
+      { timeout: 60_000 }
+    );
+  } catch (error) {
+    if (error instanceof AccessChangeError) return scimError(403, error.message);
+    throw error;
+  }
+}
+
+/**
+ * DEV-959B: in a pharmacy, a SCIM write that changes people's roles or status runs inside the
+ * access guard. SCIM has no member and no fresh approval behind it, so it may only take
+ * access away: it never gives a weighty sub-role, never makes an administrator or an owner,
+ * and never leaves the organization without an owner.
+ */
+export async function scimAccessChange<T>(
+  ctx: ScimContext,
+  targetIds: string[] | null,
+  action: string,
+  write: () => Promise<{ targetIds: string[]; value: T }>
+): Promise<T> {
+  if (!(await isPharmacyOrganization(ctx.db, ctx.organizationId))) return (await write()).value;
+  const { value } = await guardPharmacyAccessChanges(
+    ctx.db,
+    {
+      organizationId: ctx.organizationId,
+      actor: { kind: 'system', source: 'SCIM' },
+      targetIds,
+      pinVerified: false,
+      mode: 'role',
+      action,
+      describe: (name) => `Directory provisioning changed ${name}`,
     },
-    { timeout: 60_000 }
+    write
   );
+  return value;
 }
 
 export function scimUser(
