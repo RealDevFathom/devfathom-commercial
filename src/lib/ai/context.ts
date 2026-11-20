@@ -46,6 +46,11 @@ export type AssistantContext = {
   email?: string | null;
   department?: string | null;
   status?: string | null;
+  /**
+   * DEV-959B: a platform support session acting as this member. Member-access writes refuse
+   * it, as the team and organization screens do.
+   */
+  supportSession?: boolean;
 };
 
 /** Validate even typed callers: runtime input may not match the TypeScript union. */

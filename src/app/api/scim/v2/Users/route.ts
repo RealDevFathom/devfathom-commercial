@@ -5,6 +5,7 @@ import {
   SCIM_LIST_SCHEMA,
   scimError,
   scimJson,
+  scimAccessChange,
   scimRole,
   scimUser,
   withScimAuth,
@@ -96,26 +97,29 @@ export async function POST(request: Request) {
       // agency-era key would raise the composite foreign key in any tenant that
       // does not have it — a restaurant has KITCHEN/FRONT_OF_HOUSE only.
       const department = await resolveProvisionedDepartmentKey(ctx.db, ctx.organizationId, role);
-      const user = await ctx.db.user.create({
-        data: {
-          organizationId: ctx.organizationId,
-          name: input.displayName ?? input.name?.formatted ?? email.split('@')[0]!,
-          email,
-          password: null,
-          role,
-          department,
-          title: role === 'ADMIN' ? 'Organization administrator' : 'Team member',
-          status: input.active ? 'ACTIVE' : 'INACTIVE',
-        },
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
-          status: true,
-          createdAt: true,
-          updatedAt: true,
-        },
+      const user = await scimAccessChange(ctx, null, 'scim.createUser', async () => {
+        const created = await ctx.db.user.create({
+          data: {
+            organizationId: ctx.organizationId,
+            name: input.displayName ?? input.name?.formatted ?? email.split('@')[0]!,
+            email,
+            password: null,
+            role,
+            department,
+            title: role === 'ADMIN' ? 'Organization administrator' : 'Team member',
+            status: input.active ? 'ACTIVE' : 'INACTIVE',
+          },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+            status: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        });
+        return { targetIds: [created.id], value: created };
       });
       const body = scimUser(user, requestBaseUrl(request));
       await recordScimEvent(ctx, request, {
