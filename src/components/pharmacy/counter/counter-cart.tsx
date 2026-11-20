@@ -1,7 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
+import { ScanBarcode } from 'lucide-react';
 
+import { Skeleton } from '@/components/ui/skeleton';
 import { StatusPill } from '@/components/ui/status-pill';
 import type { CounterCart } from '@/lib/pharmacy/counter';
 import { counterUnitNoun, plural } from '@/lib/pharmacy/counter-pricing';
@@ -17,6 +19,8 @@ export type CounterCartPanelProps = {
   alerts?: readonly CounterAlert[];
   /** The instant near-expiry is measured from; injectable for tests. */
   now?: Date;
+  /** DEV-977: the keys that start a bill, shown under the empty bill. */
+  emptyHints?: ReactNode;
 };
 
 /** PH-A4: a batch this close to expiry is flagged at the counter. */
@@ -54,20 +58,47 @@ export function CounterCartPanel({
   onRetry,
   alerts = [],
   now = new Date(),
+  emptyHints,
 }: CounterCartPanelProps) {
   if (state === 'idle' || (state === 'ready' && cart === null)) {
+    // DEV-977 (Counter v2): the empty bill says how to start one, in the bill's own place.
     return (
-      <p className="p-4 text-sm text-text-muted">
-        No bill is open. Search for a medicine and add a line to start one.
-      </p>
+      <div className="grid justify-items-center gap-3 px-4 py-14 text-center">
+        <span
+          aria-hidden="true"
+          className="grid size-12 place-items-center rounded-[var(--radius-sm)] bg-surface-sunken text-text-strong"
+        >
+          <ScanBarcode className="size-6" />
+        </span>
+        <h3 className="text-xl font-semibold text-text-strong">Start a bill</h3>
+        <p className="max-w-[42ch] text-sm text-text-body">
+          No bill is open. Search for a medicine and add a line to start one.
+        </p>
+        {emptyHints ? (
+          <p className="flex flex-wrap justify-center gap-x-4 gap-y-2 text-xs text-text-muted">
+            {emptyHints}
+          </p>
+        ) : null}
+      </div>
     );
   }
 
   if (state === 'loading') {
     return (
-      <p className="p-4 text-sm text-text-muted" role="status">
-        Loading the bill…
-      </p>
+      <div className="p-4">
+        <p className="text-sm text-text-muted" role="status">
+          Loading the bill…
+        </p>
+        <div aria-hidden="true" className="mt-4 space-y-6">
+          {['w-3/5', 'w-1/2'].map((width) => (
+            <div key={width} className="grid grid-cols-[minmax(0,1fr)_6rem] gap-x-6 gap-y-2.5">
+              <Skeleton className={`h-3.5 ${width}`} />
+              <Skeleton className="h-3.5" />
+              <Skeleton className="h-3 w-2/5" />
+            </div>
+          ))}
+        </div>
+      </div>
     );
   }
 
@@ -90,10 +121,17 @@ export function CounterCartPanel({
     // UX rules 1 and 9: name no identifier the operator cannot act on, and say
     // how to populate the empty state rather than only that it is empty.
     return (
-      <p className="p-4 text-sm text-text-muted">
-        This bill is open with no lines yet. Scan or search a medicine, choose its sale unit, then
-        add it to the cart.
-      </p>
+      <div className="grid justify-items-center gap-3 px-4 py-14 text-center">
+        <p className="max-w-[46ch] text-sm text-text-body">
+          This bill is open with no lines yet. Scan or search a medicine, choose its sale unit, then
+          add it to the cart.
+        </p>
+        {emptyHints ? (
+          <p className="flex flex-wrap justify-center gap-x-4 gap-y-2 text-xs text-text-muted">
+            {emptyHints}
+          </p>
+        ) : null}
+      </div>
     );
   }
 
@@ -107,7 +145,7 @@ export function CounterCartPanel({
                 key={heading}
                 scope="col"
                 role="columnheader"
-                className="py-2 pr-4 text-left font-medium first:pl-4 last:text-right"
+                className="py-2.5 pr-4 text-left font-medium first:pl-0 last:pr-0 last:text-right"
               >
                 {heading}
               </th>
@@ -124,26 +162,26 @@ export function CounterCartPanel({
             >
               <tr
                 role="row"
-                className="grid grid-cols-[1.25rem_minmax(0,1fr)_auto] gap-x-3 gap-y-1 p-4 align-top hover:bg-surface-sunken/50 @min-[40rem]:table-row"
+                className="grid grid-cols-[1.75rem_minmax(0,1fr)_auto] gap-x-3 gap-y-1.5 py-3.5 align-top @min-[40rem]:table-row"
               >
                 <td
                   role="cell"
-                  className="row-span-3 font-mono text-xs tabular-nums text-text-muted @min-[40rem]:px-4 @min-[40rem]:py-3"
+                  className="row-span-3 pt-0.5 font-mono text-xs tabular-nums text-text-muted @min-[40rem]:py-3.5 @min-[40rem]:pr-3"
                 >
                   {index + 1}
                 </td>
                 <th
                   scope="row"
                   role="rowheader"
-                  className="min-w-0 text-left font-normal @min-[40rem]:w-2/5 @min-[40rem]:py-3 @min-[40rem]:pr-4"
+                  className="min-w-0 text-left font-normal @min-[40rem]:w-2/5 @min-[40rem]:py-3.5 @min-[40rem]:pr-4"
                 >
-                  <p className="text-sm font-semibold text-text-strong">
+                  <p className="text-[15px] font-semibold text-text-strong">
                     {line.medicineName}
                     {line.strength ? (
                       <span className="ml-1 font-normal text-text-body">{line.strength}</span>
                     ) : null}
                   </p>
-                  <p className="mt-1 text-xs text-text-muted">
+                  <p className="mt-0.5 text-[13px] text-text-body">
                     {line.presentation} ·{' '}
                     {line.saleUnit === 'UNIT'
                       ? counterUnitNoun(line.dosageForm)
@@ -153,7 +191,7 @@ export function CounterCartPanel({
                     {formatMinor(line.unitPriceMinor)}
                     {line.discountMinor > 0 ? ` · less ${formatMinor(line.discountMinor)}` : ''}
                   </p>
-                  <div className="mt-1 flex flex-wrap gap-1">
+                  <div className="mt-1.5 flex flex-wrap gap-1.5 empty:hidden">
                     {line.controlled ? (
                       <StatusPill status="controlled" tone="danger" label="Controlled" />
                     ) : null}
@@ -176,9 +214,9 @@ export function CounterCartPanel({
                 </th>
                 <td
                   role="cell"
-                  className="col-span-2 col-start-2 row-start-2 @min-[40rem]:py-3 @min-[40rem]:pr-4"
+                  className="col-span-2 col-start-2 row-start-2 @min-[40rem]:py-3.5 @min-[40rem]:pr-4"
                 >
-                  <p className="font-mono text-sm font-semibold tabular-nums text-text-strong">
+                  <p className="text-[15px] font-semibold tabular-nums text-text-strong">
                     {line.quantity} ×{' '}
                     {line.saleUnit === 'UNIT'
                       ? counterUnitNoun(line.dosageForm)
@@ -191,7 +229,7 @@ export function CounterCartPanel({
                 </td>
                 <td
                   role="cell"
-                  className="col-span-2 col-start-2 row-start-3 @min-[40rem]:py-3 @min-[40rem]:pr-4"
+                  className="col-span-2 col-start-2 row-start-3 @min-[40rem]:py-3.5 @min-[40rem]:pr-4"
                 >
                   <ul
                     className="space-y-2"
@@ -228,7 +266,7 @@ export function CounterCartPanel({
                 </td>
                 <td
                   role="cell"
-                  className="col-start-3 row-start-1 text-right font-mono text-sm font-semibold tabular-nums text-text-strong @min-[40rem]:py-3 @min-[40rem]:pr-4"
+                  className="col-start-3 row-start-1 text-right text-base font-semibold tabular-nums text-text-strong @min-[40rem]:py-3.5"
                 >
                   {formatMinor(line.lineTotalMinor)}
                 </td>
@@ -239,7 +277,7 @@ export function CounterCartPanel({
                   <td
                     role="cell"
                     colSpan={4}
-                    className="block px-4 pb-3 @min-[40rem]:table-cell @min-[40rem]:pl-0"
+                    className="block pb-3.5 pl-10 @min-[40rem]:table-cell @min-[40rem]:pl-0"
                   >
                     <div className="space-y-2">
                       {lineAlerts.map((alert) => (
@@ -248,8 +286,8 @@ export function CounterCartPanel({
                           role={alert.severity === 'SAFETY_BLOCK' ? 'alert' : undefined}
                           className={
                             alert.severity === 'SAFETY_BLOCK'
-                              ? 'rounded-md bg-destructive/10 p-3 text-xs text-destructive'
-                              : 'rounded-md bg-surface-sunken p-3 text-xs text-text-body'
+                              ? 'rounded-[var(--radius-sm)] bg-destructive/10 px-3 py-2.5 text-[13px] text-destructive'
+                              : 'rounded-[var(--radius-sm)] bg-surface-sunken px-3 py-2.5 text-[13px] text-text-body'
                           }
                         >
                           <div className="flex flex-wrap items-center gap-2 font-semibold">

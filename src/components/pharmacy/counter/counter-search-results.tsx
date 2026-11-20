@@ -227,8 +227,11 @@ export function CounterSearchResults({
                 aria-describedby={reason ? reasonId : undefined}
                 aria-pressed={active}
                 onClick={() => onSelect(row)}
-                className={`grid min-h-11 w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 px-4 py-1.5 text-start focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 ${
-                  active ? 'bg-surface-sunken' : 'hover:bg-surface-sunken'
+                className={`grid min-h-11 w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 border-s-[3px] px-4 py-1.5 text-start focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 ${
+                  // DEV-977 (Counter v2): the chosen result also carries a mark, not only a tint.
+                  active
+                    ? 'border-s-accent-brand bg-surface-sunken'
+                    : 'border-s-transparent hover:bg-surface-sunken'
                 }`}
               >
                 <span

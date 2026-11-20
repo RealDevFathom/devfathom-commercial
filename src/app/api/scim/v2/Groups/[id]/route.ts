@@ -6,20 +6,14 @@ import {
   SCIM_PATCH_SCHEMA,
   scimError,
   scimJson,
+  scimPatchGroupMembers,
+  ScimOwnerAccessRefusal,
   withScimAuth,
 } from '@/lib/scim';
-import { RESET_PARTY_SELECT } from '@/lib/auth/admin-password-reset';
-import { holdsOwnerLevelAccess } from '@/lib/auth/member-email-change';
-
-const OWNER_ACCESS_REFUSAL = 'Owner access can only be changed by the owner in DevFathom.';
-
 async function loadRole(ctx: Parameters<Parameters<typeof withScimAuth>[1]>[0], id: string) {
   return ctx.db.organizationRole.findUnique({
     where: { id },
-    include: {
-      users: { select: { id: true, name: true } },
-      permissions: { select: { capability: true, effect: true } },
-    },
+    include: { users: { select: { id: true, name: true } } },
   });
 }
 
@@ -103,58 +97,14 @@ export async function PATCH(request: Request, route: { params: Promise<{ id: str
           .filter((value): value is string => typeof value === 'string');
         operations.push({ op: operation.op, ids });
       }
-      // DEV-974: only the owner adds or removes owner-level access, and any
-      // administrator can mint a SCIM token. Simulate the whole PATCH on every member
-      // it can touch (the named ids and, for a replace, everyone it clears), then judge
-      // each member whose role changes BEFORE and AFTER: refuse if either is
-      // owner-level. That covers the owner-level role itself, an owner moved out, and a
-      // restricted wildcard holder whose DENY-carrying role a replace would clear.
-      const touched = await ctx.db.user.findMany({
-        where: {
-          OR: [
-            { id: { in: [...new Set(operations.flatMap((operation) => operation.ids))] } },
-            { organizationRoleId: role.id },
-          ],
-        },
-        select: { ...RESET_PARTY_SELECT, id: true, organizationRoleId: true },
-      });
-      const next = new Map(touched.map((member) => [member.id, member.organizationRoleId]));
-      for (const { op, ids } of operations) {
-        if (op === 'replace') {
-          for (const [userId, roleId] of next) if (roleId === role.id) next.set(userId, null);
+      // DEV-974: the owner-level check runs inside, before any write (see scim.ts).
+      try {
+        await scimPatchGroupMembers(ctx, role.id, operations);
+      } catch (error) {
+        if (error instanceof ScimOwnerAccessRefusal) {
+          return refuse(403, error.message, 'mutability');
         }
-        for (const userId of ids) {
-          if (!next.has(userId)) continue;
-          if (op === 'remove') {
-            if (next.get(userId) === role.id) next.set(userId, null);
-          } else {
-            next.set(userId, role.id);
-          }
-        }
-      }
-      const changed = touched.filter((member) => next.get(member.id) !== member.organizationRoleId);
-      const grantsOrRemovesOwnerAccess = changed.some(
-        (member) =>
-          holdsOwnerLevelAccess(member) ||
-          holdsOwnerLevelAccess({
-            organizationRole: next.get(member.id) === role.id ? role : null,
-            permissionOverrides: member.permissionOverrides,
-          })
-      );
-      if (grantsOrRemovesOwnerAccess) return refuse(403, OWNER_ACCESS_REFUSAL, 'mutability');
-      const joining = changed.filter((member) => next.get(member.id) === role.id);
-      const leaving = changed.filter((member) => next.get(member.id) === null);
-      if (joining.length) {
-        await ctx.db.user.updateMany({
-          where: { id: { in: joining.map((member) => member.id) } },
-          data: { organizationRoleId: role.id },
-        });
-      }
-      if (leaving.length) {
-        await ctx.db.user.updateMany({
-          where: { id: { in: leaving.map((member) => member.id) } },
-          data: { organizationRoleId: null },
-        });
+        throw error;
       }
       await recordScimEvent(ctx, request, {
         operation: 'PATCH',

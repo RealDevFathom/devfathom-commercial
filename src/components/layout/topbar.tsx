@@ -83,13 +83,67 @@ function NavigationCommands({ onSelect }: { onSelect: (href: string) => void }) 
   );
 }
 
-export function Topbar({
-  onMenuClick,
+/** The role line under the signed-in member's name, shared by every workspace bar. */
+export function useWorkspaceRoleLabel(): string {
+  const { data: session } = useSession();
+  const { vertical } = useEntitlements();
+  const role = session?.user?.role;
+  return role === 'ADMIN' || role === 'HR' || role === 'EMPLOYEE'
+    ? `Workspace role: ${inviteCopyForVertical(vertical).baseRoleLabels[role]}`
+    : 'Workspace member';
+}
+
+const getInitials = (name: string) =>
+  name
+    .split(' ')
+    .map((n) => n[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2);
+
+/** The workspace mark and name, linking to the dashboard. */
+export function WorkspaceBrandLink({
   brand,
+  subtitle = 'Company workspace',
+  textClassName = 'hidden leading-tight sm:block',
 }: {
-  onMenuClick?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   brand?: TenantBrand;
-} = {}) {
+  subtitle?: string;
+  textClassName?: string;
+}) {
+  return (
+    <Link
+      href="/dashboard"
+      className="flex shrink-0 items-center gap-3 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <span className="sr-only">Open dashboard</span>
+      {brand?.markUrl || brand?.logoUrl ? (
+        <Image
+          src={brand.markUrl ?? brand.logoUrl ?? ''}
+          alt=""
+          width={40}
+          height={40}
+          unoptimized
+          className="h-10 w-10 rounded-xl object-contain"
+        />
+      ) : (
+        <FathomMark className="h-10 w-10" variant="brand" />
+      )}
+      <div className={textClassName}>
+        <span className="block text-sm font-semibold tracking-[-0.03em] text-foreground">
+          {brand?.displayName ?? 'DevFathom'}
+        </span>
+        <span className="block text-xs text-muted-foreground">{subtitle}</span>
+      </div>
+    </Link>
+  );
+}
+
+/**
+ * Global search: the search button, the ⌘K shortcut and the lazily loaded palette.
+ * `compact` keeps the button icon-sized at every width (a bar with less room).
+ */
+export function WorkspaceSearch({ compact = false }: { compact?: boolean } = {}) {
   const [commandOpen, setCommandOpen] = useState(false);
   // Mount the lazily-rendered palette once it has first been opened, then keep
   // it mounted so subsequent opens are immediate.
@@ -97,23 +151,7 @@ export function Topbar({
   const [searchInput, setSearchInput] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const router = useRouter();
-  const { data: session } = useSession();
   const { vertical, enabledModules } = useEntitlements();
-  const role = session?.user?.role;
-  const roleLabel =
-    role === 'ADMIN' || role === 'HR' || role === 'EMPLOYEE'
-      ? `Workspace role: ${inviteCopyForVertical(vertical).baseRoleLabels[role]}`
-      : 'Workspace member';
-  const { theme, setTheme } = useTheme();
-  const openAssistant = useAssistant((s) => s.setOpen);
-  const assistantAvailable = useAssistant((state) =>
-    isAssistantAvailable(state, session?.user.organizationId)
-  );
-  const mounted = useSyncExternalStore(
-    subscribeToHydration,
-    () => true,
-    () => false
-  );
 
   // Warm the palette once the browser has finished the initial render. Pointer
   // and keyboard intent below also starts this preload for very early opens.
@@ -166,173 +204,35 @@ export function Topbar({
     return () => document.removeEventListener('keydown', down);
   }, [commandOpen, handleCommandOpenChange]);
 
-  const getInitials = (name: string) =>
-    name
-      .split(' ')
-      .map((n) => n[0])
-      .join('')
-      .toUpperCase()
-      .slice(0, 2);
-
   return (
     <>
-      <header className="studio-topbar sticky top-0 z-30 flex min-h-[76px] items-center gap-3 border-b border-border-subtle bg-card/94 px-4 backdrop-blur-xl sm:px-6 xl:px-8">
-        {/* Mobile menu button */}
-        {onMenuClick && (
-          <button
-            type="button"
-            onClick={onMenuClick}
-            className="studio-icon-button lg:hidden"
-            aria-label="Open menu"
-          >
-            <Menu className="h-5 w-5" />
-          </button>
-        )}
-
-        <Link
-          href="/dashboard"
-          className="flex shrink-0 items-center gap-3 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      <button
+        onClick={() => handleCommandOpenChange(true)}
+        onPointerEnter={() => void preloadCommandPalette()}
+        onFocus={() => void preloadCommandPalette()}
+        className={cn('studio-search', compact && 'lg:w-11! lg:justify-center! lg:px-0!')}
+      >
+        <Search className="h-4 w-4 shrink-0" />
+        <span className="sr-only">Search company hub</span>
+        <span
+          aria-hidden="true"
+          className={cn(
+            'hidden min-w-0 flex-1 truncate whitespace-nowrap text-left',
+            !compact && 'lg:block'
+          )}
         >
-          <span className="sr-only">Open dashboard</span>
-          {brand?.markUrl || brand?.logoUrl ? (
-            <Image
-              src={brand.markUrl ?? brand.logoUrl ?? ''}
-              alt=""
-              width={40}
-              height={40}
-              unoptimized
-              className="h-10 w-10 rounded-xl object-contain"
-            />
-          ) : (
-            <FathomMark className="h-10 w-10" variant="brand" />
+          Search workspace
+        </span>
+        <kbd
+          aria-hidden="true"
+          className={cn(
+            'pointer-events-none hidden shrink-0 select-none font-mono text-[10px] text-text-body xl:inline-flex',
+            compact && 'xl:hidden'
           )}
-          <div className="hidden leading-tight sm:block">
-            <span className="block text-sm font-semibold tracking-[-0.03em] text-foreground">
-              {brand?.displayName ?? 'DevFathom'}
-            </span>
-            <span className="block text-xs text-muted-foreground">Company workspace</span>
-          </div>
-        </Link>
-
-        <div className="hidden h-8 w-px bg-border-subtle md:block" />
-
-        <ProjectsShortcut />
-
-        <div className="hidden min-w-0 md:block">
-          <span className="block text-xs font-medium text-foreground">
-            {session?.user?.name ?? 'Workspace'}
-          </span>
-          <span className="block max-w-36 truncate text-[11px] text-muted-foreground">
-            {roleLabel}
-          </span>
-        </div>
-
-        {/* Breadcrumbs */}
-        <nav
-          aria-label="Breadcrumb"
-          className="ml-2 hidden min-w-0 items-center gap-1 overflow-hidden border-l border-border-subtle pl-4 text-xs xl:flex"
         >
-          <TopbarBreadcrumbs />
-        </nav>
-
-        <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          {/* Search */}
-          <button
-            onClick={() => handleCommandOpenChange(true)}
-            onPointerEnter={() => void preloadCommandPalette()}
-            onFocus={() => void preloadCommandPalette()}
-            className="studio-search"
-          >
-            <Search className="h-4 w-4 shrink-0" />
-            <span className="sr-only">Search company hub</span>
-            <span
-              aria-hidden="true"
-              className="hidden min-w-0 flex-1 truncate whitespace-nowrap text-left lg:block"
-            >
-              Search workspace
-            </span>
-            <kbd
-              aria-hidden="true"
-              className="pointer-events-none hidden shrink-0 select-none font-mono text-[10px] text-text-body xl:inline-flex"
-            >
-              ⌘K
-            </kbd>
-          </button>
-
-          {/* AI assistant */}
-          {assistantAvailable && (
-            <>
-              <button
-                type="button"
-                onClick={() => openAssistant(true)}
-                title="Open Ask Fathom chat"
-                className="studio-assistant-button disabled:cursor-not-allowed disabled:opacity-50 disabled:transform-none motion-reduce:transform-none motion-reduce:transition-none"
-                aria-label="Open Ask Fathom assistant"
-              >
-                <Sparkles className="h-[18px] w-[18px] text-accent-brand" />
-                <span className="hidden text-xs font-semibold lg:inline">Ask Fathom</span>
-              </button>
-            </>
-          )}
-
-          {/* Dark mode toggle */}
-          {mounted && (
-            <button
-              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-              className="studio-icon-button hidden sm:flex"
-              aria-label={theme === 'dark' ? 'Use light theme' : 'Use dark theme'}
-            >
-              {theme === 'dark' ? (
-                <Sun className="h-[18px] w-[18px]" />
-              ) : (
-                <Moon className="h-[18px] w-[18px]" />
-              )}
-            </button>
-          )}
-
-          {/* Notifications */}
-          <NotificationBell />
-
-          {/* User dropdown */}
-          {session?.user && (
-            <DropdownMenu>
-              <DropdownMenuTrigger className="studio-avatar-button">
-                <span className="sr-only">Open account menu for {session.user.name}</span>
-                <Avatar aria-hidden="true" className="h-8 w-8">
-                  <AvatarImage src={session.user.image ?? undefined} alt={session.user.name} />
-                  <AvatarFallback className="bg-muted text-foreground text-xs font-medium">
-                    {getInitials(session.user.name)}
-                  </AvatarFallback>
-                </Avatar>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56">
-                <div className="px-2 py-2">
-                  <p className="text-sm font-medium">{session.user.name}</p>
-                  <p className="text-xs text-muted-foreground">{session.user.email}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{roleLabel}</p>
-                </div>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => router.push('/settings')}>
-                  <User className="mr-2 h-4 w-4" />
-                  Profile
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => void signOutEverything('/login')}>
-                  <Repeat2 className="mr-2 h-4 w-4" />
-                  Switch organization
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={() => void signOutEverything()}
-                  className="text-destructive focus:text-destructive"
-                >
-                  <LogOut className="mr-2 h-4 w-4" />
-                  Sign out
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-        </div>
-      </header>
+          ⌘K
+        </kbd>
+      </button>
 
       {/* Command palette (Cmd+K) */}
       {commandLoaded && (
@@ -485,6 +385,164 @@ export function Topbar({
         </CommandDialog>
       )}
     </>
+  );
+}
+
+/** Opens the Ask Fathom assistant when this workspace has it. */
+export function AskFathomButton() {
+  const { data: session } = useSession();
+  const openAssistant = useAssistant((s) => s.setOpen);
+  const assistantAvailable = useAssistant((state) =>
+    isAssistantAvailable(state, session?.user.organizationId)
+  );
+  if (!assistantAvailable) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => openAssistant(true)}
+      title="Open Ask Fathom chat"
+      className="studio-assistant-button disabled:cursor-not-allowed disabled:opacity-50 disabled:transform-none motion-reduce:transform-none motion-reduce:transition-none"
+      aria-label="Open Ask Fathom assistant"
+    >
+      <Sparkles className="h-[18px] w-[18px] text-accent-brand" />
+      <span className="hidden text-xs font-semibold lg:inline">Ask Fathom</span>
+    </button>
+  );
+}
+
+/** Switches between the light and dark theme once the page has hydrated. */
+export function ThemeToggleButton() {
+  const { theme, setTheme } = useTheme();
+  const mounted = useSyncExternalStore(
+    subscribeToHydration,
+    () => true,
+    () => false
+  );
+  if (!mounted) return null;
+  return (
+    <button
+      onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+      className="studio-icon-button hidden sm:flex"
+      aria-label={theme === 'dark' ? 'Use light theme' : 'Use dark theme'}
+    >
+      {theme === 'dark' ? (
+        <Sun className="h-[18px] w-[18px]" />
+      ) : (
+        <Moon className="h-[18px] w-[18px]" />
+      )}
+    </button>
+  );
+}
+
+/** The signed-in member's menu: profile, switch organization and sign out. */
+export function AccountMenu() {
+  const router = useRouter();
+  const { data: session } = useSession();
+  const roleLabel = useWorkspaceRoleLabel();
+  if (!session?.user) return null;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger className="studio-avatar-button">
+        <span className="sr-only">Open account menu for {session.user.name}</span>
+        <Avatar aria-hidden="true" className="h-8 w-8">
+          <AvatarImage src={session.user.image ?? undefined} alt={session.user.name} />
+          <AvatarFallback className="bg-muted text-foreground text-xs font-medium">
+            {getInitials(session.user.name)}
+          </AvatarFallback>
+        </Avatar>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        <div className="px-2 py-2">
+          <p className="text-sm font-medium">{session.user.name}</p>
+          <p className="text-xs text-muted-foreground">{session.user.email}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{roleLabel}</p>
+        </div>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => router.push('/settings')}>
+          <User className="mr-2 h-4 w-4" />
+          Profile
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => void signOutEverything('/login')}>
+          <Repeat2 className="mr-2 h-4 w-4" />
+          Switch organization
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onClick={() => void signOutEverything()}
+          className="text-destructive focus:text-destructive"
+        >
+          <LogOut className="mr-2 h-4 w-4" />
+          Sign out
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+export function Topbar({
+  onMenuClick,
+  brand,
+}: {
+  onMenuClick?: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  brand?: TenantBrand;
+} = {}) {
+  const { data: session } = useSession();
+  const roleLabel = useWorkspaceRoleLabel();
+
+  return (
+    <header className="studio-topbar sticky top-0 z-30 flex min-h-[76px] items-center gap-3 border-b border-border-subtle bg-card/94 px-4 backdrop-blur-xl sm:px-6 xl:px-8">
+      {/* Mobile menu button */}
+      {onMenuClick && (
+        <button
+          type="button"
+          onClick={onMenuClick}
+          className="studio-icon-button lg:hidden"
+          aria-label="Open menu"
+        >
+          <Menu className="h-5 w-5" />
+        </button>
+      )}
+
+      <WorkspaceBrandLink brand={brand} />
+
+      <div className="hidden h-8 w-px bg-border-subtle md:block" />
+
+      <ProjectsShortcut />
+
+      <div className="hidden min-w-0 md:block">
+        <span className="block text-xs font-medium text-foreground">
+          {session?.user?.name ?? 'Workspace'}
+        </span>
+        <span className="block max-w-36 truncate text-[11px] text-muted-foreground">
+          {roleLabel}
+        </span>
+      </div>
+
+      {/* Breadcrumbs */}
+      <nav
+        aria-label="Breadcrumb"
+        className="ml-2 hidden min-w-0 items-center gap-1 overflow-hidden border-l border-border-subtle pl-4 text-xs xl:flex"
+      >
+        <TopbarBreadcrumbs />
+      </nav>
+
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        {/* Search */}
+        <WorkspaceSearch />
+
+        {/* AI assistant */}
+        <AskFathomButton />
+
+        {/* Dark mode toggle */}
+        <ThemeToggleButton />
+
+        {/* Notifications */}
+        <NotificationBell />
+
+        {/* User dropdown */}
+        <AccountMenu />
+      </div>
+    </header>
   );
 }
 

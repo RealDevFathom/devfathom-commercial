@@ -167,6 +167,7 @@ async function respond(req: Request) {
     department: session.user.department,
     status: session.user.status,
     enabledModules: entitlements.enabledModules,
+    supportSession: Boolean(actor.support || session.user.isSupportSession),
   };
   // DEV-576 write ledger: approval-gated writes run once, only as proposed.
   const ledger = createActionLedgerContext({ organizationId: organization.id, userId: ctx.userId });

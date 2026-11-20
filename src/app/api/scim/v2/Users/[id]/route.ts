@@ -3,6 +3,7 @@ import {
   recordScimEvent,
   requestBaseUrl,
   SCIM_PATCH_SCHEMA,
+  scimAccessChange,
   scimError,
   scimJson,
   scimRole,
@@ -16,6 +17,7 @@ import {
   sendMemberEmailChangeNotices,
   type MemberEmailChange,
 } from '@/lib/auth/member-email-change';
+import { isPharmacyOrganization } from '@/lib/team/pharmacy-access-guard';
 
 const USER_SELECT = {
   id: true,
@@ -34,10 +36,24 @@ type ScimRouteContext = Parameters<Parameters<typeof withScimAuth>[1]>[0];
  * re-address an owner or administrator; for anyone else the change cancels pending
  * reset links and must be confirmed from the new address (see member-email-change).
  */
-async function guardDirectoryEmailChange(ctx: ScimRouteContext, id: string) {
+async function guardDirectoryEmailChange(ctx: ScimRouteContext, id: string, status: string) {
   const denial = await directoryEmailChangeDenial(ctx.db, id);
-  return denial ? scimError(403, denial, 'mutability') : null;
+  if (denial) return scimError(403, denial, 'mutability');
+  // A changed email is confirmed through an invitation, and in a pharmacy an invitation can
+  // only be accepted when a member issued it (DEV-959B). A directory has no member behind
+  // it, so it would leave the person unable to confirm: refuse instead of stranding them.
+  if (
+    EMAIL_CONFIRMING_STATUSES.has(status) &&
+    (await isPharmacyOrganization(ctx.db, ctx.organizationId))
+  ) {
+    return scimError(403, PHARMACY_DIRECTORY_EMAIL_REFUSAL, 'mutability');
+  }
+  return null;
 }
+
+const EMAIL_CONFIRMING_STATUSES = new Set(['ACTIVE', 'ON_LEAVE', 'INVITED']);
+const PHARMACY_DIRECTORY_EMAIL_REFUSAL =
+  "In a pharmacy, a member's sign-in email is changed on the team screen, not by the directory.";
 
 async function finishDirectoryEmailChange(
   ctx: ScimRouteContext,
@@ -155,23 +171,26 @@ export async function PUT(request: Request, route: { params: Promise<{ id: strin
       if (clash) return scimError(409, 'A user with this userName already exists.', 'uniqueness');
       const changingEmail = email !== current.email;
       if (changingEmail) {
-        const refused = await guardDirectoryEmailChange(ctx, id);
+        const refused = await guardDirectoryEmailChange(ctx, id, current.status);
         if (refused) return refused;
       }
-      let user = await ctx.db.user.update({
-        where: { id },
-        data: {
-          email,
-          name: input.displayName ?? input.name?.formatted ?? current.name,
-          role: scimRole(input.roles?.[0]?.value ?? current.role),
-          status: input.active ? 'ACTIVE' : 'INACTIVE',
-          tokenVersion: !input.active ? { increment: 1 } : undefined,
-        },
-        select: USER_SELECT,
+      let emailChange: MemberEmailChange | null = null;
+      let user = await scimAccessChange(ctx, [id], 'scim.replaceUser', async () => {
+        const written = await ctx.db.user.update({
+          where: { id },
+          data: {
+            email,
+            name: input.displayName ?? input.name?.formatted ?? current.name,
+            role: scimRole(input.roles?.[0]?.value ?? current.role),
+            status: input.active ? 'ACTIVE' : 'INACTIVE',
+            tokenVersion: !input.active ? { increment: 1 } : undefined,
+          },
+          select: USER_SELECT,
+        });
+        if (changingEmail)
+          emailChange = await finishDirectoryEmailChange(ctx, written, current.email);
+        return { targetIds: [id], value: written };
       });
-      const emailChange = changingEmail
-        ? await finishDirectoryEmailChange(ctx, user, current.email)
-        : null;
       if (emailChange) {
         user = await ctx.db.user.findUniqueOrThrow({ where: { id }, select: USER_SELECT });
       }
@@ -235,7 +254,7 @@ export async function PATCH(request: Request, route: { params: Promise<{ id: str
       }
       const changingEmail = data.email !== undefined && data.email !== current.email;
       if (changingEmail) {
-        const refused = await guardDirectoryEmailChange(ctx, id);
+        const refused = await guardDirectoryEmailChange(ctx, id, current.status);
         if (refused) return refused;
         const clash = await ctx.db.user.findFirst({
           where: { email: data.email, id: { not: id } },
@@ -245,10 +264,13 @@ export async function PATCH(request: Request, route: { params: Promise<{ id: str
           return scimError(409, 'A user with this userName already exists.', 'uniqueness');
         }
       }
-      let user = await ctx.db.user.update({ where: { id }, data, select: USER_SELECT });
-      const emailChange = changingEmail
-        ? await finishDirectoryEmailChange(ctx, user, current.email)
-        : null;
+      let emailChange: MemberEmailChange | null = null;
+      let user = await scimAccessChange(ctx, [id], 'scim.patchUser', async () => {
+        const written = await ctx.db.user.update({ where: { id }, data, select: USER_SELECT });
+        if (changingEmail)
+          emailChange = await finishDirectoryEmailChange(ctx, written, current.email);
+        return { targetIds: [id], value: written };
+      });
       if (emailChange) {
         user = await ctx.db.user.findUniqueOrThrow({ where: { id }, select: USER_SELECT });
       }
@@ -279,10 +301,14 @@ export async function DELETE(request: Request, route: { params: Promise<{ id: st
     const { id } = await route.params;
     const user = await loadUser(ctx, id);
     if (!user) return scimError(404, 'User not found.');
-    await ctx.db.user.update({
-      where: { id },
-      data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
-    });
+    await scimAccessChange(ctx, [id], 'scim.deactivateUser', async () => ({
+      targetIds: [id],
+      value: await ctx.db.user.update({
+        where: { id },
+        data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
+        select: { id: true },
+      }),
+    }));
     await recordScimEvent(ctx, request, {
       operation: 'DELETE',
       resourceType: 'User',
