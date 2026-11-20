@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  cutText,
+  failureDetail,
+  isPassingFailure,
+  isRowRefusal,
   normalizeMatchText,
+  notCreatedReason,
   planStagedMedicine,
+  refusalCause,
+  STAGED_CREATION_BUSY,
+  STAGED_CREATION_STOPPED,
+  STAGED_SYSTEMIC_REFUSALS,
+  StagedCreationSystemicRefusal,
   stagedLevelPrices,
   stagedMatchKey,
   stagedReorderUnits,
@@ -255,5 +265,115 @@ describe('DEV-912 supplier and reorder level', () => {
     expect(stagedReorderUnits({ reorderLevelPacks: 20, unitsPerPack: null })).toBeNull();
     expect(stagedReorderUnits({ reorderLevelPacks: null, unitsPerPack: 10 })).toBeNull();
     expect(stagedReorderUnits({ reorderLevelPacks: 2_000_000_000, unitsPerPack: 10 })).toBeNull();
+  });
+});
+
+describe('DEV-1002 a row never stops the rest of its file', () => {
+  const refusal = (sqlState: string, message = 'refused') =>
+    Object.assign(new Error('Database error'), {
+      name: 'PrismaClientKnownRequestError',
+      code: 'P2039',
+      meta: {
+        modelName: 'MedicineAlias',
+        driverAdapterError: { cause: { originalCode: sqlState, originalMessage: message } },
+      },
+    });
+
+  it('cuts long text on whole characters, never inside an emoji', () => {
+    expect(cutText('ab\u{1F600}', 3)).toBe('ab');
+    expect(cutText('ab\u{1F600}', 4)).toBe('ab\u{1F600}');
+    expect(cutText('abc', 300)).toBe('abc');
+    const plan = planStagedMedicine(
+      row({
+        productName: 'L'.repeat(299) + '\u{1F600}tail',
+        barcode: '7'.repeat(63) + '\u{1F600}',
+        rawPayload: { aliasname: 'C'.repeat(199) + '\u{1F600}', 'Generic Name': 'G' },
+      })
+    )!;
+    expect(plan.productName).toBe('L'.repeat(299));
+    expect(plan.barcode).toBe('7'.repeat(63));
+    expect(plan.legacyCode).toBe('C'.repeat(199));
+    for (const text of [plan.productName, plan.barcode!, plan.legacyCode!])
+      expect(text.isWellFormed()).toBe(true);
+  });
+
+  it('records an old code, generic name, barcode or supplier with no letter or digit as not recorded', () => {
+    const plan = planStagedMedicine(
+      row({
+        barcode: '--',
+        rawPayload: { aliasname: '-', 'Generic Name': '.', Supplier: '*' },
+      })
+    )!;
+    expect([plan.legacyCode, plan.genericName, plan.barcode, plan.supplierName]).toEqual([
+      null,
+      null,
+      null,
+      null,
+    ]);
+    // So a later file never matches every "-" row to one medicine by old code.
+    expect(stagedMatchKey({ ...plan, unitsPerPack: 10 })).toBe('name:fixture tablet|10|');
+  });
+
+  it('isolates only a refusal of the data, never a busy or lost connection', () => {
+    for (const state of ['23514', '23505', '22P02', '22001', '54000', 'P0001'])
+      expect(isRowRefusal(refusal(state))).toBe(true);
+    for (const state of ['40001', '40P01', '57014', '08006', '42501'])
+      expect(isRowRefusal(refusal(state))).toBe(false);
+    expect(isRowRefusal(new Error('Transaction already closed'))).toBe(false);
+    expect(isPassingFailure(Object.assign(new Error('timeout'), { code: 'P2028' }))).toBe(true);
+    expect(isPassingFailure(refusal('40P01'))).toBe(true);
+    expect(isPassingFailure(refusal('23514'))).toBe(false);
+    expect(isPassingFailure(new Error('unknown'))).toBe(false);
+  });
+
+  it('gives the person a plain reason and the next step', () => {
+    expect(notCreatedReason(refusal('23514'))).toBe(
+      'A value in this row is not accepted by the catalogue. Correct the row in the file and upload the file again: medicines already created are matched, never made twice.'
+    );
+    expect(notCreatedReason(refusal('22P02'))).toMatch(
+      /^A cell in this row has characters the catalogue cannot store\. Correct the row/
+    );
+    expect(notCreatedReason(refusal('54000'))).toMatch(/^A cell in this row is too long/);
+    expect(notCreatedReason(refusal('22003'))).toMatch(/^A number in this row is too large/);
+    expect(notCreatedReason(refusal('23505'))).toMatch(/^A code or barcode in this row/);
+    for (const state of ['23514', '22P02', '54000', '22003', '23505'])
+      expect(notCreatedReason(refusal(state)).length).toBeLessThanOrEqual(500);
+  });
+
+  it('keeps codes for the log and the audit record, never a cell value', () => {
+    expect(
+      failureDetail(
+        refusal(
+          '23514',
+          'new row for relation "pharmacy_medicine_aliases" violates check constraint "pharmacy_medicine_aliases_normalizedValue_check"'
+        )
+      )
+    ).toEqual({
+      prismaCode: 'P2039',
+      sqlState: '23514',
+      model: 'MedicineAlias',
+      constraint: 'pharmacy_medicine_aliases_normalizedValue_check',
+      errorName: 'PrismaClientKnownRequestError',
+    });
+    const quoted = failureDetail(
+      refusal('22P02', 'invalid input syntax for type integer: "Panadol"')
+    );
+    expect(JSON.stringify(quoted)).not.toContain('Panadol');
+    expect(STAGED_CREATION_STOPPED).not.toMatch(/Nothing was changed/);
+    expect(STAGED_CREATION_BUSY).not.toMatch(/Nothing was changed/);
+  });
+
+  it('stops a step, recording nothing, when many rows share one cause', () => {
+    expect(STAGED_SYSTEMIC_REFUSALS).toBe(25);
+    expect(refusalCause(refusal('23503'))).toBe('a value is not accepted by the catalogue');
+    expect(refusalCause(refusal('23505'))).toBe(
+      'a code or barcode is already used in your catalogue'
+    );
+    const stop = new StagedCreationSystemicRefusal(refusal('23503'), 26);
+    expect(stop.rows).toBe(26);
+    expect(stop.message).toBe(
+      'Creating stopped: many rows were refused for the same reason: a value is not accepted by the catalogue. Nothing was recorded for these rows, and medicines already created are kept. Tell your administrator.'
+    );
+    expect(stop.message).not.toMatch(/Nothing was changed|—/);
   });
 });

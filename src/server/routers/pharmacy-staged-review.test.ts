@@ -70,6 +70,9 @@ function makeDb() {
       createMany: vi.fn().mockResolvedValue({}),
       groupBy: vi.fn().mockResolvedValue([]),
     },
+    pharmacyStagedMedicineLink: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
     $queryRaw: vi.fn().mockResolvedValue([]),
   };
 }
@@ -175,6 +178,26 @@ describe('staged review authorization and reads', () => {
         }),
       })
     );
+  });
+  it('DEV-1002: lists the rows a bulk creation could not create, each with its reason', async () => {
+    const reason = 'A value in this row is not accepted by the catalogue.';
+    db.pharmacyStagedMedicineLink.findMany
+      .mockResolvedValueOnce([{ sourceKey: 'key' }])
+      .mockResolvedValueOnce([{ sourceKey: 'key', notCreatedReason: reason }]);
+    const output = await caller().stagedRows({ ...scope, filter: 'not-created' });
+    expect(db.pharmacyStagedMedicineLink.findMany).toHaveBeenNthCalledWith(1, {
+      where: { organizationId: 'org_a', batchId: 'batch_a', outcome: 'NOT_CREATED' },
+      select: { sourceKey: true },
+    });
+    expect(db.pharmacyMigrationRow.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ sourceKey: { in: ['key'] } }),
+      })
+    );
+    expect(output.rows[0]!.notCreatedReason).toBe(reason);
+    // Every other filter reports no reason for a row that was created or not yet run.
+    const all = await caller().stagedRows({ ...scope });
+    expect(all.rows[0]!.notCreatedReason).toBeNull();
   });
   it('includes retained collision flags when targetNaturalKey is null', async () => {
     await caller().stagedRows({ ...scope, filter: 'collision' });
