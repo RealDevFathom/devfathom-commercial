@@ -122,6 +122,13 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // DEV-966: a cash-on-delivery bill priced by the prepaid tier when the rider collected.
   BILL_DISCOUNT_LOCKED_BY_PREPAID_TIER:
     "The customer's prepaid discount has already been priced on top of this bill's whole-bill discount, so the bill can no longer change. Finish this bill as it is, then start a new bill for any other item.",
+  // DEV-977B: changing or removing a line on the bill.
+  LINE_LOCKED_BY_PAYMENT:
+    'Payment has already been started or taken on this bill, so its lines can no longer be changed or removed.',
+  LINE_HAS_DISPENSING_RECORD:
+    'This line carries dispensing records (controlled register, prescription, pharmacist review, substitution or a scanned pack), so it cannot be changed here. Void the bill to take it off.',
+  LINE_CHANGE_NEEDS_READD:
+    'This line has a discount, voucher or batch override approved for its quantity. Remove the line and add it again with the new quantity.',
   VOUCHER_CATEGORY_REFUSED:
     'Vouchers apply to non-medicine items only. Remove the voucher from this line.',
   VOUCHER_INVALID: 'That voucher is not valid at this branch. Check the voucher and try again.',

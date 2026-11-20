@@ -1,8 +1,10 @@
 'use client';
 
 import { useId } from 'react';
+import { SlidersHorizontal } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
 import { StatusPill } from '@/components/ui/status-pill';
 import type { CounterSearchRow } from '@/lib/pharmacy/counter';
 import {
@@ -25,6 +27,13 @@ export type CounterSearchResultsProps = {
   /** A visible explanation owned by the parent; standalone uses its own text. */
   disabledReasonId?: string;
   onSelect: (row: CounterSearchRow) => void;
+  /**
+   * DEV-977B (Counter v2, A6): a press on a result adds one of it to the bill in one step, in
+   * the unit chosen under "Adds as". Without it a press stages the row (the line form).
+   */
+  onAdd?: (row: CounterSearchRow) => void;
+  /** DEV-977B: the search has been waiting long enough to say so. */
+  slow?: boolean;
   onCaptureDemand: () => void;
   onRetry: () => void;
   listLabel?: string;
@@ -87,6 +96,8 @@ export function CounterSearchResults({
   disabledReason,
   disabledReasonId,
   onSelect,
+  onAdd,
+  slow = false,
   onCaptureDemand,
   onRetry,
   listLabel = 'Search results',
@@ -112,7 +123,23 @@ export function CounterSearchResults({
   }
 
   if (state === 'loading') {
-    return (
+    // DEV-977B (Counter v2): a slow search says so and keeps the place of the results.
+    return slow ? (
+      <div aria-busy="true" className="space-y-3">
+        <p className="text-sm text-text-muted" role="status">
+          Still searching… Scanning the barcode is faster.
+        </p>
+        <div aria-hidden="true" className="space-y-4">
+          {['w-3/5', 'w-1/2', 'w-2/3'].map((width) => (
+            <div key={width} className="grid grid-cols-[minmax(0,1fr)_5rem] gap-x-6 gap-y-2">
+              <Skeleton className={`h-3.5 ${width}`} />
+              <Skeleton className="h-3.5" />
+              <Skeleton className="h-3 w-2/5" />
+            </div>
+          ))}
+        </div>
+      </div>
+    ) : (
       <p className="text-sm text-text-muted" role="status">
         Searching the catalog…
       </p>
@@ -221,96 +248,113 @@ export function CounterSearchResults({
           ].filter(Boolean);
           return (
             <li key={`${row.medicineId}:${row.presentationId}`}>
-              <button
-                type="button"
-                disabled={disabled}
-                aria-describedby={reason ? reasonId : undefined}
-                aria-pressed={active}
-                onClick={() => onSelect(row)}
-                className={`grid min-h-11 w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 border-s-[3px] px-4 py-1.5 text-start focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 ${
-                  // DEV-977 (Counter v2): the chosen result also carries a mark, not only a tint.
-                  active
-                    ? 'border-s-accent-brand bg-surface-sunken'
-                    : 'border-s-transparent hover:bg-surface-sunken'
-                }`}
-              >
-                <span
-                  dir="auto"
-                  className="min-w-0 break-words text-sm font-semibold text-text-strong"
+              <div className="flex min-w-0">
+                <button
+                  type="button"
+                  disabled={disabled}
+                  aria-describedby={reason ? reasonId : undefined}
+                  aria-pressed={active}
+                  onClick={() => (onAdd ?? onSelect)(row)}
+                  // DEV-977B (Counter v2): a result row is at least 64px, as drawn.
+                  className={`grid min-h-16 w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 border-s-[3px] px-4 py-3 text-start focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 ${
+                    // DEV-977 (Counter v2): the chosen result also carries a mark, not only a tint.
+                    active
+                      ? 'border-s-accent-brand bg-surface-sunken'
+                      : 'border-s-transparent hover:bg-surface-sunken'
+                  }`}
                 >
-                  {counterMedicineDisplayName(row)}
-                  {row.composition ? (
-                    <span dir="auto" className="block text-xs font-normal text-text-body">
-                      {row.composition}
-                    </span>
-                  ) : null}
-                  {counterMedicineGenericName(row) ? (
-                    <span dir="auto" className="block text-xs font-normal text-text-muted">
-                      {counterMedicineGenericName(row)}
-                    </span>
-                  ) : null}
-                </span>
-                <span className="w-full text-end font-mono text-sm tabular-nums text-text-strong">
-                  <span className="sr-only">Pack MRP </span>
-                  {row.printedMrpMinor === null ? '—' : formatMinor(row.printedMrpMinor)}
-                </span>
-                <span className="col-span-2 flex min-w-0 flex-wrap gap-x-3 break-words text-xs text-text-muted">
-                  <span className="block">
-                    {row.strength ? (
-                      <>
-                        <span>Strength:</span>{' '}
-                        <span className="ms-1">
-                          <bdi dir="auto">{row.strength}</bdi>
-                        </span>
-                      </>
-                    ) : (
-                      STRENGTH_NOT_RECORDED
-                    )}
+                  <span
+                    dir="auto"
+                    className="min-w-0 break-words text-sm font-semibold text-text-strong"
+                  >
+                    {counterMedicineDisplayName(row)}
+                    {row.composition ? (
+                      <span dir="auto" className="block text-xs font-normal text-text-body">
+                        {row.composition}
+                      </span>
+                    ) : null}
+                    {counterMedicineGenericName(row) ? (
+                      <span dir="auto" className="block text-xs font-normal text-text-muted">
+                        {counterMedicineGenericName(row)}
+                      </span>
+                    ) : null}
                   </span>
-                  <span className="block">
-                    <span>Form:</span> {row.presentation}
-                    {row.dosageForm ? ` · ${row.dosageForm}` : ''}
+                  <span className="w-full text-end font-mono text-sm tabular-nums text-text-strong">
+                    <span className="sr-only">Pack MRP </span>
+                    {row.printedMrpMinor === null ? '—' : formatMinor(row.printedMrpMinor)}
                   </span>
-                  {row.unitsPerPack ? (
+                  <span className="col-span-2 flex min-w-0 flex-wrap gap-x-3 break-words text-xs text-text-muted">
                     <span className="block">
-                      <span>Pack:</span> {row.unitsPerPack} units
+                      {row.strength ? (
+                        <>
+                          <span>Strength:</span>{' '}
+                          <span className="ms-1">
+                            <bdi dir="auto">{row.strength}</bdi>
+                          </span>
+                        </>
+                      ) : (
+                        STRENGTH_NOT_RECORDED
+                      )}
+                    </span>
+                    <span className="block">
+                      <span>Form:</span> {row.presentation}
+                      {row.dosageForm ? ` · ${row.dosageForm}` : ''}
+                    </span>
+                    {row.unitsPerPack ? (
+                      <span className="block">
+                        <span>Pack:</span> {row.unitsPerPack} units
+                      </span>
+                    ) : null}
+                    <span className="block">
+                      <span>Stock:</span>{' '}
+                      {formatStockBreakdown(row.onHandUnits, row.saleableUnits, row.dosageForm)}
+                    </span>
+                    {row.batchNumber
+                      ? ` · Batch ${row.batchNumber}`
+                      : row.recommendedLotId
+                        ? ` · ${BATCH_NOT_RECORDED}`
+                        : ''}
+                    {/* DEV-853: a sellable lot with no expiry says "Expiry not recorded". */}
+                    {row.nearestSafeExpiry || row.recommendedLotId
+                      ? ` · ${formatShortExpiry(row.nearestSafeExpiry)}`
+                      : ''}
+                    {notes.length ? ` · ${notes.join(' · ')}` : ''}
+                    {` · ${MATCH_LABEL[row.matchedOn]}`}
+                  </span>
+                  {safety.length > 0 ? (
+                    <span className="col-span-2 flex flex-wrap gap-1">
+                      {safety.map((flag) => (
+                        <StatusPill
+                          key={flag.status}
+                          status={flag.status}
+                          tone={flag.tone}
+                          label={flag.label}
+                          className="shrink-0"
+                        />
+                      ))}
                     </span>
                   ) : null}
-                  <span className="block">
-                    <span>Stock:</span>{' '}
-                    {formatStockBreakdown(row.onHandUnits, row.saleableUnits, row.dosageForm)}
-                  </span>
-                  {row.batchNumber
-                    ? ` · Batch ${row.batchNumber}`
-                    : row.recommendedLotId
-                      ? ` · ${BATCH_NOT_RECORDED}`
-                      : ''}
-                  {/* DEV-853: a sellable lot with no expiry says "Expiry not recorded". */}
-                  {row.nearestSafeExpiry || row.recommendedLotId
-                    ? ` · ${formatShortExpiry(row.nearestSafeExpiry)}`
-                    : ''}
-                  {notes.length ? ` · ${notes.join(' · ')}` : ''}
-                  {` · ${MATCH_LABEL[row.matchedOn]}`}
-                </span>
-                {safety.length > 0 ? (
-                  <span className="col-span-2 flex flex-wrap gap-1">
-                    {safety.map((flag) => (
-                      <StatusPill
-                        key={flag.status}
-                        status={flag.status}
-                        tone={flag.tone}
-                        label={flag.label}
-                        className="shrink-0"
-                      />
-                    ))}
-                  </span>
+                  {row.blocked.length > 0 ? (
+                    <span className="col-span-2 text-xs text-warning">
+                      Blocked stock present: {row.blocked.join(', ').toLowerCase()}.
+                    </span>
+                  ) : null}
+                </button>
+                {onAdd ? (
+                  // DEV-977B: the line form (quantity before adding, another batch) by pointer too;
+                  // Shift+Enter from the search field does the same for the highlighted result.
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    aria-describedby={reason ? reasonId : undefined}
+                    aria-label={`Quantity or batch first: ${counterMedicineDisplayName(row)}`}
+                    onClick={() => onSelect(row)}
+                    className="grid w-12 shrink-0 place-items-center border-s border-border-subtle text-text-muted hover:bg-surface-sunken hover:text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <SlidersHorizontal aria-hidden="true" className="size-[18px]" />
+                  </button>
                 ) : null}
-                {row.blocked.length > 0 ? (
-                  <span className="col-span-2 text-xs text-warning">
-                    Blocked stock present: {row.blocked.join(', ').toLowerCase()}.
-                  </span>
-                ) : null}
-              </button>
+              </div>
               {row.otherBranchAvailability?.branchNames.length ? (
                 <p className="border-t border-border-subtle px-4 py-2 text-sm text-text-body">
                   Also in stock at{' '}
