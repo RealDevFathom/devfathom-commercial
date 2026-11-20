@@ -5,6 +5,11 @@ import { router, publicProcedure } from '../trpc';
 import { anonymousTokenInput, invitationAcceptInput } from '@/lib/auth/anonymous-inputs';
 import { hashInviteToken } from '@/lib/invite-token';
 import { INVITATION_GENERIC_MESSAGE } from '@/lib/auth/anonymous-access';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import {
+  AccessChangeError,
+  guardPharmacyInvitationAcceptance,
+} from '@/lib/team/pharmacy-access-guard';
 
 // Public (unauthenticated) procedures backing the /invite/[token] page. An
 // invited user has status INVITED and a null password — they cannot sign in
@@ -36,7 +41,7 @@ async function loadPendingInvitation(db: PrismaClient, token: string) {
           department: true,
           role: true,
           status: true,
-          organization: { select: { isDemo: true } },
+          organization: { select: { isDemo: true, vertical: true } },
         },
       },
     },
@@ -116,18 +121,45 @@ export const invitationsRouter = router({
       // activate them. An administrator may have deactivated the account
       // after the public read above; a conditional write prevents that stale
       // request from undoing the administrator's decision.
-      const activated = await tx.user.updateMany({
-        where: { id: invitation.userId, status: 'INVITED' },
-        data: {
-          password: hashed,
-          status: 'ACTIVE',
-          phone: input.phone,
-          bio: input.bio ?? undefined,
-          ...(input.skills ? { skills: input.skills } : {}),
-        },
-      });
+      const activate = async () => {
+        const activated = await tx.user.updateMany({
+          where: { id: invitation.userId, status: 'INVITED' },
+          data: {
+            password: hashed,
+            status: 'ACTIVE',
+            phone: input.phone,
+            bio: input.bio ?? undefined,
+            ...(input.skills ? { skills: input.skills } : {}),
+          },
+        });
+        if (activated.count !== 1) throw invalidInvitation();
+      };
 
-      if (activated.count !== 1) throw invalidInvitation();
+      // DEV-959B: in a pharmacy the invitation is checked again now, as if the inviter were
+      // adding the person today; weighty sub-roles need the owner's recorded approval. A
+      // refusal rolls the acceptance back and tells the invitee to ask the owner again.
+      const scoped = tx as unknown as ScopedDb;
+      if (invitation.user.organization.vertical === 'PHARMACY') {
+        try {
+          await guardPharmacyInvitationAcceptance(
+            scoped,
+            {
+              organizationId: invitation.organizationId,
+              userId: invitation.userId,
+              invitedById: invitation.invitedById,
+              issuedAt: invitation.updatedAt,
+              now,
+            },
+            activate
+          );
+        } catch (error) {
+          if (error instanceof AccessChangeError)
+            throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+          throw error;
+        }
+      } else {
+        await activate();
+      }
 
       return { email: invitation.user.email };
     });

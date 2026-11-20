@@ -11,8 +11,12 @@ import { normalizeEmail } from '@/lib/email-address';
 import { requireOrganizationForRequest } from '@/lib/tenancy/host';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
+import {
+  guardPharmacyAccessChanges,
+  isPharmacyOrganization,
+} from '@/lib/team/pharmacy-access-guard';
 
-export const SSO_TICKET_COOKIE = 'df_sso_ticket';
+export { SSO_TICKET_COOKIE } from '@/lib/sso-ticket-cookie';
 
 /**
  * F10 / DEV-833 — login CSRF. Every SSO start sets an unpredictable value in
@@ -217,19 +221,40 @@ export async function provisionIdentityUser(
     // foreign key for every restaurant tenant. Derive the key from this
     // organization's own active catalog instead.
     const department = await resolveProvisionedDepartmentKey(db, connection.organizationId, role);
-    return db.user.create({
-      data: {
+    const create = () =>
+      db.user.create({
+        data: {
+          organizationId: connection.organizationId,
+          name,
+          email,
+          password: null,
+          role,
+          department,
+          title: role === 'ADMIN' ? 'Organization administrator' : 'Team member',
+          status: 'ACTIVE',
+          lastActiveAt: new Date(),
+        },
+      });
+    if (!(await isPharmacyOrganization(db, connection.organizationId))) return create();
+    // DEV-959B: in a pharmacy, sign-in provisioning passes the access guard like every other
+    // path that sets a role: it never makes an administrator or gives a weighty sub-role.
+    const { value } = await guardPharmacyAccessChanges(
+      db,
+      {
         organizationId: connection.organizationId,
-        name,
-        email,
-        password: null,
-        role,
-        department,
-        title: role === 'ADMIN' ? 'Organization administrator' : 'Team member',
-        status: 'ACTIVE',
-        lastActiveAt: new Date(),
+        actor: { kind: 'system', source: 'SSO' },
+        targetIds: null,
+        pinVerified: false,
+        mode: 'role',
+        action: 'sso.provisionUser',
+        describe: (person) => `Single sign-on provisioned ${person}`,
       },
-    });
+      async () => {
+        const user = await create();
+        return { targetIds: [user.id], value: user };
+      }
+    );
+    return value;
   });
 }
 

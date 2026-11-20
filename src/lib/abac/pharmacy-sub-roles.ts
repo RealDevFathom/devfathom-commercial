@@ -246,7 +246,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'search-counter-patients-open',
-        text: 'Search counter patients and open their masked patient panel',
+        text: 'Search counter patients and open their masked patient panel, at every branch',
         sites: { 'src/server/routers/pharmacy-prescriptions.ts': 1 },
       },
       {
