@@ -1248,7 +1248,7 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
       const support = {
         ...callers.context('owner'),
         support: { id: 'support-session' },
-      } as TRPCContext;
+      } as unknown as TRPCContext;
       const { organizationAdminRouter } = await import('@/server/routers/organization-admin');
       const { teamRouter } = await import('@/server/routers/team');
       for (let attempt = 0; attempt < 3; attempt += 1) {
