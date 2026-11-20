@@ -8,6 +8,7 @@ import {
 } from '@/lib/pharmacy/basket-workflow';
 import { generateGrowthRecommendations } from '@/lib/ai/growth-recommendations';
 import { can, subjectFromSession } from '@/lib/abac';
+import type { AuthzDb } from '@/lib/authz';
 import {
   buildPharmacyGrowthInput,
   growthPeriodInput,
@@ -75,11 +76,22 @@ import { listCounterApprovers } from '@/lib/pharmacy/counter-line-approval';
 import { protectedProcedure, router, type TRPCContext } from '../trpc';
 
 type MarketingAccessContext = Pick<TRPCContext, 'session' | 'entitlements' | 'audit'> & {
-  db: Pick<ScopedDb, 'organization' | 'pharmacyBranch'>;
+  db: Pick<ScopedDb, 'organization' | 'pharmacyBranch'> & AuthzDb;
 };
 
+/**
+ * DEV-965: Marketing is gated by the admin permission (`admin:access`) through `can()`,
+ * not the session role, so an owner's explicit DENY on a person (or their role) refuses
+ * them here as it does on every `adminProcedure`, and an explicit grant admits them.
+ */
 async function owner(ctx: MarketingAccessContext) {
-  if (ctx.session?.user.role !== 'ADMIN')
+  if (
+    !ctx.session?.user ||
+    !(await can(subjectFromSession(ctx.session.user), 'admin:access', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+    }))
+  )
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'An owner account is required. Ask a workspace owner to open Marketing.',
