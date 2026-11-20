@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 
 const thermal = vi.hoisted(() => ({ props: vi.fn() }));
@@ -9,6 +9,8 @@ vi.mock('./counter-thermal-print', () => ({
   },
 }));
 
+import { PRINT_WINDOW_READY_TIMEOUT_MS } from '@/lib/browser-print/print-window';
+import { installFakePrintWindows } from '@/lib/testing/print-window';
 import { CounterReceiptView, type CounterReceiptViewProps } from './counter-receipt-view';
 
 // #708: the cash memo is held off by a hard-coded constant until counsel confirms it. Tests
@@ -296,7 +298,7 @@ it('keeps Rx printing disabled when receipt has no sourced directions or licence
 
 it.each([false, true])(
   'opens isolated Rx labels with reprint=%s and exposes popup failure with retry available',
-  (reprint) => {
+  async (reprint) => {
     const input = props({ reprint });
     input.receipt!.lines[0]!.identityStatus = 'ISSUED';
     input.receipt!.lines[0]!.allocations = [
@@ -319,30 +321,31 @@ it.each([false, true])(
         directionsUrdu: 'اردو',
       },
     ];
-    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    // DEV-973: with noopener, a blocked window is the one whose print page never loads.
+    vi.useFakeTimers();
+    const blocked = installFakePrintWindows({ blocked: true });
     render(<CounterReceiptView {...input} />);
     const button = screen.getByRole('button', { name: /Print Rx labels/ });
     expect(button).toBeEnabled();
     fireEvent.click(button);
+    await act(() => vi.advanceTimersByTimeAsync(PRINT_WINDOW_READY_TIMEOUT_MS));
     expect(screen.getByRole('alert')).toHaveTextContent('Allow pop-ups');
-    const popup = {
-      opener: window,
-      document: { open: vi.fn(), write: vi.fn(), close: vi.fn(), querySelectorAll: () => [] },
-      focus: vi.fn(),
-      print: vi.fn(),
-      close: vi.fn(),
-    };
-    open.mockReturnValue(popup as unknown as Window);
+    vi.useRealTimers();
+    blocked.open.mockRestore();
+    const windows = installFakePrintWindows();
     fireEvent.click(button);
-    expect(popup.document.write).toHaveBeenCalledWith(expect.stringContaining('size: 50mm 30mm'));
-    expect(popup.print).toHaveBeenCalledOnce();
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(windows.last().html()).toEqual(expect.stringContaining('size: 50mm 30mm'));
+    expect(windows.last().printRequests()).toBe(1);
+    // DEV-973: the isolated window prints itself; the counter never calls print() on it.
+    expect(windows.last().proxy.print).not.toHaveBeenCalled();
     expect(input.onPrint).not.toHaveBeenCalled();
     expect(screen.queryByRole('alert')).toBeNull();
-    open.mockRestore();
+    windows.closeAll();
   }
 );
 
-it('selects only the clicked line source from the production receipt payload', () => {
+it('selects only the clicked line source from the production receipt payload', async () => {
   const input = props();
   const line = input.receipt!.lines[0]!;
   input.receipt!.lines = ['first', 'second'].map((saleLineId) => ({
@@ -368,19 +371,13 @@ it('selects only the clicked line source from the production receipt payload', (
     directionsEnglish: `${saleLineId} directions`,
     directionsUrdu: 'اردو',
   }));
-  const popup = {
-    opener: window,
-    document: { open: vi.fn(), write: vi.fn(), close: vi.fn(), querySelectorAll: () => [] },
-    focus: vi.fn(),
-    print: vi.fn(),
-    close: vi.fn(),
-  };
-  const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+  const windows = installFakePrintWindows();
   render(<CounterReceiptView {...input} />);
   fireEvent.click(screen.getAllByRole('button', { name: /Print Rx labels/ })[1]!);
-  expect(popup.document.write).toHaveBeenCalledWith(expect.stringContaining('second directions'));
-  expect(popup.document.write.mock.calls[0]![0]).not.toContain('first directions');
-  open.mockRestore();
+  await waitFor(() => expect(windows.last().printRequests()).toBe(1));
+  expect(windows.last().html()).toEqual(expect.stringContaining('second directions'));
+  expect(windows.last().html()).not.toContain('first directions');
+  windows.open.mockRestore();
 });
 
 const still = 'data:image/png;base64,iVBORw0KGgo=';

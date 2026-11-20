@@ -532,9 +532,9 @@ function DayCloseForm({
             </label>
             <Button
               variant="outline"
-              onClick={() => {
+              onClick={async () => {
                 try {
-                  printCounterBrowserZReport(
+                  await printCounterBrowserZReport(
                     { ...report, branchName: data.branchName, businessDate: date, currency },
                     locale
                   );

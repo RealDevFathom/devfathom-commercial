@@ -594,10 +594,10 @@ export function CounterReceiptView({
                   className="h-auto min-h-11 max-w-full whitespace-normal py-2"
                   disabled={printing || document === null || labelUnavailable !== null}
                   aria-describedby={`rx-label-${line.saleLineId}`}
-                  onClick={() => {
+                  onClick={async () => {
                     setLabelError(null);
                     try {
-                      printCounterBrowserReceipt(
+                      await printCounterBrowserReceipt(
                         receipt,
                         locale,
                         'LABEL_50x30',

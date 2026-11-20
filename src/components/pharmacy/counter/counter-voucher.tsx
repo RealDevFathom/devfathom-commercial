@@ -1,9 +1,11 @@
 'use client';
 
-import { useId, useState } from 'react';
+import { type RefObject, useId, useRef, useState } from 'react';
+import { X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from '@/components/ui/popover';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { trpc } from '@/lib/trpc';
@@ -42,6 +44,11 @@ const STATUS_MESSAGE: Record<Exclude<Looked['status'], 'READY'>, string> = {
  * confirms with their own PIN; the voucher is sent with the next item added. The server
  * re-checks the PIN, expiry, revocation, use limit and non-drug item rule when it redeems,
  * and refuses the voucher once its use limit is reached.
+ *
+ * DEV-972: it sits on the bill side as a compact "Voucher" button that opens a small panel,
+ * and one short line with its remove action while a voucher is held, so nothing comes between
+ * the search box and its results. Escape (or using the voucher) closes the panel and focus
+ * returns to `returnFocus`.
  */
 export function CounterVoucherEntry({
   branchId,
@@ -49,15 +56,20 @@ export function CounterVoucherEntry({
   disabled,
   onHold,
   onClear,
+  returnFocus,
 }: {
   branchId: string;
   held: CounterHeldVoucher | null;
   disabled: boolean;
   onHold: (voucher: CounterHeldVoucher) => void;
   onClear: () => void;
+  /** Where focus goes when the panel closes (the counter's search box). */
+  returnFocus?: RefObject<HTMLElement | null>;
 }) {
   const utils = trpc.useUtils();
   const id = useId();
+  const codeRef = useRef<HTMLInputElement>(null);
+  const [open, setOpen] = useState(false);
   const [code, setCode] = useState('');
   const [pin, setPin] = useState('');
   const [looked, setLooked] = useState<Looked | null>(null);
@@ -94,117 +106,132 @@ export function CounterVoucherEntry({
   if (held) {
     return (
       <div
-        className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border-subtle bg-surface-sunken p-3 text-sm"
         role="status"
+        title={`Voucher ${held.code} (${held.name}) takes Rs ${formatMinor(held.discountMinor)} off the next non-drug item you add.`}
+        className="flex min-w-0 items-center gap-1 rounded-xs bg-surface-sunken ps-3 text-sm"
       >
-        <p className="min-w-0 text-text-body">
-          Voucher <span className="font-mono">{held.code}</span> ({held.name}) takes Rs{' '}
-          {formatMinor(held.discountMinor)} off the next non-drug item you add.
-        </p>
+        <span className="min-w-0 truncate text-text-body">
+          Voucher {held.code} applied: Rs {formatMinor(held.discountMinor)} off
+        </span>
         <Button
           type="button"
-          variant="outline"
-          className="min-h-11"
+          variant="ghost"
+          size="icon"
+          className="size-11 shrink-0"
+          aria-label="Remove voucher"
           disabled={disabled}
           onClick={onClear}
         >
-          Remove voucher
+          <X aria-hidden />
         </Button>
       </div>
     );
   }
 
   return (
-    <details className="rounded-md border border-border-subtle p-3 text-sm">
-      <summary className="inline-flex min-h-11 cursor-pointer items-center font-medium focus-visible:outline-2 focus-visible:outline-ring">
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger render={<Button type="button" variant="outline" className="min-h-11" />}>
         Voucher
-      </summary>
-      <form
-        className="mt-3 space-y-3"
-        aria-busy={checking}
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (disabled || checking) return;
-          if (!looked || looked.status !== 'READY' || looked.code !== code.trim().toUpperCase()) {
-            void check();
-            return;
-          }
-          if (!PIN.test(pin)) {
-            setMessage({ error: true, text: 'Enter your own PIN to redeem this voucher.' });
-            return;
-          }
-          onHold({
-            id: looked.id,
-            code: looked.code,
-            name: looked.name,
-            discountMinor: looked.discountMinor,
-            pin,
-          });
-          setPin('');
-          setCode('');
-          setLooked(null);
-          setMessage(null);
-        }}
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="start"
+        className="max-h-(--available-height) w-96 max-w-[calc(100vw-2rem)] overflow-y-auto p-3"
+        initialFocus={codeRef}
+        finalFocus={returnFocus ?? true}
       >
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor={`${id}-code`}>Voucher code</Label>
-            <Input
-              id={`${id}-code`}
-              className="h-11 font-mono uppercase"
-              value={code}
-              autoComplete="off"
-              maxLength={40}
-              disabled={disabled || checking}
-              aria-invalid={message?.error && !looked ? true : undefined}
-              aria-describedby={message ? `${id}-message` : undefined}
-              onChange={(event) => {
-                setCode(event.target.value);
-                setLooked(null);
-                setMessage(null);
-              }}
-            />
-          </div>
-          {looked?.status === 'READY' ? (
+        <PopoverTitle className="text-sm font-semibold text-text-strong">
+          Voucher for the next item
+        </PopoverTitle>
+        <form
+          className="mt-3 space-y-3"
+          aria-busy={checking}
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (disabled || checking) return;
+            if (!looked || looked.status !== 'READY' || looked.code !== code.trim().toUpperCase()) {
+              void check();
+              return;
+            }
+            if (!PIN.test(pin)) {
+              setMessage({ error: true, text: 'Enter your own PIN to redeem this voucher.' });
+              return;
+            }
+            onHold({
+              id: looked.id,
+              code: looked.code,
+              name: looked.name,
+              discountMinor: looked.discountMinor,
+              pin,
+            });
+            setPin('');
+            setCode('');
+            setLooked(null);
+            setMessage(null);
+            setOpen(false);
+          }}
+        >
+          <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label htmlFor={`${id}-pin`}>Your PIN</Label>
+              <Label htmlFor={`${id}-code`}>Voucher code</Label>
               <Input
-                id={`${id}-pin`}
-                className="h-11"
-                type="password"
-                inputMode="numeric"
+                ref={codeRef}
+                id={`${id}-code`}
+                className="h-11 font-mono uppercase"
+                value={code}
                 autoComplete="off"
-                maxLength={8}
-                value={pin}
-                disabled={disabled}
-                onChange={(event) => setPin(event.target.value.replace(/\D/g, ''))}
+                maxLength={40}
+                disabled={disabled || checking}
+                aria-invalid={message?.error && !looked ? true : undefined}
+                aria-describedby={message ? `${id}-message` : undefined}
+                onChange={(event) => {
+                  setCode(event.target.value);
+                  setLooked(null);
+                  setMessage(null);
+                }}
               />
             </div>
+            {looked?.status === 'READY' ? (
+              <div className="space-y-1.5">
+                <Label htmlFor={`${id}-pin`}>Your PIN</Label>
+                <Input
+                  id={`${id}-pin`}
+                  className="h-11"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  maxLength={8}
+                  value={pin}
+                  disabled={disabled}
+                  onChange={(event) => setPin(event.target.value.replace(/\D/g, ''))}
+                />
+              </div>
+            ) : null}
+          </div>
+          {looked?.status === 'READY' ? (
+            <p className="text-text-body">
+              {looked.name}: Rs {formatMinor(looked.discountMinor)} off one non-drug item.{' '}
+              {looked.usesLeft} of {looked.maxUses} {looked.maxUses === 1 ? 'use' : 'uses'} left.
+            </p>
           ) : null}
-        </div>
-        {looked?.status === 'READY' ? (
-          <p className="text-text-body">
-            {looked.name}: Rs {formatMinor(looked.discountMinor)} off one non-drug item.{' '}
-            {looked.usesLeft} of {looked.maxUses} {looked.maxUses === 1 ? 'use' : 'uses'} left.
-          </p>
-        ) : null}
-        {message ? (
-          <p
-            id={`${id}-message`}
-            role={message.error ? 'alert' : 'status'}
-            className={message.error ? 'text-destructive' : 'text-text-body'}
-          >
-            {message.text}
-          </p>
-        ) : null}
-        <Button type="submit" className="min-h-11" disabled={disabled || checking}>
-          {checking
-            ? 'Checking…'
-            : looked?.status === 'READY'
-              ? 'Use on next item'
-              : 'Check voucher'}
-        </Button>
-      </form>
-    </details>
+          {message ? (
+            <p
+              id={`${id}-message`}
+              role={message.error ? 'alert' : 'status'}
+              className={message.error ? 'text-destructive' : 'text-text-body'}
+            >
+              {message.text}
+            </p>
+          ) : null}
+          <Button type="submit" className="min-h-11" disabled={disabled || checking}>
+            {checking
+              ? 'Checking…'
+              : looked?.status === 'READY'
+                ? 'Use on next item'
+                : 'Check voucher'}
+          </Button>
+        </form>
+      </PopoverContent>
+    </Popover>
   );
 }
