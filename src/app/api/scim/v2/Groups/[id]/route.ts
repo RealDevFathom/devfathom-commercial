@@ -4,9 +4,9 @@ import {
   requestBaseUrl,
   SCIM_GROUP_SCHEMA,
   SCIM_PATCH_SCHEMA,
-  scimAccessChange,
   scimError,
   scimJson,
+  scimPatchGroupMembers,
   withScimAuth,
 } from '@/lib/scim';
 
@@ -85,39 +85,7 @@ export async function PATCH(request: Request, route: { params: Promise<{ id: str
           .filter((value): value is string => typeof value === 'string');
         operations.push({ op: operation.op, ids });
       }
-      // DEV-959B: everyone whose role this request can change — the group's current members
-      // and every member named — passes the pharmacy access guard together.
-      const named = [...new Set(operations.flatMap((operation) => operation.ids))];
-      const affected = [
-        ...new Set([
-          ...role.users.map((user) => user.id),
-          ...(
-            await ctx.db.user.findMany({ where: { id: { in: named } }, select: { id: true } })
-          ).map((user) => user.id),
-        ]),
-      ];
-      await scimAccessChange(ctx, affected, 'scim.patchGroup', async () => {
-        for (const operation of operations) {
-          if (operation.op === 'add' || operation.op === 'replace') {
-            if (operation.op === 'replace') {
-              await ctx.db.user.updateMany({
-                where: { organizationRoleId: role.id },
-                data: { organizationRoleId: null },
-              });
-            }
-            await ctx.db.user.updateMany({
-              where: { id: { in: operation.ids } },
-              data: { organizationRoleId: role.id },
-            });
-          } else {
-            await ctx.db.user.updateMany({
-              where: { id: { in: operation.ids }, organizationRoleId: role.id },
-              data: { organizationRoleId: null },
-            });
-          }
-        }
-        return { targetIds: affected, value: null };
-      });
+      await scimPatchGroupMembers(ctx, role.id, operations);
       await recordScimEvent(ctx, request, {
         operation: 'PATCH',
         resourceType: 'Group',

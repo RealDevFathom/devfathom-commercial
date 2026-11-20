@@ -223,18 +223,20 @@ type CommandResult = {
 async function platformAccessChange<T>(
   db: ScopedDb,
   organizationId: string,
-  targetIds: string[],
+  targets: string[] | (() => Promise<string[]>),
   action: string,
   write: () => Promise<T>
 ): Promise<T> {
   if (!(await isPharmacyOrganization(db, organizationId))) return write();
+  // A list function runs under the organisation lock, so nobody joins it before the write.
+  let targetIds: string[] = Array.isArray(targets) ? targets : [];
   try {
     const { value } = await guardPharmacyAccessChanges(
       db,
       {
         organizationId,
         actor: { kind: 'system', source: 'PLATFORM' },
-        targetIds,
+        targetIds: Array.isArray(targets) ? targets : async () => (targetIds = await targets()),
         pinVerified: false,
         mode: 'role',
         action,
@@ -3072,14 +3074,15 @@ async function runCommand(
       if (existing?.isSystem) {
         throw new PlatformSecurityError('System roles cannot be modified.', 400);
       }
-      const holders = roleId
-        ? (
-            await db.user.findMany({
-              where: { organizationId: input.organizationId, organizationRoleId: roleId },
-              select: { id: true },
-            })
-          ).map((user) => user.id)
-        : [];
+      const holders = async () =>
+        roleId
+          ? (
+              await db.user.findMany({
+                where: { organizationId: input.organizationId, organizationRoleId: roleId },
+                select: { id: true },
+              })
+            ).map((user) => user.id)
+          : [];
       const saved = await platformAccessChange(
         db,
         input.organizationId,

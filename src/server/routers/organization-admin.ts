@@ -587,10 +587,9 @@ export const organizationAdminRouter = router({
       const role = await ctx.db.$transaction(async (tx) => {
         // DEV-959B: in a pharmacy, everyone who holds the role passes the access rules.
         if (isPharmacyContext(ctx) && roleId) {
-          const holders = await tx.user.findMany({
-            where: { organizationId: id, organizationRoleId: roleId },
-            select: { id: true },
-          });
+          // Listed only once the guard holds the organisation lock, so nobody can be moved
+          // into the role between listing its holders and saving it.
+          let holders: string[] = [];
           try {
             const { value } = await guardPharmacyAccessChanges(
               tx as unknown as ScopedDb,
@@ -601,16 +600,21 @@ export const organizationAdminRouter = router({
                   id: ctx.session.user.id,
                   supportSession: Boolean(ctx.support || ctx.session.user.isSupportSession),
                 },
-                targetIds: holders.map((holder) => holder.id),
+                targetIds: async () => {
+                  holders = (
+                    await tx.user.findMany({
+                      where: { organizationId: id, organizationRoleId: roleId },
+                      select: { id: true },
+                    })
+                  ).map((holder) => holder.id);
+                  return holders;
+                },
                 pinVerified,
                 mode: 'role',
                 action: 'organizationAdmin.upsertRole',
                 describe: (name) => `Changed the custom role ${values.name}, held by ${name}`,
               },
-              async () => ({
-                targetIds: holders.map((holder) => holder.id),
-                value: await saveRole(tx),
-              })
+              async () => ({ targetIds: holders, value: await saveRole(tx) })
             );
             return value;
           } catch (error) {

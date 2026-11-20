@@ -39,6 +39,7 @@ import { isWeightyPharmacySubRole } from '@/lib/abac/pharmacy-sub-role-weight';
 import { approvalAuthenticatorPartySelect } from '@/lib/approval-authenticator';
 import type { AuthzDb } from '@/lib/authz';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 
 export type AccessParty = {
   id: string;
@@ -270,14 +271,22 @@ export type AccessChangeResult = {
 export type AccessGuardInput = {
   organizationId: string;
   actor: AccessActor;
-  /** The person whose access changes; null when the write creates them. */
-  targetId: string | null;
+  /**
+   * The person whose access changes; null when the write creates them. A function that finds
+   * them runs only once the organisation lock is held.
+   */
+  targetId: string | null | (() => Promise<string | null>);
   pinVerified: boolean;
   mode: 'tick' | 'role';
   /** The audit row's action, e.g. `organizationAdmin.updateMember`. */
   action: string;
   describe: (targetName: string) => string;
   metadata?: Record<string, unknown>;
+  /**
+   * Record the owner's fresh approval of the person's weighty sub-roles even when nothing
+   * changes (a re-sent invitation), so accepting it later can rely on that approval.
+   */
+  recordApproval?: boolean;
   now?: Date;
 };
 
@@ -302,16 +311,28 @@ export async function guardPharmacyAccessChange<T>(
   write: (context: AccessGuardContext) => Promise<{ targetId: string; value: T }>
 ): Promise<{ value: T; result: AccessChangeResult }> {
   let newTargetId = '';
+  const find = input.targetId;
   const { value, results } = await guardPharmacyAccessChanges(
     tx,
-    { ...input, targetIds: input.targetId ? [input.targetId] : null },
+    {
+      ...input,
+      targetIds:
+        typeof find === 'function'
+          ? async () => {
+              const found = await find();
+              return found ? [found] : null;
+            }
+          : find
+            ? [find]
+            : null,
+    },
     async (contexts) => {
       const written = await write(contexts[0]);
       newTargetId = written.targetId;
       return { targetIds: [written.targetId], value: written.value };
     }
   );
-  return { value, result: results.get(input.targetId ?? newTargetId)! };
+  return { value, result: results.get(newTargetId)! };
 }
 
 type Snapshot = {
@@ -351,11 +372,20 @@ async function snapshot(
  */
 export async function guardPharmacyAccessChanges<T>(
   tx: ScopedDb,
-  input: Omit<AccessGuardInput, 'targetId'> & { targetIds: string[] | null },
+  input: Omit<AccessGuardInput, 'targetId'> & {
+    /**
+     * The people the write can change, or a function that lists them. A function runs only
+     * after the organisation lock is held, so nobody can join the list (a custom role's
+     * holders, a group's members) between listing and writing: list people that way.
+     */
+    targetIds: string[] | null | (() => Promise<string[] | null>);
+  },
   write: (contexts: AccessGuardContext[]) => Promise<{ targetIds: string[]; value: T }>
 ): Promise<{ value: T; results: Map<string, AccessChangeResult> }> {
   const now = input.now ?? new Date();
   await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${input.organizationId} FOR UPDATE`;
+  const targetIdsInput =
+    typeof input.targetIds === 'function' ? await input.targetIds() : input.targetIds;
   const actor =
     input.actor.kind === 'member'
       ? await loadAccessParty(tx, input.organizationId, input.actor.id, now)
@@ -363,8 +393,8 @@ export async function guardPharmacyAccessChanges<T>(
   if (input.actor.kind === 'member' && !actor)
     throw new TRPCError({ code: 'FORBIDDEN', message: 'No active tenant actor.' });
   const befores = new Map<string, Snapshot>();
-  const creating = input.targetIds === null;
-  for (const id of input.targetIds ?? [])
+  const creating = targetIdsInput === null;
+  for (const id of targetIdsInput ?? [])
     befores.set(id, await snapshot(tx, input.organizationId, id, now));
   const ownersBefore = await activeOwnerCount(tx, input.organizationId, now);
   const contexts: AccessGuardContext[] = creating
@@ -407,12 +437,33 @@ export async function guardPharmacyAccessChanges<T>(
       targetBefore.role !== targetAfter.role ||
       targetBefore.organizationRoleId !== targetAfter.organizationRoleId;
     const statusChanged = !!targetBefore && targetBefore.status !== targetAfter.status;
+    // Bringing someone back (deactivated, laid off or invited, to active) gives them their
+    // weighty sub-roles, administrator access and ownership again: check it as giving them.
+    const reactivated =
+      !!targetBefore &&
+      !ACTIVE_STATUSES.has(targetBefore.status) &&
+      ACTIVE_STATUSES.has(targetAfter.status);
+    const weightyOn = PHARMACY_SUB_ROLES.map((subRole) => subRole.key).filter(
+      (key) => isWeightyPharmacySubRole(key) && after.states.get(key) !== 'off'
+    );
+    const checkBefore = reactivated
+      ? new Map(
+          [...before.states].map(([key, state]) => [
+            key,
+            isWeightyPharmacySubRole(key) ? ('off' as const) : state,
+          ])
+        )
+      : before.states;
+    const editorKind = input.recordApproval ? (await editorFor()).kind : null;
+    const approving = input.recordApproval === true && input.pinVerified && editorKind === 'owner';
     const relevant =
       changed.length > 0 ||
       roleChanged ||
       before.owner !== after.owner ||
       before.admin !== after.admin ||
-      (statusChanged && (before.owner || before.admin));
+      (statusChanged && (before.owner || before.admin)) ||
+      (reactivated && (weightyOn.length > 0 || after.admin || after.owner)) ||
+      approving;
     results.set(targetId, {
       changed,
       before: Object.fromEntries(before.states),
@@ -435,11 +486,11 @@ export async function guardPharmacyAccessChanges<T>(
     }
     const refusal = accessChangeRefusal({
       editor: await editorFor(),
-      before: before.states,
+      before: checkBefore,
       after: after.states,
-      ownerBefore: before.owner,
+      ownerBefore: reactivated ? false : before.owner,
       ownerAfter: after.owner,
-      adminBefore: before.admin,
+      adminBefore: reactivated ? false : before.admin,
       adminAfter: after.admin,
       ownersBefore,
       ownersAfter,
@@ -490,6 +541,8 @@ export async function guardPharmacyAccessChanges<T>(
         metadata: {
           ...input.metadata,
           changedSubRoles: changed,
+          ...(reactivated ? { reactivatedWeighty: weightyOn } : {}),
+          ...(approving ? { approvedSubRoles: weightyOn } : {}),
           owner: { before: before.owner, after: after.owner },
           administrator: { before: before.admin, after: after.admin },
           pinVerified: input.pinVerified,
@@ -508,4 +561,97 @@ export async function isPharmacyOrganization(db: ScopedDb, organizationId: strin
     select: { vertical: true },
   });
   return organization?.vertical === 'PHARMACY';
+}
+
+/** What an invitee sees when their invitation can no longer be accepted as it stands. */
+export const INVITATION_NEEDS_OWNER_MESSAGE =
+  'This invitation needs to be confirmed again. Ask the pharmacy owner to send you a new invitation.';
+
+/**
+ * DEV-959B: accepting an invitation into a pharmacy is checked again, as if the inviter were
+ * adding the person now, so an invitation made before these rules shipped, or by someone who
+ * has since lost the right, cannot be accepted. Weighty sub-roles also need the owner's own
+ * fresh approval recorded since the invitation was made: an audited change by a current owner
+ * with their PIN that gave or approved each of them. Refusals throw `AccessChangeError` with
+ * `INVITATION_NEEDS_OWNER_MESSAGE`, and the caller's transaction rolls the acceptance back.
+ */
+export async function guardPharmacyInvitationAcceptance<T>(
+  tx: ScopedDb,
+  input: {
+    organizationId: string;
+    userId: string;
+    invitedById: string | null;
+    invitedAt: Date;
+    now?: Date;
+  },
+  write: () => Promise<T>
+): Promise<T> {
+  const now = input.now ?? new Date();
+  const refuse = () =>
+    new AccessChangeError({ code: 'FORBIDDEN', message: INVITATION_NEEDS_OWNER_MESSAGE });
+  await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${input.organizationId} FOR UPDATE`;
+  const invitee = await loadAccessParty(tx, input.organizationId, input.userId, now);
+  if (!invitee) throw refuse();
+  const states = await accessStates(tx, invitee, now);
+  const weighty = [...states]
+    .filter(([key, state]) => state !== 'off' && isWeightyPharmacySubRole(key))
+    .map(([key]) => key);
+
+  let actorId = input.invitedById;
+  let pinVerified = false;
+  if (weighty.length > 0) {
+    const approvals = await tx.auditLog.findMany({
+      where: {
+        organizationId: input.organizationId,
+        targetId: input.userId,
+        category: 'TEAM',
+        createdAt: { gte: input.invitedAt },
+        metadata: { path: ['pinVerified'], equals: true },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { actorId: true, metadata: true },
+    });
+    const covered = new Set<string>();
+    let approvingOwner: string | null = null;
+    for (const approval of approvals) {
+      if (!approval.actorId) continue;
+      const approver = await loadAccessParty(tx, input.organizationId, approval.actorId, now);
+      if (!approver || !(await isAccessOwner(tx, approver, now))) continue;
+      approvingOwner ??= approver.id;
+      const metadata = (approval.metadata ?? {}) as Record<string, unknown>;
+      for (const field of ['changedSubRoles', 'approvedSubRoles'])
+        for (const key of Array.isArray(metadata[field]) ? (metadata[field] as unknown[]) : [])
+          if (typeof key === 'string') covered.add(key);
+    }
+    if (!approvingOwner || weighty.some((key) => !covered.has(key))) throw refuse();
+    actorId = approvingOwner;
+    pinVerified = true;
+  }
+  if (!actorId) throw refuse();
+  try {
+    const { value } = await guardPharmacyAccessChanges(
+      tx,
+      {
+        organizationId: input.organizationId,
+        actor: { kind: 'member', id: actorId, supportSession: false },
+        // Checked as a new member: everything the invitation gives is given now.
+        targetIds: null,
+        pinVerified,
+        mode: 'role',
+        action: 'invitations.accept',
+        describe: (name) => `${name} accepted their invitation`,
+        now,
+      },
+      async () => ({ targetIds: [input.userId], value: await write() })
+    );
+    return value;
+  } catch (error) {
+    // The inviter may no longer edit anyone (left, deactivated, lost administrator access).
+    if (
+      error instanceof AccessChangeError ||
+      (error instanceof TRPCError && error.code === 'FORBIDDEN')
+    )
+      throw refuse();
+    throw error;
+  }
 }

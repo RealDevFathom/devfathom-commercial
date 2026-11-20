@@ -40,10 +40,13 @@ export async function guardMemberEdit<T>(
   tx: ScopedDb,
   input: {
     organizationId: string;
-    targetId: string | null;
+    /** The person, or a function that finds them under the organisation lock. */
+    targetId: string | null | (() => Promise<string | null>);
     pinVerified: boolean;
     action: string;
     describe: (name: string) => string;
+    /** Record the owner's approval even when nothing changes (a re-sent invitation). */
+    recordApproval?: boolean;
   },
   write: () => Promise<{ targetId: string; value: T }>
 ): Promise<T> {
@@ -63,6 +66,7 @@ export async function guardMemberEdit<T>(
         mode: 'role',
         action: input.action,
         describe: input.describe,
+        recordApproval: input.recordApproval,
       },
       write
     );

@@ -66,7 +66,8 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
    * screen. Returns the guard's refusal as the tool's error.
    */
   async function guardedMemberWrite<T>(
-    targetId: string | null,
+    /** The person, or a function that finds them once the organisation lock is held. */
+    targetId: string | null | ((db: ScopedDb) => Promise<string | null>),
     action: string,
     describe: (name: string) => string,
     write: (
@@ -94,7 +95,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           {
             organizationId: ctx.organizationId,
             actor: { kind: 'member', id: ctx.userId, supportSession: false },
-            targetId,
+            targetId: typeof targetId === 'function' ? () => targetId(tx) : targetId,
             pinVerified: false,
             mode: 'role',
             action: `assistant.${action}`,
@@ -956,7 +957,10 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         };
 
         const invited = await guardedMemberWrite(
-          existing?.id ?? null,
+          // A pending member with this address, found again under the organisation lock.
+          async (db) =>
+            (await db.user.findFirst({ where: { email: lowerEmail }, select: { id: true } }))?.id ??
+            null,
           'inviteMember',
           (person) => `Invited ${person} with their role`,
           async (_db, atomically) => {

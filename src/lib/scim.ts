@@ -114,7 +114,7 @@ export async function withScimAuth(
  */
 export async function scimAccessChange<T>(
   ctx: ScimContext,
-  targetIds: string[] | null,
+  targetIds: string[] | null | (() => Promise<string[] | null>),
   action: string,
   write: () => Promise<{ targetIds: string[]; value: T }>
 ): Promise<T> {
@@ -133,6 +133,57 @@ export async function scimAccessChange<T>(
     write
   );
   return value;
+}
+
+export type ScimGroupOperation = { op: 'add' | 'replace' | 'remove'; ids: string[] };
+
+/**
+ * A SCIM group's membership change: the group is a custom role, so moving people in or out
+ * changes what they may do. In a pharmacy, everyone it can change (the group's current members
+ * and every member named) passes the access guard together, listed only once the guard holds
+ * the organisation lock, so nobody joins the group or the directory unchecked in between.
+ */
+export async function scimPatchGroupMembers(
+  ctx: ScimContext,
+  roleId: string,
+  operations: readonly ScimGroupOperation[]
+): Promise<void> {
+  const named = [...new Set(operations.flatMap((operation) => operation.ids))];
+  let affected: string[] = [];
+  await scimAccessChange(
+    ctx,
+    async () => {
+      const people = await ctx.db.user.findMany({
+        where: { OR: [{ organizationRoleId: roleId }, { id: { in: named } }] },
+        select: { id: true },
+      });
+      affected = people.map((person) => person.id);
+      return affected;
+    },
+    'scim.patchGroup',
+    async () => {
+      for (const operation of operations) {
+        if (operation.op === 'add' || operation.op === 'replace') {
+          if (operation.op === 'replace') {
+            await ctx.db.user.updateMany({
+              where: { organizationRoleId: roleId },
+              data: { organizationRoleId: null },
+            });
+          }
+          await ctx.db.user.updateMany({
+            where: { id: { in: operation.ids } },
+            data: { organizationRoleId: roleId },
+          });
+        } else {
+          await ctx.db.user.updateMany({
+            where: { id: { in: operation.ids }, organizationRoleId: roleId },
+            data: { organizationRoleId: null },
+          });
+        }
+      }
+      return { targetIds: affected, value: null };
+    }
+  );
 }
 
 export function scimUser(

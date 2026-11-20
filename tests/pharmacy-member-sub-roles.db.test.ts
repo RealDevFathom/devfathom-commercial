@@ -59,6 +59,8 @@ const MEMBERS: Member[] = [
   { key: 'solo', org: orgC, role: 'ADMIN', template: 'owner', pin: true },
   { key: 'managerc', org: orgC, role: 'ADMIN', template: 'manager', pin: true },
   { key: 'cashierc', org: orgC, role: 'EMPLOYEE', template: 'cashier' },
+  // Moved into an empty custom role while that role is being edited (race test).
+  { key: 'mover', org: orgA, role: 'EMPLOYEE', template: 'cashier' },
 ];
 const member = (key: string) => MEMBERS.find((candidate) => candidate.key === key)!;
 
@@ -164,6 +166,20 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
         `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'pharmacy:orders','ALLOW')`,
         [`${orgA}_role_helper_0`, orgA, `${orgA}_role_helper`]
       );
+      // An empty custom role in A, and a group (custom role) with dispensing in C.
+      for (const [roleId, org, key, capability] of [
+        [`${orgA}_role_empty`, orgA, 'empty', 'pharmacy:orders'],
+        [`${orgC}_role_groupd`, orgC, 'groupd', 'pharmacy:dispense'],
+      ] as const) {
+        await c.query(
+          `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,$3,$3,false,now())`,
+          [roleId, org, key]
+        );
+        await c.query(
+          `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,$4,'ALLOW')`,
+          [`${roleId}_0`, org, roleId, capability]
+        );
+      }
       for (const m of MEMBERS) {
         await c.query(
           `INSERT INTO users (id,"organizationId","organizationRoleId",name,email,department,title,role,status,"updatedAt") VALUES ($1,$2,$3,$1,$1,'Pharmacy','Staff',$4,'ACTIVE',now())`,
@@ -968,6 +984,257 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
       ).rejects.toMatchObject({ message: expect.stringMatching(/owner/) });
       expect((await userRow('solo')).status).toBe('ACTIVE');
       expect(await activeOwners(orgC)).toEqual([{ id: id('solo') }]);
+    });
+
+    // ── DEV-959B round-2 review: races, re-activation and invitation acceptance ──
+
+    /** Holds the organisation row lock from a second connection until `release` runs. */
+    async function holdOrganisationLock(org: string) {
+      const lock = new pg.Client({ connectionString: ownerUrl });
+      await lock.connect();
+      await lock.query('BEGIN');
+      await lock.query("SELECT set_config('app.is_platform_admin','true',true)");
+      await lock.query(`SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, [org]);
+      const pid = (await lock.query('SELECT pg_backend_pid() AS pid')).rows[0].pid as number;
+      return {
+        lock,
+        /** Waits until another session is blocked behind this lock. */
+        async waitForWaiter() {
+          for (let attempt = 0; attempt < 200; attempt += 1) {
+            const [row] = await rows(
+              `SELECT count(*)::int AS n FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))`,
+              [pid]
+            );
+            if (row.n > 0) return;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+          throw new Error('Nothing waited on the organisation lock.');
+        },
+        async release() {
+          await lock.query('COMMIT');
+          await lock.end();
+        },
+      };
+    }
+
+    it('upsertRole lists the role’s holders under the lock: a racing move is still checked', async () => {
+      expect(await allowed('mover', 'pharmacy:dispense')).toBe(false);
+      const held = await holdOrganisationLock(orgA);
+      // A manager adds dispensing and controlled medicines to an EMPTY custom role…
+      const edit = callers
+        .admin('manager')
+        .upsertRole({
+          id: `${orgA}_role_empty`,
+          key: 'empty',
+          name: 'Empty',
+          description: null,
+          permissions: ['pharmacy:orders', 'pharmacy:dispense', 'pharmacy:safety'].map(
+            (capability) => ({ capability, effect: 'ALLOW' as const })
+          ),
+          pin: PIN,
+        })
+        .then(
+          () => 'saved',
+          (error: { code?: string }) => error.code
+        );
+      await held.waitForWaiter();
+      // …while a cashier is moved into that role (a move that changes nothing on its own).
+      await held.lock.query(`UPDATE users SET "organizationRoleId"=$1 WHERE id=$2`, [
+        `${orgA}_role_empty`,
+        id('mover'),
+      ]);
+      await held.release();
+      expect(await edit).toBe('FORBIDDEN');
+      expect(await allowed('mover', 'pharmacy:dispense')).toBe(false);
+      expect(await allowed('mover', 'pharmacy:safety')).toBe(false);
+      expect(
+        await rows(
+          `SELECT capability FROM organization_role_permissions WHERE "organizationRoleId"=$1`,
+          [`${orgA}_role_empty`]
+        )
+      ).toEqual([{ capability: 'pharmacy:orders' }]);
+    });
+
+    it('SCIM group changes list members under the lock: a person created meanwhile is checked', async () => {
+      const { scimPatchGroupMembers } = await import('@/lib/scim');
+      const { AccessChangeError } = await import('@/lib/team/pharmacy-access-guard');
+      const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
+      const late = id('late');
+      const held = await holdOrganisationLock(orgC);
+      // The directory adds a person who does not exist yet to a group that gives dispensing…
+      const patch = withTenantDb(orgC, (db) =>
+        scimPatchGroupMembers(
+          { organizationId: orgC, tokenId: 'token', db },
+          `${orgC}_role_groupd`,
+          [{ op: 'add', ids: [late] }]
+        )
+      ).then(
+        () => 'saved',
+        (error: unknown) =>
+          error instanceof AccessChangeError ? error.refusal.code : String(error)
+      );
+      await held.waitForWaiter();
+      // …and the person is created before the change runs.
+      await held.lock.query(
+        `INSERT INTO users (id,"organizationId",name,email,department,title,role,status,"updatedAt") VALUES ($1,$2,$1,$1,'Pharmacy','Staff','EMPLOYEE','ACTIVE',now())`,
+        [late, orgC]
+      );
+      await held.release();
+      expect(await patch).toBe('FORBIDDEN');
+      const [person] = await rows(`SELECT "organizationRoleId" FROM users WHERE id=$1`, [late]);
+      expect(person.organizationRoleId).toBeNull();
+    });
+
+    it('re-activating someone who holds a weighty sub-role needs the owner and the owner’s PIN', async () => {
+      // cashier2 was given dispensing by the owner earlier.
+      expect(await allowed('cashier2', 'pharmacy:dispense')).toBe(true);
+      await callers.team('owner').adminUpdateMember({ id: id('cashier2'), status: 'INACTIVE' });
+      expect((await userRow('cashier2')).status).toBe('INACTIVE');
+      // An administrator who is not the owner cannot bring them back.
+      await expect(
+        callers.team('manager').adminUpdateMember({ id: id('cashier2'), status: 'ACTIVE' })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: expect.stringMatching(/Only the owner can change/),
+      });
+      // Nor can directory provisioning.
+      const { scimAccessChange } = await import('@/lib/scim');
+      const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
+      await expect(
+        withTenantDb(orgA, (db) =>
+          scimAccessChange(
+            { organizationId: orgA, tokenId: 'token', db },
+            [id('cashier2')],
+            'scim.patchUser',
+            async () => ({
+              targetIds: [id('cashier2')],
+              value: await db.user.update({
+                where: { id: id('cashier2') },
+                data: { status: 'ACTIVE' },
+                select: { id: true },
+              }),
+            })
+          )
+        )
+      ).rejects.toMatchObject({ refusal: { code: 'FORBIDDEN' } });
+      expect((await userRow('cashier2')).status).toBe('INACTIVE');
+      // The owner needs a fresh PIN, and then brings them back, audited.
+      await expect(
+        callers.team('owner').adminUpdateMember({ id: id('cashier2'), status: 'ACTIVE' })
+      ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      await callers
+        .team('owner')
+        .adminUpdateMember({ id: id('cashier2'), status: 'ACTIVE', pin: PIN });
+      expect((await userRow('cashier2')).status).toBe('ACTIVE');
+      const [audit] = await rows(
+        `SELECT metadata FROM audit_logs WHERE "targetId"=$1 AND action='team.adminUpdateMember' ORDER BY "createdAt" DESC LIMIT 1`,
+        [id('cashier2')]
+      );
+      expect(audit.metadata.reactivatedWeighty).toEqual(
+        expect.arrayContaining(['dispense-prescriptions'])
+      );
+      // Someone with no weighty sub-role is brought back by an administrator as before.
+      await callers.team('owner').adminUpdateMember({ id: id('cashier3'), status: 'INACTIVE' });
+      await callers.team('manager').adminUpdateMember({ id: id('cashier3'), status: 'ACTIVE' });
+      expect((await userRow('cashier3')).status).toBe('ACTIVE');
+    });
+
+    describe('accepting an invitation is checked again', () => {
+      async function accept(org: string, token: string) {
+        const { invitationsRouter } = await import('@/server/routers/invitations');
+        const { createTenantDb } = await import('@/lib/tenancy/scoped-db');
+        return invitationsRouter
+          .createCaller({
+            db: createTenantDb(org),
+            session: null,
+            requestMeta: { ip: null, userAgent: null },
+            audit: { detail: {} },
+          } as unknown as TRPCContext)
+          .accept({ token, password: 'Accept-pass-1234', phone: '0300 0000000' });
+      }
+      const tokenOf = (url: string) => url.split('/invite/')[1]!;
+
+      it('refuses an invitation into a weighty role made before these rules, until the owner re-sends it', async () => {
+        const { INVITATION_NEEDS_OWNER_MESSAGE } = await import('@/lib/team/pharmacy-access-guard');
+        const { hashInviteToken } = await import('@/lib/invite-token');
+        const email = `${id('preship')}@example.test`;
+        const token = `${id('preship_token')}_0123456789abcdef`;
+        await c.query("SELECT set_config('app.is_platform_admin','true',false)");
+        await c.query(
+          `INSERT INTO users (id,"organizationId","organizationRoleId",name,email,department,title,role,status,"updatedAt") VALUES ($1,$2,$3,$1,$4,'Pharmacy','Pharmacist','EMPLOYEE','INVITED',now())`,
+          [id('preship'), orgA, `${orgA}_role_pharmacist`, email]
+        );
+        await c.query(
+          `INSERT INTO invitations (id,"organizationId","userId",email,"tokenHash","invitedById","expiresAt","updatedAt") VALUES ($1,$2,$3,$4,$5,$6,now() + interval '2 days',now())`,
+          [id('preship_inv'), orgA, id('preship'), email, hashInviteToken(token), id('owner')]
+        );
+        // The invitee sees why, and the invitation stays unused.
+        await expect(accept(orgA, token)).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: INVITATION_NEEDS_OWNER_MESSAGE,
+        });
+        expect((await userRow('preship')).status).toBe('INVITED');
+        const [invitation] = await rows(`SELECT "acceptedAt" FROM invitations WHERE id=$1`, [
+          id('preship_inv'),
+        ]);
+        expect(invitation.acceptedAt).toBeNull();
+        // The owner sends it again with their PIN; the new invitation is accepted.
+        const resent = await callers.team('owner').inviteMember({
+          name: id('preship'),
+          email,
+          role: 'EMPLOYEE',
+          organizationRoleId: `${orgA}_role_pharmacist`,
+          department: 'COUNTER',
+          title: 'Pharmacist',
+          pin: PIN,
+        });
+        await accept(orgA, tokenOf(resent.inviteUrl));
+        expect((await userRow('preship')).status).toBe('ACTIVE');
+        const { can } = await import('@/lib/abac');
+        const { createTenantDb } = await import('@/lib/tenancy/scoped-db');
+        expect(
+          await can(
+            { id: id('preship'), role: 'EMPLOYEE', department: 'Pharmacy', status: 'ACTIVE' },
+            'pharmacy:dispense',
+            undefined,
+            { db: createTenantDb(orgA, id('preship')) as never }
+          )
+        ).toBe(true);
+        expect(
+          (
+            await rows(`SELECT action FROM audit_logs WHERE "targetId"=$1 ORDER BY "createdAt"`, [
+              id('preship'),
+            ])
+          ).map((row) => row.action)
+        ).toEqual(expect.arrayContaining(['team.inviteMember', 'invitations.accept']));
+      });
+
+      it('refuses an invitation from someone who has since lost the right to give it', async () => {
+        const email = `${id('lost')}@example.test`;
+        const invited = await callers.team('manager').inviteMember({
+          name: id('lost'),
+          email,
+          role: 'EMPLOYEE',
+          organizationRoleId: `${orgA}_role_empty`,
+          department: 'COUNTER',
+          title: 'Staff',
+        });
+        await c.query("SELECT set_config('app.is_platform_admin','true',false)");
+        await c.query(`UPDATE users SET status='INACTIVE' WHERE id=$1`, [id('manager')]);
+        try {
+          await expect(accept(orgA, tokenOf(invited.inviteUrl))).rejects.toMatchObject({
+            code: 'FORBIDDEN',
+          });
+          const [person] = await rows(`SELECT status FROM users WHERE email=$1`, [email]);
+          expect(person.status).toBe('INVITED');
+        } finally {
+          await c.query(`UPDATE users SET status='ACTIVE' WHERE id=$1`, [id('manager')]);
+        }
+        // With the inviter's right back, the same invitation is accepted.
+        await accept(orgA, tokenOf(invited.inviteUrl));
+        const [person] = await rows(`SELECT status FROM users WHERE email=$1`, [email]);
+        expect(person.status).toBe('ACTIVE');
+      });
     });
   }
 );

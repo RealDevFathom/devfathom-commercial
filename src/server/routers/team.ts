@@ -285,14 +285,18 @@ export const teamRouter = router({
       const { user, token } = await ctx.db.$transaction(async (tx) => {
         // DEV-959B: an invite creates (or refreshes) the member with their role now, so in a
         // pharmacy it passes the access rules here; accepting it later changes no role.
-        const pending = await tx.user.findFirst({ where: { email }, select: { id: true } });
         return guardMemberEdit(
           ctx,
           tx as unknown as ScopedDb,
           {
             organizationId: workspaceId(ctx),
-            targetId: pending?.id ?? null,
+            // A pending member with this address, found under the organisation lock.
+            targetId: async () =>
+              (await tx.user.findFirst({ where: { email }, select: { id: true } }))?.id ?? null,
             pinVerified,
+            // An owner re-sending an invitation with their PIN approves it again, so it can
+            // still be accepted after a refresh that changes nothing.
+            recordApproval: true,
             action: 'team.inviteMember',
             describe: (name) => `Invited ${name} with their role`,
           },
