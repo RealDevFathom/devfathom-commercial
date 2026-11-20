@@ -174,17 +174,20 @@ export function CounterSalesToReconcileList({
   view,
   branchId,
   online,
+  className = 'mb-3 space-y-3 rounded-lg border border-border-subtle bg-surface-raised p-4 text-sm',
 }: {
   view: CounterReconcileView;
   branchId: string;
   online: boolean;
+  /** Where it sits: a card by default, a full-width strip on the counter screen. */
+  className?: string;
 }) {
   const [notice, setNotice] = useState<string | null>(null);
   if (!view.sales.length && !notice) return null;
   return (
     <section
       aria-label="Sales to reconcile"
-      className="mb-3 space-y-3 rounded-lg border border-border-subtle bg-surface-raised p-4 text-sm"
+      className={className}
       data-counter-sales-to-reconcile=""
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -267,7 +270,15 @@ export function CounterSalesToReconcile(props: {
   branchId: string;
   online: boolean;
   refreshKey?: unknown;
+  className?: string;
 }) {
   const view = useCounterReconcile(props);
-  return <CounterSalesToReconcileList view={view} branchId={props.branchId} online={props.online} />;
+  return (
+    <CounterSalesToReconcileList
+      view={view}
+      branchId={props.branchId}
+      online={props.online}
+      className={props.className}
+    />
+  );
 }

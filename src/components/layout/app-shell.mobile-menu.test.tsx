@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TenantBrand } from '@/lib/tenant-brand';
 
 /**
@@ -10,9 +10,10 @@ import type { TenantBrand } from '@/lib/tenant-brand';
 
 const mocks = vi.hoisted(() => ({
   useSession: vi.fn(),
+  pathname: '/pharmacy/counter',
 }));
 
-vi.mock('next/navigation', () => ({ usePathname: () => '/pharmacy/counter' }));
+vi.mock('next/navigation', () => ({ usePathname: () => mocks.pathname }));
 vi.mock('next-auth/react', () => ({ useSession: mocks.useSession }));
 vi.mock('next/dynamic', () => ({ default: () => () => null }));
 vi.mock('@/components/motion/page-transition', () => ({
@@ -68,6 +69,23 @@ vi.mock('./sidebar', async () => {
 });
 
 import { AppShell } from './app-shell';
+import { useShellChrome } from './shell-chrome';
+
+/**
+ * DEV-977: the counter draws its own bar, so there the page (not the workspace bar)
+ * holds the opener, and it opens the same drawer through the shell.
+ */
+function CounterOwnBar() {
+  const chrome = useShellChrome();
+  return (
+    <header>
+      <button type="button" onClick={chrome?.openNavigation}>
+        Open menu
+      </button>
+      <button type="button">Search</button>
+    </header>
+  );
+}
 
 const BRAND: TenantBrand = {
   organizationId: 'org_sehat',
@@ -87,6 +105,7 @@ function renderShell() {
   });
   render(
     <AppShell brand={BRAND}>
+      {mocks.pathname === '/pharmacy/counter' ? <CounterOwnBar /> : null}
       <button type="button">Edit dashboard</button>
     </AppShell>
   );
@@ -109,79 +128,86 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe('AppShell mobile navigation drawer focus', () => {
-  it('moves focus to the first navigation item when the drawer opens', () => {
-    renderShell();
-    openMenu();
+describe.each(['/pharmacy/counter', '/dashboard'])(
+  'AppShell navigation drawer focus on %s',
+  (pathname) => {
+    beforeEach(() => {
+      mocks.pathname = pathname;
+    });
 
-    const dialog = screen.getByRole('dialog', { name: 'Mobile navigation' });
-    expect(dialog).toContainElement(document.activeElement as HTMLElement);
-    expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Counter' }));
-  });
+    it('moves focus to the first navigation item when the drawer opens', () => {
+      renderShell();
+      openMenu();
 
-  it('makes the background shell inert while the drawer is open', () => {
-    renderShell();
-    const background = screen.getByText('Edit dashboard').closest('.studio-shell');
-    expect(background).not.toHaveAttribute('inert');
-
-    openMenu();
-
-    expect(background).toHaveAttribute('inert');
-    expect(screen.getByText('Skip to content')).toHaveAttribute('inert');
-  });
-
-  it('keeps Tab and Shift+Tab inside the drawer', () => {
-    renderShell();
-    openMenu();
-    const dialog = screen.getByRole('dialog', { name: 'Mobile navigation' });
-    const close = screen.getByRole('button', { name: 'Close menu' });
-    const last = screen.getByRole('link', { name: 'Stock' });
-
-    act(() => last.focus());
-    press('Tab');
-    expect(document.activeElement).toBe(close);
-
-    press('Tab', true);
-    expect(document.activeElement).toBe(last);
-
-    for (let i = 0; i < 6; i += 1) {
-      press('Tab');
+      const dialog = screen.getByRole('dialog', { name: 'Mobile navigation' });
       expect(dialog).toContainElement(document.activeElement as HTMLElement);
-    }
-  });
+      expect(document.activeElement).toBe(screen.getByRole('link', { name: 'Counter' }));
+    });
 
-  it('pulls focus back inside when it escapes to the background', () => {
-    renderShell();
-    openMenu();
-    const dialog = screen.getByRole('dialog', { name: 'Mobile navigation' });
+    it('makes the background shell inert while the drawer is open', () => {
+      renderShell();
+      const background = screen.getByText('Edit dashboard').closest('.studio-shell');
+      expect(background).not.toHaveAttribute('inert');
 
-    act(() => screen.getByRole('button', { name: 'Search' }).focus());
-    press('Tab');
+      openMenu();
 
-    expect(dialog).toContainElement(document.activeElement as HTMLElement);
-  });
+      expect(background).toHaveAttribute('inert');
+      expect(screen.getByText('Skip to content')).toHaveAttribute('inert');
+    });
 
-  it('restores focus to the opener on Escape', () => {
-    renderShell();
-    const opener = openMenu();
-    act(() => screen.getByRole('link', { name: 'Stock' }).focus());
+    it('keeps Tab and Shift+Tab inside the drawer', () => {
+      renderShell();
+      openMenu();
+      const dialog = screen.getByRole('dialog', { name: 'Mobile navigation' });
+      const close = screen.getByRole('button', { name: 'Close menu' });
+      const last = screen.getByRole('link', { name: 'Stock' });
 
-    press('Escape');
+      act(() => last.focus());
+      press('Tab');
+      expect(document.activeElement).toBe(close);
 
-    expect(screen.queryByRole('dialog', { name: 'Mobile navigation' })).not.toBeInTheDocument();
-    expect(document.activeElement).toBe(opener);
-    expect(screen.getByText('Edit dashboard').closest('.studio-shell')).not.toHaveAttribute(
-      'inert'
-    );
-  });
+      press('Tab', true);
+      expect(document.activeElement).toBe(last);
 
-  it('offers an accessible close control that restores focus to the opener', () => {
-    renderShell();
-    const opener = openMenu();
+      for (let i = 0; i < 6; i += 1) {
+        press('Tab');
+        expect(dialog).toContainElement(document.activeElement as HTMLElement);
+      }
+    });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close menu' }));
+    it('pulls focus back inside when it escapes to the background', () => {
+      renderShell();
+      openMenu();
+      const dialog = screen.getByRole('dialog', { name: 'Mobile navigation' });
 
-    expect(screen.queryByRole('dialog', { name: 'Mobile navigation' })).not.toBeInTheDocument();
-    expect(document.activeElement).toBe(opener);
-  });
-});
+      act(() => screen.getByRole('button', { name: 'Search' }).focus());
+      press('Tab');
+
+      expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    });
+
+    it('restores focus to the opener on Escape', () => {
+      renderShell();
+      const opener = openMenu();
+      act(() => screen.getByRole('link', { name: 'Stock' }).focus());
+
+      press('Escape');
+
+      expect(screen.queryByRole('dialog', { name: 'Mobile navigation' })).not.toBeInTheDocument();
+      expect(document.activeElement).toBe(opener);
+      expect(screen.getByText('Edit dashboard').closest('.studio-shell')).not.toHaveAttribute(
+        'inert'
+      );
+    });
+
+    it('offers an accessible close control that restores focus to the opener', () => {
+      renderShell();
+      const opener = openMenu();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Close menu' }));
+
+      expect(screen.queryByRole('dialog', { name: 'Mobile navigation' })).not.toBeInTheDocument();
+      expect(document.activeElement).toBe(opener);
+    });
+  }
+);
