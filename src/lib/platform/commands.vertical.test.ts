@@ -1777,6 +1777,9 @@ describe('pharmacy approval by a super admin (DEV-905)', () => {
 describe('organization.user tenant-configured departments', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // DEV-959B: the pharmacy access guard on this command runs on a real database in
+    // tests/pharmacy-member-sub-roles.db.test.ts; these department checks use a non-pharmacy tenant.
+    mocks.orgFindUnique.mockResolvedValue({ id: 'org_1', vertical: 'AGENCY' });
     mocks.userFindUnique.mockResolvedValue({
       id: 'user_1',
       organizationId: 'org_1',

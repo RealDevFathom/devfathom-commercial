@@ -28,6 +28,7 @@ import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/tenancy/
 import { isPrismaError, mapPrismaError } from '@/server/trpc-database-errors';
 import { mapAccountingPeriodError } from '@/server/trpc-period-errors';
 import { refusalReasonOf } from '@/server/refusal-reason';
+import { tagProcedureGate, type ProcedureGateTag } from '@/server/procedure-gate-tag';
 
 /**
  * The fetch adapter passes `{ req }` to createContext; the RSC SSR helper calls
@@ -166,6 +167,15 @@ const t = initTRPC
   });
 
 export const router = t.router;
+
+/** DEV-959B: name the gate a middleware enforces, so a test can read it from a procedure. */
+function gated<M extends { _middlewares: readonly object[] }>(
+  middleware: M,
+  tag: ProcedureGateTag
+): M {
+  for (const fn of middleware._middlewares) tagProcedureGate(fn, tag);
+  return middleware;
+}
 
 /**
  * Outermost middleware on every procedure: a known Prisma request error that
@@ -307,19 +317,22 @@ function assertDemoProcedureAllowed(
   }
 }
 
-const requireActiveUser = t.middleware(async ({ ctx, next, path, type }) => {
-  if (!ctx.session?.user) {
-    throw new TRPCError({
-      code: 'UNAUTHORIZED',
-      message: 'You must be logged in to access this resource',
-    });
-  }
-  assertSessionUsable(ctx.session.user);
-  assertTemporaryPasswordChanged(ctx.session.user, path);
-  assertApprovalAuthenticatorSetUp(ctx.session.user, path);
-  assertDemoProcedureAllowed(ctx, path, type);
-  return next({ ctx: { ...ctx, session: ctx.session } });
-});
+const requireActiveUser = gated(
+  t.middleware(async ({ ctx, next, path, type }) => {
+    if (!ctx.session?.user) {
+      throw new TRPCError({
+        code: 'UNAUTHORIZED',
+        message: 'You must be logged in to access this resource',
+      });
+    }
+    assertSessionUsable(ctx.session.user);
+    assertTemporaryPasswordChanged(ctx.session.user, path);
+    assertApprovalAuthenticatorSetUp(ctx.session.user, path);
+    assertDemoProcedureAllowed(ctx, path, type);
+    return next({ ctx: { ...ctx, session: ctx.session } });
+  }),
+  { kind: 'signed-in' }
+);
 
 /**
  * The entitlement refusal for `moduleKey`, worded with the catalog name. Used by
@@ -410,10 +423,13 @@ async function assertCapabilities(
 // resignation is PENDING and not your own") are checked INSIDE the resolver via
 // a second `can(...)` call with the loaded resource's attributes.
 function requireCapability(action: Action) {
-  return t.middleware(async ({ ctx, next, path, type }) => {
-    const session = await assertCapabilities(ctx, path, type, [action]);
-    return next({ ctx: { ...ctx, session } });
-  });
+  return gated(
+    t.middleware(async ({ ctx, next, path, type }) => {
+      const session = await assertCapabilities(ctx, path, type, [action]);
+      return next({ ctx: { ...ctx, session } });
+    }),
+    { kind: 'capability', action }
+  );
 }
 
 /**
@@ -422,28 +438,34 @@ function requireCapability(action: Action) {
  * A procedure that forgot its annotation is refused for everybody — nobody
  * reaches it on authentication and module entitlement alone.
  */
-const requireDeclaredCapabilities = t.middleware(async ({ ctx, next, path, type, meta }) => {
-  const actions = meta?.capabilities ?? [];
-  if (actions.length === 0) {
-    throw new TRPCError({
-      code: 'FORBIDDEN',
-      message: 'You do not have permission for this action.',
-    });
-  }
-  const session = await assertCapabilities(ctx, path, type, actions);
-  const organizationId = ctx.entitlements?.organizationId;
-  if (
-    !organizationId ||
-    session.user.organizationId !== organizationId ||
-    !(await ctx.db.user.findUnique({
-      where: { id: session.user.id, organizationId, status: 'ACTIVE' },
-      select: { id: true },
-    }))
-  ) {
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'No active tenant actor on this request.' });
-  }
-  return next({ ctx: { ...ctx, session } });
-});
+const requireDeclaredCapabilities = gated(
+  t.middleware(async ({ ctx, next, path, type, meta }) => {
+    const actions = meta?.capabilities ?? [];
+    if (actions.length === 0) {
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission for this action.',
+      });
+    }
+    const session = await assertCapabilities(ctx, path, type, actions);
+    const organizationId = ctx.entitlements?.organizationId;
+    if (
+      !organizationId ||
+      session.user.organizationId !== organizationId ||
+      !(await ctx.db.user.findUnique({
+        where: { id: session.user.id, organizationId, status: 'ACTIVE' },
+        select: { id: true },
+      }))
+    ) {
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'No active tenant actor on this request.',
+      });
+    }
+    return next({ ctx: { ...ctx, session } });
+  }),
+  { kind: 'declared' }
+);
 
 // Protected procedure — audit (outer) wraps the auth guard.
 export const protectedProcedure = baseProcedure
@@ -503,13 +525,16 @@ export function contextualCapabilityProcedure(select: (ctx: TRPCContext) => read
   return baseProcedure
     .use(auditAll)
     .use(
-      t.middleware(async ({ ctx, next, path, type }) => {
-        const actions = select(ctx);
-        // An empty selection would authorize nothing; refuse rather than allow.
-        if (actions.length === 0) throw capabilityRefusal('admin:access');
-        const session = await assertCapabilities(ctx, path, type, actions);
-        return next({ ctx: { ...ctx, session } });
-      })
+      gated(
+        t.middleware(async ({ ctx, next, path, type }) => {
+          const actions = select(ctx);
+          // An empty selection would authorize nothing; refuse rather than allow.
+          if (actions.length === 0) throw capabilityRefusal('admin:access');
+          const session = await assertCapabilities(ctx, path, type, actions);
+          return next({ ctx: { ...ctx, session } });
+        }),
+        { kind: 'contextual' }
+      )
     )
     .use(requireLicensedModule);
 }

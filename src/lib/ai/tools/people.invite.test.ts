@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   roleFindFirst: vi.fn(),
   roleFindMany: vi.fn(),
   resolveEntitlements: vi.fn(),
+  accessGuard: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -35,6 +36,17 @@ vi.mock('@/lib/entitlements', () => ({
   },
 }));
 
+// DEV-959B: the pharmacy access guard runs on a real database in
+// tests/pharmacy-member-sub-roles.db.test.ts; here it only has to wrap the write.
+vi.mock('@/lib/team/pharmacy-access-guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/team/pharmacy-access-guard')>()),
+  guardPharmacyAccessChange: mocks.accessGuard.mockImplementation(
+    async (_tx: unknown, _input: unknown, write: () => Promise<{ value: unknown }>) => ({
+      value: (await write()).value,
+    })
+  ),
+}));
+
 import { buildPeopleTools } from './people';
 import { INVITE_ROLE_MISMATCH, INVITE_ROLE_NOT_OFFERED } from '@/lib/vertical-catalog';
 import { sendEmail, templates } from '@/lib/email';
@@ -47,6 +59,7 @@ const db = {
   organizationDepartment: { findFirst: mocks.departmentFindFirst },
   organizationRole: { findFirst: mocks.roleFindFirst, findMany: mocks.roleFindMany },
   invitation: { upsert: mocks.invitationUpsert },
+  organization: { findUnique: vi.fn(async () => null) },
   $transaction: async (run: (tx: unknown) => Promise<unknown>) =>
     run({
       user: { create: mocks.create, update: mocks.update },
@@ -397,6 +410,12 @@ describe('assistant inviteMember pharmacy role labels', () => {
       expect.objectContaining({
         data: expect.objectContaining({ role: 'EMPLOYEE', organizationRoleId: 'role_manager' }),
       })
+    );
+    // DEV-959B: in a pharmacy the invite runs inside the access guard.
+    expect(mocks.accessGuard).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: 'assistant.inviteMember', mode: 'role' }),
+      expect.any(Function)
     );
   });
 });

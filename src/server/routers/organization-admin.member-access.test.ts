@@ -48,7 +48,7 @@ const db: any = {
     ),
     update: vi.fn(),
   },
-  organizationRole: { update: vi.fn(), create: vi.fn() },
+  organizationRole: { update: vi.fn(), create: vi.fn(), findMany: vi.fn(async () => []) },
   organizationRolePermission: { deleteMany: vi.fn(), createMany: vi.fn() },
   userPermissionOverride: { create: vi.fn(), update: vi.fn(), delete: vi.fn() },
 };
@@ -132,5 +132,62 @@ describe('organizationAdmin.memberAccess', () => {
       code: 'PRECONDITION_FAILED',
     });
     expect(db.user.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-959B: organizationAdmin.setMemberSubRole and applyMemberRoleTemplate', () => {
+  it('refuses a member without administrator access before reading anything', async () => {
+    await expect(
+      caller('PHARMACY', 'EMPLOYEE').setMemberSubRole({
+        userId: 'cashier_a',
+        subRoleKey: 'receive-stock',
+        ticked: true,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller('PHARMACY', 'EMPLOYEE').applyMemberRoleTemplate({
+        userId: 'cashier_a',
+        roleKey: 'cashier',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.user.findFirst).not.toHaveBeenCalled();
+    expect(db.userPermissionOverride.create).not.toHaveBeenCalled();
+  });
+
+  it('is offered to pharmacies only, and keeps the PIN out of the request audit', async () => {
+    const { annotateAudit } = await import('@/server/audit');
+    await expect(
+      caller('AGENCY').setMemberSubRole({
+        userId: 'cashier_a',
+        subRoleKey: 'controlled-medicines',
+        ticked: true,
+        pin: '2468',
+      })
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ skipInput: true })
+    );
+    expect(db.userPermissionOverride.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown sub-role and an unknown ready-made role', async () => {
+    await expect(
+      caller('PHARMACY').setMemberSubRole({
+        userId: 'cashier_a',
+        subRoleKey: 'admin',
+        ticked: true,
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller('PHARMACY').applyMemberRoleTemplate({ userId: 'cashier_a', roleKey: 'superuser' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.userPermissionOverride.create).not.toHaveBeenCalled();
+  });
+
+  it('tells a viewer who is not found in the workspace that they cannot edit', async () => {
+    const result = await caller('PHARMACY').memberAccess({ userId: 'cashier_a' });
+    expect(result.ticking.editing.allowed).toBe(false);
+    expect(result.ticking.weighty['dispense-prescriptions']).toBeTruthy();
   });
 });

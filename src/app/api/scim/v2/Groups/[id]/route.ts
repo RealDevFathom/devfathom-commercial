@@ -6,6 +6,7 @@ import {
   SCIM_PATCH_SCHEMA,
   scimError,
   scimJson,
+  scimPatchGroupMembers,
   withScimAuth,
 } from '@/lib/scim';
 
@@ -64,9 +65,13 @@ export async function PATCH(request: Request, route: { params: Promise<{ id: str
         .parse(await request.json());
       const role = await loadRole(ctx, id);
       if (!role) return scimError(404, 'Group not found.');
+      const operations: Array<{ op: 'add' | 'replace' | 'remove'; ids: string[] }> = [];
       for (const operation of input.Operations) {
         if (!operation.path?.toLowerCase().startsWith('members')) {
           return scimError(400, `Unsupported PATCH path: ${operation.path}`, 'invalidPath');
+        }
+        if (operation.op !== 'add' && operation.op !== 'replace' && operation.op !== 'remove') {
+          return scimError(400, `Unsupported PATCH operation: ${operation.op}`, 'invalidValue');
         }
         const values = Array.isArray(operation.value)
           ? operation.value
@@ -78,26 +83,9 @@ export async function PATCH(request: Request, route: { params: Promise<{ id: str
             typeof value === 'object' && value ? (value as { value?: unknown }).value : undefined
           )
           .filter((value): value is string => typeof value === 'string');
-        if (operation.op === 'add' || operation.op === 'replace') {
-          if (operation.op === 'replace') {
-            await ctx.db.user.updateMany({
-              where: { organizationRoleId: role.id },
-              data: { organizationRoleId: null },
-            });
-          }
-          await ctx.db.user.updateMany({
-            where: { id: { in: ids } },
-            data: { organizationRoleId: role.id },
-          });
-        } else if (operation.op === 'remove') {
-          await ctx.db.user.updateMany({
-            where: { id: { in: ids }, organizationRoleId: role.id },
-            data: { organizationRoleId: null },
-          });
-        } else {
-          return scimError(400, `Unsupported PATCH operation: ${operation.op}`, 'invalidValue');
-        }
+        operations.push({ op: operation.op, ids });
       }
+      await scimPatchGroupMembers(ctx, role.id, operations);
       await recordScimEvent(ctx, request, {
         operation: 'PATCH',
         resourceType: 'Group',

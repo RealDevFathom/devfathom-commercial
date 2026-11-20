@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import { Check, Copy, KeyRound, Loader2, RefreshCw, ShieldCheck, UserPlus } from 'lucide-react';
@@ -67,6 +67,34 @@ function SubmitButton({ pending, children }: { pending: boolean; children: React
       {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
       {children}
     </Button>
+  );
+}
+
+/** DEV-959B: the editor's own PIN, sent only for a pharmacy and only when one was typed. */
+function pinOf(form: FormData, pharmacy: boolean): { pin?: string } {
+  const pin = pharmacy ? String(form.get('pin') ?? '') : '';
+  return pin ? { pin } : {};
+}
+
+/** DEV-959B: in a pharmacy, a role change that touches a weighty sub-role needs the owner's PIN. */
+function AccessPinField({ className }: { className?: string }) {
+  const id = useId();
+  return (
+    <label className={className}>
+      <span className={labelClass}>Your PIN</span>
+      <Input
+        name="pin"
+        type="password"
+        inputMode="numeric"
+        autoComplete="off"
+        maxLength={8}
+        aria-describedby={`${id}-help`}
+      />
+      <span id={`${id}-help`} className="mt-1 block text-[11px] text-muted-foreground">
+        Needed when this gives or takes away a sub-role that carries extra weight. Only the owner
+        can make that change.
+      </span>
+    </label>
   );
 }
 
@@ -664,6 +692,7 @@ export function OrganizationAdminContent() {
                           'ACTIVE' | 'INACTIVE' | 'ON_LEAVE' | 'INVITED',
                         organizationRoleId: formValue(values, 'organizationRoleId') || null,
                         title: formValue(values, 'title'),
+                        ...pinOf(values, isPharmacy),
                         department: formValue(values, 'department') as
                           | 'LEADERSHIP'
                           | 'ENGINEERING'
@@ -738,6 +767,7 @@ export function OrganizationAdminContent() {
                     <span className={labelClass}>Title</span>
                     <Input name="title" defaultValue={user.title} required />
                   </label>
+                  {isPharmacy ? <AccessPinField className="sm:col-span-2" /> : null}
                   <SubmitButton pending={member.isPending}>Update access</SubmitButton>
                 </form>
                 <form
@@ -807,6 +837,7 @@ export function OrganizationAdminContent() {
                           capability: string;
                           effect: 'ALLOW' | 'DENY';
                         }>,
+                        ...pinOf(values, isPharmacy),
                       });
                     } catch {
                       toast.error('Permission rules must be valid JSON.');
@@ -833,6 +864,7 @@ export function OrganizationAdminContent() {
                       2
                     )}
                   />
+                  {isPharmacy && item._count.users > 0 ? <AccessPinField /> : null}
                   <div className="flex flex-wrap justify-between gap-2">
                     <Button
                       type="button"
