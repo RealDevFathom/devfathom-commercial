@@ -348,3 +348,31 @@ it('DEV-705 displays a loose tablet line with its quantity and exact price', () 
   expect(screen.getByText('1 tablet')).toBeVisible();
   expect(screen.getByRole('rowheader')).toHaveTextContent('Tablet · tablet · 1 tablet @ 2.50');
 });
+
+describe('DEV-977 bill states (Counter v2)', () => {
+  it('starts an empty counter with a heading, the existing message and the keys to start', () => {
+    render(
+      <CounterCartPanel
+        cart={null}
+        state="idle"
+        onRetry={vi.fn()}
+        emptyHints={<span>F2 search</span>}
+      />
+    );
+    expect(screen.getByRole('heading', { name: 'Start a bill' })).toBeInTheDocument();
+    expect(
+      screen.getByText('No bill is open. Search for a medicine and add a line to start one.')
+    ).toBeInTheDocument();
+    expect(screen.getByText('F2 search')).toBeInTheDocument();
+    cleanup();
+  });
+
+  it('keeps the loading message announced while the bill skeleton shows', () => {
+    const { container } = render(
+      <CounterCartPanel cart={null} state="loading" onRetry={vi.fn()} />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('Loading the bill…');
+    expect(container.querySelector('[aria-hidden="true"]')).not.toBeNull();
+    cleanup();
+  });
+});

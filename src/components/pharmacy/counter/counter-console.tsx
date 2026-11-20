@@ -21,7 +21,7 @@ import {
 import { Dialog as DialogPrimitive } from '@base-ui/react/dialog';
 import Link from 'next/link';
 import { flushSync } from 'react-dom';
-import { ShieldCheck, Star, UserRound } from 'lucide-react';
+import { Ellipsis, ScanBarcode, ShieldCheck, Star, UserRound } from 'lucide-react';
 import { signIn, useSession } from 'next-auth/react';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
@@ -41,6 +41,7 @@ import {
 import { CounterCartPanel, CounterLotOverride, type CounterLotOverrideValue } from './counter-cart';
 import { CounterChangeDue } from './counter-change-due';
 import { CounterKeymapLegend } from './counter-keymap-legend';
+import { CounterActionBar, CounterFrame, CounterFrameContent } from './counter-frame';
 import { CounterOpenDrawerStep } from './counter-open-drawer-step';
 import { CounterSaleReadiness, CounterSetupNextStep } from './counter-sale-readiness';
 import { clearCounterReadinessOkay } from '@/lib/pharmacy/counter-readiness-okay';
@@ -401,6 +402,10 @@ const UNKNOWN_TENDER_MESSAGE =
 
 type ConsoleProps = { initialSaleId?: string | null; initialBranchId?: string };
 
+/** DEV-977: a key named beside the control it drives (Counter v2 keycap). */
+const KEYCAP_CLASS =
+  'inline-flex min-h-5 items-center rounded-[var(--radius-control)] border border-border-subtle bg-surface-sunken px-1.5 font-mono text-xs font-semibold text-text-body';
+
 function counterSelectionPreview(
   row: CounterSearchRow | null,
   option: CounterSearchRow['saleUnits'][number] | null,
@@ -531,13 +536,17 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
     !isModuleGranted('pharmacy-counter', entitlements.enabledModules)
   ) {
     return (
-      <SectionCard title="Counter unavailable">
-        <p role="status" className="text-sm text-text-body">
-          {status === 'loading'
-            ? 'Checking counter access…'
-            : 'Sign in with an authorized pharmacy account to open this counter.'}
-        </p>
-      </SectionCard>
+      <CounterFrame>
+        <CounterFrameContent>
+          <SectionCard title="Counter unavailable">
+            <p role="status" className="text-sm text-text-body">
+              {status === 'loading'
+                ? 'Checking counter access…'
+                : 'Sign in with an authorized pharmacy account to open this counter.'}
+            </p>
+          </SectionCard>
+        </CounterFrameContent>
+      </CounterFrame>
     );
   }
   return (
@@ -766,6 +775,8 @@ function ScopedPharmacyCounterConsole({
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
+  const actionsButtonRef = useRef<HTMLButtonElement>(null);
+  const actionsPanelRef = useRef<HTMLDivElement>(null);
   const [checksOpen, setChecksOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [loyaltyOpen, setLoyaltyOpen] = useState(false);
@@ -1751,6 +1762,35 @@ function ScopedPharmacyCounterConsole({
   }, [busy, clearBill, focusSearch]);
 
   const openChecks = useCallback(() => setChecksOpen(true), []);
+  // DEV-977: the More menu closes on Escape (focus returns to its button) and on a press
+  // outside it, as the workspace menus do. Its panels stay mounted while it is closed.
+  useEffect(() => {
+    if (!actionsOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      const focus = document.activeElement;
+      if (!actionsPanelRef.current?.contains(focus) && focus !== actionsButtonRef.current) return;
+      setActionsOpen(false);
+      actionsButtonRef.current?.focus();
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (
+        target &&
+        !actionsPanelRef.current?.contains(target) &&
+        !actionsButtonRef.current?.contains(target) &&
+        // A panel opened from the menu (a dialog) sits outside it in the page.
+        !(target instanceof Element && target.closest('[role="dialog"]'))
+      )
+        setActionsOpen(false);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('pointerdown', onPointerDown);
+    };
+  }, [actionsOpen]);
 
   useEffect(() => {
     if (!paymentOpen) return;
@@ -3502,7 +3542,13 @@ function ScopedPharmacyCounterConsole({
   // DEV-957: offline with nothing loaded from the server (the stored page opened
   // with no connection), say so and offer what still works, not "no branch".
   if ((!online || offlineMode.serverUnreachable) && !branchesQuery.data) {
-    return <CounterOfflineOnly offline={offlineMode} />;
+    return (
+      <CounterFrame heading={false}>
+        <CounterFrameContent>
+          <CounterOfflineOnly offline={offlineMode} />
+        </CounterFrameContent>
+      </CounterFrame>
+    );
   }
 
   if (branchesQuery.isLoading) {
@@ -3511,26 +3557,30 @@ function ScopedPharmacyCounterConsole({
 
   if (branchesQuery.isError) {
     return (
-      <div className="space-y-6">
-        <PageHeader
-          eyebrow="Pharmacy"
-          heading="Counter"
-          description="This counter is unavailable."
-        />
-        <SectionCard title="Branches unavailable">
-          <div className="space-y-3" role="alert">
-            <p className="text-sm text-warning">{messageFrom(branchesQuery.error)}</p>
-            <Button
-              type="button"
-              variant="outline"
-              className="h-11"
-              onClick={() => void branchesQuery.refetch()}
-            >
-              Retry
-            </Button>
+      <CounterFrame heading={false}>
+        <CounterFrameContent>
+          <div className="space-y-6">
+            <PageHeader
+              eyebrow="Pharmacy"
+              heading="Counter"
+              description="This counter is unavailable."
+            />
+            <SectionCard title="Branches unavailable">
+              <div className="space-y-3" role="alert">
+                <p className="text-sm text-warning">{messageFrom(branchesQuery.error)}</p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-11"
+                  onClick={() => void branchesQuery.refetch()}
+                >
+                  Retry
+                </Button>
+              </div>
+            </SectionCard>
           </div>
-        </SectionCard>
-      </div>
+        </CounterFrameContent>
+      </CounterFrame>
     );
   }
 
@@ -3542,49 +3592,55 @@ function ScopedPharmacyCounterConsole({
     branchesQuery.data.canFixSetup !== true
   ) {
     return (
-      <div className="space-y-6">
-        <PageHeader
-          eyebrow="Pharmacy"
-          heading="Counter"
-          description="You are not assigned to a branch yet."
-        />
-        <SectionCard title="Before this counter can sell">
-          <div className="space-y-3" role="alert">
-            <p className="text-sm text-text-body">{COUNTER_NO_ASSIGNED_BRANCH_MESSAGE}</p>
-            <div className="text-sm">
-              <CounterSetupNextStep
-                advice={{
-                  reason: BRANCH_NOT_ASSIGNED,
-                  message: COUNTER_NO_ASSIGNED_BRANCH_MESSAGE,
-                  nextStep: ASK_OWNER_OR_MANAGER,
-                  link: null,
-                }}
-              />
-            </div>
-            <Button
-              type="button"
-              variant="outline"
-              className="h-11"
-              onClick={() => void branchesQuery.refetch()}
-            >
-              Check again
-            </Button>
+      <CounterFrame heading={false}>
+        <CounterFrameContent>
+          <div className="space-y-6">
+            <PageHeader
+              eyebrow="Pharmacy"
+              heading="Counter"
+              description="You are not assigned to a branch yet."
+            />
+            <SectionCard title="Before this counter can sell">
+              <div className="space-y-3" role="alert">
+                <p className="text-sm text-text-body">{COUNTER_NO_ASSIGNED_BRANCH_MESSAGE}</p>
+                <div className="text-sm">
+                  <CounterSetupNextStep
+                    advice={{
+                      reason: BRANCH_NOT_ASSIGNED,
+                      message: COUNTER_NO_ASSIGNED_BRANCH_MESSAGE,
+                      nextStep: ASK_OWNER_OR_MANAGER,
+                      link: null,
+                    }}
+                  />
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-11"
+                  onClick={() => void branchesQuery.refetch()}
+                >
+                  Check again
+                </Button>
+              </div>
+            </SectionCard>
+            <SectionCard title="Shortcuts">{keymapLegend}</SectionCard>
           </div>
-        </SectionCard>
-        <SectionCard title="Shortcuts">{keymapLegend}</SectionCard>
-      </div>
+        </CounterFrameContent>
+      </CounterFrame>
     );
   }
 
   if (branches.length === 0) {
     return (
-      <div className="space-y-6">
-        <PageHeader
-          eyebrow="Pharmacy"
-          heading="Counter"
-          description="No active branch is configured yet."
-        />
-        {/*
+      <CounterFrame heading={false}>
+        <CounterFrameContent>
+          <div className="space-y-6">
+            <PageHeader
+              eyebrow="Pharmacy"
+              heading="Counter"
+              description="No active branch is configured yet."
+            />
+            {/*
           UX rule 13: a precondition is a checklist with links, not a sentence.
           Name each gate the counter needs and link it to the page that clears
           it, so the operator is never told what is missing without being told
@@ -3592,68 +3648,226 @@ function ScopedPharmacyCounterConsole({
           this lane owns the counter, not that surface, so it links there rather
           than duplicating it.
         */}
-        <SectionCard title="Before this counter can sell">
-          <div className="space-y-3">
-            <p className="text-sm text-text-body">
-              A counter dispenses from one active pharmacy branch. Two things must exist first:
-            </p>
-            <ul className="space-y-2 text-sm text-text-body">
-              <li className="flex flex-wrap items-baseline gap-x-2">
-                <span aria-hidden="true" className="text-text-muted">
-                  1.
-                </span>
-                <span>An active pharmacy branch for this organization.</span>
-                <Link
-                  href="/organization"
-                  className="inline-flex min-h-11 min-w-11 items-center font-semibold text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            <SectionCard title="Before this counter can sell">
+              <div className="space-y-3">
+                <p className="text-sm text-text-body">
+                  A counter dispenses from one active pharmacy branch. Two things must exist first:
+                </p>
+                <ul className="space-y-2 text-sm text-text-body">
+                  <li className="flex flex-wrap items-baseline gap-x-2">
+                    <span aria-hidden="true" className="text-text-muted">
+                      1.
+                    </span>
+                    <span>An active pharmacy branch for this organization.</span>
+                    <Link
+                      href="/organization"
+                      className="inline-flex min-h-11 min-w-11 items-center font-semibold text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                    >
+                      Organization administration
+                    </Link>
+                  </li>
+                  <li className="flex flex-wrap items-baseline gap-x-2">
+                    <span aria-hidden="true" className="text-text-muted">
+                      2.
+                    </span>
+                    <span>A stock location on that branch holding dispensable batches.</span>
+                    <Link
+                      href="/organization"
+                      className="inline-flex min-h-11 min-w-11 items-center font-semibold text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                    >
+                      Organization administration
+                    </Link>
+                  </li>
+                </ul>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-11"
+                  onClick={() => void branchesQuery.refetch()}
                 >
-                  Organization administration
-                </Link>
-              </li>
-              <li className="flex flex-wrap items-baseline gap-x-2">
-                <span aria-hidden="true" className="text-text-muted">
-                  2.
-                </span>
-                <span>A stock location on that branch holding dispensable batches.</span>
-                <Link
-                  href="/organization"
-                  className="inline-flex min-h-11 min-w-11 items-center font-semibold text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-                >
-                  Organization administration
-                </Link>
-              </li>
-            </ul>
-            <Button
-              type="button"
-              variant="outline"
-              className="h-11"
-              onClick={() => void branchesQuery.refetch()}
-            >
-              Check again
-            </Button>
+                  Check again
+                </Button>
+              </div>
+            </SectionCard>
+            <SectionCard title="Shortcuts">{keymapLegend}</SectionCard>
           </div>
-        </SectionCard>
-        <SectionCard title="Shortcuts">{keymapLegend}</SectionCard>
-      </div>
+        </CounterFrameContent>
+      </CounterFrame>
     );
   }
 
   if (!branchAuthorized) {
     return (
-      <SectionCard title="Counter unavailable">
-        <p role="alert" className="text-sm text-text-body">
-          This branch could not be verified for your account. Restore branch access before opening a
-          saved payment.
-        </p>
-      </SectionCard>
+      <CounterFrame>
+        <CounterFrameContent>
+          <SectionCard title="Counter unavailable">
+            <p role="alert" className="text-sm text-text-body">
+              This branch could not be verified for your account. Restore branch access before
+              opening a saved payment.
+            </p>
+          </SectionCard>
+        </CounterFrameContent>
+      </CounterFrame>
     );
   }
 
-  const scrollableCounter = (
-    <div
-      className="min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-28 xl:flex xl:flex-col xl:overflow-hidden xl:pb-4"
-      data-counter-console=""
-    >
+  const connectionOnline = online && !offlineMode.serverUnreachable;
+  const statusLine = [
+    connectionOnline ? 'Online' : 'Offline',
+    branches.find((entry) => entry.id === branchId)?.name,
+    counterLabel(deviceId),
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const composing = Boolean(activeRow && !drawerRequired && !dayClosed);
+  const searchRows =
+    searchCurrent && !searchQuery.isPlaceholderData ? (searchQuery.data?.rows ?? []) : [];
+  const actionBar = (
+    <CounterActionBar>
+      <label className="sr-only" htmlFor="counter-branch">
+        Branch
+      </label>
+      <select
+        id="counter-branch"
+        aria-describedby={counterBusyReason ? 'counter-branch-reason' : undefined}
+        value={branchId}
+        disabled={busy}
+        onChange={(event) => {
+          scannerRevision.current += 1;
+          setSelectedBranchId(event.target.value);
+          // A voucher and the cashier PIN held for one branch never carry to another.
+          setHeldVoucher(null);
+          setHeldDiscount(null);
+          setLastReceipt(null);
+          setReceiptReprint(false);
+          setActiveRow(null);
+          setActiveSale(null);
+          setHeldSaleId(null);
+        }}
+        className="h-11 max-w-40 shrink-0 truncate rounded-full border border-border-subtle bg-surface-card px-3.5 text-[13px] font-semibold text-text-strong outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 sm:max-w-56"
+      >
+        {branches.map((branch) => (
+          <option key={branch.id} value={branch.id}>
+            {branch.name}
+          </option>
+        ))}
+      </select>
+      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto [scrollbar-width:none]">
+        <div className="flex shrink-0 items-center gap-2" aria-label="Bill status">
+          <StatusPill
+            status={saleId ? 'open' : 'idle'}
+            tone={cart?.receiptNumber ? 'success' : 'neutral'}
+            className="font-mono text-xs uppercase"
+            label={
+              cart?.receiptNumber
+                ? `Receipt ${cart.receiptNumber}`
+                : saleId
+                  ? `Bill open · ${lineCount} ${lineCount === 1 ? 'line' : 'lines'}`
+                  : 'No open bill'
+            }
+          />
+          {heldSaleId ? <StatusPill status="held" tone="warning" label="1 held" /> : null}
+          {dayClosed ? <StatusPill status="day-closed" tone="warning" label="Day closed" /> : null}
+          {drawerOpen ? (
+            <StatusPill status="drawer-open" tone="success" label="Drawer open" />
+          ) : drawerRequired && drawerQuery.isSuccess ? (
+            <StatusPill status="drawer-closed" tone="warning" label="Drawer closed" />
+          ) : null}
+        </div>
+        <StatusPill
+          status={connectionOnline ? 'online' : 'offline'}
+          tone={connectionOnline ? 'success' : 'warning'}
+          label={connectionOnline ? 'Online' : 'Offline'}
+          className="shrink-0"
+        />
+      </div>
+      <Button
+        ref={actionsButtonRef}
+        type="button"
+        variant="ghost"
+        className="order-last h-11 shrink-0 gap-2 px-3"
+        aria-expanded={actionsOpen}
+        aria-controls="counter-actions"
+        onClick={() => setActionsOpen(!actionsOpen)}
+      >
+        <Ellipsis aria-hidden="true" />
+        More
+      </Button>
+      {/* DEV-977: below 1280px every action sits in More; from 1280px the everyday ones sit
+          in the row and the rest stay in More. One copy of each, so no panel loses state. */}
+      <div
+        id="counter-actions"
+        ref={actionsPanelRef}
+        className={`${actionsOpen ? 'flex' : 'hidden'} absolute end-4 top-full z-40 mt-2 w-[min(22rem,calc(100vw-2rem))] flex-col items-stretch gap-2 rounded-2xl border border-border-default bg-surface-card p-3 shadow-lg xl:contents [&_[data-slot=button]]:rounded-[var(--radius-sm)]`}
+      >
+        {branchAuthorized ? (
+          <CounterOpenBills
+            bills={openBillsQuery.data}
+            loading={openBillsQuery.isLoading}
+            error={openBillsQuery.isError ? messageFrom(openBillsQuery.error) : null}
+            activeSaleId={saleId}
+            disabled={busy}
+            onRefresh={() => void refetchOpenBills()}
+            onResume={resumeOpenBill}
+            onVoid={voidOpenBill}
+          />
+        ) : null}
+        <CounterReturnPanel
+          branchId={branchId}
+          organizationId={organizationId}
+          accountId={accountId}
+          deviceId={currentCounterDeviceId}
+          businessDate={todayBusinessDate}
+        />
+        <Link
+          className={buttonVariants({
+            variant: 'outline',
+            className:
+              'h-11 rounded-[var(--radius-sm)] shadow-none hover:translate-y-0 active:translate-y-0',
+          })}
+          href="/pharmacy/orders"
+        >
+          Customer orders
+        </Link>
+        <CounterSignOut
+          hasOpenSale={Boolean(heldSaleId || (saleId && !billClosed(cart, saleId)))}
+        />
+        <div
+          className={`${actionsOpen ? 'contents xl:flex' : 'contents xl:hidden'} xl:absolute xl:end-6 xl:top-full xl:z-40 xl:mt-2 xl:w-[20rem] xl:flex-col xl:items-stretch xl:gap-2 xl:rounded-2xl xl:border xl:border-border-default xl:bg-surface-card xl:p-3 xl:shadow-lg`}
+        >
+          {canSettlePayments ? (
+            <CounterKhataPaymentPanel
+              branchId={branchId}
+              organizationId={organizationId}
+              accountId={accountId}
+              deviceId={currentCounterDeviceId}
+              businessDate={todayBusinessDate}
+            />
+          ) : null}
+          <Button
+            type="button"
+            variant="outline"
+            className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
+            onClick={() => setShortcutsOpen(true)}
+          >
+            Shortcuts
+          </Button>
+          {presentedReceipt && (
+            <Button
+              variant="outline"
+              className="h-11"
+              aria-keyshortcuts={lastReceiptShortcut}
+              onClick={() => setReceiptOpen(true)}
+            >
+              Last receipt{lastReceiptShortcut ? ` · ${lastReceiptShortcut}` : ''}
+            </Button>
+          )}
+        </div>
+      </div>
+    </CounterActionBar>
+  );
+  const counterBody = (
+    <>
       <nav
         aria-label="Counter shortcuts"
         className="sr-only focus-within:not-sr-only focus-within:mb-3"
@@ -3677,179 +3891,21 @@ function ScopedPharmacyCounterConsole({
           Skip to bill total
         </a>
       </nav>
-      <header className="mb-3 shrink-0 space-y-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight text-text-strong">Counter</h1>
-          <CounterSignOut
-            hasOpenSale={Boolean(heldSaleId || (saleId && !billClosed(cart, saleId)))}
-          />
-          {presentedReceipt && (
-            <Button
-              variant="outline"
-              className="h-11"
-              aria-keyshortcuts={lastReceiptShortcut}
-              onClick={() => setReceiptOpen(true)}
-            >
-              Last receipt{lastReceiptShortcut ? ` · ${lastReceiptShortcut}` : ''}
-            </Button>
-          )}
-          <Button
-            variant="outline"
-            className="ml-auto h-11 rounded-[var(--radius-sm)] md:hidden"
-            aria-expanded={actionsOpen}
-            aria-controls="counter-actions"
-            onClick={() => setActionsOpen(!actionsOpen)}
-          >
-            Actions
-          </Button>
-          <div className="order-2 flex w-full flex-wrap items-center gap-3 md:order-none md:w-auto">
-            <label className="sr-only" htmlFor="counter-branch">
-              Branch
-            </label>
-            <select
-              id="counter-branch"
-              aria-describedby={counterBusyReason ? 'counter-branch-reason' : undefined}
-              value={branchId}
-              disabled={busy}
-              onChange={(event) => {
-                scannerRevision.current += 1;
-                setSelectedBranchId(event.target.value);
-                // A voucher and the cashier PIN held for one branch never carry to another.
-                setHeldVoucher(null);
-                setHeldDiscount(null);
-                setLastReceipt(null);
-                setReceiptReprint(false);
-                setActiveRow(null);
-                setActiveSale(null);
-                setHeldSaleId(null);
-              }}
-              className="h-11 max-w-full rounded-[var(--radius-xs)] border border-border-default bg-surface-sunken px-3 text-sm font-semibold text-text-strong outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
-            >
-              {branches.map((branch) => (
-                <option key={branch.id} value={branch.id}>
-                  {branch.name}
-                </option>
-              ))}
-            </select>
-
-            <div className="flex flex-wrap items-center gap-2" aria-label="Bill status">
-              <StatusPill
-                status={saleId ? 'open' : 'idle'}
-                tone={cart?.receiptNumber ? 'success' : 'neutral'}
-                className="font-mono text-xs uppercase"
-                label={
-                  cart?.receiptNumber
-                    ? `Receipt ${cart.receiptNumber}`
-                    : saleId
-                      ? `Bill open · ${lineCount} ${lineCount === 1 ? 'line' : 'lines'}`
-                      : 'No open bill'
-                }
-              />
-              {heldSaleId ? <StatusPill status="held" tone="warning" label="1 held" /> : null}
-              {dayClosed ? (
-                <StatusPill status="day-closed" tone="warning" label="Day closed" />
-              ) : null}
-              {drawerOpen ? (
-                <StatusPill status="drawer-open" tone="success" label="Drawer open" />
-              ) : drawerRequired && drawerQuery.isSuccess ? (
-                <StatusPill status="drawer-closed" tone="warning" label="Drawer closed" />
-              ) : null}
-            </div>
-          </div>
-          <div
-            id="counter-actions"
-            className={`${actionsOpen ? 'flex' : 'hidden'} order-3 w-full flex-wrap items-center gap-2 md:order-none md:ml-auto md:flex md:w-auto [&>button]:rounded-[var(--radius-sm)]`}
-          >
-            {branchAuthorized ? (
-              <CounterOpenBills
-                bills={openBillsQuery.data}
-                loading={openBillsQuery.isLoading}
-                error={openBillsQuery.isError ? messageFrom(openBillsQuery.error) : null}
-                activeSaleId={saleId}
-                disabled={busy}
-                onRefresh={() => void refetchOpenBills()}
-                onResume={resumeOpenBill}
-                onVoid={voidOpenBill}
-              />
-            ) : null}
-            <CounterReturnPanel
-              branchId={branchId}
-              organizationId={organizationId}
-              accountId={accountId}
-              deviceId={currentCounterDeviceId}
-              businessDate={todayBusinessDate}
-            />
-            {canSettlePayments ? (
-              <CounterKhataPaymentPanel
-                branchId={branchId}
-                organizationId={organizationId}
-                accountId={accountId}
-                deviceId={currentCounterDeviceId}
-                businessDate={todayBusinessDate}
-              />
-            ) : null}
-            <Link
-              className={buttonVariants({
-                variant: 'outline',
-                className:
-                  'h-11 rounded-[var(--radius-sm)] shadow-none hover:translate-y-0 active:translate-y-0',
-              })}
-              href="/pharmacy/orders"
-            >
-              Customer orders
-            </Link>
-            <Button
-              type="button"
-              variant="outline"
-              className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
-              onClick={() => setShortcutsOpen(true)}
-            >
-              Shortcuts
-            </Button>
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-2 text-xs" aria-label="Bill context">
-          <Button
-            variant="outline"
-            className="min-h-11 rounded-full px-3 text-xs"
-            onClick={openChecks}
-            aria-label={`${patient?.displayName ?? 'Patient + prescription'} · ${formatBinding(keymap.bindings.focusPrescriptionPanel)}`}
-          >
-            <UserRound aria-hidden="true" />
-            <span>{patient?.displayName ?? 'Patient'}</span>
-            <span className="hidden md:inline">
-              {patient ? '' : ' + prescription'} ·{' '}
-              {formatBinding(keymap.bindings.focusPrescriptionPanel)}
-            </span>
-          </Button>
-          <Button
-            variant="outline"
-            className={`min-h-11 rounded-full px-3 text-xs ${blocked ? 'border-destructive text-destructive' : ''}`}
-            onClick={openChecks}
-            aria-label={safetyLabel}
-          >
-            <ShieldCheck aria-hidden="true" />
-            <span className="hidden md:inline">{safetyLabel}</span>
-            <span className="md:hidden">{blocked ? 'Safety block' : 'No blocks'}</span>
-          </Button>
-          <Button
-            variant="outline"
-            className="min-h-11 rounded-full px-3 text-xs"
-            onClick={() => setLoyaltyOpen(true)}
-            aria-label={loyaltyLabel}
-          >
-            <Star aria-hidden="true" />
-            <span className="hidden md:inline">{loyaltyLabel}</span>
-            <span className="md:hidden">Loyalty</span>
-          </Button>
-        </div>
-      </header>
+      {/* Reserve space outside the scroller: one reason stays visible without covering controls. */}
+      {counterBusyReason ? (
+        <p
+          id="counter-branch-reason"
+          className="shrink-0 border-b border-border-subtle bg-surface-sunken px-4 py-2 text-xs text-text-body lg:px-6"
+        >
+          {counterBusyReason}
+        </p>
+      ) : null}
       {online && !offlineMode.serverUnreachable ? null : (
         <div
           role="status"
           aria-live="polite"
           data-counter-offline=""
-          className="mb-3 flex shrink-0 flex-wrap items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm"
+          className="flex shrink-0 flex-wrap items-start gap-3 border-b border-border-subtle bg-warning/10 px-4 py-3 text-sm lg:px-6"
         >
           <StatusPill status="offline" tone="warning" label="Offline" />
           <div className="min-w-0 flex-1 space-y-1">
@@ -3874,42 +3930,51 @@ function ScopedPharmacyCounterConsole({
           ) : null}
         </div>
       )}
-      {branchAuthorized && !saleId && saleReadiness.data ? (
-        <CounterSaleReadiness
-          readiness={saleReadiness.data}
-          branchId={branchId}
-          checking={saleReadiness.isFetching}
-          onCheckAgain={() => void refetchSaleReadiness()}
-          rememberFor={{ organizationId, accountId, deviceId }}
-          onHidden={() => searchRef.current?.focus()}
-        />
-      ) : null}
-      <div className="grid items-start gap-3 xl:min-h-0 xl:flex-1 xl:grid-cols-2 xl:items-stretch">
-        <div className="min-w-0 space-y-3 xl:overflow-y-auto">
-          <SectionCard
+      <div
+        className="min-h-0 flex-1 overflow-y-auto pb-28 lg:grid lg:grid-cols-[minmax(0,1fr)_340px] lg:grid-rows-[auto_auto_minmax(0,1fr)] lg:overflow-hidden lg:pb-0 xl:grid-cols-[minmax(0,1fr)_380px]"
+        data-counter-console=""
+      >
+        {/* From 1024px this wrapper steps aside (display: contents) and its sections take
+            their places in the counter grid: search and bill on the left, the line being
+            added on the right. */}
+        <div className="min-w-0 lg:contents">
+          {branchAuthorized && !saleId && saleReadiness.data ? (
+            <div className="shrink-0 px-4 pt-3 lg:col-start-1 lg:row-start-1 lg:border-e lg:border-border-subtle lg:px-6 lg:pt-4">
+              <CounterSaleReadiness
+                readiness={saleReadiness.data}
+                branchId={branchId}
+                checking={saleReadiness.isFetching}
+                onCheckAgain={() => void refetchSaleReadiness()}
+                rememberFor={{ organizationId, accountId, deviceId }}
+                onHidden={() => searchRef.current?.focus()}
+              />
+            </div>
+          ) : null}
+          <section
             id="counter-scan-search"
             tabIndex={-1}
-            className="overflow-hidden rounded-xl p-0 focus-visible:outline-2 focus-visible:outline-ring"
             aria-label="Counter bill"
+            className="relative z-10 shrink-0 border-b border-border-subtle bg-surface-page px-4 py-3 outline-none focus-visible:outline-2 focus-visible:outline-ring max-lg:sticky max-lg:top-0 lg:col-start-1 lg:row-start-2 lg:self-start lg:border-e lg:px-6 lg:pt-4 lg:pb-3.5"
           >
-            <div className="border-b border-border-subtle p-4">
-              {/* DEV-972: the search help sits beside the heading, so the medicines found start
-                  directly under the search box. */}
-              <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                <h2 className="text-sm font-semibold text-text-strong">Scan or search</h2>
-                {!dayClosed && !drawerRequired ? (
-                  <p id="counter-search-help" className="text-xs text-text-muted">
-                    {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
-                    selected medicine, or a barcode. {formatBinding(keymap.bindings.openTender)}{' '}
-                    opens pay.
-                  </p>
-                ) : null}
-              </div>
+            {/* DEV-972: the search help sits beside the heading, so the medicines found start
+                directly under the search box. DEV-977: both are announced, not drawn; the
+                field shows its key and the results list shows how to move through it. */}
+            <div className="sr-only">
+              <h2>Scan or search</h2>
+              {!dayClosed && !drawerRequired ? (
+                <p id="counter-search-help">
+                  {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
+                  selected medicine, or a barcode. {formatBinding(keymap.bindings.openTender)} opens
+                  pay.
+                </p>
+              ) : null}
+            </div>
+            <div className="space-y-2.5">
               {notice ? (
                 <div
                   role={notice.tone === 'success' || notice.tone === 'info' ? 'status' : 'alert'}
                   aria-live="polite"
-                  className={`flex items-center gap-3 rounded-lg border p-3 ${notice.tone === 'success' || notice.tone === 'info' ? 'fixed inset-x-4 bottom-24 z-50 mx-auto max-w-lg bg-surface-card shadow-sm xl:bottom-6' : ''} ${
+                  className={`flex items-center gap-3 rounded-lg border p-3 ${notice.tone === 'success' || notice.tone === 'info' ? 'fixed inset-x-4 bottom-24 z-50 mx-auto max-w-lg bg-surface-card shadow-sm lg:start-11 lg:end-auto lg:bottom-11 lg:mx-0 lg:w-[35rem]' : ''} ${
                     notice.tone === 'danger'
                       ? 'border-destructive/30 bg-destructive/10'
                       : notice.tone === 'warning'
@@ -4053,7 +4118,7 @@ function ScopedPharmacyCounterConsole({
                   }}
                 />
               ) : (
-                <div className="space-y-2">
+                <div className="space-y-2.5">
                   {openDrawerSession && drawerOperatingCashier ? (
                     <CounterDrawerOperator
                       operatingCashier={drawerOperatingCashier}
@@ -4082,8 +4147,13 @@ function ScopedPharmacyCounterConsole({
                       }}
                     />
                   ) : null}
-                  <div>
-                    <div className="space-y-1.5">
+                  {/* DEV-977 (Counter v2): one large scan field, its scanner icon and key inside it. */}
+                  <div className="relative">
+                    <ScanBarcode
+                      aria-hidden="true"
+                      className="pointer-events-none absolute start-3.5 top-1/2 z-10 size-6 -translate-y-1/2 text-text-muted"
+                    />
+                    <div>
                       <Label htmlFor="counter-search" className="sr-only">
                         Scan or search
                       </Label>
@@ -4199,45 +4269,129 @@ function ScopedPharmacyCounterConsole({
                         aria-invalid={searchState === 'error' || undefined}
                         className={
                           searchState === 'error'
-                            ? 'h-12 [--ring:var(--destructive)]'
-                            : 'h-12 [--ring:var(--text-muted)]'
+                            ? 'h-14 rounded-[var(--radius-sm)] border-[1.5px] border-border-default bg-surface-card ps-12 pe-14 text-[17px] [--ring:var(--destructive)] md:text-[17px] dark:bg-surface-card'
+                            : 'h-14 rounded-[var(--radius-sm)] border-[1.5px] border-border-default bg-surface-card ps-12 pe-14 text-[17px] [--ring:var(--text-muted)] md:text-[17px] dark:bg-surface-card'
                         }
                       />
                     </div>
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute end-3 top-1/2 flex -translate-y-1/2 items-center gap-2 text-xs text-text-muted"
+                    >
+                      <kbd className={KEYCAP_CLASS}>
+                        {formatBinding(keymap.bindings.focusSearch)}
+                      </kbd>
+                    </span>
                   </div>
-
-                  <CounterSearchResults
-                    rows={
-                      searchCurrent && !searchQuery.isPlaceholderData
-                        ? (searchQuery.data?.rows ?? [])
-                        : []
-                    }
-                    state={searchState}
-                    query={trimmedQuery}
-                    disabled={busy || !branchAuthorized}
-                    disabledReasonId={branchControlReason ? 'counter-branch-reason' : undefined}
-                    activeMedicineId={activeRow?.medicineId ?? null}
-                    error={searchQuery.error ? messageFrom(searchQuery.error) : null}
-                    onSelect={stageRow}
-                    onCaptureDemand={() => void captureShortfall()}
-                    onRetry={() => {
-                      if (searchCurrent) void searchQuery.refetch();
-                    }}
-                  />
+                  <div
+                    className="-mx-4 flex gap-2 overflow-x-auto px-4 [scrollbar-width:none] lg:mx-0 lg:flex-wrap lg:px-0"
+                    aria-label="Bill context"
+                  >
+                    <Button
+                      variant="outline"
+                      className="min-h-11 shrink-0 rounded-full px-3.5 text-[13px]"
+                      onClick={openChecks}
+                      aria-label={`${patient?.displayName ?? 'Patient + prescription'} · ${formatBinding(keymap.bindings.focusPrescriptionPanel)}`}
+                    >
+                      <UserRound aria-hidden="true" />
+                      <span>{patient?.displayName ?? 'Patient'}</span>
+                      <span className="hidden md:inline">
+                        {patient ? '' : ' + prescription'} ·{' '}
+                        {formatBinding(keymap.bindings.focusPrescriptionPanel)}
+                      </span>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className={`min-h-11 shrink-0 rounded-full px-3.5 text-[13px] ${blocked ? 'border-destructive bg-destructive/10 text-destructive' : ''}`}
+                      onClick={openChecks}
+                      aria-label={safetyLabel}
+                    >
+                      <ShieldCheck aria-hidden="true" />
+                      <span className="hidden md:inline">{safetyLabel}</span>
+                      <span className="md:hidden">{blocked ? 'Safety block' : 'No blocks'}</span>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="min-h-11 shrink-0 rounded-full px-3.5 text-[13px]"
+                      onClick={() => setLoyaltyOpen(true)}
+                      aria-label={loyaltyLabel}
+                    >
+                      <Star aria-hidden="true" />
+                      <span className="hidden md:inline">{loyaltyLabel}</span>
+                      <span className="md:hidden">Loyalty</span>
+                    </Button>
+                  </div>
                 </div>
               )}
             </div>
-            {activeRow && !drawerRequired && !dayClosed ? (
+            {/* DEV-977 (Counter v2, A6 and B5): results drop over the bill. While the
+                field is too short to search they stay in place for screen readers only. */}
+            <div
+              data-counter-results=""
+              className={
+                searchState === 'idle'
+                  ? 'sr-only'
+                  : 'absolute inset-x-3 top-full z-20 -mt-1 max-h-[min(35rem,calc(100dvh-12.5rem))] overflow-y-auto rounded-2xl border border-border-default bg-surface-card shadow-lg lg:inset-x-6 lg:max-h-[calc(100dvh-18.75rem)]'
+              }
+            >
+              {searchState === 'ready' && searchRows.length > 0 ? (
+                <div className="sticky top-0 z-10 flex flex-wrap justify-between gap-x-3 gap-y-1 border-b border-border-subtle bg-surface-card px-4 py-2.5 text-xs text-text-muted">
+                  <span>
+                    {searchRows.length} {searchRows.length === 1 ? 'result' : 'results'}
+                    {searchQuery.data?.truncated ? ' (more match: keep typing)' : ''}
+                  </span>
+                  <span aria-hidden="true">↑ ↓ choose · Enter selects</span>
+                </div>
+              ) : null}
+              <div className={searchState === 'ready' && searchRows.length > 0 ? '' : 'p-4'}>
+                <CounterSearchResults
+                  rows={
+                    searchCurrent && !searchQuery.isPlaceholderData
+                      ? (searchQuery.data?.rows ?? [])
+                      : []
+                  }
+                  state={searchState}
+                  query={trimmedQuery}
+                  disabled={busy || !branchAuthorized}
+                  disabledReasonId={branchControlReason ? 'counter-branch-reason' : undefined}
+                  activeMedicineId={activeRow?.medicineId ?? null}
+                  error={searchQuery.error ? messageFrom(searchQuery.error) : null}
+                  onSelect={stageRow}
+                  onCaptureDemand={() => void captureShortfall()}
+                  onRetry={() => {
+                    if (searchCurrent) void searchQuery.refetch();
+                  }}
+                />
+              </div>
+              {searchState === 'ready' && searchRows.length > 0 ? (
+                <p
+                  aria-hidden="true"
+                  className="flex flex-wrap gap-x-4 gap-y-1 border-t border-border-subtle px-4 py-2.5 text-xs text-text-muted"
+                >
+                  <span>Batches are picked by earliest expiry.</span>
+                  <span>
+                    {(['PACK', 'STRIP', 'UNIT'] as const)
+                      .map((kind) => `${chordFor(kind)} ${kind.toLowerCase()}`)
+                      .join(' · ')}
+                  </span>
+                </p>
+              ) : null}
+            </div>
+          </section>
+          {/* DEV-977: the line being added sits under the search on a phone or tablet, and at the
+              top of the payment column from 1024px, so the results keep the full height. */}
+          {activeRow && !drawerRequired && !dayClosed ? (
+            <div className="border-b border-border-subtle px-4 py-3 lg:col-start-2 lg:row-start-2 lg:bg-surface-card lg:px-5 lg:pt-5 lg:pb-4">
               <section
                 aria-label="Next line"
-                className="m-4 rounded-lg border border-border-subtle bg-surface-sunken p-3"
+                className="rounded-[var(--radius-sm)] border border-border-subtle bg-surface-card px-3 py-2.5"
               >
-                <div className="grid items-center gap-4 lg:grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)_auto]">
-                  <div className="min-w-0">
+                <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
+                  <div className="min-w-0 basis-full">
                     <h2 className="font-mono text-xs uppercase tracking-widest text-text-muted">
                       Next line
                     </h2>
-                    <p className="mt-1 text-sm font-semibold text-text-strong">
+                    <p className="text-[15px] font-semibold text-text-strong">
                       {counterMedicineDisplayName(activeRow)}
                       {activeRow.strength ? ` ${activeRow.strength}` : ''}
                       {counterMedicineGenericName(activeRow) ? (
@@ -4246,7 +4400,7 @@ function ScopedPharmacyCounterConsole({
                         </span>
                       ) : null}
                     </p>
-                    <p className="mt-1 text-xs leading-relaxed text-text-muted">
+                    <p className="text-xs leading-relaxed text-text-muted">
                       {[
                         activeRow.presentation,
                         activeRow.dosageForm,
@@ -4264,7 +4418,7 @@ function ScopedPharmacyCounterConsole({
                         .join(' · ')}
                     </p>
                   </div>
-                  <div className="counter-next-controls min-w-0 space-y-3">
+                  <div className="counter-next-controls min-w-0 flex-1 space-y-2">
                     <CounterUnitToggle
                       inline
                       options={activeRow.saleUnits}
@@ -4319,7 +4473,7 @@ function ScopedPharmacyCounterConsole({
 
                   <Button
                     type="button"
-                    className="min-h-12 rounded-[var(--radius-sm)]"
+                    className="min-h-12 rounded-[var(--radius-sm)] lg:w-full"
                     disabled={busy || !preview?.sufficient}
                     aria-describedby={
                       !busy && !preview?.sufficient ? 'counter-add-to-cart-reason' : undefined
@@ -4338,7 +4492,7 @@ function ScopedPharmacyCounterConsole({
                     </p>
                   ) : null}
                 </div>
-                <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-text-muted">
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border-subtle pt-2 text-xs text-text-muted">
                   <span>
                     {lotOverride?.inventoryLotId
                       ? `Selected batch ${lotOptionsQuery.data?.find((lot) => lot.inventoryLotId === lotOverride.inventoryLotId)?.batchNumber ?? 'override'} will be used with a recorded reason.`
@@ -4377,8 +4531,320 @@ function ScopedPharmacyCounterConsole({
                   />
                 </div>
               </section>
-            ) : null}
-          </SectionCard>
+            </div>
+          ) : null}
+          <section
+            aria-label="Cart"
+            tabIndex={0}
+            className="min-w-0 px-4 pb-4 outline-none focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:ring-inset lg:col-start-1 lg:row-start-3 lg:min-h-0 lg:overflow-y-auto lg:border-e lg:border-border-subtle lg:px-6 lg:pb-6"
+          >
+            <h2 className="sr-only">Cart</h2>
+            <CounterCartPanel
+              cart={cart}
+              alerts={alerts}
+              state={
+                !saleId
+                  ? 'idle'
+                  : cartQuery.isLoading
+                    ? 'loading'
+                    : cartQuery.isError
+                      ? 'error'
+                      : 'ready'
+              }
+              error={cartQuery.error ? messageFrom(cartQuery.error) : null}
+              onRetry={() => void refreshTenderBill()}
+              emptyHints={
+                <>
+                  <span>
+                    <kbd className={KEYCAP_CLASS}>{formatBinding(keymap.bindings.focusSearch)}</kbd>{' '}
+                    search
+                  </span>
+                  <span>
+                    <kbd className={KEYCAP_CLASS}>Enter</kbd> add
+                  </span>
+                  <span>
+                    <kbd className={KEYCAP_CLASS}>{formatBinding(keymap.bindings.openTender)}</kbd>{' '}
+                    take payment
+                  </span>
+                </>
+              }
+            />
+          </section>
+        </div>
+        <aside
+          id="counter-bill-total"
+          tabIndex={-1}
+          aria-label="Bill total"
+          className={`flex min-w-0 flex-col gap-3.5 p-4 outline-none lg:col-start-2 lg:min-h-0 lg:overflow-y-auto lg:bg-surface-card lg:p-5 [&_button]:rounded-[var(--radius-sm)] ${composing ? 'lg:row-start-3' : 'lg:row-span-3 lg:row-start-1'}`}
+        >
+          <div className="flex items-center gap-3 rounded-2xl border border-border-subtle bg-surface-card px-4 py-3.5">
+            <span
+              aria-hidden="true"
+              className="grid size-10 shrink-0 place-items-center rounded-[var(--radius-sm)] bg-surface-sunken text-text-body"
+            >
+              <UserRound className="size-[18px]" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-semibold text-text-strong">
+                {customerQuery.data?.customer.displayName ?? 'Walk-in customer'}
+              </span>
+              <span className="block text-xs text-text-muted">
+                {customerQuery.data ? 'Linked to this bill' : 'No customer on this bill'}
+              </span>
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11 shrink-0 px-3 text-[13px]"
+              onClick={() => setLoyaltyOpen(true)}
+            >
+              {customerQuery.data ? 'Change' : 'Link customer'}
+            </Button>
+          </div>
+          {/* DEV-972: the next item's voucher and discount sit in the bill total's own header
+                row, never between the search box and its results, and add no row above Pay. */}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Eyebrow>Bill total</Eyebrow>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {!dayClosed && !drawerRequired ? (
+                <div
+                  role="group"
+                  aria-label="Voucher and discount for the next item"
+                  className="flex flex-wrap items-center gap-2"
+                >
+                  <CounterVoucherEntry
+                    branchId={branchId}
+                    held={heldVoucher}
+                    disabled={busy || !branchAuthorized || !online || Boolean(heldDiscount)}
+                    returnFocus={searchRef}
+                    onHold={(voucher) => {
+                      setHeldVoucher({ ...voucher, branchId });
+                      setNotice({
+                        tone: 'success',
+                        message: `Voucher ${voucher.code} will be used on the next item you add.`,
+                      });
+                      focusSearch();
+                    }}
+                    onClear={() => setHeldVoucher(null)}
+                  />
+                  <CounterDiscountEntry
+                    branchId={branchId}
+                    held={heldDiscount}
+                    disabled={busy || !branchAuthorized || !online || Boolean(heldVoucher)}
+                    returnFocus={searchRef}
+                    onHold={(discount) => {
+                      setHeldDiscount({ ...discount, branchId });
+                      setNotice({
+                        tone: 'success',
+                        message: `A discount of ${describeCounterDiscount(discount)} will come off the next item you add.`,
+                      });
+                      focusSearch();
+                    }}
+                    onClear={() => setHeldDiscount(null)}
+                  />
+                </div>
+              ) : null}
+              <span className="text-xs text-text-muted">
+                {lineCount} {lineCount === 1 ? 'line' : 'lines'}
+              </span>
+            </div>
+          </div>
+          <dl className="grid gap-2 text-sm">
+            {(
+              [
+                ['Gross', cart?.totals.grossMinor],
+                ['Discount', cart?.totals.discountMinor],
+                ['Total', cart?.totals.netMinor],
+                ['Tendered', cart?.totals.tenderedMinor],
+              ] as const
+            ).map(([label, value]) => (
+              <div
+                key={label}
+                className={`flex items-baseline justify-between gap-3 ${label === 'Total' ? 'border-t border-border-subtle pt-2 text-[15px] font-semibold text-text-strong' : 'text-text-body'}`}
+              >
+                <dt>{label}</dt>
+                <dd
+                  className={`tabular-nums ${label === 'Discount' && value ? 'font-semibold text-success' : 'font-semibold text-text-strong'}`}
+                >
+                  {currentBill && value !== undefined ? formatMinor(value) : '—'}
+                </dd>
+              </div>
+            ))}
+          </dl>
+          {/* DEV-956: shown only when the owner has turned the whole-bill discount on. */}
+          {currentBill && cart.status === 'OPEN' && lineCount > 0 ? (
+            <CounterBillDiscountEntry
+              branchId={branchId}
+              saleId={cart.saleId}
+              lines={cart.lines}
+              disabled={busy || !branchAuthorized || !online || cart.totals.tenderedMinor > 0}
+              requestApproval={requestBillDiscountApproval}
+              onChanged={(message) => {
+                setNotice({ tone: 'success', message });
+                void cartQuery.refetch();
+              }}
+            />
+          ) : null}
+          <div className="grid gap-3.5">
+            <div className="grid gap-0.5 rounded-2xl bg-surface-sunken px-4 py-3.5">
+              <p className="text-[13px] font-semibold text-text-body">
+                {billState === 'settled' ? `Paid · receipt ${cart?.receiptNumber}` : 'Balance due'}
+              </p>
+              <p className="text-[34px] leading-tight font-semibold tracking-[-0.02em] text-text-strong tabular-nums">
+                {billState === 'settled' && currentBill
+                  ? formatMinor(cart.totals.tenderedMinor)
+                  : balanceMinor === null
+                    ? '—'
+                    : formatMinor(balanceMinor)}
+              </p>
+              <div className="empty:hidden">
+                <CounterChangeDue minor={confirmedChangeMinor} />
+              </div>
+            </div>
+            {billState === 'settled' ? (
+              <div className="space-y-2">
+                <Button className="h-14 w-full" disabled={busy} onClick={startNextBill}>
+                  Start next bill
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-11 w-full"
+                  onClick={() => {
+                    if (settledReceipt) {
+                      if (presentedReceipt?.saleId !== saleId) setReceiptReprint(false);
+                      setLastReceipt({ branchId, receipt: settledReceipt });
+                    }
+                    setReceiptOpen(true);
+                  }}
+                >
+                  Preview receipt
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-11 w-full"
+                  onClick={() => void printReceipt()}
+                >
+                  Print · {formatBinding(keymap.bindings.printReceipt)}
+                </Button>
+              </div>
+            ) : (
+              <Button
+                className="h-14 w-full justify-between px-5 text-[17px]"
+                disabled={!canSettlePayments || billState !== 'ready' || blocked || busy}
+                aria-describedby="counter-pay-reason"
+                onClick={openPayment}
+              >
+                <span>Take payment</span>
+                <span className="sr-only">·</span>
+                <kbd className="rounded border border-primary-foreground/30 bg-primary-foreground/10 px-1.5 py-0.5 font-mono text-xs">
+                  {formatBinding(keymap.bindings.openTender)}
+                </kbd>
+              </Button>
+            )}
+          </div>
+          {!canSettlePayments ? (
+            <div
+              role="status"
+              className={`text-sm ${settlementAccess.isError ? 'text-warning' : 'text-text-muted'}`}
+            >
+              <p id="counter-pay-reason">{payDisabledReason}</p>
+              {settlementAccess.isError ? (
+                <Button
+                  variant="outline"
+                  className="mt-2 min-h-11"
+                  onClick={() => void settlementAccess.refetch()}
+                >
+                  Retry payment access
+                </Button>
+              ) : null}
+            </div>
+          ) : (
+            <p
+              id="counter-pay-reason"
+              className={`text-xs ${blocked ? 'rounded-[var(--radius-sm)] bg-destructive/10 px-3.5 py-3 text-[13px] font-semibold text-destructive' : 'text-text-muted'}`}
+            >
+              {payDisabledReason ?? 'Cash, card, bank transfer, wallet or khata.'}
+            </p>
+          )}
+          {canSettlePayments && billState !== 'ready' && billState !== 'settled' && saleId ? (
+            <Button variant="outline" className="min-h-11 w-full" onClick={openPayment}>
+              Review payment status
+            </Button>
+          ) : null}
+          <div className="grid grid-cols-3 gap-2" aria-label="Bill actions">
+            <Button
+              variant="outline"
+              className="h-11 px-2 text-xs"
+              disabled={busy || !saleId || cart?.status !== 'OPEN'}
+              aria-describedby={billActionReason ? 'counter-bill-action-reason' : undefined}
+              onClick={() => void runTransition('hold')}
+            >
+              Hold{' '}
+              <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs">
+                {formatBinding(keymap.bindings.holdSale)}
+              </kbd>
+            </Button>
+            <Button
+              variant="outline"
+              className="h-11 px-2 text-xs"
+              disabled={busy || !heldSaleId}
+              aria-describedby={resumeReasonId}
+              onClick={() => void runTransition('resume')}
+            >
+              Resume{' '}
+              <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs">
+                {formatBinding(keymap.bindings.resumeSale)}
+              </kbd>
+            </Button>
+            <Button
+              variant="outline"
+              className="h-11 px-2 text-xs text-destructive"
+              disabled={busy || !saleId || cart?.status !== 'OPEN'}
+              aria-describedby={billActionReason ? 'counter-bill-action-reason' : undefined}
+              onClick={() => setVoidOpen(true)}
+            >
+              Void
+            </Button>
+          </div>
+          {billActionReason ? (
+            <p id="counter-bill-action-reason" className="text-xs text-text-muted">
+              {billActionReason}
+            </p>
+          ) : null}
+          {resumeReasonId === 'counter-resume-reason' ? (
+            <p id="counter-resume-reason" className="text-xs text-text-muted">
+              {resumeDisabledReason}
+            </p>
+          ) : null}
+          {packApproval ? (
+            <CounterPackApprovalDialog
+              medicineName={packApproval.medicineName}
+              copy={
+                packApproval.discount
+                  ? {
+                      title: 'Approve this discount?',
+                      description: `${packApproval.medicineName}: a discount of ${packApproval.discount}. A manager or owner must enter a fresh PIN. A solo owner can enter their own PIN. The approval is recorded in the audit.`,
+                      confirm: 'Approve discount',
+                    }
+                  : undefined
+              }
+              loadApprovers={
+                packApproval.discount ? loadDiscountApprovers : loadScannedPackApprovers
+              }
+              onCancel={() => finishPackApproval(null)}
+              onConfirm={finishPackApproval}
+            />
+          ) : null}
+          <CounterVoidDialog
+            open={voidOpen && Boolean(saleId)}
+            onOpenChange={setVoidOpen}
+            busy={busy}
+            onConfirm={(reason) => {
+              setVoidOpen(false);
+              void runTransition('void', reason);
+            }}
+          />
+          {/* DEV-977: suggestions sit with the bill, as drawn, never between search and results. */}
           {substituteInput ? (
             <SectionCard
               compact
@@ -4428,283 +4894,11 @@ function ScopedPharmacyCounterConsole({
               setActiveRow(null);
             }}
           />
-        </div>
-        <aside
-          id="counter-bill-total"
-          tabIndex={-1}
-          aria-label="Bill total"
-          className="min-w-0 space-y-3 xl:sticky xl:top-0 xl:flex xl:min-h-0 xl:flex-col [&_button]:rounded-[var(--radius-sm)]"
-        >
-          <section
-            aria-label="Cart"
-            tabIndex={0}
-            className="rounded-xl border border-border-subtle bg-surface-card outline-none focus-visible:ring-3 focus-visible:ring-ring/50 xl:min-h-24 xl:flex-1 xl:overflow-y-auto"
-          >
-            <h2 className="sticky top-0 border-b border-border-subtle bg-surface-card px-4 py-3 text-sm font-semibold text-text-strong">
-              Cart
-            </h2>
-            <CounterCartPanel
-              cart={cart}
-              alerts={alerts}
-              state={
-                !saleId
-                  ? 'idle'
-                  : cartQuery.isLoading
-                    ? 'loading'
-                    : cartQuery.isError
-                      ? 'error'
-                      : 'ready'
-              }
-              error={cartQuery.error ? messageFrom(cartQuery.error) : null}
-              onRetry={() => void refreshTenderBill()}
-            />
-          </section>
-          <SectionCard className="shrink-0 rounded-xl p-3" compact>
-            {/* DEV-972: the next item's voucher and discount sit in the bill total's own header
-                row, never between the search box and its results, and add no row above Pay. */}
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <Eyebrow>Bill total</Eyebrow>
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                {!dayClosed && !drawerRequired ? (
-                  <div
-                    role="group"
-                    aria-label="Voucher and discount for the next item"
-                    className="flex flex-wrap items-center gap-2"
-                  >
-                    <CounterVoucherEntry
-                      branchId={branchId}
-                      held={heldVoucher}
-                      disabled={busy || !branchAuthorized || !online || Boolean(heldDiscount)}
-                      returnFocus={searchRef}
-                      onHold={(voucher) => {
-                        setHeldVoucher({ ...voucher, branchId });
-                        setNotice({
-                          tone: 'success',
-                          message: `Voucher ${voucher.code} will be used on the next item you add.`,
-                        });
-                        focusSearch();
-                      }}
-                      onClear={() => setHeldVoucher(null)}
-                    />
-                    <CounterDiscountEntry
-                      branchId={branchId}
-                      held={heldDiscount}
-                      disabled={busy || !branchAuthorized || !online || Boolean(heldVoucher)}
-                      returnFocus={searchRef}
-                      onHold={(discount) => {
-                        setHeldDiscount({ ...discount, branchId });
-                        setNotice({
-                          tone: 'success',
-                          message: `A discount of ${describeCounterDiscount(discount)} will come off the next item you add.`,
-                        });
-                        focusSearch();
-                      }}
-                      onClear={() => setHeldDiscount(null)}
-                    />
-                  </div>
-                ) : null}
-                <span className="text-xs text-text-muted">
-                  {lineCount} {lineCount === 1 ? 'line' : 'lines'}
-                </span>
-              </div>
-            </div>
-            <dl className="grid grid-cols-3 gap-3 text-xs">
-              {(
-                [
-                  ['Gross', cart?.totals.grossMinor],
-                  ['Discount', cart?.totals.discountMinor],
-                  ['Tendered', cart?.totals.tenderedMinor],
-                ] as const
-              ).map(([label, value]) => (
-                <div key={label} className="space-y-1">
-                  <dt className="text-text-muted">{label}</dt>
-                  <dd className="font-mono tabular-nums">
-                    {currentBill && value !== undefined ? formatMinor(value) : '—'}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-            {/* DEV-956: shown only when the owner has turned the whole-bill discount on. */}
-            {currentBill && cart.status === 'OPEN' && lineCount > 0 ? (
-              <CounterBillDiscountEntry
-                branchId={branchId}
-                saleId={cart.saleId}
-                lines={cart.lines}
-                disabled={busy || !branchAuthorized || !online || cart.totals.tenderedMinor > 0}
-                requestApproval={requestBillDiscountApproval}
-                onChanged={(message) => {
-                  setNotice({ tone: 'success', message });
-                  void cartQuery.refetch();
-                }}
-              />
-            ) : null}
-            <div className="my-3 grid grid-cols-2 items-center gap-3 border-y border-border-subtle py-3">
-              <div>
-                <p className="font-mono text-xs text-text-muted">
-                  {billState === 'settled'
-                    ? `Paid · receipt ${cart?.receiptNumber}`
-                    : 'Balance due'}
-                </p>
-                <p className="mt-1 font-mono text-3xl font-semibold tracking-tight text-text-strong tabular-nums">
-                  {billState === 'settled' && currentBill
-                    ? formatMinor(cart.totals.tenderedMinor)
-                    : balanceMinor === null
-                      ? '—'
-                      : formatMinor(balanceMinor)}
-                </p>
-                <div className="empty:hidden">
-                  <CounterChangeDue minor={confirmedChangeMinor} />
-                </div>
-              </div>
-              {billState === 'settled' ? (
-                <div className="space-y-2">
-                  <Button className="h-14 w-full" disabled={busy} onClick={startNextBill}>
-                    Start next bill
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="h-11 w-full"
-                    onClick={() => {
-                      if (settledReceipt) {
-                        if (presentedReceipt?.saleId !== saleId) setReceiptReprint(false);
-                        setLastReceipt({ branchId, receipt: settledReceipt });
-                      }
-                      setReceiptOpen(true);
-                    }}
-                  >
-                    Preview receipt
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="h-11 w-full"
-                    onClick={() => void printReceipt()}
-                  >
-                    Print · {formatBinding(keymap.bindings.printReceipt)}
-                  </Button>
-                </div>
-              ) : (
-                <Button
-                  className="h-14 w-full justify-between"
-                  disabled={!canSettlePayments || billState !== 'ready' || blocked || busy}
-                  aria-describedby="counter-pay-reason"
-                  onClick={openPayment}
-                >
-                  <span>Pay</span>
-                  <span className="sr-only">·</span>
-                  <kbd className="rounded border border-primary-foreground/30 bg-primary-foreground/10 px-1.5 py-0.5 font-mono text-xs">
-                    {formatBinding(keymap.bindings.openTender)}
-                  </kbd>
-                </Button>
-              )}
-            </div>
-            {!canSettlePayments ? (
-              <div
-                role="status"
-                className={`mt-2 text-sm ${settlementAccess.isError ? 'text-warning' : 'text-text-muted'}`}
-              >
-                <p id="counter-pay-reason">{payDisabledReason}</p>
-                {settlementAccess.isError ? (
-                  <Button
-                    variant="outline"
-                    className="mt-2 min-h-11"
-                    onClick={() => void settlementAccess.refetch()}
-                  >
-                    Retry payment access
-                  </Button>
-                ) : null}
-              </div>
-            ) : (
-              <p
-                id="counter-pay-reason"
-                className={`mt-2 text-xs ${blocked ? 'text-destructive' : 'text-text-muted'}`}
-              >
-                {payDisabledReason ?? 'Cash, card, bank transfer, wallet or khata.'}
-              </p>
-            )}
-            {canSettlePayments && billState !== 'ready' && billState !== 'settled' && saleId ? (
-              <Button variant="outline" className="mt-2 min-h-11 w-full" onClick={openPayment}>
-                Review payment status
-              </Button>
-            ) : null}
-            <div className="mt-3 grid grid-cols-3 gap-2" aria-label="Bill actions">
-              <Button
-                variant="outline"
-                className="h-11 px-2 text-xs"
-                disabled={busy || !saleId || cart?.status !== 'OPEN'}
-                aria-describedby={billActionReason ? 'counter-bill-action-reason' : undefined}
-                onClick={() => void runTransition('hold')}
-              >
-                Hold{' '}
-                <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs">
-                  {formatBinding(keymap.bindings.holdSale)}
-                </kbd>
-              </Button>
-              <Button
-                variant="outline"
-                className="h-11 px-2 text-xs"
-                disabled={busy || !heldSaleId}
-                aria-describedby={resumeReasonId}
-                onClick={() => void runTransition('resume')}
-              >
-                Resume{' '}
-                <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs">
-                  {formatBinding(keymap.bindings.resumeSale)}
-                </kbd>
-              </Button>
-              <Button
-                variant="outline"
-                className="h-11 px-2 text-xs text-destructive"
-                disabled={busy || !saleId || cart?.status !== 'OPEN'}
-                aria-describedby={billActionReason ? 'counter-bill-action-reason' : undefined}
-                onClick={() => setVoidOpen(true)}
-              >
-                Void
-              </Button>
-            </div>
-            {billActionReason ? (
-              <p id="counter-bill-action-reason" className="mt-2 text-xs text-text-muted">
-                {billActionReason}
-              </p>
-            ) : null}
-            {resumeReasonId === 'counter-resume-reason' ? (
-              <p id="counter-resume-reason" className="mt-2 text-xs text-text-muted">
-                {resumeDisabledReason}
-              </p>
-            ) : null}
-            {packApproval ? (
-              <CounterPackApprovalDialog
-                medicineName={packApproval.medicineName}
-                copy={
-                  packApproval.discount
-                    ? {
-                        title: 'Approve this discount?',
-                        description: `${packApproval.medicineName}: a discount of ${packApproval.discount}. A manager or owner must enter a fresh PIN. A solo owner can enter their own PIN. The approval is recorded in the audit.`,
-                        confirm: 'Approve discount',
-                      }
-                    : undefined
-                }
-                loadApprovers={
-                  packApproval.discount ? loadDiscountApprovers : loadScannedPackApprovers
-                }
-                onCancel={() => finishPackApproval(null)}
-                onConfirm={finishPackApproval}
-              />
-            ) : null}
-            <CounterVoidDialog
-              open={voidOpen && Boolean(saleId)}
-              onOpenChange={setVoidOpen}
-              busy={busy}
-              onConfirm={(reason) => {
-                setVoidOpen(false);
-                void runTransition('void', reason);
-              }}
-            />
-          </SectionCard>
         </aside>
       </div>
       <div
         aria-label="Phone payment"
-        className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-3 border-t border-border-default bg-surface-card p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] xl:hidden"
+        className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-3 border-t border-border-default bg-surface-card px-4 pt-2.5 pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:hidden"
       >
         <div className="min-w-0 flex-1">
           <p id="counter-phone-pay-reason" className="text-xs text-text-muted">
@@ -4712,13 +4906,13 @@ function ScopedPharmacyCounterConsole({
               ? (payDisabledReason ?? 'Balance due')
               : 'Balance due'}
           </p>
-          <p className="font-mono text-xl font-semibold text-text-strong tabular-nums">
+          <p className="text-2xl leading-tight font-semibold text-text-strong tabular-nums">
             {balanceMinor === null ? '—' : formatMinor(balanceMinor)}
           </p>
         </div>
         <Button
           variant="outline"
-          className="h-13 min-w-11 rounded-[var(--radius-sm)]"
+          className="h-14 min-w-11 rounded-[var(--radius-sm)]"
           onClick={() =>
             document.getElementById('counter-bill-total')?.scrollIntoView({ block: 'start' })
           }
@@ -4726,7 +4920,7 @@ function ScopedPharmacyCounterConsole({
           Bill
         </Button>
         <Button
-          className="h-13 min-w-28 rounded-[var(--radius-sm)]"
+          className="h-14 min-w-36 rounded-[var(--radius-sm)] text-[17px]"
           disabled={!canSettlePayments || billState !== 'ready' || blocked || busy}
           // While payment access is unresolved, the reason (with its retry) sits in the bill panel.
           aria-describedby={
@@ -4736,7 +4930,8 @@ function ScopedPharmacyCounterConsole({
           }
           onClick={openPayment}
         >
-          Pay <span className="sr-only">· {formatBinding(keymap.bindings.openTender)}</span>
+          Take payment{' '}
+          <span className="sr-only">· {formatBinding(keymap.bindings.openTender)}</span>
         </Button>
       </div>
       <CounterOverlay
@@ -5221,22 +5416,13 @@ function ScopedPharmacyCounterConsole({
       <p className="sr-only" aria-live="polite">
         {COUNTER_ACTION_LABELS.focusSearch}: {formatBinding(keymap.bindings.focusSearch)}
       </p>
-    </div>
+    </>
   );
 
   return (
-    <div className="pos-calm flex h-full min-h-0 flex-col overflow-hidden bg-surface-page">
-      {/* Reserve space outside the scroller: one reason stays visible without covering controls. */}
-      {counterBusyReason ? (
-        <p
-          id="counter-branch-reason"
-          className="shrink-0 border-b border-border-subtle px-4 py-2 text-xs text-text-muted"
-        >
-          {counterBusyReason}
-        </p>
-      ) : null}
-      {scrollableCounter}
-    </div>
+    <CounterFrame statusLine={statusLine} actionBar={actionBar}>
+      {counterBody}
+    </CounterFrame>
   );
 }
 

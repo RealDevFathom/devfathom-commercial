@@ -676,11 +676,17 @@ describe('DEV-498 counter workspace', () => {
     expect(screen.getByTestId('controlled-authorization')).toBeInTheDocument();
   });
 
-  it('keeps the cart in the payment rail and internal branch codes out of the counter', () => {
+  it('keeps the cart beside the payment rail and internal branch codes out of the counter', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    // DEV-977 (owner-approved Counter v2): the bill lines take the main column, directly
+    // under the search, and the payment rail sits beside them; they no longer share a box.
+    const rail = screen.getByLabelText('Bill total');
+    const cartRegion = screen.getByRole('region', { name: 'Cart' });
+    expect(rail).not.toContainElement(cartRegion);
+    expect(document.getElementById('counter-scan-search')).not.toContainElement(cartRegion);
     expect(
-      within(screen.getByLabelText('Bill total')).getByRole('region', { name: 'Cart' })
-    ).toBeInTheDocument();
+      cartRegion.compareDocumentPosition(rail) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
     expect(screen.getByLabelText('Branch')).not.toHaveTextContent('MT1');
     expect(document.body).not.toHaveTextContent(/(?:POS|CRM)-\d|Phase 0/);
   });
@@ -1267,7 +1273,12 @@ describe('PharmacyCounterConsole tender recovery', () => {
       expect(screen.getByLabelText('Amount')).toHaveValue('');
       expect(screen.getByLabelText('Cash received')).toHaveValue('');
       expect(screen.getByText('Settled')).toBeInTheDocument();
-      expect(screen.getByText('Take payment').closest('button')).toBeDisabled();
+      // DEV-977: the phone bar's "Take payment" also reads so; the payment panel's is the other.
+      const [panelSubmit, ...others] = screen
+        .getAllByText('Take payment')
+        .filter((text) => !text.closest('[aria-label="Phone payment"]'));
+      expect(others).toHaveLength(0);
+      expect(panelSubmit!.closest('button')).toBeDisabled();
       const receiptDrawer = screen.getByRole('dialog', { name: 'Receipt preview' });
       expect(within(receiptDrawer).getByRole('region', { name: 'Change due' })).toHaveTextContent(
         '50.00'
@@ -5550,7 +5561,7 @@ describe('DEV-618 counter composition', () => {
         fireEvent.click(
           within(
             screen.getByLabelText(entry === 'phone' ? 'Phone payment' : 'Bill total')
-          ).getByRole('button', { name: /Pay/ })
+          ).getByRole('button', { name: /^Take payment ?·/ })
         );
       const dialog = screen.getByRole('dialog', { name: 'Payment' });
       const amount = within(dialog).getByLabelText('Amount');
@@ -5940,7 +5951,7 @@ describe('DEV-618 counter composition', () => {
     expect(
       within(screen.getByRole('region', { name: 'Cart' })).queryByRole('button', { name: /^Hold/ })
     ).not.toBeInTheDocument();
-    const pay = within(rail).getByRole('button', { name: /Pay/ });
+    const pay = within(rail).getByRole('button', { name: /^Take payment ?·/ });
     const hold = within(rail).getByRole('button', { name: /^Hold/ });
     expect(pay.compareDocumentPosition(hold) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(rail).getByRole('button', { name: /^Resume/ })).toBeDisabled();
@@ -5980,7 +5991,7 @@ describe('DEV-618 counter composition', () => {
 
   it('hides the unconfirmed preset from a cashier in the shortcuts dialog', () => {
     render(<PharmacyCounterConsole />);
-    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
     fireEvent.click(screen.getByRole('button', { name: 'Shortcuts' }));
     const dialog = screen.getByRole('dialog', { name: 'Shortcuts' });
     expect(within(dialog).getByLabelText('Keymap')).toHaveValue('devfathom');
@@ -6002,7 +6013,7 @@ describe('DEV-618 counter composition', () => {
       });
       render(<PharmacyCounterConsole />);
       if (!recoveryAvailable) expect(screen.getByLabelText('Scan or search')).toBeDisabled();
-      fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+      fireEvent.click(screen.getByRole('button', { name: 'More' }));
       fireEvent.click(screen.getByRole('button', { name: 'Shortcuts' }));
       const dialog = screen.getByRole('dialog', { name: 'Shortcuts' });
       const select = within(dialog).getByLabelText('Keymap');
@@ -6075,7 +6086,7 @@ describe('DEV-618 counter composition', () => {
       .mockResolvedValueOnce({ ...resolveCounterKeymap({ preset: 'devfathom' }), stored: true });
     render(<PharmacyCounterConsole />);
     expect(screen.getByLabelText('Scan or search')).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
     fireEvent.click(screen.getByRole('button', { name: 'Shortcuts' }));
     const dialog = screen.getByRole('dialog', { name: 'Shortcuts' });
     const select = within(dialog).getByLabelText('Keymap');
@@ -6128,16 +6139,11 @@ describe('DEV-618 counter composition', () => {
     expect(screen.getByLabelText('Bill status')).toHaveTextContent('Drawer open');
     expect(screen.getByText('No safety blocks · 0 notes to pass on')).toBeInTheDocument();
     expect(screen.getByText('Loyalty and khata · not linked')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Actions' })).toHaveAttribute(
-      'aria-expanded',
-      'false'
-    );
-    expect(document.getElementById('counter-actions')).toHaveClass('hidden', 'md:flex');
-    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
-    expect(screen.getByRole('button', { name: 'Actions' })).toHaveAttribute(
-      'aria-expanded',
-      'true'
-    );
+    expect(screen.getByRole('button', { name: 'More' })).toHaveAttribute('aria-expanded', 'false');
+    // DEV-977: collapsed into More until 1280px, where the everyday actions join the row.
+    expect(document.getElementById('counter-actions')).toHaveClass('hidden', 'xl:contents');
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    expect(screen.getByRole('button', { name: 'More' })).toHaveAttribute('aria-expanded', 'true');
     fireEvent.click(screen.getByRole('button', { name: 'Shortcuts' }));
     const dialog = screen.getByRole('dialog', { name: 'Shortcuts' });
     fireEvent.change(within(dialog).getByLabelText('Keymap'), { target: { value: 'legacySpeed' } });
@@ -6475,7 +6481,7 @@ describe('DEV-97 counter payment controls follow the settlement grant', () => {
     expect(
       screen.queryByRole('group', { name: 'Payment method', hidden: true })
     ).not.toBeInTheDocument();
-    for (const button of screen.getAllByRole('button', { name: /^Pay/ }))
+    for (const button of screen.getAllByRole('button', { name: /^Take payment ?·/ }))
       expect(button).toBeDisabled();
     expect(screen.queryByRole('button', { name: 'Khata payment' })).not.toBeInTheDocument();
     fireEvent.keyDown(screen.queryByLabelText('Scan or search') ?? window, { key: 'F9' });
@@ -6782,7 +6788,7 @@ describe('DEV-41 cashier actions', () => {
           initialBranchId="branch-a"
         />
       );
-      const buttons = screen.getAllByRole('button', { name: /^Pay/ });
+      const buttons = screen.getAllByRole('button', { name: /^Take payment ?·/ });
       expect(buttons).toHaveLength(2);
       for (const button of buttons) {
         expect(button).toBeDisabled();
@@ -6812,7 +6818,7 @@ describe('DEV-41 cashier actions', () => {
   ])('explains both Pay buttons when payment access is %s', (_state, access, reason) => {
     mocks.queries.settlementAccess = access();
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-    const buttons = screen.getAllByRole('button', { name: /^Pay/ });
+    const buttons = screen.getAllByRole('button', { name: /^Take payment ?·/ });
     expect(buttons).toHaveLength(2);
     for (const button of buttons) {
       expect(button).toBeDisabled();
@@ -7803,5 +7809,128 @@ describe('DEV-957 enrolled counter computer', () => {
     } finally {
       onLine.mockRestore();
     }
+  });
+});
+
+describe('DEV-977 Counter v2 sale screen (phase 1: frame, search, bill, totals)', () => {
+  it('puts the counter heading, branch, bill status and connection in its own bar', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const bar = screen.getByRole('banner');
+    expect(within(bar).getByRole('heading', { level: 1, name: 'Counter' })).toBeInTheDocument();
+    expect(within(bar).getByRole('combobox', { name: 'Branch' })).toBeInTheDocument();
+    expect(within(bar).getByLabelText('Bill status')).toHaveTextContent('Bill open · 1 line');
+    expect(within(bar).getByText('Online')).toBeInTheDocument();
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+  });
+
+  it('shows Offline in the bar when the connection drops', () => {
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    try {
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      expect(within(screen.getByRole('banner')).getByText('Offline')).toBeInTheDocument();
+      expect(within(screen.getByRole('banner')).queryByText('Online')).not.toBeInTheDocument();
+    } finally {
+      onLine.mockRestore();
+    }
+  });
+
+  it('closes More on Escape, back to its button, and on a press outside it', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const more = screen.getByRole('button', { name: 'More' });
+    const panel = document.getElementById('counter-actions')!;
+    expect(more).toHaveAttribute('aria-controls', 'counter-actions');
+    fireEvent.click(more);
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    expect(panel).toHaveClass('flex');
+    // A press inside the menu keeps it open.
+    const shortcuts = within(panel).getByRole('button', { name: 'Shortcuts' });
+    fireEvent.pointerDown(shortcuts);
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    shortcuts.focus();
+    fireEvent.keyDown(shortcuts, { key: 'Escape' });
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    expect(panel).toHaveClass('hidden');
+    expect(more).toHaveFocus();
+    fireEvent.click(more);
+    fireEvent.pointerDown(screen.getByLabelText('Scan or search'));
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('keeps every counter action reachable from the bar', () => {
+    mocks.session.data.user.role = 'ADMIN';
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const panel = document.getElementById('counter-actions')!;
+    for (const name of ['Returns', 'Sign out', 'Shortcuts'])
+      expect(within(panel).getByRole('button', { name })).toBeInTheDocument();
+    expect(within(panel).getByRole('link', { name: 'Customer orders' })).toHaveAttribute(
+      'href',
+      '/pharmacy/orders'
+    );
+    expect(screen.getByRole('banner')).toContainElement(panel);
+  });
+
+  it('drops search results over the bill and keeps them for screen readers while idle', async () => {
+    mocks.queries.counterSearch = query({ rows: [barcodeRow()], truncated: false });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const results = document.querySelector('[data-counter-results]')!;
+    expect(results).toHaveClass('sr-only');
+    expect(document.getElementById('counter-scan-search')).toContainElement(results as HTMLElement);
+    fireEvent.change(screen.getByLabelText('Scan or search'), { target: { value: 'para' } });
+    await waitFor(() => expect(results).toHaveClass('absolute', 'top-full'));
+    expect(results).not.toHaveClass('sr-only');
+    expect(within(results as HTMLElement).getByText('1 result')).toBeInTheDocument();
+  });
+
+  it('docks the line being added beside the results, not between the search and them', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const rail = screen.getByRole('complementary', { name: 'Bill total' });
+    expect(rail).toHaveClass('lg:row-span-3');
+    act(() => mocks.searchProps.mock.lastCall![0].onSelect(barcodeRow()));
+    const next = screen.getByRole('region', { name: 'Next line' });
+    expect(document.getElementById('counter-scan-search')).not.toContainElement(next);
+    expect(next.parentElement).toHaveClass('lg:col-start-2', 'lg:row-start-2');
+    expect(rail).toHaveClass('lg:row-start-3');
+    expect(rail).not.toHaveClass('lg:row-span-3');
+  });
+
+  it('shows the server totals, the balance due and Take payment with its key', () => {
+    mocks.queries.counterCart!.data = cart({
+      totals: { grossMinor: 30000, discountMinor: 5000, netMinor: 25000, tenderedMinor: 10000 },
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const rail = screen.getByLabelText('Bill total');
+    const value = (label: string) =>
+      within(rail).getByText(label, { selector: 'dt' }).nextElementSibling;
+    expect(value('Gross')).toHaveTextContent('300.00');
+    expect(value('Discount')).toHaveTextContent('50.00');
+    expect(value('Total')).toHaveTextContent('250.00');
+    expect(value('Tendered')).toHaveTextContent('100.00');
+    expect(within(rail).getByText('Balance due')).toBeInTheDocument();
+    expect(within(rail).getByText('150.00')).toBeInTheDocument();
+    expect(within(rail).getByRole('button', { name: /^Take payment ?· ?F9$/ })).toBeEnabled();
+    expect(
+      within(screen.getByLabelText('Phone payment')).getByRole('button', {
+        name: /^Take payment ?· ?F9$/,
+      })
+    ).toBeEnabled();
+  });
+
+  it('starts an empty counter with the keys that start a bill', () => {
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    const cartRegion = screen.getByRole('region', { name: 'Cart' });
+    expect(within(cartRegion).getByRole('heading', { name: 'Start a bill' })).toBeInTheDocument();
+    expect(cartRegion).toHaveTextContent(
+      'No bill is open. Search for a medicine and add a line to start one.'
+    );
+    expect(cartRegion).toHaveTextContent('F2 search');
+    expect(cartRegion).toHaveTextContent('F9 take payment');
+  });
+
+  it('shows the customer on the bill and links one from the payment column', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const rail = screen.getByLabelText('Bill total');
+    expect(within(rail).getByText('Walk-in customer')).toBeInTheDocument();
+    fireEvent.click(within(rail).getByRole('button', { name: 'Link customer' }));
+    expect(screen.getByRole('dialog', { name: 'Customer loyalty and khata' })).toBeInTheDocument();
   });
 });
