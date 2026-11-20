@@ -73,6 +73,9 @@ export function otherBranchAvailabilityText(
  * Rendered as a list of buttons rather than a table: each row is one keyboard
  * stop that stages the medicine, which is what makes the whole search
  * mouse-free (POS-01).
+ *
+ * DEV-972: the row is dense (the details run on as one wrapping line) so at least five results
+ * show at 1366 x 768; every field above is still on the row.
  */
 export function CounterSearchResults({
   rows,
@@ -224,7 +227,7 @@ export function CounterSearchResults({
                 aria-describedby={reason ? reasonId : undefined}
                 aria-pressed={active}
                 onClick={() => onSelect(row)}
-                className={`grid min-h-11 w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 px-4 py-3 text-start focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 ${
+                className={`grid min-h-11 w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 px-4 py-1.5 text-start focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 ${
                   active ? 'bg-surface-sunken' : 'hover:bg-surface-sunken'
                 }`}
               >
@@ -248,7 +251,7 @@ export function CounterSearchResults({
                   <span className="sr-only">Pack MRP </span>
                   {row.printedMrpMinor === null ? '—' : formatMinor(row.printedMrpMinor)}
                 </span>
-                <span className="col-span-2 min-w-0 break-words text-xs leading-relaxed text-text-muted">
+                <span className="col-span-2 flex min-w-0 flex-wrap gap-x-3 break-words text-xs text-text-muted">
                   <span className="block">
                     {row.strength ? (
                       <>

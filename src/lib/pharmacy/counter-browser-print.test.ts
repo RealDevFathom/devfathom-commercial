@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { PRINT_WINDOW_READY_TIMEOUT_MS } from '@/lib/browser-print/print-window';
 import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
+import { FakeBroadcastChannel, installFakePrintWindows } from '@/lib/testing/print-window';
 
 import {
   assertCounterBrowserPrintReady,
@@ -45,7 +47,11 @@ const receipt: CounterReceipt = {
   },
 };
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe('isolated Pharmacy browser receipt', () => {
   it('reads and normalizes the profile in force at completion', async () => {
@@ -508,85 +514,104 @@ describe('isolated Pharmacy browser receipt', () => {
     expect(open).not.toHaveBeenCalled();
   });
 
-  it('reports blocked popups without printing the POS page', () => {
-    vi.spyOn(window, 'open').mockReturnValue(null);
+  it('reports blocked popups without printing the POS page', async () => {
+    vi.useFakeTimers();
+    installFakePrintWindows({ blocked: true });
     const print = vi.spyOn(window, 'print').mockImplementation(() => {});
-    expect(() => printCounterBrowserReceipt(receipt, 'en', 'A4')).toThrow('Allow pop-ups');
+    const printing = printCounterBrowserReceipt(receipt, 'en', 'A4');
+    const outcome = expect(printing).rejects.toThrow('Allow pop-ups');
+    await vi.advanceTimersByTimeAsync(PRINT_WINDOW_READY_TIMEOUT_MS);
+    await outcome;
     expect(print).not.toHaveBeenCalled();
   });
 
-  it('rejects a blocked reservation before a server copy can be requested', () => {
-    vi.spyOn(window, 'open').mockReturnValue(null);
+  it('rejects a blocked reservation before a server copy can be requested', async () => {
+    vi.useFakeTimers();
+    installFakePrintWindows({ blocked: true });
     const reservation = reserveCounterBrowserPrint();
-    expect(() => assertCounterBrowserPrintReady(reservation)).toThrow('Allow pop-ups');
+    const ready = assertCounterBrowserPrintReady(reservation);
+    const outcome = expect(ready).rejects.toThrow('Allow pop-ups');
+    await vi.advanceTimersByTimeAsync(PRINT_WINDOW_READY_TIMEOUT_MS);
+    await outcome;
     reservation.cancel();
   });
 
-  it('rejects a closed or cancelled reservation before allocating a receipt', () => {
-    const popup = {
-      closed: false,
-      opener: window,
-      document: { open: vi.fn(), write: vi.fn(), close: vi.fn() },
-      focus: vi.fn(),
-      print: vi.fn(),
-      close: vi.fn(),
-    };
-    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+  it('rejects a closed or cancelled reservation before allocating a receipt', async () => {
+    const windows = installFakePrintWindows();
     const reservation = reserveCounterBrowserPrint();
-    expect(() => assertCounterBrowserPrintReady(reservation)).not.toThrow();
-    expect(popup.document.write).not.toHaveBeenCalled();
-    expect(popup.print).not.toHaveBeenCalled();
-    popup.closed = true;
-    expect(() => assertCounterBrowserPrintReady(reservation)).toThrow('no longer available');
-    reservation.cancel();
-    expect(() => assertCounterBrowserPrintReady(reservation)).toThrow('no longer available');
-  });
-
-  it('rejects a reserved window whose document is no longer accessible', () => {
-    const popup = {
-      opener: window,
-      get document(): Document {
-        throw new Error('Cross-origin window');
-      },
-      close: vi.fn(),
-    };
-    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
-    const reservation = reserveCounterBrowserPrint();
-    expect(() => assertCounterBrowserPrintReady(reservation)).toThrow('no longer available');
-    reservation.cancel();
-  });
-
-  it('prints the isolated document, disconnects opener and leaves receipt available', () => {
-    const popup = {
-      opener: window,
-      document: { open: vi.fn(), write: vi.fn(), close: vi.fn() },
-      focus: vi.fn(),
-      print: vi.fn(),
-      close: vi.fn(),
-    };
-    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
-    printCounterBrowserReceipt(receipt, 'en', 'THERMAL');
-    expect(popup.opener).toBeNull();
-    expect(popup.document.write).toHaveBeenCalledWith(
-      buildCounterBrowserReceipt(receipt, 'en', 'THERMAL')
+    const popup = windows.last();
+    await expect(assertCounterBrowserPrintReady(reservation)).resolves.toBeUndefined();
+    expect(popup.html()).toBeUndefined();
+    expect(popup.printRequests()).toBe(0);
+    expect(popup.proxy.print).not.toHaveBeenCalled();
+    popup.closeByOperator();
+    await expect(assertCounterBrowserPrintReady(reservation)).rejects.toThrow(
+      'no longer available'
     );
-    expect(popup.print).toHaveBeenCalledOnce();
-    expect(popup.close).not.toHaveBeenCalled();
+    reservation.cancel();
+    await expect(assertCounterBrowserPrintReady(reservation)).rejects.toThrow(
+      'no longer available'
+    );
   });
 
-  it('closes the isolated window on print failure and exposes retry guidance', () => {
-    const popup = {
-      opener: null,
-      document: { open: vi.fn(), write: vi.fn(), close: vi.fn() },
-      focus: vi.fn(),
-      print: vi.fn(() => {
-        throw new Error('unavailable');
-      }),
-      close: vi.fn(),
-    };
-    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
-    expect(() => printCounterBrowserReceipt(receipt, 'en', 'A4')).toThrow('Retry Print receipt');
-    expect(popup.close).toHaveBeenCalledOnce();
+  it('rejects a reserved window whose print page never loaded', async () => {
+    vi.useFakeTimers();
+    installFakePrintWindows({ ready: false });
+    const reservation = reserveCounterBrowserPrint();
+    const ready = assertCounterBrowserPrintReady(reservation);
+    const outcome = expect(ready).rejects.toThrow('Allow pop-ups');
+    await vi.advanceTimersByTimeAsync(PRINT_WINDOW_READY_TIMEOUT_MS);
+    await outcome;
+    reservation.cancel();
+  });
+
+  it('prints the isolated document, disconnects opener and leaves receipt available', async () => {
+    const windows = installFakePrintWindows();
+    await printCounterBrowserReceipt(receipt, 'en', 'THERMAL');
+    const popup = windows.last();
+    // noopener: the print window has no reference back to the counter.
+    expect(popup.features).toBe('noopener,popup,width=480,height=720');
+    expect(popup.html()).toBe(buildCounterBrowserReceipt(receipt, 'en', 'THERMAL'));
+    expect(popup.printRequests()).toBe(1);
+    expect(popup.proxy.close).not.toHaveBeenCalled();
+    windows.closeAll();
+  });
+
+  it('DEV-973: never calls print() from this page, so the print dialog cannot freeze it', async () => {
+    const windows = installFakePrintWindows({ ready: false });
+    const pagePrint = vi.spyOn(window, 'print').mockImplementation(() => {});
+    const reservation = reserveCounterBrowserPrint();
+    const popup = windows.last();
+    // The isolated print page, by URL only: no receipt data in the address.
+    expect(popup.url).toMatch(/^\/pharmacy\/counter\/print-window\.html#[0-9a-f-]{36}$/);
+    const printing = printCounterBrowserReceipt(receipt, 'en', 'A4', true, reservation);
+    // Settled before the print page loaded: held until it announces itself.
+    await Promise.resolve();
+    expect(popup.printRequests()).toBe(0);
+    popup.ready();
+    await printing;
+    expect(popup.html()).toBe(buildCounterBrowserReceipt(receipt, 'en', 'A4', true));
+    expect(popup.printRequests()).toBe(1);
+    expect(popup.proxy.print).not.toHaveBeenCalled();
+    expect(pagePrint).not.toHaveBeenCalled();
+    windows.closeAll();
+  });
+
+  it('closes the isolated window on print failure and exposes retry guidance', async () => {
+    const windows = installFakePrintWindows();
+    const reservation = reserveCounterBrowserPrint();
+    const deliver = FakeBroadcastChannel.prototype.postMessage;
+    vi.spyOn(FakeBroadcastChannel.prototype, 'postMessage').mockImplementation(function (
+      this: FakeBroadcastChannel,
+      data: unknown
+    ) {
+      if ((data as { type?: string }).type === 'print') throw new Error('unavailable');
+      deliver.call(this, data);
+    });
+    await expect(
+      printCounterBrowserReceipt(receipt, 'en', 'A4', false, reservation)
+    ).rejects.toThrow('Retry Print receipt');
+    expect(windows.last().proxy.close).toHaveBeenCalledOnce();
   });
 });
 

@@ -12,6 +12,13 @@
  * paper. Pure and client safe apart from `printShelfLabels`, which needs a window.
  */
 
+import {
+  closePrintWindow,
+  openPrintWindow,
+  printContentOverflows,
+  sendToPrintWindow,
+  type PrintWindow,
+} from '@/lib/browser-print/print-window';
 import { formatMinor } from './counter-receipt';
 import { parseShelfLabelCode, shelfLabelBarcodeSvg } from './shelf-label-code';
 import { BATCH_NOT_RECORDED, EXPIRY_NOT_RECORDED } from './unrecorded-batch';
@@ -165,30 +172,33 @@ body { margin: 0; color: black; background: white; font: ${format === '38x25' ? 
 export function printShelfLabels(
   selection: readonly ShelfLabelSelection[],
   format: ShelfLabelFormat
-): void {
+): Promise<void> {
   const html = buildShelfLabelSheet(selection, format);
-  const popup = window.open('', '_blank', 'popup,width=720,height=800');
-  if (!popup) throw new ShelfLabelError('Allow pop-ups for this site, then retry printing.');
+  // DEV-973: an isolated window that prints itself, so this page never freezes.
+  let popup: PrintWindow;
   try {
-    popup.opener = null;
-    popup.document.open();
-    popup.document.write(html);
-    popup.document.close();
-    const overflowing = Array.from(
-      popup.document.querySelectorAll<HTMLElement>('.shelf-label')
-    ).some(
-      (label) => label.scrollHeight > label.clientHeight || label.scrollWidth > label.clientWidth
-    );
-    if (overflowing) {
-      throw new ShelfLabelError(
-        'A label does not fit the selected size. Choose 50 × 25 mm or the A4 sheet.'
-      );
-    }
-    popup.focus();
-    popup.print();
+    popup = openPrintWindow('popup,width=720,height=800');
   } catch (error) {
-    popup.close();
-    if (error instanceof ShelfLabelError) throw error;
+    throw new ShelfLabelError(error instanceof Error ? error.message : 'Print window unavailable.');
+  }
+  let overflowing: boolean;
+  try {
+    // Laid out in this page, never printed here.
+    overflowing = printContentOverflows(html, '.shelf-label');
+  } catch {
+    closePrintWindow(popup);
     throw new ShelfLabelError('The print window could not open. Retry printing.');
   }
+  if (overflowing) {
+    closePrintWindow(popup);
+    throw new ShelfLabelError(
+      'A label does not fit the selected size. Choose 50 × 25 mm or the A4 sheet.'
+    );
+  }
+  return sendToPrintWindow(popup, html, {
+    blockedMessage: 'Allow pop-ups for this site, then retry printing.',
+    failedMessage: 'The print window could not open. Retry printing.',
+  }).catch((error: unknown) => {
+    throw new ShelfLabelError(error instanceof Error ? error.message : 'Print window unavailable.');
+  });
 }

@@ -106,6 +106,7 @@ describe('DEV-939 one typed-amount reader at the counter', () => {
           onClear={vi.fn()}
         />
       );
+      fireEvent.click(screen.getByRole('button', { name: 'Discount' }));
       fireEvent.click(screen.getByRole('button', { name: 'Amount (Rs)' }));
       fireEvent.change(screen.getByLabelText('Discount (Rs)'), { target: { value: input } });
       fireEvent.click(screen.getByRole('button', { name: 'Apply to next item' }));

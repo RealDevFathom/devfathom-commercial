@@ -6,8 +6,14 @@ import {
   printPrinterTestPage,
 } from './counter-browser-print';
 import { DEFAULT_RECEIPT_LAYOUT, ReceiptLayoutSchema } from '@/lib/receipts/configuration';
+import { PRINT_WINDOW_READY_TIMEOUT_MS } from '@/lib/browser-print/print-window';
+import { FakeBroadcastChannel, installFakePrintWindows } from '@/lib/testing/print-window';
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe('DEV-742 branch paper as the counter default', () => {
   it('stores only the supported browser paper preferences in the branch layout', () => {
@@ -69,35 +75,38 @@ describe('DEV-742 printer test page', () => {
     expect(() => buildPrinterTestPage('A4', 'fr' as never, 'B')).toThrow(/supported/);
   });
 
-  it('asks to allow pop-ups when the browser blocks the print window', () => {
-    vi.spyOn(window, 'open').mockReturnValue(null);
-    expect(() => printPrinterTestPage('A4', 'en', 'B')).toThrow(
+  it('asks to allow pop-ups when the browser blocks the print window', async () => {
+    vi.useFakeTimers();
+    installFakePrintWindows({ blocked: true });
+    const outcome = expect(printPrinterTestPage('A4', 'en', 'B')).rejects.toThrow(
       'Allow pop-ups for this site, then retry Print test page.'
     );
+    await vi.advanceTimersByTimeAsync(PRINT_WINDOW_READY_TIMEOUT_MS);
+    await outcome;
   });
 
-  it('opens the browser/OS dialog with the test page and closes the window on failure', () => {
-    const write = vi.fn();
-    const print = vi.fn();
-    const popup = {
-      opener: {},
-      document: { open: vi.fn(), write, close: vi.fn() },
-      focus: vi.fn(),
-      print,
-      close: vi.fn(),
-    };
-    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
-    printPrinterTestPage('THERMAL', 'en', 'Main');
-    expect(popup.opener).toBeNull();
-    expect(write.mock.calls[0]![0]).toContain('Printer test page');
-    expect(print).toHaveBeenCalledOnce();
+  it('opens the browser/OS dialog with the test page and closes the window on failure', async () => {
+    const windows = installFakePrintWindows();
+    await printPrinterTestPage('THERMAL', 'en', 'Main');
+    const popup = windows.last();
+    // noopener: the print window has no reference back to this page.
+    expect(popup.features).toMatch(/^noopener,/);
+    expect(popup.html()).toContain('Printer test page');
+    expect(popup.printRequests()).toBe(1);
+    // DEV-973: the isolated window prints itself; this page never calls print() on it.
+    expect(popup.proxy.print).not.toHaveBeenCalled();
 
-    print.mockImplementation(() => {
-      throw new Error('blocked');
+    const deliver = FakeBroadcastChannel.prototype.postMessage;
+    vi.spyOn(FakeBroadcastChannel.prototype, 'postMessage').mockImplementation(function (
+      this: FakeBroadcastChannel,
+      data: unknown
+    ) {
+      if ((data as { type?: string }).type === 'print') throw new Error('blocked');
+      deliver.call(this, data);
     });
-    expect(() => printPrinterTestPage('THERMAL', 'en', 'Main')).toThrow(
+    await expect(printPrinterTestPage('THERMAL', 'en', 'Main')).rejects.toThrow(
       'The browser print dialog could not open. Retry Print test page.'
     );
-    expect(popup.close).toHaveBeenCalled();
+    expect(windows.last().proxy.close).toHaveBeenCalled();
   });
 });
