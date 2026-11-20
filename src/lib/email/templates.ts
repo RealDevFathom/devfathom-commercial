@@ -145,6 +145,75 @@ export function passwordReset(p: {
   };
 }
 
+/**
+ * DEV-974: a member's sign-in email changed. The OLD address is told so a change
+ * the member did not make is noticed; the NEW address is told too and, when someone
+ * else made the change, gets the link to confirm it before it can be used to sign in.
+ */
+export function signInEmailChanged(p: {
+  name: string;
+  from: string;
+  to: string;
+  byName?: string;
+  audience: 'old' | 'new';
+  confirmUrl?: string;
+  expiresLabel?: string;
+}): EmailContent {
+  const who = p.byName ? ` by ${p.byName}` : '';
+  const rows: MetaRow[] = [
+    { label: 'Previous email', value: p.from },
+    { label: 'New email', value: p.to },
+  ];
+  const confirming = p.audience === 'new' && Boolean(p.confirmUrl);
+  const lead =
+    p.audience === 'old'
+      ? `The sign-in email for your DevFathom account was changed${who}. Sign-in and password resets now go to the new address.`
+      : `This address is now the sign-in email for your DevFathom account${who ? `, changed${who}` : ''}.`;
+  const next = confirming
+    ? `Confirm this address and choose a password to sign in again${
+        p.expiresLabel ? `. The link expires ${p.expiresLabel}` : ''
+      }.`
+    : undefined;
+  const warning =
+    p.audience === 'old'
+      ? `If you did not expect this, contact your workspace owner straight away.`
+      : `If you do not recognise this account, you can ignore this email.`;
+  return {
+    subject:
+      p.audience === 'old'
+        ? 'Your DevFathom sign-in email was changed'
+        : confirming
+          ? 'Confirm your new DevFathom sign-in email'
+          : 'Your DevFathom sign-in email was changed',
+    html: renderDocument({
+      preheader: lead,
+      body: [
+        eyebrow('Security'),
+        heading(confirming ? 'Confirm your new sign-in email' : 'Your sign-in email changed'),
+        paragraph(`Hi ${firstName(p.name)} — ${esc(lead)}`, { html: true }),
+        detailCard(rows),
+        next ? paragraph(next) : '',
+        confirming && p.confirmUrl ? button('Confirm email', p.confirmUrl) : '',
+        callout(esc(warning), p.audience === 'old' ? 'warning' : 'neutral'),
+      ].join(''),
+    }),
+    text: text([
+      confirming
+        ? 'Confirm your new DevFathom sign-in email'
+        : 'Your DevFathom sign-in email changed',
+      ``,
+      `Hi ${p.name.split(' ')[0]} — ${lead}`,
+      `Previous email: ${p.from}`,
+      `New email: ${p.to}`,
+      next && ``,
+      next,
+      confirming && p.confirmUrl,
+      ``,
+      warning,
+    ]),
+  };
+}
+
 export function inviteMember(p: {
   name: string;
   inviterName?: string;

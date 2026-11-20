@@ -805,6 +805,140 @@ describe('catalogue-edit capability, queue access and solo owner (DEV-19)', () =
       expect(db.$transaction).not.toHaveBeenCalled();
       expect(mocks.verifyPin).not.toHaveBeenCalled();
     });
+
+    describe('DEV-976: who can approve the caller’s own edits, for the screen', () => {
+      const names: Record<string, string> = {
+        owner_a: 'Saad Owner',
+        owner_b: 'Bilal Ahmed',
+        pharmacist_c: 'Ayesha Khan',
+        cashier_b: 'Cashier Fixture',
+        pharmacist_d: 'Former Pharmacist',
+      };
+      beforeEach(() => {
+        db.user.findMany.mockImplementation(
+          async ({
+            where,
+          }: {
+            where: { organizationId?: string; id?: { not?: string }; status?: { in?: string[] } };
+          }) =>
+            members
+              .filter(() => !where.organizationId || where.organizationId === 'org_a')
+              .filter((item) => item.id !== where.id?.not)
+              .filter((item) => !where.status?.in || where.status.in.includes(item.status))
+              .map((item) => ({
+                id: item.id,
+                name: names[item.id] ?? item.id,
+                role: item.record.role,
+                status: item.status,
+                department: null,
+                organizationId: 'org_a',
+              }))
+        );
+      });
+
+      it('Owner alone: may approve their own edit with a PIN, and names nobody', async () => {
+        addMember('cashier_b', cashier);
+        await expect(soloCaller().catalogueSelfApproval()).resolves.toEqual({
+          canSelfApprove: true,
+          reviewers: [],
+        });
+      });
+
+      it('Owner + Owner: may not self-approve and names the other owner, as the decision refuses', async () => {
+        addMember('owner_b', owner);
+        addMember('cashier_b', cashier);
+        await expect(soloCaller().catalogueSelfApproval()).resolves.toEqual({
+          canSelfApprove: false,
+          reviewers: ['Bilal Ahmed'],
+        });
+        const proposal = await queueOwnerAlias();
+        await expect(
+          soloCaller().decideCatalogueEdit({
+            editId: proposal.id,
+            decision: 'APPROVE',
+            soloPin: '2468',
+          })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        expect(mocks.verifyPin).not.toHaveBeenCalled();
+      });
+
+      it('Owner holding the review grant + Pharmacist: names only the active pharmacist', async () => {
+        members[0]!.record = {
+          ...owner,
+          permissionOverrides: [{ capability: 'pharmacy:catalogue-review', effect: 'ALLOW' }],
+        };
+        addMember('pharmacist_c', pharmacist);
+        addMember('pharmacist_d', pharmacist, 'DEACTIVATED');
+        addMember('cashier_b', cashier);
+        const result = await soloCaller().catalogueSelfApproval();
+        expect(result).toEqual({ canSelfApprove: false, reviewers: ['Ayesha Khan'] });
+        expect(JSON.stringify(result)).not.toMatch(/pharmacist_c|@|Former Pharmacist/);
+      });
+
+      it('gives a member without the review right nothing', async () => {
+        addMember('cashier_b', cashier);
+        addMember('pharmacist_c', pharmacist);
+        await expect(
+          soloCaller('cashier_b', 'EMPLOYEE').catalogueSelfApproval()
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        expect(db.user.findMany).not.toHaveBeenCalled();
+      });
+
+      it('gives a caller from another organization nothing', async () => {
+        addMember('pharmacist_c', pharmacist);
+        const foreign = pharmacyMedicineRouter.createCaller({
+          db,
+          entitlements: {
+            organizationId: 'org_a',
+            enabledModules: ['pharmacy-core'],
+            activeSeats: 1,
+            seatLimit: 10,
+            modules: [],
+            limits: {},
+          },
+          session: {
+            expires: 'later',
+            user: { id: 'owner_a', role: 'ADMIN', status: 'ACTIVE', organizationId: 'org_b' },
+          },
+          organization: null,
+          support: null,
+          requestMeta: { ip: null, userAgent: null },
+          audit: { detail: {} },
+        } as unknown as TRPCContext);
+        await expect(foreign.catalogueSelfApproval()).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+        });
+        expect(db.user.findMany).not.toHaveBeenCalledWith(
+          expect.objectContaining({ select: expect.objectContaining({ name: true }) })
+        );
+      });
+
+      it('marks the edits the caller submitted in the queue', async () => {
+        db.pharmacyCatalogueEdit.findMany.mockResolvedValue([
+          {
+            id: 'mine',
+            editorId: 'owner_a',
+            expectedUpdatedAt: new Date(0),
+            medicine: null,
+            operation: 'createStagedMedicines',
+            changes: {},
+          },
+          {
+            id: 'theirs',
+            editorId: 'pharmacist_c',
+            expectedUpdatedAt: new Date(0),
+            medicine: null,
+            operation: 'createIngredient',
+            changes: {},
+          },
+        ]);
+        const edits = await soloCaller().catalogueEdits();
+        expect(edits.map((edit) => [edit.id, edit.ownEdit])).toEqual([
+          ['mine', true],
+          ['theirs', false],
+        ]);
+      });
+    });
   });
 });
 

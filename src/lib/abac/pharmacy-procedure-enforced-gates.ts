@@ -193,6 +193,7 @@ export const PHARMACY_PROCEDURE_ENFORCED_GATES: Readonly<Record<string, readonly
   'pharmacyMedicine.addMedicineDraft': ['contextual'],
   'pharmacyMedicine.catalogueEdits': ['signed-in'],
   'pharmacyMedicine.catalogueQueueAccess': ['signed-in'],
+  'pharmacyMedicine.catalogueSelfApproval': ['signed-in'],
   'pharmacyMedicine.configureReferenceConnector': ['admin:access'],
   'pharmacyMedicine.confirmPrices': ['pharmacy:safety'],
   'pharmacyMedicine.createIngredient': ['contextual'],

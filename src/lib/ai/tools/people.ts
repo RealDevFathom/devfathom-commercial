@@ -37,6 +37,7 @@ import {
   PASSWORD_RESET_TTL_MS,
   unusablePasswordHash,
 } from '@/lib/auth/admin-password-reset';
+import { emailChangeDenial } from '@/lib/auth/member-email-change';
 
 // "LEADERSHIP" → "Leadership", "ADMIN" → "Admin"; the acronym role stays as-is.
 const titleCase = (s: string) => (s === 'HR' ? 'HR' : s.charAt(0) + s.slice(1).toLowerCase());
@@ -930,6 +931,16 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         });
         if (existing && existing.status !== 'INVITED') {
           return { error: 'A user with this email already exists.' };
+        }
+        // DEV-974: a refresh rewrites a pending account and re-issues its sign-in link.
+        // A pending account can be a member confirming a changed email, so it follows
+        // the same hierarchy as an email change (as team.inviteMember does).
+        if (existing) {
+          const denial = await emailChangeDenial(h.db, {
+            actorId: ctx.userId,
+            targetId: existing.id,
+          });
+          if (denial) return { error: 'Only the owner can re-send this invitation.' };
         }
         // A pending invite already occupies a seat, so refreshing it is safe.
         // A new invite must use the same effective entitlement snapshot as the

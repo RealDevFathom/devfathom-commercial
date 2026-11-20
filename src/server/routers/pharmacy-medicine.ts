@@ -64,7 +64,7 @@ import {
 } from '@/lib/pharmacy/drap-reference-autofill';
 import { isEffective } from '@/lib/pharmacy/pack-conversion';
 import { actorIsPharmacyOwner } from '@/lib/pharmacy/procurement-access';
-import { can, subjectFromSession, type Action } from '@/lib/abac';
+import { ACTIVE_STATUSES, can, subjectFromSession, type Action } from '@/lib/abac';
 import {
   applyLegacyControlledToMedicine,
   hasControlledCorrection,
@@ -397,7 +397,19 @@ const catalogueCommandProcedure = contextualCapabilityProcedure(
  * only with a fresh PIN. An editor may see the queue they submit to.
  */
 async function catalogueAccess(ctx: TRPCContext) {
-  const user = ctx.session!.user;
+  return catalogueAccessFor(ctx, ctx.session!.user);
+}
+/** catalogueAccess for any member of the tenant: the one rule the queue and its decisions use. */
+async function catalogueAccessFor(
+  ctx: TRPCContext,
+  user: {
+    id: string;
+    role?: string | null;
+    department?: string | null;
+    status?: string | null;
+    organizationId?: string | null;
+  }
+) {
   const subject = subjectFromSession(user);
   const opts = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
   const allowed = async (actions: readonly Action[]) => {
@@ -557,7 +569,57 @@ export const pharmacyMedicineRouter = router({
         code: 'FORBIDDEN',
         message: 'You do not have permission for this action.',
       });
-    return listPendingCatalogueEdits(ctx.db);
+    // DEV-976: the screen asks for the approver's own PIN only on edits they submitted.
+    return (await listPendingCatalogueEdits(ctx.db)).map((edit) => ({
+      ...edit,
+      ownEdit: edit.editorId === ctx.session.user.id,
+    }));
+  }),
+  /**
+   * DEV-976: for a member who decides the queue, whether they may approve their own edits with
+   * their fresh PIN and, when not, who else can approve them. Both come from the rules the
+   * decision itself applies (isOwnerWithoutOtherReviewer and catalogueAccess), so the screen and
+   * the server agree. Names only, of active members of this organization.
+   */
+  catalogueSelfApproval: auditedProtectedProcedure.query(async ({ ctx }) => {
+    const user = ctx.session.user;
+    const organizationId = ctx.entitlements.organizationId;
+    const access = await catalogueAccess(ctx);
+    if (user.organizationId !== organizationId || (!access.reviewer && !access.ownerFallback))
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'Approving catalogue edits needs the catalogue review permission.',
+      });
+    const scope = { organizationId, actorId: user.id, actorOrganizationId: user.organizationId };
+    // The check decideCatalogueEdit makes when the approver submitted the edit.
+    const canSelfApprove = await isOwnerWithoutOtherReviewer(ctx.db, scope, {
+      countOtherOwners: true,
+    });
+    if (canSelfApprove) return { canSelfApprove, reviewers: [] as string[] };
+    const others = await ctx.db.user.findMany({
+      where: {
+        organizationId,
+        id: { not: user.id },
+        status: { in: [...ACTIVE_STATUSES] as Array<'ACTIVE' | 'ON_LEAVE'> },
+      },
+      select: {
+        id: true,
+        name: true,
+        role: true,
+        department: true,
+        status: true,
+        organizationId: true,
+      },
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      take: 500,
+    });
+    const reviewers: string[] = [];
+    for (const member of others) {
+      const memberAccess = await catalogueAccessFor(ctx, member);
+      // Who decideCatalogueEdit admits for an edit someone else submitted.
+      if (memberAccess.reviewer || memberAccess.ownerFallback) reviewers.push(member.name);
+    }
+    return { canSelfApprove, reviewers };
   }),
   /** What the signed-in member may do in the catalogue queue, for the UI only. */
   catalogueQueueAccess: auditedProtectedProcedure.query(async ({ ctx }) => {

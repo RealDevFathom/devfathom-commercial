@@ -7,9 +7,9 @@ import {
   scimError,
   scimJson,
   scimPatchGroupMembers,
+  ScimOwnerAccessRefusal,
   withScimAuth,
 } from '@/lib/scim';
-
 async function loadRole(ctx: Parameters<Parameters<typeof withScimAuth>[1]>[0], id: string) {
   return ctx.db.organizationRole.findUnique({
     where: { id },
@@ -65,13 +65,25 @@ export async function PATCH(request: Request, route: { params: Promise<{ id: str
         .parse(await request.json());
       const role = await loadRole(ctx, id);
       if (!role) return scimError(404, 'Group not found.');
+      // DEV-974: plan every operation before writing any, so a PATCH is all or
+      // nothing. A refusal is still recorded as a SCIM event.
+      const refuse = async (status: number, detail: string, scimType: string) => {
+        await recordScimEvent(ctx, request, {
+          operation: 'PATCH',
+          resourceType: 'Group',
+          status: 'FAILED',
+          payload: { groupId: role.id },
+          error: detail,
+        });
+        return scimError(status, detail, scimType);
+      };
       const operations: Array<{ op: 'add' | 'replace' | 'remove'; ids: string[] }> = [];
       for (const operation of input.Operations) {
         if (!operation.path?.toLowerCase().startsWith('members')) {
-          return scimError(400, `Unsupported PATCH path: ${operation.path}`, 'invalidPath');
+          return refuse(400, `Unsupported PATCH path: ${operation.path}`, 'invalidPath');
         }
         if (operation.op !== 'add' && operation.op !== 'replace' && operation.op !== 'remove') {
-          return scimError(400, `Unsupported PATCH operation: ${operation.op}`, 'invalidValue');
+          return refuse(400, `Unsupported PATCH operation: ${operation.op}`, 'invalidValue');
         }
         const values = Array.isArray(operation.value)
           ? operation.value
@@ -85,7 +97,15 @@ export async function PATCH(request: Request, route: { params: Promise<{ id: str
           .filter((value): value is string => typeof value === 'string');
         operations.push({ op: operation.op, ids });
       }
-      await scimPatchGroupMembers(ctx, role.id, operations);
+      // DEV-974: the owner-level check runs inside, before any write (see scim.ts).
+      try {
+        await scimPatchGroupMembers(ctx, role.id, operations);
+      } catch (error) {
+        if (error instanceof ScimOwnerAccessRefusal) {
+          return refuse(403, error.message, 'mutability');
+        }
+        throw error;
+      }
       await recordScimEvent(ctx, request, {
         operation: 'PATCH',
         resourceType: 'Group',
