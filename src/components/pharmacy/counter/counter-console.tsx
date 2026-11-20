@@ -775,6 +775,9 @@ function ScopedPharmacyCounterConsole({
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
+  // DEV-977: choosing a result (click or Enter) closes the results over the bill so the line
+  // being added is in view; typing or arrowing through results opens them again.
+  const [resultsDismissed, setResultsDismissed] = useState(false);
   const actionsButtonRef = useRef<HTMLButtonElement>(null);
   const actionsPanelRef = useRef<HTMLDivElement>(null);
   const [checksOpen, setChecksOpen] = useState(false);
@@ -1864,6 +1867,7 @@ function ScopedPharmacyCounterConsole({
     }
     focusQuantityOnStage.current = focusQuantity;
     quantityReviewed.current = false;
+    if (focusQuantity) setResultsDismissed(true);
     setActiveRow(row);
     setQuantityText('1');
     setSaleUnit(preferredSaleUnitOption(row.saleUnits, row.dosageForm)?.kind ?? null);
@@ -4186,6 +4190,7 @@ function ScopedPharmacyCounterConsole({
                         }
                         onDraftChange={(text) => {
                           scannerRevision.current += 1;
+                          setResultsDismissed(false);
                           // Results follow the field once it is too short to search;
                           // longer drafts reach the parent when their debounce fires.
                           if (text.trim().length < 2) setQuery(text);
@@ -4227,6 +4232,7 @@ function ScopedPharmacyCounterConsole({
                                   ? rows.length - 1
                                   : (index - 1 + rows.length) % rows.length;
                             // Arrowing through results keeps focus in search (DEV-633).
+                            setResultsDismissed(false);
                             stageRow(rows[next]!, false);
                             return;
                           }
@@ -4331,7 +4337,9 @@ function ScopedPharmacyCounterConsole({
               className={
                 searchState === 'idle'
                   ? 'sr-only'
-                  : 'absolute inset-x-3 top-full z-20 -mt-1 max-h-[min(35rem,calc(100dvh-12.5rem))] overflow-y-auto rounded-2xl border border-border-default bg-surface-card shadow-lg lg:inset-x-6 lg:max-h-[calc(100dvh-18.75rem)]'
+                  : resultsDismissed
+                    ? 'hidden'
+                    : 'absolute inset-x-3 top-full z-20 -mt-1 max-h-[min(35rem,calc(100dvh-12.5rem))] overflow-y-auto rounded-2xl border border-border-default bg-surface-card shadow-lg lg:inset-x-6 lg:max-h-[calc(100dvh-18.75rem)]'
               }
             >
               {searchState === 'ready' && searchRows.length > 0 ? (
@@ -4381,7 +4389,7 @@ function ScopedPharmacyCounterConsole({
           {/* DEV-977: the line being added sits under the search on a phone or tablet, and at the
               top of the payment column from 1024px, so the results keep the full height. */}
           {activeRow && !drawerRequired && !dayClosed ? (
-            <div className="border-b border-border-subtle px-4 py-3 lg:col-start-2 lg:row-start-2 lg:bg-surface-card lg:px-5 lg:pt-5 lg:pb-4">
+            <div className="border-b border-border-subtle px-4 py-3 lg:col-start-2 lg:row-start-2 lg:max-h-[min(34rem,calc(100dvh-18rem))] lg:overflow-y-auto lg:bg-surface-card lg:px-5 lg:pt-5 lg:pb-4">
               <section
                 aria-label="Next line"
                 className="rounded-[var(--radius-sm)] border border-border-subtle bg-surface-card px-3 py-2.5"
@@ -4473,7 +4481,7 @@ function ScopedPharmacyCounterConsole({
 
                   <Button
                     type="button"
-                    className="min-h-12 rounded-[var(--radius-sm)] lg:w-full"
+                    className="min-h-12 w-full rounded-[var(--radius-sm)] md:w-auto lg:w-full"
                     disabled={busy || !preview?.sufficient}
                     aria-describedby={
                       !busy && !preview?.sufficient ? 'counter-add-to-cart-reason' : undefined

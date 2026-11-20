@@ -7889,8 +7889,43 @@ describe('DEV-977 Counter v2 sale screen (phase 1: frame, search, bill, totals)'
     const next = screen.getByRole('region', { name: 'Next line' });
     expect(document.getElementById('counter-scan-search')).not.toContainElement(next);
     expect(next.parentElement).toHaveClass('lg:col-start-2', 'lg:row-start-2');
+    // A long staged line (batch override open, large text) scrolls inside its own box.
+    expect(next.parentElement).toHaveClass('lg:overflow-y-auto');
     expect(rail).toHaveClass('lg:row-start-3');
     expect(rail).not.toHaveClass('lg:row-span-3');
+  });
+
+  it('closes the results once a medicine is chosen, keeps them while arrowing, reopens on typing', async () => {
+    mocks.queries.counterSearch = query({
+      rows: [
+        barcodeRow(),
+        barcodeRow({ medicineId: 'med-second', presentationId: 'presentation-b' }),
+      ],
+      truncated: false,
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const results = document.querySelector('[data-counter-results]')!;
+    const search = screen.getByLabelText('Scan or search');
+    fireEvent.change(search, { target: { value: 'para' } });
+    await waitFor(() => expect(results).toHaveClass('absolute'));
+    // Arrowing stages a row and keeps the list open for the next arrow.
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(screen.getByRole('region', { name: 'Next line' })).toBeInTheDocument();
+    expect(results).toHaveClass('absolute');
+    expect(results).not.toHaveClass('hidden');
+    // Choosing a row (a click on the results, or Enter) closes the list over the bill and
+    // keeps the chosen medicine staged.
+    act(() => mocks.searchProps.mock.lastCall![0].onSelect(barcodeRow()));
+    expect(results).toHaveClass('hidden');
+    expect(screen.getByRole('region', { name: 'Next line' })).toBeInTheDocument();
+    expect(search).toHaveValue('para');
+    // Arrowing again, or typing, opens it again.
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(results).not.toHaveClass('hidden');
+    act(() => mocks.searchProps.mock.lastCall![0].onSelect(barcodeRow()));
+    expect(results).toHaveClass('hidden');
+    fireEvent.change(search, { target: { value: 'parac' } });
+    await waitFor(() => expect(results).not.toHaveClass('hidden'));
   });
 
   it('shows the server totals, the balance due and Take payment with its key', () => {

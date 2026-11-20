@@ -86,6 +86,7 @@ const SHOTS = [
   ['c2-sale-768-dark', 'sale', 768, 1024, { theme: 'dark' }],
   ['c3-sale-375', 'sale', 375, 812, {}],
   ['c3-search-375', 'search', 375, 812, { type: 'amox' }],
+  ['c3-picked-375', 'search', 375, 812, { type: 'amox', pick: true }],
   ['c3-sale-375-dark', 'sale', 375, 812, { theme: 'dark' }],
   ['more-menu-1024', 'sale', 1024, 768, { more: true }],
   ['keyboard-focus-1440', 'sale', 1440, 900, { tabs: 3 }],
@@ -122,6 +123,14 @@ try {
       const field = page.getByLabel('Scan or search');
       await field.fill(options.type);
       await page.waitForTimeout(600);
+      if (options.pick) {
+        await page
+          .getByRole('list', { name: 'Search results' })
+          .getByRole('button')
+          .first()
+          .click();
+        await page.waitForTimeout(300);
+      }
       if (options.arrow) {
         await field.press('ArrowDown');
         await page.waitForTimeout(300);
