@@ -2,27 +2,32 @@
  * DevFathom pharmacy counter offline shell (DEV-957 phase 1).
  *
  * Registered only by an ENROLLED counter browser, with scope /pharmacy/counter,
- * so it controls the counter pages and nothing else. It keeps exactly two
+ * so it controls the counter pages and nothing else. It keeps exactly three
  * things, and only after the counter page "arms" it:
  *
  *   1. the last counter page (/pharmacy/counter) the signed-in user loaded
  *      online, stored with its own response headers, so the per-request
  *      Content-Security-Policy nonce in the header still matches the nonce in
  *      the page's script tags when it is served offline;
- *   2. the build's immutable static files under /_next/static/ that the page uses.
+ *   2. the build's immutable static files under /_next/static/ that the page uses;
+ *   3. DEV-973: the static print page and its script (no data of their own), so a
+ *      browser print opens and prints offline as fast as online. They are
+ *      served from the store first and refreshed from the network behind it.
  *
  * Navigations go to the network first; the stored page is used only when the
  * network cannot be reached at all. It never touches a non-GET request, an API
  * or tRPC call (/api/...), a React Server Component request, another origin, or
- * any other page. Signing out and revoking the counter delete both caches.
+ * any other page. Signing out and revoking the counter delete every cache.
  * Tenants are separate origins, so they never share these caches.
  */
 'use strict';
 
 const SHELL_CACHE = 'devfathom-pharmacy-counter-shell-v1';
 const ASSET_CACHE = 'devfathom-pharmacy-counter-assets-v1';
+const PRINT_CACHE = 'devfathom-pharmacy-counter-print-v1';
 const SHELL_PATH = '/pharmacy/counter';
-const OWN_CACHES = [SHELL_CACHE, ASSET_CACHE];
+const PRINT_PATHS = ['/pharmacy/counter/print-window.html', '/pharmacy/counter/print-window.js'];
+const OWN_CACHES = [SHELL_CACHE, ASSET_CACHE, PRINT_CACHE];
 /*
  * Bumped by every clear (sign-out, revocation). A store that started before a
  * clear never writes after it, and one that raced it is undone, so an in-flight
@@ -40,6 +45,16 @@ function isShellNavigation(request, url) {
     request.mode === 'navigate' &&
     sameOrigin(url) &&
     url.pathname === SHELL_PATH
+  );
+}
+
+function isPrintFile(request, url) {
+  return (
+    request.method === 'GET' &&
+    sameOrigin(url) &&
+    PRINT_PATHS.includes(url.pathname) &&
+    !url.search &&
+    !request.headers.get('range')
   );
 }
 
@@ -123,11 +138,40 @@ async function assetResponse(request) {
   return response;
 }
 
+/** Stored copy first, so an offline print opens at once; refreshed behind it. */
+async function printResponse(request, url) {
+  const started = generation;
+  const key = url.origin + url.pathname;
+  const stored = (await self.caches.has(PRINT_CACHE))
+    ? await (await self.caches.open(PRINT_CACHE)).match(key)
+    : undefined;
+  const refresh = fetch(key, { credentials: 'same-origin' }).then(async (response) => {
+    if (storableAsset(response) && (await armed()))
+      await guardedPut(PRINT_CACHE, key, response.clone(), started);
+    return response;
+  });
+  if (stored) {
+    refresh.catch(() => undefined);
+    return stored;
+  }
+  return refresh;
+}
+
 async function arm(assets) {
   const started = generation;
   const shell = await fetch(SHELL_PATH, { credentials: 'same-origin', cache: 'no-store' });
   if (!storableShell(shell)) return false;
   if (!(await storeShell(shell, started))) return false;
+  for (const path of PRINT_PATHS) {
+    if (started !== generation) return false;
+    try {
+      const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store' });
+      if (storableAsset(response) && !(await guardedPut(PRINT_CACHE, self.location.origin + path, response, started)))
+        return false;
+    } catch {
+      // Fetched again next time online; printing online still works.
+    }
+  }
   for (const href of Array.isArray(assets) ? assets.slice(0, 400) : []) {
     let url;
     try {
@@ -182,6 +226,10 @@ self.addEventListener('fetch', (event) => {
   }
   if (isShellNavigation(request, url)) {
     event.respondWith(shellResponse(request));
+    return;
+  }
+  if (isPrintFile(request, url)) {
+    event.respondWith(printResponse(request, url));
     return;
   }
   if (isStaticAsset(request, url)) {

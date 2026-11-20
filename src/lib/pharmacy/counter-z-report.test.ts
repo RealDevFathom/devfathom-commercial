@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { buildCounterBrowserZReport, printCounterBrowserZReport } from './counter-browser-print';
+import { PRINT_WINDOW_READY_TIMEOUT_MS } from '@/lib/browser-print/print-window';
+import { installFakePrintWindows } from '@/lib/testing/print-window';
 const report = {
   id: 'close-1',
   branchName: '<script>private</script>',
@@ -78,9 +80,19 @@ describe('Z report', () => {
   it('refuses invalid amounts', () => {
     expect(() => buildCounterBrowserZReport({ ...report, cashCountedMinor: NaN }, 'en')).toThrow();
   });
-  it('reports a blocked popup without claiming printing', () => {
-    vi.stubGlobal('window', { open: vi.fn(() => null) });
-    expect(() => printCounterBrowserZReport(report, 'en')).toThrow('Allow pop-ups');
-    vi.unstubAllGlobals();
+  it('reports a blocked popup without claiming printing', async () => {
+    vi.useFakeTimers();
+    installFakePrintWindows({ blocked: true });
+    try {
+      const outcome = expect(printCounterBrowserZReport(report, 'en')).rejects.toThrow(
+        'Allow pop-ups'
+      );
+      await vi.advanceTimersByTimeAsync(PRINT_WINDOW_READY_TIMEOUT_MS);
+      await outcome;
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
   });
 });

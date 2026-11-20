@@ -6,6 +6,7 @@ import {
   COUNTER_UNKNOWN_ERROR_MESSAGE,
 } from '@/lib/pharmacy/counter-messages';
 import type { ComponentProps } from 'react';
+import { installFakePrintWindows } from '@/lib/testing/print-window';
 import { COUNTER_SETUP_GUIDANCE } from '@/lib/pharmacy/counter-setup';
 import {
   clearCounterReadinessOkay,
@@ -2143,20 +2144,16 @@ describe('PharmacyCounterConsole Khata wiring', () => {
         },
       ],
     });
-    const body = document.createElement('div');
-    const print = vi.fn();
-    vi.spyOn(window, 'open').mockReturnValue({
-      opener: window,
-      document: { title: '', createElement: document.createElement.bind(document), body },
-      focus: vi.fn(),
-      print,
-      close: vi.fn(),
-    } as never);
+    const windows = installFakePrintWindows();
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     chooseTender('KHATA');
     await screen.findByText(/Ledger balance/);
     fireEvent.click(screen.getByRole('button', { name: 'Print Khata statement' }));
-    await waitFor(() => expect(print).toHaveBeenCalledOnce());
+    await waitFor(() => expect(windows.last().printRequests()).toBe(1));
+    // DEV-973: the isolated window prints itself; the counter never calls print() on it.
+    expect(windows.last().proxy.print).not.toHaveBeenCalled();
+    expect(windows.last().document()!.title).toBe('Family Khata statement');
+    const body = windows.last().document()!.body;
     expect(body.textContent).toContain('<script>family</script>');
     expect(body.querySelector('script')).toBeNull();
     expect(body.textContent).not.toContain('private note');
@@ -3407,7 +3404,15 @@ describe('PharmacyCounterConsole barcode safety', () => {
     expect(mocks.voucherFetch).toHaveBeenCalledWith({ branchId: 'branch-a', code: 'save-100' });
     fireEvent.change(screen.getByLabelText('Your PIN'), { target: { value: '4321' } });
     fireEvent.click(screen.getByRole('button', { name: 'Use on next item' }));
-    await screen.findByText(/takes Rs 100\.00 off the next non-drug item/);
+    // DEV-972: one short line on the bill side; the full sentence is its hover text.
+    expect(
+      (await screen.findByText('Voucher SAVE-100 applied: Rs 100.00 off')).closest(
+        '[role="status"]'
+      )
+    ).toHaveAttribute(
+      'title',
+      'Voucher SAVE-100 (Front shop offer) takes Rs 100.00 off the next non-drug item you add.'
+    );
     scan();
     await screen.findByText('1 × Paracetamol added with voucher SAVE-100.');
     expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
@@ -3427,7 +3432,7 @@ describe('PharmacyCounterConsole barcode safety', () => {
     it('shows nothing new while the owner has it off', () => {
       render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
       expect(screen.queryByText('Discount the whole bill')).not.toBeInTheDocument();
-      expect(screen.getByText('Give a discount')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Discount' })).toBeInTheDocument();
       expect(mocks.mutations.applyBillDiscount).not.toHaveBeenCalled();
     });
 
@@ -3499,11 +3504,17 @@ describe('PharmacyCounterConsole barcode safety', () => {
   });
 
   describe('DEV-929 manual discount at the counter', () => {
+    // DEV-972: the discount panel opens from the bill side's "Discount" button.
+    function openDiscount() {
+      if (!screen.queryByRole('button', { name: 'Apply to next item' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Discount' }));
+    }
+
     function giveDiscount(
       value: string,
       kind: 'Percentage (%)' | 'Amount (Rs)' = 'Percentage (%)'
     ) {
-      fireEvent.click(screen.getByText('Give a discount'));
+      openDiscount();
       fireEvent.click(screen.getByRole('button', { name: kind }));
       fireEvent.change(
         screen.getByLabelText(kind === 'Amount (Rs)' ? 'Discount (Rs)' : 'Discount (%)'),
@@ -3514,6 +3525,7 @@ describe('PharmacyCounterConsole barcode safety', () => {
 
     it('says plainly when the owner has set no maximum', () => {
       render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      openDiscount();
       expect(
         screen.getByText(/The owner has not set a maximum discount\./, { exact: false })
       ).toBeInTheDocument();
@@ -3527,11 +3539,12 @@ describe('PharmacyCounterConsole barcode safety', () => {
     it('a cashier with the discount right gives it without a PIN, and it is dropped after', async () => {
       mocks.queries.discountMaximum = query({ maxDiscountBps: 1_500, canChange: false });
       render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      openDiscount();
       expect(
         screen.getByText("The owner's maximum discount is 15% of an item's price.")
       ).toBeInTheDocument();
       giveDiscount('10');
-      await screen.findByText(/A discount of 10% comes off the next item you add\./);
+      await screen.findByText('10% off the next item');
       scan();
       await screen.findByText('1 × Paracetamol added with a discount of Rs 10.00.');
       const [input] = mocks.mutations.addLine!.mock.calls[0]!;
@@ -3551,7 +3564,7 @@ describe('PharmacyCounterConsole barcode safety', () => {
     it('sends an amount in rupees as the discount', async () => {
       render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
       giveDiscount('25.50', 'Amount (Rs)');
-      await screen.findByText(/A discount of Rs 25\.50 comes off the next item you add\./);
+      await screen.findByText('Rs 25.50 off the next item');
       scan();
       await screen.findByText('1 × Paracetamol added with a discount of Rs 25.50.');
       expect(mocks.mutations.addLine).toHaveBeenCalledWith(
@@ -3656,6 +3669,7 @@ describe('PharmacyCounterConsole barcode safety', () => {
       render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
       giveDiscount('5');
       await screen.findByRole('button', { name: 'Remove discount' });
+      fireEvent.click(screen.getByRole('button', { name: 'Voucher' }));
       expect(screen.getByRole('button', { name: 'Check voucher' })).toBeDisabled();
     });
   });
@@ -3738,6 +3752,104 @@ describe('PharmacyCounterConsole barcode safety', () => {
     );
     expect(screen.queryByLabelText('Your PIN')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Use on next item' })).not.toBeInTheDocument();
+  });
+
+  describe('DEV-972 voucher and discount sit on the bill side, not in the search column', () => {
+    const searchColumn = () => document.getElementById('counter-scan-search')!;
+    const billSide = () => screen.getByRole('complementary', { name: 'Bill total' });
+    const nextItemControls = () =>
+      within(billSide()).getByRole('group', { name: 'Voucher and discount for the next item' });
+
+    it('puts nothing between the search box and its results', () => {
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      const column = searchColumn();
+      expect(within(column).queryByRole('button', { name: 'Voucher' })).not.toBeInTheDocument();
+      expect(within(column).queryByRole('button', { name: 'Discount' })).not.toBeInTheDocument();
+      expect(within(column).queryByText('Give a discount')).not.toBeInTheDocument();
+      expect(within(column).queryByLabelText('Voucher code')).not.toBeInTheDocument();
+      expect(within(nextItemControls()).getByRole('button', { name: 'Voucher' })).toBeEnabled();
+      expect(within(nextItemControls()).getByRole('button', { name: 'Discount' })).toBeEnabled();
+      // Closed, they take no room: the panels are not on the page until opened.
+      expect(screen.queryByLabelText('Voucher code')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Discount (%)')).not.toBeInTheDocument();
+    });
+
+    it('shows a held voucher as one short line with its remove action on the bill side', async () => {
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      await holdVoucher();
+      const line = within(nextItemControls()).getByRole('status');
+      expect(line).toHaveTextContent('Voucher SAVE-100 applied: Rs 100.00 off');
+      expect(line).toHaveAttribute(
+        'title',
+        'Voucher SAVE-100 (Front shop offer) takes Rs 100.00 off the next non-drug item you add.'
+      );
+      expect(within(searchColumn()).queryByText(/SAVE-100 applied/)).not.toBeInTheDocument();
+      // The panel closed and focus is back in search, ready for the item.
+      expect(screen.queryByLabelText('Voucher code')).not.toBeInTheDocument();
+      expect(screen.getByLabelText('Scan or search')).toHaveFocus();
+      fireEvent.click(within(line).getByRole('button', { name: 'Remove voucher' }));
+      expect(within(nextItemControls()).getByRole('button', { name: 'Voucher' })).toBeEnabled();
+      scan();
+      await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+      expect(mocks.mutations.addLine).toHaveBeenCalledWith(
+        expect.not.objectContaining({ voucherId: expect.anything() })
+      );
+    });
+
+    it('shows a held discount as one short line with its remove action on the bill side', async () => {
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      fireEvent.click(within(nextItemControls()).getByRole('button', { name: 'Discount' }));
+      fireEvent.change(screen.getByLabelText('Discount (%)'), { target: { value: '10' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Apply to next item' }));
+      const line = await within(nextItemControls()).findByRole('status');
+      expect(line).toHaveTextContent('10% off the next item');
+      expect(line).toHaveAttribute('title', 'A discount of 10% comes off the next item you add.');
+      expect(within(searchColumn()).queryByText('10% off the next item')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Discount (%)')).not.toBeInTheDocument();
+      expect(screen.getByLabelText('Scan or search')).toHaveFocus();
+      fireEvent.click(within(line).getByRole('button', { name: 'Remove discount' }));
+      expect(within(nextItemControls()).getByRole('button', { name: 'Discount' })).toBeEnabled();
+      scan();
+      await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+      expect(mocks.mutations.addLine).toHaveBeenCalledWith(
+        expect.not.objectContaining({ discountMinor: expect.anything() })
+      );
+    });
+
+    it.each([
+      ['Voucher', 'Voucher code'],
+      ['Discount', 'Discount (%)'],
+    ])('the %s panel closes with Escape and focus returns to search', async (button, field) => {
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      expect(screen.getByLabelText('Scan or search')).toHaveFocus();
+      fireEvent.click(within(nextItemControls()).getByRole('button', { name: button }));
+      const input = screen.getByLabelText(field);
+      await waitFor(() => expect(input).toHaveFocus());
+      fireEvent.keyDown(input, { key: 'Escape' });
+      await waitFor(() => expect(screen.queryByLabelText(field)).not.toBeInTheDocument());
+      await waitFor(() => expect(screen.getByLabelText('Scan or search')).toHaveFocus());
+    });
+
+    it('keeps the search help beside the heading, not between the box and its results', () => {
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      const help = document.getElementById('counter-search-help')!;
+      const heading = within(searchColumn()).getByRole('heading', { name: 'Scan or search' });
+      expect(help.parentElement).toBe(heading.parentElement);
+      expect(screen.getByLabelText('Scan or search')).toHaveAttribute(
+        'aria-describedby',
+        'counter-search-help'
+      );
+      expect(help).toHaveTextContent('F2 focuses search.');
+    });
+
+    it('is not offered while the drawer still has to be opened', () => {
+      closeDrawer();
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      expect(screen.getByRole('button', { name: 'Open drawer' })).toBeInTheDocument();
+      expect(
+        screen.queryByRole('group', { name: 'Voucher and discount for the next item' })
+      ).not.toBeInTheDocument();
+    });
   });
 
   it('reads the scanner Enter value even before a change render commits', async () => {
@@ -5822,8 +5934,9 @@ describe('DEV-618 counter composition', () => {
     mocks.mutations.transition!.mockResolvedValue({});
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     const rail = screen.getByLabelText('Bill total');
+    // DEV-972: the rail also has a "Discount" button now, so the totals are found as terms.
     for (const label of ['Gross', 'Discount', 'Tendered'])
-      expect(within(rail).getByText(label)).toBeInTheDocument();
+      expect(within(rail).getByText(label, { selector: 'dt' })).toBeInTheDocument();
     expect(
       within(screen.getByRole('region', { name: 'Cart' })).queryByRole('button', { name: /^Hold/ })
     ).not.toBeInTheDocument();
