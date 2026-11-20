@@ -174,6 +174,13 @@ import {
   type CounterReceiptFormat,
 } from '@/lib/pharmacy/counter-browser-print';
 import {
+  closePrintWindow,
+  createPrintDocument,
+  openPrintWindow,
+  sendToPrintWindow,
+  serializePrintDocument,
+} from '@/lib/browser-print/print-window';
+import {
   pharmacyBusinessDate,
   pharmacyCalendarDay,
   type PharmacyDayClock,
@@ -2602,17 +2609,16 @@ function ScopedPharmacyCounterConsole({
   const printKhataStatement = useCallback(
     async (familyAccountId: string) => {
       if (!saleId) throw new Error('Open a bill');
-      const popup = window.open('', '_blank', 'popup,width=640,height=720');
-      if (!popup) throw new Error('Allow pop-ups');
-      popup.opener = null;
+      // DEV-973: an isolated window that prints itself, so this counter never freezes.
+      const popup = openPrintWindow('popup,width=640,height=720');
       try {
         const statement = await utils.client.pharmacySales.khataStatement.query({
           branchId,
           saleId,
           familyAccountId,
         });
-        popup.document.title = 'Family Khata statement';
-        const pre = popup.document.createElement('pre');
+        const doc = createPrintDocument('Family Khata statement');
+        const pre = doc.createElement('pre');
         pre.style.whiteSpace = 'pre-wrap';
         pre.style.overflowWrap = 'anywhere';
         // Plain text allowlist: never copy the counter DOM, clinical data or notes.
@@ -2630,11 +2636,13 @@ function ScopedPharmacyCounterConsole({
               `${row.occurredAt.toISOString()}  ${row.kind}  PKR ${(row.amountMinor / 100).toFixed(2)}`
           ),
         ].join('\n');
-        popup.document.body.replaceChildren(pre);
-        popup.focus();
-        popup.print();
+        doc.body.replaceChildren(pre);
+        await sendToPrintWindow(popup, serializePrintDocument(doc), {
+          blockedMessage: 'Allow pop-ups',
+          failedMessage: 'The print window is closed. Retry Print Khata statement.',
+        });
       } catch (error) {
-        popup.close();
+        closePrintWindow(popup);
         throw error;
       }
     },
@@ -3265,7 +3273,7 @@ function ScopedPharmacyCounterConsole({
       try {
         // Reject known popup and rendering failures before claiming an ordinal.
         // Recheck at dispatch too: windows can close while allocation is in flight.
-        assertCounterBrowserPrintReady(reservation);
+        await assertCounterBrowserPrintReady(reservation);
         buildCounterBrowserReceipt(receipt, receiptLocale, receiptFormat, false);
         buildCounterBrowserReceipt(receipt, receiptLocale, receiptFormat, true);
       } catch (error) {
@@ -3287,7 +3295,7 @@ function ScopedPharmacyCounterConsole({
           saleId: receipt.saleId,
           locale: receiptLocale,
         });
-        printCounterBrowserReceipt(
+        await printCounterBrowserReceipt(
           receipt,
           receiptLocale,
           receiptFormat,

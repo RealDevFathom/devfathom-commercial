@@ -236,7 +236,58 @@ describe('DEV-957 counter service worker', () => {
     expect(await sw.message({ type: 'clear' })).toEqual({ type: 'cleared' });
     expect(sw.stores.has('devfathom-pharmacy-counter-shell-v1')).toBe(false);
     expect(sw.stores.has('devfathom-pharmacy-counter-assets-v1')).toBe(false);
+    expect(sw.stores.has('devfathom-pharmacy-counter-print-v1')).toBe(false);
     sw.setOnline(false);
     await expect(sw.request('/pharmacy/counter', { mode: 'navigate' })).rejects.toThrow();
+    await expect(
+      sw.request('/pharmacy/counter/print-window.html', { mode: 'navigate' })
+    ).rejects.toThrow();
+  });
+
+  describe('DEV-973 print window', () => {
+    const PAGE = '/pharmacy/counter/print-window.html';
+    const SCRIPT = '/pharmacy/counter/print-window.js';
+
+    it('keeps the print page and its script once armed, so an offline print opens at once', async () => {
+      expect(await sw.message({ type: 'arm', assets: [] })).toEqual({ type: 'armed', ok: true });
+      const kept = [...sw.stores.get('devfathom-pharmacy-counter-print-v1')!.rows.keys()];
+      expect(kept.sort()).toEqual([`${ORIGIN}${PAGE}`, `${ORIGIN}${SCRIPT}`].sort());
+      sw.setOnline(false);
+      // The opened window's address carries only a channel id in its fragment.
+      const page = await sw.request(`${PAGE}`, { mode: 'navigate' });
+      expect(page.handled).toBe(true);
+      expect(await page.response.text()).toBe(`body of ${PAGE}`);
+      const script = await sw.request(SCRIPT);
+      expect(script.handled).toBe(true);
+      expect(await script.response.text()).toBe(`body of ${SCRIPT}`);
+    });
+
+    it('serves the stored copy first while online too, without waiting for the network', async () => {
+      await sw.message({ type: 'arm', assets: [] });
+      const release = sw.holdNetwork();
+      const page = await sw.request(PAGE, { mode: 'navigate' });
+      expect(page.handled).toBe(true);
+      expect(await page.response.text()).toBe(`body of ${PAGE}`);
+      release();
+    });
+
+    it('stores nothing for printing before it is armed, and passes the request on', async () => {
+      const page = await sw.request(PAGE, { mode: 'navigate' });
+      expect(await page.response.text()).toBe(`body of ${PAGE}`);
+      expect(sw.stores.size).toBe(0);
+    });
+
+    it('handles only those two files, never a query or another counter file', async () => {
+      await sw.message({ type: 'arm', assets: [] });
+      for (const [url, init] of [
+        [`${PAGE}?x=1`, { mode: 'navigate' }],
+        [SCRIPT, { method: 'POST' }],
+        ['/pharmacy/counter/other.js', {}],
+        [`https://other.test${PAGE}`, { mode: 'navigate' }],
+      ] as const) {
+        const result = await sw.request(url, init as never);
+        expect(result.handled, url).toBe(false);
+      }
+    });
   });
 });
