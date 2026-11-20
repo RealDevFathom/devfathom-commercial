@@ -5,7 +5,12 @@ Source: the Design canvas "Pharmacy Counter Redesign", page 2, 22 artboards.
 
 All 22 artboards are ONE interactive prototype file that differs only in its title, its preview
 size and the `INITIAL` state constant near the bottom. `counter-v2-prototype.dc.html` is the
-"A1 Bill ready to pay" copy. To see another state, change `INITIAL` to the value in the table.
+"A1 Bill ready to pay" copy.
+
+The file does not render on its own: it needs the Design canvas runtime (`support.js` and the
+design-system bundle), which is not in this repository. To see the states live, open the canvas
+(owner's account) and pick the artboard. In the repository, read the markup, the `cv-*` CSS and
+the state logic; the table gives the `INITIAL` value each artboard starts from.
 
 This folder is visual and interaction reference only. It is not application code, is not
 imported anywhere, and its sample data (names, medicines, prices, phone numbers, "SehatCart")
