@@ -40,8 +40,22 @@ import { INVITE_ROLE_MISMATCH, INVITE_ROLE_NOT_OFFERED } from '@/lib/vertical-ca
 import { sendEmail, templates } from '@/lib/email';
 import type { AssistantHelpers } from '@/lib/ai/context';
 
+// DEV-974: live hierarchy reads for a pending-invitation refresh. The acting
+// administrator and pending invitees are ordinary members unless a test says otherwise.
+const partyFindUnique = vi.fn(async ({ where }: { where: { id: string } }) => ({
+  role: where.id === 'user_admin' ? 'ADMIN' : 'EMPLOYEE',
+  status: 'ACTIVE',
+  organizationRole: null,
+  permissionOverrides: [],
+}));
+
 const db = {
-  user: { findFirst: mocks.findFirst, create: mocks.create, update: mocks.update },
+  user: {
+    findFirst: mocks.findFirst,
+    findUnique: partyFindUnique,
+    create: mocks.create,
+    update: mocks.update,
+  },
   // WHA-278: the invite path validates the department against the tenant's own
   // configured catalog before writing.
   organizationDepartment: { findFirst: mocks.departmentFindFirst },
@@ -241,6 +255,28 @@ describe('assistant inviteMember guards', () => {
     expect(result.error).toBe('Seat limit reached (5/5).');
     expect(mocks.resolveEntitlements).toHaveBeenCalledWith('org_1', db);
     expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+  });
+
+  it('DEV-974: refuses refreshing the pending invite of an administrator', async () => {
+    mocks.findFirst.mockResolvedValue({ id: 'user_invited', status: 'INVITED' });
+    partyFindUnique.mockImplementationOnce(async () => ({
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      organizationRole: null,
+      permissionOverrides: [],
+    }));
+    partyFindUnique.mockImplementationOnce(async () => ({
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      organizationRole: null,
+      permissionOverrides: [],
+    }));
+
+    const result = await inviteTool().execute({ ...base, email: 'alex@company.com' });
+
+    expect(result.error).toBe('Only the owner can re-send this invitation.');
+    expect(mocks.update).not.toHaveBeenCalled();
     expect(mocks.invitationUpsert).not.toHaveBeenCalled();
   });
 

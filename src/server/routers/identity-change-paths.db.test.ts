@@ -47,6 +47,7 @@ import { buildPeopleTools } from '@/lib/ai/tools/people';
 import type { AssistantHelpers } from '@/lib/ai/context';
 import { provisionIdentityUser } from '@/lib/sso';
 import { PATCH, PUT } from '@/app/api/scim/v2/Users/[id]/route';
+import { PATCH as PATCH_GROUP } from '@/app/api/scim/v2/Groups/[id]/route';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (databaseUrl) process.env.DATABASE_URL = databaseUrl;
@@ -337,6 +338,83 @@ describe.skipIf(!databaseUrl)('DEV-974 identity-change paths against PostgreSQL'
     expect(sent.map((mail) => mail.to).sort()).toEqual(
       ['staff.new@test.invalid', 'staff@test.invalid'].sort()
     );
+  });
+
+  it('assistant: re-inviting an administrator whose email the owner changed is refused', async () => {
+    await withTenantDb(organizationId, (db) =>
+      app
+        .createCaller(context(db, ids().owner))
+        .team.adminUpdateMember({ id: ids().admin2, email: 'admin2.new@test.invalid' })
+    );
+    sent.length = 0;
+    const result = await withTenantDb(organizationId, (db) => {
+      const helpers = {
+        db,
+        isAdmin: true,
+        isHr: false,
+        isAdminOrHr: true,
+        ctx: { organizationId, userId: ids().admin, name: 'Admin' },
+        can: vi.fn(async () => true),
+        audit: vi.fn(),
+        activity: vi.fn(),
+      } as unknown as AssistantHelpers;
+      const tool = buildPeopleTools(helpers).inviteMember as unknown as {
+        execute: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+      };
+      return tool.execute({
+        name: 'Admin Two',
+        email: 'admin2.new@test.invalid',
+        role: 'ADMIN',
+        department: 'ENGINEERING',
+        title: 'Admin',
+      });
+    });
+    expect(result).toMatchObject({ error: 'Only the owner can re-send this invitation.' });
+    expect(sent).toEqual([]);
+  });
+
+  it('SCIM groups: a directory cannot grant or remove owner-level access', async () => {
+    const staffRole = `${organizationId}_staff_role`;
+    await client.query(
+      `INSERT INTO organization_roles (id, "organizationId", key, name, "updatedAt")
+       VALUES ($1, $2, 'cashier', 'Cashier', now())`,
+      [staffRole, organizationId]
+    );
+    const patch = (roleId: string, op: string, userId: string) =>
+      PATCH_GROUP(
+        new Request(`https://test.invalid/api/scim/v2/Groups/${roleId}`, {
+          method: 'PATCH',
+          headers: {
+            authorization: `Bearer ${scimToken}`,
+            'content-type': 'application/scim+json',
+          },
+          body: JSON.stringify({
+            schemas: ['urn:ietf:params:scim:api:messages:2.0:PatchOp'],
+            Operations: [{ op, path: 'members', value: [{ value: userId }] }],
+          }),
+        }),
+        { params: Promise.resolve({ id: roleId }) }
+      );
+    const ownerRole = `${organizationId}_owner_role`;
+    // Nobody is added to, or removed from, the owner role by a directory.
+    expect((await patch(ownerRole, 'add', ids().admin)).status).toBe(403);
+    expect((await patch(ownerRole, 'remove', ids().owner)).status).toBe(403);
+    // The owner cannot be moved out of the owner role into another one.
+    expect((await patch(staffRole, 'add', ids().owner)).status).toBe(403);
+    // Ordinary role membership still syncs.
+    expect((await patch(staffRole, 'add', ids().staff)).status).toBe(200);
+    const roles = await withTenantDb(organizationId, (db) =>
+      db.user.findMany({
+        where: { id: { in: [ids().owner, ids().admin, ids().staff] } },
+        select: { id: true, organizationRoleId: true },
+        orderBy: { id: 'asc' },
+      })
+    );
+    expect(Object.fromEntries(roles.map((row) => [row.id, row.organizationRoleId]))).toEqual({
+      [ids().owner]: ownerRole,
+      [ids().admin]: null,
+      [ids().staff]: staffRole,
+    });
   });
 
   it('single sign-on: an unconfirmed changed email cannot sign in through the identity provider', async () => {

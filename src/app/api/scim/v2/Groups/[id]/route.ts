@@ -8,11 +8,18 @@ import {
   scimJson,
   withScimAuth,
 } from '@/lib/scim';
+import { RESET_PARTY_SELECT } from '@/lib/auth/admin-password-reset';
+import { holdsOwnerLevelAccess } from '@/lib/auth/member-email-change';
+
+const OWNER_ACCESS_REFUSAL = 'Owner access can only be changed by the owner in DevFathom.';
 
 async function loadRole(ctx: Parameters<Parameters<typeof withScimAuth>[1]>[0], id: string) {
   return ctx.db.organizationRole.findUnique({
     where: { id },
-    include: { users: { select: { id: true, name: true } } },
+    include: {
+      users: { select: { id: true, name: true } },
+      permissions: { select: { capability: true, effect: true } },
+    },
   });
 }
 
@@ -78,6 +85,18 @@ export async function PATCH(request: Request, route: { params: Promise<{ id: str
             typeof value === 'object' && value ? (value as { value?: unknown }).value : undefined
           )
           .filter((value): value is string => typeof value === 'string');
+        // DEV-974: only the owner adds or removes owner-level access. Any administrator
+        // can mint a SCIM token, so a directory may neither change the membership of an
+        // owner-level role nor move an owner-level member into another role.
+        if (holdsOwnerLevelAccess({ organizationRole: role, permissionOverrides: [] })) {
+          return scimError(403, OWNER_ACCESS_REFUSAL, 'mutability');
+        }
+        const members = ids.length
+          ? await ctx.db.user.findMany({ where: { id: { in: ids } }, select: RESET_PARTY_SELECT })
+          : [];
+        if (members.some((member) => holdsOwnerLevelAccess(member))) {
+          return scimError(403, OWNER_ACCESS_REFUSAL, 'mutability');
+        }
         if (operation.op === 'add' || operation.op === 'replace') {
           if (operation.op === 'replace') {
             await ctx.db.user.updateMany({
