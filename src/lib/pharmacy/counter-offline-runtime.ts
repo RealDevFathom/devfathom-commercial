@@ -42,11 +42,13 @@ import { classifyReplayOutcome } from '@/lib/retail-terminal/replay-outcome';
 
 import {
   applyCounterReplayOutcome,
+  archiveCommandSnapshots,
   beginCounterReplay,
   buildCounterReplayRequest,
   createCounterQueue,
   enqueueCounterCommand,
   nextCounterReplay,
+  pruneSnapshotArchive,
   purgeCounterQueue,
   remainingReceiptNumbers,
   resumeCounterAfterReauth,
@@ -57,6 +59,7 @@ import type {
   CounterLeaseCursor,
   CounterMatrixInputs,
   CounterQueueSnapshot,
+  CounterQueuedCommand,
   CounterQuota,
   CounterReplayRequest,
   CounterReplaySigner,
@@ -66,6 +69,14 @@ import { checkEnvelope } from './offline-snapshot-envelope';
 import type { EnvelopeRejection, OfflineSnapshotEnvelope } from './offline-snapshot-envelope';
 import { applyRecallBulletin, checkSafetyLease } from './offline-safety-lease';
 import { validateManualTenderPolicy } from './manual-payments';
+import { keepUnsentSales, type CounterRetiredReason } from './counter-reconcile';
+import {
+  offlineSaleSealMessage,
+  sealLineTotalsValid,
+  sealOperatorOf,
+  type OfflineSaleSealer,
+  type SealableSale,
+} from './offline-sale-seal';
 import type { OfflineRecallBulletin, SafetyLeaseState } from './offline-safety-lease';
 
 /**
@@ -205,6 +216,49 @@ export function counterOperatorOf(
 }
 
 export type CounterRuntimeState = PersistedTerminalState<CounterQueueSnapshot, CounterCache>;
+
+export type CounterEnqueueOptions = {
+  /** DEV-957 phase 2: the offline bill this sale was rung up on (removed in the same write). */
+  draftId?: string;
+  /** DEV-957 phase 2 (hardening 4): seals the sale at the moment of sale. */
+  sealer?: OfflineSaleSealer;
+  /** Each line's total as priced at the counter; part of the seal. */
+  lineTotalsMinor?: readonly number[];
+};
+
+/** The replay fields of a queued sale, as the seal covers them. */
+function sealableSaleOf(command: CounterQueuedCommand): SealableSale | null {
+  const payload = command.payload as Record<string, unknown>;
+  const receipt = payload.leasedReceipt as { leaseId?: unknown } | undefined;
+  if (!receipt || typeof receipt.leaseId !== 'string' || !Array.isArray(payload.lines)) return null;
+  if (!Array.isArray(payload.snapshots) || typeof payload.amountMinor !== 'number') return null;
+  return {
+    sequence: command.sequence,
+    idempotencyKey: command.idempotencyKey,
+    action: command.action,
+    leasedReceipt: {
+      leaseId: receipt.leaseId,
+      receiptNumber: command.receiptNumber,
+      originalSaleAt: command.clientOriginAt,
+    },
+    snapshots: payload.snapshots as SealableSale['snapshots'],
+    lines: payload.lines as SealableSale['lines'],
+    amountMinor: payload.amountMinor,
+    ...(typeof payload.cashReceivedMinor === 'number'
+      ? { cashReceivedMinor: payload.cashReceivedMinor }
+      : {}),
+    ...(payload.manualCapture !== undefined ? { manualCapture: payload.manualCapture } : {}),
+  };
+}
+
+function sealRefusal(): CounterEnqueueResult {
+  return {
+    ok: false,
+    reason: 'SEAL_FAILED',
+    message: 'This computer could not sign the sale, so it was not taken.',
+    decision: null,
+  };
+}
 
 /** The cryptographic half of snapshot verification, injected. */
 export interface SnapshotVerifier {
@@ -606,7 +660,7 @@ export class PharmacyCounterRuntime {
   enqueue(
     input: CounterCommandInput,
     matrix: Omit<CounterMatrixInputs, 'snapshots'>,
-    options: { draftId?: string } = {}
+    options: CounterEnqueueOptions = {}
   ): Promise<CounterEnqueueResult> {
     return this.exclusive(() => this.enqueueNow(input, matrix, options));
   }
@@ -614,7 +668,7 @@ export class PharmacyCounterRuntime {
   private async enqueueNow(
     input: CounterCommandInput,
     matrix: Omit<CounterMatrixInputs, 'snapshots'>,
-    options: { draftId?: string }
+    options: CounterEnqueueOptions
   ): Promise<CounterEnqueueResult> {
     let queuedInput = input;
     if (input.action === 'MANUAL_OTC_SALE') {
@@ -667,6 +721,47 @@ export class PharmacyCounterRuntime {
       batchRecalled: batchIds.some((batchId) => leaseState.recalledBatchIds.includes(batchId)),
     });
     if (!result.ok) return result;
+    let queue = result.snapshot;
+    let command = result.command;
+    // DEV-957 phase 2 (hardening 4): seal the sale now, at the moment it is taken, over the
+    // whole sale and the hash of the sale before it. Nothing is written unless it sealed.
+    if (options.sealer) {
+      const lineTotalsMinor = options.lineTotalsMinor ?? [];
+      const sale = sealableSaleOf(command);
+      if (!sale || !sealLineTotalsValid(sale, lineTotalsMinor))
+        return sealRefusal();
+      const previousHash = this.queue().lastSealHash ?? null;
+      let digest;
+      try {
+        digest = await options.sealer(
+          offlineSaleSealMessage(
+            this.scope,
+            sale,
+            { previousHash, lineTotalsMinor },
+            sealOperatorOf(sale)
+          )
+        );
+      } catch {
+        return sealRefusal();
+      }
+      if (!/^[0-9a-f]{64}$/.test(digest.hash) || !/^[0-9a-f]{64}$/.test(digest.signature))
+        return sealRefusal();
+      command = {
+        ...command,
+        sealHash: digest.hash,
+        payload: {
+          ...command.payload,
+          seal: { previousHash, lineTotalsMinor: [...lineTotalsMinor], signature: digest.signature },
+        },
+      };
+      queue = {
+        ...queue,
+        lastSealHash: digest.hash,
+        commands: queue.commands.map((row) => (row.commandId === command.commandId ? command : row)),
+      };
+    }
+    // The sale keeps only the envelopes of its price lists; one copy of each is archived.
+    const compacted = archiveCommandSnapshots(queue, command);
     // DEV-957 phase 2: the bill that became this sale is gone in the same write, so a
     // reload shows the sale queued and never the same bill again.
     const drafts = options.draftId
@@ -674,10 +769,10 @@ export class PharmacyCounterRuntime {
       : this.cache().drafts;
     await this.commit({
       ...this.state,
-      queue: result.snapshot,
+      queue: compacted.snapshot,
       catalog: { ...this.cache(), ...(drafts ? { drafts } : {}) },
     });
-    return result;
+    return { ok: true, snapshot: compacted.snapshot, command: compacted.command };
   }
 
   /** DEV-957 phase 2: the offline bills this counter is building, newest first. */
@@ -797,11 +892,13 @@ export class PharmacyCounterRuntime {
         const nextState = { ...this.state, queue: applied.snapshot };
 
         if (applied.snapshot.replay === 'STOPPED_REVOKED') {
+          // DEV-957 phase 2 (review B2): the unsent sales are kept, read-only, first.
+          const queue = this.queue();
           this.state = nextState;
-          await purgeTerminalScope(this.driver, this.scope);
+          await this.retireNow(queue, { reason: 'REVOKED' });
           return { state: 'STOPPED', discarded: applied.discarded };
         }
-        await this.commit(nextState);
+        await this.commit({ ...nextState, queue: pruneSnapshotArchive(nextState.queue) });
         if (outcome.action !== 'ACK') return { state: 'PAUSED', discarded: applied.discarded };
         return null;
       });
@@ -809,14 +906,59 @@ export class PharmacyCounterRuntime {
     }
   }
 
-  /** Confirmed revocation outside a replay (a heartbeat said so). */
-  revoke(): Promise<{ commands: number } | null> {
+  /**
+   * Confirmed revocation outside a replay (a heartbeat said so), or this computer giving
+   * the counter up ("Remove from this computer"). The counter's queue stops for good and
+   * its document goes, but its unsent sales are NOT deleted (review B2): they are moved,
+   * unchanged, into a read-only reconcile record for a manager (counter-reconcile.ts).
+   * `commands` is how many unsent sales were taken out of the queue (and kept).
+   */
+  revoke(
+    details: { counterName?: string | null; reason?: CounterRetiredReason } = {}
+  ): Promise<{ commands: number } | null> {
     return this.exclusive(async () => {
-      const purged = purgeCounterQueue(this.queue());
+      const queue = this.queue();
+      const purged = purgeCounterQueue(queue);
       this.state = { ...this.state, queue: purged.snapshot };
-      await purgeTerminalScope(this.driver, this.scope);
+      await this.retireNow(queue, { reason: details.reason ?? 'REVOKED', counterName: details.counterName });
       return purged.discarded;
     });
+  }
+
+  /**
+   * Keep the unsent sales of `queue` (before it stopped), then remove the counter's
+   * document. When they cannot be kept, the document stays instead, stopped (nothing can
+   * be sold or sent from it) and still holding them: a sale is never lost to a revoke.
+   */
+  private async retireNow(
+    queue: CounterQueueSnapshot,
+    details: { reason: CounterRetiredReason; counterName?: string | null }
+  ): Promise<void> {
+    // Every sale the server has not acknowledged: waiting ones and ones it refused.
+    const unsent = queue.commands.filter((command) => command.status !== 'ACKNOWLEDGED');
+    if (unsent.length) {
+      try {
+        await keepUnsentSales(this.driver, {
+          scope: this.scope,
+          counterName: details.counterName ?? null,
+          reason: details.reason,
+          retiredAt: new Date().toISOString(),
+          sales: unsent,
+          snapshotArchive: queue.snapshotArchive ?? [],
+        });
+      } catch {
+        const stopped: CounterRuntimeState = {
+          ...this.state,
+          catalog: { ...this.cache(), snapshots: [], drafts: [] },
+          queue: { ...queue, replay: 'STOPPED_REVOKED', leases: [], quotas: [] },
+        };
+        await writeTerminalState(this.driver, stopped, COUNTER_STORE_SCHEMA_VERSION).catch(
+          () => undefined
+        );
+        return;
+      }
+    }
+    await purgeTerminalScope(this.driver, this.scope);
   }
 
   close(): void {

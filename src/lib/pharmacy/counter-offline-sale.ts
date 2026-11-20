@@ -245,11 +245,31 @@ export type ComposedOfflineSale =
       totalMinor: number;
       cashReceivedMinor: number;
       changeMinor: number;
+      /** Each line's total in bill order: sealed with the sale (hardening 4). */
+      lineTotalsMinor: number[];
     }
   | { ok: false; message: string };
 
 function snapshotOf(state: CounterRuntimeState, kind: string): StoredCounterSnapshot | undefined {
   return state.catalog?.snapshots.find((stored) => stored.envelope.kind === kind && stored.verified);
+}
+
+/** What the counter says while offline cash selling is switched off (review B1). */
+export const OFFLINE_SELLING_OFF_MESSAGE =
+  'Offline cash selling is off. It becomes available when sending offline sales to the server is ready; until then this counter checks prices only.';
+
+/**
+ * DEV-957 phase 2 (review B1): this counter may take cash offline only when its verified,
+ * signed RULES say the owner's switch is on. A price list signed without the switch (or
+ * with it off) never sells: the counter works as a price check only.
+ */
+export function offlineCashSellingOn(state: CounterRuntimeState): boolean {
+  const rules = snapshotOf(state, 'RULES')?.payload;
+  return (
+    !!rules &&
+    typeof rules === 'object' &&
+    (rules as { offlineCashSelling?: unknown }).offlineCashSelling === true
+  );
 }
 
 /**
@@ -266,6 +286,7 @@ export function composeOfflineCashSale(input: {
 }): ComposedOfflineSale {
   const { state, draft, nowMs } = input;
   const deviceId = state.queue?.deviceId ?? state.scope.deviceId;
+  if (!offlineCashSellingOn(state)) return { ok: false, message: OFFLINE_SELLING_OFF_MESSAGE };
   if (!draft.lines.length) return { ok: false, message: 'Add a medicine to the bill first.' };
   const bill = priceOfflineBill(draft, input.rows);
   if (bill.problems.length) return { ok: false, message: bill.problems[0]! };
@@ -294,6 +315,7 @@ export function composeOfflineCashSale(input: {
     totalMinor: bill.totalMinor,
     cashReceivedMinor: input.cashReceivedMinor,
     changeMinor: input.cashReceivedMinor - bill.totalMinor,
+    lineTotalsMinor: bill.lines.map((line) => line.lineTotalMinor),
     input: {
       deviceId,
       action: 'CASH_OTC_SALE',
@@ -353,7 +375,11 @@ export function offlineSaleRefusal(reason: string): string {
     case 'BATCH_RECALLED':
       return 'An item on this bill is from a recalled batch and cannot be sold.';
     case 'QUEUE_FULL':
-      return 'This counter is holding the most offline sales it may (200). Connect so they can be sent before taking another.';
+      return 'This counter is holding the most offline sales it may (200), so it cannot take another one offline.';
+    case 'SEAL_FAILED':
+      return 'This computer could not sign the sale, so nothing was taken. Try again; if it keeps happening, sell online or by hand.';
+    case 'SELLING_OFF':
+      return OFFLINE_SELLING_OFF_MESSAGE;
     case 'DEVICE_REVOKED':
       return 'This counter was revoked by a manager and can no longer take sales.';
     case 'DEVICE_MISMATCH':

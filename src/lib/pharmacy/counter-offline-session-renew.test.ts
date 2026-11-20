@@ -8,9 +8,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { FIXTURE_SCOPE, fixturePublicKey } from '@/lib/test-support/pharmacy-offline-snapshots';
-import { terminalScopeKey } from '@/lib/retail-terminal/local-store';
+import { terminalScopeKey, writeTerminalState } from '@/lib/retail-terminal/local-store';
 
-import { createMemoryDriver, PharmacyCounterRuntime } from './counter-offline-runtime';
+import {
+  COUNTER_STORE_SCHEMA_VERSION,
+  createMemoryDriver,
+  PharmacyCounterRuntime,
+} from './counter-offline-runtime';
 import { discardCounterDrafts, openCounterRuntime, type CounterOfflineDeps } from './counter-offline-session';
 import { CounterRequestError } from './counter-offline-transport';
 import { webCryptoSnapshotVerifier, browserSnapshotPayloadHash } from './counter-snapshot-verifier';
@@ -65,6 +69,44 @@ describe('DEV-957 phase 2: renewing the counter credential while online', () => 
     expect(JSON.stringify(raw ?? null)).not.toContain('pcd_');
   });
 
+  it('never renews while a sale sealed with the current secret is waiting to be sent', async () => {
+    const { deps: value } = deps({
+      establish: vi.fn(async () => session(true)),
+      renew: vi.fn(),
+    });
+    const seeded = new PharmacyCounterRuntime(FIXTURE_SCOPE, value.driver, webCryptoSnapshotVerifier(), '');
+    await seeded.hydrate();
+    const state = seeded.snapshot();
+    await writeTerminalState(
+      value.driver,
+      {
+        ...state,
+        queue: {
+          ...state.queue!,
+          commands: [
+            {
+              commandId: 'sale-1',
+              idempotencyKey: 'sale-1',
+              sequence: 1,
+              action: 'CASH_OTC_SALE',
+              payload: {},
+              clientOriginAt: '2026-11-19T09:00:00.000Z',
+              receiptNumber: 501,
+              status: 'PENDING',
+              attempts: 0,
+              serverRef: null,
+              rejection: null,
+            },
+          ],
+        },
+      },
+      COUNTER_STORE_SCHEMA_VERSION
+    );
+    const opened = await openCounterRuntime(ENROLMENT, value, true);
+    expect(value.transport.renew).not.toHaveBeenCalled();
+    expect(opened.sessionToken).toBe('token-1');
+  });
+
   it('does not renew when not due', async () => {
     const renew = vi.fn();
     const { deps: value } = deps({ renew });
@@ -82,7 +124,7 @@ describe('DEV-957 phase 2: renewing the counter credential while online', () => 
     expect(opened.sessionToken).toBe('token-1');
   });
 
-  it('wipes the counter on a confirmed revocation and counts the unsent sales', async () => {
+  it('stops the counter on a confirmed revocation and counts the unsent sales it kept', async () => {
     const driver = createMemoryDriver();
     const seeded = new PharmacyCounterRuntime(FIXTURE_SCOPE, driver, webCryptoSnapshotVerifier(), '');
     await seeded.hydrate();
@@ -94,7 +136,7 @@ describe('DEV-957 phase 2: renewing the counter credential while online', () => 
     });
     value.driver = driver;
     const opened = await openCounterRuntime(ENROLMENT, value, true);
-    expect(opened.revoked).toEqual({ discarded: 0 });
+    expect(opened.revoked).toEqual({ kept: 0 });
     expect(opened.sessionToken).toBeNull();
     expect(await driver.read(terminalScopeKey(FIXTURE_SCOPE))).toBeUndefined();
     // Never on a generic refusal: only the server's word "revoked" purges.

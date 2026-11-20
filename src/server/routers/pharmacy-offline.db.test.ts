@@ -9,6 +9,10 @@ import {
   seedPharmacyRegulatoryProfile,
 } from '@/lib/test-support/pharmacy-regulatory';
 import type { CounterReplay } from './pharmacy-offline';
+import { offlineSaleChain } from '@/lib/test-support/offline-sale-seal';
+
+/** A replay body before the counter's seal is added (`offlineSaleChain`). */
+type UnsealedReplay = Omit<CounterReplay, 'seal'> & { seal?: CounterReplay['seal'] };
 import type { ManualTenderType } from '@/lib/pharmacy/manual-payments';
 
 const TEST_DATABASE_URL = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
@@ -349,7 +353,7 @@ async function setup(
   expect(refreshed.status).toBe(200);
   const { snapshots } = await refreshed.json();
   const rules = snapshots.find((s: { envelope: { kind: string } }) => s.envelope.kind === 'RULES');
-  const command: CounterReplay = {
+  const command: UnsealedReplay = {
     sequence: 1,
     idempotencyKey: tag('command'),
     action: 'CASH_OTC_SALE' as const,
@@ -381,7 +385,11 @@ async function setup(
     command.manualCapture = { type: manualType, providerRef: '001234', payerName: 'Ayesha' };
   }
   const { signPharmacyCommand } = await import('@/lib/pharmacy/sales');
-  async function replay(input = command, headers: Record<string, string> = {}) {
+  // DEV-957 phase 2 (hardening 4): every sale is sealed as the counter seals it at the
+  // moment of sale, chained to the sale before it on this counter.
+  const chain = offlineSaleChain(scopeOf(fixture), fixture.deviceId, fixture.deviceSecret);
+  async function replay(unsealed: UnsealedReplay = command, headers: Record<string, string> = {}) {
+    const input = chain.seal(unsealed);
     return call('replay', input, {
       'idempotency-key': input.idempotencyKey,
       'x-command-signature': signPharmacyCommand(
@@ -399,7 +407,8 @@ async function setup(
       ...headers,
     });
   }
-  async function reject(input = command, headers: Record<string, string> = {}) {
+  async function reject(unsealed: UnsealedReplay = command, headers: Record<string, string> = {}) {
+    const input = chain.seal(unsealed);
     return call(
       'reject',
       { command: input, reason: 'Reviewed failed offline sale' },

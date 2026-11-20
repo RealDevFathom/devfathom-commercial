@@ -10,6 +10,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { OfflineSnapshotEnvelope } from '@/lib/pharmacy/offline-snapshot-envelope';
+import { offlineSaleChain } from '@/lib/test-support/offline-sale-seal';
 
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 
@@ -73,9 +74,20 @@ function envelope(
   };
 }
 
+
+/**
+ * DEV-957 phase 2 (hardening 4): the counter seals each sale when it is taken; the route
+ * checks that seal. This counter's first sale names no sale before it.
+ */
 function command(recalledBatchIds: string[] = []) {
+  return router.counterReplaySchema.parse(offlineSaleChain(SCOPE, DEVICE, 'pcd_secret').seal(unsealedCommand(recalledBatchIds), {
+    previousHash: null,
+  }));
+}
+
+function unsealedCommand(recalledBatchIds: string[] = []) {
   const receiptEnvelope = envelope('RULES', { kind: 'RULES' }, recalledBatchIds);
-  return router.counterReplaySchema.parse({
+  return {
     sequence: 1,
     idempotencyKey: 'idem_1',
     action: 'CASH_OTC_SALE',
@@ -105,7 +117,7 @@ function command(recalledBatchIds: string[] = []) {
     ],
     amountMinor: 100,
     cashReceivedMinor: 100,
-  });
+  };
 }
 
 function db(lots: Array<{ id: string; batch: { state: string } }>) {
@@ -207,14 +219,20 @@ describe('#519 replay derives recall state', () => {
 describe('DEV-825 replay takes stock locks in the global order', () => {
   it("locks every line's batch, then every candidate balance, before the first line", async () => {
     mocks.createSale.mockResolvedValue({ id: 'sale_1' });
-    const base = command();
-    const body = router.counterReplaySchema.parse({
-      ...base,
-      lines: [
-        { ...base.lines[0]!, medicineId: 'med_2', inventoryLotId: 'lot_2' },
-        { ...base.lines[0]!, medicineId: 'med_1', inventoryLotId: 'lot_1' },
-      ],
-    });
+    const base = unsealedCommand();
+    // The counter seals the sale it took, with both lines.
+    const body = router.counterReplaySchema.parse(
+      offlineSaleChain(SCOPE, DEVICE, 'pcd_secret').seal(
+        {
+          ...base,
+          lines: [
+            { ...base.lines[0]!, medicineId: 'med_2', inventoryLotId: 'lot_2' },
+            { ...base.lines[0]!, medicineId: 'med_1', inventoryLotId: 'lot_1' },
+          ],
+        },
+        { previousHash: null }
+      )
+    );
     const target = db([
       { id: 'lot_1', batch: { state: 'ACTIVE' } },
       { id: 'lot_2', batch: { state: 'ACTIVE' } },

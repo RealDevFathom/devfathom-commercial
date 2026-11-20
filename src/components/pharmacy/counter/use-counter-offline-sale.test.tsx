@@ -37,7 +37,18 @@ vi.mock('@/lib/pharmacy/counter-device-store', async (importOriginal) => {
   return {
     ...actual,
     indexedDbDeviceKeyBackend: () => ({}),
-    readCounterEnrolment: async () => ({ ...ENROLMENT, signingKey: {} }),
+    // A real non-extractable HMAC key from a throwaway test secret: the hook seals each
+    // sale with it at the moment of sale (hardening 4).
+    readCounterEnrolment: async () => ({
+      ...ENROLMENT,
+      signingKey: await globalThis.crypto.subtle.importKey(
+        'raw',
+        new TextEncoder().encode(`pcd_${'k'.repeat(43)}`),
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['sign']
+      ),
+    }),
     forgetCounterEnrolment: h.forget,
   };
 });
@@ -60,6 +71,7 @@ import { COUNTER_ENROLMENT_MIRROR_KEY } from '@/lib/pharmacy/counter-device-stor
 import { CounterRequestError } from '@/lib/pharmacy/counter-offline-transport';
 import { webCryptoSnapshotVerifier } from '@/lib/pharmacy/counter-snapshot-verifier';
 import { addToOfflineDraft, newOfflineDraft } from '@/lib/pharmacy/counter-offline-sale';
+import { readReconcileIndex, readReconcileRecord } from '@/lib/pharmacy/counter-reconcile';
 import { useCounterOffline, type CounterOfflineView } from './use-counter-offline';
 import { CounterOfflinePanel } from './counter-offline-panel';
 
@@ -192,7 +204,7 @@ describe('DEV-957 phase 2: selling offline through the counter', () => {
     expect(h.clear).toHaveBeenCalled();
   });
 
-  it('wipes the counter when the server says it was revoked, and can never sell again', async () => {
+  it('stops the counter when the server says it was revoked, keeps its unsent sale, and can never sell again', async () => {
     await preparedOnline();
     const offline = renderHook(() => useCounterOffline(props(false)));
     await waitFor(() => expect(offline.result.current.actions).not.toBeNull());
@@ -202,16 +214,49 @@ describe('DEV-957 phase 2: selling offline through the counter', () => {
     offline.unmount();
     h.establish.mockRejectedValue(new CounterRequestError(401, 'device_revoked'));
     const back = renderHook(() => useCounterOffline(props(true)));
-    await waitFor(() => expect(back.result.current.revokedNotice).toEqual({ discarded: 1 }));
+    await waitFor(() => expect(back.result.current.revokedNotice).toEqual({ kept: 1 }));
     expect(back.result.current.status).toBe('unenrolled');
     expect(back.result.current.actions).toBeNull();
     expect(h.forget).toHaveBeenCalled();
     expect(h.unbind).toHaveBeenCalled();
     expect(h.clear).toHaveBeenCalled();
-    // Nothing of the counter is left on this computer.
+    // Nothing of the counter is left on this computer: no price list, receipt block or bill.
     expect(await (h.driver as ReturnType<typeof createMemoryDriver>).read(
       `${FIXTURE_SCOPE.organizationId}::${FIXTURE_SCOPE.branchId}::${FIXTURE_SCOPE.deviceId}`
     )).toBeUndefined();
+    // Except the sale it took and never sent: kept read-only for a manager (review B2).
+    const driver = h.driver as ReturnType<typeof createMemoryDriver>;
+    const [entry] = await readReconcileIndex(driver);
+    const record = await readReconcileRecord(driver, entry!.recordKey);
+    expect(record?.sales).toHaveLength(1);
+    expect(record?.sales[0]?.payload.seal).toBeTruthy();
+  });
+});
+
+describe('DEV-957 phase 2 (review B1): with the owner switch off the counter checks prices only', () => {
+  it('offers no offline bill and refuses every offline sale, as after phase 1', async () => {
+    h.snapshots.mockImplementation(async () => ({
+      publicKey: fixturePublicKey(),
+      snapshots: KINDS.map((kind) => {
+        const payloads = fixtureSalePayloads({ offlineCashSelling: false });
+        return signedSnapshot(kind, payloads[kind as keyof typeof payloads]);
+      }),
+    }));
+    await preparedOnline();
+    const view = renderHook(() => useCounterOffline(props(false)));
+    await waitFor(() => expect(view.result.current.actions).not.toBeNull());
+    expect(view.result.current.sellingOn).toBe(false);
+    const paid = await view.result.current.actions!.pay(oneTablet(view.result.current), 500);
+    expect(paid).toEqual({
+      ok: false,
+      message:
+        'Offline cash selling is off. It becomes available when sending offline sales to the server is ready; until then this counter checks prices only.',
+    });
+    render(<CounterOfflinePanel offline={view.result.current} />);
+    expect(screen.getByText(/Offline cash selling is off:/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Offline price check')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Add a medicine to the offline bill')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Take cash/ })).toBeNull();
   });
 });
 

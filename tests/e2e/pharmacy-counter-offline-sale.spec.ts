@@ -7,14 +7,16 @@ import { chromium, expect, test, type BrowserContext, type Page } from '@playwri
 import { PHARMACY_E2E } from './pharmacy-counter-fixture';
 
 /**
- * DEV-957 phase 2 — an enrolled, prepared counter sells over-the-counter medicine for
- * cash with no network, and the sale survives the browser being closed. One persistent
- * profile plays "this computer": the owner enrols and prepares it online, the browser is
- * closed and opened again with the network cut, a cash sale is taken offline ("Paid" and
- * the leased receipt number appear only once it is saved), the browser is closed again,
- * and on reopening offline the sale is still queued with the same number and the next
- * sale takes the next one. Screenshots for the Studio visual QA matrix are written to
- * qa-evidence/dev-957-phase-2/.
+ * DEV-957 phase 2 — offline cash selling is OFF in the product until sending offline sales
+ * to the server is ready (review B1), and nobody can switch it on. One persistent profile
+ * plays "this computer": the owner enrols and prepares it online and sees the switch off
+ * (and not available), the browser is closed and opened again with the network cut, and
+ * the counter works as a price check only, exactly as after phase 1: it lists what it holds
+ * offline stock for, never a prescription-only medicine, and offers no offline bill and no
+ * "Take cash". Closed and reopened offline it is still a price check. The selling code
+ * itself is tested with the switch forced on (counter-offline-sale.test.ts,
+ * use-counter-offline-sale.test.tsx, pharmacy-offline-phase2.db.test.ts). Screenshots for
+ * the Studio visual QA matrix are written to qa-evidence/dev-957-phase-2/.
  */
 
 const baseURL = `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT ?? 4331}`;
@@ -65,17 +67,8 @@ async function openOffline(): Promise<{ context: BrowserContext; page: Page }> {
   const page = await context.newPage();
   for (const other of context.pages()) if (other !== page) await other.close();
   await page.goto('/pharmacy/counter');
-  await expect(page.locator('[data-counter-offline-sale]')).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('[data-counter-offline-mode="ready"]')).toBeVisible({ timeout: 30_000 });
   return { context, page };
-}
-
-async function addTablets(page: Page, count: number) {
-  const search = page.getByRole('searchbox', { name: 'Add a medicine to the offline bill' });
-  await search.fill(otc.name.slice(0, 6));
-  const results = page.getByRole('list', { name: 'Offline search results' });
-  await expect(results.getByText(otc.name)).toBeVisible();
-  for (let index = 0; index < count; index += 1)
-    await results.getByRole('button', { name: 'Add tablet' }).click();
 }
 
 async function noDocumentOverflow(page: Page) {
@@ -86,7 +79,7 @@ async function noDocumentOverflow(page: Page) {
   ).toBe(true);
 }
 
-test('an offline cash sale is saved, survives closing the browser and takes the next number', async () => {
+test('with offline cash selling off, a prepared counter checks prices offline and takes no cash', async () => {
   test.setTimeout(300_000);
   let context = await open();
   let page = context.pages()[0] ?? (await context.newPage());
@@ -102,10 +95,18 @@ test('an offline cash sale is saved, survives closing the browser and takes the 
   await expect(page.getByText(/This counter now holds 200 receipt numbers/)).toBeVisible({
     timeout: 60_000,
   });
-  // Online sales can no longer sell what was set aside for this counter; the page says so.
-  await expect(page.getByText(/online sales at any counter cannot sell them either/)).toBeVisible();
-  await expect(page.locator('[data-counter-revoke-rule]')).toBeVisible();
+  // What is set aside for this counter is safe from every online path; the page says so.
+  await expect(
+    page.getByText(/online sales at any counter, transfers to another branch, supplier claims and/)
+  ).toBeVisible();
+  await expect(page.locator('[data-counter-revoke-rule]')).toContainText('Sales to reconcile');
+  // The owner's switch: off, and it cannot be switched on in this version.
+  const selling = page.locator('[data-counter-offline-selling]');
+  await expect(selling.getByRole('switch', { name: 'Offline cash selling' })).toBeDisabled();
+  await expect(selling.getByRole('switch', { name: 'Offline cash selling' })).not.toBeChecked();
+  await expect(selling).toContainText('Available when sending offline sales is ready.');
   await page.screenshot({ path: `${EVIDENCE}/settings-counters-1440-light.png`, fullPage: true });
+  await selling.screenshot({ path: `${EVIDENCE}/settings-offline-selling-switch-1440-light.png` });
 
   await page.goto(`/pharmacy/counter?branchId=${PHARMACY_E2E.branchId}`);
   await expect(page.getByRole('heading', { name: 'Counter', level: 1 })).toBeVisible();
@@ -119,6 +120,9 @@ test('an offline cash sale is saved, survives closing the browser and takes the 
       { timeout: 60_000 }
     )
     .toBe(true);
+  // Nothing waits on this computer, so neither list is shown online.
+  await expect(page.locator('[data-counter-sales-to-reconcile]')).toHaveCount(0);
+  await expect(page.locator('[data-counter-offline-waiting-online]')).toHaveCount(0);
   await context.close();
 
   // Closed, then opened with no network at all.
@@ -129,50 +133,28 @@ test('an offline cash sale is saved, survives closing the browser and takes the 
   });
   // The last person is never presented as the one signed in now.
   await expect(page.getByText('Sign-in not checked')).toBeVisible();
-  await expect(page.locator('[data-counter-offline-operator]')).toContainText(
-    'who was signed in when this counter last connected'
+  const panel = page.locator('[data-counter-offline-mode="ready"]');
+  await expect(panel).toContainText('price check of the');
+  await expect(panel.locator('[data-counter-offline-selling="off"]')).toContainText(
+    'Offline cash selling is off:'
   );
-  await page.screenshot({ path: `${EVIDENCE}/counter-offline-empty-bill-1440-light.png`, fullPage: true });
+  // No offline bill, no cash.
+  await expect(page.locator('[data-counter-offline-sale]')).toHaveCount(0);
+  await expect(page.getByRole('searchbox', { name: 'Add a medicine to the offline bill' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Take cash/ })).toHaveCount(0);
 
-  // A prescription-only medicine can never be added offline.
-  const search = page.getByRole('searchbox', { name: 'Add a medicine to the offline bill' });
-  await search.fill(rx.name.slice(0, 9));
-  await expect(page.getByText(/never sold offline/)).toBeVisible();
-  await search.press('Escape');
-  await expect(search).toHaveValue('');
-
-  await addTablets(page, 2);
-  const bill = page.getByRole('list', { name: 'Offline bill lines' });
-  await expect(bill.getByText(otc.name)).toBeVisible();
-  // Two tablets of a 250.00 box of 100.
-  await expect(page.getByRole('button', { name: 'Take cash Rs 5.00' })).toBeDisabled();
-  const cash = page.getByLabel(/Cash received/);
-  await cash.fill('5.005');
-  await expect(page.getByText('Use at most 2 decimal places, for example 125.50.')).toBeVisible();
-  await page.screenshot({ path: `${EVIDENCE}/counter-offline-cash-error-1440-light.png`, fullPage: true });
-  await cash.fill('10');
-  await expect(page.getByText('Rs 5.00').last()).toBeVisible();
-
-  // The bill being built survives a reload.
-  await page.reload();
-  await expect(page.getByRole('list', { name: 'Offline bill lines' }).getByText(otc.name)).toBeVisible({
-    timeout: 30_000,
-  });
-  await page.getByLabel(/Cash received/).fill('10');
-  await page.screenshot({ path: `${EVIDENCE}/counter-offline-bill-1440-light.png`, fullPage: true });
-
-  await page.getByRole('button', { name: 'Take cash Rs 5.00' }).click();
-  const paid = page.locator('[data-counter-offline-paid]');
-  await expect(paid.getByText('Paid', { exact: true })).toBeVisible({ timeout: 30_000 });
-  const receiptText = (await paid.getByText(/^Receipt \d+/).textContent()) ?? '';
-  const receiptNumber = Number(/Receipt (\d+)/.exec(receiptText)?.[1]);
-  expect(Number.isSafeInteger(receiptNumber)).toBe(true);
-  const queue = page.locator('[data-counter-offline-queue]');
-  await expect(queue.getByRole('cell', { name: String(receiptNumber), exact: true })).toBeVisible();
-  await expect(queue.getByText('Waiting to send').first()).toBeVisible();
+  // The price check lists what this counter holds, never a prescription-only medicine.
+  const check = page.getByRole('searchbox', { name: 'Offline price check' });
+  await check.fill(rx.name.slice(0, 9));
+  await expect(page.getByText(/Prescription-only,\s+controlled and restricted medicines are never listed offline/)).toBeVisible();
+  await check.press('Escape');
+  await expect(check).toHaveValue('');
+  await check.fill(otc.name.slice(0, 6));
+  const results = page.getByRole('list', { name: 'Offline price check results' });
+  await expect(results.getByText(otc.name)).toBeVisible();
   await noDocumentOverflow(page);
 
-  // The Studio visual QA matrix, on the paid state.
+  // The Studio visual QA matrix, on the offline price-check state.
   for (const [width, height] of [
     [375, 812],
     [768, 1024],
@@ -189,12 +171,11 @@ test('an offline cash sale is saved, survives closing the browser and takes the 
       }, theme);
       await noDocumentOverflow(page);
       await page.screenshot({
-        path: `${EVIDENCE}/counter-offline-paid-${width}-${theme}${reduce ? '-reduced' : ''}.png`,
+        path: `${EVIDENCE}/counter-offline-selling-off-${width}-${theme}${reduce ? '-reduced' : ''}.png`,
         fullPage: true,
       });
-      // The app canvas scrolls inside its shell, so the sale panel is captured on its own too.
-      await page.locator('[data-counter-offline-sale]').screenshot({
-        path: `${EVIDENCE}/counter-offline-sale-panel-${width}-${theme}${reduce ? '-reduced' : ''}.png`,
+      await page.locator('[data-counter-offline]').screenshot({
+        path: `${EVIDENCE}/counter-offline-banner-${width}-${theme}${reduce ? '-reduced' : ''}.png`,
       });
     }
   }
@@ -205,10 +186,8 @@ test('an offline cash sale is saved, survives closing the browser and takes the 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.emulateMedia({ reducedMotion: 'no-preference' });
 
-  // Keyboard: the next customer, then the search, are reachable with a visible focus ring.
-  await page.getByRole('button', { name: 'Next customer' }).focus();
-  await page.keyboard.press('Enter');
-  await page.getByRole('searchbox', { name: 'Add a medicine to the offline bill' }).focus();
+  // Keyboard: the price check is reachable, with a visible focus ring.
+  await check.focus();
   await page.screenshot({ path: `${EVIDENCE}/counter-offline-keyboard-focus-1440-light.png` });
 
   // Errors logged by the page itself (requests refused by the cut network are the browser's).
@@ -217,20 +196,117 @@ test('an offline cash sale is saved, survives closing the browser and takes the 
   ).toEqual([]);
   await context.close();
 
-  // Closed again, reopened still offline: the sale is still queued with its number.
+  // Closed again, reopened still offline: still a price check, still no cash.
   ({ context, page } = await openOffline());
-  const reopenedQueue = page.locator('[data-counter-offline-queue]');
-  await expect(
-    reopenedQueue.getByRole('cell', { name: String(receiptNumber), exact: true })
-  ).toBeVisible();
-  await addTablets(page, 1);
-  await page.getByLabel(/Cash received/).fill('2.50');
-  await page.getByRole('button', { name: 'Take cash Rs 2.50' }).click();
-  const next = page.locator('[data-counter-offline-paid]');
-  await expect(next.getByText(`Receipt ${receiptNumber + 1}`, { exact: false })).toBeVisible({
+  await expect(page.getByRole('searchbox', { name: 'Offline price check' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Take cash/ })).toHaveCount(0);
+  await context.close();
+
+  // Sales to reconcile (review B2): the unsent sale a revoked counter kept on this computer,
+  // written exactly as the runtime keeps it, is listed online, read-only, and exported; a
+  // record for a counter the server does not know is refused and the sale stays.
+  context = await open();
+  page = context.pages()[0] ?? (await context.newPage());
+  await page.goto(`/pharmacy/counter?branchId=${PHARMACY_E2E.branchId}`);
+  await expect(page.getByRole('heading', { name: 'Counter', level: 1 })).toBeVisible();
+  await page.evaluate(async (branchId) => {
+    const enrolment = JSON.parse(
+      window.localStorage.getItem('devfathom.pharmacy.counter.enrolled') ?? '{}'
+    ) as { organizationId: string };
+    const scope = { organizationId: enrolment.organizationId, branchId, deviceId: 'retired_e2e_counter' };
+    const recordKey = `${scope.organizationId}::${scope.branchId}::${scope.deviceId}::reconcile`;
+    const soldAt = new Date(Date.now() - 3_600_000).toISOString();
+    const record = {
+      kind: 'pharmacy-counter-reconcile',
+      version: 1,
+      scope,
+      counterName: 'Old till',
+      retiredAt: new Date().toISOString(),
+      reason: 'REVOKED',
+      sales: [
+        {
+          commandId: 'kept_e2e_sale',
+          idempotencyKey: 'kept_e2e_sale',
+          sequence: 1,
+          action: 'CASH_OTC_SALE',
+          payload: {
+            amountMinor: 500,
+            cashReceivedMinor: 1_000,
+            lines: [{ medicineId: 'med_e2e', saleUnit: 'UNIT', quantity: 2 }],
+            snapshots: [],
+            seal: { previousHash: null, lineTotalsMinor: [500], signature: '0'.repeat(64) },
+          },
+          clientOriginAt: soldAt,
+          receiptNumber: 9_001,
+          status: 'PENDING',
+          attempts: 0,
+          serverRef: null,
+          rejection: null,
+          sealHash: 'a'.repeat(64),
+        },
+      ],
+      snapshotArchive: [],
+    };
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('devfathom-pharmacy-counter', 2);
+      request.onupgradeneeded = () => request.result.createObjectStore('scope-state');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction('scope-state', 'readwrite');
+      tx.objectStore('scope-state').put(record, recordKey);
+      tx.objectStore('scope-state').put(
+        {
+          kind: 'pharmacy-counter-reconcile-index',
+          entries: [{ recordKey, ...scope, counterName: 'Old till', retiredAt: record.retiredAt }],
+        },
+        'pharmacy-counter-reconcile-index'
+      );
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  }, PHARMACY_E2E.branchId);
+  await page.reload();
+  const reconcile = page.locator('[data-counter-sales-to-reconcile]');
+  await expect(reconcile.getByRole('heading', { name: 'Sales to reconcile (1)' })).toBeVisible({
     timeout: 30_000,
   });
-  await expect(reopenedQueue.getByRole('row')).toHaveCount(3);
-  await page.screenshot({ path: `${EVIDENCE}/counter-offline-two-queued-1440-light.png`, fullPage: true });
+  await expect(reconcile).toContainText('Receipt 9001');
+  await expect(reconcile).toContainText('Counter Old till');
+  await expect(reconcile.getByText('Not booked')).toBeVisible();
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    reconcile.getByRole('button', { name: 'Export (CSV)' }).click(),
+  ]);
+  expect(download.suggestedFilename()).toMatch(/^offline-sales-to-reconcile-\d{4}-\d{2}-\d{2}\.csv$/);
+  for (const [width, height] of [
+    [375, 812],
+    [1440, 900],
+  ] as const) {
+    for (const theme of ['light', 'dark'] as const) {
+      await page.setViewportSize({ width, height });
+      await page.evaluate((value) => {
+        window.localStorage.setItem('theme', value);
+        document.documentElement.setAttribute('data-theme', value);
+      }, theme);
+      await noDocumentOverflow(page);
+      await reconcile.screenshot({ path: `${EVIDENCE}/counter-sales-to-reconcile-${width}-${theme}.png` });
+    }
+  }
+  await page.evaluate(() => {
+    window.localStorage.setItem('theme', 'light');
+    document.documentElement.setAttribute('data-theme', 'light');
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await reconcile.getByRole('button', { name: 'Record what was done' }).click();
+  await reconcile.getByLabel('Note').fill('Entered as bill 4512');
+  await reconcile.getByRole('button', { name: 'Record', exact: true }).click();
+  await expect(reconcile.getByRole('alert')).toContainText(
+    'The server does not know this counter at this branch.'
+  );
+  await expect(reconcile).toContainText('Receipt 9001');
+  await reconcile.screenshot({ path: `${EVIDENCE}/counter-sales-to-reconcile-record-1440-light.png` });
   await context.close();
 });

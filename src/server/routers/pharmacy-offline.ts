@@ -69,6 +69,19 @@ import {
 import { lockSaleCandidates, type LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { lockStockRowsFrom } from '@/lib/pharmacy/stock-lock-order';
 import { pharmacyBusinessDate } from '@/lib/pharmacy/business-day';
+import { isPharmacistCheckPolicyOwner } from '@/lib/pharmacy/pharmacist-check-policy';
+import {
+  OFFLINE_CASH_SELLING_UNAVAILABLE_MESSAGE,
+  OfflineCashSellingError,
+  readOfflineCashSelling,
+  writeOfflineCashSelling,
+} from '@/lib/pharmacy/offline-cash-selling';
+import {
+  chainRefusal,
+  sealLineTotalsValid,
+  type ChainRefusal,
+} from '@/lib/pharmacy/offline-sale-seal';
+import { offlineSaleSealValid, recordedSaleSealHash } from '@/lib/pharmacy/offline-sale-seal-node';
 import { readPharmacyDayClock } from '@/lib/pharmacy/business-day-clock';
 import {
   cookieCredentialAllowed,
@@ -242,6 +255,137 @@ export const pharmacyOfflineRouter = router({
       return receiptNumberGaps(db, { organizationId, branchId: input.branchId }, new Date());
     })
   ),
+  /**
+   * DEV-957 phase 2 (review B1): the owner's offline cash selling switch, as it is in
+   * force. Off, and not available to switch on until sending offline sales is ready.
+   */
+  offlineCashSelling: adminProcedure.input(branchInput).query(({ ctx, input }) =>
+    ctx.db.$transaction(async (tx) => {
+      const db = tx as ScopedDb;
+      const organizationId = ctx.entitlements.organizationId;
+      await managedBranch(db, ctx.session.user, organizationId, input.branchId);
+      const setting = await readOfflineCashSelling(db, organizationId);
+      return {
+        ...setting,
+        message: setting.available ? null : OFFLINE_CASH_SELLING_UNAVAILABLE_MESSAGE,
+      };
+    })
+  ),
+  /**
+   * The owner's write. In this phase switching it on is refused for everyone; switching it
+   * off changes nothing. Owner only, so the refusal is the same answer phase 3 builds on.
+   */
+  setOfflineCashSelling: adminProcedure
+    .input(branchInput.extend({ enabled: z.boolean() }))
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const db = tx as ScopedDb;
+        const organizationId = ctx.entitlements.organizationId;
+        await managedBranch(db, ctx.session.user, organizationId, input.branchId);
+        // Switching it on is refused for everyone while it is not available, owner included.
+        const current = await readOfflineCashSelling(db, organizationId);
+        if (input.enabled && !current.enabled && !current.available)
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: OFFLINE_CASH_SELLING_UNAVAILABLE_MESSAGE,
+          });
+        if (!(await isPharmacistCheckPolicyOwner(db, organizationId, ctx.session.user.id)))
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Only the owner can change this.' });
+        try {
+          return await writeOfflineCashSelling(db, organizationId, { enabled: input.enabled });
+        } catch (error) {
+          if (error instanceof OfflineCashSellingError)
+            throw new TRPCError({
+              code: 'PRECONDITION_FAILED',
+              message: OFFLINE_CASH_SELLING_UNAVAILABLE_MESSAGE,
+            });
+          throw error;
+        }
+      })
+    ),
+  /**
+   * DEV-957 phase 2 (review B2): a manager records what was done with one offline sale a
+   * revoked (or removed) counter kept and never sent. The sale itself stays on that
+   * computer until this is recorded (or the server acknowledges it); here only the
+   * manager's account of it is kept, audited. If the server already holds the sale, that
+   * is said instead and nothing is recorded.
+   */
+  recordUnsentOfflineSale: adminProcedure
+    .input(
+      branchInput.extend({
+        deviceId: id,
+        commandId: id,
+        sequence: z.number().int().positive().max(2_147_483_647),
+        receiptNumber: z.number().int().positive().max(2_147_483_647),
+        amountMinor: z.number().int().nonnegative().safe(),
+        soldAt: z.iso.datetime(),
+        sealHash: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/)
+          .nullable(),
+        outcome: z.enum(['ENTERED_ONLINE', 'MONEY_RETURNED', 'OTHER']),
+        note: z.string().trim().min(1).max(500),
+      })
+    )
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const db = tx as ScopedDb;
+        const scope = {
+          organizationId: ctx.entitlements.organizationId,
+          branchId: input.branchId,
+          actorId: ctx.session.user.id,
+        };
+        await managedBranch(db, ctx.session.user, scope.organizationId, scope.branchId);
+        const device = await db.pharmacyRegisteredDevice.findFirst({
+          where: {
+            id: input.deviceId,
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            kind: 'PHARMACY_COUNTER',
+          },
+          select: { id: true },
+        });
+        if (!device) throw new TRPCError({ code: 'NOT_FOUND' });
+        const onServer = await db.pharmacyOfflineCommand.findFirst({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            deviceId: device.id,
+            idempotencyKey: input.commandId,
+          },
+          select: { id: true, status: true },
+        });
+        if (onServer) return { recorded: false as const, serverStatus: onServer.status };
+        await db.auditLog.create({
+          data: {
+            organizationId: scope.organizationId,
+            actorId: scope.actorId,
+            actorName: ctx.session.user.name ?? null,
+            actorEmail: ctx.session.user.email ?? null,
+            actorRole: ctx.session.user.role ?? null,
+            source: 'TRPC',
+            category: 'PHARMACY',
+            operation: 'UPDATE',
+            action: 'pharmacyOffline.recordUnsentOfflineSale',
+            targetType: 'PharmacyRegisteredDevice',
+            targetId: device.id,
+            metadata: {
+              branchId: scope.branchId,
+              deviceId: device.id,
+              commandId: input.commandId,
+              sequence: input.sequence,
+              receiptNumber: input.receiptNumber,
+              amountMinor: input.amountMinor,
+              soldAt: input.soldAt,
+              sealHash: input.sealHash,
+              outcome: input.outcome,
+              note: input.note,
+            },
+          },
+        });
+        return { recorded: true as const, serverStatus: null };
+      })
+    ),
   enroll: adminProcedure
     .input(branchInput.extend({ name: z.string().trim().min(1).max(100) }))
     .mutation(({ ctx, input }) =>
@@ -486,6 +630,18 @@ export const counterReplaySchema = z
     amountMinor: z.number().int().positive().safe(),
     cashReceivedMinor: z.number().int().positive().safe().optional(),
     manualCapture: manualTenderCaptureSchema.optional(),
+    // DEV-957 phase 2 (hardening 4): the seal the counter signed at the moment of sale,
+    // chaining this sale to the one before it (offline-sale-seal.ts).
+    seal: z
+      .object({
+        previousHash: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/)
+          .nullable(),
+        lineTotalsMinor: z.array(z.number().int().nonnegative().safe()).min(1).max(50),
+        signature: z.string().regex(/^[0-9a-f]{64}$/),
+      })
+      .strict(),
   })
   .strict()
   .refine(
@@ -530,6 +686,73 @@ export async function replayLotsRecalled(
     const batchState = state.get(lotId);
     return batchState === undefined || batchState === 'RECALLED';
   });
+}
+
+/**
+ * DEV-957 phase 2 (hardening 4): a sale whose seal does not check out, or that does not
+ * follow on from the sale the server last recorded for this counter. Refused, and the
+ * route records why in its own transaction (the refused one rolls back).
+ */
+class CounterChainError extends CounterTransportError {
+  constructor(
+    readonly reason: ChainRefusal | 'bad_seal',
+    readonly report: {
+      organizationId: string;
+      branchId: string;
+      actorId: string;
+      deviceId: string;
+      sequence: number;
+      receiptNumber: number;
+    }
+  ) {
+    super('offline_chain_broken', 409);
+  }
+}
+
+/**
+ * Check the seal the counter signed at the moment of sale, then the chain: this sale must
+ * follow directly on the sale with the highest sequence the server holds for this counter
+ * and name that sale's seal hash. A changed, dropped, inserted or reordered sale fails here.
+ */
+export async function verifyOfflineSaleChain(
+  ctx: PharmacyCounterContext,
+  command: CounterReplay
+): Promise<void> {
+  const { db, scope, deviceId, deviceSecret } = ctx;
+  const sealScope = { organizationId: scope.organizationId, branchId: scope.branchId, deviceId };
+  const report = {
+    organizationId: scope.organizationId,
+    branchId: scope.branchId,
+    actorId: scope.actorId,
+    deviceId,
+    sequence: command.sequence,
+    receiptNumber: command.leasedReceipt.receiptNumber,
+  };
+  if (
+    !sealLineTotalsValid(command, command.seal.lineTotalsMinor) ||
+    !offlineSaleSealValid(sealScope, command, command.seal, deviceSecret)
+  )
+    throw new CounterChainError('bad_seal', report);
+  const previous = await db.pharmacyOfflineCommand.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      deviceId,
+      sequence: { lt: command.sequence },
+    },
+    orderBy: { sequence: 'desc' },
+    select: { sequence: true, payload: true },
+  });
+  let previousHash: string | null = null;
+  if (previous) {
+    const parsed = counterReplaySchema.safeParse(previous.payload);
+    previousHash = parsed.success ? recordedSaleSealHash(sealScope, parsed.data) : null;
+  }
+  const refusal = chainRefusal(
+    { sequence: command.sequence, previousHash: command.seal.previousHash },
+    previous ? { sequence: previous.sequence, hash: previousHash } : null
+  );
+  if (refusal) throw new CounterChainError(refusal, report);
 }
 
 /** Called only inside the transport-owned tenant transaction; never catches a
@@ -612,6 +835,10 @@ export async function replayCounterCommand(
   }
   if (recorded.command.status !== 'PENDING')
     throw new CounterTransportError('command_rejected', 409);
+  // DEV-957 phase 2 (hardening 4): the command log has already kept the FIFO order
+  // (a skipped sequence is SEQUENCE_OUT_OF_ORDER); the seal proves this is the sale the
+  // counter signed when it was taken, following on from the sale recorded before it.
+  await verifyOfflineSaleChain(ctx, command);
   // #519: recall state is derived, never assumed. A lot the signed lease told
   // the counter was recalled, or one the server holds as recalled (or cannot
   // see) now, refuses the sale. Checked after the ACCEPTED short-circuit so a
@@ -1054,6 +1281,41 @@ function withCounterAudit<T>(
   };
 }
 
+/**
+ * DEV-957 phase 2 (hardening 4): a broken chain is refused AND recorded. The refused
+ * transaction rolled back, so the record is written in a transaction of its own. Only
+ * identifiers: never the sale, its seal or any credential.
+ */
+async function reportChainBreak(operation: CounterOperation, error: CounterChainError) {
+  const { report } = error;
+  try {
+    await withTenantDb(report.organizationId, (db) =>
+      db.auditLog.create({
+        data: {
+          organizationId: report.organizationId,
+          actorId: report.actorId,
+          source: 'REST_API',
+          category: 'PHARMACY',
+          operation: 'EXECUTE',
+          action: 'pharmacyOffline.offlineSaleChainBroken',
+          targetType: 'PharmacyRegisteredDevice',
+          targetId: report.deviceId,
+          metadata: {
+            branchId: report.branchId,
+            deviceId: report.deviceId,
+            sequence: report.sequence,
+            receiptNumber: report.receiptNumber,
+            reason: error.reason,
+            commandOperation: operation,
+          },
+        },
+      })
+    );
+  } catch {
+    // The refusal stands even when the record cannot be written.
+  }
+}
+
 export function pharmacyCounterRoute(operation: CounterOperation) {
   return async (request: Request): Promise<Response> => {
     try {
@@ -1332,6 +1594,9 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
             recalledBatchIds: recalledLots.map((lot) => lot.id),
           };
           const merchant = await readManualPaymentSettings(db, ctx.scope);
+          // DEV-957 phase 2 (review B1): the owner's offline cash selling switch, signed into
+          // the rules. Off (and not available) in this phase, so a counter checks prices only.
+          const cashSelling = await readOfflineCashSelling(db, ctx.scope.organizationId);
           const branchName = await db.pharmacyBranch.findFirst({
             where: { id: device.branchId, organizationId: ctx.scope.organizationId },
             select: { name: true },
@@ -1353,6 +1618,7 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
               // When the server stops issuing this counter new price lists.
               // (Never a key named like a credential: the counter's local store refuses those.)
               deviceAccessUntil: device.secretExpiresAt.toISOString(),
+              offlineCashSelling: cashSelling.enabled,
             },
             LOT_BALANCES: quotas,
           };
@@ -1400,6 +1666,11 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
             return { commandId: recorded.command.id, status: 'REJECTED', replayed: true };
           if (recorded.command.status !== 'PENDING')
             throw new CounterTransportError('command_already_settled', 409);
+          // A rejected sale still takes its place in the chain, so it must belong there.
+          await verifyOfflineSaleChain(
+            { db, scope: ctx.scope, deviceId: device.id, deviceSecret: secret },
+            command
+          );
           // The receipt was already printed. Retire exactly the next number
           // under the same lease checks as settlement, so recovery preserves
           // the remaining printed receipts and never makes this one reusable.
@@ -1474,6 +1745,7 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
         headers: { 'Cache-Control': 'no-store' },
       });
     } catch (error) {
+      if (error instanceof CounterChainError) await reportChainBreak(operation, error);
       if (error instanceof CounterTransportError)
         return Response.json({ error: error.code }, { status: error.status });
       // DEV-877: the replay rolled back and its command stays PENDING; the

@@ -495,6 +495,92 @@ describeIfDatabase('DEV-957 counter enrolment procedures (runtime role, real ABA
     expect(Array.isArray(await act(ownerA, (api) => api.receiptNumberGaps({ branchId: ids.branchA })))).toBe(true);
   });
 
+  it('DEV-957 phase 2 (review B1): offline cash selling is off, and nobody can switch it on', async () => {
+    expect(await act(ownerA, (api) => api.offlineCashSelling({ branchId: ids.branchA }))).toEqual({
+      enabled: false,
+      available: false,
+      message: 'Offline cash selling becomes available when sending offline sales to the server is ready.',
+    });
+    // Refused for everyone, the organisation's administrator included; nothing is written.
+    expect(
+      await refusal(act(ownerA, (api) => api.setOfflineCashSelling({ branchId: ids.branchA, enabled: true })))
+    ).toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message: 'Offline cash selling becomes available when sending offline sales to the server is ready.',
+    });
+    for (const person of [cashierA, ownerB])
+      expect(
+        await refusal(act(person, (api) => api.setOfflineCashSelling({ branchId: ids.branchA, enabled: true })))
+      ).toMatchObject({ code: 'FORBIDDEN' });
+    expect(
+      await refusal(act(managerA, (api) => api.offlineCashSelling({ branchId: ids.branchA })))
+    ).toMatchObject({ code: 'FORBIDDEN', message: 'branch_forbidden' });
+    // Every price list a counter is signed says so.
+    expect(await act(ownerA, (api) => api.offlineCashSelling({ branchId: ids.branchA }))).toMatchObject({
+      enabled: false,
+    });
+  });
+
+  it('DEV-957 phase 2 (review B2): a manager records what was done with an unsent sale a revoked counter kept, audited', async () => {
+    const counter = await act(ownerA, (api) =>
+      api.enroll({ branchId: ids.branchA, name: 'Kept-sales counter' })
+    );
+    await act(ownerA, (api) => api.revoke({ branchId: ids.branchA, deviceId: counter.device.id }));
+    const input = {
+      branchId: ids.branchA,
+      deviceId: counter.device.id,
+      commandId: `kept_${suffix}`,
+      sequence: 1,
+      receiptNumber: 501,
+      amountMinor: 330,
+      soldAt: new Date().toISOString(),
+      sealHash: 'a'.repeat(64),
+      outcome: 'ENTERED_ONLINE' as const,
+      note: 'Entered as bill 4512',
+    };
+    // Not a cashier, not an unassigned manager, not another tenant.
+    expect(await refusal(act(cashierA, (api) => api.recordUnsentOfflineSale(input)))).toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(await refusal(act(managerA, (api) => api.recordUnsentOfflineSale(input)))).toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'branch_forbidden',
+    });
+    expect(await refusal(act(ownerB, (api) => api.recordUnsentOfflineSale(input)))).toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(
+      await refusal(act(ownerA, (api) => api.recordUnsentOfflineSale({ ...input, deviceId: 'no_such_counter' })))
+    ).toMatchObject({ code: 'NOT_FOUND' });
+    expect(await act(ownerA, (api) => api.recordUnsentOfflineSale(input))).toEqual({
+      recorded: true,
+      serverStatus: null,
+    });
+    const audits = await withTenantDb(ids.orgA, (tx) =>
+      tx.auditLog.findMany({
+        where: { action: 'pharmacyOffline.recordUnsentOfflineSale', targetId: counter.device.id },
+      })
+    );
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      actorId: ids.ownerA,
+      metadata: {
+        branchId: ids.branchA,
+        deviceId: counter.device.id,
+        commandId: input.commandId,
+        receiptNumber: 501,
+        amountMinor: 330,
+        outcome: 'ENTERED_ONLINE',
+        note: 'Entered as bill 4512',
+      },
+    });
+    // It books nothing.
+    const sales = await withTenantDb(ids.orgA, (tx) =>
+      tx.pharmacySale.count({ where: { branchId: ids.branchA, receiptNumber: 501 } })
+    );
+    expect(sales).toBe(0);
+  });
+
   it('refuses a non-ADMIN with admin:access at a branch they are not assigned to (branch_forbidden)', async () => {
     const attempts: Array<(api: OfflineCaller) => Promise<unknown>> = [
       (api) => api.enroll({ branchId: ids.branchA, name: 'Unassigned manager' }),

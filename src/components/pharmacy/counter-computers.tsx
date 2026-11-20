@@ -31,6 +31,7 @@ import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { clearCounterShell } from '@/lib/pharmacy/counter-shell';
 import { ed25519Supported } from '@/lib/pharmacy/counter-snapshot-verifier';
 import { trpc } from '@/lib/trpc';
+import { Switch } from '@/components/ui/switch';
 
 import {
   browserCounterOfflineDeps,
@@ -83,11 +84,18 @@ async function adoptSecretOnThisComputer(
   await saveCounterEnrolment(indexedDbDeviceKeyBackend(), { ...enrolment, signingKey });
 }
 
-/** Everything this browser holds as the counter, gone: data, key, cookie, stored page. */
-async function forgetThisComputer(enrolment: CounterEnrolment): Promise<void> {
+/**
+ * This browser stops being the counter: its price lists, receipt numbers, stock, unfinished
+ * bills, key, cookie and stored page go. Its unsent sales do NOT: they are kept, read-only,
+ * under "Sales to reconcile" on the counter page (review B2).
+ */
+async function forgetThisComputer(
+  enrolment: CounterEnrolment,
+  reason: 'REVOKED' | 'REMOVED'
+): Promise<void> {
   try {
     const opened = await openCounterRuntime(enrolment, browserCounterOfflineDeps(), false);
-    await opened.runtime.revoke();
+    await opened.runtime.revoke({ counterName: enrolment.name, reason });
     opened.runtime.close();
   } catch {
     // Nothing stored, or storage blocked: there is nothing left to purge.
@@ -305,10 +313,13 @@ function PrepareThisComputer({
         Reserves a block of receipt numbers for this counter and earmarks, for each listed
         over-the-counter batch, the units this counter may sell while the connection is down
         (suggested: half the units on hand, at most 20). Other counters cannot be given the same
-        units, and online sales at any counter cannot sell them either: the server keeps them for
-        this counter until it sells them offline or is revoked. Prescription-only, controlled,
-        restricted, high-alert and look-alike medicines are never listed. Revoking the counter
-        hands its earmarked units back.
+        units, and online sales at any counter, transfers to another branch, supplier claims and
+        write-offs cannot take them either: the server keeps them for this counter until it sells
+        them offline or is revoked. A recall, a quarantine or an expiry removal always goes
+        ahead: it hands the affected units back, and the counter stops selling that batch
+        offline the next time it connects. Prescription-only, controlled, restricted, high-alert
+        and look-alike medicines are never listed. Revoking the counter hands its earmarked units
+        back.
       </p>
       {plan.isLoading ? (
         <p className="text-sm text-text-muted" role="status">
@@ -489,7 +500,7 @@ function BranchCounters({
     busy.current = true;
     try {
       await revoke.mutateAsync({ branchId, deviceId: row.id });
-      if (thisComputer?.deviceId === row.id) await forgetThisComputer(thisComputer);
+      if (thisComputer?.deviceId === row.id) await forgetThisComputer(thisComputer, 'REVOKED');
       setNotice({
         tone: 'status',
         text: `${row.name} is revoked. The server refuses everything it sends from now on.`,
@@ -510,6 +521,21 @@ function BranchCounters({
     if (busy.current || !thisComputer || thisComputer.deviceId !== row.id) return;
     busy.current = true;
     setNotice(null);
+    // DEV-957 phase 2 (hardening 4): each offline sale is sealed with the credential the
+    // counter held when it was taken, and the server checks the seal with the credential
+    // the counter sends it with. Rotating under unsent sales would leave them unsendable.
+    const unsent = await unsentOnThisComputer(thisComputer);
+    if (unsent !== 0) {
+      busy.current = false;
+      setNotice({
+        tone: 'alert',
+        text:
+          unsent === null
+            ? 'The credential was not rotated: the offline data on this computer could not be read, and it may hold sales sealed with the current credential.'
+            : `The credential was not rotated: this computer holds ${unsent} offline sale${unsent === 1 ? '' : 's'} sealed with the current one, which a new credential could not send.`,
+      });
+      return;
+    }
     try {
       const result = await rotate.mutateAsync({ branchId, deviceId: row.id });
       try {
@@ -614,11 +640,11 @@ function BranchCounters({
                       <p className="text-sm text-text-body" id={`revoke-counter-${row.id}`}>
                         {mine
                           ? confirming.unsent === null
-                            ? 'Revoke this computer? Offline data on it could not be read; any sale it has not sent yet is lost.'
+                            ? 'Revoke this computer? Its offline data could not be read. Whatever can be read of any unsent sale is kept on the counter page under Sales to reconcile.'
                             : confirming.unsent > 0
-                              ? `This computer holds ${confirming.unsent} offline sale${confirming.unsent === 1 ? '' : 's'} not sent yet. Revoking deletes ${confirming.unsent === 1 ? 'it' : 'them'} from this computer and the server will refuse ${confirming.unsent === 1 ? 'it' : 'them'}. Connect and let ${confirming.unsent === 1 ? 'it' : 'them'} send first if you can.`
+                              ? `This computer holds ${confirming.unsent} offline sale${confirming.unsent === 1 ? '' : 's'} not sent yet. Revoking does not delete ${confirming.unsent === 1 ? 'it' : 'them'}: ${confirming.unsent === 1 ? 'it is' : 'they are'} kept on this computer, read-only, under Sales to reconcile on the counter page, for a manager to export and record. The server will not book ${confirming.unsent === 1 ? 'it' : 'them'} from this counter.`
                               : 'Revoke this computer? It holds no unsent offline sales.'
-                          : `Revoke ${row.name}? Sales it made offline and has not sent yet will be refused by the server. Let it come online and send them first if you can.`}
+                          : `Revoke ${row.name}? Offline sales it has not sent yet are not booked; that computer keeps them read-only under Sales to reconcile the next time it reaches the server, for a manager to export and record.`}
                       </p>
                       <Button
                         type="button"
@@ -672,11 +698,11 @@ function BranchCounters({
                     className="min-h-11"
                     disabled={pending}
                     onClick={() =>
-                      void forgetThisComputer(thisComputer!).then(
+                      void forgetThisComputer(thisComputer!, 'REMOVED').then(
                         () =>
                           setNotice({
                             tone: 'status',
-                            text: 'This computer no longer holds the revoked counter. You can enrol it again.',
+                            text: 'This computer no longer holds the revoked counter. You can enrol it again. Any offline sale it never sent is kept on the counter page under Sales to reconcile.',
                           })
                       )
                     }
@@ -695,14 +721,56 @@ function BranchCounters({
       </p>
       <p className="max-w-prose text-xs text-text-muted" data-counter-revoke-rule="">
         Revoking from another computer: from that moment the server refuses everything the
-        revoked counter sends, including offline sales it has not sent yet, and its earmarked
-        units go back to the branch. The next time it reaches the server it deletes its offline
-        data, its unfinished bills and its stored page, and it can never take another sale;
-        once its signed price list ends (at most 8 hours) it cannot sell offline even if it
-        never reconnects. Sales it sent before the revoke stay booked.
+        revoked counter sends and its earmarked units go back to the branch. The next time it
+        reaches the server it deletes its price lists, receipt numbers, unfinished bills and
+        stored page, and it can never take another sale; once its signed price list ends (at
+        most 8 hours) it cannot sell offline even if it never reconnects. Offline sales it never
+        sent are not deleted: that computer keeps them, read-only, under Sales to reconcile on
+        the counter page, for a manager to export and record what was done with each one.
+        Sales it sent before the revoke stay booked.
       </p>
       <NoticeLine notice={notice} />
+      <OfflineCashSellingSwitch branchId={branchId} />
       <ReceiptNumberGaps branchId={branchId} />
+    </div>
+  );
+}
+
+/**
+ * DEV-957 phase 2 (review B1): the owner's offline cash selling switch. Off, and it cannot
+ * be switched on in this version: the server refuses, and says why.
+ */
+function OfflineCashSellingSwitch({ branchId }: { branchId: string }) {
+  const setting = trpc.pharmacyOffline.offlineCashSelling.useQuery({ branchId }, { retry: false });
+  const enabled = setting.data?.enabled ?? false;
+  return (
+    <div className="space-y-2 border-t border-border-subtle pt-4" data-counter-offline-selling="">
+      <div className="flex flex-wrap items-center gap-3">
+        <Switch
+          id={`offline-cash-selling-${branchId}`}
+          checked={enabled}
+          disabled
+          aria-labelledby={`offline-cash-selling-${branchId}-label`}
+          aria-describedby={`offline-cash-selling-${branchId}-help`}
+        />
+        <label
+          id={`offline-cash-selling-${branchId}-label`}
+          htmlFor={`offline-cash-selling-${branchId}`}
+          className="text-sm font-semibold text-text-strong"
+        >
+          Offline cash selling
+        </label>
+        <StatusPill
+          status={enabled ? 'on' : 'off'}
+          tone={enabled ? 'success' : 'neutral'}
+          label={enabled ? 'On' : 'Off'}
+        />
+      </div>
+      <p id={`offline-cash-selling-${branchId}-help`} className="max-w-prose text-xs text-text-muted">
+        {setting.data?.available === false || !setting.data
+          ? 'Available when sending offline sales is ready. Until then a counter without a connection checks prices only, and every offline cash sale is refused.'
+          : 'When on, a prepared counter takes cash sales while the connection is down.'}
+      </p>
     </div>
   );
 }

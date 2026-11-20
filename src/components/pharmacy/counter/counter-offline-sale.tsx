@@ -412,8 +412,15 @@ export function OfflinePaidCard({ paid, onNext }: { paid: OfflinePaid; onNext: (
           <p className="font-medium text-text-strong">
             Receipt {paid.receipt.receiptNumber} · {formatReceiptIssuedAt(paid.receipt.completedAt)}
           </p>
+          {paid.receipt.cashierName ? (
+            <p className="text-sm text-text-body" data-counter-offline-sold-by="">
+              Sold by {paid.receipt.cashierName} (offline), who was signed in when this counter
+              last connected.
+            </p>
+          ) : null}
           <p className="text-sm text-text-body">
-            Saved on this computer. It is sent to the server when the connection returns.
+            Saved and sealed on this computer. It waits here: this version does not send offline
+            sales to the server yet.
           </p>
         </div>
         <dl className="flex flex-wrap gap-x-8 gap-y-2">
@@ -462,6 +469,12 @@ export function OfflineQueue({ queued }: { queued: readonly CounterQueuedCommand
       <h3 className="text-sm font-semibold text-text-strong">
         Offline sales waiting to send ({queued.length})
       </h3>
+      {queued.length > 0 ? (
+        <p className="text-xs text-text-muted">
+          Kept on this computer. This version does not send offline sales to the server yet, and
+          the server accepts an offline sale only up to 7 days after it was taken.
+        </p>
+      ) : null}
       {queued.length === 0 ? (
         <p className="text-sm text-text-muted">No offline sale is waiting on this computer.</p>
       ) : (

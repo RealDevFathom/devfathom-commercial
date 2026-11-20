@@ -26,6 +26,10 @@ import {
   seedPharmacyRegulatoryProfile,
 } from '@/lib/test-support/pharmacy-regulatory';
 import type { CounterReplay } from './pharmacy-offline';
+import { offlineSaleChain } from '@/lib/test-support/offline-sale-seal';
+
+/** A replay body before the counter's seal is added (`offlineSaleChain`). */
+type UnsealedReplay = Omit<CounterReplay, 'seal'> & { seal?: CounterReplay['seal'] };
 
 const TEST_DATABASE_URL = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -75,6 +79,15 @@ vi.mock('@/lib/abac', () => ({
   can: vi.fn(async () => true),
   subjectFromSession: (user: unknown) => user,
 }));
+// DEV-957 phase 2 (review B1): offline cash selling is off and cannot be switched on in the
+// product. These tests exercise the selling code, so they force the owner's switch ON.
+vi.mock('@/lib/pharmacy/offline-cash-selling', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pharmacy/offline-cash-selling')>();
+  return {
+    ...actual,
+    readOfflineCashSelling: vi.fn(async () => ({ enabled: true, available: true })),
+  };
+});
 vi.mock('@/lib/rate-limit', () => ({
   rateLimit: () => ({ ok: true }),
   clientIp: () => '127.0.0.1',
@@ -257,6 +270,17 @@ async function readyForReplay(made: Fixture) {
   );
 }
 
+/** One seal chain per counter, as each counter keeps its own. */
+const chains = new Map<string, ReturnType<typeof offlineSaleChain>>();
+function chainOf(made: Fixture) {
+  let chain = chains.get(made.deviceId);
+  if (!chain) {
+    chain = offlineSaleChain(scopeOf(made), made.deviceId, made.secret);
+    chains.set(made.deviceId, chain);
+  }
+  return chain;
+}
+
 /** The counter REST route as this fixture's device, bearer path. */
 function counterClient(made: Fixture) {
   let token = '';
@@ -285,7 +309,9 @@ function counterClient(made: Fixture) {
       if (response.status === 201) token = body.sessionToken;
       return { status: response.status, body };
     },
-    replay(command: CounterReplay) {
+    replay(unsealed: UnsealedReplay) {
+      // DEV-957 phase 2 (hardening 4): sealed as the counter seals a sale when it is taken.
+      const command = chainOf(made).seal(unsealed);
       return call('replay', command, {
         'idempotency-key': command.idempotencyKey,
         'x-command-signature': deps.sales.signPharmacyCommand(
@@ -333,7 +359,7 @@ type SignedSnapshot = {
 function unitCommand(
   made: Fixture,
   input: { lease: { id: string }; receiptNumber: number; sequence: number; snapshots: SignedSnapshot[]; units?: number }
-): CounterReplay {
+): UnsealedReplay {
   const rules = input.snapshots.find((snapshot) => snapshot.envelope.kind === 'RULES')!;
   const units = input.units ?? 1;
   return {
@@ -830,7 +856,14 @@ describeIfDatabase('DEV-957 phase 2: the counter code signs exactly what the ser
     if (!composed.ok) return;
     // 1000 for the box, floor(1000 x 7 / 21) = 333 -> 330 for a strip, 47 -> 45 a tablet.
     expect(composed.totalMinor).toBe(1_000 + 330 + 3 * 45);
-    const queued = await runtime.enqueue(composed.input, composed.matrix);
+    // The counter seals the sale with its non-extractable key at the moment of sale.
+    const { counterSaleSealer, importCounterSigningKey } = await import(
+      '@/lib/pharmacy/counter-device-signing'
+    );
+    const queued = await runtime.enqueue(composed.input, composed.matrix, {
+      sealer: counterSaleSealer(await importCounterSigningKey(made.secret)),
+      lineTotalsMinor: composed.lineTotalsMinor,
+    });
     expect(queued.ok).toBe(true);
     if (!queued.ok) return;
     const request = await queue.buildCounterReplayRequest(
@@ -916,5 +949,61 @@ describeIfDatabase('DEV-957 phase 2: prescription-only items never sell offline'
       db.pharmacySale.count({ where: { branchId: made.branchId } })
     );
     expect(sales).toBe(0);
+  });
+});
+
+describeIfDatabase('DEV-957 phase 2 (hardening 4): the server checks each sale against its seal and the chain', () => {
+  it('refuses and records an edited sale, a sale naming the wrong sale before it, and a dropped sale', async () => {
+    const made = await fixture('chain', { units: 12, looseUnits: 12 });
+    await readyForReplay(made);
+    const { client, lease, snapshots } = await prepared(made, { leaseSize: 5, quotaUnits: 5 });
+    const sale = (sequence: number) =>
+      unitCommand(made, { lease, receiptNumber: lease.blockStart + sequence - 1, sequence, snapshots });
+    const breaks = () =>
+      inOrg((db) =>
+        db.auditLog.findMany({
+          where: { action: 'pharmacyOffline.offlineSaleChainBroken', targetId: made.deviceId },
+          orderBy: { createdAt: 'asc' },
+        })
+      );
+    const booked = () => inOrg((db) => db.pharmacySale.count({ where: { branchId: made.branchId } }));
+
+    expect((await client.replay(sale(1))).status).toBe(200);
+
+    // Changed after it was sealed: more cash written in than the counter took.
+    const second = sale(2);
+    const sealed = chainOf(made).seal(second);
+    const edited = await client.replay({ ...sealed, cashReceivedMinor: sealed.cashReceivedMinor! + 500 });
+    expect(edited.status).toBe(409);
+    expect(await edited.json()).toEqual({ error: 'offline_chain_broken' });
+
+    // Sealed with the key, but naming a sale that is not the one recorded before it.
+    const misplaced = await client.replay(chainOf(made).seal({ ...second }, { previousHash: 'f'.repeat(64) }));
+    expect(misplaced.status).toBe(409);
+    expect(await misplaced.json()).toEqual({ error: 'offline_chain_broken' });
+    expect(await booked()).toBe(1);
+    expect(
+      await inOrg((db) => db.pharmacyOfflineCommand.count({ where: { deviceId: made.deviceId } }))
+    ).toBe(1);
+
+    // Each refusal is recorded, with identifiers only.
+    const recorded = await breaks();
+    expect(recorded.map((row) => (row.metadata as { reason: string }).reason)).toEqual([
+      'bad_seal',
+      'edited',
+    ]);
+    expect(recorded[0]).toMatchObject({
+      actorId: ACTOR,
+      metadata: { branchId: made.branchId, deviceId: made.deviceId, sequence: 2, receiptNumber: lease.blockStart + 1 },
+    });
+    expect(JSON.stringify(recorded)).not.toContain(made.secret);
+    expect(JSON.stringify(recorded)).not.toContain(sealed.seal.signature);
+
+    // The sale as it was taken goes through.
+    expect((await client.replay(chainOf(made).seal(sale(2)))).status).toBe(200);
+    // A dropped sale: sale 3 never arrives, sale 4 does.
+    const dropped = await client.replay(sale(4));
+    expect(dropped.status).toBe(409);
+    expect(await booked()).toBe(2);
   });
 });

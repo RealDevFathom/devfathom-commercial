@@ -18,12 +18,17 @@ import {
 import { unsettledCommands, type CounterQueuedCommand } from '@/lib/pharmacy/counter-command-queue';
 import {
   composeOfflineCashSale,
+  offlineCashSellingOn,
   offlineSaleReceipt,
   offlineSaleRefusal,
   priceOfflineBill,
 } from '@/lib/pharmacy/counter-offline-sale';
 import type { CounterReceipt } from '@/lib/pharmacy/counter-receipt';
-import { importCounterSigningKey } from '@/lib/pharmacy/counter-device-signing';
+import {
+  counterSaleSealer,
+  importCounterSigningKey,
+} from '@/lib/pharmacy/counter-device-signing';
+import type { OfflineSaleSealer } from '@/lib/pharmacy/offline-sale-seal';
 import {
   forgetCounterEnrolment,
   indexedDbDeviceKeyBackend,
@@ -102,8 +107,16 @@ export type CounterOfflineView = {
   queued: CounterQueuedCommand[];
   /** Null until the counter is open; then the offline bill and payment actions. */
   actions: CounterOfflineActions | null;
-  /** The server confirmed this counter was revoked and its store was wiped. */
-  revokedNotice: { discarded: number } | null;
+  /**
+   * The server confirmed this counter was revoked: it can never sell again, and `kept`
+   * unsent sales were moved to "Sales to reconcile" on this computer (review B2).
+   */
+  revokedNotice: { kept: number } | null;
+  /**
+   * DEV-957 phase 2 (review B1): the owner's offline cash selling switch, as the counter's
+   * signed rules carry it. Off: the counter checks prices only, as after phase 1.
+   */
+  sellingOn: boolean;
   /** When the server stops renewing this counter's offline selling, once known. */
   credentialExpiresAt: string | null;
   /** Renewal was due and did not go through; the credential still works until it expires. */
@@ -194,9 +207,14 @@ export function useCounterOffline(input: {
   const runtimeRef = useRef<PharmacyCounterRuntime | null>(null);
   // In memory only: the terminal session token is never persisted.
   const sessionTokenRef = useRef<string | null>(null);
-  const [revokedNotice, setRevokedNotice] = useState<{ discarded: number } | null>(null);
+  const [revokedNotice, setRevokedNotice] = useState<{ kept: number } | null>(null);
   /** How `open` reports a confirmed revocation; kept outside the effect's own state. */
-  const revokedRef = useRef<((notice: { discarded: number }) => void) | null>(null);
+  const revokedRef = useRef<((notice: { kept: number }) => void) | null>(null);
+  /**
+   * DEV-957 phase 2 (hardening 4): seals each sale at the moment of sale with this
+   * counter's non-extractable key. In memory only; the key never leaves its store.
+   */
+  const sealerRef = useRef<OfflineSaleSealer | null>(null);
   useEffect(() => {
     revokedRef.current = setRevokedNotice;
   }, []);
@@ -227,6 +245,8 @@ export function useCounterOffline(input: {
       } catch {
         record = null;
       }
+      sealerRef.current =
+        record && record.deviceId === enrolled.deviceId ? counterSaleSealer(record.signingKey) : null;
       if (!record || record.deviceId !== enrolled.deviceId) {
         return finish({
           status: 'unavailable',
@@ -255,9 +275,11 @@ export function useCounterOffline(input: {
       }
       const counter = await openCounterRuntime(record, deps, isOnline).catch(() => null);
       if (counter?.revoked) {
-        // DEV-957 phase 2: the server confirmed the revoke. The store is already wiped;
-        // the key, the cookie and the stored page go too, and nothing can be sold here.
+        // DEV-957 phase 2: the server confirmed the revoke. The counter's offline data is
+        // gone (its unsent sales were kept for reconciling); the key, the cookie and the
+        // stored page go too, and nothing can be sold here.
         counter.runtime.close();
+        sealerRef.current = null;
         // Said first: forgetting the enrolment below re-renders this counter as unenrolled.
         revokedRef.current?.(counter.revoked);
         await forgetCounterEnrolment(indexedDbDeviceKeyBackend(), enrolled.organizationId).catch(
@@ -374,6 +396,7 @@ export function useCounterOffline(input: {
     [state]
   );
   const ready = current?.status === 'ready' && state !== null;
+  const sellingOn = state ? offlineCashSellingOn(state) : false;
   const enrolmentName = enrolment?.name ?? '';
   const actions = useMemo<CounterOfflineActions | null>(() => {
     if (!ready) return null;
@@ -405,12 +428,17 @@ export function useCounterOffline(input: {
           nowMs: at,
         });
         if (!composed.ok) return composed;
+        const sealer = sealerRef.current;
+        if (!sealer) return { ok: false, message: offlineSaleRefusal('SEAL_FAILED') };
         // Priced before the write: the write debits the quota the rows are read from.
         const bill = priceOfflineBill(draft, sellable);
         let result;
         try {
           result = await runtime.enqueue(composed.input, composed.matrix, {
             draftId: draft.draftId,
+            // Sealed now, at the moment of sale, over the whole sale (hardening 4).
+            sealer,
+            lineTotalsMinor: composed.lineTotalsMinor,
           });
         } catch {
           // Not written: the bill stays, no number or unit was used.
@@ -451,6 +479,7 @@ export function useCounterOffline(input: {
     queued: [],
     actions: null,
     revokedNotice,
+    sellingOn: false,
     credentialExpiresAt: null,
     renewalFailed: false,
   };
@@ -469,6 +498,7 @@ export function useCounterOffline(input: {
     queued,
     actions,
     revokedNotice,
+    sellingOn,
     credentialExpiresAt: current?.credentialExpiresAt ?? null,
     renewalFailed: current?.renewalFailed ?? false,
   };

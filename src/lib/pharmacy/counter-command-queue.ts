@@ -66,6 +66,11 @@ export type CounterQueuedCommand = {
   serverRef: string | null;
   /** Set when the server refused this command outright. */
   rejection: string | null;
+  /**
+   * DEV-957 phase 2 (hardening 4): the hash of the seal this sale was signed with when it
+   * was taken (the seal itself travels in `payload.seal`). The next sale names it.
+   */
+  sealHash?: string;
 };
 
 /** One reserved block of receipt numbers as the counter carries it. */
@@ -96,7 +101,17 @@ export type CounterQueueSnapshot = {
   quotas: CounterQuota[];
   /** OFF-04 append-only local audit trail; events are never rewritten. */
   safetyLeaseEvents: import('./offline-safety-lease').SafetyLeaseEvent[];
+  /** DEV-957 phase 2 (hardening 4): the seal hash of the last sale taken here (the chain head). */
+  lastSealHash?: string | null;
+  /**
+   * DEV-957 phase 2: one copy of each signed price list a waiting sale was priced from,
+   * keyed by its payload hash. A queued sale keeps only the envelope and signature, so a
+   * sale never stores a whole price list of its own; the payload is put back when it is sent.
+   */
+  snapshotArchive?: ArchivedSnapshotPayload[];
 };
+
+export type ArchivedSnapshotPayload = { payloadHash: string; payload: unknown };
 
 export function createCounterQueue(deviceId: string): CounterQueueSnapshot {
   return {
@@ -234,7 +249,7 @@ export type CounterEnqueueResult =
   | { ok: true; snapshot: CounterQueueSnapshot; command: CounterQueuedCommand }
   | {
       ok: false;
-      reason: OfflineDenialReason | 'DEVICE_MISMATCH' | 'DEVICE_REVOKED' | 'QUEUE_FULL';
+      reason: OfflineDenialReason | 'DEVICE_MISMATCH' | 'DEVICE_REVOKED' | 'QUEUE_FULL' | 'SEAL_FAILED' | 'SELLING_OFF';
       message: string;
       decision: OfflineActionDecision | null;
     };
@@ -447,8 +462,75 @@ export type CounterReplayRequest = {
   body: Record<string, unknown>;
 };
 
+// ── Signed price lists kept once (DEV-957 phase 2) ───────────────────────────
+
+type CarriedSnapshot = { envelope?: { payloadHash?: unknown }; payload?: unknown };
+
+function carried(value: unknown): CarriedSnapshot[] {
+  return Array.isArray(value) ? (value as CarriedSnapshot[]) : [];
+}
+
+/**
+ * Move the payloads of the price lists a queued sale carries into the shared archive,
+ * leaving the sale with each envelope and signature only. Payloads are keyed by the hash
+ * the signed envelope names, so one copy serves every sale priced from that list.
+ */
+export function archiveCommandSnapshots(
+  snapshot: CounterQueueSnapshot,
+  command: CounterQueuedCommand
+): { snapshot: CounterQueueSnapshot; command: CounterQueuedCommand } {
+  const archive = [...(snapshot.snapshotArchive ?? [])];
+  const snapshots = carried(command.payload.snapshots).map((row) => {
+    const hash = row.envelope?.payloadHash;
+    if (typeof hash !== 'string' || row.payload === undefined) return row;
+    if (!archive.some((entry) => entry.payloadHash === hash))
+      archive.push({ payloadHash: hash, payload: row.payload });
+    const reference: CarriedSnapshot = { ...row };
+    delete reference.payload;
+    return reference;
+  });
+  const compact = { ...command, payload: { ...command.payload, snapshots } };
+  return {
+    command: compact,
+    snapshot: {
+      ...snapshot,
+      snapshotArchive: archive,
+      commands: snapshot.commands.map((row) => (row.commandId === command.commandId ? compact : row)),
+    },
+  };
+}
+
+/** The carried price lists with their payloads put back from the archive. */
+function withArchivedPayloads(snapshot: CounterQueueSnapshot, value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return carried(value).map((row) => {
+    if (row.payload !== undefined) return row;
+    const hash = row.envelope?.payloadHash;
+    const kept = (snapshot.snapshotArchive ?? []).find((entry) => entry.payloadHash === hash);
+    if (!kept) throw new Error('A queued sale is missing the price list it was priced from.');
+    return { ...row, payload: kept.payload };
+  });
+}
+
+/**
+ * Drop archived price lists no sale the server has not acknowledged refers to any more
+ * (a sale it refused still needs its list, for a manager to settle it).
+ */
+export function pruneSnapshotArchive(snapshot: CounterQueueSnapshot): CounterQueueSnapshot {
+  if (!snapshot.snapshotArchive?.length) return snapshot;
+  const needed = new Set(
+    snapshot.commands.filter((command) => command.status !== 'ACKNOWLEDGED').flatMap((command) =>
+      carried(command.payload.snapshots).map((row) => row.envelope?.payloadHash)
+    )
+  );
+  const kept = snapshot.snapshotArchive.filter((entry) => needed.has(entry.payloadHash));
+  return kept.length === snapshot.snapshotArchive.length
+    ? snapshot
+    : { ...snapshot, snapshotArchive: kept };
+}
+
 export async function buildCounterReplayRequest(
-  _snapshot: CounterQueueSnapshot,
+  snapshot: CounterQueueSnapshot,
   command: CounterQueuedCommand,
   sign: CounterReplaySigner
 ): Promise<CounterReplayRequest> {
@@ -467,12 +549,14 @@ export async function buildCounterReplayRequest(
     idempotencyKey: command.idempotencyKey,
     action: command.action,
     leasedReceipt: finalReceipt,
-    snapshots: command.payload.snapshots,
+    snapshots: withArchivedPayloads(snapshot, command.payload.snapshots),
     lines: command.payload.lines,
     amountMinor: command.payload.amountMinor,
     ...(command.action === 'MANUAL_OTC_SALE'
       ? { manualCapture: command.payload.manualCapture }
       : { cashReceivedMinor: command.payload.cashReceivedMinor }),
+    // DEV-957 phase 2 (hardening 4): the seal signed when the sale was taken.
+    ...(command.payload.seal !== undefined ? { seal: command.payload.seal } : {}),
   };
   const signatures = await sign(body, finalReceipt);
   return {

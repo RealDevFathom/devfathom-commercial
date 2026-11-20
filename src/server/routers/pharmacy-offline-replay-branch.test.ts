@@ -13,6 +13,7 @@ import { randomBytes } from 'node:crypto';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { OfflineSnapshotEnvelope } from '@/lib/pharmacy/offline-snapshot-envelope';
+import { offlineSaleChain } from '@/lib/test-support/offline-sale-seal';
 
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 
@@ -147,7 +148,18 @@ function envelope(
   };
 }
 
+
+/**
+ * DEV-957 phase 2 (hardening 4): the counter seals each sale when it is taken; the route
+ * checks that seal. This counter's first sale names no sale before it.
+ */
 function command() {
+  return offlineSaleChain({ organizationId: ORG, branchId: BRANCH }, DEVICE, SECRET).seal(unsealedCommand(), {
+    previousHash: null,
+  });
+}
+
+function unsealedCommand() {
   const receiptEnvelope = envelope('RULES', { kind: 'RULES' });
   return {
     sequence: 1,

@@ -11,6 +11,7 @@ import { searchOfflineCatalogue } from '@/lib/pharmacy/counter-offline-catalogue
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 
 import type { CounterOfflineView } from './use-counter-offline';
+import { CounterSalesToReconcile } from './counter-sales-to-reconcile';
 import {
   CounterOfflineSale,
   OfflinePaidCard,
@@ -54,10 +55,10 @@ export function CounterOfflinePanel({ offline }: { offline: CounterOfflineView }
   if (status === 'unenrolled' && offline.revokedNotice)
     return (
       <p className="text-text-body" role="alert" data-counter-offline-mode="revoked">
-        A manager revoked this counter, so its offline data was deleted from this computer and it
-        can no longer sell offline.{' '}
-        {offline.revokedNotice.discarded > 0
-          ? `${offline.revokedNotice.discarded} offline sale${offline.revokedNotice.discarded === 1 ? ' was' : 's were'} not sent and the server will not accept ${offline.revokedNotice.discarded === 1 ? 'it' : 'them'}; give the paper receipts to the manager. `
+        A manager revoked this counter, so it can no longer sell offline. Its price lists,
+        receipt numbers and unfinished bills were removed from this computer.{' '}
+        {offline.revokedNotice.kept > 0
+          ? `${offline.revokedNotice.kept} offline sale${offline.revokedNotice.kept === 1 ? ' was' : 's were'} never sent. ${offline.revokedNotice.kept === 1 ? 'It is' : 'They are'} kept on this computer, read-only, under Sales to reconcile, for a manager to export and record. `
           : ''}
         A manager can enrol it again in{' '}
         <Link className="font-medium text-text-strong underline" href={SETTINGS_HREF}>
@@ -97,7 +98,11 @@ export function CounterOfflinePanel({ offline }: { offline: CounterOfflineView }
       </p>
     );
   const selling =
-    readiness.snapshotsReady && readiness.prepared && offline.actions !== null && offline.rows.length > 0;
+    offline.sellingOn &&
+    readiness.snapshotsReady &&
+    readiness.prepared &&
+    offline.actions !== null &&
+    offline.rows.length > 0;
   return (
     <div className="space-y-3" data-counter-offline-mode="ready">
       {readiness.snapshotsReady ? (
@@ -105,9 +110,16 @@ export function CounterOfflinePanel({ offline }: { offline: CounterOfflineView }
           <p className="text-text-body">
             <span className="font-medium text-text-strong">Still works: </span>
             {selling
-              ? `cash sales of the ${readiness.itemsAvailable} medicine${readiness.itemsAvailable === 1 ? '' : 's'} this counter holds offline stock for. Each sale is saved on this computer and sent when the connection returns.`
+              ? `cash sales of the ${readiness.itemsAvailable} medicine${readiness.itemsAvailable === 1 ? '' : 's'} this counter holds offline stock for. Each sale is saved and sealed on this computer and waits there: this version does not send offline sales to the server yet.`
               : `price check of the ${readiness.itemsAvailable} medicine${readiness.itemsAvailable === 1 ? '' : 's'} this counter holds offline stock for.`}
           </p>
+          {!offline.sellingOn ? (
+            <p className="text-text-body" data-counter-offline-selling="off">
+              <span className="font-medium text-text-strong">Offline cash selling is off: </span>
+              it becomes available when sending offline sales to the server is ready. Take cash
+              sales online, or write them by hand until the connection returns.
+            </p>
+          ) : null}
           <p className="text-text-body">
             <span className="font-medium text-text-strong">Never offline: </span>
             prescription-only, controlled and restricted medicines, card, wallet and khata
@@ -262,6 +274,13 @@ export function CounterOfflineOnly({ offline }: { offline: CounterOfflineView })
           <CounterOfflinePanel offline={offline} />
         </div>
       </section>
+      {offline.enrolment ? (
+        <CounterSalesToReconcile
+          organizationId={offline.enrolment.organizationId}
+          branchId={offline.enrolment.branchId}
+          online={false}
+        />
+      ) : null}
     </div>
   );
 }

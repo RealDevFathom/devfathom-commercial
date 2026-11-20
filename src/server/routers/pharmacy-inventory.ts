@@ -198,7 +198,8 @@ function domainError(error: unknown): never {
               error.reason === 'BLOCKED_STOCK'
             ? 'FORBIDDEN'
             : 'BAD_REQUEST';
-    throw new TRPCError({ code, message: error.reason });
+    // DEV-957: HELD_FOR_COUNTER carries the sentence naming the counter that holds the units.
+    throw new TRPCError({ code, message: error.userMessage ?? error.reason });
   }
   if (error instanceof PharmacyStockSignalError) {
     throw new TRPCError({
@@ -1300,7 +1301,13 @@ export const pharmacyInventoryRouter = router({
       }
       return ctx.db.$transaction(async (tx) => {
         try {
-          return await setManufacturingBatchState(txDb(tx), actorFor(ctx).organizationId, input);
+          const actor = actorFor(ctx);
+          return await setManufacturingBatchState(
+            txDb(tx),
+            actor.organizationId,
+            input,
+            actor.actorId
+          );
         } catch (error) {
           if (error instanceof OpenRecallConflictError) {
             throw new TRPCError({ code: 'CONFLICT', message: error.message });
@@ -3164,6 +3171,7 @@ export const pharmacyInventoryRouter = router({
             units: input.units,
             reason: input.reason,
             idempotencyKeyPrefix,
+            cause: 'EXPIRY',
           });
           return { replayed: false, held: moved.held };
         });

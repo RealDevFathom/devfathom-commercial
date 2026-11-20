@@ -87,6 +87,8 @@ import { CounterUpsellSuggestions } from './counter-upsell-suggestions';
 import { useBrowserOnline } from './use-browser-online';
 import { useCounterEnrolment, useCounterOffline } from './use-counter-offline';
 import { CounterOfflineOnly, CounterOfflinePanel } from './counter-offline-panel';
+import { OfflineQueue } from './counter-offline-sale';
+import { CounterSalesToReconcile } from './counter-sales-to-reconcile';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -3835,7 +3837,23 @@ function ScopedPharmacyCounterConsole({
           </Button>
         </div>
       </header>
-      {online && !offlineMode.serverUnreachable ? null : (
+      {/* DEV-957 phase 2 (review B1/B2): what this computer holds is shown online too. */}
+      <CounterSalesToReconcile
+        organizationId={organizationId}
+        branchId={branchId}
+        online={online && !offlineMode.serverUnreachable}
+        refreshKey={offlineMode.revokedNotice?.kept ?? null}
+      />
+      {online && !offlineMode.serverUnreachable ? (
+        offlineMode.queued.length > 0 ? (
+          <div
+            className="mb-3 rounded-lg border border-border-subtle bg-surface-raised p-3 text-sm"
+            data-counter-offline-waiting-online=""
+          >
+            <OfflineQueue queued={offlineMode.queued} />
+          </div>
+        ) : null
+      ) : (
         <div
           role="status"
           aria-live="polite"

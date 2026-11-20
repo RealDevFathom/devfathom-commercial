@@ -116,7 +116,12 @@ export function fixturePayloads() {
  * received as its own pack, and the cashier the RULES snapshot names.
  */
 export function fixtureSalePayloads(
-  options: { operator?: { userId: string; name: string | null }; quotaUnits?: number } = {}
+  options: {
+    operator?: { userId: string; name: string | null };
+    quotaUnits?: number;
+    /** The owner's switch as the signed RULES carry it; forced ON for the selling tests. */
+    offlineCashSelling?: boolean;
+  } = {}
 ) {
   const levels = (prefix: string, created: string) => ({
     box: {
@@ -214,6 +219,9 @@ export function fixtureSalePayloads(
     manualMerchantRevision: 0,
     operator: options.operator ?? { userId: 'user_cashier_a', name: 'Ayesha Khan' },
     branchName: 'Gulberg branch',
+    // DEV-957 phase 2 (review B1): off and not available in the product; forced on here so
+    // the selling code can be tested. `offlineCashSelling: false` tests the switch itself.
+    offlineCashSelling: options.offlineCashSelling ?? true,
   };
   return { CATALOG, PRICES, TAX: [], RULES, LOT_BALANCES };
 }
