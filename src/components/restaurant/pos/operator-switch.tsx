@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from 'react';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';import { type FormEvent, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -62,7 +62,7 @@ export function OperatorSwitch({
       </p>
       <div className="space-y-1.5">
         <Label htmlFor="switch-operator-id">Operator</Label>
-        <select
+        <StudioSelect
           id="switch-operator-id"
           autoFocus
           value={staffProfileId}
@@ -78,7 +78,7 @@ export function OperatorSwitch({
               {operator.displayName} — {operator.role}
             </option>
           ))}
-        </select>
+        </StudioSelect>
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="switch-operator-pin">Operator PIN</Label>

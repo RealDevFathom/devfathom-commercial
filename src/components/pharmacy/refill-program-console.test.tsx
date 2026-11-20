@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -142,13 +143,13 @@ describe('DEV-73 refill program screen', () => {
     expect(sign).toBeDisabled();
 
     fireEvent.click(screen.getByRole('radio'));
-    fireEvent.change(screen.getByLabelText('Signing pharmacist'), {
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Signing pharmacist', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'staff-1' },
     });
     expect(sign).toBeDisabled();
-    const pin = screen.getByLabelText('Pharmacist PIN');
+    const pin = screen.getByLabelText('Pharmacist PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
     expect(pin).toHaveAttribute('type', 'password');
-    fireEvent.change(pin, { target: { value: '7391' } });
+    fireEvent.change(selectFieldControl(pin), { target: { value: '7391' } });
     expect(sign).toBeEnabled();
     fireEvent.click(sign);
 
@@ -284,12 +285,12 @@ describe('DEV-73 refill program screen', () => {
 
   it('creates a subscription for a customer and item', async () => {
     render(<RefillProgramConsole />);
-    fireEvent.change(screen.getByLabelText('Customer'), { target: { value: 'cust-1' } });
-    fireEvent.change(screen.getByLabelText('Item and pack'), {
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Customer', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'cust-1' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Item and pack', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'med-1:pres-1:pack-1' },
     });
-    fireEvent.change(screen.getByLabelText('Packs per cycle'), { target: { value: '2' } });
-    fireEvent.change(screen.getByLabelText('First due date'), {
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Packs per cycle', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '2' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('First due date', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: '2026-12-10' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Create subscription' }));

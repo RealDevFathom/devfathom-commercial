@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -229,8 +230,8 @@ describe('schedule form times', () => {
   it('starts the due time empty and requires it', () => {
     renderSetup();
     const form = openForm(OPENING.name);
-    const due = within(form).getByLabelText('Due at');
-    expect(due).toHaveValue('');
+    const due = within(form).getByLabelText('Due at', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    expect(selectFieldControl(due)).toHaveValue('');
     expect(due).toBeRequired();
     fireEvent.click(within(form).getByRole('button', { name: 'Create schedule' }));
     expect(h.calls.createAssignment).toBeUndefined();
@@ -242,7 +243,7 @@ describe('schedule form times', () => {
   it('sends exactly the time the manager chose', () => {
     renderSetup();
     const form = openForm(OPENING.name);
-    fireEvent.change(within(form).getByLabelText('Due at'), { target: { value: '07:45' } });
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Due at', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '07:45' } });
     fireEvent.click(within(form).getByRole('button', { name: 'Create schedule' }));
     expect(h.calls.createAssignment).toEqual([
       expect.objectContaining({
@@ -258,10 +259,10 @@ describe('schedule form times', () => {
   it('starts both repeating-check times empty and requires each', () => {
     renderSetup();
     const form = openForm(TEMPERATURE.name);
-    const first = within(form).getByLabelText('First one at');
-    const last = within(form).getByLabelText('Last one by');
-    expect(first).toHaveValue('');
-    expect(last).toHaveValue('');
+    const first = within(form).getByLabelText('First one at', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const last = within(form).getByLabelText('Last one by', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    expect(selectFieldControl(first)).toHaveValue('');
+    expect(selectFieldControl(last)).toHaveValue('');
     fireEvent.click(within(form).getByRole('button', { name: 'Create schedule' }));
     expect(h.calls.createAssignment).toBeUndefined();
     expect(first).toHaveAttribute('aria-invalid', 'true');
@@ -269,13 +270,13 @@ describe('schedule form times', () => {
     expect(last).toHaveAttribute('aria-invalid', 'true');
     expect(last).toHaveAccessibleDescription(/Choose the time the last one is due\./);
 
-    fireEvent.change(first, { target: { value: '09:00' } });
-    fireEvent.change(last, { target: { value: '08:00' } });
+    fireEvent.change(selectFieldControl(first), { target: { value: '09:00' } });
+    fireEvent.change(selectFieldControl(last), { target: { value: '08:00' } });
     fireEvent.click(within(form).getByRole('button', { name: 'Create schedule' }));
     expect(h.calls.createAssignment).toBeUndefined();
     expect(last).toHaveAccessibleDescription(/later than the first one/);
 
-    fireEvent.change(last, { target: { value: '17:00' } });
+    fireEvent.change(selectFieldControl(last), { target: { value: '17:00' } });
     fireEvent.click(within(form).getByRole('button', { name: 'Create schedule' }));
     expect(h.calls.createAssignment).toEqual([
       expect.objectContaining({
@@ -293,9 +294,9 @@ describe('schedule form times', () => {
       });
     renderSetup();
     const form = openForm(OPENING.name);
-    fireEvent.change(within(form).getByLabelText('Due at'), { target: { value: '07:45' } });
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Due at', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '07:45' } });
     fireEvent.click(within(form).getByRole('button', { name: 'Create schedule' }));
-    const due = within(form).getByLabelText('Due at');
+    const due = within(form).getByLabelText('Due at', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
     expect(due).toHaveAttribute('aria-invalid', 'true');
     expect(due).toHaveAccessibleDescription(/Choose the time it is due\./);
   });

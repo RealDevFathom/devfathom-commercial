@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import {
   CheckCircle2,
@@ -737,7 +739,7 @@ export function TerminalConsole() {
                           <form className="mt-6 space-y-5" onSubmit={submitOperator}>
                             <div className="space-y-2">
                               <Label htmlFor="unlock-operator">Operator</Label>
-                              <select
+                              <StudioSelect
                                 id="unlock-operator"
                                 value={operatorId}
                                 onChange={(event) => setOperatorId(event.target.value)}
@@ -769,7 +771,7 @@ export function TerminalConsole() {
                                     {operator.displayName} — {operator.role}
                                   </option>
                                 ))}
-                              </select>
+                              </StudioSelect>
                             </div>
                             <div className="space-y-2">
                               <Label htmlFor="unlock-pin">Operator PIN</Label>
@@ -856,7 +858,7 @@ export function TerminalConsole() {
                             <form className="mt-6 space-y-5" onSubmit={submitOperator}>
                               <div className="space-y-2">
                                 <Label htmlFor="switch-operator">Incoming operator</Label>
-                                <select
+                                <StudioSelect
                                   id="switch-operator"
                                   value={operatorId}
                                   onChange={(event) => setOperatorId(event.target.value)}
@@ -888,7 +890,7 @@ export function TerminalConsole() {
                                       {operator.displayName} — {operator.role}
                                     </option>
                                   ))}
-                                </select>
+                                </StudioSelect>
                               </div>
                               <div className="space-y-2">
                                 <Label htmlFor="switch-pin">Incoming operator PIN</Label>
@@ -946,7 +948,7 @@ export function TerminalConsole() {
                               <div className="grid gap-5 sm:grid-cols-2">
                                 <div className="space-y-2">
                                   <Label htmlFor="approving-manager">Approving manager</Label>
-                                  <select
+                                  <StudioSelect
                                     id="approving-manager"
                                     value={approvingId}
                                     onChange={(event) => setApprovingId(event.target.value)}
@@ -983,7 +985,7 @@ export function TerminalConsole() {
                                           {operator.displayName} — {operator.role}
                                         </option>
                                       ))}
-                                  </select>
+                                  </StudioSelect>
                                 </div>
                                 <div className="space-y-2">
                                   <Label htmlFor="approving-pin">Manager PIN</Label>

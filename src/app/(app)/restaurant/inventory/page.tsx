@@ -1,4 +1,4 @@
-import { browserUuid } from '@/lib/browser-uuid';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';import { browserUuid } from '@/lib/browser-uuid';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
@@ -556,33 +556,33 @@ export default async function InventoryPage({
         <form action={recordWastage} className="mt-5 grid gap-3 md:grid-cols-4">
           <label className="text-sm text-text-body">
             Stock item
-            <select name="stockItemId" required disabled={!wasteable} className={inputClass}>
+            <StudioSelect name="stockItemId" required disabled={!wasteable} className={inputClass}>
               <option value="">Select stock item</option>
               {loaded.stockItems.map((item) => (
                 <option value={item.id} key={item.id}>
                   {item.ingredient.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <label className="text-sm text-text-body">
             Location
-            <select name="locationId" required disabled={!wasteable} className={inputClass}>
+            <StudioSelect name="locationId" required disabled={!wasteable} className={inputClass}>
               <option value="">Select location</option>
               {loaded.locations.map((location) => (
                 <option value={location.id} key={location.id}>
                   {location.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <label className="text-sm text-text-body">
             Reason
-            <select name="reason" required disabled={!wasteable} className={inputClass}>
+            <StudioSelect name="reason" required disabled={!wasteable} className={inputClass}>
               <option value="WASTAGE">Wastage</option>
               <option value="SPOILAGE">Spoilage</option>
               <option value="STAFF_MEAL">Staff meal</option>
-            </select>
+            </StudioSelect>
           </label>
           <label className="text-sm text-text-body">
             Quantity
@@ -611,25 +611,25 @@ export default async function InventoryPage({
           <form action={recordSaleReversal} className="mt-4 grid gap-3 md:grid-cols-4">
             <label className="text-sm text-text-body">
               Stock item
-              <select name="stockItemId" required disabled={!adjustable} className={inputClass}>
+              <StudioSelect name="stockItemId" required disabled={!adjustable} className={inputClass}>
                 <option value="">Select stock item</option>
                 {loaded.stockItems.map((item) => (
                   <option value={item.id} key={item.id}>
                     {item.ingredient.name}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <label className="text-sm text-text-body">
               Location
-              <select name="locationId" required disabled={!adjustable} className={inputClass}>
+              <StudioSelect name="locationId" required disabled={!adjustable} className={inputClass}>
                 <option value="">Select location</option>
                 {loaded.locations.map((location) => (
                   <option value={location.id} key={location.id}>
                     {location.name}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <label className="text-sm text-text-body">
               Quantity
@@ -677,14 +677,14 @@ export default async function InventoryPage({
         >
           <label className="text-sm text-text-body">
             Location
-            <select name="locationId" required disabled={!countable} className={inputClass}>
+            <StudioSelect name="locationId" required disabled={!countable} className={inputClass}>
               <option value="">Select location</option>
               {loaded.locations.map((location) => (
                 <option value={location.id} key={location.id}>
                   {location.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <label className="text-sm text-text-body">
             Reference (optional)
@@ -797,7 +797,7 @@ export default async function InventoryPage({
                     <input type="hidden" name="stockCountId" value={loaded.selectedCount.id} />
                     <label className="text-sm text-text-body">
                       Stock item
-                      <select
+                      <StudioSelect
                         name="stockItemId"
                         required
                         disabled={!countable}
@@ -809,7 +809,7 @@ export default async function InventoryPage({
                             {item.ingredient.name}
                           </option>
                         ))}
-                      </select>
+                      </StudioSelect>
                     </label>
                     <label className="text-sm text-text-body">
                       Counted quantity
@@ -975,7 +975,7 @@ export default async function InventoryPage({
           >
             <label className="text-sm text-text-body">
               From
-              <select
+              <StudioSelect
                 name="sourceLocationId"
                 required
                 disabled={!adjustable}
@@ -987,11 +987,11 @@ export default async function InventoryPage({
                     {location.name}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <label className="text-sm text-text-body">
               To
-              <select
+              <StudioSelect
                 name="destinationLocationId"
                 required
                 disabled={!adjustable}
@@ -1003,7 +1003,7 @@ export default async function InventoryPage({
                     {location.name}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <label className="text-sm text-text-body sm:col-span-2">
               Reference (optional)
@@ -1032,7 +1032,7 @@ export default async function InventoryPage({
                   <input type="hidden" name="stockTransferId" value={transfer.id} />
                   <label className="text-sm text-text-body">
                     Stock item
-                    <select
+                    <StudioSelect
                       name="stockItemId"
                       required
                       disabled={!adjustable}
@@ -1044,7 +1044,7 @@ export default async function InventoryPage({
                           {item.ingredient.name}
                         </option>
                       ))}
-                    </select>
+                    </StudioSelect>
                   </label>
                   <label className="text-sm text-text-body">
                     Quantity

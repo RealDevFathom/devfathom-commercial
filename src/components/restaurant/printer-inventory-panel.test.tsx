@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => {
@@ -97,18 +98,18 @@ beforeEach(() => {
   h.retire.mockResolvedValue(retirementResult());
 });
 async function chooseBranch(id = 'a') {
-  await waitFor(() => expect(screen.getByLabelText('Inventory branch')).toBeEnabled());
-  fireEvent.change(screen.getByLabelText('Inventory branch'), { target: { value: id } });
+  await waitFor(() => expect(screen.getByLabelText('Inventory branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeEnabled());
+  fireEvent.change(selectFieldControl(screen.getByLabelText('Inventory branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: id } });
 }
 async function openRegistration() {
   await waitFor(() =>
     expect(screen.getByRole('button', { name: 'Register printers' })).toBeEnabled()
   );
   fireEvent.click(screen.getByRole('button', { name: 'Register printers' }));
-  fireEvent.change(screen.getByLabelText('Print bridge'), { target: { value: 'bridge' } });
+  fireEvent.change(selectFieldControl(screen.getByLabelText('Print bridge', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'bridge' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add printer' }));
-  fireEvent.change(screen.getByLabelText('Printer 1 name'), { target: { value: ' Receipt ' } });
-  fireEvent.change(screen.getByLabelText('Printer 1 target'), {
+  fireEvent.change(selectFieldControl(screen.getByLabelText('Printer 1 name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: ' Receipt ' } });
+  fireEvent.change(selectFieldControl(screen.getByLabelText('Printer 1 target', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
     target: { value: ' tcp://printer:9100 ' },
   });
 }
@@ -117,16 +118,16 @@ it('keeps an invalid target editable without issuing a mutation and enables a co
   render(<PrinterInventoryPanel ownerKey="org:admin" />);
   await chooseBranch();
   await openRegistration();
-  fireEvent.change(screen.getByLabelText('Printer 1 target'), {
+  fireEvent.change(selectFieldControl(screen.getByLabelText('Printer 1 target', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
     target: { value: 'https://printer' },
   });
-  expect(screen.getByLabelText('Printer 1 target')).toHaveAttribute('aria-invalid', 'true');
+  expect(screen.getByLabelText('Printer 1 target', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('aria-invalid', 'true');
   expect(screen.getByRole('alert')).toHaveTextContent('valid TCP');
   const button = screen.getByRole('button', { name: 'Save printers' });
   expect(button).toBeDisabled();
   fireEvent.submit(button.closest('form')!);
   expect(h.mutate).not.toHaveBeenCalled();
-  fireEvent.change(screen.getByLabelText('Printer 1 target'), {
+  fireEvent.change(selectFieldControl(screen.getByLabelText('Printer 1 target', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
     target: { value: 'queue:///Receipt%20Printer' },
   });
   expect(button).toBeEnabled();
@@ -154,7 +155,7 @@ it('requires an active branch, reads management inventory independently, and doe
   render(<PrinterInventoryPanel ownerKey="org:admin" />);
   expect(screen.getByRole('button', { name: 'Register printers' })).toBeDisabled();
   await chooseBranch();
-  expect(screen.queryByRole('option', { name: 'Closed' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('option', { hidden: true, name: 'Closed' })).not.toBeInTheDocument();
   await screen.findByText('Receipt');
   expect(h.printers).toHaveBeenCalledExactlyOnceWith({ branchId: 'a' });
   expect(h.devices).toHaveBeenCalledOnce();
@@ -181,8 +182,8 @@ it('offers only active non-revoked print bridges in the selected branch', async 
   await chooseBranch();
   await openRegistration();
   expect(
-    within(screen.getByLabelText('Print bridge'))
-      .getAllByRole('option')
+    within(selectFieldControl(screen.getByLabelText('Print bridge', { selector: ':not([data-select-field-native][aria-hidden="true"])' })))
+      .getAllByRole('option', { hidden: true })
       .map((option) => option.textContent)
   ).toEqual(['Select a print bridge', 'Kitchen host']);
 });
@@ -204,7 +205,7 @@ it('snapshots the target and suppresses simultaneous duplicate submissions and d
   });
   expect(h.options).toEqual({ retry: false, gcTime: 0 });
   expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
-  expect(screen.getByLabelText('Printer 1 name')).toBeDisabled();
+  expect(screen.getByLabelText('Printer 1 name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
   fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
   expect(screen.getByRole('dialog')).toBeInTheDocument();
   await act(async () => {
@@ -302,7 +303,7 @@ it('hides prior-owner inventory immediately and requires a fresh directory', asy
   h.branches.mockReturnValueOnce(next.promise);
   view.rerender(<PrinterInventoryPanel ownerKey="org:other" />);
   expect(screen.queryByText('Receipt')).not.toBeInTheDocument();
-  expect(screen.getByLabelText('Inventory branch')).toBeDisabled();
+  expect(screen.getByLabelText('Inventory branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
   await act(async () => {
     next.resolve([]);
   });
@@ -360,7 +361,7 @@ it('refreshes inventory and eligible bridges when device changes are reported', 
 async function openRename() {
   await waitFor(() => expect(screen.getByRole('button', { name: 'Rename Receipt' })).toBeEnabled());
   fireEvent.click(screen.getByRole('button', { name: 'Rename Receipt' }));
-  fireEvent.change(screen.getByLabelText('Printer name'), { target: { value: ' Front desk ' } });
+  fireEvent.change(selectFieldControl(screen.getByLabelText('Printer name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: ' Front desk ' } });
 }
 const saveName = () => fireEvent.click(screen.getByRole('button', { name: 'Save printer name' }));
 const renameResult = (name = 'Front desk', changed = true) => ({
@@ -388,7 +389,7 @@ it('keeps invalid names editable without a mutation', async () => {
   render(<PrinterInventoryPanel ownerKey="org:admin" />);
   await chooseBranch();
   await openRename();
-  fireEvent.change(screen.getByLabelText('Printer name'), { target: { value: ' ' } });
+  fireEvent.change(selectFieldControl(screen.getByLabelText('Printer name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: ' ' } });
   const button = screen.getByRole('button', { name: 'Save printer name' });
   expect(button).toBeDisabled();
   fireEvent.submit(button.closest('form')!);
@@ -406,7 +407,7 @@ it('guards simultaneous name submissions, branch changes and dismissal while pen
     fireEvent.submit(form);
   });
   expect(h.rename).toHaveBeenCalledOnce();
-  expect(screen.getByLabelText('Printer name')).toBeDisabled();
+  expect(screen.getByLabelText('Printer name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Cancel rename' })).toBeDisabled();
   fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
   expect(screen.getByRole('dialog')).toBeInTheDocument();
@@ -486,7 +487,7 @@ it('keeps review pending across close and branch navigation', async () => {
     expect(screen.getByRole('button', { name: 'Review printer name' })).toBeEnabled()
   );
   fireEvent.click(screen.getByRole('button', { name: 'Review printer name' }));
-  expect(screen.getByLabelText('Printer name')).toHaveValue(' Front desk ');
+  expect(selectFieldControl(screen.getByLabelText('Printer name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(' Front desk ');
   expect(screen.getByRole('button', { name: 'Save printer name' })).toBeDisabled();
   expect(h.rename).toHaveBeenCalledOnce();
 });
@@ -527,7 +528,7 @@ it('hides inventory after forbidden rename until a new authorized inventory read
   fireEvent.click(screen.getByRole('button', { name: 'Refresh printers' }));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Rename Receipt' })).toBeEnabled());
   fireEvent.click(screen.getByRole('button', { name: 'Rename Receipt' }));
-  expect(screen.getByLabelText('Printer name')).toHaveValue(' Front desk ');
+  expect(selectFieldControl(screen.getByLabelText('Printer name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(' Front desk ');
   expect(h.rename).toHaveBeenCalledOnce();
 });
 it('retains a definite failed draft without an uncertain-outcome claim or automatic retry', async () => {
@@ -537,7 +538,7 @@ it('retains a definite failed draft without an uncertain-outcome claim or automa
   await openRename();
   saveName();
   await screen.findByText(/Name was not saved/);
-  expect(screen.getByLabelText('Printer name')).toHaveValue(' Front desk ');
+  expect(selectFieldControl(screen.getByLabelText('Printer name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(' Front desk ');
   expect(screen.queryByText(/Rename outcome is uncertain/)).not.toBeInTheDocument();
   expect(h.printers).toHaveBeenCalledOnce();
 });
@@ -558,7 +559,7 @@ it('reports a confirmed no-op honestly', async () => {
   render(<PrinterInventoryPanel ownerKey="org:admin" />);
   await chooseBranch();
   await openRename();
-  fireEvent.change(screen.getByLabelText('Printer name'), { target: { value: 'Receipt' } });
+  fireEvent.change(selectFieldControl(screen.getByLabelText('Printer name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Receipt' } });
   saveName();
   await screen.findByText(/Printer name remains Receipt/);
   expect(screen.queryByText(/Renamed printer to/)).not.toBeInTheDocument();
@@ -825,7 +826,7 @@ it('blocks duplicate clicks, cross-mutations, branch changes, and dismissal whil
   expect(h.retire).toHaveBeenCalledOnce();
   expect(screen.getByRole('button', { name: 'Cancel retirement' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Retiring…' })).toBeDisabled();
-  expect(screen.getByLabelText('Inventory branch')).toBeDisabled();
+  expect(screen.getByLabelText('Inventory branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Register printers', hidden: true })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Rename Receipt', hidden: true })).toBeDisabled();
   fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
@@ -971,7 +972,7 @@ it.each(['register', 'rename'] as const)(
     expect(screen.getByRole('button', { name: 'Rename Receipt' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Retire Receipt' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Refresh printers' })).toBeEnabled();
-    expect(screen.getByLabelText('Inventory branch')).toBeEnabled();
+    expect(screen.getByLabelText('Inventory branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'I reviewed the current inventory' }));
     expect(screen.getByRole('button', { name: 'Register printers' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Rename Receipt' })).toBeEnabled();

@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -132,14 +134,14 @@ export function CreateChannelDialog({
           <div className="flex items-end gap-4">
             <div className="flex-1">
               <label className="mb-1 block text-xs font-medium text-foreground">Type</label>
-              <select
+              <StudioSelect
                 value={type}
                 onChange={(e) => setType(e.target.value as 'GROUP' | 'PROJECT')}
                 className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm text-foreground outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
               >
                 <option value="GROUP">Group</option>
                 <option value="PROJECT">Project</option>
-              </select>
+              </StudioSelect>
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-foreground">Private</label>

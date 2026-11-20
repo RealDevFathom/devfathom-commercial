@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { inferRouterOutputs } from '@trpc/server';
@@ -263,7 +264,7 @@ describe('Restaurant menu-import console', () => {
       renderConsole({}, false);
 
       expect(screen.getByText('Menu and Costing module disabled')).toBeInTheDocument();
-      expect(screen.queryByLabelText('Menu file')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Menu file', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
     });
 
     it('shows the permission state, not a blank screen, without menu:import', () => {
@@ -271,7 +272,7 @@ describe('Restaurant menu-import console', () => {
 
       expect(screen.getByText('Menu import access unavailable')).toBeInTheDocument();
       expect(screen.getByText('Permission denied')).toBeInTheDocument();
-      expect(screen.queryByLabelText('Menu file')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Menu file', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
       expect(
         screen.queryByRole('button', { name: 'Import reviewed menu' })
       ).not.toBeInTheDocument();
@@ -462,7 +463,7 @@ describe('Restaurant menu-import console', () => {
 
       fireEvent.click(screen.getByRole('button', { name: 'Edit Fajita Pizza' }));
       expect(screen.getByText('Printed: Small 9" Rs. 1,200')).toBeInTheDocument();
-      fireEvent.change(screen.getByLabelText('Size 1 price'), { target: { value: '1250' } });
+      fireEvent.change(selectFieldControl(screen.getByLabelText('Size 1 price', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '1250' } });
       fireEvent.click(screen.getByRole('button', { name: 'Remove size 2' }));
       fireEvent.click(screen.getByRole('button', { name: 'Accept with edits' }));
 
@@ -525,10 +526,10 @@ describe('Restaurant menu-import console', () => {
       renderConsole();
 
       fireEvent.click(screen.getByRole('button', { name: 'Edit Grilled Chicken' }));
-      fireEvent.change(screen.getByLabelText('Product name'), {
+      fireEvent.change(selectFieldControl(screen.getByLabelText('Product name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
         target: { value: 'Grilled Chicken (half)' },
       });
-      fireEvent.change(screen.getByLabelText('Price'), { target: { value: '1300.00' } });
+      fireEvent.change(selectFieldControl(screen.getByLabelText('Price', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '1300.00' } });
       fireEvent.click(screen.getByRole('button', { name: 'Accept with edits' }));
 
       expect(mocks.reviewLine).toHaveBeenCalledWith(
@@ -545,7 +546,7 @@ describe('Restaurant menu-import console', () => {
       renderConsole();
 
       fireEvent.click(screen.getByRole('button', { name: 'Edit Mutton Karahi' }));
-      fireEvent.change(screen.getByLabelText('Product name'), { target: { value: '   ' } });
+      fireEvent.change(selectFieldControl(screen.getByLabelText('Product name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '   ' } });
       fireEvent.click(screen.getByRole('button', { name: 'Accept with edits' }));
 
       expect(mocks.reviewLine).toHaveBeenCalledWith(
@@ -560,10 +561,10 @@ describe('Restaurant menu-import console', () => {
       const mergeButton = screen.getByRole('button', { name: 'Merge into selected product' });
       expect(mergeButton).toBeDisabled();
 
-      fireEvent.change(screen.getByLabelText('Merge into existing product'), {
+      fireEvent.change(selectFieldControl(screen.getByLabelText('Merge into existing product', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
         target: { value: 'product_1' },
       });
-      fireEvent.change(screen.getByLabelText('Merge into variant'), {
+      fireEvent.change(selectFieldControl(screen.getByLabelText('Merge into variant', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
         target: { value: 'variant_1' },
       });
       fireEvent.click(screen.getByRole('button', { name: 'Merge into selected product' }));
@@ -613,7 +614,7 @@ describe('Restaurant menu-import console', () => {
       });
       renderConsole();
 
-      expect(screen.getByLabelText('Loading the review queue')).toBeInTheDocument();
+      expect(screen.getByLabelText('Loading the review queue', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeInTheDocument();
     });
   });
 
@@ -638,7 +639,7 @@ describe('Restaurant menu-import console', () => {
       const importButton = screen.getByRole('button', { name: 'Import reviewed menu' });
       expect(importButton).toBeEnabled();
 
-      fireEvent.change(screen.getByLabelText('Menu name'), { target: { value: 'Summer 2026' } });
+      fireEvent.change(selectFieldControl(screen.getByLabelText('Menu name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Summer 2026' } });
       fireEvent.click(importButton);
 
       expect(mocks.commit).toHaveBeenCalledWith({
@@ -691,10 +692,10 @@ describe('Restaurant menu-import console', () => {
         error: null,
       });
       renderConsole();
-      expect(screen.getByLabelText('Menu file')).toBeDisabled();
+      expect(screen.getByLabelText('Menu file', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
       expect(screen.getByText(/Menu extraction is unavailable/)).toBeInTheDocument();
       const file = new File(['fake'], 'menu.png', { type: 'image/png' });
-      fireEvent.change(screen.getByLabelText('Menu file'), { target: { files: [file] } });
+      fireEvent.change(selectFieldControl(screen.getByLabelText('Menu file', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { files: [file] } });
       fireEvent.drop(screen.getByText('Drop a menu file here'), {
         dataTransfer: { files: [file] },
       });
@@ -719,7 +720,7 @@ describe('Restaurant menu-import console', () => {
     ])('disables uploads while availability is unknown or failed', (result) => {
       mocks.uploadLimits.mockReturnValue(result);
       renderConsole();
-      expect(screen.getByLabelText('Menu file')).toBeDisabled();
+      expect(screen.getByLabelText('Menu file', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
       fireEvent.drop(screen.getByText('Drop a menu file here'), {
         dataTransfer: { files: [new File(['fake'], 'menu.png', { type: 'image/png' })] },
       });
@@ -741,7 +742,7 @@ describe('Restaurant menu-import console', () => {
       renderConsole();
 
       const file = new File(['x'.repeat(64)], 'big-menu.pdf', { type: 'application/pdf' });
-      fireEvent.change(screen.getByLabelText('Menu file'), { target: { files: [file] } });
+      fireEvent.change(selectFieldControl(screen.getByLabelText('Menu file', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { files: [file] } });
 
       expect(screen.getByText(/maximum upload size/i)).toBeInTheDocument();
       expect(mocks.upload).not.toHaveBeenCalled();
@@ -751,7 +752,7 @@ describe('Restaurant menu-import console', () => {
       renderConsole();
 
       const file = new File(['x'], 'menu.exe', { type: 'application/x-msdownload' });
-      fireEvent.change(screen.getByLabelText('Menu file'), { target: { files: [file] } });
+      fireEvent.change(selectFieldControl(screen.getByLabelText('Menu file', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { files: [file] } });
 
       expect(screen.getByText(/Upload one of: application\/pdf, image\/png/)).toBeInTheDocument();
       expect(mocks.upload).not.toHaveBeenCalled();

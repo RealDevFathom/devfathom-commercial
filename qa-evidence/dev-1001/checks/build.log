@@ -1,0 +1,449 @@
+
+> company-hub@0.1.0 build
+> prisma generate && next build
+
+Loaded Prisma config from prisma.config.ts.
+
+Prisma schema loaded from prisma/schema.prisma.
+
+✔ Generated Prisma Client (7.10.0) to ./src/generated/prisma in 4.07s
+
+▲ Next.js 16.4.6 (Turbopack)
+✓ Running next.config.ts took 36ms
+- Experiments (use with caution):
+  · cpus: 1
+  · optimizePackageImports
+  · serverActions
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 12.2s
+  Running TypeScript ...
+  Finished TypeScript in 13.6s ...
+  Collecting page data using 1 worker ...
+  Generating static pages using 1 worker (0/264) ...
+  Generating static pages using 1 worker (66/264) 
+  Generating static pages using 1 worker (132/264) 
+  Generating static pages using 1 worker (198/264) 
+✓ Generating static pages using 1 worker (264/264) in 587ms
+Turbopack build encountered 3 warnings:
+./src/lib/storage.ts:21:12
+Warning: The file pattern (<dynamic> '/' <dynamic> | 'undefined/' <dynamic> | <dynamic> | 'undefined' <dynamic>) matches 16104 files in [project]/
+  [90m19 |[0m     [36mconst[0m parent = dirname(path);
+  [90m20 |[0m     [36mif[0m (parent === path) [36mthrow[0m error;
+[33m[1m>[0m [90m21 |[0m     [36mreturn[0m join(canonicalLocalPath(parent), relative(parent, path));
+  [90m   |[0m            [33m[1m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+  [90m22 |[0m   }
+  [90m23 |[0m }
+  [90m24 |[0m
+
+Overly broad patterns can lead to build performance issues and over bundling.
+
+Import traces:
+  App Route:
+    ./src/lib/storage.ts
+    ./src/app/api/files/[name]/route.ts
+
+  Server Component:
+    ./src/lib/storage.ts
+    ./src/lib/pharmacy/prescription-files.ts
+    ./src/server/routers/pharmacy-prescriptions.ts
+    ./src/server/routers/_app.ts
+    ./src/lib/trpc-server.ts
+    ./src/app/(app)/dashboard/page.tsx
+
+
+./src/lib/storage.ts:21:12
+Warning: Dynamic filesystem access causes tracing of the whole project
+  [90m19 |[0m     [36mconst[0m parent = dirname(path);
+  [90m20 |[0m     [36mif[0m (parent === path) [36mthrow[0m error;
+[33m[1m>[0m [90m21 |[0m     [36mreturn[0m join(canonicalLocalPath(parent), relative(parent, path));
+  [90m   |[0m            [33m[1m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+  [90m22 |[0m   }
+  [90m23 |[0m }
+  [90m24 |[0m
+
+Static analysis determined that this filesystem access causes the whole project to be traced and included in the output.
+This is usually unintentional and leads to all source files (including the public folder) to be deployed as part of the server code.
+This can slow down deployments or lead to failures when size limits are exceeded.
+To resolve this, you can
+- make sure the path is statically scoped to some subfolder, for example path.join(process.cwd(), 'data', bar), or
+- only use them in development, or
+- opt out by adding an ignore comment to the highlighted call: path.join(/*turbopackIgnore: true*/ ...), or
+- remove them.
+
+Import traces:
+  App Route:
+    ./src/lib/storage.ts
+    ./src/app/api/files/[name]/route.ts
+
+  Server Component:
+    ./src/lib/storage.ts
+    ./src/lib/pharmacy/prescription-files.ts
+    ./src/server/routers/pharmacy-prescriptions.ts
+    ./src/server/routers/_app.ts
+    ./src/lib/trpc-server.ts
+    ./src/app/(app)/dashboard/page.tsx
+
+
+./src/lib/storage.ts:42:54
+Warning: Dynamic filesystem access causes tracing of the whole project
+  [90m40 |[0m ...l === parse(canonical).root || canonical.split(sep).includes([32m'public'[0m)) [36mreturn[0m [36mnull[0m;
+  [90m41 |[0m ...ath [36mof[0m [[32m'public'[0m, [32m'.next/standalone/public'[0m]) {
+[33m[1m>[0m [90m42 |[0m ...Public = relative(canonicalLocalPath(resolve(path)), canonical);
+  [90m   |[0m                                         [33m[1m^^^^^^^^^^^^^[0m
+  [90m43 |[0m ...
+  [90m44 |[0m ...lic ||
+  [90m45 |[0m ...blic.startsWith([32m`..[0m${sep[32m}`[0m) && fromPublic !== [32m'..'[0m && !isAbsolute(fromPublic))
+
+Static analysis determined that this filesystem access causes the whole project to be traced and included in the output.
+This is usually unintentional and leads to all source files (including the public folder) to be deployed as part of the server code.
+This can slow down deployments or lead to failures when size limits are exceeded.
+To resolve this, you can
+- make sure the path is statically scoped to some subfolder, for example path.join(process.cwd(), 'data', bar), or
+- only use them in development, or
+- opt out by adding an ignore comment to the highlighted call: path.resolve(/*turbopackIgnore: true*/ ...), or
+- remove them.
+
+Import traces:
+  App Route:
+    ./src/lib/storage.ts
+    ./src/app/api/files/[name]/route.ts
+
+  Server Component:
+    ./src/lib/storage.ts
+    ./src/lib/pharmacy/prescription-files.ts
+    ./src/server/routers/pharmacy-prescriptions.ts
+    ./src/server/routers/_app.ts
+    ./src/lib/trpc-server.ts
+    ./src/app/(app)/dashboard/page.tsx
+
+
+  Finalizing page optimization ...
+
+Route (app)
+┌ ƒ /
+├ ƒ /_not-found
+├ ƒ /api-docs
+├ ƒ /api/ably-token
+├ ƒ /api/assistant
+├ ƒ /api/auth/[...nextauth]
+├ ƒ /api/cron/demo-restaurants
+├ ƒ /api/cron/outbound-effects
+├ ƒ /api/files/[name]
+├ ƒ /api/health
+├ ƒ /api/live
+├ ƒ /api/login
+├ ƒ /api/meetings/webhooks/livekit
+├ ƒ /api/password-reset
+├ ƒ /api/pharmacy/cameras/[cameraId]/stream
+├ ƒ /api/pharmacy/cold-chain/readings
+├ ƒ /api/pharmacy/counter/bind
+├ ƒ /api/pharmacy/counter/establish
+├ ƒ /api/pharmacy/counter/lease
+├ ƒ /api/pharmacy/counter/quota
+├ ƒ /api/pharmacy/counter/reject
+├ ƒ /api/pharmacy/counter/replay
+├ ƒ /api/pharmacy/counter/snapshot
+├ ƒ /api/pharmacy/data-export
+├ ƒ /api/pharmacy/portal/[action]
+├ ƒ /api/pharmacy/prescription-files
+├ ƒ /api/pharmacy/print
+├ ƒ /api/pharmacy/print-bridge
+├ ƒ /api/pharmacy/sms/webhook
+├ ƒ /api/pharmacy/sop/evidence
+├ ƒ /api/pharmacy/whatsapp/back-in-stock
+├ ƒ /api/pharmacy/whatsapp/khata-reminders
+├ ƒ /api/pharmacy/whatsapp/reminders
+├ ƒ /api/pharmacy/whatsapp/webhook
+├ ƒ /api/platform/control
+├ ƒ /api/platform/jobs/process
+├ ƒ /api/platform/mfa
+├ ƒ /api/platform/session
+├ ƒ /api/platform/support
+├ ƒ /api/platform/workspace-requests/[id]
+├ ƒ /api/ready
+├ ƒ /api/restaurant/cameras/[cameraId]/stream
+├ ƒ /api/restaurant/cash/day/close
+├ ƒ /api/restaurant/cash/day/correct
+├ ƒ /api/restaurant/cash/day/current
+├ ƒ /api/restaurant/cash/day/preview
+├ ƒ /api/restaurant/cash/drawer/close
+├ ƒ /api/restaurant/cash/drawer/current
+├ ƒ /api/restaurant/cash/drawer/movement
+├ ƒ /api/restaurant/cash/drawer/open
+├ ƒ /api/restaurant/catering/money
+├ ƒ /api/restaurant/checkout/bill
+├ ƒ /api/restaurant/checkout/comp
+├ ƒ /api/restaurant/checkout/loyalty
+├ ƒ /api/restaurant/checkout/receipt
+├ ƒ /api/restaurant/checkout/refund
+├ ƒ /api/restaurant/checkout/summary
+├ ƒ /api/restaurant/checkout/tender
+├ ƒ /api/restaurant/checkout/uncomp
+├ ƒ /api/restaurant/devices/browser-enroll
+├ ƒ /api/restaurant/kds/ack
+├ ƒ /api/restaurant/kds/bump
+├ ƒ /api/restaurant/kds/delivery/queue
+├ ƒ /api/restaurant/kds/delivery/transition
+├ ƒ /api/restaurant/kds/operators
+├ ƒ /api/restaurant/kds/queue
+├ ƒ /api/restaurant/kds/recall
+├ ƒ /api/restaurant/orders/add-item
+├ ƒ /api/restaurant/orders/cancel
+├ ƒ /api/restaurant/orders/close
+├ ƒ /api/restaurant/orders/commercial-terms
+├ ƒ /api/restaurant/orders/customer/attach
+├ ƒ /api/restaurant/orders/customer/by-wallet
+├ ƒ /api/restaurant/orders/customer/search
+├ ƒ /api/restaurant/orders/delivery/addresses
+├ ƒ /api/restaurant/orders/delivery/attach
+├ ƒ /api/restaurant/orders/delivery/zones
+├ ƒ /api/restaurant/orders/detail
+├ ƒ /api/restaurant/orders/effective-menu
+├ ƒ /api/restaurant/orders/fire
+├ ƒ /api/restaurant/orders/hold
+├ ƒ /api/restaurant/orders/mark-served
+├ ƒ /api/restaurant/orders/merge-tables
+├ ƒ /api/restaurant/orders/move-table
+├ ƒ /api/restaurant/orders/open
+├ ƒ /api/restaurant/orders/open-orders
+├ ƒ /api/restaurant/orders/remake
+├ ƒ /api/restaurant/orders/reprint-kot
+├ ƒ /api/restaurant/orders/void
+├ ƒ /api/restaurant/print-bridge
+├ ƒ /api/restaurant/print-bridge/enroll
+├ ƒ /api/restaurant/receipt-layout
+├ ƒ /api/restaurant/reports/export
+├ ƒ /api/restaurant/sop/evidence
+├ ƒ /api/restaurant/terminal/co-authorize
+├ ƒ /api/restaurant/terminal/establish
+├ ƒ /api/restaurant/terminal/heartbeat
+├ ƒ /api/restaurant/terminal/layout
+├ ƒ /api/restaurant/terminal/lock
+├ ƒ /api/restaurant/terminal/operators
+├ ƒ /api/restaurant/terminal/renew-composer-proof
+├ ƒ /api/restaurant/terminal/switch
+├ ƒ /api/restaurant/terminal/unlock
+├ ƒ /api/restaurant/webhooks/[source]
+├ ƒ /api/scim/v2/Groups
+├ ƒ /api/scim/v2/Groups/[id]
+├ ƒ /api/scim/v2/ResourceTypes
+├ ƒ /api/scim/v2/Schemas
+├ ƒ /api/scim/v2/ServiceProviderConfig
+├ ƒ /api/scim/v2/Users
+├ ƒ /api/scim/v2/Users/[id]
+├ ƒ /api/sso/oidc/[connectionId]/callback
+├ ƒ /api/sso/oidc/[connectionId]/start
+├ ƒ /api/sso/saml/[connectionId]/callback
+├ ƒ /api/sso/saml/[connectionId]/metadata
+├ ƒ /api/sso/saml/[connectionId]/start
+├ ƒ /api/support-session
+├ ƒ /api/support-session/launch
+├ ƒ /api/trpc/[trpc]
+├ ƒ /api/upload
+├ ƒ /api/v1/boards/[id]
+├ ƒ /api/v1/clients
+├ ƒ /api/v1/clients/[id]
+├ ƒ /api/v1/finance/summary
+├ ƒ /api/v1/invoices
+├ ƒ /api/v1/invoices/[id]
+├ ƒ /api/v1/meetings
+├ ƒ /api/v1/projects
+├ ƒ /api/v1/projects/[id]
+├ ƒ /api/v1/spec
+├ ƒ /api/v1/tasks
+├ ƒ /api/v1/tasks/[id]
+├ ƒ /api/v1/tasks/[id]/comments
+├ ƒ /api/v1/team
+├ ƒ /api/v1/transactions
+├ ƒ /api/v1/transactions/[id]
+├ ƒ /api/wallet/apple/v1/devices/[deviceLibraryIdentifier]/registrations/[passTypeIdentifier]
+├ ƒ /api/wallet/apple/v1/devices/[deviceLibraryIdentifier]/registrations/[passTypeIdentifier]/[serialNumber]
+├ ƒ /api/wallet/apple/v1/log
+├ ƒ /api/wallet/apple/v1/passes/[passTypeIdentifier]/[serialNumber]
+├ ƒ /api/wallet/enroll/start
+├ ƒ /api/wallet/enroll/verify
+├ ƒ /api/workspace-requests
+├ ƒ /audit-logs
+├ ƒ /brand
+├ ƒ /brand/preview
+├ ƒ /change-password
+├ ƒ /chat
+├ ƒ /clients
+├ ƒ /clients/[id]
+├ ƒ /dashboard
+├ ƒ /demo/restaurants
+├ ƒ /demo/restaurants/access
+├ ƒ /demo/restaurants/device-session
+├ ƒ /demo/restaurants/reset
+├ ƒ /demo/restaurants/seats
+├ ƒ /email
+├ ƒ /email/oauth/callback
+├ ƒ /finance
+├ ƒ /finance/invoices/[id]/print
+├ ƒ /forgot-password
+├ ƒ /hotel/settings/extras
+├ ƒ /hotel/settings/journey
+├ ƒ /hotel/settings/meal-plans
+├ ƒ /hotel/settings/property
+├ ƒ /hotel/settings/rooms
+├ ƒ /hotel/settings/spaces
+├ ƒ /hr
+├ ƒ /invite/[token]
+├ ƒ /kds
+├ ƒ /login
+├ ƒ /login/register
+├ ƒ /login/submit
+├ ƒ /login/till
+├ ƒ /meet/[publicId]
+├ ƒ /meet/[publicId]/admit
+├ ƒ /meetings
+├ ƒ /meetings/[id]
+├ ƒ /meetings/[id]/call
+├ ƒ /my-pharmacy
+├ ƒ /my-pharmacy/join/[token]
+├ ƒ /my-pharmacy/manifest.webmanifest
+├ ƒ /notes
+├ ƒ /notes/[id]
+├ ƒ /organization
+├ ƒ /pharmacy
+├ ƒ /pharmacy/[...missing]
+├ ƒ /pharmacy/accounts
+├ ƒ /pharmacy/accounts/account-activity-bridge
+├ ƒ /pharmacy/accounts/account-code-reference
+├ ƒ /pharmacy/accounts/ap-aging
+├ ƒ /pharmacy/accounts/balance-sheet
+├ ƒ /pharmacy/accounts/cash-flow
+├ ƒ /pharmacy/accounts/cheque-maturity
+├ ƒ /pharmacy/accounts/fiscal-exceptions
+├ ƒ /pharmacy/accounts/fiscal-exceptions/csv
+├ ƒ /pharmacy/accounts/general-journal
+├ ƒ /pharmacy/accounts/journal-entry-lookup
+├ ƒ /pharmacy/accounts/journal-evidence-export
+├ ƒ /pharmacy/accounts/liquidity-kpi
+├ ƒ /pharmacy/accounts/profit-loss
+├ ƒ /pharmacy/accounts/tax-profile-review
+├ ƒ /pharmacy/accounts/tax-profile-review/export
+├ ƒ /pharmacy/accounts/trial-balance-control
+├ ƒ /pharmacy/cameras
+├ ƒ /pharmacy/controlled-register
+├ ƒ /pharmacy/counter
+├ ƒ /pharmacy/counter/close
+├ ƒ /pharmacy/finance
+├ ƒ /pharmacy/inventory
+├ ƒ /pharmacy/inventory/drap-recalls
+├ ƒ /pharmacy/inventory/expiry
+├ ƒ /pharmacy/inventory/import
+├ ƒ /pharmacy/inventory/imports
+├ ƒ /pharmacy/inventory/labels
+├ ƒ /pharmacy/inventory/transfers
+├ ƒ /pharmacy/khata
+├ ƒ /pharmacy/loyalty
+├ ƒ /pharmacy/loyalty/prepaid
+├ ƒ /pharmacy/marketing
+├ ƒ /pharmacy/medicines
+├ ƒ /pharmacy/medicines/prices
+├ ƒ /pharmacy/medicines/staged
+├ ƒ /pharmacy/orders
+├ ƒ /pharmacy/orders/refills
+├ ƒ /pharmacy/pharmacist-queue
+├ ƒ /pharmacy/prescriptions
+├ ƒ /pharmacy/purchasing
+├ ƒ /pharmacy/purchasing/orders
+├ ƒ /pharmacy/purchasing/price-lists
+├ ƒ /pharmacy/purchasing/receiving
+├ ƒ /pharmacy/purchasing/reorder
+├ ƒ /pharmacy/purchasing/returns
+├ ƒ /pharmacy/purchasing/suppliers
+├ ƒ /pharmacy/regulatory
+├ ƒ /pharmacy/regulatory/fbr-tier-1
+├ ƒ /pharmacy/reports
+├ ƒ /pharmacy/reports/branch-comparison
+├ ƒ /pharmacy/reports/repeat-purchasing
+├ ƒ /pharmacy/reports/replenishment
+├ ƒ /pharmacy/reports/supplier-credit-follow-up
+├ ƒ /pharmacy/settings/branches
+├ ƒ /pharmacy/settings/cameras/privacy
+├ ƒ /pharmacy/settings/counters
+├ ƒ /pharmacy/settings/data-export
+├ ƒ /pharmacy/settings/one-pharmacist-per-shift
+├ ƒ /pharmacy/settings/pharmacist-check
+├ ƒ /pharmacy/settings/pin
+├ ƒ /pharmacy/settings/printers
+├ ƒ /pharmacy/sop
+├ ƒ /pharmacy/substitution
+├ ƒ /platform
+├ ƒ /platform/approvals
+├ ƒ /platform/audit
+├ ƒ /platform/catalog
+├ ƒ /platform/commercial
+├ ƒ /platform/crm
+├ ƒ /platform/deployments
+├ ƒ /platform/health
+├ ƒ /platform/jobs
+├ ƒ /platform/login
+├ ƒ /platform/operators
+├ ƒ /platform/organizations
+├ ƒ /platform/organizations/[id]
+├ ƒ /platform/organizations/new
+├ ƒ /platform/settings
+├ ƒ /platform/settings/rule-sets
+├ ƒ /platform/support
+├ ƒ /pos
+├ ƒ /projects
+├ ƒ /projects/[id]
+├ ƒ /projects/[id]/board/[boardId]
+├ ƒ /projects/import
+├ ƒ /receipt/[token]
+├ ƒ /reset-password/[token]
+├ ƒ /restaurant
+├ ƒ /restaurant/catalog
+├ ƒ /restaurant/catering
+├ ƒ /restaurant/delivery
+├ ƒ /restaurant/devices
+├ ƒ /restaurant/floor
+├ ƒ /restaurant/growth
+├ ƒ /restaurant/insights
+├ ƒ /restaurant/integrations/cameras
+├ ƒ /restaurant/inventory
+├ ƒ /restaurant/loyalty
+├ ƒ /restaurant/menu-import
+├ ƒ /restaurant/menus
+├ ƒ /restaurant/money
+├ ƒ /restaurant/notifications
+├ ƒ /restaurant/orders
+├ ƒ /restaurant/promotions
+├ ƒ /restaurant/purchasing
+├ ƒ /restaurant/reports
+├ ƒ /restaurant/settings/branches
+├ ƒ /restaurant/settings/cameras/privacy
+├ ƒ /restaurant/sop
+├ ƒ /restaurant/sop/admin
+├ ƒ /restaurant/sop/oversight
+├ ƒ /restaurant/sop/reports
+├ ƒ /restaurant/staff
+├ ƒ /restaurant/staff/roster
+├ ƒ /restaurant/tax
+├ ƒ /reviews
+├ ƒ /settings
+├ ƒ /settings/[...missing]
+├ ƒ /settings/receipts
+├ ƒ /settings/team
+├ ƒ /sso/complete
+├ ƒ /supplier/po/[token]
+├ ƒ /team
+├ ƒ /team/[id]
+├ ƒ /team/stats
+├ ƒ /terminal
+└ ƒ /wallet/join/[token]
+
+
+ƒ Proxy (Middleware)
+
+ƒ  (Dynamic)  server-rendered on demand
+
+npm notice
+npm notice New major version of npm available! 11.9.0 -> 12.2.3
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.3
+npm notice To update run: npm install -g npm@12.2.3
+npm notice

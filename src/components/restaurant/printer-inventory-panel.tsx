@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import type { inferRouterOutputs } from '@trpc/server';
 import { browserUuid } from '@/lib/browser-uuid';
@@ -1129,7 +1131,7 @@ export function PrinterInventoryPanel({
               <label htmlFor="inventory-bridge" className="block text-sm font-medium">
                 Print bridge
               </label>
-              <select
+              <StudioSelect
                 id="inventory-bridge"
                 className="h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                 value={bridgeId}
@@ -1143,7 +1145,7 @@ export function PrinterInventoryPanel({
                     {bridge.name}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </div>
             <PrinterRegistrationFields rows={rows} onChange={setRows} disabled={pending} />
             <DialogFooter>

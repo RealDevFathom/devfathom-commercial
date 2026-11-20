@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';import type { Metadata } from 'next';
 import { TRPCError } from '@trpc/server';
 
 import { HotelPropertySettingsForm } from '@/components/hotel/property-settings-form';
@@ -81,7 +81,7 @@ export default async function HotelPropertySettingsPage({
                 <label htmlFor="settings-property" className="block text-sm font-semibold">
                   Property
                 </label>
-                <select
+                <StudioSelect
                   id="settings-property"
                   name="branchId"
                   defaultValue=""
@@ -96,7 +96,7 @@ export default async function HotelPropertySettingsPage({
                       {property.name}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </div>
               <button type="submit" className={buttonVariants({ className: 'min-h-11' })}>
                 Open property settings

@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { within, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -371,8 +372,8 @@ function renderConsole(enabled = true, initialTab?: MoneyTab) {
 }
 
 function setBranchAndDate() {
-  fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
-  fireEvent.change(screen.getByLabelText('Business date'), {
+  fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'branch_1' } });
+  fireEvent.change(selectFieldControl(screen.getByLabelText('Business date', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
     target: { value: '2026-08-19' },
   });
 }
@@ -417,7 +418,7 @@ describe('MoneyConsole', () => {
 
     expect(screen.getByRole('heading', { name: 'Restaurant Finance' })).toBeInTheDocument();
     expect(screen.getByText('Restaurant Finance access denied')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Branch')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
     expect(Object.values(mocks.calls).every((calls) => calls.length === 0)).toBe(true);
   });
 
@@ -426,8 +427,8 @@ describe('MoneyConsole', () => {
     expect(mocks.calls.bills.at(-1)?.enabled).toBe(false);
     expect(mocks.calls.tenders.at(-1)?.enabled).toBe(false);
     expect(screen.getByText('Restaurant POS module disabled')).toBeInTheDocument();
-    expect(screen.getByLabelText('Branch')).toBeDisabled();
-    expect(screen.getByLabelText('Business date')).toBeDisabled();
+    expect(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
+    expect(screen.getByLabelText('Business date', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
     expect(
       screen.queryByRole('tablist', { name: 'Restaurant Finance ledgers' })
     ).not.toBeInTheDocument();
@@ -478,14 +479,14 @@ describe('MoneyConsole', () => {
 
   it('creates the first provider terminal configuration when the branch has none', () => {
     renderConsole(true, 'terminal');
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
-    fireEvent.change(screen.getByLabelText('Provider source'), {
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'branch_1' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Provider source', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'stripe-terminal' },
     });
-    fireEvent.change(screen.getByLabelText('Terminal ID'), {
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Terminal ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'tmr_front_counter' },
     });
-    fireEvent.change(screen.getByLabelText('Device'), { target: { value: 'device_1' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Device', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'device_1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save terminal configuration' }));
 
     expect(mocks.saveTerminalConfig).toHaveBeenCalledWith({
@@ -572,7 +573,7 @@ describe('MoneyConsole', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Next drawers page' }));
     expect(mocks.calls.drawers.at(-1)?.input).toHaveProperty('cursor', 'drawer_cursor_2');
 
-    fireEvent.change(screen.getByLabelText('Business date'), {
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Business date', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: '2026-08-20' },
     });
     expect(mocks.calls.drawers.at(-1)?.input).not.toHaveProperty('cursor');
@@ -618,14 +619,14 @@ describe('MoneyConsole', () => {
   it('renders list loading and retryable generic-error states', () => {
     mocks.bills.isLoading = true;
     const loading = renderConsole();
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'branch_1' } });
     expect(screen.getByRole('status', { name: 'Loading bills' })).toBeInTheDocument();
     loading.unmount();
 
     mocks.bills.isLoading = false;
     mocks.bills.error = { message: 'Read unavailable', data: { code: 'INTERNAL_SERVER_ERROR' } };
     renderConsole();
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'branch_1' } });
     expect(screen.getByText('Could not load bills')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(mocks.bills.refetch).toHaveBeenCalledOnce();
@@ -637,7 +638,7 @@ describe('MoneyConsole', () => {
       data: { code: 'FORBIDDEN' },
     };
     renderConsole();
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'branch_1' } });
     expect(screen.getByText('Restaurant Finance access denied')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
   });

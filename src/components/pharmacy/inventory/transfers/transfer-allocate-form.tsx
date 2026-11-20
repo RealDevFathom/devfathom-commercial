@@ -1,4 +1,4 @@
-import { Button } from '@/components/ui/button';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
 import { TransferActionForm, type TransferStepAction } from './transfer-action-form';
@@ -31,20 +31,20 @@ export function TransferAllocateForm({
       <input name="branchId" type="hidden" value={branchId} />
       <label className="text-sm">
         Destination branch and receiving location
-        <select className={selectClass} name="destination" required>
+        <StudioSelect className={selectClass} name="destination" required>
           {destinations.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
             </option>
           ))}
-        </select>
+        </StudioSelect>
       </label>
       {Array.from({ length: ALLOCATE_ROWS }, (_, index) => (
         <div className="grid gap-3 md:grid-cols-[1fr_10rem]" key={index}>
           <label className="text-sm">
             Stock line {index + 1}
             {index > 0 ? ' (optional)' : ''}
-            <select
+            <StudioSelect
               className={selectClass}
               defaultValue={index === 0 ? undefined : ''}
               name={`position:${index}`}
@@ -55,7 +55,7 @@ export function TransferAllocateForm({
                   {option.label}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <label className="text-sm">
             Units

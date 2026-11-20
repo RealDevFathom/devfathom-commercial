@@ -1,0 +1,39 @@
+
+> company-hub@0.1.0 lint
+> eslint src/
+
+
+/workspace/devfathom-commercial/src/app/(app)/pharmacy/reports/page.test.tsx
+  38:24  warning  '_args' is defined but never used  @typescript-eslint/no-unused-vars
+
+/workspace/devfathom-commercial/src/lib/pharmacy/customer-portal.test.ts
+  107:33  warning  '_args' is defined but never used  @typescript-eslint/no-unused-vars
+
+/workspace/devfathom-commercial/src/lib/pharmacy/inspection-pack.test.ts
+  170:59  warning  '_params' is defined but never used  @typescript-eslint/no-unused-vars
+
+/workspace/devfathom-commercial/src/lib/pharmacy/regulatory.test.ts
+  406:26  warning  '_auditDenied' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  441:28  warning  '_auditDenied' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  498:26  warning  '_auditDenied' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  509:26  warning  '_auditDenied' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  538:26  warning  '_auditDenied' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  638:26  warning  '_auditDenied' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+/workspace/devfathom-commercial/src/server/routers/hr-decision-concurrency.test.ts
+  4:24  warning  '_args' is defined but never used  @typescript-eslint/no-unused-vars
+
+/workspace/devfathom-commercial/src/server/routers/notes.concurrency.test.ts
+  35:31  warning  '_query' is defined but never used   @typescript-eslint/no-unused-vars
+  35:64  warning  '_values' is defined but never used  @typescript-eslint/no-unused-vars
+
+/workspace/devfathom-commercial/src/server/routers/restaurant-staff.administrator-profile.test.ts
+  394:71  warning  '_writer' is defined but never used  @typescript-eslint/no-unused-vars
+
+✖ 13 problems (0 errors, 13 warnings)
+
+npm notice
+npm notice New major version of npm available! 11.9.0 -> 12.2.3
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.3
+npm notice To update run: npm install -g npm@12.2.3
+npm notice

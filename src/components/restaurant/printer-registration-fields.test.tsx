@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { useState } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
@@ -22,17 +23,17 @@ it('keeps surviving printer values and label identities when another row is remo
   render(<Form />);
   fireEvent.click(screen.getByRole('button', { name: 'Add printer' }));
   fireEvent.click(screen.getByRole('button', { name: 'Add printer' }));
-  fireEvent.change(screen.getByLabelText('Printer 2 name'), { target: { value: 'Kitchen' } });
-  fireEvent.change(screen.getByLabelText('Printer 2 target'), {
+  fireEvent.change(selectFieldControl(screen.getByLabelText('Printer 2 name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Kitchen' } });
+  fireEvent.change(selectFieldControl(screen.getByLabelText('Printer 2 target', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
     target: { value: 'queue:///Kitchen' },
   });
-  fireEvent.change(screen.getByLabelText('Printer 2 paper width'), { target: { value: '58' } });
-  const id = screen.getByLabelText('Printer 2 name').id;
+  fireEvent.change(selectFieldControl(screen.getByLabelText('Printer 2 paper width', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '58' } });
+  const id = screen.getByLabelText('Printer 2 name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }).id;
   fireEvent.click(screen.getByRole('button', { name: 'Remove printer 1' }));
-  expect(screen.getByLabelText('Printer 1 name')).toHaveValue('Kitchen');
-  expect(screen.getByLabelText('Printer 1 name').id).toBe(id);
-  expect(screen.getByLabelText('Printer 1 target')).toHaveValue('queue:///Kitchen');
-  expect(screen.getByLabelText('Printer 1 paper width')).toHaveValue('58');
+  expect(selectFieldControl(screen.getByLabelText('Printer 1 name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Kitchen');
+  expect(screen.getByLabelText('Printer 1 name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }).id).toBe(id);
+  expect(selectFieldControl(screen.getByLabelText('Printer 1 target', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('queue:///Kitchen');
+  expect(selectFieldControl(screen.getByLabelText('Printer 1 paper width', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('58');
 });
 it.each([
   'tcp://host:9100',
@@ -70,8 +71,8 @@ it('allows zero printers, caps rows at twenty, and disables all edits during sub
   const view = render(<PrinterRegistrationFields rows={rows} onChange={onChange} />);
   expect(screen.getByRole('button', { name: 'Add printer' })).toBeDisabled();
   view.rerender(<PrinterRegistrationFields rows={rows} onChange={onChange} disabled />);
-  expect(screen.getByLabelText('Printer 1 name')).toBeDisabled();
-  expect(screen.getByLabelText('Printer 1 paper width')).toBeDisabled();
+  expect(screen.getByLabelText('Printer 1 name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
+  expect(screen.getByLabelText('Printer 1 paper width', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Remove printer 1' })).toBeDisabled();
   expect(validPrinterDrafts([])).toBe(true);
   expect(validPrinterDrafts(rows)).toBe(true);

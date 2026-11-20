@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { SubstitutionForm } from './substitution-form';
@@ -14,19 +15,19 @@ describe('SubstitutionForm', () => {
     );
     const button = screen.getByRole('button', { name: 'Record substitution' });
     expect(button).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Supplied presentation'), {
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Supplied presentation', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'replacement' },
     });
-    fireEvent.change(screen.getByLabelText('Equivalence basis'), {
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Equivalence basis', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'Same active ingredient and strength' },
     });
-    fireEvent.change(screen.getByLabelText('Governing rule reference'), {
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Governing rule reference', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'Rule 12' },
     });
-    fireEvent.change(screen.getByLabelText('Patient communication'), {
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Patient communication', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'Alternate brand explained' },
     });
-    fireEvent.click(screen.getByLabelText('Patient communication was acknowledged'));
+    fireEvent.click(screen.getByLabelText('Patient communication was acknowledged', { selector: ':not([data-select-field-native][aria-hidden="true"])' }));
     fireEvent.click(button);
     expect(submit).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -45,11 +46,11 @@ describe('supplier price lists console', () => {
 
   it('imports for the chosen supplier and says no price changed', async () => {
     render(<SupplierPriceListsConsole canApprove actorId="owner" soloOwner={false} />);
-    expect(screen.getByLabelText('CSV or XLSX price list')).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Supplier'), { target: { value: 'sup' } });
+    expect(screen.getByLabelText('CSV or XLSX price list', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Supplier', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'sup' } });
     const file = new File(['Product,MRP\nX,1\n'], 'list.csv', { type: 'text/csv' });
     Object.defineProperty(file, 'arrayBuffer', { value: async () => new TextEncoder().encode('Product,MRP\nX,1\n').buffer });
-    fireEvent.change(screen.getByLabelText('CSV or XLSX price list'), { target: { files: [file] } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('CSV or XLSX price list', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { files: [file] } });
     await screen.findByText(/No price has changed/);
     expect(mocks.upload.mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ supplierId: 'sup', fileName: 'list.csv' }));
   });
@@ -82,7 +83,7 @@ describe('supplier price lists console', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Review' }));
     const approveButton = screen.getByRole('button', { name: 'Approve shelf price for row 2' });
     expect(approveButton).toBeDisabled();
-    fireEvent.change(screen.getByLabelText(/Your approval PIN/), { target: { value: '1234' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText(/Your approval PIN/, { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '1234' } });
     fireEvent.click(approveButton);
     await waitFor(() =>
       expect(mocks.decide.mutateAsync).toHaveBeenCalledWith({ lineIds: ['line-1'], decision: 'APPROVE', pin: '1234' })

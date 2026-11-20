@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -156,13 +157,13 @@ describe('Restaurant menus console', () => {
     renderConsole();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Effective preview' }));
-    expect(screen.getAllByRole('option', { name: 'DELIVERY' })).toEqual(
+    expect(screen.getAllByRole('option', { hidden: true, name: 'DELIVERY' })).toEqual(
       expect.arrayContaining([expect.objectContaining({ disabled: false })])
     );
-    fireEvent.change(screen.getByLabelText('Preview channel'), {
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Preview channel', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'TAKEAWAY' },
     });
-    fireEvent.change(screen.getByLabelText('Preview instant'), {
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Preview instant', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: '2026-08-18T12:30' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Load effective menu' }));
@@ -183,10 +184,10 @@ describe('Restaurant menus console', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Channels' }));
 
     expect(
-      screen.getAllByLabelText('DELIVERY').every((control) => !control.hasAttribute('disabled'))
+      screen.getAllByLabelText('DELIVERY', { selector: ':not([data-select-field-native][aria-hidden="true"])' }).every((control) => !control.hasAttribute('disabled'))
     ).toBe(true);
-    expect(screen.getByLabelText('DINE IN')).toBeEnabled();
-    expect(screen.getByLabelText('TAKEAWAY')).toBeEnabled();
+    expect(screen.getByLabelText('DINE IN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeEnabled();
+    expect(screen.getByLabelText('TAKEAWAY', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeEnabled();
   });
 
   it('renders price-list money with two decimal places', () => {

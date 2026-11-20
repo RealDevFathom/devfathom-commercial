@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -442,7 +444,7 @@ function ScenarioWorkspace({
         )}
         <label className="block text-sm text-text-body">
           Branch
-          <select
+          <StudioSelect
             name="branchId"
             form="replenishment-report-form"
             value={branchId}
@@ -466,7 +468,7 @@ function ScenarioWorkspace({
                 {branch.name}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </label>
         {errors.branchId && (
           <p id="replenishment-branch-error" className="text-sm text-destructive">
@@ -612,7 +614,7 @@ function ScenarioWorkspace({
             {field('horizonDays', 'Planning / forecast horizon (days)', 'number', false, 1, 366)}
             <label className="text-sm text-text-body">
               Forecast method
-              <select
+              <StudioSelect
                 name="method"
                 value={draft.method}
                 className={selectClass}
@@ -620,7 +622,7 @@ function ScenarioWorkspace({
               >
                 <option value="RECENT_MEAN">Based on recent days</option>
                 <option value="WEEKLY_SEASONAL_NAIVE">Based on the same weekday last week</option>
-              </select>
+              </StudioSelect>
             </label>
           </div>
           <p className="mt-4 text-sm text-text-muted">

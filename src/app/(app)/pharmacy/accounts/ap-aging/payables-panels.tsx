@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';import { randomUUID } from 'node:crypto';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -118,7 +118,7 @@ export function PaymentDraft({
         <input type="hidden" name="asOf" value={asOf} />
         <label className="grid min-w-0 gap-2 text-sm">
           Payee
-          <select
+          <StudioSelect
             name="payee"
             defaultValue={payee}
             required
@@ -129,18 +129,18 @@ export function PaymentDraft({
                 {name}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </label>
         <label className="grid min-w-0 gap-2 text-sm">
           Currency
-          <select
+          <StudioSelect
             name="currency"
             defaultValue={currency}
             className="min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <option value="PKR">PKR</option>
             <option value="USD">USD</option>
-          </select>
+          </StudioSelect>
         </label>
         <label className="grid min-w-0 gap-2 text-sm">
           Budget

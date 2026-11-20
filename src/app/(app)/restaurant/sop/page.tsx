@@ -1,4 +1,4 @@
-import { TRPCError } from '@trpc/server';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';import { TRPCError } from '@trpc/server';
 import { revalidatePath } from 'next/cache';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
@@ -317,14 +317,14 @@ function StaffSelect({
   return (
     <label className="block text-sm text-text-body">
       {label}
-      <select className={selectClass} name={name} required={required}>
+      <StudioSelect className={selectClass} name={name} required={required}>
         <option value="">{required ? 'Select active staff' : 'Current web user'}</option>
         {staff.map((person) => (
           <option key={person.id} value={person.id}>
             {person.displayName}
           </option>
         ))}
-      </select>
+      </StudioSelect>
     </label>
   );
 }
@@ -439,7 +439,7 @@ function SopBoardView(props: SopBoardViewProps) {
         >
           <label className="text-sm text-text-body">
             Branch
-            <select
+            <StudioSelect
               className={selectClass}
               defaultValue={selectedBranch?.id ?? ''}
               disabled={!branches.length}
@@ -452,7 +452,7 @@ function SopBoardView(props: SopBoardViewProps) {
                   {branch.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <label className="text-sm text-text-body">
             Business date
@@ -868,10 +868,10 @@ function SopBoardView(props: SopBoardViewProps) {
                         />
                         <label className="text-sm text-text-body">
                           Approving credential type
-                          <select className={selectClass} name="approvingType" defaultValue="PIN">
+                          <StudioSelect className={selectClass} name="approvingType" defaultValue="PIN">
                             <option value="PIN">PIN</option>
                             <option value="BADGE">Badge</option>
-                          </select>
+                          </StudioSelect>
                         </label>
                         <label className="text-sm text-text-body">
                           Approving manager credential

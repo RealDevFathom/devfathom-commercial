@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { render, screen, within } from '@testing-library/react';
 import type { ReactElement, ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -195,9 +196,9 @@ describe('physical count workflow', () => {
     render(page);
     const createForm = screen.getByRole('button', { name: 'Create count' }).closest('form')!;
     const lineForm = screen.getByRole('button', { name: 'Add count line' }).closest('form')!;
-    expect(within(createForm).getByRole('option', { name: 'Main Kitchen' })).toBeDefined();
+    expect(within(selectFieldControl(createForm)).getByRole('option', { hidden: true, name: 'Main Kitchen' })).toBeDefined();
     expect(
-      within(lineForm).getByRole('option', { name: 'Basmati Rice (Super Kernel)' })
+      within(selectFieldControl(lineForm)).getByRole('option', { hidden: true, name: 'Basmati Rice (Super Kernel)' })
     ).toBeDefined();
     expect(screen.queryByRole('textbox', { name: /location|stock item|count id/i })).toBeNull();
   });
@@ -210,7 +211,7 @@ describe('physical count workflow', () => {
         form.querySelector('input[name="stockCountId"]')
     );
     expect(addLineForms).toHaveLength(1);
-    expect(addLineForms[0].querySelector('input[name="stockCountId"]')).toHaveValue('count-1');
+    expect(selectFieldControl(addLineForms[0].querySelector('input[name="stockCountId"]'))).toHaveValue('count-1');
   });
   it('sends exact create and add-line payloads', async () => {
     const { page, caller } = await pageWithCount('DRAFT');

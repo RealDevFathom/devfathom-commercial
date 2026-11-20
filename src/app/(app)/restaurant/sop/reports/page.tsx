@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';import Link from 'next/link';
 import { TRPCError } from '@trpc/server';
 
 import { Button, buttonVariants } from '@/components/ui/button';
@@ -138,13 +138,13 @@ export default async function SopReportsPage({ searchParams }: { searchParams: S
         <form className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5" method="get">
           <label className="text-sm text-text-body">
             Branch
-            <select className={selectClass} defaultValue={branch.id} name="branch">
+            <StudioSelect className={selectClass} defaultValue={branch.id} name="branch">
               {branches.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <label className="text-sm text-text-body">
             From
@@ -156,14 +156,14 @@ export default async function SopReportsPage({ searchParams }: { searchParams: S
           </label>
           <label className="text-sm text-text-body">
             Department
-            <select className={selectClass} defaultValue={department ?? ''} name="department">
+            <StudioSelect className={selectClass} defaultValue={department ?? ''} name="department">
               <option value="">All departments</option>
               {departments.map((item) => (
                 <option key={item} value={item}>
                   {item.toLowerCase()}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <Button className="min-h-11 self-end" type="submit">
             Apply filters

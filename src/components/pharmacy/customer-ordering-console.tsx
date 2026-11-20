@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import type { inferRouterOutputs } from '@trpc/server';
@@ -133,7 +135,7 @@ function OrderCard({
           {next === 'dispatch' ? (
             <div className="min-w-48 flex-1">
               <Label htmlFor={`runner-${order.id}`}>Assigned runner</Label>
-              <select
+              <StudioSelect
                 id={`runner-${order.id}`}
                 className="h-11 w-full rounded-sm border border-border-default bg-surface-raised px-3 text-sm"
                 value={runnerUserId}
@@ -145,7 +147,7 @@ function OrderCard({
                     {runner.name}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </div>
           ) : null}
           <Button
@@ -354,7 +356,7 @@ export function PharmacyCustomerOrderingConsole() {
           <div className="mb-4 grid gap-3 sm:grid-cols-2">
             <div>
               <Label htmlFor="order-branch">Fulfilling branch</Label>
-              <select
+              <StudioSelect
                 id="order-branch"
                 className="h-11 w-full rounded-sm border border-border-default bg-surface-raised px-3 text-sm"
                 value={branchId}
@@ -365,12 +367,12 @@ export function PharmacyCustomerOrderingConsole() {
                     {branch.name} · {branch.city}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </div>
             {staff ? (
               <div>
                 <Label htmlFor="acting-customer">Ordering for customer</Label>
-                <select
+                <StudioSelect
                   id="acting-customer"
                   className="h-11 w-full rounded-sm border border-border-default bg-surface-raised px-3 text-sm"
                   value={actingCustomerId}
@@ -383,7 +385,7 @@ export function PharmacyCustomerOrderingConsole() {
                       {customer.phoneLast4 ? ` · •••• ${customer.phoneLast4}` : ''}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </div>
             ) : null}
           </div>
@@ -600,7 +602,7 @@ export function PharmacyCustomerOrderingConsole() {
 
           <div className="mt-4">
             <Label htmlFor="payment-intent">Intended payment method</Label>
-            <select
+            <StudioSelect
               id="payment-intent"
               className="h-11 w-full rounded-sm border border-border-default bg-surface-raised px-3 text-sm"
               value={payment}
@@ -611,7 +613,7 @@ export function PharmacyCustomerOrderingConsole() {
               <option value="BANK_TRANSFER">Bank transfer</option>
               <option value="WALLET">Wallet at counter</option>
               <option value="CREDIT">Approved credit</option>
-            </select>
+            </StudioSelect>
             <p className="mt-2 text-xs leading-relaxed text-text-muted">
               This is an intention only. No online payment is taken; staff settle the linked counter
               sale.

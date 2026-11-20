@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -48,8 +49,8 @@ describe('PlatformCommandForm refreshed fields', () => {
       />
     );
 
-    expect(screen.getByLabelText('Organization type')).toHaveValue('AGENCY');
-    expect(screen.getByLabelText('Commercial package')).toHaveValue('agency-old');
+    expect(selectFieldControl(screen.getByLabelText('Organization type', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('AGENCY');
+    expect(selectFieldControl(screen.getByLabelText('Commercial package', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('agency-old');
 
     rerender(
       <PlatformCommandForm
@@ -61,14 +62,14 @@ describe('PlatformCommandForm refreshed fields', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Organization type')).toHaveValue('RESTAURANT');
-      expect(screen.getByLabelText('Commercial package')).toHaveValue('restaurant-new');
+      expect(selectFieldControl(screen.getByLabelText('Organization type', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('RESTAURANT');
+      expect(selectFieldControl(screen.getByLabelText('Commercial package', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('restaurant-new');
     });
-    expect(within(screen.getByLabelText('Commercial package')).getAllByRole('option')).toHaveLength(
+    expect(within(selectFieldControl(screen.getByLabelText('Commercial package', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).getAllByRole('option', { hidden: true })).toHaveLength(
       1
     );
     expect(
-      within(screen.getByLabelText('Commercial package')).getByRole('option')
+      within(selectFieldControl(screen.getByLabelText('Commercial package', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).getByRole('option', { hidden: true })
     ).toHaveTextContent('Restaurant New');
   });
 });

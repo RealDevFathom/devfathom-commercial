@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -133,16 +134,16 @@ describe('OrderTicketPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Void Steak' }));
     const dialog = screen.getByRole('dialog', { name: 'Void Steak' });
-    fireEvent.change(within(dialog).getByLabelText('Void reason'), {
+    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Void reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'Guest rejected doneness' },
     });
-    fireEvent.change(within(dialog).getByLabelText('Approving manager'), {
+    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Approving manager', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'manager-1' },
     });
-    fireEvent.change(within(dialog).getByLabelText('Manager PIN'), {
+    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Manager PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: '5678' },
     });
-    fireEvent.change(within(dialog).getByLabelText('Wastage disposition'), {
+    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Wastage disposition', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'RESTOCK' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm void' }));
@@ -173,22 +174,22 @@ describe('OrderTicketPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Void Steak' }));
     let dialog = screen.getByRole('dialog', { name: 'Void Steak' });
-    fireEvent.change(within(dialog).getByLabelText('Void reason'), {
+    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Void reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'Guest rejected doneness' },
     });
-    fireEvent.change(within(dialog).getByLabelText('Approving manager'), {
+    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Approving manager', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'manager-1' },
     });
-    fireEvent.change(within(dialog).getByLabelText('Manager PIN'), {
+    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Manager PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: '5678' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm void' }));
 
     await screen.findByText('Void was not completed. Review the error and try again.');
     dialog = screen.getByRole('dialog', { name: 'Void Steak' });
-    expect(within(dialog).getByLabelText('Void reason')).toHaveValue('Guest rejected doneness');
-    expect(within(dialog).getByLabelText('Approving manager')).toHaveValue('manager-1');
-    expect(within(dialog).getByLabelText('Manager PIN')).toHaveValue('5678');
+    expect(selectFieldControl(within(dialog).getByLabelText('Void reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Guest rejected doneness');
+    expect(selectFieldControl(within(dialog).getByLabelText('Approving manager', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('manager-1');
+    expect(selectFieldControl(within(dialog).getByLabelText('Manager PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('5678');
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     rerender(
@@ -202,16 +203,16 @@ describe('OrderTicketPanel', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Void Steak' }));
     dialog = screen.getByRole('dialog', { name: 'Void Steak' });
-    fireEvent.change(within(dialog).getByLabelText('Void reason'), {
+    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Void reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'Approval required' },
     });
-    expect(within(dialog).getByLabelText('Approving manager')).not.toHaveTextContent('Sam Cashier');
-    fireEvent.change(within(dialog).getByLabelText('Manager PIN'), {
+    expect(within(dialog).getByLabelText('Approving manager', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toHaveTextContent('Sam Cashier');
+    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Manager PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: '1234' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm void' }));
 
-    expect(within(dialog).getByLabelText('Approving manager')).toHaveValue('');
+    expect(selectFieldControl(within(dialog).getByLabelText('Approving manager', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
     expect(actions.onVoid).toHaveBeenCalledTimes(1);
   });
 

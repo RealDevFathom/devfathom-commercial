@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -180,16 +181,16 @@ describe('PharmacyCameraWizard callbacks', () => {
     const form = screen.getByRole('form', { name: 'Register a camera' });
     const source = within(form).getByRole('combobox', { name: /^Simulator source/ });
     expect(
-      within(source)
-        .getAllByRole('option')
+      within(selectFieldControl(source))
+        .getAllByRole('option', { hidden: true })
         .map((option) => (option as HTMLOptionElement).value)
     ).toEqual(['sim-camera-1', 'sim-counter-1', 'sim-fridge-1']);
-    fireEvent.change(within(form).getByRole('combobox', { name: 'Camera gateway' }), {
+    fireEvent.change(selectFieldControl(within(form).getByRole('combobox', { name: 'Camera gateway' })), {
       target: { value: 'gw_1' },
     });
-    fireEvent.change(within(form).getByLabelText('Camera name'), { target: { value: 'Till' } });
-    fireEvent.change(within(form).getByLabelText('Username'), { target: { value: 'placeholder' } });
-    fireEvent.change(within(form).getByLabelText('Password'), { target: { value: 'placeholder' } });
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Camera name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Till' } });
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Username', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'placeholder' } });
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Password', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'placeholder' } });
     await act(async () => {
       fireEvent.submit(form);
     });
@@ -217,7 +218,7 @@ describe('PharmacyCamerasConsole presets', () => {
   it('blocks a cold-chain preset when the branch has no cold-chain zone', () => {
     render(<PharmacyCamerasConsole />);
     const form = screen.getByRole('form', { name: 'Settings for Counter camera' });
-    fireEvent.change(within(form).getByRole('combobox', { name: /^Preset/ }), {
+    fireEvent.change(selectFieldControl(within(form).getByRole('combobox', { name: /^Preset/ })), {
       target: { value: 'COLD_CHAIN' },
     });
     expect(within(form).getByRole('status')).toHaveTextContent('No active cold-chain zone');
@@ -354,7 +355,7 @@ it('camera evidence drops its grant and cache when workspace access is lost', as
 it('submits retention through the visible save button with the exact branch and days', () => {
   render(<PharmacyCamerasConsole />);
   const form = screen.getByRole('form', { name: 'Retention for Main branch' });
-  fireEvent.change(within(form).getByLabelText('Retention days'), { target: { value: '1' } });
+  fireEvent.change(selectFieldControl(within(form).getByLabelText('Retention days', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '1' } });
   fireEvent.click(within(form).getByRole('button', { name: 'Save retention' }));
   expect(mocks.retention).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch_a', days: 1 });
 });
@@ -396,9 +397,9 @@ describe('PharmacyCamerasConsole configured gateway (DEV-740)', () => {
     render(<PharmacyCamerasConsole />);
     expect(screen.getByRole('form', { name: 'Register a configured gateway' })).toBeVisible();
     const cameraForm = screen.getByRole('form', { name: 'Register a configured camera' });
-    expect(within(cameraForm).getByLabelText('Gateway stream path')).toBeVisible();
-    expect(within(cameraForm).queryByLabelText('Password')).not.toBeInTheDocument();
-    expect(within(cameraForm).queryByLabelText('Username')).not.toBeInTheDocument();
+    expect(within(cameraForm).getByLabelText('Gateway stream path', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeVisible();
+    expect(within(cameraForm).queryByLabelText('Password', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
+    expect(within(cameraForm).queryByLabelText('Username', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
     expect(screen.queryByText(/Simulator source/)).not.toBeInTheDocument();
     expect(
       screen.queryByText('Live video unavailable. Recordings unavailable.')
@@ -410,8 +411,8 @@ describe('PharmacyCamerasConsole configured gateway (DEV-740)', () => {
     mocks.enroll.mockResolvedValue({ id: 'gw_2' });
     render(<PharmacyCamerasConsole />);
     const form = screen.getByRole('form', { name: 'Register a configured gateway' });
-    fireEvent.change(within(form).getByLabelText('Gateway name'), { target: { value: 'Main' } });
-    fireEvent.change(within(form).getByLabelText(/Gateway URL/), {
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Gateway name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Main' } });
+    fireEvent.change(selectFieldControl(within(form).getByLabelText(/Gateway URL/, { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'https://camera-gateway.example.internal/' },
     });
     await act(async () => {
@@ -430,9 +431,9 @@ describe('PharmacyCamerasConsole configured gateway (DEV-740)', () => {
     mocks.register.mockResolvedValue({ id: 'cam_2' });
     render(<PharmacyCamerasConsole />);
     const form = screen.getByRole('form', { name: 'Register a configured camera' });
-    fireEvent.change(within(form).getByLabelText('Camera name'), { target: { value: 'Fridge' } });
-    fireEvent.change(within(form).getByLabelText('Camera gateway'), { target: { value: 'gw_1' } });
-    fireEvent.change(within(form).getByLabelText('Gateway stream path'), {
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Camera name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Fridge' } });
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Camera gateway', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'gw_1' } });
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Gateway stream path', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'fridge-1' },
     });
     await act(async () => {
@@ -471,12 +472,12 @@ describe('PharmacyCamerasConsole configured gateway (DEV-740)', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Open live view' }));
     });
     expect(mocks.liveGrant).toHaveBeenCalledWith({ cameraId: 'cam_1', previousGrantId: undefined });
-    const video = screen.getByLabelText('Counter camera playback panel');
+    const video = screen.getByLabelText('Counter camera playback panel', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
     expect(video).toHaveAttribute('src', '/api/pharmacy/cameras/cam_1/stream?grant=live_1');
     expect(video.getAttribute('src')).not.toMatch(/https?:|rtsp:|@/);
     fireEvent.click(screen.getByRole('button', { name: 'Close live view' }));
     expect(mocks.revoke).toHaveBeenCalledWith({ cameraId: 'cam_1', grantId: 'live_1' });
-    expect(screen.queryByLabelText('Counter camera playback panel')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Counter camera playback panel', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
   });
 
   it('closes live view for good when its camera is disabled', async () => {
@@ -485,17 +486,17 @@ describe('PharmacyCamerasConsole configured gateway (DEV-740)', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Open live view' }));
     });
-    expect(screen.getByLabelText('Counter camera playback panel')).toBeInTheDocument();
+    expect(screen.getByLabelText('Counter camera playback panel', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeInTheDocument();
     mocks.workspace.mockReturnValue(ready(configured({ enabled: false })));
     view.rerender(<PharmacyCamerasConsole />);
-    expect(screen.queryByLabelText('Counter camera playback panel')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Counter camera playback panel', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
     expect(mocks.revoke).toHaveBeenCalledWith({ cameraId: 'cam_1', grantId: 'live_1' });
     const grantsBefore = mocks.liveGrant.mock.calls.length;
     mocks.workspace.mockReturnValue(ready(configured()));
     await act(async () => {
       view.rerender(<PharmacyCamerasConsole />);
     });
-    expect(screen.queryByLabelText('Counter camera playback panel')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Counter camera playback panel', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open live view' })).toBeEnabled();
     expect(mocks.liveGrant).toHaveBeenCalledTimes(grantsBefore);
   });

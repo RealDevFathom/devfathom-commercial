@@ -1,0 +1,17 @@
+Final complete repository unit run. See unit-summary.json for every file.
+
+ Test Files  1556 passed | 248 skipped (1804)
+      Tests  26963 passed | 2584 skipped (29548)
+   Start at  19:56:47
+   Duration  848.72s (environment 44%, tests 26%, import 19%, setup 8%, transform 3%, worker 1%)
+
+Environment  jsdom was created 1804 times · 1315.03s total, 44% of tracked time
+             create it once per worker with pool: 'vmThreads' (keeps per-file isolation) or isolate: false (shares it across files)
+             learn more: https://vitest.dev/guide/improving-performance#test-environments
+
+JSON report written to /tmp/dev-1001-checks/unit-final-results.json
+npm notice
+npm notice New major version of npm available! 11.9.0 -> 12.2.3
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.3
+npm notice To update run: npm install -g npm@12.2.3
+npm notice

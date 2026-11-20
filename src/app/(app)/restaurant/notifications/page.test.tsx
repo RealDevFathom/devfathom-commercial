@@ -133,8 +133,8 @@ describe('RestaurantNotificationsPage tenancy resolution', () => {
 
     render(await RestaurantNotificationsPage({ searchParams }));
 
-    expect(screen.getByLabelText('HTTPS endpoint')).toBeDefined();
-    expect(screen.getByLabelText('New signing secret')).toHaveAttribute(
+    expect(screen.getByLabelText('HTTPS endpoint', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDefined();
+    expect(screen.getByLabelText('New signing secret', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute(
       'aria-describedby',
       'webhook-secret-help'
     );

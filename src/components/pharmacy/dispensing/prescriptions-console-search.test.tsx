@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -60,16 +61,16 @@ describe('capture medicine-name search', () => {
     const medicine = form.getByRole('combobox', { name: 'Medicine' });
     const presentation = form.getByRole('combobox', { name: 'Medicine form' });
 
-    fireEvent.change(medicine, { target: { value: 'amoxicillin' } });
+    fireEvent.change(selectFieldControl(medicine), { target: { value: 'amoxicillin' } });
     expect(form.getByRole('combobox', { name: 'Medicine form' })).toBe(presentation);
-    fireEvent.change(presentation, { target: { value: 'capsule' } });
-    expect(presentation).toHaveValue('capsule');
+    fireEvent.change(selectFieldControl(presentation), { target: { value: 'capsule' } });
+    expect(selectFieldControl(presentation)).toHaveValue('capsule');
 
-    fireEvent.change(medicine, { target: { value: 'cetirizine' } });
+    fireEvent.change(selectFieldControl(medicine), { target: { value: 'cetirizine' } });
     expect(form.getByRole('combobox', { name: 'Medicine form' })).toBe(presentation);
-    expect(presentation).toHaveValue('');
-    fireEvent.change(presentation, { target: { value: 'tablet' } });
-    expect(presentation).toHaveValue('tablet');
+    expect(selectFieldControl(presentation)).toHaveValue('');
+    fireEvent.change(selectFieldControl(presentation), { target: { value: 'tablet' } });
+    expect(selectFieldControl(presentation)).toHaveValue('tablet');
   });
 
   it('matches names without case or surrounding spaces, explains no matches, and clears', () => {
@@ -78,20 +79,20 @@ describe('capture medicine-name search', () => {
     const search = form.getByRole('searchbox', { name: 'Search medicine names' });
     const medicine = form.getByRole('combobox', { name: 'Medicine' });
 
-    fireEvent.change(search, { target: { value: ' AMOX ' } });
-    expect(within(medicine).getByRole('option', { name: 'Amoxicillin 500mg' })).toBeInTheDocument();
-    expect(within(medicine).queryByRole('option', { name: 'Cetirizine 10mg' })).toBeNull();
-    expect(within(medicine).queryByRole('option', { name: 'Paracetamol 500mg' })).toBeNull();
-    expect(medicine).toHaveValue('');
+    fireEvent.change(selectFieldControl(search), { target: { value: ' AMOX ' } });
+    expect(within(selectFieldControl(medicine)).getByRole('option', { hidden: true, name: 'Amoxicillin 500mg' })).toBeInTheDocument();
+    expect(within(selectFieldControl(medicine)).queryByRole('option', { hidden: true, name: 'Cetirizine 10mg' })).toBeNull();
+    expect(within(selectFieldControl(medicine)).queryByRole('option', { hidden: true, name: 'Paracetamol 500mg' })).toBeNull();
+    expect(selectFieldControl(medicine)).toHaveValue('');
 
-    fireEvent.change(search, { target: { value: 'unlisted medicine' } });
+    fireEvent.change(selectFieldControl(search), { target: { value: 'unlisted medicine' } });
     expect(form.getByRole('status')).toHaveTextContent('No medicines match this search');
     expect(search).toHaveAttribute('aria-describedby', 'capture-medicine-search-empty-0');
-    expect(within(medicine).getAllByRole('option')).toHaveLength(1);
-    expect(medicine).toHaveValue('');
+    expect(within(selectFieldControl(medicine)).getAllByRole('option', { hidden: true })).toHaveLength(1);
+    expect(selectFieldControl(medicine)).toHaveValue('');
 
-    fireEvent.change(search, { target: { value: '' } });
-    expect(within(medicine).getAllByRole('option')).toHaveLength(4);
+    fireEvent.change(selectFieldControl(search), { target: { value: '' } });
+    expect(within(selectFieldControl(medicine)).getAllByRole('option', { hidden: true })).toHaveLength(4);
     expect(form.queryByText(/No medicines match/)).toBeNull();
     expect(search).not.toHaveAttribute('aria-describedby');
     expect(mocks.mutation.mutateAsync).not.toHaveBeenCalled();
@@ -105,30 +106,30 @@ describe('capture medicine-name search', () => {
     const presentation = form.getByRole('combobox', { name: 'Medicine form' });
     const quantity = form.getByRole('spinbutton', { name: 'Prescribed quantity (units)' });
     const directions = form.getByRole('textbox', { name: 'Directions' });
-    fireEvent.change(medicine, { target: { value: 'amoxicillin' } });
-    fireEvent.change(presentation, { target: { value: 'capsule' } });
-    fireEvent.change(quantity, { target: { value: '12' } });
-    fireEvent.change(directions, { target: { value: 'One capsule every 8 hours' } });
+    fireEvent.change(selectFieldControl(medicine), { target: { value: 'amoxicillin' } });
+    fireEvent.change(selectFieldControl(presentation), { target: { value: 'capsule' } });
+    fireEvent.change(selectFieldControl(quantity), { target: { value: '12' } });
+    fireEvent.change(selectFieldControl(directions), { target: { value: 'One capsule every 8 hours' } });
 
-    fireEvent.change(search, { target: { value: 'cetir' } });
-    expect(medicine).toHaveValue('amoxicillin');
-    expect(within(medicine).getByRole('option', { name: 'Amoxicillin 500mg' })).toBeInTheDocument();
-    expect(within(medicine).getByRole('option', { name: 'Cetirizine 10mg' })).toBeInTheDocument();
-    expect(within(medicine).queryByRole('option', { name: 'Paracetamol 500mg' })).toBeNull();
-    expect(presentation).toHaveValue('capsule');
-    expect(quantity).toHaveValue(12);
-    expect(directions).toHaveValue('One capsule every 8 hours');
+    fireEvent.change(selectFieldControl(search), { target: { value: 'cetir' } });
+    expect(selectFieldControl(medicine)).toHaveValue('amoxicillin');
+    expect(within(selectFieldControl(medicine)).getByRole('option', { hidden: true, name: 'Amoxicillin 500mg' })).toBeInTheDocument();
+    expect(within(selectFieldControl(medicine)).getByRole('option', { hidden: true, name: 'Cetirizine 10mg' })).toBeInTheDocument();
+    expect(within(selectFieldControl(medicine)).queryByRole('option', { hidden: true, name: 'Paracetamol 500mg' })).toBeNull();
+    expect(selectFieldControl(presentation)).toHaveValue('capsule');
+    expect(selectFieldControl(quantity)).toHaveValue(12);
+    expect(selectFieldControl(directions)).toHaveValue('One capsule every 8 hours');
 
-    fireEvent.change(search, { target: { value: 'unlisted medicine' } });
+    fireEvent.change(selectFieldControl(search), { target: { value: 'unlisted medicine' } });
     expect(form.getByRole('status')).toHaveTextContent('No medicines match this search');
-    expect(medicine).toHaveValue('amoxicillin');
-    expect(presentation).toHaveValue('capsule');
-    expect(quantity).toHaveValue(12);
-    expect(directions).toHaveValue('One capsule every 8 hours');
+    expect(selectFieldControl(medicine)).toHaveValue('amoxicillin');
+    expect(selectFieldControl(presentation)).toHaveValue('capsule');
+    expect(selectFieldControl(quantity)).toHaveValue(12);
+    expect(selectFieldControl(directions)).toHaveValue('One capsule every 8 hours');
 
-    fireEvent.change(search, { target: { value: '' } });
-    expect(within(medicine).getAllByRole('option', { name: 'Amoxicillin 500mg' })).toHaveLength(1);
-    expect(medicine).toHaveValue('amoxicillin');
+    fireEvent.change(selectFieldControl(search), { target: { value: '' } });
+    expect(within(selectFieldControl(medicine)).getAllByRole('option', { hidden: true, name: 'Amoxicillin 500mg' })).toHaveLength(1);
+    expect(selectFieldControl(medicine)).toHaveValue('amoxicillin');
     expect(mocks.mutation.mutateAsync).not.toHaveBeenCalled();
   });
 
@@ -138,11 +139,11 @@ describe('capture medicine-name search', () => {
     const form = within(screen.getByRole('form', { name: 'Capture prescription' }));
     const search = form.getByRole('searchbox', { name: 'Search medicine names' });
 
-    expect(search).toHaveValue('');
+    expect(selectFieldControl(search)).toHaveValue('');
     expect(form.queryByText(/No medicines match/)).toBeNull();
     expect(search).not.toHaveAttribute('aria-describedby');
 
-    fireEvent.change(search, { target: { value: 'amox' } });
+    fireEvent.change(selectFieldControl(search), { target: { value: 'amox' } });
     expect(form.getByRole('status')).toHaveTextContent('No medicines match this search');
     expect(search).toHaveAttribute('aria-describedby', 'capture-medicine-search-empty-0');
   });
@@ -156,30 +157,30 @@ function captureForm() {
 
 function fillLine(index: number, medicineId: string, formId: string, quantity: string, directions: string) {
   const line = within(screen.getByRole('group', { name: `Line ${index}` }));
-  fireEvent.change(line.getByRole('combobox', { name: 'Medicine' }), { target: { value: medicineId } });
-  fireEvent.change(line.getByRole('combobox', { name: 'Medicine form' }), { target: { value: formId } });
-  fireEvent.change(line.getByRole('spinbutton', { name: 'Prescribed quantity (units)' }), {
+  fireEvent.change(selectFieldControl(line.getByRole('combobox', { name: 'Medicine' })), { target: { value: medicineId } });
+  fireEvent.change(selectFieldControl(line.getByRole('combobox', { name: 'Medicine form' })), { target: { value: formId } });
+  fireEvent.change(selectFieldControl(line.getByRole('spinbutton', { name: 'Prescribed quantity (units)' })), {
     target: { value: quantity },
   });
-  fireEvent.change(line.getByRole('textbox', { name: 'Directions' }), { target: { value: directions } });
+  fireEvent.change(selectFieldControl(line.getByRole('textbox', { name: 'Directions' })), { target: { value: directions } });
 }
 
 function fillCapture() {
   const form = captureForm();
   const fields = within(form);
-  fireEvent.change(fields.getByRole('combobox', { name: /^Patient$/ }), {
+  fireEvent.change(selectFieldControl(fields.getByRole('combobox', { name: /^Patient$/ })), {
     target: { value: 'patient' },
   });
-  fireEvent.change(fields.getByRole('combobox', { name: /^Prescriber$/ }), {
+  fireEvent.change(selectFieldControl(fields.getByRole('combobox', { name: /^Prescriber$/ })), {
     target: { value: 'prescriber' },
   });
-  fireEvent.change(fields.getByLabelText('Valid from'), { target: { value: '2026-11-10' } });
-  fireEvent.change(fields.getByLabelText('Valid until'), { target: { value: '2026-12-10' } });
+  fireEvent.change(selectFieldControl(fields.getByLabelText('Valid from', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '2026-11-10' } });
+  fireEvent.change(selectFieldControl(fields.getByLabelText('Valid until', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '2026-12-10' } });
   const file = new File(['image'], 'prescription.png', { type: 'image/png' });
   mocks.upload.mutateAsync.mockResolvedValue({
     url: attachment, sourceFileRef: attachment, size: file.size, contentType: file.type,
   });
-  fireEvent.change(fields.getByLabelText('Prescription image', { exact: false }), {
+  fireEvent.change(selectFieldControl(fields.getByLabelText('Prescription image', { selector: ':not([data-select-field-native][aria-hidden="true"])', exact: false })), {
     target: { files: [file] },
   });
   fillLine(1, 'amoxicillin', 'capsule', '12', 'One capsule every 8 hours');
@@ -195,14 +196,14 @@ describe('prescription capture prerequisites and copy', () => {
     expect(capture).toHaveAccessibleDescription(/Select a patient above/);
     expect(capture).toHaveAccessibleDescription(/Choose a prescription image above/);
 
-    fireEvent.change(form.getByRole('combobox', { name: /^Patient$/ }), {
+    fireEvent.change(selectFieldControl(form.getByRole('combobox', { name: /^Patient$/ })), {
       target: { value: 'patient' },
     });
     expect(capture).toBeDisabled();
     expect(capture).not.toHaveAccessibleDescription(/Select a patient above/);
     expect(capture).toHaveAccessibleDescription(/Choose a prescription image above/);
 
-    fireEvent.change(form.getByLabelText('Prescription image', { exact: false }), {
+    fireEvent.change(selectFieldControl(form.getByLabelText('Prescription image', { selector: ':not([data-select-field-native][aria-hidden="true"])', exact: false })), {
       target: { files: [new File(['invalid'], 'prescription.pdf', { type: 'application/pdf' })] },
     });
     expect(capture).toBeDisabled();
@@ -251,8 +252,8 @@ describe('prescription capture prerequisites and copy', () => {
   it('uses plain prescription copy without the internal RX-02 code', () => {
     render(<PrescriptionsConsole />);
     expect(screen.getByText('Save the prescription image and prescribed medicines before dispensing.')).toBeInTheDocument();
-    expect(screen.getByLabelText('Where is the original prescription?')).toBeInTheDocument();
-    expect(screen.getByLabelText('Prescription source')).toBeInTheDocument();
+    expect(screen.getByLabelText('Where is the original prescription?', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Prescription source', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeInTheDocument();
     expect(screen.queryByText(/RX-02|original evidence, authority|Original custody/)).toBeNull();
   });
 });
@@ -264,13 +265,13 @@ describe('multiple prescription lines', () => {
     fireEvent.click(within(form).getByRole('button', { name: 'Add line' }));
     fillLine(2, 'cetirizine', 'tablet', '10', 'One tablet daily');
     const secondLine = within(screen.getByRole('group', { name: 'Line 2' }));
-    fireEvent.change(secondLine.getByRole('searchbox'), { target: { value: ' CEtir ' } });
-    expect(within(secondLine.getByRole('combobox', { name: 'Medicine' })).queryByRole('option', {
+    fireEvent.change(selectFieldControl(secondLine.getByRole('searchbox')), { target: { value: ' CEtir ' } });
+    expect(within(selectFieldControl(secondLine.getByRole('combobox', { name: 'Medicine' }))).queryByRole('option', { hidden: true,
       name: 'Amoxicillin 500mg',
     })).toBeNull();
-    expect(within(screen.getByRole('group', { name: 'Line 1' })).getByRole('combobox', {
+    expect(selectFieldControl(within(screen.getByRole('group', { name: 'Line 1' })).getByRole('combobox', {
       name: 'Medicine',
-    })).toHaveValue('amoxicillin');
+    }))).toHaveValue('amoxicillin');
 
     fireEvent.submit(form);
     await waitFor(() => expect(mocks.mutation.mutateAsync).toHaveBeenCalledOnce());
@@ -287,9 +288,9 @@ describe('multiple prescription lines', () => {
     });
     await waitFor(() => expect(within(form).getByRole('status')).toHaveTextContent('Prescription captured.'));
     expect(screen.queryByRole('group', { name: 'Line 2' })).toBeNull();
-    expect(within(form).getByRole('searchbox')).toHaveValue('');
-    expect(within(form).getByRole('combobox', { name: 'Medicine' })).toHaveValue('');
-    expect(within(form).getByRole('spinbutton', { name: 'Prescribed quantity (units)' })).toHaveValue(null);
+    expect(selectFieldControl(within(form).getByRole('searchbox'))).toHaveValue('');
+    expect(selectFieldControl(within(form).getByRole('combobox', { name: 'Medicine' }))).toHaveValue('');
+    expect(selectFieldControl(within(form).getByRole('spinbutton', { name: 'Prescribed quantity (units)' }))).toHaveValue(null);
     expect(within(form).getByRole('button', { name: 'Capture prescription' })).toBeDisabled();
     expect(screen.getByRole('link', { name: /View saved attachment/ })).toHaveAttribute('href', attachment);
   });
@@ -301,10 +302,10 @@ describe('multiple prescription lines', () => {
     fillLine(2, 'cetirizine', 'tablet', '10', 'One tablet daily');
     fireEvent.click(within(form).getByRole('button', { name: 'Remove line 1' }));
     const remaining = within(screen.getByRole('group', { name: 'Line 1' }));
-    expect(remaining.getByRole('combobox', { name: 'Medicine' })).toHaveValue('cetirizine');
-    expect(remaining.getByRole('combobox', { name: 'Medicine form' })).toHaveValue('tablet');
-    expect(remaining.getByRole('spinbutton', { name: 'Prescribed quantity (units)' })).toHaveValue(10);
-    expect(remaining.getByRole('textbox', { name: 'Directions' })).toHaveValue('One tablet daily');
+    expect(selectFieldControl(remaining.getByRole('combobox', { name: 'Medicine' }))).toHaveValue('cetirizine');
+    expect(selectFieldControl(remaining.getByRole('combobox', { name: 'Medicine form' }))).toHaveValue('tablet');
+    expect(selectFieldControl(remaining.getByRole('spinbutton', { name: 'Prescribed quantity (units)' }))).toHaveValue(10);
+    expect(selectFieldControl(remaining.getByRole('textbox', { name: 'Directions' }))).toHaveValue('One tablet daily');
     expect(within(form).queryByRole('button', { name: /Remove line/ })).toBeNull();
     fireEvent.submit(form);
     await waitFor(() => expect(mocks.mutation.mutateAsync).toHaveBeenCalledOnce());
@@ -323,10 +324,10 @@ describe('multiple prescription lines', () => {
     expect(line.getByRole('spinbutton', { name: 'Prescribed quantity (units)' })).toBeRequired();
     expect(line.getByRole('textbox', { name: 'Directions' })).toBeRequired();
     fillLine(2, 'amoxicillin', 'capsule', '12', 'One capsule every 8 hours');
-    fireEvent.change(line.getByRole('combobox', { name: 'Medicine' }), { target: { value: 'cetirizine' } });
-    expect(line.getByRole('combobox', { name: 'Medicine form' })).toHaveValue('');
-    expect(line.getByRole('textbox', { name: 'Directions' })).toHaveValue('One capsule every 8 hours');
-    fireEvent.change(line.getByRole('combobox', { name: 'Medicine' }), { target: { value: 'paracetamol' } });
+    fireEvent.change(selectFieldControl(line.getByRole('combobox', { name: 'Medicine' })), { target: { value: 'cetirizine' } });
+    expect(selectFieldControl(line.getByRole('combobox', { name: 'Medicine form' }))).toHaveValue('');
+    expect(selectFieldControl(line.getByRole('textbox', { name: 'Directions' }))).toHaveValue('One capsule every 8 hours');
+    fireEvent.change(selectFieldControl(line.getByRole('combobox', { name: 'Medicine' })), { target: { value: 'paracetamol' } });
     expect(line.getByText(/Choose another medicine or ask a workspace administrator/)).toBeInTheDocument();
   });
 
@@ -353,9 +354,9 @@ describe('multiple prescription lines', () => {
     fireEvent.submit(form);
     await waitFor(() => expect(within(form).getByRole('alert')).toHaveTextContent(/retained for retry/));
     expect(within(form).getByRole('button', { name: 'Retry capture' })).toBeEnabled();
-    expect(within(screen.getByRole('group', { name: 'Line 2' })).getByRole('textbox', {
+    expect(selectFieldControl(within(screen.getByRole('group', { name: 'Line 2' })).getByRole('textbox', {
       name: 'Directions',
-    })).toHaveValue('One tablet daily');
+    }))).toHaveValue('One tablet daily');
     const failedPayload = mocks.mutation.mutateAsync.mock.calls[0][0];
     fireEvent.submit(form);
     await waitFor(() => expect(mocks.mutation.mutateAsync).toHaveBeenCalledTimes(2));
@@ -380,12 +381,12 @@ describe('DEV-626 inline patient and prescriber registration', () => {
     });
     render(<PrescriptionsConsole />);
     const add = within(screen.getByRole('form', { name: 'Add patient' }));
-    fireEvent.change(add.getByLabelText('Patient name'), { target: { value: ' Sana ' } });
-    fireEvent.change(add.getByLabelText('Phone (optional)'), { target: { value: '0300' } });
+    fireEvent.change(selectFieldControl(add.getByLabelText('Patient name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: ' Sana ' } });
+    fireEvent.change(selectFieldControl(add.getByLabelText('Phone (optional)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '0300' } });
     fireEvent.click(add.getByRole('button', { name: 'Add patient' }));
 
     await waitFor(() =>
-      expect(within(captureForm()).getByRole('combobox', { name: /^Patient$/ })).toHaveValue(
+      expect(selectFieldControl(within(captureForm()).getByRole('combobox', { name: /^Patient$/ }))).toHaveValue(
         'patient-new'
       )
     );
@@ -395,7 +396,7 @@ describe('DEV-626 inline patient and prescriber registration', () => {
       cnic: '',
     });
     expect(add.getByRole('status')).toHaveTextContent('Sana added and selected for capture.');
-    expect(add.getByLabelText('Patient name')).toHaveValue('');
+    expect(selectFieldControl(add.getByLabelText('Patient name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
   });
 
   it('adds a prescriber and selects it in the capture form', async () => {
@@ -405,14 +406,14 @@ describe('DEV-626 inline patient and prescriber registration', () => {
     });
     render(<PrescriptionsConsole />);
     const add = within(screen.getByRole('form', { name: 'Add prescriber' }));
-    fireEvent.change(add.getByLabelText('Doctor name'), { target: { value: 'Dr B' } });
-    fireEvent.change(add.getByLabelText('Registration number', { exact: false }), {
+    fireEvent.change(selectFieldControl(add.getByLabelText('Doctor name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Dr B' } });
+    fireEvent.change(selectFieldControl(add.getByLabelText('Registration number', { selector: ':not([data-select-field-native][aria-hidden="true"])', exact: false })), {
       target: { value: 'PMDC-9' },
     });
     fireEvent.click(add.getByRole('button', { name: 'Add prescriber' }));
 
     await waitFor(() =>
-      expect(within(captureForm()).getByRole('combobox', { name: 'Prescriber' })).toHaveValue(
+      expect(selectFieldControl(within(captureForm()).getByRole('combobox', { name: 'Prescriber' }))).toHaveValue(
         'dr-new'
       )
     );
@@ -435,16 +436,16 @@ describe('DEV-626 inline patient and prescriber registration', () => {
     );
     render(<PrescriptionsConsole />);
     const add = within(screen.getByRole('form', { name: 'Add prescriber' }));
-    const registration = add.getByLabelText('Registration number', { exact: false });
-    fireEvent.change(add.getByLabelText('Doctor name'), { target: { value: 'Dr A' } });
-    fireEvent.change(registration, { target: { value: '123' } });
+    const registration = add.getByLabelText('Registration number', { selector: ':not([data-select-field-native][aria-hidden="true"])', exact: false });
+    fireEvent.change(selectFieldControl(add.getByLabelText('Doctor name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Dr A' } });
+    fireEvent.change(selectFieldControl(registration), { target: { value: '123' } });
     fireEvent.click(add.getByRole('button', { name: 'Add prescriber' }));
 
     await waitFor(() =>
       expect(add.getByRole('alert')).toHaveTextContent(/already in the directory/)
     );
     expect(registration).toHaveAttribute('aria-invalid', 'true');
-    expect(registration).toHaveValue('123');
+    expect(selectFieldControl(registration)).toHaveValue('123');
     expect(mocks.invalidate).not.toHaveBeenCalled();
   });
 });
@@ -463,7 +464,7 @@ describe('DEV-943: capture valid-from defaults to the shop’s day', () => {
       mocks.workspace.data = { ...(mocks.workspace.data as object), timezone };
       render(<PrescriptionsConsole />);
       const form = within(screen.getByRole('form', { name: 'Capture prescription' }));
-      expect(form.getByLabelText('Valid from')).toHaveValue(day);
+      expect(selectFieldControl(form.getByLabelText('Valid from', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(day);
     } finally {
       vi.useRealTimers();
     }

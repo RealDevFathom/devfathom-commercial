@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -30,7 +31,7 @@ describe('PlatformCommandForm', () => {
       />
     );
 
-    expect(screen.getByLabelText('Operator notes')).toHaveValue('');
+    expect(selectFieldControl(screen.getByLabelText('Operator notes', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
   });
 
   it('renders an invalid time inline and focuses its exact field', async () => {
@@ -64,8 +65,8 @@ describe('PlatformCommandForm', () => {
       />
     );
 
-    const input = screen.getByLabelText('Business-day cutoff');
-    fireEvent.change(input, { target: { value: '09:30' } });
+    const input = screen.getByLabelText('Business-day cutoff', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    fireEvent.change(selectFieldControl(input), { target: { value: '09:30' } });
     fireEvent.submit(input.closest('form')!);
 
     await waitFor(() => expect(input).toHaveFocus());
@@ -87,9 +88,9 @@ describe('PlatformCommandForm', () => {
       />
     );
 
-    const input = screen.getByLabelText('Region code');
+    const input = screen.getByLabelText('Region code', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
     expect(input).toHaveAttribute('pattern', '[A-Z]{3}');
-    fireEvent.change(input, { target: { value: 'abc' } });
+    fireEvent.change(selectFieldControl(input), { target: { value: 'abc' } });
     fireEvent.submit(input.closest('form')!);
 
     expect(fetchMock).not.toHaveBeenCalled();
@@ -119,7 +120,7 @@ describe('PlatformCommandForm', () => {
       />
     );
 
-    fireEvent.submit(screen.getByLabelText('Password').closest('form')!);
+    fireEvent.submit(screen.getByLabelText('Password', { selector: ':not([data-select-field-native][aria-hidden="true"])' }).closest('form')!);
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     expect(JSON.parse(fetchMock.mock.calls[0]![1].body).payload).toEqual({});
@@ -143,13 +144,13 @@ describe('PlatformCommandForm', () => {
         ]}
       />
     );
-    const input = screen.getByLabelText('Password');
-    fireEvent.change(input, { target: { value: 'short' } });
+    const input = screen.getByLabelText('Password', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    fireEvent.change(selectFieldControl(input), { target: { value: 'short' } });
     fireEvent.submit(input.closest('form')!);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(input).toHaveAccessibleDescription('Password must be at least 12 characters.');
 
-    fireEvent.change(input, { target: { value: ' padded-pass ' } });
+    fireEvent.change(selectFieldControl(input), { target: { value: ' padded-pass ' } });
     fireEvent.submit(input.closest('form')!);
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     expect(JSON.parse(fetchMock.mock.calls[0]![1].body).payload.password).toBe(' padded-pass ');
@@ -170,8 +171,8 @@ describe('PlatformCommandForm', () => {
         />
       </>
     );
-    const overrideReason = screen.getByLabelText('Override reason');
-    const contractReason = screen.getByLabelText('Contract reason');
+    const overrideReason = screen.getByLabelText('Override reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const contractReason = screen.getByLabelText('Contract reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
     fireEvent.submit(overrideReason.closest('form')!);
     fireEvent.submit(contractReason.closest('form')!);
 
@@ -220,13 +221,13 @@ describe('PlatformCommandForm', () => {
     expect(screen.getByRole('group', { name: 'Asia' })).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Europe' })).toBeInTheDocument();
 
-    fireEvent.change(screen.getByPlaceholderText('Search city or IANA timezone…'), {
+    fireEvent.change(selectFieldControl(screen.getByPlaceholderText('Search city or IANA timezone…')), {
       target: { value: 'London' },
     });
     fireEvent.click(screen.getByText('Europe/London'));
 
     expect(screen.getByRole('button', { name: 'Timezone' })).toHaveTextContent('Europe/London');
-    expect(document.querySelector('input[name="timezone"]')).toHaveValue('Europe/London');
+    expect(selectFieldControl(document.querySelector('input[name="timezone"]'))).toHaveValue('Europe/London');
   });
 
   it('renders a custom timezone issue inline and focuses the timezone combobox', async () => {

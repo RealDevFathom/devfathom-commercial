@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type { inferRouterOutputs } from '@trpc/server';
 import { Printer, Plus } from 'lucide-react';
@@ -153,7 +155,7 @@ function DeliveryForm({
           />
         </Field>
         <Field label="Driver">
-          <select
+          <StudioSelect
             name="driverStaffId"
             aria-label="Driver"
             className={inputClass}
@@ -165,7 +167,7 @@ function DeliveryForm({
                 {person.displayName}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </Field>
         <Field label="Dispatched">
           <Input
@@ -593,7 +595,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
             />
           </Field>
           <Field label="Status">
-            <select
+            <StudioSelect
               aria-label="Filter by status"
               className={inputClass}
               value={status}
@@ -603,7 +605,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
               {statuses.map((item) => (
                 <option key={item}>{item}</option>
               ))}
-            </select>
+            </StudioSelect>
           </Field>
           <Field label="Event date from">
             <Input
@@ -878,7 +880,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                       />
                     </Field>
                     <Field label="Fulfillment">
-                      <select
+                      <StudioSelect
                         className={inputClass}
                         required
                         name="fulfillmentMode"
@@ -887,10 +889,10 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                         <option value="">Choose fulfillment</option>
                         <option value="PICKUP">Pickup</option>
                         <option value="DELIVERY">Delivery</option>
-                      </select>
+                      </StudioSelect>
                     </Field>
                     <Field label="Stock location">
-                      <select
+                      <StudioSelect
                         className={inputClass}
                         required
                         name="stockLocationId"
@@ -902,7 +904,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                             {location.name}
                           </option>
                         ))}
-                      </select>
+                      </StudioSelect>
                     </Field>
                     <Button className="min-h-11" type="submit">
                       Save booking
@@ -1150,7 +1152,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                       className="grid min-w-0 gap-3 sm:grid-cols-2"
                     >
                       <Field label="Recipe">
-                        <select
+                        <StudioSelect
                           required
                           name="source"
                           aria-label="Recipe"
@@ -1176,7 +1178,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                                 </option>
                               );
                             })}
-                        </select>
+                        </StudioSelect>
                       </Field>
                       <Field label="Description">
                         <Input className="min-h-11" required name="description" />
@@ -1257,11 +1259,11 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                       className="grid min-w-0 gap-3 sm:grid-cols-2"
                     >
                       <Field label="Cost type">
-                        <select required name="kind" aria-label="Cost type" className={inputClass}>
+                        <StudioSelect required name="kind" aria-label="Cost type" className={inputClass}>
                           {['LABOUR', 'TRANSPORT', 'RENTAL', 'OTHER'].map((item) => (
                             <option key={item}>{item}</option>
                           ))}
-                        </select>
+                        </StudioSelect>
                       </Field>
                       <Field label="Label">
                         <Input className="min-h-11" required name="label" />
@@ -1481,7 +1483,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                 />
               </Field>
               <Field label="Customer">
-                <select
+                <StudioSelect
                   name="customerId"
                   aria-label="Customer"
                   className={inputClass}
@@ -1494,7 +1496,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                       {item.displayName}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </Field>
               <Field label="Event name">
                 <Input
@@ -1543,7 +1545,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                 />
               </Field>
               <Field label="Saved delivery address">
-                <select
+                <StudioSelect
                   name="deliveryAddressId"
                   aria-label="Saved delivery address"
                   className={inputClass}
@@ -1556,7 +1558,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                       {item.label} · {item.addressLine1}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </Field>
               <Field label="Quoted total">
                 <Input

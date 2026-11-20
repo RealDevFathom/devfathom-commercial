@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';import Link from 'next/link';
 import { MigrationStagingForm } from './migration-staging-form';
 import { StagedMedicineCreation } from './staged-medicine-creation';
 import { readStagedMedicineCreation } from './staged-medicine-creation-actions';
@@ -179,14 +179,14 @@ export async function StagedMedicineCatalogue({
         <form action={route} className="flex flex-wrap items-end gap-3">
           <label className="grid gap-2 text-sm">
             Branch
-            <select className={selectClass} name="branchId" defaultValue={branchId} required>
+            <StudioSelect className={selectClass} name="branchId" defaultValue={branchId} required>
               <option value="">Choose a branch</option>
               {branches.map((branch) => (
                 <option key={branch.id} value={branch.id}>
                   {branch.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <Button type="submit" className="min-h-11" disabled={!branches.length}>
             Show batches
@@ -283,12 +283,12 @@ export async function StagedMedicineCatalogue({
             </label>
             <label className="grid gap-2 text-sm">
               Review filter
-              <select name="filter" defaultValue={text('filter') || 'all'} className={selectClass}>
+              <StudioSelect name="filter" defaultValue={text('filter') || 'all'} className={selectClass}>
                 <option value="all">All candidates</option>
                 <option value="stock">Open batch / expiry gaps</option>
                 <option value="price">Open verified price gaps</option>
                 <option value="collision">Name collisions</option>
-              </select>
+              </StudioSelect>
             </label>
             <Button type="submit" className="min-h-11">
               Search

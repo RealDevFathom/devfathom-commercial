@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { ComponentProps, ReactNode } from 'react';
@@ -98,9 +99,9 @@ it('links to AI settings and asks for plain local days with sensible defaults', 
     '/organization'
   );
   expect(container).toHaveTextContent('contact DevFathom support');
-  expect(screen.getByLabelText('First day')).toHaveAttribute('type', 'date');
-  expect(screen.getByLabelText('First day')).not.toHaveValue('');
-  expect(screen.getByLabelText('Last day')).not.toHaveValue('');
+  expect(screen.getByLabelText('First day', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('type', 'date');
+  expect(selectFieldControl(screen.getByLabelText('First day', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).not.toHaveValue('');
+  expect(selectFieldControl(screen.getByLabelText('Last day', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).not.toHaveValue('');
   expect(container).toHaveTextContent('Pakistan time (PKT)');
   expect(container).not.toHaveTextContent(/\(UTC\)|Exclusive cutoff|configured provider/);
 });
@@ -121,8 +122,8 @@ it.each(['CONFIGURATION', 'PROVIDER', 'TIMEOUT'] as const)(
     expect(form).toHaveAttribute('data-operation', 'growth-generate');
     expect(form).toHaveAttribute('data-zone', 'Asia/Karachi');
     // 2026-11-01T00:00Z..2026-11-02T00:00Z is 1 Nov 05:00 to 2 Nov 04:59 in Karachi.
-    expect(form.querySelector('input[name="from"]')).toHaveValue('2026-11-01');
-    expect(form.querySelector('input[name="lastDay"]')).toHaveValue('2026-11-02');
+    expect(selectFieldControl(form.querySelector('input[name="from"]'))).toHaveValue('2026-11-01');
+    expect(selectFieldControl(form.querySelector('input[name="lastDay"]'))).toHaveValue('2026-11-02');
     expect(container).toHaveTextContent('generate fresh suggestions for 1 – 2 Nov 2026');
   }
 );

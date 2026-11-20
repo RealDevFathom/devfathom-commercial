@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { PurchasingValidationError } from './_lib/console';
 import { revalidatePath } from 'next/cache';
 import ReturnsPage from './returns/page';
@@ -459,10 +460,10 @@ describe('pickers (UX rules 1, 12, 16)', () => {
   it('offers a lapsed supplier as a disabled, explained option rather than hiding or allowing it', async () => {
     render(await OrdersPage({ searchParams: params() }));
 
-    const option = screen.getByRole('option', { name: /Lahore Wholesale — no valid licence/ });
+    const option = screen.getByRole('option', { hidden: true, name: /Lahore Wholesale — no valid licence/ });
     expect((option as HTMLOptionElement).disabled).toBe(true);
     expect(
-      (screen.getByRole('option', { name: 'Karachi Distributors' }) as HTMLOptionElement).disabled
+      (screen.getByRole('option', { hidden: true, name: 'Karachi Distributors' }) as HTMLOptionElement).disabled
     ).toBe(false);
   });
 
@@ -470,12 +471,12 @@ describe('pickers (UX rules 1, 12, 16)', () => {
     render(await OrdersPage({ searchParams: params() }));
 
     expect(
-      screen.getAllByRole('option', { name: /Amoxicillin 500mg — STRIP \(1 STRIP = 10 units\)/ })
+      screen.getAllByRole('option', { hidden: true, name: /Amoxicillin 500mg — STRIP \(1 STRIP = 10 units\)/ })
         .length
     ).toBeGreaterThan(0);
     // The canonical multiplier travels inside the option value, so the server
     // resolves it without asking the operator for it.
-    const option = screen.getAllByRole('option', {
+    const option = screen.getAllByRole('option', { hidden: true,
       name: /Amoxicillin 500mg — STRIP/,
     })[0] as HTMLOptionElement;
     expect(option.value).toBe('med-1|pack-1|10');
@@ -511,13 +512,13 @@ describe('validation errors (UX rule 11)', () => {
       })
     );
 
-    const input = screen.getByLabelText('Trading name');
+    const input = screen.getByLabelText('Trading name', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
     expect(input.getAttribute('aria-invalid')).toBe('true');
     expect(input.getAttribute('aria-describedby')).toBe('field-name-error');
     const described = document.getElementById('field-name-error');
     expect(described?.textContent).toBe('Trading name: enter a name.');
     // Every other control stays valid — one failure does not paint the form red.
-    expect(screen.getByLabelText('Contact name').getAttribute('aria-invalid')).toBe('false');
+    expect(screen.getByLabelText('Contact name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }).getAttribute('aria-invalid')).toBe('false');
   });
 
   it('announces the failure to a screen reader as an alert', async () => {
@@ -705,7 +706,7 @@ describe('goods-in bench (PUR-02/04/05)', () => {
     render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
 
     expect(screen.getByRole('heading', { name: 'No order is out with a supplier' })).toBeDefined();
-    expect(screen.queryByRole('option', { name: /PO-DRAFT/ })).toBeNull();
+    expect(screen.queryByRole('option', { hidden: true, name: /PO-DRAFT/ })).toBeNull();
   });
 });
 
@@ -723,11 +724,11 @@ describe('goods-in dates follow the workspace day (DEV-726)', () => {
       vi.useRealTimers();
     }
 
-    expect(screen.getByLabelText(/Direct purchase received on/)).toHaveProperty(
+    expect(screen.getByLabelText(/Direct purchase received on/, { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveProperty(
       'value',
       '2026-11-15'
     );
-    expect(screen.getByLabelText(/Direct purchase invoice date/)).toHaveProperty(
+    expect(screen.getByLabelText(/Direct purchase invoice date/, { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveProperty(
       'value',
       '2026-11-15'
     );
@@ -1073,9 +1074,9 @@ describe('WHA-1349 action-boundary retry safety', () => {
       fireEvent.click(screen.getByRole('button'));
     });
     expect(write).not.toHaveBeenCalled();
-    expect(screen.getByLabelText('creditLimit')).toHaveFocus();
+    expect(screen.getByLabelText('creditLimit', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveFocus();
     expect(screen.getByRole('button')).not.toBeDisabled();
-    fireEvent.change(screen.getByLabelText('creditLimit'), { target: { value: '25.00' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('creditLimit', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '25.00' } });
     await act(async () => {
       fireEvent.click(screen.getByRole('button'));
     });
@@ -1151,14 +1152,14 @@ describe('goods-in scan and duplicate serial', () => {
 
     render(await ReceivingPage({ searchParams: params({ order: 'po-1', scan: payload }) }));
 
-    const scan = screen.getByLabelText(/Scan or search/);
+    const scan = screen.getByLabelText(/Scan or search/, { selector: ':not([data-select-field-native][aria-hidden="true"])' });
     const queue = screen.getByRole('heading', { name: /Match exceptions/ });
     expect(scan.compareDocumentPosition(queue) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(scan).toHaveFocus();
     const line = screen.getByRole('group', { name: 'Amoxicillin 500mg' });
-    expect(within(line).getByLabelText('Packs received')).toHaveValue(1);
-    expect(within(line).getByLabelText(/Invoice corrects the printed batch/)).toBeDefined();
-    expect(line.querySelector('input[name="gs1Payload:line-1"]')).toHaveValue(payload);
+    expect(selectFieldControl(within(line).getByLabelText('Packs received', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(1);
+    expect(within(line).getByLabelText(/Invoice corrects the printed batch/, { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDefined();
+    expect(selectFieldControl(line.querySelector('input[name="gs1Payload:line-1"]'))).toHaveValue(payload);
   });
 
   it('DEV-693: shows an official DRAP price change as a hint on that medicine only', async () => {
@@ -1354,7 +1355,7 @@ describe('goods-in scan and duplicate serial', () => {
       'stockLocation:line-1.lot2',
       'stockLocation:line-1.lot3',
     ]);
-    for (const select of shelves) expect(select).toHaveValue('loc-2');
+    for (const select of shelves) expect(selectFieldControl(select)).toHaveValue('loc-2');
 
     // No branch default and two receiving shelves: nothing is pre-selected.
     view.unmount();
@@ -1368,7 +1369,7 @@ describe('goods-in scan and duplicate serial', () => {
       })
     );
     const unset = render(await ReceivingPage({ searchParams: params({ order: 'po-1' }) }));
-    expect(unset.container.querySelector('select[name="stockLocation:line-1"]')).toHaveValue('');
+    expect(selectFieldControl(unset.container.querySelector('select[name="stockLocation:line-1"]'))).toHaveValue('');
   });
 });
 
@@ -1398,14 +1399,14 @@ describe('purchasing PIN controls', () => {
       })
     );
     render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
-    const picker = within(screen.getByLabelText('Approved by'));
-    expect(picker.getByRole('option', { name: 'Bilal (bilal@example.test)' })).toBeDefined();
-    expect(picker.queryByRole('option', { name: 'Other branch (other@example.test)' })).toBeNull();
-    expect(picker.queryByRole('option', { name: 'Owner (owner@example.test)' })).toBeNull();
+    const picker = within(selectFieldControl(screen.getByLabelText('Approved by', { selector: ':not([data-select-field-native][aria-hidden="true"])' })));
+    expect(picker.getByRole('option', { hidden: true, name: 'Bilal (bilal@example.test)' })).toBeDefined();
+    expect(picker.queryByRole('option', { hidden: true, name: 'Other branch (other@example.test)' })).toBeNull();
+    expect(picker.queryByRole('option', { hidden: true, name: 'Owner (owner@example.test)' })).toBeNull();
   });
   it('offers a masked, labelled approval PIN without autocomplete', async () => {
     render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
-    const pin = screen.getByLabelText('Approver PIN') as HTMLInputElement;
+    const pin = screen.getByLabelText('Approver PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLInputElement;
     expect(pin.type).toBe('password');
     expect(pin.autocomplete).toBe('off');
     expect(pin.required).toBe(true);
@@ -1421,7 +1422,7 @@ describe('purchasing PIN controls', () => {
     });
     mocks.createTRPCContext.mockResolvedValue(ctx);
     render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
-    expect(screen.queryByLabelText('Approver PIN')).toBeNull();
+    expect(screen.queryByLabelText('Approver PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeNull();
     expect(
       screen.getByRole('heading', { name: 'You do not have purchasing access' })
     ).toBeDefined();
@@ -1464,7 +1465,7 @@ describe('purchasing PIN controls', () => {
         })
       );
       render(await OrdersPage({ searchParams: params({ po: 'po-1' }) }));
-      expect(screen.queryByLabelText('Owner PIN')).toBeNull();
+      expect(screen.queryByLabelText('Owner PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeNull();
       expect(screen.queryByRole('button', { name: /^Approve$/ })).toBeNull();
     }
   );
@@ -1524,7 +1525,7 @@ describe('purchasing PIN controls', () => {
       })
     );
     render(await OrdersPage({ searchParams: params({ po: 'po-1' }) }));
-    expect((screen.getByLabelText('Owner PIN') as HTMLInputElement).type).toBe('password');
+    expect((screen.getByLabelText('Owner PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLInputElement).type).toBe('password');
     expect(screen.getByRole('button', { name: /^Approve$/ })).toBeDefined();
   });
 });

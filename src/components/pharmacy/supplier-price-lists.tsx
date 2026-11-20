@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState } from 'react';
 import { trpc } from '@/lib/trpc';
 import { IMPORT_MAX_BYTES, IMPORT_MAX_ROWS } from '@/lib/pharmacy/migration/owner-import-input';
@@ -187,7 +189,7 @@ export function SupplierPriceListsConsole({
         <div className="grid min-w-0 gap-4 md:grid-cols-2">
           <label className="space-y-2 text-sm text-text-body">
             <span>Supplier</span>
-            <select
+            <StudioSelect
               className={control}
               value={supplierId}
               disabled={busy}
@@ -199,7 +201,7 @@ export function SupplierPriceListsConsole({
                   {supplier.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <label className="space-y-2 text-sm text-text-body">
             <span>CSV or XLSX price list</span>

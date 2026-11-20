@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verticalForModuleKey, type EntitlementView } from '@/lib/module-catalog';
@@ -110,13 +111,13 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 function fill() {
-  fireEvent.change(screen.getByPlaceholderText('Ali Raza'), {
+  fireEvent.change(selectFieldControl(screen.getByPlaceholderText('Ali Raza')), {
     target: { value: 'Second operator' },
   });
-  fireEvent.change(screen.getByPlaceholderText('ali@restaurant.pk'), {
+  fireEvent.change(selectFieldControl(screen.getByPlaceholderText('ali@restaurant.pk')), {
     target: { value: 'second@e2e.invalid' },
   });
-  fireEvent.change(screen.getByPlaceholderText('Shift Manager'), {
+  fireEvent.change(selectFieldControl(screen.getByPlaceholderText('Shift Manager')), {
     target: { value: 'Counter operator' },
   });
 }
@@ -130,9 +131,9 @@ describe('tenant department invitation', () => {
   ])('submits the %s restaurant role template', (name, id) => {
     render(<AddMemberModal onClose={vi.fn()} />);
     fill();
-    fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
-    expect(screen.getByRole('option', { name })).toHaveValue(id);
-    fireEvent.change(screen.getByLabelText('Restaurant staff role'), { target: { value: id } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Department', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'COUNTER' } });
+    expect(selectFieldControl(within(selectFieldControl(screen.getByLabelText('Restaurant staff role', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).getByRole('option', { hidden: true, name }))).toHaveValue(id);
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Restaurant staff role', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: id } });
     fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
     expect(state.invite.mutate).toHaveBeenCalledWith(
       expect.objectContaining({ organizationRoleId: id }),
@@ -148,10 +149,10 @@ describe('tenant department invitation', () => {
     state.departments.data = [{ key, name, active: true }];
     render(<AddMemberModal onClose={vi.fn()} />);
     fill();
-    expect(screen.getByLabelText('Department')).toHaveValue('');
+    expect(selectFieldControl(screen.getByLabelText('Department', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
     expect(screen.getByRole('button', { name: 'Send Invite' })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Department'), { target: { value: key } });
-    expect(screen.getByRole('option', { name })).toHaveValue(key);
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Department', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: key } });
+    expect(selectFieldControl(within(selectFieldControl(screen.getByLabelText('Department', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).getByRole('option', { hidden: true, name }))).toHaveValue(key);
     fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
     expect(state.invite.mutate).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ department: key, email: 'second@e2e.invalid' }),
@@ -164,7 +165,7 @@ describe('tenant department invitation', () => {
     (kind) => {
       const view = render(<AddMemberModal onClose={vi.fn()} />);
       fill();
-      fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+      fireEvent.change(selectFieldControl(screen.getByLabelText('Department', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'COUNTER' } });
       if (kind === 'loading') state.departments.isFetching = true;
       if (kind === 'error') state.departments.isError = true;
       if (kind === 'empty') state.departments.data = [];
@@ -173,8 +174,8 @@ describe('tenant department invitation', () => {
       view.rerender(<AddMemberModal onClose={vi.fn()} />);
       fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
       expect(state.invite.mutate).not.toHaveBeenCalled();
-      expect(screen.getByPlaceholderText('Ali Raza')).toHaveValue('Second operator');
-      expect(screen.getByPlaceholderText('ali@restaurant.pk')).toHaveValue('second@e2e.invalid');
+      expect(selectFieldControl(screen.getByPlaceholderText('Ali Raza'))).toHaveValue('Second operator');
+      expect(selectFieldControl(screen.getByPlaceholderText('ali@restaurant.pk'))).toHaveValue('second@e2e.invalid');
       if (kind === 'error') {
         fireEvent.click(screen.getByRole('button', { name: 'Retry departments' }));
         expect(state.departments.refetch).toHaveBeenCalledOnce();
@@ -185,13 +186,13 @@ describe('tenant department invitation', () => {
   it('omits inactive departments and preserves entries when server authorization refuses the invite', () => {
     render(<AddMemberModal onClose={vi.fn()} />);
     fill();
-    expect(screen.queryByRole('option', { name: 'Old department' })).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+    expect(screen.queryByRole('option', { hidden: true, name: 'Old department' })).not.toBeInTheDocument();
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Department', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'COUNTER' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
     act(() => state.invite.mutate.mock.calls[0][1].onError({ message: 'Forbidden' }));
     expect(screen.getByText('Forbidden')).toBeVisible();
-    expect(screen.getByLabelText('Department')).toHaveValue('COUNTER');
-    expect(screen.getByPlaceholderText('Ali Raza')).toHaveValue('Second operator');
+    expect(selectFieldControl(screen.getByLabelText('Department', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('COUNTER');
+    expect(selectFieldControl(screen.getByPlaceholderText('Ali Raza'))).toHaveValue('Second operator');
   });
 
   it('shows delivery failure, copies the link, and replaces it after a resend', async () => {
@@ -199,7 +200,7 @@ describe('tenant department invitation', () => {
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
     render(<AddMemberModal onClose={vi.fn()} />);
     fill();
-    fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Department', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'COUNTER' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
     act(() =>
       state.invite.mutate.mock.calls[0][1].onSuccess({
@@ -238,7 +239,7 @@ describe('tenant department invitation', () => {
     const onInvited = vi.fn();
     render(<AddMemberModal onClose={vi.fn()} onInvited={onInvited} />);
     fill();
-    fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Department', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'COUNTER' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
 
     const callbacks = state.invite.mutate.mock.calls[0][1];
@@ -269,12 +270,12 @@ describe('vertical-aware invitation copy', () => {
       { id: 'role_pharmacist', key: 'pharmacist', name: 'Pharmacist' },
     ];
     const { container } = render(<AddMemberModal onClose={vi.fn()} />);
-    const roleSelect = screen.getByLabelText('Role');
-    expect(roleSelect).toHaveAttribute('id', 'invite-role-template');
-    expect(screen.queryByLabelText('Pharmacy staff role')).toBeNull();
-    expect(screen.getByRole('option', { name: 'Manager' })).toHaveValue('role_manager');
-    expect(screen.getByRole('option', { name: 'Pharmacist' })).toHaveValue('role_pharmacist');
-    expect(screen.getByRole('option', { name: 'No pharmacy role' })).toHaveValue('');
+    const roleSelect = screen.getByLabelText('Role', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    expect(selectFieldControl(roleSelect)).toHaveAttribute('id', 'invite-role-template');
+    expect(screen.queryByLabelText('Pharmacy staff role', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeNull();
+    expect(selectFieldControl(screen.getByRole('option', { hidden: true, name: 'Manager' }))).toHaveValue('role_manager');
+    expect(selectFieldControl(screen.getByRole('option', { hidden: true, name: 'Pharmacist' }))).toHaveValue('role_pharmacist');
+    expect(selectFieldControl(screen.getByRole('option', { hidden: true, name: 'No pharmacy role' }))).toHaveValue('');
     expect(screen.getByPlaceholderText('Pharmacist')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('+92 300 1234567')).toBeInTheDocument();
     // DEV-673: one role picker; the Staff / Manager / Admin switch is folded into it.
@@ -303,16 +304,16 @@ describe('vertical-aware invitation copy', () => {
     });
 
     function fillPharmacy() {
-      fireEvent.change(screen.getByPlaceholderText('Ali Raza'), {
+      fireEvent.change(selectFieldControl(screen.getByPlaceholderText('Ali Raza')), {
         target: { value: 'Second operator' },
       });
-      fireEvent.change(screen.getByPlaceholderText('ali@pharmacy.pk'), {
+      fireEvent.change(selectFieldControl(screen.getByPlaceholderText('ali@pharmacy.pk')), {
         target: { value: 'second@e2e.invalid' },
       });
-      fireEvent.change(screen.getByPlaceholderText('Pharmacist'), {
+      fireEvent.change(selectFieldControl(screen.getByPlaceholderText('Pharmacist')), {
         target: { value: 'Counter operator' },
       });
-      fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+      fireEvent.change(selectFieldControl(screen.getByLabelText('Department', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'COUNTER' } });
     }
 
     it.each([
@@ -325,7 +326,7 @@ describe('vertical-aware invitation copy', () => {
     ])('sends %s (%s) with its %s base role from one picker', (_name, id, baseRole) => {
       render(<AddMemberModal onClose={vi.fn()} />);
       fillPharmacy();
-      fireEvent.change(screen.getByLabelText('Role'), { target: { value: id } });
+      fireEvent.change(selectFieldControl(screen.getByLabelText('Role', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: id } });
       fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
       expect(state.invite.mutate).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ role: baseRole, organizationRoleId: id || null }),
@@ -341,13 +342,13 @@ describe('vertical-aware invitation copy', () => {
       ];
       render(<AddMemberModal onClose={vi.fn()} />);
       fillPharmacy();
-      const picker = screen.getByLabelText('Role');
+      const picker = screen.getByLabelText('Role', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
       const help = document.getElementById('invite-role-template-help')!;
-      expect(screen.getByRole('option', { name: 'Pharmacist and cashier' })).toHaveValue(
+      expect(selectFieldControl(screen.getByRole('option', { hidden: true, name: 'Pharmacist and cashier' }))).toHaveValue(
         'role_combined'
       );
       expect(help).not.toHaveTextContent(/one-person shop/);
-      fireEvent.change(picker, { target: { value: 'role_combined' } });
+      fireEvent.change(selectFieldControl(picker), { target: { value: 'role_combined' } });
       expect(help).toHaveTextContent(
         'Dispenses prescriptions and takes payment, for a one-person shop or a pharmacist who also runs the till.'
       );
@@ -362,25 +363,25 @@ describe('vertical-aware invitation copy', () => {
     // SEC-I (DEV-827): no base role grants exactly what Owner or Owner / Operator says.
     it('does not offer Owner or Owner / Operator by invite', () => {
       render(<AddMemberModal onClose={vi.fn()} />);
-      expect(screen.queryByRole('option', { name: 'Owner' })).toBeNull();
-      expect(screen.queryByRole('option', { name: 'Owner / Operator' })).toBeNull();
+      expect(screen.queryByRole('option', { hidden: true, name: 'Owner' })).toBeNull();
+      expect(screen.queryByRole('option', { hidden: true, name: 'Owner / Operator' })).toBeNull();
       expect(
-        screen.getByRole('option', { name: 'Organization administrator' })
+        screen.getByRole('option', { hidden: true, name: 'Organization administrator' })
       ).toBeInTheDocument();
-      expect(screen.getByRole('option', { name: 'Manager' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { hidden: true, name: 'Manager' })).toBeInTheDocument();
     });
 
     it('shows the access level each role grants', () => {
       render(<AddMemberModal onClose={vi.fn()} />);
-      const picker = screen.getByLabelText('Role');
+      const picker = screen.getByLabelText('Role', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
       const help = document.getElementById('invite-role-template-help')!;
       expect(picker).toHaveAttribute('aria-describedby', 'invite-role-template-help');
       expect(help).toHaveTextContent('Access level: Staff.');
-      fireEvent.change(picker, { target: { value: 'role_admin' } });
+      fireEvent.change(selectFieldControl(picker), { target: { value: 'role_admin' } });
       expect(help).toHaveTextContent('Access level: Admin.');
       expect(help).toHaveTextContent(/billing and team/);
       expect(help.textContent).not.toContain(inviteCopyForVertical('PHARMACY').staffRoleHelp);
-      fireEvent.change(picker, { target: { value: 'role_manager' } });
+      fireEvent.change(selectFieldControl(picker), { target: { value: 'role_manager' } });
       expect(help).toHaveTextContent('Access level: Staff.');
       expect(help).not.toHaveTextContent('Access level: Manager.');
     });
@@ -389,9 +390,9 @@ describe('vertical-aware invitation copy', () => {
   it('keeps the base role switch for a restaurant tenant and submits the chosen base role', () => {
     render(<AddMemberModal onClose={vi.fn()} />);
     fill();
-    fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Department', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'COUNTER' } });
     fireEvent.click(screen.getByRole('button', { name: 'HR' }));
-    fireEvent.change(screen.getByLabelText('Restaurant staff role'), {
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Restaurant staff role', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'role_gm' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
@@ -403,7 +404,7 @@ describe('vertical-aware invitation copy', () => {
 
   it('keeps restaurant copy for a restaurant tenant', () => {
     render(<AddMemberModal onClose={vi.fn()} />);
-    expect(screen.getByLabelText('Restaurant staff role')).toHaveAttribute(
+    expect(selectFieldControl(screen.getByLabelText('Restaurant staff role', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveAttribute(
       'id',
       'invite-role-template'
     );
@@ -535,7 +536,7 @@ describe('pharmacy team without HR', () => {
   it('shows member loading and failure states without claiming there are no members', () => {
     state.overview.isLoading = true;
     const view = render(<TeamContent />);
-    expect(screen.getByLabelText('Loading members')).toBeVisible();
+    expect(screen.getByLabelText('Loading members', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeVisible();
     expect(screen.getByText('1 team member in this workspace.')).toBeVisible();
 
     state.overview.isLoading = false;
@@ -554,7 +555,7 @@ describe('pharmacy team without HR', () => {
     });
     const view = render(<TeamContent />);
     expect(screen.getByText('1 team member in this workspace.')).toBeVisible();
-    expect(screen.getByLabelText('Loading members')).toBeVisible();
+    expect(screen.getByLabelText('Loading members', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeVisible();
 
     state.overview.data.organization.users = [];
     state.overviewQuery.mockReturnValue(state.overview);
@@ -612,14 +613,14 @@ describe('pharmacy team without HR', () => {
     expect(screen.getAllByRole('button', { name: 'Invite a colleague' })).toHaveLength(1);
     expect(screen.queryByRole('button', { name: 'Add Member' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Invite a colleague' }));
-    fireEvent.change(screen.getByPlaceholderText('Ali Raza'), { target: { value: 'Ayesha' } });
-    fireEvent.change(screen.getByPlaceholderText('ali@pharmacy.pk'), {
+    fireEvent.change(selectFieldControl(screen.getByPlaceholderText('Ali Raza')), { target: { value: 'Ayesha' } });
+    fireEvent.change(selectFieldControl(screen.getByPlaceholderText('ali@pharmacy.pk')), {
       target: { value: 'ayesha@e2e.invalid' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Pharmacist'), {
+    fireEvent.change(selectFieldControl(screen.getByPlaceholderText('Pharmacist')), {
       target: { value: 'Dispensing pharmacist' },
     });
-    fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Department', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'COUNTER' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
     expect(state.invite.mutate).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ email: 'ayesha@e2e.invalid', department: 'COUNTER' }),

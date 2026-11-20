@@ -1,0 +1,365 @@
+{
+  "scope": "Actual shared component in Chromium with existing Studio CSS; every synthetic dev1001.invalid request is fulfilled from in-memory assets or aborted; no HTTP listener, hosted site, app server, auth, database or network access",
+  "mode": "hydrate",
+  "keyboardActivation": "Playwright page.keyboard.press Enter; no option-click fallback",
+  "motionRuns": [
+    {
+      "mode": "hydrate",
+      "motion": "no-preference",
+      "checks": [
+        "Without JavaScript, all eight server-rendered native controls remain visible and required validation blocks submission",
+        "Browser media preference is no-preference; existing Studio CSS is loaded",
+        "Server-rendered native controls hydrate to shared Select without mismatches",
+        "Visible label click focuses shared trigger without opening native picker",
+        "Tab order visits only visible shared controls in the original order",
+        "Required blank exists as an empty FormData entry, but browser validation prevents a successful submit and focuses the first invalid trigger",
+        "Actual browser End/ArrowDown/Enter skips disabled options and disabled optgroups, then commits Card without an option-click fallback",
+        "Successful submission contains exactly one value per enabled control, including the optional blank and external form control",
+        "A directly disabled required blank is omitted and does not block a valid submission",
+        "Selecting an optional blank with real Home/Enter submits its name with an empty string rather than omitting it",
+        "A disabled fieldset omits its ordinary control while its first-legend control stays enabled and submits",
+        "Re-selecting a required blank with real Home/Enter again blocks submission and preserves the previous successful payload",
+        "Native reset restores uncontrolled defaults and controlled native browser reset behavior",
+        "Escape closes popup and restores focus",
+        "All five option activations originate from trusted browser Enter key events, with no harness option click"
+      ],
+      "submissions": {
+        "initialRawFormData": [
+          [
+            "first",
+            ""
+          ],
+          [
+            "second",
+            ""
+          ],
+          [
+            "controlled",
+            "b"
+          ],
+          [
+            "legend",
+            "legend-on"
+          ],
+          [
+            "optional",
+            "yes"
+          ],
+          [
+            "blank",
+            ""
+          ],
+          [
+            "external",
+            "outside"
+          ]
+        ],
+        "requiredBlank": {
+          "rawFormDataIncludesEmptyString": true,
+          "successfulSubmitEvents": 0
+        },
+        "valid": [
+          [
+            "first",
+            "card"
+          ],
+          [
+            "second",
+            "south"
+          ],
+          [
+            "controlled",
+            "b"
+          ],
+          [
+            "legend",
+            "legend-on"
+          ],
+          [
+            "optional",
+            "yes"
+          ],
+          [
+            "blank",
+            ""
+          ],
+          [
+            "external",
+            "outside"
+          ]
+        ],
+        "optionalBlankAfterKeyboardSelection": [
+          [
+            "first",
+            "card"
+          ],
+          [
+            "second",
+            "south"
+          ],
+          [
+            "controlled",
+            "b"
+          ],
+          [
+            "legend",
+            "legend-on"
+          ],
+          [
+            "optional",
+            "yes"
+          ],
+          [
+            "blank",
+            ""
+          ],
+          [
+            "external",
+            "outside"
+          ]
+        ],
+        "disabledFieldset": [
+          [
+            "first",
+            "card"
+          ],
+          [
+            "second",
+            "south"
+          ],
+          [
+            "controlled",
+            "b"
+          ],
+          [
+            "legend",
+            "legend-on"
+          ],
+          [
+            "blank",
+            ""
+          ],
+          [
+            "external",
+            "outside"
+          ]
+        ]
+      },
+      "enterEvents": [
+        {
+          "key": "Enter",
+          "isTrusted": true,
+          "role": "option",
+          "text": "Card"
+        },
+        {
+          "key": "Enter",
+          "isTrusted": true,
+          "role": "option",
+          "text": "South branch"
+        },
+        {
+          "key": "Enter",
+          "isTrusted": true,
+          "role": "option",
+          "text": "A supplied value"
+        },
+        {
+          "key": "Enter",
+          "isTrusted": true,
+          "role": "option",
+          "text": "No optional value"
+        },
+        {
+          "key": "Enter",
+          "isTrusted": true,
+          "role": "option",
+          "text": "Choose a method"
+        }
+      ],
+      "errors": [],
+      "blockedRequests": [],
+      "passed": true
+    },
+    {
+      "mode": "hydrate",
+      "motion": "reduce",
+      "checks": [
+        "Without JavaScript, all eight server-rendered native controls remain visible and required validation blocks submission",
+        "Browser media preference is reduce; existing Studio CSS is loaded",
+        "Server-rendered native controls hydrate to shared Select without mismatches",
+        "Visible label click focuses shared trigger without opening native picker",
+        "Tab order visits only visible shared controls in the original order",
+        "Required blank exists as an empty FormData entry, but browser validation prevents a successful submit and focuses the first invalid trigger",
+        "Actual browser End/ArrowDown/Enter skips disabled options and disabled optgroups, then commits Card without an option-click fallback",
+        "Successful submission contains exactly one value per enabled control, including the optional blank and external form control",
+        "A directly disabled required blank is omitted and does not block a valid submission",
+        "Selecting an optional blank with real Home/Enter submits its name with an empty string rather than omitting it",
+        "A disabled fieldset omits its ordinary control while its first-legend control stays enabled and submits",
+        "Re-selecting a required blank with real Home/Enter again blocks submission and preserves the previous successful payload",
+        "Native reset restores uncontrolled defaults and controlled native browser reset behavior",
+        "Escape closes popup and restores focus",
+        "All five option activations originate from trusted browser Enter key events, with no harness option click"
+      ],
+      "submissions": {
+        "initialRawFormData": [
+          [
+            "first",
+            ""
+          ],
+          [
+            "second",
+            ""
+          ],
+          [
+            "controlled",
+            "b"
+          ],
+          [
+            "legend",
+            "legend-on"
+          ],
+          [
+            "optional",
+            "yes"
+          ],
+          [
+            "blank",
+            ""
+          ],
+          [
+            "external",
+            "outside"
+          ]
+        ],
+        "requiredBlank": {
+          "rawFormDataIncludesEmptyString": true,
+          "successfulSubmitEvents": 0
+        },
+        "valid": [
+          [
+            "first",
+            "card"
+          ],
+          [
+            "second",
+            "south"
+          ],
+          [
+            "controlled",
+            "b"
+          ],
+          [
+            "legend",
+            "legend-on"
+          ],
+          [
+            "optional",
+            "yes"
+          ],
+          [
+            "blank",
+            ""
+          ],
+          [
+            "external",
+            "outside"
+          ]
+        ],
+        "optionalBlankAfterKeyboardSelection": [
+          [
+            "first",
+            "card"
+          ],
+          [
+            "second",
+            "south"
+          ],
+          [
+            "controlled",
+            "b"
+          ],
+          [
+            "legend",
+            "legend-on"
+          ],
+          [
+            "optional",
+            "yes"
+          ],
+          [
+            "blank",
+            ""
+          ],
+          [
+            "external",
+            "outside"
+          ]
+        ],
+        "disabledFieldset": [
+          [
+            "first",
+            "card"
+          ],
+          [
+            "second",
+            "south"
+          ],
+          [
+            "controlled",
+            "b"
+          ],
+          [
+            "legend",
+            "legend-on"
+          ],
+          [
+            "blank",
+            ""
+          ],
+          [
+            "external",
+            "outside"
+          ]
+        ]
+      },
+      "enterEvents": [
+        {
+          "key": "Enter",
+          "isTrusted": true,
+          "role": "option",
+          "text": "Card"
+        },
+        {
+          "key": "Enter",
+          "isTrusted": true,
+          "role": "option",
+          "text": "South branch"
+        },
+        {
+          "key": "Enter",
+          "isTrusted": true,
+          "role": "option",
+          "text": "A supplied value"
+        },
+        {
+          "key": "Enter",
+          "isTrusted": true,
+          "role": "option",
+          "text": "No optional value"
+        },
+        {
+          "key": "Enter",
+          "isTrusted": true,
+          "role": "option",
+          "text": "Choose a method"
+        }
+      ],
+      "errors": [],
+      "blockedRequests": [],
+      "passed": true
+    }
+  ],
+  "checks": 30,
+  "passed": true
+}

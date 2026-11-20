@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -295,8 +296,8 @@ describe('DEV-942 prepaid tier upfront amount', () => {
         refundable={false}
       />
     );
-    const amount = screen.getByLabelText('Upfront amount (PKR)') as HTMLInputElement;
-    fireEvent.change(amount, { target: { value: input } });
+    const amount = screen.getByLabelText('Upfront amount (PKR)', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLInputElement;
+    fireEvent.change(selectFieldControl(amount), { target: { value: input } });
     fireEvent.submit(view.container.querySelector('form')!);
     return amount.value;
   }
@@ -321,11 +322,11 @@ describe('DEV-942 prepaid tier upfront amount', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(
       `Tier 1 upfront amount: ${MESSAGES.DECIMALS}`
     );
-    const amount = screen.getByLabelText('Upfront amount (PKR)');
-    fireEvent.change(amount, { target: { value: '12.34' } });
+    const amount = screen.getByLabelText('Upfront amount (PKR)', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    fireEvent.change(selectFieldControl(amount), { target: { value: '12.34' } });
     expect(screen.queryByRole('alert')).toBeNull();
     // Breaking it again after a refused save shows the new reason at once.
-    fireEvent.change(amount, { target: { value: '1e3' } });
+    fireEvent.change(selectFieldControl(amount), { target: { value: '1e3' } });
     expect(screen.getByRole('alert')).toHaveTextContent(
       `Tier 1 upfront amount: ${MESSAGES.FORMAT}`
     );
@@ -340,7 +341,7 @@ describe('DEV-942 prepaid tier upfront amount', () => {
         refundable={false}
       />
     );
-    fireEvent.change(screen.getByLabelText('Upfront amount (PKR)'), { target: { value: '1e3' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Upfront amount (PKR)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '1e3' } });
     expect(screen.queryByRole('alert')).toBeNull();
   });
 

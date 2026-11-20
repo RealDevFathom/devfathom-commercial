@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -75,7 +76,7 @@ describe('ProfileSection', () => {
     const edit = screen.getByRole('button', { name: 'Edit' });
     expect(edit).toBeDisabled();
     fireEvent.click(edit);
-    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
   });
 
   it('withholds Edit while the profile is still loading', () => {
@@ -89,9 +90,9 @@ describe('ProfileSection', () => {
     mocks.profile = { data: loaded, error: null, isLoading: false };
     render(<ProfileSection />);
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
-    const name = screen.getByLabelText('Name');
-    expect(name).toHaveValue('Hotel General Manager');
-    fireEvent.change(name, { target: { value: 'Hotel GM' } });
+    const name = screen.getByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    expect(selectFieldControl(name)).toHaveValue('Hotel General Manager');
+    fireEvent.change(selectFieldControl(name), { target: { value: 'Hotel GM' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(mocks.updateMutate).toHaveBeenCalledWith({
       name: 'Hotel GM',
@@ -115,6 +116,6 @@ describe('ProfileSection', () => {
         'Your profile was not saved. The HR module is not enabled for this organization.'
       )
     );
-    expect(screen.getByLabelText('Name')).toBeInTheDocument();
+    expect(screen.getByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeInTheDocument();
   });
 });

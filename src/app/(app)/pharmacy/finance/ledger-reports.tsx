@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';import type { ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
@@ -578,7 +578,7 @@ export async function LedgerReportsSection({
           ))}
           <label className="min-w-0 text-sm text-text-body">
             Margin grouping
-            <select
+            <StudioSelect
               name="ledgerBy"
               defaultValue={group}
               aria-invalid={!groupValid || undefined}
@@ -591,7 +591,7 @@ export async function LedgerReportsSection({
                   {groupLabels[value]}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <Button type="submit" variant="secondary" className="min-h-11 self-end">
             Apply ledger filters
@@ -786,7 +786,7 @@ export async function TrueProfitSection({
         )}
         <label className="min-w-0 text-sm text-text-body">
           Profit grouping
-          <select
+          <StudioSelect
             name="profitBy"
             defaultValue={group}
             aria-invalid={!groupValid || undefined}
@@ -799,7 +799,7 @@ export async function TrueProfitSection({
                 {profitGroupLabels[value]}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </label>
         <Button type="submit" variant="secondary" className="min-h-11 self-end">
           Apply profit grouping

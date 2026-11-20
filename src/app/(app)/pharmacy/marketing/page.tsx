@@ -1,4 +1,4 @@
-import { browserUuid } from '@/lib/browser-uuid';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';import { browserUuid } from '@/lib/browser-uuid';
 import { GrowthPanel } from './growth-panel';
 import { BasketPanel } from './basket-panel';
 import { ProfilePanel } from './profile-panel';
@@ -167,13 +167,13 @@ export default async function PharmacyMarketingPage({
         <form action="/pharmacy/marketing" className="flex flex-wrap items-end gap-4">
           <label className="min-w-0 flex-1 text-sm">
             Branch
-            <select className={control} name="branch" defaultValue={branchId}>
+            <StudioSelect className={control} name="branch" defaultValue={branchId}>
               {branches.map((branch) => (
                 <option key={branch.id} value={branch.id}>
                   {branch.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <Button type="submit" className="min-h-11">
             Open branch
@@ -299,12 +299,12 @@ export default async function PharmacyMarketingPage({
                 <input type="hidden" name="requestKey" value={browserUuid()} />
                 <label className="block text-sm">
                   Sandbox outcome
-                  <select name="outcome" className={control} defaultValue="DELIVERED">
+                  <StudioSelect name="outcome" className={control} defaultValue="DELIVERED">
                     <option value="DELIVERED">Accepted and delivered (simulated)</option>
                     <option value="REJECTED">Confirmed rejection</option>
                     <option value="TIMEOUT">Timeout — outcome unknown</option>
                     <option value="FAULT">Adapter fault — outcome unknown</option>
-                  </select>
+                  </StudioSelect>
                 </label>
                 <label className="flex items-start gap-2 text-sm">
                   <input
@@ -497,11 +497,11 @@ export default async function PharmacyMarketingPage({
               >
                 <label className="block text-sm">
                   Occasion
-                  <select className={control} name="occasion">
+                  <StudioSelect className={control} name="occasion">
                     <option value="WELCOME">Welcome</option>
                     <option value="STORE_UPDATE">Store update</option>
                     <option value="RETAIL_OFFER">Retail offer</option>
-                  </select>
+                  </StudioSelect>
                 </label>
                 <p className="text-sm text-text-muted">
                   Only this generic choice goes to the AI provider. Copy and review a suggestion
@@ -530,22 +530,22 @@ export default async function PharmacyMarketingPage({
             </label>
             <label className="block text-sm">
               Approved template
-              <select name="templateId" required className={control}>
+              <StudioSelect name="templateId" required className={control}>
                 {history.templates.map((template) => (
                   <option key={template.id} value={template.id}>
                     {template.name}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="block text-sm">
                 Retail rule
-                <select className={control} name="field">
+                <StudioSelect className={control} name="field">
                   <option value="receiptCount">Completed receipt count</option>
                   <option value="daysSinceLastReceipt">Days since last receipt</option>
                   <option value="churnScore">Churn score, 0–100 (nightly)</option>
-                </select>
+                </StudioSelect>
               </label>
               <label className="block text-sm">
                 At least

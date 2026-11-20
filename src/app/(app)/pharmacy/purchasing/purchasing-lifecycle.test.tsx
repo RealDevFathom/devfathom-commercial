@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { revalidatePath } from 'next/cache';
 import ReturnsPage from './returns/page';
 import { beforeEach, expect, it, vi } from 'vitest';
@@ -429,8 +430,8 @@ it('keeps a sibling supplier draft, caret, focus and selected record through aut
   const replace = vi.fn();
   vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test', replace } });
   const view = render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
-  const draft = screen.getByLabelText(/Trading name/) as HTMLInputElement;
-  fireEvent.change(draft, { target: { value: 'Unfinished supplier' } });
+  const draft = screen.getByLabelText(/Trading name/, { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLInputElement;
+  fireEvent.change(selectFieldControl(draft), { target: { value: 'Unfinished supplier' } });
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: 'Authorize this supplier' }));
   });
@@ -438,8 +439,8 @@ it('keeps a sibling supplier draft, caret, focus and selected record through aut
   draft.setSelectionRange(2, 8);
   list.mockResolvedValue([{ ...licensedSupplier, authorized: true }]);
   view.rerender(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
-  expect(screen.getByLabelText(/Trading name/)).toBe(draft);
-  expect(draft).toHaveValue('Unfinished supplier');
+  expect(screen.getByLabelText(/Trading name/, { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBe(draft);
+  expect(selectFieldControl(draft)).toHaveValue('Unfinished supplier');
   expect(draft).toHaveFocus();
   expect([draft.selectionStart, draft.selectionEnd]).toEqual([2, 8]);
   expect(screen.getByRole('link', { name: /Karachi Distributors.*Karachi South/ })).toHaveAttribute(
@@ -456,7 +457,7 @@ it('offers the validated new supplier destination without selecting it automatic
   const replace = vi.fn();
   vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test', replace } });
   render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
-  fireEvent.change(screen.getByLabelText(/Trading name/), { target: { value: 'New supplier' } });
+  fireEvent.change(selectFieldControl(screen.getByLabelText(/Trading name/, { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'New supplier' } });
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add supplier' }));
   });
@@ -612,7 +613,7 @@ it('makes Receiving Reverse a distinct operation after a confirmed Post', async 
   expect(reverseButton).toBeEnabled();
   expect(screen.getByRole('status')).toHaveTextContent('posted');
   expect(reverse).not.toHaveBeenCalled();
-  fireEvent.change(screen.getByLabelText(/Why is this being reversed/), {
+  fireEvent.change(selectFieldControl(screen.getByLabelText(/Why is this being reversed/, { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
     target: { value: 'Invoice correction' },
   });
   await act(async () => {
@@ -641,8 +642,8 @@ it('keeps Returns success and sibling credit draft when Submit becomes Dispatch'
   );
   vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test' } });
   const view = render(await ReturnsPage({ searchParams: params({ return: 'ret-1' }) }));
-  const draft = screen.getByLabelText(/Credit note reference/) as HTMLInputElement;
-  fireEvent.change(draft, { target: { value: 'Unsaved credit' } });
+  const draft = screen.getByLabelText(/Credit note reference/, { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLInputElement;
+  fireEvent.change(selectFieldControl(draft), { target: { value: 'Unsaved credit' } });
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: 'Submit and reserve the stock' }));
   });
@@ -660,7 +661,7 @@ it('keeps Returns success and sibling credit draft when Submit becomes Dispatch'
       '1 records excluded because scope or financial data could not be validated. Review source records before reconciliation.'
     )
   ).toHaveAttribute('role', 'status');
-  expect(draft).toHaveValue('Unsaved credit');
+  expect(selectFieldControl(draft)).toHaveValue('Unsaved credit');
   expect(draft).toHaveFocus();
   expect([draft.selectionStart, draft.selectionEnd]).toEqual([1, 5]);
   expect(write).toHaveBeenCalledOnce();
@@ -712,11 +713,11 @@ it('review: same allocation cannot repeat through the credit and debit-note form
   expect(buttons).toHaveLength(2);
   for (const button of buttons) {
     const form = button.closest('form')!;
-    fireEvent.change(form.querySelector('input[name="amountMinor"]')!, {
+    fireEvent.change(selectFieldControl(form.querySelector('input[name="amountMinor"]')!), {
       target: { value: '10.00' },
     });
     const select = form.querySelector('select')!;
-    fireEvent.change(select, {
+    fireEvent.change(selectFieldControl(select), {
       target: { value: select.name === 'supplierCreditId' ? 'cr-1' : 'dn-1' },
     });
   }
@@ -910,8 +911,8 @@ it.each(['pending', 'uncertain'] as const)(
     else write.mockRejectedValueOnce(new Error('unknown result'));
     allocationFixture(write);
     const view = render(await ReturnsPage({ searchParams: params({ return: 'ret-1' }) }));
-    const draft = screen.getByLabelText(/Credit note reference/) as HTMLInputElement;
-    fireEvent.change(draft, { target: { value: 'Unrelated credit draft' } });
+    const draft = screen.getByLabelText(/Credit note reference/, { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLInputElement;
+    fireEvent.change(selectFieldControl(draft), { target: { value: 'Unrelated credit draft' } });
     const first = allocationForm('credit', 'cr-1');
     const expected = prepareLiveAllocation(first, 'dn-1');
     await act(async () => {
@@ -947,8 +948,8 @@ it.each(['pending', 'uncertain'] as const)(
       debitNoteId: 'dn-2',
       amountMinor: 1000,
     });
-    expect(screen.getByLabelText(/Credit note reference/)).toBe(draft);
-    expect(draft).toHaveValue('Unrelated credit draft');
+    expect(screen.getByLabelText(/Credit note reference/, { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBe(draft);
+    expect(selectFieldControl(draft)).toHaveValue('Unrelated credit draft');
     if (phase === 'pending')
       await act(async () => {
         complete({});
@@ -990,12 +991,12 @@ it('collects a fresh independent witness when reversing a controlled receipt', a
     expect.objectContaining({ goodsReceiptId: receipt.id })
   );
   expect(postingWitnesses).not.toHaveBeenCalled();
-  fireEvent.change(screen.getByLabelText(/Why is this being reversed/), {
+  fireEvent.change(selectFieldControl(screen.getByLabelText(/Why is this being reversed/, { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
     target: { value: 'Wrong consignment' },
   });
-  fireEvent.change(screen.getByLabelText('Reversal witness'), { target: { value: 'fresh-staff' } });
-  fireEvent.change(screen.getByLabelText('PIN'), { target: { value: '1234' } });
-  expect(screen.getByLabelText('PIN')).toHaveAttribute('type', 'password');
+  fireEvent.change(selectFieldControl(screen.getByLabelText('Reversal witness', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'fresh-staff' } });
+  fireEvent.change(selectFieldControl(screen.getByLabelText('PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '1234' } });
+  expect(screen.getByLabelText('PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('type', 'password');
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reverse posting' }));
   });
@@ -1081,9 +1082,9 @@ it('allows a wholly quarantined controlled receipt to reverse without safety wit
   vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test' } });
   render(await ReceivingPage({ searchParams: params({ receipt: receipt.id }) }));
   expect(reversalWitnesses).not.toHaveBeenCalled();
-  expect(screen.queryByLabelText('Reversal witness')).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('Reversal witness', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Reverse posting' })).toBeEnabled();
-  fireEvent.change(screen.getByLabelText(/Why is this being reversed/), {
+  fireEvent.change(selectFieldControl(screen.getByLabelText(/Why is this being reversed/, { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
     target: { value: 'Wrong quarantined consignment' },
   });
   await act(async () => {

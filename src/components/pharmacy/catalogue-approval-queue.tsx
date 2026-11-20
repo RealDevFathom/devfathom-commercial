@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState } from 'react';
 import { trpc } from '@/lib/trpc';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
@@ -174,7 +176,7 @@ export function CatalogueApprovalQueue() {
           {search.data?.length ? (
             <label className="block max-w-sm space-y-2 text-sm">
               <span>Catalogue item</span>
-              <select
+              <StudioSelect
                 className="min-h-11 w-full rounded-sm border border-border bg-surface-card px-3 focus-visible:outline-ring"
                 required
                 value={medicineId}
@@ -186,7 +188,7 @@ export function CatalogueApprovalQueue() {
                     {item.productName}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
           ) : null}
           <label className="block max-w-sm space-y-2 text-sm">

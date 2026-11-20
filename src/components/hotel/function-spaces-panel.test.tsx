@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -182,16 +183,16 @@ describe('HotelFunctionSpacesPanel', () => {
   it('adds a space from one layouts line and rupee prices, in minor units, with the selection attached', () => {
     mount();
     const form = addForm();
-    fireEvent.change(within(form).getByLabelText('Space name'), {
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Space name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'Pearl Room' },
     });
-    fireEvent.change(within(form).getByLabelText('Layouts and capacities'), {
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Layouts and capacities', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'Boardroom 24, Classroom 40' },
     });
-    fireEvent.change(within(form).getByLabelText('Setup (min)'), { target: { value: '30' } });
-    fireEvent.change(within(form).getByLabelText('Teardown (min)'), { target: { value: '15' } });
-    fireEvent.change(within(form).getByLabelText('Hourly rate'), { target: { value: '12000.50' } });
-    fireEvent.change(within(form).getByLabelText('Minimum spend'), { target: { value: '100000' } });
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Setup (min)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '30' } });
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Teardown (min)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '15' } });
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Hourly rate', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '12000.50' } });
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Minimum spend', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '100000' } });
     fireEvent.submit(form);
     expect(h.mutate.create).toHaveBeenCalledWith({
       branchId: 'branch',
@@ -215,10 +216,10 @@ describe('HotelFunctionSpacesPanel', () => {
   it('lands server field errors under their inputs and announces a save', async () => {
     mount();
     const form = addForm();
-    fireEvent.change(within(form).getByLabelText('Space name'), {
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Space name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'Crystal Hall' },
     });
-    fireEvent.change(within(form).getByLabelText('Layouts and capacities'), {
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Layouts and capacities', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'Theatre 300' },
     });
     fireEvent.submit(form);
@@ -229,9 +230,9 @@ describe('HotelFunctionSpacesPanel', () => {
         })
       );
     });
-    const name = within(form).getByLabelText('Space name');
+    const name = within(form).getByLabelText('Space name', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
     expect(name).toHaveAttribute('aria-invalid', 'true');
-    expect(name).toHaveValue('Crystal Hall');
+    expect(selectFieldControl(name)).toHaveValue('Crystal Hall');
     expect(within(form).getByRole('alert')).toHaveTextContent('already has a function space');
     act(() => {
       h.hookCallbacks.create!.onError!(
@@ -240,7 +241,7 @@ describe('HotelFunctionSpacesPanel', () => {
         })
       );
     });
-    expect(within(form).getByLabelText('Layouts and capacities')).toHaveAttribute(
+    expect(within(form).getByLabelText('Layouts and capacities', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute(
       'aria-invalid',
       'true'
     );
@@ -248,7 +249,7 @@ describe('HotelFunctionSpacesPanel', () => {
       h.hookCallbacks.create!.onSuccess!({ space: { ...crystal, name: 'Pearl Room' } }, undefined);
     });
     expect(screen.getByRole('status')).toHaveTextContent('Pearl Room is now a function space.');
-    expect(within(addForm()).getByLabelText('Space name')).toHaveValue('');
+    expect(selectFieldControl(within(addForm()).getByLabelText('Space name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
     expect(h.fetchList).toHaveBeenCalledWith({ branchId: 'branch' }, { staleTime: 0 });
   });
 
@@ -258,16 +259,16 @@ describe('HotelFunctionSpacesPanel', () => {
     fireEvent.click(book);
     expect(book).toHaveAttribute('aria-expanded', 'true');
     const form = screen.getByRole('form', { name: 'Book Crystal Hall' });
-    expect(within(form).getByLabelText('What for')).toHaveFocus();
+    expect(within(form).getByLabelText('What for', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveFocus();
     expect(within(form).getByText(/90 minutes before and 60 after/)).toBeInTheDocument();
-    fireEvent.change(within(form).getByLabelText('What for'), {
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('What for', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'Board meeting' },
     });
-    fireEvent.change(within(form).getByLabelText('Claim'), { target: { value: 'FUNCTION' } });
-    fireEvent.change(within(form).getByLabelText('From'), {
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Claim', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'FUNCTION' } });
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('From', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: '2026-10-03T19:00' },
     });
-    fireEvent.change(within(form).getByLabelText('Until'), {
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Until', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: '2026-10-03T23:00' },
     });
     fireEvent.submit(form);
@@ -291,9 +292,9 @@ describe('HotelFunctionSpacesPanel', () => {
         })
       );
     });
-    expect(within(form).getByLabelText('From')).toHaveAttribute('aria-invalid', 'true');
+    expect(within(form).getByLabelText('From', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('aria-invalid', 'true');
     expect(within(form).getByRole('alert')).toHaveTextContent('next free at');
-    expect(within(form).getByLabelText('What for')).toHaveValue('Board meeting');
+    expect(selectFieldControl(within(form).getByLabelText('What for', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Board meeting');
     await act(async () => {
       lastCallbacks('hold').onSuccess!({ booking: walima }, undefined);
     });
@@ -306,16 +307,16 @@ describe('HotelFunctionSpacesPanel', () => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'Book Crystal Hall' }));
     const form = screen.getByRole('form', { name: 'Book Crystal Hall' });
-    fireEvent.change(within(form).getByLabelText('What for'), { target: { value: 'Late night' } });
-    fireEvent.change(within(form).getByLabelText('From'), {
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('What for', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Late night' } });
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('From', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: '2026-10-03T23:00' },
     });
-    fireEvent.change(within(form).getByLabelText('Until'), {
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Until', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: '2026-10-03T19:00' },
     });
     fireEvent.submit(form);
     expect(h.mutate.hold).not.toHaveBeenCalled();
-    expect(within(form).getByLabelText('Until')).toHaveAttribute('aria-invalid', 'true');
+    expect(within(form).getByLabelText('Until', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('aria-invalid', 'true');
     expect(within(form).getByRole('alert')).toHaveTextContent('ends after it starts');
   });
 
@@ -324,13 +325,13 @@ describe('HotelFunctionSpacesPanel', () => {
     const edit = screen.getByRole('button', { name: 'Edit Crystal Hall' });
     fireEvent.click(edit);
     const form = screen.getByRole('form', { name: 'Edit Crystal Hall' });
-    expect(within(form).getByLabelText('Space name')).toHaveFocus();
-    expect(within(form).getByLabelText('Layouts and capacities')).toHaveValue(
+    expect(within(form).getByLabelText('Space name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveFocus();
+    expect(selectFieldControl(within(form).getByLabelText('Layouts and capacities', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(
       'Theatre 300, Banquet 220'
     );
-    expect(within(form).getByLabelText('Hourly rate')).toHaveValue(45000);
+    expect(selectFieldControl(within(form).getByLabelText('Hourly rate', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(45000);
     expect(within(addForm()).getByRole('button', { name: 'Add space' })).toBeDisabled();
-    fireEvent.change(within(form).getByLabelText('Setup (min)'), { target: { value: '120' } });
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Setup (min)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '120' } });
     fireEvent.submit(form);
     expect(h.mutate.update).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -354,8 +355,8 @@ describe('HotelFunctionSpacesPanel', () => {
         })
       );
     });
-    expect(within(form).getByLabelText('Setup (min)')).toHaveAttribute('aria-invalid', 'true');
-    expect(within(form).getByLabelText('Setup (min)')).toHaveValue(120);
+    expect(within(form).getByLabelText('Setup (min)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('aria-invalid', 'true');
+    expect(selectFieldControl(within(form).getByLabelText('Setup (min)', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(120);
     fireEvent.keyDown(form, { key: 'Escape' });
     expect(screen.queryByRole('form', { name: 'Edit Crystal Hall' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Edit Crystal Hall' })).toHaveFocus();

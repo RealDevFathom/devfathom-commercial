@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';import type { Metadata } from 'next';
 import { TRPCError } from '@trpc/server';
 
 import { HotelInventoryPanel } from '@/components/hotel/inventory-panel';
@@ -124,7 +124,7 @@ export default async function HotelRoomsSettingsPage({
                 <label htmlFor="rooms-property" className="block text-sm font-semibold">
                   Property
                 </label>
-                <select
+                <StudioSelect
                   id="rooms-property"
                   name="branchId"
                   defaultValue=""
@@ -139,7 +139,7 @@ export default async function HotelRoomsSettingsPage({
                       {property.name}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </div>
               <button type="submit" className={buttonVariants({ className: 'min-h-11' })}>
                 Open rooms

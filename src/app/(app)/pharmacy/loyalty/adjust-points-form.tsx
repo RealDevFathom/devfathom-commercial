@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useActionState, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -38,14 +40,14 @@ export function AdjustPointsForm({
       <div className="flex flex-wrap items-end gap-3">
         <label className="grid w-full gap-2 text-sm sm:w-40">
           Adjustment
-          <select
+          <StudioSelect
             name="direction"
             defaultValue="add"
             className="min-h-11 rounded-sm border border-border bg-surface-card px-3 focus-visible:outline-2 focus-visible:outline-ring"
           >
             <option value="add">Add points</option>
             <option value="remove">Remove points</option>
-          </select>
+          </StudioSelect>
         </label>
         <label className="grid w-full gap-2 text-sm sm:w-40">
           Number of points

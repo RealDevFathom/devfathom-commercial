@@ -1,0 +1,20 @@
+after-restaurant-staff-375-light-no-preference: layout ok, 0 console errors
+after-restaurant-staff-768-light-no-preference: layout ok, 0 console errors
+after-restaurant-staff-1024-light-no-preference: layout ok, 0 console errors
+after-restaurant-staff-1440-light-no-preference: layout ok, 0 console errors
+after-restaurant-staff-375-light-reduce: layout ok, 0 console errors
+after-restaurant-staff-768-light-reduce: layout ok, 0 console errors
+after-restaurant-staff-1024-light-reduce: layout ok, 0 console errors
+after-restaurant-staff-1440-light-reduce: layout ok, 0 console errors
+after-restaurant-staff-375-dark-no-preference: layout ok, 0 console errors
+after-restaurant-staff-768-dark-no-preference: layout ok, 0 console errors
+after-restaurant-staff-1024-dark-no-preference: layout ok, 0 console errors
+after-restaurant-staff-1440-dark-no-preference: layout ok, 0 console errors
+after-restaurant-staff-375-dark-reduce: layout ok, 0 console errors
+after-restaurant-staff-768-dark-reduce: layout ok, 0 console errors
+after-restaurant-staff-1024-dark-reduce: layout ok, 0 console errors
+after-restaurant-staff-1440-dark-reduce: layout ok, 0 console errors
+{
+  "screenshots": 16,
+  "failures": []
+}

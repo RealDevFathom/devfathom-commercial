@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { authenticatorQrPath } from '@/components/ui/authenticator-qr';
@@ -88,29 +89,29 @@ describe('DEV-48 settings security', () => {
   it('shows every shared password requirement before typing and keeps them after clearing', () => {
     render(<SettingsContent />);
     for (const rule of passwordRules) expect(screen.getByText(rule.label)).toBeVisible();
-    const password = screen.getByLabelText('New Password');
+    const password = screen.getByLabelText('New Password', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
     expect(password).toHaveAccessibleDescription(/At least 8 characters/);
-    fireEvent.change(password, { target: { value: 'ValidPass1' } });
+    fireEvent.change(selectFieldControl(password), { target: { value: 'ValidPass1' } });
     expect(screen.getAllByText('Met:', { exact: false })).toHaveLength(passwordRules.length);
-    fireEvent.change(password, { target: { value: '' } });
+    fireEvent.change(selectFieldControl(password), { target: { value: '' } });
     for (const rule of passwordRules) expect(screen.getByText(rule.label)).toBeVisible();
   });
 
   it('keeps policy and matching-password checks before saving', () => {
     render(<SettingsContent />);
-    fireEvent.change(screen.getByLabelText('Current Password'), {
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Current Password', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'CurrentPass1' },
     });
-    fireEvent.change(screen.getByLabelText('New Password'), { target: { value: 'weak' } });
-    fireEvent.change(screen.getByLabelText('Confirm'), { target: { value: 'weak' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('New Password', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'weak' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Confirm', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'weak' } });
     fireEvent.click(screen.getByRole('button', { name: 'Change Password' }));
     expect(mocks.passwordSave).not.toHaveBeenCalled();
     expect(screen.getByText(/does not meet all the requirements/)).toBeVisible();
-    fireEvent.change(screen.getByLabelText('New Password'), { target: { value: 'ValidPass1' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('New Password', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'ValidPass1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Change Password' }));
     expect(mocks.passwordSave).not.toHaveBeenCalled();
     expect(screen.getByText('Passwords do not match')).toBeVisible();
-    fireEvent.change(screen.getByLabelText('Confirm'), { target: { value: 'ValidPass1' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Confirm', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'ValidPass1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Change Password' }));
     expect(mocks.passwordSave).toHaveBeenCalledWith({
       currentPassword: 'CurrentPass1',
@@ -183,7 +184,7 @@ describe('DEV-48 settings security', () => {
       authenticatorQrPath('otpauth://totp/test').path
     );
     expect(steps).toHaveTextContent('scanning the QR code');
-    fireEvent.change(screen.getByLabelText('6-digit code from your app'), {
+    fireEvent.change(selectFieldControl(screen.getByLabelText('6-digit code from your app', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: '123456' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Verify & enable' }));

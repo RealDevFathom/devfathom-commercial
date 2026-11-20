@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -117,7 +118,7 @@ function view(templates = [row()], canApprove = true): View {
 const mount = (initial = view()) =>
   render(<HotelJourneyTemplatesEditor initial={initial} selection={selection} />);
 function change(label: string, value: string) {
-  fireEvent.change(screen.getByLabelText(label), { target: { value } });
+  fireEvent.change(selectFieldControl(screen.getByLabelText(label, { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value } });
 }
 function click(name: string) {
   fireEvent.click(screen.getByRole('button', { name }));
@@ -188,7 +189,7 @@ describe('guest message board', () => {
     mocks.session = { user: { id: 'someone-else', organizationId: 'org' } };
     mount();
     expect(screen.getByRole('heading', { name: 'Reload the guest messages' })).toBeInTheDocument();
-    expect(screen.queryByLabelText('Message')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Choose a property' })).toHaveAttribute(
       'href',
       '/hotel/settings/journey'
@@ -226,18 +227,18 @@ describe('guest message draft editing', () => {
         row({ status, version: 4, approvedByUserId: 'admin', approvedAt: at })
       );
       mount(view([original]));
-      expect(screen.getByLabelText('Message')).toHaveAttribute('readonly');
+      expect(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('readonly');
       expect(screen.queryByRole('button', { name: 'Save as a new draft' })).not.toBeInTheDocument();
       click('Create replacement draft');
       expect(mocks.save).not.toHaveBeenCalled();
-      expect(screen.getByLabelText('Message')).not.toHaveAttribute('readonly');
-      expect(screen.getByLabelText('Subject line')).toHaveValue(original.subject);
-      expect(screen.getByLabelText('Message')).toHaveValue(original.body);
+      expect(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toHaveAttribute('readonly');
+      expect(selectFieldControl(screen.getByLabelText('Subject line', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(original.subject);
+      expect(selectFieldControl(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(original.body);
       change('Message', 'Updated {{guest_name}}');
       click('View original version');
-      expect(screen.getByLabelText('Message')).toHaveValue(original.body);
+      expect(selectFieldControl(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(original.body);
       click('Create replacement draft');
-      expect(screen.getByLabelText('Message')).toHaveValue('Updated {{guest_name}}');
+      expect(selectFieldControl(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Updated {{guest_name}}');
       click('Save as a new draft');
       expect(mocks.save).toHaveBeenCalledExactlyOnceWith({
         branchId: 'branch',
@@ -274,13 +275,13 @@ describe('guest message draft editing', () => {
   it.each([false, true])('creates an Urdu SMS draft with an empty catalog: %s', (empty) => {
     mount(view(empty ? [] : [row()]));
     if (!empty) click('New draft');
-    expect(within(screen.getByLabelText('Journey moment')).getAllByRole('option')).toHaveLength(8);
-    expect(within(screen.getByLabelText('Channel')).getAllByRole('option')).toHaveLength(3);
-    expect(within(screen.getByLabelText('Language')).getAllByRole('option')).toHaveLength(2);
+    expect(within(selectFieldControl(screen.getByLabelText('Journey moment', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).getAllByRole('option', { hidden: true })).toHaveLength(8);
+    expect(within(selectFieldControl(screen.getByLabelText('Channel', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).getAllByRole('option', { hidden: true })).toHaveLength(3);
+    expect(within(selectFieldControl(screen.getByLabelText('Language', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).getAllByRole('option', { hidden: true })).toHaveLength(2);
     change('Journey moment', 'REVIEW_REQUEST');
     change('Channel', 'SMS');
     change('Language', 'UR');
-    expect(screen.getByLabelText('Message')).toHaveAttribute('dir', 'rtl');
+    expect(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('dir', 'rtl');
     expect(screen.getByText(/Available at this moment/)).toHaveTextContent('{{review_link}}');
     change('Message', 'شکریہ {{guest_name}}۔ {{review_link}}');
     click('Save draft');
@@ -303,8 +304,8 @@ describe('guest message draft editing', () => {
     change('Language', 'UR');
     change('Journey moment', 'INVOICE');
     change('Channel', 'EMAIL');
-    expect(screen.getByLabelText('Subject line')).toHaveValue('My subject');
-    expect(screen.getByLabelText('Message')).toHaveValue('My message');
+    expect(selectFieldControl(screen.getByLabelText('Subject line', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('My subject');
+    expect(selectFieldControl(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('My message');
   });
 
   it('preserves text across validation errors and selecting other versions', () => {
@@ -314,12 +315,12 @@ describe('guest message draft editing', () => {
     act(() =>
       mocks.callbacks.save.onError(refused('BAD_REQUEST', { body: ['Unknown placeholder'] }))
     );
-    expect(screen.getByLabelText('Message')).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('aria-invalid', 'true');
     expect(screen.getByRole('alert')).toHaveTextContent('Unknown placeholder');
-    expect(screen.getByLabelText('Message')).toHaveValue('My {{typo}}');
+    expect(selectFieldControl(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('My {{typo}}');
     fireEvent.click(screen.getByRole('button', { name: /version 2/ }));
     fireEvent.click(screen.getByRole('button', { name: /version 1/ }));
-    expect(screen.getByLabelText('Message')).toHaveValue('My {{typo}}');
+    expect(selectFieldControl(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('My {{typo}}');
   });
 
   it('keeps both subject and body after a mutation failure, and says a conflict kept them', async () => {
@@ -329,8 +330,8 @@ describe('guest message draft editing', () => {
     click('Save draft');
     act(() => mocks.callbacks.save.onError(new Error('Save unavailable')));
     expect(screen.getByRole('alert')).toHaveTextContent('Save unavailable');
-    expect(screen.getByLabelText('Subject line')).toHaveValue('Edited subject');
-    expect(screen.getByLabelText('Message')).toHaveValue('Edited body');
+    expect(selectFieldControl(screen.getByLabelText('Subject line', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Edited subject');
+    expect(selectFieldControl(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Edited body');
     expect(mocks.fetch).not.toHaveBeenCalled();
     await act(async () =>
       mocks.callbacks.save.onError(
@@ -340,7 +341,7 @@ describe('guest message draft editing', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(
       'This message changed while you were working. Your editor text has been kept.'
     );
-    expect(screen.getByLabelText('Message')).toHaveValue('Edited body');
+    expect(selectFieldControl(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Edited body');
     // A conflict means the list is out of date: it is reloaded past the cache.
     expect(mocks.fetch).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch' }, { staleTime: 0 });
   });
@@ -353,13 +354,13 @@ describe('guest message draft editing', () => {
     mocks.fetch.mockRejectedValueOnce(new Error('Offline'));
     await act(() => mocks.callbacks.save.onSuccess(saved));
     expect(screen.getByRole('alert')).toHaveTextContent('could not be refreshed');
-    expect(screen.getByLabelText('Message')).toHaveValue('Saved body');
+    expect(selectFieldControl(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Saved body');
     expect(screen.getByRole('button', { name: 'Save draft' })).toBeDisabled();
     change('Message', 'Further unsaved edits');
     mocks.fetch.mockResolvedValue(view([saved]));
     click('Retry refresh');
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
-    expect(screen.getByLabelText('Message')).toHaveValue('Further unsaved edits');
+    expect(selectFieldControl(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Further unsaved edits');
     expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled();
   });
 
@@ -377,12 +378,12 @@ describe('guest message draft editing', () => {
     });
     expect(screen.getByText('Refreshing message list…')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'New draft' })).toBeDisabled();
-    expect(screen.getByLabelText('Message')).toBeDisabled();
+    expect(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
     await act(async () => {
       finish(view());
       await completion;
     });
-    expect(screen.getByLabelText('Message')).not.toBeDisabled();
+    expect(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeDisabled();
   });
 
   it('keeps approval separate from unsaved copy and hides it from marketing', () => {
@@ -416,7 +417,7 @@ describe('guest message draft editing', () => {
         row({ status: 'APPROVED', approvedAt: at, approvedByUserId: 'admin' })
       )
     );
-    expect(screen.getByLabelText('Message')).toHaveAttribute('readonly');
+    expect(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('readonly');
     expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('could not be refreshed');
     mocks.fetch.mockResolvedValue(
@@ -466,8 +467,8 @@ describe('guest message review corrections', () => {
         )
       );
       expect(screen.getByRole('alert')).toHaveTextContent('This version was retired.');
-      expect(screen.getByLabelText('Subject line')).toHaveValue(original.subject);
-      expect(screen.getByLabelText('Message')).toHaveValue(original.body);
+      expect(selectFieldControl(screen.getByLabelText('Subject line', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(original.subject);
+      expect(selectFieldControl(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(original.body);
     }
   );
 
@@ -488,8 +489,8 @@ describe('guest message review corrections', () => {
     expect(alerts).toHaveLength(2);
     expect(alerts[0]).toHaveTextContent('Unknown placeholder');
     expect(alerts[1]).toHaveTextContent('Subject is not allowed. Context is missing.');
-    expect(screen.getByLabelText('Message')).toHaveAttribute('aria-invalid', 'true');
-    expect(screen.getByLabelText('Message')).toHaveValue('Kept text');
+    expect(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('aria-invalid', 'true');
+    expect(selectFieldControl(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Kept text');
   });
 
   it('falls back to the mutation error when validation contains no messages', () => {
@@ -521,11 +522,11 @@ describe('guest message review corrections', () => {
       change('Subject line', 'Kept draft subject');
       change('Message', 'Kept unsaved draft body');
       fireEvent.click(screen.getByRole('button', { name: /version 4/ }));
-      expect(screen.getByLabelText('Message')).toHaveValue(original.body);
+      expect(selectFieldControl(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(original.body);
       click('Open draft version 5');
       expect(mocks.save).not.toHaveBeenCalled();
-      expect(screen.getByLabelText('Subject line')).toHaveValue('Kept draft subject');
-      expect(screen.getByLabelText('Message')).toHaveValue('Kept unsaved draft body');
+      expect(selectFieldControl(screen.getByLabelText('Subject line', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Kept draft subject');
+      expect(selectFieldControl(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Kept unsaved draft body');
       expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled();
       click('Save draft');
       expect(mocks.save).toHaveBeenCalledExactlyOnceWith({
@@ -564,13 +565,13 @@ describe('guest message review corrections', () => {
     click('Retry refresh');
     await screen.findByRole('heading', { name: 'This version is no longer available' });
     click('Use kept text in a new draft');
-    expect(screen.getByLabelText('Journey moment')).toHaveValue('WELCOME');
-    expect(screen.getByLabelText('Channel')).toHaveValue('EMAIL');
-    expect(screen.getByLabelText('Language')).toHaveValue('UR');
-    expect(screen.getByLabelText('Subject line')).toHaveValue('محفوظ عنوان');
-    expect(screen.getByLabelText('Subject line')).toHaveAttribute('dir', 'rtl');
-    expect(screen.getByLabelText('Message')).toHaveValue('محفوظ پیغام {{guest_name}}');
-    expect(screen.getByLabelText('Message')).toHaveAttribute('dir', 'rtl');
+    expect(selectFieldControl(screen.getByLabelText('Journey moment', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('WELCOME');
+    expect(selectFieldControl(screen.getByLabelText('Channel', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('EMAIL');
+    expect(selectFieldControl(screen.getByLabelText('Language', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('UR');
+    expect(selectFieldControl(screen.getByLabelText('Subject line', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('محفوظ عنوان');
+    expect(screen.getByLabelText('Subject line', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('dir', 'rtl');
+    expect(selectFieldControl(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('محفوظ پیغام {{guest_name}}');
+    expect(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('dir', 'rtl');
     click('Save draft');
     expect(mocks.save).toHaveBeenLastCalledWith({
       branchId: 'branch',
@@ -589,9 +590,9 @@ describe('guest message review corrections', () => {
     mocks.fetch.mockResolvedValue(view([]));
     await act(() => mocks.callbacks.approve.onSuccess(row({ ...original, status: 'APPROVED' })));
     click('Use kept text in a new draft');
-    expect(screen.getByLabelText('Language')).toHaveValue('UR');
-    expect(screen.getByLabelText('Subject line')).toHaveValue(original.subject);
-    expect(screen.getByLabelText('Message')).toHaveValue(original.body);
+    expect(selectFieldControl(screen.getByLabelText('Language', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('UR');
+    expect(selectFieldControl(screen.getByLabelText('Subject line', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(original.subject);
+    expect(selectFieldControl(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(original.body);
     click('Save draft');
     expect(mocks.save).toHaveBeenCalledExactlyOnceWith({
       branchId: 'branch',
@@ -679,7 +680,7 @@ describe('guest message writes name the version the page read', () => {
       const saved = savedRegion();
       expect(saved).toBeInTheDocument();
       expect(within(saved!).getByText('Colleague {{guest_name}}')).toBeInTheDocument();
-      expect(screen.getByLabelText('Message')).toHaveValue('My edit {{guest_name}}');
+      expect(selectFieldControl(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('My edit {{guest_name}}');
       // Saving over words this page never showed is not offered.
       expect(screen.getByRole('button', { name: 'Save draft' })).toBeDisabled();
       expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled();
@@ -689,7 +690,7 @@ describe('guest message writes name the version the page read', () => {
       click(choice);
       expect(savedRegion()).not.toBeInTheDocument();
       if (choice === 'Keep my text') {
-        expect(screen.getByLabelText('Message')).toHaveValue('My edit {{guest_name}}');
+        expect(selectFieldControl(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('My edit {{guest_name}}');
         click('Save draft');
         expect(mocks.save).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
@@ -699,7 +700,7 @@ describe('guest message writes name the version the page read', () => {
           })
         );
       } else {
-        expect(screen.getByLabelText('Message')).toHaveValue('Colleague {{guest_name}}');
+        expect(selectFieldControl(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Colleague {{guest_name}}');
         click('Approve');
         expect(mocks.approve).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
@@ -723,7 +724,7 @@ describe('guest message writes name the version the page read', () => {
     expect(screen.getAllByRole('alert')[0]).toHaveTextContent(
       `${CHANGED} Your editor text has been kept.`
     );
-    expect(screen.getByLabelText('Message')).toHaveValue('My edit {{guest_name}}');
+    expect(selectFieldControl(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('My edit {{guest_name}}');
     expect(within(savedRegion()!).getByText('Colleague {{guest_name}}')).toBeInTheDocument();
   });
 
@@ -746,7 +747,7 @@ describe('guest message writes name the version the page read', () => {
       `${CHANGED} Nothing was approved. Read the current wording before approving it.`
     );
     // The words now shown are the stored ones, not the ones approved a moment ago.
-    expect(screen.getByLabelText('Message')).toHaveValue('Changed {{guest_name}}');
+    expect(selectFieldControl(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Changed {{guest_name}}');
     expect(savedRegion()).not.toBeInTheDocument();
     click('Approve');
     expect(mocks.approve).toHaveBeenLastCalledWith({
@@ -797,7 +798,7 @@ describe('guest message writes name the version the page read', () => {
     fireEvent.submit(screen.getByRole('form', { name: 'Guest message' }));
     expect(mocks.save).not.toHaveBeenCalled();
     // Submitting opened the draft, where its own words are on screen.
-    expect(screen.getByLabelText('Message')).toHaveValue('Existing draft {{guest_name}}');
+    expect(selectFieldControl(screen.getByLabelText('Message', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Existing draft {{guest_name}}');
     expect(screen.getByRole('button', { name: /^Opened/ })).toHaveAttribute('aria-current', 'true');
   });
 });
@@ -813,10 +814,10 @@ describe('guest message preview', () => {
     const preview = screen
       .getByRole('heading', { level: 2, name: 'Preview' })
       .closest<HTMLElement>('[data-slot="section-card"]')!;
-    expect(within(preview).getByLabelText('{{property_name}}')).toHaveValue('Fathom Grand');
-    expect(within(preview).getByLabelText('{{guest_name}}')).toHaveValue('Sara Khan');
-    expect(within(preview).getByLabelText('{{room_number}}')).toHaveValue('412');
-    fireEvent.change(within(preview).getByLabelText('{{guest_name}}'), {
+    expect(selectFieldControl(within(preview).getByLabelText('{{property_name}}', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Fathom Grand');
+    expect(selectFieldControl(within(preview).getByLabelText('{{guest_name}}', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Sara Khan');
+    expect(selectFieldControl(within(preview).getByLabelText('{{room_number}}', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('412');
+    fireEvent.change(selectFieldControl(within(preview).getByLabelText('{{guest_name}}', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'سارہ' },
     });
     mocks.preview.mockResolvedValue({

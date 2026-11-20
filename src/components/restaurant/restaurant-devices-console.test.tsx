@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -242,22 +243,22 @@ describe('Restaurant device security UI', () => {
     expect(screen.queryByText('device_1')).not.toBeInTheDocument();
     expect(screen.queryByText('branch_1')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Revoke POS-1' }));
-    const approvingStaff = screen.getByLabelText('Approving staff');
-    const reason = screen.getByLabelText('Reason');
+    const approvingStaff = screen.getByLabelText('Approving staff', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const reason = screen.getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
     expect(screen.getByText('Acting Admin')).toBeVisible();
-    fireEvent.change(approvingStaff, { target: { value: 'staff_2' } });
-    const approvingSecret = screen.getByLabelText('Approving PIN or badge secret');
-    fireEvent.change(approvingSecret, { target: { value: '482913' } });
-    fireEvent.change(reason, { target: { value: 'Lost terminal' } });
+    fireEvent.change(selectFieldControl(approvingStaff), { target: { value: 'staff_2' } });
+    const approvingSecret = screen.getByLabelText('Approving PIN or badge secret', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    fireEvent.change(selectFieldControl(approvingSecret), { target: { value: '482913' } });
+    fireEvent.change(selectFieldControl(reason), { target: { value: 'Lost terminal' } });
     fireEvent.click(screen.getByRole('button', { name: 'Confirm revocation' }));
 
-    expect(approvingSecret).toHaveValue('');
-    expect(approvingStaff).toHaveValue('staff_2');
-    expect(reason).toHaveValue('Lost terminal');
-    fireEvent.change(approvingSecret, { target: { value: '482913' } });
+    expect(selectFieldControl(approvingSecret)).toHaveValue('');
+    expect(selectFieldControl(approvingStaff)).toHaveValue('staff_2');
+    expect(selectFieldControl(reason)).toHaveValue('Lost terminal');
+    fireEvent.change(selectFieldControl(approvingSecret), { target: { value: '482913' } });
     fireEvent.click(screen.getByRole('button', { name: 'Confirm revocation' }));
 
-    expect(approvingSecret).toHaveValue('');
+    expect(selectFieldControl(approvingSecret)).toHaveValue('');
     expect(mocks.revokeMutate).toHaveBeenCalledWith(
       {
         deviceId: 'device_1',
@@ -273,8 +274,8 @@ describe('Restaurant device security UI', () => {
 
     renderConsole(true);
     fireEvent.click(screen.getByRole('button', { name: 'Enroll device' }));
-    fireEvent.change(screen.getByLabelText('Device name'), { target: { value: 'Expo terminal' } });
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Device name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Expo terminal' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'branch_1' } });
     const confirmation = screen.getByRole('checkbox', {
       name: /sign out of administration and open only as this terminal/,
     });
@@ -348,12 +349,12 @@ describe('Restaurant device security UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Rotate secret' }));
     expect(screen.getByRole('heading', { name: 'Rotate Kitchen display?' })).toBeInTheDocument();
     expect(screen.getByText(/current secret stops working immediately/i)).toBeVisible();
-    expect(screen.queryByLabelText('Acting staff')).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Approving staff'), { target: { value: 'staff_2' } });
-    fireEvent.change(screen.getByLabelText('Approving PIN or badge secret'), {
+    expect(screen.queryByLabelText('Acting staff', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Approving staff', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'staff_2' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Approving PIN or badge secret', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: '482913' },
     });
-    fireEvent.change(screen.getByLabelText('Reason'), {
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'Scheduled rotation' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Confirm rotation' }));
@@ -370,7 +371,7 @@ describe('Restaurant device security UI', () => {
     );
 
     expect(screen.getByRole('heading', { name: 'New secret for Kitchen display' })).toBeVisible();
-    expect(screen.getByLabelText('One-time device secret')).toHaveValue('rdk_rotated_once');
+    expect(selectFieldControl(screen.getByLabelText('One-time device secret', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('rdk_rotated_once');
     expect(screen.getByRole('status')).toHaveTextContent(/only time DevFathom will show/i);
     fireEvent.click(screen.getByRole('button', { name: 'Copy secret' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('rdk_rotated_once'));
@@ -444,8 +445,8 @@ describe('Restaurant device security UI', () => {
   function openKdsEnrollment() {
     renderConsole(true);
     fireEvent.click(screen.getByRole('button', { name: 'Enroll device' }));
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
-    fireEvent.change(screen.getByLabelText('Device kind'), { target: { value: 'KDS' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'branch_1' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Device kind', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'KDS' } });
   }
 
   it('shows the station field only for a kitchen display', () => {
@@ -455,7 +456,7 @@ describe('Restaurant device security UI', () => {
     // A POS register has no station to pick, so the field must not be there at
     // all — not merely disabled.
     expect(screen.queryByText('KDS station')).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Device kind'), { target: { value: 'KDS' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Device kind', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'KDS' } });
     expect(screen.getByText('KDS station')).toBeInTheDocument();
   });
 
@@ -487,7 +488,7 @@ describe('Restaurant device security UI', () => {
       })
     );
 
-    expect(screen.getByRole('combobox', { name: 'KDS station' })).toHaveValue('station_new');
+    expect(selectFieldControl(screen.getByRole('combobox', { name: 'KDS station' }))).toHaveValue('station_new');
   });
 
   it('says the POS module is missing rather than claiming the branch has no station', () => {
@@ -523,7 +524,7 @@ describe('Restaurant device security UI', () => {
     );
     expect(select).toHaveAttribute('aria-invalid', 'true');
 
-    fireEvent.change(select, { target: { value: 'station_grill' } });
+    fireEvent.change(selectFieldControl(select), { target: { value: 'station_grill' } });
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useMemo, useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -130,7 +132,7 @@ export function RestaurantCameraWizard({
       {branches.length > 1 && (
         <label className="mb-4 block text-sm font-medium text-text-strong">
           Branch
-          <select
+          <StudioSelect
             name="branchId"
             form="camera-wizard"
             className={field}
@@ -149,7 +151,7 @@ export function RestaurantCameraWizard({
                 {branch.name}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </label>
       )}
       {branches.length === 1 && (
@@ -206,14 +208,14 @@ export function RestaurantCameraWizard({
           </label>
           <label className="text-sm font-medium text-text-strong">
             Watches
-            <select name="preset" className={field} defaultValue="">
+            <StudioSelect name="preset" className={field} defaultValue="">
               <option value="">Not set</option>
               {VERTICAL_CAMERA_PRESETS.restaurant.map((preset) => (
                 <option key={preset} value={preset}>
                   {CAMERA_PRESET_LABELS[preset]}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <div className="text-sm font-medium text-text-strong">
             <span>Camera gateway</span>

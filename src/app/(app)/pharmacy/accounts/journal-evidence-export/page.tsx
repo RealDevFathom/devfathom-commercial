@@ -1,4 +1,4 @@
-import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/plain-language';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/plain-language';
 import { ReportDetails } from '@/components/pharmacy/report-details';
 import type { Metadata } from 'next';
 import { can, subjectFromSession } from '@/lib/abac';
@@ -174,7 +174,7 @@ export default async function JournalEvidenceExportPage({
         <form action={ROUTE} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <label className="grid gap-2 text-sm">
             {screenCopy.journalExport.branch}
-            <select
+            <StudioSelect
               name="branch"
               defaultValue={branches.some((branch) => branch.id === branchId) ? branchId : ''}
               className="min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -187,7 +187,7 @@ export default async function JournalEvidenceExportPage({
                   {branch.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <label className="grid gap-2 text-sm">
             {screenCopy.journalExport.fromMidnight}

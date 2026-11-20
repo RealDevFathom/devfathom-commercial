@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
@@ -299,13 +299,13 @@ export default async function PharmacyTransfersPage({
         <form className="flex flex-wrap items-end gap-3" method="get">
           <label className="min-w-64 flex-1 text-sm text-text-body">
             Branch
-            <select className={selectClass} defaultValue={branch.id} name="branch">
+            <StudioSelect className={selectClass} defaultValue={branch.id} name="branch">
               {workingBranches.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name} · {item.city}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <Button type="submit" variant="secondary">
             Open branch

@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { type FormEvent, useCallback, useEffect, useState } from 'react';
 
 import {
@@ -194,7 +196,7 @@ function CompControl({
           <div className="my-4 space-y-3">
             <div className="space-y-1.5">
               <Label htmlFor={`comp-line-${billId}`}>Bill item</Label>
-              <select
+              <StudioSelect
                 id={`comp-line-${billId}`}
                 required
                 value={lineId}
@@ -207,7 +209,7 @@ function CompControl({
                     {optionLabels.get(line.id)}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor={`comp-reason-${billId}`}>Comp reason</Label>

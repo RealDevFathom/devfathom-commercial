@@ -1,0 +1,1389 @@
+{
+  "baseline": "002b84ee1ca72880cee1f0ffebf4cdd79d343236",
+  "phase": "before",
+  "capturedAt": "2026-11-20T20:04:22.153Z",
+  "fixtureScope": "Actual isolated components; route integration, auth, and database workflows are not exercised.",
+  "results": [
+    {
+      "key": "before-restaurant-catalog-768-light-no-preference",
+      "screen": "restaurant-catalog",
+      "width": 768,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "controls": [],
+      "errors": [
+        "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-catalog-1024-light-no-preference",
+      "screen": "restaurant-catalog",
+      "width": 1024,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 1024,
+      "viewportWidth": 1024,
+      "controls": [],
+      "errors": [
+        "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-catalog-1440-light-no-preference",
+      "screen": "restaurant-catalog",
+      "width": 1440,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "controls": [],
+      "errors": [
+        "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-catalog-375-dark-no-preference",
+      "screen": "restaurant-catalog",
+      "width": 375,
+      "theme": "dark",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [],
+      "errors": [
+        "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-catalog-768-dark-no-preference",
+      "screen": "restaurant-catalog",
+      "width": 768,
+      "theme": "dark",
+      "reducedMotion": "no-preference",
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "controls": [],
+      "errors": [
+        "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-catalog-1024-dark-no-preference",
+      "screen": "restaurant-catalog",
+      "width": 1024,
+      "theme": "dark",
+      "reducedMotion": "no-preference",
+      "documentWidth": 1024,
+      "viewportWidth": 1024,
+      "controls": [],
+      "errors": [
+        "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-catalog-1440-dark-no-preference",
+      "screen": "restaurant-catalog",
+      "width": 1440,
+      "theme": "dark",
+      "reducedMotion": "no-preference",
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "controls": [],
+      "errors": [
+        "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-menus-768-light-no-preference",
+      "screen": "restaurant-menus",
+      "width": 768,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "controls": [],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-menus-1024-light-no-preference",
+      "screen": "restaurant-menus",
+      "width": 1024,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 1024,
+      "viewportWidth": 1024,
+      "controls": [],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-menus-1440-light-no-preference",
+      "screen": "restaurant-menus",
+      "width": 1440,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "controls": [],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-menus-375-dark-no-preference",
+      "screen": "restaurant-menus",
+      "width": 375,
+      "theme": "dark",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-menus-768-dark-no-preference",
+      "screen": "restaurant-menus",
+      "width": 768,
+      "theme": "dark",
+      "reducedMotion": "no-preference",
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "controls": [],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-menus-1024-dark-no-preference",
+      "screen": "restaurant-menus",
+      "width": 1024,
+      "theme": "dark",
+      "reducedMotion": "no-preference",
+      "documentWidth": 1024,
+      "viewportWidth": 1024,
+      "controls": [],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-menus-1440-dark-no-preference",
+      "screen": "restaurant-menus",
+      "width": 1440,
+      "theme": "dark",
+      "reducedMotion": "no-preference",
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "controls": [],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-catalog-375-light-no-preference",
+      "screen": "restaurant-catalog",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "Product typeItemCombo",
+          "height": 42.28582763671875,
+          "width": 298.88397216796875,
+          "disabled": false
+        },
+        {
+          "label": "CategoryUncategorized",
+          "height": 42.285858154296875,
+          "width": 298.88397216796875,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-menus-375-light-no-preference",
+      "screen": "restaurant-menus",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "BrandExample kitchen",
+          "height": 43.963714599609375,
+          "width": 310.74365234375,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-staff-375-light-no-preference",
+      "screen": "restaurant-staff",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "StatusAll statusesACTIVESUSPENDEDARCHIVED",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Branch",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Organization user",
+          "height": 43.56646728515625,
+          "width": 307.93572998046875,
+          "disabled": false
+        },
+        {
+          "label": "Branch",
+          "height": 43.56646728515625,
+          "width": 307.93572998046875,
+          "disabled": false
+        },
+        {
+          "label": "StatusACTIVESUSPENDEDARCHIVED",
+          "height": 43.56646728515625,
+          "width": 307.93572998046875,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-roster-375-light-no-preference",
+      "screen": "restaurant-roster",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "Branch",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-pharmacy-dispensing-375-light-no-preference",
+      "screen": "pharmacy-dispensing",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "Supplied presentationSelect supplied presentationExample supplied tablets 500 mg · pack of 20Example supplied tablets 500 mg · pack of 10",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-pharmacy-transfers-375-light-no-preference",
+      "screen": "pharmacy-transfers",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "WitnessNo shortfallAmina Example · PharmacistBilal Example · Store manager",
+          "height": 44,
+          "width": 277,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-hotel-meal-plans-375-light-no-preference",
+      "screen": "hotel-meal-plans",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "Basis",
+          "height": 44,
+          "width": 275,
+          "disabled": false
+        },
+        {
+          "label": "Basis",
+          "height": 44,
+          "width": 275,
+          "disabled": true
+        },
+        {
+          "label": "Basis",
+          "height": 44,
+          "width": 275,
+          "disabled": true
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-pharmacy-expiry-375-light-no-preference",
+      "screen": "pharmacy-expiry",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "Mark-down %10% off → PKR 135.0015% off → PKR 127.5020% off → PKR 120.0025% off → PKR 112.5030% off → PKR 105.0040% off → PKR 90.0050% off → PKR 75.00",
+          "height": 40,
+          "width": 209,
+          "disabled": false
+        },
+        {
+          "label": "Return supplierExample distributorSecond example distributor",
+          "height": 40,
+          "width": 209,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-workspace-chat-375-light-no-preference",
+      "screen": "workspace-chat",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "",
+          "height": 32,
+          "width": 256.5625,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-workspace-clients-375-light-no-preference",
+      "screen": "workspace-clients",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 581,
+      "viewportWidth": 375,
+      "controls": [],
+      "errors": [],
+      "overflow": true
+    },
+    {
+      "key": "before-workspace-finance-375-light-no-preference",
+      "screen": "workspace-finance",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "",
+          "height": 38,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "",
+          "height": 38,
+          "width": 301,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-workspace-hr-375-light-no-preference",
+      "screen": "workspace-hr",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 389,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "",
+          "height": 38,
+          "width": 224,
+          "disabled": false
+        },
+        {
+          "label": "",
+          "height": 38,
+          "width": 79,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": true
+    },
+    {
+      "key": "before-workspace-reviews-375-light-no-preference",
+      "screen": "workspace-reviews",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "",
+          "height": 38,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "",
+          "height": 38,
+          "width": 301,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-workspace-email-375-light-no-preference",
+      "screen": "workspace-email",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "",
+          "height": 37.625091552734375,
+          "width": 307.93170166015625,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-workspace-settings-375-light-no-preference",
+      "screen": "workspace-settings",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "Token acts as",
+          "height": 38,
+          "width": 267,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-workspace-projects-375-light-no-preference",
+      "screen": "workspace-projects",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "Sort projects",
+          "height": 40,
+          "width": 120,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-workspace-audit-375-light-no-preference",
+      "screen": "workspace-audit",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "",
+          "height": 31,
+          "width": 151,
+          "disabled": false
+        },
+        {
+          "label": "",
+          "height": 31,
+          "width": 117,
+          "disabled": false
+        },
+        {
+          "label": "",
+          "height": 31,
+          "width": 101,
+          "disabled": false
+        },
+        {
+          "label": "",
+          "height": 31,
+          "width": 115,
+          "disabled": false
+        },
+        {
+          "label": "Actor",
+          "height": 31,
+          "width": 137,
+          "disabled": false
+        },
+        {
+          "label": "Branch",
+          "height": 31,
+          "width": 153,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-workspace-organization-375-light-no-preference",
+      "screen": "workspace-organization",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "System roleADMINHREMPLOYEE",
+          "height": 40,
+          "width": 269,
+          "disabled": false
+        },
+        {
+          "label": "DepartmentEngineeringDesign",
+          "height": 40,
+          "width": 269,
+          "disabled": false
+        },
+        {
+          "label": "Role templateNo custom roleProject lead",
+          "height": 40,
+          "width": 269,
+          "disabled": false
+        },
+        {
+          "label": "System roleADMINHREMPLOYEE",
+          "height": 40,
+          "width": 269,
+          "disabled": false
+        },
+        {
+          "label": "StatusACTIVEINACTIVEON_LEAVEINVITED",
+          "height": 40,
+          "width": 269,
+          "disabled": false
+        },
+        {
+          "label": "DepartmentEngineeringDesign",
+          "height": 40,
+          "width": 269,
+          "disabled": false
+        },
+        {
+          "label": "Custom roleNo custom roleProject lead",
+          "height": 40,
+          "width": 269,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-workspace-team-375-light-no-preference",
+      "screen": "workspace-team",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "Department",
+          "height": 42,
+          "width": 293,
+          "disabled": false
+        },
+        {
+          "label": "Workspace role",
+          "height": 42,
+          "width": 293,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-workspace-notes-375-light-no-preference",
+      "screen": "workspace-notes",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "",
+          "height": 31,
+          "width": 82,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-registration-hotel-375-light-no-preference",
+      "screen": "registration-hotel",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "How it operates",
+          "height": 48,
+          "width": 295,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-registration-pharmacy-375-light-no-preference",
+      "screen": "registration-pharmacy",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "Province",
+          "height": 48,
+          "width": 303,
+          "disabled": false
+        },
+        {
+          "label": "Licence category",
+          "height": 48,
+          "width": 303,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-registration-restaurant-375-light-no-preference",
+      "screen": "registration-restaurant",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "Branches",
+          "height": 48,
+          "width": 295,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-terminal-375-light-no-preference",
+      "screen": "restaurant-terminal",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "Operator",
+          "height": 44,
+          "width": 261,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-pharmacy-accounts-375-light-no-preference",
+      "screen": "pharmacy-accounts",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "CurrencyPKRUSD",
+          "height": 44,
+          "width": 96,
+          "disabled": false
+        },
+        {
+          "label": "InvoiceAP-0001 · Example distributor · INV-0001 · PKR 1250.00 outstandingAP-0002 · Second example distributor · INV-0002 · PKR 2750.00 outstanding",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Paid fromCashBank",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Credit noteCN-0001 · Example distributor · PKR 250.00 leftCN-0002 · Second example distributor · PKR 750.00 left",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Supplier billAP-0001 · Example distributor · INV-0001 · PKR 1250.00 outstandingAP-0002 · Second example distributor · INV-0002 · PKR 2750.00 outstanding",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-devices-375-light-no-preference",
+      "screen": "restaurant-devices",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "Inventory branch",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-promotions-375-light-no-preference",
+      "screen": "restaurant-promotions",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "TimezoneUTCAsia/Karachi",
+          "height": 43.9635009765625,
+          "width": 310.7420654296875,
+          "disabled": false
+        },
+        {
+          "label": "Benefit typePERCENT OFFAMOUNT OFFFIXED PRICEBUY X GET Y PERCENTBUY X GET Y AMOUNTBUY X GET Y FREEBUNDLE PRICE",
+          "height": 43.9635009765625,
+          "width": 310.7420654296875,
+          "disabled": false
+        },
+        {
+          "label": "Application basisOrderLineUnit",
+          "height": 43.96356201171875,
+          "width": 310.7420654296875,
+          "disabled": false
+        },
+        {
+          "label": "Target typeWhole orderSelected itemsSelected categories",
+          "height": 43.9635009765625,
+          "width": 310.7420654296875,
+          "disabled": false
+        },
+        {
+          "label": "BranchesGarden branchNo selection means every branch.",
+          "height": 89.9254150390625,
+          "width": 310.7420654296875,
+          "disabled": false
+        },
+        {
+          "label": "ChannelsDine inTakeawayDelivery",
+          "height": 89.92529296875,
+          "width": 310.7420654296875,
+          "disabled": false
+        },
+        {
+          "label": "Offline policyAvailable offlineOnline only",
+          "height": 43.9635009765625,
+          "width": 310.7420654296875,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-floor-375-light-no-preference",
+      "screen": "restaurant-floor",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "Branch",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-loyalty-375-light-no-preference",
+      "screen": "restaurant-loyalty",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "Filter by tagAll tags",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-pharmacy-regulatory-375-light-no-preference",
+      "screen": "pharmacy-regulatory",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "Which branch is this profile for?",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Province this branch operates in",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Province",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Licence category",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Fiscal status",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-pharmacy-finance-375-light-no-preference",
+      "screen": "pharmacy-finance",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "Margin groupingSale lineBatchMedicineBranchMedicine vs non-drug",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Profit groupingItemCategorySale hourStaff",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-pharmacy-loyalty-375-light-no-preference",
+      "screen": "pharmacy-loyalty",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "AdjustmentAdd pointsRemove points",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "CustomerAmina ExampleBilal Example",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "BranchGarden pharmacyRiverside pharmacy",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Open cash drawerGarden till",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "MovementUpfront cash paymentRefund prepaid cash",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-pharmacy-marketing-375-light-no-preference",
+      "screen": "pharmacy-marketing",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "ApproverFixture Owner (you)Example Manager",
+          "height": 44,
+          "width": 267,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-pharmacy-reports-375-light-no-preference",
+      "screen": "pharmacy-reports",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "BranchSelect an authorized branchGarden pharmacyRiverside pharmacy",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Find medicine",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Forecast methodBased on recent daysBased on the same weekday last week",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "SeasonDengue seasonFlu seasonRamadanMonsoonCustom",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-pharmacy-pack-setup-375-light-no-preference",
+      "screen": "pharmacy-pack-setup",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "MedicineChoose a medicineExample tablets — Example brand — 500 mg — Example manufacturer",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "PresentationChoose a presentationTablet — 10 tablets",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Pack typeChoose a pack typeUnitStripBoxCarton",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-money-375-light-no-preference",
+      "screen": "restaurant-money",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 391,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "Branch",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Device",
+          "height": 44,
+          "width": 301,
+          "disabled": true
+        },
+        {
+          "label": "ModeDisabledSimulation — test/demo onlyAuthenticated webhookSimulation is for tests and demos only.",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": true
+    },
+    {
+      "key": "before-hotel-function-spaces-375-light-no-preference",
+      "screen": "hotel-function-spaces",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 462,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "Claim",
+          "height": 44,
+          "width": 401.09375,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": true
+    },
+    {
+      "key": "before-restaurant-procedures-375-light-no-preference",
+      "screen": "restaurant-procedures",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "Branch",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Assign toA job role (claimable pool)A named person (assigned directly)",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Job roleShift leadKitchen lead",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "FrequencyOnceDailyWeeklyMonthlyEvery N minutes",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-restaurant-printing-375-light-no-preference",
+      "screen": "restaurant-printing",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "BranchGarden branchRiverside branch",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Kitchen printer (KOT) station",
+          "height": 44,
+          "width": 310.453125,
+          "disabled": false
+        },
+        {
+          "label": "Kitchen printer (KOT) destination",
+          "height": 44,
+          "width": 310.453125,
+          "disabled": false
+        },
+        {
+          "label": "Bar tickets station",
+          "height": 44,
+          "width": 267,
+          "disabled": false
+        },
+        {
+          "label": "Bar tickets destination",
+          "height": 44,
+          "width": 267,
+          "disabled": false
+        },
+        {
+          "label": "Receipts station",
+          "height": 44,
+          "width": 267,
+          "disabled": false
+        },
+        {
+          "label": "Receipts destination",
+          "height": 44,
+          "width": 267,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-pharmacy-orders-375-light-no-preference",
+      "screen": "pharmacy-orders",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "Fulfilling branch",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Ordering for customer",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Assigned runner",
+          "height": 44,
+          "width": 267,
+          "disabled": false
+        },
+        {
+          "label": "Intended payment method",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Evidence actionRunner collected CODCashier received remittanceRecord current cash varianceCustomer refusedDelivery failedRunner returned cash to customerBranch received physical goods",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-hotel-inventory-375-light-no-preference",
+      "screen": "hotel-inventory",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "Sold as",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "New status",
+          "height": 44,
+          "width": 387.140625,
+          "disabled": false
+        },
+        {
+          "label": "Room type",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Connecting room",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    },
+    {
+      "key": "before-hotel-journey-375-light-no-preference",
+      "screen": "hotel-journey",
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "documentWidth": 375,
+      "viewportWidth": 375,
+      "controls": [
+        {
+          "label": "Journey moment",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Channel",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Language",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        }
+      ],
+      "errors": [],
+      "overflow": false
+    }
+  ]
+}

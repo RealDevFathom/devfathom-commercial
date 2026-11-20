@@ -1,4 +1,4 @@
-import { browserUuid } from '@/lib/browser-uuid';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';import { browserUuid } from '@/lib/browser-uuid';
 import Link from 'next/link';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
@@ -683,44 +683,44 @@ export default async function PurchasingPage({
           <form action={createPurchaseOrder} className="mt-4 grid gap-3 sm:grid-cols-2">
             <label className="text-sm text-text-body sm:col-span-2">
               Supplier
-              <select name="supplierId" required disabled={!creatable} className={inputClass}>
+              <StudioSelect name="supplierId" required disabled={!creatable} className={inputClass}>
                 <option value="">Select supplier</option>
                 {loaded.suppliers.map((supplier) => (
                   <option value={supplier.id} key={supplier.id}>
                     {supplier.name}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <label className="text-sm text-text-body">
               Branch
-              <select name="branch" disabled className={inputClass}>
+              <StudioSelect name="branch" disabled className={inputClass}>
                 <option>
                   {loaded.branches.length ? 'Derived from location' : 'No active branch'}
                 </option>
-              </select>
+              </StudioSelect>
             </label>
             <label className="text-sm text-text-body">
               Location
-              <select name="locationId" required disabled={!creatable} className={inputClass}>
+              <StudioSelect name="locationId" required disabled={!creatable} className={inputClass}>
                 <option value="">Select location</option>
                 {loaded.locations.map((location) => (
                   <option value={location.id} key={location.id}>
                     {location.name}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <label className="text-sm text-text-body sm:col-span-2">
               Stock item
-              <select name="stockItemId" required disabled={!creatable} className={inputClass}>
+              <StudioSelect name="stockItemId" required disabled={!creatable} className={inputClass}>
                 <option value="">Select stock item</option>
                 {loaded.stockItems.map((item) => (
                   <option value={item.id} key={item.id}>
                     {item.ingredient.name} · {unitNames.get(item.canonicalUnitId) ?? 'unit'}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <label className="text-sm text-text-body">
               Ordered quantity

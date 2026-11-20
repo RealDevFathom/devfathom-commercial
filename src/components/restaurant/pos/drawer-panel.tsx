@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { type FormEvent, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -322,7 +324,7 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="space-y-1.5">
                     <Label htmlFor="drawer-movement-kind">Movement</Label>
-                    <select
+                    <StudioSelect
                       id="drawer-movement-kind"
                       value={movementKind}
                       disabled={writesDisabled}
@@ -332,7 +334,7 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
                       <option value="PAID_IN">Paid in</option>
                       <option value="PAID_OUT">Paid out</option>
                       <option value="DROP">Drop</option>
-                    </select>
+                    </StudioSelect>
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="drawer-movement-amount">Amount</Label>

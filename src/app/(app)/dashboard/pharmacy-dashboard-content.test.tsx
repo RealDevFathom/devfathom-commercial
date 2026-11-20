@@ -125,7 +125,7 @@ describe('PharmacyDashboardContent states', () => {
   it('shows a loading command centre while branches are still loading', () => {
     state.branches = query(undefined, { isLoading: true });
     render(<PharmacyDashboardContent role="ADMIN" />);
-    expect(screen.getByLabelText('Loading command centre')).toBeInTheDocument();
+    expect(screen.getByLabelText('Loading command centre', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeInTheDocument();
     // The branch-comparison count must not claim zero branches before they load.
     expect(screen.queryByText('Restricted')).not.toBeInTheDocument();
   });

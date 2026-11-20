@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState } from 'react';
 import Link from 'next/link';
 import type { inferRouterOutputs } from '@trpc/server';
@@ -101,14 +103,14 @@ export function OwnerImportWizard() {
             </div>
             <div className="grid min-w-0 gap-4 md:grid-cols-2">
               <label className="space-y-2 text-sm text-text-body"><span>Branch</span>
-                <select className={control} value={branchId} disabled={busy} onChange={(event) => { setBranchId(event.target.value); setStockLocationId(''); clearPreview(); }}>
+                <StudioSelect className={control} value={branchId} disabled={busy} onChange={(event) => { setBranchId(event.target.value); setStockLocationId(''); clearPreview(); }}>
                   <option value="">Choose branch</option>{options.data.branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
-                </select>
+                </StudioSelect>
               </label>
               <label className="space-y-2 text-sm text-text-body"><span>Stock location</span>
-                <select className={control} value={stockLocationId} disabled={busy || !branchId} onChange={(event) => { setStockLocationId(event.target.value); clearPreview(); }}>
+                <StudioSelect className={control} value={stockLocationId} disabled={busy || !branchId} onChange={(event) => { setStockLocationId(event.target.value); clearPreview(); }}>
                   <option value="">Choose stock location</option>{options.data.locations.filter((location) => location.branchId === branchId).map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
-                </select>
+                </StudioSelect>
               </label>
               <label className="space-y-2 text-sm text-text-body md:col-span-2"><span>CSV or XLSX file</span>
                 <Input type="file" accept=".csv,.xlsx" disabled={busy} className="min-h-11" aria-describedby="upload-help" aria-invalid={Boolean(error && !sheet)} onChange={(event) => {
@@ -125,9 +127,9 @@ export function OwnerImportWizard() {
             <p className="mb-5 break-words text-sm text-text-muted">{source.fileName} · {sheet.rowCount} stock rows. Review every suggested mapping. Unmapped extra columns do not affect stock.</p>
             <div className="grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-3">
               {IMPORT_FIELDS.map(([field, label, required]) => <label key={field} className="min-w-0 space-y-2 text-sm text-text-body"><span id={`import-label-${field}`}>{label}{required ? ' *' : ' (optional)'}</span>
-                <select aria-labelledby={`import-label-${field}`} className={control} value={mapping[field] ?? ''} disabled={busy} onChange={(event) => { setMapping({ ...mapping, [field]: event.target.value === '' ? undefined : Number(event.target.value) }); clearPreview(); }}>
+                <StudioSelect aria-labelledby={`import-label-${field}`} className={control} value={mapping[field] ?? ''} disabled={busy} onChange={(event) => { setMapping({ ...mapping, [field]: event.target.value === '' ? undefined : Number(event.target.value) }); clearPreview(); }}>
                   <option value="">Choose column</option>{sheet.headers.map((header, index) => <option value={index} key={index}>{header}</option>)}
-                </select>
+                </StudioSelect>
                 {mapping[field] !== undefined && <span className="block break-words text-xs text-text-muted">Sample: {sheet.sample[0]?.[mapping[field]!] || '(empty)'}</span>}
               </label>)}
             </div>

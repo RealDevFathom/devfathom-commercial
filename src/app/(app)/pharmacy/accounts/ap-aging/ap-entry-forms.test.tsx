@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -37,8 +38,8 @@ describe('DEV-103 supplier expense invoice entry form', () => {
         today="2026-11-15"
       />
     );
-    const payee = screen.getByLabelText('Payee') as HTMLInputElement;
-    fireEvent.change(payee, { target: { value: 'K-Electric' } });
+    const payee = screen.getByLabelText('Payee', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLInputElement;
+    fireEvent.change(selectFieldControl(payee), { target: { value: 'K-Electric' } });
     fireEvent.submit(screen.getByRole('form', { name: 'Record invoice' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Already recorded.');
@@ -46,7 +47,7 @@ describe('DEV-103 supplier expense invoice entry form', () => {
     expect(sent.get('branchId')).toBe('branch_1');
     expect(sent.get('createKey')).toBe('ap-invoice:first-key');
     expect(sent.get('payeeName')).toBe('K-Electric');
-    expect((screen.getByLabelText('Payee') as HTMLInputElement).value).toBe('K-Electric');
+    expect(selectFieldControl((screen.getByLabelText('Payee', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLInputElement)).value).toBe('K-Electric');
     expect(hidden(container, 'createKey')).toBe('ap-invoice:first-key');
 
     mocks.record.mockResolvedValueOnce({ status: 'saved', message: 'Invoice AP-1 recorded.' });
@@ -57,7 +58,7 @@ describe('DEV-103 supplier expense invoice entry form', () => {
     );
     expect(hidden(container, 'createKey')).not.toBe('ap-invoice:first-key');
     expect(hidden(container, 'createKey')).toMatch(/^ap-invoice:/);
-    expect((screen.getByLabelText('Payee') as HTMLInputElement).value).toBe('');
+    expect(selectFieldControl((screen.getByLabelText('Payee', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLInputElement)).value).toBe('');
   });
 });
 
@@ -81,10 +82,10 @@ describe('DEV-103 supplier expense payment entry form', () => {
         ]}
       />
     );
-    const options = screen.getAllByRole('option').map((option) => option.getAttribute('value'));
+    const options = screen.getAllByRole('option', { hidden: true }).map((option) => option.getAttribute('value'));
     expect(options).toEqual(['inv_1', 'CASH', 'BANK']);
-    expect((screen.getByLabelText('Paid at') as HTMLInputElement).value).toBe('2026-11-15T10:30');
-    fireEvent.change(screen.getByLabelText('Amount paid'), { target: { value: '250' } });
+    expect(selectFieldControl((screen.getByLabelText('Paid at', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLInputElement)).value).toBe('2026-11-15T10:30');
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Amount paid', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '250' } });
     fireEvent.submit(screen.getByRole('form', { name: 'Record payment' }));
     await waitFor(() => expect(screen.getByText('Payment recorded.')).toBeInTheDocument());
     const sent = mocks.pay.mock.calls[0]?.[1] as FormData;
@@ -111,10 +112,10 @@ describe('DEV-103 reversal form', () => {
       />
     );
     const form = screen.getByRole('form', { name: 'Reverse payment 234.56 against AP-0001' });
-    fireEvent.change(screen.getByLabelText('Reason to reverse'), {
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Reason to reverse', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'Paid twice' },
     });
-    fireEvent.change(screen.getByLabelText('Your manager or owner PIN'), {
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Your manager or owner PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: '2468' },
     });
     fireEvent.submit(form);
@@ -126,7 +127,7 @@ describe('DEV-103 reversal form', () => {
     expect(sent.get('pin')).toBe('2468');
     expect(sent.get('commandKey')).toBe('ap-payment-rev:first-key');
     expect(mocks.reverseInvoice).not.toHaveBeenCalled();
-    expect((screen.getByLabelText('Reason to reverse') as HTMLInputElement).value).toBe(
+    expect(selectFieldControl((screen.getByLabelText('Reason to reverse', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLInputElement)).value).toBe(
       'Paid twice'
     );
     expect(hidden(container, 'commandKey')).toBe('ap-payment-rev:first-key');
@@ -153,7 +154,7 @@ describe('DEV-103 reversal form', () => {
         initialKey="ap-invoice-rev:first-key"
       />
     );
-    const pin = screen.getByLabelText('Your manager or owner PIN') as HTMLInputElement;
+    const pin = screen.getByLabelText('Your manager or owner PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLInputElement;
     expect(pin.type).toBe('password');
     expect(pin.autocomplete).toBe('off');
     fireEvent.submit(screen.getByRole('form', { name: 'Reverse invoice AP-0001' }));

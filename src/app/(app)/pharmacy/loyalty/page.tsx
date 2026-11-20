@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';import Link from 'next/link';
 import { revalidatePath } from 'next/cache';
 import { unstable_rethrow } from 'next/navigation';
 import { TRPCError } from '@trpc/server';
@@ -407,14 +407,14 @@ export default async function LoyaltyPage({
             <input type="hidden" name="customerId" value={customerId} />
             <label className="grid w-full gap-2 text-sm sm:w-auto">
               Reminder language
-              <select
+              <StudioSelect
                 name="preferredLanguage"
                 defaultValue={history.customer.preferredLanguage}
                 className="min-h-11 rounded-sm border border-border bg-surface-card px-3 focus-visible:outline-2 focus-visible:outline-ring"
               >
                 <option value="en">English</option>
                 <option value="ur">Urdu</option>
-              </select>
+              </StudioSelect>
             </label>
             <Button type="submit" className="min-h-11">
               Save reminder language

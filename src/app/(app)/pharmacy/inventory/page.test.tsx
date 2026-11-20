@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -192,7 +193,7 @@ describe('DEV-862 salt and strength under the product name', () => {
     lots.mockResolvedValue([withParacetamol()]);
     await show();
     expect(
-      screen.getAllByRole('option', { name: /Medicine A \(paracetamol 500 mg\) · /i }).length
+      screen.getAllByRole('option', { hidden: true, name: /Medicine A \(paracetamol 500 mg\) · /i }).length
     ).toBeGreaterThan(0);
   });
 
@@ -307,7 +308,7 @@ describe('physical count prerequisites', () => {
     await show();
     const card = countCard();
     expect(card.getByRole('button', { name: 'Freeze count scope' })).toBeVisible();
-    expect(card.getByRole('option', { name: 'Medicine A · batch B-100 · Rack' })).toHaveValue(
+    expect(selectFieldControl(card.getByRole('option', { hidden: true, name: 'Medicine A · batch B-100 · Rack' }))).toHaveValue(
       `${lot.id}:${location.id}`
     );
     expect(card.queryByRole('link', { name: 'Receive stock' })).not.toBeInTheDocument();
@@ -346,10 +347,10 @@ describe('DEV-682 daily cycle count', () => {
     expect(card.getByText('High value')).toBeVisible();
     const sealed = card.getAllByRole('spinbutton', { name: /Counted sealed packs/ });
     const loose = card.getAllByRole('spinbutton', { name: /Counted loose units/ });
-    fireEvent.change(sealed[0]!, { target: { value: '3' } });
-    fireEvent.change(loose[0]!, { target: { value: '4' } });
-    fireEvent.change(sealed[1]!, { target: { value: '0' } });
-    fireEvent.change(loose[1]!, { target: { value: '7' } });
+    fireEvent.change(selectFieldControl(sealed[0]!), { target: { value: '3' } });
+    fireEvent.change(selectFieldControl(loose[0]!), { target: { value: '4' } });
+    fireEvent.change(selectFieldControl(sealed[1]!), { target: { value: '0' } });
+    fireEvent.change(selectFieldControl(loose[1]!), { target: { value: '7' } });
     fireEvent.submit(card.getByRole('button', { name: 'Submit counted stock' }).closest('form')!);
     await waitFor(() =>
       expect(mocks.createCount).toHaveBeenCalledExactlyOnceWith({
@@ -392,9 +393,9 @@ describe('DEV-682 daily cycle count', () => {
       },
     ]);
     await show();
-    const reason = screen.getByLabelText('Variance reason');
+    const reason = screen.getByLabelText('Variance reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
     expect(reason).toBeRequired();
-    fireEvent.change(reason, { target: { value: 'Two strips broken, not logged' } });
+    fireEvent.change(selectFieldControl(reason), { target: { value: 'Two strips broken, not logged' } });
     fireEvent.submit(screen.getByRole('button', { name: 'Approve count' }).closest('form')!);
     await waitFor(() =>
       expect(mocks.approveCount).toHaveBeenCalledExactlyOnceWith({
@@ -427,12 +428,12 @@ describe('DEV-682 daily cycle count', () => {
       },
     ]);
     await show();
-    expect(screen.getAllByLabelText('Your PIN, if you work alone')).toHaveLength(1);
-    const form = screen.getByLabelText('Your PIN, if you work alone').closest('form')!;
-    fireEvent.change(within(form).getByLabelText('Variance reason'), {
+    expect(screen.getAllByLabelText('Your PIN, if you work alone', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveLength(1);
+    const form = screen.getByLabelText('Your PIN, if you work alone', { selector: ':not([data-select-field-native][aria-hidden="true"])' }).closest('form')!;
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Variance reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'Breakage' },
     });
-    fireEvent.change(within(form).getByLabelText('Your PIN, if you work alone'), {
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Your PIN, if you work alone', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: '2468' },
     });
     fireEvent.submit(form);
@@ -459,7 +460,7 @@ describe('DEV-682 daily cycle count', () => {
     ]);
     await show();
     expect(screen.getByText('Reason: Expired strip removed')).toBeVisible();
-    expect(screen.queryByLabelText('Variance reason')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Variance reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
   });
 });
 
@@ -536,17 +537,17 @@ describe('Quarantine resolution forms', () => {
       ]);
       await show();
       const form = screen.getByRole('button', { name: 'Record write-off' }).closest('form')!;
-      expect(within(form).getByRole('combobox', { name: 'Lot' })).toHaveValue(
+      expect(selectFieldControl(within(form).getByRole('combobox', { name: 'Lot' }))).toHaveValue(
         `${lot.id}:${location.id}:${disposition}`
       );
-      fireEvent.change(within(form).getByLabelText('Units'), { target: { value: '10' } });
-      fireEvent.change(within(form).getByLabelText('Evidence reference'), {
+      fireEvent.change(selectFieldControl(within(form).getByLabelText('Units', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '10' } });
+      fireEvent.change(selectFieldControl(within(form).getByLabelText('Evidence reference', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
         target: { value: 'certificate-1' },
       });
-      fireEvent.change(within(form).getByLabelText('Reason'), {
+      fireEvent.change(selectFieldControl(within(form).getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
         target: { value: 'Damaged stock' },
       });
-      fireEvent.change(within(form).getByLabelText(/Witness PIN/), {
+      fireEvent.change(selectFieldControl(within(form).getByLabelText(/Witness PIN/, { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
         target: { value: '2468' },
       });
       fireEvent.submit(form);
@@ -585,7 +586,7 @@ describe('Quarantine resolution forms', () => {
       })
     );
     const form = screen.getByRole('button', { name: 'Record write-off' }).closest('form')!;
-    const pin = within(form).getByLabelText(/Witness PIN/);
+    const pin = within(form).getByLabelText(/Witness PIN/, { selector: ':not([data-select-field-native][aria-hidden="true"])' });
     expect(pin).toHaveAttribute('type', 'password');
     expect(pin).toBeRequired();
   });
@@ -594,7 +595,7 @@ describe('Quarantine resolution forms', () => {
     mocks.witnessOptions.mockResolvedValueOnce({ witnesses: [], soloSelfWitness: true });
     await show();
     const form = screen.getByRole('button', { name: 'Record write-off' }).closest('form')!;
-    expect(within(form).getByRole('combobox', { name: 'Co-authorizing witness' })).toHaveValue(
+    expect(selectFieldControl(within(form).getByRole('combobox', { name: 'Co-authorizing witness' }))).toHaveValue(
       'user'
     );
     expect(within(form).getByText(/Confirm with your own PIN/)).toBeInTheDocument();
@@ -612,8 +613,8 @@ describe('Quarantine resolution forms', () => {
     lots.mockResolvedValue([{ ...lot, balances: [{ ...available, disposition: 'QUARANTINE' }] }]);
     await show();
     const form = screen.getByRole('button', { name: 'Release manual hold' }).closest('form')!;
-    fireEvent.change(within(form).getByLabelText('Units'), { target: { value: '10' } });
-    fireEvent.change(within(form).getByLabelText('Clearance reason'), {
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Units', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '10' } });
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Clearance reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'Inspection passed' },
     });
     fireEvent.submit(form);
@@ -663,8 +664,8 @@ describe('Quarantine resolution forms', () => {
       await show();
       const form = screen.getByRole('button', { name: 'Record write-off' }).closest('form')!;
       expect(
-        within(form)
-          .getAllByRole('option')
+        within(selectFieldControl(form))
+          .getAllByRole('option', { hidden: true })
           .map((option) => (option as HTMLOptionElement).value)
       ).toEqual([
         `${lot.id}:${location.id}:AVAILABLE`,
@@ -808,8 +809,8 @@ describe('Stock location creation access (issue #976)', () => {
   }
 
   function fillAndSubmit(form: HTMLFormElement) {
-    fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'Front store' } });
-    fireEvent.change(within(form).getByLabelText('Code'), { target: { value: 'FS-1' } });
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Front store' } });
+    fireEvent.change(selectFieldControl(within(form).getByLabelText('Code', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'FS-1' } });
     fireEvent.submit(form);
   }
 
@@ -961,8 +962,8 @@ describe('DEV-660 — only assigned branches are offered', () => {
     const receive = screen.getAllByRole('button', { name: 'Receive remaining' });
     expect(receive).toHaveLength(1);
     const form = receive[0]!.closest('form')!;
-    expect(form.querySelector('input[name="transferId"]')).toHaveValue('inbound');
-    expect(form.querySelector('input[name="branchId"]')).toHaveValue(branch.id);
+    expect(selectFieldControl(form.querySelector('input[name="transferId"]'))).toHaveValue('inbound');
+    expect(selectFieldControl(form.querySelector('input[name="branchId"]'))).toHaveValue(branch.id);
   });
 
   it('opens an assigned branch instead of an unassigned one named in the URL', async () => {
@@ -970,8 +971,8 @@ describe('DEV-660 — only assigned branches are offered', () => {
     render(await PharmacyInventoryPage({ searchParams: Promise.resolve({ branch: other.id }) }));
     expect(nearExpiry).toHaveBeenCalledExactlyOnceWith({ branchId: branch.id });
     const branchSelect = screen.getByRole('combobox', { name: 'Branch' });
-    expect(within(branchSelect).queryByRole('option', { name: /Other/ })).toBeNull();
-    expect(within(branchSelect).getByRole('option', { name: /Main/ })).toBeInTheDocument();
+    expect(within(selectFieldControl(branchSelect)).queryByRole('option', { hidden: true, name: /Other/ })).toBeNull();
+    expect(within(selectFieldControl(branchSelect)).getByRole('option', { hidden: true, name: /Main/ })).toBeInTheDocument();
   });
 });
 

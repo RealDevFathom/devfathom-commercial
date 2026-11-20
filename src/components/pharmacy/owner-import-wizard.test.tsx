@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -26,11 +27,11 @@ beforeEach(() => {
 afterEach(cleanup);
 
 async function uploadAndPreview() {
-  fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch' } });
-  fireEvent.change(screen.getByLabelText('Stock location'), { target: { value: 'location' } });
+  fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'branch' } });
+  fireEvent.change(selectFieldControl(screen.getByLabelText('Stock location', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'location' } });
   const file = new File(['A\n1'], 'stock.csv', { type: 'text/csv' });
   Object.defineProperty(file, 'arrayBuffer', { value: async () => new TextEncoder().encode('A\n1').buffer });
-  fireEvent.change(screen.getByLabelText('CSV or XLSX file'), { target: { files: [file] } });
+  fireEvent.change(selectFieldControl(screen.getByLabelText('CSV or XLSX file', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { files: [file] } });
   await screen.findByRole('button', { name: 'Run dry-run diff' });
   fireEvent.click(screen.getByRole('button', { name: 'Run dry-run diff' }));
   await screen.findByRole('button', { name: 'Commit opening stock' });
@@ -53,21 +54,21 @@ describe('owner importer wizard', () => {
     render(<OwnerImportWizard />);
     await uploadAndPreview();
     fireEvent.click(screen.getByRole('checkbox'));
-    fireEvent.change(screen.getByLabelText('Cost per base unit (PKR) *'), { target: { value: '4' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Cost per base unit (PKR) *', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '4' } });
     expect(screen.queryByRole('button', { name: 'Commit opening stock' })).toBeNull();
     expect(mocks.commit.mutateAsync).not.toHaveBeenCalled();
   });
   it('keeps the file and mapping after a dry-run error', async () => {
     mocks.preview.mutateAsync.mockRejectedValueOnce(new Error('Map each required field to a different column.'));
     render(<OwnerImportWizard />);
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch' } });
-    fireEvent.change(screen.getByLabelText('Stock location'), { target: { value: 'location' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'branch' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Stock location', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'location' } });
     const file = new File(['A\n1'], 'stock.csv');
     Object.defineProperty(file, 'arrayBuffer', { value: async () => new TextEncoder().encode('A\n1').buffer });
-    fireEvent.change(screen.getByLabelText('CSV or XLSX file'), { target: { files: [file] } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('CSV or XLSX file', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { files: [file] } });
     fireEvent.click(await screen.findByRole('button', { name: 'Run dry-run diff' }));
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('different column'));
-    expect(screen.getByLabelText('Cost per base unit (PKR) *')).toHaveValue('5');
+    expect(selectFieldControl(screen.getByLabelText('Cost per base unit (PKR) *', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('5');
     expect(screen.getByText(/stock.csv · 1 stock rows/)).toBeVisible();
     expect(screen.getByRole('alert')).toHaveTextContent('Review the column mapping or choose a corrected file, then run the dry-run diff again.');
     expect(screen.getByRole('link', { name: 'Review column mapping' })).toHaveAttribute('href', '#import-mapping');
@@ -80,13 +81,13 @@ describe('owner importer wizard', () => {
     mocks.options.error = { data: { code: 'FORBIDDEN' } };
     render(<OwnerImportWizard />);
     expect(screen.getByText('Owner access required')).toBeVisible();
-    expect(screen.queryByLabelText('CSV or XLSX file')).toBeNull();
+    expect(screen.queryByLabelText('CSV or XLSX file', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeNull();
   });
   it('shows a loading state before options arrive', () => {
     mocks.options.isPending = true;
     render(<OwnerImportWizard />);
     expect(screen.getByRole('status')).toHaveTextContent('Loading your branches');
-    expect(screen.queryByLabelText('CSV or XLSX file')).toBeNull();
+    expect(screen.queryByLabelText('CSV or XLSX file', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeNull();
   });
 });
 
@@ -115,12 +116,12 @@ it('offers a corrected upload after an upload failure', async () => {
   render(<OwnerImportWizard />);
   const file = new File(['A\n1'], 'stock.csv');
   Object.defineProperty(file, 'arrayBuffer', { value: async () => new TextEncoder().encode('A\n1').buffer });
-  fireEvent.change(screen.getByLabelText('CSV or XLSX file'), { target: { files: [file] } });
+  fireEvent.change(selectFieldControl(screen.getByLabelText('CSV or XLSX file', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { files: [file] } });
   await screen.findByRole('alert');
   expect(screen.getByRole('alert')).toHaveTextContent('No inventory has changed. Check the file format against the CSV template, then choose the corrected file.');
   expect(screen.getByRole('link', { name: 'Choose a corrected file' })).toHaveAttribute('href', '#import-upload');
   expect(screen.getByRole('link', { name: 'Download CSV template' })).toHaveAttribute('download');
-  fireEvent.change(screen.getByLabelText('CSV or XLSX file'), { target: { files: [file] } });
+  fireEvent.change(selectFieldControl(screen.getByLabelText('CSV or XLSX file', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { files: [file] } });
   await screen.findByRole('button', { name: 'Run dry-run diff' });
   expect(screen.queryByRole('alert')).toBeNull();
 });

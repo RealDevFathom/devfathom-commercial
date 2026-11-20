@@ -38,9 +38,9 @@ describe('DEV-935 medicines page accessible names', () => {
         <MedicinePackSetup />
       </>
     );
-    expect(screen.getByLabelText('New medicine name', { exact: true })).toBeVisible();
-    expect(screen.getByLabelText('Find a medicine', { exact: true })).toBeVisible();
-    expect(screen.queryByLabelText('Medicine name', { exact: true })).toBeNull();
+    expect(screen.getByLabelText('New medicine name', { selector: ':not([data-select-field-native][aria-hidden="true"])', exact: true })).toBeVisible();
+    expect(screen.getByLabelText('Find a medicine', { selector: ':not([data-select-field-native][aria-hidden="true"])', exact: true })).toBeVisible();
+    expect(screen.queryByLabelText('Medicine name', { selector: ':not([data-select-field-native][aria-hidden="true"])', exact: true })).toBeNull();
   });
 
   it('has no two form controls with the same accessible name', () => {
@@ -51,7 +51,7 @@ describe('DEV-935 medicines page accessible names', () => {
       </>
     );
     const names: string[] = [];
-    for (const control of container.querySelectorAll('input, select, textarea')) {
+    for (const control of container.querySelectorAll('input:not([aria-hidden="true"]), select:not([aria-hidden="true"]), textarea, [data-select-field-trigger]')) {
       if (control instanceof HTMLInputElement && ['hidden', 'radio'].includes(control.type)) continue;
       const labelled = control.getAttribute('aria-label');
       const byId = control.getAttribute('aria-labelledby');

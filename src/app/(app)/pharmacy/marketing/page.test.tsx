@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { render, screen } from '@testing-library/react';
@@ -395,10 +396,10 @@ it('asks for local send times and never for replay keys or UTC timestamps', asyn
   });
   const page = await Page({ searchParams: Promise.resolve({}) });
   const { container } = render(page);
-  expect(screen.queryByLabelText(/request key/i)).not.toBeInTheDocument();
+  expect(screen.queryByLabelText(/request key/i, { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
   const batch = screen.getByRole('button', { name: 'Run bounded sandbox batch' }).closest('form')!;
-  expect(batch.querySelector('input[type="hidden"][name="requestKey"]')).not.toHaveValue('');
-  expect(screen.getByLabelText('Send date and time (Pakistan time (PKT))')).toHaveAttribute(
+  expect(selectFieldControl(batch.querySelector('input[type="hidden"][name="requestKey"]'))).not.toHaveValue('');
+  expect(screen.getByLabelText('Send date and time (Pakistan time (PKT))', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute(
     'type',
     'datetime-local'
   );

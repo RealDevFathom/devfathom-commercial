@@ -1,4 +1,4 @@
-import { Input } from '@/components/ui/input';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
 import { DEFAULT_PROFILE_HEALTH_CONFIG } from '@/lib/pharmacy/business-profile-health';
 import { MarketingActionForm } from './action-form';
@@ -118,20 +118,20 @@ export function ProfilePanel({ branchId }: { branchId: string }) {
               <div className="grid gap-4 sm:grid-cols-2">
                 <label className="block text-sm">
                   Star rating
-                  <select name="rating" className={control} defaultValue="5">
+                  <StudioSelect name="rating" className={control} defaultValue="5">
                     {[5, 4, 3, 2, 1].map((rating) => (
                       <option key={rating} value={rating}>
                         {rating} {rating === 1 ? 'star' : 'stars'}
                       </option>
                     ))}
-                  </select>
+                  </StudioSelect>
                 </label>
                 <label className="block text-sm">
                   Tone
-                  <select name="tone" className={control} defaultValue="FRIENDLY">
+                  <StudioSelect name="tone" className={control} defaultValue="FRIENDLY">
                     <option value="FRIENDLY">Friendly</option>
                     <option value="FORMAL">Formal</option>
-                  </select>
+                  </StudioSelect>
                 </label>
               </div>
               <label className="block text-sm">

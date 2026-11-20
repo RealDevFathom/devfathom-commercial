@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useCallback, useRef, useState, type FormEvent } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -762,7 +764,7 @@ export function PharmacyCounterComputersConsole({
         <div className="space-y-6">
           <div className="max-w-md">
             <Label htmlFor="counter-computers-branch">Branch</Label>
-            <select
+            <StudioSelect
               id="counter-computers-branch"
               className={controlClass}
               value={branchId}
@@ -773,7 +775,7 @@ export function PharmacyCounterComputersConsole({
                   {option.name} ({option.code})
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </div>
           {enrolledHere ? (
             <div className="space-y-6">

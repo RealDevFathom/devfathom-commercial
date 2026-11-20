@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
@@ -147,10 +148,10 @@ describe('SOP credential approval form', () => {
     });
     const view = await SopPage({ searchParams });
     const { container } = render(view);
-    const credential = screen.getByLabelText('Approving manager credential');
+    const credential = screen.getByLabelText('Approving manager credential', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
     expect(credential).toHaveAttribute('type', 'password');
     expect(credential).toBeRequired();
-    expect(screen.getByLabelText('Approving credential type')).toHaveTextContent('PINBadge');
+    expect(selectFieldControl(screen.getByLabelText('Approving credential type', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveTextContent('PINBadge');
     expect(container.querySelector('[name="actorStaffProfileId"]')).toBeNull();
     expect(screen.getByRole('button', { name: 'Waive occurrence' })).toBeEnabled();
   });
@@ -195,13 +196,13 @@ describe('SOP waiver credential form', () => {
       getOccurrence: vi.fn(async () => detail),
     });
     const { container } = render(await SopPage({ searchParams }));
-    expect(screen.getByLabelText('Approving manager credential')).toHaveAttribute(
+    expect(screen.getByLabelText('Approving manager credential', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute(
       'type',
       'password'
     );
-    expect(screen.getByLabelText('Approving manager credential')).toBeRequired();
-    expect(screen.getByLabelText('Approving credential type')).toHaveValue('PIN');
-    expect(screen.getByLabelText('Approving co-author')).toBeRequired();
+    expect(screen.getByLabelText('Approving manager credential', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeRequired();
+    expect(selectFieldControl(screen.getByLabelText('Approving credential type', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('PIN');
+    expect(screen.getByLabelText('Approving co-author', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeRequired();
     expect(container.querySelector('[name="actorStaffProfileId"]')).toBeNull();
     expect(screen.getByRole('button', { name: 'Waive occurrence' })).toBeEnabled();
   });

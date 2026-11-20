@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -86,7 +87,7 @@ describe('pharmacy sign-in, mockup screen 1', () => {
     const form = screen.getByRole('button', { name: 'Sign in' }).closest('form')!;
     expect(form).toHaveAttribute('action', '/login/submit');
     expect(form).toHaveAttribute('method', 'post');
-    expect(form.querySelector('[name="callbackUrl"]')).toHaveValue(
+    expect(selectFieldControl(form.querySelector('[name="callbackUrl"]'))).toHaveValue(
       '/pharmacy/counter?branch=branch-1'
     );
     expect(mocks.tenantDb).toHaveBeenCalledWith('pharmacy-tenant', expect.any(Function));
@@ -99,13 +100,13 @@ describe('pharmacy sign-in, mockup screen 1', () => {
         searchParams: Promise.resolve({ callbackUrl: '/pharmacy/counter?branch=branch-1' }),
       })
     );
-    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'owner@pharmacy.pk' } });
-    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'existing-password' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Email', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'owner@pharmacy.pk' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Password', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'existing-password' } });
     fireEvent.submit(screen.getByRole('button', { name: 'Sign in' }));
-    const code = await screen.findByLabelText('Authentication code');
-    expect(screen.getByLabelText('Password')).toHaveValue('existing-password');
+    const code = await screen.findByLabelText('Authentication code', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    expect(selectFieldControl(screen.getByLabelText('Password', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('existing-password');
     expect(code).toHaveAttribute('aria-invalid', 'true');
-    fireEvent.change(code, { target: { value: 'recovery-code' } });
+    fireEvent.change(selectFieldControl(code), { target: { value: 'recovery-code' } });
     let complete!: (value: { ok: boolean }) => void;
     mocks.signIn.mockReturnValueOnce(
       new Promise((resolve) => {
@@ -131,7 +132,7 @@ describe('pharmacy sign-in, mockup screen 1', () => {
       { id: 'identity-1', name: 'Pharmacy identity', protocol: 'OIDC', enforceSso: true },
     ]);
     render(await LoginPage({ searchParams: Promise.resolve({}) }));
-    expect(screen.queryByLabelText('Password')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Password', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Continue with Pharmacy identity' })).toHaveAttribute(
       'href',
       '/api/sso/oidc/identity-1/start'
@@ -170,8 +171,8 @@ describe('pharmacy sign-in, mockup screen 1', () => {
         searchParams: Promise.resolve({ vertical: 'pharmacy', callbackUrl: '/pharmacy/counter' }),
       })
     );
-    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'owner@pharmacy.pk' } });
-    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'existing-password' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Email', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'owner@pharmacy.pk' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Password', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'existing-password' } });
     fireEvent.submit(screen.getByRole('button', { name: 'Sign in' }));
     await screen.findByRole('heading', { name: 'Where to?' });
     expect(mocks.fetch).toHaveBeenCalledWith(
@@ -210,12 +211,12 @@ describe('pharmacy registration, mockup screen 2', () => {
             ).textContent
         )
     ).toEqual(['Pharmacy', 'Drug sale licence', 'Pharmacist on record', 'Your account']);
-    expect(screen.getByLabelText('Legal business name')).toBeRequired();
-    expect(screen.getByLabelText('Licence copy')).toHaveAttribute('accept', '.pdf,.jpg,.jpeg,.png');
-    expect(screen.getByLabelText('Licence copy')).toBeRequired();
+    expect(screen.getByLabelText('Legal business name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeRequired();
+    expect(screen.getByLabelText('Licence copy', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('accept', '.pdf,.jpg,.jpeg,.png');
+    expect(screen.getByLabelText('Licence copy', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeRequired();
     expect(screen.getByRole('textbox', { name: /^NTN/ })).not.toBeRequired();
     expect(screen.getByText('Printed on customer receipts.')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Password')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Password', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
     expect(
       screen.getByText(/Your account will be created by invitation after approval/)
     ).toBeInTheDocument();
@@ -234,18 +235,18 @@ describe('pharmacy registration, mockup screen 2', () => {
       })
     );
     await registration();
-    fireEvent.change(screen.getByLabelText('Legal business name'), {
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Legal business name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'Local pharmacy' },
     });
     const licence = new File(['%PDF-1.7'], 'licence.pdf', { type: 'application/pdf' });
-    fireEvent.change(screen.getByLabelText('Licence copy'), { target: { files: [licence] } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Licence copy', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { files: [licence] } });
     expect(screen.getByText('licence.pdf')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('checkbox'));
     const form = screen.getByRole('button', { name: 'Request workspace' }).closest('form')!;
     fireEvent.submit(form);
     expect(form).toHaveAttribute('aria-busy', 'true');
     expect(screen.getByRole('button', { name: 'Saving your request…' })).toBeDisabled();
-    expect(screen.getByLabelText('Licence copy')).toBeDisabled();
+    expect(screen.getByLabelText('Licence copy', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
     const [url, request] = mocks.fetch.mock.calls[0];
     expect(url).toBe('/api/workspace-requests');
     expect(request.method).toBe('POST');
@@ -268,11 +269,11 @@ describe('pharmacy registration, mockup screen 2', () => {
       )
     );
     await screen.findByRole('alert');
-    expect(screen.getByLabelText('Legal business name')).toHaveValue('Local pharmacy');
+    expect(selectFieldControl(screen.getByLabelText('Legal business name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Local pharmacy');
     expect(screen.getByText('licence.pdf')).toBeInTheDocument();
     for (const label of ['Legal business name', 'Province', 'Licence copy']) {
-      expect(screen.getByLabelText(label)).toHaveAttribute('aria-invalid', 'true');
-      expect(screen.getByLabelText(label)).toHaveAttribute('aria-describedby');
+      expect(screen.getByLabelText(label, { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('aria-invalid', 'true');
+      expect(screen.getByLabelText(label, { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('aria-describedby');
     }
     expect(screen.getByRole('button', { name: 'Request workspace' })).toBeEnabled();
     expect(mocks.replace).not.toHaveBeenCalled();
@@ -296,14 +297,14 @@ describe('pharmacy registration, mockup screen 2', () => {
   it('retains entered values and enables retry after a network error', async () => {
     mocks.fetch.mockRejectedValue(new Error('offline'));
     await registration();
-    fireEvent.change(screen.getByLabelText('Work email'), {
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Work email', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'owner@pharmacy.pk' },
     });
     fireEvent.submit(screen.getByRole('button', { name: 'Request workspace' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Check your connection and try again.'
     );
-    expect(screen.getByLabelText('Work email')).toHaveValue('owner@pharmacy.pk');
+    expect(selectFieldControl(screen.getByLabelText('Work email', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('owner@pharmacy.pk');
     expect(screen.getByRole('button', { name: 'Request workspace' })).toBeEnabled();
   });
 

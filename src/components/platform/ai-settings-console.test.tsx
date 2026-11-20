@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import type { inferRouterOutputs } from '@trpc/server';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -173,8 +174,8 @@ describe('AiSettingsConsole', () => {
     const anthropic = panel('Anthropic');
     expect(within(anthropic).getByText('Configured')).toBeInTheDocument();
     expect(within(anthropic).getByText('At cap · skipped')).toBeInTheDocument();
-    expect(within(anthropic).getByLabelText('Monthly cap (USD)')).toHaveValue(190);
-    expect(within(anthropic).getByLabelText('Cheap')).toHaveValue('claude-haiku-5-5');
+    expect(selectFieldControl(within(anthropic).getByLabelText('Monthly cap (USD)', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(190);
+    expect(selectFieldControl(within(anthropic).getByLabelText('Cheap', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('claude-haiku-5-5');
     expect(within(anthropic).getByRole('progressbar', { name: /Anthropic spend/ })).toHaveAttribute(
       'aria-valuenow',
       '100'
@@ -185,7 +186,7 @@ describe('AiSettingsConsole', () => {
     expect(within(openai).getByText(/OPENAI_API_KEY_SECRET_ID/)).toBeInTheDocument();
     expect(within(openai).getByText('Under cap')).toBeInTheDocument();
     expect(within(openai).getByText('$12.50')).toBeInTheDocument();
-    expect(within(openai).getByLabelText('Standard')).toHaveValue('gpt-custom-standard');
+    expect(selectFieldControl(within(openai).getByLabelText('Standard', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('gpt-custom-standard');
     expect(within(openai).getByText('gpt-5.4-mini')).toBeInTheDocument();
     // The cap and the standard model are overrides; the rest are defaults.
     expect(within(openai).getAllByText('Override')).toHaveLength(2);
@@ -235,14 +236,14 @@ describe('AiSettingsConsole', () => {
   it('saves a cap and a tier model with the provider and tier', () => {
     render(<AiSettingsConsole />);
     const openai = panel('OpenAI');
-    fireEvent.change(within(openai).getByLabelText('Monthly cap (USD)'), {
+    fireEvent.change(selectFieldControl(within(openai).getByLabelText('Monthly cap (USD)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: '250.5' },
     });
     fireEvent.click(within(openai).getByRole('button', { name: 'Save OpenAI monthly cap' }));
     expect(h.mutate.setMonthlyCap).toHaveBeenCalledWith({ provider: 'openai', capUsd: '250.5' });
 
     const bedrock = panel('Bedrock');
-    fireEvent.change(within(bedrock).getByLabelText('Deep'), {
+    fireEvent.change(selectFieldControl(within(bedrock).getByLabelText('Deep', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
       target: { value: 'us.anthropic.next-deep' },
     });
     fireEvent.click(within(bedrock).getByRole('button', { name: 'Save Bedrock deep model' }));

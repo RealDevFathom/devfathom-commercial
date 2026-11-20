@@ -1,0 +1,102 @@
+after-restaurant-notifications-375-light-no-preference: layout ok, 0 console errors
+after-restaurant-purchasing-375-light-no-preference: layout ok, 7 console errors
+after-restaurant-reports-375-light-no-preference: layout ok, 5 console errors
+after-restaurant-procedures-375-light-no-preference: layout ok, 0 console errors
+after-restaurant-growth-375-light-no-preference: layout ok, 0 console errors
+after-restaurant-printing-375-light-no-preference: layout ok, 0 console errors
+after-restaurant-tax-375-light-no-preference: layout ok, 0 console errors
+after-pharmacy-devices-375-light-no-preference: layout ok, 0 console errors
+after-pharmacy-printing-375-light-no-preference: layout ok, 0 console errors
+after-pharmacy-orders-375-light-no-preference: layout ok, 0 console errors
+after-hotel-inventory-375-light-no-preference: layout ok, 0 console errors
+after-hotel-extras-375-light-no-preference: layout ok, 0 console errors
+after-hotel-function-spaces-375-light-no-preference: OVERFLOW, 0 console errors
+after-hotel-journey-375-light-no-preference: layout ok, 0 console errors
+{
+  "screenshots": 14,
+  "failures": [
+    {
+      "key": "after-restaurant-purchasing-375-light-no-preference",
+      "overflow": false,
+      "errors": [
+        "Each child in a list should have a unique \"key\" prop.%s%s See https://react.dev/link/warning-keys for more information. \n\nCheck the top-level render call using <div>. ",
+        "Each child in a list should have a unique \"key\" prop.%s%s See https://react.dev/link/warning-keys for more information. \n\nCheck the render method of `div`. ",
+        "Each child in a list should have a unique \"key\" prop.%s%s See https://react.dev/link/warning-keys for more information. \n\nCheck the top-level render call using <form>. ",
+        "Each child in a list should have a unique \"key\" prop.%s%s See https://react.dev/link/warning-keys for more information. \n\nCheck the top-level render call using <label>. ",
+        "Each child in a list should have a unique \"key\" prop.%s%s See https://react.dev/link/warning-keys for more information. \n\nCheck the render method of `SelectField`. ",
+        "Each child in a list should have a unique \"key\" prop.%s%s See https://react.dev/link/warning-keys for more information. \n\nCheck the render method of `Table2`. ",
+        "Each child in a list should have a unique \"key\" prop.%s%s See https://react.dev/link/warning-keys for more information. \n\nCheck the render method of `TableRow`. "
+      ],
+      "controls": [
+        {
+          "label": "Supplier",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Branch",
+          "height": 44,
+          "width": 301,
+          "disabled": true
+        },
+        {
+          "label": "Location",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Stock item",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Discrepancy kind",
+          "height": 44,
+          "width": 267,
+          "disabled": false
+        }
+      ]
+    },
+    {
+      "key": "after-restaurant-reports-375-light-no-preference",
+      "overflow": false,
+      "errors": [
+        "Each child in a list should have a unique \"key\" prop.%s%s See https://react.dev/link/warning-keys for more information. \n\nCheck the top-level render call using <div>. ",
+        "Each child in a list should have a unique \"key\" prop.%s%s See https://react.dev/link/warning-keys for more information. \n\nCheck the render method of `div`. ",
+        "Each child in a list should have a unique \"key\" prop.%s%s See https://react.dev/link/warning-keys for more information. \n\nCheck the top-level render call using <form>. ",
+        "Each child in a list should have a unique \"key\" prop.%s%s See https://react.dev/link/warning-keys for more information. \n\nCheck the top-level render call using <label>. ",
+        "Each child in a list should have a unique \"key\" prop.%s%s See https://react.dev/link/warning-keys for more information. \n\nCheck the render method of `SelectField`. "
+      ],
+      "controls": [
+        {
+          "label": "Branch",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        },
+        {
+          "label": "Stock location",
+          "height": 44,
+          "width": 301,
+          "disabled": false
+        }
+      ]
+    },
+    {
+      "key": "after-hotel-function-spaces-375-light-no-preference",
+      "overflow": true,
+      "errors": [],
+      "controls": [
+        {
+          "label": "Claim",
+          "height": 44,
+          "width": 401.09375,
+          "disabled": false
+        }
+      ]
+    }
+  ]
+}

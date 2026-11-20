@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HotelExtrasCatalog } from './extras-catalog';
@@ -74,7 +75,7 @@ describe('Hotel extras draft and access safety', () => {
   it('keeps the edited snapshot across list refreshes', async () => {
     mount();
     edit();
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'My draft' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'My draft' } });
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Refresh catalog' })));
     save();
     expect(h.update).toHaveBeenCalledWith(
@@ -85,10 +86,10 @@ describe('Hotel extras draft and access safety', () => {
   it('preserves conflicts without an automatic retry or clearing the draft', () => {
     mount();
     edit();
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Draft' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Draft' } });
     save();
     act(() => h.callbacks.update.onError(error('CONFLICT')));
-    expect(screen.getByLabelText('Name')).toHaveValue('Draft');
+    expect(selectFieldControl(screen.getByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Draft');
     expect(h.fetch).not.toHaveBeenCalled();
     expect(h.update).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('alert')).toHaveTextContent('Your edits are kept');
@@ -107,7 +108,7 @@ describe('Hotel extras draft and access safety', () => {
     mount();
     edit();
     act(() => h.callbacks.update.onError(error(code)));
-    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
     expect(screen.queryByText('Laundry')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Choose a property' })).toHaveAttribute(
       'href',
@@ -118,25 +119,25 @@ describe('Hotel extras draft and access safety', () => {
     mount();
     edit();
     act(() => h.callbacks.update.onError(error('NOT_FOUND')));
-    expect(screen.getByLabelText('Name')).toBeInTheDocument();
+    expect(screen.getByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('charge is no longer available');
     h.fetch.mockRejectedValueOnce(error('NOT_FOUND'));
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Refresh catalog' })));
-    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Choose a property' })).toBeInTheDocument();
   });
   it('cancel resets the draft while success starts a fresh add form', async () => {
     mount();
     edit();
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Discard' } });
+    fireEvent.change(selectFieldControl(screen.getByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Discard' } });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(screen.getByLabelText('Name')).toHaveValue('');
+    expect(selectFieldControl(screen.getByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
     edit();
     await act(async () =>
       h.callbacks.update.onSuccess({ extra: { name: 'Laundry' }, active: true })
     );
     expect(screen.getByRole('form', { name: 'Add a charge' })).toBeInTheDocument();
-    expect(screen.getByLabelText('Name')).toHaveValue('');
+    expect(selectFieldControl(screen.getByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
   });
   it('refresh bypasses a still-fresh cached catalog and rechecks revoked access', async () => {
     mount();
@@ -149,7 +150,7 @@ describe('Hotel extras draft and access safety', () => {
       { branchId: 'branch', includeInactive: false, upsellableOnly: false },
       { staleTime: 0 }
     );
-    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Choose a property' })).toBeInTheDocument();
   });
   it('ignores a late response after the selection identity changes', async () => {
@@ -165,6 +166,6 @@ describe('Hotel extras draft and access safety', () => {
     mounted.rerender(<HotelExtrasCatalog initial={view()} selection={selection} />);
     await act(async () => finish(view('Old-selection response')));
     expect(screen.queryByText('Old-selection response')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
   });
 });

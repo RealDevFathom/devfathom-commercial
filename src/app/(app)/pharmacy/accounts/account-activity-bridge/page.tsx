@@ -1,4 +1,4 @@
-import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/plain-language';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/plain-language';
 import { ReportDetails } from '@/components/pharmacy/report-details';
 import type { Metadata } from 'next';
 import { TRPCError } from '@trpc/server';
@@ -164,7 +164,7 @@ export default async function AccountActivityBridgePage({
         <form method="get" className="grid items-end gap-4 md:grid-cols-2 xl:grid-cols-5">
           <label className="grid gap-2 text-sm">
             {screenCopy.accountActivity.branch}
-            <select
+            <StudioSelect
               name="branch"
               defaultValue={branch.id}
               className="min-h-11 rounded-sm border border-border-default bg-surface-raised px-3"
@@ -174,7 +174,7 @@ export default async function AccountActivityBridgePage({
                   {item.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <label className="grid gap-2 text-sm">
             {screenCopy.dateWindow.from} ({zone})
@@ -186,7 +186,7 @@ export default async function AccountActivityBridgePage({
           </label>
           <label className="grid gap-2 text-sm">
             {screenCopy.accountActivity.accountCurrency}
-            <select
+            <StudioSelect
               name="selection"
               defaultValue={selected?.value ?? ''}
               className="min-h-11 rounded-sm border border-border-default bg-surface-raised px-3"
@@ -201,7 +201,7 @@ export default async function AccountActivityBridgePage({
                   {choice.accountCode} / {choice.currency}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <Button type="submit" size="lg">
             {screenCopy.accountActivity.readBridge}

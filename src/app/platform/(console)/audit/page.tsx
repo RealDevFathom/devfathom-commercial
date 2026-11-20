@@ -1,4 +1,4 @@
-import type { Prisma } from '@/generated/prisma/client';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';import type { Prisma } from '@/generated/prisma/client';
 import { Button } from '@/components/ui/button';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
@@ -257,7 +257,7 @@ export default async function PlatformAuditPage({
           <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-text-body">
             Outcome
           </span>
-          <select
+          <StudioSelect
             name="outcome"
             defaultValue={query.outcome ?? ''}
             className="h-10 w-full border border-border-default bg-surface-card px-3 text-sm"
@@ -265,7 +265,7 @@ export default async function PlatformAuditPage({
             <option value="">All outcomes</option>
             <option value="success">Success</option>
             <option value="failure">Failure</option>
-          </select>
+          </StudioSelect>
         </label>
         <Button type="submit" className="min-h-11">
           Filter
