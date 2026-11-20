@@ -9,6 +9,11 @@ import { browserUuid } from '@/lib/browser-uuid';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import {
+  createPrintDocument,
+  printInWindow,
+  serializePrintDocument,
+} from '@/lib/browser-print/print-window';
+import {
   KHATA_TENDER_LABELS,
   khataPaymentSlipLines,
   parseMajorToMinor,
@@ -204,20 +209,19 @@ export function KhataPaymentForm({
     }
   }
 
-  function printSlip() {
+  async function printSlip() {
     if (!slip) return;
     try {
-      const popup = window.open('', '_blank', 'popup,width=480,height=720');
-      if (!popup) throw new Error('Allow pop-ups to print this slip.');
-      popup.opener = null;
-      popup.document.open();
-      popup.document.write('<!doctype html><title>Khata payment</title><body></body>');
-      popup.document.close();
-      const text = popup.document.createElement('pre');
+      // DEV-973: an isolated window that prints itself, so the counter never freezes.
+      const doc = createPrintDocument('Khata payment');
+      const text = doc.createElement('pre');
       text.textContent = khataPaymentSlipLines(slip).join('\n');
-      popup.document.body.append(text);
-      popup.focus();
-      popup.print();
+      doc.body.append(text);
+      await printInWindow(serializePrintDocument(doc), {
+        features: 'popup,width=480,height=720',
+        blockedMessage: 'Allow pop-ups to print this slip.',
+        failedMessage: 'Slip could not print.',
+      });
       setNotice('Browser print dialog requested. Paper delivery is not confirmed.');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Slip could not print.');

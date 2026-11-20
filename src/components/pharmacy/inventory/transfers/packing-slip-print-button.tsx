@@ -37,10 +37,10 @@ export function PackingSlipPrintButton({ slip }: { slip: PackingSlip }) {
       <Button
         aria-describedby={error ? errorId : undefined}
         disabled={!ready}
-        onClick={() => {
+        onClick={async () => {
           try {
             setError(null);
-            printPackingSlip(slip, format);
+            await printPackingSlip(slip, format);
           } catch (failure) {
             setError(
               failure instanceof Error ? failure.message : 'The packing slip could not be printed.'

@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import type { TerminalRequest } from './checkout-panel';
 import type { Receipt } from './receipt-view';
 import { requestReceiptDialog } from './receipt-browser-print';
+import { PrintWindowNotice } from '@/components/ui/print-window-notice';
 import { RawPrintValidationError } from '@/lib/restaurant/printing/contract';
 
 export type ReceiptPrinting = {
@@ -241,11 +242,11 @@ export function ReceiptPrintControls({
           state.preview?.validation?.fallback === null ||
           (Boolean(state.latestJob || (error && !refusal)) && !duplicateAccepted)
         }
-        onClick={() => {
+        onClick={async () => {
           try {
             if (typeof state.preview?.text !== 'string')
               throw new Error('Validated receipt preview unavailable. Check print status.');
-            requestReceiptDialog(receipt, width, state.preview.text);
+            await requestReceiptDialog(receipt, width, state.preview.text);
             setDialogStatus(
               'Print dialog requested. Closing the dialog does not confirm printing.'
             );
@@ -263,6 +264,8 @@ export function ReceiptPrintControls({
           {dialogStatus}
         </p>
       ) : null}
+      {/* DEV-973: the terminal has no app shell; the print window line lives here. */}
+      <PrintWindowNotice className="rounded-[var(--radius-xs)] border" />
     </section>
   );
 }

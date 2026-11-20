@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ShelfLabelRow } from '@/lib/pharmacy/shelf-label';
 import { shelfLabelCode } from '@/lib/pharmacy/shelf-label-code';
+import { installFakePrintWindows } from '@/lib/testing/print-window';
 
 import { ShelfLabelPrintPanel } from './shelf-label-print-panel';
 
@@ -32,24 +33,6 @@ const recalled: ShelfLabelRow = {
   unavailableReason: 'This batch is recalled.',
 };
 
-function fakePopup() {
-  const written: string[] = [];
-  const popup = {
-    opener: {},
-    closed: false,
-    document: {
-      open: vi.fn(),
-      write: vi.fn((html: string) => written.push(html)),
-      close: vi.fn(),
-      querySelectorAll: vi.fn(() => []),
-    },
-    focus: vi.fn(),
-    print: vi.fn(),
-    close: vi.fn(),
-  };
-  return { popup, written };
-}
-
 describe('DEV-90 shelf label print panel', () => {
   it('defaults to one label per received pack and never to an unsellable lot', () => {
     render(<ShelfLabelPrintPanel title="Goods receipt GRN-7" rows={[sellable, recalled]} />);
@@ -62,9 +45,8 @@ describe('DEV-90 shelf label print panel', () => {
     expect(screen.getAllByText('Rs 120.00').length).toBeGreaterThan(0);
   });
 
-  it('lets the operator change the count and prints exactly that many stickers', () => {
-    const { popup, written } = fakePopup();
-    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+  it('lets the operator change the count and prints exactly that many stickers', async () => {
+    const windows = installFakePrintWindows();
     render(<ShelfLabelPrintPanel title="Search" rows={[sellable]} />);
     fireEvent.change(screen.getByLabelText('Labels for Paracetamol batch B-1'), {
       target: { value: '3' },
@@ -72,11 +54,18 @@ describe('DEV-90 shelf label print panel', () => {
     fireEvent.change(screen.getByLabelText('Label size'), { target: { value: '50x25' } });
     fireEvent.click(screen.getByRole('button', { name: 'Print 3 labels' }));
 
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      '3 labels sent to the print dialog.'
+    );
+    const written = windows.windows.map((popup) => popup.html());
     expect(written).toHaveLength(1);
     expect(written[0]!.match(/<section class="shelf-label"/g)).toHaveLength(3);
     expect(written[0]).toContain('@page { size: 50mm 25mm; margin: 0; }');
-    expect(popup.opener).toBeNull();
-    expect(popup.print).toHaveBeenCalledOnce();
+    // noopener: the print window has no reference back to this page.
+    expect(windows.last().features).toMatch(/^noopener,/);
+    expect(windows.last().printRequests()).toBe(1);
+    // DEV-973: the isolated window prints itself; this page never calls print() on it.
+    expect(windows.last().proxy.print).not.toHaveBeenCalled();
     expect(screen.getByRole('status')).toHaveTextContent('3 labels sent to the print dialog.');
   });
 

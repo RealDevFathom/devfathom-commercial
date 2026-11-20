@@ -71,10 +71,10 @@ export function ShelfLabelPrintPanel({
   const total = shelfLabelTotal(selection);
   const tooMany = total > MAX_SHELF_LABELS_PER_PRINT;
 
-  function print() {
+  async function print() {
     setMessage(null);
     try {
-      printShelfLabels(selection, format);
+      await printShelfLabels(selection, format);
       setMessage({
         tone: 'success',
         text: `${total} label${total === 1 ? '' : 's'} sent to the print dialog.`,
