@@ -4,6 +4,11 @@ const mocks = vi.hoisted(() => ({ signOut: vi.fn() }));
 
 vi.mock('next-auth/react', () => ({ signOut: mocks.signOut }));
 
+import {
+  counterReadinessOkayKey,
+  readCounterReadinessOkay,
+  writeCounterReadinessOkay,
+} from '@/lib/pharmacy/counter-readiness-okay';
 import { signOutEverything } from './sign-out';
 
 describe('signOutEverything', () => {
@@ -60,5 +65,22 @@ describe('signOutEverything', () => {
       credentials: 'include',
     });
     expect(mocks.signOut).toHaveBeenCalledWith({ callbackUrl: '/login' });
+  });
+
+  // DEV-970: the next sign-in sees the counter's ready-to-sell panel in full again.
+  it('forgets every Okay given to the counter sale checks', async () => {
+    const key = counterReadinessOkayKey({
+      organizationId: 'org-a',
+      accountId: 'account-a',
+      branchId: 'branch-a',
+      deviceId: 'counter-1',
+    });
+    writeCounterReadinessOkay(key, ['PROFILE_MISSING']);
+    window.sessionStorage.setItem('unrelated', 'kept');
+
+    await signOutEverything();
+
+    expect(readCounterReadinessOkay(key)).toBeNull();
+    expect(window.sessionStorage.getItem('unrelated')).toBe('kept');
   });
 });
