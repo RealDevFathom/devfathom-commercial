@@ -5,7 +5,6 @@ import { useRef, useState } from 'react';
 import { PendingLegalReviewNotice } from '../pending-legal-review-notice';
 import { Button } from '@/components/ui/button';
 import {
-  closePrintWindow,
   createPrintDocument,
   openPrintWindow,
   sendToPrintWindow,
@@ -58,7 +57,7 @@ export function ControlledRegisterConsole() {
     onError: (error) => setFormError(error.message),
   });
 
-  function printRegister() {
+  async function printRegister() {
     // DEV-973: an isolated window that prints itself, so this page never freezes.
     let popup: PrintWindow | null = null;
     try {
@@ -83,9 +82,8 @@ export function ControlledRegisterConsole() {
     doc.head.append(style);
     doc.body.append(heading, stamp, doc.importNode(page.current, true));
     try {
-      sendToPrintWindow(popup, serializePrintDocument(doc));
+      await sendToPrintWindow(popup, serializePrintDocument(doc));
     } catch {
-      closePrintWindow(popup);
       setPrintError(true);
       return;
     }

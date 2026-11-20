@@ -110,10 +110,12 @@ it is not a durable print audit and cancellation cannot be distinguished from de
 
 DEV-973: the isolated document is no longer written into a pop-up and printed from the counter.
 That pop-up shared the counter's browsing-context group, so its print dialog froze the counter
-while the pop-up sat behind it. Every browser print now opens `public/print-window.html`
-(served with `Cross-Origin-Opener-Policy: same-origin`, so it gets its own group), hands it the
-document over a per-window `BroadcastChannel`, and the print page prints itself. The counter
-never calls `print()` and shows "Print window is open" until that window closes
+while the pop-up sat behind it. Every browser print now opens `public/pharmacy/counter/print-window.html`
+with `noopener` (its own group, on https and on a plain-http LAN address alike), hands it the
+document over a per-window `BroadcastChannel`, and the print page prints itself, then closes when
+its dialog closes. With `noopener` a blocked pop-up is the one whose page never announces itself
+within 5 s. The counter never calls `print()` and shows one line while a print window is open.
+The counter service worker keeps the print page for offline printing
 (`src/lib/browser-print/print-window.ts`).
 
 Transient 58/80 mm and A4 choices only. The OS dialog must select the matching printer and paper.

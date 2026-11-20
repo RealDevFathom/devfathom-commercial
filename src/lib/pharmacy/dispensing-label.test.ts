@@ -143,51 +143,55 @@ describe('50 × 30 mm dispensing labels', () => {
       buildDispensingLabels(receipt, [{ ...source, directionsUrdu: '\u202eBAD' }])
     ).toThrow();
   });
-  it.each([false, true])('prints only labels fitting physical paper; overflow=%s', (overflow) => {
-    // Labels are laid out (never printed) in this page before the print window gets them.
-    const measured: string[] = [];
-    const size = (label: number, fallback: number) =>
-      function (this: Element) {
-        if (!this.classList.contains('dispensing-label')) return fallback;
-        measured.push(this.textContent ?? '');
-        return label;
-      };
-    // The measuring frame has its own realm, so its layout is stubbed there.
-    const frameDocument = Object.getOwnPropertyDescriptor(
-      HTMLIFrameElement.prototype,
-      'contentDocument'
-    )!.get!;
-    vi.spyOn(HTMLIFrameElement.prototype, 'contentDocument', 'get').mockImplementation(function (
-      this: HTMLIFrameElement
-    ) {
-      const doc = frameDocument.call(this) as Document;
-      const element = doc.defaultView!.Element.prototype;
-      for (const [name, value] of [
-        ['clientHeight', 113],
-        ['scrollHeight', overflow ? 150 : 113],
-        ['clientWidth', 189],
-        ['scrollWidth', 189],
-      ] as const)
-        Object.defineProperty(element, name, { configurable: true, get: size(value, 0) });
-      return doc;
-    });
-    const windows = installFakePrintWindows();
-    const print = () =>
-      printCounterBrowserReceipt(receipt, 'en', 'LABEL_50x30', false, undefined, [source]);
-    if (overflow) {
-      expect(print).toThrow('exceeds 50 × 30 mm');
-      expect(windows.last().printRequests()).toBe(0);
-      expect(windows.last().proxy.close).toHaveBeenCalledOnce();
-    } else {
-      print();
-      expect(windows.last().printRequests()).toBe(1);
-      expect(windows.last().html()).toBe(
-        buildCounterBrowserReceipt(receipt, 'en', 'LABEL_50x30', false, [source])
-      );
-      expect(windows.last().proxy.opener).toBeNull();
-      expect(windows.last().proxy.print).not.toHaveBeenCalled();
-      windows.closeAll();
+  it.each([false, true])(
+    'prints only labels fitting physical paper; overflow=%s',
+    async (overflow) => {
+      // Labels are laid out (never printed) in this page before the print window gets them.
+      const measured: string[] = [];
+      const size = (label: number, fallback: number) =>
+        function (this: Element) {
+          if (!this.classList.contains('dispensing-label')) return fallback;
+          measured.push(this.textContent ?? '');
+          return label;
+        };
+      // The measuring frame has its own realm, so its layout is stubbed there.
+      const frameDocument = Object.getOwnPropertyDescriptor(
+        HTMLIFrameElement.prototype,
+        'contentDocument'
+      )!.get!;
+      vi.spyOn(HTMLIFrameElement.prototype, 'contentDocument', 'get').mockImplementation(function (
+        this: HTMLIFrameElement
+      ) {
+        const doc = frameDocument.call(this) as Document;
+        const element = doc.defaultView!.Element.prototype;
+        for (const [name, value] of [
+          ['clientHeight', 113],
+          ['scrollHeight', overflow ? 150 : 113],
+          ['clientWidth', 189],
+          ['scrollWidth', 189],
+        ] as const)
+          Object.defineProperty(element, name, { configurable: true, get: size(value, 0) });
+        return doc;
+      });
+      const windows = installFakePrintWindows();
+      const print = () =>
+        printCounterBrowserReceipt(receipt, 'en', 'LABEL_50x30', false, undefined, [source]);
+      if (overflow) {
+        expect(print).toThrow('exceeds 50 × 30 mm');
+        expect(windows.last().printRequests()).toBe(0);
+        expect(windows.last().proxy.close).toHaveBeenCalledOnce();
+      } else {
+        await print();
+        expect(windows.last().printRequests()).toBe(1);
+        expect(windows.last().html()).toBe(
+          buildCounterBrowserReceipt(receipt, 'en', 'LABEL_50x30', false, [source])
+        );
+        // noopener: the print window has no reference back to the counter.
+        expect(windows.last().features).toMatch(/^noopener,/);
+        expect(windows.last().proxy.print).not.toHaveBeenCalled();
+        windows.closeAll();
+      }
+      expect(measured.length).toBeGreaterThan(0);
     }
-    expect(measured.length).toBeGreaterThan(0);
-  });
+  );
 });

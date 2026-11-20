@@ -242,11 +242,11 @@ export function ReceiptPrintControls({
           state.preview?.validation?.fallback === null ||
           (Boolean(state.latestJob || (error && !refusal)) && !duplicateAccepted)
         }
-        onClick={() => {
+        onClick={async () => {
           try {
             if (typeof state.preview?.text !== 'string')
               throw new Error('Validated receipt preview unavailable. Check print status.');
-            requestReceiptDialog(receipt, width, state.preview.text);
+            await requestReceiptDialog(receipt, width, state.preview.text);
             setDialogStatus(
               'Print dialog requested. Closing the dialog does not confirm printing.'
             );

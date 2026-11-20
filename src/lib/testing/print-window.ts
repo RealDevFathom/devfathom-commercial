@@ -32,14 +32,8 @@ export class FakeBroadcastChannel {
 }
 
 export type FakePrintWindow = {
-  /** What `window.open` returned to the page. */
-  proxy: {
-    opener: unknown;
-    closed: boolean;
-    close: () => void;
-    focus: () => void;
-    print: () => void;
-  };
+  /** A stand-in for the print page's own window (unreachable from the page that opened it). */
+  proxy: { closed: boolean; close: () => void; focus: () => void; print: () => void };
   url: string;
   features: string | undefined;
   /** Every message the page sent, in order. */
@@ -51,15 +45,20 @@ export type FakePrintWindow = {
   printRequests: () => number;
   /** The print page has loaded and announces itself. */
   ready: () => void;
-  /** The operator closes the print window. */
+  /** The operator closes the print window (or it closes itself after printing). */
   closeByOperator: () => void;
 };
 
 /**
- * Replaces `window.open` and `BroadcastChannel`. By default each window loads
- * at once; pass `{ ready: false }` to load it later with `ready()`.
+ * Replaces `window.open` and `BroadcastChannel`. Like a real `noopener` open,
+ * `window.open` returns null. By default each print page loads at once; pass
+ * `{ ready: false }` to load it later with `ready()`, or `{ blocked: true }`
+ * for a browser that blocks the pop-up (nothing ever loads).
  */
-export function installFakePrintWindows({ ready = true }: { ready?: boolean } = {}) {
+export function installFakePrintWindows({
+  ready = true,
+  blocked = false,
+}: { ready?: boolean; blocked?: boolean } = {}) {
   vi.stubGlobal('BroadcastChannel', FakeBroadcastChannel);
   const windows: FakePrintWindow[] = [];
   const open = vi.spyOn(window, 'open').mockImplementation((url, _target, features) => {
@@ -68,19 +67,27 @@ export function installFakePrintWindows({ ready = true }: { ready?: boolean } = 
     if (parsed.pathname !== PRINT_WINDOW_PATH) {
       throw new Error(`Unexpected window.open(${href})`);
     }
+    if (blocked) return null;
     const channel = new FakeBroadcastChannel(
       `${PRINT_WINDOW_CHANNEL_PREFIX}${parsed.hash.slice(1)}`
     );
     const messages: FakePrintWindow['messages'] = [];
-    channel.onmessage = (event) => messages.push(event.data as { type: string; html?: string });
     const proxy = {
-      opener: window as unknown,
       closed: false,
       close: vi.fn(() => {
+        if (proxy.closed) return;
         proxy.closed = true;
+        channel.postMessage({ type: 'closed' });
+        channel.close();
       }),
       focus: vi.fn(),
       print: vi.fn(),
+    };
+    channel.onmessage = (event) => {
+      const message = event.data as { type: string; html?: string };
+      messages.push(message);
+      // As the print page does: a close request closes the window.
+      if (message.type === 'close') proxy.close();
     };
     const html = () => messages.find((message) => message.type === 'print')?.html;
     const fake: FakePrintWindow = {
@@ -97,15 +104,12 @@ export function installFakePrintWindows({ ready = true }: { ready?: boolean } = 
       },
       printRequests: () => messages.filter((message) => message.type === 'print').length,
       ready: () => channel.postMessage({ type: 'ready' }),
-      closeByOperator: () => {
-        proxy.closed = true;
-        channel.postMessage({ type: 'closed' });
-        channel.close();
-      },
+      closeByOperator: () => proxy.close(),
     };
     windows.push(fake);
     if (ready) fake.ready();
-    return proxy as unknown as Window;
+    // noopener: the opening page gets no reference.
+    return null;
   });
   return {
     open,

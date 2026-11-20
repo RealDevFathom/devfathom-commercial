@@ -7,6 +7,7 @@ import type { TerminalRequest } from './checkout-panel';
 import { buildReceiptPreview, SAMPLE_RECEIPT } from '@/lib/receipts/preview';
 import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
 import { RawPrintValidationError } from '@/lib/restaurant/printing/contract';
+import { PRINT_WINDOW_READY_TIMEOUT_MS } from '@/lib/browser-print/print-window';
 import { installFakePrintWindows } from '@/lib/testing/print-window';
 
 const receipt: Receipt = {
@@ -161,14 +162,14 @@ describe('Receipt print controls', () => {
     expect(await screen.findByText(/Printer unavailable or delivery failed/)).toBeVisible();
     expect(request).toHaveBeenCalledWith('/api/restaurant/checkout/receipt?billId=bill-1');
   });
-  it('requires duplicate acknowledgement for browser copies and never treats afterprint as success', () => {
+  it('requires duplicate acknowledgement for browser copies and never treats afterprint as success', async () => {
     const windows = installFakePrintWindows();
     render(<ReceiptPrintControls receipt={receipt} initial={printed} request={vi.fn()} />);
     const button = screen.getByRole('button', { name: 'Open browser print dialog' });
     expect(button).toBeDisabled();
     fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.click(button);
-    expect(windows.last().printRequests()).toBe(1);
+    await waitFor(() => expect(windows.last().printRequests()).toBe(1));
     // DEV-973: the isolated window prints itself; the POS never calls print() on it.
     expect(windows.last().proxy.print).not.toHaveBeenCalled();
     window.dispatchEvent(new Event('afterprint'));
@@ -179,7 +180,7 @@ describe('Receipt print controls', () => {
 });
 
 describe('Browser receipt fallback', () => {
-  it('prints the identical captured shared preview at its captured width after settings change', () => {
+  it('prints the identical captured shared preview at its captured width after settings change', async () => {
     const windows = installFakePrintWindows();
     const text = 'Saved header\nInvoice: 7\nTOTAL 26.05\nSaved footer';
     render(
@@ -192,6 +193,7 @@ describe('Browser receipt fallback', () => {
     expect(screen.getByText(/Using the queued receipt layout/)).toHaveTextContent('58 mm');
     fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.click(screen.getByRole('button', { name: 'Open browser print dialog' }));
+    await waitFor(() => expect(windows.last().printRequests()).toBe(1));
     const printed = windows.last().document()!;
     expect(printed.querySelector('pre')?.textContent).toBe(text);
     expect(printed.querySelector('style')?.textContent).toContain('width: 54mm');
@@ -265,11 +267,11 @@ describe('Browser receipt fallback', () => {
   );
   it.each([58, 80] as const)(
     'requests %s mm paper with canonical facts and inert Unicode text',
-    (width) => {
+    async (width) => {
       const windows = installFakePrintWindows();
       const text = previewText(width);
-      requestReceiptDialog(receipt, width, text);
-      const popup = { document: windows.last().document()!, opener: windows.last().proxy.opener };
+      await requestReceiptDialog(receipt, width, text);
+      const popup = { document: windows.last().document()! };
       expect(popup.document.title).toBe(`Receipt ${receipt.receiptNumber ?? 'unissued'}`);
       expect(popup.document.querySelector('pre')?.textContent).toBe(text);
       expect(popup.document.querySelector('style')?.textContent).toContain('white-space: pre-wrap');
@@ -284,16 +286,22 @@ describe('Browser receipt fallback', () => {
       ])
         expect(popup.document.body.textContent).toContain(fact);
       expect(popup.document.querySelector('img')).toBeNull();
-      expect(popup.opener).toBeNull();
+      // noopener: the print window has no reference back to the POS.
+      expect(windows.last().features).toMatch(/^noopener,/);
       expect(windows.last().printRequests()).toBe(1);
       expect(windows.last().proxy.print).not.toHaveBeenCalled();
     }
   );
-  it('reports blocked popups without claiming a dialog', () => {
-    vi.spyOn(window, 'open').mockReturnValue(null);
-    expect(() => requestReceiptDialog(receipt, 80, previewText(80))).toThrow(
+  it('reports blocked popups without claiming a dialog', async () => {
+    // DEV-973: with noopener, a blocked window is the one whose print page never loads.
+    vi.useFakeTimers();
+    installFakePrintWindows({ blocked: true });
+    const outcome = expect(requestReceiptDialog(receipt, 80, previewText(80))).rejects.toThrow(
       'Print window blocked'
     );
+    await vi.advanceTimersByTimeAsync(PRINT_WINDOW_READY_TIMEOUT_MS);
+    await outcome;
+    vi.useRealTimers();
   });
   it('refuses missing validated text before opening a popup', () => {
     const open = vi.spyOn(window, 'open');

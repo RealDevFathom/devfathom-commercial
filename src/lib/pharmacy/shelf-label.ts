@@ -172,28 +172,33 @@ body { margin: 0; color: black; background: white; font: ${format === '38x25' ? 
 export function printShelfLabels(
   selection: readonly ShelfLabelSelection[],
   format: ShelfLabelFormat
-): void {
+): Promise<void> {
   const html = buildShelfLabelSheet(selection, format);
   // DEV-973: an isolated window that prints itself, so this page never freezes.
-  let popup: PrintWindow | null;
+  let popup: PrintWindow;
   try {
     popup = openPrintWindow('popup,width=720,height=800');
   } catch (error) {
     throw new ShelfLabelError(error instanceof Error ? error.message : 'Print window unavailable.');
   }
-  if (!popup) throw new ShelfLabelError('Allow pop-ups for this site, then retry printing.');
+  let overflowing: boolean;
   try {
     // Laid out in this page, never printed here.
-    const overflowing = printContentOverflows(html, '.shelf-label');
-    if (overflowing) {
-      throw new ShelfLabelError(
-        'A label does not fit the selected size. Choose 50 × 25 mm or the A4 sheet.'
-      );
-    }
-    sendToPrintWindow(popup, html);
-  } catch (error) {
+    overflowing = printContentOverflows(html, '.shelf-label');
+  } catch {
     closePrintWindow(popup);
-    if (error instanceof ShelfLabelError) throw error;
     throw new ShelfLabelError('The print window could not open. Retry printing.');
   }
+  if (overflowing) {
+    closePrintWindow(popup);
+    throw new ShelfLabelError(
+      'A label does not fit the selected size. Choose 50 × 25 mm or the A4 sheet.'
+    );
+  }
+  return sendToPrintWindow(popup, html, {
+    blockedMessage: 'Allow pop-ups for this site, then retry printing.',
+    failedMessage: 'The print window could not open. Retry printing.',
+  }).catch((error: unknown) => {
+    throw new ShelfLabelError(error instanceof Error ? error.message : 'Print window unavailable.');
+  });
 }

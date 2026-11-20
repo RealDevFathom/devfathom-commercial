@@ -2610,7 +2610,6 @@ function ScopedPharmacyCounterConsole({
       if (!saleId) throw new Error('Open a bill');
       // DEV-973: an isolated window that prints itself, so this counter never freezes.
       const popup = openPrintWindow('popup,width=640,height=720');
-      if (!popup) throw new Error('Allow pop-ups');
       try {
         const statement = await utils.client.pharmacySales.khataStatement.query({
           branchId,
@@ -2637,7 +2636,10 @@ function ScopedPharmacyCounterConsole({
           ),
         ].join('\n');
         doc.body.replaceChildren(pre);
-        sendToPrintWindow(popup, serializePrintDocument(doc));
+        await sendToPrintWindow(popup, serializePrintDocument(doc), {
+          blockedMessage: 'Allow pop-ups',
+          failedMessage: 'The print window is closed. Retry Print Khata statement.',
+        });
       } catch (error) {
         closePrintWindow(popup);
         throw error;
@@ -3270,7 +3272,7 @@ function ScopedPharmacyCounterConsole({
       try {
         // Reject known popup and rendering failures before claiming an ordinal.
         // Recheck at dispatch too: windows can close while allocation is in flight.
-        assertCounterBrowserPrintReady(reservation);
+        await assertCounterBrowserPrintReady(reservation);
         buildCounterBrowserReceipt(receipt, receiptLocale, receiptFormat, false);
         buildCounterBrowserReceipt(receipt, receiptLocale, receiptFormat, true);
       } catch (error) {
@@ -3292,7 +3294,7 @@ function ScopedPharmacyCounterConsole({
           saleId: receipt.saleId,
           locale: receiptLocale,
         });
-        printCounterBrowserReceipt(
+        await printCounterBrowserReceipt(
           receipt,
           receiptLocale,
           receiptFormat,

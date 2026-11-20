@@ -209,7 +209,7 @@ export function KhataPaymentForm({
     }
   }
 
-  function printSlip() {
+  async function printSlip() {
     if (!slip) return;
     try {
       // DEV-973: an isolated window that prints itself, so the counter never freezes.
@@ -217,7 +217,7 @@ export function KhataPaymentForm({
       const text = doc.createElement('pre');
       text.textContent = khataPaymentSlipLines(slip).join('\n');
       doc.body.append(text);
-      printInWindow(serializePrintDocument(doc), {
+      await printInWindow(serializePrintDocument(doc), {
         features: 'popup,width=480,height=720',
         blockedMessage: 'Allow pop-ups to print this slip.',
         failedMessage: 'Slip could not print.',

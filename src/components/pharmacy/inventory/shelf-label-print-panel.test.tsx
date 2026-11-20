@@ -45,7 +45,7 @@ describe('DEV-90 shelf label print panel', () => {
     expect(screen.getAllByText('Rs 120.00').length).toBeGreaterThan(0);
   });
 
-  it('lets the operator change the count and prints exactly that many stickers', () => {
+  it('lets the operator change the count and prints exactly that many stickers', async () => {
     const windows = installFakePrintWindows();
     render(<ShelfLabelPrintPanel title="Search" rows={[sellable]} />);
     fireEvent.change(screen.getByLabelText('Labels for Paracetamol batch B-1'), {
@@ -54,11 +54,15 @@ describe('DEV-90 shelf label print panel', () => {
     fireEvent.change(screen.getByLabelText('Label size'), { target: { value: '50x25' } });
     fireEvent.click(screen.getByRole('button', { name: 'Print 3 labels' }));
 
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      '3 labels sent to the print dialog.'
+    );
     const written = windows.windows.map((popup) => popup.html());
     expect(written).toHaveLength(1);
     expect(written[0]!.match(/<section class="shelf-label"/g)).toHaveLength(3);
     expect(written[0]).toContain('@page { size: 50mm 25mm; margin: 0; }');
-    expect(windows.last().proxy.opener).toBeNull();
+    // noopener: the print window has no reference back to this page.
+    expect(windows.last().features).toMatch(/^noopener,/);
     expect(windows.last().printRequests()).toBe(1);
     // DEV-973: the isolated window prints itself; this page never calls print() on it.
     expect(windows.last().proxy.print).not.toHaveBeenCalled();

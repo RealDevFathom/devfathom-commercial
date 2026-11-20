@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 
 const thermal = vi.hoisted(() => ({ props: vi.fn() }));
@@ -9,6 +9,7 @@ vi.mock('./counter-thermal-print', () => ({
   },
 }));
 
+import { PRINT_WINDOW_READY_TIMEOUT_MS } from '@/lib/browser-print/print-window';
 import { installFakePrintWindows } from '@/lib/testing/print-window';
 import { CounterReceiptView, type CounterReceiptViewProps } from './counter-receipt-view';
 
@@ -297,7 +298,7 @@ it('keeps Rx printing disabled when receipt has no sourced directions or licence
 
 it.each([false, true])(
   'opens isolated Rx labels with reprint=%s and exposes popup failure with retry available',
-  (reprint) => {
+  async (reprint) => {
     const input = props({ reprint });
     input.receipt!.lines[0]!.identityStatus = 'ISSUED';
     input.receipt!.lines[0]!.allocations = [
@@ -320,15 +321,20 @@ it.each([false, true])(
         directionsUrdu: 'اردو',
       },
     ];
-    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    // DEV-973: with noopener, a blocked window is the one whose print page never loads.
+    vi.useFakeTimers();
+    const blocked = installFakePrintWindows({ blocked: true });
     render(<CounterReceiptView {...input} />);
     const button = screen.getByRole('button', { name: /Print Rx labels/ });
     expect(button).toBeEnabled();
     fireEvent.click(button);
+    await act(() => vi.advanceTimersByTimeAsync(PRINT_WINDOW_READY_TIMEOUT_MS));
     expect(screen.getByRole('alert')).toHaveTextContent('Allow pop-ups');
-    open.mockRestore();
+    vi.useRealTimers();
+    blocked.open.mockRestore();
     const windows = installFakePrintWindows();
     fireEvent.click(button);
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
     expect(windows.last().html()).toEqual(expect.stringContaining('size: 50mm 30mm'));
     expect(windows.last().printRequests()).toBe(1);
     // DEV-973: the isolated window prints itself; the counter never calls print() on it.
@@ -339,7 +345,7 @@ it.each([false, true])(
   }
 );
 
-it('selects only the clicked line source from the production receipt payload', () => {
+it('selects only the clicked line source from the production receipt payload', async () => {
   const input = props();
   const line = input.receipt!.lines[0]!;
   input.receipt!.lines = ['first', 'second'].map((saleLineId) => ({
@@ -368,6 +374,7 @@ it('selects only the clicked line source from the production receipt payload', (
   const windows = installFakePrintWindows();
   render(<CounterReceiptView {...input} />);
   fireEvent.click(screen.getAllByRole('button', { name: /Print Rx labels/ })[1]!);
+  await waitFor(() => expect(windows.last().printRequests()).toBe(1));
   expect(windows.last().html()).toEqual(expect.stringContaining('second directions'));
   expect(windows.last().html()).not.toContain('first directions');
   windows.open.mockRestore();

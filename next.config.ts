@@ -63,9 +63,10 @@ const nextConfig: NextConfig = {
       ],
     },
     {
-      // DEV-973: the print window gets its own browsing-context group, so its
-      // print dialog never pauses the counter that opened it.
-      source: '/print-window.html',
+      // DEV-973: defence in depth for the print window. It is opened with
+      // noopener, which isolates it on plain http too, where browsers ignore
+      // this header.
+      source: '/pharmacy/counter/print-window.html',
       headers: [{ key: 'Cross-Origin-Opener-Policy', value: 'same-origin' }],
     },
   ],

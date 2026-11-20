@@ -113,10 +113,10 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }</style>
 }
 
 /** Opens only the isolated slip. Returning does not confirm physical printing. */
-export function printPackingSlip(slip: PackingSlip, format: CounterReceiptFormat): void {
+export function printPackingSlip(slip: PackingSlip, format: CounterReceiptFormat): Promise<void> {
   const html = buildPackingSlipHtml(slip, format);
   // DEV-973: an isolated window that prints itself, so this page never freezes.
-  printInWindow(html, {
+  return printInWindow(html, {
     features: 'popup,width=640,height=820',
     blockedMessage: 'Allow pop-ups for this site, then retry Print packing slip.',
     failedMessage: 'The browser print dialog could not open. Retry Print packing slip.',

@@ -1,9 +1,10 @@
 import {
+  PrintWindowError,
   closePrintWindow,
-  isPrintWindowOpen,
   openPrintWindow,
   printContentOverflows,
   printInWindow,
+  printWindowReady,
   sendToPrintWindow,
   type PrintWindow,
 } from '@/lib/browser-print/print-window';
@@ -72,18 +73,39 @@ export function reserveCounterBrowserPrint(): CounterBrowserPrintReservation {
   return reservation;
 }
 
-/** Check known failures before asking the server to allocate a receipt copy. */
-export function assertCounterBrowserPrintReady(reservation: CounterBrowserPrintReservation): void {
+function reservedWindow(reservation: CounterBrowserPrintReservation) {
   const reserved = reservations.get(reservation);
   if (!reserved || reserved.consumed) {
     throw new Error('This print window is no longer available. Retry Print receipt.');
   }
-  if (reserved.unsupported) throw new Error(reserved.unsupported);
-  if (!reserved.handle) {
-    throw new Error('Allow pop-ups for this site, then retry Print receipt.');
+  if (reserved.unsupported || !reserved.handle) {
+    throw new Error(reserved.unsupported ?? 'Print window unavailable.');
   }
-  if (!isPrintWindowOpen(reserved.handle)) {
-    throw new Error('The print window is no longer available. Retry Print receipt.');
+  return { reserved, handle: reserved.handle };
+}
+
+const RECEIPT_WINDOW_MESSAGES = {
+  blockedMessage: 'Allow pop-ups for this site, then retry Print receipt.',
+  failedMessage: 'The browser print dialog could not open. Retry Print receipt.',
+};
+
+/**
+ * Check known failures before asking the server to allocate a receipt copy.
+ * DEV-973: settles once the print page has loaded; a blocked pop-up is the one
+ * that never announces itself.
+ */
+export async function assertCounterBrowserPrintReady(
+  reservation: CounterBrowserPrintReservation
+): Promise<void> {
+  const { handle } = reservedWindow(reservation);
+  try {
+    await printWindowReady(handle);
+  } catch (error) {
+    throw new Error(
+      error instanceof PrintWindowError && error.reason === 'blocked'
+        ? RECEIPT_WINDOW_MESSAGES.blockedMessage
+        : 'The print window is no longer available. Retry Print receipt.'
+    );
   }
 }
 
@@ -151,7 +173,10 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }</style>
 </head><body><pre>${receiptHtmlText(preview, locale)}</pre></body></html>`;
 }
 
-/** Opens only an isolated receipt. Returning does not confirm physical printing. */
+/**
+ * Opens only an isolated receipt. Settles once the receipt has been handed to
+ * the print window, which prints itself. Never confirms physical printing.
+ */
 export function printCounterBrowserReceipt(
   receipt: CounterReceipt,
   locale: CounterReceiptLocale,
@@ -159,34 +184,32 @@ export function printCounterBrowserReceipt(
   reprint = false,
   reservation?: CounterBrowserPrintReservation,
   labelSources: readonly DispensingLabelSource[] = []
-): void {
+): Promise<void> {
   const html = buildCounterBrowserReceipt(receipt, locale, format, reprint, labelSources);
   const printReservation = reservation ?? reserveCounterBrowserPrint();
-  assertCounterBrowserPrintReady(printReservation);
-  const reserved = reservations.get(printReservation)!;
+  const { reserved, handle } = reservedWindow(printReservation);
   reserved.consumed = true;
-  const handle = reserved.handle!;
+  let overflowing = false;
   try {
-    if (format === 'LABEL_50x30' && printContentOverflows(html, '.dispensing-label')) {
-      throw new Error(
-        'Rx label content exceeds 50 × 30 mm. Review directions or use larger paper.'
-      );
-    }
-    // The print window prints itself; this page never calls print() on it.
-    sendToPrintWindow(handle, html);
-  } catch (error) {
+    overflowing = format === 'LABEL_50x30' && printContentOverflows(html, '.dispensing-label');
+  } catch {
     closePrintWindow(handle);
-    if (error instanceof Error && error.message.startsWith('Rx label content exceeds')) throw error;
-    throw new Error('The browser print dialog could not open. Retry Print receipt.');
+    throw new Error(RECEIPT_WINDOW_MESSAGES.failedMessage);
   }
+  if (overflowing) {
+    closePrintWindow(handle);
+    throw new Error('Rx label content exceeds 50 × 30 mm. Review directions or use larger paper.');
+  }
+  // The print window prints itself; this page never calls print() on it.
+  return sendToPrintWindow(handle, html, RECEIPT_WINDOW_MESSAGES);
 }
 
 /**
  * F3 Z-report transport: opened directly from the operator's click (no settlement await,
  * so no reserved window is needed). Receipts keep the reserved-window path above.
  */
-function printCounterDocument(html: string, retry = 'Print receipt'): void {
-  printInWindow(html, {
+function printCounterDocument(html: string, retry = 'Print receipt'): Promise<void> {
+  return printInWindow(html, {
     features: COUNTER_PRINT_WINDOW,
     blockedMessage: `Allow pop-ups for this site, then retry ${retry}.`,
     failedMessage: `The browser print dialog could not open. Retry ${retry}.`,
@@ -258,8 +281,8 @@ export function printPrinterTestPage(
   format: PrinterTestFormat,
   locale: CounterReceiptLocale,
   branchName: string
-): void {
-  printCounterDocument(buildPrinterTestPage(format, locale, branchName), 'Print test page');
+): Promise<void> {
+  return printCounterDocument(buildPrinterTestPage(format, locale, branchName), 'Print test page');
 }
 
 /** Z_REPORT is separate from settled-sale paper formats, sharing the isolated print transport. */
@@ -276,6 +299,6 @@ export function buildCounterBrowserZReport(
 export function printCounterBrowserZReport(
   report: CounterZReport,
   locale: CounterReceiptLocale
-): void {
-  printCounterDocument(buildCounterBrowserZReport(report, locale, 'Z_REPORT'));
+): Promise<void> {
+  return printCounterDocument(buildCounterBrowserZReport(report, locale, 'Z_REPORT'));
 }

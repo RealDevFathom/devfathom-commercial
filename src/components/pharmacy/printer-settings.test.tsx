@@ -120,7 +120,7 @@ describe('PharmacyPrinterSettingsConsole', () => {
     expect(mocks.print).toHaveBeenCalledWith('THERMAL', 'en', 'Main');
   });
 
-  it('prints an Urdu test page on the selected paper without claiming the printer printed', () => {
+  it('prints an Urdu test page on the selected paper without claiming the printer printed', async () => {
     render(<PharmacyPrinterSettingsConsole canSave />);
     fireEvent.change(screen.getByLabelText('Receipt printer and paper'), {
       target: { value: 'THERMAL_58' },
@@ -128,22 +128,23 @@ describe('PharmacyPrinterSettingsConsole', () => {
     fireEvent.change(screen.getByLabelText('Test language'), { target: { value: 'ur' } });
     fireEvent.click(screen.getByRole('button', { name: 'Print test page' }));
     expect(mocks.print).toHaveBeenCalledWith('THERMAL_58', 'ur', 'Main');
-    expect(screen.getByRole('status')).toHaveTextContent(
+    expect(await screen.findByRole('status')).toHaveTextContent(
       /cannot see whether the page printed or the dialog was cancelled/
     );
   });
 
-  it('shows a failed test print and lets the operator retry', () => {
-    mocks.print.mockImplementationOnce(() => {
-      throw new Error('Allow pop-ups for this site, then retry Print test page.');
-    });
+  it('shows a failed test print and lets the operator retry', async () => {
+    // DEV-973: a blocked print window is reported once its page fails to load.
+    mocks.print.mockRejectedValueOnce(
+      new Error('Allow pop-ups for this site, then retry Print test page.')
+    );
     render(<PharmacyPrinterSettingsConsole canSave />);
     fireEvent.click(screen.getByRole('button', { name: 'Print test page' }));
-    expect(screen.getByRole('alert')).toHaveTextContent('Allow pop-ups');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Allow pop-ups');
     fireEvent.click(screen.getByRole('button', { name: 'Print test page' }));
     expect(mocks.print).toHaveBeenCalledTimes(2);
+    expect(await screen.findByRole('status')).toHaveTextContent(/Print dialog opened/);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent(/Print dialog opened/);
   });
 
   it('switches branch and offers retry when saved settings cannot be read', () => {

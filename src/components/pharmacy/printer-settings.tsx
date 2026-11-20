@@ -79,10 +79,10 @@ function BranchPrinterForm({
     save.mutate({ branchId, revision, layout: layoutWithPaper(layout, paper) });
   }
 
-  function testPrint() {
+  async function testPrint() {
     setTestNotice(null);
     try {
-      printPrinterTestPage(paper, testLocale, branchName);
+      await printPrinterTestPage(paper, testLocale, branchName);
       setTestNotice({
         tone: 'status',
         text: 'Print dialog opened. Choose your printer and matching paper, then check that the ruler line fits on one line. DevFathom cannot see whether the page printed or the dialog was cancelled.',

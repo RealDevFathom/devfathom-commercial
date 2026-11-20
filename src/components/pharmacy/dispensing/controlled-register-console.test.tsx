@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type Branch = { id: string; name: string };
@@ -144,7 +144,7 @@ describe('DEV-672 controlled register branch list', () => {
     expect(h.registerInputs.at(-1)).toEqual({ input: { branchId: 'br-2' }, enabled: true });
   });
 
-  it('prints the register table with the branch name', () => {
+  it('prints the register table with the branch name', async () => {
     h.branches = { isLoading: false, error: null, data: [{ id: 'br-1', name: 'Gulberg' }] };
     const windows = installFakePrintWindows();
 
@@ -152,7 +152,7 @@ describe('DEV-672 controlled register branch list', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Print register' }));
 
     expect(windows.open).toHaveBeenCalledOnce();
-    expect(windows.last().printRequests()).toBe(1);
+    await waitFor(() => expect(windows.last().printRequests()).toBe(1));
     // DEV-973: the isolated window prints itself; this page never calls print() on it.
     expect(windows.last().proxy.print).not.toHaveBeenCalled();
     const popup = windows.last().document()!;

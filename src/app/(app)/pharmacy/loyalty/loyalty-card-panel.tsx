@@ -8,7 +8,6 @@ import { formatLoyaltyCardCode } from '@/lib/pharmacy/loyalty-card-code';
 import { formatWorkspaceDate } from '@/lib/timezone';
 import { encodeQr, qrSvgPath } from '@/lib/qr/qr-code';
 import {
-  closePrintWindow,
   createPrintDocument,
   openPrintWindow,
   sendToPrintWindow,
@@ -31,7 +30,7 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
  * code spelled out under the QR for manual entry when a scan fails. Built from text nodes only;
  * the card carries no name, phone, balance or anything else about the customer.
  */
-function printCard(code: string) {
+async function printCard(code: string): Promise<boolean> {
   // DEV-973: an isolated window that prints itself, so this page never freezes.
   let popup: PrintWindow | null;
   try {
@@ -71,9 +70,8 @@ function printCard(code: string) {
   doc.body.style.margin = '0';
   doc.body.append(wrap);
   try {
-    sendToPrintWindow(popup, serializePrintDocument(doc));
+    await sendToPrintWindow(popup, serializePrintDocument(doc));
   } catch {
-    closePrintWindow(popup);
     return false;
   }
   return true;
@@ -292,7 +290,7 @@ export function LoyaltyCardPanel({
             variant="outline"
             size="touch"
             className="min-h-11"
-            onClick={() => setPrintBlocked(!printCard(issuedCode))}
+            onClick={async () => setPrintBlocked(!(await printCard(issuedCode)))}
           >
             Print card
           </Button>

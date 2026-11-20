@@ -661,7 +661,7 @@ export function ReturnForm({
     </div>
   );
 
-  function print() {
+  async function print() {
     try {
       if (!receipt.data || !data || stale || receipt.isFetching || receipt.isError)
         throw new Error('Reload receipt and return history before printing.');
@@ -687,7 +687,7 @@ export function ReturnForm({
           )
           .join('\n');
       doc.body.append(appendix);
-      printInWindow(serializePrintDocument(doc), {
+      await printInWindow(serializePrintDocument(doc), {
         features: 'popup,width=480,height=720',
         blockedMessage: 'Allow pop-ups to reprint this receipt.',
         failedMessage: 'Receipt could not print.',

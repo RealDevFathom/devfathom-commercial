@@ -6,35 +6,53 @@
  * print dialog pauses that whole group until it closes. With the pop-up behind
  * the counter, the counter looked dead.
  *
- * Instead, the page opens the static print page `public/print-window.html`.
- * That page is served with `Cross-Origin-Opener-Policy: same-origin`, so the
- * browser moves it into its own browsing-context group: its print dialog cannot
- * pause this page, and it cannot reach back into this page either. The page
- * hands it the finished document over a `BroadcastChannel` named after a random
- * id in the URL fragment (same origin only, held in memory, never in a URL
- * query, storage or a server request), and the print page prints itself.
+ * Instead, the page opens the static print page with `noopener`, which always
+ * puts it in its own browsing-context group, on https and on a plain-http LAN
+ * address alike (Cross-Origin-Opener-Policy alone is ignored on plain http).
+ * Its print dialog therefore cannot pause this page, and it cannot reach back
+ * into this page. The page hands it the finished document over a
+ * `BroadcastChannel` named after a random id in the URL fragment (same origin
+ * only, held in memory, never in a URL query, storage or a server request), and
+ * the print page prints itself, then closes itself when the dialog closes.
  *
- * `window.open` is still called directly, so it stays inside the operator's
- * click and a blocked pop-up is still detected at once. Returning never
- * confirms that paper came out.
+ * With `noopener`, `window.open` returns null whether or not the browser blocked
+ * the window, so "blocked" means the print page never announced itself within
+ * `PRINT_WINDOW_READY_TIMEOUT_MS`. The print page lives inside the counter
+ * service worker's scope, which keeps a copy for offline printing.
+ * Returning never confirms that paper came out.
  */
+import { browserUuid } from '@/lib/browser-uuid';
 
-export const PRINT_WINDOW_PATH = '/print-window.html';
+export const PRINT_WINDOW_PATH = '/pharmacy/counter/print-window.html';
+export const PRINT_WINDOW_SCRIPT_PATH = '/pharmacy/counter/print-window.js';
 export const PRINT_WINDOW_CHANNEL_PREFIX = 'devfathom-print-window:';
-/** A print page that has not loaded by then is treated as gone. */
-export const PRINT_WINDOW_READY_TIMEOUT_MS = 20_000;
+/** A print page that has not announced itself by then was blocked or never loaded. */
+export const PRINT_WINDOW_READY_TIMEOUT_MS = 5_000;
+/** A print page that loads after all is still told to close for this long. */
+const LATE_WINDOW_MS = 120_000;
 
-/** An opaque handle; the window itself is not reachable once it has loaded. */
+/** An opaque handle: the window itself is never reachable from this page. */
 export type PrintWindow = { readonly id: string };
 
+export class PrintWindowError extends Error {
+  constructor(readonly reason: 'blocked' | 'closed') {
+    super(reason === 'blocked' ? 'The print window did not open.' : 'The print window is closed.');
+    this.name = 'PrintWindowError';
+  }
+}
+
+export type PrintWindowMessages = { blockedMessage: string; failedMessage: string };
+
 type Entry = {
-  window: Window;
   channel: BroadcastChannel;
+  /** Counted as open (for the notice) until it closes, fails or is cancelled. */
+  open: boolean;
   ready: boolean;
-  /** No longer counted as open: cancelled, closed by the operator, or never loaded. */
+  /** Cancelled or failed: a late print page is told to close. */
   closing: boolean;
-  html: string | null;
   sent: boolean;
+  readiness: Promise<void>;
+  settle: (error?: PrintWindowError) => void;
   timer: ReturnType<typeof setTimeout> | null;
 };
 
@@ -43,7 +61,7 @@ const listeners = new Set<() => void>();
 let openCount = 0;
 
 function emit(): void {
-  openCount = Array.from(entries.values()).filter((entry) => !entry.closing).length;
+  openCount = Array.from(entries.values()).filter((entry) => entry.open).length;
   for (const listener of listeners) listener();
 }
 
@@ -61,11 +79,29 @@ function dispose(id: string): void {
   if (!entry) return;
   entries.delete(id);
   if (entry.timer) clearTimeout(entry.timer);
+  entry.settle(new PrintWindowError('closed'));
   try {
     entry.channel.close();
   } catch {
     // Cleanup never interrupts the page.
   }
+  emit();
+}
+
+/** Stops counting the window; a print page that loads later is told to close. */
+function abandon(id: string, reason: 'blocked' | 'closed'): void {
+  const entry = entries.get(id);
+  if (!entry) return;
+  entry.open = false;
+  entry.closing = true;
+  entry.settle(new PrintWindowError(reason));
+  if (entry.ready) {
+    post(entry, { type: 'close' });
+    dispose(id);
+    return;
+  }
+  if (entry.timer) clearTimeout(entry.timer);
+  entry.timer = setTimeout(() => dispose(id), LATE_WINDOW_MS);
   emit();
 }
 
@@ -76,129 +112,123 @@ function onMessage(id: string, data: unknown): void {
   if (type === 'ready') {
     if (entry.ready) return;
     entry.ready = true;
-    if (entry.timer) clearTimeout(entry.timer);
-    entry.timer = null;
     if (entry.closing) {
       post(entry, { type: 'close' });
       dispose(id);
       return;
     }
-    if (entry.html !== null) {
-      post(entry, { type: 'print', html: entry.html });
-      entry.html = null;
-    }
+    if (entry.timer) clearTimeout(entry.timer);
+    entry.timer = null;
+    entry.settle();
   } else if (type === 'closed') {
     dispose(id);
   }
 }
 
 /**
- * Call synchronously from the operator's click. Returns null when the browser
- * blocked the window. Throws when this browser cannot isolate a print window.
+ * Call synchronously from the operator's click: browsers only allow a pop-up
+ * there. Throws when this browser cannot isolate a print window.
  */
-export function openPrintWindow(features: string): PrintWindow | null {
-  if (typeof BroadcastChannel !== 'function' || typeof crypto?.randomUUID !== 'function') {
+export function openPrintWindow(features: string): PrintWindow {
+  let id: string;
+  try {
+    if (typeof BroadcastChannel !== 'function') throw new Error('No BroadcastChannel.');
+    id = browserUuid();
+  } catch {
     throw new Error('This browser cannot open a print window. Update the browser, then retry.');
   }
-  const id = crypto.randomUUID();
   const channel = new BroadcastChannel(`${PRINT_WINDOW_CHANNEL_PREFIX}${id}`);
+  let settle!: Entry['settle'];
+  const readiness = new Promise<void>((resolve, reject) => {
+    let settled = false;
+    settle = (error) => {
+      if (settled) return;
+      settled = true;
+      if (error) reject(error);
+      else resolve();
+    };
+  });
+  // Nobody may be waiting yet; a failure is still reported to whoever asks.
+  readiness.catch(() => {});
   const entry: Entry = {
-    window: null as unknown as Window,
     channel,
+    open: true,
     ready: false,
     closing: false,
-    html: null,
     sent: false,
+    readiness,
+    settle,
     timer: null,
   };
   // Listen before opening: the print page announces itself as soon as it loads.
   channel.onmessage = (event: MessageEvent) => onMessage(id, event.data);
   entries.set(id, entry);
-  let popup: Window | null = null;
-  try {
-    popup = window.open(`${PRINT_WINDOW_PATH}#${id}`, '_blank', features);
-  } catch {
-    popup = null;
-  }
-  if (!popup) {
-    dispose(id);
-    return null;
-  }
-  entry.window = popup;
-  try {
-    // Defence in depth for a browser that ignores the opener policy.
-    popup.opener = null;
-  } catch {
-    // Already isolated.
-  }
-  if (!entry.ready) {
-    entry.timer = setTimeout(() => {
-      const current = entries.get(id);
-      if (!current || current.ready) return;
-      post(current, { type: 'close' });
-      dispose(id);
-    }, PRINT_WINDOW_READY_TIMEOUT_MS);
-  }
+  entry.timer = setTimeout(() => {
+    const current = entries.get(id);
+    if (current && !current.ready) abandon(id, 'blocked');
+  }, PRINT_WINDOW_READY_TIMEOUT_MS);
   emit();
+  try {
+    // noopener: its own browsing-context group, so its print dialog cannot
+    // pause this page; and no reference back into this page.
+    window.open(`${PRINT_WINDOW_PATH}#${id}`, '_blank', `noopener,${features}`);
+  } catch {
+    abandon(id, 'blocked');
+  }
   return { id };
+}
+
+/** Resolves once the print page has loaded; rejects if it was blocked or closed. */
+export function printWindowReady(handle: PrintWindow): Promise<void> {
+  const entry = entries.get(handle.id);
+  if (!entry || entry.closing) return Promise.reject(new PrintWindowError('closed'));
+  return entry.readiness;
 }
 
 /** True until the operator closes the window, it is cancelled, or it never loaded. */
 export function isPrintWindowOpen(handle: PrintWindow): boolean {
-  const entry = entries.get(handle.id);
-  return !!entry && !entry.closing;
+  return entries.get(handle.id)?.open ?? false;
 }
 
 /**
  * Hands the finished document to the print window, which prints itself in its
  * own browsing context. This page never calls `print()` on another window.
+ * Resolves once the document has been handed over; rejects (and closes the
+ * window) with `blockedMessage` when it never loaded, otherwise `failedMessage`.
  */
-export function sendToPrintWindow(handle: PrintWindow, html: string): void {
-  const entry = entries.get(handle.id);
-  if (!entry || entry.closing || entry.sent) throw new Error('The print window is closed.');
-  entry.sent = true;
-  if (!entry.ready) {
-    entry.html = html;
-    return;
+export async function sendToPrintWindow(
+  handle: PrintWindow,
+  html: string,
+  messages: PrintWindowMessages = {
+    blockedMessage: 'Allow pop-ups for this site, then retry printing.',
+    failedMessage: 'The print window is closed. Retry printing.',
   }
-  if (!post(entry, { type: 'print', html })) {
+): Promise<void> {
+  const entry = entries.get(handle.id);
+  if (!entry || entry.closing || entry.sent) throw new Error(messages.failedMessage);
+  entry.sent = true;
+  try {
+    await entry.readiness;
+    if (entries.get(handle.id) !== entry || entry.closing || !post(entry, { type: 'print', html }))
+      throw new PrintWindowError('closed');
+  } catch (error) {
     closePrintWindow(handle);
-    throw new Error('The print window is closed.');
+    throw new Error(
+      error instanceof PrintWindowError && error.reason === 'blocked'
+        ? messages.blockedMessage
+        : messages.failedMessage
+    );
   }
 }
 
 /** Closes a window that will not be used (cancelled, failed or refused content). */
 export function closePrintWindow(handle: PrintWindow): void {
-  const entry = entries.get(handle.id);
-  if (!entry) return;
-  try {
-    // Reaches the window only before it has been isolated.
-    entry.window.close();
-  } catch {
-    // Isolated: the close message below reaches it instead.
-  }
-  if (entry.ready) {
-    post(entry, { type: 'close' });
-    dispose(handle.id);
-    return;
-  }
-  // Still loading: it is told to close as soon as it announces itself.
-  entry.closing = true;
-  entry.html = null;
-  emit();
+  abandon(handle.id, 'closed');
 }
 
 /** Asks every open print window to come to the front. */
 export function focusPrintWindows(): void {
-  for (const entry of entries.values()) {
-    if (entry.closing) continue;
-    try {
-      entry.window.focus();
-    } catch {
-      // Isolated windows are asked over their channel.
-    }
-    post(entry, { type: 'focus' });
-  }
+  for (const entry of entries.values()) if (entry.open) post(entry, { type: 'focus' });
 }
 
 /** For `useSyncExternalStore`: how many print windows are open right now. */
@@ -214,28 +244,15 @@ export function subscribePrintWindows(listener: () => void): () => void {
 }
 
 /**
- * One-step print from the operator's click: open the isolated window and hand
- * it the document. Throws `blockedMessage` for a blocked pop-up.
+ * One-step print from the operator's click: the window opens synchronously,
+ * the returned promise settles once the document has been handed over.
  */
 export function printInWindow(
   html: string,
-  { features, blockedMessage, failedMessage }: PrintInWindowOptions
-): void {
-  const handle = openPrintWindow(features);
-  if (!handle) throw new Error(blockedMessage);
-  try {
-    sendToPrintWindow(handle, html);
-  } catch {
-    closePrintWindow(handle);
-    throw new Error(failedMessage);
-  }
+  { features, ...messages }: PrintWindowMessages & { features: string }
+): Promise<void> {
+  return sendToPrintWindow(openPrintWindow(features), html, messages);
 }
-
-export type PrintInWindowOptions = {
-  features: string;
-  blockedMessage: string;
-  failedMessage: string;
-};
 
 /** A detached document to build print content with DOM APIs (text nodes only). */
 export function createPrintDocument(title: string): Document {
