@@ -247,6 +247,39 @@ describe.skipIf(!databaseUrl)('DEV-974 email change takeover against PostgreSQL'
     expect(sent).toEqual([]);
   });
 
+  it('refuses another administrator re-inviting an administrator whose email the owner changed', async () => {
+    await withTenantDb(organizationId, (db) =>
+      app
+        .createCaller(context(db, ids().owner))
+        .team.adminUpdateMember({ id: ids().admin2, email: 'admin2.new@test.invalid' })
+    );
+    // The pending confirmation would hand a fresh sign-in link to the caller.
+    await expect(
+      withTenantDb(organizationId, (db) =>
+        app.createCaller(context(db, ids().admin)).team.inviteMember({
+          name: 'Admin Two',
+          email: 'admin2.new@test.invalid',
+          role: 'ADMIN',
+          department: 'ENGINEERING',
+          title: 'Admin',
+        })
+      )
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    // A pending staff invitation is still re-sent by an administrator.
+    const staffInvite = {
+      name: 'New Staff',
+      email: 'new.staff@test.invalid',
+      department: 'ENGINEERING',
+      title: 'Staff',
+    };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const sent = await withTenantDb(organizationId, (db) =>
+        app.createCaller(context(db, ids().admin)).team.inviteMember(staffInvite)
+      );
+      expect(sent.inviteUrl).toMatch(/\/invite\//);
+    }
+  });
+
   it('lets an administrator correct the email of a member below them, pending confirmation', async () => {
     // A reset link the member asked for earlier must not survive the change.
     await withTenantDb(organizationId, (db) =>

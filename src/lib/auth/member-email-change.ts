@@ -2,7 +2,6 @@ import type { Prisma } from '@/generated/prisma/client';
 import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
 import { appUrl, sendEmail, templates } from '@/lib/email';
 import { generateInviteToken } from '@/lib/invite-token';
-import { INVITE_TTL_MS } from '@/lib/member-invitation';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { RESET_PARTY_SELECT, ROLE_RANK, type ResetParty } from './admin-password-reset';
 
@@ -90,6 +89,9 @@ export async function directoryEmailChangeDenial(
   return null;
 }
 
+/** How long the new-address confirmation link stays usable (same as an invitation). */
+const EMAIL_CONFIRMATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
 /** Statuses whose holder could sign in; an email change by someone else sends them
  * back to INVITED until the new address confirms. INACTIVE stays INACTIVE. */
 const CONFIRMABLE_STATUSES = new Set(['ACTIVE', 'ON_LEAVE', 'INVITED']);
@@ -144,7 +146,7 @@ export async function applyMemberEmailChangeEffects(
     });
     if (confirm) {
       const { token, tokenHash } = generateInviteToken();
-      const expiresAt = new Date(now.getTime() + INVITE_TTL_MS);
+      const expiresAt = new Date(now.getTime() + EMAIL_CONFIRMATION_TTL_MS);
       await tx.invitation.upsert({
         where: { userId: input.userId },
         create: {
