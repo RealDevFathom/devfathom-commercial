@@ -42,7 +42,8 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  * is refused, so the same code cannot approve two actions. A refusal returns null and the
  * caller strikes the PIN credential's lockout counter exactly as it does for a wrong PIN,
  * in both modes. Each accepted approval writes one audit row naming the approver, the
- * action, the time and the method (AUTHENTICATOR or PIN); no code or PIN is stored or logged.
+ * action, the time and the method (AUTHENTICATOR, PIN, or BADGE for a restaurant operator's
+ * badge, which follows the PIN rules); no code, PIN or badge is stored or logged.
  *
  * Self-approval rules are unchanged: every caller decides who may approve (including the
  * solo-owner and sole-pharmacist exceptions) before the secret is checked. Each caller names
@@ -54,15 +55,22 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 /** Steps accepted either side of the server's current time step. */
 export const APPROVAL_TOTP_WINDOW = 1;
 
-export type ApprovalSecretMethod = 'PIN' | 'AUTHENTICATOR';
+export type ApprovalSecretMethod = 'PIN' | 'BADGE' | 'AUTHENTICATOR';
 
 export type ApprovalSecretInput = {
   organizationId: string;
   /** The web login behind the approver's staff profile, or null when it has none. */
   approverUserId: string | null | undefined;
-  /** The approver's live PIN credential hash. */
+  /** The approver's live PIN (or badge) credential hash. */
   credentialHash: string;
-  /** What the approver entered: their PIN or a code from their authenticator app. */
+  /**
+   * DEV-961: the kind of permanent credential `credentialHash` is (a restaurant operator may
+   * approve with a badge). A badge is a permanent secret like a PIN: it is accepted exactly
+   * where a PIN would be, and refused where an app code is required, since it cannot carry
+   * one. Defaults to PIN.
+   */
+  credentialType?: 'PIN' | 'BADGE';
+  /** What the approver entered: their PIN or badge, or a code from their authenticator app. */
   secret: string;
   /** The action being approved, recorded on the audit row (for example a procedure path). */
   action: string;
@@ -113,12 +121,16 @@ export async function verifyApprovalSecret(
         userId: approverUserId,
         now,
       })));
+  const credentialType = input.credentialType ?? 'PIN';
   if (pinAccepted) {
-    if (!(await verifyOperatorCredential('PIN', input.secret, input.credentialHash))) return null;
-    await recordApproval(db, input, 'PIN', approverUserId, now);
-    return 'PIN';
+    if (!(await verifyOperatorCredential(credentialType, input.secret, input.credentialHash)))
+      return null;
+    await recordApproval(db, input, credentialType, approverUserId, now);
+    return credentialType;
   }
-  // ON, an approver with a web login: only the current code from their app.
+  // ON, an approver with a web login: only the current code from their app. A badge is a
+  // permanent secret and cannot carry a code, so it is refused here like a PIN.
+  if (credentialType !== 'PIN') return null;
   const authenticator = await db.approvalAuthenticator.findFirst({
     where: {
       organizationId: input.organizationId,
@@ -195,7 +207,12 @@ async function consumeApprovalCode(
 
 type ApprovalRecordInput = Pick<
   ApprovalSecretInput,
-  'organizationId' | 'action' | 'approverRight' | 'purpose' | 'requestedById' | 'requestedByStaffProfileId'
+  | 'organizationId'
+  | 'action'
+  | 'approverRight'
+  | 'purpose'
+  | 'requestedById'
+  | 'requestedByStaffProfileId'
 >;
 
 /**
@@ -218,7 +235,11 @@ async function recordApproval(
       operation: 'EXECUTE',
       action: input.action,
       description:
-        method === 'AUTHENTICATOR' ? 'Approved with an authenticator code' : 'Approved with a PIN',
+        method === 'AUTHENTICATOR'
+          ? 'Approved with an authenticator code'
+          : method === 'BADGE'
+            ? 'Approved with a badge'
+            : 'Approved with a PIN',
       targetType: approverUserId ? 'User' : null,
       targetId: approverUserId,
       outcome: 'SUCCESS',

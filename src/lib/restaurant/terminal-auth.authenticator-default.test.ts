@@ -50,10 +50,10 @@ function fakeDb(userId: string | null, required = true) {
   };
 }
 
-const approve = (db: ReturnType<typeof fakeDb>, secret = '4821') =>
+const approve = (db: ReturnType<typeof fakeDb>, secret = '4821', type: 'PIN' | 'BADGE' = 'PIN') =>
   authenticateOperator(db as never, {
     staffProfileId: 'staff-approver',
-    type: 'PIN',
+    type,
     secret,
     now,
     approval: {
@@ -104,6 +104,38 @@ describe('DEV-961 restaurant terminal approvals with the authenticator on by def
 
   it('takes the web member’s PIN again once the owner turns the authenticator off', async () => {
     await expect(approve(fakeDb('manager', false))).resolves.toMatchObject({ ok: true });
+  });
+
+  // A badge is a permanent secret like a PIN, so it follows the PIN rules: it cannot get a web
+  // member who must use the app past the forced set-up (the credential row here stands for
+  // the badge: the fake hash matches the secret '4821').
+  it('refuses the badge of a web member who must use the app, and strikes the lockout', async () => {
+    const db = fakeDb('manager');
+    await expect(approve(db, '4821', 'BADGE')).resolves.toEqual({ ok: false, reason: 'INVALID' });
+    expect(db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
+      where: { id: 'cred' },
+      data: expect.objectContaining({ failedAttempts: 1 }),
+    });
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps the badge for a terminal-only approver, and for everyone while the setting is off', async () => {
+    for (const db of [fakeDb(null), fakeDb('manager', false)]) {
+      await expect(approve(db, '4821', 'BADGE')).resolves.toMatchObject({ ok: true });
+      expect(db.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          description: 'Approved with a badge',
+          metadata: expect.objectContaining({
+            approvalMethod: 'BADGE',
+            approverRight: 'coauth:approve',
+          }),
+        }),
+      });
+    }
+    await expect(approve(fakeDb(null), '0000', 'BADGE')).resolves.toEqual({
+      ok: false,
+      reason: 'INVALID',
+    });
   });
 
   it('keeps operator sign-in (not an approval) on the PIN for everyone', async () => {

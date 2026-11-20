@@ -72,6 +72,7 @@ describe('authenticateOperator approvals (DEV-879)', () => {
       organizationId: 'org',
       approverUserId: 'manager',
       credentialHash: 'hash',
+      credentialType: 'PIN',
       secret: '123456',
       action: 'restaurant.terminal.coAuthorize',
       approverRight: 'coauth:approve',

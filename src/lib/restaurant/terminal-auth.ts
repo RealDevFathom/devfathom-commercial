@@ -652,19 +652,21 @@ export async function authenticateOperator(
     return { ok: false, reason: 'LOCKED', retryAfterMs: remainingLockoutMs(state, now) };
   }
 
-  const valid =
-    approval && type === 'PIN'
-      ? (await verifyApprovalSecret(db, {
-          organizationId: credential.organizationId,
-          approverUserId: profile.userId,
-          credentialHash: credential.credentialHash,
-          secret,
-          action: approval.action,
-          approverRight: approval.approverRight,
-          requestedByStaffProfileId: approval.requestedByStaffProfileId ?? null,
-          now,
-        })) !== null
-      : await verifyOperatorCredential(type, secret, credential.credentialHash);
+  // DEV-961: every approval, by PIN or by badge, goes through the shared verifier, so a
+  // badge cannot approve for a web member who must use the app (a badge counts as a PIN).
+  const valid = approval
+    ? (await verifyApprovalSecret(db, {
+        organizationId: credential.organizationId,
+        approverUserId: profile.userId,
+        credentialHash: credential.credentialHash,
+        credentialType: type,
+        secret,
+        action: approval.action,
+        approverRight: approval.approverRight,
+        requestedByStaffProfileId: approval.requestedByStaffProfileId ?? null,
+        now,
+      })) !== null
+    : await verifyOperatorCredential(type, secret, credential.credentialHash);
   if (!valid) {
     const next = registerFailedAttempt(state, now);
     await db.restaurantOperatorCredential.update({ where: { id: credential.id }, data: next });
