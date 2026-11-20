@@ -7,7 +7,11 @@
 import 'server-only';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { rethrowAccessChange, verifyAccessPin } from '@/lib/team/member-sub-role-edit';
+import {
+  refuseSupportSessionPin,
+  rethrowAccessChange,
+  verifyAccessPin,
+} from '@/lib/team/member-sub-role-edit';
 import { guardPharmacyAccessChange } from '@/lib/team/pharmacy-access-guard';
 
 type AccessContext = {
@@ -15,6 +19,10 @@ type AccessContext = {
   session: { user: { id: string; organizationId?: string; isSupportSession?: boolean } };
   support?: unknown;
 };
+
+function isSupportContext(ctx: AccessContext): boolean {
+  return Boolean(ctx.support || ctx.session.user.isSupportSession);
+}
 
 export function isPharmacyContext(ctx: AccessContext): boolean {
   return ctx.entitlements.vertical === 'PHARMACY';
@@ -28,6 +36,8 @@ export async function verifyMemberEditPin(
   action: string
 ): Promise<boolean> {
   if (!isPharmacyContext(ctx) || !pin) return false;
+  // Before the PIN is checked: a support session must never strike the member's PIN.
+  refuseSupportSessionPin({ supportSession: isSupportContext(ctx) });
   return verifyAccessPin({ organizationId, actorId: ctx.session.user.id, pin, action });
 }
 
@@ -59,7 +69,7 @@ export async function guardMemberEdit<T>(
         actor: {
           kind: 'member',
           id: ctx.session.user.id,
-          supportSession: Boolean(ctx.support || ctx.session.user.isSupportSession),
+          supportSession: isSupportContext(ctx),
         },
         targetId: input.targetId,
         pinVerified: input.pinVerified,

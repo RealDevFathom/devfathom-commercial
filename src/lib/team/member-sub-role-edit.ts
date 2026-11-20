@@ -49,6 +49,19 @@ export type SubRoleChangeResult = AccessChangeResult;
  * `verifyApprovalSecret`), in its own transaction so a wrong-PIN strike commits even though
  * the change is then refused. Returns false when no PIN was given.
  */
+/** The refusal a support session gets on any member-access change. */
+export const SUPPORT_SESSION_ACCESS_REFUSAL =
+  'A support session cannot change what a person may do.';
+
+/**
+ * A support session is refused before any PIN is checked, so it can never strike, and so
+ * lock, the approval PIN of the member it is acting as.
+ */
+export function refuseSupportSessionPin(input: { supportSession: boolean }): void {
+  if (input.supportSession)
+    throw new TRPCError({ code: 'FORBIDDEN', message: SUPPORT_SESSION_ACCESS_REFUSAL });
+}
+
 export async function verifyAccessPin(input: {
   organizationId: string;
   actorId: string;
@@ -110,6 +123,7 @@ export async function setPharmacyMemberSubRole(
   if (!subRole || subRole.actions.length !== 1)
     throw new TRPCError({ code: 'BAD_REQUEST', message: 'Unknown sub-role.' });
   const action = subRole.actions[0];
+  refuseSupportSessionPin(input);
   const pinVerified = await verifyAccessPin({ ...input, now });
   try {
     return await db.$transaction(async (transaction) => {
@@ -199,6 +213,7 @@ export async function applyPharmacyMemberRoleTemplate(
   const now = input.now ?? new Date();
   if (!PHARMACY_STARTING_ROLE_KEYS.includes(input.roleKey))
     throw new TRPCError({ code: 'BAD_REQUEST', message: 'Unknown ready-made role.' });
+  refuseSupportSessionPin(input);
   const pinVerified = await verifyAccessPin({ ...input, now });
   try {
     return await db.$transaction(async (transaction) => {

@@ -1236,5 +1236,67 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
         expect(person.status).toBe('ACTIVE');
       });
     });
+
+    it('refuses a support session before any PIN is checked, so it never strikes the PIN', async () => {
+      const strikes = async () =>
+        (
+          await rows(`SELECT "failedAttempts" FROM restaurant_operator_credentials WHERE id=$1`, [
+            id('pin_owner'),
+          ])
+        )[0].failedAttempts as number;
+      const before = await strikes();
+      const support = {
+        ...callers.context('owner'),
+        support: { id: 'support-session' },
+      } as TRPCContext;
+      const { organizationAdminRouter } = await import('@/server/routers/organization-admin');
+      const { teamRouter } = await import('@/server/routers/team');
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await expect(
+          organizationAdminRouter.createCaller(support).setMemberSubRole({
+            userId: id('cashier3'),
+            subRoleKey: 'dispense-prescriptions',
+            ticked: true,
+            pin: '0000',
+          })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(
+          teamRouter
+            .createCaller(support)
+            .adminUpdateMember({ id: id('cashier3'), role: 'ADMIN', pin: '0000' })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      }
+      expect(await strikes()).toBe(before);
+    });
+
+    it('the assistant refuses member writes during a support session', async () => {
+      const { buildPeopleTools } = await import('@/lib/ai/tools/people');
+      const { createTenantDb } = await import('@/lib/tenancy/scoped-db');
+      const tools = buildPeopleTools({
+        db: createTenantDb(orgA, id('owner')),
+        isAdmin: true,
+        isHr: false,
+        isAdminOrHr: true,
+        ctx: {
+          organizationId: orgA,
+          userId: id('owner'),
+          name: 'Owner',
+          vertical: 'PHARMACY',
+          supportSession: true,
+        },
+        can: vi.fn(async () => true),
+        audit: vi.fn(),
+        resolvePerson: async (name: string) => ({
+          kind: 'match',
+          value: { id: id(name), name: id(name) },
+        }),
+      } as never) as unknown as Record<
+        string,
+        { execute: (input: Record<string, unknown>) => Promise<{ error?: string }> }
+      >;
+      const promote = await tools.updateMember.execute({ name: 'cashier3', role: 'HR' });
+      expect(promote.error).toMatch(/support session/);
+      expect((await userRow('cashier3')).role).toBe('EMPLOYEE');
+    });
   }
 );

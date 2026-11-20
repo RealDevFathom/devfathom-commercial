@@ -94,7 +94,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           tx,
           {
             organizationId: ctx.organizationId,
-            actor: { kind: 'member', id: ctx.userId, supportSession: false },
+            actor: { kind: 'member', id: ctx.userId, supportSession: ctx.supportSession === true },
             targetId: typeof targetId === 'function' ? () => targetId(tx) : targetId,
             pinVerified: false,
             mode: 'role',
