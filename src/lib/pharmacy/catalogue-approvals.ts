@@ -135,8 +135,14 @@ export async function requireIndependentCatalogueReviewer(
   if (verified !== 'OK') {
     throw new TRPCError({
       code: 'FORBIDDEN',
-      // DEV-931: an owner who has not created a PIN yet is sent to "Your PIN".
-      message: verified === 'NO_PIN' ? NO_PIN_SET_MESSAGE : 'Fresh owner PIN verification failed.',
+      // DEV-931: an owner who has not created a PIN yet is sent to "Your PIN". DEV-976: a
+      // locked PIN says so, rather than reading as a wrong PIN.
+      message:
+        verified === 'NO_PIN'
+          ? NO_PIN_SET_MESSAGE
+          : verified === 'LOCKED'
+            ? 'Your PIN is locked after too many wrong tries. Wait and try again.'
+            : 'Fresh owner PIN verification failed.',
     });
   }
   return true;
