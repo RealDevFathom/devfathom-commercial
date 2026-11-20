@@ -1,5 +1,6 @@
 import { signOut } from 'next-auth/react';
 
+import { clearCounterReadinessOkay } from '@/lib/pharmacy/counter-readiness-okay';
 import { clearCounterShell } from '@/lib/pharmacy/counter-shell';
 
 /** Loaded only when signing out, so the counter store never weighs on other pages. */
@@ -37,6 +38,8 @@ export async function signOutEverything(callbackUrl = '/login') {
   // DEV-957 phase 2: and an offline bill they were building is not left for the next
   // person. Queued sales stay: that money was taken and must still be sent.
   const draftsCleared = clearOfflineCounterDrafts();
+  // DEV-970: the next person (or the next sign-in) sees the counter's sale checks in full.
+  clearCounterReadinessOkay();
   try {
     await fetch('/api/login', { method: 'DELETE', credentials: 'include' });
   } catch {
