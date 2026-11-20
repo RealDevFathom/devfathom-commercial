@@ -195,7 +195,7 @@ function CloseShift({
     { enabled: expanded, refetchOnWindowFocus: false }
   );
   const approvers = trpc.pharmacySales.shiftApprovers.useQuery(
-    { branchId },
+    { branchId, shiftId: shift.id },
     { enabled: expanded, staleTime: 60_000 }
   );
   const close = trpc.pharmacySales.closeShift.useMutation();
@@ -383,8 +383,9 @@ function CloseShift({
                 </div>
               ) : (
                 <p role="alert" className="text-sm text-text-body">
-                  No manager or owner with a PIN works at this branch. Ask the owner to set one up
-                  before this shift closes.
+                  No one else at this branch can approve this shift, and you cannot approve your
+                  own. Ask a manager or owner with a PIN to approve it, or the owner to set a PIN
+                  up.
                 </p>
               )}
             </fieldset>

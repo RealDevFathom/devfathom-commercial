@@ -41,6 +41,14 @@ describe('DEV-958B cash-shift refusals', () => {
     await expect(withCashShiftRefusal(Promise.reject(failure))).rejects.toBe(failure);
   });
 
+  it('says plainly that an approval was refused or locked, never that one is still needed', () => {
+    const asked = COUNTER_ERROR_MESSAGES.SHIFT_APPROVAL_REQUIRED;
+    for (const reason of ['SHIFT_APPROVAL_REFUSED', 'SHIFT_APPROVAL_LOCKED'] as const)
+      expect(COUNTER_ERROR_MESSAGES[reason], reason).not.toBe(asked);
+    expect(COUNTER_ERROR_MESSAGES.SHIFT_APPROVAL_REFUSED).toMatch(/^That approval was refused/);
+    expect(COUNTER_ERROR_MESSAGES.SHIFT_APPROVAL_LOCKED).toMatch(/locked/i);
+  });
+
   it('has an operator sentence for every shift reason', () => {
     for (const reason of [
       'SHIFTS_NOT_ENABLED',
@@ -55,6 +63,10 @@ describe('DEV-958B cash-shift refusals', () => {
       'SHIFT_COUNT_MISMATCH',
       'SHIFT_CHANGED',
       'SHIFT_HANDOVER_BY_CLOSE',
+      'SHIFT_APPROVAL_REFUSED',
+      'SHIFT_APPROVAL_LOCKED',
+      'SHIFT_APPROVAL_NEEDS_ANOTHER',
+      'SHIFT_APPROVAL_NOT_ELIGIBLE',
     ] as const) {
       expect(COUNTER_ERROR_MESSAGES[reason], reason).toBeTruthy();
       expect(counterErrorMessage(new PharmacySettlementError(reason))).not.toBe(

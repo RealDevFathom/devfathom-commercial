@@ -81,6 +81,10 @@ export class PharmacySettlementError extends Error {
       | 'SHIFT_COUNT_MISMATCH'
       | 'SHIFT_CHANGED'
       | 'SHIFT_HANDOVER_BY_CLOSE'
+      | 'SHIFT_APPROVAL_REFUSED'
+      | 'SHIFT_APPROVAL_LOCKED'
+      | 'SHIFT_APPROVAL_NEEDS_ANOTHER'
+      | 'SHIFT_APPROVAL_NOT_ELIGIBLE'
   ) {
     super(reason);
   }

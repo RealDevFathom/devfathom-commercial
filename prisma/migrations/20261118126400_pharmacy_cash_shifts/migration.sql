@@ -406,14 +406,37 @@ BEGIN
   RETURN attributed.shift_id;
 END $$;
 
+-- The attribution is the database's alone, and a late arrival is exactly what the application's own
+-- offline path writes, nothing wider:
+--   * a tender or refund never names its shift; the database sets it;
+--   * a tender carries a sale time ("soldAt") only from an offline replay: the same transaction
+--     consumed one of that counter's receipt-number leases, issued no later than the sale time, so a
+--     sale time cannot be written by hand to push a payment out of the open shift;
+--   * a drawer movement names a closed shift as a late arrival only for the cash of such a replayed
+--     tender: a cash sale of the same amount on the same drawer, one movement per late tender, both
+--     written in this transaction. A paid-in, paid-out, refund or anything else never lands on a
+--     closed shift.
 CREATE OR REPLACE FUNCTION pharmacy_tender_cash_shift() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   attributed record;
 BEGIN
+  IF NEW."shiftId" IS NOT NULL OR NEW."lateArrivalShiftId" IS NOT NULL THEN
+    RAISE EXCEPTION 'PHARMACY_SHIFT_ATTRIBUTION_INVALID: the database chooses a tender''s shift'
+      USING ERRCODE = '23514';
+  END IF;
+  IF NEW."soldAt" IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM "pharmacy_receipt_number_leases" l
+     WHERE l."organizationId" = NEW."organizationId" AND l."branchId" = NEW."branchId"
+       AND l."deviceId" = NEW."deviceId" AND l."issuedAt" <= NEW."soldAt"
+       AND l.xmin = pg_current_xact_id()::xid
+  ) THEN
+    RAISE EXCEPTION 'PHARMACY_SHIFT_ATTRIBUTION_INVALID: only an offline replay carries a sale time'
+      USING ERRCODE = '23514';
+  END IF;
   SELECT * INTO attributed FROM pharmacy_cash_shift_for(
     NEW."organizationId", NEW."branchId", NEW."drawerSessionId", NEW."deviceId", NEW."businessDate",
-    NEW."soldAt", NEW."shiftId", NEW."lateArrivalShiftId", NULL);
+    NEW."soldAt", NULL, NULL, NULL);
   NEW."shiftId" := attributed.shift_id;
   NEW."lateArrivalShiftId" := attributed.late_shift_id;
   RETURN NEW;
@@ -424,9 +447,13 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   attributed record;
 BEGIN
+  IF NEW."shiftId" IS NOT NULL OR NEW."lateArrivalShiftId" IS NOT NULL THEN
+    RAISE EXCEPTION 'PHARMACY_SHIFT_ATTRIBUTION_INVALID: the database chooses a refund''s shift'
+      USING ERRCODE = '23514';
+  END IF;
   SELECT * INTO attributed FROM pharmacy_cash_shift_for(
     NEW."organizationId", NEW."branchId", NEW."drawerSessionId", NEW."deviceId", NEW."businessDate",
-    NULL, NEW."shiftId", NEW."lateArrivalShiftId", NULL);
+    NULL, NULL, NULL, NULL);
   NEW."shiftId" := attributed.shift_id;
   NEW."lateArrivalShiftId" := attributed.late_shift_id;
   RETURN NEW;
@@ -437,6 +464,22 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   attributed record;
 BEGIN
+  IF NEW."lateArrivalShiftId" IS NOT NULL AND (
+    NEW."kind" <> 'CASH_SALE' OR NEW."shiftId" IS NOT NULL
+    OR (SELECT count(*) FROM "pharmacy_tenders" t
+         WHERE t."organizationId" = NEW."organizationId"
+           AND t."drawerSessionId" = NEW."drawerSessionId"
+           AND t."lateArrivalShiftId" = NEW."lateArrivalShiftId" AND t."type" = 'CASH'
+           AND t."amountMinor" = NEW."amountMinor" AND t.xmin = pg_current_xact_id()::xid)
+       <= (SELECT count(*) FROM "pharmacy_drawer_movements" m
+            WHERE m."organizationId" = NEW."organizationId"
+              AND m."drawerSessionId" = NEW."drawerSessionId"
+              AND m."lateArrivalShiftId" = NEW."lateArrivalShiftId" AND m."kind" = 'CASH_SALE'
+              AND m."amountMinor" = NEW."amountMinor" AND m.xmin = pg_current_xact_id()::xid)
+  ) THEN
+    RAISE EXCEPTION 'PHARMACY_SHIFT_ATTRIBUTION_INVALID: only a replayed offline sale''s cash lands on a closed shift'
+      USING ERRCODE = '23514';
+  END IF;
   SELECT * INTO attributed FROM pharmacy_cash_shift_for(
     NEW."organizationId", NULL, NEW."drawerSessionId", NULL, NULL, NULL,
     NEW."shiftId", NEW."lateArrivalShiftId",

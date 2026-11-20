@@ -834,6 +834,27 @@ function failDayEndHour(error: unknown): never {
   return fail(error);
 }
 
+/**
+ * DEV-958B: the gate for the cash-shift procedures. A manager or owner at the branch (the
+ * drawer-manager gate: the manage grant with no counter DENY, an assigned branch or ADMIN) may act
+ * on any shift of the branch, even without the counter grant; anyone else needs the counter gate
+ * and acts only on their own shift (cash-shifts.ts refuses another cashier's).
+ */
+async function cashShiftScope(
+  ctx: TRPCContext,
+  branch: string
+): Promise<{ scope: LedgerScope; actorIsManager: boolean }> {
+  try {
+    return { scope: await requireDrawerManagerAccess(ctx, branch), actorIsManager: true };
+  } catch (error) {
+    if (!(error instanceof TRPCError) || error.code !== 'FORBIDDEN') throw error;
+    return {
+      scope: await requireCounterReceiptAccess(ctx, branch, true),
+      actorIsManager: false,
+    };
+  }
+}
+
 /** DEV-958B: shift refusals that are a state the counter must refresh, not a bad request. */
 const SHIFT_CONFLICTS = new Set<string>([
   'SHIFT_OPEN',
@@ -918,7 +939,7 @@ function fail(error: unknown): never {
         error.reason === 'CARD_TERMINAL_PAYMENT_OPEN' ||
         SHIFT_CONFLICTS.has(error.reason)
           ? 'CONFLICT'
-          : error.reason === 'DRAWER_NOT_YOURS' || error.reason === 'SHIFT_APPROVAL_REQUIRED'
+          : error.reason === 'DRAWER_NOT_YOURS' || error.reason.startsWith('SHIFT_APPROVAL_')
             ? 'FORBIDDEN'
             : error.reason === 'SHIFT_NOT_FOUND'
               ? 'NOT_FOUND'
@@ -2189,18 +2210,9 @@ export const pharmacySalesRouter = router({
       try {
         const namesAnotherCashier =
           input.cashierId !== undefined && input.cashierId !== ctx.session?.user?.id;
-        const scope = namesAnotherCashier
-          ? await requireDrawerManagerAccess(ctx, input.branchId)
-          : await requireCounterReceiptAccess(ctx, input.branchId, true);
-        const actorIsManager =
-          namesAnotherCashier ||
-          (await actorManagesBranchDrawers(
-            ctx.db,
-            ctx.session!.user,
-            scope.organizationId,
-            scope.branchId,
-            { source: 'TRPC' }
-          ));
+        const { scope, actorIsManager } = namesAnotherCashier
+          ? { scope: await requireDrawerManagerAccess(ctx, input.branchId), actorIsManager: true }
+          : await cashShiftScope(ctx, input.branchId);
         const result = await ctx.db.$transaction(async (tx) =>
           openPharmacyCashShift(txDb(tx), scope, input, { actorIsManager })
         );
@@ -2242,16 +2254,10 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
-        const actorIsManager = await actorManagesBranchDrawers(
-          ctx.db,
-          ctx.session!.user,
-          scope.organizationId,
-          scope.branchId,
-          { source: 'TRPC' }
-        );
+        const { scope, actorIsManager } = await cashShiftScope(ctx, input.branchId);
         const approval = input.approval
           ? await authorizeCashShiftVariance(ctx.db, scope, {
+              shiftId: input.shiftId,
               approverId: input.approval.approverId,
               pin: input.approval.approverPin,
             })
@@ -2291,14 +2297,7 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, shiftId: z.string().min(1).max(128) }).strict())
     .query(async ({ ctx, input }) => {
       try {
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
-        const actorIsManager = await actorManagesBranchDrawers(
-          ctx.db,
-          ctx.session!.user,
-          scope.organizationId,
-          scope.branchId,
-          { source: 'TRPC' }
-        );
+        const { scope, actorIsManager } = await cashShiftScope(ctx, input.branchId);
         const [report, policy, currency] = await Promise.all([
           readPharmacyCashShiftReport(ctx.db, scope, input.shiftId, { actorIsManager }),
           readPharmacyCashShiftPolicy(ctx.db, scope),
@@ -2310,15 +2309,15 @@ export const pharmacySalesRouter = router({
       }
     }),
   /**
-   * DEV-958B: who may approve an over or short above the tolerance on this branch: its managers
-   * and owners with a PIN set up, and the caller themself when they may approve their own close.
+   * DEV-958B: who may approve this shift's over or short: the branch's managers and owners with a
+   * PIN set up other than the shift's cashier, and the cashier only when nobody else can.
    */
   shiftApprovers: protectedProcedure
-    .input(z.object({ branchId }).strict())
+    .input(z.object({ branchId, shiftId: z.string().min(1).max(128) }).strict())
     .query(async ({ ctx, input }) => {
       try {
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
-        return await shiftVarianceApprovers(ctx.db, scope);
+        const { scope } = await cashShiftScope(ctx, input.branchId);
+        return await shiftVarianceApprovers(ctx.db, scope, input.shiftId);
       } catch (error) {
         fail(error);
       }

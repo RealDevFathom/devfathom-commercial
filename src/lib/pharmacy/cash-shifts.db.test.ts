@@ -18,6 +18,14 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
 
+// The router is called as a signed-in member would call it; only the web identity boundary and the
+// audit row write are stubbed, as in pharmacy-sales.drawer-close.db.test.ts.
+vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn(async () => null) }));
+vi.mock('@/server/audit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/audit')>()),
+  recordTrpcAudit: vi.fn(),
+}));
+
 type ScopedDb = import('@/lib/tenancy/scoped-db').ScopedDb;
 type Scope = { organizationId: string; branchId: string; actorId: string };
 
@@ -32,6 +40,8 @@ let report: typeof import('./cash-shift-report');
 let clock: typeof import('./business-day-clock');
 let businessDay: typeof import('./business-day');
 let regulatory: typeof import('@/lib/test-support/pharmacy-regulatory');
+let devices: typeof import('./offline-devices');
+let leases: typeof import('./offline-receipt-leases');
 
 const describeDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const run = randomUUID().slice(0, 8);
@@ -50,6 +60,8 @@ beforeAll(async () => {
   clock = await import('./business-day-clock');
   businessDay = await import('./business-day');
   regulatory = await import('@/lib/test-support/pharmacy-regulatory');
+  devices = await import('./offline-devices');
+  leases = await import('./offline-receipt-leases');
   const { assertRlsEnforcingRole } = await import('@/lib/testing/rls-role-guard');
   await assertRlsEnforcingRole(withPlatformDb);
 }, 120_000);
@@ -269,6 +281,8 @@ const openDrawer = (s: Shop, device: string, floatMinor: number) =>
     })
   );
 
+const dayClock = (s: Shop) => tenant(s.owner, (db) => clock.readPharmacyDayClock(db, s.owner));
+
 const shiftsOf = (s: Shop, drawerSessionId: string) =>
   tenant(s.owner, (db) =>
     db.pharmacyCashShift.findMany({ where: { drawerSessionId }, orderBy: { sequence: 'asc' } })
@@ -308,6 +322,102 @@ const openShift = (
       { actorIsManager: actor === s.manager }
     )
   );
+
+/** Another member of the shop's organization, assigned to `branchId` (the shop's by default). */
+async function addMember(
+  s: Shop,
+  id: string,
+  grants: readonly string[],
+  options: { pin?: string; branchId?: string } = {}
+) {
+  const credentials = await import('@/lib/restaurant/operator-credentials');
+  await tenant(s.owner, async (db) => {
+    await db.organizationRole.create({
+      data: {
+        id: `role_${id}`,
+        key: `role_${id}`,
+        name: id,
+        permissions: {
+          create: grants.map((capability) => ({ capability, effect: 'ALLOW' as const })),
+        },
+      },
+    });
+    await db.user.create({
+      data: {
+        id,
+        name: id,
+        email: `${id}@example.test`,
+        department: 'LEADERSHIP',
+        title: 'Pharmacy staff',
+        role: 'EMPLOYEE',
+        status: 'ACTIVE',
+        organizationRoleId: `role_${id}`,
+      },
+    });
+    await db.pharmacyBranchAssignment.create({
+      data: { userId: id, branchId: options.branchId ?? s.owner.branchId, active: true },
+    });
+    if (options.pin) {
+      const profile = await db.restaurantStaffProfile.create({
+        data: { userId: id, displayName: id },
+      });
+      await db.restaurantOperatorCredential.create({
+        data: {
+          staffProfileId: profile.id,
+          type: 'PIN',
+          credentialHash: await credentials.hashOperatorCredential('PIN', options.pin),
+        },
+      });
+    }
+  });
+  return id;
+}
+
+/** The pharmacy sales procedures as `userId` calls them, in one request's tenant transaction. */
+async function asMember<T>(
+  s: Shop,
+  userId: string,
+  run: (
+    caller: ReturnType<
+      (typeof import('@/server/routers/pharmacy-sales'))['pharmacySalesRouter']['createCaller']
+    >
+  ) => Promise<T>
+) {
+  const { pharmacySalesRouter } = await import('@/server/routers/pharmacy-sales');
+  const organizationId = s.owner.organizationId;
+  return withTenantDb(
+    organizationId,
+    (db) =>
+      run(
+        pharmacySalesRouter.createCaller({
+          db,
+          entitlements: {
+            organizationId,
+            enabledModules: ['pharmacy-core', 'pharmacy-counter'],
+            modules: [],
+            limits: {},
+            seatLimit: 10,
+            activeSeats: 1,
+          },
+          session: {
+            expires: 'later',
+            user: {
+              id: userId,
+              role: 'EMPLOYEE',
+              department: 'LEADERSHIP',
+              status: 'ACTIVE',
+              organizationId,
+            },
+          },
+          organization: { id: organizationId, vertical: 'PHARMACY' },
+          support: null,
+          requestMeta: { ip: null, userAgent: null },
+          audit: { detail: {} },
+        } as never)
+      ),
+    { userId, timeout: 60_000 }
+  );
+}
 
 describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
   it('leaves a branch without shifts exactly as before: no shift, no attribution, the same close', async () => {
@@ -524,11 +634,12 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
     await expect(
       tenant(s.as(s.cashier), (db) =>
         shifts.authorizeCashShiftVariance(db, s.as(s.cashier), {
+          shiftId: first!.id,
           approverId: s.manager,
           pin: '0000',
         })
       )
-    ).rejects.toMatchObject({ reason: 'SHIFT_APPROVAL_REQUIRED' });
+    ).rejects.toMatchObject({ reason: 'SHIFT_APPROVAL_REFUSED' });
     const strikes = await tenant(s.owner, (db) =>
       db.restaurantOperatorCredential.findFirstOrThrow({
         where: { staffProfile: { userId: s.manager } },
@@ -536,17 +647,28 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
       })
     );
     expect(strikes.failedAttempts).toBe(1);
-    // A cashier is no approver, even of their own close.
+    // A cashier never approves their own shift while someone else can; another cashier never can.
     await expect(
       tenant(s.as(s.cashier), (db) =>
         shifts.authorizeCashShiftVariance(db, s.as(s.cashier), {
+          shiftId: first!.id,
           approverId: s.cashier,
           pin: MANAGER_PIN,
         })
       )
-    ).rejects.toMatchObject({ reason: 'SHIFT_APPROVAL_REQUIRED' });
+    ).rejects.toMatchObject({ reason: 'SHIFT_APPROVAL_NEEDS_ANOTHER' });
+    await expect(
+      tenant(s.as(s.cashier), (db) =>
+        shifts.authorizeCashShiftVariance(db, s.as(s.cashier), {
+          shiftId: first!.id,
+          approverId: s.cashier2,
+          pin: MANAGER_PIN,
+        })
+      )
+    ).rejects.toMatchObject({ reason: 'SHIFT_APPROVAL_NOT_ELIGIBLE' });
     const approval = await tenant(s.as(s.cashier), (db) =>
       shifts.authorizeCashShiftVariance(db, s.as(s.cashier), {
+        shiftId: first!.id,
         approverId: s.manager,
         pin: MANAGER_PIN,
       })
@@ -789,13 +911,25 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
 
   it("puts an offline sale in the shift it was sold in, or on the day's close once that shift has closed", async () => {
     const s = await shop('offline', { shifts: true, toleranceMinor: 1_000_000 });
-    const device = `device-${randomUUID()}`;
+    // An enrolled counter with a receipt-number lease, issued before its drawer and first shift.
+    const { device: counter, lease } = await tenant(s.owner, async (db) => {
+      const { device } = await devices.enrollPharmacyCounter(db, s.owner, { name: 'Counter 1' });
+      const block = await leases.reserveReceiptNumberBlock(db, s.owner, {
+        deviceId: device.id,
+        size: 10,
+      });
+      return { device, lease: block };
+    });
+    const device = counter.id;
     const drawer = await openDrawer(s, device, 0);
     const [first] = await shiftsOf(s, drawer.id);
-    // Writes a replayed offline cash sale the way applyPharmacyTender does: the tender carries
-    // the signed sale time, and its cash movement the attribution the database gave the tender.
+    // Writes a replayed offline cash sale the way applyPharmacyTender does: the transaction consumes
+    // the counter's leased receipt number, the tender carries the signed sale time, and its cash
+    // movement the attribution the database gave the tender.
     const replay = (saleId: string, amountMinor: number, soldAt: Date) =>
       tenant(s.as(s.cashier), async (db) => {
+        await db.$executeRaw`UPDATE pharmacy_receipt_number_leases SET "nextNumber" = "nextNumber" + 1
+          WHERE id = ${lease.id} AND "organizationId" = ${s.owner.organizationId}`;
         const tender = await db.pharmacyTender.create({
           data: {
             organizationId: s.owner.organizationId,
@@ -836,23 +970,71 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
     const afterClose = await replay(late.sale.id, 100, soldInShift1);
     // Sold in shift 1, replayed after it closed: a late arrival on shift 1, never in shift 2.
     expect(afterClose).toMatchObject({ shiftId: null, lateArrivalShiftId: first!.id });
-    // A movement cannot claim the open shift for a sale the database put on a closed one.
+
+    // Nothing else lands on a closed shift, whatever is written by hand as the runtime role.
     const forged = await bill(s, 10);
-    await expect(
+    const movement = (data: Record<string, unknown>) =>
       tenant(s.as(s.cashier), (db) =>
         db.pharmacyDrawerMovement.create({
           data: {
             organizationId: s.owner.organizationId,
             drawerSessionId: drawer.id,
-            kind: 'CASH_SALE',
-            amountMinor: 10,
             actorId: s.cashier,
-            lateArrivalShiftId: second.shift.id,
-          },
+            amountMinor: 10,
+            ...data,
+          } as never,
         })
-      )
-    ).rejects.toThrow(/PHARMACY_SHIFT_ATTRIBUTION_INVALID/);
-    void forged;
+      );
+    const refusal = /PHARMACY_SHIFT_ATTRIBUTION_INVALID/;
+    // A paid-out, or any cash, named onto the closed shift as a late arrival.
+    await expect(
+      movement({ kind: 'PAID_OUT', reason: 'Hidden', lateArrivalShiftId: first!.id })
+    ).rejects.toThrow(refusal);
+    await expect(movement({ kind: 'CASH_SALE', lateArrivalShiftId: first!.id })).rejects.toThrow(
+      refusal
+    );
+    // Or named into the closed shift directly, or a late arrival on the open one.
+    await expect(movement({ kind: 'PAID_OUT', reason: 'x', shiftId: first!.id })).rejects.toThrow(
+      refusal
+    );
+    await expect(
+      movement({ kind: 'CASH_SALE', lateArrivalShiftId: second.shift.id })
+    ).rejects.toThrow(refusal);
+    // A tender that names its shift, or carries a sale time with no offline replay behind it.
+    const tender = (data: Record<string, unknown>) =>
+      tenant(s.as(s.cashier), (db) =>
+        db.pharmacyTender.create({
+          data: {
+            organizationId: s.owner.organizationId,
+            branchId: s.owner.branchId,
+            saleId: forged.sale.id,
+            type: 'CASH',
+            amountMinor: 10,
+            cashReceivedMinor: 10,
+            changeGivenMinor: 0,
+            drawerSessionId: drawer.id,
+            businessDate: s.today,
+            actorId: s.cashier,
+            deviceId: device,
+            ...data,
+          } as never,
+        })
+      );
+    await expect(tender({ lateArrivalShiftId: first!.id })).rejects.toThrow(refusal);
+    await expect(tender({ shiftId: first!.id })).rejects.toThrow(refusal);
+    await expect(tender({ soldAt: soldInShift1 })).rejects.toThrow(refusal);
+    // Nothing of the forgeries was written; the closed shift and its late arrival are as they were.
+    const onShift1 = await tenant(s.owner, (db) =>
+      db.pharmacyDrawerMovement.findMany({
+        where: { OR: [{ shiftId: first!.id }, { lateArrivalShiftId: first!.id }] },
+        select: { kind: true, amountMinor: true, shiftId: true },
+        orderBy: { createdAt: 'asc' },
+      })
+    );
+    expect(onShift1.map((m) => [m.kind, m.amountMinor, m.shiftId === first!.id])).toEqual([
+      ['CASH_SALE', 150, true],
+      ['CASH_SALE', 100, false],
+    ]);
     const frozen = await tenant(s.owner, (db) =>
       db.pharmacyCashShift.findFirstOrThrow({ where: { id: first!.id } })
     );
@@ -985,6 +1167,359 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
       })
     );
     expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a Manager without the counter grant close a cashier's shift, read every report and close the day", async () => {
+    const s = await shop('manager', { shifts: true, toleranceMinor: 1_000_000 });
+    // The ready-made Manager role holds the manage grant, not the counter grant.
+    const manager = await addMember(s, `${s.owner.organizationId}_mgr_only`, ['pharmacy:manage']);
+    const elsewhere = `${s.owner.organizationId}_elsewhere`;
+    await tenant(s.owner, (db) =>
+      db.pharmacyBranch.create({
+        data: {
+          id: elsewhere,
+          organizationId: s.owner.organizationId,
+          code: elsewhere,
+          name: 'Elsewhere',
+          addressLine: 'Test',
+          city: 'Test',
+          provinceCode: 'PB',
+          cashShiftsEnabled: true,
+        },
+      })
+    );
+    const device = `device-${randomUUID()}`;
+    const drawer = await openDrawer(s, device, 10_000);
+    const [first] = await shiftsOf(s, drawer.id);
+    const a = await bill(s, 300);
+    await cash(s, s.cashier, device, a.sale.id, 300);
+
+    // Another cashier, holding only the counter grant, still reaches only their own shift.
+    await expect(
+      asMember(s, s.cashier2, (api) =>
+        api.shiftReport({ branchId: s.owner.branchId, shiftId: first!.id })
+      )
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'DRAWER_NOT_YOURS' });
+
+    const sofar = await asMember(s, manager, (api) =>
+      api.shiftReport({ branchId: s.owner.branchId, shiftId: first!.id })
+    );
+    expect(sofar.report).toMatchObject({ status: 'OPEN', cash: { expectedMinor: 10_300 } });
+    // Not at a branch they are not assigned to.
+    await expect(
+      asMember(s, manager, (api) => api.shiftReport({ branchId: elsewhere, shiftId: first!.id }))
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      asMember(s, manager, (api) =>
+        api.closeShift({ branchId: elsewhere, shiftId: first!.id, countedCashMinor: 10_300 })
+      )
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    const closed = await asMember(s, manager, (api) =>
+      api.closeShift({ branchId: s.owner.branchId, shiftId: first!.id, countedCashMinor: 10_300 })
+    );
+    expect(closed).toMatchObject({
+      varianceMinor: 0,
+      closedBy: { id: manager },
+      cashier: { id: s.cashier },
+    });
+    const frozen = await asMember(s, manager, (api) =>
+      api.shiftReport({ branchId: s.owner.branchId, shiftId: first!.id })
+    );
+    expect(frozen.report).toMatchObject({ status: 'CLOSED', countedMinor: 10_300 });
+
+    const businessDate = s.today;
+    await expect(
+      asMember(s, manager, (api) => api.closePreview({ branchId: elsewhere, businessDate }))
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    const preview = await asMember(s, manager, (api) =>
+      api.closePreview({ branchId: s.owner.branchId, businessDate })
+    );
+    expect(preview!.shifts!.map((shift) => [shift.sequence, shift.status])).toEqual([
+      [1, 'CLOSED'],
+    ]);
+    const close = await asMember(s, manager, (api) =>
+      api.closeDay({
+        branchId: s.owner.branchId,
+        businessDate,
+        sourceHash: preview!.totals.sourceHash,
+        counts: [{ drawerSessionId: drawer.id, countedCashMinor: 10_300 }],
+        varianceNote: '',
+      })
+    );
+    expect(close).toMatchObject({
+      cashCountedMinor: 10_300,
+      cashVarianceMinor: 0,
+      actorId: manager,
+    });
+  });
+
+  it('needs a second person for an over or short, and says plainly when an approval is refused', async () => {
+    const s = await shop('approvals', { shifts: true, toleranceMinor: 0 });
+    const shiftOf = async (cashierId: string) => {
+      const drawer = await tenant(s.owner, (db) =>
+        settlement.openPharmacyDrawer(db, s.owner, {
+          deviceId: `device-${randomUUID()}`,
+          businessDate: s.today,
+          openingFloatMinor: 1_000,
+          operatingCashierId: cashierId,
+        })
+      );
+      return (await shiftsOf(s, drawer.id))[0]!;
+    };
+    const authorize = (shiftId: string, approverId: string, pin: string, actor = s.manager) =>
+      tenant(s.as(actor), (db) =>
+        shifts.authorizeCashShiftVariance(db, s.as(actor), { shiftId, approverId, pin })
+      );
+    const approversFor = (shiftId: string, actor = s.manager) =>
+      tenant(s.as(actor), (db) => shifts.shiftVarianceApprovers(db, s.as(actor), shiftId));
+
+    // The only manager at the branch closes their own shift short: nobody else can approve, so they
+    // approve it themselves with a fresh PIN, recorded as their own approval.
+    const own = await shiftOf(s.manager);
+    expect((await approversFor(own.id)).map((a) => a.id)).toEqual([s.manager]);
+    const alone = await authorize(own.id, s.manager, MANAGER_PIN);
+    expect(alone).toMatchObject({
+      approverId: s.manager,
+      selfApproved: true,
+      policy: shifts.SHIFT_VARIANCE_SOLO_POLICY,
+    });
+    // A cashier's shift is always approved by someone else: here, that manager.
+    const cashiers = await shiftOf(s.cashier);
+    await expect(authorize(cashiers.id, s.cashier, MANAGER_PIN, s.cashier)).rejects.toMatchObject({
+      reason: 'SHIFT_APPROVAL_NEEDS_ANOTHER',
+    });
+    expect((await approversFor(cashiers.id, s.cashier)).map((a) => a.id)).toEqual([s.manager]);
+
+    // Once a second manager works at the branch, the first may no longer approve their own shift.
+    const second = await addMember(
+      s,
+      `${s.owner.organizationId}_mgr2`,
+      ['pharmacy:manage', 'pharmacy:counter'],
+      {
+        pin: '7391',
+      }
+    );
+    const ownAgain = await shiftOf(s.manager);
+    expect((await approversFor(ownAgain.id)).map((a) => a.id)).toEqual([second]);
+    await expect(authorize(ownAgain.id, s.manager, MANAGER_PIN)).rejects.toMatchObject({
+      reason: 'SHIFT_APPROVAL_NEEDS_ANOTHER',
+    });
+    const other = await authorize(ownAgain.id, second, '7391');
+    expect(other).toMatchObject({ approverId: second, selfApproved: false });
+    // An approval answers for its own shift only.
+    await expect(
+      tenant(s.as(s.manager), (db) =>
+        shifts.closePharmacyCashShift(
+          db,
+          s.as(s.manager),
+          { shiftId: own.id, countedCashMinor: 950, varianceNote: 'Fifty short' },
+          { actorIsManager: true, approval: other }
+        )
+      )
+    ).rejects.toMatchObject({ reason: 'SHIFT_APPROVAL_REQUIRED' });
+    const closed = await tenant(s.as(s.manager), (db) =>
+      shifts.closePharmacyCashShift(
+        db,
+        s.as(s.manager),
+        { shiftId: ownAgain.id, countedCashMinor: 950, varianceNote: 'Fifty short' },
+        { actorIsManager: true, approval: other }
+      )
+    );
+    expect(closed.report).toMatchObject({ varianceMinor: -50, varianceApprovedBy: { id: second } });
+
+    // A wrong PIN is refused in so many words; after five, the approver is locked out, and says so.
+    for (let attempt = 1; attempt <= 4; attempt += 1)
+      await expect(authorize(cashiers.id, second, '0000')).rejects.toMatchObject({
+        reason: 'SHIFT_APPROVAL_REFUSED',
+      });
+    await expect(authorize(cashiers.id, second, '0000')).rejects.toMatchObject({
+      reason: 'SHIFT_APPROVAL_LOCKED',
+    });
+    await expect(authorize(cashiers.id, second, '7391')).rejects.toMatchObject({
+      reason: 'SHIFT_APPROVAL_LOCKED',
+    });
+  });
+
+  it('keeps closed shifts frozen when the day is reopened, and adds the new shifts to the next close', async () => {
+    const s = await shop('reopen', { shifts: true, toleranceMinor: 1_000_000 });
+    const device = `device-${randomUUID()}`;
+    const drawer = await openDrawer(s, device, 1_000);
+    const [first] = await shiftsOf(s, drawer.id);
+    const a = await bill(s, 300);
+    await cash(s, s.cashier, device, a.sale.id, 300);
+    await closeShift(s, s.cashier, first!.id, 1_300);
+    const preview = await tenant(s.owner, (db) => dayClose.readPharmacyClose(db, s.owner, s.today));
+    const firstClose = await tenant(s.owner, (db) =>
+      dayClose.closePharmacyDay(db, s.owner, {
+        businessDate: s.today,
+        sourceHash: preview.totals.sourceHash,
+        counts: [{ drawerSessionId: drawer.id, countedCashMinor: 1_300 }],
+        varianceNote: '',
+      })
+    );
+    const before = await tenant(s.owner, (db) =>
+      db.pharmacyCashShift.findFirstOrThrow({ where: { id: first!.id } })
+    );
+
+    await tenant(s.owner, (db) =>
+      dayClose.reopenPharmacyDayForTrading(db, s.owner, {
+        businessDate: s.today,
+        closeId: firstClose.id,
+        reason: 'Late customer',
+      })
+    );
+    // Reopening the day never reopens a shift: the closed one cannot change, by any path.
+    await expect(closeShift(s, s.manager, first!.id, 1)).rejects.toMatchObject({
+      reason: 'SHIFT_ALREADY_CLOSED',
+    });
+    await expect(
+      tenant(s.owner, (db) =>
+        db.pharmacyCashShift.update({
+          where: { organizationId_id: { organizationId: s.owner.organizationId, id: first!.id } },
+          data: { countedCashMinor: 1 },
+        })
+      )
+    ).rejects.toThrow(/PHARMACY_SHIFT_IMMUTABLE/);
+
+    // Trading resumes on a new drawer, whose first shift opens with it.
+    const again = await openDrawer(s, device, 1_300);
+    const [next] = await shiftsOf(s, again.id);
+    const b = await bill(s, 450);
+    await cash(s, s.cashier, device, b.sale.id, 450);
+    await closeShift(s, s.cashier, next!.id, 1_750);
+    const preview2 = await tenant(s.owner, (db) =>
+      dayClose.readPharmacyClose(db, s.owner, s.today)
+    );
+    const secondClose = await tenant(s.owner, (db) =>
+      dayClose.closePharmacyDay(db, s.owner, {
+        businessDate: s.today,
+        sourceHash: preview2.totals.sourceHash,
+        counts: [{ drawerSessionId: again.id, countedCashMinor: 1_750 }],
+        varianceNote: '',
+      })
+    );
+    const after = await tenant(s.owner, (db) =>
+      db.pharmacyCashShift.findFirstOrThrow({ where: { id: first!.id } })
+    );
+    expect(after).toEqual(before);
+    expect(secondClose).toMatchObject({ sequence: 2, supersedesCloseId: firstClose.id });
+    expect(preview2.shifts!.map((shift) => [shift.shiftId, shift.status])).toEqual(
+      expect.arrayContaining([
+        [first!.id, 'CLOSED'],
+        [next!.id, 'CLOSED'],
+      ])
+    );
+    // The new close adds both shifts: 750 in cash sales, counted 1,300 + 1,750.
+    expect(preview2.shiftTotals!.tenders).toEqual([{ type: 'CASH', count: 2, amountMinor: 750 }]);
+    expect(secondClose.cashCountedMinor).toBe(1_300 + 1_750);
+    expect(secondClose.cashVarianceMinor).toBe(preview2.shiftTotals!.cashVarianceMinor);
+  });
+
+  it('puts a 00:30 sale on a branch whose day ends at 05:00 in the open shift of the day before', async () => {
+    const s = await shop('late_night', { shifts: true, toleranceMinor: 1_000_000 });
+    // The day-end hour can only move a day that has not begun: 05:00 from the day after tomorrow.
+    const day = businessDay.shiftPharmacyDay(businessDay.pharmacyBusinessDay(await dayClock(s)), 2);
+    await tenant(s.owner, (db) =>
+      db.pharmacyBranch.update({
+        where: { id: s.owner.branchId },
+        data: {
+          businessDayEndsAtHistory: [
+            { from: day, hour: 5, actorId: s.manager, at: new Date().toISOString() },
+          ],
+          businessDayEndsAtRevision: { increment: 1 },
+        },
+      })
+    );
+    const dayDate = new Date(`${day}T00:00:00.000Z`);
+    const nextDay = businessDay.shiftPharmacyDay(day, 1);
+    // 00:30 and 05:30 on the next calendar day, in the organisation's zone (UTC: none is set).
+    const halfPastMidnight = new Date(`${nextDay}T00:30:00.000Z`);
+    const halfPastFive = new Date(`${nextDay}T05:30:00.000Z`);
+    expect(businessDay.pharmacyBusinessDay(await dayClock(s), halfPastMidnight)).toBe(day);
+    expect(businessDay.pharmacyBusinessDay(await dayClock(s), halfPastFive)).toBe(nextDay);
+
+    // The application's clock reads that night; the database keeps its own.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date(`${day}T18:00:00.000Z`));
+      const device = `device-${randomUUID()}`;
+      const drawer = await tenant(s.owner, (db) =>
+        settlement.openPharmacyDrawer(db, s.owner, {
+          deviceId: device,
+          businessDate: dayDate,
+          openingFloatMinor: 1_000,
+          operatingCashierId: s.cashier,
+        })
+      );
+      const [evening] = await shiftsOf(s, drawer.id);
+      const sale = (amountMinor: number, actor: string) =>
+        bill(s, amountMinor).then(({ sale: open }) =>
+          tenant(s.as(actor), (db) =>
+            settlement.applyPharmacyTender(
+              db,
+              s.as(actor),
+              {
+                saleId: open.id,
+                deviceId: device,
+                businessDate: dayDate,
+                type: 'CASH',
+                amountMinor,
+                cashReceivedMinor: amountMinor,
+                idempotencyKey: randomUUID(),
+              },
+              undefined,
+              { requireCurrentBusinessDate: true }
+            )
+          )
+        );
+      await sale(300, s.cashier);
+
+      // At 00:30 the evening cashier hands over to the night cashier: same day, same drawer.
+      vi.setSystemTime(halfPastMidnight);
+      await tenant(s.owner, (db) => settlement.requireTodaysPharmacyDrawer(db, s.owner, drawer));
+      await closeShift(s, s.cashier, evening!.id, 1_300);
+      const night = await openShift(s, s.cashier2, drawer.id, 1_300);
+      expect(night.shift).toMatchObject({ sequence: 2, businessDate: dayDate });
+      const paid = await sale(250, s.cashier2);
+      const tender = await tenant(s.owner, (db) =>
+        db.pharmacyTender.findFirstOrThrow({
+          where: { id: (paid as { tenderId: string }).tenderId },
+        })
+      );
+      // The 00:30 sale is the night shift's, on the business day before the calendar date.
+      expect(tender).toMatchObject({ shiftId: night.shift.id, businessDate: dayDate });
+      // Online, a payment for the next calendar date is refused: that day has not begun.
+      await expect(
+        tenant(s.owner, (db) =>
+          settlement.requireCurrentPharmacyBusinessDate(
+            db,
+            s.owner,
+            new Date(`${nextDay}T00:00:00.000Z`)
+          )
+        )
+      ).rejects.toMatchObject({ reason: 'BUSINESS_DATE_NOT_CURRENT' });
+
+      // After 05:00 the day is over: its drawer takes no more cash.
+      vi.setSystemTime(halfPastFive);
+      await expect(
+        tenant(s.owner, (db) => settlement.requireTodaysPharmacyDrawer(db, s.owner, drawer))
+      ).rejects.toMatchObject({ reason: 'DRAWER_FROM_EARLIER_DAY' });
+      await expect(sale(100, s.cashier2)).rejects.toMatchObject({
+        reason: 'BUSINESS_DATE_NOT_CURRENT',
+      });
+
+      const close = await tenant(s.owner, (db) => dayClose.readPharmacyClose(db, s.owner, dayDate));
+      expect(
+        close.shifts!.map((shift) => [shift.sequence, shift.cashier.id, shift.status])
+      ).toEqual([
+        [1, s.cashier, 'CLOSED'],
+        [2, s.cashier2, 'OPEN'],
+      ]);
+      expect(close.shiftTotals!.tenders).toEqual([{ type: 'CASH', count: 2, amountMinor: 550 }]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refuses another branch's and another organization's shifts", async () => {

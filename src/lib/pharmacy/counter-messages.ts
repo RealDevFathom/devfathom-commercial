@@ -214,6 +214,14 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   SHIFT_NOTE_REQUIRED: 'The count differs from the cash expected. Add a note that explains it.',
   SHIFT_APPROVAL_REQUIRED:
     'The over or short is above the owner’s limit. A manager or owner must approve it with their PIN.',
+  SHIFT_APPROVAL_REFUSED:
+    'That approval was refused. The PIN was not accepted; the shift is still open. Check it and try again.',
+  SHIFT_APPROVAL_LOCKED:
+    'That approval was refused: this approver’s PIN is locked after too many attempts. Wait for it to unlock, or ask another manager or owner.',
+  SHIFT_APPROVAL_NEEDS_ANOTHER:
+    'You cannot approve your own shift’s over or short while another manager or owner works at this branch. Ask them to approve it with their PIN.',
+  SHIFT_APPROVAL_NOT_ELIGIBLE:
+    'That person cannot approve this over or short. Choose a manager or owner at this branch, other than the shift’s cashier.',
   SHIFT_COUNT_MISMATCH:
     'A drawer that runs shifts closes on its last shift’s count. Refresh the day close and try again.',
   SHIFT_CHANGED:

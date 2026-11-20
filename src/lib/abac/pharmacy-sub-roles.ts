@@ -510,7 +510,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'run-cash-shifts-branches',
-        text: "At their branches that run cash shifts, open a shift for another cashier, close anyone's shift before the day close, see every shift report, and approve a shift's over or short above the owner's limit with their PIN",
+        text: "At their branches that run cash shifts, open a shift for another cashier, close anyone's shift before the day close, see every shift report, and approve a shift's over or short above the owner's limit with their PIN (their own shift's only when no other manager or owner works at the branch)",
         sites: {},
       },
       {

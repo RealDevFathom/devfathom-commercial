@@ -46,6 +46,7 @@ import {
   authorizeCashShiftVariance,
   closePharmacyCashShift,
   openPharmacyCashShift,
+  readPharmacyCashShiftReport,
 } from '@/lib/pharmacy/cash-shifts';
 import { recordPharmacyCashMovement } from '@/lib/pharmacy/settlement';
 import { router, type TRPCContext } from '../trpc';
@@ -200,6 +201,7 @@ describe('DEV-958B cash shift procedures', () => {
     });
     expect(order).toEqual(['approve', 'close']);
     expect(authorizeCashShiftVariance).toHaveBeenCalledWith(expect.anything(), SCOPE, {
+      shiftId: 'shift-1',
       approverId: 'manager-b',
       pin: '4826',
     });
@@ -227,6 +229,31 @@ describe('DEV-958B cash shift procedures', () => {
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'SHIFT_APPROVAL_REQUIRED' });
     expect(closePharmacyCashShift).not.toHaveBeenCalled();
+  });
+
+  it('lets a manager without the counter grant close and read any shift of the branch', async () => {
+    const f = fixture([MANAGE]);
+    await f.caller.closeShift({ branchId: 'branch-a', shiftId: 'shift-1', countedCashMinor: 100 });
+    expect(closePharmacyCashShift).toHaveBeenCalledWith(
+      expect.anything(),
+      SCOPE,
+      expect.objectContaining({ shiftId: 'shift-1' }),
+      { actorIsManager: true, approval: undefined }
+    );
+    await expect(
+      f.caller.shiftReport({ branchId: 'branch-a', shiftId: 'shift-1' })
+    ).resolves.toMatchObject({ report: { status: 'OPEN' } });
+    expect(readPharmacyCashShiftReport).toHaveBeenCalledWith(expect.anything(), SCOPE, 'shift-1', {
+      actorIsManager: true,
+    });
+  });
+
+  it('keeps a cashier to their own shift: the counter gate, never the manager path', async () => {
+    const f = fixture([COUNTER]);
+    await f.caller.shiftReport({ branchId: 'branch-a', shiftId: 'shift-1' });
+    expect(readPharmacyCashShiftReport).toHaveBeenCalledWith(expect.anything(), SCOPE, 'shift-1', {
+      actorIsManager: false,
+    });
   });
 
   it("books a manager's paid-in only on today's drawer", async () => {
