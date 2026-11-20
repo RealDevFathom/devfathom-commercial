@@ -385,9 +385,11 @@ export async function StagedMedicineCatalogue({
             {Object.entries({
               'Original status': detail.status,
               Catalogue: detail.catalogueStatus,
-              'Catalogue medicine': detail.catalogueMedicine
-                ? `${detail.catalogueMedicine.outcome === 'MATCHED' ? 'Already created from an earlier file' : 'Created'} · MRP ${createdPrice(detail.catalogueMedicine.mrpMinor)} · purchase price ${createdPrice(detail.catalogueMedicine.purchasePriceMinor)} · units per pack ${detail.catalogueMedicine.unitsPerPack ?? 'not recorded'}`
-                : 'Not created yet',
+              'Catalogue medicine': detail.catalogueMedicine?.notCreatedReason
+                ? `Not created. ${detail.catalogueMedicine.notCreatedReason}`
+                : detail.catalogueMedicine
+                  ? `${detail.catalogueMedicine.outcome === 'MATCHED' ? 'Already created from an earlier file' : 'Created'} · MRP ${createdPrice(detail.catalogueMedicine.mrpMinor)} · purchase price ${createdPrice(detail.catalogueMedicine.purchasePriceMinor)} · units per pack ${detail.catalogueMedicine.unitsPerPack ?? 'not recorded'}`
+                  : 'Not created yet',
               Barcode: !detail.catalogueMedicine?.barcode
                 ? null
                 : detail.catalogueMedicine.barcodeAttached

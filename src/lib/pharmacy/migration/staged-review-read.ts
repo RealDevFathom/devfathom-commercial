@@ -162,6 +162,7 @@ export async function stagedMedicineDetail(
       purchasePriceMinor: true,
       unitsPerPack: true,
       outcome: true,
+      notCreatedReason: true,
       barcode: true,
       barcodeAttached: true,
       supplierName: true,

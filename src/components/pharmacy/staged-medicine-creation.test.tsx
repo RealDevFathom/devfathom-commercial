@@ -15,6 +15,7 @@ const base: StagedCreationState = {
   canRequest: true,
   candidates: 500,
   done: 0,
+  notCreated: 0,
   remaining: 500,
   unnamed: 2,
   matchedEarlier: 0,
@@ -125,5 +126,61 @@ describe('DEV-912 staged medicine creation panel', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Create medicines' })).toBeEnabled()
     );
+  });
+  it('DEV-1002: carries on past refused rows, lists them and names the next step', async () => {
+    const step = {
+      matched: 0,
+      matchedEarlier: 0,
+      barcodesNotAttached: 0,
+      suppliersNotMatched: 0,
+      reorderLevelsNotApplied: 0,
+    };
+    mocks.run
+      // A step whose every row was refused still moves on to the rest of the file.
+      .mockResolvedValueOnce({
+        data: { ...step, created: 0, refused: 2, done: 0, notCreated: 2, remaining: 498 },
+      })
+      .mockResolvedValueOnce({
+        data: { ...step, created: 497, refused: 1, done: 497, notCreated: 3, remaining: 0 },
+      });
+    render(
+      <StagedMedicineCreation
+        batchId="batch_1"
+        initial={{ ...base, request: { id: 'edit_1', status: 'APPROVED' } }}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Create medicines' }));
+    expect(await screen.findByText('Finished — 3 rows not created')).toBeVisible();
+    expect(mocks.run).toHaveBeenCalledTimes(2);
+    expect(
+      screen.getByText(/497 created · 3 could not be created · 0 still to create/)
+    ).toBeVisible();
+    expect(screen.getByText(/3 rows could not be created/)).toHaveTextContent(
+      'Open a row to see why, correct those rows in the file and upload it again'
+    );
+    expect(screen.queryByText('All medicines created')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Create medicines' })).toBeNull();
+  });
+
+  it('DEV-1002: shows the plain stop message, never "Nothing was changed"', async () => {
+    const { STAGED_CREATION_STOPPED } = await import('@/lib/pharmacy/migration/staged-creation');
+    mocks.run.mockResolvedValue({ error: STAGED_CREATION_STOPPED });
+    render(
+      <StagedMedicineCreation
+        batchId="batch_1"
+        initial={{
+          ...base,
+          request: { id: 'edit_1', status: 'APPROVED' },
+          done: 18_000,
+          remaining: 933,
+        }}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Create medicines' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Medicines already created are kept');
+    expect(alert).not.toHaveTextContent('Nothing was changed');
+    expect(screen.getByText(/18,000 created · 933 still to create/)).toBeVisible();
   });
 });

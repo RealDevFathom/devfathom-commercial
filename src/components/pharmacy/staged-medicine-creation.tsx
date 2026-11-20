@@ -14,6 +14,8 @@ export type StagedCreationState = {
   canRequest: boolean;
   candidates: number;
   done: number;
+  /** Rows the database refused: recorded on the row with a reason, nothing created (DEV-1002). */
+  notCreated: number;
   remaining: number;
   unnamed: number;
   matchedEarlier: number;
@@ -67,13 +69,14 @@ export function StagedMedicineCreation({
       setState((current) => ({
         ...current,
         done: step.done,
+        notCreated: step.notCreated,
         remaining: step.remaining,
         matchedEarlier: step.matchedEarlier,
         barcodesNotAttached: step.barcodesNotAttached,
         suppliersNotMatched: step.suppliersNotMatched,
         reorderLevelsNotApplied: step.reorderLevelsNotApplied,
       }));
-      if (step.remaining === 0 || step.created + step.matched === 0) break;
+      if (step.remaining === 0 || step.created + step.matched + step.refused === 0) break;
     }
     setBusy(null);
   }
@@ -90,9 +93,17 @@ export function StagedMedicineCreation({
         </p>
         <p>
           {count(state.candidates)} medicines in this file · {count(state.done)} created ·{' '}
+          {state.notCreated ? `${count(state.notCreated)} could not be created · ` : ''}
           {count(state.remaining)} still to create
           {state.unnamed ? ` · ${count(state.unnamed)} rows have no name and are skipped` : ''}
         </p>
+        {state.notCreated > 0 && (
+          <p>
+            {count(state.notCreated)} rows could not be created, and the other medicines were
+            created without them. Open a row to see why, correct those rows in the file and upload
+            it again: medicines already created are matched, never made twice.
+          </p>
+        )}
         {state.matchedEarlier > 0 && (
           <p>
             {count(state.matchedEarlier)} rows name a medicine an earlier file already created, so
@@ -127,7 +138,15 @@ export function StagedMedicineCreation({
           </>
         )}
         {status === 'REJECTED' && <StatusPill status="rejected" label="Request rejected" />}
-        {finished && <StatusPill status="done" label="All medicines created" />}
+        {finished &&
+          (state.notCreated ? (
+            <StatusPill
+              status="warning"
+              label={`Finished — ${count(state.notCreated)} rows not created`}
+            />
+          ) : (
+            <StatusPill status="done" label="All medicines created" />
+          ))}
         {status === 'APPROVED' && !finished && (
           <StatusPill status="approved" label="Approved — ready to create" />
         )}

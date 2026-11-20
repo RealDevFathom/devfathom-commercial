@@ -4,9 +4,20 @@ import { unstable_rethrow } from 'next/navigation';
 import { TRPCError } from '@trpc/server';
 import { createTRPCContext } from '@/server/trpc';
 import { pharmacyMedicineRouter } from '@/server/routers/pharmacy-medicine';
+import {
+  STAGED_CREATION_BUSY,
+  STAGED_CREATION_STOPPED,
+} from '@/lib/pharmacy/migration/staged-creation';
 
-/** DEV-912: plain-words result for the bulk creation controls; the server checks every step. */
-async function readable<T>(run: () => Promise<T>) {
+/** The plain answers a creation step gives when it stops; any other text stays on the server. */
+const STEP_MESSAGES: readonly string[] = [STAGED_CREATION_BUSY, STAGED_CREATION_STOPPED];
+
+/**
+ * DEV-912: plain-words result for the bulk creation controls; the server checks every step.
+ * DEV-1002: a creation step never answers "Nothing was changed. Try again.": a refused row is
+ * recorded and shown on its own, and any other stop says what is kept and what to do next.
+ */
+async function readable<T>(run: () => Promise<T>, fallback = 'Nothing was changed. Try again.') {
   try {
     return { data: await run() };
   } catch (error) {
@@ -16,8 +27,9 @@ async function readable<T>(run: () => Promise<T>) {
         return { error: 'You need catalogue edit or review permission for this.' };
       if (['BAD_REQUEST', 'CONFLICT', 'NOT_FOUND', 'PRECONDITION_FAILED'].includes(error.code))
         return { error: error.message };
+      if (STEP_MESSAGES.includes(error.message)) return { error: error.message };
     }
-    return { error: 'Nothing was changed. Try again.' };
+    return { error: fallback };
   }
 }
 
@@ -37,5 +49,8 @@ export async function requestStagedMedicineCreation(batchId: string, branchId?: 
 }
 
 export async function runStagedMedicineCreationStep(batchId: string) {
-  return readable(async () => (await caller()).runStagedMedicineCreation({ batchId }));
+  return readable(
+    async () => (await caller()).runStagedMedicineCreation({ batchId }),
+    STAGED_CREATION_STOPPED
+  );
 }

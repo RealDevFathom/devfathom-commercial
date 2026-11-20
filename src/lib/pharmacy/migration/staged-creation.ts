@@ -21,6 +21,12 @@
  * Idempotent: a row whose source identity (uploaded bytes' SHA-256 plus row number) already has a
  * link creates nothing again, whichever batch of those bytes is run. Each call creates at most
  * one chunk, so a 19,000-row catalogue is created in short transactions.
+ *
+ * One row never blocks the others (DEV-1002): a value the catalogue cannot hold as an alias or a
+ * barcode is left off and the medicine is still created; a row the database still refuses is
+ * found by retrying halves of the chunk under a savepoint, recorded on its link as NOT_CREATED
+ * with a plain reason, and every other row is created. A refusal is never retried, so pressing
+ * Create medicines again always moves on to the rest of the file.
  */
 import { randomUUID } from 'node:crypto';
 
@@ -39,7 +45,41 @@ import { isStrengthPackLabel } from './source-values';
  */
 export const STAGED_CREATION_CHUNK = 1000;
 export const STAGED_CREATION_OPERATION = 'createStagedMedicines';
+
+/**
+ * DEV-1002: what the screen says when a creation step stops for a reason that is not a row of
+ * the file (rows are recorded one by one and never stop a step). Plain words and a next step;
+ * the codes go to the server log and the audit record.
+ */
+export const STAGED_CREATION_BUSY =
+  'The server was busy, so this step was undone. Medicines already created are kept. Press Create medicines to carry on.';
+export const STAGED_CREATION_STOPPED =
+  'Creating stopped because of a problem on the server, not a row in your file. Medicines already created are kept and none is made twice. Press Create medicines once more; if this message comes back, contact DevFathom support and say when it happened.';
+
+/** A failure that passes by itself: a timeout, a lock, a lost or busy connection. */
+export function isPassingFailure(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (typeof code === 'string' && /^P(?:1001|1002|1008|1017|2024|2028|2034)$/.test(code))
+    return true;
+  const state = sqlState(error);
+  return state !== null && /^(?:08|40|53|55P03|57014|57P0)/.test(state);
+}
+
 const MAX_INT = 2_147_483_647;
+
+/**
+ * At most `max` UTF-16 units of `text`, never ending inside a character: half an emoji is not
+ * valid text, and PostgreSQL refuses it in the import provenance (DEV-1002).
+ */
+export function cutText(text: string, max: number): string {
+  const head = text.slice(0, max);
+  return /[\uD800-\uDBFF]$/.test(head) ? head.slice(0, -1) : head;
+}
+
+/** A code or name with no letter or digit ("-", ".", "*") records nothing: not recorded. */
+function recorded(value: string | null | undefined, max: number): string | null {
+  return value && normalizeMedicineText(value) ? cutText(value, max) : null;
+}
 
 /** Template and legacy headers this step reads from a row's source cells, after normalising. */
 const GENERIC_HEADERS = ['genericname', 'generic', 'saltname', 'salt', 'formula'];
@@ -158,7 +198,7 @@ function stripsPerBox(row: StagedRowForCreation, unitsPerPack: number): number |
 
 /** What one staged row becomes. Pure: no value is invented, a missing one stays null. */
 export function planStagedMedicine(row: StagedRowForCreation): StagedMedicinePlan | null {
-  const productName = row.productName?.trim().replace(/\s+/g, ' ').slice(0, 300) ?? '';
+  const productName = cutText(row.productName?.trim().replace(/\s+/g, ' ') ?? '', 300);
   if (!productName) return null;
   const unitsPerPack = unitsInPack(row);
   let packLevels: PlannedPackLevel[] = [];
@@ -180,7 +220,7 @@ export function planStagedMedicine(row: StagedRowForCreation): StagedMedicinePla
           },
         ];
   }
-  const packLabel = row.packLabel?.trim().slice(0, 300);
+  const packLabel = row.packLabel && cutText(row.packLabel.trim(), 300);
   return {
     productName,
     presentation:
@@ -193,13 +233,12 @@ export function planStagedMedicine(row: StagedRowForCreation): StagedMedicinePla
     // A price of 0 is an empty cell in most legacy exports: stored as not recorded, never as 0.
     mrpMinor: boundedInt(row.mrpMinor, 1),
     purchasePriceMinor: boundedInt(row.costMinor, 1),
-    genericName: sourceCell(row.rawPayload, GENERIC_HEADERS)?.slice(0, 300) ?? null,
-    legacyCode: sourceCell(row.rawPayload, LEGACY_CODE_HEADERS)?.slice(0, 200) ?? null,
-    barcode:
-      row.barcode && normalizeMedicineText(row.barcode) ? row.barcode.trim().slice(0, 64) : null,
+    genericName: recorded(sourceCell(row.rawPayload, GENERIC_HEADERS), 300),
+    legacyCode: recorded(sourceCell(row.rawPayload, LEGACY_CODE_HEADERS), 200),
+    barcode: recorded(row.barcode?.trim(), 64),
     packLabel: packLabel || null,
     narcoticsClass: isLegacyControlledRow(row.rawPayload),
-    supplierName: sourceCell(row.rawPayload, SUPPLIER_HEADERS)?.slice(0, 300) ?? null,
+    supplierName: recorded(sourceCell(row.rawPayload, SUPPLIER_HEADERS), 300),
     reorderLevelPacks: reorderPacks(row.rawPayload),
   };
 }
@@ -251,6 +290,8 @@ export type StagedCreationProgress = {
   candidates: number;
   /** Of those, rows already done: a medicine created, or matched to one from an earlier file. */
   done: number;
+  /** Of those, rows the database refused (DEV-1002): recorded with a reason, nothing created. */
+  notCreated: number;
   remaining: number;
   /** Rows with no medicine name; nothing is created for them. */
   unnamed: number;
@@ -270,16 +311,17 @@ export async function stagedCreationProgress(
   batchId: string
 ): Promise<StagedCreationProgress> {
   const [counts] = await db.$queryRaw<
-    { candidates: bigint; done: bigint; unnamed: bigint }[]
+    { candidates: bigint; linked: bigint; unnamed: bigint }[]
   >`SELECT count(*) FILTER (WHERE ${candidate('r')}) AS "candidates",
-           count(*) FILTER (WHERE ${candidate('r')} AND ${linked(organizationId, 'r')}) AS "done",
+           count(*) FILTER (WHERE ${candidate('r')} AND ${linked(organizationId, 'r')}) AS "linked",
            count(*) FILTER (WHERE NOT (${candidate('r')})) AS "unnamed"
       FROM "pharmacy_migration_rows" r
      WHERE r."organizationId" = ${organizationId} AND r."batchId" = ${batchId}`;
   const [outcomes] = await db.$queryRaw<
-    { matched: bigint; barcodes: bigint; suppliers: bigint; reorders: bigint }[]
+    { matched: bigint; notCreated: bigint; barcodes: bigint; suppliers: bigint; reorders: bigint }[]
   >`
     SELECT count(*) FILTER (WHERE l."outcome" = 'MATCHED') AS "matched",
+           count(*) FILTER (WHERE l."outcome" = 'NOT_CREATED') AS "notCreated",
            count(*) FILTER (WHERE l."barcodeAttached" = false) AS "barcodes",
            count(*) FILTER (WHERE l."supplierName" IS NOT NULL AND l."supplierId" IS NULL) AS "suppliers",
            count(*) FILTER (WHERE l."reorderLevelApplied" = false) AS "reorders"
@@ -288,11 +330,13 @@ export async function stagedCreationProgress(
         ON r."organizationId" = l."organizationId" AND r."sourceKey" = l."sourceKey"
      WHERE l."organizationId" = ${organizationId} AND r."batchId" = ${batchId}`;
   const candidates = Number(counts?.candidates ?? 0);
-  const done = Number(counts?.done ?? 0);
+  const linkedRows = Number(counts?.linked ?? 0);
+  const notCreated = Number(outcomes?.notCreated ?? 0);
   return {
     candidates,
-    done,
-    remaining: candidates - done,
+    done: linkedRows - notCreated,
+    notCreated,
+    remaining: candidates - linkedRows,
     unnamed: Number(counts?.unnamed ?? 0),
     matchedEarlier: Number(outcomes?.matched ?? 0),
     barcodesNotAttached: Number(outcomes?.barcodes ?? 0),
@@ -381,6 +425,184 @@ const barcodeType = (code: string) =>
   /^(?:\d{8}|\d{12,14})$/.test(code) ? 'GTIN' : 'MANUFACTURER';
 
 /**
+ * The database's own normalised form of each alias and barcode value, in one statement. The
+ * catalogue triggers compare stored values with `pharmacy_normalize_catalog_text`, which reads
+ * some characters differently from `normalizeMedicineText` ("B₁₂", "½", "①"), and an empty
+ * result cannot be stored at all (DEV-1002). Empty: leave the value off.
+ */
+async function catalogueNormalizer(tx: ScopedDb, values: readonly string[]) {
+  const unique = [...new Set(values)];
+  const found = unique.length
+    ? await tx.$queryRaw<{ value: string; normalized: string | null }[]>`
+        SELECT v AS "value", pharmacy_normalize_catalog_text(v) AS "normalized"
+          FROM unnest(${unique}::text[]) AS v`
+    : [];
+  const byValue = new Map(found.map((row) => [row.value, row.normalized ?? '']));
+  return (value: string) => byValue.get(value) ?? '';
+}
+
+type DriverError = {
+  code?: unknown;
+  meta?: {
+    modelName?: unknown;
+    code?: unknown;
+    driverAdapterError?: { cause?: { originalCode?: unknown; originalMessage?: unknown } };
+  };
+};
+
+/** The SQLSTATE of a database error, as Prisma's PostgreSQL adapter reports it. */
+function sqlState(error: unknown): string | null {
+  const meta = (error as DriverError | null)?.meta;
+  const code = meta?.driverAdapterError?.cause?.originalCode ?? meta?.code;
+  return typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? code : null;
+}
+
+/**
+ * True when the database refused the data itself, which happens again on every retry: a data
+ * exception (class 22), a broken constraint (23), a value past a limit (54) or a catalogue
+ * trigger's own refusal (P0001). A busy server, a lost connection, a lock or a timeout is not:
+ * the whole step is undone and can simply run again.
+ */
+export function isRowRefusal(error: unknown): boolean {
+  const state = sqlState(error);
+  return state !== null && (/^(?:22|23|54)/.test(state) || state === 'P0001');
+}
+
+const CORRECT_AND_UPLOAD =
+  ' Correct the row in the file and upload the file again: medicines already created are matched, never made twice.';
+
+/** What the person who imported the file reads on a row the database refused. */
+export function notCreatedReason(error: unknown): string {
+  const state = sqlState(error) ?? '';
+  if (state === '23505')
+    return `A code or barcode in this row is already used in your catalogue.${CORRECT_AND_UPLOAD}`;
+  if (state === '22001' || state.startsWith('54'))
+    return `A cell in this row is too long for the catalogue.${CORRECT_AND_UPLOAD}`;
+  if (state === '22003')
+    return `A number in this row is too large for the catalogue.${CORRECT_AND_UPLOAD}`;
+  if (state.startsWith('22'))
+    return `A cell in this row has characters the catalogue cannot store.${CORRECT_AND_UPLOAD}`;
+  return `A value in this row is not accepted by the catalogue.${CORRECT_AND_UPLOAD}`;
+}
+
+const NO_NAME_REASON = `This row has no medicine name the catalogue can use.${CORRECT_AND_UPLOAD}`;
+
+/**
+ * What a failure was, for the server log and the audit record: codes and the constraint's name,
+ * never a cell value (a database message can quote one).
+ */
+export function failureDetail(error: unknown) {
+  const failure = error as DriverError | null;
+  const message = failure?.meta?.driverAdapterError?.cause?.originalMessage;
+  const constraint =
+    typeof message === 'string' ? (/constraint "([^"]{1,128})"/.exec(message)?.[1] ?? null) : null;
+  return {
+    prismaCode: typeof failure?.code === 'string' ? failure.code.slice(0, 40) : null,
+    sqlState: sqlState(error),
+    model:
+      typeof failure?.meta?.modelName === 'string' ? failure.meta.modelName.slice(0, 80) : null,
+    constraint,
+    errorName: error instanceof Error ? error.name.slice(0, 80) : null,
+  };
+}
+export type FailureDetail = ReturnType<typeof failureDetail>;
+
+/** Everything one staged row writes, kept together so a refused row can be set apart. */
+type RowWrite = {
+  row: StagedRowForCreation;
+  link: Prisma.PharmacyStagedMedicineLinkCreateManyInput;
+  medicine?: Prisma.MedicineCreateManyInput;
+  presentation?: Prisma.PresentationCreateManyInput;
+  /** Outermost first. */
+  levels: Prisma.PackLevelCreateManyInput[];
+  price?: Prisma.PharmacyPackPriceCreateManyInput;
+  aliases: Prisma.MedicineAliasCreateManyInput[];
+  barcode?: Prisma.MedicineBarcodeCreateManyInput & { id: string };
+  provenance: Prisma.MedicineProvenanceCreateManyInput[];
+  safetyStock?: Prisma.PharmacySafetyStockCreateManyInput;
+  created?: { id: string; productName: string };
+  matched?: EarlierMedicine;
+};
+
+/** Write these rows' records, set-based: one statement per table for the whole group. */
+async function writeRows(tx: ScopedDb, organizationId: string, writes: readonly RowWrite[]) {
+  const medicines = writes.flatMap((write) => (write.medicine ? [write.medicine] : []));
+  if (medicines.length) {
+    await tx.medicine.createMany({ data: medicines });
+    await tx.presentation.createMany({
+      data: writes.flatMap((write) => (write.presentation ? [write.presentation] : [])),
+    });
+    // Parents first: the hierarchy trigger reads a child's parent from an earlier statement.
+    const outerLevels = writes.flatMap((write) => write.levels.slice(0, 1));
+    const innerLevels = writes.flatMap((write) => write.levels.slice(1));
+    if (outerLevels.length) await tx.packLevel.createMany({ data: outerLevels });
+    if (innerLevels.length) await tx.packLevel.createMany({ data: innerLevels });
+    const aliases = writes.flatMap((write) => write.aliases);
+    if (aliases.length) await tx.medicineAlias.createMany({ data: aliases, skipDuplicates: true });
+    await tx.medicineProvenance.createMany({ data: writes.flatMap((write) => write.provenance) });
+  }
+  const barcodes = writes.flatMap((write) => (write.barcode ? [write.barcode] : []));
+  if (barcodes.length) {
+    // A barcode another person added since it was checked is skipped too, and reported.
+    await tx.medicineBarcode.createMany({ data: barcodes, skipDuplicates: true });
+    const attached = new Set(
+      (
+        await tx.medicineBarcode.findMany({
+          where: { id: { in: barcodes.map((barcode) => barcode.id) } },
+          select: { id: true },
+        })
+      ).map((barcode) => barcode.id)
+    );
+    for (const write of writes)
+      if (write.barcode) write.link.barcodeAttached = attached.has(write.barcode.id);
+  }
+  const safetyStocks = writes.flatMap((write) => (write.safetyStock ? [write.safetyStock] : []));
+  if (safetyStocks.length) await tx.pharmacySafetyStock.createMany({ data: safetyStocks });
+  await tx.pharmacyStagedMedicineLink.createMany({ data: writes.map((write) => write.link) });
+  const prices = writes.flatMap((write) => (write.price ? [write.price] : []));
+  if (prices.length) {
+    // Pack prices are written under the organization's price lock, as every price write is.
+    // Taken last, so the lock is held only while this chunk commits.
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${organizationId}), hashtext('pharmacy-pack-prices'))`;
+    await tx.pharmacyPackPrice.createMany({ data: prices });
+  }
+}
+
+/**
+ * DEV-1002: write the rows, and when the database refuses the group, undo it to a savepoint and
+ * write each half again, until every refused row stands alone. A chunk with no bad row is still
+ * one write; one bad row among 1,000 costs about twenty small writes. Anything other than a
+ * refusal of the data (a timeout, a lost connection) undoes the whole step instead.
+ */
+async function writeIsolated(
+  tx: ScopedDb,
+  organizationId: string,
+  writes: readonly RowWrite[],
+  refused: { write: RowWrite; error: unknown }[]
+): Promise<RowWrite[]> {
+  if (!writes.length) return [];
+  await tx.$executeRaw`SAVEPOINT staged_medicine_rows`;
+  try {
+    await writeRows(tx, organizationId, writes);
+  } catch (error) {
+    if (!isRowRefusal(error)) throw error;
+    await tx.$executeRaw`ROLLBACK TO SAVEPOINT staged_medicine_rows`;
+    await tx.$executeRaw`RELEASE SAVEPOINT staged_medicine_rows`;
+    if (writes.length === 1) {
+      refused.push({ write: writes[0]!, error });
+      return [];
+    }
+    const half = Math.ceil(writes.length / 2);
+    return [
+      ...(await writeIsolated(tx, organizationId, writes.slice(0, half), refused)),
+      ...(await writeIsolated(tx, organizationId, writes.slice(half), refused)),
+    ];
+  }
+  await tx.$executeRaw`RELEASE SAVEPOINT staged_medicine_rows`;
+  return [...writes];
+}
+
+/**
  * Create the next chunk of medicines for an approved request. Call inside one transaction; the
  * organization-wide lock makes concurrent runs (of this batch or another batch of the same
  * bytes) wait, and the unique source identity on the link refuses any double creation.
@@ -413,9 +635,19 @@ export async function createStagedMedicinesChunk(
        AND NOT ${linked(organizationId, 'r')}
      ORDER BY r."rowNumber", r."id"
      LIMIT ${limit}`;
+  // Rows that create nothing: recorded on their link with a plain reason, never left to block
+  // the file, and never retried (DEV-1002).
+  const notCreated: { row: StagedRowForCreation; reason: string; detail: FailureDetail | null }[] =
+    [];
   const planned = rows.flatMap((row) => {
-    const plan = planStagedMedicine(row);
-    return plan ? [{ row, plan }] : [];
+    try {
+      const plan = planStagedMedicine(row);
+      if (plan) return [{ row, plan }];
+      notCreated.push({ row, reason: NO_NAME_REASON, detail: null });
+    } catch (error) {
+      notCreated.push({ row, reason: notCreatedReason(error), detail: failureDetail(error) });
+    }
+    return [];
   });
   const earlier = await earlierMedicines(
     tx,
@@ -423,13 +655,17 @@ export async function createStagedMedicinesChunk(
     request.batchId,
     planned.map((item) => item.plan)
   );
+  const normalized = await catalogueNormalizer(
+    tx,
+    planned.flatMap(({ plan }) =>
+      [plan.genericName, plan.legacyCode, plan.barcode].filter((value) => value !== null)
+    )
+  );
   // A barcode is unique in the organization: one already on another pack is skipped and
   // reported on the row's link, never moved; within this chunk the first row keeps it.
   const wanted = [
-    ...new Set(
-      planned.flatMap(({ plan }) => (plan.barcode ? [normalizeMedicineText(plan.barcode)] : []))
-    ),
-  ];
+    ...new Set(planned.flatMap(({ plan }) => (plan.barcode ? [normalized(plan.barcode)] : []))),
+  ].filter(Boolean);
   const taken = new Set(
     wanted.length
       ? (
@@ -446,20 +682,7 @@ export async function createStagedMedicinesChunk(
   );
   const reorderBranchId = request.reorderBranchId ?? null;
   const now = new Date();
-  const medicines: Prisma.MedicineCreateManyInput[] = [];
-  const safetyStocks: Prisma.PharmacySafetyStockCreateManyInput[] = [];
-  const presentations: Prisma.PresentationCreateManyInput[] = [];
-  const outerLevels: Prisma.PackLevelCreateManyInput[] = [];
-  const innerLevels: Prisma.PackLevelCreateManyInput[] = [];
-  const prices: Prisma.PharmacyPackPriceCreateManyInput[] = [];
-  const aliases: Prisma.MedicineAliasCreateManyInput[] = [];
-  const barcodes: Prisma.MedicineBarcodeCreateManyInput[] = [];
-  const provenance: Prisma.MedicineProvenanceCreateManyInput[] = [];
-  const links: Prisma.PharmacyStagedMedicineLinkCreateManyInput[] = [];
-  // The barcode each created row asked for, by its link, to confirm it was attached.
-  const barcodeOfLink = new Map<Prisma.PharmacyStagedMedicineLinkCreateManyInput, string>();
-  const created: { id: string; productName: string }[] = [];
-  const matched = new Map<string, EarlierMedicine>();
+  const writes: RowWrite[] = [];
   for (const { row, plan } of planned) {
     const link = {
       sourceKey: row.sourceKey,
@@ -480,35 +703,32 @@ export async function createStagedMedicinesChunk(
     if (existing) {
       // The medicine is already in the catalogue from an earlier file: link the row, add nothing.
       // Its barcode is reported as not added, because the existing medicine is not changed here.
-      links.push({
-        ...link,
-        medicineId: existing.medicineId,
-        packLevelId: existing.packLevelId,
-        outcome: 'MATCHED',
-        barcode: plan.barcode,
-        barcodeAttached: plan.barcode ? false : null,
-        // The existing medicine's thresholds are not changed here either.
-        reorderLevelApplied: plan.reorderLevelPacks === null ? null : false,
+      writes.push({
+        row,
+        link: {
+          ...link,
+          medicineId: existing.medicineId,
+          packLevelId: existing.packLevelId,
+          outcome: 'MATCHED',
+          barcode: plan.barcode,
+          barcodeAttached: plan.barcode ? false : null,
+          // The existing medicine's thresholds are not changed here either.
+          reorderLevelApplied: plan.reorderLevelPacks === null ? null : false,
+        },
+        levels: [],
+        aliases: [],
+        provenance: [],
+        matched: existing,
       });
-      matched.set(existing.medicineId, existing);
       continue;
     }
     const medicineId = randomUUID();
     const presentationId = randomUUID();
-    medicines.push({
-      id: medicineId,
-      productName: plan.productName,
-      productFamily: 'PHARMACEUTICAL',
-      // The batch approval is the recorded review; missing strength and registration are
-      // stored as not recorded for an imported identity (DEV-852), never a reason to hold sale.
-      saleable: true,
-    });
-    presentations.push({ id: presentationId, medicineId, presentation: plan.presentation });
+    const levels: Prisma.PackLevelCreateManyInput[] = [];
     let parentId: string | null = null;
-    let outerId: string | null = null;
-    for (const [index, level] of plan.packLevels.entries()) {
+    for (const level of plan.packLevels) {
       const id = randomUUID();
-      (index === 0 ? outerLevels : innerLevels).push({
+      levels.push({
         id,
         presentationId,
         parentPackLevelId: parentId,
@@ -518,42 +738,30 @@ export async function createStagedMedicinesChunk(
         unitsPerParent: level.unitsPerParent,
         effectiveFrom: now,
       });
-      if (index === 0) outerId = id;
       parentId = id;
     }
-    if (outerId && plan.mrpMinor !== null)
-      prices.push({
-        organizationId,
-        presentationId,
-        packLevelId: outerId,
-        mrpMinor: plan.mrpMinor,
-        sellingPriceMinor: null,
-        effectiveFrom: now,
-        source: 'import',
-        // DEV-928: the approver wrote the price; the editor who asked for the creation proposed it.
-        createdById: request.reviewerId,
-        proposedById: request.editorId,
-      });
+    const outerId = (levels[0]?.id as string | undefined) ?? null;
+    const aliases: Prisma.MedicineAliasCreateManyInput[] = [];
     for (const [type, value] of [
       ['GENERIC', plan.genericName],
       ['LEGACY_CODE', plan.legacyCode],
-    ] as const)
-      if (value)
-        aliases.push({ medicineId, type, value, normalizedValue: normalizeMedicineText(value) });
-    let barcodeId: string | undefined;
+    ] as const) {
+      const normalizedValue = value ? normalized(value) : '';
+      if (value && normalizedValue) aliases.push({ medicineId, type, value, normalizedValue });
+    }
+    let barcode: RowWrite['barcode'];
     if (plan.barcode) {
-      const normalizedCode = normalizeMedicineText(plan.barcode);
-      if (!taken.has(normalizedCode)) {
+      const normalizedCode = normalized(plan.barcode);
+      if (normalizedCode && !taken.has(normalizedCode)) {
         taken.add(normalizedCode);
-        barcodeId = randomUUID();
-        barcodes.push({
-          id: barcodeId,
+        barcode = {
+          id: randomUUID(),
           presentationId,
           packLevelId: outerId,
           type: barcodeType(plan.barcode),
           code: plan.barcode,
           normalizedCode,
-        });
+        };
       }
     }
     const evidence = {
@@ -561,16 +769,18 @@ export async function createStagedMedicinesChunk(
       rowSourceKey: row.sourceKey,
       rowNumber: row.rowNumber,
     };
+    const genericStored = aliases.some((alias) => alias.type === 'GENERIC');
     const asserted: [string, string | number | null][] = [
       ['productName', plan.productName],
       ['pack', plan.unitsPerPack === null ? null : plan.presentation],
       ['unitsPerPack', plan.unitsPerPack],
       ['mrpMinor', plan.mrpMinor],
       ['purchasePriceMinor', plan.purchasePriceMinor],
-      ['alias', plan.genericName],
+      ['alias', genericStored ? plan.genericName : null],
       ['legacyCode', plan.legacyCode],
-      ['barcode', barcodeId ? plan.barcode : null],
+      ['barcode', barcode ? plan.barcode : null],
     ];
+    const provenance: Prisma.MedicineProvenanceCreateManyInput[] = [];
     for (const [field, value] of asserted)
       if (value !== null)
         provenance.push({
@@ -587,51 +797,84 @@ export async function createStagedMedicinesChunk(
     // PUR-07: a reorder level is the branch's approved safety stock, counted in units. The
     // batch approver approves it, as they approve the pack price.
     const reorderUnits = reorderBranchId ? stagedReorderUnits(plan) : null;
-    if (reorderUnits !== null)
-      safetyStocks.push({
-        organizationId,
-        branchId: reorderBranchId!,
+    writes.push({
+      row,
+      link: {
+        ...link,
         medicineId,
-        safetyStockUnits: reorderUnits,
-        approvedByUserId: request.reviewerId,
-        approvedAt: now,
-      });
-    links.push({
-      ...link,
-      medicineId,
-      packLevelId: outerId,
-      barcode: plan.barcode,
-      barcodeAttached: plan.barcode ? Boolean(barcodeId) : null,
-      reorderLevelApplied: plan.reorderLevelPacks === null ? null : reorderUnits !== null,
+        packLevelId: outerId,
+        barcode: plan.barcode,
+        barcodeAttached: plan.barcode ? Boolean(barcode) : null,
+        reorderLevelApplied: plan.reorderLevelPacks === null ? null : reorderUnits !== null,
+      },
+      medicine: {
+        id: medicineId,
+        productName: plan.productName,
+        productFamily: 'PHARMACEUTICAL',
+        // The batch approval is the recorded review; missing strength and registration are
+        // stored as not recorded for an imported identity (DEV-852), never a reason to hold sale.
+        saleable: true,
+      },
+      presentation: { id: presentationId, medicineId, presentation: plan.presentation },
+      levels,
+      price:
+        outerId && plan.mrpMinor !== null
+          ? {
+              organizationId,
+              presentationId,
+              packLevelId: outerId,
+              mrpMinor: plan.mrpMinor,
+              sellingPriceMinor: null,
+              effectiveFrom: now,
+              source: 'import',
+              // DEV-928: the approver wrote the price; the editor who asked for the creation
+              // proposed it.
+              createdById: request.reviewerId,
+              proposedById: request.editorId,
+            }
+          : undefined,
+      aliases,
+      barcode,
+      provenance,
+      safetyStock:
+        reorderUnits === null
+          ? undefined
+          : {
+              organizationId,
+              branchId: reorderBranchId!,
+              medicineId,
+              safetyStockUnits: reorderUnits,
+              approvedByUserId: request.reviewerId,
+              approvedAt: now,
+            },
+      created: { id: medicineId, productName: plan.productName },
     });
-    if (barcodeId) barcodeOfLink.set(links.at(-1)!, barcodeId);
-    created.push({ id: medicineId, productName: plan.productName });
   }
-  if (medicines.length) {
-    await tx.medicine.createMany({ data: medicines });
-    await tx.presentation.createMany({ data: presentations });
-    // Parents first: the hierarchy trigger reads a child's parent from an earlier statement.
-    if (outerLevels.length) await tx.packLevel.createMany({ data: outerLevels });
-    if (innerLevels.length) await tx.packLevel.createMany({ data: innerLevels });
-    if (aliases.length) await tx.medicineAlias.createMany({ data: aliases, skipDuplicates: true });
-    await tx.medicineProvenance.createMany({ data: provenance });
-  }
-  if (barcodes.length) {
-    // A barcode another person added since it was checked is skipped too, and reported.
-    await tx.medicineBarcode.createMany({ data: barcodes, skipDuplicates: true });
-    const attached = new Set(
-      (
-        await tx.medicineBarcode.findMany({
-          where: { id: { in: barcodes.map((barcode) => barcode.id!) } },
-          select: { id: true },
-        })
-      ).map((barcode) => barcode.id)
-    );
-    for (const [link, barcodeId] of barcodeOfLink)
-      if (!attached.has(barcodeId)) link.barcodeAttached = false;
-  }
-  if (safetyStocks.length) await tx.pharmacySafetyStock.createMany({ data: safetyStocks });
-  if (links.length) await tx.pharmacyStagedMedicineLink.createMany({ data: links });
+  const refused: { write: RowWrite; error: unknown }[] = [];
+  const written = await writeIsolated(tx, organizationId, writes, refused);
+  for (const { write, error } of refused)
+    notCreated.push({
+      row: write.row,
+      reason: notCreatedReason(error),
+      detail: failureDetail(error),
+    });
+  if (notCreated.length)
+    await tx.pharmacyStagedMedicineLink.createMany({
+      data: notCreated.map(({ row, reason }) => ({
+        sourceKey: row.sourceKey,
+        batchId: request.batchId,
+        rowId: row.id,
+        editId: request.editId,
+        medicineId: null,
+        outcome: 'NOT_CREATED',
+        notCreatedReason: reason,
+        createdById: scope.actorId,
+      })),
+    });
+  const created = written.flatMap((write) => (write.created ? [write.created] : []));
+  const matched = new Map(
+    written.flatMap((write) => (write.matched ? [[write.matched.medicineId, write.matched]] : []))
+  );
   // DEV-854: the shared legacy NARCOTICS rule, for every medicine this step creates or matches,
   // in one set-based statement for the chunk.
   const controlled = (
@@ -644,15 +887,13 @@ export async function createStagedMedicinesChunk(
       })),
     ])
   ).length;
-  if (prices.length) {
-    // Pack prices are written under the organization's price lock, as every price write is.
-    // Taken last, so the lock is held only while this chunk commits.
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${organizationId}), hashtext('pharmacy-pack-prices'))`;
-    await tx.pharmacyPackPrice.createMany({ data: prices });
-  }
   return {
     created: created.length,
-    matched: links.filter((link) => link.outcome === 'MATCHED').length,
+    matched: written.filter((write) => write.matched).length,
+    /** Rows of this step recorded as not created, each with its reason on its link. */
+    refused: notCreated.length,
+    /** Row numbers and database codes of those rows, for the server log and the audit record. */
+    refusals: notCreated.map(({ row, detail }) => ({ rowNumber: row.rowNumber, ...detail })),
     controlled,
     medicineIds: created.map((medicine) => medicine.id),
     ...(await stagedCreationProgress(tx, organizationId, request.batchId)),
