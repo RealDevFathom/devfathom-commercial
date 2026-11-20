@@ -391,6 +391,7 @@ const soloTemplate = [
             unitsPerPack: 100,
             outcome: 'CREATED',
             notCreatedReason: null,
+            aliasesNotAdded: [],
             barcode: BARCODE,
             barcodeAttached: true,
             supplierName: null,
