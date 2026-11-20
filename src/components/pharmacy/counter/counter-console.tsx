@@ -43,6 +43,7 @@ import { CounterChangeDue } from './counter-change-due';
 import { CounterKeymapLegend } from './counter-keymap-legend';
 import { CounterOpenDrawerStep } from './counter-open-drawer-step';
 import { CounterSaleReadiness, CounterSetupNextStep } from './counter-sale-readiness';
+import { clearCounterReadinessOkay } from '@/lib/pharmacy/counter-readiness-okay';
 import { CounterDrawerOperator } from './counter-drawer-operator';
 import { CounterCashShiftPanel } from './counter-cash-shift-panel';
 import { CounterOpenBills, type CounterOpenBill } from './counter-open-bills';
@@ -505,6 +506,13 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
   const session = holdOffline ? verifiedSession : liveSession;
   const status = holdOffline ? 'authenticated' : liveStatus;
   const user = session?.user;
+  // DEV-970: once the session has ended (signed out, expired or revoked; not merely
+  // offline), the next sign-in sees the ready-to-sell panel in full again.
+  const sessionEnded =
+    status === 'unauthenticated' || (status === 'authenticated' && !evaluateSessionUser(user).ok);
+  useEffect(() => {
+    if (sessionEnded) clearCounterReadinessOkay();
+  }, [sessionEnded]);
   // Remount on account/tenant changes so neither drafts nor an in-flight read's
   // response can become another operator's recovery UI. Server remains authority.
   if (
@@ -3871,6 +3879,8 @@ function ScopedPharmacyCounterConsole({
           branchId={branchId}
           checking={saleReadiness.isFetching}
           onCheckAgain={() => void refetchSaleReadiness()}
+          rememberFor={{ organizationId, accountId, deviceId }}
+          onHidden={() => searchRef.current?.focus()}
         />
       ) : null}
       <div className="grid items-start gap-3 xl:min-h-0 xl:flex-1 xl:grid-cols-2 xl:items-stretch">

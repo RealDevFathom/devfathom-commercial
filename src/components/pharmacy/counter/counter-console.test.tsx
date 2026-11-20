@@ -7,6 +7,10 @@ import {
 } from '@/lib/pharmacy/counter-messages';
 import type { ComponentProps } from 'react';
 import { COUNTER_SETUP_GUIDANCE } from '@/lib/pharmacy/counter-setup';
+import {
+  clearCounterReadinessOkay,
+  counterReadinessOkayKey,
+} from '@/lib/pharmacy/counter-readiness-okay';
 import { CounterApprovalDenied } from '@/lib/pharmacy/counter-line-approval';
 import { PharmacyRxReferenceError } from '@/lib/pharmacy/rx-prescription-reference';
 
@@ -2902,6 +2906,90 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
         screen.getAllByRole('link', { name: 'Organization administration' }).length
       ).toBeGreaterThan(0);
       expect(screen.queryByText(/not assigned to an active branch/)).not.toBeInTheDocument();
+    });
+
+    // DEV-970: "Okay" puts the list away; a blocking list stays on screen as one line.
+    describe('DEV-970: Okay on the ready-to-sell panel', () => {
+      beforeEach(() => {
+        clearCounterReadinessOkay();
+        window.sessionStorage.clear();
+        window.localStorage.setItem('devfathom.pharmacy.counter.device', 'device-a');
+      });
+
+      it('shrinks a blocking list to one line that still says why and still re-checks', () => {
+        const check = readiness(false, ['LICENCE_INVALID']);
+        mocks.queries.saleReadiness = check;
+        render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+        const panel = screen.getByRole('region', { name: 'This counter cannot sell yet' });
+        fireEvent.click(within(panel).getByRole('button', { name: /^Okay/ }));
+
+        const line = screen.getByRole('region', { name: 'Sales are blocked at this counter.' });
+        expect(line).not.toHaveTextContent('This branch has no valid licence on file');
+        expect(within(line).getByRole('button', { name: 'Show why' })).toHaveFocus();
+        fireEvent.click(within(line).getByRole('button', { name: 'Check again' }));
+        expect(check.refetch).toHaveBeenCalledTimes(1);
+
+        fireEvent.click(within(line).getByRole('button', { name: 'Show why' }));
+        expect(
+          screen.getByRole('region', { name: 'This counter cannot sell yet' })
+        ).toHaveTextContent('This branch has no valid licence on file');
+      });
+
+      it('remembers the Okay for this person, branch and counter computer across a reload', () => {
+        mocks.queries.saleReadiness = readiness(false, ['LICENCE_INVALID']);
+        const view = render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+        fireEvent.click(screen.getByRole('button', { name: /^Okay/ }));
+        view.unmount();
+        expect(
+          window.sessionStorage.getItem(
+            counterReadinessOkayKey({
+              organizationId: 'org-a',
+              accountId: 'account-a',
+              branchId: 'branch-a',
+              deviceId: 'device-a',
+            })
+          )
+        ).toBe('["LICENCE_INVALID"]');
+
+        render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+        expect(
+          screen.getByRole('region', { name: 'Sales are blocked at this counter.' })
+        ).toBeVisible();
+      });
+
+      it('hides a limits-only list and puts focus back on the scan field', () => {
+        openTheDrawer();
+        mocks.queries.saleReadiness = query({
+          ready: true,
+          blockers: [],
+          warnings: ['PHARMACIST_NOT_PRESENT'],
+          canFixSetup: false,
+        });
+        render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+        const panel = screen.getByRole('region', { name: 'Some sales are limited' });
+        fireEvent.click(within(panel).getByRole('button', { name: 'Okay, hide this' }));
+        expect(
+          screen.queryByRole('region', { name: 'Some sales are limited' })
+        ).not.toBeInTheDocument();
+        expect(screen.getByLabelText('Scan or search')).toHaveFocus();
+      });
+
+      it('shows the list in full again once the session has ended', () => {
+        mocks.queries.saleReadiness = readiness(false, ['LICENCE_INVALID']);
+        const view = render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+        fireEvent.click(screen.getByRole('button', { name: /^Okay/ }));
+        const signedIn = mocks.session;
+        mocks.session = {
+          status: 'unauthenticated',
+          data: null,
+        } as unknown as typeof mocks.session;
+        view.rerender(<PharmacyCounterConsole initialBranchId="branch-a" />);
+        expect(screen.getByText(/Sign in with an authorized pharmacy account/)).toBeInTheDocument();
+
+        mocks.session = signedIn;
+        view.rerender(<PharmacyCounterConsole initialBranchId="branch-a" />);
+        expect(screen.getByRole('region', { name: 'This counter cannot sell yet' })).toBeVisible();
+      });
     });
 
     it('does not list setup over an open bill', () => {
@@ -7564,10 +7652,14 @@ describe('DEV-957 enrolled counter computer', () => {
       mocks.queries.counterBranches = { ...query(undefined), isSuccess: false };
       render(<PharmacyCounterConsole />);
       expect(screen.getByRole('heading', { name: 'Counter', level: 1 })).toBeInTheDocument();
-      expect(screen.getByText('Offline — this counter cannot reach the server.')).toBeInTheDocument();
+      expect(
+        screen.getByText('Offline — this counter cannot reach the server.')
+      ).toBeInTheDocument();
       expect(screen.queryByText('No active branch is configured yet.')).not.toBeInTheDocument();
       // This browser has no IndexedDB here, so it says plainly why offline mode is off.
-      expect(await screen.findByText(/counter key is missing|blocks local storage/)).toBeInTheDocument();
+      expect(
+        await screen.findByText(/counter key is missing|blocks local storage/)
+      ).toBeInTheDocument();
     } finally {
       onLine.mockRestore();
     }
@@ -7583,8 +7675,12 @@ describe('DEV-957 enrolled counter computer', () => {
       });
       mocks.session = { status: 'unauthenticated', data: null } as unknown as typeof mocks.session;
       view.rerender(<PharmacyCounterConsole initialBranchId="branch-a" />);
-      expect(screen.getByText('Offline — this counter cannot reach the server.')).toBeInTheDocument();
-      expect(screen.queryByText(/Sign in with an authorized pharmacy account/)).not.toBeInTheDocument();
+      expect(
+        screen.getByText('Offline — this counter cannot reach the server.')
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText(/Sign in with an authorized pharmacy account/)
+      ).not.toBeInTheDocument();
       // Online, the live answer is used unchanged.
       onLine.mockReturnValue(true);
       act(() => {
