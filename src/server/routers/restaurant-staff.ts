@@ -29,6 +29,8 @@ import {
   rotateOperatorCredential,
 } from '@/lib/restaurant/credential-lifecycle';
 import { CredentialPolicyError } from '@/lib/restaurant/operator-credentials';
+import { approvalAuthenticatorPartySelect } from '@/lib/approval-authenticator';
+import { pinResetDenial } from '@/lib/pharmacy/own-pin';
 import {
   JobRoleError,
   clearStaffCapabilityOverride,
@@ -151,6 +153,39 @@ async function resolveStaffUserEmail(
     throw new StaffProfileError('The selected organization user is unavailable.', 'USER_NOT_FOUND');
   }
   return user.id;
+}
+
+/**
+ * DEV-974: an operator PIN or badge on a staff profile linked to a web account signs in
+ * (and approves) as that account. Setting one, or linking a profile to an account, is a
+ * sign-in identity change: it follows the PIN-reset hierarchy (`pinResetDenial`), so a
+ * manager never sets the credential of an administrator or the owner. A person's own
+ * profile, and profiles with no linked account, are unchanged.
+ */
+async function assertMaySetLinkedCredential(
+  db: ScopedDb,
+  actorId: string,
+  linkedUserId: string | null | undefined
+): Promise<void> {
+  if (!linkedUserId || linkedUserId === actorId) return;
+  const select = approvalAuthenticatorPartySelect();
+  const [actor, target] = await Promise.all([
+    db.user.findUnique({ where: { id: actorId }, select }),
+    db.user.findUnique({ where: { id: linkedUserId }, select }),
+  ]);
+  const denial =
+    actor && target
+      ? await pinResetDenial(db, actor, target)
+      : "Only the owner can change this person's PIN.";
+  if (denial) throw new TRPCError({ code: 'FORBIDDEN', message: denial });
+}
+
+async function linkedUserOf(db: ScopedDb, staffProfileId: string): Promise<string | null> {
+  const profile = await db.restaurantStaffProfile.findUnique({
+    where: { id: staffProfileId },
+    select: { userId: true },
+  });
+  return profile?.userId ?? null;
 }
 
 type InviteActor = Parameters<typeof subjectFromSession>[0];
@@ -460,6 +495,7 @@ export const restaurantStaffRouter = router({
             userEmail
           );
         }
+        await assertMaySetLinkedCredential(ctx.db, ctx.session!.user.id, profileInput.userId);
         const staff = await createStaffProfileWithinCommercialLimit(
           ctx.db,
           ctx.entitlements.limits,
@@ -659,6 +695,7 @@ export const restaurantStaffRouter = router({
             id
           );
         }
+        await assertMaySetLinkedCredential(ctx.db, ctx.session!.user.id, patch.userId);
         const staff = await updateStaffProfileWithinCommercialLimit(
           ctx.db,
           ctx.entitlements.limits,
@@ -768,6 +805,11 @@ export const restaurantStaffRouter = router({
           if (!device) denyStaffBranchAccess();
           assertAuthorizedBranch(authorization, device.branchId);
         }
+        await assertMaySetLinkedCredential(
+          ctx.db,
+          ctx.session!.user.id,
+          await linkedUserOf(ctx.db, input.staffProfileId)
+        );
         const credential = await issueOperatorCredential(ctx.db, input);
         annotateAudit(ctx, {
           skipInput: true,
@@ -814,6 +856,11 @@ export const restaurantStaffRouter = router({
           if (!existing.device) denyStaffBranchAccess();
           assertAuthorizedBranch(authorization, existing.device.branchId);
         }
+        await assertMaySetLinkedCredential(
+          ctx.db,
+          ctx.session!.user.id,
+          await linkedUserOf(ctx.db, existing.staffProfileId)
+        );
         const credential = await rotateOperatorCredential(ctx.db, input);
         annotateAudit(ctx, {
           skipInput: true,

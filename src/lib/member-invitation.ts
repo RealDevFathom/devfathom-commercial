@@ -1,6 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import type { Prisma } from '@/generated/prisma/client';
 import { generateInviteToken } from '@/lib/invite-token';
+import { emailChangeDenial } from '@/lib/auth/member-email-change';
 
 /**
  * The seat-checked "create an INVITED member and mint their single-use link"
@@ -93,6 +94,22 @@ export async function createMemberInvitation(
         message:
           'This person already has a pending invitation. An organization administrator can re-send it from Team.',
       });
+    }
+    if (existing) {
+      // DEV-974: refreshing re-issues the pending account's sign-in link, and the
+      // caller receives it. A pending account can be an existing member waiting to
+      // confirm a changed email, so the refresh follows the same hierarchy as an
+      // email change: never the owner, and an administrator only for members below them.
+      const denial = await emailChangeDenial(tx, {
+        actorId: input.invitedById,
+        targetId: existing.id,
+      });
+      if (denial) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Only the owner can re-send this invitation.',
+        });
+      }
     }
     if (existing && input.onRefresh) await input.onRefresh(existing);
     if (!existing) {
