@@ -464,6 +464,28 @@ describe('PharmacyCamerasConsole configured gateway (DEV-740)', () => {
     expect(mocks.diagnose).toHaveBeenCalledWith({ cameraId: 'cam_1' });
   });
 
+  it.each([
+    [{ outcome: 'ok', videoCodec: 'h265' }, 'Safari on Mac, iPhone and iPad plays it'],
+    [{ outcome: 'relay-unsupported' }, 'Supported: MediaMTX v1.17.1 to v1.21.4'],
+  ])('states the configured check result %j in plain words', (result, text) => {
+    mocks.workspace.mockReturnValue(ready(configured()));
+    mocks.diagnose.mockReturnValue(result);
+    const view = render(<PharmacyCamerasConsole />);
+    fireEvent.click(screen.getByRole('button', { name: 'Check configured connection' }));
+    view.rerender(<PharmacyCamerasConsole />);
+    expect(screen.getByText(new RegExp(text))).toBeVisible();
+  });
+
+  it('adds no H.265 line for an H.264 camera', () => {
+    mocks.workspace.mockReturnValue(ready(configured()));
+    mocks.diagnose.mockReturnValue({ outcome: 'ok', videoCodec: 'h264' });
+    const view = render(<PharmacyCamerasConsole />);
+    fireEvent.click(screen.getByRole('button', { name: 'Check configured connection' }));
+    view.rerender(<PharmacyCamerasConsole />);
+    expect(screen.getByText(/Supported manifest received/)).toBeVisible();
+    expect(screen.queryByText(/H\.265/)).not.toBeInTheDocument();
+  });
+
   it('opens live view on the pharmacy endpoint and releases the grant on close', async () => {
     mocks.workspace.mockReturnValue(ready(configured()));
     render(<PharmacyCamerasConsole />);
