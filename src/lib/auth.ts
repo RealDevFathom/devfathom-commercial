@@ -17,7 +17,7 @@ import {
 } from '@/lib/tenancy/host';
 import { withTenantDb, withPlatformDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { parseCookie } from '@/lib/platform/security';
-import { SSO_TICKET_COOKIE } from '@/lib/sso';
+import { SSO_TICKET_COOKIE } from '@/lib/sso-ticket-cookie';
 import { liveDemoAccessExpiry, type SessionInvalidReason } from '@/lib/auth/session-state';
 import { DUMMY_PASSWORD_HASH, SIGNIN_ALLOWED_STATUSES } from '@/lib/auth/constants';
 import { SESSION_UPDATE_AGE_SECONDS } from '@/lib/auth/session-cookie-throttle';

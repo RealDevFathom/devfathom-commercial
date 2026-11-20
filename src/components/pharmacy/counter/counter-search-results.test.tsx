@@ -750,3 +750,26 @@ it('DEV-852: shows a missing strength in plain words, not as an error', () => {
   expect(within(result).queryByText(/Unavailable/)).not.toBeInTheDocument();
   expect(within(result).queryByRole('alert')).not.toBeInTheDocument();
 });
+
+describe('DEV-977 chosen result mark', () => {
+  it('marks the chosen result with a start border as well as a tint', () => {
+    render(
+      <CounterSearchResults
+        rows={[row, { ...row, medicineId: 'med-other', presentationId: 'presentation-other' }]}
+        state="ready"
+        query="para"
+        activeMedicineId={row.medicineId}
+        onSelect={vi.fn()}
+        onCaptureDemand={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+    const [chosen, other] = within(
+      screen.getByRole('list', { name: 'Search results' })
+    ).getAllByRole('button');
+    expect(chosen).toHaveAttribute('aria-pressed', 'true');
+    expect(chosen).toHaveClass('border-s-[3px]', 'border-s-accent-brand', 'bg-surface-sunken');
+    expect(other).toHaveAttribute('aria-pressed', 'false');
+    expect(other).toHaveClass('border-s-[3px]', 'border-s-transparent');
+  });
+});
