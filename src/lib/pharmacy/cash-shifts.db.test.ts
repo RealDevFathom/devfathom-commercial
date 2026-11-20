@@ -630,7 +630,8 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
     await expect(
       closeShift(s, s.cashier, first!.id, 10_550, { varianceNote: 'Fifty short' })
     ).rejects.toMatchObject({ reason: 'SHIFT_APPROVAL_REQUIRED' });
-    // The shared approval path: a wrong PIN is refused and strikes the manager's credential.
+    // The shared approval path: a wrong PIN is refused. The cashier typed it, so it does not strike
+    // the manager's own credential (which their refunds also use); it spends the approver's budget.
     await expect(
       tenant(s.as(s.cashier), (db) =>
         shifts.authorizeCashShiftVariance(db, s.as(s.cashier), {
@@ -646,7 +647,7 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
         select: { failedAttempts: true },
       })
     );
-    expect(strikes.failedAttempts).toBe(1);
+    expect(strikes.failedAttempts).toBe(0);
     // A cashier never approves their own shift while someone else can; another cashier never can.
     await expect(
       tenant(s.as(s.cashier), (db) =>
@@ -1271,6 +1272,13 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
       tenant(s.as(actor), (db) =>
         shifts.authorizeCashShiftVariance(db, s.as(actor), { shiftId, approverId, pin })
       );
+    const credentialOf = (userId: string) =>
+      tenant(s.owner, (db) =>
+        db.restaurantOperatorCredential.findFirstOrThrow({
+          where: { staffProfile: { userId } },
+          select: { failedAttempts: true, lockedUntil: true },
+        })
+      );
     const approversFor = (shiftId: string, actor = s.manager) =>
       tenant(s.as(actor), (db) => shifts.shiftVarianceApprovers(db, s.as(actor), shiftId));
 
@@ -1278,6 +1286,11 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
     // approve it themselves with a fresh PIN, recorded as their own approval.
     const own = await shiftOf(s.manager);
     expect((await approversFor(own.id)).map((a) => a.id)).toEqual([s.manager]);
+    // Their own wrong PIN strikes their own credential, as at a refund.
+    await expect(authorize(own.id, s.manager, '0000')).rejects.toMatchObject({
+      reason: 'SHIFT_APPROVAL_REFUSED',
+    });
+    expect((await credentialOf(s.manager)).failedAttempts).toBe(1);
     const alone = await authorize(own.id, s.manager, MANAGER_PIN);
     expect(alone).toMatchObject({
       approverId: s.manager,
@@ -1338,6 +1351,14 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', () => {
     });
     await expect(authorize(cashiers.id, second, '7391')).rejects.toMatchObject({
       reason: 'SHIFT_APPROVAL_LOCKED',
+    });
+    // Those guesses were typed by someone else: the second manager's own credential took no
+    // strike, so they are not locked out of their refunds, and can still approve at their own
+    // counter with their own PIN.
+    expect(await credentialOf(second)).toMatchObject({ failedAttempts: 0, lockedUntil: null });
+    await expect(authorize(cashiers.id, second, '7391', second)).resolves.toMatchObject({
+      approverId: second,
+      selfApproved: false,
     });
   });
 
