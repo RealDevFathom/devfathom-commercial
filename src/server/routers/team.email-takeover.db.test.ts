@@ -292,7 +292,7 @@ describe.skipIf(!databaseUrl)('DEV-974 email change takeover against PostgreSQL'
           where: { organizationId, key: 'password_reset_send_failures' },
         })
       );
-      expect(counter.value).toBe(1n);
+      expect(counter.value).toBe(BigInt(1));
       await withPlatformDb((db) =>
         db.platformJob.update({ where: { id: job.id }, data: { scheduledAt: new Date(0) } })
       );
