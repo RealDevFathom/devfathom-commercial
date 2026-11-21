@@ -514,7 +514,6 @@ export const navigation: NavItem[] = [
     icon: Landmark,
     group: 'Pharmacy',
     module: 'pharmacy-core',
-    pharmacyCapabilities: ['reports:financial'],
   },
   // DEV-931: every pharmacy member creates or changes their own approval PIN here.
   {
