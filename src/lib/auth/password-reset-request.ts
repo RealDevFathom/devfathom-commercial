@@ -82,6 +82,12 @@ async function deliverTenantPasswordReset(
     });
     if (record.usedAt || record.expiresAt.getTime() <= Date.now() || record.tokenHash !== tokenHash)
       return null;
+    // The member lock serializes issuers and consumers. A superseded job
+    // returned above, so retrying it cannot retire the current link.
+    await db.passwordResetToken.updateMany({
+      where: { userId: member.id, usedAt: null, id: { not: id } },
+      data: { usedAt: new Date() },
+    });
     return { name: user.name, email: user.email, token };
   });
 

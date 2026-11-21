@@ -28,6 +28,7 @@ vi.mock('@/lib/email', async (importOriginal) => ({
 }));
 vi.mock('@/lib/notifications', () => ({ notify: vi.fn() }));
 
+import { hashInviteToken } from '@/lib/invite-token';
 import { runPasswordResetJob } from '@/lib/auth/password-reset-request';
 import { withPlatformDb, withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { ACTIVE_STATUSES } from '@/lib/abac';
@@ -125,6 +126,36 @@ async function requestAndDeliverReset(email: string) {
   await runPasswordResetJob(job);
 }
 
+function resetJob(label: string) {
+  return {
+    id: organizationId + '_' + label,
+    organizationId,
+    payload: { email: 'staff@test.invalid' },
+  };
+}
+
+function deliveredResetTokens() {
+  return sent.map((mail) => {
+    const token = /\/reset-password\/([A-Za-z0-9_-]+)/.exec(mail.text)?.[1];
+    if (!token) throw new Error('Expected a reset email in this fixture.');
+    return token;
+  });
+}
+
+function validateReset(token: string) {
+  return withTenantDb(organizationId, (db) =>
+    app.createCaller(context(db, null)).passwordReset.validate({ token })
+  );
+}
+
+function completeReset(token: string) {
+  return withTenantDb(organizationId, (db) =>
+    app
+      .createCaller(context(db, null))
+      .passwordReset.reset({ token, newPassword: 'Synthetic-new-passphrase-1' })
+  );
+}
+
 async function insertUser(
   id: string,
   email: string,
@@ -207,6 +238,102 @@ describe.skipIf(!databaseUrl)('DEV-974 email change takeover against PostgreSQL'
       vi.unstubAllEnvs();
     }
   });
+
+  it('concurrent issuers leave exactly one current link, including after stale job retries', async () => {
+    const previous = resetJob('previous');
+    const a = resetJob('a');
+    const b = resetJob('b');
+    await runPasswordResetJob(previous);
+    await Promise.all([runPasswordResetJob(a), runPasswordResetJob(b)]);
+
+    const tokens = deliveredResetTokens();
+    expect(new Set(tokens).size).toBe(3);
+    const validity = await Promise.all(tokens.map(validateReset));
+    expect(validity[0]).toEqual({ valid: false });
+    const current = tokens.filter((_, index) => validity[index]!.valid);
+    expect(current).toHaveLength(1);
+    const stale = tokens.filter((token) => token !== current[0]);
+
+    sent.length = 0;
+    await Promise.all([previous, a, b].map(runPasswordResetJob));
+    expect(deliveredResetTokens()).toEqual(current);
+    for (const token of stale) {
+      await expect(completeReset(token)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    await expect(completeReset(current[0]!)).resolves.toEqual({ success: true });
+    await expect(validateReset(current[0]!)).resolves.toEqual({ valid: false });
+  }, 60_000);
+
+  it('serializes a replacement issuance with completion of the previous link', async () => {
+    await runPasswordResetJob(resetJob('first'));
+    const [older] = deliveredResetTokens();
+    const version = () =>
+      withTenantDb(organizationId, (db) =>
+        db.user.findUniqueOrThrow({
+          where: { id: ids().staff },
+          select: { tokenVersion: true },
+        })
+      );
+    const before = await version();
+    const [completion, issuance] = await Promise.allSettled([
+      completeReset(older!),
+      runPasswordResetJob(resetJob('next')),
+    ]);
+    expect(issuance.status).toBe('fulfilled');
+    if (completion.status === 'rejected') {
+      expect(completion.reason).toMatchObject({ code: 'BAD_REQUEST' });
+    } else {
+      expect(completion.value).toEqual({ success: true });
+    }
+    expect((await version()).tokenVersion).toBe(
+      before.tokenVersion + Number(completion.status === 'fulfilled')
+    );
+    const tokens = deliveredResetTokens();
+    expect(tokens).toHaveLength(2);
+    expect(await validateReset(older!)).toEqual({ valid: false });
+    await expect(completeReset(tokens[1]!)).resolves.toEqual({ success: true });
+  }, 60_000);
+
+  it.each(['administrator reset', 'own password change', 'email change'])(
+    '%s retires all outstanding links, including links issued before the migration',
+    async (change) => {
+      const tokens = Array.from({ length: 2 }, () => randomBytes(32).toString('base64url'));
+      await withTenantDb(organizationId, (db) =>
+        db.passwordResetToken.createMany({
+          data: tokens.map((token) => ({
+            userId: ids().staff,
+            tokenHash: hashInviteToken(token),
+            expiresAt: new Date(Date.now() + 60_000),
+          })),
+        })
+      );
+      expect(await Promise.all(tokens.map(validateReset))).toEqual([
+        { valid: true },
+        { valid: true },
+      ]);
+      await withTenantDb(organizationId, async (db) => {
+        const team = app.createCaller(
+          context(db, change === 'own password change' ? ids().staff : ids().admin)
+        ).team;
+        if (change === 'administrator reset') {
+          await team.adminResetPassword({
+            id: ids().staff,
+            newPassword: 'Synthetic-new-passphrase-1',
+          });
+        } else if (change === 'own password change') {
+          await team.changePassword({
+            currentPassword: OWNER_PASSWORD,
+            newPassword: 'Synthetic-new-passphrase-1',
+          });
+        } else {
+          await team.adminUpdateMember({ id: ids().staff, email: 'replacement@test.invalid' });
+        }
+      });
+      for (const token of tokens) {
+        await expect(completeReset(token)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      }
+    }
+  );
 
   it("refuses the full takeover: admin changes the owner's email, resets the password, signs in", async () => {
     // 1. A non-owner administrator changes the owner's email to an address they control.

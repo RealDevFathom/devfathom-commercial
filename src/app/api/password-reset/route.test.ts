@@ -9,6 +9,7 @@ const m = vi.hoisted(() => ({
   send: vi.fn(),
   lookupHost: vi.fn(),
   mint: vi.fn(),
+  retire: vi.fn(),
 }));
 vi.mock('@/server/audit', () => ({ ipFromHeaders: () => '192.0.2.1' }));
 vi.mock('@/lib/rate-limit', () => ({ rateLimit: m.rateLimit }));
@@ -109,7 +110,7 @@ it('dispatches only eligible members and retries the same usable link without re
             organization: { status: 'ACTIVE', isDemo: id === 'demo' },
           }),
         },
-        passwordResetToken: { upsert: m.mint },
+        passwordResetToken: { upsert: m.mint, updateMany: m.retire },
       })
     );
     m.mint.mockImplementation(async ({ create }) => ({ ...create, usedAt: null }));
@@ -130,11 +131,16 @@ it('dispatches only eligible members and retries the same usable link without re
     expect(m.mint.mock.calls[0]![0].create.tokenHash).toBe(hashInviteToken(token));
     expect(m.mint.mock.calls[1]![0].update).toEqual({});
     expect(m.mint).toHaveBeenCalledTimes(2);
+    expect(m.retire).toHaveBeenCalledWith({
+      where: { userId: 'person', usedAt: null, id: { not: m.mint.mock.calls[0]![0].create.id } },
+      data: { usedAt: expect.any(Date) },
+    });
 
     m.mint.mockImplementation(async ({ create }) => ({ ...create, usedAt: new Date() }));
     await runPasswordResetJob(job);
     await runPasswordResetJob({ ...job, payload: { ...job.payload, email: unknown } });
     expect(m.send).toHaveBeenCalledTimes(2);
+    expect(m.retire).toHaveBeenCalledTimes(2);
   } finally {
     vi.unstubAllEnvs();
   }
