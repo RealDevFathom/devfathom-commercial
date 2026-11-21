@@ -4,6 +4,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
+import { requirePharmacyFinance } from '@/lib/pharmacy/finance-access';
 import { adminProcedure, router } from '@/server/trpc';
 
 const opaqueId = z.string().trim().min(1).max(128);
@@ -80,6 +81,7 @@ export const journalEntryLookupRouter = router({
         message: 'Organization is outside your report scope.',
       });
     }
+    await requirePharmacyFinance(ctx);
     const branch = await ctx.db.pharmacyBranch.findFirst({
       where: { id: input.branchId, organizationId, active: true },
       select: { id: true },

@@ -1,3 +1,4 @@
+import { PHARMACY_FINANCE_MANAGE_DENIED_MESSAGE } from '@/lib/pharmacy/action-error-message';
 import { randomUUID } from 'node:crypto';
 import type { Metadata } from 'next';
 import { TRPCError } from '@trpc/server';
@@ -42,7 +43,13 @@ type State =
   | { kind: 'invalid' }
   | { kind: 'denied' }
   | { kind: 'failure' }
-  | { kind: 'loaded'; branchId: string; view: ApAgingView; retrievedAt: Date };
+  | {
+      kind: 'loaded';
+      mayManageAccounts: boolean;
+      branchId: string;
+      view: ApAgingView;
+      retrievedAt: Date;
+    };
 
 /** DEV-103: the reversal list loads separately too; its failure never hides the aging. */
 type Reversals =
@@ -348,6 +355,7 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
           kind: 'loaded',
           branchId: result.scope.branchId,
           view: result.view,
+          mayManageAccounts: result.mayManageAccounts,
           retrievedAt: result.retrievedAt,
         };
         try {
@@ -491,13 +499,15 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
                   budget={draftQuery.budget}
                 />
               ) : null}
-              <CreditSetOff
-                drafts={payables.drafts}
-                pending={payables.pending}
-                approved={payables.approved}
-                branchId={state.branchId}
-                bills={state.view.rows.filter((row) => row.currency === 'PKR')}
-              />
+              <fieldset disabled={!state.mayManageAccounts} className="min-w-0">
+                <CreditSetOff
+                  drafts={payables.drafts}
+                  pending={payables.pending}
+                  approved={payables.approved}
+                  branchId={state.branchId}
+                  bills={state.view.rows.filter((row) => row.currency === 'PKR')}
+                />
+              </fieldset>
             </>
           ) : payables.kind === 'failure' ? (
             <SectionCard title="Reminders and drafts could not be loaded" titleLevel={2}>
@@ -507,7 +517,13 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
               </p>
             </SectionCard>
           ) : null}
-          <EntryForms branchId={state.branchId} view={state.view} timeZone={timeZone} />
+          {state.mayManageAccounts ? (
+            <EntryForms branchId={state.branchId} view={state.view} timeZone={timeZone} />
+          ) : (
+            <SectionCard title="View-only finance access">
+              <p className="text-sm text-text-muted">{PHARMACY_FINANCE_MANAGE_DENIED_MESSAGE}</p>
+            </SectionCard>
+          )}
           {reversals.kind === 'loaded' ? (
             <ReversalPanel
               branchId={state.branchId}
