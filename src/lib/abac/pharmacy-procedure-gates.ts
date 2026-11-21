@@ -2043,7 +2043,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['take-payment/follow-up-outofstock-requests'],
   },
   'pharmacySales.authenticatePack': {
-    gate: 'assignedBranchScope then requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense',
+    gate: 'assignedBranchScope then requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt',
     lines: [
       'take-payment/ring-up-medicines',
       'dispense-prescriptions/ring-up-medicines-without-counter',
@@ -2088,7 +2088,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     none: 'any signed-in member, for their own branch assignments',
   },
   'pharmacySales.counterCart': {
-    gate: 'requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN',
+    gate: 'requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt, assigned branch or ADMIN',
     lines: [
       'take-payment/open-hold-resume-void',
       'dispense-prescriptions/use-counter-without-counter',
@@ -2107,49 +2107,49 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     none: 'any signed-in member assigned to the branch (or a workspace administrator); no permission action is checked',
   },
   'pharmacySales.counterReceipt': {
-    gate: 'requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN',
+    gate: 'requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt, assigned branch or ADMIN',
     lines: [
       'take-payment/open-hold-resume-void',
       'dispense-prescriptions/use-counter-without-counter',
     ],
   },
   'pharmacySales.counterReceiptBrowserPrint': {
-    gate: 'requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN',
+    gate: 'requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt, assigned branch or ADMIN',
     lines: [
       'take-payment/open-hold-resume-void',
       'dispense-prescriptions/use-counter-without-counter',
     ],
   },
   'pharmacySales.counterReceiptBrowserPrintDispatched': {
-    gate: 'requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN',
+    gate: 'requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt, assigned branch or ADMIN',
     lines: [
       'take-payment/open-hold-resume-void',
       'dispense-prescriptions/use-counter-without-counter',
     ],
   },
   'pharmacySales.counterReceiptBrowserPrintFailed': {
-    gate: 'requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN',
+    gate: 'requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt, assigned branch or ADMIN',
     lines: [
       'take-payment/open-hold-resume-void',
       'dispense-prescriptions/use-counter-without-counter',
     ],
   },
   'pharmacySales.counterReceiptFormat': {
-    gate: 'requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN',
+    gate: 'requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt, assigned branch or ADMIN',
     lines: [
       'take-payment/open-hold-resume-void',
       'dispense-prescriptions/use-counter-without-counter',
     ],
   },
   'pharmacySales.counterReceiptPrintJob': {
-    gate: 'requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN',
+    gate: 'requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt, assigned branch or ADMIN',
     lines: [
       'take-payment/open-hold-resume-void',
       'dispense-prescriptions/use-counter-without-counter',
     ],
   },
   'pharmacySales.counterReceiptWhatsApp': {
-    gate: 'requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN',
+    gate: 'requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt, assigned branch or ADMIN',
     lines: [
       'take-payment/open-hold-resume-void',
       'dispense-prescriptions/use-counter-without-counter',
@@ -2164,14 +2164,14 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     none: 'workspace administrators only (admin:access)',
   },
   'pharmacySales.counterSearch': {
-    gate: 'assignedBranchScope then requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense',
+    gate: 'assignedBranchScope then requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt',
     lines: [
       'take-payment/open-hold-resume-void',
       'dispense-prescriptions/use-counter-without-counter',
     ],
   },
   'pharmacySales.counterVoucher': {
-    gate: 'assignedBranchScope then requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense',
+    gate: 'assignedBranchScope then requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt',
     lines: [
       'take-payment/open-hold-resume-void',
       'dispense-prescriptions/use-counter-without-counter',
@@ -2193,7 +2193,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     none: 'workspace administrators only (admin:access)',
   },
   'pharmacySales.customerSnapshot': {
-    gate: 'assignedBranchScope then requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense (points history limited to assigned branches unless ADMIN)',
+    gate: 'assignedBranchScope then requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt (points history limited to assigned branches unless ADMIN)',
     lines: [
       'take-payment/open-hold-resume-void',
       'dispense-prescriptions/use-counter-without-counter',
@@ -2245,7 +2245,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacySales.discountApprovers': {
-    gate: 'requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense',
+    gate: 'requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt',
     lines: ['take-payment/see-till-approvers', 'dispense-prescriptions/see-till-approvers'],
   },
   'pharmacySales.applyBillDiscount': {
@@ -2345,7 +2345,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['take-payment/follow-up-outofstock-requests'],
   },
   'pharmacySales.lookupReceiptByNumber': {
-    gate: 'counterReceiptGrant default -> pharmacy:counter or pharmacy:dispense; searches assigned branches (ADMIN audited exception)',
+    gate: 'counterReceiptGrant default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt; searches assigned branches (ADMIN audited exception)',
     lines: [
       'take-payment/open-hold-resume-void',
       'dispense-prescriptions/use-counter-without-counter',
@@ -2360,7 +2360,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['take-payment/take-payment-branches-by'],
   },
   'pharmacySales.openBills': {
-    gate: 'requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense',
+    gate: 'requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt',
     lines: [
       'take-payment/open-hold-resume-void',
       'dispense-prescriptions/use-counter-without-counter',
@@ -2407,7 +2407,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     none: 'any signed-in member (only reports whether they may refund)',
   },
   'pharmacySales.refundTender': {
-    gate: "requireCounterReceiptAccess (pharmacy:counter or pharmacy:dispense; khata-credit tenders need khataScope write = pharmacy:counter) AND actorMayRefund (pharmacy:manage) AND the actor's own PIN",
+    gate: "requireCounterReceiptAccess (pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt; khata-credit tenders need khataScope write = pharmacy:counter) AND actorMayRefund (pharmacy:manage) AND the actor's own PIN",
     lines: [
       'run-branches/refund-sales-take-returns',
       'take-payment/open-hold-resume-void',
@@ -2432,7 +2432,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacySales.returnAndRefund': {
-    gate: "requireCounterReceiptAccess default (pharmacy:counter or pharmacy:dispense) AND pharmacy:manage AND own PIN; khata refund needs pharmacy:counter; controlled line needs pharmacy:dispense + a witnessing pharmacist's PIN",
+    gate: "requireCounterReceiptAccess default (pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt) AND pharmacy:manage AND own PIN; khata refund needs pharmacy:counter; controlled line needs pharmacy:dispense + a witnessing pharmacist's PIN",
     lines: [
       'run-branches/refund-sales-take-returns',
       'take-payment/open-hold-resume-void',
@@ -2442,14 +2442,14 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacySales.returnHistory': {
-    gate: 'requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense',
+    gate: 'requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt',
     lines: [
       'take-payment/see-returns-refund-value',
       'dispense-prescriptions/see-returns-refund-value',
     ],
   },
   'pharmacySales.returnLine': {
-    gate: 'requireCounterReceiptAccess default (pharmacy:counter or pharmacy:dispense) AND pharmacy:manage AND own PIN; controlled line needs pharmacy:dispense + witness PIN',
+    gate: 'requireCounterReceiptAccess default (pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt) AND pharmacy:manage AND own PIN; controlled line needs pharmacy:dispense + witness PIN',
     lines: [
       'run-branches/refund-sales-take-returns',
       'take-payment/open-hold-resume-void',
@@ -2459,14 +2459,14 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacySales.returnQuote': {
-    gate: 'requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense',
+    gate: 'requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt',
     lines: [
       'take-payment/see-returns-refund-value',
       'dispense-prescriptions/see-returns-refund-value',
     ],
   },
   'pharmacySales.saleReadiness': {
-    gate: 'counterReceiptGrant default -> pharmacy:counter or pharmacy:dispense (unassigned branch reported, not thrown)',
+    gate: 'counterReceiptGrant default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt (unassigned branch reported, not thrown)',
     lines: [
       'take-payment/open-hold-resume-void',
       'dispense-prescriptions/use-counter-without-counter',
@@ -2515,7 +2515,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacySales.scannedPackFefoApprovers': {
-    gate: 'requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense',
+    gate: 'requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt',
     lines: ['take-payment/see-till-approvers', 'dispense-prescriptions/see-till-approvers'],
   },
   'pharmacySales.setDemandOutcome': {
@@ -2566,7 +2566,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacySales.tradingDayStatus': {
-    gate: 'requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense',
+    gate: 'requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt',
     lines: [
       'take-payment/open-hold-resume-void',
       'dispense-prescriptions/use-counter-without-counter',
