@@ -1827,7 +1827,7 @@ test('Counter v2 — a discount on the next item, approved by a manager PIN for 
   ).toBeVisible({ timeout: 15_000 });
 });
 
-test('Counter v2 — Enter on a controlled medicine opens the authorisation it asks for', async ({
+test('Counter v2 — Enter on a controlled medicine opens the authorisation it asks for; a scanned pack waits there; the status strip', async ({
   page,
 }) => {
   const controlled = PHARMACY_E2E.medicines.controlled;
@@ -1847,6 +1847,80 @@ test('Counter v2 — Enter on a controlled medicine opens the authorisation it a
     sheet.getByRole('region', { name: 'Controlled medicine authorization' })
   ).toBeVisible();
   await expect(sheet.getByRole('button', { name: 'Authorise line' })).toBeDisabled();
+
+  // DEV-977 phase 3: a serialised pack of the same medicine, in this test so the lane signs in no
+  // more often than before (the login rate limit). A GS1 pack scan of a controlled medicine is not staged (that would drop
+  // the pack's own lot): it waits in the "Authorise" sheet, and nothing is on the bill.
+  await page.keyboard.press('Escape');
+  await expect(sheet).toBeHidden();
+  const serial = `E2E977${Date.now().toString(36).toUpperCase()}`;
+  await scan(page, `(01)${controlled.gtin}(10)${controlled.batchNumber}(21)${serial}`);
+  await expect(sheet).toBeVisible({ timeout: 15_000 });
+  await expect(sheet).toContainText(
+    'One scanned pack. Its own batch is kept; nothing is on the bill until it is authorised.'
+  );
+  await expect(
+    page.getByText(/complete the authorization panel, then press Authorise line\./).first()
+  ).toBeVisible();
+  await expect(
+    sheet.getByRole('region', { name: 'Controlled medicine authorization' })
+  ).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Next line' })).toHaveCount(0);
+  await expect(billLine(page, controlled.name)).toHaveCount(0);
+  const authorisePack = sheet.getByRole('button', { name: 'Authorise line' });
+  await expect(authorisePack).toBeDisabled();
+  await qaShots(page, 'controlled-pack-waiting', {
+    focus: sheet.getByRole('button', { name: 'Find the patient' }),
+    widths: QA_STATE_WIDTHS,
+    dir: QA3_DIR,
+  });
+  // Closed without adding, the pack is let go and the cashier is told to scan it again.
+  await page.keyboard.press('Escape');
+  await expect(sheet).toBeHidden();
+  await expect(
+    page.getByText(
+      new RegExp(
+        `The scanned pack of Fathomadol.* was not added\\. Scan it again to authorise it\\.`
+      )
+    )
+  ).toBeVisible();
+  await expect(billLine(page, controlled.name)).toHaveCount(0);
+
+  // DEV-977 phase 3: the "Counter status" strip is a tab stop only while it scrolls.
+  const strip = page.getByRole('group', { name: 'Counter status' });
+  for (const width of [1440, 1366, 1024, 768, 375]) {
+    await page.setViewportSize({ width, height: width < 768 ? 812 : 900 });
+    await expect(strip).toBeVisible();
+    // Let the strip measure itself at this width.
+    await expect
+      .poll(async () => {
+        const scrolls = await strip.evaluate(
+          (element) => element.scrollWidth > element.clientWidth + 1
+        );
+        const tabStop = (await strip.getAttribute('tabindex')) === '0';
+        return scrolls === tabStop;
+      })
+      .toBe(true);
+    const scrolls = await strip.evaluate(
+      (element) => element.scrollWidth > element.clientWidth + 1
+    );
+    if (scrolls) {
+      // It scrolls: the keyboard reaches it, with the Studio focus ring.
+      await strip.focus();
+      await page.keyboard.press('Shift+Tab');
+      await page.keyboard.press('Tab');
+      await expect(strip).toBeFocused();
+      expect(await strip.evaluate((element) => element.matches(':focus-visible'))).toBe(true);
+    } else {
+      await expect(strip).not.toHaveAttribute('tabindex');
+    }
+  }
+  // At the phone width the pills do not fit, so the strip is reachable there.
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(strip).toHaveAttribute('tabindex', '0');
+  await qaShots(page, 'status-strip-375', { focus: strip, widths: [375], dir: QA3_DIR });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(strip).not.toHaveAttribute('tabindex');
 });
 
 test('Counter v2 — controlled medicine: patient, prescription or emergency supply, approving pharmacist; then the line is locked', async ({
@@ -1946,49 +2020,6 @@ test('Counter v2 — controlled medicine: patient, prescription or emergency sup
   });
 });
 
-test('Counter v2 — a scanned serialised pack of a controlled medicine waits, as scanned, in its authorisation', async ({
-  page,
-}) => {
-  const controlled = PHARMACY_E2E.medicines.controlled;
-  await openCounter(page);
-  await openDrawer(page);
-  // DEV-977 phase 3: a GS1 pack scan of a controlled medicine is not staged (that would drop
-  // the pack's own lot): it waits in the "Authorise" sheet, and nothing is on the bill.
-  const serial = `E2E977${Date.now().toString(36).toUpperCase()}`;
-  await scan(page, `(01)${controlled.gtin}(10)${controlled.batchNumber}(21)${serial}`);
-  const sheet = page.getByRole('dialog', { name: /^Authorise Fathomadol/ });
-  await expect(sheet).toBeVisible({ timeout: 15_000 });
-  await expect(sheet).toContainText(
-    'One scanned pack. Its own batch is kept; nothing is on the bill until it is authorised.'
-  );
-  await expect(
-    page.getByText(/complete the authorization panel, then press Authorise line\./).first()
-  ).toBeVisible();
-  await expect(
-    sheet.getByRole('region', { name: 'Controlled medicine authorization' })
-  ).toBeVisible();
-  await expect(page.getByRole('region', { name: 'Next line' })).toHaveCount(0);
-  await expect(billLine(page, controlled.name)).toHaveCount(0);
-  const authorise = sheet.getByRole('button', { name: 'Authorise line' });
-  await expect(authorise).toBeDisabled();
-  await qaShots(page, 'controlled-pack-waiting', {
-    focus: sheet.getByRole('button', { name: 'Find the patient' }),
-    widths: QA_STATE_WIDTHS,
-    dir: QA3_DIR,
-  });
-  // Closed without adding, the pack is let go and the cashier is told to scan it again.
-  await page.keyboard.press('Escape');
-  await expect(sheet).toBeHidden();
-  await expect(
-    page.getByText(
-      new RegExp(
-        `The scanned pack of Fathomadol.* was not added\\. Scan it again to authorise it\\.`
-      )
-    )
-  ).toBeVisible();
-  await expect(billLine(page, controlled.name)).toHaveCount(0);
-});
-
 test('Counter v2 — the discount sheet: whole bill or next item, and who can approve', async ({
   page,
 }) => {
@@ -2074,47 +2105,6 @@ test('Counter v2 — the discount sheet: whole bill or next item, and who can ap
   } finally {
     await setBillDiscount(false);
   }
-});
-
-test('Counter v2 — the "Counter status" strip is a tab stop only while it scrolls', async ({
-  page,
-}) => {
-  await openCounter(page);
-  await openDrawer(page);
-  const strip = page.getByRole('group', { name: 'Counter status' });
-  for (const width of [1440, 1366, 1024, 768, 375]) {
-    await page.setViewportSize({ width, height: width < 768 ? 812 : 900 });
-    await expect(strip).toBeVisible();
-    // Let the strip measure itself at this width.
-    await expect
-      .poll(async () => {
-        const scrolls = await strip.evaluate(
-          (element) => element.scrollWidth > element.clientWidth + 1
-        );
-        const tabStop = (await strip.getAttribute('tabindex')) === '0';
-        return scrolls === tabStop;
-      })
-      .toBe(true);
-    const scrolls = await strip.evaluate(
-      (element) => element.scrollWidth > element.clientWidth + 1
-    );
-    if (scrolls) {
-      // It scrolls: the keyboard reaches it, with the Studio focus ring.
-      await strip.focus();
-      await page.keyboard.press('Shift+Tab');
-      await page.keyboard.press('Tab');
-      await expect(strip).toBeFocused();
-      expect(await strip.evaluate((element) => element.matches(':focus-visible'))).toBe(true);
-    } else {
-      await expect(strip).not.toHaveAttribute('tabindex');
-    }
-  }
-  // At the phone width the pills do not fit, so the strip is reachable there.
-  await page.setViewportSize({ width: 375, height: 812 });
-  await expect(strip).toHaveAttribute('tabindex', '0');
-  await qaShots(page, 'status-strip-375', { focus: strip, widths: [375], dir: QA3_DIR });
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await expect(strip).not.toHaveAttribute('tabindex');
 });
 
 test('Counter v2 — offline: a price check only, no offline bill, and "Sign-in not checked"', async ({
