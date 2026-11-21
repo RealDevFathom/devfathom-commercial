@@ -397,7 +397,7 @@ async function tenderCash(page: Page, amount: string) {
   await expect(page.getByLabel('Scan or search')).toBeEnabled();
   await page.keyboard.press('F9');
   const panel = page
-    .getByRole('dialog', { name: 'Payment', exact: true })
+    .getByRole('dialog', { name: /^Take payment/ })
     .locator('div[tabindex="-1"]')
     .filter({ has: page.getByRole('group', { name: 'Payment method', exact: true }) });
   await expect(panel).toBeFocused();

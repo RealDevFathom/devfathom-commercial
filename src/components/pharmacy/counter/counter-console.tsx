@@ -21,7 +21,15 @@ import {
 import { Dialog as DialogPrimitive } from '@base-ui/react/dialog';
 import Link from 'next/link';
 import { flushSync } from 'react-dom';
-import { Ellipsis, ScanBarcode, ShieldCheck, Star, UserRound } from 'lucide-react';
+import {
+  CircleCheck,
+  Ellipsis,
+  ScanBarcode,
+  ShieldCheck,
+  Star,
+  UserRound,
+  WifiOff,
+} from 'lucide-react';
 import { signIn, useSession } from 'next-auth/react';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
@@ -109,14 +117,14 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Eyebrow } from '@/components/ui/eyebrow';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
+import { Dialog, DialogPortal, DialogOverlay, DialogDescription } from '@/components/ui/dialog';
 import {
-  Dialog,
-  DialogPortal,
-  DialogOverlay,
-  DialogTitle,
-  DialogDescription,
-  DialogClose,
-} from '@/components/ui/dialog';
+  COUNTER_SHEET_BACKDROP,
+  CounterSheetFooter,
+  CounterSheetHeader,
+  counterSheetClassName,
+  type CounterSheetVariant,
+} from './counter-sheet';
 import type { CounterCart, CounterCartLine, CounterSearchRow } from '@/lib/pharmacy/counter';
 import { counterLabelScanDecision } from '@/lib/pharmacy/counter-label-scan';
 import {
@@ -4236,11 +4244,14 @@ function ScopedPharmacyCounterConsole({
           role="status"
           aria-live="polite"
           data-counter-offline=""
+          // DEV-977 phase 2B (Counter v2 B2 and C7): the design's offline banner. While the
+          // owner's offline selling switch is off it tells the truth: a price check only.
           className="flex shrink-0 flex-wrap items-start gap-3 border-b border-border-subtle bg-warning/10 px-4 py-3 text-sm lg:px-6"
         >
-          <StatusPill status="offline" tone="warning" label="Offline" />
+          <WifiOff aria-hidden="true" className="mt-0.5 size-4.5 shrink-0 text-warning" />
           <div className="min-w-0 flex-1 space-y-1">
-            <p className="font-medium text-text-strong">
+            <p className="flex flex-wrap items-center gap-2 font-semibold text-text-strong">
+              <StatusPill status="offline" tone="warning" label="Offline" />
               {paymentQueued
                 ? 'Offline — the payment will be sent when the connection returns.'
                 : pending === 'tender'
@@ -5161,7 +5172,11 @@ function ScopedPharmacyCounterConsole({
           ) : null}
           <div className="grid gap-3.5">
             <div className="grid gap-0.5 rounded-2xl bg-surface-sunken px-4 py-3.5">
-              <p className="text-[13px] font-semibold text-text-body">
+              <p className="flex items-center gap-1.5 text-[13px] font-semibold text-text-body">
+                {/* Counter v2 A3: a paid bill says so with a mark, not by colour alone. */}
+                {billState === 'settled' ? (
+                  <CircleCheck aria-hidden="true" className="size-4 shrink-0 text-success" />
+                ) : null}
                 {billState === 'settled' ? `Paid · receipt ${cart?.receiptNumber}` : 'Balance due'}
               </p>
               <p className="text-[34px] leading-tight font-semibold tracking-[-0.02em] text-text-strong tabular-nums">
@@ -5409,35 +5424,17 @@ function ScopedPharmacyCounterConsole({
         </Button>
       </div>
       <CounterOverlay
-        title="Payment"
+        title="Take payment"
+        // Counter v2 (A2, C4): the sheet's name carries the bill total, as drawn.
+        titleDetail={currentBill ? formatMinor(cart.totals.netMinor) : undefined}
+        eyebrow={`Bill · ${lineCount} ${lineCount === 1 ? 'line' : 'lines'}`}
+        variant="wide"
         enabled={canSettlePayments}
         open={paymentOpen}
         onOpenChange={setPaymentOpen}
         initialFocus={tenderRef}
         finalFocus={searchRef}
       >
-        <p className="text-xs text-text-muted">
-          {lineCount} {lineCount === 1 ? 'line' : 'lines'} · Tendered{' '}
-          {currentBill ? formatMinor(cart.totals.tenderedMinor) : '—'}
-        </p>
-        <div className="mb-4 space-y-1">
-          <Label htmlFor="counter-auto-print" className="flex min-h-11 items-center gap-3">
-            <input
-              ref={autoPrintRef}
-              id="counter-auto-print"
-              type="checkbox"
-              checked={autoPrint}
-              disabled={busy}
-              onChange={(event) => setAutoPrint(event.target.checked)}
-              aria-describedby="counter-auto-print-help"
-              className="size-4 shrink-0 accent-primary focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
-            />
-            Automatically open print dialog after payment
-          </Label>
-          <p id="counter-auto-print-help" className="text-xs text-text-muted">
-            Opens the print window after each payment on this computer.
-          </p>
-        </div>
         {/* DEV-950: a prescription line still waiting for its pharmacist's signature. */}
         {canSignPrescriptionLines && paymentOpen ? (
           <CounterRxSelfSign
@@ -5507,6 +5504,42 @@ function ScopedPharmacyCounterConsole({
           }
           onRetry={() => void refreshTenderBill()}
           onTender={takePayment}
+          summaryExtra={
+            <>
+              <p className="text-xs text-text-muted">
+                {lineCount} {lineCount === 1 ? 'line' : 'lines'} · Tendered{' '}
+                {currentBill ? formatMinor(cart.totals.tenderedMinor) : '—'}
+              </p>
+              <div className="space-y-1">
+                <Label
+                  htmlFor="counter-auto-print"
+                  className="flex min-h-11 items-center gap-3 text-[13px]"
+                >
+                  <input
+                    ref={autoPrintRef}
+                    id="counter-auto-print"
+                    type="checkbox"
+                    checked={autoPrint}
+                    disabled={busy}
+                    onChange={(event) => setAutoPrint(event.target.checked)}
+                    aria-describedby="counter-auto-print-help"
+                    className="size-4 shrink-0 accent-primary focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+                  />
+                  Automatically open print dialog after payment
+                </Label>
+                <p id="counter-auto-print-help" className="text-xs text-text-muted max-sm:hidden">
+                  Opens the print window after each payment on this computer.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                className="h-11 w-full shadow-none hover:translate-y-0 active:translate-y-0"
+                onClick={() => setPaymentOpen(false)}
+              >
+                Back to bill
+              </Button>
+            </>
+          }
         />
         {/* DEV-743: shown only where an admitted card terminal serves this counter. */}
         <CounterCardTerminalPanel
@@ -5518,18 +5551,15 @@ function ScopedPharmacyCounterConsole({
           businessDate={todayBusinessDate}
           onSettled={() => void refreshTenderBill('accepted')}
         />
-
-        <Button variant="outline" className="h-11" onClick={() => setPaymentOpen(false)}>
-          Back to bill
-        </Button>
       </CounterOverlay>
       <CounterOverlay
         title="Patient, prescription and checks"
+        eyebrow={formatBinding(keymap.bindings.focusPrescriptionPanel)}
         open={checksOpen}
         onOpenChange={setChecksOpen}
         initialFocus={rxPanelRef}
         finalFocus={searchRef}
-        drawer
+        variant="side"
       >
         <CounterRxPanel
           ref={rxPanelRef}
@@ -5611,10 +5641,11 @@ function ScopedPharmacyCounterConsole({
       </CounterOverlay>
       <CounterOverlay
         title="Customer loyalty and khata"
+        eyebrow="Khata and loyalty"
         open={loyaltyOpen}
         onOpenChange={setLoyaltyOpen}
         finalFocus={searchRef}
-        drawer
+        variant="side"
       >
         <SectionCard
           compact
@@ -5767,6 +5798,7 @@ function ScopedPharmacyCounterConsole({
       </CounterOverlay>
       <CounterOverlay
         title="Shortcuts"
+        eyebrow="Keyboard"
         open={shortcutsOpen}
         onOpenChange={setShortcutsOpen}
         finalFocus={searchRef}
@@ -5775,6 +5807,10 @@ function ScopedPharmacyCounterConsole({
       </CounterOverlay>
       <CounterOverlay
         title="Receipt preview"
+        eyebrow={
+          displayReceipt?.receiptNumber ? `Receipt ${displayReceipt.receiptNumber}` : 'Receipt'
+        }
+        variant="side"
         open={receiptOpen}
         onOpenChange={setReceiptOpen}
         finalFocus={searchRef}
@@ -5818,7 +5854,6 @@ function ScopedPharmacyCounterConsole({
           }
         }}
         summary={<CounterChangeDue minor={confirmedChangeMinor} />}
-        drawer
       >
         <CounterReceiptView
           branchId={branchId}
@@ -5900,9 +5935,15 @@ function ScopedPharmacyCounterConsole({
   );
 }
 
-/** Keep tender drafts and receipt settlement deduplication mounted across drawer toggles. */
+/**
+ * Keep tender drafts and receipt settlement deduplication mounted across drawer toggles.
+ * DEV-977 phase 2B: drawn in the Counter v2 sheet frame (eyebrow, title, icon close, footer).
+ */
 function CounterOverlay({
   title,
+  titleDetail,
+  eyebrow,
+  subtitle,
   open,
   enabled = true,
   onOpenChange,
@@ -5910,10 +5951,15 @@ function CounterOverlay({
   finalFocus,
   onKeyDown,
   summary,
-  drawer = false,
+  footer,
+  variant = 'dialog',
   children,
 }: {
   title: string;
+  /** Shown after the title, inside the dialog's name (the payment sheet's bill total). */
+  titleDetail?: string;
+  eyebrow?: ReactNode;
+  subtitle?: ReactNode;
   open: boolean;
   /** False unmounts even the normally retained, closed contents (DEV-97: lost access). */
   enabled?: boolean;
@@ -5922,16 +5968,18 @@ function CounterOverlay({
   finalFocus: RefObject<HTMLInputElement | null>;
   onKeyDown?: KeyboardEventHandler<HTMLDivElement>;
   summary?: ReactNode;
-  drawer?: boolean;
+  footer?: ReactNode;
+  variant?: CounterSheetVariant;
   children: ReactNode;
 }) {
   if (!enabled) return null;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPortal keepMounted>
-        <DialogOverlay hidden={!open} className="bg-foreground/40 backdrop-blur-none" />
+        <DialogOverlay hidden={!open} className={COUNTER_SHEET_BACKDROP} />
         <DialogPrimitive.Popup
           hidden={!open}
+          data-counter-sheet={variant}
           // Focus already inside the initial target (moved there when it opened, or by the
           // cashier since) stays where it is; the dialog's queued initial focus never takes it back.
           initialFocus={
@@ -5944,17 +5992,27 @@ function CounterOverlay({
           }
           finalFocus={finalFocus}
           onKeyDown={onKeyDown}
-          className={`pharmacy-workspace pos-calm fixed z-50 flex flex-col overflow-hidden border border-border-subtle bg-surface-card text-text-strong outline-none [&_:is([data-slot=button],[data-slot=dialog-close]):not(.rounded-full)]:rounded-[var(--radius-sm)] ${drawer ? 'inset-y-0 right-0 w-full lg:max-w-[30rem]' : 'top-1/2 left-1/2 max-h-[90dvh] w-[calc(100%-2rem)] max-w-[38.75rem] -translate-x-1/2 -translate-y-1/2 rounded-xl'}`}
+          // Portalled out of the route layout, so the sheet carries the pharmacy scope itself
+          // (12px metadata floor, POS-calm controls).
+          className={counterSheetClassName(
+            variant,
+            'pharmacy-workspace pos-calm [&_:is([data-slot=button],[data-slot=dialog-close]):not(.rounded-full)]:rounded-[var(--radius-sm)]'
+          )}
         >
-          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle p-5">
-            <DialogTitle className="text-lg font-semibold">{title}</DialogTitle>
-            <DialogClose render={<Button variant="outline" className="h-11" />}>Close</DialogClose>
-          </div>
+          <CounterSheetHeader
+            eyebrow={eyebrow}
+            subtitle={subtitle}
+            // One text run, so the name reads "Take payment · 894.00" as a single phrase.
+            title={titleDetail ? `${title} · ${titleDetail}` : title}
+          />
           {summary ? <div className="shrink-0 px-5 pt-5 empty:hidden">{summary}</div> : null}
           <DialogDescription className="sr-only">
             {`${title} for the current counter bill.`}
           </DialogDescription>
-          <div className="grid min-h-0 gap-4 overflow-y-auto p-5">{children}</div>
+          <div className="grid min-h-0 flex-1 content-start gap-4 overflow-y-auto px-5 py-4.5">
+            {children}
+          </div>
+          {footer ? <CounterSheetFooter>{footer}</CounterSheetFooter> : null}
         </DialogPrimitive.Popup>
       </DialogPortal>
     </Dialog>

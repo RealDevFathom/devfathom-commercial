@@ -388,3 +388,80 @@ describe('DEV-943: Rx photo dates use the shop’s day', () => {
     }
   });
 });
+
+describe('DEV-977 phase 2B: controlled medicine authorisation in the Counter v2 steps (A5)', () => {
+  it('groups the fields into patient, prescription and approving pharmacist, in that order', () => {
+    render(<CounterRxPanel {...props({ patient, controlled: authorization() })} />);
+    const section = screen.getByRole('region', { name: 'Controlled medicine authorization' });
+    expect(within(section).getByText('Controlled medicine · online only')).toBeInTheDocument();
+    const patientStep = within(section).getByRole('region', { name: '1 · Patient' });
+    const rxStep = within(section).getByRole('region', { name: '2 · Prescription' });
+    const pharmacistStep = within(section).getByRole('region', {
+      name: '3 · Approving pharmacist',
+    });
+    expect(within(patientStep).getByLabelText('Patient address')).toBeInTheDocument();
+    expect(within(rxStep).getByLabelText('Prescription line')).toBeInTheDocument();
+    expect(within(rxStep).getByLabelText('Emergency supply, no prescription')).toBeInTheDocument();
+    expect(
+      within(rxStep).getByLabelText('Register serial written on the prescription')
+    ).toBeInTheDocument();
+    expect(within(rxStep).getByLabelText('Earlier register serial')).toBeInTheDocument();
+    expect(within(pharmacistStep).getByLabelText('Approving pharmacist')).toBeInTheDocument();
+    expect(within(pharmacistStep).getByLabelText('Pharmacist PIN')).toHaveAccessibleDescription(
+      /./
+    );
+    // Document order follows the steps, so Tab walks them in turn.
+    expect(
+      patientStep.compareDocumentPosition(rxStep) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      rxStep.compareDocumentPosition(pharmacistStep) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it('marks each step done only from what is filled in', () => {
+    const { rerender } = render(
+      <CounterRxPanel {...props({ patient, controlled: authorization() })} />
+    );
+    const states = () =>
+      within(screen.getByRole('list', { name: 'Authorization steps' }))
+        .getAllByRole('listitem')
+        .map((step) => `${step.textContent}:${step.getAttribute('data-state')}`);
+    expect(states()).toEqual([
+      'Patient, to do:now',
+      'Prescription, to do:todo',
+      'Pharmacist, to do:todo',
+    ]);
+    rerender(
+      <CounterRxPanel
+        {...props({
+          patient,
+          controlled: authorization({ patientAddress: '12 Mall Road', emergency: true }),
+        })}
+      />
+    );
+    expect(states()).toEqual([
+      'Patient, done:done',
+      'Prescription, done:done',
+      'Pharmacist, to do:now',
+    ]);
+    rerender(
+      <CounterRxPanel
+        {...props({
+          patient,
+          controlled: authorization({
+            patientAddress: '12 Mall Road',
+            prescriptionLineId: 'line-1',
+            staffProfileId: 'pharmacist-1',
+            pin: '1234',
+          }),
+        })}
+      />
+    );
+    expect(states()).toEqual([
+      'Patient, done:done',
+      'Prescription, done:done',
+      'Pharmacist, done:done',
+    ]);
+  });
+});
