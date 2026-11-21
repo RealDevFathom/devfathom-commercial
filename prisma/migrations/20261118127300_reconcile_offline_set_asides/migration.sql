@@ -1,4 +1,5 @@
 BEGIN;
+SET LOCAL lock_timeout = '10s';
 
 -- The old counter was price-check only. Its open grants did not reserve stock while
 -- selling was off. Keep the grant and its consumption history, and audit its release.
