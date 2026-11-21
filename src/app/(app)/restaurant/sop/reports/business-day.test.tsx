@@ -51,7 +51,14 @@ afterEach(() => vi.useRealTimers());
 it('includes the 00:30 Karachi business day in the selected SOP branch report', async () => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date('2026-11-02T00:30:00+05:00'));
-  await Reports({ searchParams: Promise.resolve({}) });
+  await Reports({
+    searchParams: Promise.resolve({
+      branch: undefined,
+      from: undefined,
+      to: undefined,
+      department: undefined,
+    }),
+  });
   expect(work.report).toHaveBeenCalledWith({
     branchId: 'branch',
     from: '2026-10-27',
@@ -68,6 +75,7 @@ it('includes the 00:30 Karachi business day in the organization-wide oversight s
     modules: [],
     seatLimit: 5,
     activeSeats: 1,
+    limits: {},
     timeZone: 'Asia/Karachi',
   };
   render(

@@ -29,6 +29,7 @@ it('opens the new transaction form on the business date at 00:30 in Karachi', ()
           activeSeats: 1,
           modules: [],
           enabledModules: [],
+          limits: {},
           timeZone: 'Asia/Karachi',
         }}
       >
