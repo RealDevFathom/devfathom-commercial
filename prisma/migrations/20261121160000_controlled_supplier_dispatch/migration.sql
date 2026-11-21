@@ -1,20 +1,40 @@
-ALTER TYPE "PharmacyControlledRegisterKind" ADD VALUE 'RETURN_TO_SUPPLIER';
-
 BEGIN;
-ALTER TABLE pharmacy_controlled_register_entries
-  ADD COLUMN "sourcePurchaseEntryId" text,
-  ADD COLUMN "supplierReturnLineId" text,
-  ADD CONSTRAINT pharmacy_register_return_purchase_fk FOREIGN KEY ("organizationId","sourcePurchaseEntryId")
-    REFERENCES pharmacy_controlled_register_entries ("organizationId",id) ON DELETE RESTRICT,
-  ADD CONSTRAINT pharmacy_register_return_line_fk FOREIGN KEY ("organizationId","supplierReturnLineId")
-    REFERENCES pharmacy_purchase_return_lines ("organizationId",id) ON DELETE RESTRICT,
-  ADD CONSTRAINT pharmacy_register_return_line_once UNIQUE ("organizationId","supplierReturnLineId"),
-  ADD CONSTRAINT pharmacy_register_return_source CHECK (
-    ("entryKind" = 'RETURN_TO_SUPPLIER') = ("sourcePurchaseEntryId" IS NOT NULL) AND
-    ("entryKind" = 'RETURN_TO_SUPPLIER') = ("supplierReturnLineId" IS NOT NULL)
-  );
 
-ALTER TABLE pharmacy_controlled_register_entries DROP CONSTRAINT pharmacy_controlled_register_kind_shape;
+ALTER TYPE "PharmacyControlledRegisterKind" ADD VALUE IF NOT EXISTS 'RETURN_TO_SUPPLIER';
+
+ALTER TABLE pharmacy_controlled_register_entries
+  ADD COLUMN IF NOT EXISTS "sourcePurchaseEntryId" text,
+  ADD COLUMN IF NOT EXISTS "supplierReturnLineId" text;
+
+-- PostgreSQL 16 permits use of the new enum literal after this transaction
+-- commits. Compare the enum label as text in the two immediate CHECKs.
+DO $constraints$
+DECLARE register_table regclass := 'pharmacy_controlled_register_entries'::regclass;
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_constraint WHERE conrelid = register_table AND conname = 'pharmacy_register_return_purchase_fk') THEN
+    ALTER TABLE pharmacy_controlled_register_entries
+      ADD CONSTRAINT pharmacy_register_return_purchase_fk FOREIGN KEY ("organizationId", "sourcePurchaseEntryId")
+        REFERENCES pharmacy_controlled_register_entries ("organizationId", id) ON DELETE RESTRICT;
+  END IF;
+  IF NOT EXISTS (SELECT FROM pg_constraint WHERE conrelid = register_table AND conname = 'pharmacy_register_return_line_fk') THEN
+    ALTER TABLE pharmacy_controlled_register_entries
+      ADD CONSTRAINT pharmacy_register_return_line_fk FOREIGN KEY ("organizationId", "supplierReturnLineId")
+        REFERENCES pharmacy_purchase_return_lines ("organizationId", id) ON DELETE RESTRICT;
+  END IF;
+  IF NOT EXISTS (SELECT FROM pg_constraint WHERE conrelid = register_table AND conname = 'pharmacy_register_return_line_once') THEN
+    ALTER TABLE pharmacy_controlled_register_entries
+      ADD CONSTRAINT pharmacy_register_return_line_once UNIQUE ("organizationId", "supplierReturnLineId");
+  END IF;
+  IF NOT EXISTS (SELECT FROM pg_constraint WHERE conrelid = register_table AND conname = 'pharmacy_register_return_source') THEN
+    ALTER TABLE pharmacy_controlled_register_entries
+      ADD CONSTRAINT pharmacy_register_return_source CHECK (
+        ("entryKind"::text = 'RETURN_TO_SUPPLIER') = ("sourcePurchaseEntryId" IS NOT NULL) AND
+        ("entryKind"::text = 'RETURN_TO_SUPPLIER') = ("supplierReturnLineId" IS NOT NULL)
+      );
+  END IF;
+END $constraints$;
+
+ALTER TABLE pharmacy_controlled_register_entries DROP CONSTRAINT IF EXISTS pharmacy_controlled_register_kind_shape;
 ALTER TABLE pharmacy_controlled_register_entries
   ADD CONSTRAINT "pharmacy_controlled_register_kind_shape" CHECK (
         (
@@ -53,7 +73,7 @@ ALTER TABLE pharmacy_controlled_register_entries
           AND length(btrim(COALESCE("correctionReason", ''))) > 0
         )
         OR (
-          "entryKind" = 'RETURN_TO_SUPPLIER' AND "stockMovementId" IS NOT NULL
+          "entryKind"::text = 'RETURN_TO_SUPPLIER' AND "stockMovementId" IS NOT NULL
           AND "recordedByUserId" <> "witnessedByUserId" AND (COALESCE("signatureRef", '') LIKE 'pin:%' OR COALESCE("signatureRef", '') LIKE 'authenticator:%')
           AND length(btrim(COALESCE("counterpartyName", ''))) > 0
           AND "correctsEntryId" IS NULL AND "restorationMovementId" IS NULL
