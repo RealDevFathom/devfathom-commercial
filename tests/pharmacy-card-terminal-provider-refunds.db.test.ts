@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { assertDisposableRlsDatabase } from './disposable-rls-database';
+import type { TRPCContext } from '@/server/trpc';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 vi.mock('server-only', () => ({}));
@@ -16,12 +17,14 @@ const key = 'test-review-' + suffix;
 let run: <T>(fn: (db: ScopedDb) => Promise<T>) => Promise<T>;
 
 async function loadRefundModules() {
-  const [store, service, refunds, settlement, sales] = await Promise.all([
+  const [store, service, refunds, settlement, sales, settings, credentials] = await Promise.all([
     import('@/lib/pharmacy/card-terminal/store'),
     import('@/lib/pharmacy/card-terminal/service'),
     import('@/lib/pharmacy/card-terminal/provider-refunds'),
     import('@/lib/pharmacy/settlement'),
     import('@/lib/pharmacy/sales'),
+    import('@/server/routers/organization-pharmacy-settings'),
+    import('@/lib/restaurant/operator-credentials'),
   ]);
   return {
     prismaCardTerminalAttemptStore: store.prismaCardTerminalAttemptStore,
@@ -30,6 +33,8 @@ async function loadRefundModules() {
     outstandingProviderRefunds: refunds.outstandingProviderRefunds,
     refundPharmacyTender: settlement.refundPharmacyTender,
     changeSaleStatus: sales.changeSaleStatus,
+    settings: settings.organizationPharmacySettingsRouter,
+    hashPin: credentials.hashOperatorCredential,
   };
 }
 
@@ -458,5 +463,103 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
         db.pharmacyCardTerminalAttempt.findUniqueOrThrow({ where: { id: attemptId } })
       )
     ).toMatchObject({ status: 'DECLINED', resolvedById: originalActor });
+  });
+
+  it('lets a finance reader view the mapping and records who, when, and both accounts on an approved write', async () => {
+    const id = 'bookkeeper_' + suffix;
+    const pin = '3762';
+    const credentialHash = await modules.hashPin('PIN', pin);
+    await run(async (db) => {
+      await db.organization.update({
+        where: { id: organizationId },
+        data: {
+          requireApprovalAuthenticator: false,
+          usesCustomFinanceChart: false,
+          terminalRefundAccount: null,
+        },
+      });
+      await db.user.create({
+        data: {
+          id,
+          organizationId,
+          name: 'Bookkeeper',
+          email: id + '@example.test',
+          department: 'Pharmacy',
+          title: 'Bookkeeper',
+          role: 'ADMIN',
+        },
+      });
+      await db.userPermissionOverride.create({
+        data: {
+          userId: id,
+          capability: 'finance:read',
+          effect: 'ALLOW',
+          reason: 'Refund settings fixture',
+        },
+      });
+      const profile = await db.restaurantStaffProfile.create({
+        data: { userId: id, displayName: 'Bookkeeper' },
+      });
+      await db.restaurantOperatorCredential.create({
+        data: { staffProfileId: profile.id, type: 'PIN', credentialHash },
+      });
+    });
+    const caller = (db: ScopedDb) =>
+      modules.settings.createCaller({
+        db,
+        session: { user: { id, role: 'ADMIN', status: 'ACTIVE', organizationId } },
+        organization: { id: organizationId },
+        entitlements: {
+          organizationId,
+          vertical: 'PHARMACY',
+          enabledModules: ['pharmacy-core', 'pharmacy-finance'],
+        },
+        requestMeta: { ip: null, userAgent: null },
+        audit: { detail: {} },
+      } as unknown as TRPCContext);
+    const input = { usesCustomFinanceChart: true, account: 'ACCOUNTS_PAYABLE' as const, pin };
+    await expect(run((db) => caller(db).refundMapping())).resolves.toMatchObject({
+      canEdit: false,
+      terminalRefundAccount: null,
+    });
+    await expect(run((db) => caller(db).setRefundMapping(input))).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await run((db) =>
+      db.userPermissionOverride.create({
+        data: {
+          userId: id,
+          capability: 'pharmacy:manage',
+          effect: 'ALLOW',
+          reason: 'Grant mapping management',
+        },
+      })
+    );
+    const started = new Date();
+    await expect(run((db) => caller(db).setRefundMapping(input))).resolves.toEqual({ saved: true });
+    const rows = await run((db) =>
+      db.auditLog.findMany({
+        where: { organizationId, action: 'pharmacy.providerRefundMappingChanged' },
+      })
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      actorId: id,
+      targetId: organizationId,
+      changes: { account: { before: 'CARD_REFUNDS_PAYABLE', after: 'ACCOUNTS_PAYABLE' } },
+      outcome: 'SUCCESS',
+    });
+    expect(rows[0].createdAt.getTime()).toBeGreaterThanOrEqual(started.getTime());
+    expect(rows[0].createdAt.getTime()).toBeLessThanOrEqual(Date.now());
+    const setting = await run((db) =>
+      db.organization.findUniqueOrThrow({
+        where: { id: organizationId },
+        select: { terminalRefundAccount: true, terminalRefundMappingActorId: true },
+      })
+    );
+    expect(setting).toEqual({
+      terminalRefundAccount: 'ACCOUNTS_PAYABLE',
+      terminalRefundMappingActorId: id,
+    });
   });
 });

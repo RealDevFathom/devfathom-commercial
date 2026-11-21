@@ -16,7 +16,7 @@ export default function ProviderRefundSettings() {
       <PageHeader
         eyebrow="Pharmacy settings"
         heading="Provider refund account"
-        description="Choose where to record money owed to customers through the card provider."
+        description="The liability account used for money owed to customers through the card provider."
       />
       <SectionCard title="Liability account" titleLevel={2}>
         <RefundMappingForm accounts={accounts} />

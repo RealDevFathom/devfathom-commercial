@@ -30,7 +30,7 @@ export default async function SettingsPage() {
               href="/pharmacy/settings/provider-refunds"
               className={buttonVariants({ variant: 'outline', className: 'min-h-11' })}
             >
-              Set the provider refund account
+              View the provider refund account
             </Link>
           </SectionCard>
         )

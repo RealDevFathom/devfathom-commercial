@@ -2,105 +2,153 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { router, type TRPCContext } from '../trpc';
 import { organizationAdminRouter } from './organization-admin';
 
-const recordAudit = vi.hoisted(() => vi.fn());
+const requestAudit = vi.hoisted(() => vi.fn());
+const verifyPin = vi.hoisted(() => vi.fn());
+const otherApprovers = vi.hoisted(() => vi.fn());
 vi.mock('@/server/audit', async (original) => ({
   ...(await original<typeof import('@/server/audit')>()),
-  recordTrpcAudit: recordAudit,
+  recordTrpcAudit: requestAudit,
 }));
-
+vi.mock('@/lib/pharmacy/refund-authorization', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/refund-authorization')>()),
+  authenticateRefundPin: verifyPin,
+}));
+vi.mock('@/lib/pharmacy/accounts/ap-reversal-approvers', () => ({
+  otherApReversalApprovers: otherApprovers,
+}));
 const application = router({ organizationAdmin: organizationAdminRouter });
 const org = 'provider-refund-settings-org';
-const account = 'CARD_REFUNDS_PAYABLE' as const;
+const account = 'ACCOUNTS_PAYABLE' as const;
+const input = { usesCustomFinanceChart: true, account, pin: '4926' };
+const old = { terminalRefundAccount: null, usesCustomFinanceChart: false };
 const update = vi.fn();
-const owner = vi.fn();
-const accountant = vi.fn();
+const writeAudit = vi.fn();
+const currentSettings = vi.fn();
+const tenantMember = vi.fn();
+const roles = (capability: string) => ({ capability, effect: 'ALLOW' });
+function member(capabilities: string[], owner = false) {
+  return {
+    role: 'ADMIN',
+    status: 'ACTIVE',
+    organizationRole: {
+      key: owner ? 'owner' : 'custom-bookkeeper',
+      isSystem: owner,
+      permissions: capabilities.map(roles),
+    },
+    permissionOverrides: [],
+  };
+}
 function context() {
+  const db = {
+    $transaction: (fn: (tx: unknown) => unknown) => fn(db),
+    $queryRaw: vi.fn(),
+    organization: { update, findUniqueOrThrow: currentSettings },
+    auditLog: { create: writeAudit },
+    user: { findUnique: tenantMember },
+    pharmacyBranch: { findFirst: vi.fn().mockResolvedValue({ id: 'branch' }) },
+  };
   return {
     session: { user: { id: 'operator', role: 'ADMIN', organizationId: org, status: 'ACTIVE' } },
-    db: { organization: { update }, user: { findUnique: owner, findFirst: accountant } },
+    db,
     organization: { id: org },
-    entitlements: { organizationId: org, vertical: 'PHARMACY', enabledModules: ['pharmacy-core'] },
+    entitlements: {
+      organizationId: org,
+      vertical: 'PHARMACY',
+      enabledModules: ['pharmacy-core', 'pharmacy-finance'],
+    },
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
   } as unknown as TRPCContext;
 }
-beforeEach(() => vi.resetAllMocks());
-
+function caller(ctx = context()) {
+  return application.createCaller(ctx).organizationAdmin.pharmacySettings;
+}
+beforeEach(() => {
+  vi.resetAllMocks();
+  currentSettings.mockResolvedValue(old);
+  otherApprovers.mockResolvedValue([]);
+  verifyPin.mockResolvedValue({ verified: true });
+});
 describe('organization-wide provider refund mapping', () => {
-  it('audits the organization whose owner changes the liability mapping', async () => {
-    owner.mockResolvedValue({
-      role: 'ADMIN',
-      status: 'ACTIVE',
-      organizationRole: { isSystem: true, key: 'owner', permissions: [] },
-      permissionOverrides: [],
-    });
-    const ctx = context();
-    const settings = application.createCaller(ctx).organizationAdmin.pharmacySettings;
-    await expect(
-      settings.setRefundMapping({ usesCustomFinanceChart: true, account })
-    ).resolves.toEqual({ saved: true });
-    expect(update).toHaveBeenCalledWith({
-      where: { id: org },
-      data: { usesCustomFinanceChart: true, terminalRefundAccount: account },
-    });
-    expect(ctx.audit.detail).toMatchObject({
-      targetType: 'Organization',
-      targetId: org,
-      operation: 'UPDATE',
-      metadata: { account, usesCustomFinanceChart: true },
-    });
-    expect(recordAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: 'organizationAdmin.pharmacySettings.setRefundMapping',
-        outcome: 'SUCCESS',
-      })
-    );
+  it('lets a finance reader view the account and forbids changing it without management', async () => {
+    tenantMember.mockResolvedValue(member(['finance:read']));
+    await expect(caller().refundMapping()).resolves.toEqual({ ...old, canEdit: false });
+    await expect(caller().setRefundMapping(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(update).not.toHaveBeenCalled();
+    expect(verifyPin).not.toHaveBeenCalled();
+    expect(requestAudit).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'FAILURE' }));
   });
-  it('lets an active designated accountant with financial permission update the mapping', async () => {
-    owner.mockResolvedValue({
-      role: 'EMPLOYEE',
-      status: 'ACTIVE',
-      organizationRole: { permissions: [{ capability: 'reports:financial', effect: 'ALLOW' }] },
-      permissionOverrides: [],
+  it.each([true, false])(
+    'audits the owner or explicitly granted finance manager, owner=%s',
+    async (owner) => {
+      tenantMember.mockResolvedValue(
+        member(owner ? ['pharmacy:manage'] : ['finance:read', 'pharmacy:manage'], owner)
+      );
+      const ctx = context();
+      await expect(caller(ctx).setRefundMapping(input)).resolves.toEqual({ saved: true });
+      expect(verifyPin).toHaveBeenCalledWith(
+        expect.objectContaining({ organizationId: org, actorId: 'operator', pin: input.pin })
+      );
+      expect(update).toHaveBeenCalledWith({
+        where: { id: org },
+        data: {
+          usesCustomFinanceChart: true,
+          terminalRefundAccount: account,
+          terminalRefundMappingActorId: 'operator',
+        },
+      });
+      expect(writeAudit).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          organizationId: org,
+          actorId: 'operator',
+          targetType: 'Organization',
+          targetId: org,
+          changes: {
+            account: { before: 'CARD_REFUNDS_PAYABLE', after: account },
+            terminalRefundAccount: { before: null, after: account },
+            usesCustomFinanceChart: { before: false, after: true },
+          },
+        }),
+      });
+      expect(ctx.audit.detail).toMatchObject({
+        skipInput: true,
+        targetType: 'Organization',
+        targetId: org,
+        operation: 'UPDATE',
+        metadata: { account, usesCustomFinanceChart: true },
+      });
+      expect(requestAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          path: 'organizationAdmin.pharmacySettings.setRefundMapping',
+          outcome: 'SUCCESS',
+        })
+      );
+    }
+  );
+  it('respects a personal finance denial even with management and a finance grant', async () => {
+    tenantMember.mockResolvedValue({
+      ...member(['finance:read', 'pharmacy:manage']),
+      permissionOverrides: [{ capability: 'finance:read', effect: 'DENY' }],
     });
-    accountant.mockResolvedValue({ id: 'operator' });
-    const settings = application.createCaller(context()).organizationAdmin.pharmacySettings;
-    await expect(
-      settings.setRefundMapping({ usesCustomFinanceChart: true, account })
-    ).resolves.toEqual({ saved: true });
-    expect(accountant).toHaveBeenCalledWith({
-      where: {
-        id: 'operator',
-        organizationId: org,
-        status: 'ACTIVE',
-        organizationRole: { key: 'accountant' },
-      },
-      select: { id: true },
-    });
-  });
-
-  it('respects a financial permission denial even for the designated accountant', async () => {
-    owner.mockResolvedValue({
-      role: 'EMPLOYEE',
-      status: 'ACTIVE',
-      organizationRole: { permissions: [{ capability: 'reports:financial', effect: 'ALLOW' }] },
-      permissionOverrides: [{ capability: 'reports:financial', effect: 'DENY' }],
-    });
-    accountant.mockResolvedValue({ id: 'operator' });
-    const settings = application.createCaller(context()).organizationAdmin.pharmacySettings;
-    await expect(
-      settings.setRefundMapping({ usesCustomFinanceChart: true, account })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().refundMapping()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().setRefundMapping(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(update).not.toHaveBeenCalled();
   });
-  it('audits a refusal for an administrator who is neither the owner nor the accountant', async () => {
-    owner.mockResolvedValue(null);
-    accountant.mockResolvedValue(null);
-    const settings = application.createCaller(context()).organizationAdmin.pharmacySettings;
-    await expect(
-      settings.setRefundMapping({ usesCustomFinanceChart: false, account: null })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  it('denies a coarse administrator without an owner identity or finance grant', async () => {
+    tenantMember.mockResolvedValue(member(['pharmacy:manage']));
+    await expect(caller().setRefundMapping(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(update).not.toHaveBeenCalled();
-    expect(recordAudit).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'FAILURE' }));
+    expect(requestAudit).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'FAILURE' }));
+  });
+  it('requires another eligible approver to change their own entry and checks a fresh credential', async () => {
+    tenantMember.mockResolvedValue(member(['finance:read', 'pharmacy:manage']));
+    currentSettings.mockResolvedValue({ ...old, terminalRefundMappingActorId: 'operator' });
+    otherApprovers.mockResolvedValue([{ name: 'Reviewer' }]);
+    await expect(caller().setRefundMapping(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(verifyPin).not.toHaveBeenCalled();
+    otherApprovers.mockResolvedValue([]);
+    verifyPin.mockResolvedValue({ blocked: 'refused' });
+    await expect(caller().setRefundMapping(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(update).not.toHaveBeenCalled();
   });
 });

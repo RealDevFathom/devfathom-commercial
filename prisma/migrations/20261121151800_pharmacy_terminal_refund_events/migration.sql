@@ -4,6 +4,7 @@ ALTER TYPE "FinanceAccountCode" ADD VALUE IF NOT EXISTS 'CARD_REFUNDS_PAYABLE';
 ALTER TYPE "FinanceSourceKind" ADD VALUE IF NOT EXISTS 'PHARMACY_TERMINAL_REFUND';
 
 ALTER TABLE organizations
+  ADD COLUMN IF NOT EXISTS "terminalRefundMappingActorId" TEXT,
   ADD COLUMN IF NOT EXISTS "terminalRefundAccount" "FinanceAccountCode",
   ADD COLUMN IF NOT EXISTS "usesCustomFinanceChart" boolean NOT NULL DEFAULT false;
 ALTER TABLE pharmacy_card_terminal_attempts

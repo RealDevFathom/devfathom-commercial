@@ -111,34 +111,61 @@ type ReversalCtx = Pick<TRPCContext, 'db'> & {
  * FAILURE audit.
  * The command re-checks the solo rule inside the write's transaction.
  */
-async function authorizeReversal(
+export async function authorizeReversal(
   ctx: ReversalCtx,
   scope: GeneralJournalScope,
   input: { pin: string; commandKey: string },
   target: { createdByUserId: string; reverseCommandKey: string | null } | null,
-  action: 'pharmacyApInvoices.reverseSettlement' | 'pharmacyApInvoices.reverseInvoice'
+  action:
+    | 'pharmacyApInvoices.reverseSettlement'
+    | 'pharmacyApInvoices.reverseInvoice'
+    | 'organizationAdmin.pharmacySettings.setRefundMapping'
 ) {
+  const mapping = action === 'organizationAdmin.pharmacySettings.setRefundMapping';
   if (!(await actorMayRefund(ctx.db, ctx.session.user)))
-    throw new TRPCError({ code: 'FORBIDDEN', message: AP_REVERSAL_FORBIDDEN });
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: mapping
+        ? 'Management permission is required to change the refund account.'
+        : AP_REVERSAL_FORBIDDEN,
+    });
   const ownEntry =
     target !== null &&
     target.createdByUserId === scope.actorId &&
     target.reverseCommandKey !== input.commandKey;
-  if (ownEntry) {
+  async function checkOtherApprovers() {
+    if (!ownEntry) return;
     const [other] = await otherApReversalApprovers(ctx.db, scope);
     if (other)
-      throw new TRPCError({ code: 'FORBIDDEN', message: apReversalOwnEntryMessage(other.name) });
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: mapping
+          ? 'Another eligible manager or owner must change this mapping.'
+          : apReversalOwnEntryMessage(other.name),
+      });
   }
+  await checkOtherApprovers();
   const pin = await authenticateRefundPin({
     organizationId: scope.organizationId,
     actorId: scope.actorId,
     pin: input.pin,
     action,
-    policy: ownEntry ? AP_REVERSAL_SOLE_APPROVER_POLICY : AP_REVERSAL_SEGREGATED_POLICY,
-    errorCode: 'AP_REVERSAL_PIN_REFUSED',
+    policy: mapping
+      ? 'PROVIDER_REFUND_MAPPING_APPROVAL'
+      : ownEntry
+        ? AP_REVERSAL_SOLE_APPROVER_POLICY
+        : AP_REVERSAL_SEGREGATED_POLICY,
+    errorCode: mapping ? 'REFUND_MAPPING_APPROVAL_REFUSED' : 'AP_REVERSAL_PIN_REFUSED',
   });
   if ('blocked' in pin)
-    throw new TRPCError({ code: 'FORBIDDEN', message: AP_REVERSAL_PIN_BLOCKED });
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: mapping
+        ? 'Enter your current approval code to change the refund account.'
+        : AP_REVERSAL_PIN_BLOCKED,
+    });
+  // AP reversal commands recheck in their own write transaction. The mapping is already inside its write transaction.
+  if (mapping) await checkOtherApprovers();
 }
 
 /** Someone else became able to approve after the first check: nothing was written. */

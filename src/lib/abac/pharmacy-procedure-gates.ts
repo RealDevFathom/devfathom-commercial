@@ -173,12 +173,12 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['take-payment/settle-card-reviews', 'run-branches/settle-cardmachine-payments-under'],
   },
   'organizationAdmin.pharmacySettings.refundMapping': {
-    gate: 'protectedProcedure + pharmacy-core + live owner or active accountant with reports:financial',
-    lines: ['financial-reports/map-provider-refunds'],
+    gate: 'protectedProcedure + pharmacy-core + pharmacy-finance + finance:read for a live owner or explicitly granted reader',
+    none: 'Finance readers and owners with finance access can view the account.',
   },
   'organizationAdmin.pharmacySettings.setRefundMapping': {
-    gate: 'protectedProcedure + pharmacy-core + live owner or active accountant with reports:financial',
-    lines: ['financial-reports/map-provider-refunds'],
+    gate: 'adminProcedure + live owner or explicit finance grant + authorizeGeneralJournal + authorizeReversal (management, fresh approval code and maker-checker)',
+    lines: ['run-branches/map-provider-refunds'],
   },
   'pharmacyCardTerminal.resolveReview': {
     gate: 'requireCounterReceiptAccess(pharmacy:counter) AND actorMayRefund (pharmacy:manage) + own fresh approval code; not own charge unless no other reviewer',

@@ -52,7 +52,7 @@ export const PHARMACY_PROCEDURE_ENFORCED_GATES: Readonly<Record<string, readonly
   'pharmacyCardTerminal.reviewHistory': ['signed-in'],
   'pharmacyCardTerminal.recordRefundAction': ['signed-in'],
   'organizationAdmin.pharmacySettings.refundMapping': ['signed-in'],
-  'organizationAdmin.pharmacySettings.setRefundMapping': ['signed-in'],
+  'organizationAdmin.pharmacySettings.setRefundMapping': ['admin:access'],
   'pharmacyCardTerminal.resolveReview': ['signed-in'],
   'pharmacyDispensing.counterSignStatus': ['pharmacy:dispense'],
   'pharmacyDispensing.decideReview': ['pharmacy:dispense'],
