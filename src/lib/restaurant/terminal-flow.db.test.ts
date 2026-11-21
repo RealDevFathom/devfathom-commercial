@@ -911,8 +911,13 @@ describeIfDatabase('terminal transport end-to-end (real DB)', { timeout: 30_000 
   it('ends only the linked operator’s sessions on SCIM deactivation and permits a fresh unlock after reactivation', async () => {
     const directoryToken = 'scim_' + randomBytes(24).toString('hex');
     await deps.withPlatformDb(async (tx) => {
-      const module = await ensurePlatformModule(tx, 'scim', { name: 'SCIM', category: 'Identity' });
-      await tx.organizationModule.create({ data: { organizationId: orgId, moduleId: module.id } });
+      const scimModule = await ensurePlatformModule(tx, 'scim', {
+        name: 'SCIM',
+        category: 'Identity',
+      });
+      await tx.organizationModule.create({
+        data: { organizationId: orgId, moduleId: scimModule.id },
+      });
     });
     const { issueOperatorCredential } = await import('./credential-lifecycle');
     const fixture = await deps.withTenantDb(orgId, async (tx) => {
