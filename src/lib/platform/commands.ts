@@ -1,3 +1,4 @@
+import { changesPharmacyFinanceRules } from '@/lib/abac/pharmacy-sub-roles';
 import 'server-only';
 
 import { hash } from 'bcryptjs';
@@ -3074,6 +3075,7 @@ async function runCommand(
       const existing = roleId
         ? await db.organizationRole.findFirst({
             where: { id: roleId, organizationId: input.organizationId },
+            include: { permissions: true },
           })
         : null;
       if (roleId && !existing) {
@@ -3081,6 +3083,15 @@ async function runCommand(
       }
       if (existing?.isSystem) {
         throw new PlatformSecurityError('System roles cannot be modified.', 400);
+      }
+      if (
+        changesPharmacyFinanceRules(existing?.permissions ?? [], permissions, 'increase') &&
+        (await isPharmacyOrganization(db, input.organizationId))
+      ) {
+        throw new PlatformSecurityError(
+          'Only the workspace owner can grant pharmacy finance role permissions.',
+          403
+        );
       }
       const holders = async () =>
         roleId
@@ -4489,8 +4500,24 @@ async function runCommand(
       if (!before || !['FAILED', 'CANCELLED'].includes(before.status)) {
         throw new PlatformSecurityError('Only failed or cancelled jobs can be retried.', 400);
       }
-      const saved = await db.platformJob.update({
-        where: { id: input.id },
+      const needsPurgeRequester = before.type === 'PURGE_DATA' && !before.requestedById;
+      if (needsPurgeRequester) {
+        assertPlatformCapability(actor, capabilityFor('organization.transition'));
+      }
+      const reason = needsPurgeRequester
+        ? z.object({ reason: sensitiveReason }).parse(payload).reason
+        : undefined;
+      const previousPayload = before.payload;
+      const payloadFields =
+        previousPayload && typeof previousPayload === 'object' && !Array.isArray(previousPayload)
+          ? previousPayload
+          : {};
+      const [saved] = await db.platformJob.updateManyAndReturn({
+        where: {
+          id: input.id,
+          status: before.status,
+          ...(needsPurgeRequester ? { requestedById: before.requestedById } : {}),
+        },
         data: {
           status: 'QUEUED',
           attempts: 0,
@@ -4499,14 +4526,19 @@ async function runCommand(
           scheduledAt: new Date(),
           startedAt: null,
           finishedAt: null,
+          ...(reason ? { requestedById: actor.id, payload: { ...payloadFields, reason } } : {}),
         },
       });
+      if (!saved) {
+        throw new PlatformSecurityError('Only failed or cancelled jobs can be retried.', 400);
+      }
       return {
         targetType: 'PlatformJob',
         targetId: saved.id,
         organizationId: saved.organizationId,
         data: saved,
-        audit: jobAudit(saved),
+        ...(reason ? { auditBefore: { status: before.status, requestedById: null } } : {}),
+        audit: reason ? { ...jobAudit(saved), reason } : jobAudit(saved),
       };
     }
     case 'job.cancel': {

@@ -657,7 +657,7 @@ describeIfDatabase('DEV-957 historical set-asides', () => {
         (await owner.query("SELECT to_regclass('_prisma_migrations') AS ledger")).rows[0].ledger
       ).toBeNull();
       const sql = readFileSync(
-        'prisma/migrations/20261118127200_reconcile_offline_set_asides/migration.sql',
+        'prisma/migrations/20261118127300_reconcile_offline_set_asides/migration.sql',
         'utf8'
       );
       await expect(owner.query(sql)).resolves.toBeDefined();
@@ -676,7 +676,7 @@ describeIfDatabase('DEV-957 historical set-asides', () => {
     await owner.connect();
     try {
       const sql = readFileSync(
-        'prisma/migrations/20261118127200_reconcile_offline_set_asides/migration.sql',
+        'prisma/migrations/20261118127300_reconcile_offline_set_asides/migration.sql',
         'utf8'
       );
       await owner.query(sql);

@@ -13,7 +13,7 @@ BEGIN
   -- Prisma replays schema history into an empty shadow without its deployment ledger.
   IF to_regclass('_prisma_migrations') IS NOT NULL THEN
     SELECT min(started_at) INTO cutover FROM "_prisma_migrations"
-      WHERE migration_name = '20261118127200_reconcile_offline_set_asides'
+      WHERE migration_name = '20261118127300_reconcile_offline_set_asides'
         AND rolled_back_at IS NULL;
   END IF;
   FOR tenant_id IN SELECT id FROM organizations ORDER BY id LOOP

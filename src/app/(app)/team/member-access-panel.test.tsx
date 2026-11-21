@@ -5,6 +5,7 @@ import { selectFieldControl } from '@/lib/testing/select-field';
 
 const state = vi.hoisted(() => ({
   query: vi.fn(),
+  approvalMode: vi.fn(() => ({ data: { required: false } })),
   refetch: vi.fn(),
   setSubRole: vi.fn(),
   applyRole: vi.fn(),
@@ -12,6 +13,7 @@ const state = vi.hoisted(() => ({
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    approvalAuthenticator: { mode: { useQuery: state.approvalMode } },
     useUtils: () => ({ organizationAdmin: { memberAccess: { invalidate: state.invalidate } } }),
     organizationAdmin: {
       memberAccess: { useQuery: state.query },
@@ -221,6 +223,19 @@ describe('DEV-959B: ticking for one person', () => {
     });
   }
   const cashier = ['pharmacy:counter', 'pharmacy:orders', 'sop:complete'];
+
+  it('asks for the authenticator approval code before granting the finance tick in code mode', () => {
+    state.approvalMode.mockReturnValue({ data: { required: true } });
+    try {
+      editable(cashier);
+      render(<MemberAccessPanel userId="u_1" />);
+      fireEvent.click(screen.getByRole('checkbox', { name: /See accounts/ }));
+      const confirm = screen.getByRole('form', { name: 'Give See accounts?' });
+      expect(within(confirm).getByLabelText('Your approval code')).toBeRequired();
+    } finally {
+      state.approvalMode.mockReturnValue({ data: { required: false } });
+    }
+  });
 
   it('ticks another role’s sub-role on the server and reloads what the server decided', async () => {
     editable(cashier);
