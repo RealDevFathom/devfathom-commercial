@@ -1,9 +1,10 @@
-ALTER TYPE "PharmacySaleEventKind" ADD VALUE 'PACK_CHECK';
-ALTER TABLE pharmacy_sale_lines ADD COLUMN "packCheckBlocked" boolean NOT NULL DEFAULT false;
+BEGIN;
+ALTER TYPE "PharmacySaleEventKind" ADD VALUE IF NOT EXISTS 'PACK_CHECK';
+ALTER TABLE pharmacy_sale_lines ADD COLUMN IF NOT EXISTS "packCheckBlocked" boolean NOT NULL DEFAULT false;
 
 -- Payment and pack verification serialize on the same bill, including a card charge
 -- before it leaves the application. The trigger runs with the caller's RLS scope.
-CREATE FUNCTION pharmacy_check_pack_before_payment() RETURNS trigger
+CREATE OR REPLACE FUNCTION pharmacy_check_pack_before_payment() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
 DECLARE
   sale_id text;
@@ -22,10 +23,11 @@ BEGIN
   RETURN NEW;
 END $$;
 REVOKE ALL ON FUNCTION pharmacy_check_pack_before_payment() FROM PUBLIC;
-CREATE TRIGGER pharmacy_pack_check_tender BEFORE INSERT ON pharmacy_tenders
+CREATE OR REPLACE TRIGGER pharmacy_pack_check_tender BEFORE INSERT ON pharmacy_tenders
   FOR EACH ROW EXECUTE FUNCTION pharmacy_check_pack_before_payment();
-CREATE TRIGGER pharmacy_pack_check_terminal BEFORE INSERT ON pharmacy_card_terminal_attempts
+CREATE OR REPLACE TRIGGER pharmacy_pack_check_terminal BEFORE INSERT ON pharmacy_card_terminal_attempts
   FOR EACH ROW EXECUTE FUNCTION pharmacy_check_pack_before_payment();
-CREATE TRIGGER pharmacy_pack_check_completion BEFORE UPDATE OF status ON pharmacy_sales
+CREATE OR REPLACE TRIGGER pharmacy_pack_check_completion BEFORE UPDATE OF status ON pharmacy_sales
   FOR EACH ROW WHEN (NEW.status = 'COMPLETED' AND OLD.status IS DISTINCT FROM NEW.status)
   EXECUTE FUNCTION pharmacy_check_pack_before_payment();
+COMMIT;

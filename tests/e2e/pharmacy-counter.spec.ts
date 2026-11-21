@@ -2273,6 +2273,7 @@ test.describe('Counter server features', () => {
     test.setTimeout(120_000);
     await openCounter(page, PHARMACY_E2E.cashierEmail);
     await openDrawer(page);
+    await pressControl(page.getByRole('button', { name: 'More', exact: true }));
     await pressControl(page.getByRole('button', { name: 'Customer asked for it' }));
     const sheet = page.getByRole('dialog', { name: 'Customer asked for it' });
     await sheet.getByLabel('Requested medicine').fill('Synthetic unlisted medicine');

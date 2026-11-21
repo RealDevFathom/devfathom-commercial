@@ -4353,25 +4353,6 @@ function ScopedPharmacyCounterConsole({
             onVoid={voidOpenBill}
           />
         ) : null}
-        <CounterPackCheck
-          key={`pack:${branchId}:${saleId}`}
-          branchId={branchId}
-          saleId={saleId ?? ''}
-          lines={cart?.lines ?? []}
-          disabled={
-            busy || !connectionOnline || cart?.status !== 'OPEN' || cart.totals.tenderedMinor > 0
-          }
-          refresh={refreshCart}
-        />
-        <CounterDemandSheet
-          key={branchId}
-          branchId={branchId}
-          query={activeRow?.displayName ?? query}
-          medicines={activeRow ? [activeRow, ...searchRows] : searchRows}
-          customer={customerQuery.data?.customer ?? null}
-          disabled={busy || !connectionOnline}
-          onSaved={(message) => setNotice({ tone: 'success', message })}
-        />
         <CounterReturnPanel
           branchId={branchId}
           organizationId={organizationId}
@@ -4395,6 +4376,25 @@ function ScopedPharmacyCounterConsole({
         <div
           className={`${actionsOpen ? 'contents xl:flex' : 'contents xl:hidden'} xl:absolute xl:end-6 xl:top-full xl:z-40 xl:mt-2 xl:w-[20rem] xl:flex-col xl:items-stretch xl:gap-2 xl:rounded-2xl xl:border xl:border-border-default xl:bg-surface-card xl:p-3 xl:shadow-lg`}
         >
+          <CounterPackCheck
+            key={`pack:${branchId}:${saleId}`}
+            branchId={branchId}
+            saleId={saleId ?? ''}
+            lines={cart?.lines ?? []}
+            disabled={
+              busy || !connectionOnline || cart?.status !== 'OPEN' || cart.totals.tenderedMinor > 0
+            }
+            refresh={refreshCart}
+          />
+          <CounterDemandSheet
+            key={branchId}
+            branchId={branchId}
+            query={activeRow?.displayName ?? query}
+            medicines={activeRow ? [activeRow, ...searchRows] : searchRows}
+            customer={customerQuery.data?.customer ?? null}
+            disabled={busy || !connectionOnline}
+            onSaved={(message) => setNotice({ tone: 'success', message })}
+          />
           {canSettlePayments ? (
             <CounterKhataPaymentPanel
               branchId={branchId}

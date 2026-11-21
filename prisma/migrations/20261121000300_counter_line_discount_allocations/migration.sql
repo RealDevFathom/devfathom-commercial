@@ -1,7 +1,8 @@
-ALTER TABLE pharmacy_sale_lines ADD COLUMN "lineAllocationDiscounts" jsonb;
+BEGIN;
+ALTER TABLE pharmacy_sale_lines ADD COLUMN IF NOT EXISTS "lineAllocationDiscounts" jsonb;
 -- Keep the lot prices at the time of dispensing immutable. Verify the separate
 -- adjustment against those snapshots, including any later prepaid tier share.
-CREATE FUNCTION pharmacy_verify_line_discount_shares() RETURNS trigger
+CREATE OR REPLACE FUNCTION pharmacy_verify_line_discount_shares() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
 DECLARE
   share record;
@@ -30,5 +31,6 @@ BEGIN
   RETURN NEW;
 END $$;
 REVOKE ALL ON FUNCTION pharmacy_verify_line_discount_shares() FROM PUBLIC;
-CREATE TRIGGER pharmacy_line_discount_evidence BEFORE UPDATE ON pharmacy_sale_lines
+CREATE OR REPLACE TRIGGER pharmacy_line_discount_evidence BEFORE UPDATE ON pharmacy_sale_lines
   FOR EACH ROW EXECUTE FUNCTION pharmacy_verify_line_discount_shares();
+COMMIT;
