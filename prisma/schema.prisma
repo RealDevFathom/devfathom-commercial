@@ -225,6 +225,12 @@ model PharmacyBranch {
   /// `src/lib/pharmacy/business-day.ts`; dates already stamped never move.
   businessDayEndsAtHistory        Json                         @default("[]")
   businessDayEndsAtRevision       Int                          @default(0)
+  /// DEV-958B: the branch runs cash shifts on its drawers (shift close, then day close). False,
+  /// a single day as before, until the owner chooses (phase 3). A drawer copies it when it opens.
+  cashShiftsEnabled               Boolean                         @default(false)
+  /// DEV-958B: the largest shift over or short, in minor units, a shift closes with without a
+  /// manager's approval. Zero: every difference needs one.
+  cashShiftVarianceToleranceMinor Int                             @default(0)
   id                              String                       @id @default(cuid())
   organizationId                  String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   code                            String
@@ -270,6 +276,7 @@ model PharmacyBranch {
   visibilityPharmacyDailyClose             PharmacyDailyClose[]              @relation("PharmacyDailyCloseVisibilityAnchor")
   visibilityPharmacyDayReopen              PharmacyDayReopen[]               @relation("PharmacyDayReopenVisibilityAnchor")
   visibilityPharmacyDrawerSession          PharmacyDrawerSession[]           @relation("PharmacyDrawerSessionVisibilityAnchor")
+  visibilityPharmacyCashShift              PharmacyCashShift[]                  @relation("PharmacyCashShiftVisibilityAnchor")
   visibilityPharmacyReceiptNumberSequence  PharmacyReceiptNumberSequence[]   @relation("PharmacyReceiptNumberSequenceVisibilityAnchor")
   visibilityPharmacyBranchReceiptSequence  PharmacyBranchReceiptSequence[]   @relation("PharmacyBranchReceiptSequenceVisibilityAnchor")
   visibilityPharmacySale                   PharmacySale[]                    @relation("PharmacySaleVisibilityAnchor")
@@ -1351,6 +1358,7 @@ enum PharmacyCustomerOrderEventKind {
 
 model PharmacySale {
   printJobs PharmacyPrintJob[]
+  receiptNumberConsumptions PharmacyReceiptNumberConsumption[]
   portalRefillRequests      PharmacyCustomerPortalRequest[]
   id                        String                       @id @default(cuid())
   organizationId            String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -1699,12 +1707,20 @@ model PharmacyTender {
   /// DEV-713: the user who confirmed a manual card or wallet tender was received.
   confirmedById     String?
   drawerSessionId   String?
+  /// DEV-958B: the cash shift the database put this tender in (empty on a drawer without shifts).
+  shiftId              String?
+  /// DEV-958B: an offline sale replayed after its shift closed: that closed shift, never changed.
+  lateArrivalShiftId   String?
+  /// DEV-958B: when an offline sale was sold (the signed command's time); empty online.
+  soldAt               DateTime?
   businessDate      DateTime                     @db.Date
   actorId           String
   deviceId          String
   createdAt         DateTime                     @default(now())
   sale              PharmacySale                 @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
   drawerSession     PharmacyDrawerSession?       @relation(fields: [organizationId, drawerSessionId], references: [organizationId, id], onDelete: Restrict)
+  shift                PharmacyCashShift?            @relation("PharmacyTenderShift", fields: [organizationId, shiftId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_tenders_shift_fkey")
+  lateArrivalShift     PharmacyCashShift?            @relation("PharmacyTenderLateShift", fields: [organizationId, lateArrivalShiftId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_tenders_late_shift_fkey")
   refunds           PharmacyRefund[]
   settlementMembers PharmacySettlementTender[]
   loyaltyEntries    PharmacyLoyaltyPointsEntry[]
@@ -1712,6 +1728,7 @@ model PharmacyTender {
 
   @@unique([organizationId, id])
   @@index([organizationId, branchId, businessDate])
+  @@index([organizationId, shiftId])
   @@map("pharmacy_tenders")
 }
 
@@ -1792,6 +1809,11 @@ model PharmacyRefund {
   amountMinor      Int
   providerRef      String?
   drawerSessionId  String?
+  /// DEV-958B: the counter the refund was paid at, so a non-cash refund finds its shift.
+  deviceId           String?
+  /// DEV-958B: the cash shift the database put this refund in (empty without shifts).
+  shiftId            String?
+  lateArrivalShiftId String?
   businessDate     DateTime                     @db.Date
   reason           String
   actorId          String
@@ -1799,9 +1821,12 @@ model PharmacyRefund {
   sale             PharmacySale                 @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
   originalTender   PharmacyTender               @relation(fields: [organizationId, originalTenderId], references: [organizationId, id], onDelete: Restrict)
   loyaltyEntries   PharmacyLoyaltyPointsEntry[]
+  shift              PharmacyCashShift?           @relation("PharmacyRefundShift", fields: [organizationId, shiftId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_refunds_shift_fkey")
+  lateArrivalShift   PharmacyCashShift?           @relation("PharmacyRefundLateShift", fields: [organizationId, lateArrivalShiftId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_refunds_late_shift_fkey")
 
   @@unique([organizationId, id])
   @@index([organizationId, branchId, businessDate])
+  @@index([organizationId, shiftId])
   @@map("pharmacy_refunds")
 }
 
@@ -1823,9 +1848,13 @@ model PharmacyDrawerSession {
   closedByActorId     String?
   openedAt            DateTime                    @default(now())
   closedAt            DateTime?
+  /// DEV-958B: this drawer runs cash shifts. Set by the database from the branch when the drawer
+  /// opens, and never changed.
+  cashShifts          Boolean                     @default(false)
   movements           PharmacyDrawerMovement[]
   tenders             PharmacyTender[]
   handovers           PharmacyDrawerHandover[]
+  shifts              PharmacyCashShift[]
   visibilityAnchor    PharmacyBranch              @relation("PharmacyDrawerSessionVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_drawer_sessions_visibility_fkey")
 
   @@unique([organizationId, id])
@@ -1859,12 +1888,67 @@ model PharmacyDrawerMovement {
   amountMinor     Int
   reason          String?
   actorId         String
+  /// DEV-958B: the cash shift the database put this movement in (empty without shifts, and on
+  /// the drawer's closing count).
+  shiftId            String?
+  lateArrivalShiftId String?
   createdAt       DateTime                   @default(now())
   drawerSession   PharmacyDrawerSession      @relation(fields: [organizationId, drawerSessionId], references: [organizationId, id], onDelete: Restrict)
+  shift              PharmacyCashShift?         @relation("PharmacyDrawerMovementShift", fields: [organizationId, shiftId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_drawer_movements_shift_fkey")
+  lateArrivalShift   PharmacyCashShift?         @relation("PharmacyDrawerMovementLateShift", fields: [organizationId, lateArrivalShiftId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_drawer_movements_late_shift_fkey")
 
   @@unique([organizationId, id])
   @@index([organizationId, drawerSessionId, createdAt])
+  @@index([organizationId, shiftId])
   @@map("pharmacy_drawer_movements")
+}
+
+enum PharmacyCashShiftStatus {
+  OPEN
+  CLOSED
+}
+
+/// DEV-958B: one cashier's shift on a drawer, inside one business day. Opened with a counted
+/// float, closed with a counted amount; the report is frozen at the close and the row never
+/// changes again (database guard). One open shift per drawer.
+model PharmacyCashShift {
+  id                     String                   @id @default(cuid())
+  organizationId         String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId               String
+  drawerSessionId        String
+  deviceId               String
+  businessDate           DateTime                 @db.Date
+  sequence               Int
+  status                 PharmacyCashShiftStatus  @default(OPEN)
+  cashierId              String
+  openedByActorId        String
+  openingFloatMinor      Int
+  /// The counted opening float less the previous shift's closing count (0 for the first shift).
+  openingDifferenceMinor Int                      @default(0)
+  openingNote            String?
+  openedAt               DateTime                 @default(now())
+  closedByActorId        String?
+  closedAt               DateTime?
+  countedCashMinor       Int?
+  expectedCashMinor      Int?
+  varianceMinor          Int?
+  varianceNote           String?
+  varianceApprovedById   String?
+  varianceApprovalPolicy String?
+  report                 Json?
+  drawerSession          PharmacyDrawerSession    @relation(fields: [organizationId, drawerSessionId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_cash_shifts_drawer_fkey")
+  visibilityAnchor       PharmacyBranch           @relation("PharmacyCashShiftVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_cash_shifts_visibility_fkey")
+  tenders                PharmacyTender[]         @relation("PharmacyTenderShift")
+  lateTenders            PharmacyTender[]         @relation("PharmacyTenderLateShift")
+  refunds                PharmacyRefund[]         @relation("PharmacyRefundShift")
+  lateRefunds            PharmacyRefund[]         @relation("PharmacyRefundLateShift")
+  movements              PharmacyDrawerMovement[] @relation("PharmacyDrawerMovementShift")
+  lateMovements          PharmacyDrawerMovement[] @relation("PharmacyDrawerMovementLateShift")
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, drawerSessionId, sequence], map: "pharmacy_cash_shifts_drawer_sequence_key")
+  @@index([organizationId, branchId, businessDate])
+  @@map("pharmacy_cash_shifts")
 }
 
 model PharmacyDailyClose {
@@ -1948,6 +2032,11 @@ model PharmacyBranchReceiptSequence {
   branchId         String
   nextNumber       Int
   updatedAt        DateTime       @default(now()) @updatedAt
+  /// DEV-958B: the numbers the last draw handed out, and in which transaction; set only by the
+  /// database, so a new receipt lease can be held to numbers drawn in its own transaction.
+  lastAllocatedFrom Int?
+  lastAllocatedTo   Int?
+  lastAllocatedXact BigInt?
   visibilityAnchor PharmacyBranch @relation("PharmacyBranchReceiptSequenceVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_branch_receipt_sequences_visibility_fkey")
 
   @@unique([organizationId, id])
@@ -15277,12 +15366,46 @@ model PharmacyReceiptNumberLease {
   nextNumber      Int
   issuedToActorId String
   issuedAt        DateTime @default(now())
+  /// DEV-958B: the transaction that last moved the cursor forward, set only by the database.
+  lastAdvancedXact BigInt?
+  /// DEV-958B: the transaction that issued the lease, set only by the database.
+  issuedXact       BigInt?
 
-  device PharmacyRegisteredDevice @relation(fields: [organizationId, branchId, deviceId], references: [organizationId, branchId, id], onDelete: Restrict)
+  device       PharmacyRegisteredDevice           @relation(fields: [organizationId, branchId, deviceId], references: [organizationId, branchId, id], onDelete: Restrict)
+  consumptions PharmacyReceiptNumberConsumption[]
 
   @@unique([organizationId, id], map: "pharmacy_receipt_number_leases_org_id_key")
   @@unique([organizationId, branchId, deviceId, blockStart], map: "pharmacy_receipt_number_leases_block_key")
   @@map("pharmacy_receipt_number_leases")
+}
+
+/// DEV-958B: which leased receipt number an offline replay used, for which sale. Written in the
+/// replay's transaction right after the lease cursor moves; the database accepts it only for the
+/// number that transaction consumed. The replayed tender, and its cash movement, each claim it once.
+/// Rows never change otherwise and are never deleted.
+model PharmacyReceiptNumberConsumption {
+  id             String   @id
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  deviceId       String
+  leaseId        String
+  receiptNumber  Int
+  saleId         String
+  soldAt         DateTime
+  consumedXact   BigInt
+  tenderId       String?
+  cashMovementId String?
+  createdAt      DateTime @default(now())
+
+  lease PharmacyReceiptNumberLease @relation(fields: [organizationId, leaseId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_receipt_number_consumptions_lease_fkey")
+  sale  PharmacySale               @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_receipt_number_consumptions_sale_fkey")
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, leaseId, receiptNumber], map: "pharmacy_receipt_number_consumptions_number_key")
+  @@unique([organizationId, saleId], map: "pharmacy_receipt_number_consumptions_sale_key")
+  @@unique([organizationId, tenderId], map: "pharmacy_receipt_number_consumptions_tender_key")
+  @@unique([organizationId, cashMovementId], map: "pharmacy_receipt_number_consumptions_movement_key")
+  @@map("pharmacy_receipt_number_consumptions")
 }
 
 /// OFF-03 — the units of one (lot, location) bucket a single counter owns while
@@ -17370,6 +17493,7 @@ model PharmacyPrepaidTierVersion {
   refundable Boolean
   effectiveFrom DateTime @default(now())
   actorId String
+
   @@unique([organizationId, id])
   @@unique([organizationId, version])
   @@map("pharmacy_prepaid_tier_versions")
@@ -17391,6 +17515,7 @@ model PharmacyPrepaidAccount {
   pinLockedUntil DateTime?
   customer PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
   entries PharmacyPrepaidEntry[]
+
   @@unique([organizationId, id])
   @@unique([organizationId, customerId])
   @@map("pharmacy_prepaid_accounts")
@@ -17422,6 +17547,7 @@ model PharmacyPrepaidEntry {
   idempotencyKey String
   createdAt DateTime @default(now())
   account PharmacyPrepaidAccount @relation(fields: [organizationId, accountId], references: [organizationId, id], onDelete: Restrict)
+
   @@unique([organizationId, id])
   @@unique([organizationId, idempotencyKey])
   @@unique([organizationId, accountId, sequence])

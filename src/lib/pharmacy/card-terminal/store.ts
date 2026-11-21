@@ -5,6 +5,7 @@ import type { PharmacyCardTerminalAttemptStatus } from '@/generated/prisma/enums
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   applyPharmacyTender,
+  cashShiftRefusal,
   requirePharmacyDayOpen,
   type PharmacyPaymentAdapter,
 } from '../settlement';
@@ -352,7 +353,9 @@ export function prismaCardTerminalAttemptStore(
         } catch (error) {
           if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
             throw new CardTerminalError('IDEMPOTENCY_CONFLICT');
-          throw error;
+          // DEV-958B: the preflight's shift check was undone with its savepoint, so the database
+          // checks again as the attempt is written, under the day lock a shift close also takes.
+          throw cashShiftRefusal(error) ?? error;
         }
       }),
     get: (scope, attemptKey) =>

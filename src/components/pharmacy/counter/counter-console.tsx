@@ -51,6 +51,7 @@ import { CounterOpenDrawerStep } from './counter-open-drawer-step';
 import { CounterSaleReadiness, CounterSetupNextStep } from './counter-sale-readiness';
 import { clearCounterReadinessOkay } from '@/lib/pharmacy/counter-readiness-okay';
 import { CounterDrawerOperator } from './counter-drawer-operator';
+import { CounterCashShiftPanel } from './counter-cash-shift-panel';
 import { CounterOpenBills, type CounterOpenBill } from './counter-open-bills';
 import { CounterPackApprovalDialog } from './counter-pack-approval-dialog';
 import type { CounterApprovalPin } from '@/lib/pharmacy/counter-line-approval';
@@ -1100,6 +1101,13 @@ function ScopedPharmacyCounterConsole({
   const drawerOpen = Boolean(openDrawerSession) && !drawerQuery.isError;
   // DEV-97: someone who takes no payment opens no drawer, and still builds bills.
   const drawerRequired = branchAuthorized && !settlementDenied && !drawerOpen;
+  // DEV-958B: a drawer whose branch runs cash shifts takes money only inside a shift. Between
+  // shifts the next cashier opens theirs in place of scan/search; the server refuses otherwise.
+  const cashShift =
+    settlementDenied || !drawerOpen || !drawerQuery.data || !('cashShift' in drawerQuery.data)
+      ? undefined
+      : drawerQuery.data.cashShift;
+  const shiftRequired = Boolean(cashShift && !cashShift.openShift);
   // DEV-631: the business day is closed, so the counter says so before a bill is
   // built rather than only when payment is refused. The server still refuses it.
   const dayClosed =
@@ -1144,10 +1152,10 @@ function ScopedPharmacyCounterConsole({
   const dayClosedRef = useRef(dayClosed);
   const pharmacistCheckOffRef = useRef(pharmacistCheckOff);
   useEffect(() => {
-    drawerRequiredRef.current = drawerRequired;
+    drawerRequiredRef.current = drawerRequired || shiftRequired;
     dayClosedRef.current = dayClosed;
     pharmacistCheckOffRef.current = pharmacistCheckOff;
-  }, [drawerRequired, dayClosed, pharmacistCheckOff]);
+  }, [drawerRequired, shiftRequired, dayClosed, pharmacistCheckOff]);
 
   const receiptQuery = trpc.pharmacySales.counterReceipt.useQuery(
     { branchId, saleId: saleId ?? '' },
@@ -4403,9 +4411,34 @@ function ScopedPharmacyCounterConsole({
                       );
                   }}
                 />
+              ) : shiftRequired && openDrawerSession && cashShift ? (
+                <CounterCashShiftPanel
+                  branchId={branchId}
+                  drawerSessionId={openDrawerSession.id}
+                  status={cashShift}
+                  currency={cashShift.currency}
+                  timeZone={workspaceZone ?? 'UTC'}
+                  actorIsManager={actorIsManager}
+                  cashiers={actorIsManager ? drawerCashiers.data : undefined}
+                  currentUserId={accountId}
+                  onChanged={() => void utils.pharmacySales.drawerStatus.invalidate()}
+                />
               ) : (
                 <div className="space-y-2.5">
-                  {openDrawerSession && drawerOperatingCashier ? (
+                  {/* DEV-958B: on a drawer that runs shifts, whose shift is open and its close. */}
+                  {openDrawerSession && cashShift ? (
+                    <CounterCashShiftPanel
+                      branchId={branchId}
+                      drawerSessionId={openDrawerSession.id}
+                      status={cashShift}
+                      currency={cashShift.currency}
+                      timeZone={workspaceZone ?? 'UTC'}
+                      actorIsManager={actorIsManager}
+                      cashiers={actorIsManager ? drawerCashiers.data : undefined}
+                      currentUserId={accountId}
+                      onChanged={() => void utils.pharmacySales.drawerStatus.invalidate()}
+                    />
+                  ) : openDrawerSession && drawerOperatingCashier ? (
                     <CounterDrawerOperator
                       operatingCashier={drawerOperatingCashier}
                       cashiers={actorIsManager ? drawerCashiers.data : undefined}

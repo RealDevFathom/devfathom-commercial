@@ -6,6 +6,8 @@ import { isPharmacyCurrentBusinessDate, pharmacyDayEndField } from './business-d
 import { readPharmacyDayClock } from './business-day-clock';
 import type { LedgerScope } from './stock-ledger';
 import { aggregateTenderTotals } from './manual-payments';
+import { readPharmacyDayShifts } from './cash-shifts';
+import { sumCashShifts } from './cash-shift-report';
 import {
   closePharmacyDrawer,
   computePharmacyClose,
@@ -25,7 +27,11 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
   const where = { organizationId: scope.organizationId, branchId: scope.branchId, businessDate };
   const branch = await db.pharmacyBranch.findFirst({
     where: { id: scope.branchId, organizationId: scope.organizationId, active: true },
-    select: { name: true, businessDayEndsAtHistory: true },
+    select: {
+      name: true,
+      businessDayEndsAtHistory: true,
+      cashShiftVarianceToleranceMinor: true,
+    },
   });
   if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
   const [close, drawers, sales, refunds, organization, tenders, unpaid] = await Promise.all([
@@ -98,7 +104,25 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
       })
     : [];
   const openerNames = new Map(openers.map((user) => [user.id, user.name]));
+  // DEV-958B: the day's cash shifts, read only when one of its drawers runs shifts, so a branch
+  // without shifts reads and returns exactly what it did before.
+  const dayShifts = drawers.some((d) => d.cashShifts)
+    ? await readPharmacyDayShifts(
+        db,
+        scope,
+        businessDate,
+        branch.cashShiftVarianceToleranceMinor ?? 0
+      )
+    : null;
   const rows = drawers.map((d) => ({
+    ...(d.cashShifts && dayShifts
+      ? {
+          cashShifts: true as const,
+          // A shift drawer is counted shift by shift: the day closes it on its last shift's count.
+          lastShiftCountMinor:
+            dayShifts.shifts.filter((s) => s.drawerSessionId === d.id).at(-1)?.countedMinor ?? null,
+        }
+      : {}),
     id: d.id,
     deviceId: d.deviceId,
     status: d.status,
@@ -153,6 +177,23 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
       open: unpaid.filter((sale) => sale.status === 'OPEN').length,
       held: unpaid.filter((sale) => sale.status === 'HELD').length,
     },
+    // DEV-958B: the day's shifts and what they add up to; absent on a day without shifts.
+    ...(dayShifts
+      ? {
+          shifts: dayShifts.shifts,
+          lateArrivals: dayShifts.lateArrivals,
+          shiftTotals: sumCashShifts(
+            dayShifts.shifts.map((s) => ({
+              tenders: s.tenders,
+              refunds: s.refunds,
+              varianceMinor: s.varianceMinor,
+              openingDifferenceMinor: s.openingDifferenceMinor,
+              status: s.status,
+            })),
+            dayShifts.lateArrivals ?? { tenders: [], refunds: [], cashNetMinor: 0 }
+          ),
+        }
+      : {}),
   };
 }
 
@@ -176,7 +217,20 @@ export async function closePharmacyDay(
     const { reopen, ...recorded } = preview.close;
     return recorded;
   }
+  // DEV-958B: shift close, then day close. Every shift of the day is closed first (a manager may
+  // close anyone's shift), and a drawer that runs shifts closes on its last shift's count.
+  if (preview.shifts?.some((shift) => shift.status === 'OPEN'))
+    throw new PharmacySettlementError('SHIFT_OPEN');
   const open = preview.drawers.filter((d) => d.status === 'OPEN');
+  if (
+    open.some(
+      (d) =>
+        'cashShifts' in d &&
+        input.counts.find((c) => c.drawerSessionId === d.id)?.countedCashMinor !==
+          d.lastShiftCountMinor
+    )
+  )
+    throw new PharmacySettlementError('SHIFT_COUNT_MISMATCH');
   if (
     preview.totals.sourceHash !== input.sourceHash ||
     open.length !== input.counts.length ||

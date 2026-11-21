@@ -9,12 +9,13 @@ import {
 import {
   clearLockout,
   isLockedOut,
-  LOCKOUT_DURATION_MS,
-  MAX_FAILED_ATTEMPTS,
   registerFailedAttempt,
 } from '@/lib/restaurant/operator-credentials';
 import { verifyApprovalSecret } from '@/lib/approval-authenticator';
-import { clearRateLimit, rateLimit } from '@/lib/rate-limit';
+import {
+  clearApproverPinGuessesTypedByAnother,
+  spendApproverPinGuessTypedByAnother,
+} from '@/lib/approver-pin-guess-budget';
 
 export const SOLO_OWNER_POLICY = 'PHARMACY_SOLO_OWNER_PIN';
 export const APPROVAL_BLOCKED = 'An authorized approver must enter a valid PIN.';
@@ -85,10 +86,10 @@ async function verifyApprover(
     return { blocked: APPROVAL_BLOCKED } as const;
   // The approval PIN is the approver's shared operator credential. Guesses typed
   // by somebody else must not lock that person out of their other workflows, so
-  // they are bounded by a per-approver budget (the same five attempts per lockout
-  // window) instead of the credential's strike counter.
-  const throttleKey = `pharmacy-purchase-approver-pin:${organizationId}:${approverId}`;
-  if (crossPerson && !(await rateLimit(throttleKey, MAX_FAILED_ATTEMPTS, LOCKOUT_DURATION_MS)).ok)
+  // they spend the approver's one budget for such guesses (the same five attempts
+  // per lockout window, shared with every approval that works this way) instead of
+  // the credential's strike counter.
+  if (crossPerson && !(await spendApproverPinGuessTypedByAnother(organizationId, approverId)).ok)
     return { blocked: APPROVAL_BLOCKED } as const;
   // Serialize strikes even for simultaneous guesses of the same user's PIN.
   await db.$queryRaw`SELECT c.id FROM restaurant_operator_credentials c JOIN restaurant_staff_profiles s ON s.id=c."staffProfileId" WHERE c."organizationId"=${organizationId} AND s."organizationId"=${organizationId} AND s."userId"=${approverId} AND c.type='PIN' AND c."revokedAt" IS NULL AND c."deviceId" IS NULL ORDER BY c.id FOR UPDATE OF c`;
@@ -132,7 +133,7 @@ async function verifyApprover(
     where: { id: credential.id },
     data: clearLockout(),
   });
-  if (crossPerson) await clearRateLimit(throttleKey);
+  if (crossPerson) await clearApproverPinGuessesTypedByAnother(organizationId, approverId);
   return { verified: true } as const;
 }
 

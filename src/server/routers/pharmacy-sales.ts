@@ -117,6 +117,16 @@ import {
 import { listOpenBills } from '@/lib/pharmacy/open-bills';
 import { readPharmacyCashCloseCheck } from '@/lib/pharmacy/cash-close-check-operations';
 import { readPharmacyShiftHandover } from '@/lib/pharmacy/shift-handover-operations';
+import {
+  authorizeCashShiftVariance,
+  closePharmacyCashShift,
+  openPharmacyCashShift,
+  organizationCurrency,
+  readPharmacyCashShiftPolicy,
+  readPharmacyCashShiftReport,
+  readPharmacyDrawerShift,
+  shiftVarianceApprovers,
+} from '@/lib/pharmacy/cash-shifts';
 import { workspaceTimezone } from '@/lib/timezone';
 import { pharmacyBusinessDay, withClientPharmacyDayEnd } from '@/lib/pharmacy/business-day';
 import { readPharmacyDayClock } from '@/lib/pharmacy/business-day-clock';
@@ -839,6 +849,37 @@ function failDayEndHour(error: unknown): never {
   return fail(error);
 }
 
+/**
+ * DEV-958B: the gate for the cash-shift procedures. A manager or owner at the branch (the
+ * drawer-manager gate: the manage grant with no counter DENY, an assigned branch or ADMIN) may act
+ * on any shift of the branch, even without the counter grant; anyone else needs the counter gate
+ * and acts only on their own shift (cash-shifts.ts refuses another cashier's).
+ */
+async function cashShiftScope(
+  ctx: TRPCContext,
+  branch: string
+): Promise<{ scope: LedgerScope; actorIsManager: boolean }> {
+  try {
+    return { scope: await requireDrawerManagerAccess(ctx, branch), actorIsManager: true };
+  } catch (error) {
+    if (!(error instanceof TRPCError) || error.code !== 'FORBIDDEN') throw error;
+    return {
+      scope: await requireCounterReceiptAccess(ctx, branch, true),
+      actorIsManager: false,
+    };
+  }
+}
+
+/** DEV-958B: shift refusals that are a state the counter must refresh, not a bad request. */
+const SHIFT_CONFLICTS = new Set<string>([
+  'SHIFT_OPEN',
+  'SHIFT_ALREADY_OPEN',
+  'SHIFT_ALREADY_CLOSED',
+  'SHIFT_CHANGED',
+  'SHIFT_COUNT_MISMATCH',
+  'SHIFT_NOT_OPEN',
+]);
+
 function fail(error: unknown): never {
   if (error instanceof PrepaidPinError)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
@@ -909,11 +950,15 @@ function fail(error: unknown): never {
     // (DEV-743), is a state conflict, not a malformed request.
     throw new TRPCError({
       code:
-        error.reason === 'OPEN_DRAWER' || error.reason === 'CARD_TERMINAL_PAYMENT_OPEN'
+        error.reason === 'OPEN_DRAWER' ||
+        error.reason === 'CARD_TERMINAL_PAYMENT_OPEN' ||
+        SHIFT_CONFLICTS.has(error.reason)
           ? 'CONFLICT'
-          : error.reason === 'DRAWER_NOT_YOURS'
+          : error.reason === 'DRAWER_NOT_YOURS' || error.reason.startsWith('SHIFT_APPROVAL_')
             ? 'FORBIDDEN'
-            : 'BAD_REQUEST',
+            : error.reason === 'SHIFT_NOT_FOUND'
+              ? 'NOT_FOUND'
+              : 'BAD_REQUEST',
       message: error.reason,
     });
   }
@@ -2054,6 +2099,11 @@ export const pharmacySalesRouter = router({
       const scope = await assignedBranchScope(ctx, input.branchId);
       const openDrawer = await readOpenPharmacyDrawer(ctx.db, scope, input.deviceId);
       if (!openDrawer) return { openDrawer, operatingCashier: null };
+      // DEV-958B: a drawer that runs cash shifts also says whose shift is open, or that the next
+      // cashier opens one. A drawer without shifts answers exactly as before.
+      const cashShift = openDrawer.cashShifts
+        ? await readPharmacyDrawerShift(ctx.db, scope, openDrawer.id)
+        : undefined;
       // DEV-821: who runs this till, so the counter can say so before a cash payment.
       const cashierId = drawerOperatingCashierId(openDrawer);
       const cashier = await ctx.db.user.findFirst({
@@ -2063,6 +2113,7 @@ export const pharmacySalesRouter = router({
       return {
         openDrawer,
         operatingCashier: { name: cashier?.name ?? null, isYou: cashierId === scope.actorId },
+        ...(cashShift ? { cashShift } : {}),
       };
     }),
   // The drawer family raises typed `PharmacySettlementError`s (OPEN_DRAWER,
@@ -2121,10 +2172,13 @@ export const pharmacySalesRouter = router({
         const scope = await requireDrawerManagerAccess(ctx, input.branchId);
         // A manager's paid-in/out may use any open drawer of the branch (DEV-821).
         return await ctx.db.$transaction(async (tx) =>
-          recordPharmacyCashMovement(txDb(tx), scope, input, {
-            kind: 'COUNTER',
-            actorIsManager: true,
-          })
+          recordPharmacyCashMovement(
+            txDb(tx),
+            scope,
+            // DEV-958B: never onto a drawer left open from an earlier business day.
+            { ...input, requireCurrentBusinessDate: true },
+            { kind: 'COUNTER', actorIsManager: true }
+          )
         );
       } catch (error) {
         fail(error);
@@ -2145,6 +2199,145 @@ export const pharmacySalesRouter = router({
       try {
         const scope = await requireDrawerManagerAccess(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) => closePharmacyDrawer(txDb(tx), scope, input));
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  /**
+   * DEV-958B: the next cashier opens a cash shift on this counter's open drawer, with the cash
+   * they count in it. A count that differs from the last shift's closing count needs a note. A
+   * cashier opens their own shift (the counter gate); naming another cashier is a manager's or
+   * owner's (the drawer-manager gate). Audited, with the handover, in the same transaction.
+   */
+  openShift: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          drawerSessionId: z.string().min(1).max(128),
+          openingFloatMinor: z.number().int().min(0).max(2147483647),
+          openingNote: z.string().trim().max(500).optional(),
+          cashierId: z.string().trim().min(1).max(128).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const namesAnotherCashier =
+          input.cashierId !== undefined && input.cashierId !== ctx.session?.user?.id;
+        const { scope, actorIsManager } = namesAnotherCashier
+          ? { scope: await requireDrawerManagerAccess(ctx, input.branchId), actorIsManager: true }
+          : await cashShiftScope(ctx, input.branchId);
+        const result = await ctx.db.$transaction(async (tx) =>
+          openPharmacyCashShift(txDb(tx), scope, input, { actorIsManager })
+        );
+        annotateAudit(ctx, {
+          targetType: 'PharmacyCashShift',
+          targetId: result.shift.id,
+          metadata: { drawerSessionId: input.drawerSessionId, replayed: result.replayed },
+        });
+        return result;
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  /**
+   * DEV-958B: the cashier closes their shift with the cash they count; a manager or owner closes
+   * anyone's (the explicit, audited manager step before a day close). A difference needs a note,
+   * and one above the branch's tolerance a manager's approval through the shared approval path
+   * (their PIN or authenticator code, with its strikes), verified before the close's transaction.
+   * A replay with the same count returns the recorded report.
+   */
+  closeShift: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          shiftId: z.string().min(1).max(128),
+          countedCashMinor: z.number().int().min(0).max(2147483647),
+          varianceNote: z.string().trim().max(1000).optional(),
+          approval: z
+            .object({
+              approverId: z.string().trim().min(1).max(128),
+              // Redacted from the audit input (a key ending in "pin").
+              approverPin: z.string().trim().min(4).max(12),
+            })
+            .strict()
+            .optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const { scope, actorIsManager } = await cashShiftScope(ctx, input.branchId);
+        const approval = input.approval
+          ? await authorizeCashShiftVariance(
+              ctx.db,
+              scope,
+              {
+                shiftId: input.shiftId,
+                approverId: input.approval.approverId,
+                pin: input.approval.approverPin,
+              },
+              { actorIsManager }
+            )
+          : undefined;
+        const result = await ctx.db.$transaction(async (tx) =>
+          closePharmacyCashShift(
+            txDb(tx),
+            scope,
+            {
+              shiftId: input.shiftId,
+              countedCashMinor: input.countedCashMinor,
+              varianceNote: input.varianceNote,
+            },
+            { actorIsManager, approval }
+          )
+        );
+        annotateAudit(ctx, {
+          targetType: 'PharmacyCashShift',
+          targetId: input.shiftId,
+          metadata: {
+            replayed: result.replayed,
+            varianceMinor: result.report.varianceMinor,
+            approverId: approval?.approverId ?? null,
+            approvalPolicy: approval?.policy ?? null,
+          },
+        });
+        return result.report;
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  /**
+   * DEV-958B: a shift's report: frozen at its close, or the figures so far for an open shift. A
+   * cashier reads their own shift; a manager or owner any shift of the branch.
+   */
+  shiftReport: protectedProcedure
+    .input(z.object({ branchId, shiftId: z.string().min(1).max(128) }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        const { scope, actorIsManager } = await cashShiftScope(ctx, input.branchId);
+        const [report, policy, currency] = await Promise.all([
+          readPharmacyCashShiftReport(ctx.db, scope, input.shiftId, { actorIsManager }),
+          readPharmacyCashShiftPolicy(ctx.db, scope),
+          organizationCurrency(ctx.db, scope.organizationId),
+        ]);
+        return { report, toleranceMinor: policy.toleranceMinor, currency };
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  /**
+   * DEV-958B: who may approve this shift's over or short: the branch's managers and owners with a
+   * PIN set up other than the shift's cashier, and the cashier only when nobody else can.
+   */
+  shiftApprovers: protectedProcedure
+    .input(z.object({ branchId, shiftId: z.string().min(1).max(128) }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        const { scope } = await cashShiftScope(ctx, input.branchId);
+        return await shiftVarianceApprovers(ctx.db, scope, input.shiftId);
       } catch (error) {
         fail(error);
       }
