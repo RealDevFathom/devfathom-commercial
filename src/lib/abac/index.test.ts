@@ -12,6 +12,7 @@ type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
 function authorizationDb(options: {
   overrides?: Permission[];
   rolePermissions?: Permission[];
+  pharmacySystemRole?: boolean;
   throws?: boolean;
 }): AuthzDb {
   return {
@@ -19,8 +20,12 @@ function authorizationDb(options: {
       findUnique: options.throws
         ? vi.fn().mockRejectedValue(new Error('database unavailable'))
         : vi.fn().mockResolvedValue({
+            organization: { vertical: options.pharmacySystemRole ? 'PHARMACY' : 'AGENCY' },
             organizationRole: options.rolePermissions
-              ? { permissions: options.rolePermissions }
+              ? {
+                  permissions: options.rolePermissions,
+                  isSystem: options.pharmacySystemRole === true,
+                }
               : null,
             permissionOverrides: options.overrides ?? [],
           }),
@@ -65,10 +70,13 @@ describe('opt-in pharmacy Owner / Operator access', () => {
     ).resolves.toBe(true);
   });
 
-  it.each(['admin:access', 'finance:read', 'team:setRole'] as const)(
+  it.each(['admin:access', 'finance:read', 'finance:manage', 'team:setRole'] as const)(
     'requires tenant ADMIN alongside the template for %s',
     async (action) => {
-      const db = authorizationDb({ rolePermissions: permissionsFor('owner-operator') });
+      const db = authorizationDb({
+        rolePermissions: permissionsFor('owner-operator'),
+        pharmacySystemRole: true,
+      });
       expect(isAdmin(proprietor.role)).toBe(true);
       expect(isAdmin(employee.role)).toBe(false);
       await expect(can(proprietor, action, undefined, { db })).resolves.toBe(true);
@@ -571,6 +579,7 @@ describe('custom ABAC decisions', () => {
 
   it('pins customer management and the M8 capabilities as typed default-deny actions', async () => {
     const actions = [
+      'finance:manage',
       'customers:read',
       'customers:manage',
       'loyalty:redeem',
@@ -600,7 +609,7 @@ describe('custom ABAC decisions', () => {
       'pharmacy:discount',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(52);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(53);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);

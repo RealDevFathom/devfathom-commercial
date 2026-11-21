@@ -38,7 +38,10 @@ const ownerOperator = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'owner
 // 20261118121400_pharmacy_catalogue_edit_capability
 // (tests/pharmacy-catalogue-edit-capability-migration.test.ts), and the DEV-751 SOP grants
 // reach new tenants only (PHARMACY_SOP_TEMPLATE_GRANTS).
+// DEV-969 backfills these two finance grants separately in 20261118127200.
 const laterGrants = new Set([
+  'finance:read',
+  'finance:manage',
   'pharmacy:procurement-approve',
   'pharmacy:catalogue-edit',
   ...(PHARMACY_SOP_TEMPLATE_GRANTS['owner-operator'] ?? []),
