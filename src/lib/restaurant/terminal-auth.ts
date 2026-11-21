@@ -747,6 +747,10 @@ export async function authenticateOperator(
       WHERE c.id = ${credential.id} AND c."credentialHash" = ${credential.credentialHash}
         AND c."revokedAt" IS NULL AND p.id = ${staffProfileId}
         AND p.status = 'ACTIVE' AND p."primaryBranchId" = ${branchId}
+        AND (p."userId" IS NULL OR EXISTS (
+          SELECT 1 FROM users u WHERE (u."organizationId", u.id) = (p."organizationId", p."userId")
+            AND u.status = 'ACTIVE' FOR SHARE OF u
+        ))
       FOR SHARE OF c, p
     `;
     if (!verified.length) return { ok: false, reason: 'INVALID' };

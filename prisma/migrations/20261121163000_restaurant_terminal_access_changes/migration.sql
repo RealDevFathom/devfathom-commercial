@@ -120,6 +120,25 @@ FOR EACH ROW WHEN (OLD.type = 'PIN' AND OLD."revokedAt" IS NULL AND
                    (OLD."credentialHash" IS DISTINCT FROM NEW."credentialHash" OR NEW."revokedAt" IS NOT NULL))
 EXECUTE FUNCTION restaurant_terminal_staff_changed();
 
+-- All account writers, including SCIM, invalidate the same live bindings.
+CREATE OR REPLACE FUNCTION restaurant_terminal_user_deactivated() RETURNS trigger
+LANGUAGE plpgsql SECURITY INVOKER SET search_path = pg_catalog, public AS $$
+BEGIN
+  UPDATE public.restaurant_terminal_sessions s
+     SET "endedAt" = statement_timestamp(), "activeStaffProfileId" = NULL
+    FROM public.restaurant_staff_profiles p
+   WHERE p."organizationId" = NEW."organizationId" AND p."userId" = NEW.id
+     AND (s."organizationId", s."activeStaffProfileId") = (p."organizationId", p.id)
+     AND s."endedAt" IS NULL;
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE TRIGGER end_linked_terminal_sessions_on_deactivation
+AFTER UPDATE ON public.users
+FOR EACH ROW WHEN (OLD.status = 'ACTIVE' AND NEW.status <> 'ACTIVE')
+EXECUTE FUNCTION restaurant_terminal_user_deactivated();
+
 CREATE OR REPLACE FUNCTION restaurant_terminal_access_changed() RETURNS trigger
 LANGUAGE plpgsql SECURITY INVOKER SET search_path = pg_catalog, public AS $$
 DECLARE

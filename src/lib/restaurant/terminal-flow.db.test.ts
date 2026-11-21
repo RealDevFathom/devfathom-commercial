@@ -16,7 +16,7 @@
  * valid on a superuser TEST_DATABASE_URL too. No Auth.js is involved — the
  * terminal transport is device-authenticated, not NextAuth.
  */
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { ensurePlatformModule, seedDepartments } from '@/lib/test-support/departments';
@@ -62,6 +62,17 @@ type Deps = {
 };
 
 let deps: Deps;
+
+function createLinkedAccount(tx: import('@/lib/tenancy/scoped-db').ScopedDb) {
+  return tx.user.create({
+    data: {
+      name: 'Linked cashier',
+      email: randomBytes(12).toString('hex') + '@test.invalid',
+      department: 'OPERATIONS',
+      title: 'Cashier',
+    },
+  });
+}
 
 async function call(
   route: RouteModule,
@@ -464,12 +475,14 @@ describeIfDatabase('terminal transport end-to-end (real DB)', { timeout: 30_000 
 
   it.each([
     'job role holding',
+    'job role deletion',
     'job role activation',
     'job role permission',
     'organization role',
     'organization role permission',
     'role permission writer',
     'user override',
+    'user override expiry',
     'staff user link',
   ] as const)(
     'ends a binding only on loss of effective terminal access through %s',
@@ -517,10 +530,17 @@ describeIfDatabase('terminal transport end-to-end (real DB)', { timeout: 30_000 
           endedAt: null,
           lastActivityAt: session.lastActivityAt,
         };
+        const otherStaff = await tx.restaurantStaffProfile.create({
+          data: {
+            displayName: 'Second cashier',
+            primaryBranchId: branchId,
+            directCapabilityGrants: { create: { branchId, capability: 'pos:operate' } },
+          },
+        });
         const other = await tx.restaurantTerminalSession.create({
           data: {
             deviceId,
-            activeStaffProfileId: STAFF.B.id,
+            activeStaffProfileId: otherStaff.id,
             tokenHash: randomBytes(32).toString('hex'),
           },
         });
@@ -551,6 +571,17 @@ describeIfDatabase('terminal transport end-to-end (real DB)', { timeout: 30_000 
         if (source.startsWith('job role')) {
           await tx.organizationRolePermission.delete({ where: { id: rolePermission.id } });
           expect(await snapshot()).toMatchObject(open);
+          if (source === 'job role deletion') {
+            // A second holder keeps the same right through an independent grant.
+            await tx.restaurantStaffJobRole.create({
+              data: { staffProfileId: otherStaff.id, branchId, jobRoleId: job.id },
+            });
+            await tx.restaurantStaffCapabilityGrant.create({
+              data: { staffProfileId: otherStaff.id, branchId, capability: amount },
+            });
+            await tx.restaurantJobRole.delete({ where: { id: job.id } });
+            expect(await tx.restaurantStaffJobRole.count({ where: { jobRoleId: job.id } })).toBe(0);
+          }
           if (source === 'job role holding')
             await tx.restaurantStaffJobRole.delete({ where: { id: holding.id } });
           if (source === 'job role activation')
@@ -603,6 +634,26 @@ describeIfDatabase('terminal transport end-to-end (real DB)', { timeout: 30_000 
               where: { id: staff.id },
               data: { userId: null },
             });
+          if (source === 'user override expiry') {
+            const override = await tx.userPermissionOverride.create({
+              data: {
+                userId: user.id,
+                capability: amount,
+                effect: 'ALLOW',
+                reason: 'Temporary register coverage',
+              },
+            });
+            await tx.organizationRolePermission.delete({ where: { id: rolePermission.id } });
+            await tx.userPermissionOverride.update({
+              where: { id: override.id },
+              data: { expiresAt: new Date(Date.now() + 86_400_000) },
+            });
+            expect(await snapshot()).toMatchObject(open);
+            await tx.userPermissionOverride.update({
+              where: { id: override.id },
+              data: { expiresAt: new Date(Date.now() - 86_400_000) },
+            });
+          }
           if (source === 'user override') {
             await tx.userPermissionOverride.create({
               data: {
@@ -622,7 +673,7 @@ describeIfDatabase('terminal transport end-to-end (real DB)', { timeout: 30_000 
         expect(
           await tx.restaurantTerminalSession.findUniqueOrThrow({ where: { id: other.id } })
         ).toMatchObject({
-          activeStaffProfileId: STAFF.B.id,
+          activeStaffProfileId: otherStaff.id,
           endedAt: null,
           lastActivityAt: other.lastActivityAt,
         });
@@ -704,16 +755,17 @@ describeIfDatabase('terminal transport end-to-end (real DB)', { timeout: 30_000 
     }
   );
 
-  it.each(['PIN reset', 'deactivation'] as const)(
+  it.each(['PIN reset', 'PIN revocation', 'deactivation', 'linked account on leave'] as const)(
     'ends every bound session in the same transaction as %s',
     async (change) => {
       const first = await enroll('control-a-' + change);
       const second = await enroll('control-b-' + change);
-      const { rotateOperatorCredential, issueOperatorCredential } =
+      const { rotateOperatorCredential, revokeOperatorCredential, issueOperatorCredential } =
         await import('./credential-lifecycle');
       const fixture = await deps.withTenantDb(orgId, async (tx) => {
+        const user = change === 'linked account on leave' ? await createLinkedAccount(tx) : null;
         const staff = await tx.restaurantStaffProfile.create({
-          data: { displayName: 'Credential fixture', primaryBranchId: branchId },
+          data: { displayName: 'Credential fixture', primaryBranchId: branchId, userId: user?.id },
         });
         const credential = await issueOperatorCredential(tx, {
           staffProfileId: staff.id,
@@ -749,6 +801,13 @@ describeIfDatabase('terminal transport end-to-end (real DB)', { timeout: 30_000 
               credentialId: fixture.credential.id,
               secret: '391872',
             });
+          else if (change === 'PIN revocation')
+            await revokeOperatorCredential(tx, { credentialId: fixture.credential.id });
+          else if (change === 'linked account on leave')
+            await tx.user.update({
+              where: { id: fixture.staff.userId! },
+              data: { status: 'ON_LEAVE' },
+            });
           else
             await tx.restaurantStaffProfile.update({
               where: { id: fixture.staff.id },
@@ -769,7 +828,7 @@ describeIfDatabase('terminal transport end-to-end (real DB)', { timeout: 30_000 
     }
   );
 
-  it.each(['PIN reset', 'deactivation'] as const)(
+  it.each(['PIN reset', 'deactivation', 'linked account deactivation'] as const)(
     'rejects an in-flight handover when %s finishes before binding',
     async (change) => {
       const { secret } = await enroll('credential-race-' + change);
@@ -777,8 +836,10 @@ describeIfDatabase('terminal transport end-to-end (real DB)', { timeout: 30_000 
       const { issueOperatorCredential, rotateOperatorCredential } =
         await import('./credential-lifecycle');
       const incoming = await deps.withTenantDb(orgId, async (tx) => {
+        const user =
+          change === 'linked account deactivation' ? await createLinkedAccount(tx) : null;
         const staff = await tx.restaurantStaffProfile.create({
-          data: { displayName: 'Incoming operator', primaryBranchId: branchId },
+          data: { displayName: 'Incoming operator', primaryBranchId: branchId, userId: user?.id },
         });
         await tx.restaurantStaffCapabilityGrant.create({
           data: { staffProfileId: staff.id, branchId, capability: 'pos:operate' },
@@ -811,6 +872,11 @@ describeIfDatabase('terminal transport end-to-end (real DB)', { timeout: 30_000 
             credentialId: incoming.credential.id,
             secret: '283951',
           });
+        else if (change === 'linked account deactivation')
+          await tx.user.update({
+            where: { id: incoming.staff.userId! },
+            data: { status: 'INACTIVE' },
+          });
         else
           await tx.restaurantStaffProfile.update({
             where: { id: incoming.staff.id },
@@ -841,6 +907,95 @@ describeIfDatabase('terminal transport end-to-end (real DB)', { timeout: 30_000 
     },
     12000
   );
+
+  it('ends only the linked operator’s sessions on SCIM deactivation and permits a fresh unlock after reactivation', async () => {
+    const directoryToken = 'scim_' + randomBytes(24).toString('hex');
+    await deps.withPlatformDb(async (tx) => {
+      const module = await ensurePlatformModule(tx, 'scim', { name: 'SCIM', category: 'Identity' });
+      await tx.organizationModule.create({ data: { organizationId: orgId, moduleId: module.id } });
+    });
+    const { issueOperatorCredential } = await import('./credential-lifecycle');
+    const fixture = await deps.withTenantDb(orgId, async (tx) => {
+      await tx.organizationScimToken.create({
+        data: {
+          organizationId: orgId,
+          name: 'Local directory',
+          prefix: directoryToken.slice(0, 12),
+          tokenHash: createHash('sha256').update(directoryToken).digest('hex'),
+        },
+      });
+      const user = await createLinkedAccount(tx);
+      const staff = await tx.restaurantStaffProfile.create({
+        data: { primaryBranchId: branchId, userId: user.id, displayName: 'Directory cashier' },
+      });
+      await tx.restaurantStaffCapabilityGrant.create({
+        data: { staffProfileId: staff.id, branchId, capability: 'pos:operate' },
+      });
+      await issueOperatorCredential(tx, {
+        staffProfileId: staff.id,
+        type: 'PIN',
+        secret: '673914',
+      });
+      return { user, staff };
+    });
+    const device = await enroll('directory cashier');
+    const otherDevice = await enroll('unrelated cashier');
+    const original = await establish(device.secret);
+    const other = await establish(otherDevice.secret);
+    const unlock = (token: string) =>
+      call(deps.routes.unlock, {
+        secret: device.secret,
+        session: token,
+        body: { staffProfileId: fixture.staff.id, type: 'PIN', secret: '673914' },
+      });
+    expect((await unlock(original.token)).status).toBe(200);
+    expect(
+      (
+        await call(deps.routes.unlock, {
+          secret: otherDevice.secret,
+          session: other.token,
+          body: { staffProfileId: STAFF.A.id, type: 'PIN', secret: STAFF.A.pin },
+        })
+      ).status
+    ).toBe(200);
+    const read = (id: string) =>
+      deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantTerminalSession.findUniqueOrThrow({ where: { id } })
+      );
+    const before = await read(original.sessionId);
+    const otherBefore = await read(other.sessionId);
+    const { PATCH } = await import('@/app/api/scim/v2/Users/[id]/route');
+    const setActive = (active: boolean) =>
+      PATCH(
+        new Request('https://tenant.test/api/scim/v2/Users/' + fixture.user.id, {
+          method: 'PATCH',
+          headers: {
+            authorization: 'Bearer ' + directoryToken,
+            'content-type': 'application/scim+json',
+          },
+          body: JSON.stringify({
+            schemas: ['urn:ietf:params:scim:api:messages:2.0:PatchOp'],
+            Operations: [{ op: 'replace', path: 'active', value: active }],
+          }),
+        }),
+        { params: Promise.resolve({ id: fixture.user.id }) }
+      );
+    expect((await setActive(true)).status).toBe(200);
+    expect(await read(original.sessionId)).toEqual(before);
+    expect((await setActive(false)).status).toBe(200);
+    const ended = await read(original.sessionId);
+    expect(ended).toMatchObject({
+      endedAt: expect.any(Date),
+      activeStaffProfileId: null,
+      lastActivityAt: before.lastActivityAt,
+    });
+    expect(await read(other.sessionId)).toEqual(otherBefore);
+    const fresh = await establish(device.secret);
+    expect((await unlock(fresh.token)).status).toBe(401);
+    expect((await setActive(true)).status).toBe(200);
+    expect(await read(original.sessionId)).toEqual(ended);
+    expect((await unlock(fresh.token)).status).toBe(200);
+  });
 
   it('records a manager co-authorization and refuses a self-approval (C7)', async () => {
     const { deviceId, secret } = await enroll('coauth');

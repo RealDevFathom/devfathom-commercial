@@ -297,7 +297,7 @@ describe('withTerminalAuth', () => {
     expect(h.store.sessions[0].lastActivityAt).toBeInstanceOf(Date);
   });
 
-  it.each(['deactivation', 'transfer', 'withdrawal'] as const)(
+  it.each(['deactivation', 'linked account deactivation', 'transfer', 'withdrawal'] as const)(
     'locks a bound kitchen operator after %s without refreshing idle time',
     async (change) => {
       seedDevice({ kind: 'KDS' });
@@ -312,7 +312,14 @@ describe('withTerminalAuth', () => {
       expect((await handler(req(headers))).status).toBe(200);
       const lastActivityAt = h.store.sessions[0].lastActivityAt;
       if (change === 'withdrawal') h.grants = [];
-      else
+      else if (change === 'linked account deactivation') {
+        h.findStaff.mockResolvedValue({
+          status: 'ACTIVE',
+          primaryBranchId: 'branch_1',
+          userId: 'linked_staff',
+          user: { status: 'INACTIVE' },
+        });
+      } else
         h.findStaff.mockResolvedValue(
           change === 'deactivation'
             ? { status: 'SUSPENDED', primaryBranchId: 'branch_1' }

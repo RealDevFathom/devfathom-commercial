@@ -29,6 +29,7 @@ export async function operatorHasCapability(
     select: {
       status: true,
       primaryBranchId: true,
+      userId: requirePrimaryBranch,
       jobRoles: !requirePrimaryBranch && { where: { branchId }, select: { branchId: true } },
       directCapabilityGrants: !requirePrimaryBranch && {
         where: { branchId },
@@ -36,6 +37,7 @@ export async function operatorHasCapability(
       },
       user: {
         select: {
+          status: requirePrimaryBranch,
           organizationRole: {
             select: { permissions: { select: { capability: true, effect: true } } },
           },
@@ -50,6 +52,7 @@ export async function operatorHasCapability(
   if (
     !profile ||
     profile.status !== 'ACTIVE' ||
+    (requirePrimaryBranch && profile.userId != null && profile.user?.status !== 'ACTIVE') ||
     (profile.primaryBranchId !== branchId &&
       (requirePrimaryBranch ||
         (!profile.jobRoles.some((row) => row.branchId === branchId) &&

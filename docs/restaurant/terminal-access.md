@@ -1,10 +1,10 @@
 # Restaurant terminal access
 
-An unlocked register requires an active staff profile assigned to the device’s branch and `pos:operate`. Kitchen and delivery displays require `kitchen:operate`. Unlock and handover verify the incoming credential before checking these rights. A denied handover leaves the outgoing operator in place.
+An unlocked register requires an active staff profile assigned to the device’s branch and `pos:operate`. If the staff profile links to a user account, that account must also be active. Kitchen and delivery displays require `kitchen:operate`. Unlock and handover verify the incoming credential before checking these rights. A denied handover leaves the outgoing operator in place.
 
 The terminal checks each operation’s own permissions. For example, a cashier with `payments:collect` can settle a bill even when the automatic loyalty snapshot returns 403 for missing `customers:read`. An operation refusal preserves both the binding and its previous idle timestamp. A refused device or invalid binding carries the `X-Terminal-Access: denied` header on 403. The kitchen board shows the server’s reason and retains the board for ordinary operation refusals.
 
-A staff deactivation, branch transfer, PIN reset or PIN revocation ends the affected person’s open bindings in the same transaction. Permission changes compare the effective terminal operations before and after the edit, including active job roles, direct grants, linked-user permissions, wildcard rules, and overriding denies. Adding rights or losing one of two equivalent grants preserves the binding.
+Staff deactivation, branch transfer, PIN reset and PIN revocation end the affected person’s open bindings in the same transaction. The same rule applies when a linked user account leaves `ACTIVE`, including through SCIM. Permission changes compare the effective terminal operations before and after the edit, including active job roles, direct grants, linked-user permissions, wildcard rules, and overriding denies. Adding rights or losing one of two equivalent grants preserves the binding.
 
 ## Kitchen polling cost
 
