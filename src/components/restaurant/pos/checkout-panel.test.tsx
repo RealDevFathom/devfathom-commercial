@@ -1,4 +1,3 @@
-import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -107,8 +106,8 @@ describe('CheckoutPanel', () => {
         }) as T;
       render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
 
-      expect(selectFieldControl(await screen.findByLabelText('Amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(remainingDue);
-      expect(selectFieldControl(screen.getByLabelText('Cash received', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(remainingDue);
+      expect(await screen.findByLabelText('Amount')).toHaveValue(remainingDue);
+      expect(screen.getByLabelText('Cash received')).toHaveValue(remainingDue);
       expect(screen.queryByText(/Outstanding balance unavailable/)).not.toBeInTheDocument();
     }
   );
@@ -126,8 +125,8 @@ describe('CheckoutPanel', () => {
     expect(await screen.findByText('Tax')).toBeVisible();
     expect(screen.getByText('Tax').nextElementSibling).toHaveTextContent('145.50');
     expect(screen.getByText('Bill total').nextElementSibling).toHaveTextContent('1115.50');
-    expect(selectFieldControl(screen.getByLabelText('Amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('145.50');
-    expect(selectFieldControl(screen.getByLabelText('Cash received', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('145.50');
+    expect(screen.getByLabelText('Amount')).toHaveValue('145.50');
+    expect(screen.getByLabelText('Cash received')).toHaveValue('145.50');
   });
 
   it('keeps an absent balance unknown instead of falling back to the bill total', async () => {
@@ -136,8 +135,8 @@ describe('CheckoutPanel', () => {
     render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
 
     expect(await screen.findByText(/Outstanding balance unavailable/)).toBeVisible();
-    expect(selectFieldControl(screen.getByLabelText('Amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
-    expect(selectFieldControl(screen.getByLabelText('Cash received', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
+    expect(screen.getByLabelText('Amount')).toHaveValue('');
+    expect(screen.getByLabelText('Cash received')).toHaveValue('');
   });
 
   it('does not offer another tender for a settled bill with zero remaining due', async () => {
@@ -153,7 +152,7 @@ describe('CheckoutPanel', () => {
     render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
 
     expect(await screen.findByText('Bill total')).toBeVisible();
-    expect(screen.queryByLabelText('Amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Amount')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Apply tender' })).not.toBeInTheDocument();
     expect(screen.queryByText(/Outstanding balance unavailable/)).not.toBeInTheDocument();
   });
@@ -216,8 +215,8 @@ describe('CheckoutPanel', () => {
 
     expect(await screen.findByRole('button', { name: 'Apply tender' })).toBeEnabled();
     expect(screen.queryByRole('button', { name: 'Comp item' })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Comp reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Manager PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Comp reason')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Manager PIN')).not.toBeInTheDocument();
     expect(calls.some(({ path }) => path === '/api/restaurant/checkout/comp')).toBe(false);
   });
 
@@ -328,10 +327,10 @@ describe('CheckoutPanel', () => {
       <CheckoutPanel open orderId="order-1" request={request} onClose={onClose} />
     );
 
-    expect(selectFieldControl(await screen.findByLabelText('Amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('24.00');
-    expect(selectFieldControl(screen.getByLabelText('Cash received', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('24.00');
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '8.00' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Cash received', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '8.00' } });
+    expect(await screen.findByLabelText('Amount')).toHaveValue('24.00');
+    expect(screen.getByLabelText('Cash received')).toHaveValue('24.00');
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '8.00' } });
+    fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '8.00' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply tender' }));
 
     expect(screen.getByRole('button', { name: 'Close checkout' })).toBeDisabled();
@@ -340,8 +339,8 @@ describe('CheckoutPanel', () => {
 
     await act(async () => resolveTender(partial));
     expect(await screen.findByText('Remaining balance 16.00')).toBeVisible();
-    expect(selectFieldControl(screen.getByLabelText('Amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('16.00');
-    expect(selectFieldControl(screen.getByLabelText('Cash received', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('16.00');
+    expect(screen.getByLabelText('Amount')).toHaveValue('16.00');
+    expect(screen.getByLabelText('Cash received')).toHaveValue('16.00');
     expect(calls.filter(({ path }) => path.includes('/summary'))).toHaveLength(1);
 
     fireEvent.click(screen.getByRole('button', { name: 'Close checkout' }));
@@ -352,8 +351,8 @@ describe('CheckoutPanel', () => {
     summary = { ...billed, bills: [{ ...billed.bills[0], remainingDue: '12.50' }] };
     view.rerender(<CheckoutPanel open orderId="order-1" request={request} onClose={onClose} />);
 
-    await waitFor(() => expect(selectFieldControl(screen.getByLabelText('Amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('12.50'));
-    expect(selectFieldControl(screen.getByLabelText('Cash received', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('12.50');
+    await waitFor(() => expect(screen.getByLabelText('Amount')).toHaveValue('12.50'));
+    expect(screen.getByLabelText('Cash received')).toHaveValue('12.50');
     expect(
       screen.queryByText('Outstanding balance unavailable. Enter the exact tender amount.')
     ).not.toBeInTheDocument();
@@ -424,7 +423,7 @@ describe('CheckoutPanel guest and loyalty', () => {
     const { calls, request } = router({});
     render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
 
-    expect(await screen.findByLabelText('Find guest', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeVisible();
+    expect(await screen.findByLabelText('Find guest')).toBeVisible();
     expect(
       calls.some(({ path }) => path === '/api/restaurant/checkout/loyalty?billId=bill-1')
     ).toBe(true);
@@ -434,7 +433,7 @@ describe('CheckoutPanel guest and loyalty', () => {
     const { request } = router({ search: () => ({ customers: [match] }) });
     render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
 
-    fireEvent.change(selectFieldControl(await screen.findByLabelText('Find guest', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'ali' } });
+    fireEvent.change(await screen.findByLabelText('Find guest'), { target: { value: 'ali' } });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
 
     expect(await screen.findByText('Ali Raza')).toBeVisible();
@@ -447,7 +446,7 @@ describe('CheckoutPanel guest and loyalty', () => {
     const { calls, request } = router({});
     render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
 
-    fireEvent.change(selectFieldControl(await screen.findByLabelText('Find guest', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'a' } });
+    fireEvent.change(await screen.findByLabelText('Find guest'), { target: { value: 'a' } });
     expect(screen.getByRole('button', { name: 'Search' })).toBeDisabled();
     expect(calls.some(({ path }) => path.includes('/customer/search'))).toBe(false);
   });
@@ -464,7 +463,7 @@ describe('CheckoutPanel guest and loyalty', () => {
     });
     render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
 
-    fireEvent.change(selectFieldControl(await screen.findByLabelText('Find guest', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'ali' } });
+    fireEvent.change(await screen.findByLabelText('Find guest'), { target: { value: 'ali' } });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Attach' }));
 
@@ -485,7 +484,7 @@ describe('CheckoutPanel guest and loyalty', () => {
     });
     render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
 
-    fireEvent.change(selectFieldControl(await screen.findByLabelText('Points to redeem (up to 48)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(await screen.findByLabelText('Points to redeem (up to 48)'), {
       target: { value: '40' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Redeem' }));
@@ -509,7 +508,7 @@ describe('CheckoutPanel guest and loyalty', () => {
     const { calls, request } = router({ loyalty: () => enrolled });
     render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
 
-    fireEvent.change(selectFieldControl(await screen.findByLabelText('Points to redeem (up to 48)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(await screen.findByLabelText('Points to redeem (up to 48)'), {
       target: { value: '2.5' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Redeem' }));

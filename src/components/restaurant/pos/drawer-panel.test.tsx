@@ -61,23 +61,30 @@ describe('DrawerPanel', () => {
     const dialog = screen.getByRole('dialog', { name: 'Cash drawer' });
     await within(dialog).findByText('No open drawer');
 
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Opening float', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(dialog).getByLabelText('Opening float'), {
       target: { value: '100.00' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Open drawer' }));
     await within(dialog).findByText('drawer-1');
 
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Movement', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'PAID_OUT' },
-    });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '10.00' } });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(
+      selectFieldControl(
+        within(dialog).getByLabelText('Movement', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'PAID_OUT' },
+      }
+    );
+    fireEvent.change(within(dialog).getByLabelText('Amount'), { target: { value: '10.00' } });
+    fireEvent.change(within(dialog).getByLabelText('Reason'), {
       target: { value: 'Petty cash' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Record movement' }));
     await within(dialog).findByText('Cash movement recorded.');
 
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Counted cash', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(dialog).getByLabelText('Counted cash'), {
       target: { value: '90.00' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close drawer' }));
@@ -166,14 +173,14 @@ describe('DrawerPanel', () => {
     expect(panel.getByRole('button', { name: 'Open drawer' })).toBeDisabled();
     expect(panel.queryByRole('button', { name: 'Record movement' })).not.toBeInTheDocument();
     expect(panel.queryByRole('button', { name: 'Close drawer' })).not.toBeInTheDocument();
-    fireEvent.submit(panel.getByLabelText('Opening float', { selector: ':not([data-select-field-native][aria-hidden="true"])' }).closest('form')!);
+    fireEvent.submit(panel.getByLabelText('Opening float').closest('form')!);
     expect(requestMock).toHaveBeenCalledTimes(1);
 
     await act(async () => rejectRead(new Error('Network unavailable')));
     expect(panel.getByRole('alert')).toHaveTextContent('Could not verify drawer state.');
     expect(panel.queryByText('No open drawer')).not.toBeInTheDocument();
     expect(panel.getByRole('button', { name: 'Open drawer' })).toBeDisabled();
-    fireEvent.submit(panel.getByLabelText('Opening float', { selector: ':not([data-select-field-native][aria-hidden="true"])' }).closest('form')!);
+    fireEvent.submit(panel.getByLabelText('Opening float').closest('form')!);
     expect(requestMock).toHaveBeenCalledTimes(1);
 
     let resolveRetry!: (value: null) => void;
@@ -217,10 +224,17 @@ describe('DrawerPanel', () => {
     render(<DrawerPanel request={request} />);
     let panel = openPanel();
     await panel.findByText('Active drawer');
-    fireEvent.change(selectFieldControl(panel.getByLabelText('Movement', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'PAID_OUT' } });
-    fireEvent.change(selectFieldControl(panel.getByLabelText('Amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '10.50' } });
-    fireEvent.change(selectFieldControl(panel.getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Petty cash' } });
-    fireEvent.change(selectFieldControl(panel.getByLabelText('Counted cash', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '89.50' } });
+    fireEvent.change(
+      selectFieldControl(
+        panel.getByLabelText('Movement', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'PAID_OUT' } }
+    );
+    fireEvent.change(panel.getByLabelText('Amount'), { target: { value: '10.50' } });
+    fireEvent.change(panel.getByLabelText('Reason'), { target: { value: 'Petty cash' } });
+    fireEvent.change(panel.getByLabelText('Counted cash'), { target: { value: '89.50' } });
 
     panel = await reopenPanel();
     await panel.findByRole('alert');
@@ -230,16 +244,22 @@ describe('DrawerPanel', () => {
     expect(panel.getByRole('button', { name: 'Record movement' })).toBeDisabled();
     expect(panel.getByRole('button', { name: 'Close drawer' })).toBeDisabled();
     expect(panel.queryByRole('button', { name: 'Open drawer' })).not.toBeInTheDocument();
-    fireEvent.submit(panel.getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' }).closest('form')!);
-    fireEvent.submit(panel.getByLabelText('Counted cash', { selector: ':not([data-select-field-native][aria-hidden="true"])' }).closest('form')!);
+    fireEvent.submit(panel.getByLabelText('Reason').closest('form')!);
+    fireEvent.submit(panel.getByLabelText('Counted cash').closest('form')!);
     expect(requestMock).toHaveBeenCalledTimes(2);
 
     fireEvent.click(panel.getByRole('button', { name: 'Retry drawer state' }));
     await panel.findByText('Active drawer');
-    expect(selectFieldControl(panel.getByLabelText('Movement', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('PAID_OUT');
-    expect(selectFieldControl(panel.getByLabelText('Amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('10.50');
-    expect(selectFieldControl(panel.getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Petty cash');
-    expect(selectFieldControl(panel.getByLabelText('Counted cash', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('89.50');
+    expect(
+      selectFieldControl(
+        panel.getByLabelText('Movement', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('PAID_OUT');
+    expect(panel.getByLabelText('Amount')).toHaveValue('10.50');
+    expect(panel.getByLabelText('Reason')).toHaveValue('Petty cash');
+    expect(panel.getByLabelText('Counted cash')).toHaveValue('89.50');
     expect(panel.getByRole('button', { name: 'Record movement' })).toBeEnabled();
     expect(panel.getByRole('button', { name: 'Close drawer' })).toBeEnabled();
     expect(panel.queryByText(/details are stale/)).not.toBeInTheDocument();
@@ -259,7 +279,7 @@ describe('DrawerPanel', () => {
       expect(panel.queryByText(/Could not verify drawer state/)).not.toBeInTheDocument();
       expect(panel.queryByText('No open drawer')).not.toBeInTheDocument();
       expect(panel.getByRole('button', { name: 'Open drawer' })).toBeDisabled();
-      fireEvent.submit(panel.getByLabelText('Opening float', { selector: ':not([data-select-field-native][aria-hidden="true"])' }).closest('form')!);
+      fireEvent.submit(panel.getByLabelText('Opening float').closest('form')!);
       expect(requestMock).toHaveBeenCalledTimes(1);
 
       fireEvent.click(panel.getByRole('button', { name: 'Retry drawer state' }));
@@ -279,19 +299,19 @@ describe('DrawerPanel', () => {
     render(<DrawerPanel request={request} />);
     let panel = openPanel();
     await panel.findByText('No open drawer');
-    fireEvent.change(selectFieldControl(panel.getByLabelText('Opening float', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '100.00' } });
+    fireEvent.change(panel.getByLabelText('Opening float'), { target: { value: '100.00' } });
     panel = await reopenPanel();
     await panel.findByRole('alert');
-    expect(selectFieldControl(panel.getByLabelText('Opening float', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('100.00');
-    expect(panel.getByLabelText('Opening float', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
+    expect(panel.getByLabelText('Opening float')).toHaveValue('100.00');
+    expect(panel.getByLabelText('Opening float')).toBeDisabled();
     expect(panel.queryByText('No open drawer')).not.toBeInTheDocument();
     fireEvent.click(panel.getByRole('button', { name: 'Retry drawer state' }));
     await panel.findByText('No open drawer');
-    expect(selectFieldControl(panel.getByLabelText('Opening float', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('100.00');
+    expect(panel.getByLabelText('Opening float')).toHaveValue('100.00');
 
     fireEvent.click(panel.getByRole('button', { name: 'Open drawer' }));
     expect(await panel.findByRole('alert')).toHaveTextContent('Open response lost');
-    expect(selectFieldControl(panel.getByLabelText('Opening float', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('100.00');
+    expect(panel.getByLabelText('Opening float')).toHaveValue('100.00');
     expect(panel.queryByRole('button', { name: 'Retry drawer state' })).not.toBeInTheDocument();
     fireEvent.click(panel.getByRole('button', { name: 'Open drawer' }));
     await panel.findByText('Active drawer');
@@ -324,24 +344,37 @@ describe('DrawerPanel', () => {
     render(<DrawerPanel request={request} />);
     const panel = openPanel();
     await panel.findByText('Active drawer');
-    fireEvent.change(selectFieldControl(panel.getByLabelText('Movement', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'PAID_OUT' } });
-    fireEvent.change(selectFieldControl(panel.getByLabelText('Amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '10.50' } });
-    fireEvent.change(selectFieldControl(panel.getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: ' Petty cash ' } });
-    fireEvent.change(selectFieldControl(panel.getByLabelText('Counted cash', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '89.50' } });
+    fireEvent.change(
+      selectFieldControl(
+        panel.getByLabelText('Movement', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'PAID_OUT' } }
+    );
+    fireEvent.change(panel.getByLabelText('Amount'), { target: { value: '10.50' } });
+    fireEvent.change(panel.getByLabelText('Reason'), { target: { value: ' Petty cash ' } });
+    fireEvent.change(panel.getByLabelText('Counted cash'), { target: { value: '89.50' } });
     fireEvent.click(panel.getByRole('button', { name: 'Record movement' }));
     expect(await panel.findByRole('alert')).toHaveTextContent('Movement response lost');
-    expect(selectFieldControl(panel.getByLabelText('Movement', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('PAID_OUT');
-    expect(selectFieldControl(panel.getByLabelText('Amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('10.50');
-    expect(selectFieldControl(panel.getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(' Petty cash ');
-    expect(selectFieldControl(panel.getByLabelText('Counted cash', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('89.50');
+    expect(
+      selectFieldControl(
+        panel.getByLabelText('Movement', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('PAID_OUT');
+    expect(panel.getByLabelText('Amount')).toHaveValue('10.50');
+    expect(panel.getByLabelText('Reason')).toHaveValue(' Petty cash ');
+    expect(panel.getByLabelText('Counted cash')).toHaveValue('89.50');
     fireEvent.click(panel.getByRole('button', { name: 'Record movement' }));
     await panel.findByText('Cash movement recorded.');
-    expect(selectFieldControl(panel.getByLabelText('Amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
-    expect(selectFieldControl(panel.getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
+    expect(panel.getByLabelText('Amount')).toHaveValue('');
+    expect(panel.getByLabelText('Reason')).toHaveValue('');
 
     fireEvent.click(panel.getByRole('button', { name: 'Close drawer' }));
     expect(await panel.findByRole('alert')).toHaveTextContent('Close response lost');
-    expect(selectFieldControl(panel.getByLabelText('Counted cash', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('89.50');
+    expect(panel.getByLabelText('Counted cash')).toHaveValue('89.50');
     fireEvent.click(panel.getByRole('button', { name: 'Close drawer' }));
     await panel.findByText('Drawer closed.');
 
@@ -382,7 +415,7 @@ describe('DrawerPanel', () => {
       const labels = current ? ['Reason', 'Counted cash'] : ['Opening float'];
       const actions = current ? ['Record movement', 'Close drawer'] : ['Open drawer'];
       for (const name of actions) expect(panel.getByRole('button', { name })).toBeDisabled();
-      for (const label of labels) fireEvent.submit(panel.getByLabelText(label, { selector: ':not([data-select-field-native][aria-hidden="true"])' }).closest('form')!);
+      for (const label of labels) fireEvent.submit(panel.getByLabelText(label).closest('form')!);
       expect(requestMock).toHaveBeenCalledTimes(1);
       expect(panel.getByRole('status')).toHaveTextContent('offline or busy');
       expect(panel.getByRole('button', { name: 'Close drawer panel' })).toBeEnabled();

@@ -1,4 +1,3 @@
-import { selectFieldControl } from '@/lib/testing/select-field';
 import { render, screen, cleanup } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TRPCError } from '@trpc/server';
@@ -38,7 +37,7 @@ describe('repeat purchasing page', () => {
     expect(screen.getByText(/off-system purchases are unknown/)).toBeInTheDocument();
     expect(screen.getByText(/10-second database execution budget/)).toBeInTheDocument();
     expect(screen.queryByText(/above 10,000 receipts/)).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Enrollment from (UTC)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeRequired();
+    expect(screen.getByLabelText('Enrollment from (UTC)')).toBeRequired();
   });
   it('preserves frozen cutoff and selected scope on submission', async () => {
     const query = {
@@ -54,7 +53,7 @@ describe('repeat purchasing page', () => {
       asOf: query.asOf,
       branchId: 'b1',
     });
-    expect(selectFieldControl(screen.getByLabelText('As-of cutoff (UTC)', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2026-05-01T00:00');
+    expect(screen.getByLabelText('As-of cutoff (UTC)')).toHaveValue('2026-05-01T00:00');
     expect(screen.getByRole('button', { name: 'Apply cohort window' })).toHaveAttribute(
       'type',
       'submit'
@@ -75,9 +74,9 @@ describe('repeat purchasing page', () => {
       to: '2026-01-31',
       asOf: '2026-05-01T09:30:00Z',
     });
-    const cutoff = screen.getByLabelText('As-of cutoff (UTC)', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const cutoff = screen.getByLabelText('As-of cutoff (UTC)');
     expect(cutoff).toHaveAttribute('type', 'datetime-local');
-    expect(selectFieldControl(cutoff)).toHaveValue('2026-05-01T09:30');
+    expect(cutoff).toHaveValue('2026-05-01T09:30');
     expect(screen.getByText(/Frozen cutoff: 1 May 2026, 12:00 AM UTC\./)).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
   });
@@ -102,7 +101,7 @@ describe('repeat purchasing page', () => {
       to: '2026-01-31',
       asOf: '2026-05-01T04:30:00Z',
     });
-    expect(selectFieldControl(screen.getByLabelText('As-of cutoff (PKT)', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2026-05-01T09:30');
+    expect(screen.getByLabelText('As-of cutoff (PKT)')).toHaveValue('2026-05-01T09:30');
     expect(screen.getByText(/Frozen cutoff: 1 May 2026, 9:30 AM PKT\./)).toBeInTheDocument();
     expect(screen.getByText(/2 Jan 2026, 12:30 AM PKT/)).toBeInTheDocument();
   });
@@ -145,10 +144,10 @@ describe('repeat purchasing page', () => {
     expect(alert).toHaveTextContent('no partial rates are shown');
     expect(alert).not.toHaveTextContent(/10,000 receipts|1,000 details|timeout|timed out/i);
     expect(html).not.toContain(message);
-    expect(selectFieldControl(screen.getByLabelText('Enrollment from (UTC)', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(query.from);
-    expect(selectFieldControl(screen.getByLabelText('Enrollment through (UTC)', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(query.to);
-    expect(selectFieldControl(screen.getByLabelText('As-of cutoff (UTC)', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2026-05-01T00:00');
-    expect(selectFieldControl(screen.getByLabelText('Selected authorized branches', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(query.branch);
+    expect(screen.getByLabelText('Enrollment from (UTC)')).toHaveValue(query.from);
+    expect(screen.getByLabelText('Enrollment through (UTC)')).toHaveValue(query.to);
+    expect(screen.getByLabelText('As-of cutoff (UTC)')).toHaveValue('2026-05-01T00:00');
+    expect(screen.getByLabelText('Selected authorized branches')).toHaveValue(query.branch);
     expect(screen.getByRole('option', { hidden: true, name: 'Main' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Apply cohort window' })).toBeEnabled();
     expect(screen.queryByText('Identity coverage')).not.toBeInTheDocument();

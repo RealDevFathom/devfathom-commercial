@@ -186,7 +186,14 @@ describe('OrdersConsole', () => {
 
     renderConsole();
     expect(mocks.listCalls.at(-1)?.enabled).toBe(false);
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'branch_1' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'branch_1' } }
+    );
     expect(mocks.listCalls.at(-1)).toEqual({
       input: { branchId: 'branch_1', limit: 25 },
       enabled: true,
@@ -204,7 +211,14 @@ describe('OrdersConsole', () => {
 
   it('names tables by their floor-plan code and never prints raw ids in the ledger', () => {
     renderConsole();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'branch_1' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'branch_1' } }
+    );
     const row = screen.getByRole('button', { name: 'View order 42' }).closest('tr')!;
     expect(row).toHaveTextContent('#42');
     expect(within(row).getByText('T1')).toBeInTheDocument();
@@ -215,10 +229,18 @@ describe('OrdersConsole', () => {
   it('keeps DELIVERY available for historical order filtering', () => {
     renderConsole();
 
-    const channel = screen.getByLabelText('Channel', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-    expect(within(selectFieldControl(channel)).getByRole('option', { hidden: true, name: 'DINE IN' })).toBeInTheDocument();
-    expect(within(selectFieldControl(channel)).getByRole('option', { hidden: true, name: 'TAKEAWAY' })).toBeInTheDocument();
-    expect(within(selectFieldControl(channel)).getByRole('option', { hidden: true, name: 'DELIVERY' })).toBeInTheDocument();
+    const channel = screen.getByLabelText('Channel', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
+    expect(
+      within(selectFieldControl(channel)).getByRole('option', { hidden: true, name: 'DINE IN' })
+    ).toBeInTheDocument();
+    expect(
+      within(selectFieldControl(channel)).getByRole('option', { hidden: true, name: 'TAKEAWAY' })
+    ).toBeInTheDocument();
+    expect(
+      within(selectFieldControl(channel)).getByRole('option', { hidden: true, name: 'DELIVERY' })
+    ).toBeInTheDocument();
   });
 
   it('cancels with session attribution, a verified approver credential, and a native idempotency key', () => {
@@ -226,35 +248,74 @@ describe('OrdersConsole', () => {
       '00000000-0000-4000-8000-000000000045'
     );
     renderConsole();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'branch_1' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'branch_1' } }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'View order 42' }));
     fireEvent.click(screen.getByRole('button', { name: 'Cancel order' }));
 
     const dialog = screen.getByRole('dialog', { name: 'Cancel order #42?' });
     // The acting staff is the signed-in user; the console offers no actor picker.
-    expect(within(dialog).queryByLabelText('Acting staff member', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Acting staff member')).not.toBeInTheDocument();
     expect(within(dialog).getByText(/recorded as your own signed-in staff profile/i)).toBeVisible();
     expect(
-      within(dialog).queryByLabelText('Approving PIN or badge secret', { selector: ':not([data-select-field-native][aria-hidden="true"])' })
+      within(dialog).queryByLabelText('Approving PIN or badge secret')
     ).not.toBeInTheDocument();
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Device', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'device_1' },
-    });
-    expect(within(dialog).getByText('Front Register — Downtown', { selector: '[data-slot="select-value"]' })).toBeVisible();
+    fireEvent.change(
+      selectFieldControl(
+        within(dialog).getByLabelText('Device', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'device_1' },
+      }
+    );
+    expect(
+      within(dialog).getByText('Front Register — Downtown', {
+        selector: '[data-slot="select-value"]',
+      })
+    ).toBeVisible();
     expect(within(dialog).queryByText('device_1')).not.toBeInTheDocument();
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(dialog).getByLabelText('Reason'), {
       target: { value: 'Guest left' },
     });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Wastage disposition', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'WASTE' },
-    });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Approving staff member (optional)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'manager_1' },
-    });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Approving credential type', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'BADGE' },
-    });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Approving PIN or badge secret', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(
+      selectFieldControl(
+        within(dialog).getByLabelText('Wastage disposition', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'WASTE' },
+      }
+    );
+    fireEvent.change(
+      selectFieldControl(
+        within(dialog).getByLabelText('Approving staff member (optional)', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'manager_1' },
+      }
+    );
+    fireEvent.change(
+      selectFieldControl(
+        within(dialog).getByLabelText('Approving credential type', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'BADGE' },
+      }
+    );
+    fireEvent.change(within(dialog).getByLabelText('Approving PIN or badge secret'), {
       target: { value: 'badge-77' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm cancellation' }));

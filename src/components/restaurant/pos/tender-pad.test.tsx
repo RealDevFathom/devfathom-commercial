@@ -27,8 +27,8 @@ describe('TenderPad', () => {
     const onApplied = vi.fn();
 
     render(<TenderPad billId="bill-1" amountDue="10.00" request={request} onApplied={onApplied} />);
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '8.00' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Cash received', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '20.00' } });
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '8.00' } });
+    fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '20.00' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply tender' }));
 
     await waitFor(() => expect(onApplied).toHaveBeenCalledWith(result));
@@ -47,8 +47,8 @@ describe('TenderPad', () => {
     ]);
     expect(screen.getByText('Remaining balance 2.00')).toBeVisible();
     expect(screen.getByText('Change 12.00')).toBeVisible();
-    expect(selectFieldControl(screen.getByLabelText('Amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2.00');
-    expect(selectFieldControl(screen.getByLabelText('Cash received', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2.00');
+    expect(screen.getByLabelText('Amount')).toHaveValue('2.00');
+    expect(screen.getByLabelText('Cash received')).toHaveValue('2.00');
   });
 
   it('refreshes a changed authoritative balance and clears the prior tender error', async () => {
@@ -63,8 +63,8 @@ describe('TenderPad', () => {
     view.rerender(
       <TenderPad billId="bill-1" amountDue="6.25" request={request} onApplied={onApplied} />
     );
-    expect(selectFieldControl(screen.getByLabelText('Amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('6.25');
-    expect(selectFieldControl(screen.getByLabelText('Cash received', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('6.25');
+    expect(screen.getByLabelText('Amount')).toHaveValue('6.25');
+    expect(screen.getByLabelText('Cash received')).toHaveValue('6.25');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(request).toHaveBeenCalledOnce();
     expect(onApplied).not.toHaveBeenCalled();
@@ -93,14 +93,14 @@ describe('TenderPad', () => {
 
     expect(await screen.findByRole('button', { name: 'Bill settled' })).toBeDisabled();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(selectFieldControl(screen.getByLabelText('Amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('0.00');
+    expect(screen.getByLabelText('Amount')).toHaveValue('0.00');
     expect(request).toHaveBeenCalledTimes(2);
   });
 
   it('blocks malformed decimal strings before request', () => {
     const request = vi.fn();
     render(<TenderPad billId="bill-1" amountDue="10.00" request={request} onApplied={vi.fn()} />);
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '10.001' } });
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '10.001' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply tender' }));
 
     expect(screen.getByRole('alert')).toHaveTextContent('at most two places');
@@ -128,20 +128,27 @@ describe('TenderPad', () => {
         onApplied={vi.fn()}
       />
     );
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Tender type', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'CARD' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Tender type', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'CARD' } }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Apply tender' }));
     expect(screen.getByRole('alert')).toHaveTextContent('approval code');
     expect(request).not.toHaveBeenCalled();
 
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Approval code', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'A1B2C3' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Last 4 digits or reference', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: 'A1B2C3' } });
+    fireEvent.change(screen.getByLabelText('Last 4 digits or reference'), {
       target: { value: '4111111111111111' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Apply tender' }));
     expect(screen.getByRole('alert')).toHaveTextContent('Never the full card number');
     expect(request).not.toHaveBeenCalled();
 
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Last 4 digits or reference', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Last 4 digits or reference'), {
       target: { value: '4242' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Apply tender' }));

@@ -307,11 +307,7 @@ export function RestaurantTaxConsole() {
               ) : null}
 
               <label className="flex items-start gap-3 text-sm text-text-strong">
-                <input
-                  className="mt-1 size-4"
-                  type="checkbox"
-                  name="replaceOpenPresetProfile"
-                />
+                <input className="mt-1 size-4" type="checkbox" name="replaceOpenPresetProfile" />
                 End the currently open tax profile when this profile starts.
               </label>
               <label className="flex items-start gap-3 text-sm text-text-strong">
@@ -346,7 +342,12 @@ export function RestaurantTaxConsole() {
                 </label>
                 <label className={labelClass}>
                   Branch
-                  <StudioSelect className={selectClass} name="customBranchId" required defaultValue="">
+                  <StudioSelect
+                    className={selectClass}
+                    name="customBranchId"
+                    required
+                    defaultValue=""
+                  >
                     <option value="" disabled>
                       Select a branch
                     </option>
@@ -359,7 +360,12 @@ export function RestaurantTaxConsole() {
                 </label>
                 <label className={labelClass}>
                   Pakistan jurisdiction
-                  <StudioSelect className={selectClass} name="jurisdictionCode" required defaultValue="">
+                  <StudioSelect
+                    className={selectClass}
+                    name="jurisdictionCode"
+                    required
+                    defaultValue=""
+                  >
                     <option value="" disabled>
                       Select jurisdiction
                     </option>

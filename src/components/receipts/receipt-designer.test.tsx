@@ -1,4 +1,3 @@
-import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
@@ -10,11 +9,11 @@ describe('receipt designer', () => {
   it('renders Unicode layout text losslessly in the existing browser preview', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ branches: [branch] })));
     render(<ReceiptDesigner />);
-    const footer = await screen.findByLabelText('Footer text (500 characters)', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const footer = await screen.findByLabelText('Footer text (500 characters)');
     const text = 'شکریہ e\u0301 👩‍👩‍👧‍👦 '.repeat(6);
-    fireEvent.change(selectFieldControl(footer), { target: { value: text } });
+    fireEvent.change(footer, { target: { value: text } });
     expect(footer).not.toHaveAttribute('aria-invalid', 'true');
-    expect(screen.getByLabelText('Sample receipt', { selector: ':not([data-select-field-native][aria-hidden="true"])' }).textContent).toContain(text);
+    expect(screen.getByLabelText('Sample receipt').textContent).toContain(text);
     expect(screen.getByRole('button', { name: 'Save layout' })).toBeEnabled();
   });
   it('preserves draft after failed save and makes reset an explicit save', async () => {
@@ -26,13 +25,13 @@ describe('receipt designer', () => {
       );
     vi.stubGlobal('fetch', fetch);
     render(<ReceiptDesigner />);
-    const footer = await screen.findByLabelText('Footer text (500 characters)', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-    fireEvent.change(selectFieldControl(footer), { target: { value: 'Visit again soon' } });
+    const footer = await screen.findByLabelText('Footer text (500 characters)');
+    fireEvent.change(footer, { target: { value: 'Visit again soon' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save layout' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Conflict');
-    expect(selectFieldControl(footer)).toHaveValue('Visit again soon');
+    expect(footer).toHaveValue('Visit again soon');
     fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' }));
-    expect(selectFieldControl(footer)).toHaveValue(DEFAULT_RECEIPT_LAYOUT.footerText);
+    expect(footer).toHaveValue(DEFAULT_RECEIPT_LAYOUT.footerText);
     expect(fetch).toHaveBeenCalledTimes(2);
   });
   it('shows permission denial without an editable form', async () => {
@@ -47,10 +46,10 @@ describe('receipt designer', () => {
   it('marks invalid text and disables saving while retaining input', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ branches: [branch] })));
     render(<ReceiptDesigner />);
-    const footer = await screen.findByLabelText('Footer text (500 characters)', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-    fireEvent.change(selectFieldControl(footer), { target: { value: '<script>' } });
+    const footer = await screen.findByLabelText('Footer text (500 characters)');
+    fireEvent.change(footer, { target: { value: '<script>' } });
     expect(footer).toHaveAttribute('aria-invalid', 'true');
-    expect(selectFieldControl(footer)).toHaveValue('<script>');
+    expect(footer).toHaveValue('<script>');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save layout' })).toBeDisabled());
   });
 });

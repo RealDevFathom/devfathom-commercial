@@ -1,4 +1,5 @@
-import { SelectField as StudioSelect } from '@/components/ui/select-field';import type { Metadata } from 'next';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 

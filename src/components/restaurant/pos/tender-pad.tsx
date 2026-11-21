@@ -90,7 +90,9 @@ export function TenderPad({
       return;
     }
     if (type === 'CARD' && !REFERENCE.test(reference.trim())) {
-      setError('Enter the last 4 digits or the card machine reference. Never the full card number.');
+      setError(
+        'Enter the last 4 digits or the card machine reference. Never the full card number.'
+      );
       return;
     }
 

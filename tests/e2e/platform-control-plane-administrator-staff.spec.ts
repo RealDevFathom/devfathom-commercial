@@ -1,3 +1,4 @@
+import { chooseSelectField, selectFieldNative } from './fixtures/select-field';
 import { expect, test } from '@playwright/test';
 
 import {
@@ -363,12 +364,14 @@ test('the administrator SuperAdmin creates is provisioned a staff profile and is
   // `RestaurantBranchSelect` decorates the option text ("Clifton Flagship ·
   // MAIN (default)"), and `selectOption({ label })` is an EXACT match — so the
   // value is read off the option rather than guessing at the presentation.
-  const branchSelect = enrollDialog.getByLabel('Branch');
-  const branchValue = await branchSelect
+  const branchSelect = enrollDialog.getByRole('combobox', { name: 'Branch', exact: true });
+  const branchValue = await (
+    await selectFieldNative(branchSelect)
+  )
     .locator('option', { hasText: tenant.branchName })
     .getAttribute('value');
   expect(branchValue, 'the default branch must be offered to the administrator').toBeTruthy();
-  await branchSelect.selectOption(branchValue!);
+  await chooseSelectField(branchSelect, branchValue!);
   await enrollDialog.getByLabel('Device kind').selectOption('KDS');
 
   const stationSelect = enrollDialog.getByLabel('KDS station');

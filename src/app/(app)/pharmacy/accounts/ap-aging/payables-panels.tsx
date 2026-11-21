@@ -1,4 +1,5 @@
-import { SelectField as StudioSelect } from '@/components/ui/select-field';import { randomUUID } from 'node:crypto';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import { randomUUID } from 'node:crypto';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';

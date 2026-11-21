@@ -77,6 +77,15 @@ function labelText(node: Node): string {
   return Array.from(node.childNodes, labelText).join('');
 }
 
+function changesOptions(record: MutationRecord, native: HTMLSelectElement): boolean {
+  if (!native.contains(record.target)) return false;
+  if (record.type === 'childList' || record.type === 'characterData') return true;
+  return (
+    (record.target instanceof HTMLOptionElement || record.target instanceof HTMLOptGroupElement) &&
+    ['value', 'label', 'disabled', 'hidden'].includes(record.attributeName ?? '')
+  );
+}
+
 /**
  * The Studio Select presentation for existing single-select form controls.
  *
@@ -113,6 +122,9 @@ export function SelectField(allProps: SelectFieldProps) {
   const errorId = `${generatedId}-error`;
   const [snapshot, setSnapshot] = React.useState<Snapshot | null>(null);
   const snapshotRef = React.useRef<Snapshot | null>(null);
+  const optionsRef = React.useRef<Option[]>([]);
+  const optionsDirty = React.useRef(true);
+  const observerRef = React.useRef<MutationObserver | null>(null);
   const [validationMessage, setValidationMessage] = React.useState('');
   const validationMessageRef = React.useRef('');
   const resetSelection = React.useRef<{ value: string; props: SelectFieldProps } | null>(null);
@@ -129,9 +141,35 @@ export function SelectField(allProps: SelectFieldProps) {
     [setValidationMessage]
   );
 
+  const invalidateOptions = React.useCallback((records: MutationRecord[]) => {
+    const native = nativeRef.current;
+    if (native && records.some((record) => changesOptions(record, native))) {
+      optionsDirty.current = true;
+    }
+  }, []);
+
   const sync = React.useCallback(() => {
     const native = nativeRef.current;
     if (!native || resetPending.current) return;
+    // React commits option changes before this layout sync. Consume those
+    // records now so the displayed fallback/value is current before paint.
+    // New React children with identical DOM, selection changes, and native
+    // aria/disabled updates do not rescan the option collection.
+    invalidateOptions(observerRef.current?.takeRecords() ?? []);
+    if (optionsDirty.current) {
+      optionsRef.current = Array.from(native.options, (option) => {
+        const group = option.parentElement;
+        const inGroup = group instanceof HTMLOptGroupElement;
+        return {
+          value: option.value,
+          label: option.label,
+          disabled: option.disabled || (inGroup && group.disabled),
+          hidden: option.hidden || (inGroup && group.hidden),
+          group: inGroup ? group.label : null,
+        };
+      });
+      optionsDirty.current = false;
+    }
     const next: Snapshot = {
       value: native.value,
       disabled: native.matches(':disabled'),
@@ -145,27 +183,57 @@ export function SelectField(allProps: SelectFieldProps) {
           )
           .map((attribute) => [attribute.name, attribute.value])
       ),
-      options: Array.from(native.options, (option) => {
-        const group = option.parentElement;
-        const inGroup = group instanceof HTMLOptGroupElement;
-        return {
-          value: option.value,
-          label: option.label,
-          disabled: option.disabled || (inGroup && group.disabled),
-          hidden: option.hidden || (inGroup && group.hidden),
-          group: inGroup ? group.label : null,
-        };
-      }),
+      options: optionsRef.current,
     };
-    if (JSON.stringify(snapshotRef.current) !== JSON.stringify(next)) {
+    const previous = snapshotRef.current;
+    if (
+      !previous ||
+      previous.options !== next.options ||
+      previous.value !== next.value ||
+      previous.disabled !== next.disabled ||
+      previous.label !== next.label ||
+      JSON.stringify(previous.aria) !== JSON.stringify(next.aria)
+    ) {
       snapshotRef.current = next;
       setSnapshot(next);
     }
     if (native.validity.valid) updateValidation('');
-  }, [setSnapshot, updateValidation]);
+  }, [invalidateOptions, setSnapshot, updateValidation]);
+
+  React.useLayoutEffect(() => {
+    const native = nativeRef.current;
+    if (!native) return;
+    // Reinitialize when effects reconnect (for example, Strict Mode), since a
+    // child layout effect may have updated options while observation was paused.
+    optionsDirty.current = true;
+    const observer = new MutationObserver((records) => {
+      invalidateOptions(records);
+      sync();
+    });
+    observerRef.current = observer;
+    observer.observe(native, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      characterData: true,
+    });
+    native.labels?.forEach((label) =>
+      observer.observe(label, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      })
+    );
+    return () => {
+      observer.disconnect();
+      observerRef.current = null;
+    };
+  }, [invalidateOptions, sync]);
 
   // Read the actual browser selection, including native fallback to the first
   // enabled option when value/defaultValue is absent or no longer available.
+  // Option snapshots are cached separately and change only after option DOM
+  // mutations; this per-commit sync keeps native focus/reset semantics intact.
   React.useLayoutEffect(() => {
     currentProps.current = allProps;
     // A parent's opening-focus effect can run while the initial native fallback
@@ -203,20 +271,10 @@ export function SelectField(allProps: SelectFieldProps) {
       }, 0);
     };
     form?.addEventListener('reset', reset);
-    const observer = new MutationObserver(sync);
-    observer.observe(native, { childList: true, subtree: true, attributes: true });
-    native.labels?.forEach((label) =>
-      observer.observe(label, {
-        childList: true,
-        subtree: true,
-        characterData: true,
-      })
-    );
     return () => {
       clearTimeout(resetTimer);
       resetPending.current = false;
       form?.removeEventListener('reset', reset);
-      observer.disconnect();
     };
   }, [props.form, sync, updateValidation]);
 
@@ -233,36 +291,43 @@ export function SelectField(allProps: SelectFieldProps) {
     ]
       .filter(Boolean)
       .join(' ') || undefined;
-  const selectedLabel = snapshot?.options.find((option) => option.value === snapshot.value)?.label;
-
-  const items = snapshot?.options.map((option, index) =>
-    option.hidden ? null : (
-      <SelectItem
-        key={`${index}:${option.value}`}
-        value={option.value}
-        disabled={option.disabled}
-        data-value={option.value}
-      >
-        {option.label}
-      </SelectItem>
-    )
-  );
-  const groupedItems: React.ReactNode[] = [];
-  snapshot?.options.forEach((option, index) => {
-    if (option.group === null) {
-      groupedItems.push(items?.[index]);
-      return;
-    }
-    if (index > 0 && snapshot.options[index - 1].group === option.group) return;
-    let end = index + 1;
-    while (end < snapshot.options.length && snapshot.options[end].group === option.group) end++;
-    groupedItems.push(
-      <SelectGroup key={`group:${index}`}>
-        <SelectLabel>{option.group}</SelectLabel>
-        {items?.slice(index, end)}
-      </SelectGroup>
-    );
-  });
+  const options = snapshot?.options;
+  const { groupedItems, labels } = React.useMemo(() => {
+    const labels = new Map<string, string>();
+    const items = options?.map((option, index) => {
+      // Match native selection and the previous first-match label lookup if
+      // callers supply more than one option with the same value.
+      if (!labels.has(option.value)) labels.set(option.value, option.label);
+      return option.hidden ? null : (
+        <SelectItem
+          key={`${index}:${option.value}`}
+          value={option.value}
+          disabled={option.disabled}
+          data-value={option.value}
+        >
+          {option.label}
+        </SelectItem>
+      );
+    });
+    const groupedItems: React.ReactNode[] = [];
+    options?.forEach((option, index) => {
+      if (option.group === null) {
+        groupedItems.push(items?.[index]);
+        return;
+      }
+      if (index > 0 && options[index - 1].group === option.group) return;
+      let end = index + 1;
+      while (end < options.length && options[end].group === option.group) end++;
+      groupedItems.push(
+        <SelectGroup key={`group:${index}`}>
+          <SelectLabel>{option.group}</SelectLabel>
+          {items?.slice(index, end)}
+        </SelectGroup>
+      );
+    });
+    return { groupedItems, labels };
+  }, [options]);
+  const selectedLabel = snapshot ? labels.get(snapshot.value) : undefined;
 
   return (
     <>

@@ -153,7 +153,14 @@ function renderConsole(value: EntitlementView = entitlements) {
 }
 
 function chooseBranch() {
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'branch_1' } });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Branch', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    { target: { value: 'branch_1' } }
+  );
 }
 
 const SHIFT = {
@@ -246,11 +253,11 @@ describe('Restaurant roster console', () => {
     renderConsole();
     chooseBranch();
     fireEvent.click(screen.getByRole('button', { name: 'Schedule shift' }));
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Starts', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Starts'), {
       target: { value: '2026-08-20T09:00' },
     });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Ends', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '2026-08-20T17:00' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Role (optional)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: ' Cashier ' } });
+    fireEvent.change(screen.getByLabelText('Ends'), { target: { value: '2026-08-20T17:00' } });
+    fireEvent.change(screen.getByLabelText('Role (optional)'), { target: { value: ' Cashier ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Schedule shift', hidden: false }));
 
     const call = mocks.createMutate.mock.calls.at(-1)?.[0];
@@ -293,12 +300,16 @@ describe('Restaurant roster console', () => {
     const action = screen.getByRole('button', { name: 'Correct time' });
     expect(action).toBeEnabled();
     fireEvent.click(action);
-    expect(screen.getByRole('option', { hidden: true, name: 'Add missing clock in' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { hidden: true, name: 'Add missing clock out' })).toBeInTheDocument();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Corrected time', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    expect(
+      screen.getByRole('option', { hidden: true, name: 'Add missing clock in' })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('option', { hidden: true, name: 'Add missing clock out' })
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Corrected time'), {
       target: { value: '2026-08-20T09:00' },
     });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Reader offline' } });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Reader offline' } });
     fireEvent.click(screen.getByRole('button', { name: 'Append correction' }));
     expect(mocks.correctTimeMutate).toHaveBeenCalledWith({
       shiftId: 'shift_1',
@@ -333,7 +344,7 @@ describe('Restaurant roster console', () => {
     renderConsole();
     chooseBranch();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel shift' }));
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Reason (optional)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Reason (optional)'), {
       target: { value: 'Called in sick' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel shift', hidden: false }));
@@ -365,9 +376,16 @@ describe('Restaurant roster console', () => {
       shifts: [SHIFT],
     };
     renderConsole();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Replacement employee', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'staff_2' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Replacement employee', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'staff_2' },
+      }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Request swap' }));
     expect(mocks.requestSwapMutate).toHaveBeenCalledWith(
       expect.objectContaining({

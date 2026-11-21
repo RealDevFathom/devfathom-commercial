@@ -126,9 +126,12 @@ describe('a refused change after the procedure changed elsewhere', () => {
     h.outcomes.linkRecord = () => refusal(CHECKED, 'CONFLICT');
     render(<RunnerHarness />);
     fireEvent.change(
-      selectFieldControl(screen.getByLabelText(
-        'temperature log for Confirm the refrigerator temperature was recorded', { selector: ':not([data-select-field-native][aria-hidden="true"])' }
-      )),
+      selectFieldControl(
+        screen.getByLabelText(
+          'temperature log for Confirm the refrigerator temperature was recorded',
+          { selector: ':not([data-select-field-native][aria-hidden="true"])' }
+        )
+      ),
       { target: { value: 'temp-2' } }
     );
     fireEvent.click(screen.getByRole('button', { name: 'Link record' }));
@@ -178,7 +181,7 @@ describe('proof refused because the procedure moved on (a stale rework tab)', ()
     render(<RunnerHarness />);
     fireEvent.click(screen.getByRole('button', { name: 'Add a change to step 1' }));
     fireEvent.change(
-      selectFieldControl(screen.getByLabelText('Photo for Confirm the refrigerator temperature was recorded', { selector: ':not([data-select-field-native][aria-hidden="true"])' })),
+      screen.getByLabelText('Photo for Confirm the refrigerator temperature was recorded'),
       { target: { files: [new File(['fridge'], 'fridge.jpg', { type: 'image/jpeg' })] } }
     );
     expect(FakeRequest.sent).toHaveLength(1);
@@ -211,7 +214,7 @@ describe('a sent-back procedure', () => {
     h.queries.linkableRecords = { data: [] };
     render(<RunnerHarness />);
     const section = screen.getByRole('region', { name: 'What did you change?' });
-    expect(within(section).getByLabelText('Your note', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAccessibleDescription(
+    expect(within(section).getByLabelText('Your note')).toHaveAccessibleDescription(
       REWORK_NOTE_HINT
     );
     expect(REWORK_NOTE_HINT).toBe(

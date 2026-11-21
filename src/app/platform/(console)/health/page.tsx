@@ -1,4 +1,5 @@
-import { SelectField as StudioSelect } from '@/components/ui/select-field';import Link from 'next/link';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import Link from 'next/link';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill, type StatusTone } from '@/components/ui/status-pill';

@@ -1,4 +1,5 @@
-import { SelectField as StudioSelect } from '@/components/ui/select-field';import { ProgressiveLines } from '../_components/progressive-lines';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import { ProgressiveLines } from '../_components/progressive-lines';
 import { APPROVAL_BLOCKED } from '@/lib/pharmacy/purchase-approval';
 import type { Metadata } from 'next';
 import type * as React from 'react';

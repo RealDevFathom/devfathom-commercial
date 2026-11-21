@@ -36,7 +36,11 @@ function change(minor: number | null, bps: number | null) {
   return `${sign}${pkr(minor)}${bps === null ? '' : ` (${sign}${(bps / 100).toFixed(2)}%)`}`;
 }
 
-const MATCH_LABEL = { MATCHED: 'Matched', NO_MATCH: 'Not in catalogue', AMBIGUOUS: 'Needs mapping' };
+const MATCH_LABEL = {
+  MATCHED: 'Matched',
+  NO_MATCH: 'Not in catalogue',
+  AMBIGUOUS: 'Needs mapping',
+};
 
 /** The on-page change flag. Both booleans come from the server's SQL. */
 function changeFlag(line: { tradeChanged: boolean; mrpChanged: boolean }) {
@@ -119,7 +123,11 @@ export function SupplierPriceListsConsole({
         ...(decision === 'APPROVE' && importedByMe ? { pin } : {}),
       });
       setPin('');
-      setNotice(decision === 'APPROVE' ? 'Shelf price approved and saved.' : 'Draft rejected. No price changed.');
+      setNotice(
+        decision === 'APPROVE'
+          ? 'Shelf price approved and saved.'
+          : 'Draft rejected. No price changed.'
+      );
       await Promise.all([
         utils.pharmacySupplierPriceLists.review.invalidate(),
         utils.pharmacySupplierPriceLists.list.invalidate(),
@@ -132,12 +140,17 @@ export function SupplierPriceListsConsole({
   if (options.isPending)
     return (
       <SectionCard title="Loading price lists" titleLevel={2}>
-        <p role="status" className="text-sm text-text-muted">Loading suppliers and imported lists…</p>
+        <p role="status" className="text-sm text-text-muted">
+          Loading suppliers and imported lists…
+        </p>
       </SectionCard>
     );
   if (options.error)
     return (
-      <SectionCard title={denied ? 'Procurement access required' : 'Could not load price lists'} titleLevel={2}>
+      <SectionCard
+        title={denied ? 'Procurement access required' : 'Could not load price lists'}
+        titleLevel={2}
+      >
         <p role="alert" className="text-sm text-text-muted">
           {denied
             ? 'Importing supplier price lists needs the procurement permission.'
@@ -162,12 +175,18 @@ export function SupplierPriceListsConsole({
   return (
     <div className="min-w-0 space-y-6">
       {error && (
-        <div role="alert" className="rounded-sm border border-destructive p-4 text-sm text-destructive">
+        <div
+          role="alert"
+          className="rounded-sm border border-destructive p-4 text-sm text-destructive"
+        >
           {error}
         </div>
       )}
       {notice && (
-        <div role="status" className="rounded-sm border border-border-default p-4 text-sm text-text-body">
+        <div
+          role="status"
+          className="rounded-sm border border-border-default p-4 text-sm text-text-body"
+        >
           {notice}
         </div>
       )}
@@ -175,7 +194,8 @@ export function SupplierPriceListsConsole({
         <p className="mb-4 text-sm text-text-muted">
           Prices are per pack in PKR. Rows are matched by pack barcode, or by the exact catalogue
           name or alias. Importing never changes a price: changed MRPs become drafts that an owner
-          or administrator other than the importer approves one by one. PDF lists: export or copy them to Excel or CSV first.
+          or administrator other than the importer approves one by one. PDF lists: export or copy
+          them to Excel or CSV first.
         </p>
         <div className="mb-5 flex flex-wrap gap-3">
           <a
@@ -232,11 +252,17 @@ export function SupplierPriceListsConsole({
 
       <SectionCard title="Imported price lists" titleLevel={2}>
         {lists.isPending ? (
-          <p role="status" className="text-sm text-text-muted">Loading imported lists…</p>
+          <p role="status" className="text-sm text-text-muted">
+            Loading imported lists…
+          </p>
         ) : lists.error ? (
-          <p role="alert" className="text-sm text-destructive">The imported lists could not be loaded.</p>
+          <p role="alert" className="text-sm text-destructive">
+            The imported lists could not be loaded.
+          </p>
         ) : !lists.data?.length ? (
-          <p className="text-sm text-text-muted">No price lists yet. Import a distributor list above.</p>
+          <p className="text-sm text-text-muted">
+            No price lists yet. Import a distributor list above.
+          </p>
         ) : (
           <div className="overflow-x-auto">
             <Table>
@@ -276,165 +302,183 @@ export function SupplierPriceListsConsole({
 
       {selected && (
         <SectionCard
-          title={review.data ? `${review.data.supplierName} · ${review.data.fileName}` : 'Price changes'}
+          title={
+            review.data ? `${review.data.supplierName} · ${review.data.fileName}` : 'Price changes'
+          }
           titleLevel={2}
         >
           {review.isPending ? (
-            <p role="status" className="text-sm text-text-muted">Comparing with current records…</p>
+            <p role="status" className="text-sm text-text-muted">
+              Comparing with current records…
+            </p>
           ) : review.error ? (
-            <p role="alert" className="text-sm text-destructive">This price list could not be loaded.</p>
+            <p role="alert" className="text-sm text-destructive">
+              This price list could not be loaded.
+            </p>
           ) : (
             <div className="min-w-0 space-y-4">
-            {pinNeeded && (
-              <label className="block max-w-xs space-y-2 text-sm text-text-body">
-                <span>Your approval PIN</span>
-                <Input
-                  type="password"
-                  inputMode="numeric"
-                  autoComplete="off"
-                  className="min-h-11"
-                  value={pin}
-                  disabled={busy}
-                  aria-describedby="price-pin-help"
-                  onChange={(event) => setPin(event.target.value.replace(/\D/g, '').slice(0, 8))}
-                />
-                <span id="price-pin-help" className="block text-xs text-text-muted">
-                  You imported this list and no other owner or administrator is active, so re-enter
-                  your PIN to approve. The approval is recorded as a self-approval.
-                </span>
-              </label>
-            )}
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <p role="status" className="text-sm text-text-body">
-                {flagged === 0
-                  ? 'No row changes a trade price or MRP against your records.'
-                  : `${flagged} of ${allLines.length} rows flagged: the trade price or MRP differs from your records.`}
-              </p>
-              <Button
-                variant="secondary"
-                size="touch"
-                aria-pressed={flaggedOnly}
-                disabled={flagged === 0 && !flaggedOnly}
-                onClick={() => setFlaggedOnly((value) => !value)}
-              >
-                {flaggedOnly ? 'Show all rows' : 'Show flagged rows only'}
-              </Button>
-            </div>
-            <div className="overflow-x-auto">
-              <Table>
-                <caption className="sr-only">
-                  Trade price and MRP changes against current records, with shelf-price drafts
-                </caption>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Row</TableHead>
-                    <TableHead>Product</TableHead>
-                    <TableHead>Match</TableHead>
-                    <TableHead>Change flag</TableHead>
-                    <TableHead className="text-right">List TP</TableHead>
-                    <TableHead className="text-right">TP change</TableHead>
-                    <TableHead className="text-right">List MRP</TableHead>
-                    <TableHead className="text-right">MRP change</TableHead>
-                    <TableHead className="text-right">Draft shelf price</TableHead>
-                    <TableHead className="text-right">Decision</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {lines.map((line) => (
-                    <TableRow key={line.id}>
-                      <TableCell className="tabular-nums">{line.rowNumber}</TableCell>
-                      <TableCell>
-                        <span className="block">{line.productText}</span>
-                        {line.medicineName && (
-                          <span className="block text-xs text-text-muted">
-                            {line.medicineName}
-                            {line.packLevel ? ` · ${line.packLevel}` : ''}
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <StatusPill
-                          status={line.matchStatus}
-                          tone={line.matchStatus === 'MATCHED' ? 'success' : 'warning'}
-                          label={MATCH_LABEL[line.matchStatus]}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        {changeFlag(line) ? (
-                          <StatusPill status="changed" tone="warning" label={changeFlag(line)} />
-                        ) : (
-                          <span className="text-xs text-text-muted">No change</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">{pkr(line.listTradePriceMinor)}</TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {line.previousTradePriceMinor === null
-                          ? 'No earlier invoice'
-                          : change(line.tradeChangeMinor, line.tradeChangeBps)}
-                        {line.tradeAboveMrp && (
-                          <span className="block text-xs text-destructive">TP above list MRP</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">{pkr(line.listMrpMinor)}</TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {line.matchStatus !== 'MATCHED'
-                          ? '—'
-                          : line.currentMrpMinor === null
-                            ? 'No current price'
-                            : change(line.mrpChangeMinor, line.mrpChangeBps)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {line.draftStatus === 'NONE' ? (
-                          '—'
-                        ) : (
-                          <>
-                            <span className="block">MRP {pkr(line.draftMrpMinor)}</span>
-                            <span className="block text-xs text-text-muted">
-                              Sell {line.draftSellingPriceMinor === null ? 'at MRP' : pkr(line.draftSellingPriceMinor)}
-                            </span>
-                          </>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {line.draftStatus === 'DRAFT' ? (
-                          line.stale ? (
-                            <StatusPill status="blocked" label="Price changed · re-import" />
-                          ) : !canApprove ? (
-                            <StatusPill status="pending" label="Awaiting owner approval" />
-                          ) : !mayApprove ? (
-                            <StatusPill status="pending" label="Another owner or admin approves" />
-                          ) : (
-                            <div className="flex justify-end gap-2">
-                              <Button
-                                size="touch"
-                                disabled={busy || (pinNeeded && !/^\d{4,8}$/.test(pin))}
-                                aria-label={`Approve shelf price for row ${line.rowNumber}`}
-                                onClick={() => void decideLine(line.id, 'APPROVE')}
-                              >
-                                Approve
-                              </Button>
-                              <Button
-                                size="touch"
-                                variant="secondary"
-                                disabled={busy}
-                                aria-label={`Reject shelf price for row ${line.rowNumber}`}
-                                onClick={() => void decideLine(line.id, 'REJECT')}
-                              >
-                                Reject
-                              </Button>
-                            </div>
-                          )
-                        ) : line.draftStatus === 'NONE' ? (
-                          <span className="text-xs text-text-muted">Nothing to change</span>
-                        ) : (
-                          <StatusPill status={line.draftStatus} />
-                        )}
-                      </TableCell>
+              {pinNeeded && (
+                <label className="block max-w-xs space-y-2 text-sm text-text-body">
+                  <span>Your approval PIN</span>
+                  <Input
+                    type="password"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    className="min-h-11"
+                    value={pin}
+                    disabled={busy}
+                    aria-describedby="price-pin-help"
+                    onChange={(event) => setPin(event.target.value.replace(/\D/g, '').slice(0, 8))}
+                  />
+                  <span id="price-pin-help" className="block text-xs text-text-muted">
+                    You imported this list and no other owner or administrator is active, so
+                    re-enter your PIN to approve. The approval is recorded as a self-approval.
+                  </span>
+                </label>
+              )}
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p role="status" className="text-sm text-text-body">
+                  {flagged === 0
+                    ? 'No row changes a trade price or MRP against your records.'
+                    : `${flagged} of ${allLines.length} rows flagged: the trade price or MRP differs from your records.`}
+                </p>
+                <Button
+                  variant="secondary"
+                  size="touch"
+                  aria-pressed={flaggedOnly}
+                  disabled={flagged === 0 && !flaggedOnly}
+                  onClick={() => setFlaggedOnly((value) => !value)}
+                >
+                  {flaggedOnly ? 'Show all rows' : 'Show flagged rows only'}
+                </Button>
+              </div>
+              <div className="overflow-x-auto">
+                <Table>
+                  <caption className="sr-only">
+                    Trade price and MRP changes against current records, with shelf-price drafts
+                  </caption>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Row</TableHead>
+                      <TableHead>Product</TableHead>
+                      <TableHead>Match</TableHead>
+                      <TableHead>Change flag</TableHead>
+                      <TableHead className="text-right">List TP</TableHead>
+                      <TableHead className="text-right">TP change</TableHead>
+                      <TableHead className="text-right">List MRP</TableHead>
+                      <TableHead className="text-right">MRP change</TableHead>
+                      <TableHead className="text-right">Draft shelf price</TableHead>
+                      <TableHead className="text-right">Decision</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+                  </TableHeader>
+                  <TableBody>
+                    {lines.map((line) => (
+                      <TableRow key={line.id}>
+                        <TableCell className="tabular-nums">{line.rowNumber}</TableCell>
+                        <TableCell>
+                          <span className="block">{line.productText}</span>
+                          {line.medicineName && (
+                            <span className="block text-xs text-text-muted">
+                              {line.medicineName}
+                              {line.packLevel ? ` · ${line.packLevel}` : ''}
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <StatusPill
+                            status={line.matchStatus}
+                            tone={line.matchStatus === 'MATCHED' ? 'success' : 'warning'}
+                            label={MATCH_LABEL[line.matchStatus]}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          {changeFlag(line) ? (
+                            <StatusPill status="changed" tone="warning" label={changeFlag(line)} />
+                          ) : (
+                            <span className="text-xs text-text-muted">No change</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {pkr(line.listTradePriceMinor)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {line.previousTradePriceMinor === null
+                            ? 'No earlier invoice'
+                            : change(line.tradeChangeMinor, line.tradeChangeBps)}
+                          {line.tradeAboveMrp && (
+                            <span className="block text-xs text-destructive">
+                              TP above list MRP
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {pkr(line.listMrpMinor)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {line.matchStatus !== 'MATCHED'
+                            ? '—'
+                            : line.currentMrpMinor === null
+                              ? 'No current price'
+                              : change(line.mrpChangeMinor, line.mrpChangeBps)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {line.draftStatus === 'NONE' ? (
+                            '—'
+                          ) : (
+                            <>
+                              <span className="block">MRP {pkr(line.draftMrpMinor)}</span>
+                              <span className="block text-xs text-text-muted">
+                                Sell{' '}
+                                {line.draftSellingPriceMinor === null
+                                  ? 'at MRP'
+                                  : pkr(line.draftSellingPriceMinor)}
+                              </span>
+                            </>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {line.draftStatus === 'DRAFT' ? (
+                            line.stale ? (
+                              <StatusPill status="blocked" label="Price changed · re-import" />
+                            ) : !canApprove ? (
+                              <StatusPill status="pending" label="Awaiting owner approval" />
+                            ) : !mayApprove ? (
+                              <StatusPill
+                                status="pending"
+                                label="Another owner or admin approves"
+                              />
+                            ) : (
+                              <div className="flex justify-end gap-2">
+                                <Button
+                                  size="touch"
+                                  disabled={busy || (pinNeeded && !/^\d{4,8}$/.test(pin))}
+                                  aria-label={`Approve shelf price for row ${line.rowNumber}`}
+                                  onClick={() => void decideLine(line.id, 'APPROVE')}
+                                >
+                                  Approve
+                                </Button>
+                                <Button
+                                  size="touch"
+                                  variant="secondary"
+                                  disabled={busy}
+                                  aria-label={`Reject shelf price for row ${line.rowNumber}`}
+                                  onClick={() => void decideLine(line.id, 'REJECT')}
+                                >
+                                  Reject
+                                </Button>
+                              </div>
+                            )
+                          ) : line.draftStatus === 'NONE' ? (
+                            <span className="text-xs text-text-muted">Nothing to change</span>
+                          ) : (
+                            <StatusPill status={line.draftStatus} />
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             </div>
           )}
         </SectionCard>

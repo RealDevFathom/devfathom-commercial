@@ -494,8 +494,8 @@ describe('OrganizationDetailPage vertical correction gating', () => {
       (option) => option.textContent
     );
     expect(options).toEqual(['Agency Growth']);
-    expect(selectFieldControl(form?.querySelector('input[name="vertical"]'))).toHaveValue('AGENCY');
-    expect(selectFieldControl(form?.querySelector('input[name="id"]'))).toHaveValue('org_1');
+    expect(form?.querySelector('input[name="vertical"]')).toHaveValue('AGENCY');
+    expect(form?.querySelector('input[name="id"]')).toHaveValue('org_1');
   });
 
   it('withdraws the correction once the organization has left onboarding', async () => {
@@ -686,8 +686,12 @@ describe('vertical readiness parity', () => {
     });
     const department = container.querySelector('select[name="department"]') as HTMLSelectElement;
     expect(department.value).toBe('KITCHEN');
-    expect(selectFieldControl(within(selectFieldControl(department)).getByRole('option', { hidden: true, name: 'Kitchen team' }))).toHaveValue('KITCHEN');
-    expect(within(selectFieldControl(department)).queryByRole('option', { hidden: true, name: 'ENGINEERING' })).toBeNull();
+    expect(
+      within(department).getByRole('option', { hidden: true, name: 'Kitchen team' })
+    ).toHaveValue('KITCHEN');
+    expect(
+      within(department).queryByRole('option', { hidden: true, name: 'ENGINEERING' })
+    ).toBeNull();
   });
 
   it('shows agency requirements without querying pharmacy evidence', async () => {
@@ -758,7 +762,7 @@ describe('OrganizationDetailPage pharmacy approval', () => {
     try {
       await renderDetail({ org: organization({ vertical: 'PHARMACY' }) });
       const section = screen.getByRole('region', { name: 'Approve pharmacy' });
-      expect(within(section).getByLabelText('Approval note (optional)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeRequired();
+      expect(within(section).getByLabelText('Approval note (optional)')).not.toBeRequired();
       expect(within(section).getByText('These 4 checks are not met:')).toBeInTheDocument();
       expect(
         within(section).getByText('Premises and licences (PREMISES_AND_LICENCES)')
@@ -839,7 +843,10 @@ describe('OrganizationDetailPage pharmacy approval', () => {
           platformApprovedById: 'op_1',
           platformApprovalNote: 'Owner instruction',
           platformApprovalUnmetChecks: [
-            { key: 'PREMISES_AND_LICENCES', label: 'Premises and licences (PREMISES_AND_LICENCES)' },
+            {
+              key: 'PREMISES_AND_LICENCES',
+              label: 'Premises and licences (PREMISES_AND_LICENCES)',
+            },
           ],
         }),
       });
@@ -859,7 +866,7 @@ describe('OrganizationDetailPage pharmacy approval', () => {
 
       const withdraw = within(section).getByRole('button', { name: 'Withdraw approval' });
       expect(withdraw).toBeDisabled();
-      fireEvent.change(selectFieldControl(within(section).getByLabelText('Reason for withdrawing', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+      fireEvent.change(within(section).getByLabelText('Reason for withdrawing'), {
         target: { value: 'Licence was never issued' },
       });
       fireEvent.click(withdraw);
@@ -906,8 +913,8 @@ describe('pharmacy domain validation', () => {
       try {
         await renderDetail({ org: organization({ vertical: 'PHARMACY' }) });
         const form = screen.getByRole('button', { name: 'Add domain' }).closest('form')!;
-        const host = within(form).getByLabelText('Hostname', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-        fireEvent.change(selectFieldControl(host), { target: { value } });
+        const host = within(form).getByLabelText('Hostname');
+        fireEvent.change(host, { target: { value } });
 
         expect(host).toBeValid();
         fireEvent.submit(form);
@@ -924,29 +931,32 @@ describe('pharmacy domain validation', () => {
     }
   );
 
-  it.each(['Hub_Customer.com', '-Hub.Customer.com', 'Hub..com', 'Hub.123', `${'a'.repeat(64)}.com`])(
-    'rejects malformed pharmacy hostname %s before submitting',
-    async (value) => {
-      const fetchMock = vi.fn();
-      vi.stubGlobal('fetch', fetchMock);
-      mocks.pharmacyReadiness.mockResolvedValue({ ready: false, gates: [] });
-      try {
-        await renderDetail({ org: organization({ vertical: 'PHARMACY' }) });
-        const form = screen.getByRole('button', { name: 'Add domain' }).closest('form')!;
-        const host = within(form).getByLabelText('Hostname', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-        fireEvent.change(selectFieldControl(host), { target: { value } });
+  it.each([
+    'Hub_Customer.com',
+    '-Hub.Customer.com',
+    'Hub..com',
+    'Hub.123',
+    `${'a'.repeat(64)}.com`,
+  ])('rejects malformed pharmacy hostname %s before submitting', async (value) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    mocks.pharmacyReadiness.mockResolvedValue({ ready: false, gates: [] });
+    try {
+      await renderDetail({ org: organization({ vertical: 'PHARMACY' }) });
+      const form = screen.getByRole('button', { name: 'Add domain' }).closest('form')!;
+      const host = within(form).getByLabelText('Hostname');
+      fireEvent.change(host, { target: { value } });
 
-        expect(host).toBeInvalid();
-        fireEvent.submit(form);
+      expect(host).toBeInvalid();
+      fireEvent.submit(form);
 
-        expect(fetchMock).not.toHaveBeenCalled();
-        expect(host).toHaveFocus();
-        expect(host).toHaveAccessibleDescription('Hostname has an invalid format.');
-      } finally {
-        vi.unstubAllGlobals();
-      }
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(host).toHaveFocus();
+      expect(host).toHaveAccessibleDescription('Hostname has an invalid format.');
+    } finally {
+      vi.unstubAllGlobals();
     }
-  );
+  });
 });
 
 describe('permission override validation', () => {
@@ -973,14 +983,14 @@ describe('permission override validation', () => {
         }),
       });
       const form = screen.getByRole('button', { name: 'Set override' }).closest('form')!;
-      const reason = within(form).getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+      const reason = within(form).getByLabelText('Reason');
       const lifecycleForm = screen
         .getByRole('button', { name: 'Apply lifecycle change' })
         .closest('form')!;
-      const lifecycleReason = within(lifecycleForm).getByLabelText('Operator reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+      const lifecycleReason = within(lifecycleForm).getByLabelText('Operator reason');
       expect(reason).toHaveAttribute('minlength', '5');
       expect(reason).toHaveAttribute('maxlength', '500');
-      fireEvent.change(selectFieldControl(within(form).getByLabelText('Capability', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+      fireEvent.change(within(form).getByLabelText('Capability'), {
         target: { value: 'pharmacy.inventory:read' },
       });
 
@@ -989,7 +999,7 @@ describe('permission override validation', () => {
         ['     ', 'Reason must be at least 5 characters.'],
         ['x'.repeat(501), 'Reason must be at most 500 characters.'],
       ]) {
-        fireEvent.change(selectFieldControl(reason), { target: { value } });
+        fireEvent.change(reason, { target: { value } });
         fireEvent.submit(form);
         expect(fetchMock).not.toHaveBeenCalled();
         expect(reason).toHaveFocus();
@@ -999,7 +1009,7 @@ describe('permission override validation', () => {
       }
 
       for (const value of ['x'.repeat(5), 'x'.repeat(500)]) {
-        fireEvent.change(selectFieldControl(reason), { target: { value } });
+        fireEvent.change(reason, { target: { value } });
         fireEvent.submit(form);
         await waitFor(() => expect(within(form).getByRole('button')).not.toBeDisabled());
       }
@@ -1023,11 +1033,11 @@ describe('destructive lifecycle reason', () => {
       await renderDetail({ org: organization({ status: 'TERMINATED' }) });
       const form = screen.getByRole('button', { name: 'Schedule purge' }).closest('form')!;
       const reason = within(form).getByRole('textbox', { name: 'Operator reason' });
-      expect(selectFieldControl(reason)).toHaveValue('');
+      expect(reason).toHaveValue('');
       fireEvent.submit(form);
       expect(fetchMock).not.toHaveBeenCalled();
       expect(confirm).not.toHaveBeenCalled();
-      fireEvent.change(selectFieldControl(reason), {
+      fireEvent.change(reason, {
         target: { value: 'Retention reviewed and approved by the owner' },
       });
       fireEvent.submit(form);
@@ -1056,7 +1066,9 @@ describe('destructive lifecycle reason', () => {
 
 describe('OrganizationDetailPage deployment mode edit', () => {
   function deploymentModeOptions() {
-    const select = screen.getByLabelText('Deployment mode', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLSelectElement;
+    const select = screen.getByLabelText('Deployment mode', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    }) as HTMLSelectElement;
     return Array.from(selectFieldControl(select).options).map((option) => option.value);
   }
 

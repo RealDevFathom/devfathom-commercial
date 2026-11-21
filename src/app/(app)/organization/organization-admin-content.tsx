@@ -742,7 +742,11 @@ export function OrganizationAdminContent() {
                     {/* The organization's own departments, not a hardcoded agency
                         list: a pharmacy files staff under Counter, Dispensary, and
                         the rest its vertical defines. */}
-                    <StudioSelect className={inputClass} name="department" defaultValue={user.department}>
+                    <StudioSelect
+                      className={inputClass}
+                      name="department"
+                      defaultValue={user.department}
+                    >
                       {organization.departments.map((department) => (
                         <option key={department.key} value={department.key}>
                           {department.name}

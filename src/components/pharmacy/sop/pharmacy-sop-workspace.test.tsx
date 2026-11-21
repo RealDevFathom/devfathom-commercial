@@ -1,4 +1,3 @@
-import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -294,7 +293,7 @@ describe('pharmacy procedures workspace', () => {
       'Write a note.'
     );
 
-    fireEvent.change(selectFieldControl(screen.getByLabelText(/Note · required/, { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText(/Note · required/), {
       target: { value: 'Fridge at 5 °C' },
     });
     expect(done).toBeEnabled();
@@ -364,7 +363,7 @@ describe('pharmacy procedures workspace', () => {
     render(<PharmacySopWorkspace />);
     fireEvent.click(screen.getByRole('button', { name: 'Open Pharmacy — opening' }));
     expect(window.location.search).toContain('occurrence=occ-mine');
-    fireEvent.change(selectFieldControl(screen.getByLabelText(/Note · required/, { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Half done' } });
+    fireEvent.change(screen.getByLabelText(/Note · required/), { target: { value: 'Half done' } });
 
     fireEvent.click(screen.getByRole('button', { name: "Back to today's work" }));
     // In-app Back steps back through history (no new entry), so the URL
@@ -374,7 +373,7 @@ describe('pharmacy procedures workspace', () => {
     expect(screen.getByRole('button', { name: 'Open Pharmacy — opening' })).toHaveFocus();
 
     fireEvent.click(screen.getByRole('button', { name: 'Open Pharmacy — opening' }));
-    expect(selectFieldControl(screen.getByLabelText(/Note · required/, { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Half done');
+    expect(screen.getByLabelText(/Note · required/)).toHaveValue('Half done');
 
     // The browser Back button: the URL changes, then popstate fires.
     await act(async () => {
@@ -383,7 +382,7 @@ describe('pharmacy procedures workspace', () => {
     });
     expect(screen.getByRole('list', { name: 'My work' })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Open Pharmacy — opening' }));
-    expect(selectFieldControl(screen.getByLabelText(/Note · required/, { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Half done');
+    expect(screen.getByLabelText(/Note · required/)).toHaveValue('Half done');
   });
 
   it('hides review from people who do not review at this branch', () => {
@@ -448,12 +447,12 @@ describe('pharmacy procedures workspace', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Send back' }));
     expect(h.calls.reject).toBeUndefined();
-    const reason = screen.getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const reason = screen.getByLabelText('Reason');
     expect(reason).toHaveAttribute('aria-invalid', 'true');
     expect(reason).toHaveFocus();
     expect(screen.getByText('Write what needs fixing before sending it back.')).toBeVisible();
 
-    fireEvent.change(selectFieldControl(reason), { target: { value: 'Photo of the fridge display is missing' } });
+    fireEvent.change(reason, { target: { value: 'Photo of the fridge display is missing' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send back' }));
     expect(h.calls.reject).toEqual([
       {
@@ -587,14 +586,14 @@ describe('pharmacy procedures workspace', () => {
     // Setup says once that procedures never gate pharmacy work.
     expect(screen.getByText(SETUP_INTRO)).toBeVisible();
     expect(SETUP_INTRO).toContain('They never block opening, closing or any other pharmacy work.');
-    const qp = screen.getByLabelText('Qualified person (pharmacist) for Mona', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const qp = screen.getByLabelText('Qualified person (pharmacist) for Mona');
     expect(qp).toBeDisabled();
     expect(qp).toHaveAccessibleDescription(/cannot give yourself the manager or qualified-person/);
     // Holding it already: removing your own reviewing role stays possible.
-    expect(screen.getByLabelText('Pharmacy manager for Mona', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeEnabled();
-    expect(screen.getByLabelText('Pharmacy assistant for Mona', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeEnabled();
-    expect(screen.getByLabelText('Pharmacy manager for Paul', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeEnabled();
-    expect(screen.getByLabelText('Qualified person (pharmacist) for Paul', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeEnabled();
+    expect(screen.getByLabelText('Pharmacy manager for Mona')).toBeEnabled();
+    expect(screen.getByLabelText('Pharmacy assistant for Mona')).toBeEnabled();
+    expect(screen.getByLabelText('Pharmacy manager for Paul')).toBeEnabled();
+    expect(screen.getByLabelText('Qualified person (pharmacist) for Paul')).toBeEnabled();
   });
 
   describe('schedule form', () => {
@@ -641,7 +640,7 @@ describe('pharmacy procedures workspace', () => {
         name: 'Schedule for Pharmacy — training attestation',
       });
       // No time is prefilled; the manager always chooses one.
-      fireEvent.change(selectFieldControl(within(form).getByLabelText('Due at', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '15:00' } });
+      fireEvent.change(within(form).getByLabelText('Due at'), { target: { value: '15:00' } });
       return form;
     }
 
@@ -655,10 +654,10 @@ describe('pharmacy procedures workspace', () => {
 
     it('checks window and grace bounds before sending, field by field', () => {
       const form = openForm();
-      const window = within(form).getByLabelText('Time allowed (minutes)', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-      const grace = within(form).getByLabelText('Extra time before it is missed (minutes)', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-      fireEvent.change(selectFieldControl(window), { target: { value: '10080' } });
-      fireEvent.change(selectFieldControl(grace), { target: { value: '-5' } });
+      const window = within(form).getByLabelText('Time allowed (minutes)');
+      const grace = within(form).getByLabelText('Extra time before it is missed (minutes)');
+      fireEvent.change(window, { target: { value: '10080' } });
+      fireEvent.change(grace, { target: { value: '-5' } });
       fireEvent.click(within(form).getByRole('button', { name: 'Create schedule' }));
       expect(h.calls.createAssignment).toBeUndefined();
       expect(window).toHaveAttribute('aria-invalid', 'true');
@@ -678,7 +677,7 @@ describe('pharmacy procedures workspace', () => {
         });
       const form = openForm();
       fireEvent.click(within(form).getByRole('button', { name: 'Create schedule' }));
-      const window = within(form).getByLabelText('Time allowed (minutes)', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+      const window = within(form).getByLabelText('Time allowed (minutes)');
       expect(window).toHaveAttribute('aria-invalid', 'true');
       expect(window).toHaveAccessibleDescription(/Enter whole minutes from 0 to 1440/);
       expect(form).not.toHaveTextContent('Number must be less than');

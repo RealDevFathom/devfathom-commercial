@@ -144,11 +144,17 @@ export const additionalFetchResponses: Record<string, unknown> = {
 
 export const additionalScreens: Record<string, ReactNode> = {
   'pharmacy-dashboard': (
-    <EntitlementsProvider value={{
-      organizationId: 'fixture-pharmacy-org', vertical: 'PHARMACY',
-      modules: [], enabledModules: ['pharmacy-reports', 'pharmacy-crm'],
-      limits: {}, seatLimit: 100, activeSeats: 2,
-    }}>
+    <EntitlementsProvider
+      value={{
+        organizationId: 'fixture-pharmacy-org',
+        vertical: 'PHARMACY',
+        modules: [],
+        enabledModules: ['pharmacy-reports', 'pharmacy-crm'],
+        limits: {},
+        seatLimit: 100,
+        activeSeats: 2,
+      }}
+    >
       <PharmacyDashboardContent role="ADMIN" reportAccess />
     </EntitlementsProvider>
   ),

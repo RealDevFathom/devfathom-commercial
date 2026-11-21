@@ -49,8 +49,20 @@ describe('PlatformCommandForm refreshed fields', () => {
       />
     );
 
-    expect(selectFieldControl(screen.getByLabelText('Organization type', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('AGENCY');
-    expect(selectFieldControl(screen.getByLabelText('Commercial package', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('agency-old');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Organization type', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('AGENCY');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Commercial package', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('agency-old');
 
     rerender(
       <PlatformCommandForm
@@ -62,14 +74,38 @@ describe('PlatformCommandForm refreshed fields', () => {
     );
 
     await waitFor(() => {
-      expect(selectFieldControl(screen.getByLabelText('Organization type', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('RESTAURANT');
-      expect(selectFieldControl(screen.getByLabelText('Commercial package', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('restaurant-new');
+      expect(
+        selectFieldControl(
+          screen.getByLabelText('Organization type', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        )
+      ).toHaveValue('RESTAURANT');
+      expect(
+        selectFieldControl(
+          screen.getByLabelText('Commercial package', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        )
+      ).toHaveValue('restaurant-new');
     });
-    expect(within(selectFieldControl(screen.getByLabelText('Commercial package', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).getAllByRole('option', { hidden: true })).toHaveLength(
-      1
-    );
     expect(
-      within(selectFieldControl(screen.getByLabelText('Commercial package', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).getByRole('option', { hidden: true })
+      within(
+        selectFieldControl(
+          screen.getByLabelText('Commercial package', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        )
+      ).getAllByRole('option', { hidden: true })
+    ).toHaveLength(1);
+    expect(
+      within(
+        selectFieldControl(
+          screen.getByLabelText('Commercial package', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        )
+      ).getByRole('option', { hidden: true })
     ).toHaveTextContent('Restaurant New');
   });
 });

@@ -1,4 +1,3 @@
-import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -47,7 +46,7 @@ describe('Overdue escalation in Setup', () => {
     const group = renderSetup();
     expect(within(group).getByText('Escalation off')).toBeVisible();
     expect(group).toHaveAccessibleDescription(OVERDUE_ESCALATION_COPY);
-    expect(selectFieldControl(within(group).getByLabelText('Minutes after the window closes', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('30');
+    expect(within(group).getByLabelText('Minutes after the window closes')).toHaveValue('30');
     expect(within(group).getByRole('button', { name: 'Turn on escalation' })).toBeEnabled();
     expect(
       within(group).queryByRole('button', { name: 'Turn off escalation' })
@@ -61,7 +60,7 @@ describe('Overdue escalation in Setup', () => {
     };
     h.outcomes.setOverdueEscalation = () => ({ enabled: true, delayMinutes: 45 });
     const group = renderSetup();
-    fireEvent.change(selectFieldControl(within(group).getByLabelText('Minutes after the window closes', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(group).getByLabelText('Minutes after the window closes'), {
       target: { value: '45' },
     });
     fireEvent.click(within(group).getByRole('button', { name: 'Turn on escalation' }));
@@ -77,9 +76,9 @@ describe('Overdue escalation in Setup', () => {
       data: { pharmacyBranchId: BRANCH, enabled: false, delayMinutes: 30, changedAt: null },
     };
     const group = renderSetup();
-    const input = within(group).getByLabelText('Minutes after the window closes', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const input = within(group).getByLabelText('Minutes after the window closes');
     for (const value of ['', '-5', '2.5', '1441']) {
-      fireEvent.change(selectFieldControl(input), { target: { value } });
+      fireEvent.change(input, { target: { value } });
       fireEvent.click(within(group).getByRole('button', { name: 'Turn on escalation' }));
       expect(input).toHaveAttribute('aria-invalid', 'true');
     }

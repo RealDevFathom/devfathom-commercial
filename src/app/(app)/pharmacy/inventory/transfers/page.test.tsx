@@ -80,8 +80,12 @@ it('DEV-660: opens an assigned branch instead of an unassigned one named in the 
     expect.objectContaining({ where: expect.objectContaining({ branchId: main.id }) })
   );
   const branchSelect = screen.getByRole('combobox', { name: 'Branch' });
-  expect(within(selectFieldControl(branchSelect)).queryByRole('option', { hidden: true, name: /Other/ })).toBeNull();
-  expect(within(selectFieldControl(branchSelect)).getByRole('option', { hidden: true, name: /Main/ })).toBeInTheDocument();
+  expect(
+    within(selectFieldControl(branchSelect)).queryByRole('option', { hidden: true, name: /Other/ })
+  ).toBeNull();
+  expect(
+    within(selectFieldControl(branchSelect)).getByRole('option', { hidden: true, name: /Main/ })
+  ).toBeInTheDocument();
 });
 
 it('DEV-660: reads no stock directly when the gated transfer board refuses', async () => {

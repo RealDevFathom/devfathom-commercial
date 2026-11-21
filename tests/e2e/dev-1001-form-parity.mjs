@@ -10,6 +10,7 @@ import postcss from 'postcss';
 import tailwind from '@tailwindcss/postcss';
 
 const root = process.cwd();
+const output = process.env.DEV1001_OUTPUT_DIR ?? '/tmp/dev-1001-browser-evidence';
 const requestedMode = process.argv[2] ?? 'all';
 assert.ok(['all', 'hydrate', 'csr'].includes(requestedMode));
 const modes = requestedMode === 'all' ? ['hydrate', 'csr'] : [requestedMode];
@@ -376,11 +377,11 @@ try {
     }
   }
 } finally {
-  await mkdir('qa-evidence/dev-1001', { recursive: true });
+  await mkdir(output, { recursive: true });
   for (const mode of modes) {
     const motionRuns = results.filter((result) => result.mode === mode);
     await writeFile(
-      `qa-evidence/dev-1001/form-parity-${mode}.json`,
+      `${output}/form-parity-${mode}.json`,
       JSON.stringify(
         {
           scope:
@@ -396,12 +397,10 @@ try {
       )
     );
   }
-  const hydrate = JSON.parse(
-    await readFile('qa-evidence/dev-1001/form-parity-hydrate.json', 'utf8')
-  );
-  const csr = JSON.parse(await readFile('qa-evidence/dev-1001/form-parity-csr.json', 'utf8'));
+  const hydrate = JSON.parse(await readFile(`${output}/form-parity-hydrate.json`, 'utf8'));
+  const csr = JSON.parse(await readFile(`${output}/form-parity-csr.json`, 'utf8'));
   await writeFile(
-    'qa-evidence/dev-1001/form-parity.json',
+    `${output}/form-parity.json`,
     JSON.stringify(
       {
         passed: hydrate.passed && csr.passed,
@@ -410,7 +409,7 @@ try {
           browser:
             'Trusted Chromium Enter events through page.keyboard.press; no option-click fallback',
           jsdom:
-            'Per-control tests explicitly call fireEvent.click(detail: 0) after Enter because jsdom does not synthesize the browser activation; those tests alone do not prove native Enter activation',
+            'Representative jsdom tests explicitly call fireEvent.click(detail: 0) after Enter because jsdom does not synthesize the browser activation; those tests alone do not prove native Enter activation',
         },
         hydrate,
         csr,

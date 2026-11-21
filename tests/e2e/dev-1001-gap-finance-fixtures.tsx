@@ -10,8 +10,18 @@ const branches = [
   { id: 'fixture-pharmacy-riverside', code: 'RIV', name: 'Riverside pharmacy' },
 ];
 const members = [
-  { id: 'fixture-pharmacist', name: 'Example pharmacist', email: 'pharmacist@example.test', roleName: 'Pharmacist' },
-  { id: 'fixture-assistant', name: 'Example assistant', email: 'assistant@example.test', roleName: 'Assistant' },
+  {
+    id: 'fixture-pharmacist',
+    name: 'Example pharmacist',
+    email: 'pharmacist@example.test',
+    roleName: 'Pharmacist',
+  },
+  {
+    id: 'fixture-assistant',
+    name: 'Example assistant',
+    email: 'assistant@example.test',
+    roleName: 'Assistant',
+  },
 ];
 
 /** Imports made by the real Khata server page are redirected to these local fixtures. */
@@ -23,19 +33,30 @@ export const khataFixtureRouter = {
       truncated: false,
       accounts: [
         {
-          id: 'fixture-household', displayName: 'Example household', payerName: 'Example payer',
-          phoneLast4: '0123', balanceMinor: 125000, creditLimitMinor: 250000,
+          id: 'fixture-household',
+          displayName: 'Example household',
+          payerName: 'Example payer',
+          phoneLast4: '0123',
+          balanceMinor: 125000,
+          creditLimitMinor: 250000,
           lastPaymentAt: new Date('2026-11-15T09:00:00Z'),
           oldestOverdueAt: new Date('2026-11-01T09:00:00Z'),
         },
         {
-          id: 'fixture-cleared-household', displayName: 'Clear example household', payerName: 'Second example payer',
-          phoneLast4: null, balanceMinor: 0, creditLimitMinor: 100000,
-          lastPaymentAt: null, oldestOverdueAt: null,
+          id: 'fixture-cleared-household',
+          displayName: 'Clear example household',
+          payerName: 'Second example payer',
+          phoneLast4: null,
+          balanceMinor: 0,
+          creditLimitMinor: 100000,
+          lastPaymentAt: null,
+          oldestOverdueAt: null,
         },
       ],
     }),
-    sendReminder: async () => { throw new Error('Fixture cannot send a reminder.'); },
+    sendReminder: async () => {
+      throw new Error('Fixture cannot send a reminder.');
+    },
   }),
 };
 
@@ -46,29 +67,38 @@ function KhataFixture() {
     void KhataPage({ searchParams: Promise.resolve({}) }).then((result) => {
       if (active) setPage(result);
     });
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, []);
   return page;
 }
 
 function BranchAssignmentsFixture() {
-  return <>
-    <PageHeader eyebrow="Pharmacy administration" heading="Branch assignments" />
-    <SectionCard title="Assign pharmacy members">
-      <BranchAssignmentsPanel
-        branches={branches}
-        members={members}
-        assignments={[{
-          id: 'fixture-assignment', branchId: branches[0]!.id, userId: members[0]!.id,
-          branchName: branches[0]!.name, userName: members[0]!.name,
-        }]}
-        pending={false}
-        notice={null}
-        onAssign={() => {}}
-        onUnassign={() => {}}
-      />
-    </SectionCard>
-  </>;
+  return (
+    <>
+      <PageHeader eyebrow="Pharmacy administration" heading="Branch assignments" />
+      <SectionCard title="Assign pharmacy members">
+        <BranchAssignmentsPanel
+          branches={branches}
+          members={members}
+          assignments={[
+            {
+              id: 'fixture-assignment',
+              branchId: branches[0]!.id,
+              userId: members[0]!.id,
+              branchName: branches[0]!.name,
+              userName: members[0]!.name,
+            },
+          ]}
+          pending={false}
+          notice={null}
+          onAssign={() => {}}
+          onUnassign={() => {}}
+        />
+      </SectionCard>
+    </>
+  );
 }
 
 export const gapFinanceScreens: Record<string, ReactNode> = {

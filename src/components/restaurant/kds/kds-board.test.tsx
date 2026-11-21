@@ -124,10 +124,17 @@ async function connect(enrolled = true) {
   }
   await flush();
   if (!enrolled) return;
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Acting operator', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-    target: { value: 'staff-1' },
-  });
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Operator PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '1234' } });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Acting operator', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    {
+      target: { value: 'staff-1' },
+    }
+  );
+  fireEvent.change(screen.getByLabelText('Operator PIN'), { target: { value: '1234' } });
   fireEvent.click(screen.getByRole('button', { name: 'Verify PIN and unlock' }));
   await flush();
 }
@@ -202,7 +209,7 @@ describe('KdsBoard transport', () => {
 
     expect(await screen.findByText('Demo burger')).toBeVisible();
     expect(screen.getByText('Mild')).toBeVisible();
-    expect(screen.queryByLabelText('Operator PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Operator PIN')).not.toBeInTheDocument();
     const bootstraps = fetch.mock.calls.filter(([input]) =>
       String(input).endsWith('/demo/restaurants/device-session')
     );
@@ -458,7 +465,10 @@ describe('KdsBoard transport', () => {
 
     expect(screen.getByRole('heading', { name: 'Checking enrollment' })).toBeVisible();
     expect(
-      screen.getByRole('option', { hidden: true, name: 'Operators unavailable — verify the device secret' })
+      screen.getByRole('option', {
+        hidden: true,
+        name: 'Operators unavailable — verify the device secret',
+      })
     ).toBeVisible();
     expect(document.body.textContent).not.toContain('rdk_');
   });

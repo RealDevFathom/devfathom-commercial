@@ -1,4 +1,3 @@
-import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -53,7 +52,7 @@ describe('replenishment medicine picker', () => {
     render(<ScenarioConsole {...props} />);
 
     const picker = screen.getByRole('combobox', { name: 'Find medicine' });
-    fireEvent.change(selectFieldControl(picker), { target: { value: 'para' } });
+    fireEvent.change(picker, { target: { value: 'para' } });
     expect(mocks.search).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -65,9 +64,11 @@ describe('replenishment medicine picker', () => {
       { signal: expect.anything() }
     );
     const results = screen.getByRole('listbox', { name: 'Medicine results' });
-    fireEvent.click(within(selectFieldControl(results)).getByRole('option', { hidden: true, name: 'Paracetamol 500 mg' }));
+    fireEvent.click(
+      within(results).getByRole('option', { hidden: true, name: 'Paracetamol 500 mg' })
+    );
 
-    expect(selectFieldControl(picker)).toHaveValue('Paracetamol 500 mg');
+    expect(picker).toHaveValue('Paracetamol 500 mg');
     expect(screen.getByText('Selected Paracetamol 500 mg.')).toBeVisible();
     expect(screen.queryByRole('listbox', { name: 'Medicine results' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Search medicines' })).not.toBeInTheDocument();
@@ -78,11 +79,11 @@ describe('replenishment medicine picker', () => {
     render(<ScenarioConsole {...props} />);
     const picker = screen.getByRole('combobox', { name: 'Find medicine' });
 
-    fireEvent.change(selectFieldControl(picker), { target: { value: 'par' } });
+    fireEvent.change(picker, { target: { value: 'par' } });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
     });
-    fireEvent.change(selectFieldControl(picker), { target: { value: 'parac' } });
+    fireEvent.change(picker, { target: { value: 'parac' } });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(300);
     });
@@ -97,7 +98,7 @@ describe('replenishment medicine picker', () => {
 async function typeAndSearch(text = 'para') {
   const input = screen.getByRole('combobox', { name: 'Find medicine' });
   input.focus();
-  fireEvent.change(selectFieldControl(input), { target: { value: text } });
+  fireEvent.change(input, { target: { value: text } });
   await act(async () => {
     await vi.advanceTimersByTimeAsync(300);
   });
@@ -114,7 +115,7 @@ it('selects with arrow keys and Enter while focus stays in the only medicine inp
   const second = screen.getByRole('option', { hidden: true, name: 'Paracetamol syrup' });
   expect(second).toHaveAttribute('aria-selected', 'true');
   fireEvent.keyDown(input, { key: 'Enter' });
-  expect(selectFieldControl(input)).toHaveValue('Paracetamol syrup');
+  expect(input).toHaveValue('Paracetamol syrup');
   expect(input).toHaveFocus();
   expect(input).toHaveAttribute('aria-expanded', 'false');
   expect(screen.getByRole('button', { name: 'Read replenishment report' })).toBeEnabled();
@@ -149,7 +150,7 @@ it('supports reverse navigation, Home/End and IME without prematurely selecting'
   expect(screen.getByRole('listbox')).toBeVisible();
   expect(screen.getByRole('button', { name: 'Read replenishment report' })).toBeDisabled();
   fireEvent.keyDown(input, { key: 'Enter' });
-  expect(selectFieldControl(input)).toHaveValue('Paracetamol syrup');
+  expect(input).toHaveValue('Paracetamol syrup');
 });
 it('closes on Escape or blur and reopens without committing a hidden option', async () => {
   render(<ScenarioConsole {...props} />);
@@ -158,11 +159,11 @@ it('closes on Escape or blur and reopens without committing a hidden option', as
   fireEvent.keyDown(input, { key: 'Escape' });
   expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
   expect(input).not.toHaveAttribute('aria-activedescendant');
-  expect(selectFieldControl(input)).toHaveValue('para');
+  expect(input).toHaveValue('para');
   expect(screen.getByRole('button', { name: 'Read replenishment report' })).toBeDisabled();
   fireEvent.keyDown(input, { key: 'ArrowDown' });
   expect(screen.getByRole('listbox')).toBeVisible();
-  fireEvent.blur(input, { relatedTarget: screen.getByLabelText('History start', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) });
+  fireEvent.blur(input, { relatedTarget: screen.getByLabelText('History start') });
   expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
   fireEvent.focus(input);
   expect(screen.getByRole('listbox')).toBeVisible();
@@ -180,14 +181,18 @@ it('cancels the prior request and rejects late results when the query changes', 
   render(<ScenarioConsole {...props} />);
   const input = await typeAndSearch('old');
   const signal = mocks.search.mock.calls[0]![1].signal as AbortSignal;
-  fireEvent.change(selectFieldControl(input), { target: { value: 'new' } });
+  fireEvent.change(input, { target: { value: 'new' } });
   expect(signal.aborted).toBe(true);
   await act(async () => {
     await vi.advanceTimersByTimeAsync(300);
   });
   await act(async () => resolveOld([{ id: 'stale', productName: 'Old private result' }]));
-  expect(screen.queryByRole('option', { hidden: true, name: 'Old private result' })).not.toBeInTheDocument();
-  expect(within(selectFieldControl(screen.getByRole('listbox'))).getAllByRole('option', { hidden: true })).toHaveLength(2);
+  expect(
+    screen.queryByRole('option', { hidden: true, name: 'Old private result' })
+  ).not.toBeInTheDocument();
+  expect(within(screen.getByRole('listbox')).getAllByRole('option', { hidden: true })).toHaveLength(
+    2
+  );
 });
 it('keeps a late response closed after Escape and clears selection on edits', async () => {
   let resolve!: (value: Array<{ id: string; productName: string }>) => void;
@@ -204,8 +209,8 @@ it('keeps a late response closed after Escape and clears selection on edits', as
   expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
   fireEvent.keyDown(input, { key: 'ArrowDown' });
   fireEvent.keyDown(input, { key: 'Enter' });
-  expect(selectFieldControl(input)).toHaveValue('Paracetamol 500 mg');
-  fireEvent.change(selectFieldControl(input), { target: { value: '' } });
+  expect(input).toHaveValue('Paracetamol 500 mg');
+  fireEvent.change(input, { target: { value: '' } });
   await act(async () => {
     await vi.advanceTimersByTimeAsync(1000);
   });
@@ -228,7 +233,7 @@ it('aborts on organization/scope remount and never shows results from the previo
   view.rerender(<ScenarioConsole {...props} organizationId="other-org" />);
   expect(signal.aborted).toBe(true);
   await act(async () => resolve([{ id: 'old', productName: 'Previous organization result' }]));
-  expect(selectFieldControl(screen.getByRole('combobox', { name: 'Find medicine' }))).toHaveValue('');
+  expect(screen.getByRole('combobox', { name: 'Find medicine' })).toHaveValue('');
   expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
   expect(screen.queryByText('Previous organization result')).not.toBeInTheDocument();
   expect(mocks.replenishment).not.toHaveBeenCalled();
@@ -263,7 +268,7 @@ it('handles empty results and blocks queries without an authorized branch or abo
   const input = await typeAndSearch();
   expect(screen.getByText('No matching medicines. Try another name or alias.')).toBeVisible();
   expect(input).toHaveAttribute('aria-expanded', 'false');
-  fireEvent.change(selectFieldControl(input), { target: { value: 'a'.repeat(201) } });
+  fireEvent.change(input, { target: { value: 'a'.repeat(201) } });
   await act(async () => {
     await vi.advanceTimersByTimeAsync(300);
   });
@@ -367,7 +372,7 @@ describe('scenario money typed as an amount', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
     fireEvent.click(screen.getByRole('checkbox', { name: 'Include a user-supplied scenario' }));
     const set = (label: string | RegExp, value: string) =>
-      fireEvent.change(selectFieldControl(screen.getByLabelText(label, { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value } });
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
     set('Scenario currency (three-letter code)', currency);
     set('Assumed daily demand (units)', '3');
     set('Current policy order (units)', '10');
@@ -411,7 +416,7 @@ describe('scenario money typed as an amount', () => {
     set('What-if selling price per unit (rupees)', '10');
     await submit();
     expect(mocks.replenishment).not.toHaveBeenCalled();
-    expect(screen.getByLabelText('Current selling price per unit (rupees)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute(
+    expect(screen.getByLabelText('Current selling price per unit (rupees)')).toHaveAttribute(
       'aria-invalid',
       'true'
     );
@@ -432,10 +437,10 @@ describe('scenario money typed as an amount', () => {
 
   it("reads assumed arrival and expiry on the organisation's clock, with no ISO example", async () => {
     const set = await openScenario('PKR', 'Asia/Karachi');
-    const arrival = screen.getByLabelText('Assumed arrival (date and time, optional)', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const arrival = screen.getByLabelText('Assumed arrival (date and time, optional)');
     expect(arrival).toHaveAttribute('type', 'datetime-local');
-    expect(screen.getByLabelText('History start', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('type', 'date');
-    expect(screen.getByLabelText('Scenario starts on (a future day)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeVisible();
+    expect(screen.getByLabelText('History start')).toHaveAttribute('type', 'date');
+    expect(screen.getByLabelText('Scenario starts on (a future day)')).toBeVisible();
     expect(document.body.textContent).toContain("organisation's clock (PKT)");
     expect(document.body.textContent).not.toMatch(/ISO instant|2026-09-16T12:00:00Z/);
     set('Current selling price per unit (rupees)', '10');
@@ -509,14 +514,14 @@ describe('DEV-944 scenario start west of UTC', () => {
     fireEvent.keyDown(input, { key: 'ArrowDown' });
     fireEvent.keyDown(input, { key: 'Enter' });
     fireEvent.click(screen.getByRole('checkbox', { name: 'Include a user-supplied scenario' }));
-    return screen.getByLabelText('Scenario starts on (a future day)', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    return screen.getByLabelText('Scenario starts on (a future day)');
   }
 
   it('defaults past a tomorrow whose UTC midnight has passed, and refuses that day as the server does', async () => {
     // 20:00 on 18 Nov in New York is 01:00 UTC on 19 Nov.
     const start = await openScenario('2026-11-19T01:00:00.000Z', '2026-11-18', 'America/New_York');
-    expect(selectFieldControl(start)).toHaveValue('2026-11-20');
-    fireEvent.change(selectFieldControl(start), { target: { value: '2026-11-19' } });
+    expect(start).toHaveValue('2026-11-20');
+    fireEvent.change(start, { target: { value: '2026-11-19' } });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Read replenishment report' }));
       await Promise.resolve();
@@ -528,6 +533,6 @@ describe('DEV-944 scenario start west of UTC', () => {
   it("keeps the shop's tomorrow as the default east of UTC", async () => {
     // 00:30 on 19 Nov in Karachi.
     const start = await openScenario('2026-11-18T19:30:00.000Z', '2026-11-19', 'Asia/Karachi');
-    expect(selectFieldControl(start)).toHaveValue('2026-11-20');
+    expect(start).toHaveValue('2026-11-20');
   });
 });

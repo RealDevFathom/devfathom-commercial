@@ -40,20 +40,27 @@ describe('DayClosePanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close day' }));
     const dialog = screen.getByRole('dialog', { name: 'Close business day' });
     await waitFor(() =>
-      expect(selectFieldControl(within(dialog).getByLabelText('Business date', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2026-08-19')
+      expect(within(dialog).getByLabelText('Business date')).toHaveValue('2026-08-19')
     );
     fireEvent.click(within(dialog).getByRole('button', { name: 'Check readiness' }));
     await within(dialog).findByText('Closed day');
     expect(within(dialog).getByText('Delivery fee sales')).toBeVisible();
     expect(within(dialog).getByText('Delivery fee refunds')).toBeVisible();
 
-    const manager = within(dialog).getByLabelText('Approving manager', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-    expect(within(selectFieldControl(manager)).queryByRole('option', { hidden: true, name: /Ari Cashier/ })).not.toBeInTheDocument();
+    const manager = within(dialog).getByLabelText('Approving manager', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
+    expect(
+      within(selectFieldControl(manager)).queryByRole('option', {
+        hidden: true,
+        name: /Ari Cashier/,
+      })
+    ).not.toBeInTheDocument();
     fireEvent.change(selectFieldControl(manager), { target: { value: 'manager-1' } });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Correction reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(dialog).getByLabelText('Correction reason'), {
       target: { value: 'Count verified' },
     });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Manager PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(dialog).getByLabelText('Manager PIN'), {
       target: { value: '5678' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Record correction' }));
@@ -91,7 +98,7 @@ describe('DayClosePanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close day' }));
     const dialog = screen.getByRole('dialog', { name: 'Close business day' });
     await waitFor(() =>
-      expect(selectFieldControl(within(dialog).getByLabelText('Business date', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2026-09-28')
+      expect(within(dialog).getByLabelText('Business date')).toHaveValue('2026-09-28')
     );
     fireEvent.click(within(dialog).getByRole('button', { name: 'Check readiness' }));
     await within(dialog).findByText('Closed day');
@@ -133,7 +140,7 @@ describe('DayClosePanel', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Close day' }));
       const dialog = screen.getByRole('dialog', { name: 'Close business day' });
       await waitFor(() =>
-        expect(selectFieldControl(within(dialog).getByLabelText('Business date', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2026-09-28')
+        expect(within(dialog).getByLabelText('Business date')).toHaveValue('2026-09-28')
       );
       fireEvent.click(within(dialog).getByRole('button', { name: 'Check readiness' }));
       await within(dialog).findByText('Close blocked');
@@ -148,7 +155,7 @@ describe('DayClosePanel', () => {
       ).toBeVisible();
       const action = existingCloseId ? 'Record correction' : 'Close business day';
       expect(within(dialog).queryByRole('button', { name: action })).not.toBeInTheDocument();
-      expect(within(dialog).queryByLabelText('Manager PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
+      expect(within(dialog).queryByLabelText('Manager PIN')).not.toBeInTheDocument();
 
       unresolvedOrderCount = 0;
       fireEvent.click(within(dialog).getByRole('button', { name: 'Check readiness' }));
@@ -212,7 +219,7 @@ describe('DayClosePanel manual card line', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close day' }));
     const dialog = screen.getByRole('dialog', { name: 'Close business day' });
     await waitFor(() =>
-      expect(selectFieldControl(within(dialog).getByLabelText('Business date', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2026-08-19')
+      expect(within(dialog).getByLabelText('Business date')).toHaveValue('2026-08-19')
     );
     fireEvent.click(within(dialog).getByRole('button', { name: 'Check readiness' }));
     return dialog;

@@ -1,4 +1,5 @@
-import { SelectField as StudioSelect } from '@/components/ui/select-field';import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { createTRPCContext } from '@/server/trpc';
 
 export type BranchOption = { id: string; name: string };

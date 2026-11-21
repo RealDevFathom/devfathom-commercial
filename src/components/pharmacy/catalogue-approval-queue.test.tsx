@@ -93,7 +93,7 @@ describe('DEV-19 catalogue queue permissions', () => {
     expect(screen.getByRole('heading', { name: 'Fixture lotion' })).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Approve edit' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Reject edit' })).toBeNull();
-    expect(screen.queryByLabelText('Solo owner PIN (for self-approval)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeNull();
+    expect(screen.queryByLabelText('Solo owner PIN (for self-approval)')).toBeNull();
     expect(screen.getByRole('note')).toHaveTextContent('needs the catalogue review permission');
     expect(screen.getByRole('button', { name: 'Submit edit for review' })).toBeVisible();
   });
@@ -132,10 +132,17 @@ describe('DEV-766 catalogue approval queue', () => {
   it('submits a selected item name for review without publishing it', () => {
     render(<CatalogueApprovalQueue />);
     expect(screen.getByRole('button', { name: 'Submit edit for review' })).toBeDisabled();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Catalogue item', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'medicine' },
-    });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Proposed product name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Catalogue item', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'medicine' },
+      }
+    );
+    fireEvent.change(screen.getByLabelText('Proposed product name'), {
       target: { value: 'New name' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Submit edit for review' }));
@@ -148,8 +155,8 @@ describe('DEV-766 catalogue approval queue', () => {
   it('uses the freshly entered PIN for one decision and clears it after success', async () => {
     m.access.data = { canEdit: true, canDecide: true, ownerPinApproval: true, isOwner: true };
     render(<CatalogueApprovalQueue />);
-    const pin = screen.getByLabelText('Solo owner PIN (for self-approval)', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-    fireEvent.change(selectFieldControl(pin), { target: { value: '2468' } });
+    const pin = screen.getByLabelText('Solo owner PIN (for self-approval)');
+    fireEvent.change(pin, { target: { value: '2468' } });
     fireEvent.click(screen.getByRole('button', { name: 'Approve edit' }));
     expect(m.decide.mutate).toHaveBeenCalledWith({
       editId: 'edit',
@@ -159,18 +166,18 @@ describe('DEV-766 catalogue approval queue', () => {
     await act(async () => {
       await m.onSuccess?.();
     });
-    expect(selectFieldControl(pin)).toHaveValue('');
+    expect(pin).toHaveValue('');
     expect(m.invalidate).toHaveBeenCalledOnce();
   });
   it('clears a refused PIN and disables duplicate decisions while pending', () => {
     m.access.data = { canEdit: true, canDecide: true, ownerPinApproval: true, isOwner: true };
     const view = render(<CatalogueApprovalQueue />);
-    const pin = screen.getByLabelText('Solo owner PIN (for self-approval)', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-    fireEvent.change(selectFieldControl(pin), { target: { value: '9999' } });
+    const pin = screen.getByLabelText('Solo owner PIN (for self-approval)');
+    fireEvent.change(pin, { target: { value: '9999' } });
     act(() => {
       m.onError?.();
     });
-    expect(selectFieldControl(pin)).toHaveValue('');
+    expect(pin).toHaveValue('');
     m.decide.isPending = true;
     view.rerender(<CatalogueApprovalQueue />);
     expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled();

@@ -111,19 +111,32 @@ async function enroll() {
   render(<TerminalConsole />);
   const submit = screen.getByRole('button', { name: 'Establish locked session' });
   expect(submit).toHaveAttribute('type', 'submit');
-  fireEvent.change(selectFieldControl(screen.getByLabelText('One-time enrollment secret', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+  fireEvent.change(screen.getByLabelText('One-time enrollment secret'), {
     target: { value: 'rde_test' },
   });
   fireEvent.click(submit);
   await screen.findByRole('heading', { name: 'Unlock terminal' });
-  await waitFor(() => expect(screen.getByLabelText('Operator', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeEnabled());
+  await waitFor(() =>
+    expect(
+      screen.getByLabelText('Operator', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toBeEnabled()
+  );
 }
 
 async function unlock(operator = 'staff-a') {
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Operator', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-    target: { value: operator },
-  });
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Operator PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '1234' } });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Operator', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    {
+      target: { value: operator },
+    }
+  );
+  fireEvent.change(screen.getByLabelText('Operator PIN'), { target: { value: '1234' } });
   fireEvent.click(screen.getByRole('button', { name: 'Verify and unlock' }));
   await screen.findByRole('button', { name: 'Lock terminal' });
 }
@@ -156,27 +169,53 @@ describe('terminal console transitions', () => {
       'type',
       'submit'
     );
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Approving manager', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'manager-a' },
-    });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Manager PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '5678' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Approving manager', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'manager-a' },
+      }
+    );
+    fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '5678' } });
     fireEvent.click(screen.getByRole('button', { name: 'Switch operator' }));
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Incoming operator', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'staff-b' },
-    });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Incoming operator PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Incoming operator', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'staff-b' },
+      }
+    );
+    fireEvent.change(screen.getByLabelText('Incoming operator PIN'), {
       target: { value: '8765' },
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Lock terminal' }));
     await screen.findByRole('heading', { name: 'Unlock terminal' });
-    expect(selectFieldControl(screen.getByLabelText('Operator', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
-    expect(selectFieldControl(screen.getByLabelText('Operator PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Operator', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('');
+    expect(screen.getByLabelText('Operator PIN')).toHaveValue('');
 
     await unlock();
     fireEvent.click(screen.getByRole('button', { name: 'Manager approval' }));
-    expect(selectFieldControl(screen.getByLabelText('Approving manager', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
-    expect(selectFieldControl(screen.getByLabelText('Manager PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Approving manager', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('');
+    expect(screen.getByLabelText('Manager PIN')).toHaveValue('');
   });
 
   it('keeps lock available during heartbeat and ignores its stale completion', async () => {
@@ -228,16 +267,23 @@ describe('terminal console transitions', () => {
     await unlock();
 
     fireEvent.click(screen.getByRole('button', { name: 'Manager approval' }));
-    expect(screen.queryByLabelText('Target ID (optional)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Target type (optional)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Approving manager', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'manager-a' },
-    });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Manager PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '5678' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Capability / action', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    expect(screen.queryByLabelText('Target ID (optional)')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Target type (optional)')).not.toBeInTheDocument();
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Approving manager', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'manager-a' },
+      }
+    );
+    fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '5678' } });
+    fireEvent.change(screen.getByLabelText('Capability / action'), {
       target: { value: 'orders:void' },
     });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Reason'), {
       target: { value: 'Guest rejected item' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Verify and record approval' }));
@@ -257,15 +303,29 @@ describe('terminal console transitions', () => {
     await unlock();
 
     fireEvent.click(screen.getByRole('button', { name: 'Manager approval' }));
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Approving manager', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'manager-a' },
-    });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Manager PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '5678' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Approving manager', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'manager-a' },
+      }
+    );
+    fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '5678' } });
     fireEvent.click(screen.getByRole('button', { name: 'Switch operator' }));
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Incoming operator', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'staff-b' },
-    });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Incoming operator PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Incoming operator', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'staff-b' },
+      }
+    );
+    fireEvent.change(screen.getByLabelText('Incoming operator PIN'), {
       target: { value: '8765' },
     });
     transport.switchOperator = async () => {
@@ -281,11 +341,23 @@ describe('terminal console transitions', () => {
       'Amina Khan — Cashier'
     );
     expect(screen.queryByText('Connection degraded')).not.toBeInTheDocument();
-    expect(selectFieldControl(screen.getByLabelText('Incoming operator', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
-    expect(selectFieldControl(screen.getByLabelText('Incoming operator PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Incoming operator', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('');
+    expect(screen.getByLabelText('Incoming operator PIN')).toHaveValue('');
     fireEvent.click(screen.getByRole('button', { name: 'Manager approval' }));
-    expect(selectFieldControl(screen.getByLabelText('Approving manager', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
-    expect(selectFieldControl(screen.getByLabelText('Manager PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Approving manager', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('');
+    expect(screen.getByLabelText('Manager PIN')).toHaveValue('');
   });
 
   it('clears recovered heartbeat failures without replacing unrelated notices', async () => {

@@ -1,4 +1,3 @@
-import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HotelMealPlansPanel, describeMeal, type HotelMealPlansView } from './meal-plans-panel';
@@ -127,26 +126,26 @@ describe('HotelMealPlansPanel', () => {
 
   it('adds a plan from named services with the selection attached and the document in the stored shape', () => {
     mount();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Code', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'HB-TERRACE' } });
-    fireEvent.change(selectFieldControl(within(addForm()).getByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Code'), { target: { value: 'HB-TERRACE' } });
+    fireEvent.change(within(addForm()).getByLabelText('Name'), {
       target: { value: 'Half board on the terrace' },
     });
-    fireEvent.change(selectFieldControl(within(addForm()).getByLabelText('Name in Urdu', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(addForm()).getByLabelText('Name in Urdu'), {
       target: { value: 'چھت پر' },
     });
     // Breakfast per person with a cut-off; dinner per room at two outlets; no lunch.
-    fireEvent.click(within(addForm()).getByLabelText('Breakfast', { selector: ':not([data-select-field-native][aria-hidden="true"])' }));
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Cut-off', { selector: '#new-cutoff-BREAKFAST' })), {
+    fireEvent.click(within(addForm()).getByLabelText('Breakfast'));
+    fireEvent.change(screen.getByLabelText('Cut-off', { selector: '#new-cutoff-BREAKFAST' }), {
       target: { value: '10:30' },
     });
-    fireEvent.click(within(addForm()).getByLabelText('Dinner', { selector: ':not([data-select-field-native][aria-hidden="true"])' }));
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Basis', { selector: '#new-basis-DINNER' })), {
+    fireEvent.click(within(addForm()).getByLabelText('Dinner'));
+    fireEvent.change(screen.getByLabelText('Basis', { selector: '#new-basis-DINNER' }), {
       target: { value: 'per_room' },
     });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Outlets', { selector: '#new-outlets-DINNER' })), {
+    fireEvent.change(screen.getByLabelText('Outlets', { selector: '#new-outlets-DINNER' }), {
       target: { value: 'Terrace, Rooftop grill' },
     });
-    fireEvent.click(within(addForm()).getByLabelText('Put on sale now', { selector: ':not([data-select-field-native][aria-hidden="true"])' }));
+    fireEvent.click(within(addForm()).getByLabelText('Put on sale now'));
     fireEvent.submit(addForm());
     expect(h.mutate.create).toHaveBeenCalledWith({
       branchId: 'branch',
@@ -168,8 +167,8 @@ describe('HotelMealPlansPanel', () => {
 
   it('sends an empty document for a room-only plan and defaults to on sale', () => {
     mount();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Code', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'RO' } });
-    fireEvent.change(selectFieldControl(within(addForm()).getByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Room only' } });
+    fireEvent.change(screen.getByLabelText('Code'), { target: { value: 'RO' } });
+    fireEvent.change(within(addForm()).getByLabelText('Name'), { target: { value: 'Room only' } });
     fireEvent.submit(addForm());
     expect(h.mutate.create).toHaveBeenCalledWith(
       expect.objectContaining({ code: 'RO', meals: [], active: true, nameUr: null })
@@ -178,17 +177,17 @@ describe('HotelMealPlansPanel', () => {
 
   it('lands server field errors under their inputs and keeps the entries, then announces a save', async () => {
     mount();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Code', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'CP' } });
-    fireEvent.change(selectFieldControl(within(addForm()).getByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Again' } });
+    fireEvent.change(screen.getByLabelText('Code'), { target: { value: 'CP' } });
+    fireEvent.change(within(addForm()).getByLabelText('Name'), { target: { value: 'Again' } });
     fireEvent.submit(addForm());
     act(() => {
       h.hookCallbacks.create!.onError!(
         error('BAD_REQUEST', { code: ['This property already sells a plan coded CP.'] })
       );
     });
-    const code = screen.getByLabelText('Code', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const code = screen.getByLabelText('Code');
     expect(code).toHaveAttribute('aria-invalid', 'true');
-    expect(selectFieldControl(code)).toHaveValue('CP');
+    expect(code).toHaveValue('CP');
     expect(screen.getByRole('alert')).toHaveTextContent('already sells a plan coded CP');
     act(() => {
       h.hookCallbacks.create!.onError!(
@@ -208,7 +207,7 @@ describe('HotelMealPlansPanel', () => {
       'HB · Half board is set up and not yet on sale.'
     );
     // The form was replaced and the list re-fetched past the cache.
-    expect(selectFieldControl(screen.getByLabelText('Code', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
+    expect(screen.getByLabelText('Code')).toHaveValue('');
     expect(h.fetchList).toHaveBeenCalledWith({ branchId: 'branch' }, { staleTime: 0 });
   });
 
@@ -218,22 +217,22 @@ describe('HotelMealPlansPanel', () => {
     fireEvent.click(edit);
     expect(edit).toHaveAttribute('aria-expanded', 'true');
     const editor = screen.getByRole('form', { name: 'Edit MAP' });
-    expect(within(editor).getByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveFocus();
-    expect(within(editor).queryByLabelText('Code', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
+    expect(within(editor).getByLabelText('Name')).toHaveFocus();
+    expect(within(editor).queryByLabelText('Code')).not.toBeInTheDocument();
     expect(within(editor).getByText(/Fixed: it is the plan’s identity/)).toBeInTheDocument();
     // Stored values are offered back: dinner is per room at two outlets.
-    expect(selectFieldControl(screen.getByLabelText('Basis', { selector: '#plan-plan_map-basis-DINNER' }))).toHaveValue(
+    expect(screen.getByLabelText('Basis', { selector: '#plan-plan_map-basis-DINNER' })).toHaveValue(
       'per_room'
     );
     expect(
-      selectFieldControl(screen.getByLabelText('Outlets', { selector: '#plan-plan_map-outlets-DINNER' }))
+      screen.getByLabelText('Outlets', { selector: '#plan-plan_map-outlets-DINNER' })
     ).toHaveValue('Terrace, Grill');
     // The add form is held while an editor is open.
     expect(within(addForm()).getByRole('button', { name: 'Add meal plan' })).toBeDisabled();
-    fireEvent.change(selectFieldControl(within(editor).getByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(editor).getByLabelText('Name'), {
       target: { value: 'Half board plus' },
     });
-    fireEvent.click(within(editor).getByLabelText('Lunch', { selector: ':not([data-select-field-native][aria-hidden="true"])' }));
+    fireEvent.click(within(editor).getByLabelText('Lunch'));
     fireEvent.submit(editor);
     expect(h.mutate.update).toHaveBeenCalledWith(
       {
@@ -263,13 +262,13 @@ describe('HotelMealPlansPanel', () => {
     mount();
     fireEvent.click(within(rowOf('CP')).getByRole('button', { name: 'Edit CP' }));
     const editor = screen.getByRole('form', { name: 'Edit CP' });
-    fireEvent.change(selectFieldControl(within(editor).getByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'B&B deluxe' } });
+    fireEvent.change(within(editor).getByLabelText('Name'), { target: { value: 'B&B deluxe' } });
     fireEvent.submit(editor);
     act(() => {
       lastCallbacks('update').onError!(error('CONFLICT'));
     });
     expect(within(editor).getByRole('alert')).toHaveTextContent('Your entries are kept');
-    expect(selectFieldControl(within(editor).getByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('B&B deluxe');
+    expect(within(editor).getByLabelText('Name')).toHaveValue('B&B deluxe');
     fireEvent.keyDown(editor, { key: 'Escape' });
     expect(screen.queryByRole('form', { name: 'Edit CP' })).not.toBeInTheDocument();
     expect(within(rowOf('CP')).getByRole('button', { name: 'Edit CP' })).toHaveFocus();

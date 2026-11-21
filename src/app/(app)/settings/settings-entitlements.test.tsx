@@ -246,7 +246,7 @@ describe('Settings entitlement presentation', () => {
     renderSection(<ApiTokensSection />, entitlementView(true, true));
 
     fireEvent.click(screen.getByRole('button', { name: 'New Token' }));
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Token Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Stale tab' } });
+    fireEvent.change(screen.getByLabelText('Token Name'), { target: { value: 'Stale tab' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create Token' }));
 
     expect(screen.getByRole('alert')).toHaveTextContent(
@@ -345,7 +345,7 @@ describe('Print routing settings', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
     renderSection(<PrintRoutingSection />, entitlementView(true, true));
-    fireEvent.change(selectFieldControl(await screen.findByLabelText('Kitchen printer (KOT) printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(await screen.findByLabelText('Kitchen printer (KOT) printer ID'), {
       target: { value: 'queue:///NewHot' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Save print routes' }));
@@ -411,7 +411,7 @@ describe('Print routing settings', () => {
     expect(first).not.toHaveProperty('document');
     expect(first).not.toHaveProperty('stationId');
     expect(posts[1][1]!.body).toBe(posts[0][1]!.body);
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Receipts printer ID'), {
       target: { value: 'queue:///Other' },
     });
     expect(button).toBeDisabled();
@@ -452,9 +452,21 @@ describe('Print routing settings', () => {
       )
     );
     renderSection(<PrintRoutingSection />, entitlementView(true, true));
-    await waitFor(() => expect(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('branch-1'));
-    expect(screen.getByLabelText('Kitchen printer (KOT) station', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeInTheDocument();
-    expect(screen.getByLabelText('Bar tickets printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        selectFieldControl(
+          screen.getByLabelText('Branch', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        )
+      ).toHaveValue('branch-1')
+    );
+    expect(
+      screen.getByLabelText('Kitchen printer (KOT) station', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('Bar tickets printer ID')).toBeInTheDocument();
     expect(screen.getByRole('switch', { name: 'Enable receipts' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save print routes' })).toBeEnabled();
     expect(screen.getByText(/each station may use either, both, or neither/i)).toBeVisible();

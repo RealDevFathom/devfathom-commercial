@@ -1,4 +1,5 @@
-import { SelectField as StudioSelect } from '@/components/ui/select-field';import type { Metadata } from 'next';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import {
   compareRecordedTaxProfiles,

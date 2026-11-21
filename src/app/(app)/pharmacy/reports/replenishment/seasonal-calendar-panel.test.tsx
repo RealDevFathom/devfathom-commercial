@@ -73,8 +73,15 @@ describe('seasonal calendar panel', () => {
     });
     render(<SeasonalCalendarPanel branchId="branch-1" today="2026-11-03" />);
     expect(screen.getByText('Ramadan 1448')).toBeVisible();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Season', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'MONSOON' } });
-    expect(selectFieldControl(screen.getByLabelText('Label', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Monsoon');
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Season', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'MONSOON' } }
+    );
+    expect(screen.getByLabelText('Label')).toHaveValue('Monsoon');
     fireEvent.click(screen.getByRole('button', { name: 'Add window' }));
     expect(mocks.save).toHaveBeenCalledWith({
       branchId: 'branch-1',
@@ -95,13 +102,13 @@ describe('seasonal calendar panel', () => {
     });
     render(<SeasonalCalendarPanel branchId="branch-1" today="2026-11-03" />);
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Ends before', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '2027-02-01' } });
+    fireEvent.change(screen.getByLabelText('Ends before'), { target: { value: '2027-02-01' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save window' }));
     expect(screen.getByRole('alert')).toHaveTextContent(
       'The end date must be after the start date.'
     );
     expect(mocks.save).not.toHaveBeenCalled();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Ends before', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '2027-03-11' } });
+    fireEvent.change(screen.getByLabelText('Ends before'), { target: { value: '2027-03-11' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save window' }));
     expect(mocks.save).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'win-1', kind: 'RAMADAN', endDateExclusive: '2027-03-11' })

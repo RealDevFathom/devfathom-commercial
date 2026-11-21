@@ -17,9 +17,11 @@ describe('OperatorSafeSelector', () => {
         ]}
       />
     );
-    fireEvent.change(selectFieldControl(screen.getByRole('searchbox')), { target: { value: '1042' } });
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: '1042' } });
     expect(screen.queryByRole('option', { hidden: true, name: /1043/ })).not.toBeInTheDocument();
-    fireEvent.change(selectFieldControl(screen.getByRole('combobox')), { target: { value: 'db-internal-1' } });
+    fireEvent.change(selectFieldControl(screen.getByRole('combobox')), {
+      target: { value: 'db-internal-1' },
+    });
     expect(onChange).toHaveBeenCalledWith('db-internal-1');
   });
 
@@ -28,7 +30,9 @@ describe('OperatorSafeSelector', () => {
       <OperatorSafeSelector label="Gateway" value="" onChange={vi.fn()} options={[]} forbidden />
     );
     expect(screen.getByRole('combobox')).toBeDisabled();
-    expect(screen.getByRole('option', { hidden: true })).toHaveTextContent('Gateway unavailable for your access');
+    expect(screen.getByRole('option', { hidden: true })).toHaveTextContent(
+      'Gateway unavailable for your access'
+    );
     rerender(
       <OperatorSafeSelector
         label="Gateway"

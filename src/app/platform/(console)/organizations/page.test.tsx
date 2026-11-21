@@ -82,9 +82,13 @@ describe('OrganizationsPage verticals', () => {
           },
         })
       );
-      expect(selectFieldControl(screen.getByRole('combobox', { name: 'Vertical' }))).toHaveValue(vertical);
-      expect(selectFieldControl(screen.getByRole('combobox', { name: 'Lifecycle status' }))).toHaveValue('ACTIVE');
-      expect(selectFieldControl(screen.getByPlaceholderText('Search name, slug, or contact'))).toHaveValue('workspace');
+      expect(selectFieldControl(screen.getByRole('combobox', { name: 'Vertical' }))).toHaveValue(
+        vertical
+      );
+      expect(
+        selectFieldControl(screen.getByRole('combobox', { name: 'Lifecycle status' }))
+      ).toHaveValue('ACTIVE');
+      expect(screen.getByPlaceholderText('Search name, slug, or contact')).toHaveValue('workspace');
       const form = screen.getByRole('button', { name: 'Apply filters' }).closest('form')!;
       expect(new FormData(form).get('vertical')).toBe(vertical);
       expect(screen.getAllByRole('row')).toHaveLength(2);
@@ -97,7 +101,9 @@ describe('OrganizationsPage verticals', () => {
     async (vertical) => {
       render(await OrganizationsPage({ searchParams: Promise.resolve({ vertical }) }));
       expect(mocks.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {} }));
-      expect(selectFieldControl(screen.getByRole('combobox', { name: 'Vertical' }))).toHaveValue('');
+      expect(selectFieldControl(screen.getByRole('combobox', { name: 'Vertical' }))).toHaveValue(
+        ''
+      );
     }
   );
 
@@ -105,7 +111,9 @@ describe('OrganizationsPage verticals', () => {
     mocks.findMany.mockResolvedValue([]);
     render(await OrganizationsPage({ searchParams: Promise.resolve({ vertical: 'PHARMACY' }) }));
     expect(screen.getByText('No organizations match these filters.')).toBeInTheDocument();
-    expect(selectFieldControl(screen.getByRole('combobox', { name: 'Vertical' }))).toHaveValue('PHARMACY');
+    expect(selectFieldControl(screen.getByRole('combobox', { name: 'Vertical' }))).toHaveValue(
+      'PHARMACY'
+    );
   });
 
   it('does not enter the database scope when access is denied', async () => {

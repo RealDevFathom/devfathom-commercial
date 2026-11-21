@@ -46,7 +46,14 @@ it('shows pending legal review even when the register is empty', () => {
 
 it('removes the pending warning when switching to a confirmed branch', () => {
   render(<ControlledRegisterConsole />);
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'punjab' } });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Branch', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    { target: { value: 'punjab' } }
+  );
   expect(screen.queryByRole('status')).not.toBeInTheDocument();
 });
 

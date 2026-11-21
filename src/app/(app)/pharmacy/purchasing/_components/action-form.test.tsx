@@ -1,4 +1,3 @@
-import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
@@ -52,7 +51,7 @@ describe('purchasing outcome delivery', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button'));
     });
-    expect(screen.getByLabelText('Reference', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAccessibleDescription(
+    expect(screen.getByLabelText('Reference')).toHaveAccessibleDescription(
       'Keep at least one line'
     );
     expect(screen.getByRole('button')).not.toBeDisabled();
@@ -65,18 +64,18 @@ describe('purchasing outcome delivery', () => {
         '/pharmacy/purchasing/orders?kind=error&outcome=rejected&notice=Reference+already+used&field=reference&order=o1'
       );
     const { replace } = setup(action);
-    const input = screen.getByLabelText('Reference', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-    fireEvent.change(selectFieldControl(input), { target: { value: 'EDITED-PO' } });
+    const input = screen.getByLabelText('Reference');
+    fireEvent.change(input, { target: { value: 'EDITED-PO' } });
     await act(async () => {
       fireEvent.click(screen.getByRole('button'));
     });
     expect(replace).not.toHaveBeenCalled();
-    expect(selectFieldControl(input)).toHaveValue('EDITED-PO');
+    expect(input).toHaveValue('EDITED-PO');
     expect(input).toHaveFocus();
     expect(input).toHaveAttribute('aria-invalid', 'true');
     expect(input).toHaveAccessibleDescription('Reference already used');
     expect(screen.getByRole('button')).not.toBeDisabled();
-    fireEvent.change(selectFieldControl(input), { target: { value: 'CORRECTED-PO' } });
+    fireEvent.change(input, { target: { value: 'CORRECTED-PO' } });
     action.mockResolvedValue('/pharmacy/purchasing/orders?kind=success&outcome=committed');
     await act(async () => {
       fireEvent.click(screen.getByRole('button'));
@@ -160,7 +159,7 @@ describe('purchasing outcome delivery', () => {
     const { form, replace } = setup(action);
     fireEvent.submit(form);
     expect(await screen.findByRole('alert')).toHaveTextContent('check the record before retrying');
-    expect(selectFieldControl(screen.getByLabelText('Reference', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('PO-1');
+    expect(screen.getByLabelText('Reference')).toHaveValue('PO-1');
     expect(replace).not.toHaveBeenCalled();
     fireEvent.submit(form);
     expect(action).toHaveBeenCalledTimes(1);
@@ -233,9 +232,9 @@ it('preserves sibling drafts, selection and focus while refreshing committed dat
   vi.stubGlobal('window', { document, location });
   router.refresh.mockImplementation(() => view.rerender(<Workspace count={1} />));
   fireEvent.click(screen.getByRole('button', { name: 'Save record' }));
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Sibling supplier', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'b' } });
-  const draft = screen.getByLabelText('Sibling draft', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLInputElement;
-  fireEvent.change(selectFieldControl(draft), { target: { value: 'Unsaved sibling text' } });
+  fireEvent.change(screen.getByLabelText('Sibling supplier'), { target: { value: 'b' } });
+  const draft = screen.getByLabelText('Sibling draft') as HTMLInputElement;
+  fireEvent.change(draft, { target: { value: 'Unsaved sibling text' } });
   draft.focus();
   draft.setSelectionRange(2, 7);
   await act(async () => {
@@ -243,8 +242,8 @@ it('preserves sibling drafts, selection and focus while refreshing committed dat
       '/pharmacy/purchasing/orders?kind=success&outcome=committed&notice=Order+saved&po=new'
     );
   });
-  expect(selectFieldControl(screen.getByLabelText('Sibling draft', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Unsaved sibling text');
-  expect(selectFieldControl(screen.getByLabelText('Sibling supplier', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('b');
+  expect(screen.getByLabelText('Sibling draft')).toHaveValue('Unsaved sibling text');
+  expect(screen.getByLabelText('Sibling supplier')).toHaveValue('b');
   expect(draft).toHaveFocus();
   expect([draft.selectionStart, draft.selectionEnd]).toEqual([2, 7]);
   expect(location.href).toContain('po=existing');
@@ -294,7 +293,7 @@ describe('required-field validation (DEV-520)', () => {
         <button type="submit">Add supplier</button>
       </PurchasingActionForm>
     );
-    const field = screen.getByLabelText('Trading name', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const field = screen.getByLabelText('Trading name');
     expect(field).toHaveAttribute('aria-invalid', 'false');
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Add supplier' }));
@@ -304,7 +303,7 @@ describe('required-field validation (DEV-520)', () => {
     expect(field).toHaveAccessibleDescription(/Trading name is required\./);
     expect(screen.getByRole('alert')).toHaveTextContent('Trading name is required.');
     expect(field).toHaveFocus();
-    fireEvent.change(selectFieldControl(field), { target: { value: 'Acme Distributors' } });
+    fireEvent.change(field, { target: { value: 'Acme Distributors' } });
     expect(field).toHaveAttribute('aria-invalid', 'false');
     expect(screen.queryByRole('alert')).toBeNull();
     await act(async () => {
@@ -331,17 +330,17 @@ describe('required-field validation (DEV-520)', () => {
         <button type="submit">Save</button>
       </PurchasingActionForm>
     );
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Reference', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'PO-1' } });
+    fireEvent.change(screen.getByLabelText('Reference'), { target: { value: 'PO-1' } });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     });
     expect(screen.getByRole('alert')).toHaveTextContent('Duplicate reference');
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Reference', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Reference'), { target: { value: '' } });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     });
     expect(screen.getByRole('alert')).toHaveTextContent('Reference is required.');
-    expect(screen.getByLabelText('Reference', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByLabelText('Reference')).toHaveAttribute('aria-invalid', 'true');
   });
 
   it('keeps the required-field error while an unrelated field is edited', async () => {
@@ -360,8 +359,8 @@ describe('required-field validation (DEV-520)', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Add supplier' }));
     });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Contact name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Ali' } });
-    expect(screen.getByLabelText('Trading name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('aria-invalid', 'true');
+    fireEvent.change(screen.getByLabelText('Contact name'), { target: { value: 'Ali' } });
+    expect(screen.getByLabelText('Trading name')).toHaveAttribute('aria-invalid', 'true');
     expect(screen.getByRole('alert')).toHaveTextContent('Trading name is required.');
   });
 });

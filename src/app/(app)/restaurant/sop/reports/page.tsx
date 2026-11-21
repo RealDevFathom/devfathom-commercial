@@ -1,4 +1,5 @@
-import { SelectField as StudioSelect } from '@/components/ui/select-field';import Link from 'next/link';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import Link from 'next/link';
 import { TRPCError } from '@trpc/server';
 
 import { Button, buttonVariants } from '@/components/ui/button';

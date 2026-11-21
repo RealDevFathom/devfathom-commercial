@@ -160,10 +160,17 @@ describe('Restaurant menus console', () => {
     expect(screen.getAllByRole('option', { hidden: true, name: 'DELIVERY' })).toEqual(
       expect.arrayContaining([expect.objectContaining({ disabled: false })])
     );
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Preview channel', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'TAKEAWAY' },
-    });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Preview instant', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Preview channel', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'TAKEAWAY' },
+      }
+    );
+    fireEvent.change(screen.getByLabelText('Preview instant'), {
       target: { value: '2026-08-18T12:30' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Load effective menu' }));
@@ -184,10 +191,10 @@ describe('Restaurant menus console', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Channels' }));
 
     expect(
-      screen.getAllByLabelText('DELIVERY', { selector: ':not([data-select-field-native][aria-hidden="true"])' }).every((control) => !control.hasAttribute('disabled'))
+      screen.getAllByLabelText('DELIVERY').every((control) => !control.hasAttribute('disabled'))
     ).toBe(true);
-    expect(screen.getByLabelText('DINE IN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeEnabled();
-    expect(screen.getByLabelText('TAKEAWAY', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeEnabled();
+    expect(screen.getByLabelText('DINE IN')).toBeEnabled();
+    expect(screen.getByLabelText('TAKEAWAY')).toBeEnabled();
   });
 
   it('renders price-list money with two decimal places', () => {

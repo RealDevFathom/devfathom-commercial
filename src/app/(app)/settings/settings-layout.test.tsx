@@ -1,4 +1,3 @@
-import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -90,9 +89,9 @@ describe('the complete settings workspace', () => {
   it('preserves separate profile and password drafts while the sections share the workspace', () => {
     const { container } = render(<SettingsContent />);
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Updated owner' } });
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Updated owner' } });
     const password = container.querySelector<HTMLInputElement>('input[type="password"]')!;
-    fireEvent.change(selectFieldControl(password), { target: { value: 'synthetic-unsaved-password' } });
+    fireEvent.change(password, { target: { value: 'synthetic-unsaved-password' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(mocks.profileSave).toHaveBeenCalledWith({
       name: 'Updated owner',

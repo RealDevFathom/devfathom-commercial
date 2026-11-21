@@ -87,10 +87,14 @@ describe('restaurant tax configuration UI', () => {
     render(<RestaurantTaxConsole />);
     expect(screen.getByText('No tax profile configured.')).toBeInTheDocument();
     expect(screen.getByText(/checkout remains fail-closed/i)).toBeInTheDocument();
-    const punjab = screen.getByRole('option', { hidden: true, name: /Punjab restaurant \(unavailable\)/i });
+    const punjab = screen.getByRole('option', {
+      hidden: true,
+      name: /Punjab restaurant \(unavailable\)/i,
+    });
     expect(punjab).toBeDisabled();
     expect(
-      screen.getByRole('option', { hidden: true,
+      screen.getByRole('option', {
+        hidden: true,
         name: /Sindh restaurant — SRB-approved listed branch \(unavailable\)/i,
       })
     ).toBeDisabled();
@@ -99,8 +103,13 @@ describe('restaurant tax configuration UI', () => {
 
   it('explains why a disabled profile is unavailable and prevents submission', () => {
     render(<RestaurantTaxConsole />);
-    const profileSelect = screen.getByLabelText('Jurisdiction and profile', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-    const punjab = screen.getByRole('option', { hidden: true, name: /Punjab restaurant \(unavailable\)/i });
+    const profileSelect = screen.getByLabelText('Jurisdiction and profile', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
+    const punjab = screen.getByRole('option', {
+      hidden: true,
+      name: /Punjab restaurant \(unavailable\)/i,
+    });
 
     expect(punjab).toBeDisabled();
     expect(profileSelect).toHaveAccessibleDescription(
@@ -116,12 +125,26 @@ describe('restaurant tax configuration UI', () => {
 
   it('submits explicit branch, profile, date, approval, and eligibility evidence', () => {
     render(<RestaurantTaxConsole />);
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Preset branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'branch_1' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Jurisdiction and profile', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'PK-ICT-RESTAURANT' },
-    });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Effective date', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '2026-07-01' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Preset accountant approval reference', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Preset branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'branch_1' } }
+    );
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Jurisdiction and profile', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'PK-ICT-RESTAURANT' },
+      }
+    );
+    fireEvent.change(screen.getByLabelText('Effective date'), { target: { value: '2026-07-01' } });
+    fireEvent.change(screen.getByLabelText('Preset accountant approval reference'), {
       target: { value: 'Memo 42' },
     });
     for (const label of [
@@ -129,7 +152,7 @@ describe('restaurant tax configuration UI', () => {
       /no refund/i,
       /I confirm an accountant reviewed/i,
     ])
-      fireEvent.click(screen.getByLabelText(label, { selector: ':not([data-select-field-native][aria-hidden="true"])' }));
+      fireEvent.click(screen.getByLabelText(label));
     fireEvent.click(screen.getByRole('button', { name: 'Activate tax profile' }));
     expect(mocks.activate).toHaveBeenCalledWith({
       branchId: 'branch_1',
@@ -142,7 +165,7 @@ describe('restaurant tax configuration UI', () => {
       idempotencyKey: expect.any(String),
     });
 
-    fireEvent.click(screen.getByLabelText(/End the currently open tax profile/i, { selector: ':not([data-select-field-native][aria-hidden="true"])' }));
+    fireEvent.click(screen.getByLabelText(/End the currently open tax profile/i));
     fireEvent.click(screen.getByRole('button', { name: 'Activate tax profile' }));
     expect(mocks.activate).toHaveBeenLastCalledWith({
       branchId: 'branch_1',
@@ -178,7 +201,9 @@ describe('restaurant tax configuration UI', () => {
     render(<RestaurantTaxConsole />);
     expect(screen.getByText('Custom tax profile')).toBeInTheDocument();
     expect(screen.getByText(/customer supplied · not verified by devfathom/i)).toBeInTheDocument();
-    const jurisdiction = screen.getByLabelText<HTMLSelectElement>('Pakistan jurisdiction', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const jurisdiction = screen.getByLabelText<HTMLSelectElement>('Pakistan jurisdiction', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
     const jurisdictionNames = [
       'Punjab',
       'Sindh',
@@ -186,7 +211,8 @@ describe('restaurant tax configuration UI', () => {
       'Islamabad Capital Territory',
       'Balochistan',
     ];
-    for (const name of jurisdictionNames) expect(selectFieldControl(jurisdiction)).toHaveTextContent(name);
+    for (const name of jurisdictionNames)
+      expect(selectFieldControl(jurisdiction)).toHaveTextContent(name);
     expect(
       Array.from(selectFieldControl(jurisdiction).options, (option) => option.text).filter(
         (name) => name !== 'Select jurisdiction'
@@ -196,26 +222,40 @@ describe('restaurant tax configuration UI', () => {
   });
 
   function customRateInput(category: 'Cash' | 'Card' | 'Other') {
-    return screen.getByLabelText(`${category} tax rate (%)`, { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    return screen.getByLabelText(`${category} tax rate (%)`);
   }
 
   function submitCustomRates(rates: [string, string, string]) {
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Profile name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Custom 2026' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'branch_1' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Pakistan jurisdiction', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'PK-SD' },
-    });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Effective date (branch local)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Profile name'), { target: { value: 'Custom 2026' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'branch_1' } }
+    );
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Pakistan jurisdiction', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'PK-SD' },
+      }
+    );
+    fireEvent.change(screen.getByLabelText('Effective date (branch local)'), {
       target: { value: '2026-08-30' },
     });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Accountant approval reference', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Accountant approval reference'), {
       target: { value: 'Memo 93' },
     });
-    fireEvent.change(selectFieldControl(customRateInput('Cash')), { target: { value: rates[0] } });
-    fireEvent.change(selectFieldControl(customRateInput('Card')), { target: { value: rates[1] } });
-    fireEvent.change(selectFieldControl(customRateInput('Other')), { target: { value: rates[2] } });
+    fireEvent.change(customRateInput('Cash'), { target: { value: rates[0] } });
+    fireEvent.change(customRateInput('Card'), { target: { value: rates[1] } });
+    fireEvent.change(customRateInput('Other'), { target: { value: rates[2] } });
     fireEvent.click(
-      screen.getByLabelText(/I confirm these exact rates were supplied\/reviewed by my accountant/i, { selector: ':not([data-select-field-native][aria-hidden="true"])' })
+      screen.getByLabelText(/I confirm these exact rates were supplied\/reviewed by my accountant/i)
     );
     fireEvent.submit(
       screen.getByRole('button', { name: 'Publish custom profile' }).closest('form')!
@@ -287,7 +327,7 @@ describe('restaurant tax configuration UI', () => {
 
   it('hides a cached zero-rate preview when the current Cash rate becomes invalid', () => {
     render(<RestaurantTaxConsole />);
-    fireEvent.change(selectFieldControl(customRateInput('Cash')), { target: { value: '0' } });
+    fireEvent.change(customRateInput('Cash'), { target: { value: '0' } });
 
     expect(mocks.previewCustom).toHaveBeenLastCalledWith(
       { amount: '1000.00', rate: '0', priceMode: 'EXCLUSIVE' },
@@ -295,7 +335,7 @@ describe('restaurant tax configuration UI', () => {
     );
     expect(screen.getByText(/Net 1000.00 · Tax 0.00 · Total 1000.00/)).toBeInTheDocument();
 
-    fireEvent.change(selectFieldControl(customRateInput('Cash')), { target: { value: 'not-a-rate' } });
+    fireEvent.change(customRateInput('Cash'), { target: { value: 'not-a-rate' } });
     fireEvent.blur(customRateInput('Cash'));
 
     expect(mocks.previewCustom).toHaveBeenLastCalledWith(
@@ -316,7 +356,7 @@ describe('restaurant tax configuration UI', () => {
     ['100.01', 'Tax rate percentage cannot exceed 100.'],
   ])('shows accessible inline feedback for invalid rate %j', (value, message) => {
     render(<RestaurantTaxConsole />);
-    fireEvent.change(selectFieldControl(customRateInput('Cash')), { target: { value } });
+    fireEvent.change(customRateInput('Cash'), { target: { value } });
     fireEvent.blur(customRateInput('Cash'));
 
     expect(customRateInput('Cash')).toHaveAttribute('aria-invalid', 'true');
@@ -327,7 +367,7 @@ describe('restaurant tax configuration UI', () => {
 
   it.each(['0', '100', '8.25'])('accepts inclusive boundary or decimal percentage %s', (value) => {
     render(<RestaurantTaxConsole />);
-    fireEvent.change(selectFieldControl(customRateInput('Cash')), { target: { value } });
+    fireEvent.change(customRateInput('Cash'), { target: { value } });
     fireEvent.blur(customRateInput('Cash'));
 
     expect(customRateInput('Cash')).toHaveAttribute('aria-invalid', 'false');

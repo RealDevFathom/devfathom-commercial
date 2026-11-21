@@ -55,9 +55,16 @@ function fillReceipt() {
       'Discrepancy kind': 'DAMAGED',
       'Discrepancy note': `Note ${line.id}`,
     }))
-      fireEvent.change(selectFieldControl(group.getByLabelText(label, { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value } });
+      fireEvent.change(
+        selectFieldControl(
+          group.getByLabelText(label, {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        ),
+        { target: { value } }
+      );
   }
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Receipt reference', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+  fireEvent.change(screen.getByLabelText('Receipt reference'), {
     target: { value: 'REF & details' },
   });
 }
@@ -81,7 +88,7 @@ describe('ReceivingForm recovery', () => {
     );
     fillReceipt();
     fireEvent.change(
-      selectFieldControl(within(screen.getByRole('group', { name: 'Flour' })).getByLabelText('Received quantity', { selector: ':not([data-select-field-native][aria-hidden="true"])' })),
+      within(screen.getByRole('group', { name: 'Flour' })).getByLabelText('Received quantity'),
       { target: { value: 'bad' } }
     );
     const form = screen.getByRole('form', { name: 'Receive stock' }) as HTMLFormElement;
@@ -90,7 +97,12 @@ describe('ReceivingForm recovery', () => {
     await screen.findByRole('alert');
     for (const line of lines) {
       expect(
-        selectFieldControl(within(screen.getByRole('group', { name: line.name })).getByLabelText('Discrepancy kind', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))
+        selectFieldControl(
+          within(screen.getByRole('group', { name: line.name })).getByLabelText(
+            'Discrepancy kind',
+            { selector: ':not([data-select-field-native][aria-hidden="true"])' }
+          )
+        )
       ).toHaveValue('DAMAGED');
     }
     expect(action.mock.calls[0][1].get('discrepancyKind:a')).toBe('DAMAGED');
@@ -126,7 +138,7 @@ describe('ReceivingForm recovery', () => {
     fireEvent.submit(form);
     fireEvent.submit(form);
     expect(screen.getByRole('button', { name: 'Receiving…' })).toBeDisabled();
-    expect(screen.getByLabelText('Receipt reference', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
+    expect(screen.getByLabelText('Receipt reference')).toBeDisabled();
     expect(action).toHaveBeenCalledTimes(1);
     await act(async () => finish({ ...initial(), status: 'rejected', message: 'Retry later.' }));
     expect(screen.getByRole('button', { name: 'Receive purchase order' })).toBeEnabled();
@@ -155,12 +167,21 @@ describe('ReceivingForm recovery', () => {
       await screen.findByRole('button', { name: 'Retry same receipt' });
       for (const line of lines) {
         expect(
-          selectFieldControl(within(screen.getByRole('group', { name: line.name })).getByLabelText('Discrepancy kind', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))
+          selectFieldControl(
+            within(screen.getByRole('group', { name: line.name })).getByLabelText(
+              'Discrepancy kind',
+              { selector: ':not([data-select-field-native][aria-hidden="true"])' }
+            )
+          )
         ).toHaveValue('DAMAGED');
       }
       expect(Object.fromEntries(new FormData(form))).toEqual(before);
-      expect(screen.getByLabelText('Receipt reference', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('readonly');
-      expect(screen.getAllByLabelText('Discrepancy kind', { selector: ':not([data-select-field-native][aria-hidden="true"])' })[0]).toBeDisabled();
+      expect(screen.getByLabelText('Receipt reference')).toHaveAttribute('readonly');
+      expect(
+        screen.getAllByLabelText('Discrepancy kind', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })[0]
+      ).toBeDisabled();
       const history = screen.getByRole('link', { name: 'Check receipt history (new tab)' });
       expect(history).toHaveAttribute('target', '_blank');
       expect(history).toHaveAttribute(
@@ -198,7 +219,7 @@ describe('ReceivingForm recovery', () => {
     const form = screen.getByRole('form', { name: 'Receive stock' });
     fireEvent.submit(form);
     await screen.findByRole('status');
-    expect(screen.queryByLabelText('Receipt reference', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Receipt reference')).not.toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Receive purchase order' })
     ).not.toBeInTheDocument();

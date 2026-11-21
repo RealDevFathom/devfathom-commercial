@@ -76,7 +76,9 @@ describe('linked records in the runner', () => {
       ],
     };
     render(<RunnerHarness />);
-    const select = screen.getByLabelText('goods receipt for Match the delivery', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const select = screen.getByLabelText('goods receipt for Match the delivery', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
     const options = within(selectFieldControl(select))
       .getAllByRole('option', { hidden: true })
       .map((option) => option.textContent);
@@ -188,7 +190,7 @@ describe('when the procedure changed underneath the person', () => {
     };
     h.outcomes.reject = () => refusal('This procedure has already been sent back.', 'CONFLICT');
     render(<RunnerHarness access={REVIEWER_ACCESS} from="review" />);
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Wrong reading' } });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Wrong reading' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send back' }));
     expect(screen.getByRole('alert')).toHaveTextContent(
       'This procedure has already been sent back.'
@@ -213,14 +215,14 @@ describe('when the procedure changed underneath the person', () => {
     h.queries.occurrence = { data: occurrence({ steps: [step({ requiresNote: true })] }) };
     h.outcomes.completeStep = () => refusal('status SUBMITTED: Expected IN_PROGRESS', 'CONFLICT');
     render(<RunnerHarness />);
-    fireEvent.change(selectFieldControl(screen.getByLabelText(/Note · required/, { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText(/Note · required/), {
       target: { value: 'Fridge 5 °C' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Mark step 1 done' }));
     // Raw engine text never reaches the screen.
     expect(screen.getByRole('alert')).toHaveTextContent(CONFLICT_MESSAGE);
     expect(screen.getByRole('alert')).not.toHaveTextContent(/SUBMITTED|Expected/);
-    expect(selectFieldControl(screen.getByLabelText(/Note · required/, { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Fridge 5 °C');
+    expect(screen.getByLabelText(/Note · required/)).toHaveValue('Fridge 5 °C');
     expect(h.invalidated.map(([procedure]) => procedure)).toEqual(['occurrence', 'board']);
   });
 

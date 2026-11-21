@@ -1,4 +1,3 @@
-import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComponentProps, ReactElement, ReactNode } from 'react';
@@ -111,7 +110,7 @@ describe('Restaurant financial report integration', () => {
     });
     expect(screen.getByRole('heading', { name: 'Financial comparison' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Apply filters' })).toHaveAttribute('type', 'submit');
-    expect(selectFieldControl(screen.getByLabelText('From date', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2026-09-01');
+    expect(screen.getByLabelText('From date')).toHaveValue('2026-09-01');
   });
 
   it('allows all branches only when the server authorizes that scope', async () => {
@@ -180,8 +179,8 @@ describe('Restaurant financial report integration', () => {
     expect(reportMocks.payments).not.toHaveBeenCalled();
     expect(reportMocks.overview).not.toHaveBeenCalled();
     expect(reportMocks.financialComparison).not.toHaveBeenCalled();
-    expect(screen.getByLabelText('From date', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('aria-invalid', 'true');
-    expect(screen.getByLabelText('To date', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute(
+    expect(screen.getByLabelText('From date')).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByLabelText('To date')).toHaveAttribute(
       'aria-describedby',
       'report-date-error'
     );
@@ -344,7 +343,7 @@ describe('Profitability diagnostics caller', () => {
     await renderPage({ from: '2026-02-30' });
     expect(reportMocks.foodCost).not.toHaveBeenCalled();
     expect(reportMocks.profitabilityTabs.mock.lastCall![0].diagnostics).toBeUndefined();
-    expect(screen.getByLabelText('From date', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByLabelText('From date')).toHaveAttribute('aria-invalid', 'true');
   });
 
   it('keeps diagnostics usable with unknown currency when comparison fails', async () => {

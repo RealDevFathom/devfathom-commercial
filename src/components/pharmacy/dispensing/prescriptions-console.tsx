@@ -453,7 +453,10 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                       medicineSearch !== '' && matchingMedicines.length === 0;
                     const searchEmptyId = `capture-medicine-search-empty-${line.id}`;
                     return (
-                      <fieldset key={line.id} className="min-w-0 border-t border-border-subtle pt-4">
+                      <fieldset
+                        key={line.id}
+                        className="min-w-0 border-t border-border-subtle pt-4"
+                      >
                         <legend className="font-mono text-xs tracking-wide text-text-muted uppercase">
                           Line {index + 1}
                         </legend>
@@ -464,22 +467,18 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                               value={line.medicineQuery}
                               onChange={(event) => {
                                 const medicineQuery = event.target.value;
-                                setLines((current) => current.map((item) =>
-                                  item.id === line.id ? { ...item, medicineQuery } : item
-                                ));
+                                setLines((current) =>
+                                  current.map((item) =>
+                                    item.id === line.id ? { ...item, medicineQuery } : item
+                                  )
+                                );
                               }}
                               className={fieldClass}
-                              aria-describedby={
-                                noMedicineMatches ? searchEmptyId : undefined
-                              }
+                              aria-describedby={noMedicineMatches ? searchEmptyId : undefined}
                             />
                           </Field>
                           {noMedicineMatches ? (
-                            <p
-                              id={searchEmptyId}
-                              role="status"
-                              className="text-sm text-text-muted"
-                            >
+                            <p id={searchEmptyId} role="status" className="text-sm text-text-muted">
                               No medicines match this search. Clear or change the name.
                             </p>
                           ) : null}
@@ -491,11 +490,13 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                               value={line.medicineId}
                               onChange={(event) => {
                                 const medicineId = event.target.value;
-                                setLines((current) => current.map((item) =>
-                                  item.id === line.id
-                                    ? { ...item, medicineId, presentationId: '' }
-                                    : item
-                                ));
+                                setLines((current) =>
+                                  current.map((item) =>
+                                    item.id === line.id
+                                      ? { ...item, medicineId, presentationId: '' }
+                                      : item
+                                  )
+                                );
                               }}
                               className={fieldClass}
                             >
@@ -521,9 +522,11 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                               value={line.presentationId}
                               onChange={(event) => {
                                 const presentationId = event.target.value;
-                                setLines((current) => current.map((item) =>
-                                  item.id === line.id ? { ...item, presentationId } : item
-                                ));
+                                setLines((current) =>
+                                  current.map((item) =>
+                                    item.id === line.id ? { ...item, presentationId } : item
+                                  )
+                                );
                               }}
                             >
                               <option value="" disabled>
@@ -570,9 +573,9 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                             size="touch"
                             className="mt-3"
                             aria-label={`Remove line ${index + 1}`}
-                            onClick={() => setLines((current) =>
-                              current.filter((item) => item.id !== line.id)
-                            )}
+                            onClick={() =>
+                              setLines((current) => current.filter((item) => item.id !== line.id))
+                            }
                           >
                             Remove line
                           </Button>
@@ -618,8 +621,8 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                       </>
                     ) : null}
                     <p>
-                      Complete the patient, prescriber, dates, and each medicine’s form,
-                      prescribed quantity and directions, then select Capture prescription.
+                      Complete the patient, prescriber, dates, and each medicine’s form, prescribed
+                      quantity and directions, then select Capture prescription.
                     </p>
                   </div>
                   {submitError ? (
@@ -867,7 +870,11 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                             label="Reminder channel"
                             hint="Consent is checked for this channel."
                           >
-                            <StudioSelect name="channel" className={fieldClass} defaultValue="WHATSAPP">
+                            <StudioSelect
+                              name="channel"
+                              className={fieldClass}
+                              defaultValue="WHATSAPP"
+                            >
                               <option value="WHATSAPP">WhatsApp</option>
                               <option value="SMS">SMS</option>
                               <option value="PHONE">Phone</option>

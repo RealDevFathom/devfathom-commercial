@@ -134,21 +134,21 @@ async function openAndRead(
 ) {
   fireEvent.click(screen.getByRole('button', { name: /Read batch and expiry/ }));
   await act(async () => {
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Photo of one pack', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Photo of one pack'), {
       target: { files: [photo()] },
     });
   });
   await ready();
 }
 
-const packsField = () => screen.getByLabelText('Packs with this exact batch and expiry', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+const packsField = () => screen.getByLabelText('Packs with this exact batch and expiry');
 const confirmBox = () =>
-  screen.getByLabelText(/I checked this batch and expiry/, { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLInputElement;
+  screen.getByLabelText(/I checked this batch and expiry/) as HTMLInputElement;
 const applyButton = () => screen.getByRole('button', { name: 'Use for lot 1' });
 
 /** Type a count, tick the confirmation and press "Use for lot 1". */
 function countConfirmApply(packs: string) {
-  fireEvent.change(selectFieldControl(packsField()), { target: { value: packs } });
+  fireEvent.change(packsField(), { target: { value: packs } });
   if (!confirmBox().checked) fireEvent.click(confirmBox());
   fireEvent.click(applyButton());
 }
@@ -172,14 +172,14 @@ describe('PackPhotoReader', () => {
     h.mutateAsync.mockResolvedValue(PROPOSAL);
     const { onSubmit, getByTestId } = harness();
     await openAndRead();
-    const batch = screen.getByLabelText('Batch number', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const batch = screen.getByLabelText('Batch number');
     const receipt = getByTestId('receipt') as HTMLFormElement;
     expect((batch as HTMLInputElement).form).not.toBe(receipt);
     expect(receipt.contains(batch)).toBe(true);
     fireEvent.submit((batch as HTMLInputElement).form!);
     expect(onSubmit).not.toHaveBeenCalled();
     // An invalid count inside the reader cannot block the receipt's own validity.
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Packs with this exact batch and expiry', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Packs with this exact batch and expiry'), {
       target: { value: '-4' },
     });
     expect(receipt.checkValidity()).toBe(true);
@@ -193,10 +193,10 @@ describe('PackPhotoReader', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Use for lot 1' }));
     expect((receipt.elements.namedItem('batchNumber:pol-1') as HTMLInputElement).value).toBe('');
 
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Packs with this exact batch and expiry', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Packs with this exact batch and expiry'), {
       target: { value: '7' },
     });
-    fireEvent.click(screen.getByLabelText(/I checked this batch and expiry/, { selector: ':not([data-select-field-native][aria-hidden="true"])' }));
+    fireEvent.click(screen.getByLabelText(/I checked this batch and expiry/));
     fireEvent.click(screen.getByRole('button', { name: 'Use for lot 1' }));
     const value = (name: string) =>
       (receipt.elements.namedItem(`${name}:pol-1`) as HTMLInputElement).value;
@@ -224,7 +224,7 @@ describe('PackPhotoReader', () => {
     );
     harness();
     fireEvent.click(screen.getByRole('button', { name: /Read batch and expiry/ }));
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Photo of one pack', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Photo of one pack'), {
       target: { files: [photo()] },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
@@ -242,7 +242,7 @@ describe('PackPhotoReader', () => {
     harness();
     fireEvent.click(screen.getByRole('button', { name: /Read batch and expiry/ }));
     await act(async () => {
-      fireEvent.change(selectFieldControl(screen.getByLabelText('Photo of one pack', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+      fireEvent.change(screen.getByLabelText('Photo of one pack'), {
         target: { files: [photo()] },
       });
     });
@@ -259,7 +259,7 @@ describe('PackPhotoReader', () => {
     const { getByTestId } = harness();
     fireEvent.click(screen.getByRole('button', { name: /Read batch and expiry/ }));
     await act(async () => {
-      fireEvent.change(selectFieldControl(screen.getByLabelText('Photo of one pack', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+      fireEvent.change(screen.getByLabelText('Photo of one pack'), {
         target: { files: [photo()] },
       });
     });
@@ -267,7 +267,7 @@ describe('PackPhotoReader', () => {
     const batch = (getByTestId('receipt') as HTMLFormElement).elements.namedItem(
       'batchNumber:pol-1'
     ) as HTMLInputElement;
-    fireEvent.change(selectFieldControl(batch), { target: { value: 'TYPED-1' } });
+    fireEvent.change(batch, { target: { value: 'TYPED-1' } });
     expect(batch.value).toBe('TYPED-1');
   });
 });
@@ -324,7 +324,7 @@ describe('PackPhotoReader capture input', () => {
   it('opens the rear camera and accepts only JPEG, PNG and WebP', () => {
     harness();
     fireEvent.click(screen.getByRole('button', { name: /Read batch and expiry/ }));
-    const input = screen.getByLabelText('Photo of one pack', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLInputElement;
+    const input = screen.getByLabelText('Photo of one pack') as HTMLInputElement;
     expect(input.type).toBe('file');
     expect(input.getAttribute('capture')).toBe('environment');
     expect(input.accept.split(',')).toEqual(['image/jpeg', 'image/png', 'image/webp']);
@@ -343,13 +343,13 @@ describe('PackPhotoReader capture input', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /Read batch and expiry/ }));
     await act(async () => {
-      fireEvent.change(selectFieldControl(screen.getByLabelText('Photo of one pack', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { files: [] } });
+      fireEvent.change(screen.getByLabelText('Photo of one pack'), { target: { files: [] } });
     });
     expect(createImageBitmap).not.toHaveBeenCalled();
     expect(h.mutateAsync).not.toHaveBeenCalled();
     expect(URL.createObjectURL).not.toHaveBeenCalled();
     expect(screen.queryByRole('alert')).toBeNull();
-    expect(screen.queryByLabelText('Batch number', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeNull();
+    expect(screen.queryByLabelText('Batch number')).toBeNull();
     expect([
       lineValue('batchNumber'),
       lineValue('printedExpiry'),
@@ -365,8 +365,10 @@ describe('PackPhotoReader review of uncertain reads', () => {
     h.mutateAsync.mockResolvedValue(AMBIGUOUS);
     const { lineValue } = harness();
     await openAndRead();
-    const expiry = screen.getByLabelText('Printed expiry', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLInputElement;
-    const precision = screen.getByLabelText('Expiry precision', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLSelectElement;
+    const expiry = screen.getByLabelText('Printed expiry') as HTMLInputElement;
+    const precision = screen.getByLabelText('Expiry precision', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    }) as HTMLSelectElement;
     expect(expiry.value).toBe('');
     expect(selectFieldControl(precision).value).toBe('');
     expect(screen.getByText(/could be read as day-month or month-day/)).toBeInTheDocument();
@@ -403,9 +405,11 @@ describe('PackPhotoReader review of uncertain reads', () => {
     const { lineValue } = harness();
     await openAndRead(() => screen.findByText(/batch number could not be read clearly/));
     expect(screen.getByText(/expiry could not be read as one clear date/)).toBeInTheDocument();
-    const batch = screen.getByLabelText('Batch number', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLInputElement;
-    const expiry = screen.getByLabelText('Printed expiry', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLInputElement;
-    const precision = screen.getByLabelText('Expiry precision', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLSelectElement;
+    const batch = screen.getByLabelText('Batch number') as HTMLInputElement;
+    const expiry = screen.getByLabelText('Printed expiry') as HTMLInputElement;
+    const precision = screen.getByLabelText('Expiry precision', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    }) as HTMLSelectElement;
     expect([batch.value, expiry.value, selectFieldControl(precision).value]).toEqual(['', '', '']);
     expect(
       screen.getByText('Not readable on the photo. Type it from the pack.')
@@ -416,12 +420,12 @@ describe('PackPhotoReader review of uncertain reads', () => {
     expect(lineValue('batchNumber')).toBe('');
     expect(screen.getByText('Type the batch number printed on the pack.')).toBeInTheDocument();
 
-    fireEvent.change(selectFieldControl(batch), { target: { value: 'SYN-HAND-9' } });
+    fireEvent.change(batch, { target: { value: 'SYN-HAND-9' } });
     countConfirmApply('4');
     expect(lineValue('batchNumber')).toBe('');
     expect(screen.getByText('Enter the printed expiry date.')).toBeInTheDocument();
 
-    fireEvent.change(selectFieldControl(expiry), { target: { value: '2028-09-15' } });
+    fireEvent.change(expiry, { target: { value: '2028-09-15' } });
     countConfirmApply('4');
     expect(lineValue('batchNumber')).toBe('');
     expect(
@@ -442,11 +446,11 @@ describe('PackPhotoReader review of uncertain reads', () => {
     h.mutateAsync.mockResolvedValue(PROPOSAL);
     const { lineValue } = harness();
     await openAndRead();
-    fireEvent.change(selectFieldControl(packsField()), { target: { value: '2' } });
+    fireEvent.change(packsField(), { target: { value: '2' } });
     fireEvent.click(confirmBox());
     expect(confirmBox().checked).toBe(true);
 
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Batch number', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'SYN-B2747' } });
+    fireEvent.change(screen.getByLabelText('Batch number'), { target: { value: 'SYN-B2747' } });
     expect(confirmBox().checked).toBe(false);
     fireEvent.click(applyButton());
     expect(lineValue('batchNumber')).toBe('');
@@ -512,9 +516,16 @@ describe('PackPhotoReader shelf choice', () => {
     h.mutateAsync.mockResolvedValue(PROPOSAL);
     const { lineValue } = harness({ locations: TWO_LOCATIONS });
     await openAndRead();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Receive into (optional)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'loc-b' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Receive into (optional)', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'loc-b' },
+      }
+    );
     countConfirmApply('7');
     expect(lineValue('stockLocation')).toBe('loc-b');
   });
@@ -523,13 +534,17 @@ describe('PackPhotoReader shelf choice', () => {
     h.mutateAsync.mockResolvedValue(PROPOSAL);
     const { lineValue, receipt } = harness({ locations: TWO_LOCATIONS });
     // The receiver changed the line's shelf before taking the photo.
-    fireEvent.change(selectFieldControl(receipt.elements.namedItem('stockLocation:pol-1') as HTMLSelectElement), {
+    fireEvent.change(receipt.elements.namedItem('stockLocation:pol-1') as HTMLSelectElement, {
       target: { value: 'loc-b' },
     });
     await openAndRead();
-    expect(selectFieldControl((screen.getByLabelText('Receive into (optional)', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLSelectElement)).value).toBe(
-      'loc-b'
-    );
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Receive into (optional)', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        }) as HTMLSelectElement
+      ).value
+    ).toBe('loc-b');
     countConfirmApply('7');
     expect(lineValue('batchNumber')).toBe('SYN-B2741');
     expect(lineValue('stockLocation')).toBe('loc-b');
@@ -539,10 +554,14 @@ describe('PackPhotoReader shelf choice', () => {
     h.mutateAsync.mockResolvedValue(PROPOSAL);
     const { lineValue, receipt } = harness({ locations: TWO_LOCATIONS });
     await openAndRead();
-    expect(selectFieldControl((screen.getByLabelText('Receive into (optional)', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLSelectElement)).value).toBe(
-      'loc-a'
-    );
-    fireEvent.change(selectFieldControl(receipt.elements.namedItem('stockLocation:pol-1') as HTMLSelectElement), {
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Receive into (optional)', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        }) as HTMLSelectElement
+      ).value
+    ).toBe('loc-a');
+    fireEvent.change(receipt.elements.namedItem('stockLocation:pol-1') as HTMLSelectElement, {
       target: { value: 'loc-b' },
     });
     countConfirmApply('7');
@@ -554,12 +573,18 @@ describe('PackPhotoReader shelf choice', () => {
     h.mutateAsync.mockResolvedValue(PROPOSAL);
     const { lineValue } = harness({ locations: TWO_LOCATIONS });
     await openAndRead();
-    const shelf = screen.getByLabelText('Receive into (optional)', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const shelf = screen.getByLabelText('Receive into (optional)', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
     fireEvent.change(selectFieldControl(shelf), { target: { value: 'loc-b' } });
     fireEvent.change(selectFieldControl(shelf), { target: { value: '' } });
     expect(
-      (within(selectFieldControl(shelf)).getByRole('option', { hidden: true, name: 'Keep the line’s location' }) as HTMLOptionElement)
-        .selected
+      (
+        within(selectFieldControl(shelf)).getByRole('option', {
+          hidden: true,
+          name: 'Keep the line’s location',
+        }) as HTMLOptionElement
+      ).selected
     ).toBe(true);
     countConfirmApply('7');
     expect(lineValue('batchNumber')).toBe('SYN-B2741');
@@ -571,7 +596,7 @@ describe('PackPhotoReader shelf choice', () => {
     harness({ locations: [], defaultLocationId: null });
     await openAndRead();
     expect(screen.getByText(/This branch has no active stock location/)).toBeInTheDocument();
-    expect(screen.queryByLabelText('Receive into (optional)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeNull();
+    expect(screen.queryByLabelText('Receive into (optional)')).toBeNull();
   });
 });
 
@@ -582,7 +607,7 @@ describe('PackPhotoReader counts', () => {
     await openAndRead();
     const hint = () => document.getElementById(packsField().getAttribute('aria-describedby')!);
     expect(hint()).toHaveTextContent('1 STRIP = 10 units');
-    fireEvent.change(selectFieldControl(packsField()), { target: { value: '7' } });
+    fireEvent.change(packsField(), { target: { value: '7' } });
     expect(hint()).toHaveTextContent('7 STRIP × 10 = 70 units');
     expect(hint()).toHaveTextContent('10 STRIP outstanding');
     fireEvent.click(confirmBox());
@@ -625,7 +650,7 @@ const PRICED = {
   price: { kind: 'read', printed: 'MRP Rs. 450.00', amountMinor: 45_000, confidence: 0.9 },
   currentMrpMinor: 45_000,
 };
-const mrpField = () => screen.getByLabelText('Printed MRP per pack (PKR)', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLInputElement;
+const mrpField = () => screen.getByLabelText('Printed MRP per pack (PKR)') as HTMLInputElement;
 const mrpHint = () => document.getElementById(mrpField().getAttribute('aria-describedby')!);
 
 describe('PackPhotoReader printed price', () => {
@@ -678,8 +703,8 @@ describe('PackPhotoReader printed price', () => {
     });
     const { lineValue } = harness({ line: { printedMrp: '440.00' } });
     await openAndRead();
-    const printed = screen.getByLabelText('Printed on the pack: Rs 495.00', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLInputElement;
-    const current = screen.getByLabelText('Current price: Rs 450.00', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLInputElement;
+    const printed = screen.getByLabelText('Printed on the pack: Rs 495.00') as HTMLInputElement;
+    const current = screen.getByLabelText('Current price: Rs 450.00') as HTMLInputElement;
     expect(mrpField().value).toBe('');
     expect(printed.checked).toBe(false);
     expect(current.checked).toBe(false);
@@ -722,14 +747,14 @@ describe('PackPhotoReader printed price', () => {
     await openAndRead();
     expect(mrpField().value).toBe('');
     expect(mrpHint()).toHaveTextContent('More than one price on the label');
-    expect(screen.queryByLabelText(/Printed on the pack/, { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Printed on the pack/)).not.toBeInTheDocument();
 
-    fireEvent.change(selectFieldControl(mrpField()), { target: { value: '45O' } });
+    fireEvent.change(mrpField(), { target: { value: '45O' } });
     countConfirmApply('1');
     expect(screen.getByText(/Enter the printed MRP per pack/)).toBeInTheDocument();
     expect(lineValue('printedMrp')).toBe('');
 
-    fireEvent.change(selectFieldControl(mrpField()), { target: { value: '495' } });
+    fireEvent.change(mrpField(), { target: { value: '495' } });
     countConfirmApply('1');
     expect(lineValue('printedMrp')).toBe('495.00');
   });

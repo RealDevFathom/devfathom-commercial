@@ -1,3 +1,4 @@
+import { chooseSelectField, selectFieldNative } from './fixtures/select-field';
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
 
 import { TOUR_STEPS, tourTargetSelector } from '../../src/lib/demo/tour';
@@ -411,13 +412,17 @@ async function refundCardTender(page: Page, orderNumber: number, cardAmount: str
 
 async function assertMockPaymentAndRefund(page: Page, tenderId: string) {
   await page.goto('/restaurant/money');
-  const branch = page.locator('select[aria-label="Branch"]:enabled');
-  const branchId = await branch
+  const branch = page
+    .getByRole('combobox', { name: 'Branch', exact: true })
+    .and(page.locator(':enabled'));
+  const branchId = await (
+    await selectFieldNative(branch)
+  )
     .locator('option:enabled:not([value=""])')
     .first()
     .getAttribute('value');
   expect(branchId, 'Money must expose an enabled branch.').toBeTruthy();
-  await branch.selectOption(branchId!);
+  await chooseSelectField(branch, branchId!);
   await page.getByRole('tab', { name: 'Payments' }).click();
   const tenderRow = page
     .getByRole('region', { name: 'Payment tenders table' })

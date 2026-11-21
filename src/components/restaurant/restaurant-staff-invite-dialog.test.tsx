@@ -66,10 +66,24 @@ beforeEach(() => {
 describe('RestaurantStaffInviteDialog', () => {
   it('invites a new waiter with a name, email, role, and branch', () => {
     renderDialog();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Full name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Sara Waiter' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Email', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'sara@example.com' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Role', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'role_server' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Primary branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'branch_1' } });
+    fireEvent.change(screen.getByLabelText('Full name'), { target: { value: 'Sara Waiter' } });
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'sara@example.com' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Role', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'role_server' } }
+    );
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Primary branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'branch_1' } }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Send invitation' }));
 
     expect(mocks.inviteMutate).toHaveBeenCalledWith({
@@ -93,7 +107,7 @@ describe('RestaurantStaffInviteDialog', () => {
 
     expect(onInvited).toHaveBeenCalledOnce();
     expect(screen.getByRole('status')).toHaveTextContent('Invitation sent.');
-    expect(selectFieldControl(screen.getByLabelText('Invitation link', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(
+    expect(screen.getByLabelText('Invitation link')).toHaveValue(
       'https://www.devfathom.com/invite/token'
     );
   });
@@ -109,8 +123,14 @@ describe('RestaurantStaffInviteDialog', () => {
   it('disables sending when there is no role the actor may assign', () => {
     mocks.roles.data = [];
     renderDialog();
-    expect(screen.getByLabelText('Role', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
-    expect(screen.getByRole('option', { hidden: true, name: 'No roles you can assign' })).toBeInTheDocument();
+    expect(
+      screen.getByLabelText('Role', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toBeDisabled();
+    expect(
+      screen.getByRole('option', { hidden: true, name: 'No roles you can assign' })
+    ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send invitation' })).toBeDisabled();
   });
 
@@ -118,7 +138,13 @@ describe('RestaurantStaffInviteDialog', () => {
     mocks.roles.data = undefined;
     mocks.roles.error = { message: 'boom' };
     renderDialog();
-    expect(screen.getByRole('option', { hidden: true, name: 'Roles unavailable' })).toBeInTheDocument();
-    expect(screen.getByLabelText('Role', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('aria-invalid', 'true');
+    expect(
+      screen.getByRole('option', { hidden: true, name: 'Roles unavailable' })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText('Role', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toHaveAttribute('aria-invalid', 'true');
   });
 });

@@ -256,13 +256,26 @@ describe('SOP interval recurrence authoring', () => {
       jobRoles: [{ id: 'role_1', key: 'manager', name: 'Manager' }],
     });
 
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Frequency', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'INTERVAL' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Frequency', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'INTERVAL' } }
+    );
 
-    expect(screen.getByLabelText('Every', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('min', '15');
-    expect(selectFieldControl(screen.getByLabelText('Interval unit', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('minutes');
+    expect(screen.getByLabelText('Every')).toHaveAttribute('min', '15');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Interval unit', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('minutes');
     expect(screen.getByText('Days of week · required')).toBeVisible();
-    expect(screen.getByLabelText('Start time', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeRequired();
-    expect(screen.getByLabelText('End time', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeRequired();
+    expect(screen.getByLabelText('Start time')).toBeRequired();
+    expect(screen.getByLabelText('End time')).toBeRequired();
     expect(screen.getByRole('button', { name: 'Preview schedule' })).toBeEnabled();
   });
 

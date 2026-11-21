@@ -1,4 +1,5 @@
-import { SelectField as StudioSelect } from '@/components/ui/select-field';import { Button } from '@/components/ui/button';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
 import { TransferActionForm, type TransferStepAction } from './transfer-action-form';

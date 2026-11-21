@@ -35,14 +35,21 @@ function openForm() {
   fireEvent.click(screen.getByRole('button', { name: 'Enroll print bridge' }));
 }
 function fill() {
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Bridge name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Kitchen host' } });
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'branch' } });
+  fireEvent.change(screen.getByLabelText('Bridge name'), { target: { value: 'Kitchen host' } });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Branch', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    { target: { value: 'branch' } }
+  );
 }
 it('requires an explicit active branch and name', () => {
   openForm();
   expect(screen.getByRole('button', { name: 'Create enrollment code' })).toBeDisabled();
   expect(screen.queryByRole('option', { hidden: true, name: 'Closed' })).not.toBeInTheDocument();
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Bridge name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Kitchen host' } });
+  fireEvent.change(screen.getByLabelText('Bridge name'), { target: { value: 'Kitchen host' } });
   expect(screen.getByRole('button', { name: 'Create enrollment code' })).toBeDisabled();
   expect(h.mutate).not.toHaveBeenCalled();
 });
@@ -50,14 +57,14 @@ it('creates a new device only, shows the code once, and clears it on close', asy
   openForm();
   fill();
   fireEvent.click(screen.getByRole('button', { name: 'Create enrollment code' }));
-  await waitFor(() => expect(selectFieldControl(screen.getByLabelText('One-time enrollment code', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(code));
+  await waitFor(() => expect(screen.getByLabelText('One-time enrollment code')).toHaveValue(code));
   expect(h.mutate).toHaveBeenCalledExactlyOnceWith({ name: 'Kitchen host', branchId: 'branch' });
   expect(h.options).toEqual({ retry: false, gcTime: 0 });
   expect(onCreated).toHaveBeenCalledOnce();
   fireEvent.click(screen.getByRole('button', { name: 'Done' }));
   fireEvent.click(screen.getByRole('button', { name: 'Enroll print bridge' }));
   expect(screen.queryByDisplayValue(code)).not.toBeInTheDocument();
-  expect(selectFieldControl(screen.getByLabelText('Bridge name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
+  expect(screen.getByLabelText('Bridge name')).toHaveValue('');
 });
 it('retains an uncertain failure for reconciliation without retry or sensitive error text', async () => {
   h.mutate.mockRejectedValue(new Error(`internal ${code} rdk_private`));
@@ -98,7 +105,7 @@ it('hides a displayed code immediately when the same organization changes user',
   fireEvent.click(screen.getByRole('button', { name: 'Enroll print bridge' }));
   fill();
   fireEvent.click(screen.getByRole('button', { name: 'Create enrollment code' }));
-  await screen.findByLabelText('One-time enrollment code', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+  await screen.findByLabelText('One-time enrollment code');
   view.rerender(
     <PrintBridgeEnrollment ownerKey="org:other" branches={branches} onCreated={onCreated} />
   );
@@ -149,13 +156,20 @@ it('includes optional printer drafts with the new bridge and omits UI row keys',
   fill();
   fireEvent.click(screen.getByRole('button', { name: 'Add printer' }));
   expect(screen.getByRole('button', { name: 'Create enrollment code' })).toBeDisabled();
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Printer 1 name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: ' Receipt ' } });
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Printer 1 target', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+  fireEvent.change(screen.getByLabelText('Printer 1 name'), { target: { value: ' Receipt ' } });
+  fireEvent.change(screen.getByLabelText('Printer 1 target'), {
     target: { value: ' tcp://printer:9100 ' },
   });
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Printer 1 paper width', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '58' } });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Printer 1 paper width', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    { target: { value: '58' } }
+  );
   fireEvent.click(screen.getByRole('button', { name: 'Create enrollment code' }));
-  await screen.findByLabelText('One-time enrollment code', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+  await screen.findByLabelText('One-time enrollment code');
   expect(h.mutate).toHaveBeenCalledExactlyOnceWith({
     name: 'Kitchen host',
     branchId: 'branch',
@@ -163,7 +177,7 @@ it('includes optional printer drafts with the new bridge and omits UI row keys',
   });
   fireEvent.click(screen.getByRole('button', { name: 'Done' }));
   fireEvent.click(screen.getByRole('button', { name: 'Enroll print bridge' }));
-  expect(screen.queryByLabelText('Printer 1 name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('Printer 1 name')).not.toBeInTheDocument();
 });
 it('prevents duplicate same-tick enrollment and freezes printer drafts while submitting', async () => {
   let resolve!: (value: typeof result) => void;
@@ -192,8 +206,8 @@ it('keeps an invalid printer target editable without creating an uncertain enrol
   openForm();
   fill();
   fireEvent.click(screen.getByRole('button', { name: 'Add printer' }));
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Printer 1 name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Receipt' } });
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Printer 1 target', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+  fireEvent.change(screen.getByLabelText('Printer 1 name'), { target: { value: 'Receipt' } });
+  fireEvent.change(screen.getByLabelText('Printer 1 target'), {
     target: { value: 'https://printer' },
   });
   const button = screen.getByRole('button', { name: 'Create enrollment code' });
@@ -201,7 +215,7 @@ it('keeps an invalid printer target editable without creating an uncertain enrol
   fireEvent.submit(button.closest('form')!);
   expect(h.mutate).not.toHaveBeenCalled();
   expect(screen.getByRole('alert')).toHaveTextContent('valid TCP');
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Printer 1 target', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+  fireEvent.change(screen.getByLabelText('Printer 1 target'), {
     target: { value: '/dev/usb/lp0' },
   });
   expect(button).toBeEnabled();

@@ -26,18 +26,32 @@ describe('SplitBillDialog', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Split bill' }));
     dialog = screen.getByRole('dialog', { name: 'Split bill' });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Split method', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'BY_SEAT' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        within(dialog).getByLabelText('Split method', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'BY_SEAT' },
+      }
+    );
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create split bills' }));
     await waitFor(() => expect(onSplit).toHaveBeenLastCalledWith({ kind: 'BY_SEAT' }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Split bill' }));
     dialog = screen.getByRole('dialog', { name: 'Split bill' });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Split method', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'FRACTIONAL' },
-    });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Fractional weights', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(
+      selectFieldControl(
+        within(dialog).getByLabelText('Split method', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'FRACTIONAL' },
+      }
+    );
+    fireEvent.change(within(dialog).getByLabelText('Fractional weights'), {
       target: { value: '1, 2' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create split bills' }));
@@ -52,10 +66,17 @@ describe('SplitBillDialog', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Split bill' }));
     const dialog = screen.getByRole('dialog', { name: 'Split bill' });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Split method', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'FRACTIONAL' },
-    });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Fractional weights', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(
+      selectFieldControl(
+        within(dialog).getByLabelText('Split method', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'FRACTIONAL' },
+      }
+    );
+    fireEvent.change(within(dialog).getByLabelText('Fractional weights'), {
       target: { value: '1, 1.5' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create split bills' }));
@@ -74,8 +95,20 @@ describe('SplitBillDialog', () => {
     expect(screen.getByText('2 × Soup')).toBeVisible();
     expect(screen.getByText('Order line 2 · No seat')).toBeVisible();
     expect(screen.queryByText(/item-1|item-2/)).not.toBeInTheDocument();
-    expect(selectFieldControl(screen.getByLabelText('Guest bill for Burger, order line 1', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('1');
-    expect(selectFieldControl(screen.getByLabelText('Guest bill for Soup, order line 2', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Guest bill for Burger, order line 1', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('1');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Guest bill for Soup, order line 2', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('2');
   });
 
   it('distinguishes otherwise identical order lines', () => {
@@ -93,8 +126,20 @@ describe('SplitBillDialog', () => {
 
     expect(screen.getByText('Order line 1 · No seat · Iced')).toBeVisible();
     expect(screen.getByText('Order line 2 · No seat · Iced')).toBeVisible();
-    expect(selectFieldControl(screen.getByLabelText('Guest bill for Tea, order line 1', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('1');
-    expect(selectFieldControl(screen.getByLabelText('Guest bill for Tea, order line 2', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Guest bill for Tea, order line 1', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('1');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Guest bill for Tea, order line 2', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('2');
   });
 
   it('groups selected dishes while submitting only their internal IDs', async () => {
@@ -110,9 +155,16 @@ describe('SplitBillDialog', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Split bill' }));
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Guest bill for Tea, order line 3', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: '1' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Guest bill for Tea, order line 3', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: '1' },
+      }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Create split bills' }));
 
     await waitFor(() =>
@@ -136,13 +188,38 @@ describe('SplitBillDialog', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Split bill' }));
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Guest bill for Soup, order line 2', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: '1' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Guest bill for Soup, order line 2', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: '1' },
+      }
+    );
 
-    expect(selectFieldControl(screen.getByLabelText('Guest bill for Burger, order line 1', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('1');
-    expect(selectFieldControl(screen.getByLabelText('Guest bill for Soup, order line 2', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('1');
-    expect(selectFieldControl(screen.getByLabelText('Guest bill for Tea, order line 3', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Guest bill for Burger, order line 1', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('1');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Guest bill for Soup, order line 2', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('1');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Guest bill for Tea, order line 3', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('2');
 
     fireEvent.click(screen.getByRole('button', { name: 'Create split bills' }));
     await screen.findByRole('alert');
@@ -150,14 +227,33 @@ describe('SplitBillDialog', () => {
       kind: 'BY_ITEM',
       groups: [['item-1', 'item-2'], ['item-3']],
     });
-    expect(selectFieldControl(screen.getByLabelText('Guest bill for Tea, order line 3', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Guest bill for Tea, order line 3', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('2');
 
     // Reassign to an unused number and retry: the displayed bill must still
     // match the one-based position of its submitted group.
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Guest bill for Tea, order line 3', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: '3' },
-    });
-    expect(selectFieldControl(screen.getByLabelText('Guest bill for Tea, order line 3', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2');
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Guest bill for Tea, order line 3', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: '3' },
+      }
+    );
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Guest bill for Tea, order line 3', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('2');
     fireEvent.click(screen.getByRole('button', { name: 'Create split bills' }));
     await waitFor(() => expect(onSplit).toHaveBeenCalledTimes(2));
     expect(onSplit).toHaveBeenLastCalledWith({
@@ -171,9 +267,16 @@ describe('SplitBillDialog', () => {
     const { rerender } = render(<SplitBillDialog items={items} onSplit={onSplit} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Split bill' }));
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Guest bill for Burger, order line 1', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: '2' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Guest bill for Burger, order line 1', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: '2' },
+      }
+    );
 
     const refreshedItems = [
       items[0],
@@ -182,9 +285,27 @@ describe('SplitBillDialog', () => {
     ];
     rerender(<SplitBillDialog items={refreshedItems} onSplit={onSplit} />);
 
-    expect(selectFieldControl(screen.getByLabelText('Guest bill for Burger, order line 1', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('1');
-    expect(selectFieldControl(screen.getByLabelText('Guest bill for Tea, order line 2', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2');
-    expect(selectFieldControl(screen.getByLabelText('Guest bill for Cake, order line 3', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('3');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Guest bill for Burger, order line 1', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('1');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Guest bill for Tea, order line 2', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('2');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Guest bill for Cake, order line 3', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('3');
 
     fireEvent.click(screen.getByRole('button', { name: 'Create split bills' }));
 
@@ -201,14 +322,33 @@ describe('SplitBillDialog', () => {
     const { rerender } = render(<SplitBillDialog items={items} onSplit={onSplit} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Split bill' }));
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Guest bill for Burger, order line 1', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: '2' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Guest bill for Burger, order line 1', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: '2' },
+      }
+    );
 
     rerender(<SplitBillDialog items={[items[1], items[0]]} onSplit={onSplit} />);
 
-    expect(selectFieldControl(screen.getByLabelText('Guest bill for Soup, order line 1', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('1');
-    expect(selectFieldControl(screen.getByLabelText('Guest bill for Burger, order line 2', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Guest bill for Soup, order line 1', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('1');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Guest bill for Burger, order line 2', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('2');
 
     fireEvent.click(screen.getByRole('button', { name: 'Create split bills' }));
 

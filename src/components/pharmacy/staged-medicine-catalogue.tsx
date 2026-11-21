@@ -57,12 +57,7 @@ async function loadReview(
       query: text('query'),
       page: Number(text('page') || '1'),
       filter: (text('filter') || 'all') as
-        | 'all'
-        | 'stock'
-        | 'price'
-        | 'collision'
-        | 'not-created'
-        | 'codes-not-added',
+        'all' | 'stock' | 'price' | 'collision' | 'not-created' | 'codes-not-added',
     });
     const explicit = {
       branchId: text('branchId'),
@@ -304,7 +299,11 @@ export async function StagedMedicineCatalogue({
             </label>
             <label className="grid gap-2 text-sm">
               Review filter
-              <StudioSelect name="filter" defaultValue={text('filter') || 'all'} className={selectClass}>
+              <StudioSelect
+                name="filter"
+                defaultValue={text('filter') || 'all'}
+                className={selectClass}
+              >
                 <option value="all">All candidates</option>
                 <option value="stock">Open batch / expiry gaps</option>
                 <option value="price">Open verified price gaps</option>

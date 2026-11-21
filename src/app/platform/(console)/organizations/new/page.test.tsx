@@ -42,7 +42,7 @@ function fillPharmacyOnboarding() {
     ['Administrator email', 'admin@clifton.test'],
     ['Temporary administrator password', 'temporary-password-123'],
   ] as const) {
-    fireEvent.change(selectFieldControl(screen.getByLabelText(label, { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value } });
+    fireEvent.change(screen.getByLabelText(label), { target: { value } });
   }
 }
 
@@ -117,12 +117,12 @@ describe('NewOrganizationPage package step', () => {
     try {
       render(await renderPage({ vertical: 'PHARMACY' }));
       fillPharmacyOnboarding();
-      const slug = screen.getByLabelText('Workspace slug', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+      const slug = screen.getByLabelText('Workspace slug');
       expect(slug).toHaveAttribute('minlength', '3');
       expect(slug).toHaveAttribute('maxlength', '63');
       expect(slug).toHaveAttribute('pattern', '\\s*[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*\\s*');
 
-      fireEvent.change(selectFieldControl(slug), { target: { value } });
+      fireEvent.change(slug, { target: { value } });
       fireEvent.submit(slug.closest('form')!);
 
       expect(fetchMock).not.toHaveBeenCalled();
@@ -142,8 +142,8 @@ describe('NewOrganizationPage package step', () => {
       try {
         render(await renderPage({ vertical: 'PHARMACY' }));
         fillPharmacyOnboarding();
-        const slug = screen.getByLabelText('Workspace slug', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-        fireEvent.change(selectFieldControl(slug), { target: { value } });
+        const slug = screen.getByLabelText('Workspace slug');
+        fireEvent.change(slug, { target: { value } });
 
         // Native submission must permit the same input as the submit handler.
         expect(slug).toBeValid();
@@ -163,22 +163,43 @@ describe('NewOrganizationPage package step', () => {
 
   it('resets an overridden seat limit to the selected package default', async () => {
     render(await renderPage({ vertical: 'RESTAURANT' }));
-    const seats = screen.getByLabelText('Seat limit', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-    expect(selectFieldControl(seats)).toHaveValue(25);
-    fireEvent.change(selectFieldControl(seats), { target: { value: '7' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Commercial package', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'pkg_r2' } });
-    expect(selectFieldControl(screen.getByLabelText('Seat limit', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(120);
-    expect(screen.getByLabelText('Seat limit', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('max', '120');
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Commercial package', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'pkg_r1' } });
-    expect(selectFieldControl(screen.getByLabelText('Seat limit', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(25);
+    const seats = screen.getByLabelText('Seat limit');
+    expect(seats).toHaveValue(25);
+    fireEvent.change(seats, { target: { value: '7' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Commercial package', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'pkg_r2' } }
+    );
+    expect(screen.getByLabelText('Seat limit')).toHaveValue(120);
+    expect(screen.getByLabelText('Seat limit')).toHaveAttribute('max', '120');
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Commercial package', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'pkg_r1' } }
+    );
+    expect(screen.getByLabelText('Seat limit')).toHaveValue(25);
   });
 
   it('disables seat overrides for other platform operators', async () => {
     mocks.requirePlatformRead.mockResolvedValue({ role: 'SALES' });
     render(await renderPage({ vertical: 'RESTAURANT' }));
-    expect(screen.getByLabelText('Seat limit', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Commercial package', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'pkg_r2' } });
-    expect(selectFieldControl(screen.getByLabelText('Seat limit', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(120);
+    expect(screen.getByLabelText('Seat limit')).toBeDisabled();
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Commercial package', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'pkg_r2' } }
+    );
+    expect(screen.getByLabelText('Seat limit')).toHaveValue(120);
   });
 
   it('offers only shared deployment when Vercel provisioning is not configured', async () => {
@@ -255,15 +276,15 @@ describe('NewOrganizationPage package step', () => {
   it('defaults a PHARMACY organization to the Pakistan market timezone and currency', async () => {
     const { container } = render(await renderPage({ vertical: 'PHARMACY' }));
 
-    expect(selectFieldControl(container.querySelector('input[name="currency"]'))).toHaveValue('PKR');
-    expect(selectFieldControl(container.querySelector('input[name="timezone"]'))).toHaveValue('Asia/Karachi');
+    expect(container.querySelector('input[name="currency"]')).toHaveValue('PKR');
+    expect(container.querySelector('input[name="timezone"]')).toHaveValue('Asia/Karachi');
   });
 
   it('keeps the commercial USD default for an AGENCY organization', async () => {
     const { container } = render(await renderPage({ vertical: 'AGENCY' }));
 
-    expect(selectFieldControl(container.querySelector('input[name="currency"]'))).toHaveValue('USD');
-    expect(selectFieldControl(container.querySelector('input[name="timezone"]'))).toHaveValue('UTC');
+    expect(container.querySelector('input[name="currency"]')).toHaveValue('USD');
+    expect(container.querySelector('input[name="timezone"]')).toHaveValue('UTC');
   });
 
   it('asks a PHARMACY organization for its first branch premises, province by name', async () => {
@@ -296,7 +317,7 @@ describe('NewOrganizationPage package step', () => {
 
     const verticalField = container.querySelector('input[name="vertical"]');
     expect(verticalField).toHaveAttribute('type', 'hidden');
-    expect(selectFieldControl(verticalField)).toHaveValue('RESTAURANT');
+    expect(verticalField).toHaveValue('RESTAURANT');
 
     const options = [...container.querySelectorAll('select[name="packageId"] option')];
     expect(options.map((option) => option.textContent)).toEqual([
@@ -309,8 +330,8 @@ describe('NewOrganizationPage package step', () => {
   it('associates timezone and business day cutoff with exactly one control each', async () => {
     const { container } = render(await renderPage({ vertical: 'RESTAURANT' }));
 
-    expect(screen.getByLabelText(/timezone/i, { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('data-field-name', 'timezone');
-    expect(screen.getByLabelText(/business day cutoff/i, { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBe(
+    expect(screen.getByLabelText(/timezone/i)).toHaveAttribute('data-field-name', 'timezone');
+    expect(screen.getByLabelText(/business day cutoff/i)).toBe(
       container.querySelector('input[name="businessDayCutoff"]')
     );
   });
@@ -346,8 +367,8 @@ describe('NewOrganizationPage package step', () => {
     expect(mocks.packageFindMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { active: true, vertical: 'AGENCY' } })
     );
-    expect(selectFieldControl(container.querySelector('input[name="opportunityId"]'))).toHaveValue('opp_9');
-    expect(selectFieldControl(container.querySelector('input[name="vertical"]'))).toHaveValue('AGENCY');
+    expect(container.querySelector('input[name="opportunityId"]')).toHaveValue('opp_9');
+    expect(container.querySelector('input[name="vertical"]')).toHaveValue('AGENCY');
   });
 
   it('offers a way back to the type choice instead of an irreversible step', async () => {
@@ -387,11 +408,18 @@ it('submits the selected package default and a super admin override within its c
   try {
     const { container } = render(await renderPage({ vertical: 'PHARMACY' }));
     fillPharmacyOnboarding();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Commercial package', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'professional' },
-    });
-    const seats = screen.getByLabelText('Seat limit', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-    expect(selectFieldControl(seats)).toHaveValue(50);
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Commercial package', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'professional' },
+      }
+    );
+    const seats = screen.getByLabelText('Seat limit');
+    expect(seats).toHaveValue(50);
     expect(seats).toHaveAttribute('max', '50');
     fireEvent.submit(container.querySelector('form')!);
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
@@ -399,7 +427,7 @@ it('submits the selected package default and a super admin override within its c
     expect(first.packageId).toBe('professional');
     expect(first.seatLimit).toBe(50);
     await waitFor(() => expect(screen.queryByText('Working…')).not.toBeInTheDocument());
-    fireEvent.change(selectFieldControl(seats), { target: { value: '25' } });
+    fireEvent.change(seats, { target: { value: '25' } });
     fireEvent.submit(container.querySelector('form')!);
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(JSON.parse(fetchMock.mock.calls[1]![1].body).payload.seatLimit).toBe(25);

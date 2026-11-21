@@ -68,15 +68,21 @@ it('DEV-780: the owner sets the use limit when issuing and the form posts it', a
     />
   );
   expect(screen.getByText(/No vouchers yet/)).toBeInTheDocument();
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Voucher code', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'GIFT10' } });
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Voucher name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Gift sets' } });
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Value per use (Rs)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '150' } });
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Uses allowed', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '25' } });
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Message for customers', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+  fireEvent.change(screen.getByLabelText('Voucher code'), { target: { value: 'GIFT10' } });
+  fireEvent.change(screen.getByLabelText('Voucher name'), { target: { value: 'Gift sets' } });
+  fireEvent.change(screen.getByLabelText('Value per use (Rs)'), { target: { value: '150' } });
+  fireEvent.change(screen.getByLabelText('Uses allowed'), { target: { value: '25' } });
+  fireEvent.change(screen.getByLabelText('Message for customers'), {
     target: { value: 'Rs 150 off gift sets.' },
   });
-  fireEvent.click(screen.getByLabelText(/I reviewed the code, value, use limit/, { selector: ':not([data-select-field-native][aria-hidden="true"])' }));
-  expect(selectFieldControl(screen.getByLabelText('Approver', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('staff-b');
+  fireEvent.click(screen.getByLabelText(/I reviewed the code, value, use limit/));
+  expect(
+    selectFieldControl(
+      screen.getByLabelText('Approver', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    )
+  ).toHaveValue('staff-b');
   fireEvent.click(screen.getByRole('button', { name: 'Issue voucher' }));
   await waitFor(() => expect(action).toHaveBeenCalledTimes(1));
   const data = action.mock.calls[0]![0] as FormData;

@@ -103,7 +103,7 @@ describe('reworking a sent-back procedure', () => {
 
     // New photo proof on a done step that never needed one: optional, not "required".
     const photo = screen.getByLabelText(
-      'Photo for Confirm the refrigerator temperature was recorded', { selector: ':not([data-select-field-native][aria-hidden="true"])' }
+      'Photo for Confirm the refrigerator temperature was recorded'
     );
     expect(photo).toHaveAttribute('type', 'file');
     expect(screen.getByText('Photo · optional')).toBeVisible();
@@ -111,7 +111,8 @@ describe('reworking a sent-back procedure', () => {
     // Another record, offered in plain words.
     expect(screen.getByText('Link another temperature log')).toBeVisible();
     const picker = screen.getByLabelText(
-      'temperature log for Confirm the refrigerator temperature was recorded', { selector: ':not([data-select-field-native][aria-hidden="true"])' }
+      'temperature log for Confirm the refrigerator temperature was recorded',
+      { selector: ':not([data-select-field-native][aria-hidden="true"])' }
     );
     fireEvent.change(selectFieldControl(picker), { target: { value: 'temp-2' } });
     fireEvent.click(screen.getByRole('button', { name: 'Link record' }));
@@ -122,7 +123,7 @@ describe('reworking a sent-back procedure', () => {
     // A note for this step.
     const save = screen.getByRole('button', { name: 'Save note for step 1' });
     expect(save).toBeDisabled();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('What you changed on this step', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('What you changed on this step'), {
       target: { value: '  Linked this morning’s reading.  ' },
     });
     fireEvent.click(save);
@@ -141,7 +142,7 @@ describe('reworking a sent-back procedure', () => {
     given(reworkOccurrence());
     render(<RunnerHarness />);
     const section = screen.getByRole('region', { name: 'What did you change?' });
-    fireEvent.change(selectFieldControl(within(section).getByLabelText('Your note', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(section).getByLabelText('Your note'), {
       target: { value: 'Replaced the reading with today’s.' },
     });
     fireEvent.click(within(section).getByRole('button', { name: 'Save note' }));
@@ -289,13 +290,14 @@ describe('reworking a sent-back procedure', () => {
     render(<RunnerHarness />);
     fireEvent.click(screen.getByRole('button', { name: 'Add a change to step 1' }));
     const picker = screen.getByLabelText(
-      'temperature log for Confirm the refrigerator temperature was recorded', { selector: ':not([data-select-field-native][aria-hidden="true"])' }
+      'temperature log for Confirm the refrigerator temperature was recorded',
+      { selector: ':not([data-select-field-native][aria-hidden="true"])' }
     );
     const noteLabel = /What happened and what you did · required/;
 
     // An in-range reading links as before, with no note.
     fireEvent.change(selectFieldControl(picker), { target: { value: 'temp-ok' } });
-    expect(screen.queryByLabelText(noteLabel, { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(noteLabel)).not.toBeInTheDocument();
 
     // An out-of-range one needs the note first, then carries it.
     fireEvent.change(selectFieldControl(picker), { target: { value: 'temp-hot' } });
@@ -304,13 +306,13 @@ describe('reworking a sent-back procedure', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(
       'This reading is out of range. Write what happened and what you did.'
     );
-    const note = screen.getByLabelText(noteLabel, { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const note = screen.getByLabelText(noteLabel);
     expect(note).toHaveAttribute('aria-required', 'true');
     expect(note).toHaveAttribute('aria-invalid', 'true');
     expect(note).toHaveAccessibleDescription(
       'This reading is out of range. Write what happened and what you did.'
     );
-    fireEvent.change(selectFieldControl(note), { target: { value: '  Door left open; moved stock.  ' } });
+    fireEvent.change(note, { target: { value: '  Door left open; moved stock.  ' } });
     // Typing clears the refusal.
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Link record' }));
@@ -345,12 +347,15 @@ describe('reworking a sent-back procedure', () => {
     render(<RunnerHarness />);
     fireEvent.click(screen.getByRole('button', { name: 'Add a change to step 1' }));
     fireEvent.change(
-      selectFieldControl(screen.getByLabelText(
-        'temperature log for Confirm the refrigerator temperature was recorded', { selector: ':not([data-select-field-native][aria-hidden="true"])' }
-      )),
+      selectFieldControl(
+        screen.getByLabelText(
+          'temperature log for Confirm the refrigerator temperature was recorded',
+          { selector: ':not([data-select-field-native][aria-hidden="true"])' }
+        )
+      ),
       { target: { value: 'temp-hot' } }
     );
-    expect(screen.queryByLabelText(/What happened and what you did/, { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/What happened and what you did/)).not.toBeInTheDocument();
   });
 
   it('needs no link note when the procedure records excursions on their own step', () => {
@@ -368,12 +373,15 @@ describe('reworking a sent-back procedure', () => {
     render(<RunnerHarness />);
     fireEvent.click(screen.getByRole('button', { name: 'Add a change to step 1' }));
     fireEvent.change(
-      selectFieldControl(screen.getByLabelText(
-        'temperature log for Confirm the refrigerator temperature was recorded', { selector: ':not([data-select-field-native][aria-hidden="true"])' }
-      )),
+      selectFieldControl(
+        screen.getByLabelText(
+          'temperature log for Confirm the refrigerator temperature was recorded',
+          { selector: ':not([data-select-field-native][aria-hidden="true"])' }
+        )
+      ),
       { target: { value: 'temp-hot' } }
     );
-    expect(screen.queryByLabelText(/What happened and what you did/, { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/What happened and what you did/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Link record' }));
     expect(h.calls.linkRecord).toEqual([expect.not.objectContaining({ note: expect.anything() })]);
   });

@@ -1,4 +1,3 @@
-import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, fireEvent, render, screen, act, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
@@ -352,7 +351,7 @@ const sentBatchIds = () => mocks.runNow.mock.calls.map(([input]) => (input as Ru
 
 async function chooseAndPreview(count: number) {
   render(<MedicineReferenceWorkbench health={[]} />);
-  fireEvent.change(selectFieldControl(screen.getByLabelText('CSV or Excel workbook', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+  fireEvent.change(screen.getByLabelText('CSV or Excel workbook'), {
     target: { files: [referenceCsv(count)] },
   });
   fireEvent.click(await screen.findByRole('button', { name: 'Preview normalized rows' }));
@@ -419,7 +418,7 @@ it('invalidates both review queues after an import so new proposals appear', asy
 
 it('rejects a file above 20,000 rows before any upload', async () => {
   render(<MedicineReferenceWorkbench health={[]} />);
-  fireEvent.change(selectFieldControl(screen.getByLabelText('CSV or Excel workbook', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+  fireEvent.change(screen.getByLabelText('CSV or Excel workbook'), {
     target: { files: [referenceCsv(20_001)] },
   });
   await waitFor(() =>
@@ -433,7 +432,7 @@ it('rejects a file above 20,000 rows before any upload', async () => {
 
 it('allows the upload controls to shrink within a narrow viewport', () => {
   render(<MedicineReferenceWorkbench health={[]} />);
-  const input = screen.getByLabelText('CSV or Excel workbook', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+  const input = screen.getByLabelText('CSV or Excel workbook');
   const label = input.closest('label');
   expect(input).toHaveClass('min-w-0');
   expect(label).toHaveClass('min-w-0');
@@ -449,7 +448,7 @@ it('auto-maps an official DRAP export and sends it as regulator data for review'
     'Registration No,Brand Name,Strength,Dosage Form,Pack Size,Prescription Status',
     '012345,Amoxil,500 mg,Capsule,2 x 10,Prescription Only',
   ].join('\n');
-  fireEvent.change(selectFieldControl(screen.getByLabelText('CSV or Excel workbook', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+  fireEvent.change(screen.getByLabelText('CSV or Excel workbook'), {
     target: { files: [new File([csv], 'drap.csv', { type: 'text/csv' })] },
   });
   fireEvent.click(await screen.findByRole('button', { name: 'Preview normalized rows' }));

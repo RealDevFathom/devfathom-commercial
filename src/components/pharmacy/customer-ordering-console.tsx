@@ -622,9 +622,7 @@ export function PharmacyCustomerOrderingConsole() {
 
           <div className="mt-5 flex items-center justify-between gap-3 border-t border-border-subtle pt-4">
             <div>
-              <p className="font-mono text-xs tracking-wide text-text-muted uppercase">
-                Total
-              </p>
+              <p className="font-mono text-xs tracking-wide text-text-muted uppercase">Total</p>
               <p className="font-display text-xl font-semibold text-text-strong">
                 {formatOrderMoney(totalMinor, currency)}
               </p>

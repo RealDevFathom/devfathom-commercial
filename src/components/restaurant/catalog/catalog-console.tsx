@@ -1122,8 +1122,8 @@ export function RestaurantCatalogConsole({
                             Configure required choices and their component products.
                           </p>
                           <p className="text-sm text-text-muted">
-                            Combos cannot be added to menus or ordered until the order flow
-                            supports combo selections.
+                            Combos cannot be added to menus or ordered until the order flow supports
+                            combo selections.
                           </p>
                         </div>
                         {canWrite ? (
@@ -3028,7 +3028,12 @@ export function RestaurantCatalogConsole({
                         <Field
                           label={editor.sourceType === 'ingredient' ? 'Ingredient' : 'Sub-recipe'}
                         >
-                          <StudioSelect name="sourceId" required defaultValue="" className={selectClass}>
+                          <StudioSelect
+                            name="sourceId"
+                            required
+                            defaultValue=""
+                            className={selectClass}
+                          >
                             <option value="" disabled>
                               Select source
                             </option>

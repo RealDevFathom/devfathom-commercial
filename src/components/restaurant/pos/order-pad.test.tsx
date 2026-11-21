@@ -336,10 +336,17 @@ async function unlock(fetch: ReturnType<typeof transport>) {
   expect(screen.getByText('Front register · Clifton Flagship')).toBeVisible();
   expect(screen.queryByText(/branch-1/)).not.toBeInTheDocument();
   await screen.findByRole('option', { hidden: true, name: 'Amina Rahman — Shift lead' });
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Operator', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-    target: { value: 'staff-1' },
-  });
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Operator PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '1234' } });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Operator', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    {
+      target: { value: 'staff-1' },
+    }
+  );
+  fireEvent.change(screen.getByLabelText('Operator PIN'), { target: { value: '1234' } });
   fireEvent.click(screen.getByRole('button', { name: 'Unlock terminal' }));
   await screen.findByRole('heading', { name: 'Order pad' });
   await waitFor(() => expect(screen.getByRole('button', { name: 'Open order' })).toBeEnabled());
@@ -404,7 +411,7 @@ describe('OrderPad transport', () => {
     });
     expect(screen.getByRole('button', { name: /Coffee4\.00/ })).toBeVisible();
     expect(screen.queryByRole('heading', { name: 'Terminal locked' })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Operator PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Operator PIN')).not.toBeInTheDocument();
     const bootstraps = fetch.mock.calls.filter(([input]) =>
       String(input).endsWith('/demo/restaurants/device-session')
     );
@@ -515,14 +522,28 @@ describe('OrderPad transport', () => {
     await unlock(fetch);
     fireEvent.click(screen.getByRole('button', { name: 'Refund' }));
     await screen.findByRole('option', { hidden: true, name: /R-0042/ });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Settled receipt', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'tender-1' },
-    });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Guest request' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Approving manager', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'staff-2' },
-    });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Manager PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '0000' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Settled receipt', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'tender-1' },
+      }
+    );
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Guest request' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Approving manager', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'staff-2' },
+      }
+    );
+    fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '0000' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review refund' }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
 
@@ -535,18 +556,32 @@ describe('OrderPad transport', () => {
     const fetch = transport();
     await unlock(fetch);
 
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Channel', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'DELIVERY' } });
-    const instructions = await screen.findByLabelText('Delivery instructions', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-    fireEvent.change(selectFieldControl(instructions), { target: { value: 'Private gate code 9876' } });
-    expect(selectFieldControl(instructions)).toHaveValue('Private gate code 9876');
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Channel', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'DELIVERY' } }
+    );
+    const instructions = await screen.findByLabelText('Delivery instructions');
+    fireEvent.change(instructions, { target: { value: 'Private gate code 9876' } });
+    expect(instructions).toHaveValue('Private gate code 9876');
 
     fireEvent.click(screen.getByRole('button', { name: 'Lock terminal' }));
     await screen.findByRole('heading', { name: 'Terminal locked' });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Operator', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'staff-1' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Operator PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '1234' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Operator', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'staff-1' } }
+    );
+    fireEvent.change(screen.getByLabelText('Operator PIN'), { target: { value: '1234' } });
     fireEvent.click(screen.getByRole('button', { name: 'Unlock terminal' }));
     await screen.findByRole('heading', { name: 'Order pad' });
-    expect(selectFieldControl(await screen.findByLabelText('Delivery instructions', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
+    expect(await screen.findByLabelText('Delivery instructions')).toHaveValue('');
   });
 
   it('ignores a deferred customer response after lock', async () => {
@@ -554,8 +589,15 @@ describe('OrderPad transport', () => {
     const gate = new Promise<void>((resolve) => (release = resolve));
     const fetch = transport({ customerSearchGates: [gate] });
     await unlock(fetch);
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Channel', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'DELIVERY' } });
-    fireEvent.change(selectFieldControl(await screen.findByLabelText('Customer name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Channel', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'DELIVERY' } }
+    );
+    fireEvent.change(await screen.findByLabelText('Customer name'), {
       target: { value: 'Private' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
@@ -571,16 +613,23 @@ describe('OrderPad transport', () => {
     const gate = new Promise<void>((resolve) => (release = resolve));
     const fetch = transport({ customerSearchGates: [gate] });
     await unlock(fetch);
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Channel', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'DELIVERY' } });
-    fireEvent.change(selectFieldControl(await screen.findByLabelText('Customer name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Channel', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'DELIVERY' } }
+    );
+    fireEvent.change(await screen.findByLabelText('Customer name'), {
       target: { value: 'Private' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     fireEvent.click(screen.getByRole('button', { name: 'Switch operator' }));
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Operator', { selector: '#switch-operator-id' })), {
+    fireEvent.change(screen.getByLabelText('Operator', { selector: '#switch-operator-id' }), {
       target: { value: 'staff-2' },
     });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Operator PIN', { selector: '#switch-operator-pin' })), {
+    fireEvent.change(screen.getByLabelText('Operator PIN', { selector: '#switch-operator-pin' }), {
       target: { value: '1234' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Confirm switch' }));
@@ -588,7 +637,7 @@ describe('OrderPad transport', () => {
     release();
     await Promise.resolve();
     expect(screen.queryByText('Private Guest')).not.toBeInTheDocument();
-    expect(selectFieldControl(screen.getByLabelText('Customer name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
+    expect(screen.getByLabelText('Customer name')).toHaveValue('');
   });
 
   it('ignores a deferred customer response after device revocation', async () => {
@@ -599,12 +648,27 @@ describe('OrderPad transport', () => {
       openErrors: [{ status: 403, error: 'This device has been revoked.' }],
     });
     await unlock(fetch);
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Channel', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'DELIVERY' } });
-    const customerName = await screen.findByLabelText('Customer name', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-    fireEvent.change(selectFieldControl(customerName), { target: { value: 'Private' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Channel', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'DELIVERY' } }
+    );
+    const customerName = await screen.findByLabelText('Customer name');
+    fireEvent.change(customerName, { target: { value: 'Private' } });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Private Guest' }));
-    await waitFor(() => expect(selectFieldControl(screen.getByLabelText('Saved address', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('address-1'));
+    await waitFor(() =>
+      expect(
+        selectFieldControl(
+          screen.getByLabelText('Saved address', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        )
+      ).toHaveValue('address-1')
+    );
     fireEvent.click(screen.getByRole('button', { name: /Coffee4\.00/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Add to order' }));
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
@@ -621,12 +685,27 @@ describe('OrderPad transport', () => {
     const gate = new Promise<void>((resolve) => (release = resolve));
     const fetch = transport({ customerSearchGates: [Promise.resolve(), gate] });
     await unlock(fetch);
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Channel', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'DELIVERY' } });
-    const customerName = await screen.findByLabelText('Customer name', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-    fireEvent.change(selectFieldControl(customerName), { target: { value: 'Private' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Channel', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'DELIVERY' } }
+    );
+    const customerName = await screen.findByLabelText('Customer name');
+    fireEvent.change(customerName, { target: { value: 'Private' } });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Private Guest' }));
-    await waitFor(() => expect(selectFieldControl(screen.getByLabelText('Saved address', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('address-1'));
+    await waitFor(() =>
+      expect(
+        selectFieldControl(
+          screen.getByLabelText('Saved address', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        )
+      ).toHaveValue('address-1')
+    );
     fireEvent.click(screen.getByRole('button', { name: /Coffee4\.00/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Add to order' }));
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
@@ -637,23 +716,38 @@ describe('OrderPad transport', () => {
         fetch.mock.calls.some(([input]) => String(input).endsWith('/orders/delivery/attach'))
       ).toBe(true)
     );
-    await waitFor(() => expect(selectFieldControl(screen.getByLabelText('Customer name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(''));
+    await waitFor(() => expect(screen.getByLabelText('Customer name')).toHaveValue(''));
     release();
     await Promise.resolve();
     expect(screen.queryByText('Private Guest')).not.toBeInTheDocument();
-    expect(selectFieldControl(screen.getByLabelText('Customer name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
+    expect(screen.getByLabelText('Customer name')).toHaveValue('');
   });
 
   it('preserves the delivery success notice while reconciling the opened order', async () => {
     const fetch = transport({ customerSearchGates: [Promise.resolve()] });
     await unlock(fetch);
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Channel', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'DELIVERY' } });
-    fireEvent.change(selectFieldControl(await screen.findByLabelText('Customer name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Channel', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'DELIVERY' } }
+    );
+    fireEvent.change(await screen.findByLabelText('Customer name'), {
       target: { value: 'Private' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Private Guest' }));
-    await waitFor(() => expect(selectFieldControl(screen.getByLabelText('Saved address', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('address-1'));
+    await waitFor(() =>
+      expect(
+        selectFieldControl(
+          screen.getByLabelText('Saved address', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        )
+      ).toHaveValue('address-1')
+    );
     fireEvent.click(screen.getByRole('button', { name: /Coffee4\.00/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Add to order' }));
     fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
@@ -722,20 +816,41 @@ describe('OrderPad transport', () => {
       deliveryZoneGates: [zoneGate, Promise.resolve()],
     });
     await unlock(fetch);
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Channel', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'DELIVERY' } });
-    fireEvent.change(selectFieldControl(await screen.findByLabelText('Customer name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Channel', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'DELIVERY' } }
+    );
+    fireEvent.change(await screen.findByLabelText('Customer name'), {
       target: { value: 'Private' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Private Guest' }));
 
-    await waitFor(() => expect(selectFieldControl(screen.getByLabelText('Delivery zone', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('zone-1'));
+    await waitFor(() =>
+      expect(
+        selectFieldControl(
+          screen.getByLabelText('Delivery zone', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        )
+      ).toHaveValue('zone-1')
+    );
     releaseZones();
     await Promise.resolve();
     expect(
       fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/delivery/zones'))
     ).toHaveLength(2);
-    expect(selectFieldControl(screen.getByLabelText('Delivery zone', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('zone-1');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Delivery zone', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('zone-1');
   });
 
   it('uses AA semantic text tokens on the initial POS screen', () => {
@@ -1046,7 +1161,7 @@ describe('OrderPad transport', () => {
     expect(
       screen.getByText('Queued orders are paused. Reauthenticate to resume replay.')
     ).toBeVisible();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Operator PIN', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '1234' } });
+    fireEvent.change(screen.getByLabelText('Operator PIN'), { target: { value: '1234' } });
     fireEvent.click(screen.getByRole('button', { name: 'Unlock terminal' }));
     await screen.findByRole('heading', { name: 'Order pad' });
     await waitFor(() =>
@@ -1089,7 +1204,7 @@ describe('OrderPad transport', () => {
     expect(screen.getByText('Amina Rahman · Shift lead')).toBeVisible();
     expect(screen.getByText('Server: Amina Rahman')).toBeVisible();
     expect(screen.queryByText('staff-1')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/profile id/i, { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/profile id/i)).not.toBeInTheDocument();
 
     const unlockCall = fetch.mock.calls.find(([input]) =>
       String(input).endsWith('/terminal/unlock')
@@ -1142,7 +1257,9 @@ describe('OrderPad transport', () => {
         )
       ).toBe(true);
 
-      const channel = screen.getByLabelText('Channel', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+      const channel = screen.getByLabelText('Channel', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      });
       expect(selectFieldControl(channel)).toHaveValue('DINE_IN');
       expect(screen.getByRole('option', { hidden: true, name: 'Delivery' })).toBeEnabled();
       expect(screen.getByRole('option', { hidden: true, name: 'Takeaway' })).toBeInTheDocument();
@@ -1169,8 +1286,15 @@ describe('OrderPad transport', () => {
     const fetch = transport();
     await unlock(fetch);
 
-    fireEvent.click(screen.getByLabelText(/T1/, { selector: ':not([data-select-field-native][aria-hidden="true"])' }));
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Channel', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'TAKEAWAY' } });
+    fireEvent.click(screen.getByLabelText(/T1/));
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Channel', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'TAKEAWAY' } }
+    );
     await waitFor(() => expect(screen.getByRole('button', { name: 'Open order' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
 
@@ -1443,13 +1567,13 @@ describe('OrderPad transport', () => {
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: 'Void Steak' })).not.toBeInTheDocument()
     );
-    const covers = screen.getByLabelText('Covers', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const covers = screen.getByLabelText('Covers');
     covers.focus();
     fireEvent.keyDown(covers, { key: 'F9' });
     expect(click).not.toHaveBeenCalled();
 
     covers.blur();
-    screen.getByLabelText('Menu search', { selector: ':not([data-select-field-native][aria-hidden="true"])' }).blur();
+    screen.getByLabelText('Menu search').blur();
     fireEvent.keyDown(window, { key: 'F9' });
     expect(click).toHaveBeenCalledTimes(1);
   });

@@ -215,12 +215,19 @@ describe('RestaurantCatalogConsole gap recovery flows', () => {
     renderCatalog();
     fireEvent.click(screen.getAllByRole('button', { name: 'Add product' })[0]!);
     const dialog = screen.getByRole('dialog', { name: 'Add product' });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Product name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(dialog).getByLabelText('Product name'), {
       target: { value: 'House burger' },
     });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Product type', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'COMBO' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        within(dialog).getByLabelText('Product type', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'COMBO' },
+      }
+    );
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add product' }));
 
     expect(mocks.createProduct).toHaveBeenCalledWith({
@@ -236,10 +243,10 @@ describe('RestaurantCatalogConsole gap recovery flows', () => {
     renderCatalog();
     fireEvent.click(screen.getAllByRole('button', { name: 'Add product' })[0]!);
     const dialog = screen.getByRole('dialog', { name: 'Add product' });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Product name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(dialog).getByLabelText('Product name'), {
       target: { value: 'House burger' },
     });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Description', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(dialog).getByLabelText('Description'), {
       target: { value: 'Beef and pickles' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add product' }));
@@ -313,7 +320,9 @@ describe('RestaurantCatalogConsole gap recovery flows', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Manage versions' }));
 
     expect(screen.getByText('Rice flour')).toBeInTheDocument();
-    const substitutePicker = screen.getByLabelText('Approved substitute ingredient', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const substitutePicker = screen.getByLabelText('Approved substitute ingredient', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
     fireEvent.change(selectFieldControl(substitutePicker), { target: { value: 'ingredient_3' } });
     fireEvent.submit(substitutePicker.closest('form')!);
     expect(mocks.addRecipeLineSubstitute).toHaveBeenCalledWith({

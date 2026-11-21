@@ -1,4 +1,5 @@
-import { SelectField as StudioSelect } from '@/components/ui/select-field';import { browserUuid } from '@/lib/browser-uuid';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import { browserUuid } from '@/lib/browser-uuid';
 import { GrowthPanel } from './growth-panel';
 import { BasketPanel } from './basket-panel';
 import { ProfilePanel } from './profile-panel';

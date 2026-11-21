@@ -1,4 +1,5 @@
-import { SelectField as StudioSelect } from '@/components/ui/select-field';import { PHARMACY_COPY, SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/plain-language';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import { PHARMACY_COPY, SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/plain-language';
 import { ReportDetails } from '@/components/pharmacy/report-details';
 import type { Metadata } from 'next';
 import { PageHeader } from '@/components/ui/page-header';

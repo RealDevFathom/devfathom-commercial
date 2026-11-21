@@ -156,9 +156,15 @@ describe('supplier-credit Reports preparation', () => {
     expect(screen.getByText('PKR 25.00 allocated')).toBeVisible();
     expect(screen.getByText('PKR 50.01 unallocated')).toBeVisible();
     expect(screen.getByText(/works without Ask Fathom/)).toBeVisible();
-    expect(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('branch-1');
-    expect(selectFieldControl(screen.getByLabelText('From', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(filters.from);
-    expect(selectFieldControl(screen.getByLabelText('To', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(filters.to);
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('branch-1');
+    expect(screen.getByLabelText('From')).toHaveValue(filters.from);
+    expect(screen.getByLabelText('To')).toHaveValue(filters.to);
     expect(screen.getByRole('button', { name: 'Prepare draft' }).closest('form')).toHaveAttribute(
       'method',
       'get'

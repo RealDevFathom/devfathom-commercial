@@ -45,7 +45,14 @@ it('preserves edited priority and requires explicit confirmation', async () => {
     async () => ({ status: 'UNAVAILABLE' as const })
   );
   render(<GrowthReviewPanel view={view} onReview={submit} />);
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Review priority', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'HIGH' } });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Review priority', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    { target: { value: 'HIGH' } }
+  );
   fireEvent.click(screen.getByRole('button', { name: 'Approve to draft' }));
   expect(submit).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Confirm approve' }));

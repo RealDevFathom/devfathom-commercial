@@ -1,4 +1,5 @@
-import { SelectField as StudioSelect } from '@/components/ui/select-field';import Link from 'next/link';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import Link from 'next/link';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Input } from '@/components/ui/input';

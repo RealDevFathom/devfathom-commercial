@@ -1,4 +1,5 @@
-import { SelectField as StudioSelect } from '@/components/ui/select-field';import Link from 'next/link';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import Link from 'next/link';
 import { ArrowUpRight, Search } from 'lucide-react';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { requirePlatformRead } from '@/lib/platform/page-access';

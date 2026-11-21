@@ -166,14 +166,24 @@ describe('organization people and access — staff onboarding', () => {
     render(<OrganizationAdminContent />);
 
     const form = screen.getByRole('form', { name: 'Add staff member' });
-    const options = [...selectFieldControl(within(form).getByLabelText('Department', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).querySelectorAll('option')].map(
-      (option) => option.textContent
-    );
+    const options = [
+      ...selectFieldControl(
+        within(form).getByLabelText('Department', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ).querySelectorAll('option'),
+    ].map((option) => option.textContent);
     expect(options).toEqual(['Counter', 'Dispensary', 'Store']);
     // The agency vocabulary from before is gone.
     expect(options).not.toContain('Engineering');
     // The pharmacy role template is attachable to the new member.
-    expect(selectFieldControl(within(form).getByLabelText('Role template', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveTextContent('Cashier');
+    expect(
+      selectFieldControl(
+        within(form).getByLabelText('Role template', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveTextContent('Cashier');
   });
 
   it('adds a member scoped to the department, role template and branches outside pharmacy', () => {
@@ -181,21 +191,35 @@ describe('organization people and access — staff onboarding', () => {
     render(<OrganizationAdminContent />);
     const form = screen.getByRole('form', { name: 'Add staff member' });
 
-    fireEvent.change(selectFieldControl(within(form).getByLabelText('Full name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Ayesha' } });
-    fireEvent.change(selectFieldControl(within(form).getByLabelText('Email', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(form).getByLabelText('Full name'), { target: { value: 'Ayesha' } });
+    fireEvent.change(within(form).getByLabelText('Email'), {
       target: { value: 'ayesha@qa-clifton.test' },
     });
-    fireEvent.change(selectFieldControl(within(form).getByLabelText('Title', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Cashier' } });
-    fireEvent.change(selectFieldControl(within(form).getByLabelText('Department', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'DISPENSARY' },
-    });
-    fireEvent.change(selectFieldControl(within(form).getByLabelText('Role template', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'role_cashier' },
-    });
-    fireEvent.change(selectFieldControl(within(form).getByLabelText('Temporary password', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(form).getByLabelText('Title'), { target: { value: 'Cashier' } });
+    fireEvent.change(
+      selectFieldControl(
+        within(form).getByLabelText('Department', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'DISPENSARY' },
+      }
+    );
+    fireEvent.change(
+      selectFieldControl(
+        within(form).getByLabelText('Role template', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'role_cashier' },
+      }
+    );
+    fireEvent.change(within(form).getByLabelText('Temporary password'), {
       target: { value: 'temporary-123456' },
     });
-    fireEvent.click(within(form).getByLabelText('Clifton', { selector: ':not([data-select-field-native][aria-hidden="true"])' }));
+    fireEvent.click(within(form).getByLabelText('Clifton'));
     fireEvent.submit(form);
 
     expect(mutationFor('createMember').mutate).toHaveBeenCalledWith(
@@ -217,16 +241,22 @@ describe('organization people and access — staff onboarding', () => {
     render(<OrganizationAdminContent />);
 
     // Pharmacy staff join by invite, so the member's edit form holds the only selector.
-    const departments = screen.getAllByLabelText('Department', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const departments = screen.getAllByLabelText('Department', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
     const memberDepartment = departments[departments.length - 1]!;
-    const options = [...selectFieldControl(memberDepartment).querySelectorAll('option')].map((o) => o.textContent);
+    const options = [...selectFieldControl(memberDepartment).querySelectorAll('option')].map(
+      (o) => o.textContent
+    );
     expect(options).toEqual(['Counter', 'Dispensary', 'Store']);
   });
 
   it('restores server-confirmed access when a Goods-in grant is refused', () => {
     render(<OrganizationAdminContent />);
 
-    const access = screen.getByLabelText('Custom role', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const access = screen.getByLabelText('Custom role', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
     fireEvent.change(selectFieldControl(access), { target: { value: 'role_goods_in' } });
     fireEvent.submit(access.closest('form')!);
 
@@ -245,12 +275,24 @@ describe('organization people and access — staff onboarding', () => {
     };
     data.organization.users[0]!.organizationRoleId = 'role_goods_in';
     const view = render(<OrganizationAdminContent />);
-    expect(selectFieldControl(screen.getByLabelText('Custom role', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('role_goods_in');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Custom role', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('role_goods_in');
 
     data.organization.users[0]!.organizationRoleId = null;
     view.rerender(<OrganizationAdminContent />);
 
-    expect(selectFieldControl(screen.getByLabelText('Custom role', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Custom role', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('');
   });
 
   it('shows the complete password policy when adding or resetting a staff password', () => {
@@ -274,7 +316,7 @@ describe('organization people and access — pharmacy invites (#980)', () => {
 
     expect(screen.queryByRole('form', { name: 'Add staff member' })).not.toBeInTheDocument();
     const invite = screen.getByRole('group', { name: 'Invite pharmacy staff' });
-    expect(within(invite).queryByLabelText('Temporary password', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
+    expect(within(invite).queryByLabelText('Temporary password')).not.toBeInTheDocument();
     expect(within(invite).getByRole('link', { name: 'pharmacy branches' })).toHaveAttribute(
       'href',
       '/pharmacy/settings/branches'
@@ -296,8 +338,13 @@ describe('organization people and access — pharmacy invites (#980)', () => {
   it('labels base roles with pharmacy vocabulary while keeping the stored values', () => {
     render(<OrganizationAdminContent />);
 
-    const role = screen.getByLabelText('System role', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-    const options = [...selectFieldControl(role).querySelectorAll('option')].map((o) => [o.value, o.textContent]);
+    const role = screen.getByLabelText('System role', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
+    const options = [...selectFieldControl(role).querySelectorAll('option')].map((o) => [
+      o.value,
+      o.textContent,
+    ]);
     expect(options).toEqual([
       ['ADMIN', 'Admin'],
       ['HR', 'Manager'],
@@ -315,10 +362,12 @@ describe('organization people and access — pharmacy invites (#980)', () => {
     useVertical('AGENCY');
     render(<OrganizationAdminContent />);
 
-    const roles = screen.getAllByLabelText('System role', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-    const options = [...selectFieldControl(roles[roles.length - 1]!).querySelectorAll('option')].map(
-      (o) => o.textContent
-    );
+    const roles = screen.getAllByLabelText('System role', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
+    const options = [
+      ...selectFieldControl(roles[roles.length - 1]!).querySelectorAll('option'),
+    ].map((o) => o.textContent);
     expect(options).toEqual(['ADMIN', 'HR', 'EMPLOYEE']);
   });
 
@@ -366,5 +415,5 @@ it('lets domain and SCIM controls fit narrow screens', () => {
 it('names the domain host and kind inputs for assistive technology (#1233)', () => {
   render(<OrganizationAdminContent />);
   expect(screen.getByRole('textbox', { name: 'Domain host' })).toHaveAttribute('name', 'host');
-  expect(selectFieldControl(screen.getByRole('textbox', { name: 'Domain kind' }))).toHaveValue('APP');
+  expect(screen.getByRole('textbox', { name: 'Domain kind' })).toHaveValue('APP');
 });

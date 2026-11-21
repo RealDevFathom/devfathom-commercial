@@ -99,7 +99,7 @@ async function server(_url: unknown, options?: RequestInit) {
 const calls = (method: string) => fetchMock.mock.calls.filter((call) => call[1]?.method === method);
 const save = () => fireEvent.click(screen.getByRole('button', { name: 'Save print routes' }));
 async function ready() {
-  await screen.findByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+  await screen.findByLabelText('Receipts printer ID');
   await waitFor(() =>
     expect(screen.queryByText('Loading printer inventory…')).not.toBeInTheDocument()
   );
@@ -120,8 +120,15 @@ describe('printer selection and legacy preservation', () => {
   it('sets registry ID and exact raw address and makes registered addresses read-only', async () => {
     render(<PrintRoutingSection />);
     await ready();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Receipts destination', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'p1' } });
-    expect(screen.getByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('readonly');
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Receipts destination', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'p1' } }
+    );
+    expect(screen.getByLabelText('Receipts printer ID')).toHaveAttribute('readonly');
     save();
     await waitFor(() => expect(calls('PUT')).toHaveLength(1));
     expect(JSON.parse(calls('PUT')[0][1].body).routes[0]).toMatchObject({
@@ -135,11 +142,20 @@ describe('printer selection and legacy preservation', () => {
     h.printers.mockRejectedValue({ data: { code: 'FORBIDDEN' } });
     render(<PrintRoutingSection />);
     await ready();
-    expect(selectFieldControl(screen.getByRole('option', { hidden: true, name: /Saved binding unavailable/ }))).toHaveValue('gone');
-    expect(screen.getByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('readonly');
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Receipts destination', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '' } });
-    expect(screen.getByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toHaveAttribute('readonly');
-    expect(selectFieldControl(screen.getByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(target);
+    expect(
+      screen.getByRole('option', { hidden: true, name: /Saved binding unavailable/ })
+    ).toHaveValue('gone');
+    expect(screen.getByLabelText('Receipts printer ID')).toHaveAttribute('readonly');
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Receipts destination', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: '' } }
+    );
+    expect(screen.getByLabelText('Receipts printer ID')).not.toHaveAttribute('readonly');
+    expect(screen.getByLabelText('Receipts printer ID')).toHaveValue(target);
     save();
     await waitFor(() => expect(calls('PUT')).toHaveLength(1));
     expect(JSON.parse(calls('PUT')[0][1].body).routes[0]).toEqual(receipt(null));
@@ -150,7 +166,7 @@ describe('printer selection and legacy preservation', () => {
     h.printers.mockRejectedValue(new Error('denied'));
     render(<PrintRoutingSection />);
     await ready();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Receipts printer ID'), {
       target: { value: 'queue:///Manual' },
     });
     save();
@@ -171,7 +187,10 @@ describe('printer selection and legacy preservation', () => {
     await ready();
     expect(screen.getAllByRole('option', { hidden: true, name: /Printer valid/ })).toHaveLength(3);
     expect(
-      screen.queryByRole('option', { hidden: true, name: /Printer other|Printer pos|Printer revoked/ })
+      screen.queryByRole('option', {
+        hidden: true,
+        name: /Printer other|Printer pos|Printer revoked/,
+      })
     ).not.toBeInTheDocument();
   });
   it('removes only the displayed first route explicitly', async () => {
@@ -187,17 +206,31 @@ describe('printer selection and legacy preservation', () => {
   it('preserves sibling branch drafts while saving the selected branch', async () => {
     render(<PrintRoutingSection />);
     await ready();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Receipts printer ID'), {
       target: { value: 'queue:///DraftA' },
     });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'B' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'B' } }
+    );
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Save print routes' })).toBeEnabled()
     );
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Receipts printer ID'), {
       target: { value: 'queue:///DraftB' },
     });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'A' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'A' } }
+    );
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Save print routes' })).toBeEnabled()
     );
@@ -205,11 +238,18 @@ describe('printer selection and legacy preservation', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Save print routes' })).toBeEnabled()
     );
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'B' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'B' } }
+    );
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Save print routes' })).toBeEnabled()
     );
-    expect(selectFieldControl(screen.getByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('queue:///DraftB');
+    expect(screen.getByLabelText('Receipts printer ID')).toHaveValue('queue:///DraftB');
     expect(JSON.parse(calls('PUT')[0][1].body).branchId).toBe('A');
   });
 });
@@ -218,14 +258,14 @@ describe('save confirmation and reconciliation', () => {
   it('blocks a stale baseline before sending PUT and retains the draft', async () => {
     render(<PrintRoutingSection />);
     await ready();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Receipts printer ID'), {
       target: { value: 'queue:///Draft' },
     });
     branches[0] = branch('A', [{ ...receipt(), printerId: 'queue:///Elsewhere' }]);
     save();
     await screen.findByText(/Saved routes changed/);
     expect(calls('PUT')).toHaveLength(0);
-    expect(selectFieldControl(screen.getByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('queue:///Draft');
+    expect(screen.getByLabelText('Receipts printer ID')).toHaveValue('queue:///Draft');
     fireEvent.click(screen.getByRole('button', { name: 'Keep draft with refreshed baseline' }));
     expect(screen.getByRole('button', { name: 'Save print routes' })).toBeEnabled();
     expect(calls('PUT')).toHaveLength(0);
@@ -259,7 +299,7 @@ describe('save confirmation and reconciliation', () => {
     });
     render(<PrintRoutingSection />);
     await ready();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Receipts printer ID'), {
       target: { value: 'queue:///Confirmed' },
     });
     save();
@@ -279,7 +319,7 @@ describe('save confirmation and reconciliation', () => {
     });
     render(<PrintRoutingSection />);
     await ready();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Receipts printer ID'), {
       target: { value: 'queue:///Changed' },
     });
     save();
@@ -301,11 +341,25 @@ describe('save confirmation and reconciliation', () => {
     await ready();
     save();
     await screen.findByText(/Save outcome is uncertain/);
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'B' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'B' } }
+    );
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Save print routes' })).toBeEnabled()
     );
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'A' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'A' } }
+    );
     await screen.findByText(/Saved routes match your submission/);
     expect(screen.getByRole('button', { name: 'Save print routes' })).toBeDisabled();
     expect(calls('PUT')).toHaveLength(1);
@@ -318,14 +372,14 @@ describe('save confirmation and reconciliation', () => {
       );
       render(<PrintRoutingSection />);
       await ready();
-      fireEvent.change(selectFieldControl(screen.getByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+      fireEvent.change(screen.getByLabelText('Receipts printer ID'), {
         target: { value: 'queue:///Draft' },
       });
       save();
       await screen.findByRole('alert');
       expect(h.success).not.toHaveBeenCalled();
       expect(calls('PUT')).toHaveLength(1);
-      expect(selectFieldControl(screen.getByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('queue:///Draft');
+      expect(screen.getByLabelText('Receipts printer ID')).toHaveValue('queue:///Draft');
     }
   );
 });
@@ -335,7 +389,7 @@ describe('owner, branch and receipt-test isolation', () => {
     h.organizationId = 'other';
     render(<PrintRoutingSection />);
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Receipts printer ID')).not.toBeInTheDocument();
   });
   it('does not expose prior owner data or late save notifications after a switch', async () => {
     const put = deferred<Response>();
@@ -361,14 +415,34 @@ describe('owner, branch and receipt-test isolation', () => {
         : Promise.resolve([printer(reads === 2 ? 'B-fresh' : 'A-fresh', branchId)])
     );
     render(<PrintRoutingSection />);
-    await screen.findByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'B' } });
+    await screen.findByLabelText('Branch', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'B' } }
+    );
     await waitFor(() => expect(h.printers).toHaveBeenCalledTimes(2));
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'A' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'A' } }
+    );
     await waitFor(() => expect(h.printers).toHaveBeenCalledTimes(3));
     await act(async () => first.resolve([printer('obsolete')]));
-    expect(screen.queryByRole('option', { hidden: true, name: /Printer obsolete/ })).not.toBeInTheDocument();
-    expect(screen.getAllByRole('option', { hidden: true, name: /Printer A-fresh/ })).toHaveLength(3);
+    expect(
+      screen.queryByRole('option', { hidden: true, name: /Printer obsolete/ })
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByRole('option', { hidden: true, name: /Printer A-fresh/ })).toHaveLength(
+      3
+    );
   });
   it('configuration denial blocks actions despite inventory access', async () => {
     fetchMock.mockResolvedValue(response({}, 403));
@@ -391,7 +465,14 @@ describe('owner, branch and receipt-test isolation', () => {
       expect(screen.getByRole('button', { name: 'Test receipt printer' })).toBeEnabled()
     );
     expect(calls('POST')[0][1].body).toBe(calls('POST')[1][1].body);
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Receipts destination', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'p2' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Receipts destination', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'p2' } }
+    );
     save();
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Test receipt printer' })).toBeEnabled()
@@ -408,14 +489,14 @@ describe('refresh transition regressions', () => {
   it('drops a reverted clean draft when the saved baseline changes', async () => {
     render(<PrintRoutingSection />);
     await ready();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Receipts printer ID'), {
       target: { value: 'queue:///Temporary' },
     });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: target } });
+    fireEvent.change(screen.getByLabelText('Receipts printer ID'), { target: { value: target } });
     branches[0] = branch('A', [{ ...receipt(), printerId: 'queue:///NewSaved' }]);
     fireEvent.click(screen.getByRole('button', { name: 'Refresh saved routes' }));
     await waitFor(() =>
-      expect(selectFieldControl(screen.getByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('queue:///NewSaved')
+      expect(screen.getByLabelText('Receipts printer ID')).toHaveValue('queue:///NewSaved')
     );
     expect(screen.queryByText(/Saved routes changed/)).not.toBeInTheDocument();
     save();
@@ -445,7 +526,7 @@ describe('refresh transition regressions', () => {
     });
     render(<PrintRoutingSection />);
     await ready();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Receipts printer ID'), {
       target: { value: '  queue:///Trimmed  ' },
     });
     save();
@@ -454,7 +535,7 @@ describe('refresh transition regressions', () => {
     );
     expect(JSON.parse(calls('PUT')[0][1].body).routes[0].printerId).toBe('queue:///Trimmed');
     expect(screen.queryByText(/Saved routes changed/)).not.toBeInTheDocument();
-    expect(selectFieldControl(screen.getByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('queue:///Trimmed');
+    expect(screen.getByLabelText('Receipts printer ID')).toHaveValue('queue:///Trimmed');
   });
   it('discards old owner configuration reads after a fully authenticated owner switch', async () => {
     const old = deferred<Response>();
@@ -471,7 +552,13 @@ describe('refresh transition regressions', () => {
       )
     );
     expect(screen.queryByDisplayValue('queue:///OldOwner')).not.toBeInTheDocument();
-    expect(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('NEW');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('NEW');
   });
   it('ignores obsolete REST branch responses after A to B to A navigation', async () => {
     render(<PrintRoutingSection />);
@@ -479,9 +566,23 @@ describe('refresh transition regressions', () => {
     const oldA = deferred<Response>();
     fetchMock.mockImplementationOnce(() => oldA.promise);
     fireEvent.click(screen.getByRole('button', { name: 'Refresh saved routes' }));
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'B' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'B' } }
+    );
     branches[0] = branch('A', [{ ...receipt(), printerId: 'queue:///FreshA' }]);
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'A' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'A' } }
+    );
     await screen.findByDisplayValue('queue:///FreshA');
     await act(async () =>
       oldA.resolve(
@@ -490,8 +591,14 @@ describe('refresh transition regressions', () => {
         })
       )
     );
-    expect(selectFieldControl(screen.getByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('queue:///FreshA');
-    expect(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('A');
+    expect(screen.getByLabelText('Receipts printer ID')).toHaveValue('queue:///FreshA');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('A');
   });
   it('guards duplicate receipt clicks and preserves the same intent after an uncertain response', async () => {
     const pending = deferred<Response>();
@@ -525,7 +632,14 @@ describe('refresh transition regressions', () => {
     await ready();
     fireEvent.click(screen.getByRole('button', { name: 'Test receipt printer' }));
     await screen.findByText(/Paper output is not confirmed/);
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Receipts destination', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Receipts destination', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: '' } }
+    );
     save();
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Test receipt printer' })).toBeEnabled()
@@ -580,7 +694,7 @@ describe('atomic routing UI guards', () => {
     const baseline = structuredClone(branches[0].config);
     render(<PrintRoutingSection />);
     await ready();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Receipts printer ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Receipts printer ID'), {
       target: { value: 'queue:///Draft' },
     });
     save();

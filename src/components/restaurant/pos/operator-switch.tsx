@@ -1,4 +1,5 @@
-import { SelectField as StudioSelect } from '@/components/ui/select-field';import { type FormEvent, useState } from 'react';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import { type FormEvent, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';

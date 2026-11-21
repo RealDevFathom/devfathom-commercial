@@ -1240,9 +1240,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                         </div>
                       ))
                     ) : (
-                      <p className="text-sm text-text-muted">
-                        No items yet. Add an active recipe.
-                      </p>
+                      <p className="text-sm text-text-muted">No items yet. Add an active recipe.</p>
                     )}
                   </div>
                 </SectionCard>
@@ -1259,7 +1257,12 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                       className="grid min-w-0 gap-3 sm:grid-cols-2"
                     >
                       <Field label="Cost type">
-                        <StudioSelect required name="kind" aria-label="Cost type" className={inputClass}>
+                        <StudioSelect
+                          required
+                          name="kind"
+                          aria-label="Cost type"
+                          className={inputClass}
+                        >
                           {['LABOUR', 'TRANSPORT', 'RENTAL', 'OTHER'].map((item) => (
                             <option key={item}>{item}</option>
                           ))}

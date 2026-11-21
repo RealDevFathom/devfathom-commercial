@@ -23,15 +23,22 @@ const callbacks = {
 
 describe('RestaurantCameraWizard', () => {
   function fill() {
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Camera name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Kitchen' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Camera gateway', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'gateway-internal' },
-    });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Host / stream source', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Camera name'), { target: { value: 'Kitchen' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Camera gateway', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'gateway-internal' },
+      }
+    );
+    fireEvent.change(screen.getByLabelText('Host / stream source'), {
       target: { value: 'Kitchen channel' },
     });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Username', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'reader' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Password', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'fixture-password' } });
+    fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'reader' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'fixture-password' } });
   }
   test('owner-provisioned registration preserves inputs without a simulated check or unused port', async () => {
     const onTest = vi.fn(),
@@ -47,7 +54,7 @@ describe('RestaurantCameraWizard', () => {
       />
     );
     expect(screen.getByText(/does not configure the DVR/)).toBeVisible();
-    expect(screen.queryByLabelText('RTSP port', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('RTSP port')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Test connection' })).not.toBeInTheDocument();
     fill();
     fireEvent.click(screen.getByRole('button', { name: 'Register camera' }));
@@ -76,9 +83,13 @@ describe('RestaurantCameraWizard', () => {
         onSubmit={onSubmit}
       />
     );
-    const watches = screen.getByLabelText('Watches', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const watches = screen.getByLabelText('Watches', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
     expect(
-      Array.from(selectFieldControl((watches as HTMLSelectElement)).options).map((option) => option.textContent)
+      Array.from(selectFieldControl(watches as HTMLSelectElement).options).map(
+        (option) => option.textContent
+      )
     ).toEqual(['Not set', 'Kitchen', 'Counter']);
     fill();
     fireEvent.change(selectFieldControl(watches), { target: { value: 'KITCHEN' } });
@@ -104,7 +115,7 @@ describe('RestaurantCameraWizard', () => {
     await waitFor(() =>
       expect(screen.getByRole('status')).toHaveTextContent('Registration failed')
     );
-    expect(selectFieldControl(screen.getByLabelText('Camera name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Kitchen');
+    expect(screen.getByLabelText('Camera name')).toHaveValue('Kitchen');
     expect(screen.queryByText('sensitive upstream detail')).not.toBeInTheDocument();
   });
   test('legacy connection rejection is handled locally', async () => {
@@ -134,19 +145,27 @@ describe('RestaurantCameraWizard', () => {
   test('opens the manual details form when the catalog is empty', () => {
     render(<RestaurantCameraWizard branches={branch} presets={[]} {...callbacks} />);
     expect(screen.getByText('Using another brand? Configure manually')).toBeVisible();
-    expect(screen.getByLabelText('Camera name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeVisible();
-    expect(screen.getByLabelText('Password', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeVisible();
-    expect(selectFieldControl(screen.getByRole('option', { hidden: true, name: 'Main gateway — active' }))).toHaveValue(
+    expect(screen.getByLabelText('Camera name')).toBeVisible();
+    expect(screen.getByLabelText('Password')).toBeVisible();
+    expect(screen.getByRole('option', { hidden: true, name: 'Main gateway — active' })).toHaveValue(
       'gateway-internal'
     );
   });
   test('enables the gateway choice when one branch arrives asynchronously', () => {
     const view = render(<RestaurantCameraWizard branches={[]} presets={[]} {...callbacks} />);
-    expect(screen.getByLabelText('Camera gateway', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
+    expect(
+      screen.getByLabelText('Camera gateway', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toBeDisabled();
 
     view.rerender(<RestaurantCameraWizard branches={branch} presets={[]} {...callbacks} />);
-    expect(screen.getByLabelText('Camera gateway', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeEnabled();
-    expect(selectFieldControl(screen.getByRole('option', { hidden: true, name: 'Main gateway — active' }))).toHaveValue(
+    expect(
+      screen.getByLabelText('Camera gateway', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toBeEnabled();
+    expect(screen.getByRole('option', { hidden: true, name: 'Main gateway — active' })).toHaveValue(
       'gateway-internal'
     );
   });

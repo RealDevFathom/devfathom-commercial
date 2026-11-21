@@ -1,4 +1,5 @@
-import { SelectField as StudioSelect } from '@/components/ui/select-field';import { browserUuid } from '@/lib/browser-uuid';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import { browserUuid } from '@/lib/browser-uuid';
 import { FinancialStatements } from './financial-statements';
 import { Suspense } from 'react';
 import { MarginComparisonSection } from './margin-comparison';

@@ -1,8 +1,14 @@
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
-import { RestaurantMenuImportConsole, type MenuImportSnapshot } from '@/components/restaurant/menu-import/menu-import-console';
-type RouterOutputs=inferRouterOutputs<AppRouter>;type ImportDetail=RouterOutputs['restaurantMenuImport']['get'];type ImportSummary=RouterOutputs['restaurantMenuImport']['summary'];type ImportLine=ImportDetail['pages'][number]['lines'][number];
-const INJECTION_TEXT='Example seasonal soup';
+import {
+  RestaurantMenuImportConsole,
+  type MenuImportSnapshot,
+} from '@/components/restaurant/menu-import/menu-import-console';
+type RouterOutputs = inferRouterOutputs<AppRouter>;
+type ImportDetail = RouterOutputs['restaurantMenuImport']['get'];
+type ImportSummary = RouterOutputs['restaurantMenuImport']['summary'];
+type ImportLine = ImportDetail['pages'][number]['lines'][number];
+const INJECTION_TEXT = 'Example seasonal soup';
 const now = new Date('2026-08-27T09:00:00.000Z');
 function line(overrides: Partial<ImportLine> = {}): ImportLine {
   return {
@@ -153,5 +159,14 @@ const snapshot: MenuImportSnapshot = {
     },
   ],
 };
-export const menuImportScreen=<RestaurantMenuImportConsole snapshot={snapshot} canImport/>;
-export const menuImportQueryData: Record<string,unknown>={'restaurantMenuImport.get':detail(),'restaurantMenuImport.summary':summary(),'restaurantMenuImport.uploadLimits':{available:true,explanation:null,maxBytes:10485760,allowedMimeTypes:['application/pdf','image/png']}};
+export const menuImportScreen = <RestaurantMenuImportConsole snapshot={snapshot} canImport />;
+export const menuImportQueryData: Record<string, unknown> = {
+  'restaurantMenuImport.get': detail(),
+  'restaurantMenuImport.summary': summary(),
+  'restaurantMenuImport.uploadLimits': {
+    available: true,
+    explanation: null,
+    maxBytes: 10485760,
+    allowedMimeTypes: ['application/pdf', 'image/png'],
+  },
+};

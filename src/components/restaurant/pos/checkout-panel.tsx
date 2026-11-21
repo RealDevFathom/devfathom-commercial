@@ -931,11 +931,7 @@ export function CheckoutPanel({
                   >
                     {busy ? 'Creating bill…' : 'Cut single bill'}
                   </Button>
-                  <SplitBillDialog
-                    items={summary.unbilledItems}
-                    disabled={busy}
-                    onSplit={cut}
-                  />
+                  <SplitBillDialog items={summary.unbilledItems} disabled={busy} onSplit={cut} />
                 </div>
               </SectionCard>
             ) : null}

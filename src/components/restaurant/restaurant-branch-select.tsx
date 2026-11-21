@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField } from '@/components/ui/select-field';
+
 type BranchOption = {
   id: string;
   name: string;
@@ -11,8 +13,6 @@ type BranchOption = {
 const selectClass =
   'h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50';
 
-// DEV-1001 native exception: floor and daily-close demo tours query a visible native
-// Branch select. Migrate when their selection/focus contract supports shared Select.
 export function RestaurantBranchSelect({
   id,
   name,
@@ -53,7 +53,7 @@ export function RestaurantBranchSelect({
         : 'Select a branch';
 
   return (
-    <select
+    <SelectField
       id={id}
       name={name}
       value={value}
@@ -78,6 +78,6 @@ export function RestaurantBranchSelect({
           {branch.isDefault ? ' (default)' : ''}
         </option>
       ))}
-    </select>
+    </SelectField>
   );
 }

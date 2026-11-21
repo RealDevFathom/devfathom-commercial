@@ -163,17 +163,28 @@ describe('PromotionsConsole', () => {
     render(<PromotionsConsole />);
     fireEvent.click(screen.getAllByRole('button', { name: /Create offer/ })[0]!);
     const dialog = screen.getByRole('dialog');
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Offer name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(dialog).getByLabelText('Offer name'), {
       target: { value: 'Chai ten' },
     });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText(/Offer code/, { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'chai10' } });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Target type', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'ITEM' } });
-    const products = within(dialog).getByLabelText('Products', { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLSelectElement;
-    within(products).getByRole('option', { hidden: true, name: 'Karak chai' }).setAttribute('selected', '');
-    fireEvent.change(selectFieldControl(products));
-    const branches = within(dialog).getByLabelText(/Branches/, { selector: ':not([data-select-field-native][aria-hidden="true"])' }) as HTMLSelectElement;
-    within(branches).getByRole('option', { hidden: true, name: 'Gulberg' }).setAttribute('selected', '');
-    fireEvent.change(selectFieldControl(branches));
+    fireEvent.change(within(dialog).getByLabelText(/Offer code/), { target: { value: 'chai10' } });
+    fireEvent.change(
+      selectFieldControl(
+        within(dialog).getByLabelText('Target type', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'ITEM' } }
+    );
+    const products = within(dialog).getByLabelText('Products') as HTMLSelectElement;
+    within(products)
+      .getByRole('option', { hidden: true, name: 'Karak chai' })
+      .setAttribute('selected', '');
+    fireEvent.change(products);
+    const branches = within(dialog).getByLabelText(/Branches/) as HTMLSelectElement;
+    within(branches)
+      .getByRole('option', { hidden: true, name: 'Gulberg' })
+      .setAttribute('selected', '');
+    fireEvent.change(branches);
     fireEvent.submit(within(dialog).getByRole('button', { name: 'Create offer' }).closest('form')!);
     expect(mocks.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -214,8 +225,14 @@ describe('offer preservation and feedback', () => {
     render(<PromotionsConsole />);
     fireEvent.click(screen.getByRole('button', { name: 'Edit draft' }));
     const dialog = screen.getByRole('dialog');
-    expect(selectFieldControl(within(dialog).getByLabelText('Starts (UTC)', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2026-09-01T13:14');
-    expect(selectFieldControl(within(dialog).getByLabelText('Timezone', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Europe/London');
+    expect(within(dialog).getByLabelText('Starts (UTC)')).toHaveValue('2026-09-01T13:14');
+    expect(
+      selectFieldControl(
+        within(dialog).getByLabelText('Timezone', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('Europe/London');
     fireEvent.submit(within(dialog).getByRole('button', { name: 'Save changes' }).closest('form')!);
     expect(mocks.edit).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -231,7 +248,7 @@ describe('offer preservation and feedback', () => {
     render(<PromotionsConsole />);
     fireEvent.click(screen.getByRole('button', { name: 'Edit draft' }));
     const dialog = screen.getByRole('dialog');
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Starts (UTC)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(dialog).getByLabelText('Starts (UTC)'), {
       target: { value: '2026-09-02T13:14' },
     });
     fireEvent.submit(within(dialog).getByRole('button', { name: 'Save changes' }).closest('form')!);
@@ -252,7 +269,7 @@ describe('offer preservation and feedback', () => {
     const dialog = screen.getByRole('dialog');
     const confirm = within(dialog).getByRole('button', { name: 'Disable offer' });
     expect(confirm).toBeDisabled();
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Reason for disabling', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(dialog).getByLabelText('Reason for disabling'), {
       target: { value: 'Pricing correction' },
     });
     fireEvent.click(confirm);
@@ -360,8 +377,8 @@ function submittedBundle(dialog: HTMLElement) {
 }
 function selectIds(element: HTMLElement, ids: string[]) {
   const select = element as HTMLSelectElement;
-  for (const option of Array.from(selectFieldControl(select).options)) option.selected = ids.includes(option.value);
-  fireEvent.change(selectFieldControl(select));
+  for (const option of Array.from(select.options)) option.selected = ids.includes(option.value);
+  fireEvent.change(select);
 }
 function expectPreservedRule(input: { rule: unknown }) {
   expect(input.rule).toMatchObject({
@@ -388,23 +405,37 @@ describe('ordered bundle draft authoring', () => {
     render(<PromotionsConsole />);
     fireEvent.click(screen.getAllByRole('button', { name: /Create offer/ })[0]!);
     const dialog = screen.getByRole('dialog');
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Offer name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(dialog).getByLabelText('Offer name'), {
       target: { value: 'Tea bundle' },
     });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText(/Offer code/, { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(dialog).getByLabelText(/Offer code/), {
       target: { value: 'tea_bundle' },
     });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Target type', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'ORDER' } });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Benefit type', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'BUNDLE_PRICE' },
-    });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Benefit amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(
+      selectFieldControl(
+        within(dialog).getByLabelText('Target type', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'ORDER' } }
+    );
+    fireEvent.change(
+      selectFieldControl(
+        within(dialog).getByLabelText('Benefit type', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'BUNDLE_PRICE' },
+      }
+    );
+    fireEvent.change(within(dialog).getByLabelText('Benefit amount'), {
       target: { value: '450.00' },
     });
-    selectIds(bundleRow(1).getByLabelText('Product alternatives', { selector: ':not([data-select-field-native][aria-hidden="true"])' }), ['product_1']);
-    fireEvent.change(selectFieldControl(bundleRow(1).getByLabelText('Required quantity', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '2' } });
+    selectIds(bundleRow(1).getByLabelText('Product alternatives'), ['product_1']);
+    fireEvent.change(bundleRow(1).getByLabelText('Required quantity'), { target: { value: '2' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add component' }));
-    selectIds(bundleRow(2).getByLabelText('Category alternatives', { selector: ':not([data-select-field-native][aria-hidden="true"])' }), ['category_1']);
+    selectIds(bundleRow(2).getByLabelText('Category alternatives'), ['category_1']);
     fireEvent.submit(within(dialog).getByRole('button', { name: 'Create offer' }).closest('form')!);
     expect(mocks.create).toHaveBeenCalledTimes(1);
     expect(mocks.edit).not.toHaveBeenCalled();
@@ -432,11 +463,11 @@ describe('ordered bundle draft authoring', () => {
     (kind) => {
       const dialog = openBundle();
       for (const label of ['Product alternatives', 'Category alternatives'])
-        fireEvent.change(selectFieldControl(bundleRow(1).getByLabelText(label, { selector: ':not([data-select-field-native][aria-hidden="true"])' })));
+        fireEvent.change(bundleRow(1).getByLabelText(label));
       for (const label of ['Products', 'Variants', /Branches/, 'Channels'])
-        fireEvent.change(selectFieldControl(within(dialog).getByLabelText(label, { selector: ':not([data-select-field-native][aria-hidden="true"])' })));
+        fireEvent.change(within(dialog).getByLabelText(label));
       if (kind === 'name-only')
-        fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Offer name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+        fireEvent.change(within(dialog).getByLabelText('Offer name'), {
           target: { value: 'Lunch bundle' },
         });
       const input = submittedBundle(dialog);
@@ -458,18 +489,18 @@ describe('ordered bundle draft authoring', () => {
     const dialog = openBundle();
     expect(bundleRow(1).getByRole('button', { name: 'Move component 1 up' })).toBeDisabled();
     expect(bundleRow(3).getByRole('button', { name: 'Move component 3 down' })).toBeDisabled();
-    fireEvent.change(selectFieldControl(bundleRow(3).getByLabelText('Required quantity', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '7' } });
+    fireEvent.change(bundleRow(3).getByLabelText('Required quantity'), { target: { value: '7' } });
     fireEvent.click(bundleRow(3).getByRole('button', { name: 'Move component 3 up' }));
-    expect(selectFieldControl(bundleRow(2).getByLabelText('Required quantity', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(7);
-    expect(selectFieldControl(bundleRow(2).getByLabelText('Product alternatives', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(['product_1']);
-    expect(selectFieldControl(bundleRow(3).getByLabelText('Required quantity', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(3);
+    expect(bundleRow(2).getByLabelText('Required quantity')).toHaveValue(7);
+    expect(bundleRow(2).getByLabelText('Product alternatives')).toHaveValue(['product_1']);
+    expect(bundleRow(3).getByLabelText('Required quantity')).toHaveValue(3);
     fireEvent.click(bundleRow(1).getByRole('button', { name: 'Remove component 1' }));
-    expect(selectFieldControl(bundleRow(1).getByLabelText('Required quantity', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(7);
+    expect(bundleRow(1).getByLabelText('Required quantity')).toHaveValue(7);
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add component' }));
-    expect(selectFieldControl(bundleRow(3).getByLabelText('Product alternatives', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue([]);
-    expect(selectFieldControl(bundleRow(3).getByLabelText('Category alternatives', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue([]);
-    selectIds(bundleRow(3).getByLabelText('Product alternatives', { selector: ':not([data-select-field-native][aria-hidden="true"])' }), ['product_2']);
-    fireEvent.change(selectFieldControl(bundleRow(3).getByLabelText('Required quantity', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '4' } });
+    expect(bundleRow(3).getByLabelText('Product alternatives')).toHaveValue([]);
+    expect(bundleRow(3).getByLabelText('Category alternatives')).toHaveValue([]);
+    selectIds(bundleRow(3).getByLabelText('Product alternatives'), ['product_2']);
+    fireEvent.change(bundleRow(3).getByLabelText('Required quantity'), { target: { value: '4' } });
     const input = submittedBundle(dialog);
     expectPreservedRule(input);
     expect(input.rule.components).toEqual([
@@ -480,7 +511,7 @@ describe('ordered bundle draft authoring', () => {
   });
   it('retains surviving ID order and appends a reselected ID without altering other rows', () => {
     const dialog = openBundle();
-    const products = bundleRow(1).getByLabelText('Product alternatives', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const products = bundleRow(1).getByLabelText('Product alternatives');
     selectIds(products, ['product_2']);
     selectIds(products, ['product_1', 'product_2']);
     const input = submittedBundle(dialog);
@@ -532,7 +563,7 @@ describe('ordered bundle draft authoring', () => {
     'rejects invalid component quantity %j at submission',
     (quantity) => {
       const dialog = openBundle();
-      fireEvent.change(selectFieldControl(bundleRow(1).getByLabelText('Required quantity', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+      fireEvent.change(bundleRow(1).getByLabelText('Required quantity'), {
         target: { value: quantity },
       });
       submitBundle(dialog);
@@ -543,13 +574,27 @@ describe('ordered bundle draft authoring', () => {
   it('retains bundle rows while switching benefit type temporarily', () => {
     const dialog = openBundle();
     fireEvent.click(bundleRow(3).getByRole('button', { name: 'Move component 3 up' }));
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Benefit type', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'PERCENT_OFF' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        within(dialog).getByLabelText('Benefit type', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'PERCENT_OFF' },
+      }
+    );
     expect(screen.queryByRole('group', { name: 'Bundle component 1' })).not.toBeInTheDocument();
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Benefit type', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'BUNDLE_PRICE' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        within(dialog).getByLabelText('Benefit type', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'BUNDLE_PRICE' },
+      }
+    );
     expect(submittedBundle(dialog).rule.components).toEqual([
       bundleRows[0],
       bundleRows[2],
@@ -560,9 +605,16 @@ describe('ordered bundle draft authoring', () => {
     'clears only incompatible target arrays on explicit transition to %s',
     (target) => {
       const dialog = openBundle();
-      fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Target type', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: target } });
+      fireEvent.change(
+        selectFieldControl(
+          within(dialog).getByLabelText('Target type', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        ),
+        { target: { value: target } }
+      );
       if (target === 'CATEGORY')
-        selectIds(within(dialog).getByLabelText('Categories', { selector: ':not([data-select-field-native][aria-hidden="true"])' }), ['category_1']);
+        selectIds(within(dialog).getByLabelText('Categories'), ['category_1']);
       const input = submittedBundle(dialog);
       expectPreservedRule(input);
       expect(input.rule.components).toEqual(bundleRows);
@@ -584,19 +636,19 @@ describe('ordered bundle draft authoring', () => {
   });
   it('retains inputs and displays stale-save errors without retrying', () => {
     const dialog = openBundle();
-    fireEvent.change(selectFieldControl(bundleRow(1).getByLabelText('Required quantity', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '7' } });
+    fireEvent.change(bundleRow(1).getByLabelText('Required quantity'), { target: { value: '7' } });
     mocks.edit.mockImplementation((_input, options) =>
       options.onError({ message: 'The offer changed. Reload before editing.' })
     );
     submitBundle(dialog);
     expect(within(dialog).getByRole('alert')).toHaveTextContent('The offer changed');
-    expect(selectFieldControl(bundleRow(1).getByLabelText('Required quantity', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(7);
+    expect(bundleRow(1).getByLabelText('Required quantity')).toHaveValue(7);
     expect(mocks.edit).toHaveBeenCalledTimes(1);
   });
   it('disables controls and blocks programmatic submission while saving', () => {
     mocks.editPending = true;
     const dialog = openBundle();
-    expect(bundleRow(1).getByLabelText('Required quantity', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
+    expect(bundleRow(1).getByLabelText('Required quantity')).toBeDisabled();
     expect(within(dialog).getByRole('button', { name: 'Add component' })).toBeDisabled();
     submitBundle(dialog);
     expect(mocks.edit).not.toHaveBeenCalled();

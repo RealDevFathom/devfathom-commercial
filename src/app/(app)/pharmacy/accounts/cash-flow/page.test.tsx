@@ -1,4 +1,3 @@
-import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { TRPCError } from '@trpc/server';
 import { redirect } from 'next/navigation';
@@ -73,7 +72,7 @@ describe('cash-flow page', () => {
     const form = button.closest('form')!;
     const submitted = vi.fn((event: Event) => event.preventDefault());
     form.addEventListener('submit', submitted);
-    fireEvent.change(selectFieldControl(screen.getByLabelText('From (UTC)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('From (UTC)'), {
       target: { value: '2026-10-02' },
     });
 
@@ -105,7 +104,7 @@ describe('cash-flow page', () => {
     } finally {
       vi.useRealTimers();
     }
-    expect(selectFieldControl(screen.getByLabelText('To, exclusive (UTC)', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2026-11-01');
+    expect(screen.getByLabelText('To, exclusive (UTC)')).toHaveValue('2026-11-01');
     expect(mocks.projection.mock.calls[0][2]).toEqual({
       from: new Date('2026-10-01T00:00:00Z'),
       to: new Date('2026-11-01T00:00:00Z'),
@@ -236,7 +235,7 @@ describe('cash-flow page', () => {
       to: new Date('2026-10-30T19:00:00Z'),
     });
     expect(screen.getByText('Scope and period (PKT)')).toBeVisible();
-    expect(screen.getByLabelText('From (PKT)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeVisible();
-    expect(screen.getByLabelText('To, exclusive (PKT)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeVisible();
+    expect(screen.getByLabelText('From (PKT)')).toBeVisible();
+    expect(screen.getByLabelText('To, exclusive (PKT)')).toBeVisible();
   });
 });

@@ -50,8 +50,12 @@ describe('QA-7 substitution screen patient records', () => {
 
     render(<SubstitutionConsole />);
 
-    expect(screen.getByRole('option', { hidden: true, name: 'Medicine A · Tablet 10mg' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { hidden: true, name: 'Select medicine' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('option', { hidden: true, name: 'Medicine A · Tablet 10mg' })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('option', { hidden: true, name: 'Select medicine' })
+    ).toBeInTheDocument();
     expect(screen.queryByText(/Patient One/)).not.toBeInTheDocument();
     expect(screen.getByText(/Patient names are hidden/)).toBeInTheDocument();
   });

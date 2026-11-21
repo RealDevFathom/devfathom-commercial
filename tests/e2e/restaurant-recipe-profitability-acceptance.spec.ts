@@ -1,3 +1,4 @@
+import { chooseSelectField } from './fixtures/select-field';
 import { expect, test, type Locator, type Page, type Response } from '@playwright/test';
 import pg from 'pg';
 
@@ -924,21 +925,14 @@ async function applyFixtureWindow(page: Page, origin: string) {
   const filters = page.locator('[data-slot="section-card"]', {
     has: page.getByRole('heading', { name: 'Report filters', exact: true, level: 2 }),
   });
-  // The branch filter is a `<select>` WRAPPED by its `<label>` with no `htmlFor`
-  // (`restaurant/reports/page.tsx`). Playwright folds the whole label subtree —
-  // every `<option>` included — into the computed accessible name, so that name
-  // is `"BranchAll active branchesGulberg Café…"` and `getByLabel('Branch',
-  // { exact: true })` matches NOTHING; it does not fail fast, it waits out the
-  // test timeout. It is addressed by the field name the page's own GET form
-  // reads, and the visible caption is asserted separately so that half of the
-  // label contract keeps its coverage. The two date controls are bare `<input>`s,
-  // which contribute no text, so their exact label locators stand.
-  const branchFilter = filters.locator('select[name="branch"]');
+  // SelectField exposes the visible caption as the trigger's accessible name;
+  // the existing label assertion also checks the successful native form control.
+  const branchFilter = filters.getByRole('combobox', { name: 'Branch', exact: true });
   await expect(
     filters.locator('label:has(select[name="branch"])'),
     'the branch filter must stay labelled "Branch"'
   ).toContainText('Branch');
-  await branchFilter.selectOption(fixture.branchId);
+  await chooseSelectField(branchFilter, fixture.branchId);
   await filters.getByLabel('From date', { exact: true }).fill(BUSINESS_DATE);
   await filters.getByLabel('To date', { exact: true }).fill(BUSINESS_DATE);
   await filters.getByRole('button', { name: 'Apply filters', exact: true }).click();

@@ -1,4 +1,5 @@
-import { SelectField as StudioSelect } from '@/components/ui/select-field';import type { Prisma } from '@/generated/prisma/client';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import type { Prisma } from '@/generated/prisma/client';
 import { Button } from '@/components/ui/button';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';

@@ -246,12 +246,21 @@ describe('Restaurant staff credential UI', () => {
     expect(within(row).getAllByRole('cell')[2]).toHaveTextContent(/^Downtown$/);
     expect(document.body).not.toHaveTextContent('branch_1');
 
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'branch_1' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'branch_1' } }
+    );
     expect(screen.getByRole('row', { name: /Shift Lead/ })).toBeVisible();
 
     fireEvent.click(within(row).getByRole('button', { name: 'Edit' }));
     const dialog = screen.getByRole('dialog', { name: 'Edit staff member' });
-    expect(selectFieldControl(within(dialog).getByLabelText('Primary branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('branch_1');
+    expect(
+      selectFieldControl(within(dialog).getByRole('combobox', { name: 'Branch', exact: true }))
+    ).toHaveValue('branch_1');
   });
 
   it.each([false, true])(
@@ -293,12 +302,18 @@ describe('Restaurant staff credential UI', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Add staff member' }));
     const dialog = screen.getByRole('dialog', { name: 'Add staff member' });
-    const selector = within(dialog).getByLabelText('Organization user', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const selector = within(dialog).getByLabelText('Organization user', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
     expect(
-      within(selectFieldControl(selector)).getByRole('option', { hidden: true, name: 'Ayesha Khan — ayesha@example.com' })
+      within(selectFieldControl(selector)).getByRole('option', {
+        hidden: true,
+        name: 'Ayesha Khan — ayesha@example.com',
+      })
     ).toBeEnabled();
     expect(
-      within(selectFieldControl(selector)).getByRole('option', { hidden: true,
+      within(selectFieldControl(selector)).getByRole('option', {
+        hidden: true,
         name: 'Bilal Ahmed — bilal@example.com — linked to Sous Chef',
       })
     ).toBeDisabled();
@@ -323,20 +338,30 @@ describe('Restaurant staff credential UI', () => {
           })
         );
         const dialog = screen.getByRole('dialog');
-        const selector = within(dialog).getByLabelText('Organization user', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-        const emailOption = within(selectFieldControl(selector)).getByRole('option', { hidden: true, name: /Link an unlisted user/ });
+        const selector = within(dialog).getByLabelText('Organization user', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        });
+        const emailOption = within(selectFieldControl(selector)).getByRole('option', {
+          hidden: true,
+          name: /Link an unlisted user/,
+        });
         expect(emailOption).toBeEnabled();
-        fireEvent.change(selectFieldControl(selector), { target: { value: (emailOption as HTMLOptionElement).value } });
-        fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Organization account email', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+        fireEvent.change(selectFieldControl(selector), {
+          target: { value: (emailOption as HTMLOptionElement).value },
+        });
+        fireEvent.change(within(dialog).getByLabelText('Organization account email'), {
           target: { value: 'unlisted@example.com' },
         });
-        fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Display name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+        fireEvent.change(within(dialog).getByLabelText('Display name'), {
           target: { value: 'New colleague' },
         });
-        fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Primary branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-          target: { value: 'branch_1' },
-        });
-        fireEvent.submit(within(dialog).getByLabelText('Display name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }).closest('form')!);
+        fireEvent.change(
+          selectFieldControl(within(dialog).getByRole('combobox', { name: 'Branch', exact: true })),
+          {
+            target: { value: 'branch_1' },
+          }
+        );
+        fireEvent.submit(within(dialog).getByLabelText('Display name').closest('form')!);
         expect(mocks.noopMutate).toHaveBeenCalledWith(
           expect.objectContaining({
             ...(operation === 'edit' ? { id: 'staff_1' } : {}),
@@ -349,9 +374,9 @@ describe('Restaurant staff credential UI', () => {
 
         fireEvent.change(selectFieldControl(selector), { target: { value: '' } });
         expect(
-          within(dialog).queryByLabelText('Organization account email', { selector: ':not([data-select-field-native][aria-hidden="true"])' })
+          within(dialog).queryByLabelText('Organization account email')
         ).not.toBeInTheDocument();
-        fireEvent.submit(within(dialog).getByLabelText('Display name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }).closest('form')!);
+        fireEvent.submit(within(dialog).getByLabelText('Display name').closest('form')!);
         expect(mocks.noopMutate).toHaveBeenLastCalledWith(
           expect.objectContaining({ userId: null })
         );
@@ -378,14 +403,20 @@ describe('Restaurant staff credential UI', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Credentials' }));
-    const type = screen.getByLabelText('Credential type', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-    const deviceId = screen.getByLabelText('Device restriction', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-    const secret = screen.getByLabelText('New operator secret', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const type = screen.getByLabelText('Credential type', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
+    const deviceId = screen.getByLabelText('Device restriction', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
+    const secret = screen.getByLabelText('New operator secret');
     fireEvent.change(selectFieldControl(type), { target: { value: 'BADGE' } });
     fireEvent.change(selectFieldControl(deviceId), { target: { value: 'device_1' } });
-    expect(screen.getByText('Front Register — Downtown', { selector: '[data-slot="select-value"]' })).toBeVisible();
+    expect(
+      screen.getByText('Front Register — Downtown', { selector: '[data-slot="select-value"]' })
+    ).toBeVisible();
     expect(screen.queryByText('device_1')).not.toBeInTheDocument();
-    fireEvent.change(selectFieldControl(secret), { target: { value: 'badge-482913' } });
+    fireEvent.change(secret, { target: { value: 'badge-482913' } });
     fireEvent.click(screen.getByRole('button', { name: 'Issue credential' }));
 
     expect(mocks.issueMutate).toHaveBeenCalledWith(
@@ -397,7 +428,7 @@ describe('Restaurant staff credential UI', () => {
       },
       expect.objectContaining({ onSuccess: expect.any(Function), onSettled: expect.any(Function) })
     );
-    expect(selectFieldControl(secret)).toHaveValue('');
+    expect(secret).toHaveValue('');
     expect(selectFieldControl(type)).toHaveValue('BADGE');
     expect(selectFieldControl(deviceId)).toHaveValue('device_1');
     expect(screen.getByRole('alert')).toHaveTextContent('Credential rejected.');
@@ -413,8 +444,14 @@ describe('Restaurant staff credential UI', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Invite staff member' }));
     const dialog = screen.getByRole('dialog', { name: 'Invite staff member' });
-    expect(within(dialog).getByRole('option', { hidden: true, name: 'Server' })).toBeInTheDocument();
-    expect(within(dialog).getByLabelText('Primary branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole('option', { hidden: true, name: 'Server' })
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByLabelText('Primary branch', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toBeInTheDocument();
   });
 
   it('shows loading instead of a false zero staff count', () => {
@@ -598,9 +635,14 @@ describe('Restaurant staff role profiles', () => {
         overrides: [],
       });
     });
-    fireEvent.change(selectFieldControl(within(screen.getByRole('dialog')).getByRole('combobox', { name: 'Branch' })), {
-      target: { value: 'branch_2' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        within(screen.getByRole('dialog')).getByRole('combobox', { name: 'Branch' })
+      ),
+      {
+        target: { value: 'branch_2' },
+      }
+    );
     fireEvent.click(screen.getByRole('button', { name: /Server/ }));
     const discount = screen.getByText('orders:discount').parentElement!;
     fireEvent.click(within(discount).getByRole('button', { name: 'Deny' }));
@@ -640,10 +682,10 @@ describe('Restaurant staff role profiles', () => {
     fireEvent.click(server);
     expect(server).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText('customers:read').parentElement).toHaveTextContent('Inherited');
-    fireEvent.change(selectFieldControl(screen.getByPlaceholderText('Search capabilities')), {
+    fireEvent.change(screen.getByPlaceholderText('Search capabilities'), {
       target: { value: 'cash:' },
     });
-    fireEvent.change(selectFieldControl(screen.getByPlaceholderText('Search capabilities')), { target: { value: '' } });
+    fireEvent.change(screen.getByPlaceholderText('Search capabilities'), { target: { value: '' } });
     expect(cashier).toHaveAttribute('aria-pressed', 'true');
   });
 

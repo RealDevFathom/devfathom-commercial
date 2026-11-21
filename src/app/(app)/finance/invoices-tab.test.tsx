@@ -137,19 +137,21 @@ describe('invoice create adjustments', () => {
   beforeEach(() => mocks.mutate.mockClear());
   function fillForm() {
     const { container } = render(<CreateInvoiceForm onClose={vi.fn()} />);
-    fireEvent.change(selectFieldControl(screen.getAllByRole('combobox')[0]), { target: { value: 'client-1' } });
-    fireEvent.change(selectFieldControl(container.querySelector('input[type="date"]')!), {
+    fireEvent.change(selectFieldControl(screen.getAllByRole('combobox')[0]), {
+      target: { value: 'client-1' },
+    });
+    fireEvent.change(container.querySelector('input[type="date"]')!, {
       target: { value: '2026-12-01' },
     });
-    fireEvent.change(selectFieldControl(screen.getByPlaceholderText('Description')), {
+    fireEvent.change(screen.getByPlaceholderText('Description'), {
       target: { value: 'Consulting' },
     });
-    fireEvent.change(selectFieldControl(screen.getByPlaceholderText('Rate')), { target: { value: '1.005' } });
+    fireEvent.change(screen.getByPlaceholderText('Rate'), { target: { value: '1.005' } });
   }
   it('previews and submits nonzero tax and discount with rounded amounts', () => {
     fillForm();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Tax (USD)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '0.005' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Discount (USD)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '0.005' } });
+    fireEvent.change(screen.getByLabelText('Tax (USD)'), { target: { value: '0.005' } });
+    fireEvent.change(screen.getByLabelText('Discount (USD)'), { target: { value: '0.005' } });
     expect(screen.getByText('Total').nextElementSibling).toHaveTextContent('$1.01');
     fireEvent.click(screen.getByRole('button', { name: 'Create Invoice' }));
     expect(mocks.mutate).toHaveBeenCalledWith(
@@ -166,9 +168,9 @@ describe('invoice create adjustments', () => {
     'blocks invalid discount %s and preserves its value',
     (discount) => {
       fillForm();
-      fireEvent.change(selectFieldControl(screen.getByLabelText('Discount (USD)', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: discount } });
+      fireEvent.change(screen.getByLabelText('Discount (USD)'), { target: { value: discount } });
       expect(screen.getByRole('alert')).toBeInTheDocument();
-      expect(selectFieldControl(screen.getByLabelText('Discount (USD)', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(Number(discount));
+      expect(screen.getByLabelText('Discount (USD)')).toHaveValue(Number(discount));
       expect(screen.getByRole('button', { name: 'Create Invoice' })).toBeDisabled();
       expect(mocks.mutate).not.toHaveBeenCalled();
     }

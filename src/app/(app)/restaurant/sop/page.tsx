@@ -1,4 +1,5 @@
-import { SelectField as StudioSelect } from '@/components/ui/select-field';import { TRPCError } from '@trpc/server';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import { TRPCError } from '@trpc/server';
 import { revalidatePath } from 'next/cache';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
@@ -868,7 +869,11 @@ function SopBoardView(props: SopBoardViewProps) {
                         />
                         <label className="text-sm text-text-body">
                           Approving credential type
-                          <StudioSelect className={selectClass} name="approvingType" defaultValue="PIN">
+                          <StudioSelect
+                            className={selectClass}
+                            name="approvingType"
+                            defaultValue="PIN"
+                          >
                             <option value="PIN">PIN</option>
                             <option value="BADGE">Badge</option>
                           </StudioSelect>

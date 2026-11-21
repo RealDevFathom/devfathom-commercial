@@ -287,7 +287,14 @@ function form(name: string) {
   return screen.getByRole('form', { name: new RegExp(name) });
 }
 function change(label: string, value: string) {
-  fireEvent.change(selectFieldControl(screen.getByLabelText(label, { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value } });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText(label, {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    { target: { value } }
+  );
 }
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -371,8 +378,16 @@ describe('CateringConsole', () => {
 
   it('uses named native event buttons, selected state and 44px primary controls', () => {
     mount();
-    expect(screen.getByLabelText('Filter by branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeInTheDocument();
-    expect(screen.getByLabelText('Filter by status', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeInTheDocument();
+    expect(
+      screen.getByLabelText('Filter by branch', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText('Filter by status', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toBeInTheDocument();
     const button = screen.getByRole('button', {
       name: /Select event Founders dinner/,
     });
@@ -383,7 +398,9 @@ describe('CateringConsole', () => {
     select();
     expect(button).toHaveAttribute('aria-pressed', 'true');
     expect(button.closest('tr')).toHaveAttribute('data-state', 'selected');
-    for (const control of document.querySelectorAll('input:not([aria-hidden="true"]), select:not([data-select-field-native]), button')) {
+    for (const control of document.querySelectorAll(
+      'input:not([aria-hidden="true"]), select:not([data-select-field-native]), button'
+    )) {
       expect(control.className).toMatch(/(?:min-)?h-11/);
       expect(control).toHaveAccessibleName();
     }
@@ -414,17 +431,17 @@ describe('CateringConsole', () => {
     expect(dialog).toHaveTextContent('Team lunch · 2026-09-21');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Keep editing' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    expect(selectFieldControl(screen.getByLabelText('Vehicle', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Unsaved A');
+    expect(screen.getByLabelText('Vehicle')).toHaveValue('Unsaved A');
     select('Team lunch');
     dialog = screen.getByRole('dialog', {
       name: 'Discard unsaved event edits?',
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Discard and switch' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    expect(selectFieldControl(screen.getByLabelText('Vehicle', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Van B');
-    expect(selectFieldControl(screen.getByLabelText('Delivery notes', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Door B');
-    expect(selectFieldControl(screen.getByLabelText('Description', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
-    expect(selectFieldControl(screen.getByLabelText('Label', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
+    expect(screen.getByLabelText('Vehicle')).toHaveValue('Van B');
+    expect(screen.getByLabelText('Delivery notes')).toHaveValue('Door B');
+    expect(screen.getByLabelText('Description')).toHaveValue('');
+    expect(screen.getByLabelText('Label')).toHaveValue('');
     expect(form('Delivery for Team lunch')).toHaveTextContent('Saving for Team lunch · 2026-09-21');
     fireEvent.submit(form('Delivery'));
     await waitFor(() =>
@@ -441,7 +458,7 @@ describe('CateringConsole', () => {
       expect(screen.getByRole('button', { name: 'Save delivery' })).toBeEnabled()
     );
     select();
-    expect(selectFieldControl(screen.getByLabelText('Vehicle', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Van A');
+    expect(screen.getByLabelText('Vehicle')).toHaveValue('Van A');
     expect(mocks.transition).not.toHaveBeenCalled();
   });
   it('preserves unsaved inputs across successful and failed background refetches', async () => {
@@ -459,22 +476,28 @@ describe('CateringConsole', () => {
         delivery: { ...orderA.delivery, vehicle: 'Server changed' },
       });
     });
-    expect(selectFieldControl(screen.getByLabelText('Vehicle', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Draft vehicle');
-    expect(selectFieldControl(screen.getByLabelText('Driver', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
+    expect(screen.getByLabelText('Vehicle')).toHaveValue('Draft vehicle');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Driver', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('');
     mocks.detail.mockRejectedValueOnce(new Error('Detail offline'));
     await act(async () => {
       await client.refetchQueries({ queryKey: ['detail', orderA.id] });
     });
     await screen.findByText(/Your edits are kept. Retry before saving/);
-    expect(selectFieldControl(screen.getByLabelText('Vehicle', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Draft vehicle');
-    expect(selectFieldControl(screen.getByLabelText('Description', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Draft line');
-    expect(selectFieldControl(screen.getByLabelText('Amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(12.34);
+    expect(screen.getByLabelText('Vehicle')).toHaveValue('Draft vehicle');
+    expect(screen.getByLabelText('Description')).toHaveValue('Draft line');
+    expect(screen.getByLabelText('Amount')).toHaveValue(12.34);
     expect(screen.getByRole('button', { name: 'Save delivery' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Retry order detail' }));
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Save delivery' })).toBeEnabled()
     );
-    expect(selectFieldControl(screen.getByLabelText('Vehicle', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Draft vehicle');
+    expect(screen.getByLabelText('Vehicle')).toHaveValue('Draft vehicle');
     expect(consoleError).not.toHaveBeenCalled();
     expect(consoleWarning).not.toHaveBeenCalled();
   });
@@ -488,7 +511,7 @@ describe('CateringConsole', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /Select event Team lunch/ })).toBeDisabled()
     );
-    expect(screen.getByLabelText('Vehicle', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
+    expect(screen.getByLabelText('Vehicle')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'New order' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Move to quoted' })).toBeDisabled();
     select('Team lunch');
@@ -506,13 +529,15 @@ describe('CateringConsole', () => {
     change('Vehicle', 'Retry A');
     fireEvent.submit(form('Delivery'));
     await screen.findByText(/Save unavailable.*Your edits are kept/);
-    expect(selectFieldControl(screen.getByLabelText('Vehicle', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Retry A');
+    expect(screen.getByLabelText('Vehicle')).toHaveValue('Retry A');
   });
   it('saves bound IDs/exact line and extra strings, clearing only the successful draft', async () => {
     mount();
     select();
     change('Vehicle', 'Keep delivery');
-    expect(screen.queryByRole('option', { hidden: true, name: 'Lunch box' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('option', { hidden: true, name: 'Lunch box' })
+    ).not.toBeInTheDocument();
     change('Recipe', 'recipe_1');
     change('Description', 'Buffet');
     change('Portions', '3.125');
@@ -531,9 +556,9 @@ describe('CateringConsole', () => {
         expect.anything()
       )
     );
-    await waitFor(() => expect(selectFieldControl(screen.getByLabelText('Description', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(''));
-    expect(selectFieldControl(screen.getByLabelText('Vehicle', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Keep delivery');
-    expect(selectFieldControl(screen.getByLabelText('Label', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Keep extra');
+    await waitFor(() => expect(screen.getByLabelText('Description')).toHaveValue(''));
+    expect(screen.getByLabelText('Vehicle')).toHaveValue('Keep delivery');
+    expect(screen.getByLabelText('Label')).toHaveValue('Keep extra');
     change('Amount', '123.45');
     fireEvent.submit(form('Extra costs'));
     await waitFor(() =>
@@ -547,7 +572,7 @@ describe('CateringConsole', () => {
         expect.anything()
       )
     );
-    await waitFor(() => expect(selectFieldControl(screen.getByLabelText('Label', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(''));
+    await waitFor(() => expect(screen.getByLabelText('Label')).toHaveValue(''));
     select('Team lunch');
     expect(
       screen.getByRole('dialog', { name: 'Discard unsaved event edits?' })
@@ -584,9 +609,16 @@ describe('CateringConsole', () => {
       for (const amount of ['9007199254740993.1234', '170.1234', '999.8766'])
         expect(screen.getByText(`${label} ${amount}`)).toBeInTheDocument();
       expect(screen.getByText(`Transport · ${label} 30.1234`)).toBeInTheDocument();
-      expect(selectFieldControl(screen.getByLabelText('Recipe', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveTextContent(`${label} 4.1234/portion`);
       expect(
-        screen.getByRole('option', { hidden: true,
+        selectFieldControl(
+          screen.getByLabelText('Recipe', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        )
+      ).toHaveTextContent(`${label} 4.1234/portion`);
+      expect(
+        screen.getByRole('option', {
+          hidden: true,
           name: 'Invalid legacy recipe · Cost unavailable: Recipe cycle detected.',
         })
       ).toBeDisabled();
@@ -707,10 +739,10 @@ describe('CateringConsole', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit order' }));
     const dialog = screen.getByRole('dialog', { name: 'Edit catering order' });
     expect(dialog).toHaveTextContent('Founders dinner · 2026-09-20');
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Event name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(dialog).getByLabelText('Event name'), {
       target: { value: 'Renamed dinner' },
     });
-    fireEvent.submit(within(dialog).getByLabelText('Event name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }).closest('form')!);
+    fireEvent.submit(within(dialog).getByLabelText('Event name').closest('form')!);
     await waitFor(() =>
       expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled()
     );
@@ -735,7 +767,9 @@ describe('CateringConsole', () => {
   it('uses catering-scoped locations and renders requirement unit metadata', async () => {
     mount();
     select();
-    expect(await screen.findByRole('option', { hidden: true, name: 'Main kitchen' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('option', { hidden: true, name: 'Main kitchen' })
+    ).toBeInTheDocument();
     expect(mocks.locations).toHaveBeenCalledWith({ branchId: 'branch_1' }, { enabled: true });
     expect(await screen.findByText('Kilogram (kg)')).toBeInTheDocument();
   });
@@ -761,7 +795,7 @@ describe('CateringConsole', () => {
     change('Booking start with UTC offset', '2026-10-07T18:00:00+05:00');
     fireEvent.submit(form('Booking'));
     await screen.findByText(/Permission denied/);
-    expect(selectFieldControl(screen.getByLabelText('Booking start with UTC offset', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue(
+    expect(screen.getByLabelText('Booking start with UTC offset')).toHaveValue(
       '2026-10-07T18:00:00+05:00'
     );
     expect(mocks.booking).toHaveBeenCalledWith(
@@ -950,17 +984,17 @@ describe('CateringConsole calendar dates in a non-UTC browser zone', () => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'New order' }));
     const dialog = screen.getByRole('dialog', { name: 'Create catering order' });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Event name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(dialog).getByLabelText('Event name'), {
       target: { value: 'Mehndi dinner — Rana family' },
     });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Event date', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(dialog).getByLabelText('Event date'), {
       target: { value: '2026-11-07' },
     });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Service time', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(dialog).getByLabelText('Service time'), {
       target: { value: '19:30' },
     });
-    fireEvent.change(selectFieldControl(within(dialog).getByLabelText('Headcount', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '120' } });
-    fireEvent.submit(within(dialog).getByLabelText('Event name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }).closest('form')!);
+    fireEvent.change(within(dialog).getByLabelText('Headcount'), { target: { value: '120' } });
+    fireEvent.submit(within(dialog).getByLabelText('Event name').closest('form')!);
     await waitFor(() => expect(mocks.create).toHaveBeenCalled());
     const [payload] = mocks.create.mock.calls[0]!;
     expect(payload.eventDate.toISOString()).toBe('2026-11-07T00:00:00.000Z');
@@ -977,8 +1011,8 @@ describe('CateringConsole calendar dates in a non-UTC browser zone', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit order' }));
     const dialog = screen.getByRole('dialog', { name: 'Edit catering order' });
     expect(dialog).toHaveTextContent('Founders dinner · 2026-11-07');
-    expect(selectFieldControl(within(dialog).getByLabelText('Event date', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2026-11-07');
-    expect(selectFieldControl(within(dialog).getByLabelText('Service time', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('19:30');
+    expect(within(dialog).getByLabelText('Event date')).toHaveValue('2026-11-07');
+    expect(within(dialog).getByLabelText('Service time')).toHaveValue('19:30');
   });
   it('filters the ledger by the entered calendar days, not their local midnights', async () => {
     mount();
@@ -1073,7 +1107,7 @@ describe('Persisted catering evidence', () => {
     expect(screen.getByRole('button', { name: 'Refund this receipt' })).toBeDisabled();
     expect(screen.getByText(/no authenticated enrolled-terminal session/i)).toBeInTheDocument();
     expect(
-      screen.queryByLabelText(/device secret|session token|actor id/i, { selector: ':not([data-select-field-native][aria-hidden="true"])' })
+      screen.queryByLabelText(/device secret|session token|actor id/i)
     ).not.toBeInTheDocument();
     const approval = screen.getByText(/Order revision 1 · Quote reference/);
     expect(approval).toHaveTextContent('1 Oct 2026');
@@ -1371,7 +1405,7 @@ describe('Catering enrolled money commands', () => {
     fireEvent.submit(form('Record catering money'));
     fireEvent.submit(form('Record catering money'));
     await waitFor(() => expect(moneyCalls(fetch)).toHaveLength(1));
-    expect(screen.getByLabelText('Payment amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
+    expect(screen.getByLabelText('Payment amount')).toBeDisabled();
     expect(screen.getByRole('button', { name: /Select event Team lunch/ })).toBeDisabled();
     await act(async () => gate.resolve(json({ error: 'Response lost after commit' }, 503)));
     await screen.findByText(/Outcome unknown/);
@@ -1424,7 +1458,7 @@ describe('Catering enrolled money commands', () => {
       expect(screen.getByRole('button', { name: 'Retry same payment command' })).toBeEnabled()
     );
     expect(screen.getByRole('button', { name: /Select event Team lunch/ })).toBeDisabled();
-    expect(screen.getByLabelText('Payment amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
+    expect(screen.getByLabelText('Payment amount')).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Retry same payment command' }));
     await screen.findByText('Previously recorded evidence confirmed.');
     const calls = moneyCalls(fetch);
@@ -1446,8 +1480,8 @@ describe('Catering enrolled money commands', () => {
     fill();
     fireEvent.submit(form('Record catering money'));
     await screen.findByText(/OVERPAYMENT/);
-    expect(selectFieldControl(screen.getByLabelText('Payment amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('10');
-    expect(selectFieldControl(screen.getByLabelText('Evidence reference', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('transfer-1');
+    expect(screen.getByLabelText('Payment amount')).toHaveValue('10');
+    expect(screen.getByLabelText('Evidence reference')).toHaveValue('transfer-1');
     change('Payment amount', '9');
     fireEvent.submit(form('Record catering money'));
     await screen.findByText('Payment evidence recorded.');
@@ -1479,7 +1513,7 @@ describe('Catering enrolled money commands', () => {
       await screen.findByText(/Inputs retained/);
       expect(moneyCalls(fetch)).toHaveLength(0);
       expect(screen.getByRole('button', { name: 'Connect enrolled terminal' })).toBeInTheDocument();
-      expect(selectFieldControl(screen.getByLabelText('Payment amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('10');
+      expect(screen.getByLabelText('Payment amount')).toHaveValue('10');
     }
   );
   it('denies a terminal enrolled to another branch', async () => {
@@ -1583,8 +1617,8 @@ describe('Catering enrolled money commands', () => {
     await screen.findByText(/Outcome unknown/);
     fireEvent.click(screen.getByRole('button', { name: 'Retry same payment command' }));
     await screen.findByText(/CAPABILITY_DENIED.*Outcome unknown/);
-    expect(selectFieldControl(screen.getByLabelText('Payment amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('10');
-    expect(screen.getByLabelText('Payment amount', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeDisabled();
+    expect(screen.getByLabelText('Payment amount')).toHaveValue('10');
+    expect(screen.getByLabelText('Payment amount')).toBeDisabled();
     expect(screen.getByRole('button', { name: /Select event Team lunch/ })).toBeDisabled();
     const calls = moneyCalls(fetch);
     expect(calls).toHaveLength(2);

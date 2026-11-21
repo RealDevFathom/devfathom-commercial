@@ -474,4 +474,89 @@ describe('SelectField native form parity', () => {
     expect(trigger).toHaveTextContent('Card');
     expect(bridge(trigger)).toHaveValue('card');
   });
+
+  it('does not reread option metadata for value-only, parent or accessibility updates', async () => {
+    function Medicines({ value, title }: { value: string; title: string }) {
+      return (
+        <SelectField aria-label="Medicine" value={value} title={title} onChange={() => {}}>
+          {Array.from({ length: 128 }, (_, index) => (
+            <option key={index} value={String(index)}>
+              Medicine {index}
+            </option>
+          ))}
+        </SelectField>
+      );
+    }
+    const { rerender } = render(<Medicines value="0" title="Original" />);
+    const trigger = screen.getByRole('combobox', { name: 'Medicine' });
+    const native = bridge(trigger);
+    // React itself reads option values when applying a controlled selection.
+    // The label getter isolates the metadata traversal performed by SelectField.
+    const readLabel = vi.spyOn(native.options[127], 'label', 'get');
+    try {
+      rerender(<Medicines value="127" title="Original" />);
+      expect(trigger).toHaveTextContent('Medicine 127');
+      expect(native).toHaveValue('127');
+      rerender(<Medicines value="127" title="Updated parent" />);
+      expect(trigger).toHaveAttribute('title', 'Updated parent');
+      await act(async () => native.setAttribute('aria-invalid', 'true'));
+      expect(trigger).toHaveAttribute('aria-invalid', 'true');
+      expect(readLabel).not.toHaveBeenCalled();
+    } finally {
+      readLabel.mockRestore();
+    }
+  });
+
+  it('refreshes cached option text, values and group state after native option mutations', async () => {
+    render(
+      <form aria-label="Payment">
+        <SelectField aria-label="Tender" name="tender" defaultValue="cash">
+          <optgroup label="Methods">
+            <option value="cash">Cash</option>
+            <option value="card">Card</option>
+          </optgroup>
+          <option value="bank">Bank</option>
+        </SelectField>
+      </form>
+    );
+    const trigger = screen.getByRole('combobox', { name: 'Tender' });
+    const native = bridge(trigger);
+    const cash = native.options[0];
+    const card = native.options[1];
+    const group = cash.parentElement as HTMLOptGroupElement;
+    await act(async () => {
+      cash.firstChild!.textContent = 'Counter cash';
+      cash.value = 'notes';
+      card.label = 'Credit card';
+      group.label = 'At the counter';
+      group.disabled = true;
+    });
+    expect(trigger).toHaveTextContent('Counter cash');
+    expect(native).toHaveValue('notes');
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    expect(await screen.findByRole('group', { name: 'At the counter' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Counter cash' })).toHaveAttribute(
+      'aria-disabled',
+      'true'
+    );
+    expect(screen.getByRole('option', { name: 'Credit card' })).toHaveAttribute(
+      'aria-disabled',
+      'true'
+    );
+    await act(async () => {
+      group.disabled = false;
+      cash.hidden = true;
+      card.disabled = true;
+    });
+    expect(screen.queryByRole('option', { name: 'Counter cash' })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Credit card' })).toHaveAttribute(
+      'aria-disabled',
+      'true'
+    );
+    await act(async () => {
+      group.hidden = true;
+    });
+    expect(screen.queryByRole('option', { name: 'Credit card' })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Bank' })).toBeInTheDocument();
+  });
 });

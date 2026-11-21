@@ -252,11 +252,11 @@ describe('HotelInventoryPanel', () => {
 
   it('adds a room type with numbers parsed and the selection attached, and offers beds-per-room only for a bed type', () => {
     mount();
-    expect(screen.queryByLabelText('Beds per room', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Code', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'dlx' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Deluxe' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Maximum adults', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '3' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Maximum children', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '1' } });
+    expect(screen.queryByLabelText('Beds per room')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Code'), { target: { value: 'dlx' } });
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Deluxe' } });
+    fireEvent.change(screen.getByLabelText('Maximum adults'), { target: { value: '3' } });
+    fireEvent.change(screen.getByLabelText('Maximum children'), { target: { value: '1' } });
     fireEvent.submit(typeForm());
     expect(h.mutate.createType).toHaveBeenCalledWith({
       branchId: 'branch',
@@ -271,8 +271,15 @@ describe('HotelInventoryPanel', () => {
       maxChildren: 1,
       bedConfig: undefined,
     });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Sold as', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'BED' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Beds per room', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '6' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Sold as', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'BED' } }
+    );
+    fireEvent.change(screen.getByLabelText('Beds per room'), { target: { value: '6' } });
     fireEvent.submit(typeForm());
     expect(h.mutate.createType).toHaveBeenLastCalledWith(
       expect.objectContaining({ inventoryKind: 'BED', bedsPerRoom: 6 })
@@ -281,7 +288,13 @@ describe('HotelInventoryPanel', () => {
 
   it('disables kinds the property does not sell and replaces the form when it sells none', () => {
     mount(view({ enabled: ['ROOM'] }));
-    const unit = within(selectFieldControl(screen.getByLabelText('Sold as', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).getByRole('option', { hidden: true, name: /Unit/ });
+    const unit = within(
+      selectFieldControl(
+        screen.getByLabelText('Sold as', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).getByRole('option', { hidden: true, name: /Unit/ });
     expect(unit).toBeDisabled();
     expect(unit).toHaveTextContent('not available for this property');
     cleanup();
@@ -292,13 +305,13 @@ describe('HotelInventoryPanel', () => {
 
   it('refuses a non-numeric occupancy locally and lands server field errors under their inputs', () => {
     mount();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Code', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'DLX' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Deluxe' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Maximum adults', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '2.5' } });
+    fireEvent.change(screen.getByLabelText('Code'), { target: { value: 'DLX' } });
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Deluxe' } });
+    fireEvent.change(screen.getByLabelText('Maximum adults'), { target: { value: '2.5' } });
     fireEvent.submit(typeForm());
     expect(h.mutate.createType).not.toHaveBeenCalled();
-    expect(screen.getByLabelText('Maximum adults', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('aria-invalid', 'true');
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Maximum adults', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '2' } });
+    expect(screen.getByLabelText('Maximum adults')).toHaveAttribute('aria-invalid', 'true');
+    fireEvent.change(screen.getByLabelText('Maximum adults'), { target: { value: '2' } });
     fireEvent.submit(typeForm());
     expect(h.mutate.createType).toHaveBeenCalledTimes(1);
     act(() =>
@@ -308,16 +321,23 @@ describe('HotelInventoryPanel', () => {
         })
       )
     );
-    expect(screen.getByLabelText('Code', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByLabelText('Code')).toHaveAttribute('aria-invalid', 'true');
     expect(screen.getByRole('alert')).toHaveTextContent('already has a room type with that code');
-    expect(selectFieldControl(screen.getByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Deluxe');
+    expect(screen.getByLabelText('Name')).toHaveValue('Deluxe');
   });
 
   it('commissions a room under the chosen type, offering a dorm policy only for a bed type', async () => {
     mount();
-    expect(screen.queryByLabelText('Dorm policy', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Room number', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '102' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Connecting room', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'room_101' } });
+    expect(screen.queryByLabelText('Dorm policy')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Room number'), { target: { value: '102' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Connecting room', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'room_101' } }
+    );
     fireEvent.submit(roomForm());
     expect(h.mutate.createRoom).toHaveBeenCalledWith({
       branchId: 'branch',
@@ -328,9 +348,23 @@ describe('HotelInventoryPanel', () => {
       genderPolicy: 'ANY',
       reason: 'Commissioned',
     });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Room type', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'type_dorm' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Dorm policy', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'FEMALE' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Room number', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '202' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Room type', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'type_dorm' } }
+    );
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Dorm policy', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'FEMALE' } }
+    );
+    fireEvent.change(screen.getByLabelText('Room number'), { target: { value: '202' } });
     fireEvent.submit(roomForm());
     expect(h.mutate.createRoom).toHaveBeenLastCalledWith(
       expect.objectContaining({ roomTypeId: 'type_dorm', number: '202', genderPolicy: 'FEMALE' })
@@ -350,11 +384,11 @@ describe('HotelInventoryPanel', () => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'Status of room 101' }));
     const editor = screen.getByRole('form', { name: 'Change status of room 101' });
-    const options = within(selectFieldControl(editor))
+    const options = within(editor)
       .getAllByRole('option', { hidden: true })
       .map((option) => option.textContent);
     expect(options).toEqual(['Vacant, clean', 'Out of order', 'Out of service']);
-    fireEvent.change(selectFieldControl(within(editor).getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(editor).getByLabelText('Reason'), {
       target: { value: 'Cleaned after checkout' },
     });
     fireEvent.submit(editor);
@@ -384,8 +418,12 @@ describe('HotelInventoryPanel', () => {
     fireEvent.click(trigger);
     const editor = screen.getByRole('form', { name: 'Change status of room 101' });
     expect(trigger).toHaveAttribute('aria-expanded', 'true');
-    expect(within(editor).getByLabelText('New status', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveFocus();
-    fireEvent.keyDown(within(editor).getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' }), { key: 'Escape' });
+    expect(
+      within(editor).getByLabelText('New status', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toHaveFocus();
+    fireEvent.keyDown(within(editor).getByLabelText('Reason'), { key: 'Escape' });
     expect(
       screen.queryByRole('form', { name: 'Change status of room 101' })
     ).not.toBeInTheDocument();
@@ -396,13 +434,18 @@ describe('HotelInventoryPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Status of room 201' }));
     expect(
       within(screen.getByRole('form', { name: 'Change status of room 201' })).getByLabelText(
-        'Change', { selector: ':not([data-select-field-native][aria-hidden="true"])' }
+        'Change',
+        { selector: ':not([data-select-field-native][aria-hidden="true"])' }
       )
     ).toHaveFocus();
     const block = screen.getByRole('button', { name: 'Block room 101' });
     fireEvent.click(block);
     const blockEditor = screen.getByRole('form', { name: 'Withhold room 101' });
-    expect(within(blockEditor).getByLabelText('Why it is withheld', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toHaveFocus();
+    expect(
+      within(blockEditor).getByLabelText('Why it is withheld', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toHaveFocus();
     // Opening one editor closes the other without stealing focus from the new one.
     expect(
       screen.queryByRole('form', { name: 'Change status of room 201' })
@@ -416,7 +459,7 @@ describe('HotelInventoryPanel', () => {
     const trigger = screen.getByRole('button', { name: 'Status of room 101' });
     fireEvent.click(trigger);
     const editor = screen.getByRole('form', { name: 'Change status of room 101' });
-    fireEvent.change(selectFieldControl(within(editor).getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Cleaned' } });
+    fireEvent.change(within(editor).getByLabelText('Reason'), { target: { value: 'Cleaned' } });
     fireEvent.submit(editor);
     act(() =>
       lastCallbacks('roomStatus').onSuccess!({ id: 'room_101', status: 'VACANT_CLEAN' }, {})
@@ -437,11 +480,25 @@ describe('HotelInventoryPanel', () => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'Status of room 201' }));
     const editor = screen.getByRole('form', { name: 'Change status of room 201' });
-    fireEvent.change(selectFieldControl(within(editor).getByLabelText('Change', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'bed_2' } });
-    fireEvent.change(selectFieldControl(within(editor).getByLabelText('New status', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'VACANT_CLEAN' },
-    });
-    fireEvent.change(selectFieldControl(within(editor).getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(
+      selectFieldControl(
+        within(editor).getByLabelText('Change', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'bed_2' } }
+    );
+    fireEvent.change(
+      selectFieldControl(
+        within(editor).getByLabelText('New status', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'VACANT_CLEAN' },
+      }
+    );
+    fireEvent.change(within(editor).getByLabelText('Reason'), {
       target: { value: 'Linen changed' },
     });
     fireEvent.submit(editor);
@@ -457,7 +514,7 @@ describe('HotelInventoryPanel', () => {
     );
     act(() => lastCallbacks('bedStatus').onError!(error('CONFLICT')));
     expect(screen.getByRole('alert')).toHaveTextContent('Your entries are kept');
-    expect(selectFieldControl(within(editor).getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Linen changed');
+    expect(within(editor).getByLabelText('Reason')).toHaveValue('Linen changed');
     expect(h.mutate.bedStatus).toHaveBeenCalledTimes(1);
   });
 
@@ -465,15 +522,22 @@ describe('HotelInventoryPanel', () => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'Block room 101' }));
     const block = screen.getByRole('form', { name: 'Withhold room 101' });
-    fireEvent.change(selectFieldControl(within(block).getByLabelText('Why it is withheld', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-      target: { value: 'OUT_OF_SERVICE' },
-    });
-    fireEvent.change(selectFieldControl(within(block).getByLabelText('From', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '2026-11-01' } });
-    fireEvent.change(selectFieldControl(within(block).getByLabelText('Back on sale from', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(
+      selectFieldControl(
+        within(block).getByLabelText('Why it is withheld', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'OUT_OF_SERVICE' },
+      }
+    );
+    fireEvent.change(within(block).getByLabelText('From'), { target: { value: '2026-11-01' } });
+    fireEvent.change(within(block).getByLabelText('Back on sale from'), {
       target: { value: '2026-11-03' },
     });
-    fireEvent.change(selectFieldControl(within(block).getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Repaint' } });
-    fireEvent.change(selectFieldControl(within(block).getByLabelText('Work order', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'WO-12' } });
+    fireEvent.change(within(block).getByLabelText('Reason'), { target: { value: 'Repaint' } });
+    fireEvent.change(within(block).getByLabelText('Work order'), { target: { value: 'WO-12' } });
     fireEvent.submit(block);
     expect(h.mutate.createBlock).toHaveBeenCalledWith(
       {
@@ -497,14 +561,14 @@ describe('HotelInventoryPanel', () => {
       )
     );
     expect(
-      within(screen.getByRole('form', { name: 'Withhold room 101' })).getByLabelText('From', { selector: ':not([data-select-field-native][aria-hidden="true"])' })
+      within(screen.getByRole('form', { name: 'Withhold room 101' })).getByLabelText('From')
     ).toHaveAttribute('aria-invalid', 'true');
 
     expect(screen.queryByRole('button', { name: 'Block room 201' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Release the block on room 201' }));
     const release = screen.getByRole('form', { name: 'Release the block on room 201' });
     expect(release).toHaveTextContent('Withheld since 2026-10-10: Leak');
-    fireEvent.change(selectFieldControl(within(release).getByLabelText('Why it is back on sale', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(within(release).getByLabelText('Why it is back on sale'), {
       target: { value: 'Repaired' },
     });
     fireEvent.submit(release);
@@ -563,8 +627,8 @@ describe('HotelInventoryPanel', () => {
     'hides the lists and offers reselection after %s',
     (code) => {
       mount();
-      fireEvent.change(selectFieldControl(screen.getByLabelText('Code', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'DLX' } });
-      fireEvent.change(selectFieldControl(screen.getByLabelText('Name', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Deluxe' } });
+      fireEvent.change(screen.getByLabelText('Code'), { target: { value: 'DLX' } });
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Deluxe' } });
       fireEvent.submit(typeForm());
       act(() => h.hookCallbacks.createType.onError!(error(code)));
       expect(screen.queryByText('Standard')).not.toBeInTheDocument();

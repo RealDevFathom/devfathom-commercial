@@ -1,4 +1,5 @@
-import { SelectField as StudioSelect } from '@/components/ui/select-field';import { browserUuid } from '@/lib/browser-uuid';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import { browserUuid } from '@/lib/browser-uuid';
 import Link from 'next/link';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
@@ -713,7 +714,12 @@ export default async function PurchasingPage({
             </label>
             <label className="text-sm text-text-body sm:col-span-2">
               Stock item
-              <StudioSelect name="stockItemId" required disabled={!creatable} className={inputClass}>
+              <StudioSelect
+                name="stockItemId"
+                required
+                disabled={!creatable}
+                className={inputClass}
+              >
                 <option value="">Select stock item</option>
                 {loaded.stockItems.map((item) => (
                   <option value={item.id} key={item.id}>

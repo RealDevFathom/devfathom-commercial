@@ -1,4 +1,5 @@
-import { SelectField as StudioSelect } from '@/components/ui/select-field';import type { Metadata } from 'next';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import type { Metadata } from 'next';
 import { TRPCError } from '@trpc/server';
 
 import { HotelInventoryPanel } from '@/components/hotel/inventory-panel';

@@ -261,7 +261,9 @@ describe('pharmacy report catalog filters', () => {
     vi.setSystemTime(new Date('2026-11-16T21:00:00Z'));
     try {
       render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
-      expect(selectFieldControl(screen.getByRole('combobox', { name: 'Branch' }))).toHaveValue('b1');
+      expect(selectFieldControl(screen.getByRole('combobox', { name: 'Branch' }))).toHaveValue(
+        'b1'
+      );
       expect(commandCentre).toHaveBeenCalledWith({
         branchId: 'b1',
         from: '2026-11-11',
@@ -323,8 +325,8 @@ describe('pharmacy report catalog filters', () => {
       );
       fireEvent.click(screen.getByRole('button', { name: 'Print / Save as PDF' }));
       expect(print).toHaveBeenCalledOnce();
-      expect(selectFieldControl(screen.getByLabelText('From', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2026-09-01');
-      expect(selectFieldControl(screen.getByLabelText('To', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2026-09-04');
+      expect(screen.getByLabelText('From')).toHaveValue('2026-09-01');
+      expect(screen.getByLabelText('To')).toHaveValue('2026-09-04');
     } finally {
       print.mockRestore();
     }
@@ -518,7 +520,7 @@ describe('pharmacy report catalog filters', () => {
       receiptsPerStaffHour: 12,
       minimumStaff: 1,
     });
-    expect(selectFieldControl(screen.getByLabelText('To', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2026-11-15');
+    expect(screen.getByLabelText('To')).toHaveValue('2026-11-15');
     expect(screen.getByText('Updated 4 Sep 2026, 3:00 PM PKT')).toBeVisible();
     const calculation = screen
       .getByText(/to the start of the day after the last, in PKT\. Finance/)
@@ -544,16 +546,31 @@ describe('pharmacy report catalog filters', () => {
         }),
       })
     );
-    expect(selectFieldControl(screen.getByLabelText('Supplier', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('sup1');
-    expect(selectFieldControl(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('b1');
-    expect(screen.getByRole('option', { hidden: true, name: 'Main' })).toHaveProperty('selected', true);
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Supplier', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('sup1');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('b1');
+    expect(screen.getByRole('option', { hidden: true, name: 'Main' })).toHaveProperty(
+      'selected',
+      true
+    );
     expect(screen.getByRole('option', { hidden: true, name: 'Acme Distribution' })).toHaveProperty(
       'selected',
       true
     );
-    expect(selectFieldControl(screen.getByRole('option', { hidden: true, name: 'All suppliers' }))).toHaveValue('');
-    expect(selectFieldControl(screen.getByLabelText('Ingredient ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('ing1');
-    expect(selectFieldControl(screen.getByLabelText('Batch ID', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('lot1');
+    expect(screen.getByRole('option', { hidden: true, name: 'All suppliers' })).toHaveValue('');
+    expect(screen.getByLabelText('Ingredient ID')).toHaveValue('ing1');
+    expect(screen.getByLabelText('Batch ID')).toHaveValue('lot1');
     expect(commandCentre).toHaveBeenCalledWith(
       expect.objectContaining({ supplierId: 'sup1', ingredientId: 'ing1', batchId: 'lot1' })
     );
@@ -578,8 +595,8 @@ describe('pharmacy report catalog filters', () => {
     expect(screen.getByRole('button', { name: 'Create draft proposal' })).toBeVisible();
     expect(screen.getByText(/never rank staff, imply misconduct/)).toBeVisible();
     expect(screen.getByText(/no posting is created by this signal/)).toBeVisible();
-    expect(screen.getByLabelText('Acknowledgement reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeRequired();
-    expect(screen.getByLabelText('Snooze reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeRequired();
+    expect(screen.getByLabelText('Acknowledgement reason')).toBeRequired();
+    expect(screen.getByLabelText('Snooze reason')).toBeRequired();
     expect(screen.getByRole('heading', { name: 'Digest history' })).toBeVisible();
     expect(
       screen.getByText(
@@ -602,14 +619,19 @@ describe('pharmacy report catalog filters', () => {
   it('preserves supplier filtering without exposing raw IDs when names cannot load', async () => {
     suppliers.mockRejectedValue(new Error('private database detail'));
     render(await PharmacyReportsPage({ searchParams: Promise.resolve({ supplier: 'sup1' }) }));
-    const filter = screen.getByLabelText('Supplier', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const filter = screen.getByLabelText('Supplier', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
     expect(filter).toHaveAccessibleName('Supplier');
     expect(filter).toHaveAccessibleDescription(
       'Supplier names could not load. Apply filters again to retry.'
     );
     expect(selectFieldControl(filter)).toHaveValue('sup1');
     expect(
-      within(selectFieldControl(filter)).getByRole('option', { hidden: true, name: 'Selected supplier unavailable' })
+      within(selectFieldControl(filter)).getByRole('option', {
+        hidden: true,
+        name: 'Selected supplier unavailable',
+      })
     ).toHaveProperty('selected', true);
     expect(
       screen.getByText('Supplier names could not load. Apply filters again to retry.')
@@ -626,12 +648,17 @@ describe('pharmacy report catalog filters', () => {
     expect(filter).toHaveAccessibleDescription(
       'Supplier names could not load. Apply filters again to retry.'
     );
-    expect(within(selectFieldControl(filter)).getByRole('option', { hidden: true, name: 'All suppliers' })).toHaveProperty(
-      'selected',
-      true
-    );
     expect(
-      within(selectFieldControl(filter)).queryByRole('option', { hidden: true, name: 'Selected supplier unavailable' })
+      within(selectFieldControl(filter)).getByRole('option', {
+        hidden: true,
+        name: 'All suppliers',
+      })
+    ).toHaveProperty('selected', true);
+    expect(
+      within(selectFieldControl(filter)).queryByRole('option', {
+        hidden: true,
+        name: 'Selected supplier unavailable',
+      })
     ).not.toBeInTheDocument();
     expect(screen.queryByText('private database detail')).not.toBeInTheDocument();
   });

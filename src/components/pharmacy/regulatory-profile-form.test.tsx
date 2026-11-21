@@ -71,10 +71,10 @@ afterEach(cleanup);
 
 it('sends the configured pharmacy phone to the supported profile save procedure', () => {
   render(<PharmacyRegulatoryProfileForm initial={initial} />);
-  const phone = screen.getByLabelText('Pharmacy phone (optional)', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+  const phone = screen.getByLabelText('Pharmacy phone (optional)');
   expect(phone).toHaveAttribute('type', 'tel');
   expect(phone).toHaveAttribute('maxlength', '60');
-  fireEvent.change(selectFieldControl(phone), { target: { value: '  +92 (42) 123-4567  ' } });
+  fireEvent.change(phone, { target: { value: '  +92 (42) 123-4567  ' } });
   fireEvent.submit(phone.closest('form')!);
   expect(mocks.mutate).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({
@@ -91,15 +91,15 @@ it('shows the pharmacist coverage hours for the selected branch (DEV-846)', () =
 
 it('preserves the entered phone and focuses its field when the server rejects it', () => {
   render(<PharmacyRegulatoryProfileForm initial={initial} />);
-  const phone = screen.getByLabelText('Pharmacy phone (optional)', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-  fireEvent.change(selectFieldControl(phone), { target: { value: '042-1234567' } });
+  const phone = screen.getByLabelText('Pharmacy phone (optional)');
+  fireEvent.change(phone, { target: { value: '042-1234567' } });
   act(() =>
     mocks.onError!({
       data: { validation: { premisesPhone: ['A phone number is at most 60 characters.'] } },
       message: 'Invalid profile',
     })
   );
-  expect(selectFieldControl(phone)).toHaveValue('042-1234567');
+  expect(phone).toHaveValue('042-1234567');
   expect(phone).toHaveFocus();
   expect(phone).toHaveAttribute('aria-invalid', 'true');
   expect(phone).toHaveAttribute('aria-describedby', 'premisesPhone-error');
@@ -138,11 +138,15 @@ const sindhBranch: Initial = {
 
 it("locks the province to a Sindh branch and says Sindh's rules are not published, never offering Punjab (#977)", () => {
   render(<PharmacyRegulatoryProfileForm initial={sindhBranch} />);
-  const province = screen.getByLabelText('Province', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-  const options = Array.from(selectFieldControl(province).querySelectorAll('option')).map((option) => ({
-    value: option.value,
-    text: option.textContent,
-  }));
+  const province = screen.getByLabelText('Province', {
+    selector: ':not([data-select-field-native][aria-hidden="true"])',
+  });
+  const options = Array.from(selectFieldControl(province).querySelectorAll('option')).map(
+    (option) => ({
+      value: option.value,
+      text: option.textContent,
+    })
+  );
   expect(options).toEqual([{ value: 'PK-SD', text: 'Sindh (rules not published yet)' }]);
   expect(province.textContent).not.toContain('Punjab');
   expect(
@@ -179,8 +183,12 @@ it("submits the branch's own province, matched to its published rules (#977)", (
       }}
     />
   );
-  const province = screen.getByLabelText('Province', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-  expect(Array.from(selectFieldControl(province).querySelectorAll('option')).map((o) => o.value)).toEqual(['PK-PB']);
+  const province = screen.getByLabelText('Province', {
+    selector: ':not([data-select-field-native][aria-hidden="true"])',
+  });
+  expect(
+    Array.from(selectFieldControl(province).querySelectorAll('option')).map((o) => o.value)
+  ).toEqual(['PK-PB']);
   expect(screen.getByRole('button', { name: 'Save this version' })).toBeEnabled();
   fireEvent.submit(province.closest('form')!);
   expect(mocks.mutate).toHaveBeenCalledExactlyOnceWith(
@@ -243,16 +251,23 @@ it("replaces the previous branch's premises with the selected branch's and saves
   };
   mocks.fetch.mockReturnValue(new Promise(() => {}));
   render(<PharmacyRegulatoryProfileForm initial={twoBranches} />);
-  expect(selectFieldControl(screen.getByLabelText('Premises address', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('12 Mall Road');
-  expect(selectFieldControl(screen.getByLabelText('Premises city', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Lahore');
+  expect(screen.getByLabelText('Premises address')).toHaveValue('12 Mall Road');
+  expect(screen.getByLabelText('Premises city')).toHaveValue('Lahore');
 
-  fireEvent.change(selectFieldControl(screen.getByLabelText('Which branch is this profile for?', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
-    target: { value: 'branch-2' },
-  });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Which branch is this profile for?', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    {
+      target: { value: 'branch-2' },
+    }
+  );
 
-  const address = screen.getByLabelText('Premises address', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
-  expect(selectFieldControl(address)).toHaveValue('7 Main Boulevard');
-  expect(selectFieldControl(screen.getByLabelText('Premises city', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('Faisalabad');
+  const address = screen.getByLabelText('Premises address');
+  expect(address).toHaveValue('7 Main Boulevard');
+  expect(screen.getByLabelText('Premises city')).toHaveValue('Faisalabad');
   fireEvent.submit(address.closest('form')!);
   expect(mocks.mutate).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({
@@ -276,11 +291,13 @@ describe('branch province (QA-3)', () => {
   it('offers every province, preselects the branch’s own, and saves only a change', () => {
     mocks.fetch.mockResolvedValue(initial);
     render(<PharmacyRegulatoryProfileForm initial={initial} />);
-    const picker = screen.getByLabelText('Province this branch operates in', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const picker = screen.getByLabelText('Province this branch operates in', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
     expect(selectFieldControl(picker)).toHaveValue('PK-PB');
-    expect(Array.from(selectFieldControl(picker).querySelectorAll('option')).map((o) => o.textContent)).toContain(
-      'Sindh'
-    );
+    expect(
+      Array.from(selectFieldControl(picker).querySelectorAll('option')).map((o) => o.textContent)
+    ).toContain('Sindh');
     const save = screen.getByRole('button', { name: 'Save province' });
     expect(save).toBeDisabled();
     fireEvent.change(selectFieldControl(picker), { target: { value: 'PK-SD' } });
@@ -305,7 +322,9 @@ describe('branch province (QA-3)', () => {
 
   it('shows a refused change on the province picker', () => {
     render(<PharmacyRegulatoryProfileForm initial={initial} />);
-    const picker = screen.getByLabelText('Province this branch operates in', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const picker = screen.getByLabelText('Province this branch operates in', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
     fireEvent.change(selectFieldControl(picker), { target: { value: 'PK-KP' } });
     act(() =>
       mocks.provinceOnError!({

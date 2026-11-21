@@ -1,4 +1,5 @@
-import { SelectField as StudioSelect } from '@/components/ui/select-field';import { Input } from '@/components/ui/input';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
 import { DEFAULT_PROFILE_HEALTH_CONFIG } from '@/lib/pharmacy/business-profile-health';
 import { MarketingActionForm } from './action-form';

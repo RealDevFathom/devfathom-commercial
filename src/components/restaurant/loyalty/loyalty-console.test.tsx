@@ -469,9 +469,9 @@ describe('Customers & Loyalty console', () => {
     const dialog = screen.getByRole('dialog', { name: 'Confirm permanent anonymization' });
     const confirm = within(dialog).getByRole('button', { name: 'Permanently anonymize' });
     expect(confirm).toBeDisabled();
-    const input = within(dialog).getByLabelText('Confirmation', { selector: ':not([data-select-field-native][aria-hidden="true"])' });
+    const input = within(dialog).getByLabelText('Confirmation');
     await waitFor(() => expect(input).toHaveFocus());
-    fireEvent.change(selectFieldControl(input), { target: { value: 'ANONYMIZE' } });
+    fireEvent.change(input, { target: { value: 'ANONYMIZE' } });
     expect(confirm).toBeEnabled();
     fireEvent.click(confirm);
 
@@ -480,7 +480,14 @@ describe('Customers & Loyalty console', () => {
 
   it('routes tag assignment through the named customer contract and announces success', () => {
     renderConsole();
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Assign tag', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'tag_vip' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Assign tag', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'tag_vip' } }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Assign' }));
 
     expect(mocks.mutations.assignTag).toEqual([{ customerId: 'customer_1', tagId: 'tag_vip' }]);
@@ -490,12 +497,12 @@ describe('Customers & Loyalty console', () => {
   it('submits immutable program versions and append-only adjustments through loyalty contracts', () => {
     renderConsole();
 
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Effective from', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Effective from'), {
       target: { value: '2026-09-01T12:00' },
     });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Earn rate', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '2' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Redemption value', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '0.01' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText(/^Expiry days/, { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '365' } });
+    fireEvent.change(screen.getByLabelText('Earn rate'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('Redemption value'), { target: { value: '0.01' } });
+    fireEvent.change(screen.getByLabelText(/^Expiry days/), { target: { value: '365' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create program version' }));
 
     expect(mocks.mutations.configure[0]).toMatchObject({
@@ -505,8 +512,8 @@ describe('Customers & Loyalty console', () => {
       expiryDays: 365,
     });
 
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Points', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: '-20' } });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), { target: { value: 'Service recovery' } });
+    fireEvent.change(screen.getByLabelText('Points'), { target: { value: '-20' } });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Service recovery' } });
     fireEvent.click(screen.getByRole('button', { name: 'Append adjustment' }));
 
     expect(mocks.mutations.adjust[0]).toMatchObject({

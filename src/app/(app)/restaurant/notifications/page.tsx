@@ -1,4 +1,5 @@
-import { SelectField as StudioSelect } from '@/components/ui/select-field';import type { inferRouterOutputs } from '@trpc/server';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import type { inferRouterOutputs } from '@trpc/server';
 import { TRPCError } from '@trpc/server';
 import { revalidatePath } from 'next/cache';
 import Link from 'next/link';

@@ -318,8 +318,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
     enabled: canDecide,
     retry: false,
   });
-  const showSoloPin =
-    canDecide && (ownerPinApproval || selfApproval.data?.canSelfApprove === true);
+  const showSoloPin = canDecide && (ownerPinApproval || selfApproval.data?.canSelfApprove === true);
   const candidates = trpc.pharmacyMedicine.referenceCandidates.useQuery(undefined, {
     retry: false,
   });

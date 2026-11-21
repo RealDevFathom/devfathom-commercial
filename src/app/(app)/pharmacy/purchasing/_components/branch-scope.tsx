@@ -1,4 +1,5 @@
-import { SelectField as StudioSelect } from '@/components/ui/select-field';import { SectionCard } from '@/components/ui/section-card';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import { SectionCard } from '@/components/ui/section-card';
 import type { BranchOption } from '../_lib/types';
 import { EmptyState } from './console-chrome';
 

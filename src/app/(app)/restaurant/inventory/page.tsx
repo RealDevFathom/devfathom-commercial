@@ -1,4 +1,5 @@
-import { SelectField as StudioSelect } from '@/components/ui/select-field';import { browserUuid } from '@/lib/browser-uuid';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import { browserUuid } from '@/lib/browser-uuid';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
@@ -611,7 +612,12 @@ export default async function InventoryPage({
           <form action={recordSaleReversal} className="mt-4 grid gap-3 md:grid-cols-4">
             <label className="text-sm text-text-body">
               Stock item
-              <StudioSelect name="stockItemId" required disabled={!adjustable} className={inputClass}>
+              <StudioSelect
+                name="stockItemId"
+                required
+                disabled={!adjustable}
+                className={inputClass}
+              >
                 <option value="">Select stock item</option>
                 {loaded.stockItems.map((item) => (
                   <option value={item.id} key={item.id}>
@@ -622,7 +628,12 @@ export default async function InventoryPage({
             </label>
             <label className="text-sm text-text-body">
               Location
-              <StudioSelect name="locationId" required disabled={!adjustable} className={inputClass}>
+              <StudioSelect
+                name="locationId"
+                required
+                disabled={!adjustable}
+                className={inputClass}
+              >
                 <option value="">Select location</option>
                 {loaded.locations.map((location) => (
                   <option value={location.id} key={location.id}>

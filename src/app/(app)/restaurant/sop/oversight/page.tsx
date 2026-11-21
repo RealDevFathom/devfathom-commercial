@@ -456,7 +456,12 @@ export default function RestaurantSopOversightPage() {
                 <label className={labelClass} htmlFor="policy-scope">
                   Scope
                 </label>
-                <StudioSelect id="policy-scope" name="scope" className={selectClass} defaultValue="ORG">
+                <StudioSelect
+                  id="policy-scope"
+                  name="scope"
+                  className={selectClass}
+                  defaultValue="ORG"
+                >
                   <option value="ORG">Organization</option>
                   <option value="BRANCH">Branch</option>
                 </StudioSelect>

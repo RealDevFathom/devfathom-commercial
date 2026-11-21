@@ -91,7 +91,11 @@ describe('staged medicine review UI', () => {
   it('defaults to an authorized branch and explains workflow states', async () => {
     render(await Page({ searchParams: Promise.resolve({}) }));
     expect(screen.getByRole('heading', { level: 1, name: 'Staged medicines' })).toBeTruthy();
-    expect(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeTruthy();
+    expect(
+      screen.getByLabelText('Branch', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toBeTruthy();
     expect(screen.getByText(/Batch, expiry and verified MRP gaps/)).toBeTruthy();
     expect(mocks.batches).toHaveBeenCalledWith({ branchId: 'branch_a', page: 1 });
   });

@@ -115,20 +115,24 @@ describe('DEV-746 earning rate card', () => {
   });
   it('asks for the custom amount only when a custom option is chosen', async () => {
     await show();
-    expect(screen.queryByLabelText('Percentage of spend', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Percentage of spend')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('radio', { name: 'A percentage of spend I choose' }));
-    expect(screen.getByLabelText('Percentage of spend', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeRequired();
+    expect(screen.getByLabelText('Percentage of spend')).toBeRequired();
     fireEvent.click(screen.getByRole('radio', { name: 'Points for every spend step I choose' }));
-    expect(screen.getByLabelText('Points', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeRequired();
-    expect(screen.getByLabelText('For every PKR', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeRequired();
+    expect(screen.getByLabelText('Points')).toBeRequired();
+    expect(screen.getByLabelText('For every PKR')).toBeRequired();
   });
 });
 
 describe('ordinary loyalty history page', () => {
   it('opens on the customer list with balances instead of an empty selection box', async () => {
     await show();
-    expect(screen.getByLabelText('Branch', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeInTheDocument();
-    expect(screen.getByLabelText('Name, phone or loyalty number', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeInTheDocument();
+    expect(
+      screen.getByLabelText('Branch', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('Name, phone or loyalty number')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Search' })).toHaveAttribute('type', 'submit');
     expect(screen.getByRole('link', { name: /Retail customer/ })).toHaveAttribute(
       'href',
@@ -145,7 +149,7 @@ describe('ordinary loyalty history page', () => {
   it('searches as the user types without a submit', async () => {
     vi.useFakeTimers();
     await show({ branchId: 'branch-a' });
-    fireEvent.change(selectFieldControl(screen.getByLabelText('Name, phone or loyalty number', { selector: ':not([data-select-field-native][aria-hidden="true"])' })), {
+    fireEvent.change(screen.getByLabelText('Name, phone or loyalty number'), {
       target: { value: 'Ahmed' },
     });
     expect(mocks.replace).not.toHaveBeenCalled();
@@ -179,7 +183,13 @@ describe('ordinary loyalty history page', () => {
     );
     expect(screen.getByText('Previous')).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByRole('link', { name: /Selected/ })).toHaveAttribute('aria-current', 'true');
-    expect(selectFieldControl(screen.getByLabelText('Reminder language', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('ur');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Reminder language', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('ur');
     expect(screen.getByRole('button', { name: 'Save reminder language' })).toBeInTheDocument();
   });
   it('shows empty branch history without inventing points', async () => {
@@ -259,8 +269,8 @@ describe('DEV-764 loyalty owner console', () => {
     expect(screen.getAllByText('1 point = PKR 2.50').length).toBeGreaterThan(0);
     expect(screen.getByText('After 180 days')).toBeInTheDocument();
     expect(screen.getByText('Do not earn')).toBeInTheDocument();
-    expect(selectFieldControl(screen.getByLabelText('PKR value of 1 point', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('2.50');
-    expect(selectFieldControl(screen.getByLabelText('Points expire after (days)', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('180');
+    expect(screen.getByLabelText('PKR value of 1 point')).toHaveValue('2.50');
+    expect(screen.getByLabelText('Points expire after (days)')).toHaveValue('180');
     expect(
       screen.getByRole('checkbox', {
         name: 'Khata purchases earn points once the customer pays them off',
@@ -273,14 +283,14 @@ describe('DEV-764 loyalty owner console', () => {
     expect(
       screen.getByText(/Changing it changes the value of every point customers already hold/)
     ).toBeInTheDocument();
-    expect(selectFieldControl(screen.getByLabelText('Largest manager adjustment (points)', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('500');
+    expect(screen.getByLabelText('Largest manager adjustment (points)')).toHaveValue('500');
   });
 
   it('makes the first setup obvious and starts from the PKR 1 default', async () => {
     await show();
     expect(screen.getByText(/First setup: choose how points are earned/)).toBeInTheDocument();
-    expect(selectFieldControl(screen.getByLabelText('PKR value of 1 point', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('1');
-    expect(selectFieldControl(screen.getByLabelText('Points expire after (days)', { selector: ':not([data-select-field-native][aria-hidden="true"])' }))).toHaveValue('');
+    expect(screen.getByLabelText('PKR value of 1 point')).toHaveValue('1');
+    expect(screen.getByLabelText('Points expire after (days)')).toHaveValue('');
     expect(
       screen.getByRole('checkbox', {
         name: 'Khata purchases earn points once the customer pays them off',
@@ -370,8 +380,8 @@ describe('DEV-764 loyalty owner console', () => {
     expect(screen.getByText('Reason: Points missed on receipt 1042')).toBeInTheDocument();
     expect(screen.getByText('Points expired')).toBeInTheDocument();
     expect(screen.getByText('Expiry of earned points')).toBeInTheDocument();
-    expect(screen.getByLabelText('Number of points', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeRequired();
-    expect(screen.getByLabelText('Reason', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeRequired();
+    expect(screen.getByLabelText('Number of points')).toBeRequired();
+    expect(screen.getByLabelText('Reason')).toBeRequired();
     expect(screen.getByRole('button', { name: 'Record adjustment' })).toHaveAttribute(
       'type',
       'submit'
@@ -391,7 +401,7 @@ describe('DEV-764 loyalty owner console', () => {
     await show({ customerId: 'customer-a' });
     expect(screen.getByText('Card active')).toBeInTheDocument();
     expect(screen.getByText('Issued 1 Nov 2026')).toBeInTheDocument();
-    expect(screen.getByLabelText('Reason for replacing or revoking the card', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeRequired();
+    expect(screen.getByLabelText('Reason for replacing or revoking the card')).toBeRequired();
     expect(screen.getByRole('button', { name: 'Replace card' })).toHaveAttribute('value', 'issue');
     expect(screen.getByRole('button', { name: 'Revoke without replacing' })).toHaveAttribute(
       'value',
@@ -487,7 +497,7 @@ describe('DEV-764 one balance across branches and membership', () => {
     mocks.history.mockResolvedValue(historyFor({}));
     await show({ customerId: 'customer-a' });
     expect(screen.getAllByText('Member').length).toBeGreaterThan(0);
-    expect(screen.getByLabelText('Reason for deactivating', { selector: ':not([data-select-field-native][aria-hidden="true"])' })).toBeRequired();
+    expect(screen.getByLabelText('Reason for deactivating')).toBeRequired();
     expect(screen.getByRole('button', { name: 'Deactivate member' })).toHaveAttribute(
       'type',
       'submit'

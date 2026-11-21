@@ -55,8 +55,7 @@ type Regulatory = inferRouterOutputs<AppRouter>['pharmacyOnboarding']['regulator
 type Jurisdiction = Regulatory['jurisdictions'][number];
 type Version = Regulatory['versions'][number];
 
-const labelClass =
-  'block font-mono text-xs font-semibold uppercase tracking-wide text-text-muted';
+const labelClass = 'block font-mono text-xs font-semibold uppercase tracking-wide text-text-muted';
 const controlClass =
   'mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm text-text-body focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none';
 

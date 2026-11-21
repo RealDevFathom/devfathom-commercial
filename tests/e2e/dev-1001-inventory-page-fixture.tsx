@@ -11,13 +11,22 @@ const stockItems = [
   { id: 'fixture-stock-flour', ingredient: { name: 'Example plain flour' } },
 ];
 const count = {
-  id: 'fixture-stock-count', locationId: locations[0]!.id, status: 'DRAFT',
-  reference: 'Example opening count', countedAt: new Date('2026-11-20T09:00:00.000Z'),
-  submittedAt: null, postedAt: null, _count: { lines: 0 }, lines: [],
+  id: 'fixture-stock-count',
+  locationId: locations[0]!.id,
+  status: 'DRAFT',
+  reference: 'Example opening count',
+  countedAt: new Date('2026-11-20T09:00:00.000Z'),
+  submittedAt: null,
+  postedAt: null,
+  _count: { lines: 0 },
+  lines: [],
 };
 const transfer = {
-  id: 'fixture-stock-transfer', reference: 'Example kitchen transfer', status: 'DRAFT',
-  sourceLocationId: locations[1]!.id, destinationLocationId: locations[0]!.id,
+  id: 'fixture-stock-transfer',
+  reference: 'Example kitchen transfer',
+  status: 'DRAFT',
+  sourceLocationId: locations[1]!.id,
+  destinationLocationId: locations[0]!.id,
   _count: { lines: 0 },
 };
 const actor = {
@@ -58,7 +67,9 @@ export function InventoryPageFixture() {
     void InventoryPage({ searchParams: Promise.resolve({}) }).then((result) => {
       if (active) setPage(result);
     });
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, []);
   return page;
 }
