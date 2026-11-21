@@ -15,6 +15,7 @@ const m = vi.hoisted(() => ({
   support: vi.fn(),
   scope: vi.fn(),
   snapshot: vi.fn(),
+  resetRequest: vi.fn(),
   retention: vi.fn(),
   consent: vi.fn(),
   archiveCreate: vi.fn(),
@@ -24,6 +25,7 @@ const m = vi.hoisted(() => ({
   ownerExport: null as null | ((...args: unknown[]) => Promise<unknown>),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: m.scope }));
+vi.mock('@/lib/auth/password-reset-request', () => ({ runPasswordResetJob: m.resetRequest }));
 vi.mock('@/lib/pharmacy/counter-evidence', () => ({
   PHARMACY_CAMERA_SNAPSHOT_JOB: 'pharmacy.camera.snapshot.v1',
   runCounterEvidenceSnapshotJob: m.snapshot,
@@ -38,6 +40,7 @@ vi.mock('@/lib/pharmacy/owner-data-export', async (importOriginal) => {
     ) => (m.ownerExport ? m.ownerExport(...args) : actual.runPharmacyOwnerDataExportJob(...args)),
   };
 });
+import { Prisma } from '@/generated/prisma/client';
 import { OwnerDataExportTimeLimitError } from '@/lib/pharmacy/owner-data-export';
 import { processPlatformJobs } from './jobs';
 
@@ -157,6 +160,22 @@ describe('composed platform worker boundaries', () => {
     expect(m.createMany.mock.calls.every(([args]) => args.skipDuplicates === true)).toBe(true);
     // Enqueueing never runs the purge inline.
     expect(purgeScans()).toHaveLength(0);
+  });
+
+  it('dispatches a reset job and removes the address from its completed row', async () => {
+    const request = job('PASSWORD_RESET_REQUEST_V1', {
+      organizationId: null,
+      payload: { host: 'app.localhost', email: 'member@example.test' },
+    });
+    queue(request);
+    m.resetRequest.mockResolvedValue({});
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ succeeded: 1, failed: 0 });
+    expect(m.resetRequest).toHaveBeenCalledExactlyOnceWith(request);
+    expect(m.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'SUCCEEDED', payload: Prisma.DbNull, result: {} }),
+      })
+    );
   });
 
   it('runs the retention purge as its own job with the long timeout', async () => {

@@ -10,6 +10,7 @@ export type SideEffectScope = {
   pending: Promise<unknown>[];
   enqueued: boolean;
   afterTransaction: (() => void)[];
+  afterCommit: (() => Promise<void>)[];
   flush: () => Promise<void>;
   settle: () => Promise<void>;
 };
@@ -32,6 +33,13 @@ export function trackSideEffect(work: Promise<unknown>): void {
 export function trackTransactionWork(work: Promise<unknown>): void {
   const scope = storage.getStore();
   if (scope) scope.pending.push(work);
+}
+
+/** A separately scoped write must wait for the tenant transaction to commit. */
+export async function afterTenantCommit(work: () => Promise<void>): Promise<void> {
+  const scope = storage.getStore();
+  if (scope) scope.afterCommit.push(work);
+  else await work();
 }
 
 /** Defer independent work until the owning transaction releases its connection. */
@@ -66,6 +74,7 @@ export function bindSideEffects<T>(run: (scope: SideEffectScope) => Promise<T>):
     pending,
     enqueued: false,
     afterTransaction: [],
+    afterCommit: [],
     flush: () => waitForAll(pending, (batch) => Promise.all(batch)),
     settle: () => waitForAll(pending, (batch) => Promise.allSettled(batch)),
   };

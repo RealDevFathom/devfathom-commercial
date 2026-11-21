@@ -7,10 +7,10 @@ import {
   passwordResetInput,
   passwordResetRequestInput,
 } from '@/lib/auth/anonymous-inputs';
-import { generateInviteToken, hashInviteToken } from '@/lib/invite-token';
+import { enqueuePasswordReset } from '@/lib/auth/password-reset-request';
+import { afterTenantCommit } from '@/lib/side-effects/scope';
+import { hashInviteToken } from '@/lib/invite-token';
 import { rateLimit } from '@/lib/rate-limit';
-import { ACTIVE_STATUSES } from '@/lib/abac';
-import { appUrl, templates, sendEmail } from '@/lib/email';
 import { RESET_GENERIC_MESSAGE } from '@/lib/auth/anonymous-access';
 
 // Public (unauthenticated) procedures backing the forgot-password / reset flow.
@@ -18,8 +18,6 @@ import { RESET_GENERIC_MESSAGE } from '@/lib/auth/anonymous-access';
 // (PasswordResetToken.tokenHash), mirroring the invite flow. To verify, we hash
 // the presented raw token with the SAME sha256 (hashInviteToken) and look up by
 // tokenHash — no plaintext token ever lives in the DB.
-
-const RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 // One message for every way a reset link can fail. Shared with the fallback
 // router the `/api/trpc` handler uses when a token names no tenant at all, so an
@@ -78,42 +76,9 @@ export const passwordResetRouter = router({
         });
       }
 
-      const user = await ctx.db.user.findFirst({
-        where: { email },
-        select: { id: true, name: true, email: true, status: true, password: true },
-      });
-
-      // Only mint a token for a real, activated account that can actually sign
-      // in (ACTIVE / ON_LEAVE, with a password set). Otherwise we silently no-op
-      // and still return success below.
-      if (user && user.password && ACTIVE_STATUSES.has(user.status)) {
-        const { token, tokenHash } = generateInviteToken();
-        await ctx.db.passwordResetToken.create({
-          data: {
-            userId: user.id,
-            tokenHash,
-            expiresAt: new Date(Date.now() + RESET_TTL_MS),
-          },
-        });
-
-        const resetUrl = `${appUrl()}/reset-password/${token}`;
-        const mail = templates.passwordReset({
-          name: user.name,
-          resetUrl,
-          expiresLabel: 'in 1 hour',
-        });
-        // Best-effort send — never fail the request on an email hiccup, and never
-        // surface delivery status to the caller (it would leak existence).
-        try {
-          await sendEmail({
-            to: { email: user.email, name: user.name },
-            subject: mail.subject,
-            html: mail.html,
-            text: mail.text,
-          });
-        } catch (err) {
-          console.error('[passwordReset.request] email failed for', email, err);
-        }
+      const organizationId = ctx.organization?.id ?? ctx.session?.user.organizationId;
+      if (organizationId) {
+        await afterTenantCommit(() => enqueuePasswordReset(email, { organizationId }));
       }
 
       return { success: true };
@@ -144,6 +109,8 @@ export const passwordResetRouter = router({
     const hashed = await hash(input.newPassword, 12);
 
     await ctx.db.$transaction(async (tx) => {
+      // Serialize sibling claims with every credential writer before touching a token.
+      await tx.$queryRaw`SELECT id FROM users WHERE id = ${record.userId} FOR UPDATE`;
       // Fresh, and read once: the same instant decides whether the token is
       // still live and stamps its consumption.
       const now = new Date();

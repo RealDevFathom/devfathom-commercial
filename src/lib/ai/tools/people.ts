@@ -1236,6 +1236,11 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         // bcrypt does not pin a pooled connection.
         const retiredPasswordHash = await unusablePasswordHash();
         const user = await h.db.$transaction(async (tx) => {
+          const updated = await tx.user.update({
+            where: { id: target.id },
+            data: adminPasswordResetData(retiredPasswordHash),
+            select: { id: true, name: true, email: true },
+          });
           await tx.passwordResetToken.create({
             data: {
               userId: target.id,
@@ -1243,11 +1248,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
               expiresAt: new Date(Date.now() + PASSWORD_RESET_TTL_MS),
             },
           });
-          return tx.user.update({
-            where: { id: target.id },
-            data: adminPasswordResetData(retiredPasswordHash),
-            select: { id: true, name: true, email: true },
-          });
+          return updated;
         });
 
         let emailed = true;

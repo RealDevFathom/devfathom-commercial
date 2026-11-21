@@ -22,6 +22,7 @@
  * cross-tenant token case is added — not before.
  */
 import { createHash, randomBytes } from 'node:crypto';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 // The routers reach `@/server/trpc`, which reaches Auth.js, which cannot load
@@ -80,21 +81,24 @@ describeIfDatabase('token single use, against PostgreSQL', () => {
       ...(await import('@/lib/auth/anonymous-access')),
     };
 
-    // This suite files its users under an existing organization's department, so
-    // it needs one whose WHA-278 catalog actually exists. Picking whichever row
-    // came back first selected, on a shared test database, an organization some
-    // other battery had inserted directly without a department catalog — the
-    // fixture then died in `beforeAll` and reported all nine tests as skipped,
-    // which reads as a missing env gate rather than a broken fixture. Require
-    // the department catalog in the query, and order by id so the choice is
-    // deterministic across runs.
-    const organization = await deps.withPlatformDb((db) =>
-      db.organization.findFirst({
-        where: { departments: { some: { active: true } } },
-        orderBy: { id: 'asc' },
+    // Own the catalog as well as the members. A concurrent suite can remove
+    // its own organization (and all of its users) while these claims are running.
+    const fixtureOrg = id('org');
+    const organization = await deps.withPlatformDb(async (db) => {
+      await db.organization.create({
+        data: {
+          id: fixtureOrg,
+          slug: fixtureOrg,
+          legalName: 'Token fixture',
+          displayName: 'Token fixture',
+          departments: { create: { key: 'ENGINEERING', name: 'Engineering' } },
+        },
+      });
+      return db.organization.findFirst({
+        where: { id: fixtureOrg, departments: { some: { active: true } } },
         select: { id: true },
-      })
-    );
+      });
+    });
     if (!organization) {
       throw new Error(
         'TEST_DATABASE_URL points at a database with no organization holding an active department catalog; run migrations and the seed first.'
@@ -173,6 +177,7 @@ describeIfDatabase('token single use, against PostgreSQL', () => {
         where: { id: { in: [id('user_invitee'), id('user_resetter')] } },
       });
     });
+    await deps.withPlatformDb((db) => db.organization.delete({ where: { id: organizationId } }));
   }, 60_000);
 
   it('reads a pending invitation with a valid token', async () => {
@@ -343,5 +348,74 @@ describeIfDatabase('token single use, against PostgreSQL', () => {
         })
       )
     ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: deps.RESET_GENERIC_MESSAGE });
+  });
+  it('accepts exactly one of two distinct concurrent links and retires their sibling', async () => {
+    const userId = id('user_resetter');
+    const tokens = Array.from({ length: 3 }, () => randomBytes(32).toString('base64url'));
+    const before = await deps.withTenantDb(organizationId, async (db) => {
+      await db.passwordResetToken.createMany({
+        data: tokens.map((token) => ({
+          userId,
+          tokenHash: hashToken(token),
+          expiresAt: new Date(Date.now() + 60_000),
+        })),
+      });
+      return db.user.findUniqueOrThrow({ where: { id: userId }, select: { tokenVersion: true } });
+    });
+    const results = await Promise.allSettled(
+      tokens.slice(0, 2).map((token) =>
+        deps.withTenantDb(organizationId, (db) =>
+          caller(deps.passwordResetRouter, db).reset({
+            token,
+            newPassword: 'Synthetic-reset-passphrase-1',
+          })
+        )
+      )
+    );
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.find((result) => result.status === 'rejected')).toMatchObject({
+      reason: { code: 'BAD_REQUEST', message: deps.RESET_GENERIC_MESSAGE },
+    });
+    await expect(
+      deps.withTenantDb(organizationId, (db) =>
+        caller(deps.passwordResetRouter, db).reset({
+          token: tokens[2]!,
+          newPassword: 'Synthetic-reset-passphrase-2',
+        })
+      )
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: deps.RESET_GENERIC_MESSAGE });
+    await deps.withTenantDb(organizationId, async (db) => {
+      expect(await db.passwordResetToken.count({ where: { userId, usedAt: null } })).toBe(0);
+      expect((await db.user.findUniqueOrThrow({ where: { id: userId } })).tokenVersion).toBe(
+        before.tokenVersion + 1
+      );
+    });
+  }, 120_000);
+
+  it('retires links on credential writes only for the changed member, atomically', async () => {
+    const userId = id('user_resetter');
+    const other = id('user_invitee');
+    const create = (userId: string) => ({
+      userId,
+      tokenHash: hashToken(randomBytes(32).toString('base64url')),
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    await deps.withTenantDb(organizationId, (db) =>
+      db.passwordResetToken.createMany({ data: [create(userId), create(other)] })
+    );
+    const change = (db: ScopedDb) =>
+      db.user.update({ where: { id: userId }, data: { password: 'synthetic-replacement-hash' } });
+    await expect(
+      deps.withTenantDb(organizationId, async (db) => {
+        await change(db);
+        throw new Error('rollback');
+      })
+    ).rejects.toThrow('rollback');
+    await deps.withTenantDb(organizationId, async (db) => {
+      expect(await db.passwordResetToken.count({ where: { userId, usedAt: null } })).toBe(1);
+      await change(db);
+      expect(await db.passwordResetToken.count({ where: { userId, usedAt: null } })).toBe(0);
+      expect(await db.passwordResetToken.count({ where: { userId: other, usedAt: null } })).toBe(1);
+    });
   });
 });

@@ -215,8 +215,8 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
       headers: {
         'Content-Type': contentType,
         'Content-Disposition': 'inline',
-        // Private so shared caches never hold an authenticated user's file.
-        'Cache-Control': 'private, max-age=3600',
+        // Require fresh authorization on every download, including in the same browser.
+        'Cache-Control': 'private, no-store',
       },
     });
   } catch (error) {

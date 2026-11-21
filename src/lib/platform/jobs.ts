@@ -843,11 +843,16 @@ async function setDeploymentAvailability(
 }
 
 async function executeJob(job: PlatformJob): Promise<JobResult> {
+  if (job.type === 'PASSWORD_RESET_REQUEST_V1') {
+    const { runPasswordResetJob } = await import('@/lib/auth/password-reset-request');
+    return runPasswordResetJob(job);
+  }
+  const jobType = job.type;
   return withPlatformDb(
     async (db) => {
       const payload = objectPayload(job.payload);
       const handlers: Record<
-        PlatformJobType,
+        Exclude<PlatformJobType, 'PASSWORD_RESET_REQUEST_V1'>,
         (database: PrismaClient, item: PlatformJob, data: JobPayload) => Promise<JobResult>
       > = {
         PROVISION_SHARED: sharedProvision,
@@ -872,7 +877,7 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
           }),
         PHARMACY_OWNER_DATA_EXPORT_V1: runPharmacyOwnerDataExportJob,
       };
-      return handlers[job.type](db, job, payload);
+      return handlers[jobType](db, job, payload);
     },
     {
       timeout:
@@ -903,6 +908,7 @@ async function completeJob(job: PlatformJob, result: JobResult): Promise<void> {
       where: { id: job.id },
       data: {
         status: 'SUCCEEDED',
+        ...(job.type === 'PASSWORD_RESET_REQUEST_V1' ? { payload: Prisma.DbNull } : {}),
         result: json(result),
         error: null,
         finishedAt: new Date(),
@@ -938,6 +944,7 @@ async function failJob(job: PlatformJob, error: unknown): Promise<'retried' | 'f
           }
         : {
             status: 'FAILED',
+            ...(job.type === 'PASSWORD_RESET_REQUEST_V1' ? { payload: Prisma.DbNull } : {}),
             error: message.slice(0, 2_000),
             finishedAt: new Date(),
           },

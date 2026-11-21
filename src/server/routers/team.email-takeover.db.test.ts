@@ -28,7 +28,8 @@ vi.mock('@/lib/email', async (importOriginal) => ({
 }));
 vi.mock('@/lib/notifications', () => ({ notify: vi.fn() }));
 
-import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
+import { runPasswordResetJob } from '@/lib/auth/password-reset-request';
+import { withPlatformDb, withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { ACTIVE_STATUSES } from '@/lib/abac';
 import { router, type TRPCContext } from '../trpc';
 import { teamRouter } from './team';
@@ -107,6 +108,23 @@ function linkToken(to: string, path: 'reset-password' | 'invite'): string | null
   return null;
 }
 
+/** Process only this fixture's admitted request through the real worker handler. */
+async function requestAndDeliverReset(email: string) {
+  await withTenantDb(organizationId, (db) =>
+    app.createCaller(context(db, null)).passwordReset.request({ email })
+  );
+  const job = await withPlatformDb((db) =>
+    db.platformJob.findFirstOrThrow({
+      where: {
+        organizationId,
+        type: 'PASSWORD_RESET_REQUEST_V1',
+        payload: { path: ['email'], equals: email },
+      },
+    })
+  );
+  await runPasswordResetJob(job);
+}
+
 async function insertUser(
   id: string,
   email: string,
@@ -123,6 +141,7 @@ async function insertUser(
 
 describe.skipIf(!databaseUrl)('DEV-974 email change takeover against PostgreSQL', () => {
   beforeAll(async () => {
+    vi.stubEnv('AUTH_SECRET', 'synthetic-password-reset-test-key');
     client = new pg.Client({ connectionString: databaseUrl });
     await client.connect();
     const role = await client.query(
@@ -185,6 +204,7 @@ describe.skipIf(!databaseUrl)('DEV-974 email change takeover against PostgreSQL'
       await client.query('DELETE FROM organizations WHERE id = ANY($1)', [organizations]);
     } finally {
       await client.end();
+      vi.unstubAllEnvs();
     }
   });
 
@@ -200,9 +220,7 @@ describe.skipIf(!databaseUrl)('DEV-974 email change takeover against PostgreSQL'
         )
     );
     // 2. They ask for a password reset to that address.
-    await withTenantDb(organizationId, (db) =>
-      app.createCaller(context(db, null)).passwordReset.request({ email: ATTACKER_EMAIL })
-    );
+    await requestAndDeliverReset(ATTACKER_EMAIL);
     const resetToken = linkToken(ATTACKER_EMAIL, 'reset-password');
     // 3. They complete the reset with a password they choose.
     const reset = resetToken
@@ -282,9 +300,7 @@ describe.skipIf(!databaseUrl)('DEV-974 email change takeover against PostgreSQL'
 
   it('lets an administrator correct the email of a member below them, pending confirmation', async () => {
     // A reset link the member asked for earlier must not survive the change.
-    await withTenantDb(organizationId, (db) =>
-      app.createCaller(context(db, null)).passwordReset.request({ email: 'staff@test.invalid' })
-    );
+    await requestAndDeliverReset('staff@test.invalid');
     const earlierReset = linkToken('staff@test.invalid', 'reset-password');
     expect(earlierReset).not.toBeNull();
 
@@ -330,9 +346,7 @@ describe.skipIf(!databaseUrl)('DEV-974 email change takeover against PostgreSQL'
     expect(await signInAs('staff.new@test.invalid', OWNER_PASSWORD)).toBeNull();
     expect(await signInAs('staff@test.invalid', OWNER_PASSWORD)).toBeNull();
     sent.length = 0;
-    await withTenantDb(organizationId, (db) =>
-      app.createCaller(context(db, null)).passwordReset.request({ email: 'staff.new@test.invalid' })
-    );
+    await requestAndDeliverReset('staff.new@test.invalid');
     expect(linkToken('staff.new@test.invalid', 'reset-password')).toBeNull();
 
     // Confirming from the new address restores sign-in with a password the member chose.
