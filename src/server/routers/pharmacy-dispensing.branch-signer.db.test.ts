@@ -625,12 +625,22 @@ describeIfDatabase('branch-scoped clinical reads (DEV-1010)', () => {
           expect(rows.map((row) => row.id)).not.toContain(hidden);
         }
       }
+      // Dispense ordinarily includes prescriptions; an explicit DENY takes precedence.
+      const rxDenial = await db.userPermissionOverride.create({
+        data: {
+          userId: ids.customAllow,
+          capability: 'pharmacy:prescriptions',
+          effect: 'DENY',
+          reason: 'Clinical reads fixture',
+        },
+      });
       const dispenseOnly = await read(ids.customAllow).reviewQueue();
       const restricted = dispenseOnly.items.find((row) => row.id === first.reviewItemId);
       expect(restricted?.line.prescription.patient).toEqual({ displayName: null });
       expect(JSON.stringify(dispenseOnly)).not.toContain(patientId);
       expect(JSON.stringify(dispenseOnly)).not.toContain(`paper:${suffix}`);
 
+      await db.userPermissionOverride.delete({ where: { id: rxDenial.id } });
       await db.pharmacyBranchAssignment.create({
         data: { branchId: ids.otherBranch, userId: ids.here, active: false },
       });
