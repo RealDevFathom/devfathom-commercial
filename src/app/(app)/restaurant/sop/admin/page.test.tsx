@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -255,10 +256,23 @@ describe('SOP interval recurrence authoring', () => {
       jobRoles: [{ id: 'role_1', key: 'manager', name: 'Manager' }],
     });
 
-    fireEvent.change(screen.getByLabelText('Frequency'), { target: { value: 'INTERVAL' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Frequency', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'INTERVAL' } }
+    );
 
     expect(screen.getByLabelText('Every')).toHaveAttribute('min', '15');
-    expect(screen.getByLabelText('Interval unit')).toHaveValue('minutes');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Interval unit', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('minutes');
     expect(screen.getByText('Days of week · required')).toBeVisible();
     expect(screen.getByLabelText('Start time')).toBeRequired();
     expect(screen.getByLabelText('End time')).toBeRequired();

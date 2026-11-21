@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -37,7 +38,13 @@ describe('audit drill-down destination', () => {
       expect.objectContaining({ actorId: 'cashier_1', search: undefined }),
       expect.anything()
     );
-    expect(screen.getByLabelText('Actor')).toHaveValue('cashier_1');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Actor', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('cashier_1');
     expect(screen.getByText('No events match these filters.')).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
     expect(listQuery).toHaveBeenLastCalledWith(
@@ -114,8 +121,20 @@ describe('audit drill-down destination', () => {
       expect.anything()
     );
     expect(screen.getByRole('heading', { name: 'Audit log: who did what' })).toBeVisible();
-    expect(screen.getByLabelText('Person')).toHaveValue('cashier_1');
-    expect(screen.getByLabelText('Branch')).toHaveValue('branch_north');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Person', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('cashier_1');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('branch_north');
     expect(screen.getByText(/Counter and sales: Return and refund/)).toBeVisible();
     expect(screen.getByText(/· North/)).toBeVisible();
     expect(screen.getByText(/Approved by Owner Person/)).toBeVisible();

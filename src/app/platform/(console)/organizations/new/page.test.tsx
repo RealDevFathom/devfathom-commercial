@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -165,10 +166,24 @@ describe('NewOrganizationPage package step', () => {
     const seats = screen.getByLabelText('Seat limit');
     expect(seats).toHaveValue(25);
     fireEvent.change(seats, { target: { value: '7' } });
-    fireEvent.change(screen.getByLabelText('Commercial package'), { target: { value: 'pkg_r2' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Commercial package', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'pkg_r2' } }
+    );
     expect(screen.getByLabelText('Seat limit')).toHaveValue(120);
     expect(screen.getByLabelText('Seat limit')).toHaveAttribute('max', '120');
-    fireEvent.change(screen.getByLabelText('Commercial package'), { target: { value: 'pkg_r1' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Commercial package', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'pkg_r1' } }
+    );
     expect(screen.getByLabelText('Seat limit')).toHaveValue(25);
   });
 
@@ -176,7 +191,14 @@ describe('NewOrganizationPage package step', () => {
     mocks.requirePlatformRead.mockResolvedValue({ role: 'SALES' });
     render(await renderPage({ vertical: 'RESTAURANT' }));
     expect(screen.getByLabelText('Seat limit')).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Commercial package'), { target: { value: 'pkg_r2' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Commercial package', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'pkg_r2' } }
+    );
     expect(screen.getByLabelText('Seat limit')).toHaveValue(120);
   });
 
@@ -386,9 +408,16 @@ it('submits the selected package default and a super admin override within its c
   try {
     const { container } = render(await renderPage({ vertical: 'PHARMACY' }));
     fillPharmacyOnboarding();
-    fireEvent.change(screen.getByLabelText('Commercial package'), {
-      target: { value: 'professional' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Commercial package', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'professional' },
+      }
+    );
     const seats = screen.getByLabelText('Seat limit');
     expect(seats).toHaveValue(50);
     expect(seats).toHaveAttribute('max', '50');

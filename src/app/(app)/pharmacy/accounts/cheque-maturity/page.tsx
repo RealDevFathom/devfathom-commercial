@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { PHARMACY_COPY, SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/plain-language';
 import { ReportDetails } from '@/components/pharmacy/report-details';
 import type { Metadata } from 'next';
@@ -133,7 +134,7 @@ export default async function ChequeMaturityPage({
         <form action="/pharmacy/accounts/cheque-maturity">
           <label className="text-sm text-text-body">
             {screenCopy.cheques.authorizedActiveBranch}
-            <select
+            <StudioSelect
               name="branch"
               defaultValue={branch?.id ?? ''}
               className="mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3"
@@ -145,7 +146,7 @@ export default async function ChequeMaturityPage({
                   {item.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <button
             className="mt-4 min-h-11 rounded-control bg-primary px-3 text-sm font-semibold text-primary-foreground"

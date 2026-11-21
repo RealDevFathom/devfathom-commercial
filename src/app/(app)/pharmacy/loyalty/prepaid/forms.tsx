@@ -1,4 +1,6 @@
 'use client';
+
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { formatUtcInstant } from '@/lib/utc-instant';
 import { useActionState, useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -185,7 +187,7 @@ export function PrepaidPaymentForm({
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="grid gap-2 text-sm">
             Customer
-            <select
+            <StudioSelect
               name="customerId"
               className={selectClass}
               value={selectedCustomer}
@@ -198,11 +200,11 @@ export function PrepaidPaymentForm({
                   {c.displayName}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <label className="grid gap-2 text-sm">
             Branch
-            <select
+            <StudioSelect
               name="branchId"
               className={selectClass}
               value={branchId}
@@ -215,11 +217,11 @@ export function PrepaidPaymentForm({
                   {b.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <label className="grid gap-2 text-sm">
             Open cash drawer
-            <select
+            <StudioSelect
               name="deviceId"
               className={selectClass}
               required
@@ -234,7 +236,7 @@ export function PrepaidPaymentForm({
               ) : (
                 <option value="">Open a drawer at the counter first</option>
               )}
-            </select>
+            </StudioSelect>
           </label>
           <label className="grid gap-2 text-sm">
             Amount (PKR)
@@ -251,7 +253,7 @@ export function PrepaidPaymentForm({
           </label>
           <label className="grid gap-2 text-sm">
             Movement
-            <select
+            <StudioSelect
               name="kind"
               className={selectClass}
               value={kind}
@@ -260,7 +262,7 @@ export function PrepaidPaymentForm({
             >
               <option value="PAYMENT">Upfront cash payment</option>
               <option value="REFUND">Refund prepaid cash</option>
-            </select>
+            </StudioSelect>
           </label>
           {kind === 'PAYMENT' && (
             <label className="grid gap-2 text-sm">
@@ -384,7 +386,7 @@ export function PrepaidPinForm({
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="grid gap-2 text-sm">
           Customer
-          <select
+          <StudioSelect
             name="customerId"
             className={selectClass}
             defaultValue={customerId}
@@ -396,7 +398,7 @@ export function PrepaidPinForm({
                 {c.displayName}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </label>
         <label className="grid gap-2 text-sm">
           New prepaid PIN (customer types it)

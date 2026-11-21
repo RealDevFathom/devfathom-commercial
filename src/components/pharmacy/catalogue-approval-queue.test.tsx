@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const m = vi.hoisted(() => ({
@@ -22,6 +23,7 @@ const m = vi.hoisted(() => ({
     error: null as null | { message: string },
   },
   selfApprovalOptions: undefined as undefined | { enabled?: boolean },
+  approvalMode: { data: { required: false } as undefined | { required: boolean } },
   invalidateSelfApproval: vi.fn(),
   decide: { mutate: vi.fn(), isPending: false, error: null as null | { message: string } },
   propose: { mutate: vi.fn(), isPending: false, error: null, isSuccess: false },
@@ -32,6 +34,7 @@ const m = vi.hoisted(() => ({
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    approvalAuthenticator: { mode: { useQuery: () => m.approvalMode } },
     useUtils: () => ({
       pharmacyMedicine: {
         catalogueEdits: { invalidate: m.invalidate },
@@ -66,6 +69,9 @@ import { CatalogueApprovalQueue } from './catalogue-approval-queue';
 afterEach(cleanup);
 beforeEach(() => {
   vi.clearAllMocks();
+  // DEV-961: these cases word the owner's own approval as a PIN, which applies while the owner has
+  // the authenticator for approvals turned off; the code wording is covered on its own below.
+  m.approvalMode.data = { required: false };
   m.queue.isPending = false;
   m.queue.error = null;
   m.decide.isPending = false;
@@ -131,9 +137,16 @@ describe('DEV-766 catalogue approval queue', () => {
   it('submits a selected item name for review without publishing it', () => {
     render(<CatalogueApprovalQueue />);
     expect(screen.getByRole('button', { name: 'Submit edit for review' })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Catalogue item'), {
-      target: { value: 'medicine' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Catalogue item', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'medicine' },
+      }
+    );
     fireEvent.change(screen.getByLabelText('Proposed product name'), {
       target: { value: 'New name' },
     });
@@ -551,5 +564,51 @@ describe('DEV-976 who can approve an edit the approver submitted', () => {
       'href',
       '/pharmacy/settings/pin'
     );
+  });
+
+  it('asks for the current app code while the authenticator for approvals is on (DEV-961)', () => {
+    m.approvalMode.data = { required: true };
+    m.access.data = owner;
+    m.queue.data = [ownEdits[0]];
+    m.selfApproval.data = { canSelfApprove: true, reviewers: [] };
+    render(<CatalogueApprovalQueue />);
+    expect(
+      screen.getByText(
+        'Edits stay pending until a catalogue reviewer approves them. A solo owner may approve with the current code from their authenticator app. Every approval is audited.'
+      )
+    ).toBeVisible();
+    const code = screen.getByLabelText('Your approval code (for self-approval)');
+    expect(code).toHaveAccessibleDescription(
+      'Nobody else can review, so you approve with the current 6-digit code from your authenticator app.'
+    );
+    expect(screen.queryByLabelText('Solo owner PIN (for self-approval)')).toBeNull();
+    fireEvent.change(code, { target: { value: '482913' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Approve edit' }));
+    // The same field carries the code: the server's shared verifier decides what it accepts.
+    expect(m.decide.mutate).toHaveBeenCalledWith({
+      editId: 'own-edit',
+      decision: 'APPROVE',
+      soloPin: '482913',
+    });
+  });
+
+  it('words the owner fallback with the app code while the setting is on (DEV-961)', () => {
+    m.approvalMode.data = { required: true };
+    m.access.data = { canEdit: true, canDecide: true, ownerPinApproval: true, isOwner: true };
+    render(<CatalogueApprovalQueue />);
+    expect(
+      screen.getByLabelText('Your approval code (for self-approval)')
+    ).toHaveAccessibleDescription(
+      'Nobody holds the catalogue review permission, so you approve as the owner with the current 6-digit code from your authenticator app.'
+    );
+  });
+
+  it('asks for the code until the setting is read, since it is on by default (DEV-961)', () => {
+    m.approvalMode.data = undefined;
+    m.access.data = owner;
+    m.queue.data = [ownEdits[0]];
+    m.selfApproval.data = { canSelfApprove: true, reviewers: [] };
+    render(<CatalogueApprovalQueue />);
+    expect(screen.getByLabelText('Your approval code (for self-approval)')).toBeInTheDocument();
   });
 });

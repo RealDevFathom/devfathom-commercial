@@ -615,19 +615,21 @@ async function verifyOtherApproverPin(
       if (!/^\d{4,8}$/.test(pin)) return refuse('REFUSED');
       const budget = await budgets.spendApproverPinGuessTypedByAnother(organizationId, approverId);
       if (!budget.ok) return refuse('LOCKED');
-      // Built before the call, so it also carries the approver right the shared check will
-      // require once DEV-961 (PR 2240) lands: the drawer-manager gate this approver passed.
       const secretCheck = {
         organizationId,
         approverUserId: approverId,
         credentialHash: credential.credentialHash,
         secret: pin,
         action: 'pharmacy.shiftVarianceApproval',
-        approverRight: 'pharmacy:manage' as const,
         requestedById: scope.actorId,
         now,
       };
-      const verified = await verifyApprovalSecret(db, secretCheck);
+      // DEV-961: the approver right is written at the call, where the gate test reads it: the
+      // drawer-manager gate this approver passed.
+      const verified = await verifyApprovalSecret(db, {
+        ...secretCheck,
+        approverRight: 'pharmacy:manage',
+      });
       if (!verified) return refuse(budget.remaining === 0 ? 'LOCKED' : 'REFUSED');
       await budgets.clearApproverPinGuessesTypedByAnother(organizationId, approverId);
       return 'VERIFIED';

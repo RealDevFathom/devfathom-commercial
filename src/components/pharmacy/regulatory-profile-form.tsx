@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 /**
  * PLAT-02 — the branch regulatory profile form and its effective-dated history.
  *
@@ -150,7 +152,7 @@ function BranchProvinceControl({
         htmlFor="branch-province"
         label="Province this branch operates in"
       >
-        <select
+        <StudioSelect
           aria-describedby={error ? 'branch-province-error' : undefined}
           aria-invalid={error ? true : undefined}
           className={controlClass}
@@ -172,7 +174,7 @@ function BranchProvinceControl({
               {name}
             </option>
           ))}
-        </select>
+        </StudioSelect>
       </Field>
       <Button
         disabled={!changing || setProvince.isPending}
@@ -368,7 +370,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
           hint="Only branches in this workspace appear here."
           label="Which branch is this profile for?"
         >
-          <select
+          <StudioSelect
             className={controlClass}
             id="branch-select"
             onChange={(event) => selectBranch(event.target.value)}
@@ -379,7 +381,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 {branch.name} — {branch.city}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </Field>
         {branch ? (
           <BranchProvinceControl
@@ -523,7 +525,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
               }
               label="Province"
             >
-              <select
+              <StudioSelect
                 aria-describedby={errors.provinceCode ? 'provinceCode-error' : undefined}
                 aria-invalid={errors.provinceCode ? true : undefined}
                 className={controlClass}
@@ -538,7 +540,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                       ? ' (rules provisional)'
                       : ''}
                 </option>
-              </select>
+              </StudioSelect>
             </Field>
             <Field
               error={errors.premisesAddressLine}
@@ -630,7 +632,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
               }
               label="Licence category"
             >
-              <select
+              <StudioSelect
                 aria-describedby={errors.licenceCategory ? 'licenceCategory-error' : undefined}
                 aria-invalid={errors.licenceCategory ? true : undefined}
                 className={controlClass}
@@ -648,7 +650,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                     </option>
                   ))
                 )}
-              </select>
+              </StudioSelect>
             </Field>
             <Field error={errors.licenceNumber} htmlFor="licenceNumber" label="Licence number">
               <Input
@@ -834,7 +836,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
               <Input className="mt-1 min-h-11" id="strn" name="strn" />
             </Field>
             <Field error={errors.fiscalStatus} htmlFor="fiscalStatus" label="Fiscal status">
-              <select
+              <StudioSelect
                 aria-describedby={errors.fiscalStatus ? 'fiscalStatus-error' : undefined}
                 aria-invalid={errors.fiscalStatus ? true : undefined}
                 className={controlClass}
@@ -846,7 +848,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                     {status.label}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </Field>
             <Field
               error={errors.retentionPrescriptionYears}

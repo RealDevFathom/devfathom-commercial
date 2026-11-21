@@ -2,7 +2,13 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const idle = { data: undefined, isFetching: false, isPending: false, error: null, refetch: vi.fn() };
+const idle = {
+  data: undefined,
+  isFetching: false,
+  isPending: false,
+  error: null,
+  refetch: vi.fn(),
+};
 const mutation = { mutate: vi.fn(), reset: vi.fn(), isPending: false, error: null };
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('@/lib/trpc', () => ({
@@ -51,8 +57,11 @@ describe('DEV-935 medicines page accessible names', () => {
       </>
     );
     const names: string[] = [];
-    for (const control of container.querySelectorAll('input, select, textarea')) {
-      if (control instanceof HTMLInputElement && ['hidden', 'radio'].includes(control.type)) continue;
+    for (const control of container.querySelectorAll(
+      'input:not([aria-hidden="true"]), select:not([aria-hidden="true"]), textarea, [data-select-field-trigger]'
+    )) {
+      if (control instanceof HTMLInputElement && ['hidden', 'radio'].includes(control.type))
+        continue;
       const labelled = control.getAttribute('aria-label');
       const byId = control.getAttribute('aria-labelledby');
       const label =

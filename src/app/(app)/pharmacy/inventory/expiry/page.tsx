@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { browserUuid } from '@/lib/browser-uuid';
 import type { Metadata } from 'next';
 import Link from 'next/link';
@@ -275,23 +276,23 @@ export default async function PharmacyExpiryBoardPage({
           {view === 'print' ? <input name="view" type="hidden" value="print" /> : null}
           <label className="min-w-64 flex-1 text-sm text-text-body">
             Branch
-            <select className={inputClass} defaultValue={branch.id} name="branch">
+            <StudioSelect className={inputClass} defaultValue={branch.id} name="branch">
               {workingBranches.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name} · {item.city}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <label className="min-w-48 text-sm text-text-body">
             Expiring within
-            <select className={inputClass} defaultValue={String(withinDays)} name="within">
+            <StudioSelect className={inputClass} defaultValue={String(withinDays)} name="within">
               {EXPIRY_BOARD_WINDOWS.map((days) => (
                 <option key={days} value={days}>
                   {days} days
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <Link
             className={buttonVariants({ variant: 'ghost' })}

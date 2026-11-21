@@ -1,5 +1,6 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { businessDateToUtcDate, resolveBusinessDate } from '@/lib/restaurant/business-date';
 import { workspaceTimezone } from '@/lib/timezone';
 import { useMemo, useRef, useState, type ReactNode } from 'react';
@@ -740,7 +741,7 @@ export function RestaurantManagementOverview({ insightsEnabled }: { insightsEnab
           </label>
           <label className="space-y-1.5">
             <span className="eyebrow">{editing ? 'Saved date range' : 'Closed-date range'}</span>
-            <select
+            <StudioSelect
               className={controlClass}
               aria-label={editing ? 'Saved date range' : 'Closed-date range'}
               value={rangeDays}
@@ -756,7 +757,7 @@ export function RestaurantManagementOverview({ insightsEnabled }: { insightsEnab
             >
               <option value={7}>Last 7 dates</option>
               <option value={30}>Last 30 dates</option>
-            </select>
+            </StudioSelect>
           </label>
         </div>
         <p className="mt-3 font-mono text-xs text-text-body">

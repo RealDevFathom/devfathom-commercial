@@ -1,3 +1,4 @@
+import { chooseSelectField, selectFieldNative } from './fixtures/select-field';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import pg from 'pg';
 
@@ -345,11 +346,13 @@ function sectionCard(page: Page, heading: string, level: 2 | 3 = 3): Locator {
  * change (`code`, `(default)`) cannot silently mis-target another branch.
  */
 async function selectSeededBranch(select: Locator) {
-  const option = select.locator('option').filter({ hasText: BRANCH_NAME });
+  const option = (await selectFieldNative(select))
+    .locator('option')
+    .filter({ hasText: BRANCH_NAME });
   await expect(option, `the ${BRANCH_NAME} branch option must load`).toHaveCount(1);
   const value = await option.getAttribute('value');
   expect(value, 'the branch option must carry a value').toBeTruthy();
-  await select.selectOption(value!);
+  await chooseSelectField(select, value!);
 }
 
 // ── SOP execution ────────────────────────────────────────────────────────────
@@ -365,10 +368,9 @@ test('the seeded daily SOP is completed, submitted LATE past its window, and ver
       main(page).getByRole('heading', { level: 1, name: 'Branch SOP board' })
     ).toBeVisible();
 
-    // `Branch` and `Business date` are implicit labels wrapping their control, so
-    // the accessible name can absorb the control's own value. Substring matching
-    // is used throughout this board for that reason.
-    await selectSeededBranch(main(page).getByLabel('Branch'));
+    // The branch trigger exposes its visible caption; Business date keeps its
+    // existing implicit-label locator.
+    await selectSeededBranch(main(page).getByRole('combobox', { name: 'Branch', exact: true }));
     await main(page).getByLabel('Business date').fill(SOP_BUSINESS_DATE);
     await main(page).getByRole('button', { name: 'Load board' }).click();
     await page.waitForURL(new RegExp(`[?&]date=${SOP_BUSINESS_DATE}(?:&|$)`, 'u'));
@@ -571,7 +573,7 @@ test('a published shift is stamped to the branch operating day, re-versions on e
     // read back (a shift whose end is already past presents as `ABSENT`), and so
     // the assertion does not depend on the runner host's timezone.
     const businessDay = branchDay(1);
-    await selectSeededBranch(page.getByLabel('Branch', { exact: true }));
+    await selectSeededBranch(page.getByRole('combobox', { name: 'Branch', exact: true }));
     await page.getByLabel('From', { exact: true }).fill(businessDay);
     await page.getByLabel('To', { exact: true }).fill(businessDay);
 
@@ -735,9 +737,9 @@ test('an operator without staff:manage is refused the manager roster and keeps o
   // console gates the roster behind never populates, and the manager roster is
   // never requested at all — refused, fail-closed, one seam before the one this
   // case originally reached for.
-  const branchPicker = page.getByLabel('Branch', { exact: true });
+  const branchPicker = page.getByRole('combobox', { name: 'Branch', exact: true });
   await expect(
-    branchPicker.locator('option').filter({ hasText: BRANCH_NAME }),
+    (await selectFieldNative(branchPicker)).locator('option').filter({ hasText: BRANCH_NAME }),
     'a staff:manage-less operator must not be offered a branch to administer'
   ).toHaveCount(0);
   await expect(branchPicker, 'the branch picker must be inert, not merely empty').toBeDisabled();
@@ -768,7 +770,10 @@ test('WHA-1599 floor table edit reaches the POS table map', async ({ page }, tes
   test.slow();
   await signInAs(page, 'restaurantAdmin');
   await page.goto(new URL('/restaurant/floor', page.url()).href);
-  await page.getByLabel('Branch', { exact: true }).selectOption(fixture.branchId);
+  await chooseSelectField(
+    page.getByRole('combobox', { name: 'Branch', exact: true }),
+    fixture.branchId
+  );
   const original = await withTenantPool(
     async (pool) =>
       (
@@ -824,9 +829,10 @@ test('WHA-1599 delivery zone and saved address attach through POS to KDS', async
   test.slow();
   await signInAs(page, 'restaurantAdmin');
   await page.goto(new URL('/restaurant/delivery', page.url()).href);
-  await page
-    .getByRole('combobox', { name: 'Branch', exact: true })
-    .selectOption(fixture.delivery.branchId);
+  await chooseSelectField(
+    page.getByRole('combobox', { name: 'Branch', exact: true }),
+    fixture.delivery.branchId
+  );
   await page.getByRole('button', { name: 'Add zone', exact: true }).click();
   let dialog = page.getByRole('dialog');
   await dialog.getByLabel('Zone name').fill('QA1599 zone');

@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { memo, useCallback, useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
 import {
@@ -380,7 +382,7 @@ const TransactionRow = memo(function TransactionRow({
         </div>
         {t.type === 'EXPENSE' && (
           <div className="mt-2">
-            <select
+            <StudioSelect
               value={eCategory}
               onChange={(e) => setECategory(e.target.value)}
               className="rounded-lg border border-border bg-background px-2 py-1 text-xs text-foreground focus:border-primary focus:outline-none"
@@ -391,7 +393,7 @@ const TransactionRow = memo(function TransactionRow({
                   {v}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </div>
         )}
         <div className="flex justify-end gap-2 mt-2">
@@ -611,7 +613,7 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
           {type === 'EXPENSE' && (
             <div>
               <label className="block text-xs font-medium text-foreground mb-1">Category</label>
-              <select
+              <StudioSelect
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
                 className="w-full rounded-xl border border-border bg-background px-2 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -622,12 +624,12 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
                     {v}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </div>
           )}
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Project</label>
-            <select
+            <StudioSelect
               value={projectId}
               onChange={(e) => setProjectId(e.target.value)}
               className="w-full rounded-xl border border-border bg-background px-2 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -638,11 +640,11 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
                   {p.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </div>
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Client</label>
-            <select
+            <StudioSelect
               value={clientId}
               onChange={(e) => setClientId(e.target.value)}
               className="w-full rounded-xl border border-border bg-background px-2 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -653,7 +655,7 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
                   {c.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </div>
         </div>
 
@@ -854,7 +856,7 @@ function RecurringTab() {
               </div>
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Category</label>
-                <select
+                <StudioSelect
                   value={category}
                   onChange={(e) => setCategory(e.target.value)}
                   className="w-full rounded-xl border border-border bg-background px-2 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -864,11 +866,11 @@ function RecurringTab() {
                       {v}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </div>
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Interval</label>
-                <select
+                <StudioSelect
                   value={interval}
                   onChange={(e) => setInterval(e.target.value)}
                   className="w-full rounded-xl border border-border bg-background px-2 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -876,7 +878,7 @@ function RecurringTab() {
                   <option value="monthly">Monthly</option>
                   <option value="quarterly">Quarterly</option>
                   <option value="yearly">Yearly</option>
-                </select>
+                </StudioSelect>
               </div>
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Next Due *</label>

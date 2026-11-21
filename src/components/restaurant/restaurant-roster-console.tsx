@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { browserUuid } from '@/lib/browser-uuid';
 
 import { useMemo, useState, type FormEvent } from 'react';
@@ -541,7 +543,7 @@ export function RestaurantRosterConsole() {
                         <div className="flex flex-col gap-2 sm:flex-row">
                           <label className="min-w-0 flex-1">
                             <span className={labelClass}>Replacement employee</span>
-                            <select
+                            <StudioSelect
                               className={selectClass}
                               value={replacement}
                               onChange={(event) =>
@@ -557,7 +559,7 @@ export function RestaurantRosterConsole() {
                                   {candidate.displayName}
                                 </option>
                               ))}
-                            </select>
+                            </StudioSelect>
                           </label>
                           <Button
                             className="self-end"
@@ -882,13 +884,13 @@ export function RestaurantRosterConsole() {
             ) : (
               <label className="space-y-1.5">
                 <span className={labelClass}>Operator</span>
-                <select name="staffProfileId" className={selectClass} required>
+                <StudioSelect name="staffProfileId" className={selectClass} required>
                   {staffOptions.map((profile: StaffProfile) => (
                     <option key={profile.id} value={profile.id}>
                       {profile.displayName}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </label>
             )}
 
@@ -976,7 +978,7 @@ export function RestaurantRosterConsole() {
             ) : null}
             <label className="space-y-1.5">
               <span className={labelClass}>Timestamp</span>
-              <select name="kind" className={selectClass} required>
+              <StudioSelect name="kind" className={selectClass} required>
                 <option value="CLOCK_IN">
                   {correcting?.clockedInAt ? 'Correct clock in' : 'Add missing clock in'}
                 </option>
@@ -993,7 +995,7 @@ export function RestaurantRosterConsole() {
                       : `Add missing break ${index + 1} end`}
                   </option>,
                 ])}
-              </select>
+              </StudioSelect>
             </label>
             <label className="space-y-1.5">
               <span className={labelClass}>Corrected time</span>

@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
@@ -148,7 +150,7 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
               {STAGING_FIELDS.map(([field, label]) => (
                 <label key={field} className="min-w-0 text-sm">
                   {label}
-                  <select
+                  <StudioSelect
                     className={control}
                     value={mapping[field] ?? ''}
                     onChange={(event) => {
@@ -167,12 +169,12 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
                         {header}
                       </option>
                     ))}
-                  </select>
+                  </StudioSelect>
                 </label>
               ))}
               <label className="min-w-0 text-sm">
                 Quantity column counts
-                <select
+                <StudioSelect
                   required={quantityMapped}
                   disabled={!quantityMapped}
                   aria-describedby="quantity-choice-help"
@@ -188,7 +190,7 @@ export function MigrationStagingForm({ branchId, route }: { branchId: string; ro
                   </option>
                   <option value="PACKS">Packs</option>
                   <option value="UNITS">Units</option>
-                </select>
+                </StudioSelect>
               </label>
             </div>
             <p id="quantity-choice-help" className="text-sm text-text-muted">

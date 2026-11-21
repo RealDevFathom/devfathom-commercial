@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
@@ -497,7 +499,7 @@ function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Type</label>
-                <select
+                <StudioSelect
                   value={leaveType}
                   onChange={(e) => setLeaveType(e.target.value as typeof leaveType)}
                   className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -505,7 +507,7 @@ function LeaveTab({ isAdmin }: { isAdmin: boolean }) {
                   <option value="VACATION">Vacation</option>
                   <option value="SICK">Sick Leave</option>
                   <option value="REMOTE">Remote Work</option>
-                </select>
+                </StudioSelect>
               </div>
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Start Date</label>
@@ -757,7 +759,7 @@ function BalancesTab() {
       <div className="flex flex-wrap items-end gap-3">
         <div>
           <label className="block text-xs font-medium text-foreground mb-1">Member</label>
-          <select
+          <StudioSelect
             value={userId}
             onChange={(e) => setSelectedUserId(e.target.value)}
             className="min-w-[14rem] rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -767,11 +769,11 @@ function BalancesTab() {
                 {m.name}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </div>
         <div>
           <label className="block text-xs font-medium text-foreground mb-1">Year</label>
-          <select
+          <StudioSelect
             value={year}
             onChange={(e) => setYear(Number(e.target.value))}
             className="rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -781,7 +783,7 @@ function BalancesTab() {
                 {y}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </div>
       </div>
 

@@ -300,6 +300,8 @@ beforeAll(async () => {
         legalName: 'WHA136 Rollback Co',
         displayName: 'WHA136 Rollback',
         status: 'ACTIVE',
+        // DEV-961: these approvals use PINs, which apply while the authenticator is off.
+        requireApprovalAuthenticator: false,
       },
     });
     await seedDepartments(tx, [orgId], ['LEADERSHIP']);

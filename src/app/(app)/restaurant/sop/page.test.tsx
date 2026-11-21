@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
@@ -150,7 +151,13 @@ describe('SOP credential approval form', () => {
     const credential = screen.getByLabelText('Approving manager credential');
     expect(credential).toHaveAttribute('type', 'password');
     expect(credential).toBeRequired();
-    expect(screen.getByLabelText('Approving credential type')).toHaveTextContent('PINBadge');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Approving credential type', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveTextContent('PINBadge');
     expect(container.querySelector('[name="actorStaffProfileId"]')).toBeNull();
     expect(screen.getByRole('button', { name: 'Waive occurrence' })).toBeEnabled();
   });
@@ -200,8 +207,18 @@ describe('SOP waiver credential form', () => {
       'password'
     );
     expect(screen.getByLabelText('Approving manager credential')).toBeRequired();
-    expect(screen.getByLabelText('Approving credential type')).toHaveValue('PIN');
-    expect(screen.getByLabelText('Approving co-author')).toBeRequired();
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Approving credential type', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('PIN');
+    expect(
+      screen.getByLabelText('Approving co-author', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toBeRequired();
     expect(container.querySelector('[name="actorStaffProfileId"]')).toBeNull();
     expect(screen.getByRole('button', { name: 'Waive occurrence' })).toBeEnabled();
   });

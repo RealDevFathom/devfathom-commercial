@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { webcrypto } from 'node:crypto';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -86,10 +87,14 @@ describe('restaurant tax configuration UI', () => {
     render(<RestaurantTaxConsole />);
     expect(screen.getByText('No tax profile configured.')).toBeInTheDocument();
     expect(screen.getByText(/checkout remains fail-closed/i)).toBeInTheDocument();
-    const punjab = screen.getByRole('option', { name: /Punjab restaurant \(unavailable\)/i });
+    const punjab = screen.getByRole('option', {
+      hidden: true,
+      name: /Punjab restaurant \(unavailable\)/i,
+    });
     expect(punjab).toBeDisabled();
     expect(
       screen.getByRole('option', {
+        hidden: true,
         name: /Sindh restaurant — SRB-approved listed branch \(unavailable\)/i,
       })
     ).toBeDisabled();
@@ -98,8 +103,13 @@ describe('restaurant tax configuration UI', () => {
 
   it('explains why a disabled profile is unavailable and prevents submission', () => {
     render(<RestaurantTaxConsole />);
-    const profileSelect = screen.getByLabelText('Jurisdiction and profile');
-    const punjab = screen.getByRole('option', { name: /Punjab restaurant \(unavailable\)/i });
+    const profileSelect = screen.getByLabelText('Jurisdiction and profile', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
+    const punjab = screen.getByRole('option', {
+      hidden: true,
+      name: /Punjab restaurant \(unavailable\)/i,
+    });
 
     expect(punjab).toBeDisabled();
     expect(profileSelect).toHaveAccessibleDescription(
@@ -108,17 +118,31 @@ describe('restaurant tax configuration UI', () => {
       )
     );
 
-    fireEvent.change(profileSelect, { target: { value: 'PK-PB-RESTAURANT' } });
+    fireEvent.change(selectFieldControl(profileSelect), { target: { value: 'PK-PB-RESTAURANT' } });
     fireEvent.submit(screen.getByRole('button', { name: 'Activate tax profile' }).closest('form')!);
     expect(mocks.activate).not.toHaveBeenCalled();
   });
 
   it('submits explicit branch, profile, date, approval, and eligibility evidence', () => {
     render(<RestaurantTaxConsole />);
-    fireEvent.change(screen.getByLabelText('Preset branch'), { target: { value: 'branch_1' } });
-    fireEvent.change(screen.getByLabelText('Jurisdiction and profile'), {
-      target: { value: 'PK-ICT-RESTAURANT' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Preset branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'branch_1' } }
+    );
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Jurisdiction and profile', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'PK-ICT-RESTAURANT' },
+      }
+    );
     fireEvent.change(screen.getByLabelText('Effective date'), { target: { value: '2026-07-01' } });
     fireEvent.change(screen.getByLabelText('Preset accountant approval reference'), {
       target: { value: 'Memo 42' },
@@ -177,7 +201,9 @@ describe('restaurant tax configuration UI', () => {
     render(<RestaurantTaxConsole />);
     expect(screen.getByText('Custom tax profile')).toBeInTheDocument();
     expect(screen.getByText(/customer supplied · not verified by devfathom/i)).toBeInTheDocument();
-    const jurisdiction = screen.getByLabelText<HTMLSelectElement>('Pakistan jurisdiction');
+    const jurisdiction = screen.getByLabelText<HTMLSelectElement>('Pakistan jurisdiction', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
     const jurisdictionNames = [
       'Punjab',
       'Sindh',
@@ -185,9 +211,10 @@ describe('restaurant tax configuration UI', () => {
       'Islamabad Capital Territory',
       'Balochistan',
     ];
-    for (const name of jurisdictionNames) expect(jurisdiction).toHaveTextContent(name);
+    for (const name of jurisdictionNames)
+      expect(selectFieldControl(jurisdiction)).toHaveTextContent(name);
     expect(
-      Array.from(jurisdiction.options, (option) => option.text).filter(
+      Array.from(selectFieldControl(jurisdiction).options, (option) => option.text).filter(
         (name) => name !== 'Select jurisdiction'
       )
     ).toEqual(jurisdictionNames);
@@ -200,10 +227,24 @@ describe('restaurant tax configuration UI', () => {
 
   function submitCustomRates(rates: [string, string, string]) {
     fireEvent.change(screen.getByLabelText('Profile name'), { target: { value: 'Custom 2026' } });
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
-    fireEvent.change(screen.getByLabelText('Pakistan jurisdiction'), {
-      target: { value: 'PK-SD' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'branch_1' } }
+    );
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Pakistan jurisdiction', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'PK-SD' },
+      }
+    );
     fireEvent.change(screen.getByLabelText('Effective date (branch local)'), {
       target: { value: '2026-08-30' },
     });

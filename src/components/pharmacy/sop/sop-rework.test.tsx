@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -110,9 +111,10 @@ describe('reworking a sent-back procedure', () => {
     // Another record, offered in plain words.
     expect(screen.getByText('Link another temperature log')).toBeVisible();
     const picker = screen.getByLabelText(
-      'temperature log for Confirm the refrigerator temperature was recorded'
+      'temperature log for Confirm the refrigerator temperature was recorded',
+      { selector: ':not([data-select-field-native][aria-hidden="true"])' }
     );
-    fireEvent.change(picker, { target: { value: 'temp-2' } });
+    fireEvent.change(selectFieldControl(picker), { target: { value: 'temp-2' } });
     fireEvent.click(screen.getByRole('button', { name: 'Link record' }));
     expect(h.calls.linkRecord).toEqual([
       expect.objectContaining({ occurrenceStepId: 'step-1', recordId: 'temp-2' }),
@@ -288,16 +290,17 @@ describe('reworking a sent-back procedure', () => {
     render(<RunnerHarness />);
     fireEvent.click(screen.getByRole('button', { name: 'Add a change to step 1' }));
     const picker = screen.getByLabelText(
-      'temperature log for Confirm the refrigerator temperature was recorded'
+      'temperature log for Confirm the refrigerator temperature was recorded',
+      { selector: ':not([data-select-field-native][aria-hidden="true"])' }
     );
     const noteLabel = /What happened and what you did · required/;
 
     // An in-range reading links as before, with no note.
-    fireEvent.change(picker, { target: { value: 'temp-ok' } });
+    fireEvent.change(selectFieldControl(picker), { target: { value: 'temp-ok' } });
     expect(screen.queryByLabelText(noteLabel)).not.toBeInTheDocument();
 
     // An out-of-range one needs the note first, then carries it.
-    fireEvent.change(picker, { target: { value: 'temp-hot' } });
+    fireEvent.change(selectFieldControl(picker), { target: { value: 'temp-hot' } });
     fireEvent.click(screen.getByRole('button', { name: 'Link record' }));
     expect(h.calls.linkRecord ?? []).toEqual([]);
     expect(screen.getByRole('alert')).toHaveTextContent(
@@ -344,8 +347,11 @@ describe('reworking a sent-back procedure', () => {
     render(<RunnerHarness />);
     fireEvent.click(screen.getByRole('button', { name: 'Add a change to step 1' }));
     fireEvent.change(
-      screen.getByLabelText(
-        'temperature log for Confirm the refrigerator temperature was recorded'
+      selectFieldControl(
+        screen.getByLabelText(
+          'temperature log for Confirm the refrigerator temperature was recorded',
+          { selector: ':not([data-select-field-native][aria-hidden="true"])' }
+        )
       ),
       { target: { value: 'temp-hot' } }
     );
@@ -367,8 +373,11 @@ describe('reworking a sent-back procedure', () => {
     render(<RunnerHarness />);
     fireEvent.click(screen.getByRole('button', { name: 'Add a change to step 1' }));
     fireEvent.change(
-      screen.getByLabelText(
-        'temperature log for Confirm the refrigerator temperature was recorded'
+      selectFieldControl(
+        screen.getByLabelText(
+          'temperature log for Confirm the refrigerator temperature was recorded',
+          { selector: ':not([data-select-field-native][aria-hidden="true"])' }
+        )
       ),
       { target: { value: 'temp-hot' } }
     );

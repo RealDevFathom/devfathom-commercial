@@ -19,6 +19,8 @@ export type { HostKind } from '@/lib/tenancy/host-routing';
 
 export const TENANT_HOST_HEADER = 'x-devfathom-host';
 export const REQUEST_ID_HEADER = 'x-devfathom-request-id';
+/** DEV-961: set by the proxy on every request (overwriting any client value): the HTTP method. */
+export const REQUEST_METHOD_HEADER = 'x-devfathom-request-method';
 
 export type TenantOrganization = {
   id: string;

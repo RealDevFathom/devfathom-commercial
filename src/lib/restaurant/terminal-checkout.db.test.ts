@@ -339,6 +339,8 @@ beforeAll(async () => {
         legalName: 'M5L5 Test Co',
         displayName: 'M5L5 Test',
         status: 'ACTIVE',
+        // DEV-961: these approvals use PINs, which apply while the authenticator is off.
+        requireApprovalAuthenticator: false,
       },
     });
     await tx.organization.create({
@@ -348,6 +350,8 @@ beforeAll(async () => {
         legalName: 'WHA-977 Isolation Co',
         displayName: 'WHA-977 Isolation',
         status: 'ACTIVE',
+        // DEV-961: these approvals use PINs, which apply while the authenticator is off.
+        requireApprovalAuthenticator: false,
       },
     });
     await seedDepartments(tx, [orgA], ['LEADERSHIP']);

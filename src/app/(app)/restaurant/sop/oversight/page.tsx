@@ -1,5 +1,6 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { workspaceDateOffset } from '@/lib/timezone';
 import { useState, type FormEvent } from 'react';
 import type { inferRouterOutputs } from '@trpc/server';
@@ -449,10 +450,15 @@ export default function RestaurantSopOversightPage() {
                 <label className={labelClass} htmlFor="policy-scope">
                   Scope
                 </label>
-                <select id="policy-scope" name="scope" className={selectClass} defaultValue="ORG">
+                <StudioSelect
+                  id="policy-scope"
+                  name="scope"
+                  className={selectClass}
+                  defaultValue="ORG"
+                >
                   <option value="ORG">Organization</option>
                   <option value="BRANCH">Branch</option>
-                </select>
+                </StudioSelect>
               </div>
               <div className="space-y-1.5">
                 <label className={labelClass} htmlFor="policy-branch">
@@ -666,7 +672,7 @@ export default function RestaurantSopOversightPage() {
                   <label className={labelClass} htmlFor="step-channel">
                     Channel
                   </label>
-                  <select
+                  <StudioSelect
                     id="step-channel"
                     name="channel"
                     className={selectClass}
@@ -677,7 +683,7 @@ export default function RestaurantSopOversightPage() {
                         {channel}
                       </option>
                     ))}
-                  </select>
+                  </StudioSelect>
                 </div>
                 <div className="space-y-1.5">
                   <label className={labelClass} htmlFor="step-attempts">
@@ -908,7 +914,7 @@ export default function RestaurantSopOversightPage() {
                 <label className={labelClass} htmlFor="audit-occurrence">
                   Recent occurrence
                 </label>
-                <select
+                <StudioSelect
                   id="audit-occurrence"
                   className={selectClass}
                   value={auditOccurrenceId}
@@ -935,7 +941,7 @@ export default function RestaurantSopOversightPage() {
                       {occurrence.status.replaceAll('_', ' ').toLowerCase()}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </div>
             </div>
 

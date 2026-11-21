@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -127,7 +128,14 @@ describe('TenderPad', () => {
         onApplied={vi.fn()}
       />
     );
-    fireEvent.change(screen.getByLabelText('Tender type'), { target: { value: 'CARD' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Tender type', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'CARD' } }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Apply tender' }));
     expect(screen.getByRole('alert')).toHaveTextContent('approval code');
     expect(request).not.toHaveBeenCalled();

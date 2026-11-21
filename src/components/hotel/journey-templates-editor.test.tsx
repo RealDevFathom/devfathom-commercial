@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -117,7 +118,14 @@ function view(templates = [row()], canApprove = true): View {
 const mount = (initial = view()) =>
   render(<HotelJourneyTemplatesEditor initial={initial} selection={selection} />);
 function change(label: string, value: string) {
-  fireEvent.change(screen.getByLabelText(label), { target: { value } });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText(label, {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    { target: { value } }
+  );
 }
 function click(name: string) {
   fireEvent.click(screen.getByRole('button', { name }));
@@ -274,9 +282,33 @@ describe('guest message draft editing', () => {
   it.each([false, true])('creates an Urdu SMS draft with an empty catalog: %s', (empty) => {
     mount(view(empty ? [] : [row()]));
     if (!empty) click('New draft');
-    expect(within(screen.getByLabelText('Journey moment')).getAllByRole('option')).toHaveLength(8);
-    expect(within(screen.getByLabelText('Channel')).getAllByRole('option')).toHaveLength(3);
-    expect(within(screen.getByLabelText('Language')).getAllByRole('option')).toHaveLength(2);
+    expect(
+      within(
+        selectFieldControl(
+          screen.getByLabelText('Journey moment', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        )
+      ).getAllByRole('option', { hidden: true })
+    ).toHaveLength(8);
+    expect(
+      within(
+        selectFieldControl(
+          screen.getByLabelText('Channel', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        )
+      ).getAllByRole('option', { hidden: true })
+    ).toHaveLength(3);
+    expect(
+      within(
+        selectFieldControl(
+          screen.getByLabelText('Language', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        )
+      ).getAllByRole('option', { hidden: true })
+    ).toHaveLength(2);
     change('Journey moment', 'REVIEW_REQUEST');
     change('Channel', 'SMS');
     change('Language', 'UR');
@@ -564,9 +596,27 @@ describe('guest message review corrections', () => {
     click('Retry refresh');
     await screen.findByRole('heading', { name: 'This version is no longer available' });
     click('Use kept text in a new draft');
-    expect(screen.getByLabelText('Journey moment')).toHaveValue('WELCOME');
-    expect(screen.getByLabelText('Channel')).toHaveValue('EMAIL');
-    expect(screen.getByLabelText('Language')).toHaveValue('UR');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Journey moment', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('WELCOME');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Channel', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('EMAIL');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Language', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('UR');
     expect(screen.getByLabelText('Subject line')).toHaveValue('محفوظ عنوان');
     expect(screen.getByLabelText('Subject line')).toHaveAttribute('dir', 'rtl');
     expect(screen.getByLabelText('Message')).toHaveValue('محفوظ پیغام {{guest_name}}');
@@ -589,7 +639,13 @@ describe('guest message review corrections', () => {
     mocks.fetch.mockResolvedValue(view([]));
     await act(() => mocks.callbacks.approve.onSuccess(row({ ...original, status: 'APPROVED' })));
     click('Use kept text in a new draft');
-    expect(screen.getByLabelText('Language')).toHaveValue('UR');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Language', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('UR');
     expect(screen.getByLabelText('Subject line')).toHaveValue(original.subject);
     expect(screen.getByLabelText('Message')).toHaveValue(original.body);
     click('Save draft');

@@ -32,6 +32,11 @@ import { CredentialPolicyError } from '@/lib/restaurant/operator-credentials';
 import { approvalAuthenticatorPartySelect } from '@/lib/approval-authenticator';
 import { pinResetDenial } from '@/lib/pharmacy/own-pin';
 import {
+  assertMayRemoveLogin,
+  guardTerminalOnlyApprovers,
+  TerminalOnlyApproverError,
+} from '@/lib/restaurant/terminal-only-approvers';
+import {
   JobRoleError,
   clearStaffCapabilityOverride,
   createJobRole,
@@ -80,6 +85,7 @@ const CREDENTIAL_TYPE = z.enum(['PIN', 'BADGE']);
 
 /** Translate a staff-domain error into the right tRPC status; rethrow anything else. */
 function mapStaffError(err: unknown): never {
+  ownerOnly(err);
   if (err instanceof CommercialLimitError) {
     throw new TRPCError({ code: 'FORBIDDEN', message: err.message });
   }
@@ -112,8 +118,15 @@ function mapCredentialError(err: unknown): never {
   throw err;
 }
 
+/** DEV-961: only the owner may leave a staff member who can approve without a login. */
+function ownerOnly(err: unknown): void {
+  if (err instanceof TerminalOnlyApproverError)
+    throw new TRPCError({ code: 'FORBIDDEN', message: err.message });
+}
+
 /** Translate a job-role domain error into the right tRPC status. */
 function mapJobRoleError(err: unknown): never {
+  ownerOnly(err);
   if (err instanceof JobRoleError) {
     const code =
       err.reason === 'KEY_TAKEN' || err.reason === 'ROLE_INACTIVE'
@@ -251,6 +264,33 @@ function workspaceOrganizationId(ctx: {
     throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
   }
   return organizationId;
+}
+
+type GuardContext = Parameters<typeof workspaceOrganizationId>[0] & {
+  db: ScopedDb;
+  session: { user: { id: string; organizationId?: string } } | null;
+};
+
+/**
+ * DEV-961: a staff or role change in one transaction under the terminal-only approver guard:
+ * a change that leaves a staff profile able to approve without a login is the owner's alone,
+ * audited, and every owner is notified (`terminal-only-approvers.ts`).
+ */
+async function guarded<T>(
+  ctx: GuardContext,
+  action: string,
+  work: (db: ScopedDb) => Promise<T>
+): Promise<T> {
+  const { result } = await guardTerminalOnlyApprovers(
+    ctx.db,
+    {
+      organizationId: workspaceOrganizationId(ctx),
+      actorUserId: ctx.session!.user.id,
+      action,
+    },
+    work
+  );
+  return result;
 }
 
 export const restaurantStaffRouter = router({
@@ -497,10 +537,8 @@ export const restaurantStaffRouter = router({
           );
         }
         await assertMaySetLinkedCredential(ctx.db, ctx.session!.user.id, profileInput.userId);
-        const staff = await createStaffProfileWithinCommercialLimit(
-          ctx.db,
-          ctx.entitlements.limits,
-          profileInput
+        const staff = await guarded(ctx, 'restaurantStaff.create', (db) =>
+          createStaffProfileWithinCommercialLimit(db, ctx.entitlements.limits, profileInput)
         );
         annotateAudit(ctx, {
           targetType: 'RestaurantStaffProfile',
@@ -697,11 +735,16 @@ export const restaurantStaffRouter = router({
           );
         }
         await assertMaySetLinkedCredential(ctx.db, ctx.session!.user.id, patch.userId);
-        const staff = await updateStaffProfileWithinCommercialLimit(
-          ctx.db,
-          ctx.entitlements.limits,
-          id,
-          patch
+        // DEV-961: removing the login from a staff member who can approve is the owner's alone
+        // (a manager cannot unlink a login, their own included).
+        if (patch.userId === null)
+          await assertMayRemoveLogin(ctx.db, {
+            organizationId: workspaceOrganizationId(ctx),
+            actorUserId: ctx.session!.user.id,
+            staffProfileId: id,
+          });
+        const staff = await guarded(ctx, 'restaurantStaff.update', (db) =>
+          updateStaffProfileWithinCommercialLimit(db, ctx.entitlements.limits, id, patch)
         );
         annotateAudit(ctx, {
           targetType: 'RestaurantStaffProfile',
@@ -727,11 +770,13 @@ export const restaurantStaffRouter = router({
           ctx.entitlements.organizationId
         );
         await assertAuthorizedStaffProfile(ctx.db, authorization, input.id);
-        const staff = await setStaffProfileStatusWithinCommercialLimit(
-          ctx.db,
-          ctx.entitlements.limits,
-          input.id,
-          input.status
+        const staff = await guarded(ctx, 'restaurantStaff.setStatus', (db) =>
+          setStaffProfileStatusWithinCommercialLimit(
+            db,
+            ctx.entitlements.limits,
+            input.id,
+            input.status
+          )
         );
         annotateAudit(ctx, {
           targetType: 'RestaurantStaffProfile',
@@ -941,7 +986,9 @@ export const restaurantStaffRouter = router({
         ctx.entitlements.organizationId
       )
     );
-    const result = await ensureDefaultJobRoles(ctx.db);
+    const result = await guarded(ctx, 'restaurantStaff.seedDefaultJobRoles', (db) =>
+      ensureDefaultJobRoles(db)
+    ).catch(mapJobRoleError);
     if (result.created.length > 0) {
       annotateAudit(ctx, {
         targetType: 'RestaurantJobRole',
@@ -1005,7 +1052,9 @@ export const restaurantStaffRouter = router({
             ctx.entitlements.organizationId
           )
         );
-        const role = await updateJobRole(ctx.db, id, patch);
+        const role = await guarded(ctx, 'restaurantStaff.updateJobRole', (db) =>
+          updateJobRole(db, id, patch)
+        );
         annotateAudit(ctx, {
           targetType: 'RestaurantJobRole',
           targetId: role.id,
@@ -1035,7 +1084,9 @@ export const restaurantStaffRouter = router({
             ctx.entitlements.organizationId
           )
         );
-        const result = await setJobRoleCapabilities(ctx.db, input.jobRoleId, input.capabilities);
+        const result = await guarded(ctx, 'restaurantStaff.setJobRoleCapabilities', (db) =>
+          setJobRoleCapabilities(db, input.jobRoleId, input.capabilities)
+        );
         annotateAudit(ctx, {
           targetType: 'RestaurantJobRole',
           targetId: input.jobRoleId,
@@ -1090,12 +1141,14 @@ export const restaurantStaffRouter = router({
         assertOrganizationWide(authorization);
         assertAuthorizedBranch(authorization, input.branchId);
         await assertStaffProfileExists(ctx.db, input.staffProfileId);
-        const result = await setStaffJobRoles(ctx.db, {
-          staffProfileId: input.staffProfileId,
-          branchId: input.branchId,
-          jobRoleIds: input.jobRoleIds,
-          actorStaffProfileId: authorization.actorStaffProfileId,
-        });
+        const result = await guarded(ctx, 'restaurantStaff.setStaffJobRoles', (db) =>
+          setStaffJobRoles(db, {
+            staffProfileId: input.staffProfileId,
+            branchId: input.branchId,
+            jobRoleIds: input.jobRoleIds,
+            actorStaffProfileId: authorization.actorStaffProfileId,
+          })
+        );
         if (result.granted.length > 0 || result.revoked.length > 0) {
           annotateAudit(ctx, {
             targetType: 'RestaurantStaffProfile',
@@ -1150,13 +1203,15 @@ export const restaurantStaffRouter = router({
         assertOrganizationWide(authorization);
         assertAuthorizedBranch(authorization, input.branchId);
         await assertStaffProfileExists(ctx.db, input.staffProfileId);
-        const result = await setStaffAccess(ctx.db, {
-          staffProfileId: input.staffProfileId,
-          branchId: input.branchId,
-          jobRoleIds: input.jobRoleIds,
-          overrides: input.overrides,
-          actorStaffProfileId: authorization.actorStaffProfileId,
-        });
+        const result = await guarded(ctx, 'restaurantStaff.setStaffAccess', (db) =>
+          setStaffAccess(db, {
+            staffProfileId: input.staffProfileId,
+            branchId: input.branchId,
+            jobRoleIds: input.jobRoleIds,
+            overrides: input.overrides,
+            actorStaffProfileId: authorization.actorStaffProfileId,
+          })
+        );
         if (result.granted.length || result.revoked.length || result.overrides.length) {
           annotateAudit(ctx, {
             targetType: 'RestaurantStaffProfile',
@@ -1227,13 +1282,15 @@ export const restaurantStaffRouter = router({
         assertOrganizationWide(authorization);
         assertAuthorizedBranch(authorization, input.branchId);
         await assertStaffProfileExists(ctx.db, input.staffProfileId);
-        const result = await setStaffCapabilityOverride(ctx.db, {
-          staffProfileId: input.staffProfileId,
-          branchId: input.branchId,
-          capability: input.capability,
-          effect: input.effect,
-          actorStaffProfileId: authorization.actorStaffProfileId,
-        });
+        const result = await guarded(ctx, 'restaurantStaff.setStaffCapabilityOverride', (db) =>
+          setStaffCapabilityOverride(db, {
+            staffProfileId: input.staffProfileId,
+            branchId: input.branchId,
+            capability: input.capability,
+            effect: input.effect,
+            actorStaffProfileId: authorization.actorStaffProfileId,
+          })
+        );
         if (result.changed) {
           annotateAudit(ctx, {
             targetType: 'RestaurantStaffProfile',
@@ -1270,12 +1327,14 @@ export const restaurantStaffRouter = router({
         assertOrganizationWide(authorization);
         assertAuthorizedBranch(authorization, input.branchId);
         await assertStaffProfileExists(ctx.db, input.staffProfileId);
-        const result = await clearStaffCapabilityOverride(ctx.db, {
-          staffProfileId: input.staffProfileId,
-          branchId: input.branchId,
-          capability: input.capability,
-          actorStaffProfileId: authorization.actorStaffProfileId,
-        });
+        const result = await guarded(ctx, 'restaurantStaff.clearStaffCapabilityOverride', (db) =>
+          clearStaffCapabilityOverride(db, {
+            staffProfileId: input.staffProfileId,
+            branchId: input.branchId,
+            capability: input.capability,
+            actorStaffProfileId: authorization.actorStaffProfileId,
+          })
+        );
         if (result.changed) {
           annotateAudit(ctx, {
             targetType: 'RestaurantStaffProfile',

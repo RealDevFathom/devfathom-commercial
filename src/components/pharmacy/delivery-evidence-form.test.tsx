@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { DeliveryEvidenceForm } from './delivery-evidence-form';
@@ -33,7 +34,14 @@ beforeEach(() => {
 
 function fill(action: string, currency = 'PKR') {
   render(<DeliveryEvidenceForm branchId="branch-a" orderId="order-a" currency={currency} />);
-  fireEvent.change(screen.getByLabelText('Evidence action'), { target: { value: action } });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Evidence action', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    { target: { value: action } }
+  );
   fireEvent.change(screen.getByLabelText('Evidence reference'), { target: { value: 'ref' } });
   fireEvent.change(screen.getByLabelText('Operation key (reuse for retry)'), {
     target: { value: 'key-1' },

@@ -1,6 +1,10 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
-import { signInRedirectPath, workspaceRedirectForPasswordChange } from '@/lib/auth/session-state';
+import {
+  signInRedirectPath,
+  workspaceRedirectForApprovalAuthenticator,
+  workspaceRedirectForPasswordChange,
+} from '@/lib/auth/session-state';
 import { AppShell } from '@/components/layout/app-shell';
 import { TenantSessionBoundary } from '@/components/tenant-session-boundary';
 import {
@@ -42,6 +46,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   }
   const passwordChange = workspaceRedirectForPasswordChange(actor.session.user.mustChangePassword);
   if (passwordChange) redirect(passwordChange);
+  // DEV-961: a member who can approve must set up their approval authenticator first.
+  const authenticatorSetup = workspaceRedirectForApprovalAuthenticator(
+    actor.session.user.approvalAuthenticatorSetupRequired
+  );
+  if (authenticatorSetup) redirect(authenticatorSetup);
   const { entitlements, brand, pharmacyPlaceholder, pharmacyOnboarding } = await withTenantDb(
     actor.organization.id,
     async (db) => {

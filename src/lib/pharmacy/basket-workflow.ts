@@ -165,6 +165,7 @@ async function ownerPin(db: ScopedDb, scope: MarketingScope, pin: string | undef
       credentialHash: credential.credentialHash,
       secret: pin,
       action: 'pharmacy.marketing.basketInsightReview',
+      approverRight: 'OWNER',
       requestedById: scope.actorId,
       now,
     }))
