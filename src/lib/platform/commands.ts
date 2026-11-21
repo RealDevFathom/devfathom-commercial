@@ -4597,6 +4597,11 @@ async function runCommand(
         !input.active && 'Operator disabled',
         existingOperator && input.role !== existingOperator.role && 'Operator role changed',
         existingOperator && input.password && 'Operator password changed',
+        existingOperator &&
+          input.mfaRequired &&
+          !existingOperator.mfaRequired &&
+          !existingOperator.mfaEnabledAt &&
+          'Operator MFA required',
       ].filter(Boolean);
       if (revocationReasons.length > 0) {
         await revokeOperatorSessions(db, saved.id, revocationReasons.join('; '), actor.id);

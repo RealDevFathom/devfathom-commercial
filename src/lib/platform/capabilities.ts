@@ -49,11 +49,12 @@ export async function endSupportSessions(
   db: Prisma.TransactionClient,
   where: Prisma.PlatformSupportSessionWhereInput,
   reason: string,
-  actorPlatformUserId?: string | null
+  actorPlatformUserId?: string | null,
+  status: 'ENDED' | 'REVOKED' = 'ENDED'
 ) {
   const ended = await db.platformSupportSession.updateManyAndReturn({
     where: { ...where, status: 'ACTIVE' },
-    data: { status: 'ENDED', endedAt: new Date(), tokenCiphertext: null, launchTokenHash: null },
+    data: { status, endedAt: new Date(), tokenCiphertext: null, launchTokenHash: null },
     select: { id: true, platformUserId: true, organizationId: true, tenantUserId: true },
   });
   if (ended.length === 0) return;

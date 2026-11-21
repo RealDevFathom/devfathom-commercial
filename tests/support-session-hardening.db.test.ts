@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto';
-import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, afterAll, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { PlatformIdentity } from '@/lib/platform/auth';
 import { assertDisposableRlsDatabase } from './disposable-rls-database';
 
@@ -18,7 +18,10 @@ let orgId: string;
 let secondOrgId: string;
 const reason = 'Investigate test support access';
 
-async function makeOperator(role: PlatformIdentity['role']): Promise<PlatformIdentity> {
+async function makeOperator(
+  role: PlatformIdentity['role'],
+  enrolled = true
+): Promise<PlatformIdentity> {
   return scoped.withPlatformDb(async (tx) => {
     const user = await tx.platformUser.create({
       data: {
@@ -26,8 +29,8 @@ async function makeOperator(role: PlatformIdentity['role']): Promise<PlatformIde
         email: `support-${randomUUID()}@example.test`,
         role,
         passwordHash: 'disposable-fixture',
-        mfaEnabledAt: new Date(),
-        encryptedTotpSecret: 'disposable-fixture',
+        mfaEnabledAt: enrolled ? new Date() : null,
+        encryptedTotpSecret: enrolled ? 'disposable-fixture' : null,
       },
     });
     const expiresAt = new Date(Date.now() + 600000);
@@ -41,7 +44,7 @@ async function makeOperator(role: PlatformIdentity['role']): Promise<PlatformIde
       role,
       sessionId: session.id,
       expiresAt,
-      mfaEnabled: true,
+      mfaEnabled: enrolled,
     };
   });
 }
@@ -68,6 +71,7 @@ function revoke(operator: PlatformIdentity, kind: string) {
       name: operator.name,
       email: operator.email,
       active: kind !== 'disabled',
+      mfaRequired: true,
       // Keep support capability across the role change to exercise session invalidation itself.
       role: kind === 'role changed' ? 'OPERATIONS' : operator.role,
       password: kind === 'password changed' ? 'fixture-password-change' : undefined,
@@ -220,10 +224,18 @@ describe.skipIf(!url)('support hardening on restricted PostgreSQL', () => {
     );
     expect(stored).toMatchObject({ status: 'ENDED', tokenCiphertext: null, launchTokenHash: null });
   });
-  it.each(['disabled', 'role changed', 'password changed', 'MFA reset'])(
+  it.each(['disabled', 'role changed', 'password changed', 'MFA reset', 'MFA required'])(
     'ends and audits all support access when the operator is %s',
     async (kind) => {
-      const operator = await makeOperator('SUPPORT');
+      if (kind === 'MFA required') {
+        // Start with optional MFA, then turn it on for this specific operator.
+        const previous = process.env.PLATFORM_MFA_ENFORCE;
+        vi.stubEnv('PLATFORM_MFA_ENFORCE', 'false');
+        onTestFinished(() => {
+          vi.stubEnv('PLATFORM_MFA_ENFORCE', previous);
+        });
+      }
+      const operator = await makeOperator('SUPPORT', kind !== 'MFA required');
       const session = await issue(operator, orgId);
       const launch = await support.consumeSupportLaunchTicket({
         organizationId: orgId,
@@ -238,6 +250,15 @@ describe.skipIf(!url)('support hardening on restricted PostgreSQL', () => {
       const ticket = await issue(operator, secondOrgId);
 
       await revoke(operator, kind);
+      if (kind === 'MFA required') {
+        // Enrollment restores operator eligibility but must not revive the old credentials.
+        await scoped.withPlatformDb((tx) =>
+          tx.platformUser.update({
+            where: { id: operator.id },
+            data: { mfaEnabledAt: new Date(), encryptedTotpSecret: 'disposable-fixture' },
+          })
+        );
+      }
       expect(await support.getSupportSession(request)).toBeNull();
       await expect(
         support.consumeSupportLaunchTicket({
@@ -278,6 +299,22 @@ describe.skipIf(!url)('support hardening on restricted PostgreSQL', () => {
       });
     }
   );
+
+  it('preserves an enrolled operator’s session when MFA becomes required', async () => {
+    const operator = await makeOperator('SUPPORT');
+    const ticket = await issue(operator, orgId);
+    await revoke(operator, 'MFA required');
+    const launched = await support.consumeSupportLaunchTicket({
+      organizationId: orgId,
+      launchToken: ticket.launchToken,
+    });
+    const request = new Request('http://support.localhost', {
+      headers: { cookie: `${support.SUPPORT_SESSION_COOKIE}=${launched.token}` },
+    });
+    expect(await support.getSupportSession(request)).toMatchObject({
+      supportSessionId: ticket.supportSessionId,
+    });
+  });
 
   it.each(['issue first', 'revoke first'])(
     'serializes issuance and MFA reset (%s)',
@@ -434,5 +471,78 @@ describe.skipIf(!url)('support hardening on restricted PostgreSQL', () => {
   });
   it('keeps global support rows invisible to tenant-scoped queries', async () => {
     expect(await scoped.withTenantDb(orgId, (tx) => tx.platformSupportSession.count())).toBe(0);
+  });
+  it('revokes and audits only the suspended organization’s support sessions', async () => {
+    const { processPlatformJobs } = await import('@/lib/platform/jobs');
+    const first = await makeOperator('SUPPORT');
+    const second = await makeOperator('SUPPORT');
+    const session = await issue(first, secondOrgId);
+    const launch = await support.consumeSupportLaunchTicket({
+      organizationId: secondOrgId,
+      launchToken: session.launchToken,
+    });
+    const request = new Request('http://support.localhost', {
+      headers: { cookie: `${support.SUPPORT_SESSION_COOKIE}=${launch.token}` },
+    });
+    const pending = await issue(second, secondOrgId);
+    const otherTenant = await issue(first, orgId);
+    const suspensionReason = 'Synthetic organization suspension';
+    const job = await scoped.withPlatformDb(async (tx) => {
+      await tx.organization.update({ where: { id: secondOrgId }, data: { status: 'SUSPENDED' } });
+      return tx.platformJob.create({
+        data: {
+          organizationId: secondOrgId,
+          type: 'SUSPEND',
+          requestedById: supervisor.id,
+          payload: { reason: suspensionReason },
+          scheduledAt: new Date('1900-01-01'),
+        },
+      });
+    });
+
+    await processPlatformJobs(1);
+    await scoped.withPlatformDb(async (tx) => {
+      expect(await tx.platformJob.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+        status: 'SUCCEEDED',
+      });
+      for (const [targetId, operator] of [
+        [session.supportSessionId, first],
+        [pending.supportSessionId, second],
+      ] as const) {
+        expect(
+          await tx.platformSupportSession.findUniqueOrThrow({ where: { id: targetId } })
+        ).toMatchObject({
+          status: 'REVOKED',
+          endedAt: expect.any(Date),
+          tokenCiphertext: null,
+          launchTokenHash: null,
+        });
+        expect(
+          await tx.platformAuditLog.findMany({
+            where: { targetId, action: 'support.session.ended' },
+          })
+        ).toEqual([
+          expect.objectContaining({
+            organizationId: secondOrgId,
+            actorPlatformUserId: supervisor.id,
+            reason: `Organization suspended: ${suspensionReason}`,
+            metadata: { sessionPlatformUserId: operator.id },
+          }),
+        ]);
+      }
+    });
+    expect(await support.getSupportSession(request)).toBeNull();
+    await expect(
+      support.consumeSupportLaunchTicket({
+        organizationId: secondOrgId,
+        launchToken: pending.launchToken,
+      })
+    ).rejects.toMatchObject({ status: 401 });
+    await expect(
+      support.consumeSupportLaunchTicket({
+        organizationId: orgId,
+        launchToken: otherTenant.launchToken,
+      })
+    ).resolves.toMatchObject({ token: expect.any(String) });
   });
 });
