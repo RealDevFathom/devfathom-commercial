@@ -11,12 +11,13 @@
  * Requires TEST_DATABASE_URL (scripts/run-pharmacy-db-tests.sh sets it). Without it the suite
  * reports skipped.
  */
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
+process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 
 // The router is called as a signed-in member would call it; only the web identity boundary and the
 // audit row write are stubbed, as in pharmacy-sales.drawer-close.db.test.ts.
@@ -84,8 +85,24 @@ type Shop = {
   today: Date;
 };
 
+/** DEV-961: an independent RFC 6238 oracle (SHA-1, 6 digits, 30 s). */
+function codeAt(secretB32: string, at: Date): string {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (const ch of secretB32) bits += alphabet.indexOf(ch).toString(2).padStart(5, '0');
+  const key = Buffer.from(bits.match(/.{8}/g)!.map((byte) => parseInt(byte, 2)));
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(at.getTime() / 30_000)));
+  const hmac = createHmac('sha1', key).update(counter).digest();
+  const value = hmac.readUInt32BE(hmac[hmac.length - 1] & 0xf) & 0x7fffffff;
+  return String(value % 1_000_000).padStart(6, '0');
+}
+
 /** A fresh organization and branch (shifts on or off), with a manager (PIN) and two cashiers. */
-async function shop(label: string, options: { shifts: boolean; toleranceMinor?: number }) {
+async function shop(
+  label: string,
+  options: { shifts: boolean; toleranceMinor?: number; approvalAuthenticator?: boolean }
+) {
   const organizationId = `cshift_${label}_${run}`;
   const branchId = `${organizationId}_branch`;
   const manager = `${organizationId}_manager`;
@@ -101,6 +118,9 @@ async function shop(label: string, options: { shifts: boolean; toleranceMinor?: 
         displayName: organizationId,
         vertical: 'PHARMACY',
         status: 'ACTIVE',
+        // DEV-961: these approvals use the manager's fixed PIN, which applies while the owner has
+        // the authenticator for approvals turned off; the approval-setting case turns it on.
+        requireApprovalAuthenticator: options.approvalAuthenticator ?? false,
       },
     })
   );
@@ -1754,6 +1774,139 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
         action: 'pharmacySales.refund',
       })
     ).resolves.toEqual({ verified: true });
+  });
+
+  it('DEV-961: the variance approval and its solo self-approval follow the approval setting; app codes typed by someone else spend the same guess budget as PINs', async () => {
+    const { encryptSecret } = await import('@/lib/secret-crypto');
+    const { generateTotpSecret } = await import('@/lib/totp');
+    const setUp = async (label: string, on: boolean) => {
+      const s = await shop(label, { shifts: true, toleranceMinor: 0, approvalAuthenticator: on });
+      const secret = generateTotpSecret();
+      await tenant(s.owner, (db) =>
+        db.approvalAuthenticator.create({
+          data: {
+            userId: s.manager,
+            encryptedSecret: encryptSecret(secret),
+            enabledAt: new Date(Date.now() - 86_400_000),
+          },
+        })
+      );
+      const shiftOf = async (cashierId: string) => {
+        const drawer = await tenant(s.owner, (db) =>
+          settlement.openPharmacyDrawer(db, s.owner, {
+            deviceId: `device-${randomUUID()}`,
+            businessDate: s.today,
+            openingFloatMinor: 1_000,
+            operatingCashierId: cashierId,
+          })
+        );
+        return (await shiftsOf(s, drawer.id))[0]!;
+      };
+      // `actor` is the person closing the shift and counting its cash.
+      const authorize = (shiftId: string, pin: string, actor = s.manager) =>
+        tenant(s.as(actor), (db) =>
+          shifts.authorizeCashShiftVariance(
+            db,
+            s.as(actor),
+            { shiftId, approverId: s.manager, pin },
+            { actorIsManager: actor === s.manager }
+          )
+        );
+      const credential = () =>
+        tenant(s.owner, (db) =>
+          db.restaurantOperatorCredential.findFirstOrThrow({
+            where: { staffProfile: { userId: s.manager } },
+            select: { failedAttempts: true, lockedUntil: true },
+          })
+        );
+      const resetStrikes = () =>
+        tenant(s.owner, (db) =>
+          db.restaurantOperatorCredential.updateMany({
+            where: { staffProfile: { userId: s.manager } },
+            data: { failedAttempts: 0, lockedUntil: null },
+          })
+        );
+      return { s, secret, shiftOf, authorize, credential, resetStrikes };
+    };
+    // Codes are single use: each accepted one is from a later 30-second step than the one before,
+    // and every one is inside the accepted window when typed.
+    const previousStep = (secret: string) => codeAt(secret, new Date(Date.now() - 30_000));
+    const currentStep = (secret: string) => codeAt(secret, new Date());
+
+    // ON (the default for organizations): the manager's app code, never their permanent PIN.
+    const on = await setUp('auth_on', true);
+    const ownOn = await on.shiftOf(on.s.manager);
+    // The manager is the only approver, so they approve their own shift alone (SOLO).
+    await expect(on.authorize(ownOn.id, MANAGER_PIN)).rejects.toMatchObject({
+      reason: 'SHIFT_APPROVAL_REFUSED',
+    });
+    await expect(on.authorize(ownOn.id, previousStep(on.secret))).resolves.toMatchObject({
+      approverId: on.s.manager,
+      selfApproved: true,
+      policy: shifts.SHIFT_VARIANCE_SOLO_POLICY,
+    });
+    await on.resetStrikes();
+    // A cashier types the manager's secret for the cashier's own shift: the PIN is refused, the
+    // current code approves it.
+    const cashierOn = await on.shiftOf(on.s.cashier);
+    await expect(on.authorize(cashierOn.id, MANAGER_PIN, on.s.cashier)).rejects.toMatchObject({
+      reason: 'SHIFT_APPROVAL_REFUSED',
+    });
+    await expect(
+      on.authorize(cashierOn.id, currentStep(on.secret), on.s.cashier)
+    ).resolves.toMatchObject({ approverId: on.s.manager, selfApproved: false });
+    // Wrong codes typed by the cashier spend the manager's one budget for guesses typed by others,
+    // exactly as wrong PINs do: refused four times, locked at the fifth, and then even a right
+    // entry is refused. The manager's own credential takes no strike.
+    for (let attempt = 1; attempt <= 4; attempt += 1)
+      await expect(on.authorize(cashierOn.id, '000000', on.s.cashier)).rejects.toMatchObject({
+        reason: 'SHIFT_APPROVAL_REFUSED',
+      });
+    await expect(on.authorize(cashierOn.id, '000000', on.s.cashier)).rejects.toMatchObject({
+      reason: 'SHIFT_APPROVAL_LOCKED',
+    });
+    await expect(
+      on.authorize(cashierOn.id, currentStep(on.secret), on.s.cashier)
+    ).rejects.toMatchObject({ reason: 'SHIFT_APPROVAL_LOCKED' });
+    expect(await on.credential()).toMatchObject({ failedAttempts: 0, lockedUntil: null });
+    const budgets = await import('@/lib/approver-pin-guess-budget');
+    expect(
+      (await budgets.spendApproverPinGuessTypedByAnother(on.s.owner.organizationId, on.s.manager))
+        .ok
+    ).toBe(false);
+
+    // OFF (the owner turned it off): the manager's permanent PIN, never an app code.
+    const off = await setUp('auth_off', false);
+    const ownOff = await off.shiftOf(off.s.manager);
+    await expect(off.authorize(ownOff.id, currentStep(off.secret))).rejects.toMatchObject({
+      reason: 'SHIFT_APPROVAL_REFUSED',
+    });
+    await expect(off.authorize(ownOff.id, MANAGER_PIN)).resolves.toMatchObject({
+      approverId: off.s.manager,
+      selfApproved: true,
+      policy: shifts.SHIFT_VARIANCE_SOLO_POLICY,
+    });
+    const cashierOff = await off.shiftOf(off.s.cashier);
+    await expect(
+      off.authorize(cashierOff.id, currentStep(off.secret), off.s.cashier)
+    ).rejects.toMatchObject({ reason: 'SHIFT_APPROVAL_REFUSED' });
+    await expect(off.authorize(cashierOff.id, MANAGER_PIN, off.s.cashier)).resolves.toMatchObject({
+      approverId: off.s.manager,
+      selfApproved: false,
+    });
+    // The manager's real app code, typed by the cashier while codes are not accepted, still
+    // spends the same budget as a wrong PIN: locked at the fifth.
+    for (let attempt = 1; attempt <= 4; attempt += 1)
+      await expect(
+        off.authorize(cashierOff.id, currentStep(off.secret), off.s.cashier)
+      ).rejects.toMatchObject({ reason: 'SHIFT_APPROVAL_REFUSED' });
+    await expect(
+      off.authorize(cashierOff.id, currentStep(off.secret), off.s.cashier)
+    ).rejects.toMatchObject({ reason: 'SHIFT_APPROVAL_LOCKED' });
+    await expect(off.authorize(cashierOff.id, MANAGER_PIN, off.s.cashier)).rejects.toMatchObject({
+      reason: 'SHIFT_APPROVAL_LOCKED',
+    });
+    expect(await off.credential()).toMatchObject({ failedAttempts: 0, lockedUntil: null });
   });
 
   it('keeps closed shifts frozen when the day is reopened, and adds the new shifts to the next close', async () => {

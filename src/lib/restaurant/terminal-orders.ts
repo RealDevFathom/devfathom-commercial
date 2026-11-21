@@ -265,7 +265,7 @@ export async function authenticateApprover(
     type: approving.type,
     secret: approving.secret,
     now,
-    approval: { action: 'restaurant.terminal.orderApproval' },
+    approval: { action: 'restaurant.terminal.orderApproval', approverRight: 'coauth:approve' },
   });
   if (!auth.ok) {
     if (auth.reason === 'LOCKED') {
@@ -621,9 +621,7 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
           lines: unbilledItems.map(toDraftLine),
           serviceChargeRate,
         }).serviceCharge;
-  const settlement = order.deliveryFulfillment
-    ? await evaluateOrderSettlement(db, order.id)
-    : null;
+  const settlement = order.deliveryFulfillment ? await evaluateOrderSettlement(db, order.id) : null;
   return {
     id: order.id,
     branchId: order.branchId,

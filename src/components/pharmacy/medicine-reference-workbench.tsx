@@ -6,6 +6,7 @@ import { memo, useRef, useState } from 'react';
 import { Download, FileSpreadsheet, Loader2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { PinAwareMessage } from '@/components/pharmacy/pin-aware-message';
+import { useOwnerSelfApprovalCopy } from '@/components/pharmacy/own-approval-copy';
 import { askReviewers } from '@/components/pharmacy/catalogue-approval-queue';
 
 import { MedicinePackSetup } from './medicine-pack-setup';
@@ -304,6 +305,8 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
   const publishing = usePendingKeys();
   const utils = trpc.useUtils();
   const [soloReviewPin, setSoloReviewPin] = useState('');
+  // DEV-961: the owner's own approval follows the "Authenticator for approvals" setting.
+  const ownApproval = useOwnerSelfApprovalCopy();
   // DEV-1004: the same treatment as the catalogue queue (DEV-976). The PIN box shows only when
   // the server's rule lets this member approve with their own PIN; otherwise the screen names
   // who else can approve. Both come from the rules the review decision applies.
@@ -316,8 +319,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
     enabled: canDecide,
     retry: false,
   });
-  const showSoloPin =
-    canDecide && (ownerPinApproval || selfApproval.data?.canSelfApprove === true);
+  const showSoloPin = canDecide && (ownerPinApproval || selfApproval.data?.canSelfApprove === true);
   const candidates = trpc.pharmacyMedicine.referenceCandidates.useQuery(undefined, {
     retry: false,
   });
@@ -488,7 +490,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
       {showSoloPin ? (
         <div className="max-w-sm space-y-2 text-sm text-text-body">
           <label className="block space-y-2">
-            <span>Solo owner PIN for reference self-approval</span>
+            <span>{ownApproval.referenceLabel}</span>
             <input
               className="min-h-11 w-full rounded-sm border border-border bg-surface-card px-3 focus-visible:outline-ring"
               type="password"
@@ -502,8 +504,8 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
           </label>
           <p id="reference-solo-pin-help" className="text-text-muted">
             {ownerPinApproval
-              ? 'Nobody holds the catalogue review permission, so you approve as the owner with your own PIN.'
-              : 'Nobody else can review, so you approve the rows you imported or edited yourself with your own PIN.'}
+              ? ownApproval.ownerFallbackReason
+              : ownApproval.referenceOwnRowsReason}
           </p>
         </div>
       ) : canDecide && selfApproval.data ? (

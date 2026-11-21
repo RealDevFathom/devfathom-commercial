@@ -108,7 +108,8 @@ const soloTemplate = [
           await c.query("SELECT set_config('app.is_platform_admin','true',false)");
           for (const org of ['a', 'b', 'solo']) {
             await c.query(
-              `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode","createdAt","updatedAt") VALUES ($1,$1,$1,$1,'ACTIVE','SHARED',now(),now())`,
+              // DEV-961: these approvals use PINs, which apply while the authenticator for approvals is off.
+              `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode","createdAt","updatedAt", "requireApprovalAuthenticator") VALUES ($1,$1,$1,$1,'ACTIVE','SHARED',now(),now(), false)`,
               [id(org)]
             );
             await c.query(

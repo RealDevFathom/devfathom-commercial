@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 
 import type { CounterTenderResult, KhataApprover } from './counter-tender-panel';
-import { COUNTER_APPROVAL_CODE_HINT } from './counter-approval-copy';
+import { useCounterApprovalCopy } from './counter-approval-copy';
 
 const APPROVER_PIN = /^\d{4,8}$/;
 const MIN_REASON = 3;
@@ -29,6 +29,7 @@ type Props = {
  * PIN. The server decides; this form never clears the saved attempt itself.
  */
 export function CounterTenderDiscard({ disabled = false, loadApprovers, onDiscard }: Props) {
+  const approvalCopy = useCounterApprovalCopy();
   const id = useId();
   const [open, setOpen] = useState(false);
   const [approvers, setApprovers] = useState<KhataApprover[] | null>(null);
@@ -158,7 +159,7 @@ export function CounterTenderDiscard({ disabled = false, loadApprovers, onDiscar
           Settings, Your PIN. <OwnPinLink />
         </p>
       ) : null}
-      <Label htmlFor={`${id}-pin`}>Approver PIN</Label>
+      <Label htmlFor={`${id}-pin`}>{approvalCopy.approverLabel}</Label>
       <Input
         id={`${id}-pin`}
         type="password"
@@ -172,7 +173,7 @@ export function CounterTenderDiscard({ disabled = false, loadApprovers, onDiscar
         className="h-11 rounded-sm"
       />
       <p id={`${id}-pin-hint`} className="text-sm text-text-muted">
-        {COUNTER_APPROVAL_CODE_HINT}
+        {approvalCopy.hint}
       </p>
       <Label htmlFor={`${id}-reason`}>Reason</Label>
       <Textarea
