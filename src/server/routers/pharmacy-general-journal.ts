@@ -99,7 +99,7 @@ export const pharmacyGeneralJournalRouter = router({
   createDraft: adminProcedure
     .input(createJournalVoucherDraftSchema)
     .mutation(async ({ ctx, input }) => {
-      const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      const scope = await authorizeGeneralJournal(ctx, input.branchId, 'manage');
       try {
         return await ctx.db.$transaction((tx) => createJournalVoucherDraft(txDb(tx), scope, input));
       } catch (error) {
@@ -110,7 +110,7 @@ export const pharmacyGeneralJournalRouter = router({
   updateDraft: adminProcedure
     .input(updateJournalVoucherDraftSchema)
     .mutation(async ({ ctx, input }) => {
-      const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      const scope = await authorizeGeneralJournal(ctx, input.branchId, 'manage');
       try {
         return await ctx.db.$transaction((tx) => updateJournalVoucherDraft(txDb(tx), scope, input));
       } catch (error) {
@@ -121,7 +121,7 @@ export const pharmacyGeneralJournalRouter = router({
   cancelDraft: adminProcedure
     .input(cancelJournalVoucherDraftSchema)
     .mutation(async ({ ctx, input }) => {
-      const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      const scope = await authorizeGeneralJournal(ctx, input.branchId, 'manage');
       try {
         return await ctx.db.$transaction((tx) => cancelJournalVoucherDraft(txDb(tx), scope, input));
       } catch (error) {
@@ -130,7 +130,7 @@ export const pharmacyGeneralJournalRouter = router({
     }),
 
   post: adminProcedure.input(postJournalVoucherSchema).mutation(async ({ ctx, input }) => {
-    const scope = await authorizeGeneralJournal(ctx, input.branchId);
+    const scope = await authorizeGeneralJournal(ctx, input.branchId, 'manage');
     try {
       return await ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
@@ -150,7 +150,7 @@ export const pharmacyGeneralJournalRouter = router({
   }),
 
   reverse: adminProcedure.input(reverseJournalVoucherSchema).mutation(async ({ ctx, input }) => {
-    const scope = await authorizeGeneralJournal(ctx, input.branchId);
+    const scope = await authorizeGeneralJournal(ctx, input.branchId, 'manage');
     try {
       return await ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);

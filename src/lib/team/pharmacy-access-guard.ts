@@ -1,3 +1,4 @@
+import { isPharmacyFinanceAction } from '@/lib/abac/pharmacy-finance-actions';
 /**
  * DEV-959B — the one guard every change to a pharmacy member's access goes through.
  *
@@ -88,6 +89,7 @@ export async function partyHolds(
   now: Date
 ): Promise<boolean> {
   return can(subjectOf(party), action, undefined, {
+    ownerOnlyFallback: isPharmacyFinanceAction(action),
     db: db as unknown as AuthzDb,
     now,
     source: 'TRPC',

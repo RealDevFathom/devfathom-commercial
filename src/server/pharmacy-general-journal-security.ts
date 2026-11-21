@@ -15,6 +15,7 @@
  * commit or roll back together.
  */
 import { TRPCError } from '@trpc/server';
+import { PHARMACY_FINANCE_MANAGE } from '@/lib/abac/pharmacy-finance-actions';
 import { requirePharmacyFinance } from '@/lib/pharmacy/finance-access';
 import { hasModule } from '@/lib/entitlements';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -39,7 +40,8 @@ function forbidden(message: string): never {
 
 export async function authorizeGeneralJournal(
   ctx: AuthorizationContext,
-  branchId: string
+  branchId: string,
+  access: 'read' | 'manage' = 'read'
 ): Promise<GeneralJournalScope> {
   const user = ctx.session?.user;
   if (!user?.id) throw new TRPCError({ code: 'UNAUTHORIZED' });
@@ -57,6 +59,7 @@ export async function authorizeGeneralJournal(
     forbidden('Pharmacy Finance access is required.');
   }
   await requirePharmacyFinance(ctx);
+  if (access === 'manage') await requirePharmacyFinance(ctx, PHARMACY_FINANCE_MANAGE);
   const branch = await ctx.db.pharmacyBranch.findFirst({
     where: { organizationId, id: branchId, active: true },
     select: { id: true },

@@ -478,7 +478,7 @@ describe('M4-L1 capability reconciliation (additive-only)', () => {
 });
 
 describe('optional pharmacy Owner / Operator', () => {
-  it('offers exactly sixteen explicit grants accepted by the pharmacy capability catalog', () => {
+  it('offers exactly eighteen explicit grants accepted by the pharmacy capability catalog', () => {
     const templates = roleTemplatesForVertical('PHARMACY').filter(
       (role) => role.key === 'owner-operator'
     );
@@ -488,6 +488,8 @@ describe('optional pharmacy Owner / Operator', () => {
         name: 'Owner / Operator',
         isSystem: true,
         capabilities: [
+          'finance:read',
+          'finance:manage',
           'reports:operational',
           'reports:financial',
           'pharmacy:orders',
@@ -549,7 +551,15 @@ describe('optional pharmacy Owner / Operator', () => {
       { key: 'cashier', capabilities: ['pharmacy:counter', 'pharmacy:orders'] },
       { key: 'procurement', capabilities: ['pharmacy:procurement'] },
       { key: 'inventory', capabilities: ['pharmacy:inventory'] },
-      { key: 'finance', capabilities: ['reports:operational', 'reports:financial'] },
+      {
+        key: 'finance',
+        capabilities: [
+          'reports:operational',
+          'reports:financial',
+          'finance:read',
+          'finance:manage',
+        ],
+      },
       { key: 'auditor', capabilities: ['reports:operational'] },
     ]);
   });
@@ -800,3 +810,14 @@ describe('pharmacy SOP grants (DEV-751)', () => {
     }
   });
 });
+
+it.each(['finance:read', 'finance:manage'])(
+  'gives %s explicitly only to the Finance and proprietor system templates',
+  (action) => {
+    expect(
+      PHARMACY_ROLE_TEMPLATES.filter((role) => role.capabilities.includes(action))
+        .map((role) => role.key)
+        .sort()
+    ).toEqual(['finance', 'owner-operator']);
+  }
+);

@@ -1,3 +1,4 @@
+import { PHARMACY_FINANCE_MANAGE } from './pharmacy-finance-actions';
 /**
  * ABAC engine — the central authorization decision point.
  *
@@ -113,6 +114,7 @@ export async function can(
       env.now
     );
     if (decision !== null) return decision;
+    if (action === PHARMACY_FINANCE_MANAGE) return isSystemOwner && subject.role === 'ADMIN';
     if (opts.ownerOnlyFallback && !isSystemOwner) return false;
     // Procurement's tenant-admin fallback exists only for legacy users who do
     // not yet have an organization role. Once a role is assigned, its

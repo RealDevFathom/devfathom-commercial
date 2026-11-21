@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import type { AuthzDb } from '@/lib/authz';
-import { canReadPharmacyFinance } from './finance-access';
+import { canAccessPharmacyFinance } from './finance-access';
 
 const sessionAdmin = { id: 'admin', role: 'ADMIN', status: 'ACTIVE' };
 const owner = { key: 'owner', isSystem: true, permissions: [] };
@@ -45,6 +45,6 @@ it.each([
           .mockResolvedValue({ role, status, organizationRole, permissionOverrides }),
       },
     } as unknown as AuthzDb;
-    await expect(canReadPharmacyFinance(sessionAdmin, { db })).resolves.toBe(expected);
+    await expect(canAccessPharmacyFinance(sessionAdmin, { db })).resolves.toBe(expected);
   }
 );

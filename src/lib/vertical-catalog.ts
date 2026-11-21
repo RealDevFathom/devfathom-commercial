@@ -898,6 +898,8 @@ export const AGENCY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
 ];
 
 export const PHARMACY_CAPABILITIES: readonly string[] = [
+  'finance:read',
+  'finance:manage',
   'pharmacy:*',
   'pharmacy:dispense',
   'pharmacy:prescriptions',
@@ -926,6 +928,8 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
 
 /** Canonical actions checked by pharmacy workflows, including shared report gates. */
 export const PHARMACY_CHECKED_CAPABILITIES = [
+  'finance:read',
+  'finance:manage',
   'pharmacy:counter',
   'pharmacy:close',
   'pharmacy:manage',
@@ -978,6 +982,8 @@ const PHARMACY_BASE_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     name: 'Owner / Operator',
     isSystem: true,
     capabilities: [
+      'finance:read',
+      'finance:manage',
       'reports:operational',
       'reports:financial',
       'pharmacy:orders',
@@ -1062,7 +1068,7 @@ const PHARMACY_BASE_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     // DEV-519: every pharmacy financial report lives inside the Reports command
     // centre, whose rail entry, page and procedures check `reports:operational`.
     // Granting only `reports:financial` left Finance with no reachable report.
-    capabilities: ['reports:operational', 'reports:financial'],
+    capabilities: ['reports:operational', 'reports:financial', 'finance:read', 'finance:manage'],
   },
   { key: 'auditor', name: 'Auditor', isSystem: true, capabilities: ['reports:operational'] },
 ];

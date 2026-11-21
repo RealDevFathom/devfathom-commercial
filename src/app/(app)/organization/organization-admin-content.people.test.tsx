@@ -24,6 +24,7 @@ vi.mock('next-auth/react', () => ({
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    approvalAuthenticator: { mode: { useQuery: () => ({ data: { required: false } }) } },
     useUtils: () => ({ organizationAdmin: { overview: { invalidate: vi.fn() } } }),
     organizationAdmin: new Proxy(
       {},

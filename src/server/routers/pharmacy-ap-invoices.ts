@@ -1,3 +1,4 @@
+import { canManagePharmacyAccounts } from '@/lib/pharmacy/finance-access';
 /**
  * DEV-103: native non-stock AP invoice, settlement and aging procedures.
  *
@@ -263,6 +264,7 @@ export const pharmacyApInvoicesRouter = router({
     try {
       return {
         scope: { organizationId: scope.organizationId, branchId: scope.branchId },
+        mayManageAccounts: await canManagePharmacyAccounts(ctx),
         view: await readApAging(
           ctx.db,
           scope,
@@ -423,7 +425,7 @@ export const pharmacyApInvoicesRouter = router({
   requestCreditSetOff: adminProcedure
     .input(requestApCreditSetOffSchema)
     .mutation(async ({ ctx, input }) => {
-      const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      const scope = await authorizeGeneralJournal(ctx, input.branchId, 'manage');
       try {
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
@@ -459,7 +461,7 @@ export const pharmacyApInvoicesRouter = router({
   approveCreditSetOff: adminProcedure
     .input(approveApCreditSetOffSchema)
     .mutation(async ({ ctx, input }) => {
-      const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      const scope = await authorizeGeneralJournal(ctx, input.branchId, 'manage');
       if (!(await actorMayRefund(ctx.db, ctx.session.user)))
         throw new TRPCError({ code: 'FORBIDDEN', message: AP_SET_OFF_FORBIDDEN });
       const pin = await authenticateRefundPin({
@@ -514,7 +516,7 @@ export const pharmacyApInvoicesRouter = router({
   rejectCreditSetOff: adminProcedure
     .input(rejectApCreditSetOffSchema)
     .mutation(async ({ ctx, input }) => {
-      const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      const scope = await authorizeGeneralJournal(ctx, input.branchId, 'manage');
       if (!(await actorMayRefund(ctx.db, ctx.session.user)))
         throw new TRPCError({ code: 'FORBIDDEN', message: AP_SET_OFF_FORBIDDEN });
       try {
@@ -546,7 +548,7 @@ export const pharmacyApInvoicesRouter = router({
   reverseCreditSetOff: adminProcedure
     .input(reverseApCreditSetOffSchema)
     .mutation(async ({ ctx, input }) => {
-      const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      const scope = await authorizeGeneralJournal(ctx, input.branchId, 'manage');
       if (!(await actorMayRefund(ctx.db, ctx.session.user)))
         throw new TRPCError({ code: 'FORBIDDEN', message: AP_SET_OFF_FORBIDDEN });
       const pin = await authenticateRefundPin({
@@ -598,7 +600,7 @@ export const pharmacyApInvoicesRouter = router({
     }),
 
   record: adminProcedure.input(recordApInvoiceSchema).mutation(async ({ ctx, input }) => {
-    const scope = await authorizeGeneralJournal(ctx, input.branchId);
+    const scope = await authorizeGeneralJournal(ctx, input.branchId, 'manage');
     try {
       return await ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
@@ -625,7 +627,7 @@ export const pharmacyApInvoicesRouter = router({
   }),
 
   pay: adminProcedure.input(payApInvoiceSchema).mutation(async ({ ctx, input }) => {
-    const scope = await authorizeGeneralJournal(ctx, input.branchId);
+    const scope = await authorizeGeneralJournal(ctx, input.branchId, 'manage');
     try {
       return await ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
@@ -660,7 +662,7 @@ export const pharmacyApInvoicesRouter = router({
   reverseSettlement: adminProcedure
     .input(reverseApSettlementSchema)
     .mutation(async ({ ctx, input }) => {
-      const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      const scope = await authorizeGeneralJournal(ctx, input.branchId, 'manage');
       const target = await ctx.db.pharmacyApInvoiceSettlement.findFirst({
         where: {
           organizationId: scope.organizationId,
@@ -723,7 +725,7 @@ export const pharmacyApInvoicesRouter = router({
    * reversed first, so the payable can never go negative.
    */
   reverseInvoice: adminProcedure.input(reverseApInvoiceSchema).mutation(async ({ ctx, input }) => {
-    const scope = await authorizeGeneralJournal(ctx, input.branchId);
+    const scope = await authorizeGeneralJournal(ctx, input.branchId, 'manage');
     const target = await ctx.db.pharmacyApInvoice.findFirst({
       where: {
         organizationId: scope.organizationId,
@@ -806,7 +808,8 @@ export const pharmacyApInvoicesRouter = router({
     .input(listApInvoicesSchema.pick({ branchId: true }))
     .query(async ({ ctx, input }) => {
       const scope = await authorizeGeneralJournal(ctx, input.branchId);
-      const mayReverse = await actorMayRefund(ctx.db, ctx.session.user);
+      const mayReverse =
+        (await canManagePharmacyAccounts(ctx)) && (await actorMayRefund(ctx.db, ctx.session.user));
       const others = mayReverse ? await otherApReversalApprovers(ctx.db, scope) : [];
       return {
         scope: { organizationId: scope.organizationId, branchId: scope.branchId },

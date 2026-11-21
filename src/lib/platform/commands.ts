@@ -1,3 +1,4 @@
+import { changesPharmacyFinanceRules } from '@/lib/abac/pharmacy-sub-roles';
 import 'server-only';
 
 import { hash } from 'bcryptjs';
@@ -3073,6 +3074,7 @@ async function runCommand(
       const existing = roleId
         ? await db.organizationRole.findFirst({
             where: { id: roleId, organizationId: input.organizationId },
+            include: { permissions: true },
           })
         : null;
       if (roleId && !existing) {
@@ -3080,6 +3082,12 @@ async function runCommand(
       }
       if (existing?.isSystem) {
         throw new PlatformSecurityError('System roles cannot be modified.', 400);
+      }
+      if (
+        changesPharmacyFinanceRules(existing?.permissions ?? [], permissions, 'increase') &&
+        (await isPharmacyOrganization(db, input.organizationId))
+      ) {
+        throw new Error('Only the workspace owner can grant pharmacy finance role permissions.');
       }
       const holders = async () =>
         roleId

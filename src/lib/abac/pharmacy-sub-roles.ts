@@ -882,6 +882,32 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     ],
   },
   {
+    key: 'read-finance-accounts',
+    label: 'View pharmacy accounts',
+    homeRole: 'finance',
+    actions: ['finance:read'],
+    allows: [
+      {
+        id: 'view-accounts',
+        text: 'With the required administrator, branch and report access, view supplier invoices, payments and reversals, the general journal, bank statements and financial statements.',
+        sites: {},
+      },
+    ],
+  },
+  {
+    key: 'manage-finance-accounts',
+    label: 'Manage pharmacy account transactions',
+    homeRole: 'finance',
+    actions: ['finance:manage'],
+    allows: [
+      {
+        id: 'manage-transactions',
+        text: 'With View pharmacy accounts and the required administrator access, record invoices and payments, manage journals and bank reconciliation, close periods and publish tax profiles. Reversing a supplier invoice, payment or approved credit set-off also requires management access and the approver’s authenticator code (or PIN, if the owner turned the authenticator off).',
+        sites: {},
+      },
+    ],
+  },
+  {
     key: 'financial-reports',
     label: 'Use financial reports',
     homeRole: 'finance',
@@ -1145,6 +1171,49 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
 export const PHARMACY_ACTION_NON_GRANTING_SITES: Readonly<
   Record<string, Readonly<Record<string, NonGrantingSite>>>
 > = {
+  'finance:read': {
+    'src/app/api/v1/clients/[id]/route.ts': {
+      count: 1,
+      reason: 'API bearer-token scope, granted separately from a person’s pharmacy role',
+    },
+    'src/app/api/v1/clients/route.ts': {
+      count: 1,
+      reason: 'API bearer-token scope, granted separately from a person’s pharmacy role',
+    },
+    'src/app/api/v1/finance/summary/route.ts': {
+      count: 1,
+      reason: 'API bearer-token scope, granted separately from a person’s pharmacy role',
+    },
+    'src/app/api/v1/invoices/[id]/route.ts': {
+      count: 1,
+      reason: 'API bearer-token scope, granted separately from a person’s pharmacy role',
+    },
+    'src/app/api/v1/invoices/route.ts': {
+      count: 1,
+      reason: 'API bearer-token scope, granted separately from a person’s pharmacy role',
+    },
+    'src/app/api/v1/transactions/route.ts': {
+      count: 1,
+      reason: 'API bearer-token scope, granted separately from a person’s pharmacy role',
+    },
+    'src/lib/api-auth.ts': {
+      count: 1,
+      reason: 'API bearer-token scope, granted separately from a person’s pharmacy role',
+    },
+    'src/lib/ai/tools/finance.ts': { count: 1, reason: 'comment describing the finance check' },
+    'src/lib/pharmacy/accounts/ap-reversal-approvers.ts': {
+      count: 1,
+      reason: 'comment describing the finance check',
+    },
+    'src/server/pharmacy-general-journal-security.ts': {
+      count: 1,
+      reason: 'comment describing the finance check',
+    },
+    'src/server/routers/pharmacy-ap-invoices.ts': {
+      count: 1,
+      reason: 'comment describing the finance check',
+    },
+  },
   'pharmacy:counter': {
     'src/server/routers/pharmacy-access.ts': { count: 3, reason: 'comment and the menu list' },
     'src/lib/pharmacy/accounts/ap-reversal-approvers.ts': {
@@ -1485,6 +1554,27 @@ export const PHARMACY_SUB_ROLES: readonly PharmacySubRole[] = DEFINITIONS.map((d
 export const PHARMACY_SUB_ROLE_ACTIONS: readonly Action[] = PHARMACY_SUB_ROLES.flatMap(
   (subRole) => subRole.actions
 );
+
+/** Finance ticks share the authorization used by the accounts procedures. */
+export const PHARMACY_FINANCE_SUB_ROLES = PHARMACY_SUB_ROLES.filter((role) =>
+  role.actions[0].startsWith('finance:')
+);
+
+type PermissionRule = { capability: string; effect: string };
+
+export function changesPharmacyFinanceRules(
+  before: readonly PermissionRule[],
+  after: readonly PermissionRule[],
+  mode: 'any' | 'increase' = 'any'
+) {
+  return PHARMACY_FINANCE_SUB_ROLES.some(({ actions: [action] }) => {
+    const oldDecision = decideFromRules(before, action);
+    const newDecision = decideFromRules(after, action);
+    if (oldDecision === newDecision) return false;
+    // Removing a denial can make a personal grant effective. An added denial only restricts access.
+    return mode === 'any' || newDecision === true || oldDecision === false;
+  });
+}
 
 /** The order in which role groups are shown; names come from the real templates. */
 const GROUP_ORDER = [

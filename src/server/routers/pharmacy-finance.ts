@@ -34,7 +34,12 @@ import {
 } from '@/lib/pharmacy/bookkeeping';
 import { PharmacyTaxProfileError, publishPharmacyTaxProfile } from '@/lib/pharmacy/tax-profiles';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { requirePharmacyFinance } from '@/lib/pharmacy/finance-access';
+import {
+  PHARMACY_FINANCE_MANAGE,
+  PHARMACY_FINANCE_READ,
+  type PharmacyFinanceAction,
+} from '@/lib/abac/pharmacy-finance-actions';
+import { requirePharmacyFinance, canManagePharmacyAccounts } from '@/lib/pharmacy/finance-access';
 import { tagProcedureGate } from '../procedure-gate-tag';
 import { assertInOrganization } from '../org-refs';
 import { adminProcedure, router, type TRPCContext } from '../trpc';
@@ -43,19 +48,20 @@ const id = z.string().trim().min(1).max(128);
 const moneyMinor = z.number().int().positive().max(999_999_999);
 const at = z.coerce.date();
 
-const financeGate = tagProcedureGate(
-  async <Result>({
-    ctx,
-    next,
-  }: {
-    ctx: Parameters<typeof requirePharmacyFinance>[0];
-    next: () => Promise<Result>;
-  }) => {
-    await requirePharmacyFinance(ctx);
-    return next();
-  },
-  { kind: 'capability', action: 'finance:read' }
-);
+const financeGate = (action: PharmacyFinanceAction) =>
+  tagProcedureGate(
+    async <Result>({
+      ctx,
+      next,
+    }: {
+      ctx: Parameters<typeof requirePharmacyFinance>[0];
+      next: () => Promise<Result>;
+    }) => {
+      await requirePharmacyFinance(ctx, action);
+      return next();
+    },
+    { kind: 'capability', action }
+  );
 
 // Server pages also use a standalone caller, where the root router prefix is
 // absent. Enforce bookkeeping licensing here as well as in the module registry.
@@ -70,7 +76,9 @@ const bookkeepingProcedure = adminProcedure
     }
     return next({ ctx });
   })
-  .use(financeGate);
+  .use(financeGate(PHARMACY_FINANCE_READ));
+
+const bookkeepingMutation = bookkeepingProcedure.use(financeGate(PHARMACY_FINANCE_MANAGE));
 
 const reportInstant = z.iso.datetime({ offset: true });
 const reportPeriod = z
@@ -241,7 +249,7 @@ export const pharmacyFinanceRouter = router({
     }
   }),
   financialStatements: ledgerReportProcedure
-    .use(financeGate)
+    .use(financeGate(PHARMACY_FINANCE_READ))
     .input(reportPeriod.safeExtend({ page: z.number().int().min(1).max(10000).default(1) }))
     .query(async ({ ctx, input }) => ({
       ...ledgerMetadata(
@@ -533,6 +541,7 @@ export const pharmacyFinanceRouter = router({
         }),
       ]);
       return {
+        mayManageAccounts: await canManagePharmacyAccounts(ctx),
         branch,
         transactions,
         periods,
@@ -543,7 +552,7 @@ export const pharmacyFinanceRouter = router({
       };
     }),
 
-  post: bookkeepingProcedure
+  post: bookkeepingMutation
     .input(
       z.object({
         branchId: id,
@@ -581,7 +590,7 @@ export const pharmacyFinanceRouter = router({
       }
     }),
 
-  reverse: bookkeepingProcedure
+  reverse: bookkeepingMutation
     .input(
       z.object({
         branchId: id,
@@ -602,7 +611,7 @@ export const pharmacyFinanceRouter = router({
       }
     }),
 
-  closePeriod: bookkeepingProcedure
+  closePeriod: bookkeepingMutation
     .input(z.object({ branchId: id, startsAt: at, endsAt: at }))
     .mutation(async ({ ctx, input }) => {
       try {
@@ -613,7 +622,7 @@ export const pharmacyFinanceRouter = router({
       }
     }),
 
-  reopenPeriod: bookkeepingProcedure
+  reopenPeriod: bookkeepingMutation
     .input(z.object({ branchId: id, periodId: id, reason: z.string().trim().min(1).max(500) }))
     .mutation(async ({ ctx, input }) => {
       try {
@@ -624,7 +633,7 @@ export const pharmacyFinanceRouter = router({
       }
     }),
 
-  importBankLine: bookkeepingProcedure
+  importBankLine: bookkeepingMutation
     .input(
       z.object({
         branchId: id,
@@ -645,7 +654,7 @@ export const pharmacyFinanceRouter = router({
       });
     }),
 
-  reconcile: bookkeepingProcedure
+  reconcile: bookkeepingMutation
     .input(
       z
         .object({
@@ -677,7 +686,7 @@ export const pharmacyFinanceRouter = router({
       }
     }),
 
-  createSettlementBatch: bookkeepingProcedure
+  createSettlementBatch: bookkeepingMutation
     .input(
       z.object({
         branchId: id,
@@ -697,7 +706,7 @@ export const pharmacyFinanceRouter = router({
       }
     }),
 
-  publishTaxProfile: bookkeepingProcedure
+  publishTaxProfile: bookkeepingMutation
     .input(
       z.object({
         branchId: id,
