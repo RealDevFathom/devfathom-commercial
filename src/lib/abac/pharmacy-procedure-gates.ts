@@ -2070,6 +2070,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
       'run-branches/close-day-branches-unless',
     ],
   },
+  'pharmacySales.closeShift': {
+    gate: "auditedProtectedProcedure + cashShiftScope: requireDrawerManagerAccess (pharmacy:manage, counter family not DENIED, assigned branch or ADMIN) closes any shift of the branch; otherwise requireCounterReceiptAccess(canonical true) -> pharmacy:counter, own shift only; over or short above the tolerance -> the caller's right to close that shift is checked before any PIN; approver passes actorManagesBranchDrawers + their PIN or code through verifyApprovalSecret, and is neither the shift's cashier nor the caller unless no other approver with a live PIN exists (solo policy, or the solo-pharmacy rule); guesses typed by someone else never strike the approver's credential and are capped per approver",
+    lines: ['take-payment/open-close-own-cash-shift', 'run-branches/run-cash-shifts-branches'],
+  },
   'pharmacySales.counterBranches': {
     gate: "protectedProcedure; lists the caller's own assigned active branches (all for ADMIN)",
     none: 'any signed-in member, for their own branch assignments',
@@ -2357,6 +2361,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'empty drawer for self -> pharmacy:counter (canonical); opening float > 0 or naming another cashier -> requireDrawerManagerAccess (pharmacy:manage)',
     lines: ['take-payment/take-payment-branches-by', 'run-branches/run-cash-drawers-branches'],
   },
+  'pharmacySales.openShift': {
+    gate: "auditedProtectedProcedure; naming another cashier -> requireDrawerManagerAccess (pharmacy:manage); own shift -> cashShiftScope: requireDrawerManagerAccess, else requireCounterReceiptAccess(canonical true) -> pharmacy:counter",
+    lines: ['take-payment/open-close-own-cash-shift', 'run-branches/run-cash-shifts-branches'],
+  },
   'pharmacySales.optOutRestockInterest': {
     gate: 'requireCounterReceiptAccess(canonical true) -> pharmacy:counter',
     lines: ['take-payment/follow-up-outofstock-requests'],
@@ -2504,9 +2512,17 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'protectedProcedure; returns whether can(pharmacy:counter)',
     none: 'any signed-in member (only reports whether they may take payment)',
   },
+  'pharmacySales.shiftApprovers': {
+    gate: "cashShiftScope: requireDrawerManagerAccess (pharmacy:manage), else requireCounterReceiptAccess(canonical true) -> pharmacy:counter; lists members passing actorManagesBranchDrawers with a live PIN other than the shift's cashier and the caller, or those two when nobody else can",
+    lines: ['take-payment/open-close-own-cash-shift', 'run-branches/run-cash-shifts-branches'],
+  },
   'pharmacySales.shiftHandoverNote': {
     gate: 'adminProcedure (admin:access) AND session role ADMIN AND reports:financial',
     lines: ['financial-reports/workspace-administrator-run-dayclose'],
+  },
+  'pharmacySales.shiftReport': {
+    gate: "cashShiftScope: requireDrawerManagerAccess (pharmacy:manage) reads any shift of the branch; otherwise requireCounterReceiptAccess(canonical true) -> pharmacy:counter, own shift only",
+    lines: ['take-payment/open-close-own-cash-shift', 'run-branches/run-cash-shifts-branches'],
   },
   'pharmacySales.substituteProposals': {
     gate: 'assignedBranchScope only; no capability checked',
