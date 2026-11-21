@@ -8,6 +8,7 @@ import { annotateAudit } from '@/server/audit';
 import { authenticateRefundPin } from '@/lib/pharmacy/refund-authorization';
 import { readOwnPinState } from '@/lib/pharmacy/own-pin';
 import { NO_PIN_SET_MESSAGE } from '@/lib/pharmacy/own-pin-policy';
+import { actorIsPharmacyOwner } from '@/lib/pharmacy/procurement-access';
 import { counterBranchAssignmentDenial } from '@/lib/pharmacy/counter-capability';
 import {
   assertRxSelfSignAllowed,
@@ -58,6 +59,31 @@ async function assertSaleLineBranch(ctx: TRPCContext, saleLineId: string) {
 // CNIC, phone, address and date of birth stay behind the audited, masked
 // patient-read route (`pharmacyPrescriptions.readPatient`).
 const queuePatient = { select: { id: true, displayName: true } } as const;
+
+// The review item records its counter sale line as an id, without a Prisma
+// relation. Join on that exact line: one prescription can be filled at several branches.
+async function clinicalReviewScope(ctx: TRPCContext) {
+  const organizationId = ctx.entitlements?.organizationId;
+  if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  const userId = ctx.session!.user.id;
+  if (await actorIsPharmacyOwner(ctx.db, organizationId, userId)) return { organizationId };
+
+  const reviews = await ctx.db.$queryRaw<{ id: string }[]>`
+    SELECT review.id
+    FROM pharmacy_pharmacist_review_items review
+    JOIN pharmacy_sale_lines line
+      ON line."organizationId" = review."organizationId" AND line.id = review."saleLineId"
+    JOIN pharmacy_branches branch
+      ON branch."organizationId" = line."organizationId" AND branch.id = line."branchId"
+    JOIN pharmacy_branch_assignments assignment
+      ON assignment."organizationId" = branch."organizationId" AND assignment."branchId" = branch.id
+    JOIN users member
+      ON member."organizationId" = assignment."organizationId" AND member.id = assignment."userId"
+    WHERE member.status = 'ACTIVE' AND review."organizationId" = ${organizationId} AND assignment."userId" = ${userId}
+      AND branch.active AND assignment.active
+  `;
+  return { organizationId, id: { in: reviews.map((review) => review.id) } };
+}
 
 const RX_SELF_SIGN_CODES: Record<RxSelfSignError['reason'], TRPCError['code']> = {
   NOT_FOUND: 'NOT_FOUND',
@@ -122,9 +148,20 @@ export const pharmacyDispensingRouter = router({
         },
       });
     }),
-  reviewQueue: dispense.query(async ({ ctx }) => ({
-    currentUserId: ctx.session!.user.id,
-    items: await ctx.db.pharmacyPharmacistReviewItem.findMany({
+  reviewQueue: dispense.query(async ({ ctx }) => {
+    const user = ctx.session!.user;
+    const canViewPatients = await can(
+      subjectFromSession(user),
+      'pharmacy:prescriptions',
+      undefined,
+      {
+        db: ctx.db,
+        source: 'TRPC',
+        ip: ctx.requestMeta.ip,
+      }
+    );
+    const items = await ctx.db.pharmacyPharmacistReviewItem.findMany({
+      where: await clinicalReviewScope(ctx),
       orderBy: { requestedAt: 'asc' },
       include: {
         line: {
@@ -132,14 +169,30 @@ export const pharmacyDispensingRouter = router({
             medicine: true,
             presentation: true,
             prescription: {
-              include: { patient: queuePatient, prescriber: { select: { id: true, name: true } } },
+              select: {
+                prescriber: { select: { id: true, name: true } },
+                ...(canViewPatients && { patient: queuePatient }),
+              },
             },
           },
         },
         decisions: { orderBy: { createdAt: 'asc' } },
       },
-    }),
-  })),
+    });
+    return {
+      currentUserId: user.id,
+      items: items.map((item) => ({
+        ...item,
+        line: {
+          ...item.line,
+          prescription: {
+            prescriber: item.line.prescription.prescriber,
+            patient: canViewPatients ? item.line.prescription.patient : { displayName: null },
+          },
+        },
+      })),
+    };
+  }),
   // DEV-35: the substitution workspace opens for a dispensing pharmacist or a
   // Pharmacy Safety holder (the same pair the rail offers it to). Only a
   // dispensing pharmacist may record evidence (`recordSubstitution`), so the
@@ -163,32 +216,31 @@ export const pharmacyDispensingRouter = router({
       });
     }
     const canViewPatients = await can(subject, 'pharmacy:prescriptions', undefined, options);
-    const orderBy = { requestedAt: 'desc' } as const;
-    const medicine = { include: { presentations: { orderBy: { presentation: 'asc' } } } } as const;
-    // Without that permission the patient relation is never read and every line
-    // carries `patient: null`.
-    const lines = canViewPatients
-      ? await ctx.db.pharmacyPharmacistReviewItem.findMany({
-          orderBy,
+    const items = await ctx.db.pharmacyPharmacistReviewItem.findMany({
+      where: await clinicalReviewScope(ctx),
+      orderBy: { requestedAt: 'desc' },
+      include: {
+        line: {
           include: {
-            line: {
-              include: {
-                medicine,
-                presentation: true,
-                prescription: { include: { patient: queuePatient } },
-              },
+            medicine: { include: { presentations: { orderBy: { presentation: 'asc' } } } },
+            presentation: true,
+            prescription: {
+              select: { id: true, ...(canViewPatients && { patient: queuePatient }) },
             },
           },
-        })
-      : (
-          await ctx.db.pharmacyPharmacistReviewItem.findMany({
-            orderBy,
-            include: { line: { include: { medicine, presentation: true, prescription: true } } },
-          })
-        ).map((item) => ({
-          ...item,
-          line: { ...item.line, prescription: { ...item.line.prescription, patient: null } },
-        }));
+        },
+      },
+    });
+    const lines = items.map((item) => ({
+      ...item,
+      line: {
+        ...item.line,
+        prescription: {
+          id: item.line.prescription.id,
+          patient: canViewPatients ? item.line.prescription.patient : null,
+        },
+      },
+    }));
     return { canRecord, canViewPatients, lines };
   }),
   enqueueReview: dispense
