@@ -224,6 +224,7 @@ import {
   addRestockInterest,
   captureSafeRestockArrival,
   captureDemand,
+  recordCounterDemand,
   changeSaleStatus,
   createSale,
   demandAggregate,
@@ -4177,6 +4178,42 @@ export const pharmacySalesRouter = router({
             replayed: returned.replayed,
           };
         });
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  recordCounterDemand: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          requestId: z.uuid(),
+          requestedText: z.string().trim().min(1).max(250),
+          requestedMedicineId: z.string().min(1).optional(),
+          quantity: z.number().int().positive().max(2147483647),
+          reason: z.enum([
+            'STOCKOUT',
+            'NOT_CARRIED',
+            'PACK_UNAVAILABLE',
+            'PRICE_REJECTED',
+            'SUBSTITUTE_DECLINED',
+          ]),
+          followUp: z
+            .object({
+              patientId: z.string().min(1),
+              channel: z.enum(['SMS', 'WHATSAPP']),
+              reserveOnArrival: z.boolean(),
+            })
+            .strict()
+            .optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const { branchId, ...request } = input;
+        const scope = await requireCounterReceiptAccess(ctx, branchId, true);
+        return await ctx.db.$transaction((tx) => recordCounterDemand(txDb(tx), scope, request));
       } catch (error) {
         fail(error);
       }

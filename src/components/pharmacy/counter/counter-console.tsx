@@ -81,6 +81,7 @@ import {
 } from './counter-receipt-view';
 import { CounterCardTerminalPanel } from './counter-card-terminal-panel';
 import { CounterKhataPaymentPanel } from './counter-khata-payment-panel';
+import { CounterDemandSheet } from './counter-demand-sheet';
 import { CounterReturnPanel } from './counter-return-panel';
 import { CounterControlledAuthorization, CounterRxPanel } from './counter-rx-panel';
 import { CounterRxSelfSign } from './counter-rx-self-sign';
@@ -4348,6 +4349,15 @@ function ScopedPharmacyCounterConsole({
             onVoid={voidOpenBill}
           />
         ) : null}
+        <CounterDemandSheet
+          key={branchId}
+          branchId={branchId}
+          query={activeRow?.displayName ?? query}
+          medicines={activeRow ? [activeRow, ...searchRows] : searchRows}
+          patient={patient ?? null}
+          disabled={busy || !connectionOnline}
+          onSaved={(message) => setNotice({ tone: 'success', message })}
+        />
         <CounterReturnPanel
           branchId={branchId}
           organizationId={organizationId}

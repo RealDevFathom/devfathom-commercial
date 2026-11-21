@@ -201,3 +201,29 @@ describeIfDatabase('lost-demand advice tables (DEV-80)', () => {
     expect(removed).toBe(1);
   });
 });
+
+describeIfDatabase('DEV-991 customer asked for it', () => {
+  it('records a request once across concurrent retries without creating stock or a sale', async () => {
+    const { recordCounterDemand } = await import('./sales');
+    const input = {
+      requestId: randomUUID(),
+      requestedText: 'Synthetic request',
+      quantity: 3,
+      reason: 'NOT_CARRIED' as const,
+    };
+    const record = () =>
+      inOrg(orgA, (dbx) =>
+        recordCounterDemand(dbx, { organizationId: orgA, branchId: branchA, actorId }, input)
+      );
+    const [a, b] = await Promise.all([record(), record()]);
+    expect(a.id).toBe(b.id);
+    await inOrg(orgA, async (dbx) => {
+      const where = { organizationId: orgA, branchId: branchA };
+      expect(await dbx.unfulfilledDemandEvent.findMany({ where })).toMatchObject([
+        { id: a.id, quantity: 3, saleId: null, capturedByUserId: actorId },
+      ]);
+      expect(await dbx.pharmacySale.count({ where })).toBe(0);
+      expect(await dbx.pharmacyInventoryLot.count({ where })).toBe(0);
+    });
+  });
+});

@@ -2127,6 +2127,21 @@ test('Counter v2 — the discount sheet: whole bill or next item, and who can ap
   }
 });
 
+test('DEV-991 records an unlisted medicine request without opening a bill', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openCounter(page, PHARMACY_E2E.cashierEmail);
+  await openDrawer(page);
+  await pressControl(page.getByRole('button', { name: 'Customer asked for it' }));
+  const sheet = page.getByRole('dialog', { name: 'Customer asked for it' });
+  await sheet.getByLabel('Requested medicine').fill('Synthetic unlisted medicine');
+  await sheet.getByLabel('How many units they wanted').fill('3');
+  await pressControl(sheet.getByRole('button', { name: 'Save request' }));
+  await expect(
+    page.getByRole('status').filter({ hasText: 'Recorded 3 units of Synthetic unlisted medicine' })
+  ).toBeVisible();
+  await expect(page.getByText('No open bill', { exact: true }).first()).toBeVisible();
+});
+
 test('Counter v2 — offline: a price check only, no offline bill, and "Sign-in not checked"', async ({
   page,
   context,

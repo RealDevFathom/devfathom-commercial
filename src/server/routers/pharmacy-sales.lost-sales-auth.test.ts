@@ -31,6 +31,7 @@ const DEMAND_ROW = {
 };
 vi.mock('@/lib/pharmacy/sales', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/sales')>()),
+  recordCounterDemand: vi.fn(async () => ({ id: 'record-1' })),
   captureDemand: vi.fn(async () => ({ ...DEMAND_ROW })),
   recoverDemandWithAlternate: vi.fn(async () => ({ ...DEMAND_ROW, status: 'RECOVERED' })),
   demandAggregate: vi.fn(async () => ({ label: 'Estimate', rows: [] })),
@@ -60,6 +61,7 @@ vi.mock('@/lib/pharmacy/substitute-finder', async (original) => ({
 
 import {
   addRestockInterest,
+  recordCounterDemand,
   captureDemand,
   captureSafeRestockArrival,
   demandAggregate,
@@ -258,6 +260,18 @@ const SALE_LINE = { saleUnit: 'PACK', quantity: 1, inventoryRuleSnapshot: {} } a
 
 // DEV-817: every counter procedure that reads or writes a demand event.
 const counterPaths: GatedPath[] = [
+  {
+    name: 'recordCounterDemand',
+    run: (c, branchId = 'branch-a') =>
+      c.recordCounterDemand({
+        branchId,
+        requestId: '10000000-0000-4000-8000-000000000001',
+        requestedText: 'Unlisted',
+        quantity: 2,
+        reason: 'NOT_CARRIED',
+      }),
+    command: () => recordCounterDemand,
+  },
   {
     name: 'captureDemand',
     run: (caller, branchId = 'branch-a') =>

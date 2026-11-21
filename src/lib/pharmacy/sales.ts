@@ -1,4 +1,4 @@
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { PREPAID_PROVIDER } from './prepaid-tiers';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -2319,7 +2319,8 @@ export async function captureDemand(
     matchedProductId?: string;
     matchConfidence?: number;
   },
-  now: Date = new Date()
+  now: Date = new Date(),
+  eventId?: string
 ) {
   if (!input.requestedMedicineId && !input.requestedText?.trim())
     throw new PharmacySaleError('INVALID_QUANTITY');
@@ -2362,6 +2363,7 @@ export async function captureDemand(
     data: {
       ...input,
       ...notify,
+      id: eventId,
       outcome,
       freeText: input.freeText?.trim() || null,
       requestedQty: input.requestedQty ?? input.quantity,
@@ -2381,6 +2383,68 @@ export async function captureDemand(
       createdAt: now,
     },
   });
+}
+
+/** Record the counter request and its optional restock follow-up in one tenant transaction. */
+export async function recordCounterDemand(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: {
+    requestId: string;
+    requestedText: string;
+    requestedMedicineId?: string;
+    quantity: number;
+    reason:
+      'STOCKOUT' | 'NOT_CARRIED' | 'PACK_UNAVAILABLE' | 'PRICE_REJECTED' | 'SUBSTITUTE_DECLINED';
+    followUp?: { patientId: string; channel: 'SMS' | 'WHATSAPP'; reserveOnArrival: boolean };
+  }
+) {
+  const { requestId, ...request } = input;
+  const digest = (value: unknown) =>
+    createHash('sha256').update(canonicalJson(value)).digest('hex');
+  const id = 'asked_' + digest([scope.organizationId, scope.branchId, scope.actorId, requestId]);
+  const fingerprint = digest(request);
+  await db.$queryRaw(Prisma.sql`SELECT 1 FROM pg_advisory_xact_lock(hashtextextended(${id}, 0))`);
+  const existing = await db.unfulfilledDemandEvent.findFirst({
+    where: { id, organizationId: scope.organizationId, branchId: scope.branchId },
+    select: { inventoryRuleSnapshot: true },
+  });
+  if (existing) {
+    if ((existing.inventoryRuleSnapshot as { fingerprint?: string })?.fingerprint !== fingerprint)
+      throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+    return { id };
+  }
+  const medicine =
+    input.requestedMedicineId &&
+    (await db.medicine.findFirst({
+      where: { id: input.requestedMedicineId, organizationId: scope.organizationId },
+      select: { id: true },
+    }));
+  if (input.requestedMedicineId && !medicine) throw new PharmacySaleError('NOT_FOUND');
+  if (input.followUp && !medicine) throw new PharmacySaleError('INVALID_STATE');
+  await captureDemand(
+    db,
+    scope,
+    {
+      requestedText: input.requestedText,
+      requestedMedicineId: input.requestedMedicineId,
+      saleUnit: 'UNIT',
+      quantity: input.quantity,
+      reason: input.reason,
+      inventoryRuleSnapshot: { source: 'CUSTOMER_REQUEST', fingerprint },
+    },
+    new Date(),
+    id
+  );
+  if (input.followUp) {
+    await activateRestockBranch(db, scope);
+    await addRestockInterest(db, scope, {
+      demandEventId: id,
+      quantityUnits: input.quantity,
+      ...input.followUp,
+    });
+  }
+  return { id };
 }
 
 export async function recoverDemandWithAlternate(
