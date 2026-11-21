@@ -635,7 +635,6 @@ export const organizationAdminRouter = router({
         const existing = roleId
           ? await tx.organizationRole.findFirst({
               where: { id: roleId, organizationId: id },
-              ...(isPharmacyContext(ctx) && { include: { permissions: true } }),
             })
           : null;
         if (roleId && !existing) {
@@ -644,30 +643,35 @@ export const organizationAdminRouter = router({
         if (existing?.isSystem) {
           throw new TRPCError({ code: 'FORBIDDEN', message: 'System roles cannot be modified.' });
         }
-        if (
-          isPharmacyContext(ctx) &&
-          changesPharmacyFinanceRules(existing?.permissions ?? [], permissions)
-        ) {
-          const db = tx as unknown as ScopedDb;
-          const now = new Date();
-          const editor = await loadAccessParty(db, id, ctx.session.user.id, now);
-          if (
-            ctx.support ||
-            ctx.session.user.isSupportSession ||
-            !editor ||
-            !(await isAccessOwner(db, editor, now))
-          ) {
-            throw new TRPCError({
-              code: 'FORBIDDEN',
-              message: 'Only the workspace owner can change finance permissions.',
-            });
+        if (isPharmacyContext(ctx)) {
+          const existingPermissions = existing
+            ? await tx.organizationRolePermission.findMany({
+                where: { organizationId: id, organizationRoleId: existing.id },
+                select: { capability: true, effect: true },
+              })
+            : [];
+          if (changesPharmacyFinanceRules(existingPermissions, permissions)) {
+            const db = tx as unknown as ScopedDb;
+            const now = new Date();
+            const editor = await loadAccessParty(db, id, ctx.session.user.id, now);
+            if (
+              ctx.support ||
+              ctx.session.user.isSupportSession ||
+              !editor ||
+              !(await isAccessOwner(db, editor, now))
+            ) {
+              throw new TRPCError({
+                code: 'FORBIDDEN',
+                message: 'Only the workspace owner can change finance permissions.',
+              });
+            }
+            if (!pinVerified)
+              throw new TRPCError({
+                code: 'PRECONDITION_FAILED',
+                message:
+                  'Confirm this change with your authenticator code, or your PIN if your pharmacy uses PIN approvals.',
+              });
           }
-          if (!pinVerified)
-            throw new TRPCError({
-              code: 'PRECONDITION_FAILED',
-              message:
-                'Confirm this change with your authenticator code, or your PIN if your pharmacy uses PIN approvals.',
-            });
         }
         const saved = roleId
           ? await tx.organizationRole.update({ where: { id: roleId }, data: values })
