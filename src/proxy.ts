@@ -9,6 +9,9 @@ import {
 
 const TENANT_HOST_HEADER = 'x-devfathom-host';
 const REQUEST_ID_HEADER = 'x-devfathom-request-id';
+// DEV-961: the request method, for `resolveTenantActor`, which cannot see it in a server
+// component or server action. Always overwritten here, so a client cannot supply it.
+const REQUEST_METHOD_HEADER = 'x-devfathom-request-method';
 const INTERNAL_ORGANIZATION_QUERY = 'organizationId';
 
 const publicPaths = [
@@ -82,6 +85,7 @@ export async function proxy(request: Request) {
   // Host classification ignores ports, but downstream login redirects need the
   // original authority to keep local tenant navigation on the same dev server.
   requestHeaders.set(TENANT_HOST_HEADER, hostWithPort);
+  requestHeaders.set(REQUEST_METHOD_HEADER, request.method);
   requestHeaders.set(
     REQUEST_ID_HEADER,
     request.headers.get(REQUEST_ID_HEADER) ?? crypto.randomUUID()
