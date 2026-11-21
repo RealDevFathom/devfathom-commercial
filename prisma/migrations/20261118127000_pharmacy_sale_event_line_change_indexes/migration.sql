@@ -6,10 +6,14 @@
 --    whose payload names that "shiftId".
 --
 -- Both were filters on the JSON payload, which no index covered, so each read every sale event of
--- the branch. The application now writes each lookup as the expression indexed here
--- (src/lib/pharmacy/sales.ts lineChangeRecord, src/lib/pharmacy/cash-shifts.ts readShiftFigures).
--- Each index is partial: only events that carry the key are indexed, which is a small share of
--- the table. No row, policy or permission changes. Idempotent.
+-- the branch. Each index here is partial: it holds only the events that carry the key (a line
+-- change's CREATED event, a line void's VOIDED event), a small share of the table. Under the
+-- runtime role's row-level security the payload comparison is not leakproof, so PostgreSQL uses
+-- only the organisation and branch columns of the index and checks the key as a filter: each
+-- lookup reads the branch's line-change (or line-void) events, not every sale event. The
+-- application writes each lookup with the same predicate as its index (src/lib/pharmacy/sales.ts
+-- lineChangeRecord, src/lib/pharmacy/cash-shifts.ts readShiftFigures), so the index applies.
+-- No row, policy or permission changes. Idempotent.
 BEGIN;
 
 -- Building an index locks the table against writes until it is built. Give up rather than queue

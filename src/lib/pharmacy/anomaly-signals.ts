@@ -44,14 +44,15 @@ export type AnomalyFactSet = {
   staffVoid: Array<{
     branchId: string;
     userId: string;
-    /** Whole bills voided plus `lineVoidBills`. */
+    /** Whole bills voided plus `lineVoids`. */
     voidEvents: number;
     /**
-     * DEV-1004: bills whose lines were changed or removed at the counter and whose changes took
-     * value off overall, each counted once, and the net value they took off. Lowering a line and
-     * raising it again is not a void.
+     * DEV-1004: bill lines changed or removed at the counter whose changes took value off,
+     * each counted once, and the value they took off. A line nets only against the lines that
+     * replaced it in its own changes: lowering it and raising it again is not a void, and a
+     * removal is never offset by another line.
      */
-    lineVoidBills?: number;
+    lineVoids?: number;
     lineVoidNetMinor?: number;
     completedSales: number;
     occurredAt: Date;
@@ -136,17 +137,17 @@ const rateBps = (part: number, total: number) =>
 const money = (minor: number) => `PKR ${(minor / 100).toFixed(2)}`;
 
 /**
- * DEV-1004: what the void count is made of. Lines changed or removed on an open bill count once
- * per bill, by the net value taken off it: a quantity lowered and raised again is not a void.
+ * DEV-1004: what the void count is made of. A line changed or removed on an open bill counts
+ * once, by the value taken off it through its own changes; nothing on another line offsets it.
  */
 function staffVoidBreakdown(fact: {
   voidEvents: number;
-  lineVoidBills?: number;
+  lineVoids?: number;
   lineVoidNetMinor?: number;
 }): string {
-  const lineBills = fact.lineVoidBills ?? 0;
-  const wholeBills = fact.voidEvents - lineBills;
-  return `${wholeBills} ${wholeBills === 1 ? 'is a whole bill' : 'are whole bills'} voided and ${lineBills} ${lineBills === 1 ? 'is a bill' : 'are bills'} with lines taken off, ${money(fact.lineVoidNetMinor ?? 0)} net. Line changes count once per bill, by the net value they took off it: lowering a quantity and raising it again is not a void.`;
+  const lines = fact.lineVoids ?? 0;
+  const wholeBills = fact.voidEvents - lines;
+  return `${wholeBills} ${wholeBills === 1 ? 'is a whole bill' : 'are whole bills'} voided and ${lines} ${lines === 1 ? 'is a line' : 'are lines'} taken off bills, ${money(fact.lineVoidNetMinor ?? 0)} in all. A changed line counts by the value it lost through its own changes: lowering a quantity and raising it again is not a void. A removed line always counts in full; raising or adding another line does not offset it.`;
 }
 
 function finalize(
@@ -283,7 +284,7 @@ export function detectPharmacyAnomalies(
           scope: { branchId: fact.branchId, userId: fact.userId },
           exactNumbers: {
             voidEvents: fact.voidEvents,
-            lineVoidBills: fact.lineVoidBills ?? 0,
+            lineVoids: fact.lineVoids ?? 0,
             lineVoidNetMinor: fact.lineVoidNetMinor ?? 0,
             completedSales: fact.completedSales,
             voidRateBps,

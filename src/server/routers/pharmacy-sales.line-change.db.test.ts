@@ -980,7 +980,7 @@ describeIfDatabase('DEV-977B change and remove a bill line', () => {
     ]);
   });
 
-  it('counts a bill in the staff-void signal once, by the net value its changes took off (DEV-1004)', async () => {
+  it('counts each line in the staff-void signal by the value its own changes took off (DEV-1004)', async () => {
     const { readPharmacyAnomalyFacts } = await import('@/lib/pharmacy/anomaly-signals-operations');
     const today = workspaceToday('UTC');
     const cashierVoids = async () => {
@@ -990,35 +990,75 @@ describeIfDatabase('DEV-977B change and remove a bill line', () => {
       const row = facts.staffVoid.find((fact) => fact.userId === ids.cashierB);
       return {
         voidEvents: row?.voidEvents ?? 0,
-        lineVoidBills: row?.lineVoidBills ?? 0,
+        lineVoids: row?.lineVoids ?? 0,
         lineVoidNetMinor: row?.lineVoidNetMinor ?? 0,
       };
     };
-    const otc = await oneLot('Antacid void signal');
-    const before = await cashierVoids();
-    // 3 strips lowered to 1 and raised back to 3: nothing came off the bill overall.
-    const resized = await bill(ids.cashierB, [(id) => strip(otc, id, 3)]);
+    let expected = await cashierVoids();
+    const expectAdded = async (voids: number, minor: number) => {
+      expected = {
+        voidEvents: expected.voidEvents + voids,
+        lineVoids: expected.lineVoids + voids,
+        lineVoidNetMinor: expected.lineVoidNetMinor + minor,
+      };
+      expect(await cashierVoids()).toEqual(expected);
+    };
+    // A strip of the cheap medicine is PKR 20.00; of the dear one PKR 500.00.
+    const cheap = await oneLot('Antacid void signal', 600);
+    const dear = await stockedItem('Biologic void signal', [
+      { expiresAt: '2028-01-01', units: 60, mrp: 50_000 },
+    ]);
+    const lineOf = (saleId: string, saleLineId: string) => ({ saleId, saleLineId });
+
+    // 1. 3 strips lowered to 1 and raised back to 3: the line lost nothing.
+    const resized = await bill(ids.cashierB, [(id) => strip(cheap, id, 3)]);
     const lowered = await act(ids.cashierB, (api) =>
-      api.changeLine(change({ saleId: resized.saleId, saleLineId: resized.lineIds[0]! }, otc, 1))
+      api.changeLine(change(lineOf(resized.saleId, resized.lineIds[0]!), cheap, 1))
     );
     await act(ids.cashierB, (api) =>
-      api.changeLine(change({ saleId: resized.saleId, saleLineId: lowered.line.id }, otc, 3))
+      api.changeLine(change(lineOf(resized.saleId, lowered.line.id), cheap, 3))
     );
-    expect(await cashierVoids()).toEqual(before);
-    // A line genuinely removed from another bill still counts, with its value (one strip).
-    const removed = await bill(ids.cashierB, [
-      (id) => strip(otc, id, 1),
-      (id) => strip(otc, id, 2),
+    await expectAdded(0, 0);
+
+    // 2. 3 strips lowered to 1: one void, worth the 2 strips that came off.
+    const reduced = await bill(ids.cashierB, [(id) => strip(cheap, id, 3)]);
+    await act(ids.cashierB, (api) =>
+      api.changeLine(change(lineOf(reduced.saleId, reduced.lineIds[0]!), cheap, 1))
+    );
+    await expectAdded(1, 4_000);
+
+    // 3. The dear strip removed and the cheap line raised from 1 to 26 strips (worth as much):
+    //    the removal still counts in full.
+    const swapped = await bill(ids.cashierB, [
+      (id) => strip(dear, id, 1),
+      (id) => strip(cheap, id, 1),
     ]);
     await act(ids.cashierB, (api) =>
-      api.removeLine(remove({ saleId: removed.saleId, saleLineId: removed.lineIds[0]! }))
+      api.removeLine(remove(lineOf(swapped.saleId, swapped.lineIds[0]!)))
     );
-    expect(await cashierVoids()).toEqual({
-      voidEvents: before.voidEvents + 1,
-      lineVoidBills: before.lineVoidBills + 1,
-      lineVoidNetMinor: before.lineVoidNetMinor + 2000,
-    });
-  });
+    await act(ids.cashierB, (api) =>
+      api.changeLine(change(lineOf(swapped.saleId, swapped.lineIds[1]!), cheap, 26))
+    );
+    await expectAdded(1, 50_000);
+
+    // 4. The dear strip removed and a new cheap line added: the removal counts in full.
+    const replaced = await bill(ids.cashierB, [(id) => strip(dear, id, 1)]);
+    await act(ids.cashierB, (api) =>
+      api.removeLine(remove(lineOf(replaced.saleId, replaced.lineIds[0]!)))
+    );
+    await act(ids.cashierB, (api) => api.addLine(strip(cheap, replaced.saleId, 25)));
+    await expectAdded(1, 50_000);
+
+    // 5. Five times a strip added and removed again: five voids.
+    const cycled = await bill(ids.cashierB, []);
+    for (let cycle = 0; cycle < 5; cycle += 1) {
+      const added = await act(ids.cashierB, (api) => api.addLine(strip(cheap, cycled.saleId, 1)));
+      await act(ids.cashierB, (api) =>
+        api.removeLine(remove(lineOf(cycled.saleId, added.line.id)))
+      );
+    }
+    await expectAdded(5, 10_000);
+  }, 120_000);
 
   it('leaves a whole-bill discount given after a change out of the staff-void value (DEV-1004)', async () => {
     const { readPharmacyAnomalyFacts } = await import('@/lib/pharmacy/anomaly-signals-operations');
@@ -1031,7 +1071,7 @@ describeIfDatabase('DEV-977B change and remove a bill line', () => {
       const row = facts.staffVoid.find((fact) => fact.userId === ids.cashierB);
       return {
         voidEvents: row?.voidEvents ?? 0,
-        lineVoidBills: row?.lineVoidBills ?? 0,
+        lineVoids: row?.lineVoids ?? 0,
         lineVoidNetMinor: row?.lineVoidNetMinor ?? 0,
       };
     };
@@ -1076,7 +1116,7 @@ describeIfDatabase('DEV-977B change and remove a bill line', () => {
     await expect(discountTenPercent(trimmed.saleId)).resolves.toMatchObject({ status: 'APPLIED' });
     expect(await cashierVoids()).toEqual({
       voidEvents: before.voidEvents + 1,
-      lineVoidBills: before.lineVoidBills + 1,
+      lineVoids: before.lineVoids + 1,
       lineVoidNetMinor: before.lineVoidNetMinor + 2000,
     });
   });

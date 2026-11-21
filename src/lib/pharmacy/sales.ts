@@ -1117,8 +1117,9 @@ const ORDER_LINE_KEY = /^(customer-order|refill-cycle):/;
 
 /** The removal record written for this request key, if a committed attempt already made it. */
 async function lineChangeRecord(db: ScopedDb, scope: LedgerScope, idempotencyKey: string) {
-  // DEV-1004: written as the expression the index on a change's key reads (migration
-  // 20261118127000), so a change never scans every sale event of the branch.
+  // DEV-1004: written with the predicate of the partial index on line-change events (migration
+  // 20261118127000). Under row-level security the index narrows to this organisation and branch,
+  // and the key is checked over the branch's line-change events only, never every sale event.
   const [record] = await db.$queryRaw<{ saleId: string; payload: Prisma.JsonValue }[]>(Prisma.sql`
     SELECT "saleId", "payload" FROM "pharmacy_sale_events"
      WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}

@@ -54,8 +54,8 @@ type StaffVoidRow = {
   branchId: string;
   userId: string;
   voidEvents: number;
-  /** DEV-1004: of `voidEvents`, the bills whose line changes took value off them overall. */
-  lineVoidBills: number;
+  /** DEV-1004: of `voidEvents`, the bill lines whose changes took value off overall. */
+  lineVoids: number;
   lineVoidNetMinor: number;
   completedSales: number;
   occurredAt: Date;
@@ -151,26 +151,33 @@ export async function readPharmacyAnomalyFacts(
           GROUP BY r."branchId", r."actorId" ORDER BY MAX(r."createdAt") DESC LIMIT 200`);
 
   // DEV-1004: since DEV-977B a bill line lowered at the counter is taken off onto its own void
-  // record, so every reduction (3 to 1, and 1 back to 3) wrote a void. A bill whose lines were
-  // changed or removed now counts once, and only when those changes took value off it overall:
-  // the net of every line taken off (its value) less every line put back in its place. A line's
-  // whole-bill discount share is left out on both sides: a bill discount given later rewrites
-  // that share in place (bill-discount-service.ts) and is not a change of goods.
-  // Whole-bill voids count one each, as before.
-  const staffVoid =
+  // record, so every reduction (3 to 1, and 1 back to 3) wrote a void. Each line is now followed
+  // through its own changes: a quantity or unit change nets only against the line that replaced
+  // it, and that line against its own replacement, so 3 to 1 and back to 3 takes nothing off and
+  // 3 to 1 takes off the value of 2. A removal ends the line and counts its value in full.
+  // Nothing on one line offsets another line or another medicine: removing one line while
+  // raising or adding another still counts the removal, and each add-then-remove counts once.
+  // Values leave out a line's whole-bill discount share, which a bill discount given later
+  // rewrites in place (bill-discount-service.ts). The line is credited to whoever made its last
+  // change. Whole-bill voids count one each, as before. The shift report and the cash-close
+  // check still count every void (cash-shifts.ts, cash-close-check-operations.ts).
+  const staffVoidRows =
     filters.supplierId || filters.ingredientId || filters.batchId
       ? []
-      : await db.$queryRaw<StaffVoidRow[]>(Prisma.sql`
-          WITH window_events AS (
+      : await db.$queryRaw<
+          Array<Omit<StaffVoidRow, 'lineVoidNetMinor'> & { lineVoidNetMinor: bigint | number }>
+        >(Prisma.sql`
+          WITH RECURSIVE window_events AS (
             SELECT e."organizationId", e."branchId", e."actorId", e."kind", e."payload", e."occurredAt"
             FROM "pharmacy_sale_events" e
             WHERE e."branchId" IN (${branches}) AND e."occurredAt">=${events.from} AND e."occurredAt"<${events.to}
           ),
-          line_bills AS (
-            SELECT e."branchId", e."actorId" AS "userId", e."payload"->>'fromSaleId' AS "billId",
-                   SUM((moved."grossMinor"-(moved."discountMinor"-moved."billDiscountMinor"))
-                       - COALESCE(replacement."grossMinor"-(replacement."discountMinor"-replacement."billDiscountMinor"), 0))::int AS "netMinor",
-                   MAX(e."occurredAt") AS "occurredAt"
+          line_changes AS (
+            SELECT e."branchId", e."actorId", e."occurredAt", moved."id" AS "movedId",
+                   replacement."id" AS "replacementId",
+                   (moved."grossMinor"-(moved."discountMinor"-moved."billDiscountMinor"))::bigint
+                     - COALESCE((replacement."grossMinor"-(replacement."discountMinor"-replacement."billDiscountMinor"))::bigint, 0)
+                     AS "takenOffMinor"
             FROM window_events e
             JOIN "pharmacy_sale_lines" moved
               ON moved."organizationId"=e."organizationId" AND moved."id"=e."payload"->>'saleLineId'
@@ -178,36 +185,59 @@ export async function readPharmacyAnomalyFacts(
               ON e."payload"->>'cause'='LINE_CHANGED' AND replacement."organizationId"=e."organizationId"
              AND replacement."idempotencyKey"=e."payload"->>'lineChangeKey'
             WHERE e."kind"='CREATED' AND (e."payload"->>'lineChangeKey') IS NOT NULL
-            GROUP BY e."branchId", e."actorId", e."payload"->>'fromSaleId'
+          ),
+          line_chains AS (
+            SELECT c."movedId" AS "rootId", c."replacementId", c."takenOffMinor", c."branchId",
+                   c."actorId", c."occurredAt", 1 AS "depth"
+            FROM line_changes c
+            WHERE NOT EXISTS (SELECT 1 FROM line_changes earlier WHERE earlier."replacementId"=c."movedId")
+            UNION ALL
+            SELECT chain."rootId", next."replacementId", next."takenOffMinor", next."branchId",
+                   next."actorId", next."occurredAt", chain."depth"+1
+            FROM line_chains chain
+            JOIN line_changes next ON next."movedId"=chain."replacementId"
+          ),
+          line_voids AS (
+            SELECT (ARRAY_AGG("branchId" ORDER BY "depth" DESC))[1] AS "branchId",
+                   (ARRAY_AGG("actorId" ORDER BY "depth" DESC))[1] AS "userId",
+                   SUM("takenOffMinor") AS "netMinor", MAX("occurredAt") AS "occurredAt"
+            FROM line_chains
+            GROUP BY "rootId"
           ),
           staff_activity AS (
             SELECT e."branchId", e."actorId" AS "userId",
                    COUNT(*) FILTER (WHERE e."kind"='VOIDED' AND (e."payload"->>'fromSaleId') IS NULL)::int AS "voidEvents",
-                   0::int AS "lineVoidBills", 0::int AS "lineVoidNetMinor",
+                   0::int AS "lineVoids", 0::bigint AS "lineVoidNetMinor",
                    0::int AS "completedSales", MAX(e."occurredAt") AS "occurredAt"
             FROM window_events e
             GROUP BY e."branchId", e."actorId"
             UNION ALL
-            SELECT b."branchId", b."userId",
-                   COUNT(*) FILTER (WHERE b."netMinor">0)::int,
-                   COUNT(*) FILTER (WHERE b."netMinor">0)::int,
-                   COALESCE(SUM(b."netMinor") FILTER (WHERE b."netMinor">0), 0)::int,
-                   0::int, MAX(b."occurredAt")
-            FROM line_bills b
-            GROUP BY b."branchId", b."userId"
+            SELECT v."branchId", v."userId",
+                   COUNT(*) FILTER (WHERE v."netMinor">0)::int,
+                   COUNT(*) FILTER (WHERE v."netMinor">0)::int,
+                   COALESCE(SUM(v."netMinor") FILTER (WHERE v."netMinor">0), 0)::bigint,
+                   0::int, MAX(v."occurredAt")
+            FROM line_voids v
+            GROUP BY v."branchId", v."userId"
             UNION ALL
-            SELECT s."branchId", s."createdByUserId", 0::int, 0::int, 0::int, COUNT(*)::int, MAX(s."completedAt")
+            SELECT s."branchId", s."createdByUserId", 0::int, 0::int, 0::bigint, COUNT(*)::int, MAX(s."completedAt")
             FROM "pharmacy_sales" s
             WHERE s."branchId" IN (${branches}) AND s."status"='COMPLETED'
               AND s."businessDate">=${window.from} AND s."businessDate"<${window.to}
             GROUP BY s."branchId", s."createdByUserId"
           )
           SELECT "branchId", "userId", SUM("voidEvents")::int AS "voidEvents",
-                 SUM("lineVoidBills")::int AS "lineVoidBills",
-                 SUM("lineVoidNetMinor")::int AS "lineVoidNetMinor",
+                 SUM("lineVoids")::int AS "lineVoids",
+                 SUM("lineVoidNetMinor")::bigint AS "lineVoidNetMinor",
                  SUM("completedSales")::int AS "completedSales", MAX("occurredAt") AS "occurredAt"
           FROM staff_activity GROUP BY "branchId", "userId"
           ORDER BY MAX("occurredAt") DESC LIMIT 200`);
+  // The net value is summed as a 64-bit number in the database; it reaches the signal as a
+  // JavaScript number, exact for any total below 2^53 minor units.
+  const staffVoid: StaffVoidRow[] = staffVoidRows.map((row) => ({
+    ...row,
+    lineVoidNetMinor: Number(row.lineVoidNetMinor),
+  }));
 
   // A close that was superseded, or reopened for trading (DEV-631) and so awaiting the
   // close that restates the day, is not the day's standing close.

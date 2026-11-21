@@ -105,18 +105,26 @@ export async function withScimAuth(
   } catch (error) {
     if (error instanceof AccessChangeError) {
       // DEV-1004: the refused request rolled back, its event with it. Keep the FAILED event in a
-      // transaction of its own, as every other refused SCIM request keeps one.
-      await withTenantDb(credential.organizationId, (db) =>
-        recordScimEvent(
-          { organizationId: credential.organizationId, tokenId: credential.id, db },
-          request,
-          {
-            ...scimRequestResource(request),
-            status: 'FAILED',
-            error: error.message,
-          }
-        )
-      );
+      // transaction of its own, as every other refused SCIM request keeps one. The refusal stands
+      // whether or not that record can be written.
+      try {
+        await withTenantDb(credential.organizationId, (db) =>
+          recordScimEvent(
+            { organizationId: credential.organizationId, tokenId: credential.id, db },
+            request,
+            {
+              ...scimRequestResource(request),
+              status: 'FAILED',
+              error: error.message,
+            }
+          )
+        );
+      } catch (recordError) {
+        console.error('[scim] the FAILED event of a refused request could not be recorded', {
+          organizationId: credential.organizationId,
+          errorName: recordError instanceof Error ? recordError.name : null,
+        });
+      }
       return scimError(403, error.message);
     }
     throw error;

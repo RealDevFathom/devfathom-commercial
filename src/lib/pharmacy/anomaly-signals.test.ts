@@ -157,13 +157,13 @@ describe('AI-04 deterministic anomaly thresholds and explanations', () => {
     expect(detect(facts)).toEqual([]);
   });
 
-  it('explains what the void count is made of, and that line changes count by net value (DEV-1004)', () => {
+  it('explains what the void count is made of, and how a changed line counts (DEV-1004)', () => {
     const facts = empty();
     facts.staffVoid.push({
       branchId: 'branch_1',
       userId: 'cashier_1',
       voidEvents: 3,
-      lineVoidBills: 2,
+      lineVoids: 2,
       lineVoidNetMinor: 45_000,
       completedSales: 7,
       occurredAt: NOW,
@@ -172,12 +172,15 @@ describe('AI-04 deterministic anomaly thresholds and explanations', () => {
     const [signal] = detect(facts);
     expect(signal).toMatchObject({
       kind: 'VOID_ABUSE',
-      exactNumbers: { voidEvents: 3, lineVoidBills: 2, lineVoidNetMinor: 45_000 },
+      exactNumbers: { voidEvents: 3, lineVoids: 2, lineVoidNetMinor: 45_000 },
     });
     expect(signal!.explanation).toContain(
-      '1 is a whole bill voided and 2 are bills with lines taken off, PKR 450.00 net.'
+      '1 is a whole bill voided and 2 are lines taken off bills, PKR 450.00 in all.'
     );
     expect(signal!.explanation).toContain('lowering a quantity and raising it again is not a void');
+    expect(signal!.explanation).toContain(
+      'A removed line always counts in full; raising or adding another line does not offset it.'
+    );
   });
 
   it('uses the greater absolute/proportional cash materiality threshold', () => {
