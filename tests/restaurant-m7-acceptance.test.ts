@@ -640,9 +640,28 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
         data: { mode: 'WEBHOOK' },
       });
     });
-    const first = await deps.withTenantDb(orgId, (tx) =>
-      deps.webhookInbox.recordInboundWebhook(tx, input, T0)
-    );
+    const first = await deps.withTenantDb(orgId, async (tx) => {
+      const admitted = await deps.webhookInbox.recordInboundWebhook(tx, input, T0);
+      await deps.withTenantDb(orgId, async (other) => {
+        const locks = await other.$queryRaw<{ acquired: boolean }[]>`
+          SELECT pg_try_advisory_xact_lock(hashtextextended('restaurant:webhook:' || ${orgId}, 0)) AS acquired
+        `;
+        expect(locks).toEqual([{ acquired: false }]);
+        const providers = await other.$queryRaw<{ id: string }[]>`
+          SELECT id FROM restaurant_terminal_provider_configs WHERE source = ${input.source}
+          FOR UPDATE SKIP LOCKED
+        `;
+        expect(providers).toHaveLength(0);
+      });
+      return admitted;
+    });
+    await deps.withTenantDb(orgId, async (tx) => {
+      const providers = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM restaurant_terminal_provider_configs WHERE source = ${input.source}
+        FOR UPDATE NOWAIT
+      `;
+      expect(providers).toHaveLength(1);
+    });
     const duplicate = await deps.withTenantDb(orgId, (tx) =>
       deps.webhookInbox.recordInboundWebhook(tx, input, T0)
     );
@@ -709,6 +728,36 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
     expect(await db.restaurantJob.count({ where: pendingWhere })).toBe(limit);
     expect(await db.restaurantWebhookInbox.count({ where: { source: input.source } })).toBe(2);
     expect((await deps.webhookInbox.recordInboundWebhook(db, input, T0)).deduplicated).toBe(true);
+    // A second configured provider and a signed payment share the same business cap.
+    const provider = await db.restaurantTerminalProviderConfig.findFirstOrThrow({
+      where: { source: input.source },
+      select: { branchId: true, deviceId: true, externalTerminalId: true },
+    });
+    const secondSource = 'wha88-other-provider';
+    await db.restaurantTerminalProviderConfig.create({
+      data: { ...provider, source: secondSource, mode: 'WEBHOOK' },
+    });
+    await expect(
+      deps.webhookInbox.recordInboundWebhook(
+        db,
+        {
+          ...input,
+          source: secondSource,
+          externalEventId: 'other-provider-payment',
+          eventType: 'terminal.payment',
+          payload: {
+            terminalId: provider.externalTerminalId,
+            status: 'approved',
+            reference: 'fixture',
+            amount: '1.00',
+            staffProfileId: ids.operator,
+            providerReference: 'fixture',
+          },
+        },
+        T0
+      )
+    ).rejects.toMatchObject({ status: 429 });
+    expect(await db.restaurantWebhookInbox.count({ where: { source: secondSource } })).toBe(0);
   });
 
   it('freezes published templates, pins generated versions, and resolves both DST edges', async () => {

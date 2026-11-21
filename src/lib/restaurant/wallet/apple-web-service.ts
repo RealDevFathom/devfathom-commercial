@@ -220,8 +220,10 @@ export async function sendUpdatedApplePass(
 }
 
 export async function acceptAppleLogs(request: Request) {
-  const limited = await admitted(request);
-  if (limited) return limited;
+  const gate = await rateLimit(`wallet-apple:log:ip:${clientIp(request)}`, 600, 60_000);
+  if (!gate.ok) {
+    return new Response(null, { status: 429, headers: { 'Retry-After': String(gate.retryAfter) } });
+  }
   // Apple log entries can echo pass payloads. Never retain or reflect the body.
   const withinLimit = await consumeBoundedBody(request, 64_000).catch(() => true);
   if (!withinLimit) return new Response(null, { status: 413 });

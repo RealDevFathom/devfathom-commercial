@@ -8,7 +8,7 @@ import {
   type RestaurantWebhookVerificationStatus,
 } from '@/generated/prisma/client';
 import type { RestaurantJobHandler } from '@/lib/restaurant/job-handlers-core';
-import { enqueue } from '@/lib/restaurant/scheduler';
+import { enqueue, SchedulerError } from '@/lib/restaurant/scheduler';
 import { recordAudit } from '@/server/audit';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { processTerminalEvent, terminalEventSchema } from '@/lib/restaurant/terminal-payments';
@@ -266,6 +266,9 @@ export async function recordInboundWebhook(
       // externalEventId) first. Re-read and report it as a duplicate receipt,
       // unless an unauthenticated row won against an authenticated event: then
       // retry once so the promotion above replaces it.
+      if (error instanceof SchedulerError && error.reason === 'WEBHOOK_CAPACITY') {
+        throw new WebhookAdmissionError(429, error.message);
+      }
       if (isUniqueViolation(error)) {
         const existing = await runInboxTransaction(db, (tx) =>
           findExistingInbox(tx, input.source, input.externalEventId)

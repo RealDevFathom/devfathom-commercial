@@ -130,6 +130,7 @@ describe('Apple web-service authentication', () => {
       new Request('https://wallet.devfathom.com/api/wallet/apple?passesUpdatedSince=3'),
       params
     );
+    expect(state.rateLimit).toHaveBeenCalledWith('wallet-apple:ip:127.0.0.1', 120, 60_000);
     expect(updated.status).toBe(200);
     expect(await updated.json()).toEqual({
       serialNumbers: [params.serialNumber, 'wps_11111111111111111111111111'],
@@ -192,7 +193,7 @@ it('uses the Apple IP limit before consuming a log', async () => {
   state.rateLimit.mockReturnValueOnce({ ok: false, retryAfter: 19, remaining: 0 });
   const { request, bytesRead } = oversizedRequest(64_000);
   const response = await acceptAppleLogs(request);
-  expect(state.rateLimit).toHaveBeenCalledWith('wallet-apple:ip:127.0.0.1', 120, 60_000);
+  expect(state.rateLimit).toHaveBeenCalledWith('wallet-apple:log:ip:127.0.0.1', 600, 60_000);
   expect(response.status).toBe(429);
   expect(response.headers.get('Retry-After')).toBe('19');
   expect(bytesRead()).toBe(0);

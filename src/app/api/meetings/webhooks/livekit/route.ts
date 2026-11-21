@@ -12,7 +12,7 @@ const MAX_BODY_BYTES = 256 * 1024;
 const REJECTION = { error: 'Invalid webhook.' };
 
 export async function POST(request: Request) {
-  const gate = await rateLimit(`meetings-livekit:ip:${clientIp(request)}`, 120, 60_000);
+  const gate = await rateLimit(`meetings-livekit:ip:${clientIp(request)}`, 600, 60_000);
   if (!gate.ok) {
     return NextResponse.json(
       { error: 'Too many requests' },
@@ -20,7 +20,7 @@ export async function POST(request: Request) {
     );
   }
   const rawBody = await readBoundedBody(request, MAX_BODY_BYTES);
-  if (rawBody === null) return NextResponse.json(REJECTION, { status: 400 });
+  if (rawBody === null) return NextResponse.json(REJECTION, { status: 413 });
 
   const apiKey = process.env.LIVEKIT_API_KEY;
   const apiSecret = process.env.LIVEKIT_API_SECRET;

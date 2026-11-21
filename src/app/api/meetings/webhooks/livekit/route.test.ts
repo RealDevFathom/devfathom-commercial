@@ -71,13 +71,13 @@ describe('LiveKit webhook route', () => {
         body: '{}',
       })
     );
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(413);
     expect(mocks.verify).not.toHaveBeenCalled();
   });
 
   it('bounds a chunked request before verification or ingestion', async () => {
     const { request, cancelled, bytesRead } = oversizedRequest(256 * 1024);
-    expect((await POST(request)).status).toBe(400);
+    expect((await POST(request)).status).toBe(413);
     expect(cancelled()).toBe(true);
     expect(bytesRead()).toBeLessThanOrEqual(256 * 1024 + 16_384);
     expect(mocks.verify).not.toHaveBeenCalled();
@@ -88,7 +88,7 @@ describe('LiveKit webhook route', () => {
     mocks.rateLimit.mockResolvedValueOnce({ ok: false, retryAfter: 12 });
     const { request, bytesRead } = oversizedRequest(256 * 1024);
     const response = await POST(request);
-    expect(mocks.rateLimit).toHaveBeenCalledWith('meetings-livekit:ip:192.0.2.17', 120, 60_000);
+    expect(mocks.rateLimit).toHaveBeenCalledWith('meetings-livekit:ip:192.0.2.17', 600, 60_000);
     expect(response.status).toBe(429);
     expect(response.headers.get('Retry-After')).toBe('12');
     expect(bytesRead()).toBe(0);
