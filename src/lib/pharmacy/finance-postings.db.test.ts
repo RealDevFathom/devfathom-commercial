@@ -75,6 +75,8 @@ type Deps = {
   ledger: typeof import('./stock-ledger');
   operations: typeof import('./inventory-operations');
   sales: typeof import('./sales');
+  journal: typeof import('@/lib/finance/journal');
+  statements: typeof import('./financial-statements');
 };
 let deps: Deps;
 /** Branches whose sale-gate regulatory profile is seeded, mapped to the rule-set id. */
@@ -410,17 +412,29 @@ function totalFor(entry: Entry, accountCode: string, side: 'DEBIT' | 'CREDIT') {
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, postings, reports, receipts, ledger, operations, sales, roleGuard] =
-    await Promise.all([
-      import('@/lib/tenancy/scoped-db'),
-      import('./finance-postings'),
-      import('./finance-reports'),
-      import('./goods-receipt'),
-      import('./stock-ledger'),
-      import('./inventory-operations'),
-      import('./sales'),
-      import('@/lib/testing/rls-role-guard'),
-    ]);
+  const [
+    scopedDb,
+    postings,
+    reports,
+    receipts,
+    ledger,
+    operations,
+    sales,
+    roleGuard,
+    journal,
+    statements,
+  ] = await Promise.all([
+    import('@/lib/tenancy/scoped-db'),
+    import('./finance-postings'),
+    import('./finance-reports'),
+    import('./goods-receipt'),
+    import('./stock-ledger'),
+    import('./inventory-operations'),
+    import('./sales'),
+    import('@/lib/testing/rls-role-guard'),
+    import('@/lib/finance/journal'),
+    import('./financial-statements'),
+  ]);
   deps = {
     withTenantDb: scopedDb.withTenantDb,
     withPlatformDb: scopedDb.withPlatformDb,
@@ -430,6 +444,8 @@ beforeAll(async () => {
     ledger,
     operations,
     sales,
+    journal,
+    statements,
   };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
   // Integrated tip (20261012120000_visibility_context_anchors): tenant rows must reference an
@@ -1185,8 +1201,9 @@ describeIfDatabase('FIN-01 — stock operations post their own journal entries',
   const entriesFor = (db: ScopedDb, sourceKind: FinanceSourceKind, sourceId: string) =>
     db.financeJournalEntry.findMany({
       where: { organizationId: ORG_A, sourceKind, sourceId },
-      include: { lines: true },
-      orderBy: { createdAt: 'asc' },
+      include: { lines: { orderBy: { id: 'asc' } } },
+      // An entry and its reversal can share a createdAt; id breaks the tie in posting order.
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
   const net = (entries: Entry[], accountCode: string) =>
     entries
@@ -1310,6 +1327,164 @@ describeIfDatabase('FIN-01 — stock operations post their own journal entries',
     expect(entries).toHaveLength(1);
     expectBalanced(entries[0]!);
     expect(totalFor(entries[0]!, 'INVENTORY_SHRINKAGE', 'DEBIT')).toBe(3_500);
+  });
+});
+
+// DEV-1006: with no ORDER BY, PostgreSQL returns an entry's legs in the order its plan yields.
+// Through the (organizationId, accountCode, branchId) index that is account-code order, which
+// made the FIN-01 return case compare one read of a sale's legs against another and fail now and
+// then. Every entry below is written with its legs in DESCENDING id order, and the leg with the
+// higher id is also the one whose account code sorts first. Heap order and account-code order
+// therefore both disagree with posting (id) order: only an explicit ORDER BY id reads them back
+// ascending, so each case fails deterministically without it.
+describeIfDatabase('FIN-01 — ledger legs read back in posting order', () => {
+  const AT = new Date('2026-09-04T09:00:00.000Z');
+  const ORDER_BRANCH = branch('posting-order');
+  type Leg = [
+    id: string,
+    accountCode: 'INVENTORY' | 'OPENING_BALANCE_EQUITY',
+    side: 'DEBIT' | 'CREDIT',
+  ];
+
+  /** An opening-stock entry of 1 250 whose legs are inserted highest id first. */
+  async function writeEntry(db: ScopedDb, label: string, reversal?: { reversesEntryId: string }) {
+    await ensureBranch(db, ORG_A, ORDER_BRANCH);
+    const entryId = `je_order_${label}_${suffix}`;
+    await db.financeJournalEntry.create({
+      data: {
+        id: entryId,
+        organizationId: ORG_A,
+        branchId: ORDER_BRANCH,
+        sourceKind: 'PHARMACY_OPENING_STOCK',
+        sourceId: reversal ? reversal.reversesEntryId : entryId,
+        description: `Posting order ${label}`,
+        actorId: ACTOR,
+        occurredAt: AT,
+        idempotencyKey: `order-${label}-${suffix}`,
+        ...(reversal
+          ? { reversesEntryId: reversal.reversesEntryId, reversalReason: 'Posting order check' }
+          : {}),
+      },
+    });
+    const legs: Leg[] = reversal
+      ? [
+          [`jl_order_${label}_z_${suffix}`, 'INVENTORY', 'CREDIT'],
+          [`jl_order_${label}_a_${suffix}`, 'OPENING_BALANCE_EQUITY', 'DEBIT'],
+        ]
+      : [
+          [`jl_order_${label}_z_${suffix}`, 'INVENTORY', 'DEBIT'],
+          [`jl_order_${label}_a_${suffix}`, 'OPENING_BALANCE_EQUITY', 'CREDIT'],
+        ];
+    for (const [id, accountCode, side] of legs) {
+      await db.financeJournalLine.create({
+        data: {
+          id,
+          organizationId: ORG_A,
+          entryId,
+          accountCode,
+          side,
+          amountMinor: 1_250,
+          branchId: ORDER_BRANCH,
+        },
+      });
+    }
+    // Ascending id: the order every read must return, whatever the plan.
+    return { entryId, legs: [...legs].reverse() };
+  }
+  const legsOf = (
+    lines: Array<{ id: string; accountCode: string; side: string; amountMinor: number }>
+  ) => lines.map((leg) => [leg.id, leg.accountCode, leg.side, leg.amountMinor]);
+  const expected = (legs: Leg[]) =>
+    legs.map(([id, accountCode, side]) => [id, accountCode, side, 1_250]);
+
+  it('returns a fresh posting and an idempotent replay with every leg in posting order', async () => {
+    const result = await inOrg(ORG_A, async (db) => {
+      const written = await writeEntry(db, 'replay');
+      const replayed = await deps.journal.postJournalEntry(
+        db,
+        { organizationId: ORG_A, actorId: ACTOR },
+        {
+          sourceKind: 'PHARMACY_OPENING_STOCK',
+          sourceId: written.entryId,
+          description: 'Posting order replay',
+          occurredAt: AT,
+          idempotencyKey: `order-replay-${suffix}`,
+          branchId: ORDER_BRANCH,
+          lines: [
+            { accountCode: 'INVENTORY', side: 'DEBIT', amountMinor: 1_250 },
+            { accountCode: 'OPENING_BALANCE_EQUITY', side: 'CREDIT', amountMinor: 1_250 },
+          ],
+        }
+      );
+      // Given credit first: account-code order would put the INVENTORY debit first.
+      const fresh = await deps.journal.postJournalEntry(
+        db,
+        { organizationId: ORG_A, actorId: ACTOR },
+        {
+          sourceKind: 'PHARMACY_OPENING_STOCK',
+          sourceId: `order-fresh-${suffix}`,
+          description: 'Posting order fresh',
+          occurredAt: AT,
+          idempotencyKey: `order-fresh-${suffix}`,
+          branchId: ORDER_BRANCH,
+          lines: [
+            { accountCode: 'OPENING_BALANCE_EQUITY', side: 'CREDIT', amountMinor: 900 },
+            { accountCode: 'INVENTORY', side: 'DEBIT', amountMinor: 900 },
+          ],
+        }
+      );
+      return { written, replayed, fresh };
+    });
+
+    expect(result.replayed.id).toBe(result.written.entryId);
+    expect(legsOf(result.replayed.lines)).toEqual(expected(result.written.legs));
+    expect(result.fresh.lines.map((leg) => [leg.accountCode, leg.side, leg.amountMinor])).toEqual([
+      ['OPENING_BALANCE_EQUITY', 'CREDIT', 900],
+      ['INVENTORY', 'DEBIT', 900],
+    ]);
+    expect(result.fresh.lines.map((leg) => leg.id)).toEqual(
+      result.fresh.lines.map((leg) => leg.id).sort()
+    );
+  });
+
+  it('returns an existing reversal with every leg in posting order', async () => {
+    const result = await inOrg(ORG_A, async (db) => {
+      const original = await writeEntry(db, 'reversed');
+      const reversal = await writeEntry(db, 'reversal', { reversesEntryId: original.entryId });
+      return {
+        reversal,
+        replayed: await deps.journal.reverseJournalEntry(
+          db,
+          { organizationId: ORG_A, actorId: ACTOR },
+          {
+            entryId: original.entryId,
+            reason: 'Posting order check',
+            at: AT,
+            idempotencyKey: `order-reversal-replay-${suffix}`,
+          }
+        ),
+      };
+    });
+
+    expect(result.replayed.id).toBe(result.reversal.entryId);
+    expect(legsOf(result.replayed.lines)).toEqual(expected(result.reversal.legs));
+  });
+
+  it('shows each journal entry on the statements page with its legs in posting order', async () => {
+    const result = await inOrg(ORG_A, async (db) => {
+      const shown = await writeEntry(db, 'statements');
+      const statements = await deps.statements.financialStatements(
+        db,
+        { organizationId: ORG_A, branchId: ORDER_BRANCH },
+        { from: WINDOW.from, to: WINDOW.to, page: 1 }
+      );
+      return { shown, entry: statements.journal.find((entry) => entry.id === shown.entryId) };
+    });
+
+    expect(result.entry).toBeDefined();
+    expect(
+      result.entry!.lines.map((leg) => [leg.id, leg.accountCode, leg.side, leg.amountMinor])
+    ).toEqual(expected(result.shown.legs));
   });
 });
 
