@@ -2,6 +2,7 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { lockStockBalances } from './stock-lock-order';
 
 /**
  * PH-OFF / OFF-03 — multi-counter stock ownership by per-device lot quotas.
@@ -107,19 +108,28 @@ export async function grantDeviceLotQuota(
 
   // Orders, refills and supplier claims lock this same balance before reserving.
   // Read reservations in a fresh statement after any concurrent writer commits.
+  await lockStockBalances(db, scope, [
+    {
+      inventoryLotId: input.inventoryLotId,
+      stockLocationId: input.stockLocationId,
+      disposition: 'AVAILABLE',
+    },
+  ]);
   const bucket = Prisma.sql`"organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}
     AND "inventoryLotId" = ${input.inventoryLotId} AND "stockLocationId" = ${input.stockLocationId}`;
-  const balances = await db.$queryRaw<Array<{ onHandUnits: number }>>(Prisma.sql`
-    SELECT "onHandUnits" FROM pharmacy_stock_balances WHERE ${bucket} AND disposition = 'AVAILABLE' FOR UPDATE`);
-  const [reserved] = await db.$queryRaw<Array<{ units: bigint }>>(Prisma.sql`
-    SELECT COALESCE((SELECT SUM("reservedUnits") FROM pharmacy_supplier_claims
-             WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}
-               AND "inventoryLotId" = ${input.inventoryLotId} AND status = 'RESERVED'), 0)
-         + COALESCE((SELECT SUM("reservedUnits") FROM pharmacy_restock_reservations
-             WHERE ${bucket} AND status = 'RESERVED'), 0)
-         + COALESCE((SELECT SUM("quotaUnits" - "consumedUnits") FROM pharmacy_device_lot_quotas
-             WHERE ${bucket} AND "releasedAt" IS NULL), 0) AS units`);
-  if (balances[0] && Number(reserved?.units ?? 0) + input.units > balances[0].onHandUnits)
+  const [balance] = await db.$queryRaw<
+    Array<{ onHandUnits: number; reservedUnits: bigint }>
+  >(Prisma.sql`
+    SELECT "onHandUnits",
+      COALESCE((SELECT SUM("reservedUnits") FROM pharmacy_supplier_claims
+        WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}
+          AND "inventoryLotId" = ${input.inventoryLotId} AND status = 'RESERVED'), 0)
+      + COALESCE((SELECT SUM("reservedUnits") FROM pharmacy_restock_reservations
+        WHERE ${bucket} AND status = 'RESERVED'), 0)
+      + COALESCE((SELECT SUM("quotaUnits" - "consumedUnits") FROM pharmacy_device_lot_quotas
+        WHERE ${bucket} AND "releasedAt" IS NULL), 0) AS "reservedUnits"
+    FROM pharmacy_stock_balances WHERE ${bucket} AND disposition = 'AVAILABLE'`);
+  if (balance && Number(balance.reservedUnits) + input.units > balance.onHandUnits)
     throw new PharmacyQuotaError('QUOTA_EXCEEDS_ON_HAND');
 
   try {
