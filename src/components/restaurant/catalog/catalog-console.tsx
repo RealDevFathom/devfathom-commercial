@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useMemo, useState, useTransition, type FormEvent, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
@@ -967,7 +969,7 @@ export function RestaurantCatalogConsole({
                             }
                           }}
                         >
-                          <select
+                          <StudioSelect
                             aria-label="Modifier group to attach"
                             name="modifierGroupId"
                             required
@@ -990,7 +992,7 @@ export function RestaurantCatalogConsole({
                                   {group.name}
                                 </option>
                               ))}
-                          </select>
+                          </StudioSelect>
                           <Button type="submit" className="min-h-11" disabled={busy}>
                             Attach
                           </Button>
@@ -1048,7 +1050,7 @@ export function RestaurantCatalogConsole({
                             }
                           }}
                         >
-                          <select
+                          <StudioSelect
                             aria-label="Allergen to attach to product"
                             name="allergenId"
                             required
@@ -1071,7 +1073,7 @@ export function RestaurantCatalogConsole({
                                   {allergen.name}
                                 </option>
                               ))}
-                          </select>
+                          </StudioSelect>
                           <Button type="submit" className="min-h-11" disabled={busy}>
                             Attach
                           </Button>
@@ -1120,8 +1122,8 @@ export function RestaurantCatalogConsole({
                             Configure required choices and their component products.
                           </p>
                           <p className="text-sm text-text-muted">
-                            Combos cannot be added to menus or ordered until the order flow
-                            supports combo selections.
+                            Combos cannot be added to menus or ordered until the order flow supports
+                            combo selections.
                           </p>
                         </div>
                         {canWrite ? (
@@ -1906,7 +1908,7 @@ export function RestaurantCatalogConsole({
                         }
                       }}
                     >
-                      <select
+                      <StudioSelect
                         aria-label="Allergen to attach to ingredient"
                         name="allergenId"
                         required
@@ -1929,7 +1931,7 @@ export function RestaurantCatalogConsole({
                               {allergen.name}
                             </option>
                           ))}
-                      </select>
+                      </StudioSelect>
                       <Button type="submit" className="min-h-11" disabled={busy}>
                         Attach
                       </Button>
@@ -2334,7 +2336,7 @@ export function RestaurantCatalogConsole({
                                                   }
                                                 }}
                                               >
-                                                <select
+                                                <StudioSelect
                                                   aria-label="Approved substitute ingredient"
                                                   name="substituteIngredientId"
                                                   required
@@ -2363,7 +2365,7 @@ export function RestaurantCatalogConsole({
                                                         {ingredient.name}
                                                       </option>
                                                     ))}
-                                                </select>
+                                                </StudioSelect>
                                                 <Button
                                                   type="submit"
                                                   size="sm"
@@ -2493,7 +2495,7 @@ export function RestaurantCatalogConsole({
                       />
                     </Field>
                     <Field label="Parent category">
-                      <select
+                      <StudioSelect
                         name="parentId"
                         defaultValue={editor.item?.parentId ?? ''}
                         className={selectClass}
@@ -2506,7 +2508,7 @@ export function RestaurantCatalogConsole({
                               {category.name}
                             </option>
                           ))}
-                      </select>
+                      </StudioSelect>
                     </Field>
                     <Field label="Sort order">
                       <Input
@@ -2539,15 +2541,15 @@ export function RestaurantCatalogConsole({
                     </Field>
                     {!editor.item ? (
                       <Field label="Product type">
-                        <select name="type" defaultValue="ITEM" className={selectClass}>
+                        <StudioSelect name="type" defaultValue="ITEM" className={selectClass}>
                           <option value="ITEM">Item</option>
                           <option value="COMBO">Combo</option>
-                        </select>
+                        </StudioSelect>
                       </Field>
                     ) : null}
                     <div className="grid gap-4 sm:grid-cols-2">
                       <Field label="Category">
-                        <select
+                        <StudioSelect
                           name="categoryId"
                           defaultValue={editor.item?.categoryId ?? ''}
                           className={selectClass}
@@ -2558,7 +2560,7 @@ export function RestaurantCatalogConsole({
                               {category.name}
                             </option>
                           ))}
-                        </select>
+                        </StudioSelect>
                       </Field>
                       <Field label="Sort order">
                         <Input
@@ -2626,7 +2628,7 @@ export function RestaurantCatalogConsole({
                     ) : (
                       <>
                         <Field label="Component product">
-                          <select
+                          <StudioSelect
                             name="productId"
                             required
                             value={editor.productId ?? ''}
@@ -2645,17 +2647,17 @@ export function RestaurantCatalogConsole({
                                   {product.name}
                                 </option>
                               ))}
-                          </select>
+                          </StudioSelect>
                         </Field>
                         <Field label="Variant (optional)">
-                          <select name="variantId" defaultValue="" className={selectClass}>
+                          <StudioSelect name="variantId" defaultValue="" className={selectClass}>
                             <option value="">All variants</option>
                             {productsById.get(editor.productId ?? '')?.variants.map((variant) => (
                               <option key={variant.id} value={variant.id}>
                                 {variant.name}
                               </option>
                             ))}
-                          </select>
+                          </StudioSelect>
                         </Field>
                       </>
                     )}
@@ -2812,7 +2814,7 @@ export function RestaurantCatalogConsole({
                   <>
                     <div className="grid gap-4 sm:grid-cols-2">
                       <Field label="From unit">
-                        <select
+                        <StudioSelect
                           name="fromUnitId"
                           required
                           defaultValue={editor.item?.fromUnitId ?? ''}
@@ -2827,10 +2829,10 @@ export function RestaurantCatalogConsole({
                               {unit.name}
                             </option>
                           ))}
-                        </select>
+                        </StudioSelect>
                       </Field>
                       <Field label="To unit">
-                        <select
+                        <StudioSelect
                           name="toUnitId"
                           required
                           defaultValue={editor.item?.toUnitId ?? ''}
@@ -2845,7 +2847,7 @@ export function RestaurantCatalogConsole({
                               {unit.name}
                             </option>
                           ))}
-                        </select>
+                        </StudioSelect>
                       </Field>
                     </div>
                     {editor.item ? (
@@ -2884,7 +2886,7 @@ export function RestaurantCatalogConsole({
                     </Field>
                     <div className="grid gap-4 sm:grid-cols-2">
                       <Field label="Base unit">
-                        <select
+                        <StudioSelect
                           name="baseUnitId"
                           required
                           defaultValue={editor.item?.baseUnitId ?? ''}
@@ -2898,7 +2900,7 @@ export function RestaurantCatalogConsole({
                               {unit.name}
                             </option>
                           ))}
-                        </select>
+                        </StudioSelect>
                       </Field>
                       <Field label="Reference cost">
                         <Input
@@ -2920,7 +2922,7 @@ export function RestaurantCatalogConsole({
                       <Input name="name" required maxLength={200} className="h-11" />
                     </Field>
                     <Field label="Product">
-                      <select
+                      <StudioSelect
                         name="productId"
                         required
                         value={editor.productId}
@@ -2937,17 +2939,17 @@ export function RestaurantCatalogConsole({
                             {product.name}
                           </option>
                         ))}
-                      </select>
+                      </StudioSelect>
                     </Field>
                     <Field label="Variant">
-                      <select name="variantId" defaultValue="" className={selectClass}>
+                      <StudioSelect name="variantId" defaultValue="" className={selectClass}>
                         <option value="">All variants</option>
                         {productsById.get(editor.productId)?.variants.map((variant) => (
                           <option key={variant.id} value={variant.id}>
                             {variant.name}
                           </option>
                         ))}
-                      </select>
+                      </StudioSelect>
                     </Field>
                   </>
                 ) : null}
@@ -2966,7 +2968,7 @@ export function RestaurantCatalogConsole({
                         />
                       </Field>
                       <Field label="Yield unit">
-                        <select
+                        <StudioSelect
                           name="yieldUnitId"
                           defaultValue={editor.item?.yieldUnitId ?? ''}
                           className={selectClass}
@@ -2977,7 +2979,7 @@ export function RestaurantCatalogConsole({
                               {unit.name}
                             </option>
                           ))}
-                        </select>
+                        </StudioSelect>
                       </Field>
                     </div>
                     <Field label="Portion count">
@@ -3009,7 +3011,7 @@ export function RestaurantCatalogConsole({
                     ) : (
                       <>
                         <Field label="Source type">
-                          <select
+                          <StudioSelect
                             value={editor.sourceType}
                             className={selectClass}
                             onChange={(event) =>
@@ -3021,12 +3023,17 @@ export function RestaurantCatalogConsole({
                           >
                             <option value="ingredient">Ingredient</option>
                             <option value="recipe">Sub-recipe</option>
-                          </select>
+                          </StudioSelect>
                         </Field>
                         <Field
                           label={editor.sourceType === 'ingredient' ? 'Ingredient' : 'Sub-recipe'}
                         >
-                          <select name="sourceId" required defaultValue="" className={selectClass}>
+                          <StudioSelect
+                            name="sourceId"
+                            required
+                            defaultValue=""
+                            className={selectClass}
+                          >
                             <option value="" disabled>
                               Select source
                             </option>
@@ -3043,7 +3050,7 @@ export function RestaurantCatalogConsole({
                                       {recipe.name}
                                     </option>
                                   ))}
-                          </select>
+                          </StudioSelect>
                         </Field>
                       </>
                     )}
@@ -3060,7 +3067,7 @@ export function RestaurantCatalogConsole({
                         />
                       </Field>
                       <Field label="Unit">
-                        <select
+                        <StudioSelect
                           name="unitId"
                           required
                           defaultValue={editor.item?.unitId ?? ''}
@@ -3074,7 +3081,7 @@ export function RestaurantCatalogConsole({
                               {unit.name}
                             </option>
                           ))}
-                        </select>
+                        </StudioSelect>
                       </Field>
                       <Field label="Sort order">
                         <Input

@@ -271,8 +271,16 @@ describe('pharmacy registration, mockup screen 2', () => {
     expect(screen.getByLabelText('Legal business name')).toHaveValue('Local pharmacy');
     expect(screen.getByText('licence.pdf')).toBeInTheDocument();
     for (const label of ['Legal business name', 'Province', 'Licence copy']) {
-      expect(screen.getByLabelText(label)).toHaveAttribute('aria-invalid', 'true');
-      expect(screen.getByLabelText(label)).toHaveAttribute('aria-describedby');
+      expect(
+        screen.getByLabelText(label, {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ).toHaveAttribute('aria-invalid', 'true');
+      expect(
+        screen.getByLabelText(label, {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ).toHaveAttribute('aria-describedby');
     }
     expect(screen.getByRole('button', { name: 'Request workspace' })).toBeEnabled();
     expect(mocks.replace).not.toHaveBeenCalled();

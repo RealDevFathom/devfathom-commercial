@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -188,14 +189,18 @@ export function VoucherPanel({
               <div className="grid gap-4 sm:grid-cols-2">
                 <label className="block text-sm">
                   Approver
-                  <select className={control} name="approverId" defaultValue={approvers[0]!.id}>
+                  <StudioSelect
+                    className={control}
+                    name="approverId"
+                    defaultValue={approvers[0]!.id}
+                  >
                     {approvers.map((approver) => (
                       <option key={approver.id} value={approver.id}>
                         {approver.name}
                         {approver.self ? ' (you)' : ''}
                       </option>
                     ))}
-                  </select>
+                  </StudioSelect>
                 </label>
                 <label className="block text-sm">
                   Approver PIN

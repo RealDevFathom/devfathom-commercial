@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { type FormEvent, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -88,7 +90,9 @@ export function TenderPad({
       return;
     }
     if (type === 'CARD' && !REFERENCE.test(reference.trim())) {
-      setError('Enter the last 4 digits or the card machine reference. Never the full card number.');
+      setError(
+        'Enter the last 4 digits or the card machine reference. Never the full card number.'
+      );
       return;
     }
 
@@ -152,7 +156,7 @@ export function TenderPad({
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor={`tender-type-${billId}`}>Tender type</Label>
-          <select
+          <StudioSelect
             id={`tender-type-${billId}`}
             value={type}
             disabled={pending || disabled || result?.settled}
@@ -165,7 +169,7 @@ export function TenderPad({
             <option value="CASH">Cash</option>
             <option value="CARD">Card (confirmed on card machine)</option>
             <option value="OTHER">Other</option>
-          </select>
+          </StudioSelect>
         </div>
         <div className="space-y-1.5">
           <Label htmlFor={`tender-amount-${billId}`}>Amount</Label>

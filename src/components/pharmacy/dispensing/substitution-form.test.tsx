@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { SubstitutionForm } from './substitution-form';
@@ -14,9 +15,16 @@ describe('SubstitutionForm', () => {
     );
     const button = screen.getByRole('button', { name: 'Record substitution' });
     expect(button).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Supplied presentation'), {
-      target: { value: 'replacement' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Supplied presentation', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'replacement' },
+      }
+    );
     fireEvent.change(screen.getByLabelText('Equivalence basis'), {
       target: { value: 'Same active ingredient and strength' },
     });

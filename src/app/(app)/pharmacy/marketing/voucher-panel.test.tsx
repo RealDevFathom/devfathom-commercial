@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { VoucherPanel, voucherState, type VoucherPanelVoucher } from './voucher-panel';
@@ -75,7 +76,13 @@ it('DEV-780: the owner sets the use limit when issuing and the form posts it', a
     target: { value: 'Rs 150 off gift sets.' },
   });
   fireEvent.click(screen.getByLabelText(/I reviewed the code, value, use limit/));
-  expect(screen.getByLabelText('Approver')).toHaveValue('staff-b');
+  expect(
+    selectFieldControl(
+      screen.getByLabelText('Approver', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    )
+  ).toHaveValue('staff-b');
   fireEvent.click(screen.getByRole('button', { name: 'Issue voucher' }));
   await waitFor(() => expect(action).toHaveBeenCalledTimes(1));
   const data = action.mock.calls[0]![0] as FormData;
@@ -96,7 +103,7 @@ it('DEV-780: tells a solo owner to re-enter their own PIN above the cap', () => 
     />
   );
   expect(screen.getByText(/You are the only approver, so re-enter your own PIN/)).toBeVisible();
-  expect(screen.getByRole('option', { name: 'Owner A (you)' })).toBeInTheDocument();
+  expect(screen.getByRole('option', { hidden: true, name: 'Owner A (you)' })).toBeInTheDocument();
 });
 
 it('DEV-780: disables issuing while vouchers cannot be loaded', () => {

@@ -151,7 +151,7 @@ describe('tax profile review page', () => {
     profiles[1].status = 'DRAFT';
     await show();
     expect(screen.getByRole('button', { name: 'Compare recorded evidence' })).toBeDisabled();
-    expect(screen.queryByRole('option', { name: /v2/ })).toBeNull();
+    expect(screen.queryByRole('option', { hidden: true, name: /v2/ })).toBeNull();
     noDownload();
   });
 

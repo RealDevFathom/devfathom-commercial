@@ -160,7 +160,7 @@ async function enterDemo(page: Page, perspective: Perspective, selectedSeat = se
   } else if (perspective.key === 'finance') {
     await expect(page.getByRole('heading', { name: 'Finance unavailable' })).toHaveCount(0);
     await expect(page.getByRole('tab', { name: 'Payments', exact: true })).toBeVisible();
-    await expect(page.getByLabel('Branch', { exact: true })).toBeEnabled();
+    await expect(page.getByRole('combobox', { name: 'Branch', exact: true })).toBeEnabled();
   }
   return { page, user, terminal };
 }

@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useActionState, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
@@ -207,7 +209,7 @@ export function ReceivingForm({
                     {label}
                     {field === 'discrepancyKind' ? (
                       <>
-                        <select
+                        <StudioSelect
                           {...fieldProps(name)}
                           disabled={uncertain || disabled}
                           className="mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
@@ -219,7 +221,7 @@ export function ReceivingForm({
                           <option value="EXPIRED">Expired</option>
                           <option value="REJECTED">Rejected</option>
                           <option value="OTHER">Other</option>
-                        </select>
+                        </StudioSelect>
                         {uncertain && <input type="hidden" name={name} value={values[name]} />}
                       </>
                     ) : (

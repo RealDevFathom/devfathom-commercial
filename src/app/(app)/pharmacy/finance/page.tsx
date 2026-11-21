@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { browserUuid } from '@/lib/browser-uuid';
 import { FinancialStatements } from './financial-statements';
 import { Suspense } from 'react';
@@ -433,13 +434,13 @@ export default async function PharmacyFinancePage({
           )}
           <label className="min-w-64 text-sm text-text-body">
             Branch
-            <select className={inputClass} name="branch" defaultValue={branch.id}>
+            <StudioSelect className={inputClass} name="branch" defaultValue={branch.id}>
               {branches.map((item) => (
                 <option value={item.id} key={item.id}>
                   {item.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <Button type="submit" variant="secondary">
             Switch branch
@@ -489,14 +490,14 @@ export default async function PharmacyFinancePage({
             </label>
             <label className="text-sm text-text-body">
               Tender type
-              <select className={inputClass} name="tenderType">
+              <StudioSelect className={inputClass} name="tenderType">
                 <option value="CARD">Card</option>
                 <option value="WALLET">Wallet</option>
                 <option value="BANK_TRANSFER">Bank transfer</option>
                 <option value="RAAST">Raast</option>
                 <option value="JAZZCASH">JazzCash</option>
                 <option value="EASYPAISA">Easypaisa</option>
-              </select>
+              </StudioSelect>
             </label>
             <fieldset className="space-y-2 md:col-span-2">
               <legend className="text-sm text-text-body">Unsettled POS tenders</legend>
@@ -554,7 +555,7 @@ export default async function PharmacyFinancePage({
             <input type="hidden" name="branchId" value={branch.id} />
             <label className="text-sm text-text-body">
               Workflow
-              <select className={inputClass} name="transactionKind" required>
+              <StudioSelect className={inputClass} name="transactionKind" required>
                 {[
                   'SUPPLIER_PAYMENT',
                   'CUSTOMER_RECEIPT',
@@ -569,7 +570,7 @@ export default async function PharmacyFinancePage({
                     {label(kind)}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <label className="text-sm text-text-body">
               Reference
@@ -611,10 +612,10 @@ export default async function PharmacyFinancePage({
             </label>
             <label className="text-sm text-text-body">
               Pay from / receive into
-              <select className={inputClass} name="fundingAccount">
+              <StudioSelect className={inputClass} name="fundingAccount">
                 <option value="BANK">Bank</option>
                 <option value="CASH">Cash / petty cash</option>
-              </select>
+              </StudioSelect>
             </label>
             <label className="text-sm text-text-body">
               Bank reference
@@ -797,7 +798,7 @@ export default async function PharmacyFinancePage({
               <input type="hidden" name="branchId" value={branch.id} />
               <label className="text-sm">
                 Bank or wallet statement line
-                <select className={inputClass} name="statementLineId" required>
+                <StudioSelect className={inputClass} name="statementLineId" required>
                   {workspace.bankLines
                     .filter((line) => line.status === 'UNMATCHED' && line.amountMinor > 0)
                     .map((line) => (
@@ -805,11 +806,11 @@ export default async function PharmacyFinancePage({
                         {line.lineReference} · {money(line.amountMinor)}
                       </option>
                     ))}
-                </select>
+                </StudioSelect>
               </label>
               <label className="text-sm">
                 POS settlement batch
-                <select className={inputClass} name="settlementBatchId" required>
+                <StudioSelect className={inputClass} name="settlementBatchId" required>
                   {workspace.settlementBatches
                     .filter((batch) => (batch.settledMinor ?? 0) < batch.expectedMinor)
                     .map((batch) => (
@@ -819,7 +820,7 @@ export default async function PharmacyFinancePage({
                         {money(batch.expectedMinor - (batch.settledMinor ?? 0))}
                       </option>
                     ))}
-                </select>
+                </StudioSelect>
               </label>
               <label className="text-sm">
                 Amount to match (PKR)
@@ -876,7 +877,7 @@ export default async function PharmacyFinancePage({
               <input type="hidden" name="branchId" value={branch.id} />
               <label className="text-sm">
                 Unmatched bank line
-                <select className={inputClass} name="statementLineId">
+                <StudioSelect className={inputClass} name="statementLineId">
                   {workspace.bankLines
                     .filter((line) => line.status === 'UNMATCHED')
                     .map((line) => (
@@ -884,11 +885,11 @@ export default async function PharmacyFinancePage({
                         {line.lineReference} · {money(Math.abs(line.amountMinor))}
                       </option>
                     ))}
-                </select>
+                </StudioSelect>
               </label>
               <label className="text-sm">
                 Posted transaction
-                <select className={inputClass} name="transactionId">
+                <StudioSelect className={inputClass} name="transactionId">
                   {workspace.transactions
                     .filter((t) => t.status === 'POSTED')
                     .map((t) => (
@@ -896,7 +897,7 @@ export default async function PharmacyFinancePage({
                         {t.reference} · {money(t.amountMinor)}
                       </option>
                     ))}
-                </select>
+                </StudioSelect>
               </label>
               <label className="text-sm">
                 Amount to match
@@ -959,10 +960,10 @@ export default async function PharmacyFinancePage({
             </label>
             <label className="text-sm">
               Price mode
-              <select className={inputClass} name="priceMode">
+              <StudioSelect className={inputClass} name="priceMode">
                 <option value="INCLUSIVE">Tax inclusive</option>
                 <option value="EXCLUSIVE">Tax exclusive</option>
-              </select>
+              </StudioSelect>
             </label>
             <label className="text-sm sm:col-span-2">
               SRO reference (always provisional)

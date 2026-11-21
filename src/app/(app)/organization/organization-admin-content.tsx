@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { PharmacyFinanceRoleFields } from './pharmacy-finance-role-fields';
 import { useOwnApprovalLabel } from '@/components/pharmacy/own-approval-copy';
@@ -605,32 +607,32 @@ export function OrganizationAdminContent() {
             </label>
             <label>
               <span className={labelClass}>System role</span>
-              <select className={inputClass} name="role" defaultValue="EMPLOYEE">
+              <StudioSelect className={inputClass} name="role" defaultValue="EMPLOYEE">
                 {['ADMIN', 'HR', 'EMPLOYEE'].map((option) => (
                   <option key={option}>{option}</option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <label>
               <span className={labelClass}>Department</span>
-              <select className={inputClass} name="department" required>
+              <StudioSelect className={inputClass} name="department" required>
                 {organization.departments.map((department) => (
                   <option key={department.key} value={department.key}>
                     {department.name}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <label>
               <span className={labelClass}>Role template</span>
-              <select className={inputClass} name="organizationRoleId" defaultValue="">
+              <StudioSelect className={inputClass} name="organizationRoleId" defaultValue="">
                 <option value="">No custom role</option>
                 {organization.roles.map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.name}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             {pharmacyBranches.length > 0 && (
               <fieldset className="sm:col-span-2 lg:col-span-3">
@@ -725,7 +727,7 @@ export function OrganizationAdminContent() {
                   ].map(([name, label, options, value]) => (
                     <label key={String(name)}>
                       <span className={labelClass}>{String(label)}</span>
-                      <select
+                      <StudioSelect
                         className={inputClass}
                         name={String(name)}
                         defaultValue={String(value)}
@@ -735,7 +737,7 @@ export function OrganizationAdminContent() {
                             {name === 'role' ? baseRoleLabels[option as BaseRole] : option}
                           </option>
                         ))}
-                      </select>
+                      </StudioSelect>
                     </label>
                   ))}
                   <label>
@@ -743,17 +745,21 @@ export function OrganizationAdminContent() {
                     {/* The organization's own departments, not a hardcoded agency
                         list: a pharmacy files staff under Counter, Dispensary, and
                         the rest its vertical defines. */}
-                    <select className={inputClass} name="department" defaultValue={user.department}>
+                    <StudioSelect
+                      className={inputClass}
+                      name="department"
+                      defaultValue={user.department}
+                    >
                       {organization.departments.map((department) => (
                         <option key={department.key} value={department.key}>
                           {department.name}
                         </option>
                       ))}
-                    </select>
+                    </StudioSelect>
                   </label>
                   <label>
                     <span className={labelClass}>Custom role</span>
-                    <select
+                    <StudioSelect
                       className={inputClass}
                       name="organizationRoleId"
                       defaultValue={user.organizationRoleId ?? ''}
@@ -764,7 +770,7 @@ export function OrganizationAdminContent() {
                           {item.name}
                         </option>
                       ))}
-                    </select>
+                    </StudioSelect>
                   </label>
                   <label className="sm:col-span-2">
                     <span className={labelClass}>Title</span>

@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useId, useMemo, useRef, useState } from 'react';
 
 import { Field, fieldClass, WorkspaceState } from '@/components/pharmacy/dispensing/field';
@@ -111,6 +113,8 @@ export function initialSiteTimezone(branchZone: string | null, organizationZone?
   return browserZone();
 }
 
+// DEV-1001 native exception: the full IANA timezone list uses the phone picker.
+// Migrate when a shared searchable picker preserves that long-list interaction.
 function EnableSite({ branch, defaultTimezone, onChanged, onNotice }: SopSetupViewProps) {
   const utils = trpc.useUtils();
   const zones = useMemo(() => {
@@ -785,7 +789,7 @@ function ScheduleForm({
       {targetType === 'ROLE' ? (
         <ScheduleField id={`${id}-role`} label="Role">
           {(control) => (
-            <select
+            <StudioSelect
               {...control}
               className={INPUT}
               value={roleKey}
@@ -796,7 +800,7 @@ function ScheduleForm({
                   {ROLE_LABEL[key]}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           )}
         </ScheduleField>
       ) : (
@@ -807,7 +811,7 @@ function ScheduleForm({
           error={fieldErrors.userId}
         >
           {(control) => (
-            <select
+            <StudioSelect
               {...control}
               className={INPUT}
               value={userId}
@@ -821,13 +825,13 @@ function ScheduleForm({
                     {person.displayName}
                   </option>
                 ))}
-            </select>
+            </StudioSelect>
           )}
         </ScheduleField>
       )}
       <ScheduleField id={`${id}-frequency`} label="How often">
         {(control) => (
-          <select
+          <StudioSelect
             {...control}
             className={INPUT}
             value={frequency}
@@ -838,7 +842,7 @@ function ScheduleForm({
                 {option.label}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         )}
       </ScheduleField>
       {frequency !== 'ONCE' ? (

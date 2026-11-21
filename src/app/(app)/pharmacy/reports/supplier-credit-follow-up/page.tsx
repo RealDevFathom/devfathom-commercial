@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import type { Metadata } from 'next';
 
 import { Button, buttonVariants } from '@/components/ui/button';
@@ -333,7 +334,7 @@ export default async function SupplierCreditFollowUpPage({
             <label htmlFor="follow-up-branch" className="mb-1 block text-sm">
               Branch
             </label>
-            <select
+            <StudioSelect
               id="follow-up-branch"
               name="branch"
               defaultValue={branch?.id ?? ''}
@@ -348,7 +349,7 @@ export default async function SupplierCreditFollowUpPage({
                   {item.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </div>
           {(['from', 'to'] as const).map((key) => (
             <div key={key} className="min-w-0 flex-1 basis-40">

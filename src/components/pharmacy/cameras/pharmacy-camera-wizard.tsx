@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -124,7 +126,7 @@ export function PharmacyCameraWizard({
       {branches.length > 1 && (
         <label className="mb-4 block text-sm font-medium text-text-strong">
           Branch
-          <select
+          <StudioSelect
             aria-label="Branch"
             className={field}
             value={branchId}
@@ -143,7 +145,7 @@ export function PharmacyCameraWizard({
                 {branch.name}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </label>
       )}
       {branches.length === 0 && (
@@ -193,13 +195,13 @@ export function PharmacyCameraWizard({
         </div>
         <label className="text-sm font-medium text-text-strong">
           Simulator source
-          <select name="sourceRef" required className={field} defaultValue="sim-counter-1">
+          <StudioSelect name="sourceRef" required className={field} defaultValue="sim-counter-1">
             {PHARMACY_SIMULATOR_SOURCES.map((source) => (
               <option key={source.value} value={source.value}>
                 {source.label} ({source.value})
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </label>
         <p className="text-sm text-text-muted">
           Use placeholder credentials. They are sealed in private storage and never shown again; do

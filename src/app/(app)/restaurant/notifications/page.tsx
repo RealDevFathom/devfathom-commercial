@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import type { inferRouterOutputs } from '@trpc/server';
 import { TRPCError } from '@trpc/server';
 import { revalidatePath } from 'next/cache';
@@ -451,14 +452,14 @@ function NotificationsView(props: NotificationsViewProps) {
               </label>
               <label className="text-sm text-text-body">
                 Delivery state
-                <select
+                <StudioSelect
                   className="mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-text-strong outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                   defaultValue={String(webhook.config?.enabled ?? false)}
                   name="enabled"
                 >
                   <option value="true">Enabled</option>
                   <option value="false">Disabled</option>
-                </select>
+                </StudioSelect>
               </label>
               <p
                 className="text-xs leading-relaxed text-text-muted md:col-span-2"
@@ -901,7 +902,7 @@ function NotificationsView(props: NotificationsViewProps) {
                     ) : null}
                     <label className="min-w-0 flex-1 text-sm text-text-body">
                       Branch
-                      <select
+                      <StudioSelect
                         className="mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
                         defaultValue={matrixBranch?.id ?? ''}
                         disabled={!activeBranches.length}
@@ -915,7 +916,7 @@ function NotificationsView(props: NotificationsViewProps) {
                             {branch.name} · {branch.timezone}
                           </option>
                         ))}
-                      </select>
+                      </StudioSelect>
                     </label>
                     <Button
                       className="min-h-11 self-end"
