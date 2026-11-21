@@ -2295,7 +2295,7 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     // A real keydown on the window listener, outside act(): React would otherwise open the
     // dialog only after the event, and the cashier's next key would land outside it.
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F9', bubbles: true }));
-    const payment = screen.getByRole('dialog', { name: 'Payment' });
+    const payment = screen.getByRole('dialog', { name: /^Take payment/ });
     expect(payment).toContainElement(document.activeElement as HTMLElement);
     // A payment method the cashier moves to straight away keeps focus: the dialog's queued
     // initial focus does not take it back.
@@ -2644,7 +2644,7 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     // The re-read reports the drawer closed.
     closeDrawer();
     view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-    const payment = screen.getByRole('dialog', { name: 'Payment' });
+    const payment = screen.getByRole('dialog', { name: /^Take payment/ });
     fireEvent.click(within(payment).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(payment).not.toBeVisible());
   }
@@ -3260,7 +3260,7 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     dialog.setAttribute('role', 'dialog');
     document.body.append(dialog);
     fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F9' });
-    expect(screen.queryByRole('dialog', { name: 'Payment' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: /^Take payment/ })).not.toBeInTheDocument();
     dialog.remove();
     screen.getByLabelText('Scan or search').focus();
     fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F9' });
@@ -5558,7 +5558,7 @@ describe('DEV-618 counter composition', () => {
   it('shows the auto-print copy only beside the auto-print checkbox, reworded', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F9' });
-    const dialog = screen.getByRole('dialog', { name: 'Payment' });
+    const dialog = screen.getByRole('dialog', { name: /^Take payment/ });
     const checkbox = within(dialog).getByRole('checkbox', {
       description: 'Opens the print window after each payment on this computer.',
     });
@@ -5582,7 +5582,7 @@ describe('DEV-618 counter composition', () => {
             screen.getByLabelText(entry === 'phone' ? 'Phone payment' : 'Bill total')
           ).getByRole('button', { name: /^Take payment ?·/ })
         );
-      const dialog = screen.getByRole('dialog', { name: 'Payment' });
+      const dialog = screen.getByRole('dialog', { name: /^Take payment/ });
       const amount = within(dialog).getByLabelText('Amount');
       await waitFor(() => expect(document.activeElement).toBe(amount.closest('[tabindex="-1"]')));
       expect(scroll).toHaveBeenCalledWith({ block: 'nearest' });
@@ -5614,7 +5614,7 @@ describe('DEV-618 counter composition', () => {
     );
     fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F9' });
     expect(
-      within(screen.getByRole('dialog', { name: 'Payment' })).getByLabelText('Amount')
+      within(screen.getByRole('dialog', { name: /^Take payment/ })).getByLabelText('Amount')
     ).toHaveValue('81.50');
     expect(mocks.mutations.tender).not.toHaveBeenCalled();
   });
@@ -6504,7 +6504,7 @@ describe('DEV-97 counter payment controls follow the settlement grant', () => {
       expect(button).toBeDisabled();
     expect(screen.queryByRole('button', { name: 'Khata payment' })).not.toBeInTheDocument();
     fireEvent.keyDown(screen.queryByLabelText('Scan or search') ?? window, { key: 'F9' });
-    expect(screen.queryByRole('dialog', { name: 'Payment' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: /^Take payment/ })).not.toBeInTheDocument();
     expect(mocks.mutations.tender).not.toHaveBeenCalled();
   }
 
@@ -6858,7 +6858,7 @@ describe('DEV-41 cashier actions', () => {
     renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     expect(screen.getByLabelText('Bill total')).toHaveTextContent(/1 line(?!s)/);
     expect(screen.getByLabelText('Bill total')).not.toHaveTextContent('1 lines');
-    const payment = screen.getByRole('dialog', { name: 'Payment' });
+    const payment = screen.getByRole('dialog', { name: /^Take payment/ });
     expect(payment).toHaveTextContent(/1 line · Tendered/);
     expect(payment).not.toHaveTextContent('1 lines');
   });
@@ -7004,7 +7004,7 @@ describe('DEV-705 keyboard loose sale', () => {
     );
     await waitFor(() => expect(screen.getByLabelText('Scan or search')).toHaveFocus());
     fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F9' });
-    expect(screen.getByRole('dialog', { name: 'Payment' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: /^Take payment/ })).toBeInTheDocument();
   });
 
   it('DEV-930 leaves focus in payment opened while an add is still settling, so Enter takes it', async () => {
@@ -7024,7 +7024,7 @@ describe('DEV-705 keyboard loose sale', () => {
     fireEvent.keyDown(screen.getByLabelText('Quantity'), { key: 'Enter' });
     await waitFor(() => expect(controlledRegister.invalidate).toHaveBeenCalled());
     fireEvent.keyDown(window, { key: 'F9' });
-    const payment = screen.getByRole('dialog', { name: 'Payment' });
+    const payment = screen.getByRole('dialog', { name: /^Take payment/ });
     const panel = within(payment)
       .getByRole('group', { name: 'Payment method' })
       .closest<HTMLElement>('[tabindex="-1"]')!;
@@ -7770,7 +7770,7 @@ describe('DEV-633 keyboard-only counter', () => {
       expect(fireEvent.keyDown(quantity, { key: 'F6' })).toBe(true);
       expect(fireEvent.keyDown(quantity, { key: 'F9' })).toBe(true);
       expect(mocks.mutations.addLine).not.toHaveBeenCalled();
-      expect(screen.queryByRole('dialog', { name: 'Payment' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('dialog', { name: /^Take payment/ })).not.toBeInTheDocument();
     } finally {
       dialog.remove();
     }
@@ -8298,5 +8298,83 @@ describe('DEV-977B Counter v2 phase 2A: one-step add, quantity and unit on the b
     await waitFor(() => expect(mocks.searchProps.mock.lastCall![0].slow).toBe(true), {
       timeout: COUNTER_SLOW_SEARCH_MS + 1500,
     });
+  });
+});
+
+describe('DEV-977 phase 2B: the counter panels in the Counter v2 sheets', () => {
+  it('heads the payment sheet with the bill, names it with the total and puts the counter controls in the summary', () => {
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const payment = screen.getByRole('dialog', { name: 'Take payment · 250.00' });
+    expect(payment).toHaveAttribute('data-counter-sheet', 'wide');
+    expect(within(payment).getByText(/^Bill · \d+ lines?$/)).toHaveAttribute(
+      'data-slot',
+      'eyebrow'
+    );
+    // The full screen below 1024px; a centred dialog up to 1000px from 1024px.
+    expect(payment.className).toContain('inset-0');
+    expect(payment.className).toContain('lg:w-[min(62.5rem,calc(100vw-4rem))]');
+    const summary = within(payment).getByRole('region', { name: 'Payment summary' });
+    expect(
+      within(summary).getByLabelText('Automatically open print dialog after payment')
+    ).toBeInTheDocument();
+    expect(within(summary).getByText(/Tendered/)).toBeInTheDocument();
+    const back = within(summary).getByRole('button', { name: 'Back to bill' });
+    // The close control is an icon with a name; Back to bill still closes the sheet.
+    expect(within(payment).getByRole('button', { name: 'Close' }).textContent).toBe('');
+    fireEvent.click(back);
+    expect(screen.queryByRole('dialog', { name: /^Take payment/ })).not.toBeInTheDocument();
+  });
+
+  it('draws the offline banner with its mark, its pill and the price-check-only truth (B2, C7)', () => {
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    try {
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      onLine.mockReturnValue(false);
+      act(() => {
+        window.dispatchEvent(new Event('offline'));
+      });
+      const banner = document.querySelector('[data-counter-offline]') as HTMLElement;
+      expect(banner).toHaveAttribute('role', 'status');
+      expect(banner.firstElementChild?.tagName.toLowerCase()).toBe('svg');
+      expect(banner.firstElementChild).toHaveAttribute('aria-hidden', 'true');
+      const title = screen.getByText('Offline — this counter cannot reach the server.');
+      expect(within(title).getByText('Offline')).toHaveAttribute('data-slot', 'status-pill');
+      // Offline selling is off: the banner never offers offline bills.
+      expect(banner).toHaveTextContent(
+        'Search, bill changes and payments wait until the connection returns.'
+      );
+      expect(banner).not.toHaveTextContent(/as offline bills/);
+    } finally {
+      onLine.mockRestore();
+    }
+  });
+
+  it('heads the receipt as a side sheet with its number after a confirmed payment (A3, C5)', async () => {
+    const completeCounterReceipt = issuedReceipt();
+    mocks.receiptRefetch.mockImplementationOnce(async () => {
+      mocks.queries.counterReceipt!.data = completeCounterReceipt;
+      return { isSuccess: true, data: completeCounterReceipt };
+    });
+    mocks.mutations.tender!.mockResolvedValue(accepted(0));
+    mocks.refetch.mockImplementation(async () => {
+      mocks.queries.counterCart!.data = cart({
+        status: 'COMPLETED',
+        receiptNumber: 42,
+        totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000 },
+      });
+      return mocks.queries.counterCart;
+    });
+    renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '250.00' } });
+    fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '300.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
+    await screen.findByText('Payment recorded.');
+    const receipt = screen.getByRole('dialog', { name: 'Receipt preview' });
+    expect(receipt).toHaveAttribute('data-counter-sheet', 'side');
+    expect(within(receipt).getByText('Receipt 42')).toHaveAttribute('data-slot', 'eyebrow');
+    expect(within(receipt).getByRole('region', { name: 'Change due' })).toHaveTextContent('50.00');
+    // The paid bill is marked by a check as well as its words.
+    const paid = screen.getByText('Paid · receipt 42');
+    expect(paid.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
   });
 });

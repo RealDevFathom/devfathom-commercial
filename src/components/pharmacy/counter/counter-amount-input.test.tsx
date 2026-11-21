@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { amountInputToMinor } from '@/lib/money-input';
@@ -236,5 +236,46 @@ describe('DEV-939 one typed-amount reader at the counter', () => {
       if (shared !== 'EMPTY') expect(alert).toHaveTextContent(MESSAGES[shared]);
       expect(screen.getByLabelText('Opening cash')).toHaveAttribute('aria-invalid', 'true');
     });
+  });
+});
+
+describe('DEV-977 phase 2B: the Counter v2 discount sheet (A4)', () => {
+  it('opens as a sheet with the discount eyebrow, a segmented type, the amount and Cancel', () => {
+    const onHold = vi.fn();
+    render(
+      <CounterDiscountEntry
+        branchId="branch-a"
+        held={null}
+        disabled={false}
+        onHold={onHold}
+        onClear={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Discount' }));
+    const sheet = screen.getByRole('dialog', { name: 'Discount on the next item' });
+    expect(sheet).toHaveAttribute('data-counter-sheet', 'dialog');
+    expect(within(sheet).getByText('Discount', { selector: '[data-slot=eyebrow]' })).toBeVisible();
+    const type = within(sheet).getByRole('group', { name: 'Discount as' });
+    expect(type.querySelector('[data-counter-segmented]')).not.toBeNull();
+    expect(within(type).getByRole('button', { name: 'Percentage (%)' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    // The rule about regulated medicines and the PIN approval sits in a note under the amount.
+    expect(
+      within(sheet)
+        .getByText(/Prescription, restricted and controlled medicines are never discounted/)
+        .closest('[data-counter-note]')
+    ).toHaveAttribute('data-counter-note', 'warning');
+    const footer = sheet.querySelector('[data-counter-sheet-foot]') as HTMLElement;
+    expect(
+      within(footer)
+        .getAllByRole('button')
+        .map((button) => button.textContent)
+    ).toEqual(['Cancel', 'Apply to next item']);
+    fireEvent.change(within(sheet).getByLabelText('Discount (%)'), { target: { value: '5' } });
+    fireEvent.click(within(footer).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog', { name: 'Discount on the next item' })).toBeNull();
+    expect(onHold).not.toHaveBeenCalled();
   });
 });

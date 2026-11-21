@@ -1408,3 +1408,113 @@ describe('DEV-875 bank transfer reference', () => {
     expect(props.onTender).not.toHaveBeenCalled();
   });
 });
+
+describe('DEV-977 phase 2B: the Counter v2 payment sheet arrangement', () => {
+  it('lays out methods, the form and the summary as the design draws them (A2, C4)', () => {
+    const { container } = setup({
+      tenders: [{ tenderId: 'cash-a', type: 'CASH', amountMinor: 10000 }],
+      balanceMinor: 15000,
+      summaryExtra: <button type="button">Back to bill</button>,
+    });
+    const root = container.firstElementChild as HTMLElement;
+    const columns = [...root.children].map((child) =>
+      child.hasAttribute('data-counter-pay-methods')
+        ? 'methods'
+        : child.hasAttribute('data-counter-pay-form')
+          ? 'form'
+          : child.getAttribute('aria-label') === 'Payment summary'
+            ? 'summary'
+            : child.tagName
+    );
+    expect(columns).toEqual(['methods', 'form', 'summary']);
+    // Three columns from 1024px; the summary leads below it.
+    expect(root.className).toContain('lg:grid-cols-[236px_minmax(0,1fr)_272px]');
+    const summary = screen.getByRole('region', { name: 'Payment summary' });
+    expect(summary.className).toContain('max-lg:order-first');
+    // The summary holds what is paid, what is due and the counter's own controls.
+    expect(within(summary).getByRole('list', { name: 'Recorded payments' })).toHaveTextContent(
+      /1\. Cash · Recorded\s*100\.00/
+    );
+    expect(within(summary).getByText('Balance due').parentElement).toHaveTextContent('150.00');
+    expect(within(summary).getByRole('button', { name: 'Back to bill' })).toBeInTheDocument();
+    // The methods group and the form keep their own places.
+    const methods = root.querySelector('[data-counter-pay-methods]') as HTMLElement;
+    expect(within(methods).getByRole('group', { name: 'Payment method' })).toBeInTheDocument();
+    const form = root.querySelector('[data-counter-pay-form]') as HTMLElement;
+    expect(within(form).getByLabelText('Amount')).toBeInTheDocument();
+    expect(within(form).getByRole('button', { name: 'Take payment' })).toBeInTheDocument();
+  });
+
+  it('draws each method as a card with a visual note, the name staying the method alone', () => {
+    setup();
+    const cash = tenderButton('CASH');
+    expect(cash).toHaveAccessibleName('Cash');
+    expect(cash).toHaveAttribute('data-counter-pay-method', 'CASH');
+    expect(cash.className).toContain('min-h-14');
+    const note = cash.parentElement!.querySelector('[data-counter-pay-note]');
+    expect(note).toHaveAttribute('aria-hidden', 'true');
+    expect(note).toHaveTextContent('Change worked out');
+    expect(tenderButton('CARD').parentElement).toHaveTextContent('On the shop’s terminal');
+    // The selected card is marked by its ink outline as well as aria-pressed.
+    expect(cash).toHaveAttribute('aria-pressed', 'true');
+    expect(cash.className).toContain('ring-text-strong');
+    expect(tenderButton('CARD').className).not.toContain('ring-text-strong');
+  });
+
+  it('shows cash change in the success tone and quick cash as pills (C4)', () => {
+    setup();
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '250.00' } });
+    fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '1000' } });
+    const change = screen.getByText('Change').closest('[data-counter-change]');
+    expect(change).toHaveTextContent('750.00');
+    expect(change?.className).toContain('bg-success/10');
+    for (const pill of within(screen.getByRole('group', { name: 'Quick cash' })).getAllByRole(
+      'button'
+    ))
+      expect(pill.className).toContain('rounded-full');
+  });
+
+  it('heads an unconfirmed payment as such, with its status and the check inside (A7)', () => {
+    setup({
+      state: 'error',
+      initialDraft: { type: 'CASH', amount: '125.50', cashReceived: '200.00' },
+      recoveryOutcome: { status: 'unknown', message: 'Check the saved payment.' },
+      onCheckOutcome: vi.fn().mockResolvedValue({ status: 'unknown', message: 'Still unknown.' }),
+    });
+    const unknown = screen.getByRole('region', { name: 'Payment not confirmed' });
+    expect(within(unknown).getByRole('status')).toHaveTextContent('Check the saved payment.');
+    expect(within(unknown).getByRole('button', { name: 'Check payment outcome' })).toBeEnabled();
+    // Every method stays locked while the outcome is unknown.
+    for (const button of tenderButtons()) expect(button).toBeDisabled();
+  });
+
+  it('keeps one status line and no unconfirmed heading for an ordinary payment', () => {
+    setup();
+    expect(screen.queryByRole('region', { name: 'Payment not confirmed' })).toBeNull();
+    expect(document.querySelectorAll('#tender-status')).toHaveLength(1);
+  });
+
+  it('draws the khata limit, what is used and what is left, and marks an over-limit charge (B1)', async () => {
+    setup({
+      loadKhataAccounts: vi
+        .fn()
+        .mockResolvedValue([
+          { id: 'family-a', displayName: 'Family A', balanceMinor: 30000, creditLimitMinor: 50000 },
+        ]),
+    });
+    chooseTender('KHATA');
+    await screen.findByText(/Ledger balance/);
+    const limit = document.querySelector('[data-counter-khata-limit]') as HTMLElement;
+    expect(within(limit).getByText('Limit').nextElementSibling).toHaveTextContent('500.00');
+    expect(within(limit).getByText('Used').nextElementSibling).toHaveTextContent('300.00');
+    expect(within(limit).getByText('Available').nextElementSibling).toHaveTextContent('200.00');
+    // The bill's 250.00 takes the account over its 500.00 limit.
+    const meter = within(limit).getByRole('img');
+    expect(meter).toHaveAccessibleName('550.00 of 500.00 limit used, over the limit');
+    expect(meter).toHaveAttribute('data-over', 'true');
+    expect(screen.getByText(/exceeds the family credit limit/)).toHaveAttribute('role', 'alert');
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '100' } });
+    expect(within(limit).getByRole('img')).toHaveAccessibleName('400.00 of 500.00 limit used');
+    expect(screen.queryByText(/exceeds the family credit limit/)).toBeNull();
+  });
+});
