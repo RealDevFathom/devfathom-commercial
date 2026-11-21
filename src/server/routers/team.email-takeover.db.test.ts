@@ -400,6 +400,18 @@ describe.skipIf(!databaseUrl)('DEV-974 email change takeover against PostgreSQL'
     await expect(completeReset(token!)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
+  it('keeps the reset link valid after updating lastActiveAt and moving the member to ON_LEAVE', async () => {
+    await runPasswordResetJob(resetJob('on-leave'));
+    const [token] = deliveredResetTokens();
+    await withTenantDb(organizationId, (db) =>
+      db.user.update({
+        where: { id: ids().staff },
+        data: { lastActiveAt: new Date(), status: 'ON_LEAVE' },
+      })
+    );
+    expect(await validateReset(token!)).toEqual({ valid: true });
+  });
+
   it('refuses an unused legacy token belonging to an inactive member', async () => {
     const token = 'synthetic-legacy-' + organizationId;
     await withTenantDb(organizationId, async (db) => {
