@@ -60,6 +60,14 @@ async function assertSaleLineBranch(ctx: TRPCContext, saleLineId: string) {
 // patient-read route (`pharmacyPrescriptions.readPatient`).
 const queuePatient = { select: { id: true, displayName: true } } as const;
 
+function canReadQueuePatients(ctx: TRPCContext) {
+  return can(subjectFromSession(ctx.session!.user), 'pharmacy:prescriptions', undefined, {
+    db: ctx.db,
+    source: 'TRPC',
+    ip: ctx.requestMeta.ip,
+  });
+}
+
 // The review item records its counter sale line as an id, without a Prisma
 // relation. Join on that exact line: one prescription can be filled at several branches.
 async function clinicalReviewScope(ctx: TRPCContext) {
@@ -150,16 +158,7 @@ export const pharmacyDispensingRouter = router({
     }),
   reviewQueue: dispense.query(async ({ ctx }) => {
     const user = ctx.session!.user;
-    const canViewPatients = await can(
-      subjectFromSession(user),
-      'pharmacy:prescriptions',
-      undefined,
-      {
-        db: ctx.db,
-        source: 'TRPC',
-        ip: ctx.requestMeta.ip,
-      }
-    );
+    const canViewPatients = await canReadQueuePatients(ctx);
     const items = await ctx.db.pharmacyPharmacistReviewItem.findMany({
       where: await clinicalReviewScope(ctx),
       orderBy: { requestedAt: 'asc' },
@@ -215,7 +214,7 @@ export const pharmacyDispensingRouter = router({
         message: 'You do not have permission for this action.',
       });
     }
-    const canViewPatients = await can(subject, 'pharmacy:prescriptions', undefined, options);
+    const canViewPatients = await canReadQueuePatients(ctx);
     const items = await ctx.db.pharmacyPharmacistReviewItem.findMany({
       where: await clinicalReviewScope(ctx),
       orderBy: { requestedAt: 'desc' },
