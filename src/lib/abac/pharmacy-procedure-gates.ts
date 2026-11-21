@@ -2050,6 +2050,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'requireCounterReceiptAccess(canonical true) -> pharmacy:counter + counter family, assigned branch or ADMIN',
     lines: ['take-payment/follow-up-outofstock-requests'],
   },
+  'pharmacySales.checkBillLinePack': {
+    gate: 'auditedProtectedProcedure; requireCounterReceiptAccess(canonical true) -> pharmacy:counter, assigned branch or ADMIN; bill owner or manager',
+    lines: ['take-payment/take-payment-branches-by'],
+  },
   'pharmacySales.authenticatePack': {
     gate: 'assignedBranchScope then requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense',
     lines: [

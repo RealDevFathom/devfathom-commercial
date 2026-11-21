@@ -620,3 +620,59 @@ describeDatabase(
     });
   }
 );
+
+describeDatabase('DEV-988 explicit bill line pack check', () => {
+  it('records a mismatch, blocks payment and line replacement, and releases only a matching allocated batch', async () => {
+    const s = await shop('packcheck');
+    const device = 'pack-till';
+    await openDrawer(s, device, 0);
+    const { sale, lines } = await billBy(s, s.cashier, [[1000, 1]]);
+    const line = lines[0]!;
+    const check = (payload: string) =>
+      asMember(s, s.cashier, (c) =>
+        c.checkBillLinePack({
+          branchId: s.owner.branchId,
+          saleId: sale.id,
+          saleLineId: line.id,
+          payload,
+        })
+      );
+    expect(await check('unlisted-pack')).toMatchObject({ matched: false });
+    await expect(cash(s, s.cashier, device, sale.id, 1000)).rejects.toThrow(/pack.check/i);
+    await expect(changeLine(s, s.cashier, sale.id, line, 2, device)).rejects.toThrow(/pack.check/i);
+    const gtin = '01234567890128';
+    const batch = await tenant(s.owner, async (db) => {
+      const alloc = await db.pharmacySaleLineAllocation.findFirstOrThrow({
+        where: { saleLineId: line.id },
+        include: { lot: { include: { batch: true, packLevel: true } } },
+      });
+      await db.medicineBarcode.create({
+        data: {
+          organizationId: s.owner.organizationId,
+          presentationId: alloc.lot.packLevel.presentationId,
+          packLevelId: line.packLevelId,
+          type: 'GTIN',
+          code: gtin,
+          normalizedCode: gtin,
+        },
+      });
+      await db.pharmacyManufacturingBatch.update({
+        where: { id: alloc.lot.batch.id },
+        data: { batchNumber: 'TESTPACK' },
+      });
+      return 'TESTPACK';
+    });
+    expect(await check(`(01)${gtin}(10)${batch}(17)310101`)).toMatchObject({ matched: true });
+    await cash(s, s.cashier, device, sale.id, 1000);
+    const checks = await tenant(s.owner, (db) =>
+      db.pharmacySaleEvent.findMany({
+        where: { saleId: sale.id, kind: 'PACK_CHECK' },
+        orderBy: { occurredAt: 'asc' },
+      })
+    );
+    expect(checks.map((row) => row.payload)).toMatchObject([
+      { saleLineId: line.id, matched: false },
+      { saleLineId: line.id, matched: true },
+    ]);
+  }, 60000);
+});

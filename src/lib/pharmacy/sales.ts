@@ -252,6 +252,7 @@ export class PharmacySaleError extends Error {
       | 'LINE_HAS_DISPENSING_RECORD'
       // DEV-977B: a line whose price was approved for its quantity (manual discount, voucher,
       // batch override) is changed by taking it off and adding it again with its approval.
+      | 'PACK_CHECK_REQUIRED'
       | 'LINE_CHANGE_NEEDS_READD'
       // DEV-977B: a customer order's or refill's bill holds the lines that order reserved and
       // packed; it is settled through its own flow, never changed line by line at the counter.
@@ -1179,6 +1180,8 @@ async function lockLineForChange(
     throw new PharmacySaleError('NOT_BILL_OWNER');
   const line = lockedSale.lines.find((row) => row.id === input.saleLineId);
   if (!line) throw new PharmacySaleError('NOT_FOUND');
+  if (cause === 'LINE_CHANGED' && line.packCheckBlocked)
+    throw new PharmacySaleError('PACK_CHECK_REQUIRED');
   const shiftId = await input.cashShift(lockedSale);
   if (await saleHasPaymentActivity(db, scope, input.saleId))
     throw new PharmacySaleError('LINE_LOCKED_BY_PAYMENT');

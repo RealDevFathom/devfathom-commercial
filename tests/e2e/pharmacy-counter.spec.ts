@@ -2127,6 +2127,27 @@ test('Counter v2 — the discount sheet: whole bill or next item, and who can ap
   }
 });
 
+test('DEV-988 an unmatched pack holds its line even after reopening the counter', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await openCounter(page);
+  await openDrawer(page);
+  const otc = PHARMACY_E2E.medicines.otc;
+  await search(page, otc.brandName);
+  await addFirstResult(page, otc.name);
+  await expect(billLine(page, otc.name)).toBeVisible();
+  await pressControl(page.getByRole('button', { name: 'More', exact: true }));
+  await pressControl(page.getByRole('button', { name: 'Pack check', exact: true }));
+  const sheet = page.getByRole('dialog', { name: 'Check a pack against this bill' });
+  await sheet.getByLabel('Pack code').fill('unmatched-test-pack');
+  await pressControl(sheet.getByRole('button', { name: 'Check pack', exact: true }));
+  await expect(sheet.getByRole('alert')).toContainText('doesn’t match');
+  await page.reload();
+  await expect(billLine(page, otc.name)).toBeVisible();
+  await expect(page.getByRole('button', { name: /Take payment/i }).first()).toBeDisabled();
+});
+
 test('DEV-991 records an unlisted medicine request without opening a bill', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openCounter(page, PHARMACY_E2E.cashierEmail);

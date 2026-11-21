@@ -81,6 +81,7 @@ import {
 } from './counter-receipt-view';
 import { CounterCardTerminalPanel } from './counter-card-terminal-panel';
 import { CounterKhataPaymentPanel } from './counter-khata-payment-panel';
+import { CounterPackCheck } from './counter-pack-check';
 import { CounterDemandSheet } from './counter-demand-sheet';
 import { CounterReturnPanel } from './counter-return-panel';
 import { CounterControlledAuthorization, CounterRxPanel } from './counter-rx-panel';
@@ -1520,7 +1521,8 @@ function ScopedPharmacyCounterConsole({
     return counterAlertsFor(lines, { at: new Date(), timeZone: workspaceZone, pharmacistCheckOff });
   }, [cart, patient, workspaceZone, pharmacistCheckOff]);
 
-  const blocked = hasBlockingAlert(alerts);
+  const packBlocked = cart?.lines.some((line) => line.packCheckBlocked) === true;
+  const blocked = hasBlockingAlert(alerts) || packBlocked;
   const safetyLabel = blocked
     ? `${alerts.filter((alert) => alert.severity === 'SAFETY_BLOCK').length} safety block · payment locked`
     : `No safety blocks · ${alerts.length} notes to pass on`;
@@ -1787,25 +1789,27 @@ function ScopedPharmacyCounterConsole({
         ? 'Browser recovery is unavailable. Review payment status before continuing.'
         : tenderReadRequired
           ? 'Refresh this bill to verify payment before taking more money.'
-          : blocked
-            ? 'Resolve the safety block in the prescription panel before taking payment.'
-            : billState === 'idle'
-              ? 'Add an item to start a sale before taking payment.'
-              : billState === 'loading'
-                ? 'Checking the bill. Please wait before taking payment.'
-                : billState === 'error' || billState === 'stale'
-                  ? 'Refresh the bill to check the balance before taking payment.'
-                  : billState === 'settled'
-                    ? 'This bill is already paid. Start a new sale.'
-                    : billState === 'unavailable'
-                      ? cart?.status === 'HELD'
-                        ? 'Resume this bill before taking payment.'
-                        : currentBill && lineCount === 0
-                          ? 'Add an item to this bill before taking payment.'
-                          : 'Refresh the bill or start a new sale before taking payment.'
-                      : busy
-                        ? 'Wait for the current counter action to finish before taking payment.'
-                        : null;
+          : packBlocked
+            ? 'Resolve the pack check or remove the blocked line before taking payment.'
+            : blocked
+              ? 'Resolve the safety block in the prescription panel before taking payment.'
+              : billState === 'idle'
+                ? 'Add an item to start a sale before taking payment.'
+                : billState === 'loading'
+                  ? 'Checking the bill. Please wait before taking payment.'
+                  : billState === 'error' || billState === 'stale'
+                    ? 'Refresh the bill to check the balance before taking payment.'
+                    : billState === 'settled'
+                      ? 'This bill is already paid. Start a new sale.'
+                      : billState === 'unavailable'
+                        ? cart?.status === 'HELD'
+                          ? 'Resume this bill before taking payment.'
+                          : currentBill && lineCount === 0
+                            ? 'Add an item to this bill before taking payment.'
+                            : 'Refresh the bill or start a new sale before taking payment.'
+                        : busy
+                          ? 'Wait for the current counter action to finish before taking payment.'
+                          : null;
   const settledReceipt =
     billState === 'settled' &&
     !receiptQuery.isError &&
@@ -4349,6 +4353,16 @@ function ScopedPharmacyCounterConsole({
             onVoid={voidOpenBill}
           />
         ) : null}
+        <CounterPackCheck
+          key={saleId ?? branchId}
+          branchId={branchId}
+          saleId={saleId ?? ''}
+          lines={cart?.lines ?? []}
+          disabled={
+            busy || !connectionOnline || cart?.status !== 'OPEN' || cart.totals.tenderedMinor > 0
+          }
+          refresh={refreshCart}
+        />
         <CounterDemandSheet
           key={branchId}
           branchId={branchId}

@@ -223,6 +223,7 @@ import {
   replaySaleLine,
   addRestockInterest,
   captureSafeRestockArrival,
+  saleHasPaymentActivity,
   captureDemand,
   recordCounterDemand,
   changeSaleStatus,
@@ -4930,6 +4931,103 @@ export const pharmacySalesRouter = router({
       }
     }),
 
+  checkBillLinePack: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          saleLineId: z.string().min(1),
+          payload: z.string().trim().min(1).max(512),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, {
+        skipInput: true,
+        targetType: 'PharmacySaleLine',
+        targetId: input.saleLineId,
+      });
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+      return ctx.db.$transaction(async (tx) => {
+        const db = txDb(tx);
+        const [sale] = await db.$queryRaw<
+          { status: string; createdByUserId: string }[]
+        >`SELECT status,"createdByUserId" FROM pharmacy_sales WHERE id=${input.saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`;
+        if (
+          !sale ||
+          (sale.createdByUserId !== scope.actorId && !(await actorMayRefund(db, ctx.session!.user)))
+        )
+          throw new TRPCError({ code: 'FORBIDDEN' });
+        if (sale.status !== 'OPEN' || (await saleHasPaymentActivity(db, scope, input.saleId)))
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'Pack checks require an open, unpaid bill.',
+          });
+        const where = {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          saleId: input.saleId,
+        };
+        const line = await db.pharmacySaleLine.findFirst({
+          where: { ...where, id: input.saleLineId },
+          include: { allocations: { include: { lot: { include: { batch: true } } } } },
+        });
+        if (!line) throw new TRPCError({ code: 'NOT_FOUND' });
+        const scan = await authenticatePharmacyPack(db, {
+          ...scope,
+          source: 'DISPENSING',
+          payload: input.payload,
+        });
+        const code = scan.parsed;
+        const barcode =
+          code &&
+          (await db.medicineBarcode.findFirst({
+            where: {
+              organizationId: scope.organizationId,
+              normalizedCode: code.gtin,
+              presentationId: line.presentationId,
+            },
+            select: { packLevelId: true },
+          }));
+        const serial = await db.pharmacySoldPackSerial.findFirst({
+          where: { ...where, saleLineId: line.id, releasedAt: null },
+        });
+        const matched = Boolean(
+          scan.status === 'VERIFIED' &&
+          code?.batch &&
+          barcode &&
+          (!barcode.packLevelId ||
+            line.allocations.some((a) => a.lot.packLevelId === barcode.packLevelId)) &&
+          (serial || code.serial
+            ? serial?.serialNumber === code.serial && serial?.gtin === code.gtin
+            : true) &&
+          line.allocations.some(
+            (a) =>
+              a.lot.receivedAt &&
+              a.lot.batch.state === 'ACTIVE' &&
+              a.lot.batch.batchNumber === code.batch &&
+              a.lot.batch.medicineId === line.medicineId &&
+              (!code.expiry ||
+                a.lot.batch.expiresAt?.toISOString().slice(2, 10).replaceAll('-', '') ===
+                  code.expiry)
+          )
+        );
+        await db.pharmacySaleLine.update({
+          where: { id: line.id },
+          data: { packCheckBlocked: !matched },
+        });
+        await db.pharmacySaleEvent.create({
+          data: {
+            ...where,
+            actorId: scope.actorId,
+            kind: 'PACK_CHECK',
+            payload: { saleLineId: line.id, scanId: scan.id, matched },
+          },
+        });
+        return { matched };
+      });
+    }),
   /** SAFE-05: advisory pack authentication; only the existing recall path blocks. */
   authenticatePack: auditedProtectedProcedure
     .input(z.object({ branchId, payload: z.string().max(512) }).strict())

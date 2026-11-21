@@ -767,17 +767,23 @@ async function hydrateCounterRows(
   // DEV-957 phase 2: units set aside for an enrolled counter to sell offline are not
   // offered here, exactly as the sale allocation leaves them out (stock-ledger.ts).
   // Review round 2: only while offline cash selling is in force (offline-cash-selling.ts).
-  const held = lotIds.length && (await counterSetAsidesInForce(db, scope.organizationId))
-    ? await db.pharmacyDeviceLotQuota.findMany({
-        where: {
-          organizationId: scope.organizationId,
-          branchId: scope.branchId,
-          inventoryLotId: { in: lotIds },
-          releasedAt: null,
-        },
-        select: { inventoryLotId: true, stockLocationId: true, quotaUnits: true, consumedUnits: true },
-      })
-    : [];
+  const held =
+    lotIds.length && (await counterSetAsidesInForce(db, scope.organizationId))
+      ? await db.pharmacyDeviceLotQuota.findMany({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            inventoryLotId: { in: lotIds },
+            releasedAt: null,
+          },
+          select: {
+            inventoryLotId: true,
+            stockLocationId: true,
+            quotaUnits: true,
+            consumedUnits: true,
+          },
+        })
+      : [];
   if (held.length) {
     const heldByBucket = new Map<string, number>();
     for (const quota of held) {
@@ -1001,6 +1007,7 @@ async function hydrateCounterRows(
 }
 
 export type CounterCartLine = {
+  packCheckBlocked?: boolean;
   saleLineId: string;
   medicineId: string;
   medicineName: string;
@@ -1149,6 +1156,7 @@ export async function readCounterCart(
         : best;
     }, null);
     return {
+      ...(line.packCheckBlocked ? { packCheckBlocked: true } : {}),
       saleLineId: line.id,
       medicineId: line.medicineId,
       medicineName: line.medicine.productName,
