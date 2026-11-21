@@ -153,7 +153,9 @@ export async function readPharmacyAnomalyFacts(
   // DEV-1004: since DEV-977B a bill line lowered at the counter is taken off onto its own void
   // record, so every reduction (3 to 1, and 1 back to 3) wrote a void. A bill whose lines were
   // changed or removed now counts once, and only when those changes took value off it overall:
-  // the net of every line taken off (its value) less every line put back in its place.
+  // the net of every line taken off (its value) less every line put back in its place. A line's
+  // whole-bill discount share is left out on both sides: a bill discount given later rewrites
+  // that share in place (bill-discount-service.ts) and is not a change of goods.
   // Whole-bill voids count one each, as before.
   const staffVoid =
     filters.supplierId || filters.ingredientId || filters.batchId
@@ -166,8 +168,8 @@ export async function readPharmacyAnomalyFacts(
           ),
           line_bills AS (
             SELECT e."branchId", e."actorId" AS "userId", e."payload"->>'fromSaleId' AS "billId",
-                   SUM((moved."grossMinor"-moved."discountMinor")
-                       - COALESCE(replacement."grossMinor"-replacement."discountMinor", 0))::int AS "netMinor",
+                   SUM((moved."grossMinor"-(moved."discountMinor"-moved."billDiscountMinor"))
+                       - COALESCE(replacement."grossMinor"-(replacement."discountMinor"-replacement."billDiscountMinor"), 0))::int AS "netMinor",
                    MAX(e."occurredAt") AS "occurredAt"
             FROM window_events e
             JOIN "pharmacy_sale_lines" moved

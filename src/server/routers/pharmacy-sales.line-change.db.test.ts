@@ -1020,6 +1020,67 @@ describeIfDatabase('DEV-977B change and remove a bill line', () => {
     });
   });
 
+  it('leaves a whole-bill discount given after a change out of the staff-void value (DEV-1004)', async () => {
+    const { readPharmacyAnomalyFacts } = await import('@/lib/pharmacy/anomaly-signals-operations');
+    const { applyBillDiscount } = await import('@/lib/pharmacy/bill-discount-service');
+    const today = workspaceToday('UTC');
+    const cashierVoids = async () => {
+      const { facts } = await withTenantDb(ids.org, (db) =>
+        readPharmacyAnomalyFacts(db, { branchIds: [ids.branch], from: today, to: today })
+      );
+      const row = facts.staffVoid.find((fact) => fact.userId === ids.cashierB);
+      return {
+        voidEvents: row?.voidEvents ?? 0,
+        lineVoidBills: row?.lineVoidBills ?? 0,
+        lineVoidNetMinor: row?.lineVoidNetMinor ?? 0,
+      };
+    };
+    await withPlatformDb(
+      (db) =>
+        db.$executeRaw`UPDATE "organizations" SET "pharmacyBillDiscountEnabled" = true WHERE "id" = ${ids.org}`
+    );
+    const discountTenPercent = (saleId: string) =>
+      withTenantDb(ids.org, (db) =>
+        applyBillDiscount(
+          db,
+          { organizationId: ids.org, branchId: ids.branch, actorId: ids.cashierB },
+          {
+            saleId,
+            request: { kind: 'PERCENT', bps: 1_000 },
+            approval: {
+              approvedByUserId: ids.manager,
+              approvalPolicy: 'MANAGER_APPROVAL',
+              selfApproved: false,
+            },
+          }
+        )
+      );
+    const otc = await oneLot('Antacid bill discount void', 400);
+    const before = await cashierVoids();
+    // 10 strips raised to 11, then a 10% discount on the whole bill: only goods were added.
+    const raised = await bill(ids.cashierB, [(id) => strip(otc, id, 10)]);
+    await act(ids.cashierB, (api) =>
+      api.changeLine(change({ saleId: raised.saleId, saleLineId: raised.lineIds[0]! }, otc, 11))
+    );
+    await expect(discountTenPercent(raised.saleId)).resolves.toMatchObject({ status: 'APPLIED' });
+    expect(await cashierVoids()).toEqual(before);
+    // A line genuinely removed, then a whole-bill discount on what is left: still one void,
+    // worth the strip that came off.
+    const trimmed = await bill(ids.cashierB, [
+      (id) => strip(otc, id, 1),
+      (id) => strip(otc, id, 2),
+    ]);
+    await act(ids.cashierB, (api) =>
+      api.removeLine(remove({ saleId: trimmed.saleId, saleLineId: trimmed.lineIds[0]! }))
+    );
+    await expect(discountTenPercent(trimmed.saleId)).resolves.toMatchObject({ status: 'APPLIED' });
+    expect(await cashierVoids()).toEqual({
+      voidEvents: before.voidEvents + 1,
+      lineVoidBills: before.lineVoidBills + 1,
+      lineVoidNetMinor: before.lineVoidNetMinor + 2000,
+    });
+  });
+
   it('totals after any sequence of changes and removals equal a fresh bill of the same lines', async () => {
     // One lot, at an MRP that does not divide evenly into tablets, so every loose price is
     // rounded: a fresh bill of the same lines then allocates and rounds exactly the same way.

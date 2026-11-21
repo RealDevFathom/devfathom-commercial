@@ -394,16 +394,31 @@ export function createMediaMtxTransport(raw: string, request = httpsRequest) {
     return { bytes, secret };
   }
 
-  /** One renewal per binding at a time; concurrent reads share its result. */
-  function renew(binding: Binding, deadline: number) {
+  /**
+   * One renewal per binding at a time; concurrent reads share its result. The renewal has its
+   * own deadline (DEV-1004), so it never inherits the time left to whichever read started it,
+   * and each read waits for it only until its own deadline (`untilDeadline`).
+   */
+  function renew(binding: Binding) {
     let pending = renewing.get(binding);
     if (!pending) {
-      pending = open(binding, deadline)
+      pending = open(binding, Date.now() + CAMERA_READ_DEADLINE_MS)
         .then((result) => result.secret)
         .finally(() => renewing.delete(binding));
       renewing.set(binding, pending);
     }
     return pending;
+  }
+
+  /** `work`, or `gateway-unreachable` once this read's own deadline has passed. */
+  function untilDeadline<T>(work: Promise<T>, deadline: number): Promise<T> {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return Promise.reject(new CameraTransportError('gateway-unreachable'));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new CameraTransportError('gateway-unreachable')), remaining);
+    });
+    return Promise.race([work, expired]).finally(() => clearTimeout(timer));
   }
 
   async function fetchResource(
@@ -419,7 +434,7 @@ export function createMediaMtxTransport(raw: string, request = httpsRequest) {
       // The relay ended the session (idle, restart) or none was open yet: open a
       // fresh one and retry once. A relay without sessions answers 401 only for a
       // refused login, and that refusal stands.
-      const renewed = await renew(binding, deadline);
+      const renewed = await untilDeadline(renew(binding), deadline);
       if (!renewed) refuse(res.status);
       res = await get(binding, resource, maximum, deadline, renewed);
       if (res.status === 401) throw new CameraTransportError('relay-unsupported');
