@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
@@ -398,7 +400,7 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
       >
         <label className="block max-w-sm space-y-1.5">
           <span className="eyebrow">Branch</span>
-          <select
+          <StudioSelect
             aria-label="Dashboard branch"
             value={branchId}
             onChange={(event) => setBranchId(event.target.value)}
@@ -411,7 +413,7 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
                 {branch.name}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </label>
         <p className="mt-3 font-mono text-xs text-text-muted">
           {command.data

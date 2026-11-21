@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import type { inferRouterOutputs } from '@trpc/server';
 import { ArrowDown, ArrowUp, RotateCcw } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
@@ -459,7 +461,7 @@ export function AiSettingsConsole() {
             )
           }
         >
-          <select
+          <StudioSelect
             name="provider"
             aria-label="Provider"
             className="h-11 rounded-xl border border-border-default bg-surface-page px-3 text-sm"
@@ -469,7 +471,7 @@ export function AiSettingsConsole() {
                 {PROVIDER_LABEL[value]}
               </option>
             ))}
-          </select>
+          </StudioSelect>
           <Input
             name="model"
             aria-label="Model"

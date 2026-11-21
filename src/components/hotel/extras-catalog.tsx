@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 /**
  * PROP-05 — the extras and services catalog surface.
  *
@@ -482,7 +484,7 @@ function SelectedCatalog({ initial, branchId }: { initial: CatalogView; branchId
             error={errors.department}
             hint="Where this charge appears in revenue by department."
           >
-            <select
+            <StudioSelect
               id="department"
               name="department"
               {...fieldProps('department')}
@@ -494,7 +496,7 @@ function SelectedCatalog({ initial, branchId }: { initial: CatalogView; branchId
                   {option.label}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </Field>
           <Field
             htmlFor="taxClass"
@@ -521,7 +523,7 @@ function SelectedCatalog({ initial, branchId }: { initial: CatalogView; branchId
               )?.description
             }
           >
-            <select
+            <StudioSelect
               id="recurring"
               name="recurring"
               {...fieldProps('recurring')}
@@ -533,7 +535,7 @@ function SelectedCatalog({ initial, branchId }: { initial: CatalogView; branchId
                   {option.label}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </Field>
           <div className="min-w-0">
             <label

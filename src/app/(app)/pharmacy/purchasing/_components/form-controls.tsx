@@ -136,6 +136,9 @@ export type SelectOption = { value: string; label: string; disabled?: boolean };
  * what the missing thing is and where to create it, so `emptyHint` is required
  * rather than optional and is rendered whenever there is nothing to choose.
  */
+// DEV-1001 native exception: this record picker serves unbounded medicine, pack
+// and supplier lists. Keep the phone picker and imperative OCR/validation contract
+// until a shared searchable record picker preserves both interactions.
 export function SelectField({
   name,
   label,

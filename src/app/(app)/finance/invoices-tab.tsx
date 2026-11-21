@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { InvoiceAdjustments } from '@/components/finance/invoice-adjustments';
 import { invoiceTotals, invoiceTotalsError } from '@/lib/finance/invoice-totals';
 import { moneyLabel } from '@/lib/finance/currency';
@@ -375,7 +377,7 @@ export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Client *</label>
-            <select
+            <StudioSelect
               value={clientId}
               onChange={(e) => setClientId(e.target.value)}
               className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -386,11 +388,11 @@ export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
                   {c.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </div>
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Project</label>
-            <select
+            <StudioSelect
               value={projectId}
               onChange={(e) => setProjectId(e.target.value)}
               className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -401,7 +403,7 @@ export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
                   {p.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </div>
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Due Date *</label>

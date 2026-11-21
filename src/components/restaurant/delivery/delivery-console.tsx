@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState, type FormEvent } from 'react';
 import { inferRouterOutputs } from '@trpc/server';
 import { Plus } from 'lucide-react';
@@ -233,7 +235,7 @@ export function DeliveryConsole() {
       <SectionCard title="Scope" titleLevel={2}>
         <div className="grid gap-4 md:grid-cols-2">
           <Field label="Branch">
-            <select
+            <StudioSelect
               className={inputClass}
               value={branchId}
               onChange={(event) => {
@@ -249,7 +251,7 @@ export function DeliveryConsole() {
                   {branch.active ? '' : ' (inactive)'}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </Field>
           <div className="space-y-1.5">
             <label className={labelClass} htmlFor="delivery-customer-search">
@@ -265,7 +267,7 @@ export function DeliveryConsole() {
             <label className="sr-only" htmlFor="delivery-customer">
               Customer
             </label>
-            <select
+            <StudioSelect
               id="delivery-customer"
               className={inputClass}
               value={customerId}
@@ -283,7 +285,7 @@ export function DeliveryConsole() {
                     `Unnamed customer ${index + 1}`}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </div>
         </div>
         <QueryState

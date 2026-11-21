@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -192,7 +193,8 @@ describe('DEV-862 salt and strength under the product name', () => {
     lots.mockResolvedValue([withParacetamol()]);
     await show();
     expect(
-      screen.getAllByRole('option', { name: /Medicine A \(paracetamol 500 mg\) · /i }).length
+      screen.getAllByRole('option', { hidden: true, name: /Medicine A \(paracetamol 500 mg\) · /i })
+        .length
     ).toBeGreaterThan(0);
   });
 
@@ -307,9 +309,9 @@ describe('physical count prerequisites', () => {
     await show();
     const card = countCard();
     expect(card.getByRole('button', { name: 'Freeze count scope' })).toBeVisible();
-    expect(card.getByRole('option', { name: 'Medicine A · batch B-100 · Rack' })).toHaveValue(
-      `${lot.id}:${location.id}`
-    );
+    expect(
+      card.getByRole('option', { hidden: true, name: 'Medicine A · batch B-100 · Rack' })
+    ).toHaveValue(`${lot.id}:${location.id}`);
     expect(card.queryByRole('link', { name: 'Receive stock' })).not.toBeInTheDocument();
   });
 });
@@ -536,7 +538,7 @@ describe('Quarantine resolution forms', () => {
       ]);
       await show();
       const form = screen.getByRole('button', { name: 'Record write-off' }).closest('form')!;
-      expect(within(form).getByRole('combobox', { name: 'Lot' })).toHaveValue(
+      expect(selectFieldControl(within(form).getByRole('combobox', { name: 'Lot' }))).toHaveValue(
         `${lot.id}:${location.id}:${disposition}`
       );
       fireEvent.change(within(form).getByLabelText('Units'), { target: { value: '10' } });
@@ -594,9 +596,9 @@ describe('Quarantine resolution forms', () => {
     mocks.witnessOptions.mockResolvedValueOnce({ witnesses: [], soloSelfWitness: true });
     await show();
     const form = screen.getByRole('button', { name: 'Record write-off' }).closest('form')!;
-    expect(within(form).getByRole('combobox', { name: 'Co-authorizing witness' })).toHaveValue(
-      'user'
-    );
+    expect(
+      selectFieldControl(within(form).getByRole('combobox', { name: 'Co-authorizing witness' }))
+    ).toHaveValue('user');
     expect(within(form).getByText(/Confirm with your own PIN/)).toBeInTheDocument();
   });
 
@@ -664,7 +666,7 @@ describe('Quarantine resolution forms', () => {
       const form = screen.getByRole('button', { name: 'Record write-off' }).closest('form')!;
       expect(
         within(form)
-          .getAllByRole('option')
+          .getAllByRole('option', { hidden: true })
           .map((option) => (option as HTMLOptionElement).value)
       ).toEqual([
         `${lot.id}:${location.id}:AVAILABLE`,
@@ -970,8 +972,15 @@ describe('DEV-660 — only assigned branches are offered', () => {
     render(await PharmacyInventoryPage({ searchParams: Promise.resolve({ branch: other.id }) }));
     expect(nearExpiry).toHaveBeenCalledExactlyOnceWith({ branchId: branch.id });
     const branchSelect = screen.getByRole('combobox', { name: 'Branch' });
-    expect(within(branchSelect).queryByRole('option', { name: /Other/ })).toBeNull();
-    expect(within(branchSelect).getByRole('option', { name: /Main/ })).toBeInTheDocument();
+    expect(
+      within(selectFieldControl(branchSelect)).queryByRole('option', {
+        hidden: true,
+        name: /Other/,
+      })
+    ).toBeNull();
+    expect(
+      within(selectFieldControl(branchSelect)).getByRole('option', { hidden: true, name: /Main/ })
+    ).toBeInTheDocument();
   });
 });
 

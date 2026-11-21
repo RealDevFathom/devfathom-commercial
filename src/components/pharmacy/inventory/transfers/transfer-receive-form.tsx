@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
@@ -66,7 +67,7 @@ export function TransferReceiveForm({
         </label>
         <label className="text-sm">
           Witness
-          <select className={selectClass} defaultValue="" name="witnessId">
+          <StudioSelect className={selectClass} defaultValue="" name="witnessId">
             <option value="">No shortfall</option>
             {witnesses.map((witness) => (
               <option key={witness.id} value={witness.id}>
@@ -74,7 +75,7 @@ export function TransferReceiveForm({
                 {witness.title ? ` · ${witness.title}` : ''}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </label>
         <label className="text-sm">
           Witness PIN

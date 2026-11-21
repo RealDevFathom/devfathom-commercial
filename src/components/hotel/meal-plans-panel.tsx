@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 /**
  * MEAL-01 — the meal plans surface: the board bases a property sells (room
  * only, bed & breakfast, half board, full board, or its own), what each one
@@ -748,7 +750,7 @@ function MealPlanForm({
                   {option.label}
                 </label>
                 <Field htmlFor={id(`basis-${meal}`)} label="Basis">
-                  <select
+                  <StudioSelect
                     id={id(`basis-${meal}`)}
                     name={`basis-${meal}`}
                     className={selectClass}
@@ -757,7 +759,7 @@ function MealPlanForm({
                   >
                     <option value="per_person">Per person</option>
                     <option value="per_room">Per room</option>
-                  </select>
+                  </StudioSelect>
                 </Field>
                 <Field htmlFor={id(`cutoff-${meal}`)} label="Cut-off">
                   <Input

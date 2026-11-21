@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useMemo, useRef, useState, type ChangeEvent, type DragEvent, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import type { inferRouterOutputs } from '@trpc/server';
@@ -1267,7 +1269,7 @@ function LineEditorPanel({
           label="Merge into existing product"
           hint="Required for a merge; ignored when accepting as new."
         >
-          <select
+          <StudioSelect
             className={selectClass}
             value={editor.mergeProductId}
             disabled={busy}
@@ -1281,10 +1283,10 @@ function LineEditorPanel({
                 {candidate.name}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </Field>
         <Field label="Merge into variant" hint="Optional. Only when a product is selected.">
-          <select
+          <StudioSelect
             className={selectClass}
             value={editor.mergeVariantId}
             disabled={busy || !selectedProduct}
@@ -1296,7 +1298,7 @@ function LineEditorPanel({
                 {variant.name}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </Field>
       </div>
 

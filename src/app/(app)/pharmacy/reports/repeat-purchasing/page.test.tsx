@@ -121,7 +121,7 @@ describe('repeat purchasing page', () => {
       mocks.repeatPurchasing.mockRejectedValue(new TRPCError({ code }));
       render(await Page({ searchParams: Promise.resolve({}) }));
       expect(screen.getByRole('alert')).toBeInTheDocument();
-      expect(screen.getByRole('option', { name: 'Main' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { hidden: true, name: 'Main' })).toBeInTheDocument();
       expect(screen.queryByText('Identity coverage')).not.toBeInTheDocument();
     }
   );
@@ -148,7 +148,7 @@ describe('repeat purchasing page', () => {
     expect(screen.getByLabelText('Enrollment through (UTC)')).toHaveValue(query.to);
     expect(screen.getByLabelText('As-of cutoff (UTC)')).toHaveValue('2026-05-01T00:00');
     expect(screen.getByLabelText('Selected authorized branches')).toHaveValue(query.branch);
-    expect(screen.getByRole('option', { name: 'Main' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { hidden: true, name: 'Main' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Apply cohort window' })).toBeEnabled();
     expect(screen.queryByText('Identity coverage')).not.toBeInTheDocument();
     expect(screen.queryByText('Fully elapsed follow-up')).not.toBeInTheDocument();

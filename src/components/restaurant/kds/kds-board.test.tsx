@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -123,9 +124,16 @@ async function connect(enrolled = true) {
   }
   await flush();
   if (!enrolled) return;
-  fireEvent.change(screen.getByLabelText('Acting operator'), {
-    target: { value: 'staff-1' },
-  });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Acting operator', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    {
+      target: { value: 'staff-1' },
+    }
+  );
   fireEvent.change(screen.getByLabelText('Operator PIN'), { target: { value: '1234' } });
   fireEvent.click(screen.getByRole('button', { name: 'Verify PIN and unlock' }));
   await flush();
@@ -457,7 +465,10 @@ describe('KdsBoard transport', () => {
 
     expect(screen.getByRole('heading', { name: 'Checking enrollment' })).toBeVisible();
     expect(
-      screen.getByRole('option', { name: 'Operators unavailable — verify the device secret' })
+      screen.getByRole('option', {
+        hidden: true,
+        name: 'Operators unavailable — verify the device secret',
+      })
     ).toBeVisible();
     expect(document.body.textContent).not.toContain('rdk_');
   });

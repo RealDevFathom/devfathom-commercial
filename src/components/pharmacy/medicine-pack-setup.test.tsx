@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -76,11 +77,32 @@ beforeEach(() => {
 afterEach(cleanup);
 
 function fill() {
-  fireEvent.change(screen.getByLabelText('Medicine'), { target: { value: 'medicine-secret' } });
-  fireEvent.change(screen.getByLabelText('Presentation'), {
-    target: { value: 'presentation-secret' },
-  });
-  fireEvent.change(screen.getByLabelText('Pack type'), { target: { value: 'STRIP' } });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Medicine', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    { target: { value: 'medicine-secret' } }
+  );
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Presentation', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    {
+      target: { value: 'presentation-secret' },
+    }
+  );
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Pack type', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    { target: { value: 'STRIP' } }
+  );
   fireEvent.change(screen.getByLabelText(/Individual units per pack/), { target: { value: '10' } });
   fireEvent.change(screen.getByLabelText(/Effective from/), { target: { value: '2026-09-06' } });
 }
@@ -89,7 +111,9 @@ describe('medicine pack setup', () => {
   it('repeats the same search after publication instead of keeping an empty result', () => {
     mocks.search.data = [];
     render(<MedicinePackSetup />);
-    fireEvent.change(screen.getByLabelText('Find a medicine'), { target: { value: 'Paracetamol' } });
+    fireEvent.change(screen.getByLabelText('Find a medicine'), {
+      target: { value: 'Paracetamol' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Find medicine' }));
     fireEvent.click(screen.getByRole('button', { name: 'Find medicine' }));
     expect(mocks.search.refetch).toHaveBeenCalledOnce();
@@ -97,11 +121,15 @@ describe('medicine pack setup', () => {
 
   it('selects readable medicine/presentation labels and invokes the existing pack procedure', () => {
     render(<MedicinePackSetup />);
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Medicine' }), { key: 'ArrowDown' });
     expect(
       screen.getByRole('option', { name: 'Paracetamol — Panadol — 500 mg — GSK' })
     ).toBeVisible();
+    fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' });
     fill();
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Presentation' }), { key: 'ArrowDown' });
     expect(screen.getByRole('option', { name: 'Tablet — 10 tablets' })).toBeVisible();
+    fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' });
     fireEvent.click(screen.getByRole('button', { name: 'Create pack' }));
     expect(mocks.mutation.mutate).toHaveBeenCalledExactlyOnceWith({
       presentationId: 'presentation-secret',
@@ -120,7 +148,14 @@ describe('medicine pack setup', () => {
   it('keeps values and describes validation errors without submitting an invalid unit conversion', () => {
     render(<MedicinePackSetup />);
     fill();
-    fireEvent.change(screen.getByLabelText('Pack type'), { target: { value: 'UNIT' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Pack type', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'UNIT' } }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Create pack' }));
     expect(mocks.mutation.mutate).not.toHaveBeenCalled();
     expect(screen.getByRole('alert')).toHaveTextContent('exactly 1');
@@ -140,7 +175,13 @@ describe('medicine pack setup', () => {
       view.rerender(<MedicinePackSetup />);
       expect(screen.getByRole('alert')).toHaveTextContent(/entries are preserved/);
       expect(screen.getByLabelText(/Individual units per pack/)).toHaveValue(10);
-      expect(screen.getByLabelText('Presentation')).toHaveValue('presentation-secret');
+      expect(
+        selectFieldControl(
+          screen.getByLabelText('Presentation', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        )
+      ).toHaveValue('presentation-secret');
       expect(screen.getByLabelText(/Effective from/)).toHaveValue('2026-09-06');
       if (code !== 'BAD_REQUEST')
         expect(screen.getByRole('button', { name: 'Create pack' })).toBeDisabled();
@@ -153,7 +194,11 @@ describe('medicine pack setup', () => {
     mocks.mutation.isPending = true;
     view.rerender(<MedicinePackSetup />);
     expect(screen.getByRole('button', { name: 'Creating pack…' })).toBeDisabled();
-    expect(screen.getByLabelText('Medicine')).toBeDisabled();
+    expect(
+      screen.getByLabelText('Medicine', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toBeDisabled();
     await mocks.onSuccess?.({ id: 'pack-created' });
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Pack created'));
     expect(mocks.invalidateMedicine).toHaveBeenCalledWith({ id: 'medicine-secret' });
@@ -307,10 +352,24 @@ describe('medicine pack setup', () => {
     };
   }
   function choosePresentation() {
-    fireEvent.change(screen.getByLabelText('Medicine'), { target: { value: 'medicine-secret' } });
-    fireEvent.change(screen.getByLabelText('Presentation'), {
-      target: { value: 'presentation-secret' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Medicine', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'medicine-secret' } }
+    );
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Presentation', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'presentation-secret' },
+      }
+    );
   }
 
   it('shows each pack ID next to its barcode', () => {

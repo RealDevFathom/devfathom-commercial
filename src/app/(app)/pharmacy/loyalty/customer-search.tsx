@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useEffect, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Input } from '@/components/ui/input';
@@ -49,7 +51,7 @@ export function LoyaltyCustomerSearch({
     >
       <label className="grid w-full gap-2 text-sm sm:w-auto">
         Branch
-        <select
+        <StudioSelect
           name="branchId"
           value={branch}
           onChange={(event) => setBranch(event.target.value)}
@@ -60,7 +62,7 @@ export function LoyaltyCustomerSearch({
               {b.name}
             </option>
           ))}
-        </select>
+        </StudioSelect>
       </label>
       <label className="grid w-full gap-2 text-sm sm:w-80">
         Name, phone or loyalty number

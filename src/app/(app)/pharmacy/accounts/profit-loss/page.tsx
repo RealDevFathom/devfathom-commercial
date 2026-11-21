@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { TRPCError } from '@trpc/server';
@@ -92,7 +93,7 @@ export default async function ProfitAndLossPage({
         <form action="/pharmacy/accounts/profit-loss" className="flex flex-wrap items-end gap-3">
           <label className="grid min-w-0 max-w-full gap-2 text-sm">
             Branch
-            <select
+            <StudioSelect
               name="branch"
               defaultValue={branchId ?? ''}
               required
@@ -108,7 +109,7 @@ export default async function ProfitAndLossPage({
                   {branch.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <label className="grid gap-2 text-sm">
             From ({zone})

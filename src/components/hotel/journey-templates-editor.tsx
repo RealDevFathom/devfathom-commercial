@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 /**
  * UPS-04 — the guest messages surface: every version of what the property
  * sends a guest at each step of a stay, an editor for one message at a time,
@@ -715,7 +717,7 @@ function SelectedJourneyTemplates({
                           ? 'Channel'
                           : 'Language'}
                     </label>
-                    <select
+                    <StudioSelect
                       id={`journey-${field}`}
                       className={controlClass}
                       value={newKey[field]}
@@ -736,7 +738,7 @@ function SelectedJourneyTemplates({
                           {entry.label}
                         </option>
                       ))}
-                    </select>
+                    </StudioSelect>
                   </div>
                 ))}
               </div>

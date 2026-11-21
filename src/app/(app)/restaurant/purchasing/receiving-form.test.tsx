@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -54,7 +55,14 @@ function fillReceipt() {
       'Discrepancy kind': 'DAMAGED',
       'Discrepancy note': `Note ${line.id}`,
     }))
-      fireEvent.change(group.getByLabelText(label), { target: { value } });
+      fireEvent.change(
+        selectFieldControl(
+          group.getByLabelText(label, {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        ),
+        { target: { value } }
+      );
   }
   fireEvent.change(screen.getByLabelText('Receipt reference'), {
     target: { value: 'REF & details' },
@@ -89,7 +97,12 @@ describe('ReceivingForm recovery', () => {
     await screen.findByRole('alert');
     for (const line of lines) {
       expect(
-        within(screen.getByRole('group', { name: line.name })).getByLabelText('Discrepancy kind')
+        selectFieldControl(
+          within(screen.getByRole('group', { name: line.name })).getByLabelText(
+            'Discrepancy kind',
+            { selector: ':not([data-select-field-native][aria-hidden="true"])' }
+          )
+        )
       ).toHaveValue('DAMAGED');
     }
     expect(action.mock.calls[0][1].get('discrepancyKind:a')).toBe('DAMAGED');
@@ -154,12 +167,21 @@ describe('ReceivingForm recovery', () => {
       await screen.findByRole('button', { name: 'Retry same receipt' });
       for (const line of lines) {
         expect(
-          within(screen.getByRole('group', { name: line.name })).getByLabelText('Discrepancy kind')
+          selectFieldControl(
+            within(screen.getByRole('group', { name: line.name })).getByLabelText(
+              'Discrepancy kind',
+              { selector: ':not([data-select-field-native][aria-hidden="true"])' }
+            )
+          )
         ).toHaveValue('DAMAGED');
       }
       expect(Object.fromEntries(new FormData(form))).toEqual(before);
       expect(screen.getByLabelText('Receipt reference')).toHaveAttribute('readonly');
-      expect(screen.getAllByLabelText('Discrepancy kind')[0]).toBeDisabled();
+      expect(
+        screen.getAllByLabelText('Discrepancy kind', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })[0]
+      ).toBeDisabled();
       const history = screen.getByRole('link', { name: 'Check receipt history (new tab)' });
       expect(history).toHaveAttribute('target', '_blank');
       expect(history).toHaveAttribute(

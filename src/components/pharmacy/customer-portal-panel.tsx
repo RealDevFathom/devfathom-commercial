@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState } from 'react';
 import type { inferRouterOutputs } from '@trpc/server';
 
@@ -111,7 +113,7 @@ export function CustomerPortalPanel() {
         <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
           <div className="space-y-1.5">
             <Label htmlFor="portal-branch">Branch</Label>
-            <select
+            <StudioSelect
               id="portal-branch"
               value={branchId}
               onChange={(event) => setBranchChoice(event.target.value)}
@@ -122,11 +124,11 @@ export function CustomerPortalPanel() {
                   {branch.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="portal-customer">Customer</Label>
-            <select
+            <StudioSelect
               id="portal-customer"
               value={customerId}
               onChange={(event) => {
@@ -142,7 +144,7 @@ export function CustomerPortalPanel() {
                   {customer.phoneLast4 ? ` · ${customer.phoneLast4}` : ''}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </div>
           <Button
             size="touch"

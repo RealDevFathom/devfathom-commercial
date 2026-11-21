@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState } from 'react';
 import { trpc } from '@/lib/trpc';
 import { PageHeader } from '@/components/ui/page-header';
@@ -51,7 +53,7 @@ export function SubstitutionConsole() {
         <SectionCard title="Record substitution" titleLevel={2} className="max-w-3xl">
           <div className="mb-5">
             <Field label="Prescription line">
-              <select
+              <StudioSelect
                 className={fieldClass}
                 value={itemId}
                 onChange={(e) => {
@@ -72,7 +74,7 @@ export function SubstitutionConsole() {
                     {entry.line.medicine.productName} · {entry.line.presentation.presentation}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </Field>
             {workspace.data.canViewPatients ? null : (
               <p className="mt-2 text-sm text-text-muted">

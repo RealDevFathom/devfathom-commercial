@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { browserUuid } from '@/lib/browser-uuid';
 
 import { useMemo, useRef, useState, type FormEvent } from 'react';
@@ -187,7 +189,7 @@ export function RestaurantTaxConsole() {
               <div className="grid gap-4 md:grid-cols-2">
                 <label className={labelClass}>
                   Preset branch
-                  <select className={selectClass} name="branchId" required defaultValue="">
+                  <StudioSelect className={selectClass} name="branchId" required defaultValue="">
                     <option value="" disabled>
                       Select a branch
                     </option>
@@ -196,11 +198,11 @@ export function RestaurantTaxConsole() {
                         {branch.name}
                       </option>
                     ))}
-                  </select>
+                  </StudioSelect>
                 </label>
                 <label className={labelClass}>
                   Jurisdiction and profile
-                  <select
+                  <StudioSelect
                     aria-label="Jurisdiction and profile"
                     aria-describedby="unavailable-tax-profiles"
                     className={selectClass}
@@ -218,7 +220,7 @@ export function RestaurantTaxConsole() {
                         {profile.enabled ? '' : ' (unavailable)'}
                       </option>
                     ))}
-                  </select>
+                  </StudioSelect>
                   {unavailableProfiles.length ? (
                     <span
                       id="unavailable-tax-profiles"
@@ -305,11 +307,7 @@ export function RestaurantTaxConsole() {
               ) : null}
 
               <label className="flex items-start gap-3 text-sm text-text-strong">
-                <input
-                  className="mt-1 size-4"
-                  type="checkbox"
-                  name="replaceOpenPresetProfile"
-                />
+                <input className="mt-1 size-4" type="checkbox" name="replaceOpenPresetProfile" />
                 End the currently open tax profile when this profile starts.
               </label>
               <label className="flex items-start gap-3 text-sm text-text-strong">
@@ -344,7 +342,12 @@ export function RestaurantTaxConsole() {
                 </label>
                 <label className={labelClass}>
                   Branch
-                  <select className={selectClass} name="customBranchId" required defaultValue="">
+                  <StudioSelect
+                    className={selectClass}
+                    name="customBranchId"
+                    required
+                    defaultValue=""
+                  >
                     <option value="" disabled>
                       Select a branch
                     </option>
@@ -353,11 +356,16 @@ export function RestaurantTaxConsole() {
                         {branch.name}
                       </option>
                     ))}
-                  </select>
+                  </StudioSelect>
                 </label>
                 <label className={labelClass}>
                   Pakistan jurisdiction
-                  <select className={selectClass} name="jurisdictionCode" required defaultValue="">
+                  <StudioSelect
+                    className={selectClass}
+                    name="jurisdictionCode"
+                    required
+                    defaultValue=""
+                  >
                     <option value="" disabled>
                       Select jurisdiction
                     </option>
@@ -366,11 +374,11 @@ export function RestaurantTaxConsole() {
                     <option value="PK-KP">Khyber Pakhtunkhwa</option>
                     <option value="PK-ICT">Islamabad Capital Territory</option>
                     <option value="PK-BA">Balochistan</option>
-                  </select>
+                  </StudioSelect>
                 </label>
                 <label className={labelClass}>
                   Price mode
-                  <select
+                  <StudioSelect
                     className={selectClass}
                     name="priceMode"
                     value={customMode}
@@ -380,7 +388,7 @@ export function RestaurantTaxConsole() {
                   >
                     <option value="EXCLUSIVE">Exclusive — add tax</option>
                     <option value="INCLUSIVE">Inclusive — extract tax</option>
-                  </select>
+                  </StudioSelect>
                 </label>
                 <label className={labelClass}>
                   Effective date (branch local)

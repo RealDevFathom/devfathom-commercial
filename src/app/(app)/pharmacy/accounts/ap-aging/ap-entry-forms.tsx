@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import {
   createContext,
   startTransition,
@@ -149,10 +151,10 @@ export function RecordApInvoiceForm({
         <div className="grid grid-cols-[6rem_1fr] gap-3">
           <label className={fieldClass}>
             Currency
-            <select name="currency" defaultValue="PKR" className={selectClass}>
+            <StudioSelect name="currency" defaultValue="PKR" className={selectClass}>
               <option value="PKR">PKR</option>
               <option value="USD">USD</option>
-            </select>
+            </StudioSelect>
           </label>
           <label className={fieldClass}>
             Amount
@@ -219,13 +221,13 @@ export function PayApInvoiceForm({
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <label className={`${fieldClass} md:col-span-2 xl:col-span-3`}>
           Invoice
-          <select name="invoiceId" required className={selectClass} {...aria}>
+          <StudioSelect name="invoiceId" required className={selectClass} {...aria}>
             {invoices.map((invoice) => (
               <option key={invoice.invoiceId} value={invoice.invoiceId}>
                 {`${invoice.reference} · ${invoice.payeeName} · ${invoice.supplierInvoiceRef} · ${invoice.currency} ${invoice.outstanding} outstanding`}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </label>
         <label className={fieldClass}>
           Amount paid
@@ -251,10 +253,10 @@ export function PayApInvoiceForm({
         </label>
         <label className={fieldClass}>
           Paid from
-          <select name="fundingAccount" defaultValue="CASH" className={selectClass}>
+          <StudioSelect name="fundingAccount" defaultValue="CASH" className={selectClass}>
             <option value="CASH">Cash</option>
             <option value="BANK">Bank</option>
-          </select>
+          </StudioSelect>
         </label>
         <label className={fieldClass}>
           Payment reference
@@ -332,23 +334,23 @@ export function RequestCreditSetOffForm({
       <div className="grid gap-4 md:grid-cols-2">
         <label className={fieldClass}>
           Credit note
-          <select name="supplierCreditId" required className={selectClass} {...aria}>
+          <StudioSelect name="supplierCreditId" required className={selectClass} {...aria}>
             {credits.map((credit) => (
               <option key={credit.creditId} value={credit.creditId}>
                 {`${credit.reference} · ${credit.supplierName} · PKR ${credit.remaining} left`}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </label>
         <label className={fieldClass}>
           Supplier bill
-          <select name="invoiceId" required className={selectClass} {...aria}>
+          <StudioSelect name="invoiceId" required className={selectClass} {...aria}>
             {bills.map((bill) => (
               <option key={bill.invoiceId} value={bill.invoiceId}>
                 {`${bill.reference} · ${bill.payeeName} · ${bill.supplierInvoiceRef} · PKR ${bill.outstanding} outstanding`}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </label>
         <label className={fieldClass}>
           Amount to set off (PKR)

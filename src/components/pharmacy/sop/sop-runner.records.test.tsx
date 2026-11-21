@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -75,9 +76,11 @@ describe('linked records in the runner', () => {
       ],
     };
     render(<RunnerHarness />);
-    const select = screen.getByLabelText('goods receipt for Match the delivery');
-    const options = within(select)
-      .getAllByRole('option')
+    const select = screen.getByLabelText('goods receipt for Match the delivery', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
+    const options = within(selectFieldControl(select))
+      .getAllByRole('option', { hidden: true })
       .map((option) => option.textContent);
     expect(options).toEqual(['Select…', 'Delivery GR-1042 · Received']);
     expect(select).not.toHaveTextContent(/RECEIVED|GOODS_RECEIPT/);

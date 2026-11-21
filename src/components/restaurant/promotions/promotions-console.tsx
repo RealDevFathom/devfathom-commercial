@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import type { inferRouterOutputs } from '@trpc/server';
 import { Plus, RefreshCw } from 'lucide-react';
 import { useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react';
@@ -83,6 +85,8 @@ type SelectionName =
   | 'allowedChannels';
 type BundleRow = { key: number; productIds: string[]; categoryIds: string[]; quantity: string };
 
+// DEV-1001 native exceptions: seven multi-select listboxes preserve selectedOptions,
+// modifier-key selection and ordered bundles. Migrate with equivalent multi-select UX.
 function selectedIds(select: HTMLSelectElement) {
   return Array.from(select.selectedOptions, (option) => option.value);
 }
@@ -401,7 +405,7 @@ function OfferEditor({
                 />
               </Field>
               <Field label="Timezone">
-                <select
+                <StudioSelect
                   className={selectClass}
                   name="timezone"
                   required
@@ -416,7 +420,7 @@ function OfferEditor({
                   ].map((timezone) => (
                     <option key={timezone}>{timezone}</option>
                   ))}
-                </select>
+                </StudioSelect>
               </Field>
               <Field label="Currency">
                 <Input
@@ -431,7 +435,7 @@ function OfferEditor({
 
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Benefit type">
-                <select
+                <StudioSelect
                   className={selectClass}
                   name="benefitKind"
                   value={benefitKind}
@@ -450,10 +454,10 @@ function OfferEditor({
                       {kind.replaceAll('_', ' ')}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </Field>
               <Field label="Application basis">
-                <select
+                <StudioSelect
                   className={selectClass}
                   name="applicationBasis"
                   defaultValue={version?.applicationBasis ?? 'ORDER'}
@@ -461,7 +465,7 @@ function OfferEditor({
                   <option value="ORDER">Order</option>
                   <option value="LINE">Line</option>
                   <option value="UNIT">Unit</option>
-                </select>
+                </StudioSelect>
               </Field>
               {benefitKind.includes('PERCENT') ? (
                 <Field label="Percentage">
@@ -519,7 +523,7 @@ function OfferEditor({
 
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Target type">
-                <select
+                <StudioSelect
                   className={selectClass}
                   value={targetKind}
                   onChange={(event) => changeTarget(event.target.value as typeof targetKind)}
@@ -527,7 +531,7 @@ function OfferEditor({
                   <option value="ORDER">Whole order</option>
                   <option value="ITEM">Selected items</option>
                   <option value="CATEGORY">Selected categories</option>
-                </select>
+                </StudioSelect>
               </Field>
               <Field label="Branches" detail="No selection means every branch.">
                 <select
@@ -606,14 +610,14 @@ function OfferEditor({
                 </select>
               </Field>
               <Field label="Offline policy">
-                <select
+                <StudioSelect
                   className={selectClass}
                   name="offlinePolicy"
                   defaultValue={version?.offlinePolicy ?? 'ALLOW'}
                 >
                   <option value="ALLOW">Available offline</option>
                   <option value="ONLINE_ONLY">Online only</option>
-                </select>
+                </StudioSelect>
               </Field>
               <Field label="Minimum quantity">
                 <Input

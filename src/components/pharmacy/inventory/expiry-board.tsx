@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import Link from 'next/link';
 
 import { Button, buttonVariants } from '@/components/ui/button';
@@ -401,7 +403,7 @@ function LotCard({ row, props }: { row: ExpiryBoardRow; props: ExpiryBoardProps 
               <Hidden kind="markdown" props={props} row={row} />
               <label className="block text-xs">
                 Mark-down %
-                <select
+                <StudioSelect
                   className={inputClass}
                   defaultValue={row.markdown?.markdownPercent ?? 20}
                   name="markdownPercent"
@@ -412,7 +414,7 @@ function LotCard({ row, props }: { row: ExpiryBoardRow; props: ExpiryBoardProps 
                       {money(Math.round((row.printedMrpMinor * (100 - percent)) / 100))}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </label>
               <label className="block text-xs">
                 Mark-down reason
@@ -464,7 +466,7 @@ function LotCard({ row, props }: { row: ExpiryBoardRow; props: ExpiryBoardProps 
               <Hidden kind="return" props={props} row={row} />
               <label className="block text-xs">
                 Return supplier
-                <select
+                <StudioSelect
                   className={inputClass}
                   defaultValue={row.suggestedSupplierId ?? props.suppliers[0]!.id}
                   name="supplierId"
@@ -474,7 +476,7 @@ function LotCard({ row, props }: { row: ExpiryBoardRow; props: ExpiryBoardProps 
                       {supplier.name}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </label>
               <label className="block text-xs">
                 Return units

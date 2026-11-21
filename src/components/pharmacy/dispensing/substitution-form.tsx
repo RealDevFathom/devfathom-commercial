@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import { Field, fieldClass } from './field';
@@ -40,7 +42,7 @@ export function SubstitutionForm({
         <input readOnly value={prescribed.label} className={fieldClass} />
       </Field>
       <Field label="Supplied presentation">
-        <select required name="suppliedPresentationId" className={fieldClass} defaultValue="">
+        <StudioSelect required name="suppliedPresentationId" className={fieldClass} defaultValue="">
           <option value="" disabled>
             Select supplied presentation
           </option>
@@ -49,7 +51,7 @@ export function SubstitutionForm({
               {choice.label}
             </option>
           ))}
-        </select>
+        </StudioSelect>
       </Field>
       <Field label="Equivalence basis">
         <textarea

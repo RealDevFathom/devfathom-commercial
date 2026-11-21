@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -217,9 +218,16 @@ describe('RestaurantCatalogConsole gap recovery flows', () => {
     fireEvent.change(within(dialog).getByLabelText('Product name'), {
       target: { value: 'House burger' },
     });
-    fireEvent.change(within(dialog).getByLabelText('Product type'), {
-      target: { value: 'COMBO' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        within(dialog).getByLabelText('Product type', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'COMBO' },
+      }
+    );
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add product' }));
 
     expect(mocks.createProduct).toHaveBeenCalledWith({
@@ -312,8 +320,10 @@ describe('RestaurantCatalogConsole gap recovery flows', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Manage versions' }));
 
     expect(screen.getByText('Rice flour')).toBeInTheDocument();
-    const substitutePicker = screen.getByLabelText('Approved substitute ingredient');
-    fireEvent.change(substitutePicker, { target: { value: 'ingredient_3' } });
+    const substitutePicker = screen.getByLabelText('Approved substitute ingredient', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
+    fireEvent.change(selectFieldControl(substitutePicker), { target: { value: 'ingredient_3' } });
     fireEvent.submit(substitutePicker.closest('form')!);
     expect(mocks.addRecipeLineSubstitute).toHaveBeenCalledWith({
       recipeLineId: 'line_1',

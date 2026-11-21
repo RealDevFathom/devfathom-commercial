@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useId, useState, type FormEvent } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -166,7 +168,7 @@ export function SeasonalCalendarPanel({ branchId, today }: { branchId: string; t
           <form onSubmit={submit} noValidate className="mt-6 grid gap-4 md:grid-cols-4">
             <label className="text-sm" htmlFor={`${formId}-kind`}>
               Season
-              <select
+              <StudioSelect
                 id={`${formId}-kind`}
                 className={selectClass}
                 value={draft.kind}
@@ -188,7 +190,7 @@ export function SeasonalCalendarPanel({ branchId, today }: { branchId: string; t
                     {KIND_LABELS[kind]}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <label className="text-sm" htmlFor={`${formId}-label`}>
               Label

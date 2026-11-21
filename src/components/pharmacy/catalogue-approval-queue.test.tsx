@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const m = vi.hoisted(() => ({
@@ -136,9 +137,16 @@ describe('DEV-766 catalogue approval queue', () => {
   it('submits a selected item name for review without publishing it', () => {
     render(<CatalogueApprovalQueue />);
     expect(screen.getByRole('button', { name: 'Submit edit for review' })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Catalogue item'), {
-      target: { value: 'medicine' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Catalogue item', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'medicine' },
+      }
+    );
     fireEvent.change(screen.getByLabelText('Proposed product name'), {
       target: { value: 'New name' },
     });

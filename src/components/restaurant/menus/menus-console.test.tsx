@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -156,12 +157,19 @@ describe('Restaurant menus console', () => {
     renderConsole();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Effective preview' }));
-    expect(screen.getAllByRole('option', { name: 'DELIVERY' })).toEqual(
+    expect(screen.getAllByRole('option', { hidden: true, name: 'DELIVERY' })).toEqual(
       expect.arrayContaining([expect.objectContaining({ disabled: false })])
     );
-    fireEvent.change(screen.getByLabelText('Preview channel'), {
-      target: { value: 'TAKEAWAY' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Preview channel', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'TAKEAWAY' },
+      }
+    );
     fireEvent.change(screen.getByLabelText('Preview instant'), {
       target: { value: '2026-08-18T12:30' },
     });
