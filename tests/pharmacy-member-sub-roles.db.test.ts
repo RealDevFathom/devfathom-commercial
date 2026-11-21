@@ -9,6 +9,8 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { assertDisposableRlsDatabase } from './disposable-rls-database';
+import { PHARMACY_SUB_ROLES } from '@/lib/abac/pharmacy-sub-roles';
+import { isWeightyPharmacySubRole } from '@/lib/abac/pharmacy-sub-role-weight';
 import type { TRPCContext } from '@/server/trpc';
 
 vi.mock('server-only', () => ({}));
@@ -51,6 +53,8 @@ const MEMBERS: Member[] = [
   { key: 'cashier', org: orgA, role: 'EMPLOYEE', template: 'cashier' },
   { key: 'cashier2', org: orgA, role: 'EMPLOYEE', template: 'cashier' },
   { key: 'pharmacist', org: orgA, role: 'EMPLOYEE', template: 'pharmacist' },
+  { key: 'cashierb1', org: orgB, role: 'EMPLOYEE', template: 'cashier' },
+  { key: 'cashierb2', org: orgB, role: 'EMPLOYEE', template: 'cashier' },
   { key: 'ownerb', org: orgB, role: 'ADMIN', template: 'owner', pin: true },
   { key: 'cashier3', org: orgA, role: 'EMPLOYEE', template: 'cashier' },
   // Administrator access through a personal exception, not the base role.
@@ -275,6 +279,139 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
         `SELECT relforcerowsecurity FROM pg_class WHERE relname IN ('user_permission_overrides','audit_logs','users')`
       );
       expect(forced.every((row) => row.relforcerowsecurity)).toBe(true);
+    });
+
+    const cashierRoleB = `${orgB}_role_cashier`;
+    it.each(PHARMACY_SUB_ROLES)(
+      'role-wide $label applies on the next server decision for both holders',
+      async (subRole) => {
+        const action = subRole.actions[0];
+        const owner = callers.admin('ownerb');
+        const args = {
+          roleId: cashierRoleB,
+          subRoleKey: subRole.key,
+          pin: isWeightyPharmacySubRole(subRole.key) ? PIN : undefined,
+        };
+        const initial = await allowed('cashierb1', action);
+        // Give this fixture owner the exact action, including clinical powers absent from Owner.
+        await rows(
+          `INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"updatedAt") VALUES ($1,$2,$3,$4,'ALLOW','fixture',now())`,
+          [id('owner_tick'), orgB, id('ownerb'), action]
+        );
+        try {
+          for (const ticked of [!initial, initial]) {
+            await owner.setRoleSubRole({ ...args, ticked });
+            const view = await owner.roleAccess({ roleId: cashierRoleB });
+            expect(
+              view.groups
+                .flatMap((group) => group.subRoles)
+                .find((item) => item.key === subRole.key)?.state
+            ).toBe(ticked ? 'on' : 'off');
+            for (const who of ['cashierb1', 'cashierb2'])
+              expect(await allowed(who, action)).toBe(ticked);
+          }
+          expect((await audits('cashierb1')).at(-1)).toMatchObject({
+            actorId: id('ownerb'),
+            action: 'organizationAdmin.setRoleSubRole',
+          });
+        } finally {
+          await rows('DELETE FROM user_permission_overrides WHERE id=$1', [id('owner_tick')]);
+          if (!initial)
+            await rows(
+              'DELETE FROM organization_role_permissions WHERE "organizationRoleId"=$1 AND capability=$2',
+              [cashierRoleB, action]
+            );
+        }
+      }
+    );
+
+    it('protects role-wide edits even without holders and keeps personal refusals and role edits tenant-scoped', async () => {
+      const owner = callers.admin('ownerb');
+      const args = { roleId: `${orgB}_role_inventory`, subRoleKey: 'receive-stock', ticked: true };
+      await expect(owner.setRoleSubRole(args)).rejects.toMatchObject({
+        code: 'PRECONDITION_FAILED',
+      });
+      await expect(
+        callers
+          .admin('manager')
+          .setRoleSubRole({ ...args, roleId: `${orgA}_role_inventory`, pin: PIN })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(
+        owner.setRoleSubRole({ ...args, subRoleKey: 'review-catalogue', pin: PIN })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(
+        owner.setRoleSubRole({ ...args, roleId: `${orgB}_role_owner`, ticked: false, pin: PIN })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(
+        owner.setRoleSubRole({ ...args, roleId: `${orgA}_role_inventory`, pin: PIN })
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      await expect(
+        owner.setRoleSubRole({ ...args, subRoleKey: '*', pin: PIN })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(owner.setRoleSubRole({ ...args, pin: '0000' })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(
+        (await owner.roleAccess({ roleId: args.roleId })).groups
+          .flatMap((group) => group.subRoles)
+          .find((item) => item.key === args.subRoleKey)?.state
+      ).toBe('off');
+      await owner.setRoleSubRole({ ...args, pin: PIN });
+      await expect(owner.setRoleSubRole({ ...args, pin: PIN })).resolves.toEqual({ changed: [] });
+      expect(
+        await rows(
+          `SELECT "actorId" FROM audit_logs WHERE "targetId"=$1 AND action='organizationAdmin.setRoleSubRole'`,
+          [args.roleId]
+        )
+      ).toEqual([{ actorId: id('ownerb') }]);
+      await rows(
+        `INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"updatedAt") VALUES ($1,$2,$3,'pharmacy:inventory','DENY','fixture',now())`,
+        [id('personal_refusal'), orgB, id('cashierb2')]
+      );
+      await owner.setRoleSubRole({
+        ...args,
+        roleId: cashierRoleB,
+        subRoleKey: 'manage-stock',
+        pin: PIN,
+      });
+      expect(await allowed('cashierb1', 'pharmacy:inventory')).toBe(true);
+      expect(await allowed('cashierb2', 'pharmacy:inventory')).toBe(false);
+      expect(await overrides('cashierb2')).toContainEqual({
+        capability: 'pharmacy:inventory',
+        effect: 'DENY',
+      });
+    });
+
+    it('keeps a custom role’s wildcard refusal and applies an empty role edit to a later holder', async () => {
+      const roleId = `${orgB}_role_custom`;
+      await rows(
+        `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,'custom','Custom',false,now())`,
+        [roleId, orgB]
+      );
+      await rows(
+        `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'sop:*','DENY')`,
+        [id('sop_deny'), orgB, roleId]
+      );
+      const owner = callers.admin('ownerb');
+      const view = await owner.roleAccess({ roleId });
+      expect(view.locked['do-procedures']).toMatch(/refuses/);
+      await expect(
+        owner.setRoleSubRole({ roleId, subRoleKey: 'do-procedures', ticked: true })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await owner.setRoleSubRole({ roleId, subRoleKey: 'receive-stock', ticked: true, pin: PIN });
+      expect(await allowed('cashierb1', 'pharmacy:procurement')).toBe(false);
+      await owner.updateMember({
+        id: id('cashierb1'),
+        department: 'COUNTER',
+        title: 'Staff',
+        role: 'EMPLOYEE',
+        status: 'ACTIVE',
+        organizationRoleId: roleId,
+        pin: PIN,
+      });
+      expect(await allowed('cashierb1', 'pharmacy:procurement')).toBe(true);
+      expect(await allowed('cashierb1', 'sop:complete')).toBe(false);
+      expect(await overrides('cashierb1')).toEqual([]);
     });
 
     it('shows a cashier the Cashier sub-roles ticked and every other one unticked', async () => {
@@ -1415,6 +1552,16 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
         support: { id: 'support-session' },
       } as unknown as TRPCContext;
       const { organizationAdminRouter } = await import('@/server/routers/organization-admin');
+      await expect(
+        organizationAdminRouter
+          .createCaller(support)
+          .setRoleSubRole({
+            roleId: `${orgA}_role_cashier`,
+            subRoleKey: 'manage-stock',
+            ticked: true,
+            pin: '0000',
+          })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
       const { teamRouter } = await import('@/server/routers/team');
       for (let attempt = 0; attempt < 3; attempt += 1) {
         await expect(

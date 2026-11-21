@@ -1,5 +1,6 @@
 'use client';
 
+import { RoleAccessButton } from './role-access-panel';
 import { memo, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
@@ -115,10 +116,13 @@ export function TeamContent() {
         }
         actions={
           canManageMembers ? (
-            <Button size="lg" onClick={() => setShowAddMember(true)}>
-              <Plus className="h-4 w-4" />
-              {canReadDirectory ? 'Add Member' : 'Invite a colleague'}
-            </Button>
+            <>
+              {entitlements.vertical === 'PHARMACY' ? <RoleAccessButton /> : null}
+              <Button size="lg" onClick={() => setShowAddMember(true)}>
+                <Plus className="h-4 w-4" />
+                {canReadDirectory ? 'Add Member' : 'Invite a colleague'}
+              </Button>
+            </>
           ) : undefined
         }
       />

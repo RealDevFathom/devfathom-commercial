@@ -22,6 +22,7 @@ import { guardMemberEdit, isPharmacyContext, verifyMemberEditPin } from '@/serve
 import { guardPharmacyAccessChanges } from '@/lib/team/pharmacy-access-guard';
 import { adminProcedure, protectedProcedure, router } from '@/server/trpc';
 import { readUploadRegistryReport } from '@/lib/uploads/registry-report';
+import { readPharmacyRoleAccess, setPharmacyRoleSubRole } from '@/lib/team/role-sub-role-edit';
 import { readPharmacyMemberAccess } from '@/lib/team/member-access';
 import {
   applyPharmacyMemberRoleTemplate,
@@ -215,6 +216,42 @@ export const organizationAdminRouter = router({
       select: { id: true, key: true, name: true },
     });
   }),
+
+  roleAccess: adminProcedure
+    .input(z.strictObject({ roleId: z.string().trim().min(1).max(128) }))
+    .query(({ ctx, input }) => {
+      assertPharmacySubRoles(ctx);
+      return readPharmacyRoleAccess(ctx.db, {
+        ...input,
+        organizationId: organizationId(ctx),
+        actorId: ctx.session.user.id,
+        supportSession: supportSession(ctx),
+      });
+    }),
+
+  setRoleSubRole: adminProcedure
+    .input(
+      z.strictObject({
+        roleId: z.string().trim().min(1).max(128),
+        subRoleKey: z.string().trim().min(1).max(64),
+        ticked: z.boolean(),
+        pin: z.string().min(1).max(64).optional(),
+      })
+    )
+    .mutation(({ ctx, input }) => {
+      annotateAudit(ctx, {
+        skipInput: true,
+        targetType: 'OrganizationRole',
+        targetId: input.roleId,
+      });
+      assertPharmacySubRoles(ctx);
+      return setPharmacyRoleSubRole(ctx.db, {
+        ...input,
+        organizationId: organizationId(ctx),
+        actorId: ctx.session.user.id,
+        supportSession: supportSession(ctx),
+      });
+    }),
 
   // DEV-959A: read-only "What this person can do" for the team screen. Same
   // administrator gate as the member list it opens from; nothing is changed.

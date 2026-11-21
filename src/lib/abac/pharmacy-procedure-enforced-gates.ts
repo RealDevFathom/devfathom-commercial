@@ -12,6 +12,8 @@
  * dropping a capability from `.meta`) fails until this file changes in review. Data only.
  */
 export const PHARMACY_PROCEDURE_ENFORCED_GATES: Readonly<Record<string, readonly string[]>> = {
+  'organizationAdmin.roleAccess': ['admin:access'],
+  'organizationAdmin.setRoleSubRole': ['admin:access'],
   'pharmacyAccess.navigation': ['signed-in'],
   'pharmacyApInvoices.aging': ['admin:access'],
   'pharmacyApInvoices.approveCreditSetOff': ['admin:access'],

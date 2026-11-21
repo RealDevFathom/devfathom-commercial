@@ -158,23 +158,24 @@ function PinConfirm({
 
 function SubRoleRow({
   subRole,
-  ticking,
+  locked,
+  weightyLine,
+  personal,
   editor,
   onChanged,
 }: {
   subRole: SubRole;
-  ticking?: Ticking;
-  editor?: MemberAccessEditor;
+  locked: string | null;
+  weightyLine?: string;
+  personal?: 'ALLOW' | 'DENY';
+  editor?: Pick<MemberAccessEditor, 'pending' | 'setSubRole'>;
   onChanged: (notice: Notice) => void;
 }) {
   const id = useId();
   const [confirming, setConfirming] = useState<{ giving: boolean } | null>(null);
   const stateLabel =
     subRole.state === 'on' ? 'Allowed' : subRole.state === 'partial' ? 'Partly allowed' : '';
-  const locked = lockedNote(ticking, subRole);
   const editable = Boolean(editor) && locked === null;
-  const weightyLine = ticking?.weighty[subRole.key];
-  const personal = ticking?.personal[subRole.key];
 
   function toggle(checked: boolean) {
     if (!editor || !editable || editor.pending) return;
@@ -222,9 +223,7 @@ function SubRoleRow({
             <li key={line}>{line}</li>
           ))}
         </ul>
-        {ticking?.editing.allowed && locked ? (
-          <p className="text-xs text-text-muted">{locked}</p>
-        ) : null}
+        {editor && locked ? <p className="text-xs text-text-muted">{locked}</p> : null}
         {confirming && editor && weightyLine ? (
           <PinConfirm
             subRole={subRole}
@@ -463,28 +462,14 @@ export function MemberAccessView(access: {
       {editor && ticking ? (
         <StartingRole ticking={ticking} groups={groups} editor={editor} onChanged={setNotice} />
       ) : null}
-      <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-        {groups.map((group) => (
-          <section
-            key={group.roleKey}
-            aria-labelledby={`access-group-${group.roleKey}`}
-            className="min-w-0 border-t border-border-subtle pt-3"
-          >
-            <Eyebrow id={`access-group-${group.roleKey}`}>{group.roleName}</Eyebrow>
-            <ul className="divide-y divide-border-subtle">
-              {group.subRoles.map((subRole) => (
-                <SubRoleRow
-                  key={subRole.key}
-                  subRole={subRole}
-                  ticking={ticking}
-                  editor={editor}
-                  onChanged={setNotice}
-                />
-              ))}
-            </ul>
-          </section>
-        ))}
-      </div>
+      <SubRoleGroups
+        groups={groups}
+        lockedNoteFor={(subRole) => lockedNote(ticking, subRole)}
+        weighty={ticking?.weighty}
+        personal={ticking?.personal}
+        editor={editor}
+        onChanged={setNotice}
+      />
     </div>
   );
 }
@@ -518,5 +503,49 @@ export function MemberAccessButton({ userId, name }: { userId: string; name: str
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+export function SubRoleGroups({
+  groups,
+  lockedNoteFor,
+  weighty,
+  personal,
+  editor,
+  onChanged,
+}: {
+  groups: MemberAccess['groups'];
+  lockedNoteFor: (subRole: SubRole) => string | null;
+  weighty?: Readonly<Record<string, string>>;
+  personal?: Ticking['personal'];
+  editor?: Pick<MemberAccessEditor, 'pending' | 'setSubRole'>;
+  onChanged: (notice: Notice) => void;
+}) {
+  const groupId = useId();
+  return (
+    <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+      {groups.map((group) => (
+        <section
+          key={group.roleKey}
+          aria-labelledby={`${groupId}-${group.roleKey}`}
+          className="min-w-0 border-t border-border-subtle pt-3"
+        >
+          <Eyebrow id={`${groupId}-${group.roleKey}`}>{group.roleName}</Eyebrow>
+          <ul className="divide-y divide-border-subtle">
+            {group.subRoles.map((subRole) => (
+              <SubRoleRow
+                key={subRole.key}
+                subRole={subRole}
+                locked={lockedNoteFor(subRole)}
+                weightyLine={weighty?.[subRole.key]}
+                personal={personal?.[subRole.key]}
+                editor={editor}
+                onChanged={onChanged}
+              />
+            ))}
+          </ul>
+        </section>
+      ))}
+    </div>
   );
 }
