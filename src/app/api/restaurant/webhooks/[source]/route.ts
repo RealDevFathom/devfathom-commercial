@@ -110,6 +110,7 @@ export async function POST(
       eventType: parsed.data.eventType ?? null,
       payload: parsed.data.payload as unknown as Prisma.InputJsonValue,
       verificationStatus: 'VERIFIED',
+      signatureMethod: 'HMAC_SHA256',
     });
   } catch (error) {
     if (error instanceof WebhookAdmissionError) {

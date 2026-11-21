@@ -24,7 +24,10 @@ export async function consumeBoundedBody(
   }
 }
 
-export async function readBoundedBody(request: Request, limit: number): Promise<Buffer | null> {
+export async function readBoundedBody(
+  request: Request,
+  limit: number
+): Promise<Buffer<ArrayBuffer> | null> {
   const chunks: Uint8Array[] = [];
   const complete = await consumeBoundedBody(request, limit, (chunk) => chunks.push(chunk));
   return complete ? Buffer.concat(chunks) : null;

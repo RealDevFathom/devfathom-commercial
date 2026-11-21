@@ -1,3 +1,5 @@
+// @vitest-environment node
+import { multipartUpload } from '../../../../../../tests/fixtures/multipart-upload';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TRPCError } from '@trpc/server';
 
@@ -60,11 +62,16 @@ function request(overrides?: {
     );
   }
   const origin = overrides?.origin === undefined ? 'https://devfathom.test' : overrides.origin;
-  return {
-    formData: overrides?.formData ?? (async () => form),
-    headers: new Headers(origin ? { origin } : undefined),
-    url: 'https://devfathom.test/api/pharmacy/sop/evidence',
-  } as Request;
+  // Only synthetic invalid File metadata and parser failures need a test double.
+  if (overrides?.formData)
+    vi.spyOn(Response.prototype, 'formData').mockImplementationOnce(overrides.formData);
+  else if (overrides && 'file' in overrides)
+    vi.spyOn(Response.prototype, 'formData').mockResolvedValueOnce(form);
+  return new Request('https://devfathom.test/api/pharmacy/sop/evidence', {
+    method: 'POST',
+    headers: origin ? { origin } : undefined,
+    body: form,
+  });
 }
 
 const TARGET = {
@@ -553,4 +560,19 @@ describe('POST pharmacy SOP evidence capture receipts', () => {
     expect(retry.status).toBe(201);
     expect(db.pharmacySopEvidenceCapture.createMany).toHaveBeenCalledTimes(2);
   });
+});
+
+it.each([24, 25])('accepts a %i MB multipart file with its full byte count', async (size) => {
+  const response = await POST(multipartUpload('/api/pharmacy/sop/evidence', size));
+  expect(response.status).toBe(201);
+  expect(mocks.putUpload).toHaveBeenCalledOnce();
+  expect(mocks.putUpload.mock.calls[0]![2].byteLength).toBe(size * 1024 * 1024);
+  expect(response.headers.get('Content-Security-Policy')).toContain("'nonce-");
+});
+
+it('refuses a 26 MB multipart file with a plain size message before storage', async () => {
+  const response = await POST(multipartUpload('/api/pharmacy/sop/evidence', 26));
+  expect(response.status).toBe(413);
+  expect(await response.text()).toContain('Choose a file of 25 MB or smaller.');
+  expect(mocks.putUpload).not.toHaveBeenCalled();
 });

@@ -1,3 +1,4 @@
+import { readUploadForm, uploadPost, UPLOAD_SIZE_MESSAGE } from '@/lib/uploads/multipart-request';
 import { requireSopActor } from '@/lib/restaurant/sop-actor';
 
 import crypto from 'node:crypto';
@@ -78,7 +79,7 @@ function destination(request: Request, form: FormData, notice: string, kind: 'su
   return url;
 }
 
-export async function POST(request: Request) {
+export const POST = uploadPost(async (request: Request) => {
   const origin = request.headers.get('origin');
   const fetchSite = request.headers.get('sec-fetch-site');
   let sameOrigin = false;
@@ -94,9 +95,10 @@ export async function POST(request: Request) {
     return new Response('Forbidden', { status: 403 });
   }
 
-  let form: FormData;
+  let form: FormData | null;
   try {
-    form = await request.formData();
+    form = await readUploadForm(request);
+    if (!form) return new Response(UPLOAD_SIZE_MESSAGE, { status: 413 });
   } catch {
     return new Response('Invalid multipart form.', { status: 400 });
   }
@@ -106,6 +108,12 @@ export async function POST(request: Request) {
   let stage: EvidenceCaptureStage = 'file_validation';
   try {
     const file = form.get('file');
+    if (file && typeof file === 'object' && file.size > MAX_ATTACHMENT_BYTES) {
+      return NextResponse.redirect(
+        destination(request, form, `Proof capture failed. ${UPLOAD_SIZE_MESSAGE}`, 'error'),
+        303
+      );
+    }
     const purpose = String(form.get('evidencePurpose') ?? '').trim();
     const occurrenceId = String(form.get('occurrenceId') ?? '').trim();
     const occurrenceStepId = String(form.get('occurrenceStepId') ?? '').trim();
@@ -203,4 +211,13 @@ export async function POST(request: Request) {
       303
     );
   }
-}
+});
+
+export {
+  uploadMethodResponse as GET,
+  uploadMethodResponse as HEAD,
+  uploadMethodResponse as PUT,
+  uploadMethodResponse as PATCH,
+  uploadMethodResponse as DELETE,
+  uploadMethodResponse as OPTIONS,
+} from '@/lib/uploads/multipart-request';

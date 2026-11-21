@@ -1,3 +1,5 @@
+// @vitest-environment node
+import { multipartUpload } from '../../../../../../tests/fixtures/multipart-upload';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
@@ -68,11 +70,13 @@ function request(overrides?: {
     headers.set('x-forwarded-proto', 'https');
   }
   if (overrides?.fetchSite) headers.set('sec-fetch-site', overrides.fetchSite);
-  return {
-    formData: async () => form,
+  if (overrides && 'file' in overrides)
+    vi.spyOn(Response.prototype, 'formData').mockResolvedValueOnce(form);
+  return new Request(overrides?.url ?? 'https://devfathom.test/api/restaurant/sop/evidence', {
+    method: 'POST',
     headers,
-    url: overrides?.url ?? 'https://devfathom.test/api/restaurant/sop/evidence',
-  } as Request;
+    body: form,
+  });
 }
 
 beforeEach(() => {
@@ -469,4 +473,19 @@ it('failed cleanup after attach failure is visible and sanitized', async () => {
   expect(response.headers.get('location')).toContain('cleanup+is+incomplete');
   expect(JSON.stringify(warn.mock.calls)).not.toContain('private');
   expect(mocks.deleteUpload).toHaveBeenCalledOnce();
+});
+
+it.each([24, 25])('accepts a %i MB multipart file with its full byte count', async (size) => {
+  const response = await POST(multipartUpload('/api/restaurant/sop/evidence', size));
+  expect(response.status).toBe(303);
+  expect(mocks.putUpload).toHaveBeenCalledOnce();
+  expect(mocks.putUpload.mock.calls[0]![2].byteLength).toBe(size * 1024 * 1024);
+  expect(response.headers.get('Content-Security-Policy')).toContain("'nonce-");
+});
+
+it('refuses a 26 MB multipart file with a plain size message before storage', async () => {
+  const response = await POST(multipartUpload('/api/restaurant/sop/evidence', 26));
+  expect(response.status).toBe(413);
+  expect(await response.text()).toContain('Choose a file of 25 MB or smaller.');
+  expect(mocks.putUpload).not.toHaveBeenCalled();
 });

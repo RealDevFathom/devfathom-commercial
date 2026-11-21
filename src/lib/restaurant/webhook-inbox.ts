@@ -70,6 +70,8 @@ export type RecordInboundWebhookInput = {
   eventType?: string | null;
   payload: Prisma.InputJsonValue;
   verificationStatus: RestaurantWebhookVerificationStatus | 'UNVERIFIED';
+  /** Set only after the provider HMAC verifier authenticates the original body. */
+  signatureMethod?: 'HMAC_SHA256';
 };
 
 export type RecordInboundWebhookResult = {
@@ -242,6 +244,7 @@ export async function recordInboundWebhook(
             eventType: input.eventType ?? null,
             payload: input.payload,
             verificationStatus,
+            providerHmacVerified: input.signatureMethod === 'HMAC_SHA256',
             status: 'PENDING',
           },
           select: INBOX_SELECT,

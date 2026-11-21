@@ -196,6 +196,7 @@ describe('terminal webhook: unsigned envelopes cannot suppress a signed event', 
           externalEventId: EVENT_ID,
           eventType: 'terminal.approved',
           verificationStatus: 'VERIFIED',
+          providerHmacVerified: true,
           status: 'PROCESSED',
         }),
       ]);

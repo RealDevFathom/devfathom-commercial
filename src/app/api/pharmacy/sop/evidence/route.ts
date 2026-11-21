@@ -1,3 +1,4 @@
+import { readUploadForm, uploadPost, UPLOAD_SIZE_MESSAGE } from '@/lib/uploads/multipart-request';
 import crypto from 'node:crypto';
 
 import { TRPCError } from '@trpc/server';
@@ -118,7 +119,7 @@ async function readEvidenceFile(value: FormDataEntryValue | null) {
     typeof value.type !== 'string' ||
     typeof value.arrayBuffer !== 'function'
   ) {
-    throw new EvidenceInputError(`Choose a file between 1 byte and ${MAX_ATTACHMENT_BYTES} bytes.`);
+    throw new EvidenceInputError('Choose a file between 1 byte and 25 MB.');
   }
   const baseType = value.type.split(';')[0]!.trim().toLowerCase();
   const extension = EVIDENCE_TYPES[baseType as keyof typeof EVIDENCE_TYPES];
@@ -157,12 +158,13 @@ function isSameOrigin(request: Request): boolean {
   }
 }
 
-export async function POST(request: Request) {
+export const POST = uploadPost(async (request: Request) => {
   if (!isSameOrigin(request)) return new Response('Forbidden', { status: 403 });
 
-  let form: FormData;
+  let form: FormData | null;
   try {
-    form = await request.formData();
+    form = await readUploadForm(request);
+    if (!form) return json(413, { error: UPLOAD_SIZE_MESSAGE });
   } catch {
     return json(400, { error: 'The upload was incomplete or not a multipart form.' });
   }
@@ -354,4 +356,13 @@ export async function POST(request: Request) {
     }
     return json(500, { error: 'Proof capture failed. Check the file and try again.' });
   }
-}
+});
+
+export {
+  uploadMethodResponse as GET,
+  uploadMethodResponse as HEAD,
+  uploadMethodResponse as PUT,
+  uploadMethodResponse as PATCH,
+  uploadMethodResponse as DELETE,
+  uploadMethodResponse as OPTIONS,
+} from '@/lib/uploads/multipart-request';

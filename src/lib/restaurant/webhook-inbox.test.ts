@@ -158,6 +158,7 @@ describe('recordInboundWebhook', () => {
     expect(result.deduplicated).toBe(false);
     expect(result.inbox.verificationStatus).toBe('VERIFIED');
     expect(result.inbox.status).toBe('PENDING');
+    expect(inbox.get(result.inbox.id)?.providerHmacVerified).toBe(false);
     expect(inbox.size).toBe(1);
     expect(result.enqueuedJobId).toBe('job_new');
     expect(mocks.enqueue).toHaveBeenCalledTimes(1);

@@ -1,4 +1,10 @@
 BEGIN;
+SET LOCAL lock_timeout = '10s';
+
+-- Never infer HMAC provenance from a historical VERIFIED label. Old records
+-- and rows inserted by older application versions retain the false default.
+ALTER TABLE public.restaurant_webhook_inbox
+  ADD COLUMN IF NOT EXISTS "providerHmacVerified" boolean NOT NULL DEFAULT false;
 
 -- Serialize the one-time count with writers, including jobs already queued at rollout.
 LOCK TABLE public.restaurant_jobs IN SHARE ROW EXCLUSIVE MODE;
@@ -27,7 +33,7 @@ DECLARE
   -- Deployment-wide admission policy. All totals include QUEUED and RUNNING.
   deployment_limit CONSTANT integer := 50000;
   payment_reserve CONSTANT integer := 10000;
-  new_total bigint;
+  pending_total bigint;
   was_pending boolean := false;
   is_pending boolean := false;
 BEGIN
@@ -38,25 +44,32 @@ BEGIN
     is_pending := NEW.type = 'webhook.process' AND NEW.status IN ('QUEUED', 'RUNNING');
   END IF;
   IF was_pending AND NOT is_pending THEN
-    UPDATE restaurant_queue_private.webhook_capacity SET pending = pending - 1 WHERE singleton;
+    SELECT pending INTO pending_total FROM restaurant_queue_private.webhook_capacity
+    WHERE singleton FOR UPDATE;
+    IF pending_total = 0 THEN
+      RAISE WARNING 'restaurant_webhook_capacity_counter_underflow';
+    END IF;
+    UPDATE restaurant_queue_private.webhook_capacity
+    SET pending = greatest(0, pending - 1) WHERE singleton;
   ELSIF is_pending AND NOT was_pending THEN
     -- Concurrent writers recheck the predicate on the locked row. The update
     -- and the actual job always commit or roll back in the same transaction.
     UPDATE restaurant_queue_private.webhook_capacity SET pending = pending + 1
     WHERE singleton AND pending < deployment_limit
-    RETURNING pending INTO new_total;
+    RETURNING pending INTO pending_total;
     IF NOT FOUND THEN
       RAISE EXCEPTION USING ERRCODE = 'RW429', MESSAGE = 'Too many pending webhook jobs.';
     END IF;
     -- The public route has already authenticated the exact bytes and validated
     -- terminalEventSchema. Requeues must resolve to that same stored terminal
     -- event and its configured provider/device to qualify for reserved capacity.
-    IF new_total > deployment_limit - payment_reserve AND NOT EXISTS (
+    IF pending_total > deployment_limit - payment_reserve AND NOT EXISTS (
       SELECT 1 FROM public.restaurant_webhook_inbox AS inbox
       JOIN public.restaurant_terminal_provider_configs AS provider
         ON provider."organizationId" = inbox."organizationId" AND provider.source = inbox.source
         AND provider."externalTerminalId" = inbox.payload->>'terminalId' AND provider.mode = 'WEBHOOK'
       WHERE inbox."organizationId" = NEW."organizationId" AND inbox.id = NEW.payload->>'inboxId'
+        AND inbox."providerHmacVerified"
         AND inbox.status = 'PENDING' AND inbox."verificationStatus" = 'VERIFIED' AND inbox."eventType" LIKE 'terminal.%'
         AND inbox.payload->>'status' IN ('initiated', 'approved', 'declined', 'voided')
         -- A repeated operator retry of the same dead job cannot take more

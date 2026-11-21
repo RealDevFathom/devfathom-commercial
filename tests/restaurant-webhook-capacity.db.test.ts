@@ -83,6 +83,7 @@ it.skipIf(!runtimeUrl)(
       const ordinary = {
         source: 'fixture',
         verificationStatus: 'VERIFIED' as const,
+        signatureMethod: 'HMAC_SHA256' as const,
         externalEventId: 'ordinary',
         eventType: 'restaurant.event',
         payload: {},
@@ -143,6 +144,23 @@ it.skipIf(!runtimeUrl)(
           where: { externalEventId: 'unknown-terminal' },
         })
       ).toBe(0);
+      // A pre-migration stub row can look like a terminal payment. Its original
+      // verification method is unknown, even if that provider is enabled today.
+      const legacy = await generic.db.restaurantWebhookInbox.create({
+        data: {
+          source: payment.source,
+          externalEventId: 'legacy-stub',
+          eventType: payment.eventType,
+          payload: payment.payload,
+          status: 'PENDING',
+          verificationStatus: 'VERIFIED',
+        },
+      });
+      expect(legacy.providerHmacVerified).toBe(false);
+      await expect(
+        enqueue(generic.db, { type: 'webhook.process', payload: { inboxId: legacy.id } })
+      ).rejects.toMatchObject({ reason: 'WEBHOOK_CAPACITY' });
+      expect(await count()).toBe(40_000);
       const signed = await race(payment, 49_999);
       const existing = await signed.db.restaurantJob.findFirstOrThrow({
         where: { idempotencyKey: `webhook.process:${signed.inboxId}` },
@@ -175,6 +193,32 @@ it.skipIf(!runtimeUrl)(
       expect(
         (await signed.db.restaurantJob.findUniqueOrThrow({ where: { id: existing.id } })).status
       ).toBe('DEAD');
+
+      // Simulate drift and settle one fixture job as the restricted runtime.
+      // Capture PostgreSQL's diagnostic on the same connection as the update.
+      await seedCount(0);
+      const worker = new Client({ connectionString: runtime.href });
+      const warnings: string[] = [];
+      worker.on('notice', (notice) => {
+        if (notice.severity === 'WARNING') warnings.push(notice.message ?? '');
+      });
+      await worker.connect();
+      try {
+        await worker.query('BEGIN');
+        await worker.query("SELECT set_config('app.current_organization_id', $1, true)", [
+          existing.organizationId,
+        ]);
+        const settled = await worker.query(
+          "UPDATE restaurant_jobs SET status = 'SUCCEEDED' WHERE id = $1 RETURNING status",
+          [requeued.job.id]
+        );
+        expect(settled.rows).toEqual([{ status: 'SUCCEEDED' }]);
+        await worker.query('COMMIT');
+      } finally {
+        await worker.end();
+      }
+      expect(await count()).toBe(0);
+      expect(warnings).toEqual(['restaurant_webhook_capacity_counter_underflow']);
     } finally {
       // Remove only the synthetic count offset. Leave existing and fixture jobs intact.
       try {
