@@ -405,6 +405,8 @@ export async function dispatchPurchaseReturn(
     ) {
       throw new PharmacySupplierReturnError('LATE_DISPATCH_UNAVAILABLE');
     }
+    if (!lateLine.legacyOutgoingMovementId)
+      throw new PharmacySupplierReturnError('LATE_MOVEMENT_UNCLEAR');
   } else {
     if (sent) throw new PharmacySupplierReturnError('ALREADY_DISPATCHED');
     assertPurchaseReturnTransition(found.status as PurchaseReturnStatus, 'DISPATCHED');
@@ -428,17 +430,14 @@ export async function dispatchPurchaseReturn(
   if (controlled) await lockRegister(db, scope.organizationId, scope.branchId);
 
   if (input.recordLateLineId) {
-    if (!lateLine || !found.dispatchedAt || !witness)
+    if (!lateLine?.legacyOutgoingMovementId || !found.dispatchedAt || !witness)
       throw new PharmacySupplierReturnError('LATE_DISPATCH_UNAVAILABLE');
-    const [movement] = await db.$queryRaw<{ id: string | null }[]>`
-      SELECT pharmacy_legacy_supplier_outgoing(${scope.organizationId}, ${scope.branchId}, ${lateLine.id}) AS id`;
-    if (!movement?.id) throw new PharmacySupplierReturnError('LATE_MOVEMENT_UNCLEAR');
     await appendControlledSupplierReturn(db, scope, {
       supplierId: found.supplierId,
       supplierName: found.supplier.name,
       lineId: lateLine.id,
       inventoryLotId: lateLine.inventoryLotId,
-      movementId: movement.id,
+      movementId: lateLine.legacyOutgoingMovementId,
       quantity: lateLine.quantityUnits,
       lateDispatchAt: found.dispatchedAt,
       approvalReason: input.approvalReason,

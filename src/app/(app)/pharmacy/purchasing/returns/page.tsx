@@ -215,32 +215,52 @@ export default async function PharmacyReturnsPage({
   let witnesses: { id: string; name: string }[] = [];
   let witnessHint = 'A different pharmacist must approve this dispatch.';
   if (needsWitness) {
-    if (
-      await can(subjectFromSession(ctx.session.user), 'pharmacy:dispense', undefined, {
-        db: ctx.db,
-      })
-    ) {
-      try {
-        const orgId = ctx.entitlements.organizationId;
-        const userId = ctx.session.user.id;
-        if (!lateLine) {
-          witnesses = await listControlledPinWitnesses(ctx.db, orgId, userId);
-          if (!witnesses.length && (await isSolePharmacist(ctx.db, orgId, userId)))
-            selfApproval = 'solo';
-        }
-        if (selfApproval)
+    const orgId = ctx.entitlements.organizationId;
+    const userId = ctx.session.user.id;
+    try {
+      if (lateLine) {
+        // The historical list is owner-only. This credential identifies its recorder.
+        const ownerProfiles = await ctx.db.restaurantStaffProfile.findMany({
+          where: {
+            organizationId: orgId,
+            userId,
+            status: 'ACTIVE',
+            user: { organizationId: orgId, status: 'ACTIVE' },
+            credentials: {
+              some: {
+                type: 'PIN',
+                revokedAt: null,
+                deviceId: null,
+                OR: [{ lockedUntil: null }, { lockedUntil: { lte: new Date() } }],
+              },
+            },
+          },
+          select: { id: true, displayName: true },
+          orderBy: { id: 'asc' },
+        });
+        witnesses = ownerProfiles.map((profile) => ({ id: profile.id, name: profile.displayName }));
+      } else if (
+        await can(subjectFromSession(ctx.session.user), 'pharmacy:dispense', undefined, {
+          db: ctx.db,
+        })
+      ) {
+        witnesses = await listControlledPinWitnesses(ctx.db, orgId, userId);
+        if (!witnesses.length && (await isSolePharmacist(ctx.db, orgId, userId))) {
+          selfApproval = 'solo';
           witnesses = await listControlledPinWitnesses(ctx.db, orgId, userId, userId);
-        if (selfApproval)
-          witnessHint = witnesses.length
-            ? 'Confirm with your own credential.'
-            : 'Your approval credential is unavailable. Check your approval settings.';
-        else if (!witnesses.length)
+        }
+        if (!witnesses.length)
           witnessHint = 'No eligible independent pharmacist is available to witness this dispatch.';
-      } catch {
-        witnessHint = 'Witnesses could not be loaded. Reload this return before dispatch.';
+      } else {
+        witnessHint = 'A pharmacist with dispensing access must dispatch controlled stock.';
       }
-    } else {
-      witnessHint = 'A pharmacist with dispensing access must dispatch controlled stock.';
+      if (selfApproval)
+        witnessHint = witnesses.length
+          ? 'Confirm with your own credential.'
+          : 'Your approval credential is unavailable. Check your approval settings.';
+    } catch {
+      witnessHint =
+        'Approval credentials could not be loaded. Reload this return before continuing.';
     }
   }
   const witnessLabel = `${selfApproval ? 'Your' : 'Witness'} ${credentialKind === 'PIN' ? 'PIN' : 'approval code'}`;

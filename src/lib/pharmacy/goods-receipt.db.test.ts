@@ -1459,12 +1459,12 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
             department: actor.department,
             title: 'Owner',
             permissionOverrides: {
-              create: ['*', 'pharmacy:dispense'].map((capability) => ({
+              create: {
                 organizationId: scope.organizationId,
-                capability,
-                effect: 'ALLOW' as const,
+                capability: '*',
+                effect: 'ALLOW',
                 reason: 'Synthetic owner',
-              })),
+              },
             },
           },
         })
@@ -1526,6 +1526,23 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
           dispatchedAt: new Date(fixture.dispatchedAt),
         }),
       ]);
+      const { can } = await import('@/lib/abac');
+      const permissions = await inOrg(scope.organizationId, async (db) => {
+        const user = (id: string) =>
+          db.user.findFirstOrThrow({ where: { id, organizationId: scope.organizationId } });
+        return {
+          ownerCanDispense: await can(
+            await user(ownerScope.actorId),
+            'pharmacy:dispense',
+            undefined,
+            { db }
+          ),
+          senderCanDispense: await can(await user(scope.actorId), 'pharmacy:dispense', undefined, {
+            db,
+          }),
+        };
+      });
+      expect(permissions).toEqual({ ownerCanDispense: false, senderCanDispense: true });
       const before = await rows();
       expect(before.map((e) => [e.entryKind, e.runningBalance])).toEqual([
         ['PURCHASE', 100],
@@ -1620,6 +1637,125 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
       expect((await rows()).at(-1)?.runningBalance).toBe(20);
       expect((await stock()).balances.AVAILABLE).toBe(20);
       expect(await incidents()).toBe(0);
+    },
+    30000
+  );
+
+  it.skipIf(!upgradeFixture)(
+    'pins the pre-upgrade outgoing movement independently of business dates',
+    async () => {
+      const fixture: UpgradeFixture = JSON.parse(readFileSync(upgradeFixture!, 'utf8'));
+      const { f, scope, lotId, lineId } = fixture;
+      const snapshotId = (id: string) =>
+        inOrg(scope.organizationId, async (db) => {
+          const [row] = await db.$queryRaw<{ movementId: string | null }[]>`
+          SELECT to_jsonb(l)->>'legacyOutgoingMovementId' AS "movementId" FROM pharmacy_purchase_return_lines l
+          WHERE l."organizationId"=${scope.organizationId} AND l.id=${id}`;
+          return row?.movementId;
+        });
+      const original = await inOrg(scope.organizationId, (db) =>
+        db.pharmacyStockMovement.findFirstOrThrow({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            inventoryLotId: lotId,
+            kind: 'ADJUSTMENT',
+            disposition: 'AVAILABLE',
+            quantityUnits: -30,
+            occurredAt: new Date(fixture.dispatchedAt),
+          },
+        })
+      );
+      expect(await snapshotId(lineId)).toBe(original.id);
+
+      // A normal, witnessed return entered after the upgrade has an earlier business date.
+      const at = new Date(fixture.dispatchedAt);
+      at.setUTCHours(at.getUTCHours() - 1);
+      const operations = await import('./supplier-returns-operations');
+      const sent = await inOrg(scope.organizationId, async (db) => {
+        const doc = await operations.createPurchaseReturn(db, scope, {
+          supplierId: f.supplierId,
+          kind: 'PURCHASE_RETURN',
+          reference: tag('later-return'),
+          lines: [
+            {
+              inventoryLotId: lotId,
+              stockLocationId: f.storeId,
+              quantityUnits: 10,
+              reason: 'Supplier collection',
+              returnWindowEndsAt: EXPIRY,
+              expectedCreditMinor: 10000,
+            },
+          ],
+        });
+        await operations.submitPurchaseReturn(db, scope, { purchaseReturnId: doc.id, at });
+        return operations.dispatchPurchaseReturn(db, scope, {
+          purchaseReturnId: doc.id,
+          at,
+          idempotencyKeyPrefix: tag('new-return'),
+          controlledWitness: { staffProfileId: fixture.staffId, pin: fixture.pin },
+        });
+      });
+      const newLineId = sent.lines[0]!.id;
+      const registered = await inOrg(scope.organizationId, (db) =>
+        db.pharmacyControlledRegisterEntry.findFirstOrThrow({
+          where: { organizationId: scope.organizationId, supplierReturnLineId: newLineId },
+        })
+      );
+      const later = await inOrg(scope.organizationId, (db) =>
+        db.pharmacyStockMovement.findFirstOrThrow({
+          where: { organizationId: scope.organizationId, id: registered.stockMovementId! },
+        })
+      );
+      expect(later.occurredAt.getTime()).toBeLessThan(original.occurredAt.getTime());
+      expect(await snapshotId(newLineId)).toBeNull();
+      expect(await snapshotId(lineId)).toBe(original.id);
+      const requireSnapshot = (id: string, movement: string) =>
+        inOrg(
+          scope.organizationId,
+          (db) => db.$queryRaw`
+          SELECT pharmacy_require_legacy_supplier_outgoing(${scope.organizationId},${scope.branchId},${id},${movement}) AS eligible`
+        );
+      await expect(requireSnapshot(lineId, original.id)).resolves.toEqual([{ eligible: true }]);
+      await expect(requireSnapshot(lineId, later.id)).rejects.toThrow(/not captured at migration/i);
+      await expect(requireSnapshot(newLineId, later.id)).rejects.toThrow(
+        /not captured at migration/i
+      );
+      await expect(
+        inOrg(scope.organizationId, (db) =>
+          db.pharmacyPurchaseReturnLine.update({
+            where: { id: lineId },
+            data: { legacyOutgoingMovementId: null },
+          })
+        )
+      ).rejects.toThrow(/immutable/i);
+      await expect(
+        inOrg(scope.organizationId, (db) =>
+          db.pharmacyPurchaseReturnLine.update({
+            where: { id: newLineId },
+            data: { legacyOutgoingMovementId: later.id },
+          })
+        )
+      ).rejects.toThrow(/immutable/i);
+      await expect(
+        deps.withTenantDb(
+          scope.organizationId,
+          (db) =>
+            operations.dispatchPurchaseReturn(
+              db,
+              { ...scope, actorId: fixture.ownerId },
+              {
+                purchaseReturnId: sent.id,
+                recordLateLineId: newLineId,
+                at: new Date(),
+                idempotencyKeyPrefix: tag('late-review'),
+              }
+            ),
+          { userId: fixture.ownerId }
+        )
+      ).rejects.toThrow(/no unrecorded controlled supplier dispatch/i);
+      expect(await snapshotId(newLineId)).toBeNull();
+      expect(await snapshotId(lineId)).toBe(original.id);
     },
     30000
   );

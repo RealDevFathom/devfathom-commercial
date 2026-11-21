@@ -3,6 +3,7 @@ import { can } from '@/lib/abac';
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import { POLICIES } from '@/lib/abac/policies';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { isLiveOrganizationOwner } from './owner-data-export';
 import type { LedgerScope } from './stock-ledger';
 import {
   clearLockout,
@@ -104,11 +105,21 @@ export async function authorizeControlledRestoration(
   actorCapability: 'pharmacy:dispense' | 'pharmacy:safety' = 'pharmacy:dispense',
   options: RestorationOptions = {}
 ): Promise<ControlledRestorationWitness> {
-  const actor = await db.user.findFirst({
-    where: { id: scope.actorId, organizationId: scope.organizationId, status: 'ACTIVE' },
-  });
-  if (!actor || !(await can(actor, actorCapability, undefined, { db }))) {
-    throw new ControlledRestorationDenied(true);
+  if (options.lateOwnerApproval) {
+    if (!(await isLiveOrganizationOwner(db, scope.organizationId, scope.actorId)))
+      throw new ControlledRestorationDenied(
+        true,
+        false,
+        true,
+        'Only the pharmacy owner can record a late supplier return.'
+      );
+  } else {
+    const actor = await db.user.findFirst({
+      where: { id: scope.actorId, organizationId: scope.organizationId, status: 'ACTIVE' },
+    });
+    if (!actor || !(await can(actor, actorCapability, undefined, { db }))) {
+      throw new ControlledRestorationDenied(true);
+    }
   }
   if (!input && options.lateOwnerApproval)
     throw new ControlledRestorationDenied(
@@ -189,8 +200,7 @@ async function verifyRestorationPin(
     credential.staffProfile.status !== 'ACTIVE' ||
     !witness ||
     witness.organizationId !== scope.organizationId ||
-    witness.status !== 'ACTIVE' ||
-    !(await can(witness, 'pharmacy:dispense', undefined, { db, now }))
+    witness.status !== 'ACTIVE'
   ) {
     return null;
   }
@@ -198,7 +208,12 @@ async function verifyRestorationPin(
   // grant and a fresh PIN. The check runs only for a self-witness attempt, and
   // any second pharmacist ends the exception.
   const selfWitness = witness.id === scope.actorId;
-  if (options.lateOwnerApproval && !selfWitness) return null;
+  if (options.lateOwnerApproval) {
+    if (!selfWitness || !(await isLiveOrganizationOwner(db, scope.organizationId, witness.id)))
+      return null;
+  } else if (!(await can(witness, 'pharmacy:dispense', undefined, { db, now }))) {
+    return null;
+  }
   if (
     selfWitness &&
     !options.lateOwnerApproval &&

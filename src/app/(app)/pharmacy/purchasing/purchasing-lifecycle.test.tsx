@@ -798,7 +798,7 @@ it.each(['late', 'solo'] as const)(
         permissions: [
           { capability: 'pharmacy.procurement', effect: 'ALLOW' },
           { capability: 'reports:financial', effect: 'ALLOW' },
-          { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+          ...(late ? [] : [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]),
         ],
       },
       permissionOverrides: [],

@@ -128,7 +128,7 @@ ALTER TABLE pharmacy_controlled_register_entries
 -- pair together. Match the document date, original sender, location, lot, both
 -- quantities and line ordinal. Prefer the document-bound purchasing screen key;
 -- for another client's key, return NULL if the evidence is ambiguous.
-CREATE OR REPLACE FUNCTION pharmacy_legacy_supplier_outgoing(org text, branch text, target_line text)
+CREATE OR REPLACE FUNCTION pharmacy_match_supplier_outgoing_at_cutover(org text, branch text, target_line text)
 RETURNS text LANGUAGE sql STABLE SECURITY INVOKER AS $legacy$
   WITH line AS (
     SELECT l.*, d."dispatchedAt", d."dispatchedByUserId",
@@ -160,6 +160,80 @@ RETURNS text LANGUAGE sql STABLE SECURITY INVOKER AS $legacy$
   SELECT CASE WHEN count(*) FILTER (WHERE exact) = 1 THEN min(id) FILTER (WHERE exact)
               WHEN count(*) = 1 THEN min(id) END FROM candidates
 $legacy$;
+
+-- Freeze the matches once, while old dispatches and their movements are stable.
+-- No register or stock row is written. A migration replay must not fill a gap
+-- using a movement recorded after the original cutover.
+DO $snapshot$
+DECLARE tenant_id text;
+BEGIN
+  IF EXISTS (SELECT FROM pg_attribute WHERE attrelid = 'pharmacy_purchase_return_lines'::regclass
+             AND attname = 'legacyOutgoingMovementId' AND NOT attisdropped) THEN
+    RETURN;
+  END IF;
+  ALTER TABLE pharmacy_purchase_return_lines ADD COLUMN "legacyOutgoingMovementId" text;
+  LOCK TABLE pharmacy_stock_movements IN SHARE MODE;
+  PERFORM set_config('app.is_platform_admin','true',true);
+  FOR tenant_id IN SELECT id FROM organizations ORDER BY id LOOP
+    PERFORM set_config('app.current_organization_id',tenant_id,true);
+    PERFORM set_config('app.current_branch_id','',true);
+    WITH matches AS MATERIALIZED (
+      SELECT l.id, pharmacy_match_supplier_outgoing_at_cutover(tenant_id,d."branchId",l.id) AS movement
+      FROM pharmacy_purchase_return_lines l
+      JOIN pharmacy_purchase_returns d ON d."organizationId" = l."organizationId" AND d.id = l."purchaseReturnId"
+      WHERE l."organizationId" = tenant_id AND d.status IN ('DISPATCHED','SETTLED')
+        AND NOT d."dispatchedWithRegisterPolicy"
+        AND (EXISTS (SELECT FROM pharmacy_inventory_lots lot
+              JOIN pharmacy_manufacturing_batches b ON b."organizationId" = tenant_id AND b.id = lot."manufacturingBatchId"
+              JOIN pharmacy_medicines m ON m."organizationId" = tenant_id AND m.id = b."medicineId"
+              WHERE lot."organizationId" = tenant_id AND lot.id = l."inventoryLotId" AND m.controlled)
+          OR EXISTS (SELECT FROM pharmacy_controlled_register_entries purchase
+              JOIN pharmacy_stock_movements receipt ON receipt."organizationId" = tenant_id AND receipt.id = purchase."stockMovementId"
+              WHERE purchase."organizationId" = tenant_id AND purchase."branchId" = d."branchId"
+                AND purchase."inventoryLotId" = l."inventoryLotId" AND purchase."entryKind" = 'PURCHASE'
+                AND receipt."occurredAt" <= d."dispatchedAt"))
+    ), unambiguous AS (
+      SELECT movement,min(id) AS line FROM matches WHERE movement IS NOT NULL
+      GROUP BY movement HAVING count(*) = 1
+    )
+    UPDATE pharmacy_purchase_return_lines l SET "legacyOutgoingMovementId" = u.movement
+    FROM unambiguous u WHERE l."organizationId" = tenant_id AND l.id = u.line;
+  END LOOP;
+  PERFORM set_config('app.current_organization_id','',true);
+  PERFORM set_config('app.is_platform_admin','false',true);
+END $snapshot$;
+
+DROP FUNCTION pharmacy_match_supplier_outgoing_at_cutover(text,text,text);
+
+CREATE OR REPLACE FUNCTION pharmacy_guard_supplier_return_snapshot()
+RETURNS trigger LANGUAGE plpgsql AS $immutable$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW."legacyOutgoingMovementId" IS NULL THEN RETURN NEW; END IF;
+  ELSIF NEW."legacyOutgoingMovementId" IS NOT DISTINCT FROM OLD."legacyOutgoingMovementId"
+    AND (OLD."legacyOutgoingMovementId" IS NULL OR
+      (NEW."organizationId", NEW."branchId", NEW."purchaseReturnId", NEW.id)
+      IS NOT DISTINCT FROM (OLD."organizationId", OLD."branchId", OLD."purchaseReturnId", OLD.id)) THEN
+    RETURN NEW;
+  END IF;
+  RAISE EXCEPTION 'The legacy supplier movement snapshot is immutable.' USING ERRCODE='23514';
+END $immutable$;
+DROP TRIGGER IF EXISTS pharmacy_supplier_return_snapshot_immutable ON pharmacy_purchase_return_lines;
+CREATE TRIGGER pharmacy_supplier_return_snapshot_immutable BEFORE INSERT OR UPDATE ON pharmacy_purchase_return_lines
+FOR EACH ROW EXECUTE FUNCTION pharmacy_guard_supplier_return_snapshot();
+
+CREATE OR REPLACE FUNCTION pharmacy_require_legacy_supplier_outgoing(org text, branch text, target_line text, movement text)
+RETURNS boolean LANGUAGE plpgsql STABLE SECURITY INVOKER AS $captured$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pharmacy_purchase_return_lines l JOIN pharmacy_purchase_returns d
+    ON d."organizationId" = l."organizationId" AND d.id = l."purchaseReturnId"
+    WHERE l."organizationId" = org AND l."branchId" = branch AND l.id = target_line
+      AND d."branchId" = branch AND d.status IN ('DISPATCHED','SETTLED') AND NOT d."dispatchedWithRegisterPolicy"
+      AND l."legacyOutgoingMovementId" = movement) THEN
+    RAISE EXCEPTION 'This outgoing movement was not captured at migration for this return line.' USING ERRCODE='23514';
+  END IF;
+  RETURN true;
+END $captured$;
 
 -- The stock ledger keeps dispatched units in a separate disposition. Develop
 -- counted those units. Deduct only returns for which a register line exists,
@@ -333,6 +407,7 @@ BEGIN
         ) THEN
         RAISE EXCEPTION 'Only the acting pharmacy owner may confirm a late register entry.' USING ERRCODE='23514';
       END IF;
+      PERFORM pharmacy_require_legacy_supplier_outgoing(NEW."organizationId", NEW."branchId", NEW."supplierReturnLineId", NEW."stockMovementId");
     ELSIF NEW."recordedByUserId" = NEW."witnessedByUserId" THEN
       IF EXISTS (
         SELECT FROM users u WHERE u."organizationId" = NEW."organizationId" AND u.id <> NEW."recordedByUserId"
@@ -376,7 +451,7 @@ BEGIN
               AND NEW."lateDispatchAt" = doc."dispatchedAt" AND movement."occurredAt" = doc."dispatchedAt"
               AND movement."actorId" = doc."dispatchedByUserId" AND receipt."occurredAt" <= movement."occurredAt"
               AND NEW."createdAt"::date = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date
-              AND movement.id = pharmacy_legacy_supplier_outgoing(NEW."organizationId", NEW."branchId", line.id))
+              AND movement.id = line."legacyOutgoingMovementId")
         )
         AND movement."quantityUnits" = -line."quantityUnits"
         AND NEW."quantityCanonicalUnits" = line."quantityUnits" AND NEW."balanceDelta" = movement."quantityUnits"

@@ -14543,6 +14543,8 @@ model PharmacyPurchaseReturnLine {
   /// The INV-09 reservation this line takes at submission. Null while the line
   /// is still on a DRAFT return, which is precisely why a draft holds no stock.
   supplierClaimId     String?
+  /// Outgoing movement identified when the controlled-return register policy first took effect.
+  legacyOutgoingMovementId String?
   createdAt           DateTime @default(now())
 
   registerEntry PharmacyControlledRegisterEntry?
