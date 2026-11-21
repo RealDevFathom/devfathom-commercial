@@ -20,6 +20,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { lockStockBalances, lockStockRowsFrom } from './stock-lock-order';
+import { counterSetAsidesInForce } from './offline-cash-selling';
 
 import {
   arrangementFor,
@@ -89,7 +90,31 @@ export function normalizeExpiryBoundary(expiresAt: Date): Date {
     : expiresAt;
 }
 
-const CANDIDATE_COLUMNS = Prisma.sql`
+/**
+ * DEV-957 phase 2: units a manager set aside for an enrolled counter to sell offline
+ * (OFF-03 device lot quotas), still open and unsold. Online selling, reserved order
+ * hand-over and transfers treat them as taken, so a unit promised to a counter is
+ * never sold twice. Read in the same fresh statement as the claims and reservations,
+ * after the candidate balances are locked: a grant locks that balance row before it
+ * sums (guard_pharmacy_device_lot_quota) and an offline replay consumes its own quota
+ * while holding the same locks, so every reader sees a settled figure. A replay
+ * consumes its quota before it allocates, so its own units are no longer held when
+ * its line is planned.
+ */
+// Review round 2: only while offline cash selling is in force for the organisation
+// (`counterSetAsidesInForce`). While it is off a set-aside can never be sold offline, so
+// open ones are ignored here, never deleted.
+const DEVICE_QUOTA_HELD = Prisma.sql`CASE WHEN balance."disposition" = 'AVAILABLE' THEN COALESCE((
+    SELECT SUM(quota."quotaUnits" - quota."consumedUnits") FROM "pharmacy_device_lot_quotas" quota
+    WHERE quota."organizationId" = balance."organizationId"
+      AND quota."branchId" = balance."branchId"
+      AND quota."inventoryLotId" = balance."inventoryLotId"
+      AND quota."stockLocationId" = balance."stockLocationId"
+      AND quota."releasedAt" IS NULL
+  ), 0) ELSE 0 END`;
+
+function candidateColumns(counterHolds: boolean) {
+  return Prisma.sql`
   balance."inventoryLotId"    AS "inventoryLotId",
   balance."stockLocationId"   AS "stockLocationId",
   balance."organizationId"    AS "organizationId",
@@ -111,10 +136,11 @@ const CANDIDATE_COLUMNS = Prisma.sql`
       AND reservation."inventoryLotId" = balance."inventoryLotId"
       AND reservation."stockLocationId" = balance."stockLocationId"
       AND reservation."status" = 'RESERVED'
-  ), 0))                         AS "availableUnits",
+  ), 0) - ${counterHolds ? DEVICE_QUOTA_HELD : Prisma.sql`0`}) AS "availableUnits",
   lot."unitsPerPack"          AS "unitsPerPack",
   balance."sealedPacks"       AS "sealedPacks",
   balance."looseUnits"        AS "looseUnits"`;
+}
 
 const CANDIDATE_JOINS = Prisma.sql`
   FROM "pharmacy_stock_balances" balance
@@ -138,10 +164,11 @@ async function loadCandidates(
   db: ScopedDb,
   scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
   medicineId: string,
-  lock: boolean
+  lock: boolean,
+  counterHolds: boolean
 ): Promise<CandidateRow[]> {
   const query = Prisma.sql`
-    SELECT ${CANDIDATE_COLUMNS}
+    SELECT ${candidateColumns(counterHolds)}
     ${CANDIDATE_JOINS}
     WHERE balance."organizationId" = ${scope.organizationId}
       AND balance."branchId" = ${scope.branchId}
@@ -160,7 +187,7 @@ async function loadCandidates(
           AND reservation."inventoryLotId" = balance."inventoryLotId"
           AND reservation."stockLocationId" = balance."stockLocationId"
           AND reservation."status" = 'RESERVED'
-      ), 0)) > 0
+      ), 0) - ${counterHolds ? DEVICE_QUOTA_HELD : Prisma.sql`0`}) > 0
     ORDER BY batch."expiresAt" ASC NULLS LAST, lot."receivedAt" ASC NULLS FIRST,
              balance."inventoryLotId" ASC, balance."stockLocationId" ASC`;
 
@@ -231,8 +258,9 @@ export async function lotsWithNetAvailableStock(
   inventoryLotIds: readonly string[]
 ): Promise<Set<string>> {
   if (!inventoryLotIds.length) return new Set();
+  const holds = await counterSetAsidesInForce(db, scope.organizationId);
   const rows = await db.$queryRaw<Array<{ inventoryLotId: string; availableUnits: unknown }>>`
-    SELECT ${CANDIDATE_COLUMNS}
+    SELECT ${candidateColumns(holds)}
     ${CANDIDATE_JOINS}
     WHERE balance."organizationId" = ${scope.organizationId}
       AND balance."branchId" = ${scope.branchId}
@@ -250,7 +278,8 @@ export async function loadStockCandidatesForRead(
   scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
   medicineId: string
 ): Promise<AllocationCandidate[]> {
-  return (await loadCandidates(db, scope, medicineId, false)).map(toCandidate);
+  const holds = await counterSetAsidesInForce(db, scope.organizationId);
+  return (await loadCandidates(db, scope, medicineId, false, holds)).map(toCandidate);
 }
 
 export type ReceiveLotInput = {
@@ -518,7 +547,8 @@ export async function allocateForSale(
   scope: LedgerScope,
   input: AllocateForSaleInput
 ): Promise<AllocateForSaleResult> {
-  const rows = await loadCandidates(db, scope, input.medicineId, true);
+  const holds = await counterSetAsidesInForce(db, scope.organizationId);
+  const rows = await loadCandidates(db, scope, input.medicineId, true, holds);
   const byBucket = new Map(
     // Plans debit AVAILABLE only; blocked dispositions remain candidates for refusal evidence.
     rows
@@ -663,9 +693,10 @@ export async function allocateReservedForSale(
            balance."disposition"::text AS "disposition"
     ${reservedBuckets}`
   );
+  const holds = await counterSetAsidesInForce(db, scope.organizationId);
   const rows = await db.$queryRaw<CandidateRow[]>(Prisma.sql`
     /* reserved_sale_buckets */
-    SELECT ${CANDIDATE_COLUMNS}
+    SELECT ${candidateColumns(holds)}
     ${reservedBuckets}
     ORDER BY batch.id, lot.id, balance."stockLocationId"`);
   const byBucket = new Map(
@@ -980,8 +1011,9 @@ export async function transferStock(
       disposition: 'AVAILABLE',
     },
   ]);
+  const holds = await counterSetAsidesInForce(db, scope.organizationId);
   const rows = await db.$queryRaw<CandidateRow[]>(Prisma.sql`
-    SELECT ${CANDIDATE_COLUMNS}
+    SELECT ${candidateColumns(holds)}
     ${CANDIDATE_JOINS}
     WHERE balance."organizationId" = ${scope.organizationId}
       AND balance."branchId" = ${scope.branchId}
@@ -1091,7 +1123,9 @@ export async function onHand(
   medicineId: string,
   at: Date
 ) {
-  const rows = await loadCandidates(db, scope, medicineId, false);
+  // The projection as counted on the shelf: units set aside for a counter are still
+  // there, so they are not taken off here (they are off every sale path above).
+  const rows = await loadCandidates(db, scope, medicineId, false, false);
   return rows.map((row) => {
     const bucket = {
       inventoryLotId: row.inventoryLotId,

@@ -1089,13 +1089,29 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); read only, the quota grant itself is the manager-only counter route',
     none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
   },
+  'pharmacyOffline.offlineCashSelling': {
+    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); read only (the switch is off and not available until sending offline sales is ready)',
+    none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
+  },
+  'pharmacyOffline.receiptNumberGaps': {
+    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); read only',
+    none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
+  },
+  'pharmacyOffline.recordUnsentOfflineSale': {
+    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); records a manager\'s account of one unsent offline sale a revoked counter kept, audited; books nothing',
+    none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
+  },
   'pharmacyOffline.revoke': {
     gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); releases the counter\'s open stock quotas in the same transaction, audited',
     none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
   },
   'pharmacyOffline.rotate': {
-    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch)',
+    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); moves the credential expiry 30 days on',
     none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
+  },
+  'pharmacyOffline.setOfflineCashSelling': {
+    gate: 'adminProcedure (admin:access) + managedBranch + isPharmacistCheckPolicyOwner (owner only); switching offline cash selling on is refused in this phase (PRECONDITION_FAILED) for everyone',
+    none: 'owner only; in this phase nobody can switch it on',
   },
   'pharmacyOnboarding.fbrTier1Status': {
     gate: 'fbrTier1Procedure = adminProcedure + pharmacy-core',

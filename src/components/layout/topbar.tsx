@@ -39,6 +39,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { FathomMark } from '@/components/brand/logo';
 import type { TenantBrand } from '@/lib/tenant-brand';
 import { TopbarBreadcrumbs } from './topbar-breadcrumbs';
+import { useBrowserOnline } from '@/components/pharmacy/counter/use-browser-online';
 import { useVisibleNavigation } from './sidebar';
 // Badge unused after notification refactor
 import {
@@ -439,23 +440,39 @@ export function AccountMenu() {
   const router = useRouter();
   const { data: session } = useSession();
   const roleLabel = useWorkspaceRoleLabel();
+  // DEV-957 phase 2 (shared till): a page opened with no connection (the stored offline
+  // counter page) cannot check who is signed in, so it never presents the last person as
+  // the one using the computer now.
+  const browserOnline = useBrowserOnline();
   if (!session?.user) return null;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger className="studio-avatar-button">
-        <span className="sr-only">Open account menu for {session.user.name}</span>
+        <span className="sr-only">
+          {browserOnline ? `Open account menu for ${session.user.name}` : 'Open account menu'}
+        </span>
         <Avatar aria-hidden="true" className="h-8 w-8">
-          <AvatarImage src={session.user.image ?? undefined} alt={session.user.name} />
+          {browserOnline ? (
+            <AvatarImage src={session.user.image ?? undefined} alt={session.user.name} />
+          ) : null}
           <AvatarFallback className="bg-muted text-foreground text-xs font-medium">
-            {getInitials(session.user.name)}
+            {browserOnline ? getInitials(session.user.name) : '–'}
           </AvatarFallback>
         </Avatar>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
         <div className="px-2 py-2">
-          <p className="text-sm font-medium">{session.user.name}</p>
-          <p className="text-xs text-muted-foreground">{session.user.email}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{roleLabel}</p>
+          {browserOnline ? (
+            <>
+              <p className="text-sm font-medium">{session.user.name}</p>
+              <p className="text-xs text-muted-foreground">{session.user.email}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{roleLabel}</p>
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Offline: who is signed in is checked again when the connection returns.
+            </p>
+          )}
         </div>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => router.push('/settings')}>
@@ -488,6 +505,8 @@ export function Topbar({
 } = {}) {
   const { data: session } = useSession();
   const roleLabel = useWorkspaceRoleLabel();
+  // DEV-957 phase 2 (shared till): never the last person's name on a page opened offline.
+  const browserOnline = useBrowserOnline();
 
   return (
     <header className="studio-topbar sticky top-0 z-30 flex min-h-[76px] items-center gap-3 border-b border-border-subtle bg-card/94 px-4 backdrop-blur-xl sm:px-6 xl:px-8">
@@ -511,10 +530,10 @@ export function Topbar({
 
       <div className="hidden min-w-0 md:block">
         <span className="block text-xs font-medium text-foreground">
-          {session?.user?.name ?? 'Workspace'}
+          {browserOnline ? (session?.user?.name ?? 'Workspace') : 'Offline'}
         </span>
         <span className="block max-w-36 truncate text-[11px] text-muted-foreground">
-          {roleLabel}
+          {browserOnline ? roleLabel : 'Sign-in not checked'}
         </span>
       </div>
 

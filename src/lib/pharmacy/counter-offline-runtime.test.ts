@@ -108,7 +108,9 @@ async function install(
 async function readyCounter(driver: TerminalStorageDriver) {
   const counter = runtime(driver);
   await counter.hydrate();
-  for (const kind of CATALOG_KINDS) await install(counter, kind);
+  // DEV-957 phase 2 (review): the owner's switch forced ON in the signed RULES.
+  for (const kind of CATALOG_KINDS)
+    await install(counter, kind, kind === 'RULES' ? FORCED_ON_RULES : { kind });
   await counter.adoptLeases([
     { leaseId: 'lease_1', blockStart: 900, blockEnd: 902, nextNumber: 900 },
   ]);
@@ -119,6 +121,9 @@ async function readyCounter(driver: TerminalStorageDriver) {
 }
 
 const replaySigner = () => ({ command: 'command-signature', receipt: 'receipt-signature' });
+
+/** Signed RULES with offline cash selling forced on (it is off in the product). */
+const FORCED_ON_RULES = { kind: 'RULES', offlineCashSelling: true };
 
 const MATRIX = {
   nowMs: NOW,
@@ -143,7 +148,7 @@ describe('#710 offline manual merchant evidence', () => {
   it('persists a Raast tender through restart and signs the same evidence on retry', async () => {
     const driver = createMemoryDriver();
     const counter = await readyCounter(driver);
-    await install(counter, 'RULES', { manualMerchantPolicies: { RAAST: { allowReferenceSkip: false } } }, { version: 2 });
+    await install(counter, 'RULES', { offlineCashSelling: true, manualMerchantPolicies: { RAAST: { allowReferenceSkip: false } } }, { version: 2 });
     const manualCapture = { type: 'RAAST', providerRef: '001234', payerName: 'Ayesha' };
     const result = await counter.enqueue({ ...cashSale(), action: 'MANUAL_OTC_SALE', payload: {
       ...cashSale().payload, amountMinor: 100, manualCapture: { ...manualCapture, payerName: ' Ayesha ' },
@@ -168,7 +173,7 @@ describe('#710 offline manual merchant evidence', () => {
   });
   it('refuses a missing reference or unauthorized skip without consuming stock or receipts', async () => {
     const counter = await readyCounter(createMemoryDriver());
-    await install(counter, 'RULES', { manualMerchantPolicies: { RAAST: { allowReferenceSkip: false } } }, { version: 2 });
+    await install(counter, 'RULES', { offlineCashSelling: true, manualMerchantPolicies: { RAAST: { allowReferenceSkip: false } } }, { version: 2 });
     for (const manualCapture of [
       { type: 'RAAST', payerName: 'Ayesha' },
       { type: 'RAAST', payerName: 'Ayesha', referenceSkipped: true },
@@ -177,7 +182,7 @@ describe('#710 offline manual merchant evidence', () => {
       expect(await counter.enqueue({ ...cashSale(), action: 'MANUAL_OTC_SALE', payload: { ...cashSale().payload, manualCapture } }, MATRIX)).toMatchObject({ ok: false });
     }
     expect(counter.snapshot().queue).toMatchObject({ commands: [], leases: [{ nextNumber: 900 }], quotas: [{ consumedUnits: 0 }] });
-    await install(counter, 'RULES', { manualMerchantPolicies: { RAAST: { allowReferenceSkip: true } } }, { version: 3 });
+    await install(counter, 'RULES', { offlineCashSelling: true, manualMerchantPolicies: { RAAST: { allowReferenceSkip: true } } }, { version: 3 });
     expect(await counter.enqueue({ ...cashSale(), action: 'MANUAL_OTC_SALE', payload: {
       ...cashSale().payload, manualCapture: { type: 'RAAST', payerName: 'Ayesha', referenceSkipped: true },
     } }, MATRIX)).toMatchObject({ ok: true });
@@ -366,7 +371,7 @@ describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
     expect(counter.counterStatus(NOW)).toMatchObject({ safetyLeaseStatus: 'ACTIVE' });
     expect(counter.snapshot().queue?.safetyLeaseEvents[0]?.type).toBe('ISSUED');
 
-    await install(counter, 'RULES', { kind: 'RULES', renewed: true }, { version: 2 });
+    await install(counter, 'RULES', { kind: 'RULES', offlineCashSelling: true, renewed: true }, { version: 2 });
     expect(counter.snapshot().queue?.safetyLeaseEvents.at(-1)?.type).toBe('RENEWED');
 
     const denied = await counter.enqueue(cashSale(), { ...MATRIX, nowMs: Date.parse(EXPIRES_AT) });
@@ -384,7 +389,7 @@ describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
     await install(
       counter,
       'RULES',
-      { kind: 'RULES', renewed: true },
+      { kind: 'RULES', offlineCashSelling: true, renewed: true },
       {
         version: 2,
         issuedAt: renewedAt,
@@ -419,7 +424,7 @@ describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
     await install(
       counter,
       'RULES',
-      { kind: 'RULES', recalled: true },
+      { kind: 'RULES', offlineCashSelling: true, recalled: true },
       {
         version: 2,
         issuedAt: renewedAt,
@@ -443,7 +448,7 @@ describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
     await counter.hydrate();
     const leaseWithoutRecalls: Partial<typeof SAFETY_LEASE> = { ...SAFETY_LEASE };
     delete leaseWithoutRecalls.recalledBatchIds;
-    const result = await install(counter, 'RULES', { kind: 'RULES' }, {
+    const result = await install(counter, 'RULES', FORCED_ON_RULES, {
       safetyLease: leaseWithoutRecalls as typeof SAFETY_LEASE,
     });
     expect(result).toMatchObject({ ok: false, reason: 'MALFORMED' });
@@ -460,7 +465,7 @@ describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
     await install(
       counter,
       'RULES',
-      { kind: 'RULES', shortLease: true },
+      { kind: 'RULES', offlineCashSelling: true, shortLease: true },
       {
         version: 2,
         issuedAt: renewedAt,

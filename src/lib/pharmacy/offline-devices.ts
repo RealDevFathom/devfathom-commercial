@@ -9,6 +9,8 @@ import {
 } from '@/lib/retail-terminal/device-secret';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { pharmacyDeviceSecretExpired, pharmacyDeviceSecretExpiry } from './device-secret-expiry';
+
 /**
  * PH-OFF / OFF-01 — pharmacy counter enrollment.
  *
@@ -27,8 +29,18 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 export const PHARMACY_DEVICE_SECRET_PREFIX = 'pcd_';
 
+export {
+  PHARMACY_DEVICE_SECRET_LIFETIME_DAYS,
+  PHARMACY_DEVICE_SECRET_RENEW_WITHIN_DAYS,
+  pharmacyDeviceSecretDueForRenewal,
+  pharmacyDeviceSecretExpired,
+  pharmacyDeviceSecretExpiry,
+} from './device-secret-expiry';
+
 export class PharmacyDeviceError extends Error {
-  constructor(readonly reason: 'NOT_FOUND' | 'REVOKED' | 'STALE_ROTATION' | 'INVALID_NAME') {
+  constructor(
+    readonly reason: 'NOT_FOUND' | 'REVOKED' | 'STALE_ROTATION' | 'INVALID_NAME' | 'EXPIRED'
+  ) {
     super(reason);
     this.name = 'PharmacyDeviceError';
   }
@@ -82,8 +94,10 @@ export async function rotatePharmacyCounterSecret(
   db: ScopedDb,
   scope: PharmacyDeviceScope,
   deviceId: string,
-  expectedSecretHash: string
+  expectedSecretHash: string,
+  options: { now?: Date; requireUnexpired?: boolean } = {}
 ): Promise<{ device: PharmacyRegisteredDevice; secret: string }> {
+  const now = options.now ?? new Date();
   return db.$transaction(async (tx) => {
     const rows = await tx.$queryRaw<
       Array<{
@@ -91,9 +105,10 @@ export async function rotatePharmacyCounterSecret(
         status: 'ACTIVE' | 'REVOKED';
         revokedAt: Date | null;
         deviceSecretHash: string;
+        secretExpiresAt: Date;
       }>
     >`
-      SELECT id, status, "revokedAt", "deviceSecretHash"
+      SELECT id, status, "revokedAt", "deviceSecretHash", "secretExpiresAt"
       FROM pharmacy_registered_devices
       WHERE id = ${deviceId}
         AND "organizationId" = ${scope.organizationId}
@@ -106,11 +121,16 @@ export async function rotatePharmacyCounterSecret(
     if (current.deviceSecretHash !== expectedSecretHash) {
       throw new PharmacyDeviceError('STALE_ROTATION');
     }
+    // DEV-957 phase 2: a counter renewing its own secret must still hold a valid one; an
+    // expired counter is rotated by a manager in Settings, Counter computers.
+    if (options.requireUnexpired && pharmacyDeviceSecretExpired(current, now)) {
+      throw new PharmacyDeviceError('EXPIRED');
+    }
 
     const { secret, secretHash } = generateDeviceSecret(PHARMACY_DEVICE_SECRET_PREFIX);
     const device = await tx.pharmacyRegisteredDevice.update({
       where: { organizationId_id: { organizationId: scope.organizationId, id: deviceId } },
-      data: { deviceSecretHash: secretHash },
+      data: { deviceSecretHash: secretHash, secretExpiresAt: pharmacyDeviceSecretExpiry(now) },
     });
     return { device, secret };
   });

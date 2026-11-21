@@ -520,3 +520,43 @@ it('does not invent a workspace role for an unrecognized session role', () => {
   expect(screen.getByText('Workspace member')).toBeVisible();
   expect(screen.queryByText(/Workspace role:/)).not.toBeInTheDocument();
 });
+
+// DEV-957 phase 2 (shared till): a page opened with no connection still carries the last
+// session, so neither the workspace bar nor the account menu presents that person.
+describe('workspace bar and account menu with the browser offline', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function openAccountMenu(name: string) {
+    const trigger = screen.getByRole('button', { name });
+    fireEvent.click(trigger);
+    return screen.findByRole('menu');
+  }
+
+  it('names nobody offline: workspace bar, account button and menu', async () => {
+    vi.useRealTimers();
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    const { container } = render(<Topbar />);
+    const header = screen.getByRole('banner');
+    expect(within(header).getByText('Offline')).toBeInTheDocument();
+    expect(within(header).getByText('Sign-in not checked')).toBeInTheDocument();
+    expect(header).not.toHaveTextContent('Test member');
+    expect(header).not.toHaveTextContent('TM');
+    const menu = await openAccountMenu('Open account menu');
+    expect(menu).toHaveTextContent(
+      'Offline: who is signed in is checked again when the connection returns.'
+    );
+    expect(menu).not.toHaveTextContent('Test member');
+    expect(menu).not.toHaveTextContent('member@example.test');
+    expect(menu).not.toHaveTextContent('Workspace role');
+    expect(container.querySelector('img')).toBeNull();
+  });
+
+  it('names the signed-in member online, as before', async () => {
+    vi.useRealTimers();
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    render(<Topbar />);
+    expect(within(screen.getByRole('banner')).getByText('Test member')).toBeInTheDocument();
+    const menu = await openAccountMenu('Open account menu for Test member');
+    expect(menu).toHaveTextContent('member@example.test');
+  });
+});

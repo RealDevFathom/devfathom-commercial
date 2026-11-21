@@ -89,7 +89,13 @@ import { CounterUnitToggle } from './counter-unit-toggle';
 import { CounterUpsellSuggestions } from './counter-upsell-suggestions';
 import { useBrowserOnline } from './use-browser-online';
 import { useCounterEnrolment, useCounterOffline } from './use-counter-offline';
-import { CounterOfflineOnly, CounterOfflinePanel } from './counter-offline-panel';
+import {
+  CounterOfflineBannerDetail,
+  CounterOfflineOnly,
+  CounterOfflinePanel,
+} from './counter-offline-panel';
+import { OfflineQueue } from './counter-offline-sale';
+import { CounterSalesToReconcile } from './counter-sales-to-reconcile';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -3921,7 +3927,25 @@ function ScopedPharmacyCounterConsole({
           {counterBusyReason}
         </p>
       ) : null}
-      {online && !offlineMode.serverUnreachable ? null : (
+      {/* DEV-957 phase 2 (review B1/B2): what this computer holds is shown online too, as
+          strips under the bars like the offline banner (Counter v2, B2 and C7). */}
+      <CounterSalesToReconcile
+        organizationId={organizationId}
+        branchId={branchId}
+        online={online && !offlineMode.serverUnreachable}
+        refreshKey={offlineMode.revokedNotice?.kept ?? null}
+        className="shrink-0 space-y-3 border-b border-border-subtle bg-surface-raised px-4 py-3 text-sm lg:px-6"
+      />
+      {online && !offlineMode.serverUnreachable ? (
+        offlineMode.queued.length > 0 ? (
+          <div
+            className="shrink-0 border-b border-border-subtle bg-surface-raised px-4 py-3 text-sm lg:px-6"
+            data-counter-offline-waiting-online=""
+          >
+            <OfflineQueue queued={offlineMode.queued} />
+          </div>
+        ) : null
+      ) : (
         <div
           role="status"
           aria-live="polite"
@@ -3937,13 +3961,11 @@ function ScopedPharmacyCounterConsole({
                   ? 'Offline — this payment is waiting for the server to confirm it.'
                   : 'Offline — this counter cannot reach the server.'}
             </p>
-            <p className="text-text-body">
-              {paymentQueued
-                ? '1 payment waiting to send. Keep this bill open and do not take the money again.'
-                : pending === 'tender'
-                  ? 'Keep this bill open and do not take the money again until the connection returns.'
-                  : 'Search, bill changes and payments wait until the connection returns.'}
-            </p>
+            <CounterOfflineBannerDetail
+              paymentQueued={paymentQueued}
+              tenderPending={pending === 'tender'}
+              offlineSelling={offlineMode.actions !== null && offlineMode.sellingOn}
+            />
             <CounterOfflinePanel offline={offlineMode} />
           </div>
           {paymentQueued ? (

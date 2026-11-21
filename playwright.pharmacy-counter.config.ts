@@ -19,6 +19,8 @@ export default defineConfig({
     'time-to-first-sale.spec.ts',
     'pharmacy-sop.spec.ts',
     'pharmacy-counter-offline.spec.ts',
+    // DEV-957 phase 2: selling offline on its own enrolled browser profile.
+    'pharmacy-counter-offline-sale.spec.ts',
   ],
   outputDir: './playwright-artifacts/pharmacy-counter',
   // Serial: the three bills draw from one seeded stock balance, so a parallel
