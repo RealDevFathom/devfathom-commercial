@@ -1,12 +1,7 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import {
-  SSO_PENDING_PER_CONNECTION,
-  SSO_PENDING_PER_SOURCE,
-  SSO_START_LIMITS,
-  SSO_TRANSACTION_TTL_MS,
-} from './sso-limits';
+import { SSO_PENDING_PER_CONNECTION, SSO_START_LIMITS, SSO_TRANSACTION_TTL_MS } from './sso-limits';
 import { rateLimitStorageKey } from './rate-limit';
 import { deleteSpentSsoStates, reserveSsoStateCapacity, SsoStateCapacityError } from './sso-state';
 import { withPlatformDb, withTenantDb } from './tenancy/scoped-db';
@@ -88,18 +83,23 @@ describe.skipIf(!runtime)('sign-in state on PostgreSQL', () => {
       new Request('https://fixture.example', { headers: { 'x-fixture-address': ip } });
     const full = '192.0.2.1';
     const fullKey = rateLimitStorageKey(`sso:pending:${id}:${full}`);
+    const samlPair = (sourceKey: string) =>
+      ['SAML_RELAY', 'SAML_REQUEST'].map((kind) => ({
+        ...row(randomUUID()),
+        identityConnectionId: id,
+        kind,
+        payload: { sourceKey },
+      }));
     try {
       await withTenantDb(org, async (db) => {
         await db.organizationIdentityConnection.create({
           data: { id, organizationId: org, protocol: 'SAML', name: 'Source isolation fixture' },
         });
         await db.organizationSsoState.createMany({
-          data: Array.from({ length: SSO_PENDING_PER_SOURCE }, () => ({
-            ...row(randomUUID()),
-            identityConnectionId: id,
-            payload: { sourceKey: fullKey },
-          })),
+          data: Array.from({ length: 299 }, () => samlPair(fullKey)).flat(),
         });
+        const sourceKey = await reserveSsoStateCapacity(db, id, request(full), 2);
+        await db.organizationSsoState.createMany({ data: samlPair(sourceKey) });
       });
       const rowsForConnection = { identityConnectionId: id };
       const before = await withTenantDb(org, (db) =>
@@ -109,7 +109,7 @@ describe.skipIf(!runtime)('sign-in state on PostgreSQL', () => {
           orderBy: { id: 'asc' },
         })
       );
-      expect(before).toHaveLength(300);
+      expect(before).toHaveLength(600);
       for (const slots of [1, 2] as const) {
         await expect(
           withTenantDb(org, (db) => reserveSsoStateCapacity(db, id, request(full), slots))
@@ -119,14 +119,9 @@ describe.skipIf(!runtime)('sign-in state on PostgreSQL', () => {
         const sourceKey = await reserveSsoStateCapacity(db, id, request('192.0.2.2'), 2);
         expect(sourceKey).not.toBe(fullKey);
         await db.organizationSsoState.createMany({
-          data: ['SAML_RELAY', 'SAML_REQUEST'].map((kind) => ({
-            ...row(randomUUID()),
-            identityConnectionId: id,
-            kind,
-            payload: { sourceKey },
-          })),
+          data: samlPair(sourceKey),
         });
-        expect(await db.organizationSsoState.count({ where: rowsForConnection })).toBe(302);
+        expect(await db.organizationSsoState.count({ where: rowsForConnection })).toBe(602);
         expect(
           await db.organizationSsoState.findMany({
             where: { ...rowsForConnection, payload: { path: ['sourceKey'], equals: fullKey } },

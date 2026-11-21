@@ -10,7 +10,7 @@ export const SSO_START_LIMITS = {
 } as const;
 
 export const SSO_TRANSACTION_TTL_MS = 10 * 60_000;
-export const SSO_PENDING_PER_SOURCE = 300;
+export const SSO_PENDING_PER_SOURCE = 600;
 // SAML needs two rows per start. Ten minutes can straddle eleven fixed
 // windows; leave another window of headroom for starts already in flight.
 export const SSO_PENDING_PER_CONNECTION =
