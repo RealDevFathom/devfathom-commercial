@@ -1,6 +1,7 @@
 import { resolvePharmacyE2eDatabaseUrl } from '../../../scripts/pharmacy-e2e-environment';
 import { platformAuthentication } from './platform-control-plane';
 import { fixtureTotp } from './restaurant-platform-auth';
+import { chooseSelectField } from './select-field';
 /**
  * Fresh-tenant acceptance journey; business setup and the sale use rendered UI.
  * Staging uses operator-owned, real evidence in PHARMACY_FIRST_SALE_INPUT.
@@ -207,10 +208,25 @@ function input(): JourneyInput {
   return value;
 }
 
-async function choose(select: Locator, label: string) {
-  const option = select.getByRole('option').filter({ hasText: label });
+async function choose(field: Locator, label: string) {
+  const page = field.page();
+  const control = field.and(page.locator('select, [data-select-field-trigger]'));
+  const nativeId = await control.evaluate((element) => {
+    return (
+      element.getAttribute('data-native-control') ??
+      (element.hasAttribute('data-select-field-native') ? element.id : null)
+    );
+  });
+  const select = nativeId ? page.locator(`select[id=${JSON.stringify(nativeId)}]`) : control;
+  const option = select.locator('option').filter({ hasText: label });
   await expect(option).toHaveCount(1);
-  await select.selectOption({ label: (await option.textContent())!.trim() });
+  const selection = { label: (await option.textContent())!.trim() };
+  if (nativeId) {
+    const trigger = page.locator(`[data-native-control=${JSON.stringify(nativeId)}]`);
+    await chooseSelectField(trigger, selection);
+  } else {
+    await select.selectOption(selection);
+  }
 }
 
 async function fill(form: Locator | Page, values: Record<string, string>) {
@@ -362,9 +378,9 @@ export async function freshPharmacyFirstSale(
     await page.getByPlaceholder('Ali Raza', { exact: true }).fill(name);
     await page.getByPlaceholder('ali@pharmacy.pk', { exact: true }).fill(email);
     await page.getByPlaceholder('Pharmacist', { exact: true }).fill(title);
-    await choose(page.getByLabel('Department', { exact: true }), 'Counter');
+    await choose(page.getByRole('combobox', { name: 'Department', exact: true }), 'Counter');
     // DEV-827: a pharmacy invite grants exactly the chosen role.
-    await choose(page.getByLabel('Role', { exact: true }), 'Administrator');
+    await choose(page.getByRole('combobox', { name: 'Role', exact: true }), 'Administrator');
     await expect(page.getByText('Access level: Admin.', { exact: false })).toBeVisible();
     // Team still labels the field "Your PIN"; the verifier uses the workspace's approval mode.
     if (disposable) await page.getByLabel('Your PIN', { exact: true }).fill(await ownerApproval());
@@ -449,7 +465,7 @@ export async function freshPharmacyFirstSale(
     const access = member.locator('form').filter({
       has: page.getByRole('button', { name: 'Update access', exact: true }),
     });
-    await access.locator('select[name="status"]').selectOption('INACTIVE');
+    await choose(access.getByRole('combobox', { name: 'Status', exact: true }), 'INACTIVE');
     await fill(access, { pin: await ownerApproval() });
     await click(access.getByRole('button', { name: 'Update access', exact: true }));
     await expect(member.locator('summary').getByText('INACTIVE', { exact: true })).toBeVisible();
@@ -581,10 +597,13 @@ export async function freshPharmacyFirstSale(
     await setup(page);
 
     await follow(page, 'Premises and licences', 'Open regulatory profile');
-    await choose(page.getByLabel('Which branch is this profile for?'), branchName);
-    await choose(page.getByLabel('Province', { exact: true }), data.provinceLabel);
     await choose(
-      page.getByLabel('Licence category', { exact: true }),
+      page.getByRole('combobox', { name: 'Which branch is this profile for?' }),
+      branchName
+    );
+    await choose(page.getByRole('combobox', { name: 'Province', exact: true }), data.provinceLabel);
+    await choose(
+      page.getByRole('combobox', { name: 'Licence category', exact: true }),
       data.regulatory.licenceCategoryLabel
     );
     const { licenceEvidencePath, permittedScheduleLabels } = data.regulatory;
@@ -874,7 +893,7 @@ export async function freshPharmacyFirstSale(
     if (await shared.isVisible()) await click(shared);
     await expect(platform.getByText('Unmet activation gates', { exact: true })).toHaveCount(0);
     const lifecycle = formFor(platform, 'Apply lifecycle change');
-    await choose(lifecycle.getByLabel('Move to', { exact: true }), 'ACTIVE');
+    await choose(lifecycle.getByRole('combobox', { name: 'Move to', exact: true }), 'ACTIVE');
     await lifecycle.locator('[name="reason"]').fill(data.authorizationRef);
     await click(lifecycle.getByRole('button', { name: 'Apply lifecycle change', exact: true }));
     await expect(
