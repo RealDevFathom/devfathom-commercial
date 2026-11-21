@@ -189,6 +189,7 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
               varianceMinor: s.varianceMinor,
               openingDifferenceMinor: s.openingDifferenceMinor,
               status: s.status,
+              lineVoids: s.lineVoids,
             })),
             dayShifts.lateArrivals ?? { tenders: [], refunds: [], cashNetMinor: 0 }
           ),

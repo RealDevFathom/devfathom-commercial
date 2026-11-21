@@ -217,6 +217,25 @@ describe('DEV-958B shift report', () => {
     expect(screen.getByText('No refunds in this shift.')).toBeInTheDocument();
   });
 
+  it('DEV-977B: shows the lines taken off bills in the shift, and nothing for an older report', () => {
+    const { unmount } = render(
+      <CashShiftReportView
+        report={{ ...report, lineVoids: { count: 2, valueMinor: 2_100 } }}
+        status="OPEN"
+        currency="PKR"
+        timeZone="Asia/Karachi"
+      />
+    );
+    const voids = screen.getByLabelText('Shift 1 lines taken off bills');
+    expect(within(voids).getByText('Lines taken off bills (2)')).toBeInTheDocument();
+    expect(within(voids).getByText('PKR 21.00')).toBeInTheDocument();
+    unmount();
+    render(
+      <CashShiftReportView report={report} status="OPEN" currency="PKR" timeZone="Asia/Karachi" />
+    );
+    expect(screen.queryByText(/Lines taken off bills/)).not.toBeInTheDocument();
+  });
+
   it("offline, never says whose shift it is on the stored session's word", () => {
     const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
     try {

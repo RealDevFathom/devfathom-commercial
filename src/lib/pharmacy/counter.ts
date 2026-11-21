@@ -1008,6 +1008,9 @@ export type CounterCartLine = {
   presentation: string;
   dosageForm?: string | null;
   saleUnit: SaleUnitKind;
+  /** DEV-977B: the pack level and units per sale unit, so the line's own stepper can change it. */
+  packLevelId?: string;
+  canonicalUnitsPerSaleUnit?: number;
   quantity: number;
   canonicalUnits: number;
   unitPriceMinor: number;
@@ -1153,6 +1156,8 @@ export async function readCounterCart(
       presentation: line.presentation.presentation,
       dosageForm: line.presentation.dosageForm,
       saleUnit: line.saleUnit as SaleUnitKind,
+      packLevelId: line.packLevelId,
+      canonicalUnitsPerSaleUnit: line.canonicalUnitsPerSaleUnit,
       quantity: line.quantity,
       canonicalUnits: line.canonicalUnits,
       unitPriceMinor: line.unitPriceMinor,

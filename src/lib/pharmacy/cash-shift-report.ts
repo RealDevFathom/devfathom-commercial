@@ -14,7 +14,30 @@ export type CashShiftSource = {
   tenders: readonly { type: string; amountMinor: number; saleId: string }[];
   refunds: readonly { type: string; amountMinor: number }[];
   movements: readonly { kind: CashShiftMovementKind | string; amountMinor: number }[];
+  /** DEV-977B: the VOIDED payloads of bill lines changed or removed in the shift. */
+  lineVoids?: readonly unknown[];
 };
+
+/**
+ * DEV-977B: the value a line change or removal took off an open bill, as its VOIDED event records
+ * it (`voidedMinor`), or null for any other void. The day's void evidence and the shift report
+ * both count a line-change void by this one rule.
+ */
+export function lineChangeVoidMinor(payload: unknown): number | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const { cause, voidedMinor } = payload as { cause?: unknown; voidedMinor?: unknown };
+  if (
+    (cause === 'LINE_CHANGED' || cause === 'LINE_REMOVED') &&
+    typeof voidedMinor === 'number' &&
+    Number.isSafeInteger(voidedMinor) &&
+    voidedMinor >= 0
+  )
+    return voidedMinor;
+  return null;
+}
+
+/** DEV-977B: bill lines changed to fewer units or removed in a shift, and the value they took off. */
+export type CashShiftLineVoids = { count: number; valueMinor: number };
 
 export type CashShiftTypeTotal = { type: string; count: number; amountMinor: number };
 
@@ -25,6 +48,8 @@ export type CashShiftFigures = {
   tenderTotalMinor: number;
   refundTotalMinor: number;
   netTakenMinor: number;
+  /** Absent on a report frozen before line changes were counted. */
+  lineVoids?: CashShiftLineVoids;
   cash: {
     openingFloatMinor: number;
     cashSalesMinor: number;
@@ -65,6 +90,9 @@ export function computeCashShiftFigures(source: CashShiftSource): CashShiftFigur
   const paidOutMinor = sum(kind('PAID_OUT'));
   const tenderTotalMinor = sum(source.tenders);
   const refundTotalMinor = sum(source.refunds);
+  const lineVoidValues = (source.lineVoids ?? [])
+    .map(lineChangeVoidMinor)
+    .filter((value): value is number => value !== null);
   return {
     tenders: byType(source.tenders),
     refunds: byType(source.refunds),
@@ -72,6 +100,10 @@ export function computeCashShiftFigures(source: CashShiftSource): CashShiftFigur
     tenderTotalMinor,
     refundTotalMinor,
     netTakenMinor: tenderTotalMinor - refundTotalMinor,
+    lineVoids: {
+      count: lineVoidValues.length,
+      valueMinor: lineVoidValues.reduce((total, value) => total + value, 0),
+    },
     cash: {
       openingFloatMinor: source.openingFloatMinor,
       cashSalesMinor,
@@ -125,6 +157,7 @@ export function sumCashShifts(
     varianceMinor: number | null;
     openingDifferenceMinor: number;
     status: 'OPEN' | 'CLOSED';
+    lineVoids?: CashShiftLineVoids;
   }[],
   late: {
     tenders: readonly CashShiftTypeTotal[];
@@ -148,6 +181,14 @@ export function sumCashShifts(
     openShifts: shifts.length - closed.length,
     tenders: add([...shifts.map((s) => s.tenders), late.tenders]),
     refunds: add([...shifts.map((s) => s.refunds), late.refunds]),
+    // DEV-977B: each line-change void is in the one shift it happened in, so this counts it once.
+    lineVoids: shifts.reduce<CashShiftLineVoids>(
+      (total, s) => ({
+        count: total.count + (s.lineVoids?.count ?? 0),
+        valueMinor: total.valueMinor + (s.lineVoids?.valueMinor ?? 0),
+      }),
+      { count: 0, valueMinor: 0 }
+    ),
     cashVarianceMinor:
       closed.reduce((total, s) => total + (s.varianceMinor ?? 0) + s.openingDifferenceMinor, 0) -
       late.cashNetMinor,

@@ -233,6 +233,32 @@ export async function lockSaleCandidates(
   );
 }
 
+/**
+ * DEV-977B: lock every balance of `medicineId` at the branch, stocked or not, in the global key
+ * order. A bill line's change gives the old line's stock back (writing its balances) and then
+ * allocates the new quantity from the stocked candidates; locking the whole set first, in one
+ * ordered statement, means neither step can lock a balance out of order against a concurrent
+ * sale of the same medicine.
+ */
+export async function lockMedicineBalances(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
+  medicineId: string
+) {
+  await lockStockRowsFrom(
+    db,
+    scope.organizationId,
+    Prisma.sql`
+    SELECT balance."branchId", balance."inventoryLotId", balance."stockLocationId",
+           balance."disposition"::text AS "disposition"
+    ${CANDIDATE_JOINS}
+    WHERE balance."organizationId" = ${scope.organizationId}
+      AND balance."branchId" = ${scope.branchId}
+      AND batch."medicineId" = ${medicineId}`,
+    { balance: true }
+  );
+}
+
 function toCandidate(row: CandidateRow): AllocationCandidate {
   return {
     inventoryLotId: row.inventoryLotId,

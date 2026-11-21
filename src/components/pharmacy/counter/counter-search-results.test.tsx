@@ -773,3 +773,69 @@ describe('DEV-977 chosen result mark', () => {
     expect(other).toHaveClass('border-s-[3px]', 'border-s-transparent');
   });
 });
+
+describe('DEV-977B (Counter v2, A6 and B6) results', () => {
+  it('adds a pressed result when the counter adds in one step, and keeps alternatives staging', () => {
+    const onSelect = vi.fn();
+    const onAdd = vi.fn();
+    const alternative: CounterSearchRow = { ...row, medicineId: 'med-alt', displayName: 'Alt' };
+    render(
+      <CounterSearchResults
+        rows={[
+          {
+            ...row,
+            onHandUnits: 0,
+            stockAlternatives: {
+              ingredientRecorded: true,
+              exact: [alternative],
+              other: [],
+              truncated: false,
+            },
+          },
+        ]}
+        state="ready"
+        query="para"
+        activeMedicineId={null}
+        onSelect={onSelect}
+        onAdd={onAdd}
+        onCaptureDemand={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+    const [result] = screen.getAllByRole('button', { name: /Paracetamol/ });
+    // A result row is at least 64px tall, as drawn.
+    expect(result).toHaveClass('min-h-16', 'py-3');
+    fireEvent.click(result!);
+    expect(onAdd).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ medicineId: 'med-1' }));
+    expect(onSelect).not.toHaveBeenCalled();
+    // The line form stays one press away, beside the result.
+    const [options] = screen.getAllByRole('button', { name: /^Quantity or batch first: / });
+    fireEvent.click(options!);
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ medicineId: 'med-1' })
+    );
+    onSelect.mockClear();
+    const alternatives = screen.getByRole('list', { name: 'Same ingredient, strength and form' });
+    fireEvent.click(within(alternatives).getByRole('button'));
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith(alternative);
+  });
+
+  it('says a slow search is still running, and keeps the plain loading line otherwise', () => {
+    const props = {
+      rows: [],
+      state: 'loading' as const,
+      query: 'para',
+      activeMedicineId: null,
+      onSelect: vi.fn(),
+      onCaptureDemand: vi.fn(),
+      onRetry: vi.fn(),
+    };
+    const { rerender } = render(<CounterSearchResults {...props} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Searching the catalog…');
+    rerender(<CounterSearchResults {...props} slow />);
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Still searching… Scanning the barcode is faster.'
+    );
+    expect(screen.getByRole('status').parentElement).toHaveAttribute('aria-busy', 'true');
+  });
+});

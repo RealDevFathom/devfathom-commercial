@@ -844,6 +844,14 @@ function DayCloseForm({
                   </dd>
                 </div>
               ))}
+              <div className="flex justify-between gap-3 border-t border-border-subtle py-1.5">
+                <dt className="text-text-body">
+                  Lines taken off bills ({data.shiftTotals.lineVoids.count})
+                </dt>
+                <dd className="font-mono tabular-nums text-text-strong">
+                  {currency} {formatMinor(data.shiftTotals.lineVoids.valueMinor)}
+                </dd>
+              </div>
               {data.shiftTotals.openShifts === 0 ? (
                 <div className="flex justify-between gap-3 border-t border-border-subtle py-1.5">
                   <dt className="font-semibold text-text-strong">Cash over or short, all shifts</dt>
