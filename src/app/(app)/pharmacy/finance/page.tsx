@@ -16,7 +16,11 @@ import { DayEndHourPanel } from '@/components/pharmacy/counter/day-end-hour-pane
 import { DiscountMaximumPanel } from '@/components/pharmacy/counter/discount-maximum-panel';
 import { BillDiscountSettingPanel } from '@/components/pharmacy/counter/bill-discount-setting-panel';
 import { StatusPill } from '@/components/ui/status-pill';
-import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
+import {
+  pharmacyActionErrorMessage,
+  isPharmacyActionForbidden,
+  PHARMACY_FINANCE_ACCESS_DENIED_MESSAGE,
+} from '@/lib/pharmacy/action-error-message';
 import {
   isCounterKhataRepayment,
   isNativeApSettlementTransaction,
@@ -124,7 +128,8 @@ export default async function PharmacyFinancePage({
   let workspace: Awaited<ReturnType<typeof caller.workspace>>;
   try {
     workspace = await caller.workspace({ branchId: branch.id });
-  } catch {
+  } catch (error) {
+    const denied = isPharmacyActionForbidden(error);
     return (
       <div className="space-y-6">
         <PageHeader
@@ -132,9 +137,11 @@ export default async function PharmacyFinancePage({
           heading="Finance"
           description="Bookkeeping, reconciliation, close, and tax profile controls."
         />
-        <SectionCard title="Finance could not load">
+        <SectionCard title={denied ? 'Finance access required' : 'Finance could not load'}>
           <p className="text-sm text-text-muted">
-            Refresh the page. No financial data was changed.
+            {denied
+              ? PHARMACY_FINANCE_ACCESS_DENIED_MESSAGE
+              : 'Refresh the page. No financial data was changed.'}
           </p>
         </SectionCard>
       </div>

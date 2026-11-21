@@ -1,3 +1,7 @@
+import {
+  isPharmacyActionForbidden,
+  PHARMACY_FINANCE_ACCESS_DENIED_MESSAGE,
+} from '@/lib/pharmacy/action-error-message';
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import {
@@ -46,7 +50,15 @@ export default async function TaxProfileReviewPage({
       .createCaller(ctx)
       .workspace({ branchId: branch.id });
     profiles = workspace.taxProfiles;
-  } catch {
+  } catch (error) {
+    if (isPharmacyActionForbidden(error))
+      return (
+        <Shell>
+          <SectionCard title="Finance access required">
+            <p className="text-sm text-text-muted">{PHARMACY_FINANCE_ACCESS_DENIED_MESSAGE}</p>
+          </SectionCard>
+        </Shell>
+      );
     loadFailed = true;
   }
   const approved = profiles.filter(

@@ -1,3 +1,4 @@
+import { TRPCError } from '@trpc/server';
 import { Children, isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -482,4 +483,16 @@ describe('Finance posting window on the organisation clock (DEV-722)', () => {
     visit(tree);
     expect(defaults).toEqual({ businessDate: '2026-08-01', occurredAt: '2026-08-01' });
   });
+});
+
+it('explains a finance refusal and who can grant access', async () => {
+  mocks.workspace.mockRejectedValueOnce(
+    new TRPCError({ code: 'FORBIDDEN', message: 'private detail' })
+  );
+  const html = renderToStaticMarkup(
+    await PharmacyFinancePage({ searchParams: Promise.resolve({}) })
+  );
+  expect(html).toContain('Ask your workspace owner for finance access');
+  expect(html).not.toContain('private detail');
+  expect(html).not.toContain('Refresh the page');
 });

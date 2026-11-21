@@ -350,3 +350,12 @@ describe('tax profile evidence export', () => {
     expect(await response.text()).not.toContain('APPROVED');
   });
 });
+
+it('explains a finance refusal and who can grant access', async () => {
+  mocks.workspace.mockRejectedValueOnce(
+    new TRPCError({ code: 'FORBIDDEN', message: 'private detail' })
+  );
+  await show();
+  expect(screen.getByText(/Ask your workspace owner for finance access/)).toBeVisible();
+  expect(screen.queryByText(/private detail/)).toBeNull();
+});
