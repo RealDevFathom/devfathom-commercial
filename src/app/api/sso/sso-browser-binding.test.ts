@@ -5,6 +5,7 @@
  * unpredictable cookie set by the start route, and verified before any account
  * is provisioned or ticket issued.
  */
+import { SSO_START_LIMITS } from '@/lib/sso-limits';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type StateRow = {
@@ -40,11 +41,18 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: vi.fn(async (_organizationId: string, run: (db: unknown) => Promise<unknown>) =>
     run({
       $executeRaw: vi.fn(),
+      $queryRaw: vi.fn(async (_sql, sourceKey: string, connectionId: string, now: Date) => {
+        const active = states.filter(
+          (row) => row.identityConnectionId === connectionId && !row.usedAt && row.expiresAt > now
+        );
+        return [
+          {
+            total: active.length,
+            fromSource: active.filter((row) => row.payload.sourceKey === sourceKey).length,
+          },
+        ];
+      }),
       organizationSsoState: {
-        count: vi.fn(
-          async () =>
-            states.filter((row) => row.usedAt === null && row.expiresAt > new Date()).length
-        ),
         create: vi.fn(async ({ data }: { data: Omit<StateRow, 'id' | 'usedAt'> }) => {
           const row = { id: `s${states.length + 1}`, usedAt: null, ...data };
           states.push(row);
@@ -217,6 +225,7 @@ describe('OIDC browser binding (F10)', () => {
     const { binding } = await startInBrowser();
     expect(states).toHaveLength(1);
     expect(typeof states[0]!.payload.browserBindingHash).toBe('string');
+    expect(states[0]!.payload.sourceKey).toMatch(/^[0-9a-f]{64}$/);
     expect(JSON.stringify(states[0])).not.toContain(binding);
   });
 
@@ -293,6 +302,8 @@ describe('SAML browser binding (F10)', () => {
   it('binds both the RelayState and the AuthnRequest ID to the browser', async () => {
     const { binding } = await startInBrowser();
     expect(states.map((row) => row.kind).sort()).toEqual(['SAML_RELAY', 'SAML_REQUEST']);
+    expect(states[0]!.payload.sourceKey).toMatch(/^[0-9a-f]{64}$/);
+    expect(states[1]!.payload.sourceKey).toBe(states[0]!.payload.sourceKey);
     for (const row of states) {
       expect(typeof row.payload.browserBindingHash).toBe('string');
       expect(JSON.stringify(row)).not.toContain(binding);
@@ -451,10 +462,10 @@ describe('start admission', () => {
       });
       const { requireOrganizationForRequest } = await import('@/lib/tenancy/host');
       for (const [key, limit] of [
-        ['overall', 600],
-        [`ip:${clientIp(request)}`, 60],
-        ['host:acme.example', 180],
-        ['connection:fixture', 120],
+        ['overall', SSO_START_LIMITS.platform],
+        [`ip:${clientIp(request)}`, SSO_START_LIMITS.source],
+        ['host:acme.example', SSO_START_LIMITS.host],
+        ['connection:fixture', SSO_START_LIMITS.connection],
       ] as const) {
         const name = 'sso:start:' + key;
         try {
@@ -472,11 +483,63 @@ describe('start admission', () => {
       }
     }
   );
+  it('leaves all shared quota available to a different source on a different business', async () => {
+    const limiter = await import('@/lib/rate-limit');
+    const { requireOrganizationForRequest } = await import('@/lib/tenancy/host');
+    vi.stubEnv('CLIENT_IP_HEADER', 'x-fixture-address');
+    const balances = new Map([
+      ['sso:start:ip:192.0.2.1', 0],
+      ['sso:start:overall', 1],
+    ]);
+    const quota = vi.spyOn(limiter, 'rateLimit').mockImplementation(async (key, limit) => {
+      const available = balances.get(key) ?? limit;
+      if (!available) return { ok: false, remaining: 0, retryAfter: 60 };
+      balances.set(key, available - 1);
+      return { ok: true, remaining: available - 1, retryAfter: 0 };
+    });
+    const req = (host: string, address: string) =>
+      new Request('https://' + host + '/start', {
+        headers: { host, 'x-fixture-address': address },
+      });
+    try {
+      expect((await oidcStart(req('first.example', '192.0.2.1'), route('first'))).status).toBe(429);
+      expect(quota.mock.calls.map(([key]) => key)).toEqual(['sso:start:ip:192.0.2.1']);
+      expect(balances.get('sso:start:overall')).toBe(1);
+      expect(requireOrganizationForRequest).not.toHaveBeenCalled();
+      expect(states).toHaveLength(0);
+
+      vi.mocked(requireOrganizationForRequest, { partial: true }).mockResolvedValueOnce({
+        id: 'org_2',
+      });
+      mocks.requireIdentityConnection.mockResolvedValueOnce({
+        id: 'other',
+        organizationId: 'org_2',
+        issuer: 'https://idp.example',
+        clientId: 'fixture',
+      });
+      const admitted = await oidcStart(req('other.example', '192.0.2.2'), route('other'));
+      expect(admitted.status).toBe(302);
+      expect(quota.mock.calls.slice(1).map(([key, limit]) => [key, limit])).toEqual([
+        ['sso:start:ip:192.0.2.2', 300],
+        ['sso:start:overall', 6000],
+        ['sso:start:host:other.example', 900],
+        ['sso:start:connection:other', 600],
+        ['sso:start:organization:org_2', 900],
+      ]);
+      expect(states).toHaveLength(1);
+      expect(states[0]).toMatchObject({ organizationId: 'org_2', identityConnectionId: 'other' });
+    } finally {
+      quota.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('charges the same business on both verified aliases before reading entitlements or the connection', async () => {
     const { rateLimit, clearRateLimit } = await import('@/lib/rate-limit');
     const key = 'sso:start:organization:org_1';
     try {
-      for (let i = 0; i < 180; i++) await rateLimit(key, 180, 60_000);
+      for (let i = 0; i < SSO_START_LIMITS.business; i++)
+        await rateLimit(key, SSO_START_LIMITS.business, 60_000);
       for (const host of ['tenant.example', 'alias.example']) {
         const response = await oidcStart(
           new Request('https://' + host + '/start', { headers: { host } }),

@@ -2960,7 +2960,7 @@ async function runCommand(
           });
         } catch {
           throw new PlatformSecurityError(
-            'OIDC settings require a public HTTPS address on the standard port.',
+            'OIDC settings require a public HTTPS address on port 443.',
             400
           );
         }

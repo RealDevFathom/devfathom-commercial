@@ -180,6 +180,33 @@ describe('OIDC connection saves', () => {
     });
   });
 
+  it.each(['issuer', 'discoveryUrl'] as const)(
+    'requires port 443 before saving the %s',
+    async (field) => {
+      await expect(
+        execute('organization.identity', { ...payload, [field]: 'https://idp.example:8443/tenant' })
+      ).rejects.toMatchObject({
+        status: 400,
+        message: 'OIDC settings require a public HTTPS address on port 443.',
+      });
+      expect(db.organizationIdentityConnection.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('accepts explicitly configured HTTPS port 443', async () => {
+    db.organizationIdentityConnection.create.mockResolvedValueOnce({
+      id: 'fixture',
+      organizationId: 'org_1',
+    });
+    await execute('organization.identity', {
+      ...payload,
+      discoveryUrl: 'https://8.8.8.8:443/document',
+    });
+    expect(db.organizationIdentityConnection.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ discoveryUrl: 'https://8.8.8.8:443/document' }),
+    });
+  });
+
   it('refuses a forbidden discovery address before creating a connection', async () => {
     await expect(
       execute('organization.identity', { ...payload, discoveryUrl: 'https://192.0.2.1/document' })

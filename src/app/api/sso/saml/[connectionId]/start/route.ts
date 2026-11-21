@@ -28,10 +28,11 @@ export async function GET(request: Request, route: { params: Promise<{ connectio
     // F10: bind the RelayState and the AuthnRequest ID to this browser.
     const binding = createSsoBrowserBinding();
     const redirect = await withTenantDb(connection.organizationId, async (db) => {
-      await reserveSsoStateCapacity(db, connection.id, 2);
+      const sourceKey = await reserveSsoStateCapacity(db, connection.id, request, 2);
       const relayState = await createAuthorizationState(db, {
         organizationId: connection.organizationId,
         identityConnectionId: connection.id,
+        sourceKey,
         kind: 'SAML_RELAY',
         payload: { returnTo: '/dashboard', browserBindingHash: binding.hash },
       });
@@ -49,6 +50,7 @@ export async function GET(request: Request, route: { params: Promise<{ connectio
         acceptedClockSkewMs: 120_000,
         cacheProvider: new PrismaSamlCache(db, connection.organizationId, connection.id, {
           hash: binding.hash,
+          sourceKey,
         }),
       });
       return saml.getAuthorizeUrlAsync(relayState, publicUrl.host, {});

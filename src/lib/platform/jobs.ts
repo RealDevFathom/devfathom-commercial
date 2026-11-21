@@ -1004,8 +1004,7 @@ export type ProcessJobsResult = {
 
 export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResult> {
   const limit = Math.max(1, Math.min(100, Math.floor(maxJobs)));
-  // Each five-minute worker pass can retire more rows than both protocols
-  // together can admit in that interval, without holding one large lock set.
+  // Bound each five-minute cleanup pass and release locks between batches.
   for (let batch = 0; batch < 16; batch++) {
     if ((await withPlatformDb(deleteSpentSsoStates)) < SSO_CLEANUP_BATCH_SIZE) break;
   }

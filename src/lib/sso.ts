@@ -7,6 +7,7 @@ import { resolveProvisionedDepartmentKey } from '@/lib/department-provisioning';
 import { publicRequestOrigin } from '@/lib/http-origin';
 import { decryptSecret } from '@/lib/secret-crypto';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
+import { SSO_TRANSACTION_TTL_MS } from '@/lib/sso-limits';
 import { normalizeEmail } from '@/lib/email-address';
 import { requireOrganizationForRequest } from '@/lib/tenancy/host';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -27,7 +28,6 @@ export { SSO_TICKET_COOKIE } from '@/lib/sso-ticket-cookie';
  * the sender's account.
  */
 export const SSO_BROWSER_BINDING_COOKIE = 'df_sso_binding';
-const SSO_TRANSACTION_TTL_MS = 10 * 60_000;
 
 export function createSsoBrowserBinding() {
   const value = randomBytes(32).toString('base64url');
@@ -298,6 +298,7 @@ export async function createAuthorizationState(
     organizationId: string;
     identityConnectionId: string;
     kind: string;
+    sourceKey: string;
     payload: Record<string, unknown>;
     ttlMs?: number;
   }
@@ -309,7 +310,7 @@ export async function createAuthorizationState(
       identityConnectionId: input.identityConnectionId,
       key,
       kind: input.kind,
-      payload: JSON.parse(JSON.stringify(input.payload)),
+      payload: JSON.parse(JSON.stringify({ ...input.payload, sourceKey: input.sourceKey })),
       expiresAt: new Date(Date.now() + (input.ttlMs ?? SSO_TRANSACTION_TTL_MS)),
     },
   });
@@ -365,7 +366,8 @@ export class PrismaSamlCache implements CacheProvider {
     private readonly db: ScopedDb,
     private readonly organizationId: string,
     private readonly connectionId: string,
-    private readonly browserBinding: { hash: string } | { presented: string | null } | null = null
+    private readonly browserBinding:
+      { hash: string; sourceKey: string } | { presented: string | null } | null = null
   ) {}
 
   async saveAsync(key: string, value: string) {
@@ -378,7 +380,11 @@ export class PrismaSamlCache implements CacheProvider {
         identityConnectionId: this.connectionId,
         key,
         kind: 'SAML_REQUEST',
-        payload: { value, browserBindingHash: this.browserBinding.hash },
+        payload: {
+          value,
+          browserBindingHash: this.browserBinding.hash,
+          sourceKey: this.browserBinding.sourceKey,
+        },
         expiresAt: new Date(Date.now() + SSO_TRANSACTION_TTL_MS),
       },
     });

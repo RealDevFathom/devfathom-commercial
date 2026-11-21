@@ -124,6 +124,24 @@ describe('OIDC discovery transport', () => {
     expect(net.request).not.toHaveBeenCalled();
   });
 
+  it.each(['authorization_endpoint', 'token_endpoint', 'jwks_uri'])(
+    'refuses a discovered %s on a nonstandard port',
+    async (field) => {
+      json({ ...document, [field]: 'https://idp.example:8443/endpoint' });
+      await expect(discoverOidc(settings, 'fixture', undefined, true)).rejects.toThrow();
+      expect(net.request).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('applies the port policy when requesting user information', async () => {
+    json({ ...document, userinfo_endpoint: 'https://idp.example:8443/userinfo' });
+    const config = await discoverOidc(settings, 'fixture', undefined, true);
+    await expect(
+      client.fetchUserInfo(config, 'fixture-token', 'fixture-subject')
+    ).rejects.toThrow();
+    expect(net.request).toHaveBeenCalledTimes(1);
+  });
+
   it('honors the deadline while DNS resolution is pending', async () => {
     net.lookup.mockImplementationOnce(() => new Promise(() => {}));
     const controller = new AbortController();

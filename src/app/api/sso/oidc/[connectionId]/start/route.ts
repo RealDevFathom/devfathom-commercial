@@ -33,10 +33,11 @@ export async function GET(request: Request, route: { params: Promise<{ connectio
     // F10: bind the transaction to this browser; the callback requires it.
     const binding = createSsoBrowserBinding();
     const state = await withTenantDb(connection.organizationId, async (db) => {
-      await reserveSsoStateCapacity(db, connection.id, 1);
+      const sourceKey = await reserveSsoStateCapacity(db, connection.id, request, 1);
       return createAuthorizationState(db, {
         organizationId: connection.organizationId,
         identityConnectionId: connection.id,
+        sourceKey,
         kind: 'OIDC',
         payload: { verifier, nonce, redirectUri, browserBindingHash: binding.hash },
       });

@@ -1,6 +1,13 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  SSO_PENDING_PER_CONNECTION,
+  SSO_PENDING_PER_SOURCE,
+  SSO_START_LIMITS,
+  SSO_TRANSACTION_TTL_MS,
+} from './sso-limits';
+import { rateLimitStorageKey } from './rate-limit';
 import { deleteSpentSsoStates, reserveSsoStateCapacity, SsoStateCapacityError } from './sso-state';
 import { withPlatformDb, withTenantDb } from './tenancy/scoped-db';
 import { assertRlsEnforcingRole } from './testing/rls-role-guard';
@@ -36,16 +43,30 @@ describe.skipIf(!runtime)('sign-in state on PostgreSQL', () => {
   });
 
   it('serializes concurrent reservations and fits a complete SAML pair or neither row', async () => {
-    await withTenantDb(org, (db) =>
-      db.organizationSsoState.createMany({
-        data: Array.from({ length: 253 }, () => row(randomUUID())),
-      })
+    const seedCount = SSO_PENDING_PER_CONNECTION - 3;
+    expect(SSO_PENDING_PER_CONNECTION).toBeGreaterThan(
+      2 *
+        SSO_START_LIMITS.connection *
+        (1 + Math.ceil(SSO_TRANSACTION_TTL_MS / SSO_START_LIMITS.windowMs))
     );
+    // Pre-upgrade rows have no source tag and still consume connection slots.
+    await withTenantDb(
+      org,
+      (db) => db.$executeRaw`
+      INSERT INTO organization_sso_states (id, "organizationId", "identityConnectionId", key, kind, payload, "expiresAt")
+      SELECT ${connection} || n, ${org}, ${connection}, ${connection} || n, 'OIDC', '{}', ${active}
+      FROM generate_series(1, ${seedCount}::int) n
+    `
+    );
+    const request = new Request('https://fixture.example');
     const start = (slots: 1 | 2) =>
       withTenantDb(org, async (db) => {
-        await reserveSsoStateCapacity(db, connection, slots);
+        const sourceKey = await reserveSsoStateCapacity(db, connection, request, slots);
         await db.organizationSsoState.createMany({
-          data: Array.from({ length: slots }, () => row(randomUUID())),
+          data: Array.from({ length: slots }, () => ({
+            ...row(randomUUID()),
+            payload: { sourceKey },
+          })),
         });
       });
     await Promise.all([start(1), start(1)]);
@@ -55,7 +76,68 @@ describe.skipIf(!runtime)('sign-in state on PostgreSQL', () => {
     expect(race.find((result) => result.status === 'rejected')?.reason).toBeInstanceOf(
       SsoStateCapacityError
     );
-    expect(await withTenantDb(org, (db) => db.organizationSsoState.count())).toBe(256);
+    expect(await withTenantDb(org, (db) => db.organizationSsoState.count())).toBe(
+      SSO_PENDING_PER_CONNECTION
+    );
+  });
+
+  it('refuses new states at the source limit and preserves another source’s capacity on the same connection', async () => {
+    const id = randomUUID();
+    vi.stubEnv('CLIENT_IP_HEADER', 'x-fixture-address');
+    const request = (ip: string) =>
+      new Request('https://fixture.example', { headers: { 'x-fixture-address': ip } });
+    const full = '192.0.2.1';
+    const fullKey = rateLimitStorageKey(`sso:pending:${id}:${full}`);
+    try {
+      await withTenantDb(org, async (db) => {
+        await db.organizationIdentityConnection.create({
+          data: { id, organizationId: org, protocol: 'SAML', name: 'Source isolation fixture' },
+        });
+        await db.organizationSsoState.createMany({
+          data: Array.from({ length: SSO_PENDING_PER_SOURCE }, () => ({
+            ...row(randomUUID()),
+            identityConnectionId: id,
+            payload: { sourceKey: fullKey },
+          })),
+        });
+      });
+      const rowsForConnection = { identityConnectionId: id };
+      const before = await withTenantDb(org, (db) =>
+        db.organizationSsoState.findMany({
+          where: rowsForConnection,
+          select: { id: true },
+          orderBy: { id: 'asc' },
+        })
+      );
+      expect(before).toHaveLength(300);
+      for (const slots of [1, 2] as const) {
+        await expect(
+          withTenantDb(org, (db) => reserveSsoStateCapacity(db, id, request(full), slots))
+        ).rejects.toBeInstanceOf(SsoStateCapacityError);
+      }
+      await withTenantDb(org, async (db) => {
+        const sourceKey = await reserveSsoStateCapacity(db, id, request('192.0.2.2'), 2);
+        expect(sourceKey).not.toBe(fullKey);
+        await db.organizationSsoState.createMany({
+          data: ['SAML_RELAY', 'SAML_REQUEST'].map((kind) => ({
+            ...row(randomUUID()),
+            identityConnectionId: id,
+            kind,
+            payload: { sourceKey },
+          })),
+        });
+        expect(await db.organizationSsoState.count({ where: rowsForConnection })).toBe(302);
+        expect(
+          await db.organizationSsoState.findMany({
+            where: { ...rowsForConnection, payload: { path: ['sourceKey'], equals: fullKey } },
+            select: { id: true },
+            orderBy: { id: 'asc' },
+          })
+        ).toEqual(before);
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('removes used and expired rows in batches and preserves all active rows', async () => {

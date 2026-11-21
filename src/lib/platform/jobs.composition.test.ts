@@ -1,4 +1,5 @@
 // @vitest-environment node
+import https from 'node:https';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const m = vi.hoisted(() => ({
@@ -150,6 +151,10 @@ describe('composed platform worker boundaries', () => {
   });
 
   it('revalidates a stored discovery destination in the identity worker', async () => {
+    using fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Unexpected fetch'));
+    using transport = vi.spyOn(https, 'request').mockImplementation(() => {
+      throw new Error('Unexpected HTTPS request');
+    });
     db.organizationIdentityConnection.findFirst.mockResolvedValue({
       id: 'fixture',
       protocol: 'OIDC',
@@ -159,6 +164,8 @@ describe('composed platform worker boundaries', () => {
     });
     queue(job('SYNC_IDENTITY', { payload: { connectionId: 'fixture' } }));
     await expect(processPlatformJobs(1)).resolves.toMatchObject({ succeeded: 0, retried: 1 });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
     expect(db.organizationIdentityConnection.update).toHaveBeenCalledWith({
       where: { id: 'fixture' },
       data: expect.objectContaining({ status: 'ERROR' }),
