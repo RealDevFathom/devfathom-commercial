@@ -6,6 +6,7 @@ import { z } from 'zod';
 import {
   Prisma,
   type LifecycleAction,
+  type Organization,
   type OrganizationIdentityConnection,
   type OrganizationStatus,
   type PlatformJob,
@@ -940,8 +941,8 @@ function canonicalOrganizationSlug(slug: string): string {
  */
 async function createOrganizationRecord(
   db: PrismaClient,
-  data: Parameters<PrismaClient['organization']['create']>[0]['data']
-) {
+  data: Prisma.OrganizationCreateArgs['data']
+): Promise<Organization> {
   const slug = typeof data.slug === 'string' ? canonicalOrganizationSlug(data.slug) : data.slug;
   try {
     return await db.organization.create({ data: { ...data, slug } });

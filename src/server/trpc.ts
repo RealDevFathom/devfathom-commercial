@@ -14,7 +14,11 @@ import type { TenantOrganization } from '@/lib/tenancy/host';
 import type { SupportIdentity } from '@/lib/tenancy/support-session';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
-import { alternativeModulesForProcedure, moduleForProcedure } from '@/lib/module-catalog';
+import {
+  alternativeModulesForProcedure,
+  moduleForProcedure,
+  type EntitlementView,
+} from '@/lib/module-catalog';
 import { formatValidationError } from '@/lib/validation-error';
 import {
   type AuditDetail,
@@ -27,6 +31,16 @@ import { isPrismaError, mapPrismaError } from '@/server/trpc-database-errors';
 import { mapAccountingPeriodError } from '@/server/trpc-period-errors';
 import { refusalReasonOf } from '@/server/refusal-reason';
 import { tagProcedureGate, type ProcedureGateTag } from '@/server/procedure-gate-tag';
+
+export interface TRPCContext {
+  db: ScopedDb;
+  entitlements: EntitlementView;
+  session: Session | null;
+  organization: TenantOrganization | null;
+  support: SupportIdentity | null;
+  requestMeta: { ip: string | null; userAgent: string | null };
+  audit: { detail: AuditDetail; db?: ScopedDb };
+}
 
 /**
  * The fetch adapter passes `{ req }` to createContext; the RSC SSR helper calls
@@ -41,7 +55,7 @@ export const createTRPCContext = async (opts?: {
   auditDb?: ScopedDb;
   organization?: TenantOrganization;
   support?: SupportIdentity | null;
-}) => {
+}): Promise<TRPCContext> => {
   // Route adapters can execute their context factory after Next's request
   // AsyncLocalStorage scope has been released. When the route already resolved
   // the session, use it instead of calling auth() again outside request scope.
@@ -83,8 +97,6 @@ export const createTRPCContext = async (opts?: {
     audit: { detail: {} as AuditDetail, ...(opts?.auditDb ? { db: opts.auditDb } : {}) },
   };
 };
-
-export type TRPCContext = Awaited<ReturnType<typeof createTRPCContext>>;
 
 /** What a production client is told instead of an unexpected failure's own message. */
 const INTERNAL_ERROR_MESSAGE = 'Something went wrong on our side. Please try again.';

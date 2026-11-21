@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { Prisma } from '@/generated/prisma/client';
+import { Prisma, type PharmacyCashShift } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { actorManagesBranchDrawers } from './counter-capability';
@@ -202,8 +202,6 @@ export async function openPharmacyCashShift(
   return { shift, replayed: false as const };
 }
 
-type ShiftRow = NonNullable<Awaited<ReturnType<ScopedDb['pharmacyCashShift']['findFirst']>>>;
-
 async function userNames(db: ScopedDb, organizationId: string, ids: (string | null)[]) {
   const wanted = [...new Set(ids.filter((id): id is string => Boolean(id)))];
   if (!wanted.length) return new Map<string, string | null>();
@@ -215,7 +213,7 @@ async function userNames(db: ScopedDb, organizationId: string, ids: (string | nu
 }
 
 /** The shift's figures from the rows the database put in it. */
-async function readShiftFigures(db: ScopedDb, scope: LedgerScope, shift: ShiftRow) {
+async function readShiftFigures(db: ScopedDb, scope: LedgerScope, shift: PharmacyCashShift) {
   const where = { organizationId: scope.organizationId, shiftId: shift.id };
   const [tenders, refunds, movements, lineVoids] = await Promise.all([
     db.pharmacyTender.findMany({
@@ -265,7 +263,7 @@ function refundByTender(refund: {
 async function buildReport(
   db: ScopedDb,
   scope: LedgerScope,
-  shift: ShiftRow,
+  shift: PharmacyCashShift,
   toleranceMinor: number,
   close?: {
     closedByActorId: string;

@@ -152,7 +152,7 @@ import {
 } from '@/lib/pharmacy/bill-discount-service';
 import { z } from 'zod';
 import { saleVoidReasonSchema, saleVoidReasonText } from '@/lib/pharmacy/sale-void-reasons';
-import { Prisma } from '@/generated/prisma/client';
+import { Prisma, type PharmacySale } from '@/generated/prisma/client';
 import { randomUUID } from 'node:crypto';
 import {
   authorizeKhataCharge,
@@ -3075,7 +3075,7 @@ export const pharmacySalesRouter = router({
           path: ['deviceId'],
         })
     )
-    .mutation(async ({ ctx, input }) => {
+    .mutation(async ({ ctx, input }): Promise<PharmacySale> => {
       try {
         // DEV-607: the same member, capability and branch-assignment gate as
         // `counterCart`, so nobody opens a bill they cannot then read or pay.

@@ -16,7 +16,7 @@
  * behind that lock, not the primary mechanism — a caller that skipped the lock
  * would still be unable to push a balance below zero.
  */
-import { Prisma } from '@/generated/prisma/client';
+import { Prisma, type PharmacyStockMovement } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { lockStockBalances, lockStockRowsFrom } from './stock-lock-order';
@@ -960,8 +960,8 @@ const SALEABLE_TRANSFER_DESTINATIONS: ReadonlySet<string> = new Set([
 ]);
 
 type TransferLegs = {
-  out: Awaited<ReturnType<ScopedDb['pharmacyStockMovement']['create']>>;
-  received: Awaited<ReturnType<ScopedDb['pharmacyStockMovement']['create']>>;
+  out: PharmacyStockMovement;
+  received: PharmacyStockMovement;
 };
 
 /**

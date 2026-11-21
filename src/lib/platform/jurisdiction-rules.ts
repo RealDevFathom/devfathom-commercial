@@ -67,7 +67,8 @@ export function ruleFieldConfirmed(field: unknown): boolean {
   );
 }
 
-const rule = <T extends z.ZodType>(values: T) =>
+// Keep the concrete field schema for inference without comparing its fluent methods.
+const rule = <T extends z.core.$ZodType>(values: T) =>
   z
     .object({
       values,

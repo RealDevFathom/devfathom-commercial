@@ -198,27 +198,29 @@ export function FloorConsole() {
     options('Routing rule deleted.')
   );
 
-  const busy = [
-    createFloor,
-    updateFloor,
-    deleteFloor,
-    createTable,
-    updateTable,
-    deleteTable,
-    createSection,
-    updateSection,
-    deleteSection,
-    setSectionTables,
-    assignServer,
-    unassignServer,
-    createStation,
-    updateStation,
-    setDefaultStation,
-    deleteStation,
-    createRoutingRule,
-    updateRoutingRule,
-    deleteRoutingRule,
-  ].some((mutation) => mutation.isPending);
+  const busy = (
+    [
+      createFloor,
+      updateFloor,
+      deleteFloor,
+      createTable,
+      updateTable,
+      deleteTable,
+      createSection,
+      updateSection,
+      deleteSection,
+      setSectionTables,
+      assignServer,
+      unassignServer,
+      createStation,
+      updateStation,
+      setDefaultStation,
+      deleteStation,
+      createRoutingRule,
+      updateRoutingRule,
+      deleteRoutingRule,
+    ] as const
+  ).some((mutation) => mutation.isPending);
 
   const floors = floorsQuery.data ?? [];
   const allTables = floors.flatMap((floor) => floor.tables);

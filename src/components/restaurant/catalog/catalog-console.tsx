@@ -414,54 +414,56 @@ export function RestaurantCatalogConsole({
 
   const busy =
     isRefreshing ||
-    [
-      createCategory,
-      updateCategory,
-      deleteCategory,
-      createProduct,
-      updateProduct,
-      setProductStatus,
-      createVariant,
-      updateVariant,
-      deleteVariant,
-      createModifierGroup,
-      updateModifierGroup,
-      deleteModifierGroup,
-      createModifierOption,
-      updateModifierOption,
-      deleteModifierOption,
-      attachModifierGroup,
-      detachModifierGroup,
-      createComboGroup,
-      updateComboGroup,
-      deleteComboGroup,
-      createComboOption,
-      updateComboOption,
-      deleteComboOption,
-      createAllergen,
-      updateAllergen,
-      deleteAllergen,
-      attachProductAllergen,
-      detachProductAllergen,
-      createUnit,
-      updateUnit,
-      deleteUnit,
-      upsertConversion,
-      deleteConversion,
-      createIngredient,
-      updateIngredient,
-      attachIngredientAllergen,
-      detachIngredientAllergen,
-      createRecipe,
-      createRecipeVersion,
-      updateRecipeVersion,
-      activateRecipeVersion,
-      createRecipeLine,
-      updateRecipeLine,
-      deleteRecipeLine,
-      addRecipeLineSubstitute,
-      removeRecipeLineSubstitute,
-    ].some((mutation) => mutation.isPending);
+    (
+      [
+        createCategory,
+        updateCategory,
+        deleteCategory,
+        createProduct,
+        updateProduct,
+        setProductStatus,
+        createVariant,
+        updateVariant,
+        deleteVariant,
+        createModifierGroup,
+        updateModifierGroup,
+        deleteModifierGroup,
+        createModifierOption,
+        updateModifierOption,
+        deleteModifierOption,
+        attachModifierGroup,
+        detachModifierGroup,
+        createComboGroup,
+        updateComboGroup,
+        deleteComboGroup,
+        createComboOption,
+        updateComboOption,
+        deleteComboOption,
+        createAllergen,
+        updateAllergen,
+        deleteAllergen,
+        attachProductAllergen,
+        detachProductAllergen,
+        createUnit,
+        updateUnit,
+        deleteUnit,
+        upsertConversion,
+        deleteConversion,
+        createIngredient,
+        updateIngredient,
+        attachIngredientAllergen,
+        detachIngredientAllergen,
+        createRecipe,
+        createRecipeVersion,
+        updateRecipeVersion,
+        activateRecipeVersion,
+        createRecipeLine,
+        updateRecipeLine,
+        deleteRecipeLine,
+        addRecipeLineSubstitute,
+        removeRecipeLineSubstitute,
+      ] as const
+    ).some((mutation) => mutation.isPending);
 
   const categoriesById = useMemo(
     () => new Map(snapshot?.categories.map((item) => [item.id, item]) ?? []),
@@ -1120,8 +1122,8 @@ export function RestaurantCatalogConsole({
                             Configure required choices and their component products.
                           </p>
                           <p className="text-sm text-text-muted">
-                            Combos cannot be added to menus or ordered until the order flow
-                            supports combo selections.
+                            Combos cannot be added to menus or ordered until the order flow supports
+                            combo selections.
                           </p>
                         </div>
                         {canWrite ? (

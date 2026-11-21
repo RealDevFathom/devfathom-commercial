@@ -1,6 +1,11 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { PREPAID_PROVIDER } from './prepaid-tiers';
-import { Prisma } from '@/generated/prisma/client';
+import {
+  Prisma,
+  type PharmacySale,
+  type PharmacySaleReturnLine,
+  type PharmacyStockMovement,
+} from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { legacyStripOption, packLevelCanonicalUnits } from './counter-pricing';
@@ -369,7 +374,7 @@ export async function createSale(
   quotation = false,
   /** A caller-specific precondition, checked after the shared gate and before the insert. */
   beforeCreate?: () => Promise<void>
-) {
+): Promise<PharmacySale> {
   // Every creation path (counter, offline replay, customer orders) shares this gate.
   await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
     name: 'pharmacy.sale.create',
@@ -2119,8 +2124,8 @@ export async function returnSaleLine(
       replayed: false,
     };
   }
-  let firstReturnLine: Awaited<ReturnType<typeof db.pharmacySaleReturnLine.create>> | undefined;
-  let firstMovement: Awaited<ReturnType<typeof db.pharmacyStockMovement.create>> | undefined;
+  let firstReturnLine: PharmacySaleReturnLine | undefined;
+  let firstMovement: PharmacyStockMovement | undefined;
   const restorations: Array<{
     sourceMovementId: string;
     restorationMovementId: string;

@@ -154,16 +154,18 @@ export function DeliveryConsole() {
   const deleteAddress = trpc.restaurantDelivery.deleteAddress.useMutation(
     options('Saved address deactivated.')
   );
-  const busy = [
-    createZone,
-    updateZone,
-    deactivateZone,
-    reactivateZone,
-    createAddress,
-    updateAddress,
-    setDefaultAddress,
-    deleteAddress,
-  ].some((mutation) => mutation.isPending);
+  const busy = (
+    [
+      createZone,
+      updateZone,
+      deactivateZone,
+      reactivateZone,
+      createAddress,
+      updateAddress,
+      setDefaultAddress,
+      deleteAddress,
+    ] as const
+  ).some((mutation) => mutation.isPending);
 
   const submitZone = (event: FormEvent<HTMLFormElement>, item?: Zone) => {
     event.preventDefault();

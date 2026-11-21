@@ -1,4 +1,4 @@
-import { Client } from '@microsoft/microsoft-graph-client';
+import { Client } from '@microsoft/microsoft-graph-client/lib/src/Client.js';
 import type {
   AdapterCredentials,
   ListOptions,

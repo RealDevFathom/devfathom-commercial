@@ -3,19 +3,20 @@
  * DEV-963: the full type check outgrew the standard 8 GB heap. Its largest single block was
  * the root of `googleapis`, about 900 declaration files and 170 MB of types for every Google
  * API, loaded for the two files that use Gmail; the root of `@vercel/sdk` added another 500
- * files for two API groups. Both are now imported from their own entry points. These checks
- * keep the roots out of the type-checked program and prove the narrow entry points build the
- * same clients the roots did.
+ * files for two API groups. Outlook only needs the Microsoft Graph Client, not the batch,
+ * upload or paging helpers. These checks guard the imports and compare the narrow entry
+ * points with the SDK roots at runtime.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { Client as GraphClient } from '@microsoft/microsoft-graph-client/lib/src/Client.js';
 import { GoogleOAuth2, gmailClient } from '@/lib/email/google-gmail';
 
 const repoRoot = join(__dirname, '..', '..');
 
 /** Package roots whose declarations cost far more than the APIs this app uses. */
-const HEAVY_ROOTS = ['googleapis', '@vercel/sdk'];
+const HEAVY_ROOTS = ['googleapis', '@vercel/sdk', '@microsoft/microsoft-graph-client'];
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -53,8 +54,15 @@ async function loadRoot<Shape>(specifier: string): Promise<Shape> {
 }
 
 describe('type-check weight of package roots (DEV-963)', () => {
-  it('imports no Google API or Vercel API from its package root', () => {
+  it('imports no Google, Vercel or Microsoft Graph API from its package root', () => {
     expect(heavyRootImports()).toEqual([]);
+  });
+
+  it('uses the same Graph client that the Outlook SDK root exports', async () => {
+    const root = await loadRoot<{ Client: typeof GraphClient }>(
+      '@microsoft/microsoft-graph-client'
+    );
+    expect(GraphClient).toBe(root.Client);
   });
 
   it('builds the same Google OAuth2 and Gmail clients as the googleapis root', async () => {

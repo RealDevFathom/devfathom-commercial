@@ -418,7 +418,7 @@ export function RestaurantMenusConsole({
     removeAvailabilityException,
     setItemOverride,
     clearItemOverride,
-  ];
+  ] as const;
   const busy = isRefreshing || mutations.some((mutation) => mutation.isPending);
 
   const brandsById = useMemo(

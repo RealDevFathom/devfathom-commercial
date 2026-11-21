@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { Prisma } from '@/generated/prisma/client';
+import { Prisma, type PharmacyStockMovement } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { releaseCounterQuotasForSafety } from './counter-stock-holds';
@@ -627,10 +627,7 @@ export async function reverseRecallQuarantine(
   const recall = await db.pharmacyRecallNotice.findFirstOrThrow({
     where: { organizationId: scope.organizationId, id: recallNoticeId },
   });
-  const originalsByAction = new Map<
-    string,
-    Awaited<ReturnType<typeof db.pharmacyStockMovement.findMany>>
-  >();
+  const originalsByAction = new Map<string, PharmacyStockMovement[]>();
   for (const action of actions) {
     const originals = await db.pharmacyStockMovement.findMany({
       where: {

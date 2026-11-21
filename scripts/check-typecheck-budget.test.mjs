@@ -72,3 +72,9 @@ test('a figure tsc did not print fails instead of passing silently', () => {
 test('the memory budget leaves clear room inside the standard heap', () => {
   assert.ok(BUDGET.memoryUsedKB < STANDARD_HEAP_MB * 1024 * 0.93);
 });
+
+test('rejects the instantiation count before the second DEV-963 reduction', () => {
+  // Cold develop at 24e1e6f4 with the generated Prisma client and Next route types.
+  const before = { files: 8061, types: 2573706, instantiations: 8866106, memoryUsedKB: 7118032 };
+  assert.ok(budgetViolations(before).some((violation) => violation.startsWith('instantiations:')));
+});

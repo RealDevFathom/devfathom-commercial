@@ -27,7 +27,8 @@ export const STANDARD_HEAP_MB = 8192;
 export const BUDGET = Object.freeze({
   memoryUsedKB: 7_600_000,
   types: 2_650_000,
-  instantiations: 9_200_000,
+  // Before the second pass develop needed 8,866,106 instantiations.
+  instantiations: 8_800_000,
   files: 8_600,
 });
 
