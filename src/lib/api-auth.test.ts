@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   createTenantDb: vi.fn(),
   resolveEntitlements: vi.fn(),
   recordRestAudit: vi.fn(),
+  approvalAuthenticatorGate: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -21,6 +22,9 @@ vi.mock('@/lib/entitlements', () => ({
   hasModule: (entitlements: { enabledModules: string[] }, key: string) =>
     entitlements.enabledModules.includes(key),
   resolveOrganizationEntitlements: mocks.resolveEntitlements,
+}));
+vi.mock('@/lib/approval-authenticator-gate', () => ({
+  approvalAuthenticatorGate: mocks.approvalAuthenticatorGate,
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => {
   const tenantDb = {
@@ -85,9 +89,68 @@ describe('authenticateApiRequest entitlement enforcement', () => {
   });
 });
 
+describe('DEV-961 an API token is gated like its member’s session', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.compare.mockResolvedValue(true);
+    mocks.update.mockResolvedValue({});
+    mocks.resolveEntitlements.mockResolvedValue({
+      organizationId: 'org_1',
+      seatLimit: 10,
+      activeSeats: 1,
+      enabledModules: ['api'],
+      modules: [],
+      limits: {},
+    });
+    mocks.findMany.mockResolvedValue([
+      {
+        id: 'token_1',
+        organizationId: 'org_1',
+        userId: 'user_1',
+        tokenHash: 'hash',
+        scopes: ['*'],
+        expiresAt: null,
+        user: {
+          id: 'user_1',
+          role: 'ADMIN',
+          status: 'ACTIVE',
+          organization: { id: 'org_1', status: 'ACTIVE' },
+        },
+      },
+    ]);
+  });
+  const call = () =>
+    authenticateApiRequest(
+      new Request('https://acme.example.com/api/v1/projects', {
+        headers: { Authorization: 'Bearer df_existing_valid_token' },
+      })
+    );
+
+  it('refuses the token of an approver who has not set up the authenticator', async () => {
+    mocks.approvalAuthenticatorGate.mockResolvedValue({ approver: true, setupRequired: true });
+    const result = await call();
+    expect(result).toBeInstanceOf(Response);
+    expect((result as Response).status).toBe(403);
+    await expect((result as Response).json()).resolves.toMatchObject({
+      code: 'APPROVAL_AUTHENTICATOR_SETUP_REQUIRED',
+    });
+    expect(mocks.approvalAuthenticatorGate).toHaveBeenCalledWith(expect.anything(), {
+      organizationId: 'org_1',
+      userId: 'user_1',
+    });
+    expect(mocks.createTenantDb).not.toHaveBeenCalled();
+  });
+
+  it('accepts the token once nothing is outstanding', async () => {
+    mocks.approvalAuthenticatorGate.mockResolvedValue({ approver: true, setupRequired: false });
+    await expect(call()).resolves.toMatchObject({ organizationId: 'org_1', userId: 'user_1' });
+  });
+});
+
 describe('withApiAuth error logging', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.approvalAuthenticatorGate.mockResolvedValue({ approver: false, setupRequired: false });
     mocks.compare.mockResolvedValue(true);
     mocks.update.mockResolvedValue({});
     mocks.resolveEntitlements.mockResolvedValue({

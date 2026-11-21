@@ -24,6 +24,10 @@ declare module 'next-auth' {
       status?: string;
       /** Administrator-issued password that must be replaced before other calls. */
       mustChangePassword?: boolean;
+      /** DEV-961: the member holds an approver right (refreshed with the role). */
+      approvalApprover?: boolean;
+      /** DEV-961: the member must set up an approval authenticator before other calls. */
+      approvalAuthenticatorSetupRequired?: boolean;
       // Session validity, independent of account status. `true` means the token
       // itself is no longer usable (revoked, deleted, suspended organization, or
       // unverifiable). See src/lib/auth/session-state.ts.
@@ -31,6 +35,8 @@ declare module 'next-auth' {
       sessionInvalidReason?: SessionInvalidReason | null;
       /** Server-issued epoch ms of verified password entry; never a refresh timestamp. */
       passwordAuthenticatedAt?: number;
+      /** DEV-961: server-issued epoch ms of this session's sign-in (any method). */
+      signedInAt?: number;
       demoAccessExpiresAt?: number;
     };
   }
@@ -66,9 +72,14 @@ declare module 'next-auth/jwt' {
     // revocation. Populated/refreshed in the jwt() callback.
     status?: string;
     mustChangePassword?: boolean;
+    // DEV-961: approver right (refreshed with the role) and the live set-up gate.
+    approvalApprover?: boolean;
+    approvalAuthenticatorSetupRequired?: boolean;
     lastValidatedAt?: number;
     // #1252: sign-in time (epoch ms); bounds the session's absolute lifetime.
     signedInAt?: number;
+    // DEV-961: sign-in time set only at a real sign-in (never backfilled).
+    signInVerifiedAt?: number;
     // #16: session revocation as its own claim, never folded into `status`.
     sessionRevoked?: boolean;
     sessionInvalidReason?: SessionInvalidReason | null;

@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Eyebrow } from '@/components/ui/eyebrow';
-import { COUNTER_APPROVAL_CODE_HINT } from './counter-approval-copy';
+import { useCounterApprovalCopy } from './counter-approval-copy';
 import { CounterDuplicateSaltAcknowledge } from './counter-duplicate-salt-acknowledge';
 import type { CounterAlert } from '@/lib/pharmacy/counter-alerts';
 import type { CounterPatientPanel } from '@/lib/pharmacy/counter-prescriptions';
@@ -597,6 +597,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
     },
     ref
   ) {
+    const approvalCopy = useCounterApprovalCopy();
     const blocks = alerts.filter((alert) => alert.severity === 'SAFETY_BLOCK');
     const advice = alerts.filter((alert) => alert.severity === 'CLINICAL_ADVICE');
     const commercial = alerts.filter((alert) => alert.severity === 'COMMERCIAL');
@@ -940,10 +941,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
               <h4 className="text-base font-semibold text-text-strong">
                 Controlled medicine authorization
               </h4>
-              <p className="text-xs text-text-muted">
-                Patient address and a pharmacist PIN are required. Use a prescription, or record an
-                emergency supply. Online only.
-              </p>
+              <p className="text-xs text-text-muted">{approvalCopy.controlledIntro}</p>
             </div>
             <ControlledSteps
               steps={[
@@ -1108,7 +1106,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                   administrator to configure one.
                 </p>
               ) : null}
-              <Label htmlFor="controlled-pin">Pharmacist PIN</Label>
+              <Label htmlFor="controlled-pin">{approvalCopy.pharmacistLabel}</Label>
               <Input
                 id="controlled-pin"
                 type="password"
@@ -1122,12 +1120,9 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                 onChange={(event) => controlled.onChange('pin', event.target.value)}
               />
               <p id="controlled-pin-hint" className="text-xs text-text-muted">
-                {COUNTER_APPROVAL_CODE_HINT}
+                {approvalCopy.hint}
               </p>
-              <p className="text-xs text-text-muted">
-                Leave the earlier serial blank unless this repeats a previous entry. PIN is cleared
-                after each attempt.
-              </p>
+              <p className="text-xs text-text-muted">{approvalCopy.pharmacistCleared}</p>
             </section>
           </section>
         ) : null}

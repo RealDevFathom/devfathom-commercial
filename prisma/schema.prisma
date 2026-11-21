@@ -4150,6 +4150,7 @@ model User {
   leaveBalances               LeaveBalance[]                 @relation("UserLeaveBalances")
   recoveryCodes               TwoFactorRecoveryCode[]
   approvalAuthenticators      ApprovalAuthenticator[]          @relation("ApprovalAuthenticatorUser")
+  approvalAuthenticatorRecoveryCodes ApprovalAuthenticatorRecoveryCode[] @relation("ApprovalAuthenticatorRecoveryCodeUser")
   webhooksCreated             Webhook[]                      @relation("WebhookCreator")
   auditLogs                   AuditLog[]                     @relation("UserAuditLogs")
   resignations                Resignation[]                  @relation("UserResignations")
@@ -6049,6 +6050,24 @@ model ApprovalAuthenticator {
   @@map("approval_authenticators")
 }
 
+/// DEV-961: one-time recovery codes for a member's approval authenticator, shown once at
+/// set-up. Only the SHA-256 hash is stored. A used code is stamped `usedAt`, is never accepted
+/// again, and removes the authenticator so the member must set up a new one.
+model ApprovalAuthenticatorRecoveryCode {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId         String
+  codeHash       String
+  usedAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  user User @relation("ApprovalAuthenticatorRecoveryCodeUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId, codeHash], map: "approval_authenticator_recovery_codes_org_user_hash_key")
+  @@index([userId])
+  @@map("approval_authenticator_recovery_codes")
+}
+
 // IMP-AUTH-02: single-use TOTP recovery codes. Only the hash is stored.
 model TwoFactorRecoveryCode {
   id             String    @id @default(cuid())
@@ -6256,7 +6275,10 @@ model Organization {
   aiDeepStrategyEnabled         Boolean                        @default(false)
   /// DEV-879: when true, no member's fixed PIN is accepted for an approval; every approver
   /// must enter a code from their enrolled approval authenticator.
-  requireApprovalAuthenticator  Boolean                        @default(false)
+  /// DEV-961: on by default for every organization. While on, a member who can approve
+  /// anything must set up their authenticator before their account works. Only the owner
+  /// can turn it off (audited); approvals then take permanent PINs as before.
+  requireApprovalAuthenticator  Boolean                        @default(true)
   /// DEV-908: the owner switches on recorded stock transfers between their own
   /// licensed branches. Off by default; controlled drugs never move this way.
   pharmacyBranchTransfersEnabled Boolean                       @default(false)
