@@ -428,9 +428,7 @@ describe('DEV-256 supplier, ingredient and batch report filters', () => {
       ...filters,
     });
     const query = (needle: string) =>
-      queryRaw.mock.calls
-        .map(([sql]) => sql as Sql)
-        .find((sql) => sql.sql.includes(needle));
+      queryRaw.mock.calls.map(([sql]) => sql as Sql).find((sql) => sql.sql.includes(needle));
     return { result, queryRaw, counts, query };
   }
 
@@ -440,6 +438,15 @@ describe('DEV-256 supplier, ingredient and batch report filters', () => {
     const money = query('AS "salesMinor"')!;
     expect(money.sql).toContain(
       'SUM(a."grossMinor" - a."discountMinor" - COALESCE((l."tierAllocationDiscounts" ->> a."id")::int, 0) - COALESCE((l."billAllocationDiscounts" ->> a."id")::int, 0))'
+    );
+  });
+
+  it('subtracts later line discounts exactly once from the batch and supplier allocation totals', async () => {
+    const { result, query } = run({ batchId: 'batch_1', supplierId: 'supplier_1' });
+    await result;
+    const money = query('AS "salesMinor"')!;
+    expect(money.sql).toContain(
+      '- SUM(COALESCE((l."lineAllocationDiscounts" ->> a."id")::int, 0))'
     );
   });
 
