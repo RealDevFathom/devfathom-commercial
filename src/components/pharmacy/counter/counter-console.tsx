@@ -14,6 +14,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type ComponentProps,
   type ReactNode,
   type RefObject,
   type KeyboardEventHandler,
@@ -75,7 +76,7 @@ import {
 import { CounterCardTerminalPanel } from './counter-card-terminal-panel';
 import { CounterKhataPaymentPanel } from './counter-khata-payment-panel';
 import { CounterReturnPanel } from './counter-return-panel';
-import { CounterRxPanel } from './counter-rx-panel';
+import { CounterControlledAuthorization, CounterRxPanel } from './counter-rx-panel';
 import { CounterRxSelfSign } from './counter-rx-self-sign';
 import { CounterSearchResults } from './counter-search-results';
 import { CounterScanInput } from './counter-scan-input';
@@ -119,6 +120,8 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { Dialog, DialogPortal, DialogOverlay, DialogDescription } from '@/components/ui/dialog';
 import {
   COUNTER_SHEET_BACKDROP,
+  CounterNote,
+  CounterStateCard,
   CounterSheetFooter,
   CounterSheetHeader,
   counterSheetClassName,
@@ -352,6 +355,41 @@ function freshControlledAuth(
   const fresh = { ...EMPTY_CONTROLLED_AUTH };
   for (const key of edited) Object.assign(fresh, { [key]: current[key] });
   return fresh;
+}
+
+/**
+ * DEV-977 phase 3 (Counter v2 A5): what a controlled line still needs before it is added, in the
+ * order of the authorisation steps. These are exactly the conditions the add checks before it
+ * sends the line; the server checks every field and the pharmacist's PIN again.
+ */
+function controlledAuthMissing(
+  patient: unknown,
+  patientAddress: string,
+  auth: typeof EMPTY_CONTROLLED_AUTH,
+  online: boolean
+): string[] {
+  const missing: string[] = [];
+  if (!patient) missing.push('the patient');
+  if (patientAddress.trim().length < 3) missing.push("the patient's address");
+  if (!auth.emergency && !auth.prescriptionLineId)
+    missing.push('a prescription or an emergency supply');
+  if (auth.emergency && auth.prescriberName.trim().length === 0)
+    missing.push("the prescriber's name");
+  if (!auth.staffProfileId) missing.push('the approving pharmacist');
+  if (!/^\d{4,8}$/.test(auth.pin)) missing.push("the pharmacist's PIN");
+  if (!online) missing.push('a connection');
+  return missing;
+}
+
+/** DEV-977 phase 3: the notice for a controlled line refused until it is authorised. */
+function controlledNotice(canAuthorise: boolean, online: boolean): string {
+  const needs =
+    'Controlled medicine needs the patient address, a pharmacist PIN, and a prescription or an emergency prescriber.';
+  if (!canAuthorise)
+    return `${needs} Only a pharmacist can authorise it at this till: ask the pharmacist on duty.`;
+  return online
+    ? `${needs} Fill in the three steps to complete the authorization panel, then press Authorise line.`
+    : `${needs} Connect online, then complete the authorization panel and press Authorise line.`;
 }
 
 function tenderAcknowledgement(value: unknown): value is {
@@ -699,6 +737,12 @@ function ScopedPharmacyCounterConsole({
   const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
     enabled: safetyLicensed,
   });
+  // QA-138: controlledPharmacists requires pharmacy:dispense/safety. A FORBIDDEN read means this
+  // actor cannot dispense, so the controlled authorization panel is not offered (the server
+  // refuses it anyway). Without Pharmacy Safety the read is not made at all, with the same outcome.
+  const controlledAuthorisable =
+    safetyLicensed &&
+    (pharmacistsQuery.error as { data?: { code?: string } } | null)?.data?.code !== 'FORBIDDEN';
   // DEV-35: the same ABAC read the rail uses decides whether the Rx substitute
   // hand-off links to the substitution workspace (dispense or Pharmacy Safety).
   const railAccess = trpc.pharmacyAccess.navigation.useQuery(undefined, {
@@ -798,6 +842,10 @@ function ScopedPharmacyCounterConsole({
   const quantityReviewed = useRef(false);
   const restoreSearchAfterAdd = useRef(false);
   const rxPanelRef = useRef<HTMLDivElement>(null);
+  const controlledPanelRef = useRef<HTMLDivElement>(null);
+  // DEV-977 phase 3: "Find the patient" in the authorisation sheet opens the checks sheet and
+  // comes back to the authorisation when it closes.
+  const returnToControlled = useRef(false);
   const tenderRef = useRef<HTMLDivElement>(null);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
@@ -818,6 +866,14 @@ function ScopedPharmacyCounterConsole({
   const actionsButtonRef = useRef<HTMLButtonElement>(null);
   const actionsPanelRef = useRef<HTMLDivElement>(null);
   const [checksOpen, setChecksOpen] = useState(false);
+  // DEV-977 phase 3 (Counter v2 A5): the controlled-medicine authorisation's own sheet, and a
+  // scanned serialised pack of a controlled medicine waiting there. The pack is kept as scanned
+  // (its payload, so the server pins its own lot) and nothing is on the bill until it is added.
+  const [controlledOpen, setControlledOpen] = useState(false);
+  const [pendingPack, setPendingPack] = useState<{
+    row: CounterSearchRow;
+    pack: { payload: string; serial: string };
+  } | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [loyaltyOpen, setLoyaltyOpen] = useState(false);
   // DEV-977 phase 3: the Counter status strip is a tab stop only while it scrolls sideways.
@@ -1515,6 +1571,41 @@ function ScopedPharmacyCounterConsole({
           ) => (await sheetBillDiscount.send(discount, label)).error,
         }
       : undefined;
+  // DEV-977 phase 3 (Counter v2 A5): the controlled line the authorisation sheet is for: a
+  // scanned pack waiting as scanned, or the controlled medicine in the line form.
+  const controlledTarget =
+    pendingPack?.row ?? (activeRow?.restriction.controlled ? activeRow : null);
+  const controlledInPlay = Boolean(
+    pendingPack?.row.restriction.controlled ||
+    activeRow?.restriction.controlled ||
+    (currentBill && cart?.lines.some((line) => line.controlled))
+  );
+  const controlledFields:
+    ComponentProps<typeof CounterControlledAuthorization>['controlled'] | null =
+    controlledInPlay && controlledAuthorisable
+      ? {
+          ...controlledAuth,
+          pharmacists: pharmacistsQuery.data ?? [],
+          loading: pharmacistsQuery.isLoading,
+          error: pharmacistsQuery.isError,
+          patientAddress,
+          onChange: (field, value) => {
+            if (field === 'patientAddress') {
+              setPatientAddressDraft(typeof value === 'string' ? value : '');
+              return;
+            }
+            closedBillPatient.current?.editedAuth.add(field);
+            setControlledAuth((current) => {
+              if (field === 'emergency' || field === 'rxSerialWritten') {
+                return { ...current, [field]: value === true };
+              }
+              if (typeof value !== 'string') return current;
+              return { ...current, [field]: value };
+            });
+          },
+        }
+      : null;
+  const controlledMissing = controlledAuthMissing(patient, patientAddress, controlledAuth, online);
   const describeBusy = (billReadRequired: boolean) =>
     unknownTender || attempt !== null || checkingOutcome
       ? 'Check the payment outcome before changing this bill or branch.'
@@ -1965,6 +2056,8 @@ function ScopedPharmacyCounterConsole({
       setNotice({ tone: 'danger', message: label.message });
       return;
     }
+    // DEV-977 phase 3: staging another medicine replaces a pack waiting for authorisation.
+    setPendingPack(null);
     focusQuantityOnStage.current = focusQuantity;
     quantityReviewed.current = false;
     setHighlightId(null);
@@ -2133,34 +2226,28 @@ function ScopedPharmacyCounterConsole({
         const checkOff = pharmacistCheckOffRef.current;
         const controlled = row.restriction.controlled;
         const patient = billPatient;
-        const addressOk = patientAddress.trim().length >= 3;
-        const prescriptionOk = billAuth.emergency || Boolean(billAuth.prescriptionLineId);
-        const emergencyOk = !billAuth.emergency || billAuth.prescriberName.trim().length > 0;
         if (
           controlled &&
           !checkOff &&
-          (!patient ||
-            !addressOk ||
-            !prescriptionOk ||
-            !emergencyOk ||
-            !billAuth.staffProfileId ||
-            !/^\d{4,8}$/.test(billAuth.pin) ||
-            !navigator.onLine)
+          controlledAuthMissing(patient, patientAddress, billAuth, navigator.onLine).length > 0
         ) {
           setNotice({
             tone: 'warning',
-            message:
-              'Controlled medicine needs the patient address, a pharmacist PIN, and a prescription or an emergency prescriber. Connect online, then complete the authorization panel.',
+            message: controlledNotice(controlledAuthorisable, navigator.onLine),
           });
           // DEV-1005: a one-step add (Enter, or a plain barcode) is staged as Shift+Enter stages
           // it, so the authorization panel this notice points to is shown and the line is added
-          // once it is complete. A serialized pack scan is left as it was: staging would drop
-          // the scanned pack's own lot.
+          // once it is complete.
           if (scannedRow && !scannedPack) {
             stageRow(scannedRow, false);
             setSaleUnit(option.kind);
           }
-          openChecks();
+          // DEV-977 phase 3: a serialised pack is not staged (that would drop its own lot): it
+          // waits, as scanned, in the authorisation sheet, and is sent with its payload once the
+          // sheet's "Authorise line" is pressed. No line is added before that.
+          if (scannedPack && scannedRow) setPendingPack({ row: scannedRow, pack: scannedPack });
+          setChecksOpen(false);
+          setControlledOpen(true);
           return;
         }
         // DEV-629: the server refuses to take payment for an Rx/restricted line without a
@@ -2376,6 +2463,9 @@ function ScopedPharmacyCounterConsole({
         setLotOverride(null);
         // DEV-977B: a one-step add (a scan or a result) leaves no line form behind.
         if (scannedRow) setActiveRow(null);
+        // DEV-977 phase 3: an authorised controlled line closes its sheet; a waiting pack is done.
+        if (controlled) setControlledOpen(false);
+        if (scannedPack) setPendingPack(null);
         // DEV-66: a promotion the owner's maximum skipped is said, never silent.
         const discountNotice =
           'promotionNotice' in added && added.promotionNotice
@@ -2445,7 +2535,7 @@ function ScopedPharmacyCounterConsole({
       ensureSale,
       focusSearch,
       lotOverride,
-      openChecks,
+      controlledAuthorisable,
       openSale,
       patientId,
       preview,
@@ -2505,6 +2595,8 @@ function ScopedPharmacyCounterConsole({
         const row = result.rows[0]!;
         if (!cached && !search.serializedPack) catalogueCache.put(branchId, search.query, row);
         const serialized = search.serializedPack;
+        // DEV-977 phase 3: a new scan replaces a pack waiting for authorisation.
+        setPendingPack(null);
         const label = counterLabelScanDecision(row);
         if (label.kind === 'BLOCKED') {
           stageRow(row);
@@ -4089,6 +4181,7 @@ function ScopedPharmacyCounterConsole({
           setLastReceipt(null);
           setReceiptReprint(false);
           setActiveRow(null);
+          setPendingPack(null);
           setActiveSale(null);
           setHeldSaleId(null);
         }}
@@ -5598,52 +5691,176 @@ function ScopedPharmacyCounterConsole({
           onSettled={() => void refreshTenderBill('accepted')}
         />
       </CounterOverlay>
+      {/* DEV-977 phase 3 (Counter v2 A5): the controlled-medicine authorisation in its own sheet.
+          The same fields and steps as before; "Authorise line" runs the same add, which checks
+          every field and the server re-checks them and the pharmacist's PIN. Nothing is on the
+          bill before that. A scanned serialised pack waits here as scanned, so its own lot is
+          kept. A member who cannot dispense is told who can; no way round is offered. */}
+      <CounterOverlay
+        title={
+          controlledTarget
+            ? `Authorise ${controlledTarget.displayName}`
+            : 'Authorise a controlled medicine'
+        }
+        eyebrow="Controlled medicine · online only"
+        subtitle={
+          pendingPack
+            ? 'One scanned pack. Its own batch is kept; nothing is on the bill until it is authorised.'
+            : controlledTarget
+              ? `${quantityText || '1'} × ${selectedOption?.levelLabel.toLowerCase() ?? 'unit'}. Nothing is on the bill until it is authorised.`
+              : undefined
+        }
+        open={controlledOpen}
+        onOpenChange={(open) => {
+          setControlledOpen(open);
+          if (open || !pendingPack) return;
+          // Closed without adding: the waiting pack is let go, and the cashier is told.
+          setPendingPack(null);
+          setNotice({
+            tone: 'warning',
+            message: `The scanned pack of ${pendingPack.row.displayName} was not added. Scan it again to authorise it.`,
+          });
+        }}
+        initialFocus={controlledPanelRef}
+        finalFocus={searchRef}
+        variant="side"
+        footer={
+          controlledFields && controlledTarget ? (
+            <>
+              <p
+                id="controlled-sheet-help"
+                className="min-w-0 flex-1 text-xs text-text-muted"
+                aria-live="polite"
+              >
+                {controlledMissing.length > 0
+                  ? `Still needed: ${controlledMissing.join(', ')}.`
+                  : "Ready. The pharmacist's PIN is checked when the line is added."}
+              </p>
+              <Button
+                type="button"
+                className="min-h-11"
+                aria-describedby="controlled-sheet-help"
+                disabled={busy || controlledMissing.length > 0}
+                onClick={() => {
+                  if (pendingPack) void addToCart(pendingPack.row, undefined, pendingPack.pack);
+                  else void addToCart();
+                }}
+              >
+                Authorise line
+              </Button>
+            </>
+          ) : undefined
+        }
+      >
+        <div
+          ref={controlledPanelRef}
+          tabIndex={-1}
+          data-counter-controlled-sheet=""
+          className="grid gap-4 outline-none"
+        >
+          {controlledFields ? (
+            <>
+              {patient ? (
+                <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-[13px]">
+                  <dt className="text-text-muted">Patient</dt>
+                  <dd className="font-semibold text-text-strong">{patient.displayName}</dd>
+                </dl>
+              ) : (
+                <CounterNote tone="warning">
+                  <p>
+                    <b className="font-semibold text-text-strong">Choose the patient first.</b> The
+                    patient and their address go into the controlled-drug register.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="mt-1 min-h-11"
+                    onClick={() => {
+                      returnToControlled.current = true;
+                      setControlledOpen(false);
+                      setChecksOpen(true);
+                    }}
+                  >
+                    Find the patient
+                  </Button>
+                </CounterNote>
+              )}
+              <CounterControlledAuthorization
+                controlled={controlledFields}
+                patient={patient}
+                disabled={busy}
+              />
+            </>
+          ) : controlledTarget ? (
+            <CounterStateCard
+              tone="warning"
+              heading="A pharmacist must authorise this line"
+              actions={
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-11"
+                  onClick={() => {
+                    setPendingPack(null);
+                    if (activeRow?.restriction.controlled) setActiveRow(null);
+                    setControlledOpen(false);
+                    setNotice({
+                      tone: 'warning',
+                      message: `${controlledTarget.displayName} was not added.`,
+                    });
+                  }}
+                >
+                  Don&apos;t add it
+                </Button>
+              }
+            >
+              <p>
+                Controlled medicines need the patient&apos;s address, a prescription or an emergency
+                supply, and an independent pharmacist&apos;s PIN. Ask the pharmacist on duty to add
+                it at this till.
+              </p>
+            </CounterStateCard>
+          ) : null}
+        </div>
+      </CounterOverlay>
       <CounterOverlay
         title="Patient, prescription and checks"
         eyebrow={formatBinding(keymap.bindings.focusPrescriptionPanel)}
         open={checksOpen}
-        onOpenChange={setChecksOpen}
+        onOpenChange={(open) => {
+          setChecksOpen(open);
+          // DEV-977 phase 3: back to the authorisation the cashier came from.
+          if (!open && returnToControlled.current && controlledTarget) setControlledOpen(true);
+          if (!open) returnToControlled.current = false;
+        }}
+        summary={
+          controlledTarget && controlledFields && !pharmacistCheckOff ? (
+            <CounterNote tone="warning">
+              <p>
+                {controlledTarget.displayName} is a controlled medicine. It is added once it is
+                authorised.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                className="mt-1 min-h-11"
+                onClick={() => {
+                  returnToControlled.current = false;
+                  setChecksOpen(false);
+                  setControlledOpen(true);
+                }}
+              >
+                Authorise {controlledTarget.displayName}
+              </Button>
+            </CounterNote>
+          ) : undefined
+        }
         initialFocus={rxPanelRef}
         finalFocus={searchRef}
         variant="side"
       >
         <CounterRxPanel
           ref={rxPanelRef}
-          controlled={
-            // QA-138: controlledPharmacists requires pharmacy:dispense/safety. A
-            // FORBIDDEN read means this actor cannot dispense, so the controlled
-            // authorization panel is not offered (the server refuses it anyway).
-            // Without Pharmacy Safety the read is not made at all, with the same outcome.
-            !(
-              activeRow?.restriction.controlled ||
-              (currentBill && cart.lines.some((line) => line.controlled))
-            ) ||
-            !safetyLicensed ||
-            (pharmacistsQuery.error as { data?: { code?: string } } | null)?.data?.code ===
-              'FORBIDDEN'
-              ? undefined
-              : {
-                  ...controlledAuth,
-                  pharmacists: pharmacistsQuery.data ?? [],
-                  loading: pharmacistsQuery.isLoading,
-                  error: pharmacistsQuery.isError,
-                  patientAddress,
-                  onChange: (field, value) => {
-                    if (field === 'patientAddress') {
-                      setPatientAddressDraft(typeof value === 'string' ? value : '');
-                      return;
-                    }
-                    closedBillPatient.current?.editedAuth.add(field);
-                    setControlledAuth((current) => {
-                      if (field === 'emergency' || field === 'rxSerialWritten') {
-                        return { ...current, [field]: value === true };
-                      }
-                      if (typeof value !== 'string') return current;
-                      return { ...current, [field]: value };
-                    });
-                  },
-                }
-          }
           alerts={alerts}
           acknowledgementScope={saleId && branchId ? { branchId, saleId } : null}
           patient={patient}

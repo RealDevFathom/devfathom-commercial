@@ -17,7 +17,7 @@ import { PharmacyRxReferenceError } from '@/lib/pharmacy/rx-prescription-referen
 
 import type { CounterCart, CounterSearchRow } from '@/lib/pharmacy/counter';
 import type { CounterReceipt } from '@/lib/pharmacy/counter-receipt';
-import type { CounterRxPanel } from './counter-rx-panel';
+import type { CounterControlledAuthorization, CounterRxPanel } from './counter-rx-panel';
 import type { CounterSearchResults } from './counter-search-results';
 
 type Query = {
@@ -64,6 +64,7 @@ const mocks = vi.hoisted(() => ({
   searchQuery: vi.fn(),
   searchSetData: vi.fn(),
   rxPanelProps: vi.fn<(props: ComponentProps<typeof CounterRxPanel>) => void>(),
+  controlledProps: vi.fn<(props: ComponentProps<typeof CounterControlledAuthorization>) => void>(),
   searchProps: vi.fn<(props: ComponentProps<typeof CounterSearchResults>) => void>(),
   khataAccounts: vi.fn(),
   khataStatement: vi.fn(),
@@ -275,6 +276,13 @@ vi.mock('./counter-rx-panel', () => ({
         {props.controlled ? <div data-testid="controlled-authorization" /> : null}
       </div>
     );
+  },
+  // DEV-977 phase 3: the console shows the authorization in its own sheet.
+  CounterControlledAuthorization: (
+    props: ComponentProps<typeof CounterControlledAuthorization>
+  ) => {
+    mocks.controlledProps(props);
+    return <div data-testid="controlled-authorization" />;
   },
 }));
 vi.mock('./counter-search-results', async (importOriginal) => {
@@ -4300,6 +4308,163 @@ describe('PharmacyCounterConsole barcode safety', () => {
     }
   );
 
+  // DEV-977 phase 3 (Counter v2 A5): the authorization in its own sheet, with "Authorise line";
+  // a scanned serialised pack of a controlled medicine waits there as scanned.
+  describe('DEV-977 phase 3: controlled medicine in its own "Authorise" sheet', () => {
+    const payload = `${gs1}(21)SERIAL-977`;
+    function controlledPack() {
+      const row = barcodeRow();
+      const controlledRow = {
+        ...row,
+        restriction: { ...row.restriction, controlled: true },
+        saleUnits: [{ ...row.saleUnits[0]!, kind: 'PACK' as const }],
+      };
+      mocks.searchQuery.mockResolvedValue({ rows: [controlledRow], truncated: false });
+      mocks.mutations.authenticatePack!.mockResolvedValue({
+        status: 'VERIFIED',
+        explanation: 'Pack verified.',
+        parsed: { gtin: '01234567890128', serial: 'SERIAL-977' },
+      });
+      return controlledRow;
+    }
+    function choosePatient() {
+      // The patient panel the console reads once a patient is chosen in the checks sheet.
+      mocks.queries.counterPatientPanel = query({
+        patientId: 'patient-a',
+        displayName: 'Patient A',
+        address: 'Patient address',
+        dispensingConsent: true,
+        prescriptions: [],
+        cnic: null,
+        phone: null,
+      });
+      act(() => mocks.rxPanelProps.mock.lastCall![0].onSelectPatient('patient-a'));
+    }
+    function fillAuthorization() {
+      if (!mocks.queries.counterPatientPanel?.data) choosePatient();
+      act(() => {
+        const controlled = mocks.controlledProps.mock.lastCall![0].controlled;
+        controlled.onChange('staffProfileId', 'pharmacist-a');
+        controlled.onChange('pin', '1234');
+        controlled.onChange('emergency', true);
+        controlled.onChange('prescriberName', 'Prescriber');
+      });
+    }
+
+    it('keeps a scanned controlled pack, as scanned, until "Authorise line" adds it with its own lot', async () => {
+      const row = controlledPack();
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      scan(payload);
+      // The notice names a panel that is now on screen, and the step that adds the pack.
+      const notice = await screen.findByText(/complete the authorization panel/);
+      expect(notice).toHaveTextContent(/then press Authorise line\./);
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+      const sheet = screen.getByRole('dialog', { name: `Authorise ${row.displayName}` });
+      expect(sheet).toHaveTextContent('Controlled medicine · online only');
+      expect(sheet).toHaveTextContent(
+        'One scanned pack. Its own batch is kept; nothing is on the bill until it is authorised.'
+      );
+      expect(within(sheet).getByTestId('controlled-authorization')).toBeInTheDocument();
+      // Not staged: the line form would add any pack of the medicine, not this one.
+      expect(screen.queryByRole('region', { name: 'Next line' })).not.toBeInTheDocument();
+      const authorise = within(sheet).getByRole('button', { name: 'Authorise line' });
+      expect(authorise).toBeDisabled();
+      expect(sheet).toHaveTextContent(/Still needed: the patient, .*the pharmacist's PIN\./);
+      fillAuthorization();
+      expect(within(sheet).getByText('Patient A')).toBeInTheDocument();
+      expect(authorise).toBeEnabled();
+      fireEvent.click(authorise);
+      await screen.findByText('1 × Paracetamol added.');
+      expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          scannedPack: { payload },
+          saleUnit: 'PACK',
+          quantity: 1,
+          controlledAuthorization: expect.objectContaining({
+            patientId: 'patient-a',
+            patientAddress: 'Patient address',
+            staffProfileId: 'pharmacist-a',
+            pin: '1234',
+            emergency: true,
+            prescriberName: 'Prescriber',
+          }),
+        })
+      );
+      expect(mocks.mutations.addLine!.mock.calls[0]![0]).not.toHaveProperty('override');
+      await waitFor(() =>
+        expect(
+          screen.queryByRole('dialog', { name: `Authorise ${row.displayName}` })
+        ).not.toBeInTheDocument()
+      );
+    });
+
+    it('lets the waiting pack go, and says so, when the sheet is closed without adding it', async () => {
+      const row = controlledPack();
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      scan(payload);
+      const sheet = await screen.findByRole('dialog', { name: `Authorise ${row.displayName}` });
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Close' }));
+      await screen.findByText(
+        `The scanned pack of ${row.displayName} was not added. Scan it again to authorise it.`
+      );
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    });
+
+    it('tells a member who cannot dispense who can, offers no way round, and adds nothing', async () => {
+      const row = controlledPack();
+      Object.assign(mocks.queries.controlledPharmacists!, {
+        isSuccess: false,
+        isError: true,
+        error: Object.assign(new Error('Forbidden'), { data: { code: 'FORBIDDEN' } }),
+      });
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      scan(payload);
+      await screen.findByText(/Only a pharmacist can authorise it at this till/);
+      const sheet = screen.getByRole('dialog', { name: `Authorise ${row.displayName}` });
+      expect(
+        within(sheet).getByRole('heading', { name: 'A pharmacist must authorise this line' })
+      ).toBeInTheDocument();
+      expect(within(sheet).queryByTestId('controlled-authorization')).toBeNull();
+      expect(within(sheet).queryByRole('button', { name: 'Authorise line' })).toBeNull();
+      fireEvent.click(within(sheet).getByRole('button', { name: "Don't add it" }));
+      await screen.findByText(`${row.displayName} was not added.`);
+      expect(
+        screen.queryByRole('dialog', { name: `Authorise ${row.displayName}` })
+      ).not.toBeInTheDocument();
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    });
+
+    it('authorises a medicine from the line form, going to the checks sheet for the patient and back', async () => {
+      controlledPack();
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      act(stageControlledMedicine);
+      fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
+      const name = `Authorise ${barcodeRow().displayName}`;
+      const sheet = await screen.findByRole('dialog', { name });
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+      // The checks sheet no longer holds the authorization.
+      expect(mocks.rxPanelProps.mock.lastCall![0].controlled).toBeUndefined();
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Find the patient' }));
+      const checks = screen.getByRole('dialog', { name: 'Patient, prescription and checks' });
+      expect(screen.queryByRole('dialog', { name })).not.toBeInTheDocument();
+      choosePatient();
+      fireEvent.click(within(checks).getByRole('button', { name }));
+      const back = screen.getByRole('dialog', { name });
+      fillAuthorization();
+      fireEvent.click(within(back).getByRole('button', { name: 'Authorise line' }));
+      await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledOnce());
+      expect(mocks.mutations.addLine).toHaveBeenCalledWith(
+        expect.objectContaining({
+          controlledAuthorization: expect.objectContaining({
+            patientId: 'patient-a',
+            staffProfileId: 'pharmacist-a',
+          }),
+        })
+      );
+      expect(mocks.mutations.addLine!.mock.calls[0]![0]).not.toHaveProperty('scannedPack');
+    });
+  });
+
   describe('DEV-889 scanned-pack first-expiry approval', () => {
     const payload = `${gs1}(21)SERIAL-889`;
     function preparePack() {
@@ -4496,13 +4661,22 @@ describe('PharmacyCounterConsole barcode safety', () => {
       act(() => {
         const props = mocks.rxPanelProps.mock.lastCall![0];
         props.onSelectPatient('patient-a');
-        props.controlled!.onChange('staffProfileId', 'pharmacist-a');
-        props.controlled!.onChange('pin', '1234');
+        mocks.controlledProps.mock.lastCall![0].controlled.onChange(
+          'staffProfileId',
+          'pharmacist-a'
+        );
+        mocks.controlledProps.mock.lastCall![0].controlled.onChange('pin', '1234');
         if (authorization === 'prescription')
-          props.controlled!.onChange('prescriptionLineId', 'rx-line-a');
+          mocks.controlledProps.mock.lastCall![0].controlled.onChange(
+            'prescriptionLineId',
+            'rx-line-a'
+          );
         else {
-          props.controlled!.onChange('emergency', true);
-          props.controlled!.onChange('prescriberName', 'Prescriber');
+          mocks.controlledProps.mock.lastCall![0].controlled.onChange('emergency', true);
+          mocks.controlledProps.mock.lastCall![0].controlled.onChange(
+            'prescriberName',
+            'Prescriber'
+          );
         }
       });
       // DEV-977B: a scan adds in one step and leaves no line form; the authorization panel then
@@ -4530,7 +4704,7 @@ describe('PharmacyCounterConsole barcode safety', () => {
           }),
         })
       );
-      expect(mocks.rxPanelProps.mock.lastCall![0].controlled!.pin).toBe('');
+      expect(mocks.controlledProps.mock.lastCall![0].controlled.pin).toBe('');
     }
   );
 
@@ -4779,10 +4953,9 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
   }
 
   function authorize() {
-    const props = mocks.rxPanelProps.mock.lastCall![0];
-    props.controlled!.onChange('staffProfileId', 'pharmacist-a');
-    props.controlled!.onChange('pin', '1234');
-    props.controlled!.onChange('prescriptionLineId', 'rx-line-b');
+    mocks.controlledProps.mock.lastCall![0].controlled.onChange('staffProfileId', 'pharmacist-a');
+    mocks.controlledProps.mock.lastCall![0].controlled.onChange('pin', '1234');
+    mocks.controlledProps.mock.lastCall![0].controlled.onChange('prescriptionLineId', 'rx-line-b');
   }
 
   it('keeps a patient picked for the next customer after the bill was paid', async () => {
@@ -4815,10 +4988,13 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     act(() => {
       const props = mocks.rxPanelProps.mock.lastCall![0];
       props.onSelectPatient('patient-a');
-      props.controlled!.onChange('staffProfileId', 'pharmacist-a');
-      props.controlled!.onChange('emergency', true);
-      props.controlled!.onChange('prescriberName', 'Old prescriber');
-      props.controlled!.onChange('refSerial', '77');
+      mocks.controlledProps.mock.lastCall![0].controlled.onChange('staffProfileId', 'pharmacist-a');
+      mocks.controlledProps.mock.lastCall![0].controlled.onChange('emergency', true);
+      mocks.controlledProps.mock.lastCall![0].controlled.onChange(
+        'prescriberName',
+        'Old prescriber'
+      );
+      mocks.controlledProps.mock.lastCall![0].controlled.onChange('refSerial', '77');
     });
     mocks.queries.counterCart!.data = settled();
     view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
@@ -4826,10 +5002,12 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     act(() => mocks.rxPanelProps.mock.lastCall![0].onSelectPatient('patient-b'));
     act(stageControlledMedicine);
     act(() => {
-      const props = mocks.rxPanelProps.mock.lastCall![0];
-      props.controlled!.onChange('staffProfileId', 'pharmacist-b');
-      props.controlled!.onChange('pin', '1234');
-      props.controlled!.onChange('prescriptionLineId', 'rx-line-b');
+      mocks.controlledProps.mock.lastCall![0].controlled.onChange('staffProfileId', 'pharmacist-b');
+      mocks.controlledProps.mock.lastCall![0].controlled.onChange('pin', '1234');
+      mocks.controlledProps.mock.lastCall![0].controlled.onChange(
+        'prescriptionLineId',
+        'rx-line-b'
+      );
     });
 
     scan();
@@ -4856,8 +5034,8 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     act(() => {
       const props = mocks.rxPanelProps.mock.lastCall![0];
       props.onSelectPatient('patient-a');
-      props.controlled!.onChange('staffProfileId', 'pharmacist-a');
-      props.controlled!.onChange('rxSerialWritten', true);
+      mocks.controlledProps.mock.lastCall![0].controlled.onChange('staffProfileId', 'pharmacist-a');
+      mocks.controlledProps.mock.lastCall![0].controlled.onChange('rxSerialWritten', true);
     });
     mocks.queries.counterCart!.data = settled();
     view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
@@ -4865,11 +5043,13 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     act(() => mocks.rxPanelProps.mock.lastCall![0].onSelectPatient('patient-b'));
     act(stageControlledMedicine);
     act(() => {
-      const props = mocks.rxPanelProps.mock.lastCall![0];
-      props.controlled!.onChange('staffProfileId', 'pharmacist-a');
-      props.controlled!.onChange('rxSerialWritten', true);
-      props.controlled!.onChange('pin', '1234');
-      props.controlled!.onChange('prescriptionLineId', 'rx-line-b');
+      mocks.controlledProps.mock.lastCall![0].controlled.onChange('staffProfileId', 'pharmacist-a');
+      mocks.controlledProps.mock.lastCall![0].controlled.onChange('rxSerialWritten', true);
+      mocks.controlledProps.mock.lastCall![0].controlled.onChange('pin', '1234');
+      mocks.controlledProps.mock.lastCall![0].controlled.onChange(
+        'prescriptionLineId',
+        'rx-line-b'
+      );
     });
 
     scan();
@@ -7040,8 +7220,9 @@ describe('DEV-705 keyboard loose sale', () => {
     const nextLine = screen.getByRole('region', { name: 'Next line' });
     expect(nextLine).toHaveTextContent(row.displayName);
     expect(screen.getByLabelText('Quantity')).toHaveValue('1');
+    // DEV-977 phase 3 (Counter v2 A5): the authorization is in its own sheet.
     expect(
-      screen.getByRole('dialog', { name: 'Patient, prescription and checks' })
+      screen.getByRole('dialog', { name: `Authorise ${row.displayName}` })
     ).toBeInTheDocument();
   });
 
