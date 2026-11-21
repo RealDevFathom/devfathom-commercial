@@ -64,6 +64,18 @@ describe('RestaurantCamerasConsole gateway availability', () => {
     expect(source).toContain('onTest={onTest}');
     expect(source).toContain('onSubmit={onSubmit}');
   });
+  test('an H.265 camera check says which browsers play it', () => {
+    query.mockReturnValue({ data: { available: true, mode: 'mediamtx' } });
+    cameraQuery.mockReturnValue({ data: [{ id: 'c', name: 'Kitchen', enabled: true }] });
+    diagnosticQuery.mockReturnValue({
+      data: { outcome: 'ok', discoveredProfile: 'Configured HLS gateway', videoCodec: 'h265' },
+      refetch: vi.fn(),
+    });
+    render(<RestaurantCamerasConsole />);
+    expect(screen.getByText(/This camera sends H\.265 \(HEVC\) video/)).toBeVisible();
+    expect(screen.getByText(/Chrome and Edge play it only on computers with H\.265/)).toBeVisible();
+  });
+
   test('real-mode diagnostics are explicit, manual and never load recordings', () => {
     query.mockReturnValue({ data: { available: true, mode: 'mediamtx' } });
     cameraQuery.mockReturnValue({ data: [{ id: 'c', name: 'Kitchen', enabled: true }] });

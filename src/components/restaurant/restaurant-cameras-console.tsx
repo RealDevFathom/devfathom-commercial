@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
-import { CAMERA_DIAGNOSTIC_MESSAGES } from '@/lib/cameras/diagnostic-messages';
+import { CAMERA_DIAGNOSTIC_MESSAGES, CAMERA_H265_NOTE } from '@/lib/cameras/diagnostic-messages';
 import { trpc } from '@/lib/trpc';
 import { RestaurantCameraWizard, type CameraWizardValues } from './restaurant-camera-wizard';
 import { RestaurantCameraPlayer } from './restaurant-camera-player';
@@ -36,6 +36,9 @@ function CameraConnectionCheck({ cameraId }: { cameraId: string }) {
               ? diagnostics[check.data.outcome]
               : 'Connection not checked.'}
       </p>
+      {check.data && 'videoCodec' in check.data && check.data.videoCodec === 'h265' ? (
+        <p className="text-sm text-text-muted">{CAMERA_H265_NOTE}</p>
+      ) : null}
     </div>
   );
 }

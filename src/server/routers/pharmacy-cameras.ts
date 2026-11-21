@@ -506,7 +506,11 @@ export const pharmacyCamerasRouter = router({
         description: 'Checked configured pharmacy camera gateway connection',
         metadata: { outcome: result.outcome },
       });
-      return { outcome: result.outcome };
+      // The codec lets the camera card say which browsers play H.265; nothing else
+      // from the transport is returned.
+      return result.outcome === 'ok' && 'videoCodec' in result
+        ? { outcome: result.outcome, videoCodec: result.videoCodec }
+        : { outcome: result.outcome };
     }),
   /**
    * Short-lived live-view grant. Renewal needs a live grant this viewer holds

@@ -13,8 +13,9 @@ const adapter = vi.hoisted(() => ({
 vi.mock('hls.js', () => ({
   default: class {
     static isSupported = () => adapter.supported;
-    static Events = { ERROR: 'error', MANIFEST_PARSED: 'parsed' };
+    static Events = { ERROR: 'error', MANIFEST_PARSED: 'parsed', MANIFEST_LOADED: 'loaded' };
     static ErrorTypes = { MEDIA_ERROR: 'mediaError' };
+    static ErrorDetails = { MANIFEST_INCOMPATIBLE_CODECS_ERROR: 'manifestIncompatibleCodecsError' };
     constructor(config: unknown) {
       adapter.constructed(config);
     }
