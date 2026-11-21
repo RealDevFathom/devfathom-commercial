@@ -19,8 +19,9 @@ vi.mock('@/lib/abac', async () => ({
   can: (...args: unknown[]) => abacCan(...args),
 }));
 
-function toolExecute() {
+function toolExecute(timeZone = 'Asia/Karachi') {
   const db = {
+    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: timeZone }) },
     pharmacyBranch: { findMany: branchFindMany },
     $queryRaw: queryRaw,
     pharmacyRecallNotice: { count },
@@ -47,6 +48,7 @@ function toolExecute() {
 
 function ownerQuestionExecute(role = 'ADMIN') {
   const db = {
+    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi' }) },
     pharmacyBranch: { findMany: branchFindMany },
     $queryRaw: queryRaw,
     pharmacyRecallNotice: { count },
@@ -665,4 +667,18 @@ describe('pharmacy business insight execution', () => {
       fetchSpy.mockRestore();
     }
   });
+});
+
+it('uses the requested workspace clock on either side of Karachi midnight', async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-11-02T00:30:00+05:00'));
+  for (const [zone, date] of [
+    ['Asia/Karachi', '2026-11-02'],
+    ['America/Chicago', '2026-11-01'],
+  ]) {
+    expect(await toolExecute(zone)({ metricKeys: ['openStockSignals'] })).toMatchObject({
+      kind: 'answer',
+      period: { from: date, to: date },
+    });
+  }
 });

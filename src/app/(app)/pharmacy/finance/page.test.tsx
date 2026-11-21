@@ -351,6 +351,27 @@ describe('DEV-942 typed finance amounts', () => {
     return { notice: query.get('notice'), kind: query.get('kind') };
   }
 
+  it('posts a newly entered date at noon on the Karachi clock', async () => {
+    const makeContext = vi.mocked(createTRPCContext);
+    const ordinary = makeContext.getMockImplementation()!;
+    makeContext
+      .mockImplementationOnce(ordinary)
+      .mockImplementationOnce(
+        async (...args) =>
+          ({ ...(await ordinary(...args)), organization: { timezone: 'Asia/Karachi' } }) as never
+      );
+    await notice({
+      branchId: 'branch_1',
+      action: 'post',
+      transactionKind: 'EXPENSE',
+      reference: 'Test',
+      amount: '1',
+      occurredAt: '2026-11-02',
+    });
+    expect(mocks.post).toHaveBeenCalledWith(
+      expect.objectContaining({ occurredAt: new Date('2026-11-02T07:00:00Z') })
+    );
+  });
   it('explains a refused posting amount and posts nothing', async () => {
     await expect(
       notice({

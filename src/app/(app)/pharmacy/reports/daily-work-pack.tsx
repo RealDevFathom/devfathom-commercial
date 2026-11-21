@@ -1,3 +1,4 @@
+import { workspaceTimezone } from '@/lib/timezone';
 import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/plain-language';
 import Link from 'next/link';
 import {
@@ -69,7 +70,7 @@ export async function DailyWorkPack({
   timeZone,
 }: DailyWorkPackProps) {
   const shopTime = (value: string | Date | null | undefined) =>
-    formatShopTime(value, timeZone ?? 'Asia/Karachi');
+    formatShopTime(value, workspaceTimezone(timeZone));
   let pack: WorkPack | null = null;
   try {
     // Generate as-of on every server read, including GET refresh; never trust a URL timestamp.
