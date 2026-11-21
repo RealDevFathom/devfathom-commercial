@@ -2014,7 +2014,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacySales.addLine': {
-    gate: "requireCounterReceiptAccess default (pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN); discount -> pharmacy:discount or a pharmacy:manage PIN; batch override -> pharmacy:dispense on duty or a dispense PIN; scanned pack out of FEFO -> pharmacy:manage PIN; Rx/restricted line and prescription fill -> pharmacy:dispense; controlled -> pharmacy:dispense + a different pharmacist's PIN (unless owner switched check off); voucher -> own PIN",
+    gate: "requireCartWriteAccess (pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN); discount -> pharmacy:discount or a pharmacy:manage PIN; batch override -> pharmacy:dispense on duty or a dispense PIN; scanned pack out of FEFO -> pharmacy:manage PIN; Rx/restricted line and prescription fill -> pharmacy:dispense; controlled -> pharmacy:dispense + a different pharmacist's PIN (unless owner switched check off); voucher -> own PIN",
     lines: [
       'take-payment/ring-up-medicines',
       'dispense-prescriptions/ring-up-medicines-without-counter',
@@ -2030,7 +2030,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacySales.changeLine': {
-    gate: "protectedProcedure + requireCounterReceiptAccess default (pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN), the addLine builder and gate; Rx/restricted line -> pharmacy:dispense; another's bill -> pharmacy:manage (as a void); refused for a paid, held or closed bill, a controlled or prescription line, or a discount, voucher or batch override approved for the old quantity; on a cash-shift branch refused between shifts (the payment rule) and for a bill whose shift has closed",
+    gate: "protectedProcedure + requireCartWriteAccess (pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN), the addLine builder and gate; Rx/restricted line -> pharmacy:dispense; another's bill -> pharmacy:manage (as a void); refused for a paid, held or closed bill, a controlled or prescription line, or a discount, voucher or batch override approved for the old quantity; on a cash-shift branch refused between shifts (the payment rule) and for a bill whose shift has closed",
     lines: [
       'take-payment/ring-up-medicines',
       'dispense-prescriptions/ring-up-medicines-without-counter',
@@ -2178,7 +2178,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacySales.create': {
-    gate: 'requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense; a pharmacy:counter holder also needs an open drawer for a non-quotation bill',
+    gate: 'requireCartWriteAccess -> pharmacy:counter or pharmacy:dispense; a pharmacy:counter holder also needs an open drawer for a non-quotation bill',
     lines: [
       'take-payment/open-hold-resume-void',
       'dispense-prescriptions/use-counter-without-counter',
@@ -2249,7 +2249,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['take-payment/see-till-approvers', 'dispense-prescriptions/see-till-approvers'],
   },
   'pharmacySales.applyBillDiscount': {
-    gate: "requireCounterReceiptAccess (pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN) + the owner's whole-bill discount switch on; approved as an item discount: the operator's own pharmacy:discount, or a pharmacy:manage approver's PIN (solo: the sole approver's own PIN); removing it (zero) needs no approval",
+    gate: "requireCartWriteAccess (pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN) + the owner's whole-bill discount switch on; approved as an item discount: the operator's own pharmacy:discount, or a pharmacy:manage approver's PIN (solo: the sole approver's own PIN); removing it (zero) needs no approval",
     lines: [
       'take-payment/whole-bill-discount',
       'dispense-prescriptions/whole-bill-discount',
@@ -2334,7 +2334,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacySales.linkCustomer': {
-    gate: 'requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense',
+    gate: 'requireCartWriteAccess -> pharmacy:counter or pharmacy:dispense',
     lines: [
       'take-payment/open-hold-resume-void',
       'dispense-prescriptions/use-counter-without-counter',
@@ -2423,7 +2423,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['run-branches/see-demand-lostsales-restockrecovery'],
   },
   'pharmacySales.removeLine': {
-    gate: "protectedProcedure + requireCounterReceiptAccess default (pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN), the addLine builder and gate; Rx/restricted line -> pharmacy:dispense; another's bill -> pharmacy:manage (as a void); refused for a paid, held or closed bill and a controlled or prescription line; on a cash-shift branch refused between shifts (the payment rule) and for a bill whose shift has closed",
+    gate: "protectedProcedure + requireCartWriteAccess (pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN), the addLine builder and gate; Rx/restricted line -> pharmacy:dispense; another's bill -> pharmacy:manage (as a void); refused for a paid, held or closed bill and a controlled or prescription line; on a cash-shift branch refused between shifts (the payment rule) and for a bill whose shift has closed",
     lines: [
       'take-payment/ring-up-medicines',
       'dispense-prescriptions/ring-up-medicines-without-counter',
@@ -2508,7 +2508,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     none: 'workspace administrators only (admin:access)',
   },
   'pharmacySales.scanLoyaltyCard': {
-    gate: 'requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense',
+    gate: 'requireCartWriteAccess -> pharmacy:counter or pharmacy:dispense',
     lines: [
       'take-payment/open-hold-resume-void',
       'dispense-prescriptions/use-counter-without-counter',
@@ -2573,7 +2573,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacySales.transition': {
-    gate: "requireCounterReceiptAccess default (pharmacy:counter or pharmacy:dispense) for hold/resume/convert/void of own bill; voiding another's bill -> pharmacy:manage; controlled line void -> pharmacy:dispense + witness PIN",
+    gate: "requireCartWriteAccess (pharmacy:counter or pharmacy:dispense) for hold/resume/convert/void; voiding another's bill -> pharmacy:manage; controlled line void -> pharmacy:dispense + witness PIN",
     lines: [
       'take-payment/open-hold-resume-void',
       'dispense-prescriptions/use-counter-without-counter',
