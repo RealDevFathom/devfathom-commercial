@@ -1,3 +1,4 @@
+import { pharmacyAccountMutation } from '@/server/pharmacy-finance-gate';
 import { canManagePharmacyAccounts } from '@/lib/pharmacy/finance-access';
 /**
  * DEV-103: native non-stock AP invoice, settlement and aging procedures.
@@ -422,10 +423,10 @@ export const pharmacyApInvoicesRouter = router({
   }),
 
   /** DEV-694: staff choose the bill; this records a PENDING request and moves no money. */
-  requestCreditSetOff: adminProcedure
+  requestCreditSetOff: pharmacyAccountMutation
     .input(requestApCreditSetOffSchema)
     .mutation(async ({ ctx, input }) => {
-      const scope = await authorizeGeneralJournal(ctx, input.branchId, 'manage');
+      const scope = await authorizeGeneralJournal(ctx, input.branchId);
       try {
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
@@ -458,10 +459,10 @@ export const pharmacyApInvoicesRouter = router({
    * strike); a different person must have requested the set-off, unless the
    * approver is the organization's only owner-level user.
    */
-  approveCreditSetOff: adminProcedure
+  approveCreditSetOff: pharmacyAccountMutation
     .input(approveApCreditSetOffSchema)
     .mutation(async ({ ctx, input }) => {
-      const scope = await authorizeGeneralJournal(ctx, input.branchId, 'manage');
+      const scope = await authorizeGeneralJournal(ctx, input.branchId);
       if (!(await actorMayRefund(ctx.db, ctx.session.user)))
         throw new TRPCError({ code: 'FORBIDDEN', message: AP_SET_OFF_FORBIDDEN });
       const pin = await authenticateRefundPin({
@@ -513,10 +514,10 @@ export const pharmacyApInvoicesRouter = router({
     }),
 
   /** DEV-694: a manager or owner closes a request without touching money. */
-  rejectCreditSetOff: adminProcedure
+  rejectCreditSetOff: pharmacyAccountMutation
     .input(rejectApCreditSetOffSchema)
     .mutation(async ({ ctx, input }) => {
-      const scope = await authorizeGeneralJournal(ctx, input.branchId, 'manage');
+      const scope = await authorizeGeneralJournal(ctx, input.branchId);
       if (!(await actorMayRefund(ctx.db, ctx.session.user)))
         throw new TRPCError({ code: 'FORBIDDEN', message: AP_SET_OFF_FORBIDDEN });
       try {
@@ -545,10 +546,10 @@ export const pharmacyApInvoicesRouter = router({
    * approval: a manager or owner, their own fresh PIN, and not the requester
    * unless they are the only owner-level user.
    */
-  reverseCreditSetOff: adminProcedure
+  reverseCreditSetOff: pharmacyAccountMutation
     .input(reverseApCreditSetOffSchema)
     .mutation(async ({ ctx, input }) => {
-      const scope = await authorizeGeneralJournal(ctx, input.branchId, 'manage');
+      const scope = await authorizeGeneralJournal(ctx, input.branchId);
       if (!(await actorMayRefund(ctx.db, ctx.session.user)))
         throw new TRPCError({ code: 'FORBIDDEN', message: AP_SET_OFF_FORBIDDEN });
       const pin = await authenticateRefundPin({
@@ -599,8 +600,8 @@ export const pharmacyApInvoicesRouter = router({
       }
     }),
 
-  record: adminProcedure.input(recordApInvoiceSchema).mutation(async ({ ctx, input }) => {
-    const scope = await authorizeGeneralJournal(ctx, input.branchId, 'manage');
+  record: pharmacyAccountMutation.input(recordApInvoiceSchema).mutation(async ({ ctx, input }) => {
+    const scope = await authorizeGeneralJournal(ctx, input.branchId);
     try {
       return await ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
@@ -626,8 +627,8 @@ export const pharmacyApInvoicesRouter = router({
     }
   }),
 
-  pay: adminProcedure.input(payApInvoiceSchema).mutation(async ({ ctx, input }) => {
-    const scope = await authorizeGeneralJournal(ctx, input.branchId, 'manage');
+  pay: pharmacyAccountMutation.input(payApInvoiceSchema).mutation(async ({ ctx, input }) => {
+    const scope = await authorizeGeneralJournal(ctx, input.branchId);
     try {
       return await ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
@@ -659,10 +660,10 @@ export const pharmacyApInvoicesRouter = router({
    * through the canonical bookkeeping reversal; the payment row stays, marked REVERSED, and the
    * invoice owes that amount again from the reversal instant.
    */
-  reverseSettlement: adminProcedure
+  reverseSettlement: pharmacyAccountMutation
     .input(reverseApSettlementSchema)
     .mutation(async ({ ctx, input }) => {
-      const scope = await authorizeGeneralJournal(ctx, input.branchId, 'manage');
+      const scope = await authorizeGeneralJournal(ctx, input.branchId);
       const target = await ctx.db.pharmacyApInvoiceSettlement.findFirst({
         where: {
           organizationId: scope.organizationId,
@@ -724,62 +725,64 @@ export const pharmacyApInvoicesRouter = router({
    * stays, marked REVERSED. Every payment and approved credit set-off against it must be
    * reversed first, so the payable can never go negative.
    */
-  reverseInvoice: adminProcedure.input(reverseApInvoiceSchema).mutation(async ({ ctx, input }) => {
-    const scope = await authorizeGeneralJournal(ctx, input.branchId, 'manage');
-    const target = await ctx.db.pharmacyApInvoice.findFirst({
-      where: {
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-        id: input.invoiceId,
-      },
-      select: { createdByUserId: true, reverseCommandKey: true },
-    });
-    // The PIN is checked here and never reaches the command.
-    const { pin, ...command } = input;
-    await authorizeReversal(
-      ctx,
-      scope,
-      { pin, commandKey: command.commandKey },
-      target,
-      'pharmacyApInvoices.reverseInvoice'
-    );
-    try {
-      return await ctx.db.$transaction(async (tx) => {
-        const db = txDb(tx);
-        const result = await reverseApInvoice(db, scope, command, {
-          soleApprover: async () => (await otherApReversalApprovers(db, scope)).length === 0,
-        });
-        const invoice = result.invoice;
-        await recordApAudit(db, ctx, scope, {
-          action: 'pharmacyApInvoices.reverseInvoice',
-          description: `Reversed supplier expense invoice ${invoice.reference}`,
-          targetType: 'PharmacyApInvoice',
-          targetId: invoice.id,
-          targetLabel: invoice.reference,
-          commandKey: input.commandKey,
-          replayed: result.replayed,
-          result: {
-            status: invoice.status,
-            amountMinor: invoice.amountMinor,
-            reversalEntryId: invoice.reversalEntryId,
-          },
-          metadata: {
-            policy: result.replayed ? null : result.policy,
-            approverId: invoice.reversedByUserId,
-            recordedById: invoice.createdByUserId,
-            pinVerified: true,
-            selfApproved: invoice.reversedByUserId === invoice.createdByUserId,
-            reason: invoice.reversalReason,
-            reversedAt: invoice.reversedAt?.toISOString() ?? null,
-          },
-        });
-        return invoice;
+  reverseInvoice: pharmacyAccountMutation
+    .input(reverseApInvoiceSchema)
+    .mutation(async ({ ctx, input }) => {
+      const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      const target = await ctx.db.pharmacyApInvoice.findFirst({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          id: input.invoiceId,
+        },
+        select: { createdByUserId: true, reverseCommandKey: true },
       });
-    } catch (error) {
-      if (isSelfApproval(error)) await ownEntryRefusal(ctx, scope);
-      fail(error);
-    }
-  }),
+      // The PIN is checked here and never reaches the command.
+      const { pin, ...command } = input;
+      await authorizeReversal(
+        ctx,
+        scope,
+        { pin, commandKey: command.commandKey },
+        target,
+        'pharmacyApInvoices.reverseInvoice'
+      );
+      try {
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const result = await reverseApInvoice(db, scope, command, {
+            soleApprover: async () => (await otherApReversalApprovers(db, scope)).length === 0,
+          });
+          const invoice = result.invoice;
+          await recordApAudit(db, ctx, scope, {
+            action: 'pharmacyApInvoices.reverseInvoice',
+            description: `Reversed supplier expense invoice ${invoice.reference}`,
+            targetType: 'PharmacyApInvoice',
+            targetId: invoice.id,
+            targetLabel: invoice.reference,
+            commandKey: input.commandKey,
+            replayed: result.replayed,
+            result: {
+              status: invoice.status,
+              amountMinor: invoice.amountMinor,
+              reversalEntryId: invoice.reversalEntryId,
+            },
+            metadata: {
+              policy: result.replayed ? null : result.policy,
+              approverId: invoice.reversedByUserId,
+              recordedById: invoice.createdByUserId,
+              pinVerified: true,
+              selfApproved: invoice.reversedByUserId === invoice.createdByUserId,
+              reason: invoice.reversalReason,
+              reversedAt: invoice.reversedAt?.toISOString() ?? null,
+            },
+          });
+          return invoice;
+        });
+      } catch (error) {
+        if (isSelfApproval(error)) await ownEntryRefusal(ctx, scope);
+        fail(error);
+      }
+    }),
 
   /**
    * DEV-103: find a posted invoice, or a payment in force against one, to reverse: search by

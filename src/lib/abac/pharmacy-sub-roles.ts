@@ -883,7 +883,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
   },
   {
     key: 'read-finance-accounts',
-    label: 'View pharmacy accounts',
+    label: 'See accounts',
     homeRole: 'finance',
     actions: ['finance:read'],
     allows: [
@@ -896,13 +896,13 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
   },
   {
     key: 'manage-finance-accounts',
-    label: 'Manage pharmacy account transactions',
+    label: 'Manage account transactions',
     homeRole: 'finance',
     actions: ['finance:manage'],
     allows: [
       {
         id: 'manage-transactions',
-        text: 'With View pharmacy accounts and the required administrator access, record invoices and payments, manage journals and bank reconciliation, close periods and publish tax profiles. Reversing a supplier invoice, payment or approved credit set-off also requires management access and the approver’s authenticator code (or PIN, if the owner turned the authenticator off).',
+        text: 'With See accounts and the required administrator access, record invoices and payments, manage journals and bank reconciliation, close periods and publish tax profiles. Reversing a supplier invoice, payment or approved credit set-off also requires management access and the approver’s authenticator code (or PIN, if the owner turned the authenticator off).',
         sites: {},
       },
     ],

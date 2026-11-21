@@ -229,8 +229,8 @@ describe('DEV-959B: ticking for one person', () => {
     try {
       editable(cashier);
       render(<MemberAccessPanel userId="u_1" />);
-      fireEvent.click(screen.getByRole('checkbox', { name: /View pharmacy accounts/ }));
-      const confirm = screen.getByRole('form', { name: 'Give View pharmacy accounts?' });
+      fireEvent.click(screen.getByRole('checkbox', { name: /See accounts/ }));
+      const confirm = screen.getByRole('form', { name: 'Give See accounts?' });
       expect(within(confirm).getByLabelText('Your approval code')).toBeRequired();
     } finally {
       state.approvalMode.mockReturnValue({ data: { required: false } });

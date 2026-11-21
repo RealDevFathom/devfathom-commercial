@@ -477,6 +477,13 @@ describe('M4-L1 capability reconciliation (additive-only)', () => {
   });
 });
 
+function expectExactPharmacyFinanceGrants(capabilities: readonly string[]) {
+  expect(capabilities.filter((grant) => grant.startsWith('finance:')).sort()).toEqual([
+    'finance:manage',
+    'finance:read',
+  ]);
+}
+
 describe('optional pharmacy Owner / Operator', () => {
   it('offers exactly eighteen explicit grants accepted by the pharmacy capability catalog', () => {
     const templates = roleTemplatesForVertical('PHARMACY').filter(
@@ -509,9 +516,11 @@ describe('optional pharmacy Owner / Operator', () => {
         ],
       },
     ]);
+    expectExactPharmacyFinanceGrants(templates[0]!.capabilities);
     for (const capability of templates[0]!.capabilities) {
       expect(PHARMACY_CAPABILITIES).toContain(capability);
-      expect(capability).toMatch(/^(reports|pharmacy|sop):[a-z-]+$/);
+      if (!capability.startsWith('finance:'))
+        expect(capability).toMatch(/^(reports|pharmacy|sop):[a-z-]+$/);
     }
     for (const vertical of ['AGENCY', 'RESTAURANT'] as const) {
       expect(roleTemplatesForVertical(vertical).map((role) => role.key)).not.toContain(
@@ -521,6 +530,9 @@ describe('optional pharmacy Owner / Operator', () => {
   });
 
   it('preserves all eight standard roles and their intended grants', () => {
+    expectExactPharmacyFinanceGrants(
+      PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'finance')!.capabilities
+    );
     expect(
       PHARMACY_ROLE_TEMPLATES.filter((role) => !PHARMACY_OPT_IN_ROLE_KEYS.has(role.key)).map(
         (role) => ({

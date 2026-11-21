@@ -13,15 +13,15 @@ it('ticks finance reads and transactions independently and preserves unrelated r
       <PharmacyFinanceRoleFields initial={[retained]} />
     </form>
   );
-  fireEvent.click(screen.getByRole('checkbox', { name: 'View pharmacy accounts' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'See accounts' }));
   expect(submitted()).toEqual([retained, { capability: 'finance:read', effect: 'ALLOW' }]);
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Manage pharmacy account transactions' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Manage account transactions' }));
   expect(submitted()).toEqual([
     retained,
     { capability: 'finance:read', effect: 'ALLOW' },
     { capability: 'finance:manage', effect: 'ALLOW' },
   ]);
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Manage pharmacy account transactions' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Manage account transactions' }));
   expect(submitted()).toEqual([retained, { capability: 'finance:read', effect: 'ALLOW' }]);
 });
 
@@ -32,7 +32,7 @@ it('unticks inherited access with a precise denial and respects a broader deny',
       <PharmacyFinanceRoleFields initial={[wildcard]} />
     </form>
   );
-  const write = screen.getByRole('checkbox', { name: 'Manage pharmacy account transactions' });
+  const write = screen.getByRole('checkbox', { name: 'Manage account transactions' });
   fireEvent.click(write);
   expect(submitted()).toEqual([wildcard, { capability: 'finance:manage', effect: 'DENY' }]);
   fireEvent.click(write);
@@ -43,7 +43,7 @@ it('unticks inherited access with a precise denial and respects a broader deny',
       <PharmacyFinanceRoleFields initial={[{ ...wildcard, effect: 'DENY' }]} />
     </form>
   );
-  expect(screen.getByRole('checkbox', { name: /View pharmacy accounts.*blocked/ })).toHaveAttribute(
+  expect(screen.getByRole('checkbox', { name: /See accounts.*blocked/ })).toHaveAttribute(
     'aria-disabled',
     'true'
   );
