@@ -29,7 +29,8 @@ vi.mock('@/lib/tenancy/host', () => ({
   requestHost: () => 'acme.devfathom.test',
   resolveExplicitOrganizationByHost: async () => ({ id: 'org_acme', isDemo: false }),
 }));
-vi.mock('@/lib/restaurant/scheduler', () => ({
+vi.mock('@/lib/restaurant/scheduler', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/restaurant/scheduler')>()),
   enqueue: async (_tx: unknown, input: { payload: { inboxId: string } }) => {
     state.jobs.push(input.payload);
     return { job: { id: `job_${state.jobs.length}`, status: 'QUEUED' }, deduplicated: false };

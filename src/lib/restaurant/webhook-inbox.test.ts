@@ -12,7 +12,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/server/audit', () => ({ recordAudit: mocks.recordAudit }));
 
-vi.mock('@/lib/restaurant/scheduler', () => ({
+vi.mock('@/lib/restaurant/scheduler', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/restaurant/scheduler')>()),
   enqueue: mocks.enqueue,
 }));
 
