@@ -245,7 +245,7 @@ export function ControlledRegisterConsole() {
                                 : entry.entryKind === 'CORRECTION'
                                   ? `Correction of ${entry.correctsEntry?.serial ?? '—'}`
                                   : entry.entryKind === 'RETURN_TO_SUPPLIER'
-                                    ? `Returned to supplier · purchase ${entry.sourcePurchase?.serial ?? '—'}`
+                                    ? supplierReturnLabel(entry)
                                     : entry.emergency
                                       ? 'Emergency sale'
                                       : 'Sale'}
@@ -470,6 +470,7 @@ type ShownEntry = {
   prescriber: { name: string; registrationNumber: string } | null;
   line: { medicine: { productName: string } } | null;
   correctsEntry: { serial: number } | null;
+  sourcePurchase: { serial: number } | null;
   refEntry: { serial: number } | null;
 };
 
@@ -490,6 +491,10 @@ function RegisterTotals({ entries }: { entries: readonly ShownEntry[] }) {
   );
 }
 
+function supplierReturnLabel(entry: Pick<ShownEntry, 'sourcePurchase'>) {
+  return `Returned to supplier · purchase ${entry.sourcePurchase?.serial ?? '—'}`;
+}
+
 function RegisterCards({ entries }: { entries: readonly ShownEntry[] }) {
   const totals = registerPrintTotals(entries);
   return (
@@ -501,6 +506,9 @@ function RegisterCards({ entries }: { entries: readonly ShownEntry[] }) {
             <p className="font-mono text-text-strong">
               {entry.serial} · {formatKarachiDateTime(entry.createdAt)}
             </p>
+            {entry.entryKind === 'RETURN_TO_SUPPLIER' && (
+              <p className="mt-1 text-text-muted">{supplierReturnLabel(entry)}</p>
+            )}
             <p className="mt-1 text-text-body">
               {drug} · {batchNumberLabel(entry.batchNumber)} · qty {entry.quantityCanonicalUnits}
             </p>

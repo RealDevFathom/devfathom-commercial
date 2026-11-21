@@ -144,6 +144,28 @@ describe('DEV-672 controlled register branch list', () => {
     expect(h.registerInputs.at(-1)).toEqual({ input: { branchId: 'br-2' }, enabled: true });
   });
 
+  it('identifies the outgoing supplier and original purchase on the mobile register card', () => {
+    h.branches = { isLoading: false, error: null, data: [{ id: 'br-1', name: 'Gulberg' }] };
+    h.entries = [
+      {
+        ...entry,
+        serial: 3,
+        entryKind: 'RETURN_TO_SUPPLIER',
+        sourcePurchase: { serial: 1 },
+        patient: null,
+        counterpartyName: 'Test supplier',
+        quantityCanonicalUnits: 80,
+        balanceDelta: -80,
+        runningBalance: 0,
+      },
+    ];
+    render(<ControlledRegisterConsole />);
+    const card = screen.getByRole('article');
+    expect(card).toHaveTextContent('Returned to supplier · purchase 1');
+    expect(card).toHaveTextContent('Test supplier');
+    expect(card).toHaveTextContent('balance 0');
+  });
+
   it('prints the register table with the branch name', async () => {
     h.branches = { isLoading: false, error: null, data: [{ id: 'br-1', name: 'Gulberg' }] };
     const windows = installFakePrintWindows();
