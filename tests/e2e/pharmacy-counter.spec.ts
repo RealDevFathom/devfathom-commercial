@@ -2003,6 +2003,8 @@ test('Counter v2 — controlled medicine: patient, prescription or emergency sup
   await expect(refusal).not.toContainText('0000');
   await expect(pin).toHaveValue('');
   await expect(pin).toBeFocused();
+  // The refusal stays on screen while the cleared PIN has the focus.
+  await expect(refusal).toBeInViewport();
   await expect(billLine(page, controlled.name)).toHaveCount(0);
   await qaShots(page, 'controlled-sheet-refused', {
     focus: pin,

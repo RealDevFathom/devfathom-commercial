@@ -5806,6 +5806,16 @@ function ScopedPharmacyCounterConsole({
         footer={
           controlledFields && controlledTarget ? (
             <>
+              {/* In the footer, so it stays on screen while focus is on the cleared PIN. */}
+              {controlledError ? (
+                <p
+                  role="alert"
+                  data-counter-controlled-error=""
+                  className="basis-full rounded-sm bg-destructive/10 px-3.5 py-3 text-sm text-destructive"
+                >
+                  {controlledError}
+                </p>
+              ) : null}
               <p
                 id="controlled-sheet-help"
                 className="min-w-0 flex-1 text-xs text-text-muted"
@@ -5838,15 +5848,6 @@ function ScopedPharmacyCounterConsole({
           data-counter-controlled-sheet=""
           className="grid gap-4 outline-none"
         >
-          {controlledError ? (
-            <p
-              role="alert"
-              data-counter-controlled-error=""
-              className="rounded-sm bg-destructive/10 px-3.5 py-3 text-sm text-destructive"
-            >
-              {controlledError}
-            </p>
-          ) : null}
           {controlledFields ? (
             <>
               {patient ? (

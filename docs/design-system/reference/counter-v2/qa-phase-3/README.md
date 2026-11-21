@@ -18,6 +18,10 @@ In every shot:
   user sees;
 - the lane checks that the document does not scroll sideways.
 
+The E2E seed has the owner's "Authenticator for approvals" setting off (DEV-961), so the approval
+wording in these shots is the PIN wording. The code wording is covered by unit tests in both
+modes.
+
 The floating "N" in the lower corner is the Next.js development indicator. It is not part of the
 product.
 
@@ -26,6 +30,7 @@ product.
 | `after-payment-paid-so-far.png` | A2 | Take payment after 4.00 in cash. The summary shows "Paid so far 4.00" above the recorded payment, then the balance due. The JazzCash part is being entered. | Transaction ID |
 | `after-discount-whole-bill.png` | A4 | The discount sheet, signed in as a cashier. "Apply to": Next item or Whole bill. The supervisor block names who can approve. 10% is being given to the whole bill. | Discount (%) |
 | `after-controlled-sheet-ready.png` | A5 | The "Authorise Fathomadol E2E" sheet with the patient, an emergency supply and the approving pharmacist filled in. The footer says it is ready. | Authorise line |
+| `after-controlled-sheet-refused.png` | A5 | The same sheet after the server refused a wrong pharmacist PIN. The refusal is an alert in the sheet's footer, so it stays on screen. The PIN is cleared and has focus, and nothing was added. | Pharmacist PIN |
 | `after-controlled-pack-waiting.png` | A5 | A serialised (GS1) pack of the controlled medicine, scanned. It waits in the sheet as scanned; nothing is on the bill. The notice behind says to complete the panel and press Authorise line. | Find the patient |
 | `after-no-permission-got-it.png` | C6 | A cashier in Returns, with the no-permission card and the full-width "Got it" below it. | Got it |
 | `after-status-strip-375.png` | — | At 375 the "Counter status" strip scrolls, so it is a tab stop with the Studio focus ring. Where the pills fit (the lane checks every width), it is not. | Counter status |

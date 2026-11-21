@@ -4462,6 +4462,8 @@ describe('PharmacyCounterConsole barcode safety', () => {
       const alert = await within(sheet).findByRole('alert');
       expect(alert).toHaveTextContent('The pharmacist PIN was not accepted.');
       expect(alert.className).toContain('text-destructive');
+      // In the sheet's footer, so it stays on screen while the cleared PIN has the focus.
+      expect(alert.closest('[data-counter-sheet-foot]')).not.toBeNull();
       // The PIN is never echoed, and is cleared for the next attempt.
       expect(alert).not.toHaveTextContent('1234');
       expect(mocks.controlledProps.mock.lastCall![0].controlled.pin).toBe('');
