@@ -644,6 +644,28 @@ describeIfDatabase('DEV-957 phase 3 stock promises', () => {
 });
 
 describeIfDatabase('DEV-957 historical set-asides', () => {
+  it('replays in an empty shadow schema without the deployment ledger', async () => {
+    const owner = new pg.Client({
+      connectionString:
+        process.env.M8_TEST_OWNER_DATABASE_URL ?? process.env.PHARMACY_TEST_OWNER_DATABASE_URL,
+    });
+    await owner.connect();
+    try {
+      await owner.query('CREATE TEMP TABLE organizations (id text)');
+      await owner.query('SET search_path = pg_temp');
+      expect(
+        (await owner.query("SELECT to_regclass('_prisma_migrations') AS ledger")).rows[0].ledger
+      ).toBeNull();
+      const sql = readFileSync(
+        'prisma/migrations/20261118127200_reconcile_offline_set_asides/migration.sql',
+        'utf8'
+      );
+      await expect(owner.query(sql)).resolves.toBeDefined();
+    } finally {
+      await owner.end();
+    }
+  });
+
   it('retires pre-replay grants once with an audit and preserves newer grants', async () => {
     const old = await fixture('old-set-aside', { legacyGrant: true });
     const current = await fixture('current-set-aside');

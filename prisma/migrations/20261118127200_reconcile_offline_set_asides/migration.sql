@@ -10,15 +10,21 @@ DECLARE
   tenant_id text;
   cutover timestamptz;
 BEGIN
-  SELECT min(started_at) INTO cutover FROM "_prisma_migrations"
-    WHERE migration_name = '20261118127200_reconcile_offline_set_asides'
-      AND rolled_back_at IS NULL;
-  IF cutover IS NULL THEN
-    RAISE EXCEPTION 'Missing offline set-aside migration start time';
+  -- Prisma replays schema history into an empty shadow without its deployment ledger.
+  IF to_regclass('_prisma_migrations') IS NOT NULL THEN
+    SELECT min(started_at) INTO cutover FROM "_prisma_migrations"
+      WHERE migration_name = '20261118127200_reconcile_offline_set_asides'
+        AND rolled_back_at IS NULL;
   END IF;
   FOR tenant_id IN SELECT id FROM organizations ORDER BY id LOOP
     PERFORM set_config('app.current_organization_id', tenant_id, true);
     PERFORM set_config('app.current_branch_id', '', true);
+    -- An empty rebuild has nothing to reconcile. On a populated database an
+    -- unknown cutoff cannot safely distinguish historical and current grants.
+    IF cutover IS NULL AND EXISTS (SELECT FROM pharmacy_device_lot_quotas
+      WHERE "organizationId" = tenant_id AND "releasedAt" IS NULL) THEN
+      RAISE EXCEPTION 'Missing offline set-aside migration start time for existing grants';
+    END IF;
     WITH released AS (
       UPDATE pharmacy_device_lot_quotas
         SET "releasedAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP
