@@ -947,25 +947,35 @@ export function CounterControlledAuthorization({
   controlled,
   patient,
   disabled = false,
+  inSheet = false,
 }: {
   controlled: NonNullable<CounterRxPanelProps['controlled']>;
   patient: CounterPatientPanel | null;
   disabled?: boolean;
+  /**
+   * DEV-977 phase 3: drawn in the "Authorise" sheet, whose own header already carries the
+   * eyebrow and the title, so they are not repeated here. The region keeps its name.
+   */
+  inSheet?: boolean;
 }) {
   return (
     <section
       aria-label="Controlled medicine authorization"
       data-counter-controlled=""
-      className="space-y-4 border-t border-border-subtle pt-5"
+      className={inSheet ? 'space-y-4' : 'space-y-4 border-t border-border-subtle pt-5'}
     >
       {/* DEV-977 phase 2B (Counter v2 A5): the authorisation in three numbered steps, with
             a progress strip. The steps only show what is filled in; the server still checks
             every field and the pharmacist's PIN. */}
       <div className="space-y-1">
-        <Eyebrow className="block">Controlled medicine · online only</Eyebrow>
-        <h4 className="text-base font-semibold text-text-strong">
-          Controlled medicine authorization
-        </h4>
+        {inSheet ? null : (
+          <>
+            <Eyebrow className="block">Controlled medicine · online only</Eyebrow>
+            <h4 className="text-base font-semibold text-text-strong">
+              Controlled medicine authorization
+            </h4>
+          </>
+        )}
         <p className="text-xs text-text-muted">
           Patient address and a pharmacist PIN are required. Use a prescription, or record an
           emergency supply. Online only.

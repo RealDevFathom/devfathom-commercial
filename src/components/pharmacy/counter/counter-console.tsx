@@ -5789,6 +5789,7 @@ function ScopedPharmacyCounterConsole({
                 controlled={controlledFields}
                 patient={patient}
                 disabled={busy}
+                inSheet
               />
             </>
           ) : controlledTarget ? (
