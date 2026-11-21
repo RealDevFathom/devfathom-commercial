@@ -4,12 +4,18 @@ ALTER TYPE "PharmacySaleEventKind" ADD VALUE IF NOT EXISTS 'PACK_CHECK';
 ALTER TABLE pharmacy_sale_lines ADD COLUMN IF NOT EXISTS "packCheckBlocked" boolean NOT NULL DEFAULT false;
 
 -- Payment and pack verification serialize on the same bill, including a card charge
--- before it leaves the application. The trigger runs with the caller's RLS scope.
+-- before it leaves the application. The terminal role cannot read sale lines. The
+-- trigger reads them as the migration owner, under forced RLS and the active tenant.
 CREATE OR REPLACE FUNCTION pharmacy_check_pack_before_payment() RETURNS trigger
-LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp SET row_security = on AS $$
 DECLARE
   sale_id text;
+  active_branch text := NULLIF(current_setting('app.current_branch_id', true), '');
 BEGIN
+  IF NEW."organizationId" IS DISTINCT FROM NULLIF(current_setting('app.current_organization_id', true), '')
+     OR (active_branch IS NOT NULL AND NEW."branchId" IS DISTINCT FROM active_branch) THEN
+    RAISE EXCEPTION 'Pack check requires the active sale scope' USING ERRCODE = '42501';
+  END IF;
   IF TG_TABLE_NAME = 'pharmacy_sales' THEN
     sale_id := NEW.id;
   ELSE

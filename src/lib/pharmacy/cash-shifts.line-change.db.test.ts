@@ -641,6 +641,25 @@ describeDatabase('DEV-988 explicit bill line pack check', () => {
         })
       );
     expect(await check('unlisted-pack')).toMatchObject({ matched: false });
+    await expect(
+      tenant(s.as(s.cashier), (db) =>
+        db.pharmacyCardTerminalAttempt.create({
+          data: {
+            organizationId: s.owner.organizationId,
+            branchId: s.owner.branchId,
+            saleId: sale.id,
+            deviceId: device,
+            terminalId: 'counter-1',
+            provider: 'QA_TERMINAL',
+            attemptKey: randomUUID(),
+            amountMinor: 1000,
+            currency: 'PKR',
+            businessDate: s.today,
+            actorId: s.cashier,
+          },
+        })
+      )
+    ).rejects.toThrow(/PACK_CHECK_REQUIRED/);
     await expect(cash(s, s.cashier, device, sale.id, 1000)).rejects.toThrow(/pack.check/i);
     await expect(changeLine(s, s.cashier, sale.id, line, 2, device)).rejects.toThrow(/pack.check/i);
     const gtin = '01234567890128';
