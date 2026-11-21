@@ -161,6 +161,22 @@ beforeEach(() => {
 });
 
 describe('DEV-647 refunds need a manager or owner PIN', () => {
+  it('allows booking a provider obligation when the stored tender is a card and the manager reauthenticates', async () => {
+    const f = fixture(ROLES.manager!);
+    f.db.pharmacyTender.findFirst.mockResolvedValue({ type: 'CARD' });
+    await f.caller.refundTender({ ...settlement, managerPin: PIN });
+    expect(refundPharmacyTender).toHaveBeenCalledExactlyOnceWith(
+      f.db,
+      { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
+      settlement,
+      {
+        requireCurrentBusinessDate: true,
+        drawerOperator: { kind: 'COUNTER', actorIsManager: true },
+        recordProviderRefundOwed: true,
+      }
+    );
+  });
+
   it.each(['cashier', 'pharmacist'])('refuses a %s before any PIN or money work', async (role) => {
     const f = fixture(ROLES[role]!);
     await expect(f.caller.refundTender({ ...settlement, managerPin: PIN })).rejects.toMatchObject({
