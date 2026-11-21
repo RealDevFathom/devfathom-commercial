@@ -33,11 +33,12 @@ import {
   type SupplierLicenceEvidence,
 } from './purchasing';
 
+export const WHOLE_RECEIPT_REVERSAL_ONLY =
+  'Only a full receipt can be reversed. To send stock back, open Purchasing, then Returns & claims, and create a supplier return.';
+
 export const receiptReversalRefusals = {
-  REVERSAL_STOCK_MOVED:
-    'Some of the stock this receipt brought in has since been sold, transferred, quarantined or written off. Only a full receipt can be reversed. Leave this receipt posted.',
-  REVERSAL_PACKS_OPENED:
-    'Sealed packs from this receipt have since been opened into loose units. Only a full receipt can be reversed. Leave this receipt posted.',
+  REVERSAL_STOCK_MOVED: `Some of the stock this receipt brought in has since been sold, transferred, quarantined or written off. ${WHOLE_RECEIPT_REVERSAL_ONLY}`,
+  REVERSAL_PACKS_OPENED: `Sealed packs from this receipt have since been opened into loose units. ${WHOLE_RECEIPT_REVERSAL_ONLY}`,
 } as const;
 
 export class PharmacyReceivingError extends Error {

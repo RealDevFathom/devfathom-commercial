@@ -100,6 +100,7 @@ import {
   receiptLandedCosts,
   receiptLineQuantities,
   receiptReversalRefusals,
+  WHOLE_RECEIPT_REVERSAL_ONLY,
 } from '@/lib/pharmacy/receiving';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
 import {
@@ -2303,9 +2304,7 @@ const purchasingRouter = router({
         },
         {
           error: (issue) =>
-            issue.code === 'unrecognized_keys'
-              ? 'Only a full receipt can be reversed. Leave this receipt posted.'
-              : undefined,
+            issue.code === 'unrecognized_keys' ? WHOLE_RECEIPT_REVERSAL_ONLY : undefined,
         }
       )
     )

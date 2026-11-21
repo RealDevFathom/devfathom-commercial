@@ -2551,7 +2551,9 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     };
     await expect(caller().reverseGoodsReceipt(partial)).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: expect.stringContaining('Only a full receipt can be reversed.'),
+      message: expect.stringContaining(
+        'Only a full receipt can be reversed. To send stock back, open Purchasing, then Returns & claims, and create a supplier return.'
+      ),
     });
     expect(db.$transaction).not.toHaveBeenCalled();
   });

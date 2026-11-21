@@ -1,3 +1,4 @@
+import { WHOLE_RECEIPT_REVERSAL_ONLY } from '@/lib/pharmacy/receiving';
 import { ProgressiveLines } from '../_components/progressive-lines';
 import { APPROVAL_BLOCKED } from '@/lib/pharmacy/purchase-approval';
 import type { Metadata } from 'next';
@@ -534,9 +535,7 @@ export default async function PharmacyReceivingPage({
         'witnessPin',
       ];
       if (Array.from(form.keys()).some((key) => !fields.includes(key))) {
-        throw new PurchasingValidationError(
-          'Only a full receipt can be reversed. Leave this receipt posted.'
-        );
+        throw new PurchasingValidationError(WHOLE_RECEIPT_REVERSAL_ONLY);
       }
       await outcome.write(actionCaller.reverseGoodsReceipt)({
         branchId: branch,

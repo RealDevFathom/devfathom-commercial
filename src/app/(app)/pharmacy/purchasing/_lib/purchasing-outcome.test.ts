@@ -99,7 +99,9 @@ it.each(['REVERSAL_STOCK_MOVED', 'REVERSAL_PACKS_OPENED'])(
   'explains why %s precludes a partial reversal',
   async (reason) => {
     await expect(fail(new Error(reason), true)).resolves.toMatchObject({
-      message: expect.stringContaining('Only a full receipt can be reversed.'),
+      message: expect.stringContaining(
+        'Only a full receipt can be reversed. To send stock back, open Purchasing, then Returns & claims, and create a supplier return.'
+      ),
       outcome: 'rejected',
     });
   }
