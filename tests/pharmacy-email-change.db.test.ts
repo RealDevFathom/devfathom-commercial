@@ -6,7 +6,7 @@
  * person confirm from the new address. Real tables, the restricted runtime role, forced
  * row-level security. Skipped (never silently passed) without the database URLs.
  */
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { assertDisposableRlsDatabase } from './disposable-rls-database';
@@ -19,6 +19,7 @@ vi.mock('@/lib/entitlements', async (importOriginal) => ({
   hasModule: () => true,
 }));
 
+process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 const ownerUrl = process.env.PHARMACY_TEST_OWNER_DATABASE_URL ?? '';
 const runtimeUrl = process.env.TEST_DATABASE_URL ?? '';
 if (runtimeUrl) process.env.DATABASE_URL = runtimeUrl;
@@ -54,6 +55,19 @@ const MEMBERS = [
   { key: 'helper', role: 'EMPLOYEE', template: 'helper', pin: false },
 ] as const;
 const emailOf = (key: string) => `${id(key)}@example.test`;
+
+/** DEV-961: an independent RFC 6238 oracle (SHA-1, 6 digits, 30 s). */
+function codeAt(secretB32: string, at: Date): string {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (const ch of secretB32) bits += alphabet.indexOf(ch).toString(2).padStart(5, '0');
+  const key = Buffer.from(bits.match(/.{8}/g)!.map((byte) => parseInt(byte, 2)));
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(at.getTime() / 30_000)));
+  const hmac = createHmac('sha1', key).update(counter).digest();
+  const value = hmac.readUInt32BE(hmac[hmac.length - 1] & 0xf) & 0x7fffffff;
+  return String(value % 1_000_000).padStart(6, '0');
+}
 
 (ownerUrl && runtimeUrl ? describe : describe.skip)(
   'DEV-974 pharmacy email changes under the restricted PostgreSQL runtime role',
@@ -107,8 +121,10 @@ const emailOf = (key: string) => `${id(key)}@example.test`;
       const { hashOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
       await c.connect();
       await c.query("SELECT set_config('app.is_platform_admin','true',false)");
+      // DEV-961: these changes are confirmed with fixed PINs, which apply while the owner has the
+      // authenticator for approvals turned off; the last case turns it on and uses the app code.
       await c.query(
-        `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode",vertical,"seatLimit","createdAt","updatedAt") VALUES ($1,$1,$1,$1,'ACTIVE','SHARED','PHARMACY',50,now(),now())`,
+        `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode",vertical,"seatLimit","requireApprovalAuthenticator","createdAt","updatedAt") VALUES ($1,$1,$1,$1,'ACTIVE','SHARED','PHARMACY',50,false,now(),now())`,
         [org]
       );
       await c.query(
@@ -333,6 +349,46 @@ const emailOf = (key: string) => `${id(key)}@example.test`;
       expect(((await response.json()) as { detail: string }).detail).toMatch(/team screen/);
       expect((await userRow('helper')).email).not.toBe('helper.scim@example.test');
       expect(sent).toEqual([]);
+    });
+
+    it('DEV-961: with the authenticator on, the owner confirms with the app code; the PIN is refused', async () => {
+      const { encryptSecret } = await import('@/lib/secret-crypto');
+      const { generateTotpSecret } = await import('@/lib/totp');
+      const secret = generateTotpSecret();
+      await rows(`UPDATE organizations SET "requireApprovalAuthenticator"=true WHERE id=$1`, [org]);
+      await rows(
+        `INSERT INTO approval_authenticators (id,"organizationId","userId","encryptedSecret","enabledAt","updatedAt") VALUES ($1,$2,$3,$4,now(),now())`,
+        [id('auth_owner'), org, id('owner'), encryptSecret(secret)]
+      );
+      await rows(`SELECT set_config('app.is_platform_admin','false',false)`);
+
+      // The owner's permanent PIN no longer confirms it, and nothing changes.
+      await expect(
+        team('owner').adminUpdateMember({
+          id: id('cashier'),
+          email: 'cashier.code@example.test',
+          pin: PIN,
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(await userRow('cashier')).toEqual({ email: emailOf('cashier'), status: 'ACTIVE' });
+      expect(sent).toEqual([]);
+
+      // The current code from the owner's app does, through the shared approval verifier.
+      await team('owner').adminUpdateMember({
+        id: id('cashier'),
+        email: 'cashier.code@example.test',
+        pin: codeAt(secret, new Date()),
+      });
+      expect(await userRow('cashier')).toEqual({
+        email: 'cashier.code@example.test',
+        status: 'INVITED',
+      });
+      expect(confirmToken('cashier.code@example.test')).not.toBeNull();
+      const [latest] = await rows(
+        `SELECT metadata->>'approvalMethod' AS method, metadata->>'approverRight' AS "right" FROM audit_logs WHERE "organizationId"=$1 AND "actorId"=$2 AND source='AUTH' AND action='team.adminUpdateMember' ORDER BY "createdAt" DESC LIMIT 1`,
+        [org, id('owner')]
+      );
+      expect(latest).toEqual({ method: 'AUTHENTICATOR', right: 'OWNER' });
     });
   }
 );
