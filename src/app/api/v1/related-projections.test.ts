@@ -1,5 +1,7 @@
 // @vitest-environment node
+import { randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { GET as listClients } from './clients/route';
 import { GET as getClient } from './clients/[id]/route';
 import { GET as getInvoice } from './invoices/[id]/route';
@@ -58,7 +60,10 @@ describe('API related-record projections', () => {
   ])(
     'client invoice fields for $scope with Finance enabled=$finance',
     async ({ scope, finance, include }) => {
-      const db = fixture(['clients:read', scope], finance ? ['clients', 'finance'] : ['clients']);
+      const db = fixture(
+        ['clients:read', 'projects:read', scope],
+        finance ? ['clients', 'projects', 'finance'] : ['clients', 'projects']
+      );
       expect((await getClient(request, params)).status).toBe(200);
       expect((await listClients(request)).status).toBe(200);
       const detail = db.client.findUnique.mock.calls[0][0].include;
@@ -68,6 +73,50 @@ describe('API related-record projections', () => {
         expect(detail.invoices).toEqual({ orderBy: { createdAt: 'desc' } });
       } else {
         expect(detail).not.toHaveProperty('invoices');
+      }
+    }
+  );
+
+  it.each([
+    {
+      scopes: ['clients:read'],
+      modules: ['clients', 'projects'],
+      projects: false,
+      invoices: false,
+    },
+    {
+      scopes: ['clients:read', 'projects:read'],
+      modules: ['clients'],
+      projects: false,
+      invoices: false,
+    },
+    {
+      scopes: ['clients:read', 'finance:read'],
+      modules: ['clients', 'finance', 'projects'],
+      projects: false,
+      invoices: true,
+    },
+    {
+      scopes: ['clients:read', 'projects:read'],
+      modules: ['clients', 'projects'],
+      projects: true,
+      invoices: false,
+    },
+  ])(
+    'client project fields for $scopes with modules $modules',
+    async ({ scopes, modules, projects, invoices }) => {
+      const db = fixture(scopes, modules);
+      expect((await getClient(request, params)).status).toBe(200);
+      expect((await listClients(request)).status).toBe(200);
+      const detail = db.client.findUnique.mock.calls[0][0].include;
+      const list = db.client.findMany.mock.calls[0][0].include;
+      if (projects) {
+        expect(detail.projects).toEqual({ select: { id: true, name: true, status: true } });
+        expect(list._count.select).toEqual({ projects: true });
+      } else {
+        expect(detail).not.toHaveProperty('projects');
+        if (invoices) expect(list._count.select).toEqual({ invoices: true });
+        else expect(list).not.toHaveProperty('_count');
       }
     }
   );
@@ -87,3 +136,49 @@ describe('API related-record projections', () => {
     }
   );
 });
+
+const runtimeUrl = process.env.RUNTIME_DATABASE_URL;
+it.runIf(runtimeUrl && runtimeUrl === process.env.DATABASE_URL)(
+  'returns client project rows and counts only to callers with Projects access (PostgreSQL)',
+  async () => {
+    const organizationId = `projection_test_${randomUUID()}`;
+    await withTenantDb(organizationId, async (db) => {
+      await db.organization.create({
+        data: {
+          id: organizationId,
+          slug: organizationId,
+          legalName: 'Fixture',
+          displayName: 'Fixture',
+        },
+      });
+      const client = await db.client.create({ data: { name: 'Fixture client' } });
+      const project = await db.project.create({
+        data: { name: 'Fixture project', type: 'CLIENT', clientId: client.id },
+      });
+      Object.assign(current, {
+        db,
+        userRole: 'ADMIN',
+        scopes: ['clients:read'],
+        entitlements: { enabledModules: ['clients', 'projects'] },
+      });
+      const args = { params: Promise.resolve({ id: client.id }) };
+      const detail = async () => (await (await getClient(request, args)).json()).data;
+      const list = async () => (await (await listClients(request)).json()).data;
+      const clientDetail = await detail();
+      expect(clientDetail).toMatchObject({ id: client.id });
+      expect(clientDetail).not.toHaveProperty('projects');
+      const clients = await list();
+      expect(clients).toHaveLength(1);
+      expect(clients[0]).not.toHaveProperty('_count');
+      current.scopes = ['clients:read', 'projects:read'];
+      expect((await detail()).projects).toEqual([
+        { id: project.id, name: project.name, status: project.status },
+      ]);
+      expect((await list())[0]._count).toEqual({ projects: 1 });
+
+      await db.project.delete({ where: { id: project.id } });
+      await db.client.delete({ where: { id: client.id } });
+      await db.organization.delete({ where: { id: organizationId } });
+    });
+  }
+);

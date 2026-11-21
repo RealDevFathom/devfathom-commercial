@@ -10,12 +10,15 @@ export const GET = withApiAuth(
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
     const { id } = await ctx.params;
+    const includeProjects = canIncludeAdminResource(authCtx, 'projects:read');
     const includeFinance = canIncludeAdminResource(authCtx, 'finance:read');
     const client = await authCtx.db.client.findUnique({
       where: { id },
       include: {
         contacts: true,
-        projects: { select: { id: true, name: true, status: true } },
+        ...(includeProjects
+          ? { projects: { select: { id: true, name: true, status: true } } }
+          : {}),
         ...(includeFinance ? { invoices: { orderBy: { createdAt: 'desc' as const } } } : {}),
       },
     });

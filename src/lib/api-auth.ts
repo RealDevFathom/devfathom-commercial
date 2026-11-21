@@ -124,7 +124,10 @@ export async function authenticateApiRequest(request: Request): Promise<ApiConte
     );
     if (gate.setupRequired) {
       return NextResponse.json(
-        { error: APPROVAL_AUTHENTICATOR_SETUP_MESSAGE, code: 'APPROVAL_AUTHENTICATOR_SETUP_REQUIRED' },
+        {
+          error: APPROVAL_AUTHENTICATOR_SETUP_MESSAGE,
+          code: 'APPROVAL_AUTHENTICATOR_SETUP_REQUIRED',
+        },
         { status: 403 }
       );
     }
@@ -163,7 +166,7 @@ export function hasScope(ctx: ApiContext, required: string): boolean {
 /** Secondary data in an admin-only response needs its own scope and live module. */
 export function canIncludeAdminResource(
   ctx: ApiContext,
-  scope: `${'clients' | 'finance'}:read`
+  scope: `${'clients' | 'finance' | 'projects'}:read`
 ): boolean {
   const moduleKey = moduleForApiScope(scope);
   return (
@@ -197,72 +200,75 @@ export function withApiAuth<T extends unknown[]>(
       return res;
     }
 
-    const auth = await authenticateApiRequest(request);
-    if (auth instanceof NextResponse) {
-      // Authentication failed — record the attempt with no actor.
-      recordRestAudit({
-        request,
-        ctx: null,
-        scope: requiredScope,
-        status: auth.status,
-        durationMs: Date.now() - start,
-      });
-      return auth;
-    }
-
-    // REST-04: per-token throttle once the caller is identified.
-    const tokenGate = await rateLimit(`api:token:${auth.tokenId}`, 240, 60_000);
-    if (!tokenGate.ok) {
-      const res = NextResponse.json(
-        { error: 'Too many requests' },
-        { status: 429, headers: { 'Retry-After': String(tokenGate.retryAfter) } }
-      );
-      recordRestAudit({
-        request,
-        ctx: auth,
-        scope: requiredScope,
-        status: 429,
-        durationMs: Date.now() - start,
-      });
-      return res;
-    }
-
-    if (!hasScope(auth, requiredScope)) {
-      const res = NextResponse.json(
-        { error: `Insufficient permissions. Required scope: ${requiredScope}` },
-        { status: 403 }
-      );
-      recordRestAudit({
-        request,
-        ctx: auth,
-        scope: requiredScope,
-        status: 403,
-        error: 'Insufficient scope',
-        durationMs: Date.now() - start,
-      });
-      return res;
-    }
-
-    // Finance is an admin-only domain. Enforce the bound user's ROLE here (not
-    // just the token scope) so that even a wildcard "*" token issued to a
-    // non-admin user cannot read or mutate finance data.
-    if (requiredScope.startsWith('finance') && auth.userRole !== 'ADMIN') {
-      const res = NextResponse.json(
-        { error: 'Forbidden: finance endpoints require an admin-bound token' },
-        { status: 403 }
-      );
-      recordRestAudit({
-        request,
-        ctx: auth,
-        scope: requiredScope,
-        status: 403,
-        error: 'Finance requires admin-bound token',
-        durationMs: Date.now() - start,
-      });
-      return res;
-    }
-
+    let auditContext: ApiContext | null = null;
     try {
+      const auth = await authenticateApiRequest(request);
+      if (auth instanceof NextResponse) {
+        // Authentication failed — record the attempt with no actor.
+        recordRestAudit({
+          request,
+          ctx: null,
+          scope: requiredScope,
+          status: auth.status,
+          durationMs: Date.now() - start,
+        });
+        return auth;
+      }
+
+      auditContext = auth;
+
+      // REST-04: per-token throttle once the caller is identified.
+      const tokenGate = await rateLimit(`api:token:${auth.tokenId}`, 240, 60_000);
+      if (!tokenGate.ok) {
+        const res = NextResponse.json(
+          { error: 'Too many requests' },
+          { status: 429, headers: { 'Retry-After': String(tokenGate.retryAfter) } }
+        );
+        recordRestAudit({
+          request,
+          ctx: auth,
+          scope: requiredScope,
+          status: 429,
+          durationMs: Date.now() - start,
+        });
+        return res;
+      }
+
+      if (!hasScope(auth, requiredScope)) {
+        const res = NextResponse.json(
+          { error: `Insufficient permissions. Required scope: ${requiredScope}` },
+          { status: 403 }
+        );
+        recordRestAudit({
+          request,
+          ctx: auth,
+          scope: requiredScope,
+          status: 403,
+          error: 'Insufficient scope',
+          durationMs: Date.now() - start,
+        });
+        return res;
+      }
+
+      // Finance is an admin-only domain. Enforce the bound user's ROLE here (not
+      // just the token scope) so that even a wildcard "*" token issued to a
+      // non-admin user cannot read or mutate finance data.
+      if (requiredScope.startsWith('finance') && auth.userRole !== 'ADMIN') {
+        const res = NextResponse.json(
+          { error: 'Forbidden: finance endpoints require an admin-bound token' },
+          { status: 403 }
+        );
+        recordRestAudit({
+          request,
+          ctx: auth,
+          scope: requiredScope,
+          status: 403,
+          error: 'Finance requires admin-bound token',
+          durationMs: Date.now() - start,
+        });
+        return res;
+      }
+
       const res = await withTenantDb(auth.organizationId, async (tenantDb) => {
         const moduleKey = moduleForApiScope(requiredScope);
         if (moduleKey) {
@@ -284,20 +290,30 @@ export function withApiAuth<T extends unknown[]>(
       });
       return res;
     } catch (err) {
-      // Log the full error server-side, but never leak DB/Prisma internals or
-      // stack details to the client — respond with a generic 500.
-      console.error('API error in %s:', requiredScope, err);
-      recordRestAudit({
-        request,
-        ctx: auth,
-        scope: requiredScope,
-        status: 500,
-        error: err,
-        durationMs: Date.now() - start,
-      });
-      return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+      return auditedApiError(request, requiredScope, start, auditContext, err);
     }
   };
+}
+
+export function auditedApiError(
+  request: Request,
+  scope: string,
+  start: number,
+  ctx: ApiContext | null,
+  err: unknown
+): NextResponse {
+  // Log the full error server-side, but never leak DB/Prisma internals or
+  // stack details to the client — respond with a generic 500.
+  console.error('API error in %s:', scope, err);
+  recordRestAudit({
+    request,
+    ctx,
+    scope,
+    status: 500,
+    error: err,
+    durationMs: Date.now() - start,
+  });
+  return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
 }
 
 /**
