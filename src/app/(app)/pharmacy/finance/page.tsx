@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { browserUuid } from '@/lib/browser-uuid';
 import { FinancialStatements } from './financial-statements';
 import { Suspense } from 'react';
@@ -16,7 +17,12 @@ import { DayEndHourPanel } from '@/components/pharmacy/counter/day-end-hour-pane
 import { DiscountMaximumPanel } from '@/components/pharmacy/counter/discount-maximum-panel';
 import { BillDiscountSettingPanel } from '@/components/pharmacy/counter/bill-discount-setting-panel';
 import { StatusPill } from '@/components/ui/status-pill';
-import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
+import {
+  pharmacyActionErrorMessage,
+  isPharmacyActionForbidden,
+  PHARMACY_FINANCE_ACCESS_DENIED_MESSAGE,
+  PHARMACY_FINANCE_MANAGE_DENIED_MESSAGE,
+} from '@/lib/pharmacy/action-error-message';
 import {
   isCounterKhataRepayment,
   isNativeApSettlementTransaction,
@@ -124,7 +130,8 @@ export default async function PharmacyFinancePage({
   let workspace: Awaited<ReturnType<typeof caller.workspace>>;
   try {
     workspace = await caller.workspace({ branchId: branch.id });
-  } catch {
+  } catch (error) {
+    const denied = isPharmacyActionForbidden(error);
     return (
       <div className="space-y-6">
         <PageHeader
@@ -132,9 +139,11 @@ export default async function PharmacyFinancePage({
           heading="Finance"
           description="Bookkeeping, reconciliation, close, and tax profile controls."
         />
-        <SectionCard title="Finance could not load">
+        <SectionCard title={denied ? 'Finance access required' : 'Finance could not load'}>
           <p className="text-sm text-text-muted">
-            Refresh the page. No financial data was changed.
+            {denied
+              ? PHARMACY_FINANCE_ACCESS_DENIED_MESSAGE
+              : 'Refresh the page. No financial data was changed.'}
           </p>
         </SectionCard>
       </div>
@@ -282,7 +291,15 @@ export default async function PharmacyFinancePage({
       // Preserve Next.js control-flow errors without trusting a user/provider-controlled
       // `digest` property as proof that an arbitrary thrown value is a framework error.
       unstable_rethrow(error);
-      redirect(destination(branchId || branch.id, pharmacyActionErrorMessage('finance'), 'error'));
+      redirect(
+        destination(
+          branchId || branch.id,
+          isPharmacyActionForbidden(error)
+            ? PHARMACY_FINANCE_MANAGE_DENIED_MESSAGE
+            : pharmacyActionErrorMessage('finance'),
+          'error'
+        )
+      );
     }
   }
 
@@ -395,6 +412,11 @@ export default async function PharmacyFinancePage({
           {query.notice}
         </div>
       ) : null}
+      {!workspace.mayManageAccounts && (
+        <SectionCard title="View-only finance access">
+          <p className="text-sm text-text-muted">{PHARMACY_FINANCE_MANAGE_DENIED_MESSAGE}</p>
+        </SectionCard>
+      )}
       <SectionCard title="Working branch" eyebrow="Organization scope">
         <form method="get" className="flex flex-wrap items-end gap-3">
           {(
@@ -412,13 +434,13 @@ export default async function PharmacyFinancePage({
           )}
           <label className="min-w-64 text-sm text-text-body">
             Branch
-            <select className={inputClass} name="branch" defaultValue={branch.id}>
+            <StudioSelect className={inputClass} name="branch" defaultValue={branch.id}>
               {branches.map((item) => (
                 <option value={item.id} key={item.id}>
                   {item.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <Button type="submit" variant="secondary">
             Switch branch
@@ -468,14 +490,14 @@ export default async function PharmacyFinancePage({
             </label>
             <label className="text-sm text-text-body">
               Tender type
-              <select className={inputClass} name="tenderType">
+              <StudioSelect className={inputClass} name="tenderType">
                 <option value="CARD">Card</option>
                 <option value="WALLET">Wallet</option>
                 <option value="BANK_TRANSFER">Bank transfer</option>
                 <option value="RAAST">Raast</option>
                 <option value="JAZZCASH">JazzCash</option>
                 <option value="EASYPAISA">Easypaisa</option>
-              </select>
+              </StudioSelect>
             </label>
             <fieldset className="space-y-2 md:col-span-2">
               <legend className="text-sm text-text-body">Unsettled POS tenders</legend>
@@ -498,7 +520,7 @@ export default async function PharmacyFinancePage({
                 </label>
               ))}
             </fieldset>
-            <Button className="md:col-span-3" type="submit">
+            <Button disabled={!workspace.mayManageAccounts} className="md:col-span-3" type="submit">
               Create settlement batch
             </Button>
           </form>
@@ -533,7 +555,7 @@ export default async function PharmacyFinancePage({
             <input type="hidden" name="branchId" value={branch.id} />
             <label className="text-sm text-text-body">
               Workflow
-              <select className={inputClass} name="transactionKind" required>
+              <StudioSelect className={inputClass} name="transactionKind" required>
                 {[
                   'SUPPLIER_PAYMENT',
                   'CUSTOMER_RECEIPT',
@@ -548,7 +570,7 @@ export default async function PharmacyFinancePage({
                     {label(kind)}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <label className="text-sm text-text-body">
               Reference
@@ -590,10 +612,10 @@ export default async function PharmacyFinancePage({
             </label>
             <label className="text-sm text-text-body">
               Pay from / receive into
-              <select className={inputClass} name="fundingAccount">
+              <StudioSelect className={inputClass} name="fundingAccount">
                 <option value="BANK">Bank</option>
                 <option value="CASH">Cash / petty cash</option>
-              </select>
+              </StudioSelect>
             </label>
             <label className="text-sm text-text-body">
               Bank reference
@@ -611,7 +633,7 @@ export default async function PharmacyFinancePage({
               Memo
               <Input className="mt-1 min-h-11" name="memo" />
             </label>
-            <Button className="sm:col-span-2" type="submit">
+            <Button disabled={!workspace.mayManageAccounts} className="sm:col-span-2" type="submit">
               Post transaction
             </Button>
           </form>
@@ -628,7 +650,12 @@ export default async function PharmacyFinancePage({
               Period ends (exclusive)
               <Input className="mt-1 min-h-11" type="date" name="endsAt" required />
             </label>
-            <Button className="sm:col-span-2" type="submit" variant="destructive">
+            <Button
+              disabled={!workspace.mayManageAccounts}
+              className="sm:col-span-2"
+              type="submit"
+              variant="destructive"
+            >
               Close period
             </Button>
           </form>
@@ -659,7 +686,11 @@ export default async function PharmacyFinancePage({
                         required
                         placeholder="Reason for controlled reopen"
                       />
-                      <Button type="submit" variant="secondary">
+                      <Button
+                        disabled={!workspace.mayManageAccounts}
+                        type="submit"
+                        variant="secondary"
+                      >
                         Reopen
                       </Button>
                     </form>
@@ -733,7 +764,11 @@ export default async function PharmacyFinancePage({
                             required
                             placeholder="Reversal reason"
                           />
-                          <Button type="submit" variant="destructive">
+                          <Button
+                            disabled={!workspace.mayManageAccounts}
+                            type="submit"
+                            variant="destructive"
+                          >
                             Reverse
                           </Button>
                         </form>
@@ -763,7 +798,7 @@ export default async function PharmacyFinancePage({
               <input type="hidden" name="branchId" value={branch.id} />
               <label className="text-sm">
                 Bank or wallet statement line
-                <select className={inputClass} name="statementLineId" required>
+                <StudioSelect className={inputClass} name="statementLineId" required>
                   {workspace.bankLines
                     .filter((line) => line.status === 'UNMATCHED' && line.amountMinor > 0)
                     .map((line) => (
@@ -771,11 +806,11 @@ export default async function PharmacyFinancePage({
                         {line.lineReference} · {money(line.amountMinor)}
                       </option>
                     ))}
-                </select>
+                </StudioSelect>
               </label>
               <label className="text-sm">
                 POS settlement batch
-                <select className={inputClass} name="settlementBatchId" required>
+                <StudioSelect className={inputClass} name="settlementBatchId" required>
                   {workspace.settlementBatches
                     .filter((batch) => (batch.settledMinor ?? 0) < batch.expectedMinor)
                     .map((batch) => (
@@ -785,7 +820,7 @@ export default async function PharmacyFinancePage({
                         {money(batch.expectedMinor - (batch.settledMinor ?? 0))}
                       </option>
                     ))}
-                </select>
+                </StudioSelect>
               </label>
               <label className="text-sm">
                 Amount to match (PKR)
@@ -798,7 +833,9 @@ export default async function PharmacyFinancePage({
                   required
                 />
               </label>
-              <Button type="submit">Match POS settlement to statement</Button>
+              <Button disabled={!workspace.mayManageAccounts} type="submit">
+                Match POS settlement to statement
+              </Button>
             </form>
           ) : null}
           <form action={perform} className="grid gap-3 sm:grid-cols-2">
@@ -824,7 +861,12 @@ export default async function PharmacyFinancePage({
               Bank description
               <Input className="mt-1 min-h-11" name="description" required />
             </label>
-            <Button type="submit" variant="secondary" className="sm:col-span-2">
+            <Button
+              disabled={!workspace.mayManageAccounts}
+              type="submit"
+              variant="secondary"
+              className="sm:col-span-2"
+            >
               Add statement line
             </Button>
           </form>
@@ -835,7 +877,7 @@ export default async function PharmacyFinancePage({
               <input type="hidden" name="branchId" value={branch.id} />
               <label className="text-sm">
                 Unmatched bank line
-                <select className={inputClass} name="statementLineId">
+                <StudioSelect className={inputClass} name="statementLineId">
                   {workspace.bankLines
                     .filter((line) => line.status === 'UNMATCHED')
                     .map((line) => (
@@ -843,11 +885,11 @@ export default async function PharmacyFinancePage({
                         {line.lineReference} · {money(Math.abs(line.amountMinor))}
                       </option>
                     ))}
-                </select>
+                </StudioSelect>
               </label>
               <label className="text-sm">
                 Posted transaction
-                <select className={inputClass} name="transactionId">
+                <StudioSelect className={inputClass} name="transactionId">
                   {workspace.transactions
                     .filter((t) => t.status === 'POSTED')
                     .map((t) => (
@@ -855,7 +897,7 @@ export default async function PharmacyFinancePage({
                         {t.reference} · {money(t.amountMinor)}
                       </option>
                     ))}
-                </select>
+                </StudioSelect>
               </label>
               <label className="text-sm">
                 Amount to match
@@ -868,7 +910,9 @@ export default async function PharmacyFinancePage({
                   required
                 />
               </label>
-              <Button type="submit">Match selected records</Button>
+              <Button disabled={!workspace.mayManageAccounts} type="submit">
+                Match selected records
+              </Button>
             </form>
           ) : (
             <p className="mt-5 text-sm text-text-muted">
@@ -916,10 +960,10 @@ export default async function PharmacyFinancePage({
             </label>
             <label className="text-sm">
               Price mode
-              <select className={inputClass} name="priceMode">
+              <StudioSelect className={inputClass} name="priceMode">
                 <option value="INCLUSIVE">Tax inclusive</option>
                 <option value="EXCLUSIVE">Tax exclusive</option>
-              </select>
+              </StudioSelect>
             </label>
             <label className="text-sm sm:col-span-2">
               SRO reference (always provisional)
@@ -928,7 +972,7 @@ export default async function PharmacyFinancePage({
                 Verify against the final gazette before operational use.
               </span>
             </label>
-            <Button type="submit" className="sm:col-span-2">
+            <Button disabled={!workspace.mayManageAccounts} type="submit" className="sm:col-span-2">
               Publish approved version
             </Button>
           </form>

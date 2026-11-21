@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 /**
  * PROP-07 — the function spaces surface: the halls, lawns and boardrooms a
  * property sells, how each can be laid out, what it costs, how long it takes to
@@ -1100,7 +1102,7 @@ function HoldForm({
           />
         </Field>
         <Field htmlFor={`${prefix}-kind`} label="Claim" error={message('kind')}>
-          <select
+          <StudioSelect
             id={`${prefix}-kind`}
             name="kind"
             className={selectClass}
@@ -1112,7 +1114,7 @@ function HoldForm({
                 {option.label}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </Field>
         <Field
           htmlFor={`${prefix}-startsAt`}

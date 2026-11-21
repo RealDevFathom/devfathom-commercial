@@ -267,7 +267,8 @@ export async function postSaleReturnEntry(
       organizationId: scope.organizationId,
       idempotencyKey: postingKey('PHARMACY_SALE_RETURN_LINE', returnLine.id),
     },
-    include: { lines: true },
+    // Posting order, as postJournalEntry returns it.
+    include: { lines: { orderBy: { id: 'asc' } } },
   });
   if (existing) return existing;
 
@@ -362,7 +363,8 @@ export async function postUnidentifiedSaleReturnEntry(
       organizationId: scope.organizationId,
       idempotencyKey: postingKey(sourceKind, holding.id),
     },
-    include: { lines: true },
+    // Posting order, as postJournalEntry returns it.
+    include: { lines: { orderBy: { id: 'asc' } } },
   });
   if (existing) return existing;
 

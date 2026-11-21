@@ -1651,3 +1651,30 @@ describe('DEV-977 phase 2B: returns and no-permission in the Counter v2 sheets (
     expect(document.querySelector('[data-counter-no-permission]')).toBeNull();
   });
 });
+
+describe('DEV-977 phase 3: "Got it" closes the returns sheet for a member without refund access (C6)', () => {
+  it('closes the sheet and records nothing', () => {
+    mocks.refundAccess = { data: { authorized: false } };
+    render(<CounterReturnPanel {...base} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Returns' }));
+    const sheet = screen.getByRole('dialog', { name: 'Returns' });
+    chooseReceipt();
+    const card = within(sheet).getByRole('heading', {
+      name: 'Ask a manager or owner to record this return',
+    }).parentElement!;
+    expect(within(card).queryByRole('button')).toBeNull();
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Got it' }));
+    expect(screen.queryByRole('dialog', { name: 'Returns' })).not.toBeInTheDocument();
+    expect(mocks.returnLine).not.toHaveBeenCalled();
+    expect(mocks.returnAndRefund).not.toHaveBeenCalled();
+    expect(mocks.refund).not.toHaveBeenCalled();
+  });
+
+  it('offers no "Got it" to a manager or owner, who records the return', () => {
+    mocks.refundAccess = { data: { authorized: true } };
+    render(<CounterReturnPanel {...base} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Returns & refunds' }));
+    chooseReceipt();
+    expect(screen.queryByRole('button', { name: 'Got it' })).toBeNull();
+  });
+});

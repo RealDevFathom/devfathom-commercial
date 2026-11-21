@@ -2,10 +2,15 @@ import 'server-only';
 
 import { createHash, randomBytes } from 'node:crypto';
 import { cookies } from 'next/headers';
-import { assertPlatformCapability, type PlatformIdentity } from '@/lib/platform/auth';
+import {
+  assertPlatformCapability,
+  platformRoleRequiresMfa,
+  type PlatformIdentity,
+} from '@/lib/platform/auth';
 import { parseCookie, PlatformSecurityError } from '@/lib/platform/security';
 import { decryptSecret, encryptSecret } from '@/lib/secret-crypto';
-import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
+import { canPlatformRole, endSupportSessions } from '@/lib/platform/capabilities';
+import { type ScopedDb, withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 
 export const SUPPORT_SESSION_COOKIE = 'df_support_session';
 
@@ -42,6 +47,24 @@ export type SupportIdentity = {
   expiresAt: Date;
   reason: string;
 };
+
+async function operatorCanSupport(db: ScopedDb, id: string): Promise<boolean> {
+  const operator = await db.platformUser.findUnique({
+    where: { id },
+    select: {
+      active: true,
+      role: true,
+      mfaRequired: true,
+      mfaEnabledAt: true,
+      encryptedTotpSecret: true,
+    },
+  });
+  if (!operator?.active || !canPlatformRole(operator.role, 'support:write')) return false;
+  return (
+    Boolean(operator.mfaEnabledAt && operator.encryptedTotpSecret) ||
+    !(operator.mfaRequired || platformRoleRequiresMfa(operator.role))
+  );
+}
 
 export async function createSupportSession(input: {
   actor: PlatformIdentity;
@@ -100,15 +123,28 @@ export async function createSupportSession(input: {
   const launchToken = randomBytes(32).toString('base64url');
   const expiresAt = new Date(Date.now() + duration * 60_000);
   const session = await withPlatformDb(async (platformDb) => {
-    await platformDb.platformSupportSession.updateMany({
+    // Operator updates hold this same row lock until their session revocations commit.
+    // A password or MFA reset can leave the role unchanged, so check the sign-in too.
+    await platformDb.$queryRaw`SELECT id FROM platform_users WHERE id = ${input.actor.id} FOR UPDATE`;
+    const signIn = await platformDb.platformSession.findFirst({
       where: {
+        id: input.actor.sessionId,
         platformUserId: input.actor.id,
-        organizationId: organization.id,
-        status: 'ACTIVE',
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
       },
-      data: { status: 'ENDED', endedAt: new Date() },
+      select: { id: true },
     });
+    if (!signIn || !(await operatorCanSupport(platformDb, input.actor.id))) {
+      throw new PlatformSecurityError('Support access is no longer authorized.', 403);
+    }
+    await endSupportSessions(
+      platformDb,
+      { platformUserId: input.actor.id, organizationId: organization.id },
+      'Replaced by a new support session.'
+    );
     const created = await platformDb.platformSupportSession.create({
+      select: { id: true },
       data: {
         organizationId: organization.id,
         platformUserId: input.actor.id,
@@ -193,7 +229,8 @@ export async function consumeSupportLaunchTicket(input: {
       session.status !== 'ACTIVE' ||
       session.expiresAt <= new Date() ||
       session.launchUsedAt ||
-      !session.tokenCiphertext
+      !session.tokenCiphertext ||
+      !(await operatorCanSupport(platformDb, session.platformUserId))
     ) {
       throw new PlatformSecurityError('Support access ticket is invalid or expired.', 401);
     }
@@ -232,8 +269,8 @@ export async function consumeSupportLaunchTicket(input: {
 export async function getSupportSession(request?: Request): Promise<SupportIdentity | null> {
   const token = await tokenFromRequest(request);
   if (!token || token.length < 32 || token.length > 128) return null;
-  const session = await withPlatformDb((platformDb) =>
-    platformDb.platformSupportSession.findUnique({
+  const session = await withPlatformDb(async (platformDb) => {
+    const candidate = await platformDb.platformSupportSession.findUnique({
       where: { tokenHash: hashToken(token) },
       select: {
         id: true,
@@ -244,16 +281,17 @@ export async function getSupportSession(request?: Request): Promise<SupportIdent
         status: true,
         expiresAt: true,
       },
-    })
-  );
-  if (
-    !session ||
-    session.status !== 'ACTIVE' ||
-    session.expiresAt <= new Date() ||
-    !session.tenantUserId
-  ) {
-    return null;
-  }
+    });
+    if (
+      !candidate ||
+      candidate.status !== 'ACTIVE' ||
+      candidate.expiresAt <= new Date() ||
+      !(await operatorCanSupport(platformDb, candidate.platformUserId))
+    )
+      return null;
+    return candidate;
+  });
+  if (!session?.tenantUserId) return null;
   const tenantUser = await withTenantDb(session.organizationId, (tenantDb) =>
     tenantDb.user.findUnique({
       where: { id: session.tenantUserId! },
@@ -281,25 +319,11 @@ export async function endSupportSession(request?: Request): Promise<void> {
   const token = await tokenFromRequest(request);
   if (!token) return;
   await withPlatformDb(async (platformDb) => {
-    const session = await platformDb.platformSupportSession.findUnique({
-      where: { tokenHash: hashToken(token) },
-    });
-    if (!session || session.status !== 'ACTIVE') return;
-    await platformDb.platformSupportSession.update({
-      where: { id: session.id },
-      data: { status: 'ENDED', endedAt: new Date() },
-    });
-    await platformDb.platformAuditLog.create({
-      data: {
-        organizationId: session.organizationId,
-        actorPlatformUserId: session.platformUserId,
-        actorTenantUserId: session.tenantUserId,
-        action: 'support.session.ended',
-        targetType: 'PlatformSupportSession',
-        targetId: session.id,
-        reason: session.reason,
-      },
-    });
+    await endSupportSessions(
+      platformDb,
+      { tokenHash: hashToken(token) },
+      'Operator ended support access.'
+    );
   });
 }
 

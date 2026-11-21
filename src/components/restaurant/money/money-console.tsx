@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { ManualCardBreakdown } from '@/components/restaurant/manual-card-breakdown';
 
 import { useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
@@ -622,7 +624,7 @@ function AuthorizedMoneyConsole({ initialTab }: { initialTab: MoneyTab }) {
                       />
                     </Field>
                     <Field label="Mode" description="Simulation is for tests and demos only.">
-                      <select
+                      <StudioSelect
                         className="h-11 w-full rounded-sm border border-border-default bg-surface-card px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                         value={terminalMode}
                         onChange={(event) =>
@@ -632,7 +634,7 @@ function AuthorizedMoneyConsole({ initialTab }: { initialTab: MoneyTab }) {
                         <option value="DISABLED">Disabled</option>
                         <option value="SIMULATION">Simulation — test/demo only</option>
                         <option value="WEBHOOK">Authenticated webhook</option>
-                      </select>
+                      </StudioSelect>
                     </Field>
                     <div className="md:col-span-2 flex items-center gap-3">
                       <Button

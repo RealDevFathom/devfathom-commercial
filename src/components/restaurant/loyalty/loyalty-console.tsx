@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { browserUuid } from '@/lib/browser-uuid';
 
 import type { inferRouterOutputs } from '@trpc/server';
@@ -539,7 +541,7 @@ export function LoyaltyConsole() {
               </span>
             </Field>
             <Field label="Filter by tag">
-              <select
+              <StudioSelect
                 value={tagId}
                 onChange={(event) => setTagId(event.target.value)}
                 className={selectClass}
@@ -550,7 +552,7 @@ export function LoyaltyConsole() {
                     {tag.name}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </Field>
           </div>
 
@@ -1189,7 +1191,7 @@ function CustomerDetail({
             <label className="sr-only" htmlFor="loyalty-tag-select">
               Assign tag
             </label>
-            <select
+            <StudioSelect
               id="loyalty-tag-select"
               name="tagId"
               required
@@ -1202,7 +1204,7 @@ function CustomerDetail({
                   {tag.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
             <Button
               type="submit"
               variant="secondary"
@@ -1244,17 +1246,17 @@ function CustomerDetail({
         <h3 className="font-semibold text-text-strong">Append consent event</h3>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
           <Field label="Channel">
-            <select name="channel" className={selectClass} disabled={busy}>
+            <StudioSelect name="channel" className={selectClass} disabled={busy}>
               {CONSENT_CHANNELS.map((channel) => (
                 <option key={channel}>{channel}</option>
               ))}
-            </select>
+            </StudioSelect>
           </Field>
           <Field label="State">
-            <select name="granted" className={selectClass} disabled={busy}>
+            <StudioSelect name="granted" className={selectClass} disabled={busy}>
               <option value="true">Granted</option>
               <option value="false">Denied</option>
-            </select>
+            </StudioSelect>
           </Field>
           <Field label="Source">
             <Input

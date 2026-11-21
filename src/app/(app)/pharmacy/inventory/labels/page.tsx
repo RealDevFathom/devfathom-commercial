@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
@@ -148,7 +149,7 @@ export default async function PharmacyShelfLabelsPage({
             <input name="branch" type="hidden" value={branch.id} />
             <label className="min-w-64 flex-1 text-sm text-text-body">
               Posted goods receipt
-              <select
+              <StudioSelect
                 className={inputClass}
                 defaultValue={query.receipt ?? ''}
                 disabled={receipts.length === 0}
@@ -163,7 +164,7 @@ export default async function PharmacyShelfLabelsPage({
                     {receipt.reference} · invoice {receipt.supplierInvoiceRef}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <Button disabled={receipts.length === 0} size="touch" type="submit" variant="secondary">
               Load receipt
@@ -193,13 +194,13 @@ export default async function PharmacyShelfLabelsPage({
           <form className="flex flex-wrap items-end gap-3" method="get">
             <label className="min-w-64 text-sm text-text-body">
               Branch
-              <select className={inputClass} defaultValue={branch.id} name="branch">
+              <StudioSelect className={inputClass} defaultValue={branch.id} name="branch">
                 {workingBranches.map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.name} · {item.city}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <Button size="touch" type="submit" variant="ghost">
               Switch branch

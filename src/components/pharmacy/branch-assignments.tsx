@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState, type FormEvent } from 'react';
 import Link from 'next/link';
 
@@ -57,7 +59,7 @@ export function BranchAssignmentsPanel({
       <form className="grid gap-4 sm:grid-cols-2" onSubmit={assign}>
         <div>
           <Label htmlFor="pharmacy-assignment-branch">Branch</Label>
-          <select
+          <StudioSelect
             className={controlClass}
             id="pharmacy-assignment-branch"
             value={branchValue}
@@ -70,11 +72,11 @@ export function BranchAssignmentsPanel({
                 {branch.name} ({branch.code})
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </div>
         <div>
           <Label htmlFor="pharmacy-assignment-member">Member</Label>
-          <select
+          <StudioSelect
             className={controlClass}
             id="pharmacy-assignment-member"
             value={memberValue}
@@ -87,7 +89,7 @@ export function BranchAssignmentsPanel({
                 {member.name} — {member.roleName}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </div>
         <div className="sm:col-span-2">
           <Button className="min-h-11" type="submit" disabled={!ready || pending}>

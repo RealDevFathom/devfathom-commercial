@@ -1,4 +1,6 @@
 'use client';
+
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { useRef, useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -101,7 +103,7 @@ export function RequestForm({ vertical }: { vertical: Exclude<LoginVertical, 'de
         <label htmlFor={name} className="block">
           {label}
         </label>
-        <select
+        <StudioSelect
           id={name}
           name={name}
           aria-invalid={vertical === 'pharmacy' ? !!fields[name] : undefined}
@@ -110,7 +112,7 @@ export function RequestForm({ vertical }: { vertical: Exclude<LoginVertical, 'de
           {options.map((option) => (
             <option key={option}>{option}</option>
           ))}
-        </select>
+        </StudioSelect>
         {vertical === 'pharmacy' && fields[name] && (
           <p id={`${name}-help`} className="text-xs leading-5 text-destructive">
             {fields[name].join(' ')}

@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ mutate: vi.fn(), reset: vi.fn(), options: null as unknown }));
@@ -35,12 +36,19 @@ function openForm() {
 }
 function fill() {
   fireEvent.change(screen.getByLabelText('Bridge name'), { target: { value: 'Kitchen host' } });
-  fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch' } });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Branch', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    { target: { value: 'branch' } }
+  );
 }
 it('requires an explicit active branch and name', () => {
   openForm();
   expect(screen.getByRole('button', { name: 'Create enrollment code' })).toBeDisabled();
-  expect(screen.queryByRole('option', { name: 'Closed' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('option', { hidden: true, name: 'Closed' })).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText('Bridge name'), { target: { value: 'Kitchen host' } });
   expect(screen.getByRole('button', { name: 'Create enrollment code' })).toBeDisabled();
   expect(h.mutate).not.toHaveBeenCalled();
@@ -152,7 +160,14 @@ it('includes optional printer drafts with the new bridge and omits UI row keys',
   fireEvent.change(screen.getByLabelText('Printer 1 target'), {
     target: { value: ' tcp://printer:9100 ' },
   });
-  fireEvent.change(screen.getByLabelText('Printer 1 paper width'), { target: { value: '58' } });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Printer 1 paper width', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    { target: { value: '58' } }
+  );
   fireEvent.click(screen.getByRole('button', { name: 'Create enrollment code' }));
   await screen.findByLabelText('One-time enrollment code');
   expect(h.mutate).toHaveBeenCalledExactlyOnceWith({

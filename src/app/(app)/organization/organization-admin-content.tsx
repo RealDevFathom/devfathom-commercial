@@ -1,6 +1,10 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { PharmacyFinanceRoleFields } from './pharmacy-finance-role-fields';
+import { useOwnApprovalLabel } from '@/components/pharmacy/own-approval-copy';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import { Check, Copy, KeyRound, Loader2, RefreshCw, ShieldCheck, UserPlus } from 'lucide-react';
@@ -78,10 +82,11 @@ function pinOf(form: FormData, pharmacy: boolean): { pin?: string } {
 
 /** DEV-959B: in a pharmacy, a role change that touches a weighty sub-role needs the owner's PIN. */
 function AccessPinField({ className }: { className?: string }) {
+  const approvalLabel = useOwnApprovalLabel();
   const id = useId();
   return (
     <label className={className}>
-      <span className={labelClass}>Your PIN</span>
+      <span className={labelClass}>{approvalLabel}</span>
       <Input
         name="pin"
         type="password"
@@ -343,6 +348,9 @@ export function OrganizationAdminContent() {
   const createRoleErrors = !role.variables?.id ? role.error?.data?.validation : null;
   const createRoleKeyError = createRoleErrors?.key?.[0];
   const createRolePermissionsError = createRoleErrors?.permissions?.[0];
+  const permissionsErrorId = createRolePermissionsError
+    ? 'create-role-permissions-error'
+    : undefined;
   const submitProfile = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const values = new FormData(event.currentTarget);
@@ -602,32 +610,32 @@ export function OrganizationAdminContent() {
             </label>
             <label>
               <span className={labelClass}>System role</span>
-              <select className={inputClass} name="role" defaultValue="EMPLOYEE">
+              <StudioSelect className={inputClass} name="role" defaultValue="EMPLOYEE">
                 {['ADMIN', 'HR', 'EMPLOYEE'].map((option) => (
                   <option key={option}>{option}</option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <label>
               <span className={labelClass}>Department</span>
-              <select className={inputClass} name="department" required>
+              <StudioSelect className={inputClass} name="department" required>
                 {organization.departments.map((department) => (
                   <option key={department.key} value={department.key}>
                     {department.name}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <label>
               <span className={labelClass}>Role template</span>
-              <select className={inputClass} name="organizationRoleId" defaultValue="">
+              <StudioSelect className={inputClass} name="organizationRoleId" defaultValue="">
                 <option value="">No custom role</option>
                 {organization.roles.map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.name}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             {pharmacyBranches.length > 0 && (
               <fieldset className="sm:col-span-2 lg:col-span-3">
@@ -722,7 +730,7 @@ export function OrganizationAdminContent() {
                   ].map(([name, label, options, value]) => (
                     <label key={String(name)}>
                       <span className={labelClass}>{String(label)}</span>
-                      <select
+                      <StudioSelect
                         className={inputClass}
                         name={String(name)}
                         defaultValue={String(value)}
@@ -732,7 +740,7 @@ export function OrganizationAdminContent() {
                             {name === 'role' ? baseRoleLabels[option as BaseRole] : option}
                           </option>
                         ))}
-                      </select>
+                      </StudioSelect>
                     </label>
                   ))}
                   <label>
@@ -740,17 +748,21 @@ export function OrganizationAdminContent() {
                     {/* The organization's own departments, not a hardcoded agency
                         list: a pharmacy files staff under Counter, Dispensary, and
                         the rest its vertical defines. */}
-                    <select className={inputClass} name="department" defaultValue={user.department}>
+                    <StudioSelect
+                      className={inputClass}
+                      name="department"
+                      defaultValue={user.department}
+                    >
                       {organization.departments.map((department) => (
                         <option key={department.key} value={department.key}>
                           {department.name}
                         </option>
                       ))}
-                    </select>
+                    </StudioSelect>
                   </label>
                   <label>
                     <span className={labelClass}>Custom role</span>
-                    <select
+                    <StudioSelect
                       className={inputClass}
                       name="organizationRoleId"
                       defaultValue={user.organizationRoleId ?? ''}
@@ -761,7 +773,7 @@ export function OrganizationAdminContent() {
                           {item.name}
                         </option>
                       ))}
-                    </select>
+                    </StudioSelect>
                   </label>
                   <label className="sm:col-span-2">
                     <span className={labelClass}>Title</span>
@@ -851,20 +863,27 @@ export function OrganizationAdminContent() {
                     defaultValue={item.description ?? ''}
                     aria-label="Role description"
                   />
-                  <textarea
-                    className={cn(inputClass, 'min-h-28 py-2 font-mono text-xs')}
-                    name="permissions"
-                    aria-label="Permission rules"
-                    defaultValue={JSON.stringify(
-                      item.permissions.map((permission) => ({
-                        capability: permission.capability,
-                        effect: permission.effect,
-                      })),
-                      null,
-                      2
-                    )}
-                  />
-                  {isPharmacy && item._count.users > 0 ? <AccessPinField /> : null}
+                  {isPharmacy ? (
+                    <PharmacyFinanceRoleFields
+                      initial={item.permissions}
+                      disabled={item.isSystem}
+                    />
+                  ) : (
+                    <textarea
+                      className={cn(inputClass, 'min-h-28 py-2 font-mono text-xs')}
+                      name="permissions"
+                      aria-label="Permission rules"
+                      defaultValue={JSON.stringify(
+                        item.permissions.map((permission) => ({
+                          capability: permission.capability,
+                          effect: permission.effect,
+                        })),
+                        null,
+                        2
+                      )}
+                    />
+                  )}
+                  {isPharmacy && !item.isSystem ? <AccessPinField /> : null}
                   <div className="flex flex-wrap justify-between gap-2">
                     <Button
                       type="button"
@@ -892,6 +911,7 @@ export function OrganizationAdminContent() {
               const values = new FormData(event.currentTarget);
               try {
                 role.mutate({
+                  ...pinOf(values, isPharmacy),
                   key: formValue(values, 'key'),
                   name: formValue(values, 'name'),
                   description: formValue(values, 'description') || null,
@@ -935,28 +955,33 @@ export function OrganizationAdminContent() {
               <span className={labelClass}>Description</span>
               <Input name="description" />
             </label>
-            <label>
-              <span className={labelClass}>Permission JSON</span>
-              <textarea
-                className={cn(inputClass, 'min-h-28 py-2 font-mono text-xs')}
-                name="permissions"
-                aria-invalid={Boolean(createRolePermissionsError)}
-                aria-describedby={
-                  createRolePermissionsError ? 'create-role-permissions-error' : undefined
-                }
-                onChange={() => role.reset()}
-                defaultValue={'[{"capability":"projects:*","effect":"ALLOW"}]'}
-              />
-              {createRolePermissionsError ? (
-                <p
-                  id="create-role-permissions-error"
-                  className="mt-1.5 text-[11px] text-destructive"
-                  role="alert"
-                >
-                  {createRolePermissionsError}
-                </p>
-              ) : null}
-            </label>
+            {isPharmacy ? (
+              <>
+                <PharmacyFinanceRoleFields errorId={permissionsErrorId} />
+                <AccessPinField />
+              </>
+            ) : (
+              <label>
+                <span className={labelClass}>Permission JSON</span>
+                <textarea
+                  className={cn(inputClass, 'min-h-28 py-2 font-mono text-xs')}
+                  name="permissions"
+                  aria-invalid={Boolean(createRolePermissionsError)}
+                  aria-describedby={permissionsErrorId}
+                  onChange={() => role.reset()}
+                  defaultValue={'[{"capability":"projects:*","effect":"ALLOW"}]'}
+                />
+              </label>
+            )}
+            {createRolePermissionsError ? (
+              <p
+                id="create-role-permissions-error"
+                className="mt-1.5 text-[11px] text-destructive"
+                role="alert"
+              >
+                {createRolePermissionsError}
+              </p>
+            ) : null}
             <SubmitButton pending={role.isPending}>Create role</SubmitButton>
           </form>
         </div>
