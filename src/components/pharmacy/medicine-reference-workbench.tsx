@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { browserUuid } from '@/lib/browser-uuid';
 
 import { memo, useRef, useState } from 'react';
@@ -628,7 +630,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                 ].map((field) => (
                   <label key={field} className="text-xs font-medium text-text-body">
                     {field}
-                    <select
+                    <StudioSelect
                       className="mt-1 min-h-11 w-full rounded-sm border border-border-default bg-surface-raised px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       value={mapping[field] ?? ''}
                       onChange={(event) => {
@@ -645,7 +647,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                           {header}
                         </option>
                       ))}
-                    </select>
+                    </StudioSelect>
                   </label>
                 ))}
               </div>

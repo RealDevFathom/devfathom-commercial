@@ -81,7 +81,9 @@ describe('DEV-103 supplier expense payment entry form', () => {
         ]}
       />
     );
-    const options = screen.getAllByRole('option').map((option) => option.getAttribute('value'));
+    const options = screen
+      .getAllByRole('option', { hidden: true })
+      .map((option) => option.getAttribute('value'));
     expect(options).toEqual(['inv_1', 'CASH', 'BANK']);
     expect((screen.getByLabelText('Paid at') as HTMLInputElement).value).toBe('2026-11-15T10:30');
     fireEvent.change(screen.getByLabelText('Amount paid'), { target: { value: '250' } });

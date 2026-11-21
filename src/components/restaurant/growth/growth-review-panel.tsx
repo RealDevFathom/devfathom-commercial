@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState } from 'react';
 import { browserUuid } from '@/lib/browser-uuid';
 import { PageHeader } from '@/components/ui/page-header';
@@ -149,7 +151,7 @@ export function GrowthReviewPanel({
                   )}
                   <label className="block text-sm">
                     Review priority
-                    <select
+                    <StudioSelect
                       className="ml-3 min-h-11 rounded-sm border border-border-default bg-surface-page px-3 focus-visible:ring-2 focus-visible:ring-ring"
                       value={priorities[index] ?? saved?.settings.priority ?? 'NORMAL'}
                       disabled={busy || final || !!pending || !onReview}
@@ -162,7 +164,7 @@ export function GrowthReviewPanel({
                     >
                       <option value="NORMAL">Normal</option>
                       <option value="HIGH">High</option>
-                    </select>
+                    </StudioSelect>
                   </label>
                   <div className="flex flex-wrap gap-3">
                     <Button

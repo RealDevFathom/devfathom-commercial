@@ -487,6 +487,8 @@ describe('organization.create vertical + package compatibility', () => {
         key: 'owner-operator',
         permissions: {
           create: [
+            'finance:read',
+            'finance:manage',
             'reports:operational',
             'reports:financial',
             'pharmacy:orders',
@@ -1534,7 +1536,10 @@ describe('pharmacy approval by a super admin (DEV-905)', () => {
           after: expect.objectContaining({
             approval: expect.objectContaining({
               unmetChecks: expect.arrayContaining([
-                { key: 'PREMISES_AND_LICENCES', label: 'Premises and licences (PREMISES_AND_LICENCES)' },
+                {
+                  key: 'PREMISES_AND_LICENCES',
+                  label: 'Premises and licences (PREMISES_AND_LICENCES)',
+                },
               ]),
             }),
           }),
@@ -1565,13 +1570,16 @@ describe('pharmacy approval by a super admin (DEV-905)', () => {
     expect(platformDb.organizationLifecycleEvent.create).not.toHaveBeenCalled();
   });
 
-  it.each(['SUSPENDED', 'TERMINATED', 'PROSPECT'])('refuses to approve a %s pharmacy', async (status) => {
-    bareOnboardingPharmacy({ status });
-    const command = pharmacyApprovalCommand('org_p', null, BARE_UNMET);
+  it.each(['SUSPENDED', 'TERMINATED', 'PROSPECT'])(
+    'refuses to approve a %s pharmacy',
+    async (status) => {
+      bareOnboardingPharmacy({ status });
+      const command = pharmacyApprovalCommand('org_p', null, BARE_UNMET);
 
-    await expect(run(command.action, command.payload)).rejects.toThrow(/cannot be approved/);
-    expect(mocks.orgUpdate).not.toHaveBeenCalled();
-  });
+      await expect(run(command.action, command.payload)).rejects.toThrow(/cannot be approved/);
+      expect(mocks.orgUpdate).not.toHaveBeenCalled();
+    }
+  );
 
   it('refuses a second approval and an organization that is not a pharmacy', async () => {
     bareOnboardingPharmacy({ platformApprovedAt: new Date('2026-11-18') });

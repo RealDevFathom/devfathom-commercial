@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState, memo } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
@@ -759,7 +761,7 @@ function EditMemberForm({
           </div>
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Department</label>
-            <select
+            <StudioSelect
               value={editDept}
               onChange={(e) => setEditDept(e.target.value)}
               className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -769,7 +771,7 @@ function EditMemberForm({
                   {d.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </div>
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Role</label>
@@ -800,7 +802,7 @@ function EditMemberForm({
           </div>
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Status</label>
-            <select
+            <StudioSelect
               defaultValue={member.status}
               onChange={(e) =>
                 updateMember.mutate({
@@ -814,7 +816,7 @@ function EditMemberForm({
               <option value="ACTIVE">Active</option>
               <option value="ON_LEAVE">On Leave</option>
               <option value="INACTIVE">Inactive</option>
-            </select>
+            </StudioSelect>
           </div>
         </div>
         <div>

@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { can, subjectFromSession } from '@/lib/abac';
+import { actorIsPharmacyOwner } from './procurement-access';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { pharmacySopRolesAt, pharmacySopVerifierRolesFor } from './sop-adapter';
 import {
@@ -129,7 +130,7 @@ export type PharmacySopEvidenceReadDecision = 'NOT_PHARMACY' | 'ALLOW' | 'DENY';
 /**
  * File-delivery authorisation for SOP evidence on a pharmacy SOP site. Mirrors
  * the router's occurrence visibility as far as a file read needs: the reader
- * must be actively assigned to the site's pharmacy branch, and then be a
+ * must own the workspace or be actively assigned to the site's pharmacy branch, then be a
  * manager (`sop:manage`), the occurrence's owner, claimer or the proof's
  * uploader (with `sop:complete` or `sop:verify`), or a holder of one of the
  * pack's verifier roles at the site with `sop:verify`.
@@ -168,10 +169,11 @@ export async function pharmacySopEvidenceReadDecision(
       userId: user.id,
       active: true,
       user: { status: 'ACTIVE' },
+      branch: { organizationId, active: true },
     },
     select: { id: true },
   });
-  if (!assignment) return 'DENY';
+  if (!assignment && !(await actorIsPharmacyOwner(db, organizationId, user.id))) return 'DENY';
 
   const subject = subjectFromSession(user);
   const allowed = (action: 'sop:manage' | 'sop:verify' | 'sop:complete') =>

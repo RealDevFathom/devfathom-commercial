@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CreateInvoiceForm, InvoicesTab } from './invoices-tab';
@@ -136,7 +137,9 @@ describe('invoice create adjustments', () => {
   beforeEach(() => mocks.mutate.mockClear());
   function fillForm() {
     const { container } = render(<CreateInvoiceForm onClose={vi.fn()} />);
-    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: 'client-1' } });
+    fireEvent.change(selectFieldControl(screen.getAllByRole('combobox')[0]), {
+      target: { value: 'client-1' },
+    });
     fireEvent.change(container.querySelector('input[type="date"]')!, {
       target: { value: '2026-12-01' },
     });

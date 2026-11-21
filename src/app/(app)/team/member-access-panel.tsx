@@ -1,5 +1,7 @@
 'use client';
 
+import { useOwnApprovalLabel } from '@/components/pharmacy/own-approval-copy';
+
 import { useId, useRef, useState, type FormEvent } from 'react';
 import { ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -14,6 +16,7 @@ import {
 } from '@/components/ui/dialog';
 import { Eyebrow } from '@/components/ui/eyebrow';
 import { Input } from '@/components/ui/input';
+import { SelectField } from '@/components/ui/select-field';
 import { Skeleton } from '@/components/ui/skeleton';
 import { SIGNIN_ALLOWED_STATUSES } from '@/lib/auth/constants';
 import { trpc } from '@/lib/trpc';
@@ -104,6 +107,7 @@ function PinConfirm({
   onConfirm: (pin: string) => Promise<MemberAccessOutcome>;
   onCancel: () => void;
 }) {
+  const approvalLabel = useOwnApprovalLabel();
   const id = useId();
   const [error, setError] = useState<string | null>(null);
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -126,7 +130,7 @@ function PinConfirm({
       </p>
       <div className="flex flex-wrap items-end gap-2">
         <label className="grid gap-1.5 text-sm">
-          Your PIN
+          {approvalLabel}
           <Input
             name="pin"
             type="password"
@@ -263,6 +267,7 @@ function StartingRole({
   editor: MemberAccessEditor;
   onChanged: (notice: Notice) => void;
 }) {
+  const approvalLabel = useOwnApprovalLabel();
   const id = useId();
   const [roleKey, setRoleKey] = useState(ticking.roleKey ?? '');
   const chosen = ticking.startingRoles.find((role) => role.key === roleKey);
@@ -287,7 +292,7 @@ function StartingRole({
     >
       <label htmlFor={`${id}-role`} className="grid gap-1.5 text-sm">
         Start from a ready-made role
-        <select
+        <SelectField
           id={`${id}-role`}
           value={roleKey}
           onChange={(event) => setRoleKey(event.target.value)}
@@ -300,10 +305,10 @@ function StartingRole({
               {role.name}
             </option>
           ))}
-        </select>
+        </SelectField>
       </label>
       <label className="grid gap-1.5 text-sm">
-        Your PIN
+        {approvalLabel}
         <Input
           name="pin"
           type="password"
@@ -324,8 +329,8 @@ function StartingRole({
         {editor.pending ? 'Saving…' : 'Use this role'}
       </Button>
       <p id={`${id}-help`} className="w-full text-sm text-text-muted">
-        Ticks exactly that role&apos;s sub-roles and clears this person&apos;s own ticks. Your PIN
-        is needed when the role gives a sub-role that carries extra weight.
+        Ticks exactly that role&apos;s sub-roles and clears this person&apos;s own ticks.{' '}
+        {approvalLabel} is needed when the role gives a sub-role that carries extra weight.
       </p>
       {chosen && weighty.length ? (
         <div

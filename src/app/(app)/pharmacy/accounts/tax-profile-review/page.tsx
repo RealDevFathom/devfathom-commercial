@@ -1,3 +1,8 @@
+import {
+  isPharmacyActionForbidden,
+  PHARMACY_FINANCE_ACCESS_DENIED_MESSAGE,
+} from '@/lib/pharmacy/action-error-message';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import {
@@ -46,7 +51,15 @@ export default async function TaxProfileReviewPage({
       .createCaller(ctx)
       .workspace({ branchId: branch.id });
     profiles = workspace.taxProfiles;
-  } catch {
+  } catch (error) {
+    if (isPharmacyActionForbidden(error))
+      return (
+        <Shell>
+          <SectionCard title="Finance access required">
+            <p className="text-sm text-text-muted">{PHARMACY_FINANCE_ACCESS_DENIED_MESSAGE}</p>
+          </SectionCard>
+        </Shell>
+      );
     loadFailed = true;
   }
   const approved = profiles.filter(
@@ -92,13 +105,13 @@ export default async function TaxProfileReviewPage({
           >
             <label className="text-sm">
               Branch
-              <select className={selectClass} name="branch" defaultValue={branch.id}>
+              <StudioSelect className={selectClass} name="branch" defaultValue={branch.id}>
                 {branches.map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.name}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <VersionSelect
               name="before"
@@ -211,14 +224,14 @@ function VersionSelect({
   return (
     <label className="text-sm">
       {label}
-      <select className={selectClass} name={name} defaultValue={selected ?? ''} required>
+      <StudioSelect className={selectClass} name={name} defaultValue={selected ?? ''} required>
         <option value="">Select version</option>
         {profiles.map((profile) => (
           <option key={profile.id} value={profile.id}>
             v{profile.versionNumber} · {profile.name}
           </option>
         ))}
-      </select>
+      </StudioSelect>
     </label>
   );
 }

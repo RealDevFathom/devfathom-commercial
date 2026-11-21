@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useEffect, useMemo, useState } from 'react';
 
 export type OperatorSafeOption = { value: string; label: string; code?: string };
@@ -70,7 +72,7 @@ export function OperatorSafeSelector({
         disabled={unavailable}
         className="h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
       />
-      <select
+      <StudioSelect
         aria-label={label}
         name={name}
         required={required}
@@ -87,7 +89,7 @@ export function OperatorSafeSelector({
             {option.code ? ` — ${option.code}` : ''}
           </option>
         ))}
-      </select>
+      </StudioSelect>
       {stale ? (
         <p role="alert" className="text-xs text-destructive">
           The previous choice is no longer available. Choose another option.

@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { memo, useState, useMemo } from 'react';
 import Link from 'next/link';
 import {
@@ -210,7 +212,7 @@ export function ProjectsContent() {
         <div className="flex items-center gap-2">
           <div className="relative">
             <ArrowUpDown className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <select
+            <StudioSelect
               value={sort}
               onChange={(e) => setSort(e.target.value as SortKey)}
               aria-label="Sort projects"
@@ -220,7 +222,7 @@ export function ProjectsContent() {
               <option value="name">Name</option>
               <option value="progress">Progress</option>
               <option value="deadline">Deadline</option>
-            </select>
+            </StudioSelect>
           </div>
           <button
             onClick={() => setGrouped((g) => !g)}
@@ -419,7 +421,7 @@ function CreateProjectModal({ onClose }: { onClose: () => void }) {
               </div>
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1.5">Status</label>
-                <select
+                <StudioSelect
                   value={status}
                   onChange={(e) => setStatus(e.target.value as typeof status)}
                   className="w-full rounded-xl border border-border bg-card px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
@@ -427,7 +429,7 @@ function CreateProjectModal({ onClose }: { onClose: () => void }) {
                   <option value="ACTIVE">Active</option>
                   <option value="IN_DEVELOPMENT">In Development</option>
                   <option value="ON_HOLD">On Hold</option>
-                </select>
+                </StudioSelect>
               </div>
             </div>
 
@@ -435,7 +437,7 @@ function CreateProjectModal({ onClose }: { onClose: () => void }) {
             {type === 'CLIENT' && (
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1.5">Client</label>
-                <select
+                <StudioSelect
                   value={clientId}
                   onChange={(e) => setClientId(e.target.value)}
                   className="w-full rounded-xl border border-border bg-card px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
@@ -446,7 +448,7 @@ function CreateProjectModal({ onClose }: { onClose: () => void }) {
                       {c.name}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </div>
             )}
 

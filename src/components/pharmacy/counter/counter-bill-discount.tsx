@@ -39,49 +39,48 @@ export function describeBillDiscountExclusions(
   );
 }
 
-/**
- * DEV-956: one discount for the whole bill, as a percentage or an amount, shown only when the
- * owner has switched it on (with it off the counter is unchanged). The server shares it onto the
- * bill's items under the same rules as an item discount and says which items it left out; the
- * cashier is told each one. A cashier without the discount right is asked for a manager's or
- * owner's PIN in the counter's approval dialog (a solo owner enters their own).
- */
-export function CounterBillDiscountEntry({
-  branchId,
-  saleId,
-  lines,
-  disabled,
-  requestApproval,
-  onChanged,
-}: {
+export type CounterBillDiscountInput = {
   branchId: string;
   saleId: string;
   lines: readonly CartLine[];
-  /** No discount while the counter is busy, offline, or the bill has taken a payment. */
-  disabled: boolean;
   requestApproval: (discount: string) => Promise<CounterApprovalPin | null>;
   onChanged: (message: string) => void;
-}) {
-  const id = useId();
+  /**
+   * DEV-977 phase 3: name each item left out, and why, in the message itself. The discount
+   * sheet closes once it is applied, so the counter's notice is where they are read; the bill's
+   * own form lists them under itself instead.
+   */
+  nameLeftOut?: boolean;
+};
+
+/**
+ * DEV-956: the whole-bill discount's server call, shared by the bill's own form and (DEV-977
+ * phase 3) the discount sheet's "Whole bill" choice. One procedure, one approval path: a cashier
+ * without the discount right is asked for a manager's or owner's PIN in the counter's approval
+ * dialog (a solo owner enters their own). `send` resolves to the refusal to show, or null once
+ * the server applied it.
+ */
+export function useCounterBillDiscount({
+  branchId,
+  saleId,
+  lines,
+  requestApproval,
+  onChanged,
+  nameLeftOut = false,
+}: CounterBillDiscountInput) {
   const setting = trpc.pharmacySales.billDiscountSetting.useQuery({ branchId });
   const maximum = trpc.pharmacySales.discountMaximum.useQuery(
     { branchId },
     { enabled: setting.data?.enabled === true }
   );
   const apply = trpc.pharmacySales.applyBillDiscount.useMutation();
-  const [kind, setKind] = useState<BillDiscountRequest['kind']>('PERCENT');
-  const [value, setValue] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [left, setLeft] = useState<{ saleId: string; text: string[] } | null>(null);
-  if (setting.data?.enabled !== true) return null;
   const stored = maximum.data?.maxDiscountBps;
   const maxBps = stored !== undefined && stored < NO_MAXIMUM_DISCOUNT_BPS ? stored : null;
-  const givenMinor = lines.reduce((sum, line) => sum + (line.billDiscountMinor ?? 0), 0);
-  const leftOut = left?.saleId === saleId ? left.text : [];
-  const busy = disabled || apply.isPending;
 
-  const send = async (discount: BillDiscountRequest, label: string) => {
-    setError(null);
+  const send = async (
+    discount: BillDiscountRequest,
+    label: string
+  ): Promise<{ error: string | null; leftOut: string[] }> => {
     let discountApproval: CounterApprovalPin | undefined;
     const post = () =>
       apply.mutateAsync({
@@ -99,35 +98,83 @@ export function CounterBillDiscountEntry({
           throw failure;
         const approval = await requestApproval(label);
         if (!approval) {
-          setError('The discount was not given: it needs a manager or owner to approve it.');
-          return;
+          return {
+            error: 'The discount was not given: it needs a manager or owner to approve it.',
+            leftOut: [],
+          };
         }
         discountApproval = approval;
         outcome = await post();
       }
       const reasons = describeBillDiscountExclusions(outcome.excluded, lines);
       if (outcome.status === 'REFUSED') {
-        setError(
-          outcome.reason === 'ABOVE_LIMIT'
-            ? `This bill can take at most Rs ${formatMinor(outcome.capacityMinor)} off without taking an item below its cost, the branch's minimum margin or the owner's maximum discount. Give Rs ${formatMinor(outcome.capacityMinor)} or less.`
-            : `No item on this bill can take this discount.${reasons.length ? ` ${reasons.join(' ')}` : ''}`
-        );
-        return;
+        return {
+          error:
+            outcome.reason === 'ABOVE_LIMIT'
+              ? `This bill can take at most Rs ${formatMinor(outcome.capacityMinor)} off without taking an item below its cost, the branch's minimum margin or the owner's maximum discount. Give Rs ${formatMinor(outcome.capacityMinor)} or less.`
+              : `No item on this bill can take this discount.${reasons.length ? ` ${reasons.join(' ')}` : ''}`,
+          leftOut: [],
+        };
       }
-      setLeft({ saleId, text: reasons });
-      setValue('');
-      onChanged(
+      const message =
         outcome.totalMinor > 0
           ? `A whole-bill discount of Rs ${formatMinor(outcome.totalMinor)} is on the bill, shared over ${outcome.lines.length} ${outcome.lines.length === 1 ? 'item' : 'items'}.${reasons.length ? ` ${reasons.length} ${reasons.length === 1 ? 'item was' : 'items were'} left out.` : ''}`
-          : 'The whole-bill discount was removed.'
-      );
+          : 'The whole-bill discount was removed.';
+      onChanged(nameLeftOut && reasons.length ? `${message} ${reasons.join(' ')}` : message);
+      return { error: null, leftOut: reasons };
     } catch (failure) {
-      setError(
-        failure instanceof Error && failure.message === COUNTER_DISCOUNT_APPROVAL_REQUIRED
-          ? 'That PIN did not approve the discount, so it was not given. A manager or owner must enter their own PIN.'
-          : counterErrorMessage(failure)
-      );
+      return {
+        error:
+          failure instanceof Error && failure.message === COUNTER_DISCOUNT_APPROVAL_REQUIRED
+            ? 'That PIN did not approve the discount, so it was not given. A manager or owner must enter their own PIN.'
+            : counterErrorMessage(failure),
+        leftOut: [],
+      };
     }
+  };
+
+  return { enabled: setting.data?.enabled === true, maxBps, pending: apply.isPending, send };
+}
+
+/**
+ * DEV-956: one discount for the whole bill, as a percentage or an amount, shown only when the
+ * owner has switched it on (with it off the counter is unchanged). The server shares it onto the
+ * bill's items under the same rules as an item discount and says which items it left out; the
+ * cashier is told each one. A cashier without the discount right is asked for a manager's or
+ * owner's PIN in the counter's approval dialog (a solo owner enters their own).
+ */
+export function CounterBillDiscountEntry({
+  branchId,
+  saleId,
+  lines,
+  disabled,
+  requestApproval,
+  onChanged,
+}: CounterBillDiscountInput & {
+  /** No discount while the counter is busy, offline, or the bill has taken a payment. */
+  disabled: boolean;
+}) {
+  const id = useId();
+  const bill = useCounterBillDiscount({ branchId, saleId, lines, requestApproval, onChanged });
+  const [kind, setKind] = useState<BillDiscountRequest['kind']>('PERCENT');
+  const [value, setValue] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [left, setLeft] = useState<{ saleId: string; text: string[] } | null>(null);
+  if (!bill.enabled) return null;
+  const maxBps = bill.maxBps;
+  const givenMinor = lines.reduce((sum, line) => sum + (line.billDiscountMinor ?? 0), 0);
+  const leftOut = left?.saleId === saleId ? left.text : [];
+  const busy = disabled || bill.pending;
+
+  const send = async (discount: BillDiscountRequest, label: string) => {
+    setError(null);
+    const result = await bill.send(discount, label);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    setLeft({ saleId, text: result.leftOut });
+    setValue('');
   };
 
   return (
@@ -261,7 +308,7 @@ export function CounterBillDiscountEntry({
             their PIN.
           </p>
           <Button type="submit" className="min-h-11" disabled={busy}>
-            {apply.isPending ? 'Applying…' : 'Apply to bill'}
+            {bill.pending ? 'Applying…' : 'Apply to bill'}
           </Button>
         </form>
       </details>
