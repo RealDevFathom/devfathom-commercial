@@ -213,7 +213,7 @@ async function verifyRestorationPin(
     return 'REASON_REQUIRED';
   const refused = selfWitness ? 'SOLO_PIN_REFUSED' : null;
   if (isLockedOut(credential, now)) return refused;
-  const method = await verifyApprovalSecret(db, {
+  const approval = {
     organizationId: scope.organizationId,
     approverUserId: witness.id,
     credentialHash: credential.credentialHash,
@@ -221,10 +221,12 @@ async function verifyRestorationPin(
     action: options.supplierDispatch
       ? 'pharmacyPurchasing.dispatchPurchaseReturn'
       : 'pharmacy.controlledRestorationWitness',
-    approverRight: options.lateOwnerApproval ? 'OWNER' : 'pharmacy:dispense',
     requestedById: scope.actorId,
     now,
-  });
+  };
+  const method = options.lateOwnerApproval
+    ? await verifyApprovalSecret(db, { ...approval, approverRight: 'OWNER' })
+    : await verifyApprovalSecret(db, { ...approval, approverRight: 'pharmacy:dispense' });
   if (!method) {
     await db.restaurantOperatorCredential.update({
       where: { id: credential.id },
