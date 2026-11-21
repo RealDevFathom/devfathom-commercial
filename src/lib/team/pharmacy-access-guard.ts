@@ -187,7 +187,10 @@ export function changedSubRoles(
 }
 
 /** The rules every change must pass, on the decided before and after; a refusal, or null. */
-export function accessChangeRefusal(check: AccessChangeCheck): AccessChangeRefusal | null {
+export function accessChangeRefusal(
+  check: AccessChangeCheck,
+  approvalSecret: 'approval code' | 'PIN' = 'approval code'
+): AccessChangeRefusal | null {
   const changed = changedSubRoles(check.before, check.after);
   const given = changed.filter((key) => check.after.get(key) !== 'off');
   const weighty = changed.filter(isWeightyPharmacySubRole);
@@ -238,7 +241,7 @@ export function accessChangeRefusal(check: AccessChangeCheck): AccessChangeRefus
   if (editor.kind === 'owner' && weighty.length > 0 && !check.pinVerified)
     return {
       code: 'PIN_REQUIRED',
-      message: `Enter your PIN to change ${weighty.map(labelOf).join(', ')}. It carries extra weight.`,
+      message: `Enter your ${approvalSecret} to change ${weighty.map(labelOf).join(', ')}. It carries extra weight.`,
     };
   return null;
 }
@@ -398,7 +401,11 @@ export async function guardPharmacyAccessChanges<T>(
   write: (contexts: AccessGuardContext[]) => Promise<{ targetIds: string[]; value: T }>
 ): Promise<{ value: T; results: Map<string, AccessChangeResult> }> {
   const now = input.now ?? new Date();
-  await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${input.organizationId} FOR UPDATE`;
+  const [organization] = await tx.$queryRaw<Array<{ requireApprovalAuthenticator: boolean }>>`
+    SELECT "requireApprovalAuthenticator" FROM "organizations" WHERE "id" = ${input.organizationId} FOR UPDATE
+  `;
+  const approvalSecret =
+    organization?.requireApprovalAuthenticator === false ? 'PIN' : 'approval code';
   const targetIdsInput =
     typeof input.targetIds === 'function' ? await input.targetIds() : input.targetIds;
   const actor =
@@ -508,19 +515,22 @@ export async function guardPharmacyAccessChanges<T>(
       );
       if (refusal) throw new TRPCError({ code: 'FORBIDDEN', message: refusal });
     }
-    const refusal = accessChangeRefusal({
-      editor: await editorFor(),
-      before: checkBefore,
-      after: after.states,
-      ownerBefore: givenAgain ? false : before.owner,
-      ownerAfter: after.owner,
-      adminBefore: givenAgain ? false : before.admin,
-      adminAfter: after.admin,
-      ownersBefore,
-      ownersAfter,
-      pinVerified: input.pinVerified,
-      mode: input.mode,
-    });
+    const refusal = accessChangeRefusal(
+      {
+        editor: await editorFor(),
+        before: checkBefore,
+        after: after.states,
+        ownerBefore: givenAgain ? false : before.owner,
+        ownerAfter: after.owner,
+        adminBefore: givenAgain ? false : before.admin,
+        adminAfter: after.admin,
+        ownersBefore,
+        ownersAfter,
+        pinVerified: input.pinVerified,
+        mode: input.mode,
+      },
+      approvalSecret
+    );
     if (refusal) throw new AccessChangeError(refusal);
 
     const pick = (states: ReadonlyMap<string, PharmacySubRoleState>) =>

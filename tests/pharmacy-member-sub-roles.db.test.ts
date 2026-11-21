@@ -816,6 +816,35 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
       }
     );
 
+    it.each([
+      [false, 'PIN'],
+      [true, 'approval code'],
+    ] as const)(
+      'names the configured approval secret when authenticator approval is %s',
+      async (required, secret) => {
+        await rows('UPDATE organizations SET "requireApprovalAuthenticator"=$1 WHERE id=$2', [
+          required,
+          orgA,
+        ]);
+        try {
+          await expect(
+            callers.admin('owner').setMemberSubRole({
+              userId: id('cashier2'),
+              subRoleKey: 'read-finance-accounts',
+              ticked: true,
+            })
+          ).rejects.toMatchObject({
+            code: 'PRECONDITION_FAILED',
+            message: `Enter your ${secret} to change See accounts. It carries extra weight.`,
+          });
+        } finally {
+          await rows('UPDATE organizations SET "requireApprovalAuthenticator"=false WHERE id=$1', [
+            orgA,
+          ]);
+        }
+      }
+    );
+
     it('requires owner approval for finance rules even on an empty custom role', async () => {
       const role = { key: 'finance-fixture', name: 'Finance fixture', description: null };
       const permissions = [{ capability: 'finance:read', effect: 'ALLOW' as const }];
@@ -971,19 +1000,22 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
         mfaEnabled: true,
       } as never;
       const request = new Request('https://platform.test/command');
-      await expect(
-        executePlatformCommand(
-          actor,
-          'organization.role',
-          {
-            organizationId: orgC,
-            key: 'unassigned-finance',
-            name: 'Unassigned finance',
-            permissions: [{ capability: 'finance:*', effect: 'ALLOW' }],
-          },
-          request
-        )
-      ).rejects.toThrow(/workspace owner/);
+      const deniedGrant = executePlatformCommand(
+        actor,
+        'organization.role',
+        {
+          organizationId: orgC,
+          key: 'unassigned-finance',
+          name: 'Unassigned finance',
+          permissions: [{ capability: 'finance:*', effect: 'ALLOW' }],
+        },
+        request
+      );
+      await expect(deniedGrant).rejects.toThrow(/workspace owner/);
+      await expect(deniedGrant).rejects.toMatchObject({
+        name: 'PlatformSecurityError',
+        status: 403,
+      });
       await expect(
         executePlatformCommand(
           actor,

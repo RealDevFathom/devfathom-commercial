@@ -3087,7 +3087,10 @@ async function runCommand(
         changesPharmacyFinanceRules(existing?.permissions ?? [], permissions, 'increase') &&
         (await isPharmacyOrganization(db, input.organizationId))
       ) {
-        throw new Error('Only the workspace owner can grant pharmacy finance role permissions.');
+        throw new PlatformSecurityError(
+          'Only the workspace owner can grant pharmacy finance role permissions.',
+          403
+        );
       }
       const holders = async () =>
         roleId

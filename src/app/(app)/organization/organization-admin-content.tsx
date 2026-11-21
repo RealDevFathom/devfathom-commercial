@@ -348,6 +348,9 @@ export function OrganizationAdminContent() {
   const createRoleErrors = !role.variables?.id ? role.error?.data?.validation : null;
   const createRoleKeyError = createRoleErrors?.key?.[0];
   const createRolePermissionsError = createRoleErrors?.permissions?.[0];
+  const permissionsErrorId = createRolePermissionsError
+    ? 'create-role-permissions-error'
+    : undefined;
   const submitProfile = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const values = new FormData(event.currentTarget);
@@ -954,9 +957,8 @@ export function OrganizationAdminContent() {
             </label>
             {isPharmacy ? (
               <>
-                <PharmacyFinanceRoleFields />
+                <PharmacyFinanceRoleFields errorId={permissionsErrorId} />
                 <AccessPinField />
-                {createRolePermissionsError && <p role="alert">{createRolePermissionsError}</p>}
               </>
             ) : (
               <label>
@@ -965,23 +967,21 @@ export function OrganizationAdminContent() {
                   className={cn(inputClass, 'min-h-28 py-2 font-mono text-xs')}
                   name="permissions"
                   aria-invalid={Boolean(createRolePermissionsError)}
-                  aria-describedby={
-                    createRolePermissionsError ? 'create-role-permissions-error' : undefined
-                  }
+                  aria-describedby={permissionsErrorId}
                   onChange={() => role.reset()}
                   defaultValue={'[{"capability":"projects:*","effect":"ALLOW"}]'}
                 />
-                {createRolePermissionsError ? (
-                  <p
-                    id="create-role-permissions-error"
-                    className="mt-1.5 text-[11px] text-destructive"
-                    role="alert"
-                  >
-                    {createRolePermissionsError}
-                  </p>
-                ) : null}
               </label>
             )}
+            {createRolePermissionsError ? (
+              <p
+                id="create-role-permissions-error"
+                className="mt-1.5 text-[11px] text-destructive"
+                role="alert"
+              >
+                {createRolePermissionsError}
+              </p>
+            ) : null}
             <SubmitButton pending={role.isPending}>Create role</SubmitButton>
           </form>
         </div>

@@ -11,9 +11,11 @@ type Rule = { capability: string; effect: 'ALLOW' | 'DENY' };
 export function PharmacyFinanceRoleFields({
   initial = [],
   disabled = false,
+  errorId,
 }: {
   initial?: Rule[];
   disabled?: boolean;
+  errorId?: string;
 }) {
   const [value, setValue] = useState(() =>
     JSON.stringify(
@@ -29,7 +31,7 @@ export function PharmacyFinanceRoleFields({
     // An unfinished advanced edit remains visible and cannot be replaced by a tick.
   }
   return (
-    <fieldset disabled={disabled} className="space-y-2">
+    <fieldset aria-describedby={errorId} disabled={disabled} className="space-y-2">
       <legend className="text-sm font-semibold text-text-strong">Pharmacy accounts access</legend>
       {PHARMACY_FINANCE_SUB_ROLES.map(({ key, label, actions: [action] }) => {
         const others = rules?.filter((rule) => rule.capability !== action);
@@ -59,7 +61,8 @@ export function PharmacyFinanceRoleFields({
         <textarea
           name="permissions"
           aria-label="Permission rules"
-          aria-invalid={!rules}
+          aria-invalid={!rules || Boolean(errorId)}
+          aria-describedby={errorId}
           className="mt-2 min-h-28 w-full rounded-control border border-border-default bg-surface-raised p-2 font-mono text-sm text-text-body"
           value={value}
           onChange={(event) => setValue(event.target.value)}

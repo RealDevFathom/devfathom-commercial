@@ -129,6 +129,24 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('organization shared controls preserve upstream access behavior', () => {
+  it('connects the pharmacy permission controls to their create-role error', () => {
+    const message = 'Each capability may only appear once.';
+    Object.assign(mutation('upsertRole'), {
+      error: { data: { validation: { permissions: [message] } } },
+    });
+    render(<OrganizationAdminContent />);
+    const form = screen.getByRole('button', { name: 'Create role' }).closest('form')!;
+    const error = within(form).getByRole('alert');
+    expect(error).toHaveTextContent(message);
+    expect(error).toHaveClass('mt-1.5', 'text-[11px]', 'text-destructive');
+    expect(
+      within(form).getByRole('group', { name: 'Pharmacy accounts access' })
+    ).toHaveAccessibleDescription(message);
+    const field = form.querySelector('textarea[name="permissions"]');
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(field).toHaveAttribute('aria-describedby', error.id);
+  });
+
   it('uses the authenticator label and submits the typed approval code in code mode', () => {
     mocks.authenticatorRequired = true;
     const form = openMember();
