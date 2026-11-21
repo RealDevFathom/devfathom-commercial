@@ -217,7 +217,7 @@ async function userNames(db: ScopedDb, organizationId: string, ids: (string | nu
 /** The shift's figures from the rows the database put in it. */
 async function readShiftFigures(db: ScopedDb, scope: LedgerScope, shift: ShiftRow) {
   const where = { organizationId: scope.organizationId, shiftId: shift.id };
-  const [tenders, refunds, movements] = await Promise.all([
+  const [tenders, refunds, movements, lineVoids] = await Promise.all([
     db.pharmacyTender.findMany({
       where: { ...where, branchId: scope.branchId },
       select: { type: true, amountMinor: true, saleId: true },
@@ -231,12 +231,24 @@ async function readShiftFigures(db: ScopedDb, scope: LedgerScope, shift: ShiftRo
       },
     }),
     db.pharmacyDrawerMovement.findMany({ where, select: { kind: true, amountMinor: true } }),
+    // DEV-977B: the bill lines changed or removed in this shift; each void names the one open
+    // shift the change happened in (sales.ts), so it is counted here and in no other shift.
+    db.pharmacySaleEvent.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        kind: 'VOIDED',
+        payload: { path: ['shiftId'], equals: shift.id },
+      },
+      select: { payload: true },
+    }),
   ]);
   return computeCashShiftFigures({
     openingFloatMinor: shift.openingFloatMinor,
     tenders,
     refunds: refunds.map(refundByTender),
     movements,
+    lineVoids: lineVoids.map((event) => event.payload),
   });
 }
 

@@ -128,7 +128,11 @@ import {
   shiftVarianceApprovers,
 } from '@/lib/pharmacy/cash-shifts';
 import { workspaceTimezone } from '@/lib/timezone';
-import { pharmacyBusinessDay, withClientPharmacyDayEnd } from '@/lib/pharmacy/business-day';
+import {
+  pharmacyBusinessDate,
+  pharmacyBusinessDay,
+  withClientPharmacyDayEnd,
+} from '@/lib/pharmacy/business-day';
 import { readPharmacyDayClock } from '@/lib/pharmacy/business-day-clock';
 import {
   PharmacyDayEndHourError,
@@ -250,6 +254,7 @@ import {
   readOpenPharmacyDrawer,
   requireTodaysPharmacyDrawer,
   requirePharmacyTodayOpenForTrading,
+  requireCashShiftForLineChange,
   PharmacySettlementError,
   readPharmacyTenderOutcome,
   discardPharmacyTenderAttempt,
@@ -868,6 +873,25 @@ async function cashShiftScope(
       actorIsManager: false,
     };
   }
+}
+
+/**
+ * DEV-977B: the cash-shift gate of a line change, on the branch's current business day: the same
+ * rule a payment meets (settlement.ts), plus a bill whose shift has closed.
+ */
+async function lineChangeCashShift(
+  db: ScopedDb,
+  scope: LedgerScope,
+  deviceId: string | undefined,
+  bill: { createdAt: Date; createdByUserId: string }
+) {
+  const businessDate = pharmacyBusinessDate(await readPharmacyDayClock(db, scope));
+  return requireCashShiftForLineChange(
+    db,
+    scope,
+    { deviceId: deviceId ?? null, businessDate },
+    bill
+  );
 }
 
 /** DEV-958B: shift refusals that are a state the counter must refresh, not a bad request. */
@@ -3713,6 +3737,8 @@ export const pharmacySalesRouter = router({
           quantity: z.number().int().positive(),
           canonicalUnitsPerSaleUnit: z.number().int().positive(),
           idempotencyKey: z.string().trim().min(1).max(160),
+          // DEV-958B: the counter device whose drawer's shift must be open on a shift branch.
+          deviceId: z.string().min(1).optional(),
         })
         .strict()
     )
@@ -3731,6 +3757,7 @@ export const pharmacySalesRouter = router({
           return changeSaleLine(db, scope, {
             ...input,
             actorIsManager: await actorMayRefund(db, ctx.session!.user),
+            cashShift: (bill) => lineChangeCashShift(db, scope, input.deviceId, bill),
           });
         });
         if (outcome.replacedSaleLineId)
@@ -3754,6 +3781,8 @@ export const pharmacySalesRouter = router({
           saleId: z.string().min(1),
           saleLineId: z.string().trim().min(1).max(128),
           idempotencyKey: z.string().trim().min(1).max(160),
+          // DEV-958B: the counter device whose drawer's shift must be open on a shift branch.
+          deviceId: z.string().min(1).optional(),
         })
         .strict()
     )
@@ -3772,6 +3801,7 @@ export const pharmacySalesRouter = router({
           return removeSaleLine(db, scope, {
             ...input,
             actorIsManager: await actorMayRefund(db, ctx.session!.user),
+            cashShift: (bill) => lineChangeCashShift(db, scope, input.deviceId, bill),
           });
         });
       } catch (error) {

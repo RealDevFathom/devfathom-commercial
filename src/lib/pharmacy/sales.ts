@@ -258,6 +258,9 @@ export class PharmacySaleError extends Error {
       | 'LINE_ON_ORDER_BILL'
       // DEV-977B: a sale an offline counter sealed and the server replayed is a closed record.
       | 'LINE_ON_OFFLINE_SALE'
+      // DEV-977B: a bill started in a cash shift that has since closed; a closed shift never
+      // changes, so neither do the lines it rang up.
+      | 'LINE_ON_CLOSED_SHIFT'
   ) {
     super(reason);
   }
@@ -1091,6 +1094,13 @@ export type SaleLineChangeRequest = {
   idempotencyKey: string;
   /** DEV-821: a counter user changes only a bill they created unless a manager or owner. */
   actorIsManager: boolean;
+  /**
+   * DEV-958B: the counter's cash-shift gate, asked under the bill's row lock. On a branch that
+   * runs shifts it refuses between shifts and for a bill whose shift has closed, exactly as a
+   * payment is refused, and returns the open shift the change happens in (null without shifts),
+   * which the void records so the shift report counts it once.
+   */
+  cashShift: (bill: { createdAt: Date; createdByUserId: string }) => Promise<string | null>;
 };
 
 export type SaleLineNewUnit = {
@@ -1123,6 +1133,8 @@ type LineChangePayload = {
   fromSaleId: string;
   saleLineId: string;
   lineChangeKey: string;
+  /** DEV-958B: the open cash shift the change happened in, on a branch that runs shifts. */
+  shiftId?: string;
 };
 
 function lineChangePayload(value: Prisma.JsonValue): LineChangePayload | null {
@@ -1167,6 +1179,7 @@ async function lockLineForChange(
     throw new PharmacySaleError('NOT_BILL_OWNER');
   const line = lockedSale.lines.find((row) => row.id === input.saleLineId);
   if (!line) throw new PharmacySaleError('NOT_FOUND');
+  const shiftId = await input.cashShift(lockedSale);
   if (await saleHasPaymentActivity(db, scope, input.saleId))
     throw new PharmacySaleError('LINE_LOCKED_BY_PAYMENT');
   // A customer order's or refill's checkout opens the bill and adds the lines it reserved under
@@ -1231,7 +1244,7 @@ async function lockLineForChange(
       (line.discountMinor - line.billDiscountMinor > 0 && line.promotionId === null))
   )
     throw new PharmacySaleError('LINE_CHANGE_NEEDS_READD');
-  return { sale: lockedSale, line };
+  return { sale: lockedSale, line, shiftId };
 }
 
 async function lineAllocations(db: ScopedDb, scope: LedgerScope, saleLineId: string) {
@@ -1251,7 +1264,7 @@ async function takeLineOffBill(
   scope: LedgerScope,
   sale: { id: string },
   line: { id: string; voucherId: string | null; canonicalUnits: number },
-  input: { idempotencyKey: string; cause: LineChangeCause; reason: string }
+  input: { idempotencyKey: string; cause: LineChangeCause; reason: string; shiftId: string | null }
 ) {
   const record = await db.pharmacySale.create({
     data: {
@@ -1287,6 +1300,7 @@ async function takeLineOffBill(
     fromSaleId: sale.id,
     saleLineId: line.id,
     lineChangeKey: input.idempotencyKey,
+    ...(input.shiftId ? { shiftId: input.shiftId } : {}),
   };
   await event(db, scope, record.id, 'CREATED', input.reason, payload);
   // The line as it now stands (any whole-bill share was cleared before it moved).
@@ -1299,7 +1313,8 @@ async function takeLineOffBill(
 
 /**
  * The VOIDED event of a line-change record: written when goods came off the bill, with the value
- * that came off (`voidedMinor`), which the day's void evidence counts (cash-close check).
+ * that came off (`voidedMinor`), which the day's void evidence counts (cash-close check), and
+ * (DEV-958B) the open shift it happened in, whose report counts it.
  */
 async function voidLineChangeRecord(
   db: ScopedDb,
@@ -1311,6 +1326,7 @@ async function voidLineChangeRecord(
     saleLineId: string;
     voidedMinor: number;
     reason: string;
+    shiftId: string | null;
     replacementSaleLineId?: string;
   }
 ) {
@@ -1319,6 +1335,7 @@ async function voidLineChangeRecord(
     fromSaleId: input.fromSaleId,
     saleLineId: input.saleLineId,
     voidedMinor: Math.max(0, input.voidedMinor),
+    ...(input.shiftId ? { shiftId: input.shiftId } : {}),
     ...(input.replacementSaleLineId ? { replacementSaleLineId: input.replacementSaleLineId } : {}),
   });
 }
@@ -1343,7 +1360,7 @@ export async function removeSaleLine(
     await saleInScope(db, scope, input.saleId);
     return { saleLineId: input.saleLineId, removed: true, replayed: true };
   }
-  const { sale, line } = await lockLineForChange(db, scope, input, 'LINE_REMOVED');
+  const { sale, line, shiftId } = await lockLineForChange(db, scope, input, 'LINE_REMOVED');
   const billDiscountClearedMinor = sale.lines.some((row) => row.billDiscountMinor > 0)
     ? await clearBillDiscountForNewLine(db, scope, sale, 'LINE_REMOVED')
     : 0;
@@ -1352,6 +1369,7 @@ export async function removeSaleLine(
     idempotencyKey: input.idempotencyKey,
     cause: 'LINE_REMOVED',
     reason,
+    shiftId,
   });
   await voidLineChangeRecord(db, scope, taken.record.id, {
     cause: 'LINE_REMOVED',
@@ -1359,6 +1377,7 @@ export async function removeSaleLine(
     saleLineId: line.id,
     voidedMinor: taken.netMinor,
     reason,
+    shiftId,
   });
   return {
     saleLineId: line.id,
@@ -1414,7 +1433,7 @@ export async function changeSaleLine(
     select: { id: true },
   });
   if (keyTaken) throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
-  const { sale, line } = await lockLineForChange(db, scope, input, 'LINE_CHANGED');
+  const { sale, line, shiftId } = await lockLineForChange(db, scope, input, 'LINE_CHANGED');
   if (
     line.packLevelId === input.packLevelId &&
     line.saleUnit === input.saleUnit &&
@@ -1434,6 +1453,7 @@ export async function changeSaleLine(
     idempotencyKey: input.idempotencyKey,
     cause: 'LINE_CHANGED',
     reason,
+    shiftId,
   });
   const added = await addSaleLineWithAllocation(
     db,
@@ -1462,6 +1482,7 @@ export async function changeSaleLine(
       saleLineId: line.id,
       voidedMinor: taken.netMinor - (added.line.grossMinor - added.line.discountMinor),
       reason,
+      shiftId,
       replacementSaleLineId: added.line.id,
     });
   return {

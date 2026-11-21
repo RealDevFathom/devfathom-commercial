@@ -133,6 +133,8 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     "This bill is a customer order or refill. Its lines are the order's, so they are changed through the order, not here.",
   LINE_ON_OFFLINE_SALE:
     'This sale was made offline and sealed on the counter computer, so its lines cannot be changed.',
+  LINE_ON_CLOSED_SHIFT:
+    'This bill was started in a cash shift that has closed, and a closed shift never changes. Void this bill and ring the items up again in the open shift.',
   VOUCHER_CATEGORY_REFUSED:
     'Vouchers apply to non-medicine items only. Remove the voucher from this line.',
   VOUCHER_INVALID: 'That voucher is not valid at this branch. Check the voucher and try again.',

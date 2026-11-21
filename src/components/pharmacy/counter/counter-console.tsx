@@ -1078,6 +1078,11 @@ function ScopedPharmacyCounterConsole({
     () => counterDeviceId({ organizationId, branchId }),
     [organizationId, branchId]
   );
+  /** DEV-977B: the counter device a line change names, so the server checks its drawer's shift. */
+  const counterDevice = useCallback(() => {
+    const id = currentCounterDeviceId();
+    return id ? { deviceId: id } : {};
+  }, [currentCounterDeviceId]);
   const drawerQueryEnabled = Boolean(branchAuthorized && branchId && deviceId && !settlementDenied);
   // On the client a missing device id means site storage is blocked: no drawer
   // can be read or opened, so the step says so instead of waiting forever.
@@ -2595,6 +2600,7 @@ function ScopedPharmacyCounterConsole({
           quantity: next.quantity,
           canonicalUnitsPerSaleUnit: next.canonicalUnitsPerSaleUnit,
           idempotencyKey,
+          ...counterDevice(),
         });
         lineChangeKeys.current.delete(selection);
         catalogueCache.clear();
@@ -2622,7 +2628,17 @@ function ScopedPharmacyCounterConsole({
         setPending(null);
       }
     },
-    [branchId, busy, catalogueCache, changeLine, lineChangeMessage, refreshCart, saleId, utils]
+    [
+      branchId,
+      busy,
+      catalogueCache,
+      changeLine,
+      counterDevice,
+      lineChangeMessage,
+      refreshCart,
+      saleId,
+      utils,
+    ]
   );
 
   /** DEV-977B: takes a line off the bill, on the server, which gives its stock back. */
@@ -2647,6 +2663,7 @@ function ScopedPharmacyCounterConsole({
           saleId,
           saleLineId: line.saleLineId,
           idempotencyKey,
+          ...counterDevice(),
         });
         lineChangeKeys.current.delete(selection);
         catalogueCache.clear();
@@ -2673,6 +2690,7 @@ function ScopedPharmacyCounterConsole({
       branchId,
       busy,
       catalogueCache,
+      counterDevice,
       focusSearch,
       lineChangeMessage,
       refreshCart,
@@ -4971,12 +4989,14 @@ function ScopedPharmacyCounterConsole({
                 onRetry={() => void refreshTenderBill()}
                 lineControls={{
                   // DEV-977B: a line change needs the server; offline (or when the server cannot
-                  // be reached) the bill's lines are read-only.
+                  // be reached) the bill's lines are read-only. Between cash shifts they are
+                  // read-only too, as adding a line and taking payment are (the server refuses).
                   disabled:
                     busy ||
                     !connectionOnline ||
                     dayClosed ||
                     drawerRequired ||
+                    shiftRequired ||
                     !cart ||
                     cart.status !== 'OPEN' ||
                     cart.totals.tenderedMinor > 0 ||

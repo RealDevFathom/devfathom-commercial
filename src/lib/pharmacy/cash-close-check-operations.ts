@@ -7,6 +7,7 @@ import { pharmacyBusinessDay } from './business-day';
 import { foldExpectedCash, saleTotalMinor, type DrawerMovement } from './settlement';
 import { checkPharmacyCashClose, type CashCloseCheck } from './cash-close-check';
 import { pharmacyCashCloseDayBounds } from './cash-close-day';
+import { lineChangeVoidMinor } from './cash-shift-report';
 
 /** Page size for the void-event read; every page is read, so nothing is truncated. */
 const VOID_PAGE = 1_000;
@@ -178,16 +179,7 @@ function voidValueMinor(event: {
   payload: unknown;
   sale: { lines: Parameters<typeof saleTotalMinor>[0] };
 }) {
-  const payload = event.payload as { cause?: unknown; voidedMinor?: unknown } | null;
-  if (
-    payload &&
-    (payload.cause === 'LINE_CHANGED' || payload.cause === 'LINE_REMOVED') &&
-    typeof payload.voidedMinor === 'number' &&
-    Number.isSafeInteger(payload.voidedMinor) &&
-    payload.voidedMinor >= 0
-  )
-    return payload.voidedMinor;
-  return saleTotalMinor(event.sale.lines);
+  return lineChangeVoidMinor(event.payload) ?? saleTotalMinor(event.sale.lines);
 }
 
 async function readAllVoidEvents(

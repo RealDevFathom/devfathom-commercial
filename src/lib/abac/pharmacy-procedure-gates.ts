@@ -2030,7 +2030,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacySales.changeLine': {
-    gate: "protectedProcedure + requireCounterReceiptAccess default (pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN), the addLine builder and gate; Rx/restricted line -> pharmacy:dispense; another's bill -> pharmacy:manage (as a void); refused for a paid, held or closed bill, a controlled or prescription line, or a discount, voucher or batch override approved for the old quantity",
+    gate: "protectedProcedure + requireCounterReceiptAccess default (pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN), the addLine builder and gate; Rx/restricted line -> pharmacy:dispense; another's bill -> pharmacy:manage (as a void); refused for a paid, held or closed bill, a controlled or prescription line, or a discount, voucher or batch override approved for the old quantity; on a cash-shift branch refused between shifts (the payment rule) and for a bill whose shift has closed",
     lines: [
       'take-payment/ring-up-medicines',
       'dispense-prescriptions/ring-up-medicines-without-counter',
@@ -2423,7 +2423,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['run-branches/see-demand-lostsales-restockrecovery'],
   },
   'pharmacySales.removeLine': {
-    gate: "protectedProcedure + requireCounterReceiptAccess default (pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN), the addLine builder and gate; Rx/restricted line -> pharmacy:dispense; another's bill -> pharmacy:manage (as a void); refused for a paid, held or closed bill and a controlled or prescription line",
+    gate: "protectedProcedure + requireCounterReceiptAccess default (pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN), the addLine builder and gate; Rx/restricted line -> pharmacy:dispense; another's bill -> pharmacy:manage (as a void); refused for a paid, held or closed bill and a controlled or prescription line; on a cash-shift branch refused between shifts (the payment rule) and for a bill whose shift has closed",
     lines: [
       'take-payment/ring-up-medicines',
       'dispense-prescriptions/ring-up-medicines-without-counter',

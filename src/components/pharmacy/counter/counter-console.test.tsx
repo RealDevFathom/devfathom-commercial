@@ -232,6 +232,11 @@ vi.mock('@/lib/trpc', async () => {
         // DEV-956: the owner's whole-bill discount switch, and giving one.
         'billDiscountSetting',
         'applyBillDiscount',
+        // DEV-958B: the cash-shift panel shown between shifts.
+        'openShift',
+        'closeShift',
+        'shiftReport',
+        'shiftApprovers',
       ]),
       pharmacyPrescriptions: router(['counterPatients', 'counterPatientPanel']),
       pharmacySafety: router(['controlledPharmacists']),
@@ -8145,6 +8150,8 @@ describe('DEV-977B Counter v2 phase 2A: one-step add, quantity and unit on the b
         quantity: 3,
         canonicalUnitsPerSaleUnit: 10,
         idempotencyKey: expect.stringMatching(/^counter-change:/),
+        // DEV-958B: the counter's device, whose drawer's shift the server checks.
+        deviceId: expect.stringMatching(/^counter-/),
       })
     );
     expect(await screen.findByText('Synthetic item: 3 × strip.')).toBeInTheDocument();
@@ -8189,6 +8196,8 @@ describe('DEV-977B Counter v2 phase 2A: one-step add, quantity and unit on the b
         saleId: 'sale-a',
         saleLineId: 'line-a',
         idempotencyKey: expect.stringMatching(/^counter-remove:/),
+        // DEV-958B: the counter's device, whose drawer's shift the server checks.
+        deviceId: expect.stringMatching(/^counter-/),
       })
     );
     expect(await screen.findByText('Synthetic item removed from the bill.')).toBeInTheDocument();
@@ -8243,6 +8252,25 @@ describe('DEV-977B Counter v2 phase 2A: one-step add, quantity and unit on the b
     } finally {
       onLine.mockRestore();
     }
+  });
+
+  it('keeps every line read-only between cash shifts, as adding and payment are', () => {
+    mocks.queries.counterCart = { ...query(editableCart()), refetch: mocks.refetch };
+    // DEV-958B: the drawer runs shifts and none is open; the server refuses a change too.
+    mocks.queries.drawerStatus = query({
+      openDrawer: { id: 'drawer-default' },
+      cashShift: { openShift: null, lastClosedShift: null, currency: 'PKR' },
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const cartRegion = screen.getByRole('region', { name: 'Cart' });
+    for (const name of ['+ Synthetic item', '− Synthetic item', 'Remove Synthetic item']) {
+      const button = within(cartRegion).getByRole('button', { name });
+      expect(button).toBeDisabled();
+      fireEvent.click(button);
+    }
+    expect(within(cartRegion).getByLabelText('Quantity: Synthetic item')).toBeDisabled();
+    expect(mocks.mutations.changeLine).not.toHaveBeenCalled();
+    expect(mocks.mutations.removeLine).not.toHaveBeenCalled();
   });
 
   it('closes the results with Escape and keeps what was typed', async () => {
