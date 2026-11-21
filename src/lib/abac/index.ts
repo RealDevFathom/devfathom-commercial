@@ -24,6 +24,8 @@ export type CanOptions = {
   source?: Environment['source'];
   ip?: string | null;
   db?: AuthzDb;
+  /** Only an active system Owner may rely on the coarse role policy when no grant matches. */
+  ownerOnlyFallback?: boolean;
 };
 
 async function customDecision(
@@ -31,12 +33,18 @@ async function customDecision(
   userId: string,
   action: string,
   now: Date
-): Promise<{ decision: boolean | null; hasOrganizationRole: boolean }> {
+): Promise<{ decision: boolean | null; hasOrganizationRole: boolean; isSystemOwner: boolean }> {
   const user = await db.user.findUnique({
     where: { id: userId },
     select: {
+      role: true,
+      status: true,
       organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
+        select: {
+          key: true,
+          isSystem: true,
+          permissions: { select: { capability: true, effect: true } },
+        },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
@@ -44,7 +52,7 @@ async function customDecision(
       },
     },
   });
-  if (!user) return { decision: false, hasOrganizationRole: false };
+  if (!user) return { decision: false, hasOrganizationRole: false, isSystemOwner: false };
   // Prescription capture is narrower than dispensing. Existing pharmacist
   // grants remain authoritative for it, including DENYs, without granting
   // tenant administrators the wider dispensing capability (`decideFromRules`).
@@ -52,7 +60,15 @@ async function customDecision(
     [...user.permissionOverrides, ...(user.organizationRole?.permissions ?? [])],
     action
   );
-  return { decision, hasOrganizationRole: user.organizationRole !== null };
+  return {
+    decision,
+    hasOrganizationRole: user.organizationRole !== null,
+    isSystemOwner:
+      user.status === 'ACTIVE' &&
+      user.role === 'ADMIN' &&
+      user.organizationRole?.isSystem === true &&
+      user.organizationRole.key === 'owner',
+  };
 }
 
 /**
@@ -90,8 +106,14 @@ export async function can(
     return false;
   }
   try {
-    const { decision, hasOrganizationRole } = await customDecision(db, subject.id, action, env.now);
+    const { decision, hasOrganizationRole, isSystemOwner } = await customDecision(
+      db,
+      subject.id,
+      action,
+      env.now
+    );
     if (decision !== null) return decision;
+    if (opts.ownerOnlyFallback && !isSystemOwner) return false;
     // Procurement's tenant-admin fallback exists only for legacy users who do
     // not yet have an organization role. Once a role is assigned, its
     // capabilities are the boundary: an omitted procurement grant must not

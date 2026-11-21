@@ -7,65 +7,70 @@
 export type PharmacyProcedureGate =
   { gate: string; lines: readonly string[] } | { gate: string; none: string };
 
+const accountsGate =
+  'adminProcedure (admin:access) + ADMIN role, Pharmacy Finance module, finance:read (a live grant or the system Owner, subject to deny) and an active branch of the organization';
+const bookkeepingGate =
+  'bookkeepingProcedure: admin:access + Pharmacy Finance module + finance:read (a live grant or the system Owner, subject to deny) + active branch';
+
 export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedureGate>> = {
   'pharmacyAccess.navigation': {
     gate: "protectedProcedure; reads the caller's own decisions for the menu",
     none: 'menu only: any signed-in member, about themselves',
   },
   'pharmacyApInvoices.aging': {
-    gate: 'adminProcedure (admin:access) + authorizeGeneralJournal (ADMIN role, Pharmacy Finance module, finance:read)',
+    gate: accountsGate,
     none: 'workspace administrators with finance access only',
   },
   'pharmacyApInvoices.approveCreditSetOff': {
-    gate: 'adminProcedure + authorizeGeneralJournal + actorMayRefund -> pharmacy:manage + own PIN; not the requester',
+    gate: `${accountsGate} + actorMayRefund -> pharmacy:manage + own PIN; a different approver unless no other active ADMIN exists in the organization`,
     lines: ['run-branches/workspace-administrator-finance-access'],
   },
   'pharmacyApInvoices.creditSetOffs': {
-    gate: 'adminProcedure + authorizeGeneralJournal',
+    gate: accountsGate,
     none: 'workspace administrators with finance access only',
   },
   'pharmacyApInvoices.list': {
-    gate: 'adminProcedure + authorizeGeneralJournal',
+    gate: accountsGate,
     none: 'workspace administrators with finance access only',
   },
   'pharmacyApInvoices.pay': {
-    gate: 'adminProcedure + authorizeGeneralJournal',
+    gate: accountsGate,
     none: 'workspace administrators with finance access only',
   },
   'pharmacyApInvoices.payablesDrafts': {
-    gate: 'adminProcedure + authorizeGeneralJournal',
+    gate: accountsGate,
     none: 'workspace administrators with finance access only',
   },
   'pharmacyApInvoices.record': {
-    gate: 'adminProcedure + authorizeGeneralJournal',
+    gate: accountsGate,
     none: 'workspace administrators with finance access only',
   },
   'pharmacyApInvoices.rejectCreditSetOff': {
-    gate: 'adminProcedure + authorizeGeneralJournal + actorMayRefund -> pharmacy:manage',
+    gate: `${accountsGate} + actorMayRefund -> pharmacy:manage`,
     lines: ['run-branches/reject-undo-credit-set-offs'],
   },
   'pharmacyApInvoices.requestCreditSetOff': {
-    gate: 'adminProcedure + authorizeGeneralJournal',
+    gate: accountsGate,
     none: 'workspace administrators with finance access only',
   },
   'pharmacyApInvoices.reversalAccess': {
-    gate: 'adminProcedure + authorizeGeneralJournal; reports whether actorMayRefund (pharmacy:manage) but does not require it',
+    gate: `${accountsGate}; reports whether actorMayRefund (pharmacy:manage) but does not require it`,
     none: 'workspace administrators with finance access only',
   },
   'pharmacyApInvoices.reverseCreditSetOff': {
-    gate: 'adminProcedure + authorizeGeneralJournal + actorMayRefund -> pharmacy:manage + own PIN',
+    gate: `${accountsGate} + actorMayRefund -> pharmacy:manage + own PIN`,
     lines: ['run-branches/reject-undo-credit-set-offs'],
   },
   'pharmacyApInvoices.reversalSearch': {
-    gate: 'adminProcedure (admin:access) + authorizeGeneralJournal (owner-level ADMIN role, Pharmacy Finance module, finance:read, an active branch)',
+    gate: accountsGate,
     none: 'workspace administrators with finance access only',
   },
   'pharmacyApInvoices.reverseInvoice': {
-    gate: 'adminProcedure + authorizeGeneralJournal + authorizeReversal -> pharmacy:manage + own PIN (own entry refused while another approver exists)',
+    gate: `${accountsGate} + authorizeReversal -> pharmacy:manage + own PIN (own entry refused while another approver exists)`,
     lines: ['run-branches/workspace-administrator-finance-access'],
   },
   'pharmacyApInvoices.reverseSettlement': {
-    gate: 'adminProcedure + authorizeGeneralJournal + authorizeReversal -> pharmacy:manage + own PIN',
+    gate: `${accountsGate} + authorizeReversal -> pharmacy:manage + own PIN (own entry refused while another approver exists)`,
     lines: ['run-branches/workspace-administrator-finance-access'],
   },
   'pharmacyBranchAssignments.assign': {
@@ -200,12 +205,12 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyFinance.closePeriod': {
-    gate: 'bookkeepingProcedure: adminProcedure (admin:access) + Pharmacy Finance module',
-    none: 'workspace administrators with the Pharmacy Finance module only',
+    gate: bookkeepingGate,
+    none: 'workspace administrators with the Pharmacy Finance module and finance access',
   },
   'pharmacyFinance.createSettlementBatch': {
-    gate: 'bookkeepingProcedure: admin:access + Pharmacy Finance module',
-    none: 'workspace administrators with the Pharmacy Finance module only',
+    gate: bookkeepingGate,
+    none: 'workspace administrators with the Pharmacy Finance module and finance access',
   },
   'pharmacyFinance.deliveryRadiusProfitability': {
     gate: 'ledgerReportProcedure: admin:access + reports:operational AND reports:financial',
@@ -215,7 +220,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyFinance.financialStatements': {
-    gate: 'ledgerReportProcedure: admin:access + reports:operational AND reports:financial',
+    gate: 'ledgerReportProcedure: admin:access + ADMIN role + Pharmacy Reports module + reports:operational AND reports:financial + finance:read (a live grant or the system Owner, subject to deny), within an active branch',
     lines: [
       'financial-reports/workspace-administrator-use-operational-2',
       'operational-reports/workspace-administrator-use-financial',
@@ -229,8 +234,8 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyFinance.importBankLine': {
-    gate: 'bookkeepingProcedure: admin:access + Pharmacy Finance module',
-    none: 'workspace administrators with the Pharmacy Finance module only',
+    gate: bookkeepingGate,
+    none: 'workspace administrators with the Pharmacy Finance module and finance access',
   },
   'pharmacyFinance.leakageReport': {
     gate: 'ledgerReportProcedure: admin:access + reports:operational AND reports:financial',
@@ -254,24 +259,24 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyFinance.post': {
-    gate: 'bookkeepingProcedure: admin:access + Pharmacy Finance module',
-    none: 'workspace administrators with the Pharmacy Finance module only',
+    gate: bookkeepingGate,
+    none: 'workspace administrators with the Pharmacy Finance module and finance access',
   },
   'pharmacyFinance.publishTaxProfile': {
-    gate: 'bookkeepingProcedure: admin:access + Pharmacy Finance module',
-    none: 'workspace administrators with the Pharmacy Finance module only',
+    gate: bookkeepingGate,
+    none: 'workspace administrators with the Pharmacy Finance module and finance access',
   },
   'pharmacyFinance.reconcile': {
-    gate: 'bookkeepingProcedure: admin:access + Pharmacy Finance module',
-    none: 'workspace administrators with the Pharmacy Finance module only',
+    gate: bookkeepingGate,
+    none: 'workspace administrators with the Pharmacy Finance module and finance access',
   },
   'pharmacyFinance.reopenPeriod': {
-    gate: 'bookkeepingProcedure: admin:access + Pharmacy Finance module',
-    none: 'workspace administrators with the Pharmacy Finance module only',
+    gate: bookkeepingGate,
+    none: 'workspace administrators with the Pharmacy Finance module and finance access',
   },
   'pharmacyFinance.reverse': {
-    gate: 'bookkeepingProcedure: admin:access + Pharmacy Finance module',
-    none: 'workspace administrators with the Pharmacy Finance module only',
+    gate: bookkeepingGate,
+    none: 'workspace administrators with the Pharmacy Finance module and finance access',
   },
   'pharmacyFinance.trueProfit': {
     gate: 'ledgerReportProcedure: admin:access + reports:operational AND reports:financial (margin by item/category/hour/staff)',
@@ -281,39 +286,39 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyFinance.workspace': {
-    gate: 'bookkeepingProcedure: admin:access + Pharmacy Finance module',
-    none: 'workspace administrators with the Pharmacy Finance module only',
+    gate: bookkeepingGate,
+    none: 'workspace administrators with the Pharmacy Finance module and finance access',
   },
   'pharmacyGeneralJournal.cancelDraft': {
-    gate: 'adminProcedure + authorizeGeneralJournal',
+    gate: accountsGate,
     none: 'workspace administrators with finance access only',
   },
   'pharmacyGeneralJournal.catalog': {
-    gate: 'adminProcedure + authorizeGeneralJournal',
+    gate: accountsGate,
     none: 'workspace administrators with finance access only',
   },
   'pharmacyGeneralJournal.createDraft': {
-    gate: 'adminProcedure + authorizeGeneralJournal',
+    gate: accountsGate,
     none: 'workspace administrators with finance access only',
   },
   'pharmacyGeneralJournal.get': {
-    gate: 'adminProcedure + authorizeGeneralJournal',
+    gate: accountsGate,
     none: 'workspace administrators with finance access only',
   },
   'pharmacyGeneralJournal.list': {
-    gate: 'adminProcedure + authorizeGeneralJournal',
+    gate: accountsGate,
     none: 'workspace administrators with finance access only',
   },
   'pharmacyGeneralJournal.post': {
-    gate: 'adminProcedure + authorizeGeneralJournal',
+    gate: accountsGate,
     none: 'workspace administrators with finance access only',
   },
   'pharmacyGeneralJournal.reverse': {
-    gate: 'adminProcedure + authorizeGeneralJournal',
+    gate: accountsGate,
     none: 'workspace administrators with finance access only',
   },
   'pharmacyGeneralJournal.updateDraft': {
-    gate: 'adminProcedure + authorizeGeneralJournal',
+    gate: accountsGate,
     none: 'workspace administrators with finance access only',
   },
   'pharmacyInventory.acknowledgeRecall': {
@@ -665,6 +670,13 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
   'pharmacyInvoiceCapture.read': {
     gate: 'auditedProtectedProcedure + inline actorCanProcure -> pharmacy:procurement; active branch',
     lines: ['receive-stock/open-purchasing-screens-read'],
+  },
+  'pharmacyJournalEntryLookup.lookup': {
+    gate: 'adminProcedure + ADMIN role + Pharmacy Reports module + reports:operational AND reports:financial + finance:read (a live grant or the system Owner, subject to deny), within an active branch',
+    lines: [
+      'financial-reports/workspace-administrator-use-operational-3',
+      'operational-reports/workspace-administrator-use-financial-2',
+    ],
   },
   'pharmacyKhata.branches': {
     gate: 'adminProcedure (admin:access) + pharmacy-counter module',
@@ -1090,11 +1102,11 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
   },
   'pharmacyOffline.recordUnsentOfflineSale': {
-    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); records a manager\'s account of one unsent offline sale a revoked counter kept, audited; books nothing',
+    gate: "adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); records a manager's account of one unsent offline sale a revoked counter kept, audited; books nothing",
     none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
   },
   'pharmacyOffline.revoke': {
-    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); releases the counter\'s open stock quotas in the same transaction, audited',
+    gate: "adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); releases the counter's open stock quotas in the same transaction, audited",
     none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
   },
   'pharmacyOffline.rotate': {
@@ -2371,7 +2383,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['take-payment/take-payment-branches-by', 'run-branches/run-cash-drawers-branches'],
   },
   'pharmacySales.openShift': {
-    gate: "auditedProtectedProcedure; naming another cashier -> requireDrawerManagerAccess (pharmacy:manage); own shift -> cashShiftScope: requireDrawerManagerAccess, else requireCounterReceiptAccess(canonical true) -> pharmacy:counter",
+    gate: 'auditedProtectedProcedure; naming another cashier -> requireDrawerManagerAccess (pharmacy:manage); own shift -> cashShiftScope: requireDrawerManagerAccess, else requireCounterReceiptAccess(canonical true) -> pharmacy:counter',
     lines: ['take-payment/open-close-own-cash-shift', 'run-branches/run-cash-shifts-branches'],
   },
   'pharmacySales.optOutRestockInterest': {
@@ -2539,7 +2551,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['financial-reports/workspace-administrator-run-dayclose'],
   },
   'pharmacySales.shiftReport': {
-    gate: "cashShiftScope: requireDrawerManagerAccess (pharmacy:manage) reads any shift of the branch; otherwise requireCounterReceiptAccess(canonical true) -> pharmacy:counter, own shift only",
+    gate: 'cashShiftScope: requireDrawerManagerAccess (pharmacy:manage) reads any shift of the branch; otherwise requireCounterReceiptAccess(canonical true) -> pharmacy:counter, own shift only',
     lines: ['take-payment/open-close-own-cash-shift', 'run-branches/run-cash-shifts-branches'],
   },
   'pharmacySales.substituteProposals': {

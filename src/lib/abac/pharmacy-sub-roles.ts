@@ -591,7 +591,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'workspace-administrator-finance-access',
-        text: 'As a workspace administrator with finance access: approve supplier credit set-offs and reverse supplier invoices and payments with their PIN',
+        text: 'As a workspace administrator with finance access through a grant or as the workspace owner: approve supplier credit set-offs and reverse supplier invoices and payments with their PIN',
         sites: { 'src/server/routers/pharmacy-ap-invoices.ts': 1 },
       },
       {
@@ -611,7 +611,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'reject-undo-credit-set-offs',
-        text: 'As a workspace administrator with finance access: reject a supplier credit set-off, or undo an approved one with their PIN',
+        text: 'As a workspace administrator with finance access through a grant or as the workspace owner: reject a supplier credit set-off, or undo an approved one with their PIN',
         sites: {},
       },
       {
@@ -911,12 +911,12 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'workspace-administrator-use-operational-2',
-        text: 'As a workspace administrator with Use operational reports: view the accounts reports (cash-flow forecast, statements, stock valuation, margins, leakage)',
+        text: 'As a workspace administrator with Use operational reports: view the accounts reports (cash-flow forecast, stock valuation, margins, leakage). Reading financial statements also requires finance access through a grant or as the workspace owner',
         sites: { 'src/server/routers/pharmacy-finance.ts': 2 },
       },
       {
         id: 'workspace-administrator-use-operational-3',
-        text: 'As a workspace administrator with Use operational reports: look up accounting journal entries',
+        text: 'As a workspace administrator with Use operational reports: look up accounting journal entries when you also have finance access through a grant or as the workspace owner',
         sites: { 'src/lib/pharmacy/accounts/journal-entry-lookup.ts': 1 },
       },
       {
@@ -1014,12 +1014,12 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'workspace-administrator-use-financial',
-        text: 'As a workspace administrator with Use financial reports: view the accounts reports (cash-flow forecast, statements, stock valuation, margins, leakage)',
+        text: 'As a workspace administrator with Use financial reports: view the accounts reports (cash-flow forecast, stock valuation, margins, leakage). Reading financial statements also requires finance access through a grant or as the workspace owner',
         sites: { 'src/server/routers/pharmacy-finance.ts': 2 },
       },
       {
         id: 'workspace-administrator-use-financial-2',
-        text: 'As a workspace administrator with Use financial reports: look up accounting journal entries',
+        text: 'As a workspace administrator with Use financial reports: look up accounting journal entries when you also have finance access through a grant or as the workspace owner',
         sites: { 'src/lib/pharmacy/accounts/journal-entry-lookup.ts': 1 },
       },
       {

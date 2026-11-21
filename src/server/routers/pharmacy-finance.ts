@@ -34,6 +34,8 @@ import {
 } from '@/lib/pharmacy/bookkeeping';
 import { PharmacyTaxProfileError, publishPharmacyTaxProfile } from '@/lib/pharmacy/tax-profiles';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { requirePharmacyFinance } from '@/lib/pharmacy/finance-access';
+import { tagProcedureGate } from '../procedure-gate-tag';
 import { assertInOrganization } from '../org-refs';
 import { adminProcedure, router, type TRPCContext } from '../trpc';
 
@@ -41,18 +43,28 @@ const id = z.string().trim().min(1).max(128);
 const moneyMinor = z.number().int().positive().max(999_999_999);
 const at = z.coerce.date();
 
+const financeGate = tagProcedureGate(
+  (async ({ ctx, next }) => {
+    await requirePharmacyFinance(ctx);
+    return next();
+  }) satisfies Parameters<typeof adminProcedure.use>[0],
+  { kind: 'capability', action: 'finance:read' }
+);
+
 // Server pages also use a standalone caller, where the root router prefix is
 // absent. Enforce bookkeeping licensing here as well as in the module registry.
-const bookkeepingProcedure = adminProcedure.use(({ ctx, next }) => {
-  if (
-    !hasModule(ctx.entitlements, 'pharmacy-finance') ||
-    !ctx.organization?.id ||
-    ctx.entitlements.organizationId !== ctx.organization.id
-  ) {
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy Finance access is required.' });
-  }
-  return next({ ctx });
-});
+const bookkeepingProcedure = adminProcedure
+  .use(({ ctx, next }) => {
+    if (
+      !hasModule(ctx.entitlements, 'pharmacy-finance') ||
+      !ctx.organization?.id ||
+      ctx.entitlements.organizationId !== ctx.organization.id
+    ) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy Finance access is required.' });
+    }
+    return next({ ctx });
+  })
+  .use(financeGate);
 
 const reportInstant = z.iso.datetime({ offset: true });
 const reportPeriod = z
@@ -223,6 +235,7 @@ export const pharmacyFinanceRouter = router({
     }
   }),
   financialStatements: ledgerReportProcedure
+    .use(financeGate)
     .input(reportPeriod.safeExtend({ page: z.number().int().min(1).max(10000).default(1) }))
     .query(async ({ ctx, input }) => ({
       ...ledgerMetadata(
