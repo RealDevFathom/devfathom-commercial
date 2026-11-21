@@ -405,6 +405,9 @@ export function createMediaMtxTransport(raw: string, request = httpsRequest) {
       pending = open(binding, Date.now() + CAMERA_READ_DEADLINE_MS)
         .then((result) => result.secret)
         .finally(() => renewing.delete(binding));
+      // Every read that joins waits only until its own deadline; a renewal that outlives all of
+      // them still settles without an unhandled rejection.
+      pending.catch(() => {});
       renewing.set(binding, pending);
     }
     return pending;
@@ -433,7 +436,9 @@ export function createMediaMtxTransport(raw: string, request = httpsRequest) {
     if (res.status === 401) {
       // The relay ended the session (idle, restart) or none was open yet: open a
       // fresh one and retry once. A relay without sessions answers 401 only for a
-      // refused login, and that refusal stands.
+      // refused login, and that refusal stands. A read whose time is already up starts no
+      // renewal nobody would wait for.
+      if (Date.now() >= deadline) throw new CameraTransportError('gateway-unreachable');
       const renewed = await untilDeadline(renew(binding), deadline);
       if (!renewed) refuse(res.status);
       res = await get(binding, resource, maximum, deadline, renewed);

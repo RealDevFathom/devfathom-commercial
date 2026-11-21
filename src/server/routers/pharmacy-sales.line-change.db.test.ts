@@ -1060,6 +1060,80 @@ describeIfDatabase('DEV-977B change and remove a bill line', () => {
     await expectAdded(5, 10_000);
   }, 120_000);
 
+  it('charges each reduction to whoever made it, and only when units come off (DEV-1004)', async () => {
+    const { readPharmacyAnomalyFacts } = await import('@/lib/pharmacy/anomaly-signals-operations');
+    const today = workspaceToday('UTC');
+    const voidsOf = async (userId: string) => {
+      const { facts } = await withTenantDb(ids.org, (db) =>
+        readPharmacyAnomalyFacts(db, { branchIds: [ids.branch], from: today, to: today })
+      );
+      const row = facts.staffVoid.find((fact) => fact.userId === userId);
+      return {
+        voidEvents: row?.voidEvents ?? 0,
+        lineVoids: row?.lineVoids ?? 0,
+        lineVoidNetMinor: row?.lineVoidNetMinor ?? 0,
+      };
+    };
+    const expected = {
+      [ids.cashierB]: await voidsOf(ids.cashierB),
+      [ids.manager]: await voidsOf(ids.manager),
+    };
+    const expectAdded = async (userId: string, voids: number, minor: number) => {
+      const before = expected[userId]!;
+      expected[userId] = {
+        voidEvents: before.voidEvents + voids,
+        lineVoids: before.lineVoids + voids,
+        lineVoidNetMinor: before.lineVoidNetMinor + minor,
+      };
+      expect(await voidsOf(userId)).toEqual(expected[userId]);
+    };
+    const lineOf = (saleId: string, saleLineId: string) => ({ saleId, saleLineId });
+    // A strip of 10 at PKR 20.05: its 10 tablets sell for PKR 20.00 in all.
+    const odd = await stockedItem('Antacid odd MRP', [
+      { expiresAt: '2028-01-01', units: 200, mrp: 2005 },
+    ]);
+    const otc = await oneLot('Antacid who changed it', 400);
+
+    // 1 strip changed to the same 10 tablets: no unit came off, so no void, although the
+    // tablets' prices add up to 5 paisa less.
+    const loosened = await bill(ids.cashierB, [(id) => strip(odd, id, 1)]);
+    await act(ids.cashierB, (api) =>
+      api.changeLine(change(lineOf(loosened.saleId, loosened.lineIds[0]!), odd, 10, 'UNIT'))
+    );
+    await expectAdded(ids.cashierB, 0, 0);
+
+    // 3 strips changed to 29 tablets: one tablet came off, worth PKR 2.00.
+    const trimmed = await bill(ids.cashierB, [(id) => strip(otc, id, 3)]);
+    await act(ids.cashierB, (api) =>
+      api.changeLine(change(lineOf(trimmed.saleId, trimmed.lineIds[0]!), otc, 29, 'UNIT'))
+    );
+    await expectAdded(ids.cashierB, 1, 200);
+
+    // The cashier lowers 3 strips to 1, then the manager raises it to 2: the cashier is charged
+    // for the 2 strips they took off; the manager's raise takes nothing off and offsets nothing.
+    const raisedByManager = await bill(ids.cashierB, [(id) => strip(otc, id, 3)]);
+    const loweredByCashier = await act(ids.cashierB, (api) =>
+      api.changeLine(change(lineOf(raisedByManager.saleId, raisedByManager.lineIds[0]!), otc, 1))
+    );
+    await act(ids.manager, (api) =>
+      api.changeLine(change(lineOf(raisedByManager.saleId, loweredByCashier.line.id), otc, 2))
+    );
+    await expectAdded(ids.cashierB, 1, 4_000);
+    await expectAdded(ids.manager, 0, 0);
+
+    // The manager lowers 3 strips to 1, then the cashier removes the line: the manager is
+    // charged for 2 strips and the cashier for the 1 they removed.
+    const removedByCashier = await bill(ids.cashierB, [(id) => strip(otc, id, 3)]);
+    const loweredByManager = await act(ids.manager, (api) =>
+      api.changeLine(change(lineOf(removedByCashier.saleId, removedByCashier.lineIds[0]!), otc, 1))
+    );
+    await act(ids.cashierB, (api) =>
+      api.removeLine(remove(lineOf(removedByCashier.saleId, loweredByManager.line.id)))
+    );
+    await expectAdded(ids.manager, 1, 4_000);
+    await expectAdded(ids.cashierB, 1, 2_000);
+  }, 120_000);
+
   it('leaves a whole-bill discount given after a change out of the staff-void value (DEV-1004)', async () => {
     const { readPharmacyAnomalyFacts } = await import('@/lib/pharmacy/anomaly-signals-operations');
     const { applyBillDiscount } = await import('@/lib/pharmacy/bill-discount-service');

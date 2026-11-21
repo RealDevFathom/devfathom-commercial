@@ -680,6 +680,56 @@ describe('DEV-1004: one deadline per read', () => {
     }
   });
 
+  it('starts no renewal when the read’s own time is already up as the relay answers 401', async () => {
+    vi.useFakeTimers();
+    try {
+      const paths: string[] = [];
+      const request = vi.fn(
+        (url: URL, _options: Record<string, unknown>, callback: (res: EventEmitter) => void) => {
+          paths.push(url.pathname + url.search);
+          const req = new EventEmitter() as EventEmitter & {
+            end: () => void;
+            destroy: (error?: Error) => void;
+          };
+          req.destroy = (error?: Error) => {
+            if (error) req.emit('error', error);
+            req.emit('close');
+          };
+          req.end = () => {
+            queueMicrotask(() => {
+              // The 401 arrives just as the read's ten seconds run out.
+              vi.setSystemTime(Date.now() + CAMERA_READ_DEADLINE_MS);
+              const res = new EventEmitter() as EventEmitter & {
+                statusCode: number;
+                headers: Record<string, string | string[]>;
+                destroy: () => void;
+              };
+              res.statusCode = 401;
+              res.headers = {};
+              res.destroy = () => {};
+              callback(res);
+              res.emit('end');
+              req.emit('close');
+            });
+          };
+          return req;
+        }
+      );
+      const outcome = transportWith(request)
+        .read(scope(), 'abc_video1_seg0.mp4')
+        .then(
+          () => 'read',
+          (error: unknown) => (error as CameraTransportError).code
+        );
+      await vi.advanceTimersByTimeAsync(CAMERA_READ_DEADLINE_MS * 2);
+      await expect(outcome).resolves.toBe('gateway-unreachable');
+      // Only the segment was asked for: no playlist request opened a renewal.
+      expect(paths).toEqual(['/pharmacy-counter-1/abc_video1_seg0.mp4']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('still reads within the deadline when the relay is quick enough', async () => {
     vi.useFakeTimers();
     try {

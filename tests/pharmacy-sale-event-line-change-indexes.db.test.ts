@@ -53,17 +53,25 @@ async function executedPlan(client: pg.Client, sql: string, values: string[]) {
   }
 }
 
-/** The plan's one read of the sale events, and how many rows it looked at. */
+/**
+ * The plan's one read of the sale events: the index it used (directly, or through a bitmap),
+ * the index condition, and how many rows it looked at. Never a sequential scan.
+ */
 function eventScan(nodes: PlanNode[]) {
-  const scans = nodes.filter((node) => node['Relation Name'] === 'pharmacy_sale_events');
-  expect(scans).toHaveLength(1);
-  const scan = scans[0]!;
+  const reads = nodes.filter((node) => node['Relation Name'] === 'pharmacy_sale_events');
+  expect(reads).toHaveLength(1);
+  const read = reads[0]!;
+  expect(read['Node Type']).not.toBe('Seq Scan');
+  // An Index Scan names its index itself; a Bitmap Heap Scan reads it through its child.
+  const indexNode = read['Index Name'] ? read : nodes.find((node) => node['Index Name']);
   return {
-    nodeType: scan['Node Type'],
-    indexName: scan['Index Name'],
-    indexCond: String(scan['Index Cond'] ?? ''),
-    rowsRead: Number(scan['Actual Rows'] ?? 0) + Number(scan['Rows Removed by Filter'] ?? 0),
-    rowsReturned: Number(scan['Actual Rows'] ?? 0),
+    indexName: indexNode?.['Index Name'],
+    indexCond: String(indexNode?.['Index Cond'] ?? ''),
+    rowsRead:
+      Number(read['Actual Rows'] ?? 0) +
+      Number(read['Rows Removed by Filter'] ?? 0) +
+      Number(read['Rows Removed by Index Recheck'] ?? 0),
+    rowsReturned: Number(read['Actual Rows'] ?? 0),
   };
 }
 
@@ -90,6 +98,8 @@ function eventScan(nodes: PlanNode[]) {
       `INSERT INTO pharmacy_branches (id,"organizationId",code,name,"addressLine",city,"provinceCode","updatedAt") VALUES ($1,$2,'IX','Index','Fixture street','Lahore','PB',now())`,
       [branch, org]
     );
+    // The sale tables force row-level security: rows are written as this organisation.
+    await owner.query("SELECT set_config('app.current_organization_id', $1, false)", [org]);
     await owner.query(
       `INSERT INTO pharmacy_sales (id,"organizationId","branchId","createdByUserId","updatedAt") VALUES ($1,$2,$3,'fixture-user',now())`,
       [`${prefix}_sale`, org, branch]
@@ -133,7 +143,6 @@ function eventScan(nodes: PlanNode[]) {
       )
     );
     expect(scan).toMatchObject({
-      nodeType: 'Index Scan',
       indexName: 'pharmacy_sale_events_line_change_key_idx',
       rowsReturned: 1,
     });
@@ -152,7 +161,6 @@ function eventScan(nodes: PlanNode[]) {
       )
     );
     expect(scan).toMatchObject({
-      nodeType: 'Index Scan',
       indexName: 'pharmacy_sale_events_void_shift_idx',
       rowsReturned: 1,
     });

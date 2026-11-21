@@ -175,9 +175,12 @@ describe('AI-04 deterministic anomaly thresholds and explanations', () => {
       exactNumbers: { voidEvents: 3, lineVoids: 2, lineVoidNetMinor: 45_000 },
     });
     expect(signal!.explanation).toContain(
-      '1 is a whole bill voided and 2 are lines taken off bills, PKR 450.00 in all.'
+      '1 is a whole bill voided and 2 are lines this person took units off, PKR 450.00 in all.'
     );
-    expect(signal!.explanation).toContain('lowering a quantity and raising it again is not a void');
+    expect(signal!.explanation).toContain('Each change counts against the person who made it');
+    expect(signal!.explanation).toContain(
+      'lowering a quantity and raising it again yourself is not a void, and nor is selling the same units as loose tablets'
+    );
     expect(signal!.explanation).toContain(
       'A removed line always counts in full; raising or adding another line does not offset it.'
     );

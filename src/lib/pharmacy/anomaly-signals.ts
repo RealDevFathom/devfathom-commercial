@@ -47,10 +47,9 @@ export type AnomalyFactSet = {
     /** Whole bills voided plus `lineVoids`. */
     voidEvents: number;
     /**
-     * DEV-1004: bill lines changed or removed at the counter whose changes took value off,
-     * each counted once, and the value they took off. A line nets only against the lines that
-     * replaced it in its own changes: lowering it and raising it again is not a void, and a
-     * removal is never offset by another line.
+     * DEV-1004: bill lines this person changed or removed at the counter so that fewer units
+     * remained, each counted once, and the value those changes took off. A person's raise offsets
+     * only their own reduction of the same line; a removal is never offset by another line.
      */
     lineVoids?: number;
     lineVoidNetMinor?: number;
@@ -137,8 +136,8 @@ const rateBps = (part: number, total: number) =>
 const money = (minor: number) => `PKR ${(minor / 100).toFixed(2)}`;
 
 /**
- * DEV-1004: what the void count is made of. A line changed or removed on an open bill counts
- * once, by the value taken off it through its own changes; nothing on another line offsets it.
+ * DEV-1004: what the void count is made of. A bill line changed or removed counts once for each
+ * person whose own changes took units off it; nothing on another line offsets it.
  */
 function staffVoidBreakdown(fact: {
   voidEvents: number;
@@ -147,7 +146,7 @@ function staffVoidBreakdown(fact: {
 }): string {
   const lines = fact.lineVoids ?? 0;
   const wholeBills = fact.voidEvents - lines;
-  return `${wholeBills} ${wholeBills === 1 ? 'is a whole bill' : 'are whole bills'} voided and ${lines} ${lines === 1 ? 'is a line' : 'are lines'} taken off bills, ${money(fact.lineVoidNetMinor ?? 0)} in all. A changed line counts by the value it lost through its own changes: lowering a quantity and raising it again is not a void. A removed line always counts in full; raising or adding another line does not offset it.`;
+  return `${wholeBills} ${wholeBills === 1 ? 'is a whole bill' : 'are whole bills'} voided and ${lines} ${lines === 1 ? 'is a line' : 'are lines'} this person took units off, ${money(fact.lineVoidNetMinor ?? 0)} in all. Each change counts against the person who made it, only when it leaves fewer units on the line: lowering a quantity and raising it again yourself is not a void, and nor is selling the same units as loose tablets. A removed line always counts in full; raising or adding another line does not offset it.`;
 }
 
 function finalize(

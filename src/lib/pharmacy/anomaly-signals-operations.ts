@@ -152,15 +152,19 @@ export async function readPharmacyAnomalyFacts(
 
   // DEV-1004: since DEV-977B a bill line lowered at the counter is taken off onto its own void
   // record, so every reduction (3 to 1, and 1 back to 3) wrote a void. Each line is now followed
-  // through its own changes: a quantity or unit change nets only against the line that replaced
-  // it, and that line against its own replacement, so 3 to 1 and back to 3 takes nothing off and
-  // 3 to 1 takes off the value of 2. A removal ends the line and counts its value in full.
-  // Nothing on one line offsets another line or another medicine: removing one line while
-  // raising or adding another still counts the removal, and each add-then-remove counts once.
-  // Values leave out a line's whole-bill discount share, which a bill discount given later
-  // rewrites in place (bill-discount-service.ts). The line is credited to whoever made its last
-  // change. Whole-bill voids count one each, as before. The shift report and the cash-close
-  // check still count every void (cash-shifts.ts, cash-close-check-operations.ts).
+  // through its own changes (the line, the line that replaced it, and so on), and each change is
+  // charged to the person who made it. Per line and person, the units that person's changes
+  // took off are added up: a raise offsets only the same person's reduction of that line, so
+  // 3 to 1 and back to 3 by one cashier takes nothing off. The line counts one void for a person
+  // only when their changes took units off (as sales.ts writes a void only when fewer units
+  // remain): 1 strip to the same 10 tablets is not a void, even when the tablets' prices round to
+  // a few paisa less. A removal takes off every unit of the line. Nothing on one line offsets
+  // another line or another medicine: removing one line while raising or adding another still
+  // counts the removal, and each add-then-remove counts once. The value counted is what those
+  // same changes took off, leaving out a line's whole-bill discount share, which a bill discount
+  // given later rewrites in place (bill-discount-service.ts). Whole-bill voids count one each, as
+  // before. The shift report and the cash-close check still count every void (cash-shifts.ts,
+  // cash-close-check-operations.ts).
   const staffVoidRows =
     filters.supplierId || filters.ingredientId || filters.batchId
       ? []
@@ -175,6 +179,8 @@ export async function readPharmacyAnomalyFacts(
           line_changes AS (
             SELECT e."branchId", e."actorId", e."occurredAt", moved."id" AS "movedId",
                    replacement."id" AS "replacementId",
+                   moved."canonicalUnits"::bigint - COALESCE(replacement."canonicalUnits", 0)::bigint
+                     AS "unitsOff",
                    (moved."grossMinor"-(moved."discountMinor"-moved."billDiscountMinor"))::bigint
                      - COALESCE((replacement."grossMinor"-(replacement."discountMinor"-replacement."billDiscountMinor"))::bigint, 0)
                      AS "takenOffMinor"
@@ -187,22 +193,22 @@ export async function readPharmacyAnomalyFacts(
             WHERE e."kind"='CREATED' AND (e."payload"->>'lineChangeKey') IS NOT NULL
           ),
           line_chains AS (
-            SELECT c."movedId" AS "rootId", c."replacementId", c."takenOffMinor", c."branchId",
-                   c."actorId", c."occurredAt", 1 AS "depth"
+            SELECT c."movedId" AS "rootId", c."replacementId", c."unitsOff", c."takenOffMinor",
+                   c."branchId", c."actorId", c."occurredAt"
             FROM line_changes c
             WHERE NOT EXISTS (SELECT 1 FROM line_changes earlier WHERE earlier."replacementId"=c."movedId")
             UNION ALL
-            SELECT chain."rootId", next."replacementId", next."takenOffMinor", next."branchId",
-                   next."actorId", next."occurredAt", chain."depth"+1
+            SELECT chain."rootId", next."replacementId", next."unitsOff", next."takenOffMinor",
+                   next."branchId", next."actorId", next."occurredAt"
             FROM line_chains chain
             JOIN line_changes next ON next."movedId"=chain."replacementId"
           ),
           line_voids AS (
-            SELECT (ARRAY_AGG("branchId" ORDER BY "depth" DESC))[1] AS "branchId",
-                   (ARRAY_AGG("actorId" ORDER BY "depth" DESC))[1] AS "userId",
-                   SUM("takenOffMinor") AS "netMinor", MAX("occurredAt") AS "occurredAt"
+            SELECT MAX("branchId") AS "branchId", "actorId" AS "userId",
+                   SUM("unitsOff") AS "unitsOff", GREATEST(SUM("takenOffMinor"), 0) AS "netMinor",
+                   MAX("occurredAt") AS "occurredAt"
             FROM line_chains
-            GROUP BY "rootId"
+            GROUP BY "rootId", "actorId"
           ),
           staff_activity AS (
             SELECT e."branchId", e."actorId" AS "userId",
@@ -213,9 +219,9 @@ export async function readPharmacyAnomalyFacts(
             GROUP BY e."branchId", e."actorId"
             UNION ALL
             SELECT v."branchId", v."userId",
-                   COUNT(*) FILTER (WHERE v."netMinor">0)::int,
-                   COUNT(*) FILTER (WHERE v."netMinor">0)::int,
-                   COALESCE(SUM(v."netMinor") FILTER (WHERE v."netMinor">0), 0)::bigint,
+                   COUNT(*) FILTER (WHERE v."unitsOff">0)::int,
+                   COUNT(*) FILTER (WHERE v."unitsOff">0)::int,
+                   COALESCE(SUM(v."netMinor") FILTER (WHERE v."unitsOff">0), 0)::bigint,
                    0::int, MAX(v."occurredAt")
             FROM line_voids v
             GROUP BY v."branchId", v."userId"
