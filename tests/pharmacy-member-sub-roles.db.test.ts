@@ -284,48 +284,70 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
     });
 
     const cashierRoleB = `${orgB}_role_cashier`;
-    it.each(PHARMACY_SUB_ROLES)(
-      'role-wide $label applies on the next server decision for both holders',
-      async (subRole) => {
-        const action = subRole.actions[0];
-        const owner = callers.admin('ownerb');
-        const args = {
-          roleId: cashierRoleB,
-          subRoleKey: subRole.key,
-          pin: isWeightyPharmacySubRole(subRole.key) ? PIN : undefined,
-        };
-        const initial = await allowed('cashierb1', action);
-        // Give this fixture owner the exact action, including clinical powers absent from Owner.
+    describe.each(PHARMACY_SUB_ROLES)('role-wide $label', (subRole) => {
+      const action = subRole.actions[0];
+      const overrideId = id(`owner_tick_${subRole.key}`);
+      let original: string | undefined;
+      beforeAll(async () => {
+        const [rule] = await rows(
+          'SELECT effect FROM organization_role_permissions WHERE "organizationRoleId"=$1 AND capability=$2',
+          [cashierRoleB, action]
+        );
+        original = rule?.effect;
+        // Clinical grants are exact, even for the owner who edits this fixture role.
         await rows(
           `INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"updatedAt") VALUES ($1,$2,$3,$4,'ALLOW','fixture',now())`,
-          [id('owner_tick'), orgB, id('ownerb'), action]
+          [overrideId, orgB, id('ownerb'), action]
         );
-        try {
-          for (const ticked of [!initial, initial]) {
-            await owner.setRoleSubRole({ ...args, ticked });
-            const view = await owner.roleAccess({ roleId: cashierRoleB });
-            expect(
-              view.groups
-                .flatMap((group) => group.subRoles)
-                .find((item) => item.key === subRole.key)?.state
-            ).toBe(ticked ? 'on' : 'off');
-            for (const who of ['cashierb1', 'cashierb2'])
-              expect(await allowed(who, action)).toBe(ticked);
-          }
-          expect((await audits('cashierb1')).at(-1)).toMatchObject({
-            actorId: id('ownerb'),
-            action: 'organizationAdmin.setRoleSubRole',
-          });
-        } finally {
-          await rows('DELETE FROM user_permission_overrides WHERE id=$1', [id('owner_tick')]);
-          if (!initial)
-            await rows(
-              'DELETE FROM organization_role_permissions WHERE "organizationRoleId"=$1 AND capability=$2',
-              [cashierRoleB, action]
-            );
+      });
+      afterAll(async () => {
+        await rows('DELETE FROM user_permission_overrides WHERE id=$1', [overrideId]);
+        if (original) {
+          await rows(
+            'UPDATE organization_role_permissions SET effect=$3 WHERE "organizationRoleId"=$1 AND capability=$2',
+            [cashierRoleB, action, original]
+          );
+        } else {
+          await rows(
+            'DELETE FROM organization_role_permissions WHERE "organizationRoleId"=$1 AND capability=$2',
+            [cashierRoleB, action]
+          );
         }
-      }
-    );
+      });
+      it.each([true, false])(
+        'setting the tick to %s applies to the next server decision for both holders',
+        async (ticked) => {
+          // Start each direction independently. The only edit under test goes through the router.
+          await rows(
+            `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,$4,$5)
+                    ON CONFLICT ("organizationRoleId",capability) DO UPDATE SET effect=EXCLUDED.effect`,
+            [id(`role_tick_${subRole.key}`), orgB, cashierRoleB, action, ticked ? 'DENY' : 'ALLOW']
+          );
+          const holders = ['cashierb1', 'cashierb2'];
+          for (const who of holders) expect(await allowed(who, action)).toBe(!ticked);
+          const owner = callers.admin('ownerb');
+          await owner.setRoleSubRole({
+            roleId: cashierRoleB,
+            subRoleKey: subRole.key,
+            pin: isWeightyPharmacySubRole(subRole.key) ? PIN : undefined,
+            ticked,
+          });
+          const view = await owner.roleAccess({ roleId: cashierRoleB });
+          expect(
+            view.groups.flatMap((group) => group.subRoles).find((item) => item.key === subRole.key)
+              ?.state
+          ).toBe(ticked ? 'on' : 'off');
+          for (const who of holders) {
+            expect(await allowed(who, action)).toBe(ticked);
+            expect((await audits(who)).at(-1)).toMatchObject({
+              actorId: id('ownerb'),
+              action: 'organizationAdmin.setRoleSubRole',
+              metadata: { subRole: subRole.key, ticked },
+            });
+          }
+        }
+      );
+    });
 
     it('refuses role-wide edits from another tenant, a non-owner or an owner changing their own access', async () => {
       const owner = callers.admin('ownerb');
