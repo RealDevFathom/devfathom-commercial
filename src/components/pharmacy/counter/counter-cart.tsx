@@ -1,10 +1,17 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
+import { Minus, Plus, ScanBarcode, Trash2 } from 'lucide-react';
 
+import { Skeleton } from '@/components/ui/skeleton';
 import { StatusPill } from '@/components/ui/status-pill';
-import type { CounterCart } from '@/lib/pharmacy/counter';
-import { counterUnitNoun, plural } from '@/lib/pharmacy/counter-pricing';
+import type { CounterCart, CounterCartLine } from '@/lib/pharmacy/counter';
+import {
+  counterUnitNoun,
+  plural,
+  type SaleUnitKind,
+  type SaleUnitOption,
+} from '@/lib/pharmacy/counter-pricing';
 import type { CounterAlert } from '@/lib/pharmacy/counter-alerts';
 import { formatMinor, formatShortExpiry } from '@/lib/pharmacy/counter-receipt';
 import { batchPhrase } from '@/lib/pharmacy/unrecorded-batch';
@@ -17,7 +24,199 @@ export type CounterCartPanelProps = {
   alerts?: readonly CounterAlert[];
   /** The instant near-expiry is measured from; injectable for tests. */
   now?: Date;
+  /** DEV-977: the keys that start a bill, shown under the empty bill. */
+  emptyHints?: ReactNode;
+  /**
+   * DEV-977B (Counter v2, A1): quantity, sale unit and removal are changed on the bill line.
+   * Without it the bill is read-only, as before.
+   */
+  lineControls?: CounterLineControls;
 };
+
+/** The quantity and unit a bill line is changed to. */
+export type CounterLineChange = Pick<
+  SaleUnitOption,
+  'kind' | 'packLevelId' | 'canonicalUnitsPerSaleUnit'
+> & {
+  quantity: number;
+};
+
+export type CounterLineControls = {
+  /** No line can change now (bill paid or closed, a counter action running, offline). */
+  disabled: boolean;
+  /** The sale units this line's medicine can be sold in, when the counter knows them. */
+  unitOptions: (line: CounterCartLine) => readonly SaleUnitOption[];
+  onChange: (line: CounterCartLine, next: CounterLineChange) => void;
+  onRemove: (line: CounterCartLine) => void;
+};
+
+/**
+ * DEV-977B: what the counter may change on a line. The server decides; this only keeps controls
+ * off a line the server would refuse. A line with dispensing records (controlled, prescription,
+ * emergency supply) or prepaid pricing stays as recorded. A line whose discount or batch was
+ * approved for its quantity can be removed, not changed.
+ */
+export function counterLineEditing(
+  line: CounterCartLine
+): 'locked' | 'remove-only' | 'approved' | 'full' {
+  if (
+    line.controlled ||
+    line.prescriptionLineId ||
+    line.emergencySupply ||
+    (line.tierDiscountMinor ?? 0) > 0
+  )
+    return 'locked';
+  const ownDiscount = line.discountMinor - (line.billDiscountMinor ?? 0) > 0 && !line.promotionName;
+  if (ownDiscount || line.allocations.some((allocation) => allocation.overridden))
+    return 'approved';
+  // An older bill read without the line's pack level can only be removed here.
+  if (!line.packLevelId || !line.canonicalUnitsPerSaleUnit) return 'remove-only';
+  return 'full';
+}
+
+/** DEV-977B: takes the line off the bill; beside its amount, as the design draws it. */
+function CounterLineRemove({
+  line,
+  controls,
+}: {
+  line: CounterCartLine;
+  controls: CounterLineControls;
+}) {
+  if (counterLineEditing(line) === 'locked') return null;
+  return (
+    <button
+      type="button"
+      aria-label={`Remove ${line.medicineName}`}
+      disabled={controls.disabled}
+      onClick={() => controls.onRemove(line)}
+      className="mt-1 ms-auto grid size-11 place-items-center rounded-[var(--radius-sm)] text-text-muted transition-colors hover:bg-surface-sunken hover:text-destructive focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      <Trash2 aria-hidden="true" className="size-[18px]" />
+    </button>
+  );
+}
+
+const UNIT_WORD: Record<SaleUnitKind, string> = { PACK: 'Pack', STRIP: 'Strip', UNIT: 'Unit' };
+
+function CounterLineEditor({
+  line,
+  controls,
+}: {
+  line: CounterCartLine;
+  controls: CounterLineControls;
+}) {
+  const editing = counterLineEditing(line);
+  const [draft, setDraft] = useState(String(line.quantity));
+  if (editing === 'locked' || editing === 'remove-only') return null;
+  const name = line.medicineName;
+  const unitWord =
+    line.saleUnit === 'UNIT' ? counterUnitNoun(line.dosageForm) : line.saleUnit.toLowerCase();
+  const options = controls.unitOptions(line);
+  const current = {
+    kind: line.saleUnit,
+    packLevelId: line.packLevelId ?? '',
+    canonicalUnitsPerSaleUnit: line.canonicalUnitsPerSaleUnit ?? 0,
+  };
+  const setQuantity = (quantity: number) => {
+    if (quantity === line.quantity) return;
+    if (quantity < 1) controls.onRemove(line);
+    else controls.onChange(line, { ...current, quantity });
+  };
+  const commitDraft = () => {
+    const quantity = Number(draft);
+    if (/^\d+$/.test(draft) && Number.isSafeInteger(quantity) && quantity > 0)
+      setQuantity(quantity);
+    else setDraft(String(line.quantity));
+  };
+  const button =
+    'grid size-11 place-items-center text-text-strong transition-colors hover:bg-surface-sunken focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50';
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      {editing === 'full' && options.length > 1 ? (
+        <span
+          role="radiogroup"
+          aria-label={`Sold as: ${name}`}
+          className="inline-flex overflow-hidden rounded-[var(--radius-sm)] border border-border-default bg-surface-card"
+        >
+          {options.map((option) => {
+            const checked =
+              option.kind === line.saleUnit &&
+              option.canonicalUnitsPerSaleUnit === line.canonicalUnitsPerSaleUnit;
+            return (
+              <button
+                key={`${option.kind}:${option.packLevelId}:${option.canonicalUnitsPerSaleUnit}`}
+                type="button"
+                role="radio"
+                aria-checked={checked}
+                disabled={controls.disabled}
+                onClick={() => {
+                  if (!checked)
+                    controls.onChange(line, {
+                      kind: option.kind,
+                      packLevelId: option.packLevelId,
+                      canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
+                      quantity: line.quantity,
+                    });
+                }}
+                className={`min-h-11 px-2.5 text-[13px] font-semibold focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:opacity-50 ${
+                  checked
+                    ? 'bg-text-strong text-surface-card'
+                    : 'text-text-body hover:bg-surface-sunken'
+                }`}
+              >
+                {UNIT_WORD[option.kind]}
+              </button>
+            );
+          })}
+        </span>
+      ) : null}
+      {editing === 'full' ? (
+        <span className="inline-flex items-center overflow-hidden rounded-[var(--radius-sm)] border border-border-default bg-surface-card">
+          <button
+            type="button"
+            aria-label={`− ${name}`}
+            disabled={controls.disabled}
+            onClick={() => setQuantity(line.quantity - 1)}
+            className={button}
+          >
+            <Minus aria-hidden="true" className="size-[18px]" />
+          </button>
+          <input
+            inputMode="numeric"
+            aria-label={`Quantity: ${name}`}
+            data-counter-line-quantity=""
+            value={draft}
+            disabled={controls.disabled}
+            onChange={(event) => setDraft(event.target.value.replace(/\D/g, '').slice(0, 4))}
+            onBlur={commitDraft}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                commitDraft();
+              }
+              if (event.key === 'Escape') setDraft(String(line.quantity));
+            }}
+            className="h-11 w-14 border-x border-border-subtle bg-transparent text-center text-base font-semibold tabular-nums text-text-strong outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:opacity-50"
+          />
+          <button
+            type="button"
+            aria-label={`+ ${name}`}
+            disabled={controls.disabled}
+            onClick={() => setQuantity(line.quantity + 1)}
+            className={button}
+          >
+            <Plus aria-hidden="true" className="size-[18px]" />
+          </button>
+        </span>
+      ) : editing === 'approved' ? (
+        <span className="text-xs text-text-muted">
+          {line.quantity} × {unitWord}. Its discount or batch was approved for this quantity: remove
+          it and add it again to change it.
+        </span>
+      ) : null}
+    </div>
+  );
+}
 
 /** PH-A4: a batch this close to expiry is flagged at the counter. */
 export const NEAR_EXPIRY_DAYS = 90;
@@ -54,20 +253,48 @@ export function CounterCartPanel({
   onRetry,
   alerts = [],
   now = new Date(),
+  emptyHints,
+  lineControls,
 }: CounterCartPanelProps) {
   if (state === 'idle' || (state === 'ready' && cart === null)) {
+    // DEV-977 (Counter v2): the empty bill says how to start one, in the bill's own place.
     return (
-      <p className="p-4 text-sm text-text-muted">
-        No bill is open. Search for a medicine and add a line to start one.
-      </p>
+      <div className="grid justify-items-center gap-3 px-4 py-14 text-center">
+        <span
+          aria-hidden="true"
+          className="grid size-12 place-items-center rounded-[var(--radius-sm)] bg-surface-sunken text-text-strong"
+        >
+          <ScanBarcode className="size-6" />
+        </span>
+        <h3 className="text-xl font-semibold text-text-strong">Start a bill</h3>
+        <p className="max-w-[42ch] text-sm text-text-body">
+          No bill is open. Search for a medicine and add a line to start one.
+        </p>
+        {emptyHints ? (
+          <p className="flex flex-wrap justify-center gap-x-4 gap-y-2 text-xs text-text-muted">
+            {emptyHints}
+          </p>
+        ) : null}
+      </div>
     );
   }
 
   if (state === 'loading') {
     return (
-      <p className="p-4 text-sm text-text-muted" role="status">
-        Loading the bill…
-      </p>
+      <div className="p-4">
+        <p className="text-sm text-text-muted" role="status">
+          Loading the bill…
+        </p>
+        <div aria-hidden="true" className="mt-4 space-y-6">
+          {['w-3/5', 'w-1/2'].map((width) => (
+            <div key={width} className="grid grid-cols-[minmax(0,1fr)_6rem] gap-x-6 gap-y-2.5">
+              <Skeleton className={`h-3.5 ${width}`} />
+              <Skeleton className="h-3.5" />
+              <Skeleton className="h-3 w-2/5" />
+            </div>
+          ))}
+        </div>
+      </div>
     );
   }
 
@@ -90,10 +317,17 @@ export function CounterCartPanel({
     // UX rules 1 and 9: name no identifier the operator cannot act on, and say
     // how to populate the empty state rather than only that it is empty.
     return (
-      <p className="p-4 text-sm text-text-muted">
-        This bill is open with no lines yet. Scan or search a medicine, choose its sale unit, then
-        add it to the cart.
-      </p>
+      <div className="grid justify-items-center gap-3 px-4 py-14 text-center">
+        <p className="max-w-[46ch] text-sm text-text-body">
+          This bill is open with no lines yet. Scan or search a medicine, choose its sale unit, then
+          add it to the cart.
+        </p>
+        {emptyHints ? (
+          <p className="flex flex-wrap justify-center gap-x-4 gap-y-2 text-xs text-text-muted">
+            {emptyHints}
+          </p>
+        ) : null}
+      </div>
     );
   }
 
@@ -107,7 +341,7 @@ export function CounterCartPanel({
                 key={heading}
                 scope="col"
                 role="columnheader"
-                className="py-2 pr-4 text-left font-medium first:pl-4 last:text-right"
+                className="py-2.5 pr-4 text-left font-medium first:pl-0 last:pr-0 last:text-right"
               >
                 {heading}
               </th>
@@ -124,26 +358,26 @@ export function CounterCartPanel({
             >
               <tr
                 role="row"
-                className="grid grid-cols-[1.25rem_minmax(0,1fr)_auto] gap-x-3 gap-y-1 p-4 align-top hover:bg-surface-sunken/50 @min-[40rem]:table-row"
+                className="grid grid-cols-[1.75rem_minmax(0,1fr)_auto] gap-x-3 gap-y-1.5 py-3.5 align-top @min-[40rem]:table-row"
               >
                 <td
                   role="cell"
-                  className="row-span-3 font-mono text-xs tabular-nums text-text-muted @min-[40rem]:px-4 @min-[40rem]:py-3"
+                  className="row-span-3 pt-0.5 font-mono text-xs tabular-nums text-text-muted @min-[40rem]:py-3.5 @min-[40rem]:pr-3"
                 >
                   {index + 1}
                 </td>
                 <th
                   scope="row"
                   role="rowheader"
-                  className="min-w-0 text-left font-normal @min-[40rem]:w-2/5 @min-[40rem]:py-3 @min-[40rem]:pr-4"
+                  className="min-w-0 text-left font-normal @min-[40rem]:w-2/5 @min-[40rem]:py-3.5 @min-[40rem]:pr-4"
                 >
-                  <p className="text-sm font-semibold text-text-strong">
+                  <p className="text-[15px] font-semibold text-text-strong">
                     {line.medicineName}
                     {line.strength ? (
                       <span className="ml-1 font-normal text-text-body">{line.strength}</span>
                     ) : null}
                   </p>
-                  <p className="mt-1 text-xs text-text-muted">
+                  <p className="mt-0.5 text-[13px] text-text-body">
                     {line.presentation} ·{' '}
                     {line.saleUnit === 'UNIT'
                       ? counterUnitNoun(line.dosageForm)
@@ -153,7 +387,7 @@ export function CounterCartPanel({
                     {formatMinor(line.unitPriceMinor)}
                     {line.discountMinor > 0 ? ` · less ${formatMinor(line.discountMinor)}` : ''}
                   </p>
-                  <div className="mt-1 flex flex-wrap gap-1">
+                  <div className="mt-1.5 flex flex-wrap gap-1.5 empty:hidden">
                     {line.controlled ? (
                       <StatusPill status="controlled" tone="danger" label="Controlled" />
                     ) : null}
@@ -173,12 +407,20 @@ export function CounterCartPanel({
                       <StatusPill status="cold-chain" tone="info" label="Cold chain" />
                     ) : null}
                   </div>
+                  {lineControls ? (
+                    // Keyed on the quantity, so a typed draft resets when the line changes.
+                    <CounterLineEditor
+                      key={`${line.saleLineId}:${line.quantity}`}
+                      line={line}
+                      controls={lineControls}
+                    />
+                  ) : null}
                 </th>
                 <td
                   role="cell"
-                  className="col-span-2 col-start-2 row-start-2 @min-[40rem]:py-3 @min-[40rem]:pr-4"
+                  className="col-span-2 col-start-2 row-start-2 @min-[40rem]:py-3.5 @min-[40rem]:pr-4"
                 >
-                  <p className="font-mono text-sm font-semibold tabular-nums text-text-strong">
+                  <p className="text-[15px] font-semibold tabular-nums text-text-strong">
                     {line.quantity} ×{' '}
                     {line.saleUnit === 'UNIT'
                       ? counterUnitNoun(line.dosageForm)
@@ -191,7 +433,7 @@ export function CounterCartPanel({
                 </td>
                 <td
                   role="cell"
-                  className="col-span-2 col-start-2 row-start-3 @min-[40rem]:py-3 @min-[40rem]:pr-4"
+                  className="col-span-2 col-start-2 row-start-3 @min-[40rem]:py-3.5 @min-[40rem]:pr-4"
                 >
                   <ul
                     className="space-y-2"
@@ -228,9 +470,10 @@ export function CounterCartPanel({
                 </td>
                 <td
                   role="cell"
-                  className="col-start-3 row-start-1 text-right font-mono text-sm font-semibold tabular-nums text-text-strong @min-[40rem]:py-3 @min-[40rem]:pr-4"
+                  className="col-start-3 row-start-1 text-right text-base font-semibold tabular-nums text-text-strong @min-[40rem]:py-3.5"
                 >
                   {formatMinor(line.lineTotalMinor)}
+                  {lineControls ? <CounterLineRemove line={line} controls={lineControls} /> : null}
                 </td>
               </tr>
               {lineAlerts.length > 0 ? (
@@ -239,7 +482,7 @@ export function CounterCartPanel({
                   <td
                     role="cell"
                     colSpan={4}
-                    className="block px-4 pb-3 @min-[40rem]:table-cell @min-[40rem]:pl-0"
+                    className="block pb-3.5 pl-10 @min-[40rem]:table-cell @min-[40rem]:pl-0"
                   >
                     <div className="space-y-2">
                       {lineAlerts.map((alert) => (
@@ -248,8 +491,8 @@ export function CounterCartPanel({
                           role={alert.severity === 'SAFETY_BLOCK' ? 'alert' : undefined}
                           className={
                             alert.severity === 'SAFETY_BLOCK'
-                              ? 'rounded-md bg-destructive/10 p-3 text-xs text-destructive'
-                              : 'rounded-md bg-surface-sunken p-3 text-xs text-text-body'
+                              ? 'rounded-[var(--radius-sm)] bg-destructive/10 px-3 py-2.5 text-[13px] text-destructive'
+                              : 'rounded-[var(--radius-sm)] bg-surface-sunken px-3 py-2.5 text-[13px] text-text-body'
                           }
                         >
                           <div className="flex flex-wrap items-center gap-2 font-semibold">

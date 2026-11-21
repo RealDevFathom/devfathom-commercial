@@ -528,6 +528,18 @@ describe('configured connection diagnostics', () => {
     });
   });
 
+  it('returns the playlist codec with ok, and nothing else from the transport', async () => {
+    mocks.diagnose.mockResolvedValue({
+      outcome: 'ok',
+      discoveredProfile: 'Configured HLS gateway',
+      videoCodec: 'h265',
+    } as never);
+    await expect(caller().configuredConnectionDiagnostics({ cameraId: 'cam_1' })).resolves.toEqual({
+      outcome: 'ok',
+      videoCodec: 'h265',
+    });
+  });
+
   it.each([
     [
       'another tenant camera',

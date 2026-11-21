@@ -5,6 +5,13 @@ import { publicRequestOrigin } from '@/lib/http-origin';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
+import {
+  AccessChangeError,
+  guardPharmacyAccessChanges,
+  isPharmacyOrganization,
+} from '@/lib/team/pharmacy-access-guard';
+import { RESET_PARTY_SELECT } from '@/lib/auth/admin-password-reset';
+import { holdsOwnerLevelAccess } from '@/lib/auth/member-email-change';
 
 export const SCIM_USER_SCHEMA = 'urn:ietf:params:scim:schemas:core:2.0:User';
 export const SCIM_GROUP_SCHEMA = 'urn:ietf:params:scim:schemas:core:2.0:Group';
@@ -74,24 +81,213 @@ export async function withScimAuth(
     return scimError(401, 'The SCIM bearer token is invalid or expired.');
   }
 
-  return withTenantDb(
-    credential.organizationId,
-    async (db) => {
-      const entitlements = await resolveOrganizationEntitlements(credential.organizationId, db);
-      if (!hasModule(entitlements, 'scim')) {
-        return scimError(403, 'SCIM provisioning is not licensed for this organization.');
+  // DEV-959B: a pharmacy access change the guard refuses rolls the whole request back.
+  try {
+    return await withTenantDb(
+      credential.organizationId,
+      async (db) => {
+        const entitlements = await resolveOrganizationEntitlements(credential.organizationId, db);
+        if (!hasModule(entitlements, 'scim')) {
+          return scimError(403, 'SCIM provisioning is not licensed for this organization.');
+        }
+        await db.organizationScimToken.update({
+          where: { id: credential.id },
+          data: { lastUsedAt: new Date() },
+        });
+        return run({
+          organizationId: credential.organizationId,
+          tokenId: credential.id,
+          db,
+        });
+      },
+      { timeout: 60_000 }
+    );
+  } catch (error) {
+    if (error instanceof AccessChangeError) {
+      // DEV-1004: the refused request rolled back, its event with it. Keep the FAILED event in a
+      // transaction of its own, as every other refused SCIM request keeps one. The refusal stands
+      // whether or not that record can be written.
+      try {
+        await withTenantDb(credential.organizationId, (db) =>
+          recordScimEvent(
+            { organizationId: credential.organizationId, tokenId: credential.id, db },
+            request,
+            {
+              ...scimRequestResource(request),
+              status: 'FAILED',
+              error: error.message,
+            }
+          )
+        );
+      } catch (recordError) {
+        console.error('[scim] the FAILED event of a refused request could not be recorded', {
+          organizationId: credential.organizationId,
+          errorName: recordError instanceof Error ? recordError.name : null,
+        });
       }
-      await db.organizationScimToken.update({
-        where: { id: credential.id },
-        data: { lastUsedAt: new Date() },
-      });
-      return run({
-        organizationId: credential.organizationId,
-        tokenId: credential.id,
-        db,
-      });
+      return scimError(403, error.message);
+    }
+    throw error;
+  }
+}
+
+const SCIM_OPERATIONS: Record<string, string> = {
+  POST: 'CREATE',
+  PUT: 'REPLACE',
+  PATCH: 'PATCH',
+  DELETE: 'DELETE',
+};
+
+/** The operation and resource a SCIM request names, as the routes record them. */
+export function scimRequestResource(request: Request) {
+  const [, collection, id] =
+    /\/scim\/v2\/(Users|Groups)(?:\/([^/?#]+))?\/?$/.exec(new URL(request.url).pathname) ?? [];
+  const resourceType = collection === 'Groups' ? 'Group' : 'User';
+  const resourceId = id ? decodeURIComponent(id).slice(0, 200) : null;
+  return {
+    operation: SCIM_OPERATIONS[request.method] ?? request.method.slice(0, 20),
+    resourceType,
+    payload: resourceId
+      ? resourceType === 'Group'
+        ? { groupId: resourceId }
+        : { userId: resourceId }
+      : undefined,
+  };
+}
+
+/**
+ * DEV-959B: in a pharmacy, a SCIM write that changes people's roles or status runs inside the
+ * access guard, which locks the organisation row; elsewhere it takes the same lock (DEV-1004).
+ * SCIM has no member and no fresh approval behind it, so in a pharmacy it may only take access
+ * away: it never gives a weighty sub-role, never makes an administrator or an owner, and never
+ * leaves the organization without an owner.
+ */
+export async function scimAccessChange<T>(
+  ctx: ScimContext,
+  targetIds: string[] | null | (() => Promise<string[] | null>),
+  action: string,
+  write: () => Promise<{ targetIds: string[]; value: T }>
+): Promise<T> {
+  if (!(await isPharmacyOrganization(ctx.db, ctx.organizationId))) {
+    // DEV-1004: in every other business type the write still takes the organisation lock the
+    // team and organization admin screens take for a role or status change, so a racing edit
+    // by the owner or an administrator is serialised with it rather than read before it.
+    await ctx.db
+      .$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${ctx.organizationId} FOR UPDATE`;
+    return (await write()).value;
+  }
+  const { value } = await guardPharmacyAccessChanges(
+    ctx.db,
+    {
+      organizationId: ctx.organizationId,
+      actor: { kind: 'system', source: 'SCIM' },
+      targetIds,
+      pinVerified: false,
+      mode: 'role',
+      action,
+      describe: (name) => `Directory provisioning changed ${name}`,
     },
-    { timeout: 60_000 }
+    write
+  );
+  return value;
+}
+
+export type ScimGroupOperation = { op: 'add' | 'replace' | 'remove'; ids: string[] };
+
+/** DEV-974: a group change that would give or take away owner-level access. */
+export class ScimOwnerAccessRefusal extends Error {
+  constructor() {
+    super('Owner access can only be changed by the owner in DevFathom.');
+  }
+}
+
+/**
+ * A SCIM group's membership change: the group is a custom role, so moving people in or out
+ * changes what they may do. In a pharmacy, everyone it can change (the group's current members
+ * and every member named) passes the access guard together, listed only once the guard holds
+ * the organisation lock, so nobody joins the group or the directory unchecked in between.
+ *
+ * DEV-974, in every business type: only the owner adds or removes owner-level access, and any
+ * administrator can mint a SCIM token. Inside the write (so after the lock), the whole PATCH
+ * is simulated on every member it can touch (the named ids and everyone a `replace` clears),
+ * each member whose role would change is judged before and after, and if either side is
+ * owner-level (the system owner role or a `*` grant) `ScimOwnerAccessRefusal` is thrown before
+ * anything is written. Otherwise the final memberships are written together: all or nothing.
+ */
+export async function scimPatchGroupMembers(
+  ctx: ScimContext,
+  roleId: string,
+  operations: readonly ScimGroupOperation[]
+): Promise<void> {
+  const named = [...new Set(operations.flatMap((operation) => operation.ids))];
+  let affected: string[] = [];
+  await scimAccessChange(
+    ctx,
+    async () => {
+      const people = await ctx.db.user.findMany({
+        where: { OR: [{ organizationRoleId: roleId }, { id: { in: named } }] },
+        select: { id: true },
+      });
+      affected = people.map((person) => person.id);
+      return affected;
+    },
+    'scim.patchGroup',
+    async () => {
+      const role = await ctx.db.organizationRole.findUnique({
+        where: { id: roleId },
+        select: {
+          key: true,
+          isSystem: true,
+          permissions: { select: { capability: true, effect: true } },
+        },
+      });
+      const touched = await ctx.db.user.findMany({
+        where: { OR: [{ organizationRoleId: roleId }, { id: { in: named } }] },
+        select: { ...RESET_PARTY_SELECT, id: true, organizationRoleId: true },
+      });
+      const next = new Map(touched.map((member) => [member.id, member.organizationRoleId]));
+      for (const { op, ids } of operations) {
+        if (op === 'replace') {
+          for (const [userId, current] of next) if (current === roleId) next.set(userId, null);
+        }
+        for (const userId of ids) {
+          if (!next.has(userId)) continue;
+          if (op === 'remove') {
+            if (next.get(userId) === roleId) next.set(userId, null);
+          } else {
+            next.set(userId, roleId);
+          }
+        }
+      }
+      const changed = touched.filter((member) => next.get(member.id) !== member.organizationRoleId);
+      if (
+        changed.some(
+          (member) =>
+            holdsOwnerLevelAccess(member) ||
+            holdsOwnerLevelAccess({
+              organizationRole: next.get(member.id) === roleId ? role : null,
+              permissionOverrides: member.permissionOverrides,
+            })
+        )
+      ) {
+        throw new ScimOwnerAccessRefusal();
+      }
+      const joining = changed.filter((member) => next.get(member.id) === roleId);
+      const leaving = changed.filter((member) => next.get(member.id) === null);
+      if (joining.length) {
+        await ctx.db.user.updateMany({
+          where: { id: { in: joining.map((member) => member.id) } },
+          data: { organizationRoleId: roleId },
+        });
+      }
+      if (leaving.length) {
+        await ctx.db.user.updateMany({
+          where: { id: { in: leaving.map((member) => member.id) } },
+          data: { organizationRoleId: null },
+        });
+      }
+      return { targetIds: affected, value: null };
+    }
   );
 }
 

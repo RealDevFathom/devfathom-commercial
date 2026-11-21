@@ -1478,8 +1478,21 @@ describeIfDatabase('leased receipt settlement', () => {
   it('DEV-637 records an offline sale whose old-range number repeats a branch receipt, under a fresh number', async () => {
     // A block leased before branch-wide numbering came from the counter's own range, so a
     // number it printed can already belong to another counter's receipt in the branch.
+    // DEV-958B: the database now issues a lease only over numbers no sale carries yet, so the
+    // old-range block is leased first and the other counter's receipt takes its number after.
     const f = await setup(async (db, scope, deviceId) => {
       const taken = await deps.receipts.allocateBranchReceiptNumbers(db, scope, 4);
+      const lease = await db.pharmacyReceiptNumberLease.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: BRANCH_A,
+          deviceId,
+          blockStart: taken,
+          blockEnd: taken + 1,
+          nextNumber: taken,
+          issuedToActorId: ACTOR,
+        },
+      });
       await db.pharmacySale.create({
         data: {
           organizationId: ORG_A,
@@ -1492,17 +1505,7 @@ describeIfDatabase('leased receipt settlement', () => {
           completedAt: NOW,
         },
       });
-      return db.pharmacyReceiptNumberLease.create({
-        data: {
-          organizationId: ORG_A,
-          branchId: BRANCH_A,
-          deviceId,
-          blockStart: taken,
-          blockEnd: taken + 1,
-          nextNumber: taken,
-          issuedToActorId: ACTOR,
-        },
-      });
+      return lease;
     });
     const printed = f.lease.blockStart;
 

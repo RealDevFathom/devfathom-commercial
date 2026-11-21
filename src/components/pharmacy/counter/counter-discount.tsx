@@ -5,13 +5,21 @@ import { X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from '@/components/ui/popover';
+import { Dialog, DialogDescription, DialogPortal, DialogTrigger } from '@/components/ui/dialog';
+import { Dialog as DialogPrimitive } from '@base-ui/react/dialog';
 import { amountInputError, amountInputToMinor } from '@/lib/money-input';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { BPS, NO_MAXIMUM_DISCOUNT_BPS } from '@/lib/pharmacy/smart-discount';
 import { trpc } from '@/lib/trpc';
 import { percentToBps } from './discount-maximum-panel';
+import {
+  COUNTER_SHEET_BACKDROP,
+  CounterNote,
+  CounterSheetFooter,
+  CounterSheetHeader,
+  counterSheetClassName,
+} from './counter-sheet';
 
 /** DEV-929: a manual discount the cashier set for the next item, as a share or an amount. */
 export type CounterHeldDiscount =
@@ -39,6 +47,10 @@ export function describeCounterDiscount(held: CounterHeldDiscount): string {
  * and one short line with its remove action while a discount is held, so nothing comes between
  * the search box and its results. Escape (or applying the discount) closes the panel and focus
  * returns to `returnFocus`.
+ *
+ * DEV-977 phase 2B (Counter v2 A4): the panel is the design's discount sheet (eyebrow, title,
+ * type as a segmented choice, the amount, then Cancel and Apply). The approval itself stays
+ * where it is today: a manager or owner approves with their PIN when the item is added.
  */
 export function CounterDiscountEntry({
   branchId,
@@ -93,128 +105,152 @@ export function CounterDiscountEntry({
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger render={<Button type="button" variant="outline" className="min-h-11" />}>
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger render={<Button type="button" variant="outline" className="min-h-11" />}>
         Discount
-      </PopoverTrigger>
-      <PopoverContent
-        side="top"
-        align="start"
-        className="max-h-(--available-height) w-96 max-w-[calc(100vw-2rem)] overflow-y-auto p-3"
-        initialFocus={valueRef}
-        finalFocus={returnFocus ?? true}
-      >
-        <PopoverTitle className="text-sm font-semibold text-text-strong">
-          Discount on the next item
-        </PopoverTitle>
-        <form
-          className="mt-3 space-y-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (disabled) return;
-            if (kind === 'AMOUNT') {
-              // DEV-939: the shared typed-amount reader, so "12.50" is 1250 exactly, never via a float.
-              const amount = amountInputToMinor(value);
-              if (amount.status === 'INVALID') {
-                setError(amountInputError(amount.reason));
-                return;
-              }
-              if (amount.status === 'EMPTY' || amount.minor === 0) {
-                setError('Enter an amount in rupees above 0, with at most two decimal places.');
-                return;
-              }
-              onHold({ kind, minor: amount.minor });
-            } else {
-              const bps = percentToBps(value);
-              if (bps === null || bps === 0) {
-                setError(
-                  'Enter a percentage above 0 and up to 100, with at most two decimal places.'
-                );
-                return;
-              }
-              if (maxBps !== null && bps > maxBps) {
-                setError(
-                  `${bps / 100}% is above the owner's maximum discount of ${maxBps / 100}%. Give a smaller discount, or ask the owner to raise the maximum.`
-                );
-                return;
-              }
-              onHold({ kind, bps });
-            }
-            setValue('');
-            setError(null);
-            setOpen(false);
-          }}
+      </DialogTrigger>
+      <DialogPortal>
+        <DialogPrimitive.Backdrop className={`fixed inset-0 z-50 ${COUNTER_SHEET_BACKDROP}`} />
+        <DialogPrimitive.Popup
+          data-counter-sheet="dialog"
+          className={counterSheetClassName('dialog')}
+          initialFocus={valueRef}
+          finalFocus={returnFocus ?? true}
         >
-          <p id={`${id}-maximum`} className="text-text-body">
-            {maximum.isLoading
-              ? "Checking the owner's maximum discount…"
-              : maximum.isError
-                ? `The owner's maximum discount could not be loaded: ${counterErrorMessage(maximum.error)} The discount is still checked when you add the item.`
-                : maxBps !== null
-                  ? `The owner's maximum discount is ${maxBps / 100}% of an item's price.`
-                  : "The owner has not set a maximum discount. A discount still cannot take an item below its cost or the branch's minimum margin."}
-          </p>
-          <fieldset className="space-y-1.5">
-            <legend className="font-medium">Discount as</legend>
-            <div className="flex flex-wrap gap-2">
-              {(
-                [
-                  ['PERCENT', 'Percentage (%)'],
-                  ['AMOUNT', 'Amount (Rs)'],
-                ] as const
-              ).map(([option, label]) => (
-                <Button
-                  key={option}
-                  type="button"
-                  variant={kind === option ? 'default' : 'outline'}
-                  className="min-h-11"
-                  aria-pressed={kind === option}
+          <form
+            className="flex min-h-0 flex-1 flex-col"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (disabled) return;
+              if (kind === 'AMOUNT') {
+                // DEV-939: the shared typed-amount reader, so "12.50" is 1250 exactly, never via a float.
+                const amount = amountInputToMinor(value);
+                if (amount.status === 'INVALID') {
+                  setError(amountInputError(amount.reason));
+                  return;
+                }
+                if (amount.status === 'EMPTY' || amount.minor === 0) {
+                  setError('Enter an amount in rupees above 0, with at most two decimal places.');
+                  return;
+                }
+                onHold({ kind, minor: amount.minor });
+              } else {
+                const bps = percentToBps(value);
+                if (bps === null || bps === 0) {
+                  setError(
+                    'Enter a percentage above 0 and up to 100, with at most two decimal places.'
+                  );
+                  return;
+                }
+                if (maxBps !== null && bps > maxBps) {
+                  setError(
+                    `${bps / 100}% is above the owner's maximum discount of ${maxBps / 100}%. Give a smaller discount, or ask the owner to raise the maximum.`
+                  );
+                  return;
+                }
+                onHold({ kind, bps });
+              }
+              setValue('');
+              setError(null);
+              setOpen(false);
+            }}
+          >
+            <CounterSheetHeader eyebrow="Discount" title="Discount on the next item" />
+            <DialogDescription className="sr-only">
+              A manual discount on the next item you add to this bill.
+            </DialogDescription>
+            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4.5 text-sm">
+              <p id={`${id}-maximum`} className="text-text-body">
+                {maximum.isLoading
+                  ? "Checking the owner's maximum discount…"
+                  : maximum.isError
+                    ? `The owner's maximum discount could not be loaded: ${counterErrorMessage(maximum.error)} The discount is still checked when you add the item.`
+                    : maxBps !== null
+                      ? `The owner's maximum discount is ${maxBps / 100}% of an item's price.`
+                      : "The owner has not set a maximum discount. A discount still cannot take an item below its cost or the branch's minimum margin."}
+              </p>
+              <fieldset className="space-y-1.5">
+                <legend className="text-[13px] font-semibold text-text-strong">Discount as</legend>
+                <div
+                  data-counter-segmented=""
+                  className="inline-flex flex-wrap gap-1 rounded-sm bg-surface-sunken p-1"
+                >
+                  {(
+                    [
+                      ['PERCENT', 'Percentage (%)'],
+                      ['AMOUNT', 'Amount (Rs)'],
+                    ] as const
+                  ).map(([option, label]) => (
+                    <Button
+                      key={option}
+                      type="button"
+                      variant={kind === option ? 'default' : 'ghost'}
+                      className="min-h-11 shadow-none hover:translate-y-0 active:translate-y-0"
+                      aria-pressed={kind === option}
+                      disabled={disabled}
+                      onClick={() => {
+                        setKind(option);
+                        setError(null);
+                      }}
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </div>
+              </fieldset>
+              <div className="space-y-1.5">
+                <Label htmlFor={`${id}-value`} className="text-[13px] font-semibold">
+                  {kind === 'PERCENT' ? 'Discount (%)' : 'Discount (Rs)'}
+                </Label>
+                <Input
+                  ref={valueRef}
+                  id={`${id}-value`}
+                  className="h-11 w-40 font-semibold tabular-nums"
+                  inputMode="decimal"
+                  autoComplete="off"
+                  value={value}
                   disabled={disabled}
-                  onClick={() => {
-                    setKind(option);
+                  aria-invalid={error ? true : undefined}
+                  aria-describedby={`${id}-maximum ${id}-help${error ? ` ${id}-error` : ''}`}
+                  onChange={(event) => {
+                    setValue(event.target.value);
                     setError(null);
                   }}
+                />
+              </div>
+              {error ? (
+                <p
+                  id={`${id}-error`}
+                  role="alert"
+                  className="rounded-sm bg-destructive/10 px-3.5 py-3 text-destructive"
                 >
-                  {label}
-                </Button>
-              ))}
+                  {error}
+                </p>
+              ) : null}
+              <CounterNote tone="warning">
+                <p id={`${id}-help`}>
+                  Prescription, restricted and controlled medicines are never discounted. If you
+                  cannot give discounts on your own, a manager or owner approves with their PIN when
+                  you add the item.
+                </p>
+              </CounterNote>
             </div>
-          </fieldset>
-          <div className="space-y-1.5">
-            <Label htmlFor={`${id}-value`}>
-              {kind === 'PERCENT' ? 'Discount (%)' : 'Discount (Rs)'}
-            </Label>
-            <Input
-              ref={valueRef}
-              id={`${id}-value`}
-              className="h-11 w-40"
-              inputMode="decimal"
-              autoComplete="off"
-              value={value}
-              disabled={disabled}
-              aria-invalid={error ? true : undefined}
-              aria-describedby={`${id}-maximum ${id}-help${error ? ` ${id}-error` : ''}`}
-              onChange={(event) => {
-                setValue(event.target.value);
-                setError(null);
-              }}
-            />
-          </div>
-          <p id={`${id}-help`} className="text-text-muted">
-            Prescription, restricted and controlled medicines are never discounted. If you cannot
-            give discounts on your own, a manager or owner approves with their PIN when you add the
-            item.
-          </p>
-          {error ? (
-            <p id={`${id}-error`} role="alert" className="text-destructive">
-              {error}
-            </p>
-          ) : null}
-          <Button type="submit" className="min-h-11" disabled={disabled}>
-            Apply to next item
-          </Button>
-        </form>
-      </PopoverContent>
-    </Popover>
+            <CounterSheetFooter>
+              <Button
+                type="button"
+                variant="outline"
+                className="min-h-11 shadow-none hover:translate-y-0 active:translate-y-0"
+                onClick={() => setOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" className="min-h-11" disabled={disabled}>
+                Apply to next item
+              </Button>
+            </CounterSheetFooter>
+          </form>
+        </DialogPrimitive.Popup>
+      </DialogPortal>
+    </Dialog>
   );
 }

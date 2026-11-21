@@ -889,6 +889,13 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: "auditedProtectedProcedure; returns only the caller's own flags",
     none: 'any signed-in member (UI flags only)',
   },
+  'pharmacyMedicine.catalogueSelfApproval': {
+    gate: "auditedProtectedProcedure + inline catalogueAccess, as decideCatalogueEdit: pharmacy:catalogue-review, OR owner fallback (admin:access AND pharmacy:catalogue-edit, live owner, no other active reviewer); caller's own organization only; names of this organization's active members who can approve the caller's edits",
+    lines: [
+      'review-catalogue/approve-reject-others-catalogue',
+      'suggest-catalogue-edits/owner-approve-no-reviewer',
+    ],
+  },
   'pharmacyMedicine.configureReferenceConnector': {
     gate: 'adminProcedure -> admin:access',
     none: 'workspace administrators only (admin:access)',
@@ -1074,13 +1081,29 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); read only, the quota grant itself is the manager-only counter route',
     none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
   },
+  'pharmacyOffline.offlineCashSelling': {
+    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); read only (the switch is off and not available until sending offline sales is ready)',
+    none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
+  },
+  'pharmacyOffline.receiptNumberGaps': {
+    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); read only',
+    none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
+  },
+  'pharmacyOffline.recordUnsentOfflineSale': {
+    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); records a manager\'s account of one unsent offline sale a revoked counter kept, audited; books nothing',
+    none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
+  },
   'pharmacyOffline.revoke': {
     gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); releases the counter\'s open stock quotas in the same transaction, audited',
     none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
   },
   'pharmacyOffline.rotate': {
-    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch)',
+    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); moves the credential expiry 30 days on',
     none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
+  },
+  'pharmacyOffline.setOfflineCashSelling': {
+    gate: 'adminProcedure (admin:access) + managedBranch + isPharmacistCheckPolicyOwner (owner only); switching offline cash selling on is refused in this phase (PRECONDITION_FAILED) for everyone',
+    none: 'owner only; in this phase nobody can switch it on',
   },
   'pharmacyOnboarding.fbrTier1Status': {
     gate: 'fbrTier1Procedure = adminProcedure + pharmacy-core',
@@ -2006,6 +2029,15 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
       'dispense-prescriptions/witness-colleagues-controlledmedicine-sale',
     ],
   },
+  'pharmacySales.changeLine': {
+    gate: "protectedProcedure + requireCounterReceiptAccess default (pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN), the addLine builder and gate; Rx/restricted line -> pharmacy:dispense; another's bill -> pharmacy:manage (as a void); refused for a paid, held or closed bill, a controlled or prescription line, or a discount, voucher or batch override approved for the old quantity; on a cash-shift branch refused between shifts (the payment rule) and for a bill whose shift has closed",
+    lines: [
+      'take-payment/ring-up-medicines',
+      'dispense-prescriptions/ring-up-medicines-without-counter',
+      'take-payment/open-hold-resume-void',
+      'dispense-prescriptions/sell-prescriptiononly-restricted-medicines',
+    ],
+  },
   'pharmacySales.addRestockInterest': {
     gate: 'requireCounterReceiptAccess(canonical true) -> pharmacy:counter + counter family, assigned branch or ADMIN',
     lines: ['take-payment/follow-up-outofstock-requests'],
@@ -2046,6 +2078,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
       'close-the-day/review-reconciliation-close-day',
       'run-branches/close-day-branches-unless',
     ],
+  },
+  'pharmacySales.closeShift': {
+    gate: "auditedProtectedProcedure + cashShiftScope: requireDrawerManagerAccess (pharmacy:manage, counter family not DENIED, assigned branch or ADMIN) closes any shift of the branch; otherwise requireCounterReceiptAccess(canonical true) -> pharmacy:counter, own shift only; over or short above the tolerance -> the caller's right to close that shift is checked before any PIN; approver passes actorManagesBranchDrawers + their PIN or code through verifyApprovalSecret, and is neither the shift's cashier nor the caller unless no other approver with a live PIN exists (solo policy, or the solo-pharmacy rule); guesses typed by someone else never strike the approver's credential and are capped per approver",
+    lines: ['take-payment/open-close-own-cash-shift', 'run-branches/run-cash-shifts-branches'],
   },
   'pharmacySales.counterBranches': {
     gate: "protectedProcedure; lists the caller's own assigned active branches (all for ADMIN)",
@@ -2334,6 +2370,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'empty drawer for self -> pharmacy:counter (canonical); opening float > 0 or naming another cashier -> requireDrawerManagerAccess (pharmacy:manage)',
     lines: ['take-payment/take-payment-branches-by', 'run-branches/run-cash-drawers-branches'],
   },
+  'pharmacySales.openShift': {
+    gate: "auditedProtectedProcedure; naming another cashier -> requireDrawerManagerAccess (pharmacy:manage); own shift -> cashShiftScope: requireDrawerManagerAccess, else requireCounterReceiptAccess(canonical true) -> pharmacy:counter",
+    lines: ['take-payment/open-close-own-cash-shift', 'run-branches/run-cash-shifts-branches'],
+  },
   'pharmacySales.optOutRestockInterest': {
     gate: 'requireCounterReceiptAccess(canonical true) -> pharmacy:counter',
     lines: ['take-payment/follow-up-outofstock-requests'],
@@ -2381,6 +2421,15 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
   'pharmacySales.restockRecoveryReport': {
     gate: 'requireDrawerManagerAccess -> pharmacy:manage',
     lines: ['run-branches/see-demand-lostsales-restockrecovery'],
+  },
+  'pharmacySales.removeLine': {
+    gate: "protectedProcedure + requireCounterReceiptAccess default (pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN), the addLine builder and gate; Rx/restricted line -> pharmacy:dispense; another's bill -> pharmacy:manage (as a void); refused for a paid, held or closed bill and a controlled or prescription line; on a cash-shift branch refused between shifts (the payment rule) and for a bill whose shift has closed",
+    lines: [
+      'take-payment/ring-up-medicines',
+      'dispense-prescriptions/ring-up-medicines-without-counter',
+      'take-payment/open-hold-resume-void',
+      'dispense-prescriptions/sell-prescriptiononly-restricted-medicines',
+    ],
   },
   'pharmacySales.returnAndRefund': {
     gate: "requireCounterReceiptAccess default (pharmacy:counter or pharmacy:dispense) AND pharmacy:manage AND own PIN; khata refund needs pharmacy:counter; controlled line needs pharmacy:dispense + a witnessing pharmacist's PIN",
@@ -2481,9 +2530,17 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'protectedProcedure; returns whether can(pharmacy:counter)',
     none: 'any signed-in member (only reports whether they may take payment)',
   },
+  'pharmacySales.shiftApprovers': {
+    gate: "cashShiftScope: requireDrawerManagerAccess (pharmacy:manage), else requireCounterReceiptAccess(canonical true) -> pharmacy:counter; lists members passing actorManagesBranchDrawers with a live PIN other than the shift's cashier and the caller, or those two when nobody else can",
+    lines: ['take-payment/open-close-own-cash-shift', 'run-branches/run-cash-shifts-branches'],
+  },
   'pharmacySales.shiftHandoverNote': {
     gate: 'adminProcedure (admin:access) AND session role ADMIN AND reports:financial',
     lines: ['financial-reports/workspace-administrator-run-dayclose'],
+  },
+  'pharmacySales.shiftReport': {
+    gate: "cashShiftScope: requireDrawerManagerAccess (pharmacy:manage) reads any shift of the branch; otherwise requireCounterReceiptAccess(canonical true) -> pharmacy:counter, own shift only",
+    lines: ['take-payment/open-close-own-cash-shift', 'run-branches/run-cash-shifts-branches'],
   },
   'pharmacySales.substituteProposals': {
     gate: 'assignedBranchScope only; no capability checked',

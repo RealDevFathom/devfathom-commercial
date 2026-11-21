@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   roleFindFirst: vi.fn(),
   roleFindMany: vi.fn(),
   resolveEntitlements: vi.fn(),
+  accessGuard: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -35,18 +36,44 @@ vi.mock('@/lib/entitlements', () => ({
   },
 }));
 
+// DEV-959B: the pharmacy access guard runs on a real database in
+// tests/pharmacy-member-sub-roles.db.test.ts; here it only has to wrap the write.
+vi.mock('@/lib/team/pharmacy-access-guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/team/pharmacy-access-guard')>()),
+  guardPharmacyAccessChange: mocks.accessGuard.mockImplementation(
+    async (_tx: unknown, _input: unknown, write: () => Promise<{ value: unknown }>) => ({
+      value: (await write()).value,
+    })
+  ),
+}));
+
 import { buildPeopleTools } from './people';
 import { INVITE_ROLE_MISMATCH, INVITE_ROLE_NOT_OFFERED } from '@/lib/vertical-catalog';
 import { sendEmail, templates } from '@/lib/email';
 import type { AssistantHelpers } from '@/lib/ai/context';
 
+// DEV-974: live hierarchy reads for a pending-invitation refresh. The acting
+// administrator and pending invitees are ordinary members unless a test says otherwise.
+const partyFindUnique = vi.fn(async ({ where }: { where: { id: string } }) => ({
+  role: where.id === 'user_admin' ? 'ADMIN' : 'EMPLOYEE',
+  status: 'ACTIVE',
+  organizationRole: null,
+  permissionOverrides: [],
+}));
+
 const db = {
-  user: { findFirst: mocks.findFirst, create: mocks.create, update: mocks.update },
+  user: {
+    findFirst: mocks.findFirst,
+    findUnique: partyFindUnique,
+    create: mocks.create,
+    update: mocks.update,
+  },
   // WHA-278: the invite path validates the department against the tenant's own
   // configured catalog before writing.
   organizationDepartment: { findFirst: mocks.departmentFindFirst },
   organizationRole: { findFirst: mocks.roleFindFirst, findMany: mocks.roleFindMany },
   invitation: { upsert: mocks.invitationUpsert },
+  organization: { findUnique: vi.fn(async () => null) },
   $transaction: async (run: (tx: unknown) => Promise<unknown>) =>
     run({
       user: { create: mocks.create, update: mocks.update },
@@ -244,6 +271,28 @@ describe('assistant inviteMember guards', () => {
     expect(mocks.invitationUpsert).not.toHaveBeenCalled();
   });
 
+  it('DEV-974: refuses refreshing the pending invite of an administrator', async () => {
+    mocks.findFirst.mockResolvedValue({ id: 'user_invited', status: 'INVITED' });
+    partyFindUnique.mockImplementationOnce(async () => ({
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      organizationRole: null,
+      permissionOverrides: [],
+    }));
+    partyFindUnique.mockImplementationOnce(async () => ({
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      organizationRole: null,
+      permissionOverrides: [],
+    }));
+
+    const result = await inviteTool().execute({ ...base, email: 'alex@company.com' });
+
+    expect(result.error).toBe('Only the owner can re-send this invitation.');
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+  });
+
   it('refreshes a pending invite at the seat limit without consuming another seat', async () => {
     mocks.findFirst.mockResolvedValue({ id: 'user_invited', status: 'INVITED' });
     mocks.update.mockResolvedValue({ id: 'user_invited', name: 'Alex Carter' });
@@ -397,6 +446,12 @@ describe('assistant inviteMember pharmacy role labels', () => {
       expect.objectContaining({
         data: expect.objectContaining({ role: 'EMPLOYEE', organizationRoleId: 'role_manager' }),
       })
+    );
+    // DEV-959B: in a pharmacy the invite runs inside the access guard.
+    expect(mocks.accessGuard).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: 'assistant.inviteMember', mode: 'role' }),
+      expect.any(Function)
     );
   });
 });

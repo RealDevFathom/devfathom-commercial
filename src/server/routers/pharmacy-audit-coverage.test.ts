@@ -496,6 +496,11 @@ const REST_ROUTES: Readonly<
     delegate: { file: OFFLINE_ROUTER, writes: /'replayOfflineSale'/ },
     how: 'pharmacyCounterRoute writes pharmacyOffline.replayOfflineSale for each posted offline sale.',
   },
+  'counter/renew/route.ts': {
+    audited: /pharmacyCounterRoute\('renew'\)/,
+    delegate: { file: OFFLINE_ROUTER, writes: /'renewCounterCredential'/ },
+    how: 'pharmacyCounterRoute writes pharmacyOffline.renewCounterCredential (the new expiry, never the secret) with person, branch and terminal.',
+  },
   'counter/snapshot/route.ts': {
     audited: /pharmacyCounterRoute\('snapshot'\)/,
     delegate: { file: OFFLINE_ROUTER, writes: /'issueOfflineSnapshot'/ },

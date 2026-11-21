@@ -1,0 +1,622 @@
+/**
+ * @vitest-environment node
+ *
+ * DEV-977B with DEV-958B: changing or removing a bill line on a branch that runs cash shifts,
+ * against a REAL migrated PostgreSQL, written as the restricted runtime role with row-level
+ * security on (the suite first proves the role is neither SUPERUSER nor BYPASSRLS). The line
+ * procedures are called through the router as a signed-in member would call them:
+ *   * between shifts a line change or removal is refused, exactly as a payment is, and a bill
+ *     that belongs to a closed shift is refused even once the next shift is open;
+ *   * a line change never moves cash: the open shift expects the same cash before and after, and
+ *     paying the changed bill expects exactly what paying a fresh bill of the same lines does;
+ *   * the value a line change voids is counted once: in the one shift it happened in (open and
+ *     frozen at its close), in the day close's shift totals, and in the day's void evidence.
+ *
+ * Requires TEST_DATABASE_URL (scripts/run-pharmacy-db-tests.sh sets it). Without it the suite
+ * reports skipped.
+ */
+import { randomUUID } from 'node:crypto';
+
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
+
+// Only the web identity boundary and the audit row write are stubbed, as in cash-shifts.db.test.ts.
+vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn(async () => null) }));
+vi.mock('@/server/audit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/audit')>()),
+  recordTrpcAudit: vi.fn(),
+}));
+
+type ScopedDb = import('@/lib/tenancy/scoped-db').ScopedDb;
+type Scope = { organizationId: string; branchId: string; actorId: string };
+
+let withTenantDb: typeof import('@/lib/tenancy/scoped-db').withTenantDb;
+let withPlatformDb: typeof import('@/lib/tenancy/scoped-db').withPlatformDb;
+let settlement: typeof import('./settlement');
+let shifts: typeof import('./cash-shifts');
+let dayClose: typeof import('./day-close');
+let closeCheck: typeof import('./cash-close-check-operations');
+let sales: typeof import('./sales');
+let ledger: typeof import('./stock-ledger');
+let clock: typeof import('./business-day-clock');
+let businessDay: typeof import('./business-day');
+let regulatory: typeof import('@/lib/test-support/pharmacy-regulatory');
+
+const describeDatabase = TEST_DATABASE_URL ? describe : describe.skip;
+const run = randomUUID().slice(0, 8);
+const ruleSetIds: string[] = [];
+
+beforeAll(async () => {
+  if (!TEST_DATABASE_URL) return;
+  ({ withTenantDb, withPlatformDb } = await import('@/lib/tenancy/scoped-db'));
+  settlement = await import('./settlement');
+  shifts = await import('./cash-shifts');
+  dayClose = await import('./day-close');
+  closeCheck = await import('./cash-close-check-operations');
+  sales = await import('./sales');
+  ledger = await import('./stock-ledger');
+  clock = await import('./business-day-clock');
+  businessDay = await import('./business-day');
+  regulatory = await import('@/lib/test-support/pharmacy-regulatory');
+  const { assertRlsEnforcingRole } = await import('@/lib/testing/rls-role-guard');
+  await assertRlsEnforcingRole(withPlatformDb);
+}, 120_000);
+
+afterAll(async () => {
+  if (!TEST_DATABASE_URL) return;
+  await regulatory.retirePharmacyRegulatoryRules(withPlatformDb, ruleSetIds);
+});
+
+const tenant = <T>(scope: Scope, work: (db: ScopedDb) => Promise<T>) =>
+  withTenantDb(scope.organizationId, work, { userId: scope.actorId, timeout: 60_000 });
+
+type Shop = {
+  owner: Scope;
+  as: (actorId: string) => Scope;
+  manager: string;
+  cashier: string;
+  cashier2: string;
+  locationId: string;
+  today: Date;
+};
+
+/** A fresh organization and branch that runs cash shifts, with a manager and two cashiers. */
+async function shop(label: string): Promise<Shop> {
+  const organizationId = `lcshift_${label}_${run}`;
+  const branchId = `${organizationId}_branch`;
+  const manager = `${organizationId}_manager`;
+  const cashier = `${organizationId}_cashier`;
+  const cashier2 = `${organizationId}_cashier2`;
+  const as = (actorId: string): Scope => ({ organizationId, branchId, actorId });
+  await withPlatformDb((db) =>
+    db.organization.create({
+      data: {
+        id: organizationId,
+        slug: organizationId,
+        legalName: organizationId,
+        displayName: organizationId,
+        vertical: 'PHARMACY',
+        status: 'ACTIVE',
+      },
+    })
+  );
+  const { seedDepartments } = await import('@/lib/test-support/departments');
+  const locationId = await tenant(as(manager), async (db) => {
+    await db.pharmacyBranch.create({
+      data: {
+        id: branchId,
+        organizationId,
+        code: branchId,
+        name: `Line change ${label}`,
+        addressLine: 'Test',
+        city: 'Test',
+        provinceCode: 'PB',
+        cashShiftsEnabled: true,
+      },
+    });
+    await seedDepartments(db, [organizationId], ['LEADERSHIP']);
+    for (const [id, grants] of [
+      [manager, ['pharmacy:manage', 'pharmacy:counter']],
+      [cashier, ['pharmacy:counter']],
+      [cashier2, ['pharmacy:counter']],
+    ] as const) {
+      await db.organizationRole.create({
+        data: {
+          id: `role_${id}`,
+          key: `role_${id}`,
+          name: id,
+          permissions: {
+            create: grants.map((capability) => ({ capability, effect: 'ALLOW' as const })),
+          },
+        },
+      });
+      await db.user.create({
+        data: {
+          id,
+          name: id,
+          email: `${id}@example.test`,
+          department: 'LEADERSHIP',
+          title: 'Pharmacy staff',
+          role: 'EMPLOYEE',
+          status: 'ACTIVE',
+          organizationRoleId: `role_${id}`,
+        },
+      });
+      await db.pharmacyBranchAssignment.create({ data: { userId: id, branchId, active: true } });
+    }
+    return (
+      await db.pharmacyStockLocation.create({
+        data: { organizationId, branchId, code: randomUUID(), name: 'Stock', kind: 'STORE' },
+      })
+    ).id;
+  });
+  ruleSetIds.push(
+    await regulatory.seedPharmacyRegulatoryProfile(
+      withPlatformDb,
+      (work) => tenant(as(manager), work),
+      branchId
+    )
+  );
+  const today = await tenant(as(manager), async (db) =>
+    businessDay.pharmacyBusinessDate(await clock.readPharmacyDayClock(db, as(manager)))
+  );
+  return { owner: as(manager), as, manager, cashier, cashier2, locationId, today };
+}
+
+type BillLine = { id: string; packLevelId: string; medicineId: string };
+
+/**
+ * An open bill started by `actor`, one OTC medicine per `[priceMinor, units]` line, each with ten
+ * spare units received so a line can grow.
+ */
+async function billBy(s: Shop, actor: string, lines: readonly [number, number][]) {
+  const org = s.owner.organizationId;
+  const items = await tenant(s.owner, async (db) => {
+    const made = [];
+    for (const [priceMinor, units] of lines) {
+      const medicine = await db.medicine.create({
+        data: {
+          organizationId: org,
+          productName: randomUUID(),
+          productFamily: 'PHARMACEUTICAL',
+          saleable: true,
+          otc: true,
+          presentations: { create: { organizationId: org, presentation: 'Unit' } },
+        },
+        include: { presentations: true },
+      });
+      const presentation = medicine.presentations[0]!;
+      const pack = await db.packLevel.create({
+        data: {
+          organizationId: org,
+          presentationId: presentation.id,
+          versionGroupId: randomUUID(),
+          version: 1,
+          level: 'UNIT',
+          unitsPerParent: 1,
+          effectiveFrom: new Date('2020-01-01'),
+        },
+      });
+      const batch = await db.pharmacyManufacturingBatch.create({
+        data: {
+          organizationId: org,
+          medicineId: medicine.id,
+          batchNumber: randomUUID(),
+          expiresAt: new Date('2031-01-01'),
+          expiryPrecision: 'DAY',
+        },
+      });
+      await ledger.receiveLot(db, s.owner, {
+        manufacturingBatchId: batch.id,
+        packLevelId: pack.id,
+        stockLocationId: s.locationId,
+        unitsPerPack: 1,
+        supplierName: 'QA',
+        supplierInvoiceRef: randomUUID(),
+        unitCostMinor: 1,
+        printedMrpMinor: priceMinor,
+        receivedExpiresAt: batch.expiresAt as Date,
+        receivedExpiryPrecision: 'DAY',
+        quantityUnits: units + 10,
+        idempotencyKey: randomUUID(),
+        receivedAt: new Date('2020-01-01'),
+      });
+      made.push({ medicineId: medicine.id, presentationId: presentation.id, packId: pack.id });
+    }
+    return made;
+  });
+  return tenant(s.as(actor), async (db) => {
+    const sale = await sales.createSale(db, s.as(actor));
+    const billLines: BillLine[] = [];
+    for (const [index, item] of items.entries()) {
+      const { line } = await sales.addSaleLine(db, s.as(actor), {
+        saleId: sale.id,
+        medicineId: item.medicineId,
+        presentationId: item.presentationId,
+        packLevelId: item.packId,
+        saleUnit: 'UNIT',
+        quantity: lines[index]![1],
+        canonicalUnitsPerSaleUnit: 1,
+        idempotencyKey: randomUUID(),
+      });
+      billLines.push({ id: line.id, packLevelId: item.packId, medicineId: item.medicineId });
+    }
+    return { sale, lines: billLines };
+  });
+}
+
+/** The pharmacy sales procedures as `userId` calls them, in one request's tenant transaction. */
+async function asMember<T>(
+  s: Shop,
+  userId: string,
+  work: (
+    caller: ReturnType<
+      (typeof import('@/server/routers/pharmacy-sales'))['pharmacySalesRouter']['createCaller']
+    >
+  ) => Promise<T>
+) {
+  const { pharmacySalesRouter } = await import('@/server/routers/pharmacy-sales');
+  const organizationId = s.owner.organizationId;
+  return withTenantDb(
+    organizationId,
+    (db) =>
+      work(
+        pharmacySalesRouter.createCaller({
+          db,
+          entitlements: {
+            organizationId,
+            enabledModules: ['pharmacy-core', 'pharmacy-counter'],
+            modules: [],
+            limits: {},
+            seatLimit: 10,
+            activeSeats: 1,
+          },
+          session: {
+            expires: 'later',
+            user: {
+              id: userId,
+              role: 'EMPLOYEE',
+              department: 'LEADERSHIP',
+              status: 'ACTIVE',
+              organizationId,
+            },
+          },
+          organization: { id: organizationId, vertical: 'PHARMACY' },
+          support: null,
+          requestMeta: { ip: null, userAgent: null },
+          audit: { detail: {} },
+        } as never)
+      ),
+    { userId, timeout: 60_000 }
+  );
+}
+
+const changeLine = (
+  s: Shop,
+  actor: string,
+  saleId: string,
+  line: BillLine,
+  quantity: number,
+  deviceId?: string
+) =>
+  asMember(s, actor, (caller) =>
+    caller.changeLine({
+      branchId: s.owner.branchId,
+      saleId,
+      saleLineId: line.id,
+      packLevelId: line.packLevelId,
+      saleUnit: 'UNIT',
+      quantity,
+      canonicalUnitsPerSaleUnit: 1,
+      idempotencyKey: `test-change:${randomUUID()}`,
+      ...(deviceId ? { deviceId } : {}),
+    })
+  );
+
+const removeLine = (s: Shop, actor: string, saleId: string, line: BillLine, deviceId?: string) =>
+  asMember(s, actor, (caller) =>
+    caller.removeLine({
+      branchId: s.owner.branchId,
+      saleId,
+      saleLineId: line.id,
+      idempotencyKey: `test-remove:${randomUUID()}`,
+      ...(deviceId ? { deviceId } : {}),
+    })
+  );
+
+const openDrawer = (s: Shop, device: string, floatMinor: number) =>
+  tenant(s.owner, (db) =>
+    settlement.openPharmacyDrawer(db, s.owner, {
+      deviceId: device,
+      businessDate: s.today,
+      openingFloatMinor: floatMinor,
+      operatingCashierId: s.cashier,
+    })
+  );
+
+const shiftsOf = (s: Shop, drawerSessionId: string) =>
+  tenant(s.owner, (db) =>
+    db.pharmacyCashShift.findMany({ where: { drawerSessionId }, orderBy: { sequence: 'asc' } })
+  );
+
+const shiftReport = (s: Shop, shiftId: string) =>
+  tenant(s.owner, (db) =>
+    shifts.readPharmacyCashShiftReport(db, s.owner, shiftId, { actorIsManager: true })
+  );
+
+const closeShift = (s: Shop, actor: string, shiftId: string, countedCashMinor: number) =>
+  tenant(s.as(actor), (db) =>
+    shifts.closePharmacyCashShift(
+      db,
+      s.as(actor),
+      { shiftId, countedCashMinor },
+      { actorIsManager: actor === s.manager }
+    )
+  );
+
+const openShift = (s: Shop, actor: string, drawerSessionId: string, openingFloatMinor: number) =>
+  tenant(s.as(actor), (db) =>
+    shifts.openPharmacyCashShift(
+      db,
+      s.as(actor),
+      { drawerSessionId, openingFloatMinor },
+      { actorIsManager: actor === s.manager }
+    )
+  );
+
+const cash = (s: Shop, actor: string, device: string, saleId: string, amountMinor: number) =>
+  tenant(s.as(actor), (db) =>
+    settlement.applyPharmacyTender(db, s.as(actor), {
+      saleId,
+      deviceId: device,
+      businessDate: s.today,
+      type: 'CASH',
+      amountMinor,
+      cashReceivedMinor: amountMinor,
+      idempotencyKey: randomUUID(),
+    })
+  );
+
+/** The bill's total from its lines, as payment and the close read it. */
+const billTotal = (s: Shop, saleId: string) =>
+  tenant(s.owner, async (db) =>
+    settlement.saleTotalMinor(
+      await db.pharmacySaleLine.findMany({
+        where: { saleId },
+        select: { quantity: true, unitPriceMinor: true, grossMinor: true, discountMinor: true },
+      })
+    )
+  );
+
+/** What a line change or removal could have written that moves cash, for the whole branch. */
+const cashRows = (s: Shop, drawerSessionId: string) =>
+  tenant(s.owner, async (db) => ({
+    tenders: await db.pharmacyTender.findMany({
+      where: { branchId: s.owner.branchId },
+      select: { id: true, amountMinor: true, shiftId: true },
+      orderBy: { id: 'asc' },
+    }),
+    refunds: await db.pharmacyRefund.count({ where: { branchId: s.owner.branchId } }),
+    movements: await db.pharmacyDrawerMovement.findMany({
+      where: { drawerSessionId },
+      select: { id: true, kind: true, amountMinor: true, shiftId: true },
+      orderBy: { id: 'asc' },
+    }),
+  }));
+
+const lineVoidEvents = (s: Shop) =>
+  tenant(s.owner, async (db) =>
+    (
+      await db.pharmacySaleEvent.findMany({
+        where: { branchId: s.owner.branchId, kind: 'VOIDED' },
+        select: { saleId: true, payload: true },
+      })
+    ).map((event) => event.payload as { shiftId?: string; voidedMinor?: number; cause?: string })
+  );
+
+// Each test seeds its own organization and runs many transactions as the restricted role.
+describeDatabase(
+  'bill line changes on a cash-shift branch, on migrated PostgreSQL',
+  { timeout: 120_000 },
+  () => {
+    it('refuses a line change or removal between shifts, as a payment is, and a bill whose shift has closed', async () => {
+      const s = await shop('between');
+      const device = `device-${randomUUID()}`;
+      const drawer = await openDrawer(s, device, 10_000);
+      expect(drawer.cashShifts).toBe(true);
+      const [first] = await shiftsOf(s, drawer.id);
+      expect(first!.cashierId).toBe(s.cashier);
+      const started = await billBy(s, s.cashier, [[500, 3]]);
+      const line = started.lines[0]!;
+      await closeShift(s, s.cashier, first!.id, 10_000);
+
+      // Between shifts: the counter's device, no device at all, and a device with no drawer.
+      for (const deviceId of [device, undefined, `device-${randomUUID()}`]) {
+        await expect(
+          changeLine(s, s.cashier, started.sale.id, line, 1, deviceId)
+        ).rejects.toMatchObject({ code: 'CONFLICT', message: 'SHIFT_NOT_OPEN' });
+        await expect(
+          removeLine(s, s.cashier, started.sale.id, line, deviceId)
+        ).rejects.toMatchObject({
+          code: 'CONFLICT',
+          message: 'SHIFT_NOT_OPEN',
+        });
+      }
+      // The same refusal a payment meets.
+      await expect(cash(s, s.cashier, device, started.sale.id, 1_500)).rejects.toMatchObject({
+        reason: 'SHIFT_NOT_OPEN',
+      });
+
+      // The next shift opens; the bill still belongs to the closed one, for its cashier and a manager.
+      const second = await openShift(s, s.cashier2, drawer.id, 10_000);
+      for (const actor of [s.cashier, s.manager]) {
+        await expect(changeLine(s, actor, started.sale.id, line, 1, device)).rejects.toMatchObject({
+          code: 'BAD_REQUEST',
+          message: 'LINE_ON_CLOSED_SHIFT',
+        });
+        await expect(removeLine(s, actor, started.sale.id, line, device)).rejects.toMatchObject({
+          code: 'BAD_REQUEST',
+          message: 'LINE_ON_CLOSED_SHIFT',
+        });
+      }
+
+      // Nothing moved: the line is on the bill as it was, no void was recorded, no stock came back.
+      const after = await tenant(s.owner, async (db) => ({
+        lines: await db.pharmacySaleLine.findMany({ where: { saleId: started.sale.id } }),
+        voidRecords: await db.pharmacySale.count({
+          where: { branchId: s.owner.branchId, status: 'VOID' },
+        }),
+        movements: await db.pharmacyStockMovement.aggregate({
+          where: { branchId: s.owner.branchId, lot: { batch: { medicineId: line.medicineId } } },
+          _sum: { quantityUnits: true },
+        }),
+      }));
+      expect(after.lines.map((row) => [row.id, row.quantity])).toEqual([[line.id, 3]]);
+      expect(after.voidRecords).toBe(0);
+      expect(after.movements._sum.quantityUnits).toBe(10);
+      expect(await lineVoidEvents(s)).toEqual([]);
+
+      // A bill of the open shift changes, and its void names that shift.
+      const fresh = await billBy(s, s.cashier2, [[400, 4]]);
+      const changed = await changeLine(s, s.cashier2, fresh.sale.id, fresh.lines[0]!, 2, device);
+      expect(changed.line.quantity).toBe(2);
+      expect(await lineVoidEvents(s)).toEqual([
+        expect.objectContaining({
+          cause: 'LINE_CHANGED',
+          voidedMinor: 800,
+          shiftId: second.shift.id,
+        }),
+      ]);
+    });
+
+    it('never moves cash: the open shift expects the same cash, and the changed bill pays in as a fresh one', async () => {
+      const s = await shop('cash');
+      const device = `device-${randomUUID()}`;
+      const drawer = await openDrawer(s, device, 10_000);
+      const [shift] = await shiftsOf(s, drawer.id);
+      const before = await shiftReport(s, shift!.id);
+      const rowsBefore = await cashRows(s, drawer.id);
+      expect(before.cash.expectedMinor).toBe(10_000);
+
+      const changedBill = await billBy(s, s.cashier, [
+        [700, 4],
+        [300, 2],
+      ]);
+      const [kept, dropped] = changedBill.lines as [BillLine, BillLine];
+      const halved = await changeLine(s, s.cashier, changedBill.sale.id, kept, 2, device);
+      // A change re-adds the line under a new id; the next change names that line.
+      await changeLine(
+        s,
+        s.cashier,
+        changedBill.sale.id,
+        { ...kept, id: halved.line.id },
+        3,
+        device
+      );
+      await removeLine(s, s.cashier, changedBill.sale.id, dropped, device);
+
+      // No tender, refund or drawer movement, and the shift's figures are exactly as before.
+      const during = await shiftReport(s, shift!.id);
+      expect(await cashRows(s, drawer.id)).toEqual(rowsBefore);
+      expect(during.cash).toEqual(before.cash);
+      expect(during.tenders).toEqual([]);
+      expect(during.netTakenMinor).toBe(0);
+      expect(during.lineVoids).toEqual({ count: 2, valueMinor: 1_400 + 600 });
+
+      // Paid, the changed bill adds exactly what a fresh bill rung up with its final lines adds.
+      const changedTotal = await billTotal(s, changedBill.sale.id);
+      expect(changedTotal).toBe(3 * 700);
+      await cash(s, s.cashier, device, changedBill.sale.id, changedTotal);
+      const afterChanged = (await shiftReport(s, shift!.id)).cash.expectedMinor;
+      const freshBill = await billBy(s, s.cashier, [[700, 3]]);
+      const freshTotal = await billTotal(s, freshBill.sale.id);
+      expect(freshTotal).toBe(changedTotal);
+      await cash(s, s.cashier, device, freshBill.sale.id, freshTotal);
+      const afterFresh = await shiftReport(s, shift!.id);
+      expect(afterChanged - before.cash.expectedMinor).toBe(changedTotal);
+      expect(afterFresh.cash.expectedMinor - afterChanged).toBe(
+        afterChanged - before.cash.expectedMinor
+      );
+      expect(afterFresh.cash.cashSalesMinor).toBe(2 * changedTotal);
+      expect(afterFresh.tenders).toEqual([
+        { type: 'CASH', count: 2, amountMinor: 2 * changedTotal },
+      ]);
+      expect((await cashRows(s, drawer.id)).tenders.every((t) => t.shiftId === shift!.id)).toBe(
+        true
+      );
+      // The line changes' voids are counted, and moved no cash of their own.
+      expect(afterFresh.lineVoids).toEqual({ count: 2, valueMinor: 2_000 });
+    });
+
+    it('counts the value a line change voids once: in its shift, in the day close and in the day’s voids', async () => {
+      const s = await shop('voids');
+      const device = `device-${randomUUID()}`;
+      const drawer = await openDrawer(s, device, 10_000);
+      const [first] = await shiftsOf(s, drawer.id);
+
+      // Shift 1: 4 → 1 unit (1,500 off), a line removed (600 off), then 1 → 3 units (nothing off).
+      const one = await billBy(s, s.cashier, [
+        [500, 4],
+        [300, 2],
+      ]);
+      const cut = await changeLine(s, s.cashier, one.sale.id, one.lines[0]!, 1, device);
+      await removeLine(s, s.cashier, one.sale.id, one.lines[1]!, device);
+      await changeLine(s, s.cashier, one.sale.id, { ...one.lines[0]!, id: cut.line.id }, 3, device);
+      const oneTotal = await billTotal(s, one.sale.id);
+      expect(oneTotal).toBe(1_500);
+      await cash(s, s.cashier, device, one.sale.id, oneTotal);
+      const firstOpen = await shiftReport(s, first!.id);
+      expect(firstOpen.lineVoids).toEqual({ count: 2, valueMinor: 2_100 });
+      await closeShift(s, s.cashier, first!.id, firstOpen.cash.expectedMinor);
+
+      // Shift 2: 5 → 2 units (1,200 off).
+      const second = await openShift(s, s.cashier2, drawer.id, firstOpen.cash.expectedMinor);
+      const two = await billBy(s, s.cashier2, [[400, 5]]);
+      await changeLine(s, s.cashier2, two.sale.id, two.lines[0]!, 2, device);
+      await cash(s, s.cashier2, device, two.sale.id, await billTotal(s, two.sale.id));
+
+      // Each void names the one shift it happened in.
+      const events = await lineVoidEvents(s);
+      expect(events.map((e) => [e.shiftId, e.voidedMinor]).sort()).toEqual(
+        [
+          [first!.id, 1_500],
+          [first!.id, 600],
+          [second.shift.id, 1_200],
+        ].sort()
+      );
+
+      // The closed shift's report is frozen with its voids; the open one counts only its own.
+      const firstClosed = await shiftReport(s, first!.id);
+      expect(firstClosed.status).toBe('CLOSED');
+      expect(firstClosed.lineVoids).toEqual({ count: 2, valueMinor: 2_100 });
+      expect((await shiftReport(s, second.shift.id)).lineVoids).toEqual({
+        count: 1,
+        valueMinor: 1_200,
+      });
+
+      // The day close adds its shifts' voids once, and the day's void evidence holds each once.
+      const expectDay = async () => {
+        const preview = await tenant(s.owner, (db) =>
+          dayClose.readPharmacyClose(db, s.owner, s.today)
+        );
+        expect(preview.shiftTotals?.lineVoids).toEqual({ count: 3, valueMinor: 3_300 });
+        expect(preview.shifts?.map((shift) => shift.lineVoids)).toEqual([
+          { count: 2, valueMinor: 2_100 },
+          { count: 1, valueMinor: 1_200 },
+        ]);
+        const evidence = await tenant(s.owner, (db) =>
+          closeCheck.readPharmacyCashCloseCheck(db, s.owner, s.today)
+        );
+        expect(evidence.totals.voidCount).toBe(3);
+        expect(evidence.totals.voidValueMinor).toBe(3_300);
+      };
+      await expectDay();
+      const secondOpen = await shiftReport(s, second.shift.id);
+      await closeShift(s, s.cashier2, second.shift.id, secondOpen.cash.expectedMinor);
+      // Frozen at the second close, the figures are unchanged.
+      await expectDay();
+    });
+  }
+);

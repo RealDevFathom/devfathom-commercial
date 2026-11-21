@@ -13,6 +13,7 @@ import { randomBytes } from 'node:crypto';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { OfflineSnapshotEnvelope } from '@/lib/pharmacy/offline-snapshot-envelope';
+import { offlineSaleChain } from '@/lib/test-support/offline-sale-seal';
 
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 
@@ -56,6 +57,8 @@ vi.mock('@/lib/pharmacy/offline-devices', async (importOriginal) => ({
     branchId: 'branch_a',
     status: 'ACTIVE',
     revokedAt: null,
+    // DEV-957 phase 2: the device row now carries its credential expiry.
+    secretExpiresAt: new Date(Date.now() + 30 * 86_400_000),
   })),
 }));
 vi.mock('@/lib/pharmacy/sales', async (importOriginal) => ({
@@ -145,7 +148,18 @@ function envelope(
   };
 }
 
+
+/**
+ * DEV-957 phase 2 (hardening 4): the counter seals each sale when it is taken; the route
+ * checks that seal. This counter's first sale names no sale before it.
+ */
 function command() {
+  return offlineSaleChain({ organizationId: ORG, branchId: BRANCH }, DEVICE, SECRET).seal(unsealedCommand(), {
+    previousHash: null,
+  });
+}
+
+function unsealedCommand() {
   const receiptEnvelope = envelope('RULES', { kind: 'RULES' });
   return {
     sequence: 1,
@@ -159,7 +173,8 @@ function command() {
       signature: signing.signSnapshotEnvelope(receiptEnvelope),
     },
     snapshots: KINDS.map((kind) => {
-      const payload = { kind };
+      // Offline cash selling forced ON in the signed RULES (it is off in the product).
+      const payload = kind === 'RULES' ? { kind, offlineCashSelling: true } : { kind };
       const signed = envelope(kind, payload);
       return { envelope: signed, signature: signing.signSnapshotEnvelope(signed), payload };
     }),

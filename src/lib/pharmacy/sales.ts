@@ -47,7 +47,12 @@ import { assertStoredPharmacyMayOperate } from './regulatory';
 import { isRefillCycleCampaignKey } from './refill-subscription-rules';
 import { assertVoucherEligibleLine, VoucherScopeError } from './voucher-scope';
 import { assertVoucherIssuerRights, VoucherIssuerRevoked } from './voucher-controls';
-import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
+import {
+  allocateForSale,
+  allocateReservedForSale,
+  lockMedicineBalances,
+  reverseMovements,
+} from './stock-ledger';
 import {
   claimSoldPackSerial,
   PharmacySerializedPackError,
@@ -240,6 +245,22 @@ export class PharmacySaleError extends Error {
       | 'BILL_DISCOUNT_LOCKED_BY_PAYMENT'
       // DEV-966: the prepaid tier priced on top of the bill share, so the bill is fixed.
       | 'BILL_DISCOUNT_LOCKED_BY_PREPAID_TIER'
+      // DEV-977B: a line is changed or taken off only before any payment on the bill.
+      | 'LINE_LOCKED_BY_PAYMENT'
+      // DEV-977B: a line with dispensing records (controlled register, prescription, pharmacist
+      // review, emergency supply, substitution, a scanned serialized pack) stays as recorded.
+      | 'LINE_HAS_DISPENSING_RECORD'
+      // DEV-977B: a line whose price was approved for its quantity (manual discount, voucher,
+      // batch override) is changed by taking it off and adding it again with its approval.
+      | 'LINE_CHANGE_NEEDS_READD'
+      // DEV-977B: a customer order's or refill's bill holds the lines that order reserved and
+      // packed; it is settled through its own flow, never changed line by line at the counter.
+      | 'LINE_ON_ORDER_BILL'
+      // DEV-977B: a sale an offline counter sealed and the server replayed is a closed record.
+      | 'LINE_ON_OFFLINE_SALE'
+      // DEV-977B: a bill started in a cash shift that has since closed; a closed shift never
+      // changes, so neither do the lines it rang up.
+      | 'LINE_ON_CLOSED_SHIFT'
   ) {
     super(reason);
   }
@@ -701,7 +722,8 @@ export async function saleHasPaymentActivity(db: ScopedDb, scope: LedgerScope, s
 async function clearBillDiscountForNewLine(
   db: ScopedDb,
   scope: LedgerScope,
-  sale: Awaited<ReturnType<typeof saleInScope>>
+  sale: Awaited<ReturnType<typeof saleInScope>>,
+  cause: 'LINE_ADDED' | 'LINE_CHANGED' | 'LINE_REMOVED' = 'LINE_ADDED'
 ) {
   if (await saleHasPaymentActivity(db, scope, sale.id))
     throw new PharmacySaleError('BILL_DISCOUNT_LOCKED_BY_PAYMENT');
@@ -726,7 +748,7 @@ async function clearBillDiscountForNewLine(
     });
   const clearedMinor = shared.reduce((sum, row) => sum + row.billDiscountMinor, 0);
   await event(db, scope, sale.id, 'BILL_DISCOUNT', 'CLEARED', {
-    cause: 'LINE_ADDED',
+    cause,
     totalMinor: 0,
     previousTotalMinor: clearedMinor,
     lines: shared.map((row) => ({ saleLineId: row.id, discountMinor: row.billDiscountMinor })),
@@ -740,7 +762,12 @@ async function addSaleLineWithAllocation(
   input: AddSaleLineInput,
   reservation?: ReservedSaleAllocation,
   applyCounterPromotions = false,
-  saleUnitAt?: Date
+  saleUnitAt?: Date,
+  /**
+   * DEV-977B: a changed line keeps its place on the bill (and the receipt), which is ordered by
+   * when each line was first rung up. The change itself is dated by its own LINE_ADDED event.
+   */
+  placedAt?: Date
 ) {
   // #414: a sale opened while the licence was valid must not keep dispensing after it
   // lapses. Every line path (counter, controlled, offline replay, customer orders)
@@ -996,6 +1023,7 @@ async function addSaleLineWithAllocation(
       promotionId: promotion?.promotion.id,
       promotionName: promotion?.promotion.name,
       idempotencyKey: input.idempotencyKey,
+      ...(placedAt ? { createdAt: placedAt } : {}),
     },
   });
   const allocationDiscountMinors = apportionDiscount(discountMinor, allocationGrossMinors);
@@ -1044,6 +1072,426 @@ async function addSaleLineWithAllocation(
     allocation,
     replayed: false,
     ...(promotionNotice ? { promotionNotice } : {}),
+    ...(billDiscountClearedMinor ? { billDiscountClearedMinor } : {}),
+  };
+}
+
+/**
+ * DEV-977B: a counter line is changed (quantity or sale unit) or taken off an open, unpaid
+ * bill. Allocation rows and stock movements are append-only, so a line is never edited or
+ * deleted in place: it is taken off the bill onto its own one-line VOID record, its stock is
+ * reversed, and (for a change) a new line is added through `addSaleLineWithAllocation` with
+ * every rule of adding a line: licence and pharmacist-presence gates, the sale-unit check,
+ * FEFO allocation and stock sufficiency, pricing, automatic promotions, discount limits.
+ * Every reader of the bill (totals, payment, receipt, returns, reports) then sees only the
+ * lines still on it. The record names the bill and the line, and when goods came off the bill
+ * (a removal, or a change to fewer units) it carries a VOIDED event, so it is in the day's
+ * void evidence like any other void.
+ */
+export type SaleLineChangeRequest = {
+  saleId: string;
+  saleLineId: string;
+  idempotencyKey: string;
+  /** DEV-821: a counter user changes only a bill they created unless a manager or owner. */
+  actorIsManager: boolean;
+  /**
+   * DEV-958B: the counter's cash-shift gate, asked under the bill's row lock. On a branch that
+   * runs shifts it refuses between shifts and for a bill whose shift has closed, exactly as a
+   * payment is refused, and returns the open shift the change happens in (null without shifts),
+   * which the void records so the shift report counts it once.
+   */
+  cashShift: (bill: { createdAt: Date; createdByUserId: string }) => Promise<string | null>;
+};
+
+export type SaleLineNewUnit = {
+  packLevelId: string;
+  saleUnit: 'PACK' | 'STRIP' | 'UNIT';
+  quantity: number;
+  canonicalUnitsPerSaleUnit: number;
+};
+
+type LineChangeCause = 'LINE_CHANGED' | 'LINE_REMOVED';
+
+/** DEV-977B: the line keys a customer order's or refill's checkout gives the lines it adds. */
+const ORDER_LINE_KEY = /^(customer-order|refill-cycle):/;
+
+/** The removal record written for this request key, if a committed attempt already made it. */
+async function lineChangeRecord(db: ScopedDb, scope: LedgerScope, idempotencyKey: string) {
+  // DEV-1004: written with the predicate of the partial index on line-change events (migration
+  // 20261118127000). Under row-level security the index narrows to this organisation and branch,
+  // and the key is checked over the branch's line-change events only, never every sale event.
+  const [record] = await db.$queryRaw<{ saleId: string; payload: Prisma.JsonValue }[]>(Prisma.sql`
+    SELECT "saleId", "payload" FROM "pharmacy_sale_events"
+     WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}
+       AND "kind" = 'CREATED' AND ("payload"->>'lineChangeKey') = ${idempotencyKey}
+     LIMIT 1`);
+  return record ?? null;
+}
+
+type LineChangePayload = {
+  cause: LineChangeCause;
+  fromSaleId: string;
+  saleLineId: string;
+  lineChangeKey: string;
+  /** DEV-958B: the open cash shift the change happened in, on a branch that runs shifts. */
+  shiftId?: string;
+};
+
+function lineChangePayload(value: Prisma.JsonValue): LineChangePayload | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const { cause, fromSaleId, saleLineId, lineChangeKey } = value as Record<string, unknown>;
+  if (
+    (cause !== 'LINE_CHANGED' && cause !== 'LINE_REMOVED') ||
+    typeof fromSaleId !== 'string' ||
+    typeof saleLineId !== 'string' ||
+    typeof lineChangeKey !== 'string'
+  )
+    return null;
+  return { cause, fromSaleId, saleLineId, lineChangeKey };
+}
+
+/**
+ * Locks the open bill, then reads the line and refuses everything a change may not touch.
+ * Returns the locked bill and the line.
+ */
+async function lockLineForChange(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: SaleLineChangeRequest,
+  cause: LineChangeCause
+) {
+  const sale = await saleInScope(db, scope, input.saleId);
+  if (sale.status !== 'OPEN') throw new PharmacySaleError('INVALID_STATE');
+  // The same row lock adding a line takes: a concurrent payment, add, change or void of this
+  // bill waits here, and whichever loses sees the bill as the winner left it.
+  const locked = await db.pharmacySale.updateMany({
+    where: {
+      id: input.saleId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: 'OPEN',
+    },
+    data: { status: 'OPEN' },
+  });
+  if (locked.count !== 1) throw new PharmacySaleError('INVALID_STATE');
+  const lockedSale = await saleInScope(db, scope, input.saleId);
+  if (!input.actorIsManager && lockedSale.createdByUserId !== scope.actorId)
+    throw new PharmacySaleError('NOT_BILL_OWNER');
+  const line = lockedSale.lines.find((row) => row.id === input.saleLineId);
+  if (!line) throw new PharmacySaleError('NOT_FOUND');
+  const shiftId = await input.cashShift(lockedSale);
+  if (await saleHasPaymentActivity(db, scope, input.saleId))
+    throw new PharmacySaleError('LINE_LOCKED_BY_PAYMENT');
+  // A customer order's or refill's checkout opens the bill and adds the lines it reserved under
+  // keys only the server sets (customer-ordering.ts, refill-subscriptions.ts). The line keys are
+  // read from the bill itself, so the refusal never depends on who may see the order rows.
+  const saleWhere = { organizationId: scope.organizationId, branchId: scope.branchId };
+  const [order, refillCycle, offlineCommand] = await Promise.all([
+    db.pharmacyCustomerOrder.findFirst({
+      where: { ...saleWhere, counterSaleId: input.saleId },
+      select: { id: true },
+    }),
+    db.pharmacyRefillSubscriptionCycle.findFirst({
+      where: { ...saleWhere, counterSaleId: input.saleId },
+      select: { id: true },
+    }),
+    db.pharmacyOfflineCommand.findFirst({
+      where: { ...saleWhere, serverRef: input.saleId },
+      select: { id: true },
+    }),
+  ]);
+  if (
+    order ||
+    refillCycle ||
+    lockedSale.lines.some((row) => ORDER_LINE_KEY.test(row.idempotencyKey))
+  )
+    throw new PharmacySaleError('LINE_ON_ORDER_BILL');
+  if (offlineCommand) throw new PharmacySaleError('LINE_ON_OFFLINE_SALE');
+  // A prepaid tier priced this line; its evidence is frozen (DEV-966).
+  if (line.tierDiscountMinor > 0)
+    throw new PharmacySaleError('BILL_DISCOUNT_LOCKED_BY_PREPAID_TIER');
+  const where = { organizationId: scope.organizationId, saleLineId: line.id };
+  const [review, followUp, substitution, serial, movements] = await Promise.all([
+    db.pharmacyPharmacistReviewItem.findFirst({ where, select: { id: true } }),
+    db.pharmacyEmergencyRxFollowUp.findFirst({ where, select: { id: true } }),
+    db.pharmacySubstitutionRecord.findFirst({ where, select: { id: true } }),
+    db.pharmacySoldPackSerial.findFirst({ where, select: { id: true } }),
+    db.pharmacyStockMovement.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        id: { in: (await lineAllocations(db, scope, line.id)).map((row) => row.stockMovementId) },
+      },
+      select: { id: true, allocationOverrideId: true },
+    }),
+  ]);
+  if (
+    line.medicine.controlled ||
+    line.prescriptionLineId !== null ||
+    review ||
+    followUp ||
+    substitution ||
+    serial
+  )
+    throw new PharmacySaleError('LINE_HAS_DISPENSING_RECORD');
+  const overridden = movements.some((movement) => movement.allocationOverrideId !== null);
+  // A changed line is priced again from its new quantity. An approval given for the old
+  // quantity (a manual discount, a voucher, a batch override) does not carry over.
+  if (
+    cause === 'LINE_CHANGED' &&
+    (overridden ||
+      line.voucherId !== null ||
+      (line.discountMinor - line.billDiscountMinor > 0 && line.promotionId === null))
+  )
+    throw new PharmacySaleError('LINE_CHANGE_NEEDS_READD');
+  return { sale: lockedSale, line, shiftId };
+}
+
+async function lineAllocations(db: ScopedDb, scope: LedgerScope, saleLineId: string) {
+  return db.pharmacySaleLineAllocation.findMany({
+    where: { organizationId: scope.organizationId, branchId: scope.branchId, saleLineId },
+    orderBy: { createdAt: 'asc' },
+    select: { stockMovementId: true },
+  });
+}
+
+/**
+ * Takes the line off the bill onto its own VOID record and gives its stock back. The caller
+ * holds the bill's row lock and has cleared any whole-bill discount.
+ */
+async function takeLineOffBill(
+  db: ScopedDb,
+  scope: LedgerScope,
+  sale: { id: string },
+  line: { id: string; voucherId: string | null; canonicalUnits: number },
+  input: { idempotencyKey: string; cause: LineChangeCause; reason: string; shiftId: string | null }
+) {
+  const record = await db.pharmacySale.create({
+    data: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      createdByUserId: scope.actorId,
+      status: 'VOID',
+    },
+  });
+  await db.pharmacySaleLine.update({
+    where: { organizationId_id: { organizationId: scope.organizationId, id: line.id } },
+    data: { saleId: record.id },
+  });
+  // DEV-819: a voucher use goes back when its line comes off an unpaid bill, as on a void.
+  if (line.voucherId)
+    await db.pharmacyVoucher.updateMany({
+      where: {
+        id: line.voucherId,
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        usedCount: { gte: 1 },
+      },
+      data: { usedCount: { decrement: 1 } },
+    });
+  const allocations = await lineAllocations(db, scope, line.id);
+  await reverseMovements(db, scope, {
+    movementIds: allocations.map((allocation) => allocation.stockMovementId),
+    reason: input.reason,
+    at: new Date(),
+  });
+  const payload: LineChangePayload = {
+    cause: input.cause,
+    fromSaleId: sale.id,
+    saleLineId: line.id,
+    lineChangeKey: input.idempotencyKey,
+    ...(input.shiftId ? { shiftId: input.shiftId } : {}),
+  };
+  await event(db, scope, record.id, 'CREATED', input.reason, payload);
+  // The line as it now stands (any whole-bill share was cleared before it moved).
+  const moved = await db.pharmacySaleLine.findFirstOrThrow({
+    where: { organizationId: scope.organizationId, id: line.id },
+    select: { grossMinor: true, discountMinor: true },
+  });
+  return { record, netMinor: moved.grossMinor - moved.discountMinor };
+}
+
+/**
+ * The VOIDED event of a line-change record: written when goods came off the bill, with the value
+ * that came off (`voidedMinor`), which the day's void evidence counts (cash-close check), and
+ * (DEV-958B) the open shift it happened in, whose report counts it.
+ */
+async function voidLineChangeRecord(
+  db: ScopedDb,
+  scope: LedgerScope,
+  recordId: string,
+  input: {
+    cause: LineChangeCause;
+    fromSaleId: string;
+    saleLineId: string;
+    voidedMinor: number;
+    reason: string;
+    shiftId: string | null;
+    replacementSaleLineId?: string;
+  }
+) {
+  await event(db, scope, recordId, 'VOIDED', input.reason, {
+    cause: input.cause,
+    fromSaleId: input.fromSaleId,
+    saleLineId: input.saleLineId,
+    voidedMinor: Math.max(0, input.voidedMinor),
+    ...(input.shiftId ? { shiftId: input.shiftId } : {}),
+    ...(input.replacementSaleLineId ? { replacementSaleLineId: input.replacementSaleLineId } : {}),
+  });
+}
+
+/** DEV-977B: takes one line off an open, unpaid counter bill. */
+export async function removeSaleLine(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: SaleLineChangeRequest
+) {
+  await lockSaleLineKey(db, scope, input.idempotencyKey);
+  const previous = await lineChangeRecord(db, scope, input.idempotencyKey);
+  if (previous) {
+    const payload = lineChangePayload(previous.payload);
+    if (
+      payload?.cause !== 'LINE_REMOVED' ||
+      payload.fromSaleId !== input.saleId ||
+      payload.saleLineId !== input.saleLineId
+    )
+      throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+    // Never replay into another branch or bill than the one this request names.
+    await saleInScope(db, scope, input.saleId);
+    return { saleLineId: input.saleLineId, removed: true, replayed: true };
+  }
+  const { sale, line, shiftId } = await lockLineForChange(db, scope, input, 'LINE_REMOVED');
+  const billDiscountClearedMinor = sale.lines.some((row) => row.billDiscountMinor > 0)
+    ? await clearBillDiscountForNewLine(db, scope, sale, 'LINE_REMOVED')
+    : 0;
+  const reason = 'Line removed from the bill at the counter';
+  const taken = await takeLineOffBill(db, scope, sale, line, {
+    idempotencyKey: input.idempotencyKey,
+    cause: 'LINE_REMOVED',
+    reason,
+    shiftId,
+  });
+  await voidLineChangeRecord(db, scope, taken.record.id, {
+    cause: 'LINE_REMOVED',
+    fromSaleId: sale.id,
+    saleLineId: line.id,
+    voidedMinor: taken.netMinor,
+    reason,
+    shiftId,
+  });
+  return {
+    saleLineId: line.id,
+    removed: true,
+    replayed: false,
+    ...(billDiscountClearedMinor ? { billDiscountClearedMinor } : {}),
+  };
+}
+
+/**
+ * DEV-977B: changes the quantity or sale unit of one line on an open, unpaid counter bill.
+ * The old line is taken off and a new one added under the request key with every rule of
+ * adding a line, so the bill's money is exactly that of a bill rung up with the new line.
+ */
+export async function changeSaleLine(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: SaleLineChangeRequest & SaleLineNewUnit
+) {
+  if (
+    !Number.isSafeInteger(input.quantity) ||
+    input.quantity <= 0 ||
+    !Number.isSafeInteger(input.canonicalUnitsPerSaleUnit) ||
+    input.canonicalUnitsPerSaleUnit <= 0 ||
+    !Number.isSafeInteger(input.quantity * input.canonicalUnitsPerSaleUnit)
+  )
+    throw new PharmacySaleError('INVALID_QUANTITY');
+  await lockSaleLineKey(db, scope, input.idempotencyKey);
+  const previous = await lineChangeRecord(db, scope, input.idempotencyKey);
+  if (previous) {
+    const payload = lineChangePayload(previous.payload);
+    const replacement = await db.pharmacySaleLine.findFirst({
+      where: { organizationId: scope.organizationId, idempotencyKey: input.idempotencyKey },
+    });
+    if (
+      payload?.cause !== 'LINE_CHANGED' ||
+      payload.fromSaleId !== input.saleId ||
+      payload.saleLineId !== input.saleLineId ||
+      !replacement ||
+      replacement.branchId !== scope.branchId ||
+      replacement.saleId !== input.saleId ||
+      replacement.packLevelId !== input.packLevelId ||
+      replacement.saleUnit !== input.saleUnit ||
+      replacement.quantity !== input.quantity ||
+      replacement.canonicalUnitsPerSaleUnit !== input.canonicalUnitsPerSaleUnit
+    )
+      throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+    return { line: replacement, replacedSaleLineId: input.saleLineId, replayed: true };
+  }
+  // A key that already added a line (an add, not a change) is never reused for a change.
+  const keyTaken = await db.pharmacySaleLine.findFirst({
+    where: { organizationId: scope.organizationId, idempotencyKey: input.idempotencyKey },
+    select: { id: true },
+  });
+  if (keyTaken) throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+  const { sale, line, shiftId } = await lockLineForChange(db, scope, input, 'LINE_CHANGED');
+  if (
+    line.packLevelId === input.packLevelId &&
+    line.saleUnit === input.saleUnit &&
+    line.quantity === input.quantity &&
+    line.canonicalUnitsPerSaleUnit === input.canonicalUnitsPerSaleUnit
+  )
+    return { line, replacedSaleLineId: null, replayed: false, unchanged: true };
+  const billDiscountClearedMinor = sale.lines.some((row) => row.billDiscountMinor > 0)
+    ? await clearBillDiscountForNewLine(db, scope, sale, 'LINE_CHANGED')
+    : 0;
+  const newUnits = input.quantity * input.canonicalUnitsPerSaleUnit;
+  // Every balance the reversal writes and the new allocation draws from, locked first in the
+  // global order, so a concurrent sale of the same medicine cannot deadlock with this change.
+  await lockMedicineBalances(db, scope, line.medicineId);
+  const reason = 'Line quantity or unit changed at the counter';
+  const taken = await takeLineOffBill(db, scope, sale, line, {
+    idempotencyKey: input.idempotencyKey,
+    cause: 'LINE_CHANGED',
+    reason,
+    shiftId,
+  });
+  const added = await addSaleLineWithAllocation(
+    db,
+    scope,
+    {
+      saleId: input.saleId,
+      medicineId: line.medicineId,
+      presentationId: line.presentationId,
+      packLevelId: input.packLevelId,
+      saleUnit: input.saleUnit,
+      quantity: input.quantity,
+      canonicalUnitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
+      idempotencyKey: input.idempotencyKey,
+    },
+    undefined,
+    true,
+    undefined,
+    line.createdAt
+  );
+  // Goods came off the bill only when the new line holds fewer units; the void counts the value
+  // that came off, never the whole old line.
+  if (newUnits < line.canonicalUnits)
+    await voidLineChangeRecord(db, scope, taken.record.id, {
+      cause: 'LINE_CHANGED',
+      fromSaleId: sale.id,
+      saleLineId: line.id,
+      voidedMinor: taken.netMinor - (added.line.grossMinor - added.line.discountMinor),
+      reason,
+      shiftId,
+      replacementSaleLineId: added.line.id,
+    });
+  return {
+    line: added.line,
+    replacedSaleLineId: line.id,
+    replayed: false,
+    ...('promotionNotice' in added && added.promotionNotice
+      ? { promotionNotice: added.promotionNotice }
+      : {}),
     ...(billDiscountClearedMinor ? { billDiscountClearedMinor } : {}),
   };
 }

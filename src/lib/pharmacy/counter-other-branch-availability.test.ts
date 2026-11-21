@@ -217,6 +217,8 @@ function fixture(branches = defaultBranches, lots = defaultLots) {
       ),
     },
     medicinePackMrp: { findMany: vi.fn(async () => []) },
+    // DEV-957 phase 2: no units are set aside for an offline counter in these cases.
+    pharmacyDeviceLotQuota: { findMany: vi.fn(async () => []) },
     pharmacyStockBalance: {
       findMany: vi.fn(async () =>
         local.map((lot) => ({

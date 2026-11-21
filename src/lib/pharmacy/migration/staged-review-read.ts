@@ -12,7 +12,9 @@ export const reviewListInput = reviewBatchInput
   .extend({
     query: z.string().trim().max(120).default(''),
     page: z.number().int().min(1).max(10000).default(1),
-    filter: z.enum(['all', 'stock', 'price', 'collision']).default('all'),
+    filter: z
+      .enum(['all', 'stock', 'price', 'collision', 'not-created', 'codes-not-added'])
+      .default('all'),
   })
   .strict();
 export const REVIEW_PAGE_SIZE = 25;
@@ -88,6 +90,31 @@ export async function listStagedMedicines(
         ],
       },
     ];
+  // DEV-1002: the rows a bulk creation could not turn into medicines, each with its reason.
+  if (input.filter === 'not-created')
+    where.sourceKey = {
+      in: (
+        await db.pharmacyStagedMedicineLink.findMany({
+          where: { organizationId, batchId: batch.id, outcome: 'NOT_CREATED' },
+          select: { sourceKey: true },
+        })
+      ).map((link) => link.sourceKey),
+    };
+  // DEV-1004: the created rows whose old code, generic name or barcode was not added, so the
+  // person who imported the file can see each of them (the creation step names only counts).
+  if (input.filter === 'codes-not-added')
+    where.sourceKey = {
+      in: (
+        await db.pharmacyStagedMedicineLink.findMany({
+          where: {
+            organizationId,
+            batchId: batch.id,
+            OR: [{ aliasesNotAdded: { isEmpty: false } }, { barcodeAttached: false }],
+          },
+          select: { sourceKey: true },
+        })
+      ).map((link) => link.sourceKey),
+    };
   if (input.filter === 'stock' || input.filter === 'price')
     where.exceptions = {
       some: {
@@ -115,6 +142,18 @@ export async function listStagedMedicines(
     },
   });
   const candidateCount = await db.pharmacyMigrationRow.count({ where: base });
+  const notCreated = new Map(
+    (
+      await db.pharmacyStagedMedicineLink.findMany({
+        where: {
+          organizationId,
+          outcome: 'NOT_CREATED',
+          sourceKey: { in: rows.map((row) => row.sourceKey) },
+        },
+        select: { sourceKey: true, notCreatedReason: true },
+      })
+    ).map((link) => [link.sourceKey, link.notCreatedReason])
+  );
   const groups = await db.pharmacyMigrationException.groupBy({
     by: ['bucket'],
     where: { organizationId, batchId: batch.id, status: 'OPEN' },
@@ -131,9 +170,10 @@ export async function listStagedMedicines(
       count: g._count._all,
       workflow: exceptionWorkflow(g.bucket),
     })),
-    rows: rows.map((row) =>
-      stagedReference(row, batch.source, batch.id, batch.quantityUnit, batch.quantityColumn)
-    ),
+    rows: rows.map((row) => ({
+      ...stagedReference(row, batch.source, batch.id, batch.quantityUnit, batch.quantityColumn),
+      notCreatedReason: notCreated.get(row.sourceKey) ?? null,
+    })),
   };
 }
 export async function stagedMedicineDetail(
@@ -162,6 +202,8 @@ export async function stagedMedicineDetail(
       purchasePriceMinor: true,
       unitsPerPack: true,
       outcome: true,
+      notCreatedReason: true,
+      aliasesNotAdded: true,
       barcode: true,
       barcodeAttached: true,
       supplierName: true,

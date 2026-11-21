@@ -74,7 +74,7 @@ function makeDb() {
       findFirst: async () => ({ ...state.batches[0], source: state.sources[0] }),
     },
     // DEV-912: no catalogue medicine has been created from these rows yet.
-    pharmacyStagedMedicineLink: { findFirst: async () => null },
+    pharmacyStagedMedicineLink: { findFirst: async () => null, findMany: async () => [] },
     pharmacyMigrationRow: {
       createMany: async ({ data }: { data: Record<string, unknown>[] }) => {
         data.forEach((row, index) => state.rows.push({ id: `row_${index + 1}`, ...row }));

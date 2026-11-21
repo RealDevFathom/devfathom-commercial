@@ -70,6 +70,11 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         sites: { 'src/server/routers/pharmacy-sales.ts': 1 },
       },
       {
+        id: 'open-close-own-cash-shift',
+        text: "At a branch that runs cash shifts, open their own shift on a counter's drawer with the cash they count, close it with a count, and see their own shift report (an over or short above the owner's limit needs the PIN of another manager or owner)",
+        sites: {},
+      },
+      {
         id: 'see-customerapp-request-queue',
         text: 'See the customer-app request queue and confirm or reject payments customers report against their khata',
         sites: { 'src/server/routers/pharmacy-ordering.ts': 3 },
@@ -144,7 +149,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'take-payment-use-offline',
-        text: 'With Take payment, use an offline counter: start it, download stock, upload offline sales and renew its receipt numbers',
+        text: "With Take payment, use an offline counter: start it, download its signed price list and receipt numbers, check prices on it while offline, upload offline sales, renew its receipt numbers and renew its own device credential before it expires. Taking cash sales on it while offline also needs the owner's offline cash selling switch, which stays off until sending offline sales is ready",
         sites: { 'src/server/routers/pharmacy-offline.ts': 2 },
       },
       {
@@ -246,7 +251,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'search-counter-patients-open',
-        text: 'Search counter patients and open their masked patient panel',
+        text: 'Search counter patients and open their masked patient panel, at every branch',
         sites: { 'src/server/routers/pharmacy-prescriptions.ts': 1 },
       },
       {
@@ -502,6 +507,11 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
           'src/server/routers/pharmacy-sales.ts': 2,
           'src/server/pharmacy-manager-branches.ts': 1,
         },
+      },
+      {
+        id: 'run-cash-shifts-branches',
+        text: "At their branches that run cash shifts, open a shift for another cashier, close anyone's shift before the day close, see every shift report, and approve another person's shift's over or short above the owner's limit with their PIN. A shift they are the cashier of, or are closing and counting themselves, they approve only when no other manager or owner with an approval PIN works at the branch",
+        sites: { 'src/lib/pharmacy/cash-shifts.ts': 1 },
       },
       {
         id: 'set-when-business-day',

@@ -1555,3 +1555,45 @@ describe('DEV-939 typed refund amounts use the shared reader', () => {
     }
   );
 });
+
+describe('DEV-977 phase 2B: returns and no-permission in the Counter v2 sheets (B3, C6)', () => {
+  it('opens the returns sheet with its eyebrow, title, subtitle and an icon close', () => {
+    mocks.refundAccess = { data: { authorized: true } };
+    render(<CounterReturnPanel {...base} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Returns & refunds' }));
+    const sheet = screen.getByRole('dialog', { name: 'Returns & refunds' });
+    expect(sheet).toHaveAttribute('data-counter-sheet', 'returns');
+    // A 760px dialog from 1024px; a bottom sheet below.
+    expect(sheet.className).toContain('lg:w-[min(47.5rem,calc(100vw-4rem))]');
+    expect(sheet.className).toContain('rounded-t-xl');
+    expect(within(sheet).getByText('Returns and refunds')).toHaveAttribute('data-slot', 'eyebrow');
+    expect(sheet).toHaveAccessibleDescription(
+      'Scan or find the receipt, choose the returned line, then confirm the return and its refund together.'
+    );
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('dialog', { name: 'Returns & refunds' })).not.toBeInTheDocument();
+  });
+
+  it('tells a member without refund access who can do it, and offers no way round it', () => {
+    render(<ReturnForm {...props} refundAuthorized={false} />);
+    chooseReceipt();
+    const card = screen.getByRole('heading', {
+      name: 'Ask a manager or owner to record this return',
+    }).parentElement!;
+    expect(card).toHaveAttribute('data-counter-no-permission');
+    expect(within(card).getByRole('note')).toHaveTextContent(
+      'Returns and refunds need a manager or owner. Ask one to record this return and refund it with their PIN.'
+    );
+    expect(within(card).getByText('Who can').nextElementSibling).toHaveTextContent(
+      'Managers and the owner'
+    );
+    expect(within(card).queryByRole('button')).toBeNull();
+    expect(screen.queryByLabelText('Your manager or owner PIN')).not.toBeInTheDocument();
+  });
+
+  it('shows no no-permission card to a manager or owner', () => {
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    expect(document.querySelector('[data-counter-no-permission]')).toBeNull();
+  });
+});

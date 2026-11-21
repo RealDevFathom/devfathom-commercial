@@ -24,7 +24,7 @@ import {
   demoPersonaDeviceName,
   demoPersonaUserRole,
 } from '@/lib/demo/personas';
-import { publicRequestOrigin } from '@/lib/http-origin';
+import { trustedRequestOrigin } from '@/lib/http-origin';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
 import {
   isDeviceSecretFormat,
@@ -182,7 +182,8 @@ function cookieOriginAllowed(request: Request): boolean {
   const origin = request.headers.get('origin');
   if (!origin) return false;
   try {
-    return new URL(origin).origin.toLowerCase() === publicRequestOrigin(request);
+    // DEV-957 phase 2: never trusts a client-supplied X-Forwarded-Host (http-origin.ts).
+    return new URL(origin).origin.toLowerCase() === trustedRequestOrigin(request);
   } catch {
     return false;
   }

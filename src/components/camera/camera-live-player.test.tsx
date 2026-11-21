@@ -14,8 +14,9 @@ const adapter = vi.hoisted(() => ({
 vi.mock('hls.js', () => ({
   default: class {
     static isSupported = () => true;
-    static Events = { ERROR: 'error', MANIFEST_PARSED: 'parsed' };
+    static Events = { ERROR: 'error', MANIFEST_PARSED: 'parsed', MANIFEST_LOADED: 'loaded' };
     static ErrorTypes = { MEDIA_ERROR: 'mediaError', NETWORK_ERROR: 'networkError' };
+    static ErrorDetails = { MANIFEST_INCOMPATIBLE_CODECS_ERROR: 'manifestIncompatibleCodecsError' };
     on(event: string, handler: (...args: unknown[]) => void) {
       adapter.handlers[event] = handler;
     }
@@ -173,4 +174,52 @@ test.each([
   act(() => void video.dispatchEvent(new Event('error')));
   expect(screen.getByRole('status')).toHaveTextContent(text);
   expect(onRelease).toHaveBeenCalledWith('g1');
+});
+
+async function openWithHlsJs() {
+  vi.mocked(HTMLMediaElement.prototype.canPlayType).mockReturnValue('');
+  const view = await open();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1);
+  });
+  return view;
+}
+
+test('names H.265 when the playlist codec is H.265 and the browser cannot decode it', async () => {
+  const { onRelease } = await openWithHlsJs();
+  act(() => {
+    adapter.handlers.loaded?.({}, { levels: [{ videoCodec: 'hvc1.1.6.L93.B0' }] });
+    adapter.handlers.error?.({}, { fatal: true, type: 'mediaError', details: 'bufferAppendError' });
+  });
+  expect(screen.getByRole('status')).toHaveTextContent(
+    "This browser cannot play this camera's H.265 (HEVC) video. Use Safari on Mac, iPhone or iPad"
+  );
+  expect(adapter.destroy).toHaveBeenCalled();
+  expect(onRelease).toHaveBeenCalledWith('g1');
+});
+
+test('explains H.265 browsers when no playlist codec is playable here', async () => {
+  const { onRelease } = await openWithHlsJs();
+  act(() => {
+    adapter.handlers.error?.(
+      {},
+      { fatal: true, type: 'mediaError', details: 'manifestIncompatibleCodecsError' }
+    );
+  });
+  expect(screen.getByRole('status')).toHaveTextContent(
+    "This browser cannot play this camera's video format. H.265 (HEVC) cameras play in Safari"
+  );
+  expect(onRelease).toHaveBeenCalledWith('g1');
+});
+
+test('keeps the generic codec message for an H.264 stream', async () => {
+  await openWithHlsJs();
+  act(() => {
+    adapter.handlers.loaded?.({}, { levels: [{ videoCodec: 'avc1.42c01e' }] });
+    adapter.handlers.error?.({}, { fatal: true, type: 'mediaError', details: 'bufferAppendError' });
+  });
+  expect(screen.getByRole('status')).toHaveTextContent(
+    'This stream or codec is unsupported. Ask the gateway owner to check the video format.'
+  );
+  expect(screen.getByRole('status')).not.toHaveTextContent('H.265');
 });

@@ -348,3 +348,196 @@ it('DEV-705 displays a loose tablet line with its quantity and exact price', () 
   expect(screen.getByText('1 tablet')).toBeVisible();
   expect(screen.getByRole('rowheader')).toHaveTextContent('Tablet · tablet · 1 tablet @ 2.50');
 });
+
+describe('DEV-977 bill states (Counter v2)', () => {
+  it('starts an empty counter with a heading, the existing message and the keys to start', () => {
+    render(
+      <CounterCartPanel
+        cart={null}
+        state="idle"
+        onRetry={vi.fn()}
+        emptyHints={<span>F2 search</span>}
+      />
+    );
+    expect(screen.getByRole('heading', { name: 'Start a bill' })).toBeInTheDocument();
+    expect(
+      screen.getByText('No bill is open. Search for a medicine and add a line to start one.')
+    ).toBeInTheDocument();
+    expect(screen.getByText('F2 search')).toBeInTheDocument();
+    cleanup();
+  });
+
+  it('keeps the loading message announced while the bill skeleton shows', () => {
+    const { container } = render(
+      <CounterCartPanel cart={null} state="loading" onRetry={vi.fn()} />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('Loading the bill…');
+    expect(container.querySelector('[aria-hidden="true"]')).not.toBeNull();
+    cleanup();
+  });
+});
+
+describe('DEV-977B (Counter v2, A1) quantity, unit and removal on the bill line', () => {
+  const STRIP = {
+    kind: 'STRIP' as const,
+    packLevelId: 'pack-strip',
+    levelLabel: 'STRIP',
+    canonicalUnitsPerSaleUnit: 10,
+  };
+  const UNIT = {
+    kind: 'UNIT' as const,
+    packLevelId: 'pack-strip',
+    levelLabel: 'UNIT',
+    canonicalUnitsPerSaleUnit: 1,
+  };
+  function editable(overrides: Partial<CounterCart['lines'][number]> = {}): CounterCart {
+    const base = cart([inDays(400)]);
+    return {
+      ...base,
+      lines: [
+        {
+          ...base.lines[0]!,
+          quantity: 2,
+          canonicalUnits: 20,
+          packLevelId: 'pack-strip',
+          canonicalUnitsPerSaleUnit: 10,
+          allocations: [{ ...base.lines[0]!.allocations[0]!, overridden: false }],
+          ...overrides,
+        },
+      ],
+    };
+  }
+  function renderLine(bill: CounterCart, disabled = false) {
+    const controls = {
+      disabled,
+      unitOptions: vi.fn(() => [STRIP, UNIT]),
+      onChange: vi.fn(),
+      onRemove: vi.fn(),
+    };
+    render(
+      <CounterCartPanel
+        cart={bill}
+        state="ready"
+        onRetry={vi.fn()}
+        now={NOW}
+        lineControls={controls}
+      />
+    );
+    return controls;
+  }
+
+  it('steps the quantity up and down on the line, keeping its unit', () => {
+    const controls = renderLine(editable());
+    fireEvent.click(screen.getByRole('button', { name: '+ Synthetic tablet' }));
+    expect(controls.onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ saleLineId: 'line-a' }),
+      { kind: 'STRIP', packLevelId: 'pack-strip', canonicalUnitsPerSaleUnit: 10, quantity: 3 }
+    );
+    fireEvent.click(screen.getByRole('button', { name: '− Synthetic tablet' }));
+    expect(controls.onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ saleLineId: 'line-a' }),
+      expect.objectContaining({ quantity: 1 })
+    );
+    expect(controls.onRemove).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  it('takes a typed quantity on Enter, ignores a blank or zero, and removes at one with minus', () => {
+    const controls = renderLine(editable({ quantity: 1, canonicalUnits: 10 }));
+    const input = screen.getByLabelText('Quantity: Synthetic tablet');
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(controls.onChange).not.toHaveBeenCalled();
+    expect(input).toHaveValue('1');
+    fireEvent.change(input, { target: { value: '0' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(controls.onChange).not.toHaveBeenCalled();
+    expect(input).toHaveValue('1');
+    fireEvent.change(input, { target: { value: '12a' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(controls.onChange).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ saleLineId: 'line-a' }),
+      expect.objectContaining({ quantity: 12 })
+    );
+    // At one, minus takes the line off the bill.
+    fireEvent.click(screen.getByRole('button', { name: '− Synthetic tablet' }));
+    expect(controls.onRemove).toHaveBeenCalledTimes(1);
+    cleanup();
+  });
+
+  it('switches the unit on the line and removes it with its own button', () => {
+    const controls = renderLine(editable());
+    const units = screen.getByRole('radiogroup', { name: 'Sold as: Synthetic tablet' });
+    expect(within(units).getByRole('radio', { name: 'Strip' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    fireEvent.click(within(units).getByRole('radio', { name: 'Unit' }));
+    expect(controls.onChange).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ saleLineId: 'line-a' }),
+      { kind: 'UNIT', packLevelId: 'pack-strip', canonicalUnitsPerSaleUnit: 1, quantity: 2 }
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Synthetic tablet' }));
+    expect(controls.onRemove).toHaveBeenCalledTimes(1);
+    cleanup();
+  });
+
+  it.each([
+    ['controlled', { controlled: true }],
+    ['prescription', { prescriptionLineId: 'rx-line' }],
+    ['emergency supply', { emergencySupply: true }],
+    ['prepaid tier', { tierDiscountMinor: 100, discountMinor: 100 }],
+  ] as const)('offers no change or removal on a %s line', (_, overrides) => {
+    renderLine(editable(overrides));
+    expect(screen.queryByRole('button', { name: /Synthetic tablet/ })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Quantity: Synthetic tablet')).not.toBeInTheDocument();
+    cleanup();
+  });
+
+  it.each<[string, Partial<CounterCart['lines'][number]>]>([
+    ['manual discount', { discountMinor: 200 }],
+    [
+      'batch override',
+      {
+        allocations: [
+          {
+            inventoryLotId: 'lot-x',
+            batchNumber: 'B-X',
+            expiresAt: inDays(500),
+            canonicalUnits: 20,
+            stockLocationCode: null,
+            overridden: true,
+          },
+        ],
+      },
+    ],
+  ])('offers only removal on a line with a %s', (_, overrides) => {
+    const controls = renderLine(editable(overrides));
+    expect(screen.queryByLabelText('Quantity: Synthetic tablet')).not.toBeInTheDocument();
+    expect(screen.getByText(/remove it and add it again to change it/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Synthetic tablet' }));
+    expect(controls.onRemove).toHaveBeenCalledTimes(1);
+    cleanup();
+  });
+
+  it('keeps a promotion line changeable: the server prices it again', () => {
+    renderLine(editable({ discountMinor: 200, promotionName: 'Two for one' }));
+    expect(screen.getByLabelText('Quantity: Synthetic tablet')).toBeInTheDocument();
+    cleanup();
+  });
+
+  it('disables every line control while changes are not allowed', () => {
+    const controls = renderLine(editable(), true);
+    for (const name of ['+ Synthetic tablet', '− Synthetic tablet', 'Remove Synthetic tablet'])
+      expect(screen.getByRole('button', { name })).toBeDisabled();
+    expect(screen.getByLabelText('Quantity: Synthetic tablet')).toBeDisabled();
+    expect(controls.onChange).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  it('stays read-only without line controls', () => {
+    render(<CounterCartPanel cart={editable()} state="ready" onRetry={vi.fn()} now={NOW} />);
+    expect(screen.queryByRole('button', { name: /Synthetic tablet/ })).not.toBeInTheDocument();
+    cleanup();
+  });
+});

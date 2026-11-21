@@ -36,6 +36,7 @@ import { readReceiptIdentity } from './receipt-identity';
 import { parseShelfLabelCode } from './shelf-label-code';
 import type { LedgerScope } from './stock-ledger';
 import { BATCH_NOT_RECORDED, compareKnownExpiryFirst } from './unrecorded-batch';
+import { counterSetAsidesInForce } from './offline-cash-selling';
 
 export class PharmacyCounterError extends Error {
   constructor(readonly reason: 'NOT_FOUND' | 'CROSS_BRANCH_REFERENCE' | 'INVALID_QUERY') {
@@ -763,6 +764,33 @@ async function hydrateCounterRows(
       })
     : [];
 
+  // DEV-957 phase 2: units set aside for an enrolled counter to sell offline are not
+  // offered here, exactly as the sale allocation leaves them out (stock-ledger.ts).
+  // Review round 2: only while offline cash selling is in force (offline-cash-selling.ts).
+  const held = lotIds.length && (await counterSetAsidesInForce(db, scope.organizationId))
+    ? await db.pharmacyDeviceLotQuota.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          inventoryLotId: { in: lotIds },
+          releasedAt: null,
+        },
+        select: { inventoryLotId: true, stockLocationId: true, quotaUnits: true, consumedUnits: true },
+      })
+    : [];
+  if (held.length) {
+    const heldByBucket = new Map<string, number>();
+    for (const quota of held) {
+      const key = `${quota.inventoryLotId}:${quota.stockLocationId}`;
+      heldByBucket.set(key, (heldByBucket.get(key) ?? 0) + quota.quotaUnits - quota.consumedUnits);
+    }
+    for (const balance of balances) {
+      if (balance.disposition !== 'AVAILABLE') continue;
+      const units = heldByBucket.get(`${balance.inventoryLotId}:${balance.stockLocationId}`) ?? 0;
+      if (units > 0) balance.onHandUnits = Math.max(0, balance.onHandUnits - units);
+    }
+  }
+
   const locationIds = [...new Set(balances.map((balance) => balance.stockLocationId))];
   const locations = locationIds.length
     ? await db.pharmacyStockLocation.findMany({
@@ -980,6 +1008,9 @@ export type CounterCartLine = {
   presentation: string;
   dosageForm?: string | null;
   saleUnit: SaleUnitKind;
+  /** DEV-977B: the pack level and units per sale unit, so the line's own stepper can change it. */
+  packLevelId?: string;
+  canonicalUnitsPerSaleUnit?: number;
   quantity: number;
   canonicalUnits: number;
   unitPriceMinor: number;
@@ -1125,6 +1156,8 @@ export async function readCounterCart(
       presentation: line.presentation.presentation,
       dosageForm: line.presentation.dosageForm,
       saleUnit: line.saleUnit as SaleUnitKind,
+      packLevelId: line.packLevelId,
+      canonicalUnitsPerSaleUnit: line.canonicalUnitsPerSaleUnit,
       quantity: line.quantity,
       canonicalUnits: line.canonicalUnits,
       unitPriceMinor: line.unitPriceMinor,

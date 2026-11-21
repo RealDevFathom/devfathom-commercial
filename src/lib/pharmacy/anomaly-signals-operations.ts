@@ -54,6 +54,9 @@ type StaffVoidRow = {
   branchId: string;
   userId: string;
   voidEvents: number;
+  /** DEV-1004: of `voidEvents`, the bill lines whose changes took value off overall. */
+  lineVoids: number;
+  lineVoidNetMinor: number;
   completedSales: number;
   occurredAt: Date;
 };
@@ -147,28 +150,100 @@ export async function readPharmacyAnomalyFacts(
             AND NOT EXISTS (SELECT 1 FROM "pharmacy_sale_returns" sr WHERE sr."organizationId"=r."organizationId" AND sr."branchId"=r."branchId" AND sr."originalSaleId"=r."saleId")
           GROUP BY r."branchId", r."actorId" ORDER BY MAX(r."createdAt") DESC LIMIT 200`);
 
-  const staffVoid =
+  // DEV-1004: since DEV-977B a bill line lowered at the counter is taken off onto its own void
+  // record, so every reduction (3 to 1, and 1 back to 3) wrote a void. Each line is now followed
+  // through its own changes (the line, the line that replaced it, and so on), and each change is
+  // charged to the person who made it. Per line and person, the units that person's changes
+  // took off are added up: a raise offsets only the same person's reduction of that line, so
+  // 3 to 1 and back to 3 by one cashier takes nothing off. The line counts one void for a person
+  // only when their changes took units off (as sales.ts writes a void only when fewer units
+  // remain): 1 strip to the same 10 tablets is not a void, even when the tablets' prices round to
+  // a few paisa less. A removal takes off every unit of the line. Nothing on one line offsets
+  // another line or another medicine: removing one line while raising or adding another still
+  // counts the removal, and each add-then-remove counts once. The value counted is what those
+  // same changes took off, leaving out a line's whole-bill discount share, which a bill discount
+  // given later rewrites in place (bill-discount-service.ts). Whole-bill voids count one each, as
+  // before. The shift report and the cash-close check still count every void (cash-shifts.ts,
+  // cash-close-check-operations.ts).
+  const staffVoidRows =
     filters.supplierId || filters.ingredientId || filters.batchId
       ? []
-      : await db.$queryRaw<StaffVoidRow[]>(Prisma.sql`
-          WITH staff_activity AS (
-            SELECT e."branchId", e."actorId" AS "userId",
-                   COUNT(*) FILTER (WHERE e."kind"='VOIDED')::int AS "voidEvents",
-                   0::int AS "completedSales", MAX(e."occurredAt") AS "occurredAt"
+      : await db.$queryRaw<
+          Array<Omit<StaffVoidRow, 'lineVoidNetMinor'> & { lineVoidNetMinor: bigint | number }>
+        >(Prisma.sql`
+          WITH RECURSIVE window_events AS (
+            SELECT e."organizationId", e."branchId", e."actorId", e."kind", e."payload", e."occurredAt"
             FROM "pharmacy_sale_events" e
             WHERE e."branchId" IN (${branches}) AND e."occurredAt">=${events.from} AND e."occurredAt"<${events.to}
+          ),
+          line_changes AS (
+            SELECT e."branchId", e."actorId", e."occurredAt", moved."id" AS "movedId",
+                   replacement."id" AS "replacementId",
+                   moved."canonicalUnits"::bigint - COALESCE(replacement."canonicalUnits", 0)::bigint
+                     AS "unitsOff",
+                   (moved."grossMinor"-(moved."discountMinor"-moved."billDiscountMinor"))::bigint
+                     - COALESCE((replacement."grossMinor"-(replacement."discountMinor"-replacement."billDiscountMinor"))::bigint, 0)
+                     AS "takenOffMinor"
+            FROM window_events e
+            JOIN "pharmacy_sale_lines" moved
+              ON moved."organizationId"=e."organizationId" AND moved."id"=e."payload"->>'saleLineId'
+            LEFT JOIN "pharmacy_sale_lines" replacement
+              ON e."payload"->>'cause'='LINE_CHANGED' AND replacement."organizationId"=e."organizationId"
+             AND replacement."idempotencyKey"=e."payload"->>'lineChangeKey'
+            WHERE e."kind"='CREATED' AND (e."payload"->>'lineChangeKey') IS NOT NULL
+          ),
+          line_chains AS (
+            SELECT c."movedId" AS "rootId", c."replacementId", c."unitsOff", c."takenOffMinor",
+                   c."branchId", c."actorId", c."occurredAt"
+            FROM line_changes c
+            WHERE NOT EXISTS (SELECT 1 FROM line_changes earlier WHERE earlier."replacementId"=c."movedId")
+            UNION ALL
+            SELECT chain."rootId", next."replacementId", next."unitsOff", next."takenOffMinor",
+                   next."branchId", next."actorId", next."occurredAt"
+            FROM line_chains chain
+            JOIN line_changes next ON next."movedId"=chain."replacementId"
+          ),
+          line_voids AS (
+            SELECT MAX("branchId") AS "branchId", "actorId" AS "userId",
+                   SUM("unitsOff") AS "unitsOff", GREATEST(SUM("takenOffMinor"), 0) AS "netMinor",
+                   MAX("occurredAt") AS "occurredAt"
+            FROM line_chains
+            GROUP BY "rootId", "actorId"
+          ),
+          staff_activity AS (
+            SELECT e."branchId", e."actorId" AS "userId",
+                   COUNT(*) FILTER (WHERE e."kind"='VOIDED' AND (e."payload"->>'fromSaleId') IS NULL)::int AS "voidEvents",
+                   0::int AS "lineVoids", 0::bigint AS "lineVoidNetMinor",
+                   0::int AS "completedSales", MAX(e."occurredAt") AS "occurredAt"
+            FROM window_events e
             GROUP BY e."branchId", e."actorId"
             UNION ALL
-            SELECT s."branchId", s."createdByUserId", 0::int, COUNT(*)::int, MAX(s."completedAt")
+            SELECT v."branchId", v."userId",
+                   COUNT(*) FILTER (WHERE v."unitsOff">0)::int,
+                   COUNT(*) FILTER (WHERE v."unitsOff">0)::int,
+                   COALESCE(SUM(v."netMinor") FILTER (WHERE v."unitsOff">0), 0)::bigint,
+                   0::int, MAX(v."occurredAt")
+            FROM line_voids v
+            GROUP BY v."branchId", v."userId"
+            UNION ALL
+            SELECT s."branchId", s."createdByUserId", 0::int, 0::int, 0::bigint, COUNT(*)::int, MAX(s."completedAt")
             FROM "pharmacy_sales" s
             WHERE s."branchId" IN (${branches}) AND s."status"='COMPLETED'
               AND s."businessDate">=${window.from} AND s."businessDate"<${window.to}
             GROUP BY s."branchId", s."createdByUserId"
           )
           SELECT "branchId", "userId", SUM("voidEvents")::int AS "voidEvents",
+                 SUM("lineVoids")::int AS "lineVoids",
+                 SUM("lineVoidNetMinor")::bigint AS "lineVoidNetMinor",
                  SUM("completedSales")::int AS "completedSales", MAX("occurredAt") AS "occurredAt"
           FROM staff_activity GROUP BY "branchId", "userId"
           ORDER BY MAX("occurredAt") DESC LIMIT 200`);
+  // The net value is summed as a 64-bit number in the database; it reaches the signal as a
+  // JavaScript number, exact for any total below 2^53 minor units.
+  const staffVoid: StaffVoidRow[] = staffVoidRows.map((row) => ({
+    ...row,
+    lineVoidNetMinor: Number(row.lineVoidNetMinor),
+  }));
 
   // A close that was superseded, or reopened for trading (DEV-631) and so awaiting the
   // close that restates the day, is not the day's standing close.

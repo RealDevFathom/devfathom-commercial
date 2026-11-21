@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { CAMERA_PRESET_LABELS } from '@/lib/cameras/camera-preset';
-import { CAMERA_DIAGNOSTIC_MESSAGES } from '@/lib/cameras/diagnostic-messages';
+import { CAMERA_DIAGNOSTIC_MESSAGES, CAMERA_H265_NOTE } from '@/lib/cameras/diagnostic-messages';
 import { isModuleGranted } from '@/lib/module-catalog';
 import { trpc } from '@/lib/trpc';
 import { PharmacyCameraWizard, type PharmacyCameraWizardValues } from './pharmacy-camera-wizard';
@@ -82,6 +82,9 @@ function ConfiguredConnectionCheck({ cameraId }: { cameraId: string }) {
               ? CAMERA_DIAGNOSTIC_MESSAGES[check.data.outcome]
               : 'Connection not checked.'}
       </p>
+      {check.data && 'videoCodec' in check.data && check.data.videoCodec === 'h265' ? (
+        <p className="text-sm text-text-muted">{CAMERA_H265_NOTE}</p>
+      ) : null}
     </div>
   );
 }

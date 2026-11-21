@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import dynamic from 'next/dynamic';
 import { usePathname } from 'next/navigation';
 import { Sidebar, TopNavigation } from './sidebar';
@@ -21,7 +21,9 @@ import { AdministratorStaffProfileCallout } from '@/components/restaurant/admini
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { PrintWindowNotice } from '@/components/ui/print-window-notice';
+import { useBrowserOnline } from '@/components/pharmacy/counter/use-browser-online';
 import { dismissedNoticeKey, useDismissedNotice } from './use-dismissed-notice';
+import { routeOwnsChrome, ShellChromeProvider, type ShellChrome } from './shell-chrome';
 
 // Lazy-load the assistant panel so @ai-sdk/react + ai stay out of the global
 // chunk; only fetched once the user first opens the assistant.
@@ -241,11 +243,16 @@ export function AppShell({
   const pathname = usePathname();
   const { data: session, status: sessionStatus } = useSession();
   const entitlements = useEntitlements();
+  const browserOnline = useBrowserOnline();
   const currentModule = moduleForPath(pathname, entitlements.vertical);
   const moduleEnabled =
     !currentModule ||
     isModuleGranted(currentModule, entitlements.enabledModules, entitlements.vertical);
   const counterPos = pathname === '/pharmacy/counter';
+  // DEV-977: this route draws its own top bar and action row, so the shell leaves out
+  // the workspace bar and module row and lends the page its navigation drawer instead.
+  // A route whose module is not enabled shows the shell's notice, so it keeps the bar.
+  const ownChrome = moduleEnabled && routeOwnsChrome(pathname);
   const immersive =
     counterPos || pathname === '/chat' || /^\/meetings\/[^/]+\/call$/.test(pathname);
   const { resolvedTheme } = useTheme();
@@ -260,6 +267,16 @@ export function AppShell({
     mobileMenuOpenerRef.current = event.currentTarget;
     setMobileMenuOpen(true);
   };
+  const chrome = useMemo<ShellChrome>(
+    () => ({
+      brand,
+      openNavigation: (event) => {
+        mobileMenuOpenerRef.current = event.currentTarget;
+        setMobileMenuOpen(true);
+      },
+    }),
+    [brand]
+  );
 
   // DEV-507: the mobile drawer is a modal dialog. Focus moves into it on open,
   // Tab and Shift+Tab stay inside it (the rest of the shell is also `inert`),
@@ -298,8 +315,9 @@ export function AppShell({
     };
 
     // The drawer only exists below `lg`; widening the viewport dismisses it so
-    // focus is never trapped inside a hidden dialog.
-    const desktop = window.matchMedia?.('(min-width: 1024px)');
+    // focus is never trapped inside a hidden dialog. A route that draws its own bar
+    // opens the drawer at every width, so it stays open there.
+    const desktop = ownChrome ? undefined : window.matchMedia?.('(min-width: 1024px)');
     const closeOnDesktop = (event: MediaQueryListEvent) => {
       if (event.matches) setMobileMenuOpen(false);
     };
@@ -311,7 +329,7 @@ export function AppShell({
       desktop?.removeEventListener?.('change', closeOnDesktop);
       if (opener?.isConnected) opener.focus();
     };
-  }, [mobileMenuOpen]);
+  }, [mobileMenuOpen, ownChrome]);
 
   // WHA-276: enforce the invariant that displayed workspace identity can never
   // diverge from session.user.organizationId. Every hook above has already run,
@@ -334,7 +352,10 @@ export function AppShell({
         <>
           <div
             aria-hidden="true"
-            className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm lg:hidden"
+            className={cn(
+              'fixed inset-0 z-40 bg-black/50 backdrop-blur-sm',
+              !ownChrome && 'lg:hidden'
+            )}
             onClick={() => setMobileMenuOpen(false)}
           />
           <div
@@ -343,7 +364,7 @@ export function AppShell({
             aria-modal="true"
             aria-label="Mobile navigation"
             tabIndex={-1}
-            className="fixed inset-y-0 start-0 z-50 outline-none lg:hidden"
+            className={cn('fixed inset-y-0 start-0 z-50 outline-none', !ownChrome && 'lg:hidden')}
           >
             <Sidebar
               brand={brand}
@@ -365,20 +386,28 @@ export function AppShell({
           <div className="flex min-h-10 items-center justify-between gap-3 border-b border-warning/40 bg-warning/10 px-4 py-2 text-xs text-foreground">
             <span className="flex items-center gap-2">
               <ShieldAlert className="h-4 w-4 shrink-0" />
-              Audited support access · acting as {session.user.name}
-              {session.user.supportReason ? ` · ${session.user.supportReason}` : ''}
+              {browserOnline ? (
+                <>
+                  Audited support access · acting as {session.user.name}
+                  {session.user.supportReason ? ` · ${session.user.supportReason}` : ''}
+                </>
+              ) : (
+                // DEV-957 phase 2 (shared till): offline, the stored page cannot check who
+                // is signed in, so it names nobody.
+                'Audited support access · Offline: who is signed in is checked again when the connection returns.'
+              )}
             </span>
             <EndSupportAccessButton />
           </div>
         ) : null}
         {/* DEV-973: a print window behind this page is never lost; self-hiding. */}
         <PrintWindowNotice />
-        <Topbar brand={brand} onMenuClick={openMobileMenu} />
+        {ownChrome ? null : <Topbar brand={brand} onMenuClick={openMobileMenu} />}
         {/* WHA-1181 — a one-time setup step for a restaurant administrator whose
             organization activated before staff profiles were provisioned. Self-
             hiding, so it costs a healthy workspace nothing. */}
         <AdministratorStaffProfileCallout />
-        <TopNavigation pharmacyOnboarding={pharmacyOnboarding} />
+        {ownChrome ? null : <TopNavigation pharmacyOnboarding={pharmacyOnboarding} />}
         <main
           id="main-content"
           tabIndex={-1}
@@ -398,7 +427,7 @@ export function AppShell({
             )}
           >
             {moduleEnabled ? (
-              children
+              <ShellChromeProvider value={chrome}>{children}</ShellChromeProvider>
             ) : (
               <section className="mx-auto max-w-2xl border border-border-default bg-surface-card p-8">
                 <Box className="h-8 w-8 text-accent-brand" />

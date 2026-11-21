@@ -20,9 +20,18 @@ import { emailSchema } from '@/lib/email-address';
 import { assertInOrganization, workspaceId } from '../org-refs';
 import { passwordSchema } from '@/lib/password-policy';
 import { adminPasswordResetData, passwordResetDenial } from '@/lib/auth/admin-password-reset';
+import {
+  applyMemberEmailChangeEffects,
+  emailChangeDenial,
+  sendMemberEmailChangeNotices,
+  type MemberEmailChange,
+} from '@/lib/auth/member-email-change';
+import { requirePasswordReauthentication } from '@/lib/password-reauthentication';
 import { createMemberInvitation } from '@/lib/member-invitation';
 import { inviteRoleRefusal } from '@/lib/vertical-catalog';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { guardMemberEdit, isPharmacyContext, verifyMemberEditPin } from '../pharmacy-access';
+import { AccessChangeError, INVITATION_ISSUED_AT_KEY } from '@/lib/team/pharmacy-access-guard';
 
 // IMP-AUTH-04: per-category × per-channel notification opt-outs. Sparse —
 // anything unset means "opted in" (notify() defaults to ON). Keys mirror
@@ -62,6 +71,35 @@ const profileResponseSchema = z.object({
 });
 
 const titleCase = (s: string) => (s === 'HR' ? 'HR' : s.charAt(0) + s.slice(1).toLowerCase());
+
+/**
+ * DEV-974 × DEV-959B: in a pharmacy, an email change made by someone else issues the member's
+ * invitation again, which the access rules check as giving them everything they hold. When
+ * those rules refuse an administrator, say plainly what happened instead of naming a sub-role.
+ * The owner's PIN request (PRECONDITION_FAILED) and every other refusal pass through as they are,
+ * and so does every refusal of a call that also changes the role or status (DEV-1004): the
+ * refusal may be about that change, so its own words are kept.
+ */
+async function withPharmacyEmailRefusal<T>(active: boolean, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (
+      active &&
+      error instanceof TRPCError &&
+      error.code === 'FORBIDDEN' &&
+      error.cause instanceof AccessChangeError
+    ) {
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message:
+          "Only the owner can change this person's sign-in email: confirming it gives them their access again, which only the owner can approve.",
+        cause: error,
+      });
+    }
+    throw error;
+  }
+}
 
 // #435: admin:access lets a member into the admin procedures, but granting or
 // revoking a role is its own `team:setRole` capability. Evaluate it through the
@@ -227,6 +265,8 @@ export const teamRouter = router({
         phone: z.string().optional(),
         bio: z.string().optional(),
         skills: z.array(z.string()).default([]),
+        /** DEV-959B: the inviter's PIN, when the invite gives a weighty sub-role (pharmacy). */
+        pin: z.string().min(1).max(64).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -273,30 +313,74 @@ export const teamRouter = router({
         skills: input.skills,
       };
 
-      const { user, token } = await ctx.db.$transaction((tx) =>
-        createMemberInvitation(tx, {
-          organizationId: workspaceId(ctx),
-          email,
-          seatLimit: ctx.entitlements.seatLimit,
-          invitedById: ctx.session.user.id,
-          profile,
-          // Re-inviting overwrites the pending member's role and role template.
-          onRefresh: async (existing) => {
-            if (grantsRole) return;
-            const current = await tx.user.findUnique({
-              where: { id: existing.id },
-              select: { role: true, organizationRoleId: true },
-            });
-            if (current?.role !== input.role || current.organizationRoleId !== null) {
-              await assertCanSetRole(ctx.session.user, tx, {
-                type: 'User',
-                id: existing.id,
-                targetRole: input.role,
-              });
-            }
-          },
-        })
+      const pinVerified = await verifyMemberEditPin(
+        ctx,
+        workspaceId(ctx),
+        input.pin,
+        'team.inviteMember'
       );
+      let issuedAt: Date | undefined;
+      const { user, token } = await ctx.db.$transaction(async (tx) => {
+        // DEV-959B: an invite creates (or refreshes) the member with their role now, so in a
+        // pharmacy it passes the access rules here; accepting it later changes no role.
+        return guardMemberEdit(
+          ctx,
+          tx as unknown as ScopedDb,
+          {
+            organizationId: workspaceId(ctx),
+            // A pending member with this address, found under the organisation lock.
+            targetId: async () =>
+              (await tx.user.findFirst({ where: { email }, select: { id: true } }))?.id ?? null,
+            pinVerified,
+            // An owner re-sending an invitation with their PIN approves it again, so it can
+            // still be accepted after a refresh that changes nothing.
+            recordApproval: true,
+            // Re-sending gives everything again: no earlier approval is carried forward.
+            reissue: true,
+            // Names this exact issue of the invitation, so accepting it can rely only on the
+            // approval given for it (every re-send changes the row's updatedAt).
+            metadata: {
+              get [INVITATION_ISSUED_AT_KEY]() {
+                return issuedAt?.toISOString() ?? null;
+              },
+            },
+            action: 'team.inviteMember',
+            describe: (name) => `Invited ${name} with their role`,
+          },
+          async () => {
+            const value = await createMemberInvitation(tx, {
+              organizationId: workspaceId(ctx),
+              email,
+              seatLimit: ctx.entitlements.seatLimit,
+              invitedById: ctx.session.user.id,
+              profile,
+              // Re-inviting overwrites the pending member's role and role template.
+              onRefresh: async (existing) => {
+                if (grantsRole) return;
+                const current = await tx.user.findUnique({
+                  where: { id: existing.id },
+                  select: { role: true, organizationRoleId: true },
+                });
+                if (current?.role !== input.role || current.organizationRoleId !== null) {
+                  await assertCanSetRole(ctx.session.user, tx, {
+                    type: 'User',
+                    id: existing.id,
+                    targetRole: input.role,
+                  });
+                }
+              },
+            });
+            if (isPharmacyContext(ctx))
+              issuedAt = (
+                await tx.invitation.findUnique({
+                  where: { userId: value.user.id },
+                  select: { updatedAt: true },
+                })
+              )?.updatedAt;
+            return { targetId: value.user.id, value };
+          }
+        );
+      });
 
       const inviteUrl = `${appUrl()}/invite/${token}`;
 
@@ -892,7 +976,10 @@ export const teamRouter = router({
       z.object({
         id: z.string(),
         name: z.string().min(1).optional(),
-        email: z.string().email().optional(),
+        // DEV-974: stored in the one canonical (trimmed, lower-case) form.
+        email: emailSchema.optional(),
+        // DEV-974: required only when a member changes their OWN email.
+        currentPassword: z.string().min(1).max(256).optional(),
         role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']).optional(),
         department: z
           .string()
@@ -906,10 +993,59 @@ export const teamRouter = router({
         bio: z.string().nullable().optional(),
         skills: z.array(z.string()).optional(),
         status: z.enum(['ACTIVE', 'INACTIVE', 'ON_LEAVE']).optional(),
+        /** DEV-959B: the editor's PIN, when the change touches a weighty sub-role (pharmacy). */
+        pin: z.string().min(1).max(64).optional(),
       })
     )
-    .mutation(async ({ ctx, input }) => {
-      const { id, ...data } = input;
+    .mutation(async ({ ctx, input: rawInput }) => {
+      const { pin, ...input } = rawInput;
+      const { id, currentPassword, ...data } = input;
+      const actorId = ctx.session.user.id;
+      const organizationId = workspaceId(ctx);
+      // DEV-974: the email is the sign-in identity. A support session never changes
+      // it, and a member changing their own proves it is them with their password
+      // (checked before the transaction: bcrypt must not pin a pooled connection).
+      let emailMayChange = false;
+      // DEV-1004: whether this call also changes the member's role or status, so a refusal of
+      // that change is reported as it is and not as an email refusal.
+      let roleOrStatusChanging = false;
+      if (input.email !== undefined) {
+        if (ctx.support || ctx.session.user.isSupportSession) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'A support session cannot change a sign-in email.',
+          });
+        }
+        const current = await ctx.db.user.findUnique({
+          where: { id },
+          select: { email: true, role: true, status: true },
+        });
+        emailMayChange = !!current && current.email !== input.email;
+        roleOrStatusChanging =
+          !!current &&
+          ((input.role !== undefined && input.role !== current.role) ||
+            (input.status !== undefined && input.status !== current.status));
+        if (id === actorId && emailMayChange) {
+          if (!currentPassword) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'Enter your current password to change your sign-in email.',
+            });
+          }
+          await requirePasswordReauthentication(ctx.db, {
+            organizationId,
+            userId: id,
+            password: currentPassword,
+            purpose: 'email-change',
+          });
+        }
+      }
+      // DEV-974 + DEV-959B: an email change by someone else sends the member back to
+      // INVITED and issues their invitation again, to the new address. In a pharmacy that
+      // is checked as giving them everything again (only the owner, with a PIN, for weighty
+      // access), and the owner's approval of THIS issue is recorded so the member can
+      // confirm from the new address.
+      const reissuingInvitation = emailMayChange && id !== actorId;
       if (input.department) {
         const department = await ctx.db.organizationDepartment.findFirst({
           where: { key: input.department, active: true },
@@ -931,82 +1067,176 @@ export const teamRouter = router({
       ] as const;
       const demoting = input.role !== undefined && input.role !== 'ADMIN';
       const deactivating = input.status !== undefined && input.status !== 'ACTIVE';
-      const organizationId = workspaceId(ctx);
       // Coordinate promotions/reactivations as well as removals. Read the
       // target only after locking so a stale role/status cannot skip the guard.
       const rosterChange = input.role !== undefined || input.status !== undefined;
-      const { before, updated } = await withAdminRosterLock(
-        ctx.db,
+      const pinVerified = await verifyMemberEditPin(
+        ctx,
         organizationId,
-        rosterChange,
-        async (tx) => {
-          const before = await tx.user.findUnique({
-            where: { id },
-            select: Object.fromEntries(auditFields.map((f) => [f, true])) as Record<
-              (typeof auditFields)[number],
-              true
-            >,
-          });
-          // The edit form always sends the current role; only an actual
-          // grant or revoke needs `team:setRole`. Checked against the locked row.
-          if (input.role !== undefined && before?.role !== input.role) {
-            await assertCanSetRole(ctx.session.user, tx, {
-              type: 'User',
-              id,
-              targetRole: input.role,
-            });
-          }
-          if (
-            before?.role === 'ADMIN' &&
-            before.status === 'ACTIVE' &&
-            (demoting || deactivating)
-          ) {
-            const activeAdmins = await tx.user.count({
-              where: { organizationId, role: 'ADMIN', status: 'ACTIVE' },
-            });
-            if (activeAdmins <= 1) {
-              throw new TRPCError({
-                code: 'BAD_REQUEST',
-                message: 'Cannot demote or deactivate the last active admin.',
-              });
-            }
-          }
-          // Return only the member profile needed by callers. Prisma returns every
-          // scalar column when `select` is omitted, which would expose credential
-          // and session fields (including the bcrypt password hash) over tRPC.
-          const updated = await tx.user.update({
-            where: { id },
-            data,
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              role: true,
-              department: true,
-              title: true,
-              avatar: true,
-              phone: true,
-              bio: true,
-              skills: true,
-              startDate: true,
-              status: true,
-              lastActiveAt: true,
-            },
-          });
-          return { before, updated };
-        }
+        pin,
+        'team.adminUpdateMember'
       );
+      let issuedAt: Date | undefined;
+      const { before, updated, emailChange } = await withPharmacyEmailRefusal(
+        reissuingInvitation && !roleOrStatusChanging && isPharmacyContext(ctx),
+        () =>
+          withAdminRosterLock(ctx.db, organizationId, rosterChange, async (tx) =>
+            guardMemberEdit(
+              ctx,
+              tx as unknown as ScopedDb,
+              {
+                organizationId,
+                targetId: id,
+                pinVerified,
+                action: 'team.adminUpdateMember',
+                describe: (name) =>
+                  reissuingInvitation
+                    ? `Changed the sign-in email of ${name}; they confirm it from the new address`
+                    : `Changed the role or status of ${name}`,
+                ...(reissuingInvitation
+                  ? {
+                      recordApproval: true,
+                      reissue: true,
+                      metadata: {
+                        get [INVITATION_ISSUED_AT_KEY]() {
+                          return issuedAt?.toISOString() ?? null;
+                        },
+                      },
+                    }
+                  : {}),
+              },
+              async () => {
+                const value = await updateRow(tx);
+                if (value.emailChange?.confirmationToken && isPharmacyContext(ctx))
+                  issuedAt = (
+                    await tx.invitation.findUnique({
+                      where: { userId: id },
+                      select: { updatedAt: true },
+                    })
+                  )?.updatedAt;
+                return { targetId: id, value };
+              }
+            )
+          )
+      );
+      async function updateRow(tx: Prisma.TransactionClient) {
+        const before = await tx.user.findUnique({
+          where: { id },
+          select: Object.fromEntries(auditFields.map((f) => [f, true])) as Record<
+            (typeof auditFields)[number],
+            true
+          >,
+        });
+        const changingEmail =
+          before !== null && input.email !== undefined && input.email !== before.email;
+        if (changingEmail) {
+          // DEV-974: nobody else changes an owner's email, and an administrator
+          // changes only the email of a member below them.
+          const denial = await emailChangeDenial(tx, { actorId, targetId: id });
+          if (denial === 'Member not found.') {
+            throw new TRPCError({ code: 'NOT_FOUND', message: denial });
+          }
+          if (denial) throw new TRPCError({ code: 'FORBIDDEN', message: denial });
+          const clash = await tx.user.findFirst({
+            where: { email: input.email, id: { not: id } },
+            select: { id: true },
+          });
+          if (clash) {
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'Another member already uses this email.',
+            });
+          }
+        }
+        // The edit form always sends the current role; only an actual
+        // grant or revoke needs `team:setRole`. Checked against the locked row.
+        if (input.role !== undefined && before?.role !== input.role) {
+          await assertCanSetRole(ctx.session.user, tx, {
+            type: 'User',
+            id,
+            targetRole: input.role,
+          });
+        }
+        if (before?.role === 'ADMIN' && before.status === 'ACTIVE' && (demoting || deactivating)) {
+          const activeAdmins = await tx.user.count({
+            where: { organizationId, role: 'ADMIN', status: 'ACTIVE' },
+          });
+          if (activeAdmins <= 1) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Cannot demote or deactivate the last active admin.',
+            });
+          }
+        }
+        // Return only the member profile needed by callers. Prisma returns every
+        // scalar column when `select` is omitted, which would expose credential
+        // and session fields (including the bcrypt password hash) over tRPC.
+        const updated = await tx.user.update({
+          where: { id },
+          data,
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+            department: true,
+            title: true,
+            avatar: true,
+            phone: true,
+            bio: true,
+            skills: true,
+            startDate: true,
+            status: true,
+            lastActiveAt: true,
+          },
+        });
+        // DEV-974: cancel pending resets; a change made by someone else must be
+        // confirmed from the new address before it can sign in or get a reset.
+        let emailChange: MemberEmailChange | null = null;
+        if (changingEmail) {
+          emailChange = await applyMemberEmailChangeEffects(tx, {
+            userId: id,
+            name: updated.name,
+            from: before.email,
+            to: updated.email,
+            status: updated.status,
+            selfChange: id === actorId,
+            changedById: actorId,
+          });
+          if (emailChange.confirmationToken) updated.status = 'INVITED';
+        }
+        return { before, updated, emailChange };
+      }
+      if (emailChange) {
+        await sendMemberEmailChangeNotices(emailChange, ctx.session.user.name ?? null);
+      }
       annotateAudit(ctx, {
         targetType: 'User',
         targetId: id,
         targetLabel: updated.name,
-        description: `Updated team member ${updated.name}`,
+        description: emailChange
+          ? `Changed the sign-in email of ${updated.name}`
+          : `Updated team member ${updated.name}`,
         changes:
           diffChanges(
             before as Record<string, unknown> | null,
             updated as unknown as Record<string, unknown>,
             [...auditFields]
           ) ?? undefined,
+        ...(emailChange
+          ? {
+              metadata: {
+                emailChange: {
+                  from: emailChange.from,
+                  to: emailChange.to,
+                  changedById: actorId,
+                  selfChange: emailChange.selfChange,
+                  confirmationRequired: emailChange.confirmationToken !== null,
+                  pendingResetsCancelled: true,
+                },
+              },
+            }
+          : {}),
       });
       return updated;
     }),
@@ -1064,51 +1294,66 @@ export const teamRouter = router({
         ctx.db,
         organizationId,
         true,
-        async (tx) => {
-          const before = await tx.user.findUnique({
-            where: { id: input.id },
-            select: { status: true, name: true, email: true, role: true },
-          });
-          if (!before) {
-            throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found' });
-          }
-          // Check the current role under the same lock as role changes: HR may
-          // lay off non-admins only, including after a concurrent promotion.
-          const subject = subjectFromSession(ctx.session.user);
-          if (
-            !(await can(
-              subject,
-              'team:layoff',
-              { type: 'User', targetRole: before.role },
-              { source: 'TRPC', db: tx }
-            ))
-          ) {
-            throw new TRPCError({
-              code: 'FORBIDDEN',
-              message: 'You do not have permission to lay off this member.',
-            });
-          }
-          if (before.role === 'ADMIN' && before.status === 'ACTIVE') {
-            const activeAdmins = await tx.user.count({
-              where: { organizationId, role: 'ADMIN', status: 'ACTIVE' },
-            });
-            if (activeAdmins <= 1) {
-              throw new TRPCError({
-                code: 'BAD_REQUEST',
-                message: 'You cannot lay off the last active admin',
-              });
-            }
-          }
-          // DEV-828 F02: select only the notice/audit fields; the full row
-          // carries the member's password verifier and TOTP seed.
-          const updated = await tx.user.update({
-            where: { id: input.id },
-            data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
-            select: { id: true, name: true, status: true },
-          });
-          return { before, updated };
-        }
+        async (tx) =>
+          // DEV-959B: in a pharmacy, laying off an owner or administrator passes the access
+          // rules (only the owner, and never the last active owner).
+          guardMemberEdit(
+            ctx,
+            tx as unknown as ScopedDb,
+            {
+              organizationId,
+              targetId: input.id,
+              pinVerified: false,
+              action: 'team.layOffMember',
+              describe: (name) => `Laid off ${name}`,
+            },
+            async () => ({ targetId: input.id, value: await layOff(tx) })
+          )
       );
+      async function layOff(tx: Prisma.TransactionClient) {
+        const before = await tx.user.findUnique({
+          where: { id: input.id },
+          select: { status: true, name: true, email: true, role: true },
+        });
+        if (!before) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found' });
+        }
+        // Check the current role under the same lock as role changes: HR may
+        // lay off non-admins only, including after a concurrent promotion.
+        const subject = subjectFromSession(ctx.session.user);
+        if (
+          !(await can(
+            subject,
+            'team:layoff',
+            { type: 'User', targetRole: before.role },
+            { source: 'TRPC', db: tx }
+          ))
+        ) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You do not have permission to lay off this member.',
+          });
+        }
+        if (before.role === 'ADMIN' && before.status === 'ACTIVE') {
+          const activeAdmins = await tx.user.count({
+            where: { organizationId, role: 'ADMIN', status: 'ACTIVE' },
+          });
+          if (activeAdmins <= 1) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'You cannot lay off the last active admin',
+            });
+          }
+        }
+        // DEV-828 F02: select only the notice/audit fields; the full row
+        // carries the member's password verifier and TOTP seed.
+        const updated = await tx.user.update({
+          where: { id: input.id },
+          data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
+          select: { id: true, name: true, status: true },
+        });
+        return { before, updated };
+      }
       annotateAudit(ctx, {
         targetType: 'User',
         targetId: input.id,
