@@ -11,7 +11,14 @@ import { randomInt, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 import AxeBuilder from '@axe-core/playwright';
-import { expect, type Browser, type Locator, type Page, type TestInfo } from '@playwright/test';
+import {
+  expect,
+  type Browser,
+  type Locator,
+  type Page,
+  type Response,
+  type TestInfo,
+} from '@playwright/test';
 
 const attestedSteps = [
   'Organization type',
@@ -256,6 +263,7 @@ export async function freshPharmacyFirstSale(
   const platformPassword = requiredEnvironment('PLAYWRIGHT_PLATFORM_ADMIN_PASSWORD');
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
   const slug = `e2e-first-sale-${suffix}`;
+  const ownerName = 'Test owner';
   const ownerEmail = `owner-${suffix}@${data.emailDomain}`;
   const colleagueEmail = `approver-${suffix}@${data.emailDomain}`;
   const ownerPassword = `Wha1203!${randomUUID()}`;
@@ -308,6 +316,105 @@ export async function freshPharmacyFirstSale(
           `${response.status()} ${response.request().method()} ${new URL(response.url()).pathname.replace(/\/invite\/[^/]+/, '/invite/[redacted]')}`
         );
     });
+  const savePin = async (actor: Page, password: string, pin: string) => {
+    await actor.getByLabel('Your current password', { exact: true }).fill(password);
+    await actor.getByLabel('PIN', { exact: true }).fill(pin);
+    await actor.getByLabel('Type the PIN again', { exact: true }).fill(pin);
+    await click(actor.getByRole('button', { name: 'Save PIN', exact: true }));
+    await expect(actor.getByText('Your PIN is set.', { exact: false })).toBeVisible();
+  };
+  const inviteAdministrator = async (name: string, email: string, title: string) => {
+    await page.goto(new URL('/team', tenantOrigin).href);
+    await click(page.getByRole('button', { name: 'Add Member', exact: true }));
+    await page.getByPlaceholder('Ali Raza', { exact: true }).fill(name);
+    await page.getByPlaceholder('ali@pharmacy.pk', { exact: true }).fill(email);
+    await page.getByPlaceholder('Pharmacist', { exact: true }).fill(title);
+    await choose(page.getByLabel('Department', { exact: true }), 'Counter');
+    // DEV-827: a pharmacy invite grants exactly the chosen role.
+    await choose(page.getByLabel('Role', { exact: true }), 'Administrator');
+    await expect(page.getByText('Access level: Admin.', { exact: false })).toBeVisible();
+    if (disposable) await page.getByLabel('Your PIN', { exact: true }).fill(ownerPin);
+    await click(page.getByRole('button', { name: 'Send Invite', exact: true }));
+    const invitation = page
+      .getByText('Invite link', { exact: true })
+      .locator('..')
+      .locator('p')
+      .last();
+    await expect(invitation).toBeVisible();
+    const inviteUrl = new URL((await invitation.textContent())!.trim());
+    if (inviteUrl.origin !== tenantOrigin || !inviteUrl.pathname.startsWith('/invite/'))
+      throw new Error('Invitation must target the configured isolated SHARED tenant host.');
+    return inviteUrl.href;
+  };
+  const acceptInvitation = async (actor: Page, url: string, password: string) => {
+    await actor.goto(url);
+    await actor.locator('#password').fill(password);
+    await actor.locator('#confirm').fill(password);
+    await actor.locator('#phone').fill(data.colleaguePhone);
+    await click(actor.getByRole('button', { name: 'Create account', exact: true }));
+    await expect(actor).not.toHaveURL(/\/invite\//);
+  };
+  const signInAfterInvitation = async (actor: Page, email: string, password: string) => {
+    // Shared hosts require workspace-aware sign-in after accepting the account.
+    if (new URL(actor.url()).pathname === '/login') {
+      await fill(actor, { email, password });
+      await click(actor.getByRole('button', { name: 'Sign in', exact: true }));
+      await expect(actor).not.toHaveURL(/\/login/);
+    }
+  };
+  const grantCatalogueReviewOnTeam = async () => {
+    // Only another owner may change the original owner's access. Deactivate the
+    // temporary owner afterward so the journey still exercises solo approval.
+    const name = 'Temporary test owner';
+    const email = `temporary-owner-${suffix}@${data.emailDomain}`;
+    const password = `Wha1203!${randomUUID()}`;
+    const pin = '625849';
+    const invitation = await inviteAdministrator(name, email, 'Temporary access administrator');
+    const grantor = await browser.newPage();
+    observe(grantor);
+    let response: Response;
+    try {
+      await acceptInvitation(grantor, invitation, password);
+      await signInAfterInvitation(grantor, email, password);
+      await grantor.goto(new URL('/pharmacy/settings/pin', tenantOrigin).href);
+      await savePin(grantor, password, pin);
+      await grantor.goto(new URL('/team', tenantOrigin).href);
+      await click(
+        grantor.getByRole('link').filter({
+          has: grantor.getByRole('heading', { name: ownerName, exact: true }),
+        })
+      );
+      const reviewLabel = 'Approve medicine catalogue changes';
+      const tick = grantor.getByRole('checkbox', { name: new RegExp(`^${reviewLabel}`) });
+      await click(tick);
+      const confirmation = grantor.getByRole('form', { name: `Give ${reviewLabel}?` });
+      await confirmation.getByLabel('Your PIN', { exact: true }).fill(pin);
+      const updated = grantor.waitForResponse(
+        (result) =>
+          new URL(result.url()).pathname === '/api/trpc/organizationAdmin.setMemberSubRole' &&
+          result.request().method() === 'POST'
+      );
+      await click(confirmation.getByRole('button', { name: 'Give it', exact: true }));
+      response = await updated;
+      await expect(tick).toBeChecked();
+    } finally {
+      await grantor.close();
+    }
+
+    await page.goto(new URL('/organization', tenantOrigin).href);
+    const member = page.locator('details').filter({
+      has: page.locator('summary').getByText(name, { exact: true }),
+    });
+    await click(member.locator('summary'));
+    const access = member.locator('form').filter({
+      has: page.getByRole('button', { name: 'Update access', exact: true }),
+    });
+    await access.locator('select[name="status"]').selectOption('INACTIVE');
+    await fill(access, { pin: ownerPin });
+    await click(access.getByRole('button', { name: 'Update access', exact: true }));
+    await expect(member.locator('summary').getByText('INACTIVE', { exact: true })).toBeVisible();
+    return response;
+  };
   const platformContext = await browser.newContext();
   const colleagueContext = await browser.newContext();
   const platform = await platformContext.newPage();
@@ -336,9 +443,9 @@ export async function freshPharmacyFirstSale(
       firstBranchName: branchName,
       firstBranchAddress: data.branchAddress,
       firstBranchCity: data.branchCity,
-      primaryContactName: 'Test owner',
+      primaryContactName: ownerName,
       primaryContactEmail: ownerEmail,
-      adminName: 'Test owner',
+      adminName: ownerName,
       adminEmail: ownerEmail,
       adminPassword: ownerPassword,
     });
@@ -352,23 +459,24 @@ export async function freshPharmacyFirstSale(
       platform.locator('[data-slot="page-header"]').getByText('ONBOARDING', { exact: true })
     ).toBeVisible();
 
-    // Wildcard ownership deliberately cannot confirm regulated reference changes.
-    // Grant this one review capability explicitly through the audited platform UI.
-    const reviewGrant = formFor(platform, 'Set override');
-    await choose(reviewGrant.locator('[name="userId"]'), ownerEmail);
-    await fill(reviewGrant, {
-      capability: 'pharmacy:catalogue-review',
-      reason: data.authorizationRef,
-      expiresAt: new Date(Date.now() + 86400000).toISOString().slice(0, 16),
-    });
-    await choose(reviewGrant.locator('[name="effect"]'), 'ALLOW');
-    const ownerUpdated = platform.waitForResponse(
-      (response) =>
-        new URL(response.url()).pathname === '/api/platform/control' &&
-        response.request().method() === 'POST'
-    );
-    await click(reviewGrant.getByRole('button', { name: 'Set override', exact: true }));
-    expect((await ownerUpdated).status()).toBe(200);
+    const grantStagingCatalogueReview = async () => {
+      const reviewGrant = formFor(platform, 'Set override');
+      await choose(reviewGrant.locator('[name="userId"]'), ownerEmail);
+      await fill(reviewGrant, {
+        capability: 'pharmacy:catalogue-review',
+        reason: data.authorizationRef,
+        expiresAt: new Date(Date.now() + 86400000).toISOString().slice(0, 16),
+      });
+      await choose(reviewGrant.locator('[name="effect"]'), 'ALLOW');
+      const updated = platform.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/api/platform/control' &&
+          response.request().method() === 'POST'
+      );
+      await click(reviewGrant.getByRole('button', { name: 'Set override', exact: true }));
+      return updated;
+    };
+    const stagingGrant = disposable ? null : await grantStagingCatalogueReview();
 
     await page.goto(new URL('/login', tenantOrigin).href);
     const signInOwner = async (password: string) => {
@@ -413,11 +521,10 @@ export async function freshPharmacyFirstSale(
     await click(pinPrompt.getByRole('link', { name: 'Create your PIN', exact: true }));
     await expect(page).toHaveURL(new URL('/pharmacy/settings/pin', tenantOrigin).href);
     await noRawIdEntry(page);
-    await page.getByLabel('Your current password', { exact: true }).fill(rotatedOwnerPassword);
-    await page.getByLabel('PIN', { exact: true }).fill(ownerPin);
-    await page.getByLabel('Type the PIN again', { exact: true }).fill(ownerPin);
-    await click(page.getByRole('button', { name: 'Save PIN', exact: true }));
-    await expect(page.getByText('Your PIN is set.', { exact: false })).toBeVisible();
+    await savePin(page, rotatedOwnerPassword, ownerPin);
+    // Wildcard ownership deliberately cannot confirm regulated reference changes.
+    const ownerUpdated = stagingGrant ?? (await grantCatalogueReviewOnTeam());
+    expect(ownerUpdated.status()).toBe(200);
     await setup(page);
     await expect(page.getByRole('heading', { name: 'Create your PIN', exact: true })).toHaveCount(
       0
@@ -604,32 +711,12 @@ export async function freshPharmacyFirstSale(
       page.getByText('No authorized approver is available', { exact: true })
     ).toHaveCount(0);
     await expect(page.getByRole('combobox', { name: 'Approved by', exact: true })).toBeVisible();
-    await page.goto(new URL('/team', tenantOrigin).href);
-    await click(page.getByRole('button', { name: 'Add Member', exact: true }));
-    await page.getByPlaceholder('Ali Raza', { exact: true }).fill('Test second approver');
-    await page.getByPlaceholder('ali@pharmacy.pk', { exact: true }).fill(colleagueEmail);
-    await page.getByPlaceholder('Pharmacist', { exact: true }).fill('Purchasing reviewer');
-    await choose(page.getByLabel('Department', { exact: true }), 'Counter');
-    // DEV-827: a pharmacy invite grants exactly the chosen role; the Administrator role is
-    // the one whose access level is Admin.
-    await choose(page.getByLabel('Role', { exact: true }), 'Administrator');
-    await expect(page.getByText('Access level: Admin.', { exact: false })).toBeVisible();
-    await click(page.getByRole('button', { name: 'Send Invite', exact: true }));
-    const invitation = page
-      .getByText('Invite link', { exact: true })
-      .locator('..')
-      .locator('p')
-      .last();
-    await expect(invitation).toBeVisible();
-    const inviteUrl = new URL((await invitation.textContent())!.trim());
-    if (inviteUrl.origin !== tenantOrigin || !inviteUrl.pathname.startsWith('/invite/'))
-      throw new Error('Invitation must target the configured isolated SHARED tenant host.');
-    await colleague.goto(inviteUrl.href);
-    await colleague.locator('#password').fill(colleaguePassword);
-    await colleague.locator('#confirm').fill(colleaguePassword);
-    await colleague.locator('#phone').fill(data.colleaguePhone);
-    await click(colleague.getByRole('button', { name: 'Create account', exact: true }));
-    await expect(colleague).not.toHaveURL(/\/invite\//);
+    const invitation = await inviteAdministrator(
+      'Test second approver',
+      colleagueEmail,
+      'Purchasing reviewer'
+    );
+    await acceptInvitation(colleague, invitation, colleaguePassword);
     // A system administrator still needs an explicit procurement grant.
     await platform.goto(organizationUrl);
     const colleagueGrant = formFor(platform, 'Set override');
@@ -647,12 +734,7 @@ export async function freshPharmacyFirstSale(
     );
     await click(colleagueGrant.getByRole('button', { name: 'Set override', exact: true }));
     expect((await colleagueUpdated).status()).toBe(200);
-    // Shared hosts require workspace-aware sign-in after accepting the account.
-    if (new URL(colleague.url()).pathname === '/login') {
-      await fill(colleague, { email: colleagueEmail, password: colleaguePassword });
-      await click(colleague.getByRole('button', { name: 'Sign in', exact: true }));
-      await expect(colleague).not.toHaveURL(/\/login/);
-    }
+    await signInAfterInvitation(colleague, colleagueEmail, colleaguePassword);
     await setup(colleague);
     await click(page.getByRole('button', { name: 'Done', exact: true }));
     await setup(page);
