@@ -16,7 +16,11 @@ import {
   type CounterRuntimeState,
   type PharmacyCounterRuntime,
 } from '@/lib/pharmacy/counter-offline-runtime';
-import { unsettledCommands, type CounterQueuedCommand } from '@/lib/pharmacy/counter-command-queue';
+import {
+  unsettledCommands,
+  type CounterQueuedCommand,
+  type CounterReplaySigner,
+} from '@/lib/pharmacy/counter-command-queue';
 import {
   composeOfflineCashSale,
   offlineCashSellingOn,
@@ -27,6 +31,7 @@ import {
 import type { CounterReceipt } from '@/lib/pharmacy/counter-receipt';
 import {
   counterSaleSealer,
+  counterReplaySigner,
   importCounterSigningKey,
 } from '@/lib/pharmacy/counter-device-signing';
 import type { OfflineSaleSealer } from '@/lib/pharmacy/offline-sale-seal';
@@ -55,6 +60,7 @@ import {
   reserveCounterReceipts,
   unbindCounterBrowser,
 } from '@/lib/pharmacy/counter-offline-transport';
+import { sendCounterReplay } from '@/lib/pharmacy/counter-replay-transport';
 import * as counterShell from '@/lib/pharmacy/counter-shell';
 import {
   browserSnapshotPayloadHash,
@@ -80,6 +86,7 @@ export type OfflinePayResult =
 
 /** DEV-957 phase 2: what the counter can do with its offline bills and queue. */
 export type CounterOfflineActions = {
+  resolveConflict?(commandId: string, reason: string): Promise<void>;
   saveDraft(draft: CounterDraft): Promise<boolean>;
   discardDraft(draftId: string): Promise<void>;
   /** Write the sale to this computer; "Paid" only once this resolves ok. */
@@ -207,6 +214,7 @@ export function useCounterOffline(input: {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const runtimeRef = useRef<PharmacyCounterRuntime | null>(null);
   // In memory only: the terminal session token is never persisted.
+  const signerRef = useRef<CounterReplaySigner | null>(null);
   const sessionTokenRef = useRef<string | null>(null);
   const [revokedNotice, setRevokedNotice] = useState<{ kept: number } | null>(null);
   /** How `open` reports a confirmed revocation; kept outside the effect's own state. */
@@ -246,6 +254,7 @@ export function useCounterOffline(input: {
       } catch {
         record = null;
       }
+      if (cancelled()) return;
       sealerRef.current =
         record && record.deviceId === enrolled.deviceId ? counterSaleSealer(record.signingKey) : null;
       if (!record || record.deviceId !== enrolled.deviceId) {
@@ -309,6 +318,36 @@ export function useCounterOffline(input: {
         isOnline && counter.error instanceof CounterRequestError && counter.error.status === 0;
       let message = isOnline && counter.error ? counterSetupMessage(counter.error) : null;
       if (counter.sessionToken) {
+        const token = counter.sessionToken;
+        const sign = counterReplaySigner(record.signingKey, enrolled, enrolled.deviceId);
+        signerRef.current = sign;
+        const queue = counter.runtime.snapshot().queue;
+        if (queue?.commands.some((c) => c.status !== 'ACKNOWLEDGED')) {
+          try {
+            if (queue.replay === 'PAUSED_REAUTH') await counter.runtime.resume();
+            const outcome = await counter.runtime.replay(
+              (request) =>
+                cancelled() ? Promise.resolve({ status: 0 }) : sendCounterReplay(token, request),
+              sign
+            );
+            if (cancelled()) return;
+            if (outcome.state === 'STOPPED') {
+              revokedRef.current?.({ kept: outcome.discarded?.commands ?? 0 });
+              await forgetCounterEnrolment(indexedDbDeviceKeyBackend(), enrolled.organizationId);
+              await unbindCounterBrowser().catch(() => undefined);
+              await clearShell();
+              return;
+            }
+            if (
+              outcome.state === 'PAUSED' &&
+              counter.runtime.snapshot().queue?.replay === 'PAUSED_REAUTH'
+            )
+              message = 'Sign in again to send the waiting receipts from this counter.';
+          } catch {
+            message =
+              'Sending stopped before this counter could confirm the result. The receipts are kept for retry.';
+          }
+        }
         const previousOperator = counterOperatorOf(
           counter.runtime.snapshot().catalog?.snapshots ?? []
         )?.userId;
@@ -367,10 +406,11 @@ export function useCounterOffline(input: {
   const serverUnreachable = online && current?.unreachable === true;
   // A dropped line behind a working Wi-Fi: try the server again every minute.
   useEffect(() => {
-    if (!serverUnreachable) return;
+    const head = current?.state?.queue?.commands.find((c) => c.status !== 'ACKNOWLEDGED');
+    if (!serverUnreachable && !(online && head && head.status !== 'QUARANTINED')) return;
     const timer = window.setTimeout(() => setAttempt((value) => value + 1), 60_000);
     return () => window.clearTimeout(timer);
-  }, [serverUnreachable]);
+  }, [serverUnreachable, online, current]);
   const state = current?.state ?? null;
   const sellingOn = state ? offlineCashSellingOn(state) : false;
   // Review round 2: with offline cash selling off nothing is set aside, so the price check
@@ -402,9 +442,7 @@ export function useCounterOffline(input: {
   );
   const queued = useMemo(
     () =>
-      state?.queue
-        ? [...unsettledCommands(state.queue)].sort((a, b) => a.sequence - b.sequence)
-        : [],
+      state?.queue ? unsettledCommands(state.queue).sort((a, b) => a.sequence - b.sequence) : [],
     [state]
   );
   const ready = current?.status === 'ready' && state !== null;
@@ -412,6 +450,24 @@ export function useCounterOffline(input: {
   const actions = useMemo<CounterOfflineActions | null>(() => {
     if (!ready) return null;
     return {
+      ...(online && !serverUnreachable && sessionTokenRef.current
+        ? {
+            async resolveConflict(commandId: string, reason: string) {
+              const runtime = runtimeRef.current;
+              const token = sessionTokenRef.current;
+              const signer = signerRef.current;
+              if (!runtime || !token || !signer)
+                throw new Error('Reconnect and sign in as a manager to review this receipt.');
+              await runtime.resolveConflict(
+                commandId,
+                (request) => sendCounterReplay(token, request, reason),
+                signer
+              );
+              refresh();
+              setAttempt((value) => value + 1);
+            },
+          }
+        : {}),
       async saveDraft(draft) {
         const runtime = runtimeRef.current;
         if (!runtime) return false;
@@ -471,14 +527,16 @@ export function useCounterOffline(input: {
             cashReceivedMinor,
             counterName: enrolmentName,
             branchName:
-              typeof rules?.branchName === 'string' && rules.branchName ? rules.branchName : 'Branch',
+              typeof rules?.branchName === 'string' && rules.branchName
+                ? rules.branchName
+                : 'Branch',
             cashierName: signed?.name ?? null,
             commandId: result.command.commandId,
           }),
         };
       },
     };
-  }, [ready, refresh, enrolmentName]);
+  }, [ready, refresh, enrolmentName, online, serverUnreachable]);
   const idle = {
     message: null,
     readiness: null,

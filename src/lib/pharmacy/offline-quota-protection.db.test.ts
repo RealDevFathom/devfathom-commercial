@@ -18,6 +18,8 @@
  *    open quotas only) and the counter's replay of that lot is refused (the replay reads
  *    `openDeviceLotQuota`, which finds none, and consuming it is refused).
  */
+import { readFileSync } from 'node:fs';
+import pg from 'pg';
 import { randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it, vi } from 'vitest';
@@ -102,7 +104,10 @@ async function branch(db: ScopedDb, label: string) {
 }
 
 /** A private branch: 12 loose-countable units on hand, 10 set aside for "Front till". */
-async function fixture(label: string, options: { expiresAt?: Date } = {}): Promise<Fixture> {
+async function fixture(
+  label: string,
+  options: { expiresAt?: Date; legacyGrant?: boolean } = {}
+): Promise<Fixture> {
   return inOrg(async (db) => {
     const branchId = await branch(db, label);
     const scope = scopeOf({ branchId });
@@ -176,7 +181,20 @@ async function fixture(label: string, options: { expiresAt?: Date } = {}): Promi
         occurredAt: new Date('2025-12-01T00:00:00.000Z'),
       },
     });
-    const quota = await deps.quotas.grantDeviceLotQuota(db, scope, {
+    const quota = options.legacyGrant
+      ? await db.pharmacyDeviceLotQuota.create({
+          data: {
+            organizationId: ORG,
+            branchId,
+            deviceId: device.id,
+            stockLocationId: location.id,
+            inventoryLotId: lot.id,
+            quotaUnits: 10,
+            grantedByActorId: ACTOR,
+            grantedAt: new Date('2020-01-01T00:00:00Z'),
+          },
+        })
+      : await deps.quotas.grantDeviceLotQuota(db, scope, {
       deviceId: device.id,
       inventoryLotId: lot.id,
       stockLocationId: location.id,
@@ -571,5 +589,119 @@ describeIfDatabase('DEV-957 phase 2 (review round 2): with offline cash selling 
     } finally {
       selling.on = true;
     }
+  });
+});
+
+describeIfDatabase('DEV-957 phase 3 stock promises', () => {
+  it('only offers the two unpromised units to a customer order or a refill', async () => {
+    const made = await fixture('ordering');
+    const { reservationCandidates, listStorefrontCatalog } = await import('./customer-ordering');
+    await inOrg(async (db) => {
+      const batch = await db.pharmacyManufacturingBatch.findUniqueOrThrow({
+        where: { id: made.batchId },
+      });
+      const lot = await db.pharmacyInventoryLot.findUniqueOrThrow({ where: { id: made.lotId } });
+      const rows = await reservationCandidates(
+        db,
+        scopeOf(made),
+        batch.medicineId,
+        lot.packLevelId!
+      );
+      expect(rows.find((row) => row.inventoryLotId === made.lotId)?.availableUnits).toBe(2);
+      const catalog = await listStorefrontCatalog(db, scopeOf(made));
+      expect(catalog.find((row) => row.medicineId === batch.medicineId)?.availableUnits).toBe(2);
+    });
+  });
+
+  it('stops a stock-take approval from reducing free stock below outstanding promises', async () => {
+    const made = await fixture('stocktake');
+    const count = await inOrg((db) =>
+      deps.operations.createCount(db, scopeOf(made), {
+        readings: [
+          {
+            inventoryLotId: made.lotId,
+            stockLocationId: made.locationId,
+            countedSealedPacks: 8,
+            countedLooseUnits: 0,
+          },
+        ],
+        varianceThreshold: 100,
+      })
+    );
+    await expect(
+      inOrg((db) =>
+        deps.operations.approveCount(
+          db,
+          scopeOf(made),
+          count.id,
+          tag('approval'),
+          'Counted on shelf'
+        )
+      )
+    ).rejects.toMatchObject({ reason: 'HELD_FOR_COUNTER' });
+    expect(await onHand(made)).toBe(12);
+  });
+});
+
+describeIfDatabase('DEV-957 historical set-asides', () => {
+  it('retires pre-replay grants once with an audit and preserves newer grants', async () => {
+    const old = await fixture('old-set-aside', { legacyGrant: true });
+    const current = await fixture('current-set-aside');
+    const owner = new pg.Client({
+      connectionString:
+        process.env.M8_TEST_OWNER_DATABASE_URL ?? process.env.PHARMACY_TEST_OWNER_DATABASE_URL,
+    });
+    await owner.connect();
+    try {
+      const sql = readFileSync(
+        'prisma/migrations/20261118127200_reconcile_offline_set_asides/migration.sql',
+        'utf8'
+      );
+      await owner.query(sql);
+      await owner.query(sql);
+    } finally {
+      await owner.end();
+    }
+    await inOrg(async (db) => {
+      expect(
+        (await db.pharmacyDeviceLotQuota.findFirstOrThrow({ where: { id: old.quotaId } }))
+          .releasedAt
+      ).toBeInstanceOf(Date);
+      expect(
+        (await db.pharmacyDeviceLotQuota.findFirstOrThrow({ where: { id: current.quotaId } }))
+          .releasedAt
+      ).toBeNull();
+      expect(
+        await db.auditLog.count({
+          where: { action: 'pharmacyOffline.releaseLegacyQuota', targetId: old.quotaId },
+        })
+      ).toBe(1);
+    });
+  });
+});
+
+describeIfDatabase('DEV-957 quota grant after reservations', () => {
+  it('keeps the last two units reserved when another counter prepares', async () => {
+    const made = await fixture('last-two');
+    await inOrg((db) =>
+      deps.operations.reserveSupplierClaim(db, scopeOf(made), {
+        inventoryLotId: made.lotId,
+        reservedUnits: 2,
+        returnBy: LATER,
+      })
+    );
+    const other = await inOrg((db) =>
+      deps.devices.enrollPharmacyCounter(db, scopeOf(made), { name: 'Other counter' })
+    );
+    await expect(
+      inOrg((db) =>
+        deps.quotas.grantDeviceLotQuota(db, scopeOf(made), {
+          deviceId: other.device.id,
+          inventoryLotId: made.lotId,
+          stockLocationId: made.locationId,
+          units: 2,
+        })
+      )
+    ).rejects.toThrow();
   });
 });

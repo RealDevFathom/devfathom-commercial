@@ -126,9 +126,7 @@ export function createCounterQueue(deviceId: string): CounterQueueSnapshot {
 }
 
 export function unsettledCommands(snapshot: CounterQueueSnapshot): CounterQueuedCommand[] {
-  return snapshot.commands.filter(
-    (command) => command.status !== 'ACKNOWLEDGED' && command.status !== 'QUARANTINED'
-  );
+  return snapshot.commands.filter((command) => command.status !== 'ACKNOWLEDGED');
 }
 
 // ── Receipt-number leases (§8A invariant 16) ─────────────────────────────────
@@ -431,8 +429,10 @@ export function nextCounterReplay(
   }
   if (snapshot.replay === 'PAUSED_REAUTH') return { status: 'PAUSED', reason: 'REAUTH' };
 
-  const next = [...unsettledCommands(snapshot)].sort((a, b) => a.sequence - b.sequence)[0];
-  return next ? { status: 'READY', command: next } : { status: 'IDLE' };
+  const next = unsettledCommands(snapshot).sort((a, b) => a.sequence - b.sequence)[0];
+  return next && next.status !== 'QUARANTINED'
+    ? { status: 'READY', command: next }
+    : { status: 'IDLE' };
 }
 
 /** The replay request for one queued command. The key is the command id, always. */

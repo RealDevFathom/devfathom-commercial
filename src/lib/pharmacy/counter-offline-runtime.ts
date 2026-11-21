@@ -29,6 +29,7 @@ import {
   createTerminalIndexedDbDriver,
   emptyTerminalState,
   purgeTerminalScope,
+  TerminalStorageError,
   readTerminalState,
   writeTerminalState,
 } from '@/lib/retail-terminal/local-store';
@@ -38,6 +39,7 @@ import type {
   TerminalStorageDriver,
   TerminalStoreDatabase,
 } from '@/lib/retail-terminal/local-store';
+import { counterConflictMessage } from './counter-replay-transport';
 import { classifyReplayOutcome } from '@/lib/retail-terminal/replay-outcome';
 
 import {
@@ -328,6 +330,7 @@ type ReplayResult = {
 
 export class PharmacyCounterRuntime {
   private state: CounterRuntimeState;
+  private revision = 0;
   private activeReplay: Promise<ReplayResult> | null = null;
   private activeLeaseRenewal: Promise<LeaseRenewalResult> | null = null;
   /**
@@ -394,10 +397,16 @@ export class PharmacyCounterRuntime {
           ? { ...previous.state.catalog, drafts: [] }
           : previous.state.catalog,
       };
-      await writeTerminalState(this.driver, upgraded, COUNTER_STORE_SCHEMA_VERSION);
-      result = { status: 'ok', state: upgraded, revision: 0 };
+      const revision = await writeTerminalState(
+        this.driver,
+        upgraded,
+        COUNTER_STORE_SCHEMA_VERSION,
+        previous.revision
+      );
+      result = { status: 'ok', state: upgraded, revision };
     }
     if (result.status === 'unrecoverable') return 'unrecoverable';
+    this.revision = result.status === 'ok' ? result.revision : 0;
     if (result.status === 'ok') {
       if (result.state.queue && result.state.queue.deviceId !== this.scope.deviceId) {
         return 'unrecoverable';
@@ -824,6 +833,43 @@ export class PharmacyCounterRuntime {
     );
   }
 
+  /** Settle only the oldest retained sale, after the manager route has audited it. */
+  resolveConflict(
+    commandId: string,
+    send: (request: CounterReplayRequest) => Promise<CounterReplayResponse>,
+    sign: CounterReplaySigner
+  ): Promise<void> {
+    return this.exclusive(async () => {
+      const queue = this.queue();
+      const head = queue.commands.find((c) => c.status !== 'ACKNOWLEDGED');
+      if (head?.commandId !== commandId || head.status !== 'QUARANTINED')
+        throw new Error('Refresh the queue before reviewing this receipt.');
+      const request = await buildCounterReplayRequest(queue, head, sign);
+      let result: CounterReplayResponse;
+      try {
+        result = await send(request);
+      } catch {
+        throw new Error(
+          'The review could not be confirmed. Reconnect and try again. The receipt is kept here.'
+        );
+      }
+      if (result.status === 403 || result.status === 401)
+        throw new Error(
+          'Sign in as a manager for this branch. The receipt is still on this counter.'
+        );
+      if (!result.serverRef || result.status < 200 || result.status >= 300)
+        throw new Error(
+          'The server could not confirm the review. The receipt is still here. Try again.'
+        );
+      const { snapshot } = applyCounterReplayOutcome(queue, {
+        commandId,
+        outcome: { action: 'ACK' },
+        serverRef: result.serverRef,
+      });
+      await this.commit({ ...this.state, queue: pruneSnapshotArchive(snapshot) });
+    });
+  }
+
   replay(
     send: (request: CounterReplayRequest) => Promise<CounterReplayResponse>,
     sign: CounterReplaySigner
@@ -884,7 +930,13 @@ export class PharmacyCounterRuntime {
       } catch {
         response = { status: 0 };
       }
-      const outcome = classifyReplayOutcome(response);
+      const outcome = classifyReplayOutcome(
+        response.status === 401 && response.serverMessage === 'device_revoked'
+          ? { ...response, status: 403 }
+          : response
+      );
+      if (outcome.action === 'REVIEW' || outcome.action === 'QUARANTINE')
+        outcome.message = counterConflictMessage(response.serverMessage);
       // Apply the outcome to the queue as it is NOW — a sale enqueued while the
       // request was in flight must survive this whole-document write.
       const settled = await this.exclusive(async (): Promise<ReplayResult | null> => {
@@ -944,7 +996,20 @@ export class PharmacyCounterRuntime {
     queue: CounterQueueSnapshot,
     details: { reason: CounterRetiredReason; counterName?: string | null }
   ): Promise<void> {
-    // Every sale the server has not acknowledged: waiting ones and ones it refused.
+    // Stop writes from other tabs before archiving: a later successful payment must
+    // never be erased by a revoke that started from an older browser document.
+    const stopped: CounterRuntimeState = {
+      ...this.state,
+      catalog: { ...this.cache(), snapshots: [], drafts: [] },
+      queue: { ...queue, replay: 'STOPPED_REVOKED', leases: [], quotas: [] },
+    };
+    try {
+      await this.commit(stopped);
+    } catch (error) {
+      if (error instanceof TerminalStorageError && error.reason === 'WRITE_CONFLICT')
+        return this.retireNow(this.queue(), details);
+      throw error;
+    }
     const unsent = queue.commands.filter((command) => command.status !== 'ACKNOWLEDGED');
     if (unsent.length) {
       try {
@@ -957,17 +1022,10 @@ export class PharmacyCounterRuntime {
           snapshotArchive: queue.snapshotArchive ?? [],
         });
       } catch {
-        const stopped: CounterRuntimeState = {
-          ...this.state,
-          catalog: { ...this.cache(), snapshots: [], drafts: [] },
-          queue: { ...queue, replay: 'STOPPED_REVOKED', leases: [], quotas: [] },
-        };
-        await writeTerminalState(this.driver, stopped, COUNTER_STORE_SCHEMA_VERSION).catch(
-          () => undefined
-        );
         return;
       }
     }
+    this.state = { ...stopped, queue: purgeCounterQueue(queue).snapshot };
     await purgeTerminalScope(this.driver, this.scope);
   }
 
@@ -997,7 +1055,27 @@ export class PharmacyCounterRuntime {
   /** Publish a state transition only after its whole-document write succeeds. Callers
    * hold the transition chain (`exclusive`), so the write never races another one. */
   private async commit(nextState: CounterRuntimeState): Promise<void> {
-    await writeTerminalState(this.driver, nextState, COUNTER_STORE_SCHEMA_VERSION);
+    try {
+      this.revision = await writeTerminalState(
+        this.driver,
+        nextState,
+        COUNTER_STORE_SCHEMA_VERSION,
+        this.revision
+      );
+    } catch (error) {
+      if (error instanceof TerminalStorageError && error.reason === 'WRITE_CONFLICT') {
+        // Reload the winning tab's work. The caller can retry using the original command key.
+        // A scope removed by another tab must stay stopped, even in memory.
+        const stored = await readTerminalState(
+          this.driver,
+          this.scope,
+          COUNTER_STORE_SCHEMA_VERSION
+        );
+        if (stored.status === 'ok') await this.hydrateNow();
+        else this.state = { ...this.state, queue: purgeCounterQueue(this.queue()).snapshot };
+      }
+      throw error;
+    }
     this.state = nextState;
   }
 }

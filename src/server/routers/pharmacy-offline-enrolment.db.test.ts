@@ -950,3 +950,31 @@ describeIfDatabase('DEV-957 counter enrolment procedures (runtime role, real ABA
     expect(plan.lots.every((lot) => lot.stockLocationId === locationId)).toBe(true);
   });
 });
+
+describeIfDatabase('DEV-957 phase 3 credential rotation', () => {
+  it('keeps the current credential when a different computer tries to rotate a prepared counter', async () => {
+    const enrolled = await act(ownerA, (api) =>
+      api.enroll({ branchId: ids.branchA, name: 'Prepared counter' })
+    );
+    const { reserveReceiptNumberBlock } = await import('@/lib/pharmacy/offline-receipt-leases');
+    await withTenantDb(ids.orgA, (db) =>
+      reserveReceiptNumberBlock(
+        db,
+        {
+          organizationId: ids.orgA,
+          branchId: ids.branchA,
+          actorId: ids.ownerA,
+        },
+        { deviceId: enrolled.device.id, size: 5 }
+      )
+    );
+    await expect(
+      act(ownerA, (api) => api.rotate({ branchId: ids.branchA, deviceId: enrolled.device.id }))
+    ).rejects.toThrow(/rotate.*this counter/i);
+    await withTenantDb(ids.orgA, async (db) => {
+      expect((await devices.resolvePharmacyCounterBySecret(db, enrolled.secret))?.id).toBe(
+        enrolled.device.id
+      );
+    });
+  });
+});

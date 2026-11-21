@@ -414,13 +414,12 @@ export function OfflinePaidCard({ paid, onNext }: { paid: OfflinePaid; onNext: (
           </p>
           {paid.receipt.cashierName ? (
             <p className="text-sm text-text-body" data-counter-offline-sold-by="">
-              Sold by {paid.receipt.cashierName} (offline), who was signed in when this counter
-              last connected.
+              Sold by {paid.receipt.cashierName} (offline), who was signed in when this counter last
+              connected.
             </p>
           ) : null}
           <p className="text-sm text-text-body">
-            Saved and sealed on this computer. It waits here: this version does not send offline
-            sales to the server yet.
+            Saved and sealed on this computer. This counter sends it when the connection returns.
           </p>
         </div>
         <dl className="flex flex-wrap gap-x-8 gap-y-2">
@@ -463,16 +462,26 @@ function commandState(command: CounterQueuedCommand): {
 }
 
 /** Sales taken offline on this computer and not yet accepted by the server, oldest first. */
-export function OfflineQueue({ queued }: { queued: readonly CounterQueuedCommand[] }) {
+export function OfflineQueue({
+  queued,
+  resolveConflict,
+}: {
+  queued: readonly CounterQueuedCommand[];
+  resolveConflict?: (commandId: string, reason: string) => Promise<void>;
+}) {
   return (
-    <section aria-label="Offline sales waiting to send" className="space-y-2" data-counter-offline-queue="">
+    <section
+      aria-label="Offline sales waiting to send"
+      className="space-y-2"
+      data-counter-offline-queue=""
+    >
       <h3 className="text-sm font-semibold text-text-strong">
         Offline sales waiting to send ({queued.length})
       </h3>
       {queued.length > 0 ? (
         <p className="text-xs text-text-muted">
-          Kept on this computer. This version does not send offline sales to the server yet, and
-          the server accepts an offline sale only up to 7 days after it was taken.
+          Receipts are sent in order when this counter reconnects. The server accepts a sale up to 7
+          days after it was taken.
         </p>
       ) : null}
       {queued.length === 0 ? (
@@ -501,7 +510,10 @@ export function OfflineQueue({ queued }: { queued: readonly CounterQueuedCommand
                 const state = commandState(command);
                 const amount = command.payload.amountMinor;
                 return (
-                  <tr key={command.commandId} className="border-b border-border-subtle last:border-0">
+                  <tr
+                    key={command.commandId}
+                    className="border-b border-border-subtle last:border-0"
+                  >
                     <td className="py-2 pr-3 font-medium tabular-nums text-text-strong">
                       {command.receiptNumber ?? '—'}
                     </td>
@@ -520,6 +532,95 @@ export function OfflineQueue({ queued }: { queued: readonly CounterQueuedCommand
             </tbody>
           </table>
         </div>
+      )}
+      {queued[0]?.status === 'QUARANTINED' ? (
+        <OfflineReceiptReview
+          key={queued[0].commandId}
+          sale={queued[0]}
+          resolve={resolveConflict}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+function OfflineReceiptReview({
+  sale,
+  resolve,
+}: {
+  sale: CounterQueuedCommand;
+  resolve?: (commandId: string, reason: string) => Promise<void>;
+}) {
+  const [note, setNote] = useState('');
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState('');
+  const busy = useRef(false);
+  const id = useId();
+  return (
+    <section
+      aria-label="Manager receipt review"
+      className="space-y-3 rounded-md border border-border-subtle bg-surface-raised p-4"
+    >
+      <h4 className="font-semibold text-text-strong">Review receipt {sale.receiptNumber}</h4>
+      <p className="text-sm text-text-body">
+        {sale.rejection} Later receipts wait here until this one is settled.
+      </p>
+      {resolve ? (
+        <form
+          className="space-y-2"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            if (busy.current || !note.trim()) return;
+            busy.current = true;
+            setPending(true);
+            setError('');
+            try {
+              await resolve(sale.commandId, note.trim());
+            } catch (failure) {
+              setError(
+                failure instanceof Error
+                  ? failure.message
+                  : 'Review could not be confirmed. The receipt is kept here.'
+              );
+            } finally {
+              busy.current = false;
+              setPending(false);
+            }
+          }}
+        >
+          <Label htmlFor={id}>Manager note for receipt {sale.receiptNumber}</Label>
+          <Input
+            id={id}
+            className="min-h-11 rounded-control"
+            value={note}
+            maxLength={500}
+            required
+            disabled={pending}
+            onChange={(event) => setNote(event.target.value)}
+            aria-describedby={id + '-effect'}
+          />
+          <p id={id + '-effect'} className="text-sm text-text-muted">
+            Record how you handled the cash. Confirming closes this receipt as rejected without
+            booking a sale or issuing a refund.
+          </p>
+          <Button
+            type="submit"
+            variant="destructive"
+            className="min-h-11"
+            disabled={pending || !note.trim()}
+          >
+            {pending ? 'Recording review…' : 'Confirm rejection'}
+          </Button>
+          {error ? (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          ) : null}
+        </form>
+      ) : (
+        <p className="text-sm text-text-muted">
+          A manager can record the outcome on this counter when it is online.
+        </p>
       )}
     </section>
   );

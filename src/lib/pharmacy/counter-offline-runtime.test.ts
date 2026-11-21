@@ -565,9 +565,9 @@ function gatedDriver() {
   const pending: Array<() => void> = [];
   const driver: TerminalStorageDriver = {
     ...inner,
-    write: async (key, record) => {
+    writeIfRevision: async (key, record, revision) => {
       if (gated) await new Promise<void>((resolve) => pending.push(resolve));
-      await inner.write(key, record);
+      return inner.writeIfRevision(key, record, revision);
     },
   };
   return {
@@ -648,9 +648,9 @@ describe('#554 — overlapping transitions never reuse a receipt or drop a sale'
     let fail = true;
     const driver: TerminalStorageDriver = {
       ...inner,
-      write: async (key, record) => {
+      writeIfRevision: async (key, record, revision) => {
         if (fail) throw new Error('disk full');
-        await inner.write(key, record);
+        return inner.writeIfRevision(key, record, revision);
       },
     };
     const counter = runtime(driver);
@@ -924,4 +924,21 @@ describe('DEV-712 — the receipt lease renews in the background', () => {
       vi.useRealTimers();
     }
   });
+});
+
+it('keeps the sale another counter tab saved while a replay response was in flight', async () => {
+  const driver = createMemoryDriver();
+  const first = await readyCounter(driver);
+  await first.enqueue(cashSale(1), MATRIX);
+  await first
+    .replay(async () => {
+      const second = runtime(driver);
+      await second.hydrate();
+      expect((await second.enqueue(cashSale(1), MATRIX)).ok).toBe(true);
+      return { status: 200, serverRef: 'sale-1' };
+    }, replaySigner)
+    .catch((error) => expect(error).toMatchObject({ reason: 'WRITE_CONFLICT' }));
+  const reopened = runtime(driver);
+  await reopened.hydrate();
+  expect(reopened.snapshot().queue?.commands.map((c) => c.sequence)).toEqual([1, 2]);
 });
