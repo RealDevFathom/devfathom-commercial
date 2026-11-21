@@ -1,5 +1,4 @@
 import 'server-only';
-import { lockDeniedOperator } from './terminal-session';
 import { recordOwnerPinReauthentication } from './owner-reauthentication';
 
 import { createHash } from 'node:crypto';
@@ -235,14 +234,12 @@ export async function requireOrderTakingCapability(
   const now = new Date();
   const branchId = ctx.device.branchId;
   if (!(await operatorHasCapability(ctx.db, staffProfileId, 'orders:take', now, branchId))) {
-    await lockDeniedOperator(ctx.db, ctx.session.id);
     return json({ error: 'This operator lacks the "orders:take" capability.' }, 403);
   }
   if (
     requireCustomerRead &&
     !(await operatorHasCapability(ctx.db, staffProfileId, 'customers:read', now, branchId))
   ) {
-    await lockDeniedOperator(ctx.db, ctx.session.id);
     return json({ error: 'This operator lacks the "customers:read" capability.' }, 403);
   }
   return null;

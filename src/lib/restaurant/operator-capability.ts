@@ -7,6 +7,11 @@ import { resolveStaffCapabilityDecision } from './job-roles';
 
 type CapabilityRule = { capability: string; effect: 'ALLOW' | 'DENY' };
 
+export function deviceBaseCapability(kind: string) {
+  // withTerminalAuth accepts POS and KDS devices only.
+  return kind === 'KDS' ? 'kitchen:operate' : 'pos:operate';
+}
+
 /** Resolve branch-bound active staff access. Any matching DENY across linked-user
  * rules and staff overrides wins over all grants, including wildcard grants.
  * A branch binding is a primary branch, held job role, or direct staff override. */
@@ -15,7 +20,8 @@ export async function operatorHasCapability(
   staffProfileId: string,
   capability: string,
   now: Date,
-  branchId: string
+  branchId: string,
+  requirePrimaryBranch = false
 ): Promise<boolean> {
   if (!branchId?.trim()) return false;
   const profile = await db.restaurantStaffProfile.findUnique({
@@ -23,8 +29,11 @@ export async function operatorHasCapability(
     select: {
       status: true,
       primaryBranchId: true,
-      jobRoles: { where: { branchId }, select: { branchId: true } },
-      directCapabilityGrants: { where: { branchId }, select: { branchId: true } },
+      jobRoles: !requirePrimaryBranch && { where: { branchId }, select: { branchId: true } },
+      directCapabilityGrants: !requirePrimaryBranch && {
+        where: { branchId },
+        select: { branchId: true },
+      },
       user: {
         select: {
           organizationRole: {
@@ -42,8 +51,9 @@ export async function operatorHasCapability(
     !profile ||
     profile.status !== 'ACTIVE' ||
     (profile.primaryBranchId !== branchId &&
-      !profile.jobRoles.some((row) => row.branchId === branchId) &&
-      !profile.directCapabilityGrants.some((row) => row.branchId === branchId))
+      (requirePrimaryBranch ||
+        (!profile.jobRoles.some((row) => row.branchId === branchId) &&
+          !profile.directCapabilityGrants.some((row) => row.branchId === branchId))))
   )
     return false;
   const user = profile.user;

@@ -41,7 +41,7 @@ import {
   verifyOperatorCredential,
   type OperatorCredentialType,
 } from '@/lib/restaurant/operator-credentials';
-import { operatorHasCapability } from './operator-capability';
+import { deviceBaseCapability, operatorHasCapability } from './operator-capability';
 import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import type { RestaurantApproverRight } from '@/lib/approval-approver-rights';
 import { resolveShiftEligibility, type ShiftDenialReason } from '@/lib/restaurant/shifts';
@@ -132,8 +132,6 @@ export type TerminalErrorMapper = (err: unknown) => Response | null;
 export type TerminalRouteOptions = {
   /** Shape a domain error into its public response, OUTSIDE the owning transaction. */
   mapError?: TerminalErrorMapper;
-  /** Lock the same binding after a thrown operator access refusal rolls back. */
-  isOperatorAccessError?: (err: unknown) => boolean;
   /**
    * Reject a malformed request before tenant scope and persistent device/session
    * check-ins. The validator must be side-effect free and inspect a cloned body.
@@ -146,7 +144,10 @@ function unauthorized(message: string): NextResponse {
 }
 
 function forbidden(message: string): NextResponse {
-  return NextResponse.json({ error: message }, { status: 403 });
+  return NextResponse.json(
+    { error: message },
+    { status: 403, headers: { 'X-Terminal-Access': 'denied' } }
+  );
 }
 
 function tooManyRequests(retryAfter: number): NextResponse {
@@ -460,7 +461,6 @@ export function withTerminalAuth<T extends unknown[]>(
       return unauthorized('Missing or malformed terminal session token.');
     }
 
-    let binding: { id: string; activeStaffProfileId: string } | undefined;
     try {
       const preflightRejection = await options.preflight?.(request);
       if (preflightRejection) return preflightRejection;
@@ -496,47 +496,33 @@ export function withTerminalAuth<T extends unknown[]>(
           select: { active: true },
         });
         if (!branch?.active) {
-          if (session.activeStaffProfileId) await lockDeniedOperator(db, session.id);
           return forbidden('This branch is inactive. Contact a restaurant administrator.');
         }
 
         const entitlementRejection = await rejectDisabledTerminalModule(db, auth.organizationId);
         if (entitlementRejection) {
-          if (session.activeStaffProfileId) await lockDeniedOperator(db, session.id);
           return entitlementRejection;
         }
 
         if (session.activeStaffProfileId !== null) {
-          const profile = await db.restaurantStaffProfile.findUnique({
-            where: { id: session.activeStaffProfileId },
-            select: { status: true, primaryBranchId: true },
-          });
-          // Match the primary-branch requirement at unlock and switch. A separate
-          // job grant cannot retain a terminal binding after a branch transfer.
+          const capability = deviceBaseCapability(device.kind);
           if (
-            !profile ||
-            profile.status !== 'ACTIVE' ||
-            profile.primaryBranchId !== device.branchId ||
-            (device.kind === 'KDS' &&
-              !(await operatorHasCapability(
-                db,
-                session.activeStaffProfileId,
-                'kitchen:operate',
-                now,
-                device.branchId
-              )))
+            !(await operatorHasCapability(
+              db,
+              session.activeStaffProfileId,
+              capability,
+              now,
+              device.branchId,
+              true
+            ))
           ) {
             await lockDeniedOperator(db, session.id);
-            return forbidden('Operator access changed. Unlock the terminal again.');
+            return forbidden(
+              `To use this terminal, the operator must be active, assigned to this branch, and have the "${capability}" capability.`
+            );
           }
         }
 
-        if (options.isOperatorAccessError && session.activeStaffProfileId) {
-          binding = {
-            id: session.id,
-            activeStaffProfileId: session.activeStaffProfileId,
-          };
-        }
         await touchDeviceLastSeen(db, device.id, now);
         const response = await withOwnerReauthenticationScope(
           {
@@ -562,17 +548,6 @@ export function withTerminalAuth<T extends unknown[]>(
         return response;
       });
     } catch (err) {
-      if (binding && options.isOperatorAccessError?.(err)) {
-        // A concurrent heartbeat may advance idle time after rollback. Lock the
-        // refused operator if still bound, without disturbing a different operator.
-        const where = { ...binding, endedAt: null };
-        await withTenantDb(auth.organizationId, (db) =>
-          db.restaurantTerminalSession.updateMany({
-            where,
-            data: { activeStaffProfileId: null },
-          })
-        );
-      }
       return respondToEscapedError('Terminal session-auth error:', err, options.mapError);
     }
   };
@@ -656,6 +631,7 @@ export async function authenticateOperator(
     type: OperatorCredentialType;
     secret: string;
     now: Date;
+    forTerminalBinding?: boolean;
     /** DEV-879: set when the credential approves an action rather than signing in. An
      * approver who enrolled an approval authenticator must then enter its current code
      * instead of their PIN (see `verifyApprovalSecret`). */
@@ -762,5 +738,18 @@ export async function authenticateOperator(
     }
   }
 
+  if (params.forTerminalBinding) {
+    // A reset or deactivation may have committed during credential verification.
+    // Recheck the exact proof and profile under shared row locks through bind.
+    const verified = await db.$queryRaw<{ id: string }[]>`
+      SELECT c.id FROM restaurant_operator_credentials c
+      JOIN restaurant_staff_profiles p ON (p."organizationId", p.id) = (c."organizationId", c."staffProfileId")
+      WHERE c.id = ${credential.id} AND c."credentialHash" = ${credential.credentialHash}
+        AND c."revokedAt" IS NULL AND p.id = ${staffProfileId}
+        AND p.status = 'ACTIVE' AND p."primaryBranchId" = ${branchId}
+      FOR SHARE OF c, p
+    `;
+    if (!verified.length) return { ok: false, reason: 'INVALID' };
+  }
   return { ok: true, credentialId: credential.id, staffProfileId };
 }

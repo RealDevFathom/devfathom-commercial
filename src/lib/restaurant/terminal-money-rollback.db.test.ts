@@ -776,7 +776,7 @@ describeIfDatabase('WHA-136 terminal money mutations roll back before HTTP mappi
       expect(await customerExists(marker)).toBe(false);
     });
 
-    it('locks only the refused catering binding after rollback and preserves its idle timestamp', async () => {
+    it('preserves the operator binding and idle timestamp after a refused catering operation', async () => {
       await deps.withPlatformDb(async (tx) => {
         const core = await ensurePlatformModule(tx, 'restaurant-core', {
           name: 'Restaurant core',
@@ -818,7 +818,8 @@ describeIfDatabase('WHA-136 terminal money mutations roll back before HTTP mappi
       expect(res.status).toBe(403);
       expect(res.json.error).toBe('CAPABILITY_DENIED');
       expect(await binding()).toMatchObject({
-        activeStaffProfileId: null,
+        activeStaffProfileId: ctx.operator,
+        endedAt: null,
         lastActivityAt: before.lastActivityAt,
       });
     });

@@ -1,5 +1,4 @@
 import 'server-only';
-import { lockDeniedOperator } from './terminal-session';
 
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -305,7 +304,6 @@ async function requireCapability(
   branchId: string
 ): Promise<NextResponse | null> {
   if (await operatorHasCapability(ctx.db, staffProfileId, capability, now, branchId)) return null;
-  await lockDeniedOperator(ctx.db, ctx.session.id);
   return forbidden(`This operator lacks the "${capability}" capability.`);
 }
 

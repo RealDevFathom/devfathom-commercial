@@ -90,10 +90,7 @@ describe('terminal order capability boundary', () => {
     await expect(response.json()).resolves.toEqual({
       error: 'This operator lacks the "orders:take" capability.',
     });
-    expect(mocks.ctx.db.restaurantTerminalSession.update).toHaveBeenCalledWith({
-      where: { id: 'session-1' },
-      data: { activeStaffProfileId: null },
-    });
+    expect(mocks.ctx.db.restaurantTerminalSession.update).not.toHaveBeenCalled();
     expect(run).not.toHaveBeenCalled();
     expect(mocks.ctx.db.restaurantOrder.findFirst).not.toHaveBeenCalled();
   });
@@ -109,10 +106,7 @@ describe('terminal order capability boundary', () => {
     await expect(response.json()).resolves.toEqual({
       error: 'This operator lacks the "customers:read" capability.',
     });
-    expect(mocks.ctx.db.restaurantTerminalSession.update).toHaveBeenCalledWith({
-      where: { id: 'session-1' },
-      data: { activeStaffProfileId: null },
-    });
+    expect(mocks.ctx.db.restaurantTerminalSession.update).not.toHaveBeenCalled();
     expect(run).not.toHaveBeenCalled();
   });
 

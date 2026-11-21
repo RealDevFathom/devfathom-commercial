@@ -81,10 +81,7 @@ describe('POST customer attach capability', () => {
       expect.any(Date),
       'branch_1'
     );
-    expect(mocks.updateSession).toHaveBeenCalledWith({
-      where: { id: 'session_1' },
-      data: { activeStaffProfileId: null },
-    });
+    expect(mocks.updateSession).not.toHaveBeenCalled();
     expect(mocks.orderFindFirst).not.toHaveBeenCalled();
     expect(mocks.attachCustomerToOrder).not.toHaveBeenCalled();
   });

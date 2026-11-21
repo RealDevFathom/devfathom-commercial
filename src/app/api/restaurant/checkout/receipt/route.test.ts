@@ -491,11 +491,7 @@ describe('Restaurant receipt dispatch', () => {
     const missing = await post({ billId: 'missing-bill', action: 'print' }, 'missing-key');
     expect(existing.status).toBe(403);
     expect(missing.status).toBe(403);
-    expect(updateSession).toHaveBeenCalledTimes(2);
-    expect(updateSession).toHaveBeenCalledWith({
-      where: { id: 'session-1' },
-      data: { activeStaffProfileId: null },
-    });
+    expect(updateSession).not.toHaveBeenCalled();
     expect(await existing.json()).toEqual(await missing.json());
     expect(findBill).not.toHaveBeenCalled();
   });

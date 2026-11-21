@@ -167,6 +167,9 @@ beforeAll(async () => {
         },
       ],
     });
+    await tx.restaurantStaffCapabilityGrant.create({
+      data: { staffProfileId: denied.id, branchId, capability: 'pos:operate' },
+    });
     for (const operator of [denied, cashier]) {
       await tx.restaurantOperatorCredential.create({
         data: {
@@ -204,6 +207,11 @@ describeIfDatabase('WHA-1047 DELIVERY capability denial (real DB)', () => {
     const idempotencyKey = `delivery-capability-${suffix}`;
     const body = { channel: 'DELIVERY', customerId };
 
+    const binding = () =>
+      deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantTerminalSession.findFirstOrThrow({ where: { deviceId, endedAt: null } })
+      );
+    const before = await binding();
     const deniedResponse = await call(deps.routes.open, body, idempotencyKey);
     expect(deniedResponse).toEqual({
       status: 403,
@@ -219,18 +227,11 @@ describeIfDatabase('WHA-1047 DELIVERY capability denial (real DB)', () => {
     }));
     expect(effectsAfterDenial).toEqual({ orders: 0, keys: 0, events: 0 });
 
-    const lockedSwitch = await call(deps.routes.switchOperator, {
-      staffProfileId: cashier.id,
-      type: 'PIN',
-      secret: cashier.pin,
+    expect(await binding()).toMatchObject({
+      activeStaffProfileId: denied.id,
+      endedAt: null,
+      lastActivityAt: before.lastActivityAt,
     });
-    expect(lockedSwitch.status).toBe(409);
-    const unlocked = await call(deps.routes.unlock, {
-      staffProfileId: denied.id,
-      type: 'PIN',
-      secret: denied.pin,
-    });
-    expect(unlocked.status).toBe(200);
 
     const switched = await call(deps.routes.switchOperator, {
       staffProfileId: cashier.id,

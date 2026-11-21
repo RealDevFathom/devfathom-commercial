@@ -74,7 +74,25 @@ const db = {
       return copy(row);
     },
   },
-  $queryRaw: async (_query: TemplateStringsArray, tokenHash: string, deviceId: string) => {
+  $queryRaw: async (
+    query: TemplateStringsArray,
+    tokenHash: string,
+    deviceId: string,
+    staff?: string,
+    branch?: string
+  ) => {
+    if (query.join('').includes('FOR SHARE OF c, p')) {
+      const credential = find(h.store.credentials, {
+        id: tokenHash,
+        credentialHash: deviceId,
+        staffProfileId: staff,
+        revokedAt: null,
+      });
+      return credential &&
+        find(h.store.staff, { id: staff, primaryBranchId: branch, status: 'ACTIVE' })
+        ? [{ id: credential.id }]
+        : [];
+    }
     h.reads.sessionByHash += 1;
     return h.store.sessions
       .filter((row) => row.tokenHash === tokenHash && row.deviceId === deviceId)
@@ -332,7 +350,10 @@ function addOperator(
     directCapabilityGrants: [],
     user: {
       organizationRole: {
-        permissions: capabilities.map((capability) => ({ capability, effect: 'ALLOW' })),
+        permissions: ['pos:operate', ...capabilities].map((capability) => ({
+          capability,
+          effect: 'ALLOW',
+        })),
       },
       permissionOverrides: [],
     },

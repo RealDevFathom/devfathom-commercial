@@ -19,7 +19,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it } from 'vitest';
-import { ensurePlatformModule } from '@/lib/test-support/departments';
+import { ensurePlatformModule, seedDepartments } from '@/lib/test-support/departments';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -177,6 +177,7 @@ beforeAll(async () => {
   });
 
   await deps.withTenantDb(orgId, async (tx) => {
+    await seedDepartments(tx, [orgId], ['OPERATIONS']);
     await tx.restaurantBranch.create({ data: { id: branchId, name: 'Main' } });
     for (const staff of Object.values(STAFF)) {
       await tx.restaurantStaffProfile.create({
@@ -197,6 +198,11 @@ beforeAll(async () => {
     }
     await tx.restaurantStaffCapabilityGrant.createMany({
       data: [
+        ...Object.values(STAFF).map(({ id }) => ({
+          staffProfileId: id,
+          branchId,
+          capability: 'pos:operate',
+        })),
         { staffProfileId: STAFF.A.id, branchId, capability: 'orders:take' },
         { staffProfileId: STAFF.B.id, branchId, capability: 'orders:take' },
         { staffProfileId: STAFF.M.id, branchId, capability: 'coauth:approve' },
@@ -454,6 +460,386 @@ describeIfDatabase('terminal transport end-to-end (real DB)', { timeout: 30_000 
         });
       });
     }
+  );
+
+  it.each([
+    'job role holding',
+    'job role activation',
+    'job role permission',
+    'organization role',
+    'organization role permission',
+    'role permission writer',
+    'user override',
+    'staff user link',
+  ] as const)(
+    'ends a binding only on loss of effective terminal access through %s',
+    async (source) => {
+      const { deviceId } = await enroll('rights-' + source);
+      await deps.withTenantDb(orgId, async (tx) => {
+        const tag = randomBytes(6).toString('hex');
+        const amount = 'payments:collect';
+        const role = await tx.organizationRole.create({
+          data: { key: 'role-' + tag, name: 'Role ' + tag },
+        });
+        const user = await tx.user.create({
+          data: {
+            name: 'Test cashier',
+            email: tag + '@local.test',
+            department: 'OPERATIONS',
+            title: 'Cashier',
+            organizationRoleId: role.id,
+          },
+        });
+        const staff = await tx.restaurantStaffProfile.create({
+          data: { displayName: 'Test cashier', primaryBranchId: branchId, userId: user.id },
+        });
+        const scope = { staffProfileId: staff.id, branchId };
+        const job = await tx.restaurantJobRole.create({
+          data: { key: tag, name: 'Cashier ' + tag },
+        });
+        const holding = await tx.restaurantStaffJobRole.create({
+          data: { ...scope, jobRoleId: job.id },
+        });
+        await tx.restaurantStaffCapabilityGrant.create({
+          data: { ...scope, capability: 'pos:operate' },
+        });
+        const session = await tx.restaurantTerminalSession.create({
+          data: {
+            deviceId,
+            activeStaffProfileId: staff.id,
+            tokenHash: randomBytes(32).toString('hex'),
+          },
+        });
+        const snapshot = () =>
+          tx.restaurantTerminalSession.findUniqueOrThrow({ where: { id: session.id } });
+        const open = {
+          activeStaffProfileId: staff.id,
+          endedAt: null,
+          lastActivityAt: session.lastActivityAt,
+        };
+        const other = await tx.restaurantTerminalSession.create({
+          data: {
+            deviceId,
+            activeStaffProfileId: STAFF.B.id,
+            tokenHash: randomBytes(32).toString('hex'),
+          },
+        });
+        // Neither granting, reaffirming an existing permission, losing a duplicate
+        // grant nor an unrelated back-office permission change retires the binding.
+        const jobPermission = await tx.restaurantJobRoleCapability.create({
+          data: { jobRoleId: job.id, capability: amount },
+        });
+        const rolePermission = await tx.organizationRolePermission.create({
+          data: { organizationRoleId: role.id, capability: amount, effect: 'ALLOW' },
+        });
+        const unrelated = await tx.userPermissionOverride.create({
+          data: {
+            userId: user.id,
+            capability: 'finance:manage',
+            effect: 'ALLOW',
+            reason: 'Fixture',
+          },
+        });
+        await tx.userPermissionOverride.update({
+          where: { id: unrelated.id },
+          data: { effect: 'DENY' },
+        });
+        await tx.restaurantJobRole.update({
+          where: { id: job.id },
+          data: { name: 'New name ' + tag },
+        });
+        if (source.startsWith('job role')) {
+          await tx.organizationRolePermission.delete({ where: { id: rolePermission.id } });
+          expect(await snapshot()).toMatchObject(open);
+          if (source === 'job role holding')
+            await tx.restaurantStaffJobRole.delete({ where: { id: holding.id } });
+          if (source === 'job role activation')
+            await tx.restaurantJobRole.update({ where: { id: job.id }, data: { active: false } });
+          if (source === 'job role permission') {
+            const { setJobRoleCapabilities } = await import('./job-roles');
+            await setJobRoleCapabilities(tx, job.id, ['payments:*']);
+            expect(await snapshot()).toMatchObject(open);
+            await setJobRoleCapabilities(tx, job.id, []);
+          }
+        } else {
+          await tx.restaurantJobRoleCapability.delete({ where: { id: jobPermission.id } });
+          expect(await snapshot()).toMatchObject(open);
+          if (source === 'organization role') {
+            const wider = await tx.organizationRole.create({
+              data: {
+                key: 'wider-' + tag,
+                name: 'Wider ' + tag,
+                permissions: {
+                  create: [{ capability: 'payments:*' }, { capability: 'orders:take' }],
+                },
+              },
+            });
+            await tx.user.update({
+              where: { id: user.id },
+              data: { organizationRoleId: wider.id },
+            });
+            expect(await snapshot()).toMatchObject(open);
+            await tx.user.update({ where: { id: user.id }, data: { organizationRoleId: role.id } });
+          }
+          if (source === 'organization role permission')
+            await tx.organizationRolePermission.update({
+              where: { id: rolePermission.id },
+              data: { effect: 'DENY' },
+            });
+          if (source === 'role permission writer') {
+            const { replaceRolePermissions } = await import('@/lib/organization-role');
+            const mixed = [
+              { capability: 'payments:*', effect: 'ALLOW' as const },
+              { capability: 'payments:refund', effect: 'DENY' as const },
+            ];
+            await replaceRolePermissions(tx, orgId, role.id, [rolePermission], mixed);
+            expect(await snapshot()).toMatchObject(open);
+            await replaceRolePermissions(tx, orgId, role.id, mixed, [
+              { capability: 'payments:refund', effect: 'ALLOW' },
+            ]);
+          }
+          if (source === 'staff user link')
+            await tx.restaurantStaffProfile.update({
+              where: { id: staff.id },
+              data: { userId: null },
+            });
+          if (source === 'user override') {
+            await tx.userPermissionOverride.create({
+              data: {
+                userId: user.id,
+                capability: 'payments:*',
+                effect: 'DENY',
+                reason: 'Withdraw tender access',
+              },
+            });
+          }
+        }
+        expect(await snapshot()).toMatchObject({
+          activeStaffProfileId: null,
+          endedAt: expect.any(Date),
+          lastActivityAt: session.lastActivityAt,
+        });
+        expect(
+          await tx.restaurantTerminalSession.findUniqueOrThrow({ where: { id: other.id } })
+        ).toMatchObject({
+          activeStaffProfileId: STAFF.B.id,
+          endedAt: null,
+          lastActivityAt: other.lastActivityAt,
+        });
+      });
+    }
+  );
+
+  it.each(['staff', 'linked user', 'organization role'] as const)(
+    'compares all %s rules in a single insert, including overlapping wildcards and denies',
+    async (source) => {
+      const { deviceId } = await enroll('bulk-' + source);
+      await deps.withTenantDb(orgId, async (tx) => {
+        const tag = randomBytes(6).toString('hex');
+        const role = await tx.organizationRole.create({ data: { key: tag, name: 'Bulk ' + tag } });
+        const user = await tx.user.create({
+          data: {
+            name: 'Bulk cashier',
+            email: tag + '@local.test',
+            department: 'OPERATIONS',
+            title: 'Cashier',
+            organizationRoleId: role.id,
+          },
+        });
+        const staff = await tx.restaurantStaffProfile.create({
+          data: { displayName: 'Bulk cashier', primaryBranchId: branchId, userId: user.id },
+        });
+        const store = (rows: { capability: string; effect: 'ALLOW' | 'DENY' }[]) => {
+          if (source === 'staff')
+            return tx.restaurantStaffCapabilityGrant.createMany({
+              data: rows.map((row) => ({ ...row, staffProfileId: staff.id, branchId })),
+            });
+          if (source === 'linked user')
+            return tx.userPermissionOverride.createMany({
+              data: rows.map((row) => ({ ...row, userId: user.id, reason: 'Test edit' })),
+            });
+          return tx.organizationRolePermission.createMany({
+            data: rows.map((row) => ({ ...row, organizationRoleId: role.id })),
+          });
+        };
+        await store([{ capability: 'pos:operate', effect: 'ALLOW' }]);
+        const session = await tx.restaurantTerminalSession.create({
+          data: {
+            deviceId,
+            activeStaffProfileId: staff.id,
+            tokenHash: randomBytes(32).toString('hex'),
+          },
+        });
+        const binding = () =>
+          tx.restaurantTerminalSession.findUniqueOrThrow({ where: { id: session.id } });
+        await store([
+          { capability: 'payments:*', effect: 'ALLOW' },
+          { capability: 'payments:refund', effect: 'DENY' },
+        ]);
+        expect(await binding()).toMatchObject({
+          activeStaffProfileId: staff.id,
+          endedAt: null,
+          lastActivityAt: session.lastActivityAt,
+        });
+        // Deny an inherited order-taking right at both wildcard and exact scope,
+        // on a separate source so both rows are newly inserted.
+        await tx.restaurantJobRole.create({
+          data: {
+            key: 'ord-' + tag,
+            name: 'Order ' + tag,
+            capabilities: { create: { capability: 'orders:take' } },
+            holdings: { create: { staffProfileId: staff.id, branchId } },
+          },
+        });
+        await store([
+          { capability: 'orders:*', effect: 'DENY' },
+          { capability: 'orders:take', effect: 'DENY' },
+        ]);
+        expect(await binding()).toMatchObject({
+          activeStaffProfileId: null,
+          endedAt: expect.any(Date),
+          lastActivityAt: session.lastActivityAt,
+        });
+      });
+    }
+  );
+
+  it.each(['PIN reset', 'deactivation'] as const)(
+    'ends every bound session in the same transaction as %s',
+    async (change) => {
+      const first = await enroll('control-a-' + change);
+      const second = await enroll('control-b-' + change);
+      const { rotateOperatorCredential, issueOperatorCredential } =
+        await import('./credential-lifecycle');
+      const fixture = await deps.withTenantDb(orgId, async (tx) => {
+        const staff = await tx.restaurantStaffProfile.create({
+          data: { displayName: 'Credential fixture', primaryBranchId: branchId },
+        });
+        const credential = await issueOperatorCredential(tx, {
+          staffProfileId: staff.id,
+          type: 'PIN',
+          secret: '381794',
+        });
+        const sessions = await Promise.all(
+          [first, second].map((device) =>
+            tx.restaurantTerminalSession.create({
+              data: {
+                deviceId: device.deviceId,
+                activeStaffProfileId: staff.id,
+                tokenHash: randomBytes(32).toString('hex'),
+              },
+            })
+          )
+        );
+        return { staff, credential, sessions };
+      });
+      const verifyChange = async (rollback: boolean) =>
+        deps.withTenantDb(orgId, async (tx) => {
+          await tx.restaurantOperatorCredential.update({
+            where: { id: fixture.credential.id },
+            data: { failedAttempts: 1 },
+          });
+          expect(
+            await tx.restaurantTerminalSession.count({
+              where: { activeStaffProfileId: fixture.staff.id, endedAt: null },
+            })
+          ).toBe(2);
+          if (change === 'PIN reset')
+            await rotateOperatorCredential(tx, {
+              credentialId: fixture.credential.id,
+              secret: '391872',
+            });
+          else
+            await tx.restaurantStaffProfile.update({
+              where: { id: fixture.staff.id },
+              data: { status: 'SUSPENDED' },
+            });
+          for (const session of fixture.sessions)
+            expect(
+              await tx.restaurantTerminalSession.findUniqueOrThrow({ where: { id: session.id } })
+            ).toMatchObject({
+              activeStaffProfileId: null,
+              endedAt: expect.any(Date),
+              lastActivityAt: session.lastActivityAt,
+            });
+          if (rollback) throw new Error('Rollback synthetic access edit');
+        });
+      await expect(verifyChange(true)).rejects.toThrow('Rollback synthetic access edit');
+      await verifyChange(false);
+    }
+  );
+
+  it.each(['PIN reset', 'deactivation'] as const)(
+    'rejects an in-flight handover when %s finishes before binding',
+    async (change) => {
+      const { secret } = await enroll('credential-race-' + change);
+      const { token, sessionId } = await establish(secret);
+      const { issueOperatorCredential, rotateOperatorCredential } =
+        await import('./credential-lifecycle');
+      const incoming = await deps.withTenantDb(orgId, async (tx) => {
+        const staff = await tx.restaurantStaffProfile.create({
+          data: { displayName: 'Incoming operator', primaryBranchId: branchId },
+        });
+        await tx.restaurantStaffCapabilityGrant.create({
+          data: { staffProfileId: staff.id, branchId, capability: 'pos:operate' },
+        });
+        const credential = await issueOperatorCredential(tx, {
+          staffProfileId: staff.id,
+          type: 'PIN',
+          secret: '392815',
+        });
+        return { staff, credential };
+      });
+      expect(
+        (
+          await call(deps.routes.unlock, {
+            secret,
+            session: token,
+            body: { staffProfileId: STAFF.A.id, type: 'PIN', secret: STAFF.A.pin },
+          })
+        ).status
+      ).toBe(200);
+      const binding = () =>
+        deps.withTenantDb(orgId, (tx) =>
+          tx.restaurantTerminalSession.findUniqueOrThrow({ where: { id: sessionId } })
+        );
+      const before = await binding();
+      let handover: ReturnType<typeof call> | undefined;
+      await deps.withTenantDb(orgId, async (tx) => {
+        if (change === 'PIN reset')
+          await rotateOperatorCredential(tx, {
+            credentialId: incoming.credential.id,
+            secret: '283951',
+          });
+        else
+          await tx.restaurantStaffProfile.update({
+            where: { id: incoming.staff.id },
+            data: { status: 'SUSPENDED' },
+          });
+        handover = call(deps.routes.switchOperator, {
+          secret,
+          session: token,
+          body: { staffProfileId: incoming.staff.id, type: 'PIN', secret: '392815' },
+        });
+        // Wait for the real request to reach the rows held by this transaction.
+        const deadline = Date.now() + 5000;
+        for (;;) {
+          const [state] = await tx.$queryRaw<{ waiting: boolean }[]>`SELECT EXISTS (
+          SELECT FROM pg_stat_activity a WHERE pg_backend_pid() = ANY(pg_blocking_pids(a.pid))
+        ) AS waiting`;
+          if (state.waiting) break;
+          if (Date.now() > deadline) throw new Error('Handover did not reach the binding check');
+          await new Promise((resolve) => setTimeout(resolve, 15));
+        }
+      });
+      expect((await handover!).status).toBe(401);
+      expect(await binding()).toMatchObject({
+        activeStaffProfileId: STAFF.A.id,
+        endedAt: null,
+        lastActivityAt: before.lastActivityAt,
+      });
+    },
+    12000
   );
 
   it('records a manager co-authorization and refuses a self-approval (C7)', async () => {

@@ -25,7 +25,6 @@ const h = vi.hoisted(() => ({
   resolveTenantActor: vi.fn(),
   findDemoStaff: vi.fn(),
   findStaff: vi.fn(),
-  beforeAccessLock: vi.fn(),
   grants: [] as { capability: string; effect: string }[],
 }));
 
@@ -75,7 +74,6 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
       findUnique: async ({ where }: { where: Record<string, unknown> }) =>
         findBy(h.store.sessions, where),
       updateMany: async ({ where, data }: { where: Row; data: Row }) => {
-        h.beforeAccessLock();
         const row = findBy(h.store.sessions, where);
         if (row) Object.assign(row, data);
         return { count: row ? 1 : 0 };
@@ -152,8 +150,7 @@ function req(headers: Record<string, string> = {}): Request {
 
 beforeEach(() => {
   h.findStaff.mockReset().mockResolvedValue({ status: 'ACTIVE', primaryBranchId: 'branch_1' });
-  h.grants = [];
-  h.beforeAccessLock.mockReset();
+  h.grants = [{ capability: 'pos:operate', effect: 'ALLOW' }];
   h.findDemoStaff.mockReset().mockResolvedValue([{ id: 'staff_1' }]);
   h.store.devices = [];
   h.store.sessions = [];
@@ -328,27 +325,20 @@ describe('withTerminalAuth', () => {
   );
 
   it.each([
-    ['staff_1', null],
+    ['staff_1', 'staff_1'],
     ['new-operator', 'new-operator'],
   ] as const)(
-    'locks a rolled-back access refusal only while the refused operator remains bound (%s)',
+    'preserves the current binding and idle timestamp after an operation refusal (%s)',
     async (current, expected) => {
       seedDevice();
-      seedSession({ activeStaffProfileId: 'staff_1' });
-      const heartbeat = new Date(Date.now() + 1000);
-      h.beforeAccessLock.mockImplementationOnce(() =>
-        Object.assign(h.store.sessions[0], {
-          activeStaffProfileId: current,
-          lastActivityAt: heartbeat,
-        })
-      );
+      seedSession({ activeStaffProfileId: current });
+      const heartbeat = h.store.sessions[0].lastActivityAt;
       const refusal = new Error('Access denied');
       const handler = withTerminalAuth(
         () => {
           throw refusal;
         },
         {
-          isOperatorAccessError: (err) => err === refusal,
           mapError: () => new Response(null, { status: 403 }),
         }
       );
@@ -365,6 +355,24 @@ describe('withTerminalAuth', () => {
       });
     }
   );
+
+  it('locks a POS operator missing base access without running the operation or touching idle time', async () => {
+    seedDevice();
+    seedSession({ activeStaffProfileId: 'staff_1' });
+    h.grants = [{ capability: 'payments:collect', effect: 'ALLOW' }];
+    const inner = vi.fn(() => new Response('ok'));
+    const before = h.store.sessions[0].lastActivityAt;
+    const response = await withTerminalAuth(inner)(
+      req({ authorization: `Bearer ${deviceSecret}`, 'x-terminal-session': sessionToken })
+    );
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: expect.stringContaining('pos:operate') });
+    expect(h.store.sessions[0]).toMatchObject({
+      activeStaffProfileId: null,
+      lastActivityAt: before,
+    });
+    expect(inner).not.toHaveBeenCalled();
+  });
 
   it('checks a session-bearing station queue poll before reading tickets', async () => {
     seedDevice({ kind: 'KDS', stationId: 'kitchen' });

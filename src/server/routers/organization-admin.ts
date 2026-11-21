@@ -13,7 +13,7 @@ import { readDeepStrategySettings } from '@/lib/ai/deep-strategy-settings';
 import { readAIProviderReadiness } from '@/lib/ai/provider';
 import { passwordSchema } from '@/lib/password-policy';
 import { adminPasswordResetData, passwordResetDenial } from '@/lib/auth/admin-password-reset';
-import { organizationRolePermissionsSchema } from '@/lib/organization-role';
+import { organizationRolePermissionsSchema, replaceRolePermissions } from '@/lib/organization-role';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { withPlatformDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { ianaTimezone } from '@/lib/timezone';
@@ -643,13 +643,13 @@ export const organizationAdminRouter = router({
         if (existing?.isSystem) {
           throw new TRPCError({ code: 'FORBIDDEN', message: 'System roles cannot be modified.' });
         }
+        const existingPermissions = existing
+          ? await tx.organizationRolePermission.findMany({
+              where: { organizationId: id, organizationRoleId: existing.id },
+              select: { capability: true, effect: true },
+            })
+          : [];
         if (isPharmacyContext(ctx)) {
-          const existingPermissions = existing
-            ? await tx.organizationRolePermission.findMany({
-                where: { organizationId: id, organizationRoleId: existing.id },
-                select: { capability: true, effect: true },
-              })
-            : [];
           if (changesPharmacyFinanceRules(existingPermissions, permissions)) {
             const db = tx as unknown as ScopedDb;
             const now = new Date();
@@ -676,18 +676,7 @@ export const organizationAdminRouter = router({
         const saved = roleId
           ? await tx.organizationRole.update({ where: { id: roleId }, data: values })
           : await tx.organizationRole.create({ data: { organizationId: id, ...values } });
-        await tx.organizationRolePermission.deleteMany({
-          where: { organizationRoleId: saved.id },
-        });
-        if (permissions.length) {
-          await tx.organizationRolePermission.createMany({
-            data: permissions.map((permission) => ({
-              organizationId: id,
-              organizationRoleId: saved.id,
-              ...permission,
-            })),
-          });
-        }
+        await replaceRolePermissions(tx, id, saved.id, existingPermissions, permissions);
         return saved;
       }
       annotateAudit(ctx, {

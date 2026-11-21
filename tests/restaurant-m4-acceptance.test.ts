@@ -386,6 +386,7 @@ beforeAll(async () => {
           create: [
             { capability: 'payments:collect', effect: 'ALLOW' },
             { capability: 'coauth:approve', effect: 'ALLOW' },
+            { capability: 'pos:operate', effect: 'ALLOW' },
             { capability: 'orders:take', effect: 'ALLOW' },
             { capability: 'kitchen:operate', effect: 'ALLOW' },
           ],
@@ -498,6 +499,7 @@ beforeAll(async () => {
         name: 'WHA-49 Order Taking',
         permissions: {
           create: [
+            { capability: 'pos:operate', effect: 'ALLOW' },
             { capability: 'orders:take', effect: 'ALLOW' },
             { capability: 'kitchen:operate', effect: 'ALLOW' },
           ],

@@ -440,7 +440,12 @@ beforeAll(async () => {
         id: ctx.roleNone,
         key: `none_${suffix}`,
         name: 'No Money',
-        permissions: { create: [{ capability: 'menu:read', effect: 'ALLOW' }] },
+        permissions: {
+          create: [
+            { capability: 'menu:read', effect: 'ALLOW' },
+            { capability: 'pos:operate', effect: 'ALLOW' },
+          ],
+        },
       },
     });
 
@@ -586,6 +591,74 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       });
       expect(day.status).toBe(200);
       expect(day.json.businessDate).toBe(TODAY);
+    });
+
+    it('refuses the automatic loyalty snapshot without touching the binding and settles checkout on the same session', async () => {
+      // Give this operator checkout rights without customer-directory access.
+      await deps.withTenantDb(orgA, (tx) =>
+        tx.restaurantStaffCapabilityGrant.create({
+          data: {
+            staffProfileId: ctx.staffNoCap,
+            branchId: ctx.branchA,
+            capability: 'payments:collect',
+          },
+        })
+      );
+      try {
+        const cashierSession = await establishUnlock(ctx.posA.secret, ctx.staffNoCap);
+        const connection = { secret: ctx.posA.secret, session: cashierSession };
+        const { orderId } = await seedOrder(ctx.branchA, ctx.posA.deviceId, TODAY, ['2.00']);
+        const cut = await call(deps.routes.bill, {
+          ...connection,
+          key: uniqueKey('loyalty-cut'),
+          body: { orderId, split: { kind: 'NONE' } },
+        });
+        expect(cut.status).toBe(200);
+        const billId = (cut.json.billIds as string[])[0]!;
+        const binding = () =>
+          deps.withTenantDb(orgA, (tx) =>
+            tx.restaurantTerminalSession.findFirstOrThrow({
+              where: {
+                deviceId: ctx.posA.deviceId,
+                activeStaffProfileId: ctx.staffNoCap,
+                endedAt: null,
+              },
+            })
+          );
+        const before = await binding();
+        const loyalty = await import('@/app/api/restaurant/checkout/loyalty/route');
+        const snapshot = await call(loyalty, { ...connection, method: 'GET', query: { billId } });
+        expect(snapshot).toEqual({
+          status: 403,
+          json: { error: 'This operator lacks the "customers:read" capability.' },
+        });
+        expect(await binding()).toMatchObject({
+          id: before.id,
+          activeStaffProfileId: ctx.staffNoCap,
+          endedAt: null,
+          lastActivityAt: before.lastActivityAt,
+        });
+        const payment = await call(deps.routes.tender, {
+          ...connection,
+          key: uniqueKey('loyalty-tender'),
+          body: {
+            billId,
+            tender: { type: 'CARD', amount: '2.00' },
+          },
+        });
+        expect(payment.status).toBe(200);
+        expect(payment.json.settled).toBe(true);
+      } finally {
+        await deps.withTenantDb(orgA, (tx) =>
+          tx.restaurantStaffCapabilityGrant.deleteMany({
+            where: {
+              staffProfileId: ctx.staffNoCap,
+              branchId: ctx.branchA,
+              capability: 'payments:collect',
+            },
+          })
+        );
+      }
     });
 
     it('cuts a bill, tenders it to settlement, and reads the summary + receipt', async () => {
@@ -1815,8 +1888,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
     ] as const;
     const deniedSessions = new Map<string, { secret: string; session: string }>();
     beforeAll(async () => {
-      // A capability refusal locks its binding, so authorize a distinct device
-      // and session for each route before measuring the route's response.
+      // Give each route an independently authenticated operator without money capabilities.
       for (const name of [...mutations.map((m) => m.r), ...reads.map(([r]) => r)]) {
         const device = await enroll(ctx.branchA, uniqueKey('deny-pos'));
         deniedSessions.set(name, {
@@ -1860,7 +1932,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
         tx.restaurantBillLine.findFirst({ where: { billId }, select: { id: true } })
       );
 
-      // staffNoCap holds a valid credential but only `menu:read` — not `coauth:approve`.
+      // staffNoCap holds a valid credential and basic register/menu access, without `coauth:approve`.
       const res = await call(deps.routes.retainedComp, {
         secret: ctx.posA.secret,
         session: token,
