@@ -35,6 +35,7 @@ vi.mock('@/lib/trpc', () => ({
   },
 }));
 
+import { ApprovalSecretKindContext } from './counter-approval-copy';
 import { CounterRxPanel, type CounterRxPanelProps } from './counter-rx-panel';
 
 const patient: CounterPatientPanel = {
@@ -311,12 +312,39 @@ describe('CounterRxPanel checks', () => {
     expect(link).toHaveAttribute('target', '_blank');
   });
 
+  it('DEV-961: words the pharmacist step for the approval setting', () => {
+    const controlled = { ...authorization(), staffProfileId: 'pharmacist-1' };
+    // On (the default): the pharmacist's current app code.
+    const { unmount } = render(<CounterRxPanel {...props({ patient, controlled })} />);
+    expect(screen.getByLabelText('Pharmacist’s approval code')).toHaveAccessibleDescription(
+      /6-digit code from their authenticator app/
+    );
+    expect(
+      screen.getByText(/Patient address and the pharmacist’s approval code are required/)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/The code is cleared after each attempt/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Pharmacist PIN')).toBeNull();
+    unmount();
+    // Off: the pharmacist's permanent PIN.
+    render(
+      <ApprovalSecretKindContext.Provider value="PIN">
+        <CounterRxPanel {...props({ patient, controlled })} />
+      </ApprovalSecretKindContext.Provider>
+    );
+    expect(screen.getByLabelText('Pharmacist PIN')).toHaveAccessibleDescription(/permanent PIN/);
+    expect(
+      screen.getByText(/Patient address and a pharmacist PIN are required/)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/PIN is cleared after each attempt/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Pharmacist’s approval code')).toBeNull();
+  });
+
   it('preserves pharmacist witness requirements and emergency authorization callbacks', () => {
     const controlled = authorization();
     const { rerender } = render(<CounterRxPanel {...props({ controlled })} />);
     expect(screen.getByLabelText('Patient address')).toBeDisabled();
     expect(screen.getByLabelText('Prescription line')).toBeDisabled();
-    expect(screen.getByLabelText('Pharmacist PIN')).toBeDisabled();
+    expect(screen.getByLabelText('Pharmacist’s approval code')).toBeDisabled();
 
     rerender(
       <CounterRxPanel
@@ -326,7 +354,7 @@ describe('CounterRxPanel checks', () => {
         })}
       />
     );
-    const pin = screen.getByLabelText('Pharmacist PIN');
+    const pin = screen.getByLabelText('Pharmacist’s approval code');
     expect(pin).toHaveAttribute('type', 'password');
     expect(pin).toHaveAttribute('autocomplete', 'off');
     // DEV-961: on by default, the pharmacist enters the current code from their app.
@@ -335,7 +363,7 @@ describe('CounterRxPanel checks', () => {
       ['Patient address', 'patientAddress', 'Model Town'],
       ['Prescription line', 'prescriptionLineId', 'rx-line-1'],
       ['Approving pharmacist', 'staffProfileId', 'pharmacist-1'],
-      ['Pharmacist PIN', 'pin', '123456'],
+      ['Pharmacist’s approval code', 'pin', '123456'],
       ['Prescriber name', 'prescriberName', 'Dr. Ahmed'],
       ['Prescriber registration', 'prescriberRegNo', 'REG-123'],
       ['Earlier register serial', 'refSerial', '42'],
@@ -407,9 +435,9 @@ describe('DEV-977 phase 2B: controlled medicine authorisation in the Counter v2 
     ).toBeInTheDocument();
     expect(within(rxStep).getByLabelText('Earlier register serial')).toBeInTheDocument();
     expect(within(pharmacistStep).getByLabelText('Approving pharmacist')).toBeInTheDocument();
-    expect(within(pharmacistStep).getByLabelText('Pharmacist PIN')).toHaveAccessibleDescription(
-      /./
-    );
+    expect(
+      within(pharmacistStep).getByLabelText('Pharmacist’s approval code')
+    ).toHaveAccessibleDescription(/./);
     // Document order follows the steps, so Tab walks them in turn.
     expect(
       patientStep.compareDocumentPosition(rxStep) & Node.DOCUMENT_POSITION_FOLLOWING

@@ -941,10 +941,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
               <h4 className="text-base font-semibold text-text-strong">
                 Controlled medicine authorization
               </h4>
-              <p className="text-xs text-text-muted">
-                Patient address and a pharmacist PIN are required. Use a prescription, or record an
-                emergency supply. Online only.
-              </p>
+              <p className="text-xs text-text-muted">{approvalCopy.controlledIntro}</p>
             </div>
             <ControlledSteps
               steps={[
@@ -1109,7 +1106,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                   administrator to configure one.
                 </p>
               ) : null}
-              <Label htmlFor="controlled-pin">Pharmacist PIN</Label>
+              <Label htmlFor="controlled-pin">{approvalCopy.pharmacistLabel}</Label>
               <Input
                 id="controlled-pin"
                 type="password"
@@ -1125,10 +1122,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
               <p id="controlled-pin-hint" className="text-xs text-text-muted">
                 {approvalCopy.hint}
               </p>
-              <p className="text-xs text-text-muted">
-                Leave the earlier serial blank unless this repeats a previous entry. PIN is cleared
-                after each attempt.
-              </p>
+              <p className="text-xs text-text-muted">{approvalCopy.pharmacistCleared}</p>
             </section>
           </section>
         ) : null}

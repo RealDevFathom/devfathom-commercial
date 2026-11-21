@@ -13,6 +13,7 @@ import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { BPS, NO_MAXIMUM_DISCOUNT_BPS } from '@/lib/pharmacy/smart-discount';
 import { trpc } from '@/lib/trpc';
 import { percentToBps } from './discount-maximum-panel';
+import { useCounterApprovalCopy } from './counter-approval-copy';
 import {
   COUNTER_SHEET_BACKDROP,
   CounterNote,
@@ -71,6 +72,8 @@ export function CounterDiscountEntry({
   const id = useId();
   const valueRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
+  // DEV-961: how a manager or owner approves follows the authenticator for approvals setting.
+  const approvalCopy = useCounterApprovalCopy();
   const maximum = trpc.pharmacySales.discountMaximum.useQuery({ branchId });
   const [kind, setKind] = useState<CounterHeldDiscount['kind']>('PERCENT');
   const [value, setValue] = useState('');
@@ -228,11 +231,7 @@ export function CounterDiscountEntry({
                 </p>
               ) : null}
               <CounterNote tone="warning">
-                <p id={`${id}-help`}>
-                  Prescription, restricted and controlled medicines are never discounted. If you
-                  cannot give discounts on your own, a manager or owner approves with their PIN when
-                  you add the item.
-                </p>
+                <p id={`${id}-help`}>{approvalCopy.discountApproval}</p>
               </CounterNote>
             </div>
             <CounterSheetFooter>

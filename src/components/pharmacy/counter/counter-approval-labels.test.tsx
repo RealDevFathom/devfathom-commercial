@@ -3,7 +3,18 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('@/lib/trpc', () => ({
+  trpc: {
+    pharmacySales: {
+      discountMaximum: {
+        useQuery: () => ({ data: undefined, isLoading: false, isError: false, error: null }),
+      },
+    },
+  },
+}));
+
 import { ApprovalSecretKindContext, type ApprovalSecretKind } from './counter-approval-copy';
+import { CounterDiscountEntry } from './counter-discount';
 import { CounterPackApprovalDialog } from './counter-pack-approval-dialog';
 import { CounterTenderDiscard } from './counter-tender-discard';
 
@@ -15,7 +26,9 @@ const approvers = [{ id: 'staff-1', name: 'Manager', self: false }];
 function inMode(kind: ApprovalSecretKind | null, element: ReactElement) {
   return render(
     kind ? (
-      <ApprovalSecretKindContext.Provider value={kind}>{element}</ApprovalSecretKindContext.Provider>
+      <ApprovalSecretKindContext.Provider value={kind}>
+        {element}
+      </ApprovalSecretKindContext.Provider>
     ) : (
       element
     )
@@ -62,5 +75,31 @@ describe('DEV-961 counter approval fields follow the authenticator setting', () 
     expect(await screen.findByLabelText('Approver PIN')).toHaveAccessibleDescription(
       /permanent PIN/
     );
+  });
+});
+
+describe('DEV-961 the discount sheet says how a manager or owner approves', () => {
+  const entry = (
+    <CounterDiscountEntry
+      branchId="branch-a"
+      held={null}
+      disabled={false}
+      onHold={vi.fn()}
+      onClear={vi.fn()}
+    />
+  );
+  it.each([null, 'CODE'] as const)('with their approval code while it is on (%s)', (kind) => {
+    inMode(kind, entry);
+    fireEvent.click(screen.getByRole('button', { name: 'Discount' }));
+    expect(
+      screen.getByText(/a manager or owner approves with their approval code when you add the item/)
+    ).toBeInTheDocument();
+  });
+  it('with their PIN while the owner has it off', () => {
+    inMode('PIN', entry);
+    fireEvent.click(screen.getByRole('button', { name: 'Discount' }));
+    expect(
+      screen.getByText(/a manager or owner approves with their PIN when you add the item/)
+    ).toBeInTheDocument();
   });
 });

@@ -610,10 +610,7 @@ export function ReturnForm({
       aria-label="Controlled medicine return witness"
       className="space-y-3 rounded-md border border-border-subtle p-3"
     >
-      <p className="text-sm text-text-muted">
-        Controlled medicine. A different pharmacist must witness this return with a fresh PIN. The
-        PIN is never saved on this device.
-      </p>
+      <p className="text-sm text-text-muted">{approvalCopy.witnessIntro}</p>
       <Label htmlFor="return-witness">Witnessing pharmacist</Label>
       <select
         id="return-witness"
@@ -652,7 +649,7 @@ export function ReturnForm({
           configure one.
         </p>
       ) : null}
-      <Label htmlFor="return-witness-pin">Witness PIN</Label>
+      <Label htmlFor="return-witness-pin">{approvalCopy.witnessLabel}</Label>
       <Input
         id="return-witness-pin"
         type="password"

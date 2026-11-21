@@ -1,4 +1,11 @@
-import { fireEvent, render as renderUi, screen, waitFor, within } from '@testing-library/react';
+import {
+  cleanup,
+  fireEvent,
+  render as renderUi,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import type { ReactElement, ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApprovalSecretKindContext } from './counter-approval-copy';
@@ -862,6 +869,24 @@ describe('controlled medicine returns', () => {
     chooseReceipt();
     fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
     expect(screen.queryByLabelText('Witness PIN')).toBeNull();
+  });
+
+  it('DEV-961: asks the witness for their app code while the setting is on, their PIN while off', () => {
+    controlledHistory();
+    renderUi(<ReturnForm {...props} />);
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
+    expect(screen.getByLabelText('Witness approval code')).toHaveAttribute('type', 'password');
+    expect(
+      screen.getByText(/witness this return with the current code from their authenticator app/)
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText('Witness PIN')).toBeNull();
+    cleanup();
+    render(<ReturnForm {...props} />);
+    fillControlledReturn();
+    expect(screen.getByLabelText('Witness PIN')).toBeInTheDocument();
+    expect(screen.getByText(/witness this return with a fresh PIN/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Witness approval code')).toBeNull();
   });
 
   it('requires a fresh witness PIN and sends it without persisting it', async () => {
