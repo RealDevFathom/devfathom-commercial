@@ -87,10 +87,16 @@ export const POST = withTerminalAuth(async (ctx, request) => {
   }
 
   // Check device access only after proving the incoming operator's credential.
-  const capability = deviceBaseCapability(ctx.device.kind);
-  if (
-    !(await operatorHasCapability(ctx.db, staffProfileId, capability, now, ctx.device.branchId))
-  ) {
+  const kitchenDisplay = ctx.device.kind === 'KDS';
+  const mayUnlock = await operatorHasCapability(
+    ctx.db,
+    staffProfileId,
+    kitchenDisplay ? 'kitchen:operate' : 'pos:operate',
+    now,
+    ctx.device.branchId
+  );
+  if (!mayUnlock) {
+    const capability = deviceBaseCapability(ctx.device.kind);
     return NextResponse.json(
       { error: `This operator lacks the "${capability}" capability.` },
       { status: 403 }
