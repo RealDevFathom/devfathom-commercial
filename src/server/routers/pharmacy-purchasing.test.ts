@@ -3444,6 +3444,7 @@ const readActions = {
   receiptDebitNotes: () => caller().receiptDebitNotes({ branchId: 'branch_a' }),
   lotsFromReceipt: () =>
     caller().lotsFromReceipt({ branchId: 'branch_a', goodsReceiptId: 'grn_a' }),
+  legacySupplierDispatches: () => caller().legacySupplierDispatches({ branchId: 'branch_a' }),
   purchaseReturns: () => caller().purchaseReturns({ branchId: 'branch_a' }),
   supplierCredits: () => caller().supplierCredits({ branchId: 'branch_a' }),
   returnableLots: () => caller().returnableLots({ branchId: 'branch_a' }),
