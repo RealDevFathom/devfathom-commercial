@@ -71,7 +71,26 @@ export default async function JobsPage() {
                   </td>
                   <td className="px-4 py-4">
                     <div className="flex gap-2">
-                      {job.status === 'FAILED' ? (
+                      {job.status === 'FAILED' &&
+                      job.type === 'PURGE_DATA' &&
+                      !job.requestedById ? (
+                        <PlatformCommandForm
+                          compact
+                          action="job.retry"
+                          submitLabel="Retry purge"
+                          fields={[
+                            { name: 'id', label: 'Job ID', type: 'hidden', defaultValue: job.id },
+                            {
+                              name: 'reason',
+                              label: 'Reason for retry',
+                              type: 'textarea',
+                              required: true,
+                              minLength: 10,
+                              maxLength: 500,
+                            },
+                          ]}
+                        />
+                      ) : job.status === 'FAILED' ? (
                         <PlatformCommandButton
                           action="job.retry"
                           label="Retry"

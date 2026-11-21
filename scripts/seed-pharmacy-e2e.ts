@@ -738,6 +738,7 @@ function medicineSeeds(): MedicineSeed[] {
     ],
     batchId: controlled.batchId,
     batchNumber: controlled.batchNumber,
+    barcode: controlled.gtin,
     unitsPerPack: controlled.unitsPerPack,
     printedMrpMinor: controlled.printedMrpMinor,
     onHandUnits: controlled.onHandUnits,
