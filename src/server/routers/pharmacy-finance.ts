@@ -1,3 +1,4 @@
+import { workspaceTimezone } from '@/lib/timezone';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
@@ -12,7 +13,6 @@ import {
   marginComparisonPeriods,
   perpetualValuation,
   unallocatedInventoryValue,
-  TRUE_PROFIT_TIMEZONE,
   trueProfit,
 } from '@/lib/pharmacy/finance-reports';
 import { loadLedgerLabels } from '@/lib/pharmacy/finance-label-lookup';
@@ -40,6 +40,7 @@ import { adminProcedure, router, type TRPCContext } from '../trpc';
 const id = z.string().trim().min(1).max(128);
 const moneyMinor = z.number().int().positive().max(999_999_999);
 const at = z.coerce.date();
+const periodBoundary = z.union([z.iso.date(), at]);
 
 // Server pages also use a standalone caller, where the root router prefix is
 // absent. Enforce bookkeeping licensing here as well as in the module registry.
@@ -310,8 +311,9 @@ export const pharmacyFinanceRouter = router({
     .input(reportPeriod.safeExtend({ by: z.enum(['item', 'category', 'hour', 'staff']) }))
     .query(async ({ ctx, input }) => {
       const period = { from: new Date(input.from), to: new Date(input.to) };
+      const timeZone = workspaceTimezone(ctx.organization?.timezone);
       const [rows, currencies] = await Promise.all([
-        trueProfit(ctx.db, ctx.reportScope, { ...period, by: input.by }),
+        trueProfit(ctx.db, ctx.reportScope, { ...period, by: input.by, timeZone }),
         ledgerCurrencies(ctx.db, ctx.reportScope, { accountCodes: MARGIN_ACCOUNTS, ...period }),
       ]);
       const keys = rows.flatMap((row) => (row.key === null ? [] : [row.key]));
@@ -336,11 +338,11 @@ export const pharmacyFinanceRouter = router({
       return {
         ...ledgerMetadata(
           ctx.reportScope,
-          `Posted gross revenue minus discounts minus posted COGS at each lot's landed cost (invoice net, non-creditable tax and freight share over received plus bonus units). Hour is the sale completion hour in ${TRUE_PROFIT_TIMEZONE}; staff is the user who completed the sale (falling back to its creator); returns stay with the original sale. Totals reconcile with ledger gross margin; this is not net profit or cash flow.`,
+          `Posted gross revenue minus discounts minus posted COGS at each lot's landed cost (invoice net, non-creditable tax and freight share over received plus bonus units). Hour is the sale completion hour in ${timeZone}; staff is the user who completed the sale (falling back to its creator); returns stay with the original sale. Totals reconcile with ledger gross margin; this is not net profit or cash flow.`,
           reportCurrency(ctx, ctx.reportScope.organizationId, currencies)
         ),
         period: { ...period, bounds: '[from,to)' as const },
-        hourTimezone: TRUE_PROFIT_TIMEZONE,
+        hourTimezone: timeZone,
         by: input.by,
         rows: rows.map((row) => ({
           ...row,
@@ -584,11 +586,13 @@ export const pharmacyFinanceRouter = router({
     }),
 
   closePeriod: bookkeepingProcedure
-    .input(z.object({ branchId: id, startsAt: at, endsAt: at }))
+    .input(z.object({ branchId: id, startsAt: periodBoundary, endsAt: periodBoundary }))
     .mutation(async ({ ctx, input }) => {
       try {
         const scoped = await scope(ctx, input.branchId);
-        return await ctx.db.$transaction((tx) => closeAccountingPeriod(txDb(tx), scoped, input));
+        return await ctx.db.$transaction((tx) =>
+          closeAccountingPeriod(txDb(tx), scoped, input, ctx.organization?.timezone)
+        );
       } catch (error) {
         fail(error);
       }
@@ -683,8 +687,8 @@ export const pharmacyFinanceRouter = router({
       z.object({
         branchId: id,
         name: z.string().trim().min(1).max(160),
-        effectiveFrom: at,
-        effectiveTo: at.optional(),
+        effectiveFrom: periodBoundary,
+        effectiveTo: periodBoundary.optional(),
         approvalReference: z.string().trim().min(1).max(160),
         idempotencyKey: id,
         rules: z
@@ -712,7 +716,7 @@ export const pharmacyFinanceRouter = router({
       try {
         const scoped = await scope(ctx, input.branchId);
         return await ctx.db.$transaction((tx) =>
-          publishPharmacyTaxProfile(txDb(tx), scoped, input)
+          publishPharmacyTaxProfile(txDb(tx), scoped, input, ctx.organization?.timezone)
         );
       } catch (error) {
         fail(error);

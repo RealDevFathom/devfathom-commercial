@@ -11,7 +11,8 @@ import {
   serializePrintDocument,
   type PrintWindow,
 } from '@/lib/browser-print/print-window';
-import { formatKarachiDateTime } from '@/lib/pharmacy/karachi-time';
+import { useWorkspaceTimeZone } from '@/components/entitlements-provider';
+import { formatWorkspaceDateTime } from '@/lib/timezone';
 import { registerPrintTotals } from '@/lib/pharmacy/register-print';
 import { trpc } from '@/lib/trpc';
 import { PageHeader } from '@/components/ui/page-header';
@@ -23,6 +24,7 @@ const cell = 'break-words px-2 py-1.5 align-top text-xs text-text-body';
 const head = 'px-2 py-1.5 text-left font-mono text-xs tracking-wide text-text-muted uppercase';
 
 export function ControlledRegisterConsole() {
+  const timeZone = useWorkspaceTimeZone();
   const page = useRef<HTMLDivElement>(null);
   const [printError, setPrintError] = useState(false);
   const [branchId, setBranchId] = useState('');
@@ -75,7 +77,7 @@ export function ControlledRegisterConsole() {
     const branchName =
       branches.data?.find((branch) => branch.id === selected)?.name ?? 'This branch';
     const stamp = doc.createElement('p');
-    stamp.textContent = `Printed ${formatKarachiDateTime(new Date())} · ${branchName}`;
+    stamp.textContent = `Printed ${formatWorkspaceDateTime(new Date(), timeZone)} · ${branchName}`;
     const style = doc.createElement('style');
     style.textContent =
       '@page { size: landscape; margin: 12mm; } body { font: 11px sans-serif; color: #222; } table { border-collapse: collapse; width: 100%; } th, td { border: 1px solid #222; padding: 4px; text-align: left; vertical-align: top; } thead { display: table-header-group; } tr { break-inside: avoid; }';
@@ -238,7 +240,7 @@ export function ControlledRegisterConsole() {
                         <tr className="border-b border-border-subtle" key={entry.id}>
                           <td className={`${cell} font-mono tabular-nums`}>{entry.serial}</td>
                           <td className={cell}>
-                            {formatKarachiDateTime(entry.createdAt)}
+                            {formatWorkspaceDateTime(entry.createdAt, timeZone)}
                             <span className="mt-0.5 block text-text-muted">
                               {entry.entryKind === 'PURCHASE'
                                 ? 'Purchase'
@@ -489,6 +491,7 @@ function RegisterTotals({ entries }: { entries: readonly ShownEntry[] }) {
 }
 
 function RegisterCards({ entries }: { entries: readonly ShownEntry[] }) {
+  const timeZone = useWorkspaceTimeZone();
   const totals = registerPrintTotals(entries);
   return (
     <div className="space-y-2 md:hidden">
@@ -497,7 +500,7 @@ function RegisterCards({ entries }: { entries: readonly ShownEntry[] }) {
         return (
           <article className="rounded-md border border-border-subtle p-3 text-xs" key={entry.id}>
             <p className="font-mono text-text-strong">
-              {entry.serial} · {formatKarachiDateTime(entry.createdAt)}
+              {entry.serial} · {formatWorkspaceDateTime(entry.createdAt, timeZone)}
             </p>
             <p className="mt-1 text-text-body">
               {drug} · {batchNumberLabel(entry.batchNumber)} · qty {entry.quantityCanonicalUnits}

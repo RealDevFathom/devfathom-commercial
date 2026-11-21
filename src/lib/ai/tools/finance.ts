@@ -13,6 +13,12 @@
  * `needsApproval: true`. Optional params are `.nullish()` (NOT `.optional()`):
  * Groq/gpt-oss send `null` for omitted optionals and 400 on a bare `.optional()`.
  */
+import {
+  workspaceDateRange,
+  workspaceMonthRange,
+  workspaceToday,
+  workspaceTimezone,
+} from '@/lib/timezone';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
@@ -80,6 +86,15 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
   if (!h.isAdmin) return tools; // finance is admin-only — no tools for non-admins.
 
   const now = () => h.now();
+  const organizationZone = async () =>
+    workspaceTimezone(
+      (
+        await db.organization.findUnique({
+          where: { id: h.ctx.organizationId },
+          select: { timezone: true },
+        })
+      )?.timezone
+    );
   const FINANCE_RESTRICTED = 'Finance data is restricted to administrators.';
 
   // Resolve a free-text client name to one client (or candidates to ask about).
@@ -106,10 +121,17 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
     execute: async ({ startDate, endDate }) => {
       if (!h.isAdmin) return { error: FINANCE_RESTRICTED };
       const today = now();
+      const zone = await organizationZone();
       const start = startDate
-        ? new Date(startDate)
-        : new Date(today.getFullYear(), today.getMonth(), 1);
-      const end = endDate ? new Date(endDate) : today;
+        ? /^\d{4}-\d{2}-\d{2}$/.test(startDate)
+          ? workspaceDateRange(startDate, startDate, zone).from
+          : new Date(startDate)
+        : workspaceMonthRange(zone, today).from;
+      const end = endDate
+        ? /^\d{4}-\d{2}-\d{2}$/.test(endDate)
+          ? new Date(workspaceDateRange(endDate, endDate, zone).to.getTime() - 1)
+          : new Date(endDate)
+        : today;
 
       // FIN-02: group by currency — never report a USD + PKR sum as one number.
       const [incomeG, expenseG, paidG, outstandingG] = await Promise.all([
@@ -182,22 +204,23 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
 
       // FIN-02: per-month figures are grouped by currency (USD + PKR are never
       // summed together). Each month carries a per-currency breakdown.
+      const zone = await organizationZone();
+      const january = workspaceToday(zone, today).slice(0, 4) + '-01-01';
       const monthRanges: Date[] = [];
       const groupPromises = [];
       for (let i = span - 1; i >= 0; i--) {
-        const date = new Date(today.getFullYear(), today.getMonth() - i, 1);
-        const endOfMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59);
+        const { from: date, to } = workspaceMonthRange(zone, today, -i);
         monthRanges.push(date);
         groupPromises.push(
           db.transaction.groupBy({
             by: ['currency'],
             _sum: { amount: true },
-            where: { type: 'INCOME', date: { gte: date, lte: endOfMonth } },
+            where: { type: 'INCOME', date: { gte: date, lt: to } },
           }),
           db.transaction.groupBy({
             by: ['currency'],
             _sum: { amount: true },
-            where: { type: 'EXPENSE', date: { gte: date, lte: endOfMonth } },
+            where: { type: 'EXPENSE', date: { gte: date, lt: to } },
           })
         );
       }
@@ -208,7 +231,11 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         const income = fromCurrencyGroups(groups[idx * 2], 'amount');
         const expense = fromCurrencyGroups(groups[idx * 2 + 1], 'amount');
         return {
-          period: date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+          period: date.toLocaleDateString('en-US', {
+            month: 'short',
+            year: 'numeric',
+            timeZone: zone,
+          }),
           incomeByCurrency: income,
           expenseByCurrency: expense,
           profitByCurrency: diffByCurrency(income, expense),
@@ -218,7 +245,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
       const categoryGroups = await db.transaction.groupBy({
         by: ['category', 'currency'],
         _sum: { amount: true },
-        where: { type: 'EXPENSE', date: { gte: new Date(today.getFullYear(), 0, 1) } },
+        where: { type: 'EXPENSE', date: { gte: workspaceDateRange(january, january, zone).from } },
         orderBy: { _sum: { amount: 'desc' } },
       });
 
@@ -431,8 +458,9 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
     execute: async () => {
       if (!h.isAdmin) return { error: FINANCE_RESTRICTED };
       const expenses = await db.recurringExpense.findMany({ where: { active: true } });
-      const today = now();
-      today.setHours(0, 0, 0, 0);
+      const zone = await organizationZone();
+      const day = workspaceToday(zone, now());
+      const today = workspaceDateRange(day, day, zone).from;
       return expenses
         .map((exp) => ({
           ...exp,

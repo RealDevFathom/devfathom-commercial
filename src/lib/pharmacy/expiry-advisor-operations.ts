@@ -1,3 +1,4 @@
+import { pharmacyCalendarDay, pharmacyCalendarDayOffset } from './business-day';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -17,6 +18,7 @@ type AdvisorRow = Omit<ExpiryLotFact, 'onHandUnits' | 'soldUnits' | 'historyDays
  */
 export type ExpiryAdvisorScope = PharmacyReportDimensions & {
   organizationId: string;
+  timeZone?: string | null;
   branchIds: readonly string[];
 };
 
@@ -33,13 +35,17 @@ export async function readExpiryAdvice(db: ScopedDb, scope: ExpiryAdvisorScope, 
   if (!organizationId) throw new Error('EXPIRY_ADVISOR_SCOPE_REQUIRED');
   if (!branchIds.length) return [];
   const branches = Prisma.join(branchIds);
-  const historyFrom = new Date(at.getTime() - 30 * 86_400_000);
+  // Sales retain the business-date label assigned at checkout. Compare labels to
+  // labels, and apply the observation instant separately to timed completions.
+  const historyDay = pharmacyCalendarDay(scope.timeZone, at);
+  const historyFrom = pharmacyCalendarDayOffset(scope.timeZone, -29, at);
   const rows = await db.$queryRaw<AdvisorRow[]>(Prisma.sql`
     WITH branch_history AS (
-      SELECT s."branchId", LEAST(30, GREATEST(1, (${at}::date-min(s."businessDate")::date)+1))::int AS "historyDays"
+      SELECT s."branchId", LEAST(30, GREATEST(1, (${historyDay}::date-min(s."businessDate")::date)+1))::int AS "historyDays"
       FROM "pharmacy_sales" s
       WHERE s."organizationId"=${organizationId} AND s."branchId" IN (${branches})
-        AND s."status"='COMPLETED' AND s."businessDate">=${historyFrom} AND s."businessDate"<${at}
+        AND s."status"='COMPLETED' AND s."businessDate">=${historyFrom}::date AND s."businessDate"<=${historyDay}::date
+        AND (s."completedAt" IS NULL OR s."completedAt" <= ${at})
       GROUP BY s."branchId"
     ), sold AS (
       SELECT a."inventoryLotId", COALESCE(sum(a."canonicalUnits"),0)::int AS "soldUnits"
@@ -47,7 +53,8 @@ export async function readExpiryAdvice(db: ScopedDb, scope: ExpiryAdvisorScope, 
       JOIN "pharmacy_sale_lines" line ON line."organizationId"=a."organizationId" AND line."branchId"=a."branchId" AND line."id"=a."saleLineId"
       JOIN "pharmacy_sales" s ON s."organizationId"=line."organizationId" AND s."branchId"=line."branchId" AND s."id"=line."saleId"
       WHERE a."organizationId"=${organizationId} AND a."branchId" IN (${branches})
-        AND s."status"='COMPLETED' AND s."businessDate">=${historyFrom} AND s."businessDate"<${at}
+        AND s."status"='COMPLETED' AND s."businessDate">=${historyFrom}::date AND s."businessDate"<=${historyDay}::date
+        AND (s."completedAt" IS NULL OR s."completedAt" <= ${at})
       GROUP BY a."inventoryLotId"
     ), available AS (
       SELECT balance."organizationId", balance."branchId", balance."inventoryLotId",
@@ -82,12 +89,12 @@ export async function readExpiryAdvice(db: ScopedDb, scope: ExpiryAdvisorScope, 
     WHERE lot."organizationId"=${organizationId} AND lot."branchId" IN (${branches})
       AND batch."expiresAt">${at} ${lotDimension(Prisma.raw('lot'), scope, true)}
   `);
-  return adviseExpiryLots(rows, at);
+  return adviseExpiryLots(rows, at, scope.timeZone);
 }
 
 export async function proposeExpiryReturn(
   db: ScopedDb,
-  scope: { organizationId: string; branchId: string; actorId: string },
+  scope: { organizationId: string; branchId: string; actorId: string; timeZone?: string | null },
   lotId: string,
   at = new Date()
 ) {
@@ -104,7 +111,11 @@ export async function proposeExpiryReturn(
   const advice = (
     await readExpiryAdvice(
       db,
-      { organizationId: scope.organizationId, branchIds: [scope.branchId] },
+      {
+        organizationId: scope.organizationId,
+        branchIds: [scope.branchId],
+        timeZone: scope.timeZone,
+      },
       at
     )
   ).find((item) => item.lotId === lotId);

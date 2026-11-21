@@ -1085,6 +1085,7 @@ export const pharmacyReportsRouter = router({
   expiryAdvice: reports.input(filters).query(async ({ ctx, input }) => {
     const bounded = await ownerFilters(ctx, input);
     return readExpiryAdvice(ctx.db, {
+      timeZone: ctx.organization?.timezone,
       organizationId: ctx.entitlements.organizationId,
       branchIds: bounded.branchIds,
       ...reportDimensions(input),
@@ -1105,6 +1106,7 @@ export const pharmacyReportsRouter = router({
       return proposeExpiryReturn(
         ctx.db,
         {
+          timeZone: ctx.organization?.timezone,
           organizationId: ctx.entitlements.organizationId,
           branchId: input.branchId,
           actorId: ctx.session!.user.id,

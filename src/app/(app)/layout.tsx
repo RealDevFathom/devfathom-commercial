@@ -70,7 +70,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         }),
       ]);
       return {
-        entitlements: entitlementSnapshot,
+        entitlements: { ...entitlementSnapshot, timeZone: actor.organization.timezone },
         brand: {
           // WHA-276: the chrome is only allowed to display an identity it can
           // attribute to a tenant, so the brand carries the organization it was

@@ -342,6 +342,7 @@ export const restaurantStaffRouter = router({
         name: true,
         code: true,
         timezone: true,
+        businessDayCutoff: true,
         active: true,
         isDefault: true,
       },

@@ -1,5 +1,7 @@
 'use client';
 
+import { businessDateToUtcDate, resolveBusinessDate } from '@/lib/restaurant/business-date';
+import { workspaceTimezone } from '@/lib/timezone';
 import { useMemo, useRef, useState, type ReactNode } from 'react';
 import type { inferRouterOutputs } from '@trpc/server';
 import { ArrowDown, ArrowUp, Eye, EyeOff, Pencil, RotateCcw, Save } from 'lucide-react';
@@ -59,8 +61,13 @@ function dateString(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
-export function closedDateRange(days: 7 | 30, now = new Date()) {
-  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+export function closedDateRange(
+  days: 7 | 30,
+  now = new Date(),
+  timeZone?: string | null,
+  cutoff?: string
+) {
+  const to = businessDateToUtcDate(resolveBusinessDate(now, workspaceTimezone(timeZone), cutoff));
   to.setUTCDate(to.getUTCDate() - 1);
   const from = new Date(to);
   from.setUTCDate(from.getUTCDate() - (days - 1));
@@ -575,7 +582,13 @@ export function RestaurantManagementOverview({ insightsEnabled }: { insightsEnab
     : ((storedBranch ?? fallbackBranch)?.id ?? '');
   const rangeDays = rangeOverride ?? preferencesQuery.data?.rangeDays ?? 7;
 
-  const range = useMemo(() => closedDateRange(rangeDays), [rangeDays]);
+  const selectedBranch = activeBranches.find((branch) => branch.id === selectedBranchId);
+  const range = closedDateRange(
+    rangeDays,
+    new Date(),
+    selectedBranch?.timezone,
+    selectedBranch?.businessDayCutoff
+  );
   const branchReady = insightsEnabled && selectedBranchId.length > 0;
   const rangeInput = {
     branchId: selectedBranchId,

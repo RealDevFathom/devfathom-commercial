@@ -1,3 +1,4 @@
+import { workspaceTimezone } from '@/lib/timezone';
 import Link from 'next/link';
 import { TRPCError } from '@trpc/server';
 
@@ -7,7 +8,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { can, subjectFromSession } from '@/lib/abac';
-import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
+import { businessDateToUtcDate, resolveBusinessDate } from '@/lib/restaurant/business-date';
 import { hasModule } from '@/lib/entitlements';
 import { restaurantSopExecutionRouter } from '@/server/routers/restaurant-sop-execution';
 import { createTRPCContext } from '@/server/trpc';
@@ -102,10 +103,14 @@ export default async function SopReportsPage({ searchParams }: { searchParams: S
     );
   }
 
-  const today = isoDate(new Date());
+  const branch = branches.find((item) => item.id === queryValue(query.branch)) ?? branches[0];
+  const today = resolveBusinessDate(
+    new Date(),
+    workspaceTimezone(branch?.timezone ?? ctx.organization?.timezone),
+    branch?.businessDayCutoff
+  );
   const weekAgo = new Date(`${today}T00:00:00Z`);
   weekAgo.setUTCDate(weekAgo.getUTCDate() - 6);
-  const branch = branches.find((item) => item.id === queryValue(query.branch)) ?? branches[0];
   const from = validDate(queryValue(query.from), isoDate(weekAgo));
   const to = validDate(queryValue(query.to), today);
   const rawDepartment = queryValue(query.department);

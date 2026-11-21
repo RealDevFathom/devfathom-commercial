@@ -306,11 +306,13 @@ function EntryForms({
 
 export default async function ApAgingPage({ searchParams }: { searchParams: Promise<Query> }) {
   const query = await searchParams;
-  // The organization zone is known only after the actor resolves; before any read the
-  // form names it generically.
-  let timeZone: string | null | undefined;
-  // The pre-read check uses the UTC day; the router checks again on the organization's day.
-  const parsed = parseAgingQuery(query, new Date());
+  const resolution = await resolveTenantActor().then(
+    (actor) => ({ actor }),
+    (error: unknown) => ({ actor: null, error })
+  );
+  const { actor } = resolution;
+  const timeZone = actor?.organization?.timezone;
+  const parsed = parseAgingQuery(query, new Date(), timeZone);
   let state: State = parsed.invalid ? { kind: 'invalid' } : { kind: 'initial' };
   let payables: Payables = { kind: 'none' };
   let reversals: Reversals = { kind: 'none' };
@@ -325,8 +327,7 @@ export default async function ApAgingPage({ searchParams }: { searchParams: Prom
 
   if (parsed.branchId && !parsed.invalid) {
     try {
-      const actor = await resolveTenantActor();
-      timeZone = actor?.organization?.timezone ?? 'UTC';
+      if ('error' in resolution) throw resolution.error;
       if (!actor) {
         state = { kind: 'denied' };
       } else {

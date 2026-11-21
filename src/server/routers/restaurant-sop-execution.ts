@@ -351,7 +351,7 @@ export const restaurantSopExecutionRouter = router({
             }),
       },
       orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
-      select: { id: true, name: true },
+      select: { id: true, name: true, timezone: true, businessDayCutoff: true },
     });
   }),
 

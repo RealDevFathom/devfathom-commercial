@@ -1,3 +1,5 @@
+import { resolveBusinessDate } from '@/lib/restaurant/business-date';
+import { workspaceTimezone } from '@/lib/timezone';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Suspense } from 'react';
@@ -199,17 +201,22 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
     );
   }
 
-  const today = isoDate(new Date());
-  const weekAgo = new Date(`${today}T00:00:00.000Z`);
-  weekAgo.setUTCDate(weekAgo.getUTCDate() - 6);
-  const from = queryValue(query.from) ?? isoDate(weekAgo);
-  const to = queryValue(query.to) ?? today;
   const requestedBranch = queryValue(query.branch);
   const canAllBranches = branchResult.data?.canAllBranches ?? false;
   const branch =
     requestedBranch === 'all' && canAllBranches
       ? 'all'
       : (branches.find((item) => item.id === requestedBranch)?.id ?? branches[0]!.id);
+  const selectedBranch = branches.find((item) => item.id === branch);
+  const today = resolveBusinessDate(
+    new Date(),
+    workspaceTimezone(selectedBranch?.timezone ?? ctx.organization?.timezone),
+    selectedBranch?.businessDayCutoff
+  );
+  const weekAgo = new Date(`${today}T00:00:00.000Z`);
+  weekAgo.setUTCDate(weekAgo.getUTCDate() - 6);
+  const from = queryValue(query.from) ?? isoDate(weekAgo);
+  const to = queryValue(query.to) ?? today;
   const rangeInput = { ...(branch === 'all' ? {} : { branchId: branch }), from, to };
   let rangeError: string | undefined;
   try {

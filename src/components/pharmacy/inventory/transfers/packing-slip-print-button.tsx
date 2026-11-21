@@ -1,5 +1,6 @@
 'use client';
 
+import { useWorkspaceTimeZone } from '@/components/entitlements-provider';
 import { useId, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -10,6 +11,7 @@ import { useHydrated } from './transfer-action-form';
 
 /** Requests the OS print dialog for one slip; it cannot confirm paper came out. */
 export function PackingSlipPrintButton({ slip }: { slip: PackingSlip }) {
+  const timeZone = useWorkspaceTimeZone();
   const [format, setFormat] = useState<CounterReceiptFormat>('A4');
   const [error, setError] = useState<string | null>(null);
   const selectId = useId();
@@ -40,7 +42,7 @@ export function PackingSlipPrintButton({ slip }: { slip: PackingSlip }) {
         onClick={async () => {
           try {
             setError(null);
-            await printPackingSlip(slip, format);
+            await printPackingSlip({ ...slip, timeZone }, format);
           } catch (failure) {
             setError(
               failure instanceof Error ? failure.message : 'The packing slip could not be printed.'

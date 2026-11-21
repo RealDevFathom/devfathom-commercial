@@ -1,4 +1,5 @@
 import type { PharmacyTaxProductClass, Prisma } from '@/generated/prisma/client';
+import { pharmacyCalendarDayRange } from './business-day';
 import { calculateTaxAmount, resolveTaxProfile } from '@/lib/tax/calculator';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -24,18 +25,26 @@ export async function publishPharmacyTaxProfile(
   scope: { organizationId: string; branchId: string; actorId: string },
   input: {
     name: string;
-    effectiveFrom: Date;
-    effectiveTo?: Date | null;
+    effectiveFrom: Date | string;
+    effectiveTo?: Date | string | null;
     approvalReference: string;
     idempotencyKey: string;
     rules: PharmacyTaxRuleInput[];
-  }
+  },
+  timeZone?: string | null
 ) {
+  const calendarStart = (day: string) => pharmacyCalendarDayRange(day, day, timeZone).from;
+  let effectiveFrom =
+    typeof input.effectiveFrom === 'string'
+      ? calendarStart(input.effectiveFrom)
+      : input.effectiveFrom;
+  const effectiveTo =
+    typeof input.effectiveTo === 'string' ? calendarStart(input.effectiveTo) : input.effectiveTo;
   if (
     !input.name.trim() ||
     !input.approvalReference.trim() ||
     input.rules.length === 0 ||
-    (input.effectiveTo && input.effectiveFrom >= input.effectiveTo)
+    (effectiveTo && effectiveFrom >= effectiveTo)
   )
     throw new PharmacyTaxProfileError('INVALID');
   await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${scope.organizationId}:${scope.branchId}:pharmacy-tax`}, 0))`;
@@ -44,13 +53,28 @@ export async function publishPharmacyTaxProfile(
     include: { rules: true },
   });
   if (replay) return replay;
+  if (typeof input.effectiveFrom === 'string') {
+    // The old date picker published this label as midnight UTC. Join a replacement
+    // to that exact approved end while holding the same lock as the overlap check.
+    const previous = await db.pharmacyTaxProfileVersion.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        status: 'PUBLISHED',
+        effectiveTo: new Date(input.effectiveFrom),
+      },
+      select: { effectiveTo: true },
+    });
+    if (previous?.effectiveTo) effectiveFrom = previous.effectiveTo;
+    if (effectiveTo && effectiveFrom >= effectiveTo) throw new PharmacyTaxProfileError('INVALID');
+  }
   const overlap = await db.pharmacyTaxProfileVersion.findFirst({
     where: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       status: 'PUBLISHED',
-      effectiveFrom: { lt: input.effectiveTo ?? new Date('9999-12-31T23:59:59.999Z') },
-      OR: [{ effectiveTo: null }, { effectiveTo: { gt: input.effectiveFrom } }],
+      effectiveFrom: { lt: effectiveTo ?? new Date('9999-12-31T23:59:59.999Z') },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: effectiveFrom } }],
     },
     select: { id: true },
   });
@@ -67,8 +91,8 @@ export async function publishPharmacyTaxProfile(
       versionNumber: (latest?.versionNumber ?? 0) + 1,
       name: input.name,
       status: 'PUBLISHED',
-      effectiveFrom: input.effectiveFrom,
-      effectiveTo: input.effectiveTo,
+      effectiveFrom,
+      effectiveTo,
       approvalReference: input.approvalReference,
       approvedAt: new Date(),
       approvedByUserId: scope.actorId,
