@@ -19,6 +19,7 @@ import { sharedDeploymentUrl, unmetActivationGates } from '@/lib/platform/activa
 import { decryptSecret, encryptSecret } from '@/lib/secret-crypto';
 import { verifyTotp } from '@/lib/totp';
 import { type ScopedDb, withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { revokeOperatorSessions } from '@/lib/platform/capabilities';
 import type { DemoSeatIdentity } from '@/lib/platform/command-types';
 import { demoApproverEmail } from '@/lib/demo/approval';
 import { demoSharedDeploymentOrigin } from '@/lib/platform/activation-gates';
@@ -4592,14 +4593,18 @@ async function runCommand(
               passwordHash: passwordHash!,
             },
           });
-      if (
-        !input.active ||
-        (existingOperator && (input.role !== existingOperator.role || input.password))
-      ) {
-        await db.platformSession.updateMany({
-          where: { platformUserId: saved.id, revokedAt: null },
-          data: { revokedAt: new Date() },
-        });
+      const revocationReasons = [
+        !input.active && 'Operator disabled',
+        existingOperator && input.role !== existingOperator.role && 'Operator role changed',
+        existingOperator && input.password && 'Operator password changed',
+        existingOperator &&
+          input.mfaRequired &&
+          !existingOperator.mfaRequired &&
+          !existingOperator.mfaEnabledAt &&
+          'Operator MFA required',
+      ].filter(Boolean);
+      if (revocationReasons.length > 0) {
+        await revokeOperatorSessions(db, saved.id, revocationReasons.join('; '), actor.id);
       }
       const safe = omit(saved, 'passwordHash', 'encryptedTotpSecret');
       return { targetType: 'PlatformUser', targetId: saved.id, data: safe, audit: safe };
@@ -4621,10 +4626,7 @@ async function runCommand(
           encryptedTotpSecret: null,
         },
       });
-      await db.platformSession.updateMany({
-        where: { platformUserId: input.id, revokedAt: null },
-        data: { revokedAt: new Date() },
-      });
+      await revokeOperatorSessions(db, saved.id, `Operator MFA reset: ${input.reason}`, actor.id);
       return {
         targetType: 'PlatformUser',
         targetId: saved.id,

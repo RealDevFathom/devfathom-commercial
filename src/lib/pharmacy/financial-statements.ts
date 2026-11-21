@@ -67,6 +67,8 @@ export async function financialStatements(
         reversesEntryId: true,
         lines: {
           where: { organizationId: scope.organizationId, branchId: scope.branchId },
+          // Posting order (unique, so stable); see JOURNAL_LINES_IN_POSTING_ORDER.
+          orderBy: { id: 'asc' },
           select: { id: true, accountCode: true, side: true, amountMinor: true, lotId: true },
         },
       },

@@ -27,6 +27,7 @@ const db = {
     create: vi.fn(async ({ data }: any) => ({ id: 'new_1', ...data })),
   },
   platformSession: { updateMany: vi.fn() },
+  platformSupportSession: { updateManyAndReturn: vi.fn(async () => []) },
   user: {
     update: vi.fn(async () => ({
       id: 'user_1',

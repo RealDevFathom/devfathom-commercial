@@ -1519,3 +1519,42 @@ describe('DEV-977 phase 2B: the Counter v2 payment sheet arrangement', () => {
     expect(screen.queryByText(/exceeds the family credit limit/)).toBeNull();
   });
 });
+
+describe('DEV-977 phase 3: "Paid so far" in the Take payment summary (A2)', () => {
+  it('adds up the payments the server recorded on a split bill, above their list', () => {
+    setup({
+      balanceMinor: 29400,
+      tenders: [
+        { tenderId: 'cash-a', type: 'CASH', amountMinor: 60000 },
+        { tenderId: 'jazz-a', type: 'JAZZCASH', amountMinor: 12550 },
+      ],
+    });
+    const summary = screen.getByRole('region', { name: 'Payment summary' });
+    const paid = within(summary).getByRole('group', { name: 'Paid so far' });
+    // The figure is the sum of the recorded payments, to the paisa: 600.00 + 125.50.
+    expect(within(paid).getByText('Paid so far').parentElement).toHaveTextContent(
+      /Paid so far\s*725\.50/
+    );
+    // The list it sums stays as it was, inside the same group.
+    expect(within(paid).getByRole('list', { name: 'Recorded payments' })).toHaveTextContent(
+      /1\. Cash · Recorded\s*600\.00\s*2\. JazzCash · Recorded\s*125\.50/
+    );
+    expect(within(summary).getByText('Balance due').parentElement).toHaveTextContent('294.00');
+  });
+
+  it('shows it for a part-paid bill reopened with one payment', () => {
+    setup({
+      balanceMinor: 15000,
+      tenders: [{ tenderId: 'cash-a', type: 'CASH', amountMinor: 10000 }],
+    });
+    expect(screen.getByRole('group', { name: 'Paid so far' })).toHaveTextContent(
+      /Paid so far\s*100\.00/
+    );
+  });
+
+  it('shows no "Paid so far" before any payment is recorded', () => {
+    setup({ balanceMinor: 25000, tenders: [] });
+    expect(screen.queryByRole('group', { name: 'Paid so far' })).toBeNull();
+    expect(screen.queryByText('Paid so far')).toBeNull();
+  });
+});

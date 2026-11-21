@@ -322,7 +322,6 @@ const REVIEWED_ROW_READS: Record<string, Record<string, number>> = {
   'src/lib/restaurant/terminal-session.ts': { RestaurantTerminalSession: 6 },
   'src/lib/restaurant/wallet/enrollment.ts': { WalletEnrollmentAttempt: 2 },
   'src/lib/sso.ts': { OrganizationIdentityConnection: 1, TenantSsoTicket: 1, User: 2 },
-  'src/lib/tenancy/support-session.ts': { PlatformSupportSession: 2 },
   'src/server/routers/email.ts': { MailboxOAuthState: 1 },
   'src/server/routers/invitations.ts': { Invitation: 1 },
   'src/server/routers/organization-admin.ts': { OrganizationEmailSettings: 1 },

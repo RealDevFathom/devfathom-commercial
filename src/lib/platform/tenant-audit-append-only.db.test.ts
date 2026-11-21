@@ -13,6 +13,7 @@
  * is asserted in `jobs.purge.db.test.ts`. This suite asserts the trigger itself
  * refuses everything else, for the tenant runtime, the platform runtime and —
  * when OWNER_DATABASE_URL is set — the table owner.
+ * The pharmacy retention window has a separate check on an unexpired row.
  *
  * Requires TEST_DATABASE_URL (a migrated, throwaway database, never
  * DATABASE_URL). Without it the suite reports itself skipped.
@@ -45,9 +46,11 @@ const OTHER_ORG = `dev155_other_${suffix}`;
 const USER = `dev155_user_${suffix}`;
 const DOOMED_USER = `dev155_doomed_${suffix}`;
 const AUDIT = `dev155_audit_${suffix}`;
+const RETAINED_AUDIT = `dev155_retained_audit_${suffix}`;
 const DOOMED_AUDIT = `dev155_doomed_audit_${suffix}`;
 const PURGED_AUDIT = `dev155_purged_audit_${suffix}`;
 const PLATFORM_ACTOR = `dev155_platform_admin_${suffix}`;
+const RETENTION_DAYS = 30;
 // Not `platform_audit_logs`, whose own guard words its refusal the same way.
 const APPEND_ONLY = /(?<!platform_)audit_logs is append-only/;
 
@@ -80,13 +83,15 @@ async function seedUser(db: ScopedDb, id: string) {
   );
 }
 
-async function seedAudit(db: ScopedDb, id: string, actorId: string | null) {
+async function seedAudit(db: ScopedDb, id: string, actorId: string | null, ageInDays = 0) {
   await db.$executeRawUnsafe(
-    `INSERT INTO audit_logs (id, "organizationId", "actorId", "actorName", "actorEmail", source, category, action, description)
-     VALUES ($1, $2, $3, 'Audit Actor', 'actor@example.test', 'TRPC', 'SYSTEM', 'fixture.audit', 'original')`,
+    `INSERT INTO audit_logs (id, "organizationId", "actorId", "actorName", "actorEmail", source, category, action, description, "createdAt")
+     VALUES ($1, $2, $3, 'Audit Actor', 'actor@example.test', 'TRPC', 'SYSTEM', 'fixture.audit', 'original',
+             timezone('UTC', now()) - make_interval(days => $4::integer))`,
     id,
     ORG,
-    actorId
+    actorId,
+    ageInDays
   );
 }
 
@@ -136,7 +141,18 @@ describeIfDatabase('tenant audit_logs are append-only, against PostgreSQL', () =
       await seedOrganization(db, OTHER_ORG);
       await seedUser(db, USER);
       await seedUser(db, DOOMED_USER);
-      await seedAudit(db, AUDIT, USER);
+      await db.$executeRawUnsafe(
+        `INSERT INTO pharmacy_retention_classes (id, "organizationId", "recordClass", "retentionDays", "effectiveFrom", reason, "createdByUserId")
+         VALUES ($1, $2, 'AUDIT', $3, timezone('UTC', now()), 'Audit retention test policy', $4)`,
+        `retention_${ORG}`,
+        ORG,
+        RETENTION_DAYS,
+        USER
+      );
+      // PostgreSQL checks the retention trigger first. Age this row past the
+      // configured window so its DELETE assertions reach the append-only guard.
+      await seedAudit(db, AUDIT, USER, RETENTION_DAYS + 1);
+      await seedAudit(db, RETAINED_AUDIT, USER);
       await seedAudit(db, DOOMED_AUDIT, DOOMED_USER);
       await seedAudit(db, PURGED_AUDIT, null);
     });
@@ -163,6 +179,18 @@ describeIfDatabase('tenant audit_logs are append-only, against PostgreSQL', () =
       })
     ).rejects.toThrow(APPEND_ONLY);
     expect(await auditRow(AUDIT)).not.toBeNull();
+  });
+
+  it('refuses a tenant DELETE inside the pharmacy retention window', async () => {
+    await expect(
+      withTenantDb(ORG, (db) => db.auditLog.deleteMany({ where: { id: RETAINED_AUDIT } }))
+    ).rejects.toThrow(
+      `deletion refused: AUDIT record ${RETAINED_AUDIT} is inside its ${RETENTION_DAYS} day retention window`
+    );
+    expect(await auditRow(RETAINED_AUDIT)).toMatchObject({
+      actorId: USER,
+      description: 'original',
+    });
   });
 
   it('refuses the platform runtime an UPDATE, and a DELETE outside a recorded purge', async () => {
