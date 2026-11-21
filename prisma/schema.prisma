@@ -14062,6 +14062,7 @@ model PharmacySubstitutionRecord {
 }
 
 enum PharmacyControlledRegisterKind {
+  RETURN_TO_SUPPLIER
   SALE
   PURCHASE
   CORRECTION
@@ -14107,6 +14108,11 @@ model PharmacyControlledRegisterEntry {
   restorationMovementId  String?
   refEntryId             String?
   createdAt              DateTime                          @default(now())
+  sourcePurchaseEntryId    String?
+  supplierReturnLineId     String?
+  sourcePurchase           PharmacyControlledRegisterEntry? @relation("SupplierReturnPurchase", fields: [organizationId, sourcePurchaseEntryId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_register_return_purchase_fk")
+  supplierReturns          PharmacyControlledRegisterEntry[] @relation("SupplierReturnPurchase")
+  supplierReturnLine       PharmacyPurchaseReturnLine? @relation(fields: [organizationId, supplierReturnLineId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_register_return_line_fk")
   prescription           Prescription?                     @relation(fields: [organizationId, prescriptionId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_controlled_register_prescription_fkey")
   line                   PrescriptionLine?                 @relation(fields: [organizationId, prescriptionLineId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_controlled_register_line_fkey")
   patient                PharmacyPatient?                  @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
@@ -14118,6 +14124,7 @@ model PharmacyControlledRegisterEntry {
   repeats                PharmacyControlledRegisterEntry[] @relation("RegisterRepeat")
   incidents              PharmacyRegisterIncident[]
 
+  @@unique([organizationId, supplierReturnLineId], map: "pharmacy_register_return_line_once")
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, serial])
   @@unique([organizationId, stockMovementId])
@@ -14509,6 +14516,7 @@ model PharmacyPurchaseReturnLine {
   supplierClaimId     String?
   createdAt           DateTime @default(now())
 
+  registerEntry PharmacyControlledRegisterEntry?
   purchaseReturn PharmacyPurchaseReturn @relation(fields: [organizationId, branchId, purchaseReturnId], references: [organizationId, branchId, id], onDelete: Restrict)
   lot            PharmacyInventoryLot   @relation(fields: [organizationId, branchId, inventoryLotId], references: [organizationId, branchId, id], onDelete: Restrict)
   location       PharmacyStockLocation  @relation(fields: [organizationId, stockLocationId], references: [organizationId, id], onDelete: Restrict)

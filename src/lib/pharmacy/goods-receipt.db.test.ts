@@ -20,7 +20,7 @@
  * error aborts its whole transaction, so a case that provokes a trigger and
  * then reads back must do the read from a new one (`expectRejection`).
  */
-import { randomBytes, randomInt } from 'node:crypto';
+import { createHmac, randomBytes, randomInt } from 'node:crypto';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -1163,8 +1163,8 @@ describeIfDatabase('PUR-04 — exceptions remain visible until resolved', () => 
 });
 
 describeIfDatabase('PUR-04 — reversal creates linked movements and never edits', () => {
-  it('keeps the controlled register equal to sellable stock after receiving and reversing (DEV-892)', async () => {
-    const f = await fixture(ORG_A, BRANCH_A, 'controlled-reverse');
+  async function controlledReceipt(label: string, line: LineOverrides) {
+    const f = await fixture(ORG_A, BRANCH_A, label);
     const { hashOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
     const pin = String(randomInt(100_000, 1_000_000));
     const credentialHash = await hashOperatorCredential('PIN', pin);
@@ -1195,6 +1195,15 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
         });
       }
       const actor = await member('pharmacy:safety');
+      await db.userPermissionOverride.create({
+        data: {
+          organizationId: ORG_A,
+          userId: actor.id,
+          capability: 'pharmacy:dispense',
+          effect: 'ALLOW',
+          reason: 'Test fixture',
+        },
+      });
       const witness = await member('pharmacy:dispense');
       await db.pharmacyBranchAssignment.create({
         data: { organizationId: ORG_A, branchId: BRANCH_A, userId: actor.id },
@@ -1208,9 +1217,7 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
         },
       });
       await db.medicine.update({ where: { id: f.medicineId }, data: { controlled: true } });
-      const receipt = await draftReceipt(db, f, 'controlled-reverse', {
-        line: { receivedPacks: 10, bonusPacks: 2, rejectedCanonicalUnits: 30 },
-      });
+      const receipt = await draftReceipt(db, f, label, { line });
       await db.pharmacyGoodsReceipt.update({
         where: { id: receipt.id },
         data: { qualifiedPersonUserId: witness.id },
@@ -1245,6 +1252,16 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
         }),
       }));
     }
+    return { f, actor, witness, staff, receipt, scope, posted, pin, lotId, snapshot };
+  }
+
+  it('keeps the controlled register equal to sellable stock after receiving and reversing (DEV-892)', async () => {
+    const { actor, witness, staff, receipt, scope, posted, pin, snapshot } =
+      await controlledReceipt('controlled-reverse', {
+        receivedPacks: 10,
+        bonusPacks: 2,
+        rejectedCanonicalUnits: 30,
+      });
     const received = await snapshot();
     expect(received.balances).toEqual({ AVAILABLE: 90, QUARANTINE: 30 });
     expect(received.entries).toHaveLength(1);
@@ -1282,6 +1299,219 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
     });
     expect(reversal.reversalMovementIds).toContain(reversed.entries[1]!.restorationMovementId);
     expect(reversed.entries[1]!.runningBalance).toBe(reversed.sellable._sum.onHandUnits);
+
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.receipts.reverseGoodsReceipt(db, scope, {
+          goodsReceiptId: receipt.id,
+          reason: 'Retry reversal',
+          at: RECEIVED_AT,
+          controlledWitness: { staffProfileId: staff.id, pin },
+        })
+      )
+    ).rejects.toMatchObject({ reason: 'INVALID_TRANSITION' });
+    expect(await snapshot()).toEqual(reversed);
+  }, 30_000);
+
+  it('keeps the controlled batch in balance after a sale, a refused reversal and supplier dispatch', async () => {
+    const { f, actor, witness, staff, receipt, scope, pin, lotId, snapshot } =
+      await controlledReceipt('controlled-return', { receivedPacks: 10, bonusPacks: 0 });
+    const { appendControlledSaleEntries } = await import('./controlled-register');
+    const returns = await import('./supplier-returns-operations');
+    const received = await snapshot();
+    expect(received.balances.AVAILABLE).toBe(100);
+    expect(received.entries.at(-1)?.runningBalance).toBe(received.balances.AVAILABLE);
+    await inOrg(ORG_A, async (db) => {
+      const patient = await db.pharmacyPatient.create({
+        data: { organizationId: ORG_A, displayName: tag('patient') },
+      });
+      const prescriber = await db.pharmacyPrescriber.create({
+        data: { organizationId: ORG_A, name: tag('doctor'), registrationNumber: tag('reg') },
+      });
+      const pack = await db.packLevel.findUniqueOrThrow({ where: { id: f.packLevelId } });
+      const rx = await db.prescription.create({
+        data: {
+          organizationId: ORG_A,
+          patientId: patient.id,
+          prescriberId: prescriber.id,
+          sourceKind: 'PAPER_IMAGE',
+          sourceFileRef: tag('rx'),
+          validFrom: RECEIVED_AT,
+          validUntil: EXPIRY,
+          capturedByUserId: actor.id,
+          lines: {
+            create: {
+              lineNumber: 1,
+              medicineId: f.medicineId,
+              presentationId: pack.presentationId,
+              authorizedCanonicalUnits: 20,
+              directions: 'Test prescription',
+            },
+          },
+        },
+        include: { lines: true },
+      });
+      const sale = await deps.ledger.allocateForSale(db, scope, {
+        medicineId: f.medicineId,
+        requiredUnits: 20,
+        at: RECEIVED_AT,
+        idempotencyKeyPrefix: tag('sale'),
+      });
+      await appendControlledSaleEntries(db, {
+        organizationId: ORG_A,
+        branchId: BRANCH_A,
+        movementIds: sale.movementIds,
+        patientId: patient.id,
+        patientAddress: 'Test address',
+        medicineId: f.medicineId,
+        manufacturer: null,
+        prescriberId: prescriber.id,
+        prescriberName: prescriber.name,
+        prescriberRegNo: prescriber.registrationNumber,
+        prescriptionId: rx.id,
+        prescriptionLineId: rx.lines[0]!.id,
+        emergency: false,
+        rxSerialWritten: true,
+        refEntryId: null,
+        recordedByUserId: actor.id,
+        witnessedByUserId: witness.id,
+        signatureRef: tag('test-signature'),
+      });
+    });
+    const sold = await snapshot();
+    expect(sold.balances.AVAILABLE).toBe(80);
+    expect(sold.entries.at(-1)?.runningBalance).toBe(sold.balances.AVAILABLE);
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.receipts.reverseGoodsReceipt(db, scope, {
+          goodsReceiptId: receipt.id,
+          at: RECEIVED_AT,
+          reason: 'Return the remainder',
+          controlledWitness: { staffProfileId: staff.id, pin },
+        })
+      )
+    ).rejects.toMatchObject({ reason: 'REVERSAL_STOCK_MOVED' });
+    expect(await snapshot()).toEqual(sold);
+
+    const document = await inOrg(ORG_A, (db) =>
+      returns.createPurchaseReturn(db, scope, {
+        supplierId: f.supplierId,
+        kind: 'PURCHASE_RETURN',
+        reference: tag('return'),
+        lines: [
+          {
+            inventoryLotId: lotId,
+            stockLocationId: f.storeId,
+            quantityUnits: 80,
+            reason: 'Return remaining stock',
+            returnWindowEndsAt: EXPIRY,
+            expectedCreditMinor: 80000,
+          },
+        ],
+      })
+    );
+    await inOrg(ORG_A, (db) =>
+      returns.submitPurchaseReturn(db, scope, { purchaseReturnId: document.id, at: RECEIVED_AT })
+    );
+    const dispatch = (
+      sender: string,
+      controlledWitness?: { staffProfileId: string; pin: string }
+    ) =>
+      inOrg(ORG_A, (db) =>
+        returns.dispatchPurchaseReturn(
+          db,
+          { ...scope, actorId: sender },
+          {
+            purchaseReturnId: document.id,
+            at: RECEIVED_AT,
+            idempotencyKeyPrefix: tag('dispatch'),
+            controlledWitness,
+          }
+        )
+      );
+    const proof = { staffProfileId: staff.id, pin };
+    await expect(dispatch(actor.id)).rejects.toThrow(/different pharmacist/);
+    await expect(dispatch(witness.id, proof)).rejects.toThrow(/different pharmacist/);
+    await expect(
+      dispatch(actor.id, { ...proof, pin: pin === '111111' ? '222222' : '111111' })
+    ).rejects.toThrow(/different pharmacist/);
+    expect(
+      await inOrg(ORG_A, (db) =>
+        db.restaurantOperatorCredential.findFirstOrThrow({
+          where: { staffProfileId: staff.id },
+          select: { failedAttempts: true },
+        })
+      )
+    ).toEqual({ failedAttempts: 1 });
+    expect(await snapshot()).toEqual(sold);
+    // Force a transaction failure after both entries are visible, then read in a new transaction.
+    await expect(
+      inOrg(ORG_A, async (db) => {
+        await returns.dispatchPurchaseReturn(db, scope, {
+          purchaseReturnId: document.id,
+          at: RECEIVED_AT,
+          idempotencyKeyPrefix: tag('rollback'),
+          controlledWitness: proof,
+        });
+        const outgoing = await db.pharmacyControlledRegisterEntry.findFirstOrThrow({
+          where: { supplierReturnLineId: document.lines[0]!.id },
+        });
+        expect(outgoing.balanceDelta).toBe(-80);
+        expect((await balancesFor(db, ORG_A, lotId)).AVAILABLE).toBe(0);
+        throw new Error('fixture rollback');
+      })
+    ).rejects.toThrow('fixture rollback');
+    expect(await snapshot()).toEqual(sold);
+    // Enrol the independent witness before the real dispatch. The approved
+    // code must be consumed once even when two submissions arrive together.
+    const { encryptSecret } = await import('@/lib/secret-crypto');
+    const rfcSecret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
+    await inOrg(ORG_A, (db) =>
+      db.approvalAuthenticator.create({
+        data: {
+          organizationId: ORG_A,
+          userId: witness.id,
+          enabledAt: new Date(),
+          encryptedSecret: encryptSecret(rfcSecret),
+        },
+      })
+    );
+    const counter = Buffer.alloc(8);
+    counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000)));
+    const mac = createHmac('sha1', '12345678901234567890').update(counter).digest();
+    const code = String(
+      (mac.readUInt32BE(mac[mac.length - 1]! & 15) & 0x7fffffff) % 1000000
+    ).padStart(6, '0');
+    const approval = { ...proof, pin: code };
+    await Promise.all([dispatch(actor.id, approval), dispatch(actor.id, approval)]);
+    const dispatched = await snapshot();
+    expect(dispatched.balances.AVAILABLE).toBe(0);
+    expect(dispatched.entries).toHaveLength(3);
+    expect(dispatched.entries.slice(0, 2)).toEqual(sold.entries);
+    expect(dispatched.entries[2]).toMatchObject({
+      entryKind: 'RETURN_TO_SUPPLIER',
+      recordedByUserId: actor.id,
+      witnessedByUserId: witness.id,
+      signatureRef: expect.stringMatching(/^authenticator:/),
+      sourcePurchaseEntryId: received.entries[0]!.id,
+      quantityCanonicalUnits: 80,
+      balanceDelta: -80,
+      runningBalance: dispatched.balances.AVAILABLE,
+    });
+    const out = await inOrg(ORG_A, (db) =>
+      db.pharmacyStockMovement.findUniqueOrThrow({
+        where: { id: dispatched.entries[2]!.stockMovementId! },
+      })
+    );
+    expect(out).toMatchObject({
+      inventoryLotId: lotId,
+      disposition: 'AVAILABLE',
+      quantityUnits: -80,
+      actorId: actor.id,
+    });
+    expect(dispatched.entries[2]!.counterpartyName).toBe(received.entries[0]!.counterpartyName);
+    await dispatch(actor.id, approval);
+    expect(await snapshot()).toEqual(dispatched);
   }, 30_000);
 
   it('adds a negating ADJUSTMENT per posting, linked to what it cancels', async () => {

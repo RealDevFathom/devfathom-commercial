@@ -105,6 +105,7 @@ export async function sellableOnHand(
       branchId: scope.branchId,
       inventoryLotId: scope.inventoryLotId,
       disposition: { not: 'QUARANTINE' },
+      NOT: { disposition: 'RETURN_TO_SUPPLIER' },
     },
     _sum: { onHandUnits: true },
   });
@@ -381,6 +382,77 @@ export async function appendControlledPurchaseReversals(
   }
 }
 
+/** The return document and its stock movement are written in the caller's transaction. */
+export async function appendControlledSupplierReturn(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string; actorId: string },
+  input: {
+    supplierId: string;
+    supplierName: string;
+    lineId: string;
+    inventoryLotId: string;
+    movementId: string;
+    quantity: number;
+    witness: import('./controlled-restoration-authorization').ControlledRestorationWitness;
+  }
+) {
+  const { organizationId, branchId } = scope;
+  // A lot can contain several lines of the same invoice. Never guess which
+  // original register entry a physical return belongs to.
+  const sources = await db.$queryRaw<
+    { id: string; medicineId: string; manufacturer: string | null; batchNumber: string | null }[]
+  >`
+    SELECT p.id, p."medicineId", p.manufacturer, p."batchNumber"
+    FROM pharmacy_controlled_register_entries p
+    JOIN pharmacy_stock_movements m ON m."organizationId" = p."organizationId" AND m.id = p."stockMovementId"
+    JOIN pharmacy_goods_receipt_lines l ON l."organizationId" = p."organizationId"
+      AND l."inventoryLotId" = p."inventoryLotId" AND m."idempotencyKey" = 'pharmacy-receipt:' || l.id || ':accepted'
+    JOIN pharmacy_goods_receipts r ON r."organizationId" = l."organizationId" AND r.id = l."goodsReceiptId"
+    WHERE p."organizationId" = ${organizationId} AND p."branchId" = ${branchId}
+      AND p."inventoryLotId" = ${input.inventoryLotId} AND p."entryKind" = 'PURCHASE'
+      AND r.status = 'POSTED' AND r."supplierId" = ${input.supplierId}
+      AND p."quantityCanonicalUnits" - COALESCE((SELECT sum(sent."quantityCanonicalUnits")
+        FROM pharmacy_controlled_register_entries sent WHERE sent."organizationId" = p."organizationId"
+        AND sent."sourcePurchaseEntryId" = p.id), 0) >= ${input.quantity}
+    LIMIT 2`;
+  if (sources.length !== 1) {
+    throw new Error(
+      'The return must identify one controlled purchase from this supplier for the quantity being sent.'
+    );
+  }
+  const purchase = sources[0]!;
+  const lot = {
+    organizationId,
+    branchId,
+    medicineId: purchase.medicineId,
+    inventoryLotId: input.inventoryLotId,
+  };
+  const balanceDelta = -input.quantity;
+  const runningBalance = await runningFromLot(db, lot, balanceDelta);
+  if (runningBalance !== (await sellableOnHand(db, lot))) {
+    throw new Error(
+      'The controlled register and stock balance disagree. Reconcile this batch before dispatch.'
+    );
+  }
+  await createRegisterRow(db, {
+    ...lot,
+    serial: await nextSerial(db, organizationId, branchId),
+    entryKind: 'RETURN_TO_SUPPLIER',
+    sourcePurchaseEntryId: purchase.id,
+    supplierReturnLineId: input.lineId,
+    stockMovementId: input.movementId,
+    manufacturer: purchase.manufacturer,
+    batchNumber: purchase.batchNumber,
+    counterpartyName: input.supplierName,
+    quantityCanonicalUnits: input.quantity,
+    balanceDelta,
+    runningBalance,
+    recordedByUserId: scope.actorId,
+    witnessedByUserId: input.witness.witnessedByUserId,
+    signatureRef: input.witness.signatureRef,
+  });
+}
+
 export async function earlierRegisterEntry(
   db: ScopedDb,
   scope: { organizationId: string; branchId: string },
@@ -419,7 +491,10 @@ export async function appendControlledCorrection(db: ScopedDb, input: Correction
     },
   });
   if (!original) throw new Error('NOT_FOUND');
-  if (original.entryKind === 'CORRECTION' || !original.medicineId) {
+  if (
+    (original.entryKind !== 'PURCHASE' && original.entryKind !== 'SALE') ||
+    !original.medicineId
+  ) {
     throw new Error('ALREADY_CORRECTED');
   }
   const existing = await db.pharmacyControlledRegisterEntry.findFirst({

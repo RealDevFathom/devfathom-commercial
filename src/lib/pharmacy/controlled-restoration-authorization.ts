@@ -28,14 +28,17 @@ export class ControlledRestorationDenied extends Error {
   constructor(
     readonly forbidden = false,
     /** A sole pharmacist's own PIN was refused (wrong, or locked out). */
-    readonly soloPinRefused = false
+    readonly soloPinRefused = false,
+    supplierDispatch = false
   ) {
     super(
       forbidden
         ? 'Permission to change controlled stock is required.'
         : soloPinRefused
           ? 'Your PIN was not accepted. Check it and try again, or wait if your PIN is locked.'
-          : 'A different pharmacist must enter a fresh witness PIN.'
+          : supplierDispatch
+            ? 'A different pharmacist must enter a valid witness PIN or approval code before dispatch.'
+            : 'A different pharmacist must enter a fresh witness PIN.'
     );
   }
 }
@@ -90,7 +93,7 @@ export async function authorizeControlledRestoration(
   scope: LedgerScope,
   input?: ControlledRestorationPin,
   actorCapability: 'pharmacy:dispense' | 'pharmacy:safety' = 'pharmacy:dispense',
-  options: { allowSoloSelfWitness?: boolean } = {}
+  options: { allowSoloSelfWitness?: boolean; supplierDispatch?: boolean } = {}
 ): Promise<ControlledRestorationWitness> {
   const actor = await db.user.findFirst({
     where: { id: scope.actorId, organizationId: scope.organizationId, status: 'ACTIVE' },
@@ -98,17 +101,16 @@ export async function authorizeControlledRestoration(
   if (!actor || !(await can(actor, actorCapability, undefined, { db }))) {
     throw new ControlledRestorationDenied(true);
   }
-  if (!input) throw new ControlledRestorationDenied();
+  if (!input) throw new ControlledRestorationDenied(false, false, options.supplierDispatch);
   const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
   const result = await withTenantDb(
     scope.organizationId,
-    (credentialDb) =>
-      verifyRestorationPin(credentialDb, scope, input, options.allowSoloSelfWitness === true),
+    (credentialDb) => verifyRestorationPin(credentialDb, scope, input, options),
     { userId: scope.actorId, skipDrain: true }
   );
   // Throw only after the credential transaction has committed failed attempts.
   if (result === 'SOLO_PIN_REFUSED') throw new ControlledRestorationDenied(false, true);
-  if (!result) throw new ControlledRestorationDenied();
+  if (!result) throw new ControlledRestorationDenied(false, false, options.supplierDispatch);
   return result;
 }
 
@@ -116,7 +118,7 @@ async function verifyRestorationPin(
   db: ScopedDb,
   scope: LedgerScope,
   input: ControlledRestorationPin,
-  allowSoloSelfWitness: boolean
+  options: { allowSoloSelfWitness?: boolean; supplierDispatch?: boolean }
 ): Promise<ControlledRestorationWitness | 'SOLO_PIN_REFUSED' | null> {
   await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${input.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
   const credential = await db.restaurantOperatorCredential.findFirst({
@@ -148,24 +150,27 @@ async function verifyRestorationPin(
   if (
     selfWitness &&
     !(
-      allowSoloSelfWitness && (await isSolePharmacist(db, scope.organizationId, scope.actorId, now))
+      options.allowSoloSelfWitness &&
+      !options.supplierDispatch &&
+      (await isSolePharmacist(db, scope.organizationId, scope.actorId, now))
     )
   ) {
     return null;
   }
   const refused = selfWitness ? 'SOLO_PIN_REFUSED' : null;
   if (isLockedOut(credential, now)) return refused;
-  if (
-    !(await verifyApprovalSecret(db, {
-      organizationId: scope.organizationId,
-      approverUserId: witness.id,
-      credentialHash: credential.credentialHash,
-      secret: input.pin,
-      action: 'pharmacy.controlledRestorationWitness',
-      requestedById: scope.actorId,
-      now,
-    }))
-  ) {
+  const method = await verifyApprovalSecret(db, {
+    organizationId: scope.organizationId,
+    approverUserId: witness.id,
+    credentialHash: credential.credentialHash,
+    secret: input.pin,
+    action: options.supplierDispatch
+      ? 'pharmacyPurchasing.dispatchPurchaseReturn'
+      : 'pharmacy.controlledRestorationWitness',
+    requestedById: scope.actorId,
+    now,
+  });
+  if (!method) {
     await db.restaurantOperatorCredential.update({
       where: { id: credential.id },
       data: registerFailedAttempt(credential, now),
@@ -183,5 +188,10 @@ async function verifyRestorationPin(
       soloSelfWitness: true,
     };
   }
-  return { witnessedByUserId: witness.id, signatureRef: `pin:${credential.id}:${randomUUID()}` };
+  const signatureMethod =
+    options.supplierDispatch && method === 'AUTHENTICATOR' ? 'authenticator' : 'pin';
+  return {
+    witnessedByUserId: witness.id,
+    signatureRef: `${signatureMethod}:${credential.id}:${randomUUID()}`,
+  };
 }

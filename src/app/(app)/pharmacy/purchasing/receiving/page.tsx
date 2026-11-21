@@ -524,6 +524,20 @@ export default async function PharmacyReceivingPage({
     try {
       const actionCaller = await purchasingCaller();
       if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      // A quantity or line selection would otherwise be discarded and turn a
+      // partial request into a full reversal. This action accepts whole receipts only.
+      const fields = [
+        'branchId',
+        'goodsReceiptId',
+        'reversalReason',
+        'witnessStaffProfileId',
+        'witnessPin',
+      ];
+      if (Array.from(form.keys()).some((key) => !fields.includes(key))) {
+        throw new PurchasingValidationError(
+          'Only a full receipt can be reversed. Leave this receipt posted.'
+        );
+      }
       await outcome.write(actionCaller.reverseGoodsReceipt)({
         branchId: branch,
         goodsReceiptId,

@@ -24,6 +24,11 @@
  * allocations against one note (or from one credit) serialize and only one of
  * them can spend the shared remainder.
  */
+import {
+  authorizeControlledRestoration,
+  type ControlledRestorationPin,
+} from './controlled-restoration-authorization';
+import { appendControlledSupplierReturn, lockRegister } from './controlled-register';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -307,10 +312,52 @@ async function removalArrangement(
 export async function dispatchPurchaseReturn(
   db: ScopedDb,
   scope: LedgerScope,
-  input: { purchaseReturnId: string; at: Date; idempotencyKeyPrefix: string }
+  input: {
+    purchaseReturnId: string;
+    at: Date;
+    idempotencyKeyPrefix: string;
+    controlledWitness?: ControlledRestorationPin;
+  }
 ) {
-  const found = await loadReturn(db, scope, input.purchaseReturnId);
+  await db.$queryRaw`SELECT id FROM pharmacy_purchase_returns WHERE "organizationId"=${scope.organizationId}
+    AND "branchId"=${scope.branchId} AND id=${input.purchaseReturnId} FOR UPDATE`;
+  const found = await db.pharmacyPurchaseReturn.findFirst({
+    where: {
+      id: input.purchaseReturnId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+    },
+    include: {
+      supplier: { select: { name: true } },
+      lines: {
+        orderBy: { lineNumber: 'asc' },
+        include: {
+          lot: {
+            select: {
+              unitsPerPack: true,
+              batch: { select: { medicine: { select: { controlled: true } } } },
+            },
+          },
+        },
+      },
+    },
+  });
+  if (!found) throw new PharmacySupplierReturnError('CROSS_BRANCH_REFERENCE');
+  if (found.status === 'DISPATCHED' || found.status === 'SETTLED') {
+    return loadReturn(db, scope, input.purchaseReturnId);
+  }
   assertPurchaseReturnTransition(found.status as PurchaseReturnStatus, 'DISPATCHED');
+  const controlled = found.lines.some((line) => line.lot.batch.medicine.controlled);
+  const witness = controlled
+    ? await authorizeControlledRestoration(
+        db,
+        scope,
+        input.controlledWitness,
+        'pharmacy:dispense',
+        { supplierDispatch: true }
+      )
+    : undefined;
+  if (controlled) await lockRegister(db, scope.organizationId, scope.branchId);
 
   // DEV-825: every balance the dispatch writes, locked once in the global key order.
   await lockStockBalances(
@@ -325,21 +372,13 @@ export async function dispatchPurchaseReturn(
     )
   );
   for (const [index, line] of found.lines.entries()) {
-    const lot = await db.pharmacyInventoryLot.findFirst({
-      where: {
-        id: line.inventoryLotId,
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-      },
-    });
-    if (!lot) throw new PharmacySupplierReturnError('CROSS_BRANCH_REFERENCE');
     const arrangement = await removalArrangement(
       db,
       scope,
       line.inventoryLotId,
       line.stockLocationId,
       line.quantityUnits,
-      lot.unitsPerPack
+      line.lot.unitsPerPack
     );
     // ADJUSTMENT on both legs, exactly as `quarantinePart` does: this is a
     // disposition move within one lot and location, and the ledger's direction
@@ -357,14 +396,16 @@ export async function dispatchPurchaseReturn(
       reason: line.reason,
       occurredAt: input.at,
     };
-    await db.pharmacyStockMovement.create({
+    const outgoing = await db.pharmacyStockMovement.create({
       data: {
         ...common,
         disposition: 'AVAILABLE',
         quantityUnits: -line.quantityUnits,
         sealedPackDelta: -arrangement.sealedPacks,
         looseUnitDelta: -arrangement.looseUnits,
-        idempotencyKey: `${input.idempotencyKeyPrefix}:${index}:out`,
+        idempotencyKey: line.lot.batch.medicine.controlled
+          ? `supplier-return:${line.id}:out`
+          : `${input.idempotencyKeyPrefix}:${index}:out`,
       },
     });
     await db.pharmacyStockMovement.create({
@@ -377,6 +418,17 @@ export async function dispatchPurchaseReturn(
         idempotencyKey: `${input.idempotencyKeyPrefix}:${index}:returned`,
       },
     });
+    if (witness && line.lot.batch.medicine.controlled) {
+      await appendControlledSupplierReturn(db, scope, {
+        supplierId: found.supplierId,
+        supplierName: found.supplier.name,
+        lineId: line.id,
+        inventoryLotId: line.inventoryLotId,
+        movementId: outgoing.id,
+        quantity: line.quantityUnits,
+        witness,
+      });
+    }
     if (line.supplierClaimId) {
       await db.pharmacySupplierClaim.update({
         where: { id: line.supplierClaimId },

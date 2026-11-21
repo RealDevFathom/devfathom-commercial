@@ -137,6 +137,7 @@ export const pharmacySafetyRouter = router({
           medicine: { select: { productName: true, manufacturer: true } },
           line: { include: { medicine: true } },
           correctsEntry: { select: { serial: true } },
+          sourcePurchase: { select: { serial: true } },
           refEntry: { select: { serial: true } },
           incidents: { include: { approvals: true } },
         },

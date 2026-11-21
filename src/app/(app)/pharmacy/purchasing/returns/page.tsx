@@ -1,3 +1,4 @@
+import { listControlledPinWitnesses } from '@/lib/pharmacy/controlled-register';
 import { FollowUpQueue } from './follow-up-queue';
 import { supplierCreditFollowUp } from '@/lib/pharmacy/supplier-credit-follow-up';
 import type { Metadata } from 'next';
@@ -193,6 +194,32 @@ export default async function PharmacyReturnsPage({
 
   const selected = returns.find((row) => row.id === param(query, 'return')) ?? null;
 
+  const needsWitness =
+    selected?.status === 'SUBMITTED' &&
+    selected.lines.some((line) => line.lot.batch.medicine.controlled);
+  let witnesses: { id: string; name: string }[] = [];
+  let witnessHint = 'A different pharmacist must approve this dispatch.';
+  if (needsWitness) {
+    if (
+      await can(subjectFromSession(ctx.session.user), 'pharmacy:dispense', undefined, {
+        db: ctx.db,
+      })
+    ) {
+      try {
+        witnesses = await listControlledPinWitnesses(
+          ctx.db,
+          ctx.entitlements.organizationId,
+          ctx.session.user.id
+        );
+        if (!witnesses.length)
+          witnessHint = 'No eligible independent pharmacist is available to witness this dispatch.';
+      } catch {
+        witnessHint = 'Witnesses could not be loaded. Reload this return before dispatch.';
+      }
+    } else {
+      witnessHint = 'A pharmacist with dispensing access must dispatch controlled stock.';
+    }
+  }
   // The credit position across the branch, kept as two separately sourced
   // numbers rather than one that has been overwritten.
   const expectedMinor = returns
@@ -299,6 +326,12 @@ export default async function PharmacyReturnsPage({
         await outcome.write(actionCaller.dispatchPurchaseReturn)({
           branchId: branch,
           purchaseReturnId,
+          controlledWitness: optionalField(form, 'witnessStaffProfileId')
+            ? {
+                staffProfileId: field(form, 'witnessStaffProfileId'),
+                pin: field(form, 'witnessPin'),
+              }
+            : undefined,
           // The reservation is already unique per return, so the document's own
           // id is a stable idempotency key: a retried dispatch cannot post the
           // movements twice.
@@ -516,6 +549,8 @@ export default async function PharmacyReturnsPage({
               timeZone={ctx.organization?.timezone}
               onAdvance={advanceReturn}
               onAllocate={allocateCredit}
+              witnesses={needsWitness ? witnesses : null}
+              witnessHint={witnessHint}
               purchaseReturn={selected}
             />
           ) : (
@@ -789,6 +824,8 @@ function Frame({
 }
 
 function ReturnDetail({
+  witnesses,
+  witnessHint,
   purchaseReturn,
   credits,
   branchId,
@@ -797,6 +834,8 @@ function ReturnDetail({
   onAdvance,
   onAllocate,
 }: {
+  witnesses: { id: string; name: string }[] | null;
+  witnessHint: string;
   purchaseReturn: PurchaseReturnDetail;
   credits: {
     id: string;
@@ -960,7 +999,30 @@ function ReturnDetail({
               <input name="branchId" type="hidden" value={branchId} />
               <input name="purchaseReturnId" type="hidden" value={purchaseReturn.id} />
               <input name="action" type="hidden" value="dispatch" />
-              <SubmitButton>Dispatch to supplier</SubmitButton>
+              {witnesses && (
+                <div className="grid w-full gap-3 sm:grid-cols-2">
+                  <SelectField
+                    label="Dispatch witness"
+                    name="witnessStaffProfileId"
+                    notice={notice}
+                    placeholder="Select a pharmacist"
+                    emptyHint={witnessHint}
+                    hint={witnessHint}
+                    options={witnesses.map(({ id, name }) => ({ value: id, label: name }))}
+                    required
+                  />
+                  <TextField
+                    label="Witness PIN or approval code"
+                    name="witnessPin"
+                    notice={notice}
+                    type="password"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    required
+                  />
+                </div>
+              )}
+              <SubmitButton disabled={witnesses?.length === 0}>Dispatch to supplier</SubmitButton>
             </PurchasingActionForm>
           )
         ) : null}

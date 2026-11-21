@@ -97,7 +97,7 @@ export function ControlledRegisterConsole() {
         <PageHeader
           eyebrow="Pharmacy"
           heading="Controlled register"
-          description="Append-only sales, purchases and corrections for this branch."
+          description="Append-only sales, purchases, supplier returns and corrections for this branch."
         />
         <AccessDeniedState title="You do not have controlled-register access">
           The controlled register is restricted to users holding the pharmacy safety permission.
@@ -122,7 +122,7 @@ export function ControlledRegisterConsole() {
         }
         eyebrow="Pharmacy"
         heading="Controlled register"
-        description="Append-only sales, purchases and corrections for this branch."
+        description="Append-only sales, purchases, supplier returns and corrections for this branch."
       />
       {printError ? (
         <p className="text-xs text-destructive" role="alert">
@@ -244,9 +244,11 @@ export function ControlledRegisterConsole() {
                                 ? 'Purchase'
                                 : entry.entryKind === 'CORRECTION'
                                   ? `Correction of ${entry.correctsEntry?.serial ?? '—'}`
-                                  : entry.emergency
-                                    ? 'Emergency sale'
-                                    : 'Sale'}
+                                  : entry.entryKind === 'RETURN_TO_SUPPLIER'
+                                    ? `Returned to supplier · purchase ${entry.sourcePurchase?.serial ?? '—'}`
+                                    : entry.emergency
+                                      ? 'Emergency sale'
+                                      : 'Sale'}
                               {entry.refEntry ? ` · repeats ${entry.refEntry.serial}` : ''}
                             </span>
                           </td>
@@ -361,7 +363,7 @@ export function ControlledRegisterConsole() {
                     {register.data.entries
                       .filter(
                         (entry) =>
-                          entry.entryKind !== 'CORRECTION' &&
+                          (entry.entryKind === 'PURCHASE' || entry.entryKind === 'SALE') &&
                           !register.data.entries.some((other) => other.correctsEntryId === entry.id)
                       )
                       .map((entry) => (

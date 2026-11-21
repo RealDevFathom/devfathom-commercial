@@ -2542,6 +2542,20 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'CROSS_BRANCH_REFERENCE' });
   });
 
+  it('explains a partial receipt reversal before writing', async () => {
+    const partial = {
+      branchId: 'branch_a',
+      goodsReceiptId: 'gr_a',
+      reason: 'Return part',
+      quantityUnits: 80,
+    };
+    await expect(caller().reverseGoodsReceipt(partial)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: expect.stringContaining('Only a full receipt can be reversed.'),
+    });
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
   it('refuses goods-in when the actor only holds the cashier grants', async () => {
     db.user.findUnique.mockResolvedValue(CASHIER);
     await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({

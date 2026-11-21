@@ -99,6 +99,7 @@ import {
   PharmacyReceivingError,
   receiptLandedCosts,
   receiptLineQuantities,
+  receiptReversalRefusals,
 } from '@/lib/pharmacy/receiving';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
 import {
@@ -176,7 +177,7 @@ const MAX_RECEIPT_ALLOCATIONS = MAX_RECEIPT_LINES * 4;
 
 function domainError(error: unknown): never {
   if (error instanceof ControlledRestorationDenied) {
-    throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+    throw new TRPCError({ code: 'FORBIDDEN', message: error.message, cause: error });
   }
   if (error instanceof CentralPurchasingError) {
     throw new TRPCError({
@@ -216,7 +217,11 @@ function domainError(error: unknown): never {
               error.reason === 'SELF_APPROVAL'
             ? 'FORBIDDEN'
             : 'BAD_REQUEST',
-      message: error.reason,
+      message:
+        error.reason === 'REVERSAL_STOCK_MOVED' || error.reason === 'REVERSAL_PACKS_OPENED'
+          ? receiptReversalRefusals[error.reason]
+          : error.reason,
+      cause: error,
     });
   }
   if (error instanceof PharmacyInventoryError) {
@@ -2283,8 +2288,8 @@ const purchasingRouter = router({
   reverseGoodsReceipt: purchasing
     .meta(PROCUREMENT)
     .input(
-      z
-        .object({
+      z.strictObject(
+        {
           branchId,
           goodsReceiptId: z.string().min(1).max(200),
           reason: z.string().trim().min(1).max(1000),
@@ -2295,8 +2300,14 @@ const purchasingRouter = router({
             })
             .strict()
             .optional(),
-        })
-        .strict()
+        },
+        {
+          error: (issue) =>
+            issue.code === 'unrecognized_keys'
+              ? 'Only a full receipt can be reversed. Leave this receipt posted.'
+              : undefined,
+        }
+      )
     )
     .mutation(async ({ ctx, input }) => {
       await assertProcurement(ctx);
@@ -2490,6 +2501,13 @@ const purchasingRouter = router({
         .object({
           branchId,
           purchaseReturnId: z.string().min(1).max(200),
+          controlledWitness: z
+            .object({
+              staffProfileId: z.string().min(1).max(200),
+              pin: z.string().regex(/^\d{4,8}$/),
+            })
+            .strict()
+            .optional(),
           idempotencyKey: z.string().trim().min(1).max(200),
         })
         .strict()
@@ -2502,6 +2520,7 @@ const purchasingRouter = router({
             purchaseReturnId: input.purchaseReturnId,
             at: new Date(),
             idempotencyKeyPrefix: input.idempotencyKey,
+            controlledWitness: input.controlledWitness,
           })
         );
       } catch (error) {

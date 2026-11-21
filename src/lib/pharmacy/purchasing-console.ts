@@ -851,7 +851,7 @@ async function purchaseReturnRows(db: ScopedDb, scope: BranchScope, options: Rea
                 select: {
                   batchNumber: true,
                   expiresAt: true,
-                  medicine: { select: { id: true, productName: true } },
+                  medicine: { select: { id: true, productName: true, controlled: true } },
                 },
               },
             },

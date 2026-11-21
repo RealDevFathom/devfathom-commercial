@@ -33,6 +33,13 @@ import {
   type SupplierLicenceEvidence,
 } from './purchasing';
 
+export const receiptReversalRefusals = {
+  REVERSAL_STOCK_MOVED:
+    'Some of the stock this receipt brought in has since been sold, transferred, quarantined or written off. Only a full receipt can be reversed. Leave this receipt posted.',
+  REVERSAL_PACKS_OPENED:
+    'Sealed packs from this receipt have since been opened into loose units. Only a full receipt can be reversed. Leave this receipt posted.',
+} as const;
+
 export class PharmacyReceivingError extends Error {
   constructor(
     readonly reason:

@@ -651,6 +651,7 @@ it('keeps Returns success and sibling credit draft when Submit becomes Dispatch'
   list.mockResolvedValue([{ ...row, status: 'SUBMITTED' }]);
   view.rerender(await ReturnsPage({ searchParams: params({ return: 'ret-1' }) }));
   expect(screen.getByRole('button', { name: 'Dispatch to supplier' })).toBeEnabled();
+  expect(screen.queryByLabelText('Witness PIN or approval code')).toBeNull();
   const outcome = screen.getByRole('link', { name: 'View saved record' }).parentElement!;
   expect(within(outcome).getByRole('status')).toHaveTextContent(
     /^Return submitted\. The quantity is reserved and can no longer be sold\. Check the updated record before starting another change\.$/
@@ -664,6 +665,79 @@ it('keeps Returns success and sibling credit draft when Submit becomes Dispatch'
   expect(draft).toHaveFocus();
   expect([draft.selectionStart, draft.selectionEnd]).toEqual([1, 5]);
   expect(write).toHaveBeenCalledOnce();
+});
+
+it('requires an independent witness for a controlled supplier dispatch', async () => {
+  const ctx = contextStub();
+  const witness = {
+    id: 'staff-w',
+    displayName: 'Witness pharmacist',
+    user: { ...actor.session.user, id: 'user-w', status: 'ACTIVE' },
+  };
+  ctx.db.user.findUnique.mockResolvedValue({
+    organizationRole: {
+      permissions: [
+        { capability: 'pharmacy.procurement', effect: 'ALLOW' },
+        { capability: 'reports:financial', effect: 'ALLOW' },
+        { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+      ],
+    },
+    permissionOverrides: [],
+  });
+  mocks.createTRPCContext.mockResolvedValue({
+    ...ctx,
+    db: { ...ctx.db, restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue([witness]) } },
+  });
+  const row = {
+    id: 'controlled-return',
+    reference: 'RET-controlled',
+    status: 'SUBMITTED',
+    kind: 'PURCHASE_RETURN',
+    supplier: licensedSupplier,
+    createdAt: new Date('2026-09-01'),
+    debitNotes: [],
+    lines: [
+      {
+        id: 'line',
+        lot: {
+          batch: {
+            medicine: { productName: 'Controlled medicine', controlled: true },
+            batchNumber: 'B1',
+            expiresAt: new Date('2027-06-01'),
+          },
+        },
+        location: { name: 'Shelf' },
+        quantityUnits: 80,
+        expectedCreditMinor: 80000,
+        reason: 'Return',
+        windowState: 'OPEN',
+        daysToWindowEnd: 20,
+      },
+    ],
+  };
+  const dispatch = vi.fn().mockResolvedValue({});
+  mocks.createCaller.mockReturnValue(
+    callerStub({
+      purchaseReturns: vi.fn().mockResolvedValue([row]),
+      dispatchPurchaseReturn: dispatch,
+    })
+  );
+  render(await ReturnsPage({ searchParams: params({ return: row.id }) }));
+  const select = screen.getByLabelText(/Dispatch witness/);
+  const secret = screen.getByLabelText(/Witness PIN or approval code/);
+  expect(secret).toHaveAttribute('type', 'password');
+  expect(secret).toBeRequired();
+  fireEvent.change(select, { target: { value: 'staff-w' } });
+  fireEvent.change(secret, { target: { value: '123456' } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Dispatch to supplier' }));
+  });
+  expect(dispatch).toHaveBeenCalledWith(
+    expect.objectContaining({
+      purchaseReturnId: row.id,
+      controlledWitness: { staffProfileId: 'staff-w', pin: '123456' },
+    })
+  );
 });
 
 it('review: same allocation cannot repeat through the credit and debit-note forms after uncertain outcome', async () => {

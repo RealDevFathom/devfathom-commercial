@@ -421,6 +421,11 @@ describeIfDatabase('PUR-06 — dispatch posts an append-only RETURN_TO_SUPPLIER 
       return { dispatched, balances, claim, lotId: lot.id };
     });
 
+    expect(
+      await inOrg(ORG_A, (db) =>
+        db.pharmacyControlledRegisterEntry.count({ where: { inventoryLotId: outcome.lotId } })
+      )
+    ).toBe(0);
     expect(outcome.dispatched.status).toBe('DISPATCHED');
     expect(outcome.balances).toEqual([
       expect.objectContaining({ disposition: 'AVAILABLE', onHandUnits: 10 }),
