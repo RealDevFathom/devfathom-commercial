@@ -676,3 +676,51 @@ describeDatabase('DEV-988 explicit bill line pack check', () => {
     ]);
   }, 60000);
 });
+
+describeDatabase('DEV-977 existing line discount', () => {
+  it('requires a verified approval and records the authorized discount against the selected line and its allocations', async () => {
+    const s = await shop('discount');
+    const device = 'discount-till';
+    await openDrawer(s, device, 0);
+    const { sale, lines } = await billBy(s, s.cashier, [
+      [1000, 2],
+      [500, 1],
+    ]);
+    const input = {
+      branchId: s.owner.branchId,
+      saleId: sale.id,
+      saleLineId: lines[0]!.id,
+      deviceId: device,
+      discount: { kind: 'PERCENT' as const, bps: 100 },
+      requestId: randomUUID(),
+    };
+    const apply = () => asMember(s, s.cashier, (c) => c.discountBillLine(input));
+    await expect(apply()).rejects.toThrow(/approve|approval/i);
+    await tenant(s.owner, async (db) => {
+      await db.userPermissionOverride.create({
+        data: {
+          userId: s.cashier,
+          capability: 'pharmacy:discount',
+          effect: 'ALLOW',
+          reason: 'Synthetic line discount test',
+        },
+      });
+    });
+    const result = await apply();
+    expect(result).toMatchObject({ discountMinor: 20 });
+    await expect(apply()).resolves.toMatchObject({ discountMinor: 20 });
+    await tenant(s.owner, async (db) => {
+      const line = await db.pharmacySaleLine.findUniqueOrThrow({
+        where: { id: input.saleLineId },
+        include: { allocations: true },
+      });
+      expect(line).toMatchObject({ discountMinor: 20, approvedByUserId: s.cashier });
+      const { saleAllocationMoney } = await import('./sale-line-money');
+      expect(saleAllocationMoney(line).map((a) => a.discountMinor)).toEqual([20]);
+      expect(line.allocations.map((a) => a.discountMinor)).toEqual([0]);
+      expect(await db.pharmacySaleLine.findFirst({ where: { id: lines[1]!.id } })).toMatchObject({
+        discountMinor: 0,
+      });
+    });
+  }, 60000);
+});

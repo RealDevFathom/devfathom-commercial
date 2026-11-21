@@ -225,6 +225,7 @@ import {
   captureSafeRestockArrival,
   saleHasPaymentActivity,
   captureDemand,
+  discountBillLine,
   recordCounterDemand,
   changeSaleStatus,
   createSale,
@@ -2852,6 +2853,63 @@ export const pharmacySalesRouter = router({
    * own). The server shares it onto the lines under the owner's maximum, cost and minimum
    * margin, and refuses what the bill cannot take in full, naming the most it can take.
    */
+  discountBillLine: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          saleLineId: z.string().min(1),
+          deviceId: z.string().min(1).optional(),
+          requestId: z.uuid(),
+          discount: z.discriminatedUnion('kind', [
+            z.object({ kind: z.literal('PERCENT'), bps: maxDiscountBpsSchema }).strict(),
+            z
+              .object({
+                kind: z.literal('AMOUNT'),
+                minor: z.number().int().positive().max(2000000000),
+              })
+              .strict(),
+          ]),
+          discountApproval: counterApprovalPin.optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, {
+        skipInput: true,
+        targetType: 'PharmacySaleLine',
+        targetId: input.saleLineId,
+      });
+      try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          await requirePharmacyTodayOpenForTrading(db, scope);
+          await assertLineMedicineSellable(db, scope, input.saleLineId);
+          return discountBillLine(db, scope, {
+            saleId: input.saleId,
+            saleLineId: input.saleLineId,
+            discount: input.discount,
+            idempotencyKey: input.requestId,
+            actorIsManager: await actorMayRefund(db, ctx.session!.user),
+            cashShift: (bill) => lineChangeCashShift(db, scope, input.deviceId, bill),
+            approve: async () => {
+              const approval = await authorizeCounterApproval(
+                db,
+                scope,
+                'DISCOUNT',
+                input.discountApproval
+              );
+              await confirmCounterApproval(db, scope, 'DISCOUNT', approval);
+              return approval;
+            },
+          });
+        });
+      } catch (error) {
+        fail(error);
+      }
+    }),
   applyBillDiscount: protectedProcedure
     .input(
       z

@@ -1,0 +1,1 @@
+ALTER TYPE "PharmacySaleEventKind" ADD VALUE 'LINE_DISCOUNT';

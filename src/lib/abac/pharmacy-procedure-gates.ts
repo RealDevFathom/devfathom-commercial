@@ -2264,6 +2264,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'requireCounterReceiptAccess default -> pharmacy:counter or pharmacy:dispense',
     lines: ['take-payment/see-till-approvers', 'dispense-prescriptions/see-till-approvers'],
   },
+  'pharmacySales.discountBillLine': {
+    gate: 'protectedProcedure; requireCounterReceiptAccess(canonical true) -> pharmacy:counter, assigned branch or ADMIN; bill owner or manager; DISCOUNT approval',
+    lines: ['take-payment/take-payment-branches-by'],
+  },
   'pharmacySales.applyBillDiscount': {
     gate: "requireCounterReceiptAccess (pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN) + the owner's whole-bill discount switch on; approved as an item discount: the operator's own pharmacy:discount, or a pharmacy:manage approver's approval code (solo: the sole approver's own approval code); removing it (zero) needs no approval",
     lines: [

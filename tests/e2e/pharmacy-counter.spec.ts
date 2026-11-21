@@ -2127,6 +2127,27 @@ test('Counter v2 — the discount sheet: whole bill or next item, and who can ap
   }
 });
 
+test('A4 approves a discount on the selected existing line inside the discount sheet', async ({
+  page,
+}) => {
+  await openCounter(page, PHARMACY_E2E.cashierEmail);
+  await openDrawer(page);
+  const otc = PHARMACY_E2E.medicines.otc;
+  await search(page, otc.brandName);
+  await addFirstResult(page, otc.name);
+  const totals = page.getByRole('complementary', { name: 'Bill total' });
+  await pressControl(totals.getByRole('button', { name: 'Discount', exact: true }));
+  const sheet = page.getByRole('dialog');
+  await pressControl(sheet.getByRole('button', { name: 'Bill line', exact: true }));
+  await sheet.getByLabel('Discount (%)', { exact: true }).fill('10');
+  await pressControl(sheet.getByRole('combobox', { name: 'Approving manager or owner' }));
+  await pressControl(page.getByRole('option', { name: 'Pharmacy Administrator' }));
+  await sheet.getByLabel(/^(Approver PIN|Approval code)$/).fill(PHARMACY_E2E.adminPin);
+  await pressControl(sheet.getByRole('button', { name: 'Apply to selected line' }));
+  await expect(sheet).toBeHidden();
+  await expect(billLine(page, otc.name)).toContainText('2.25');
+});
+
 test('DEV-988 an unmatched pack holds its line even after reopening the counter', async ({
   page,
 }) => {

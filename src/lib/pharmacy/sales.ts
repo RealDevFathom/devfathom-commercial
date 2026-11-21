@@ -6,7 +6,12 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { legacyStripOption, packLevelCanonicalUnits } from './counter-pricing';
 import { mrpRoundingIncrementForLot, priceFromLot } from './medicine';
 import { COUNTER_DISCOUNT_NOTICES } from './counter-messages';
-import { billShareHeldByTier } from './bill-discount';
+import {
+  BillDiscountRefused,
+  billShareHeldByTier,
+  planBillDiscount,
+  type BillDiscountRequest,
+} from './bill-discount';
 import {
   lineDiscountRoomMinor,
   maxDiscountMinorFor,
@@ -1395,6 +1400,116 @@ export async function removeSaleLine(
  * The old line is taken off and a new one added under the request key with every rule of
  * adding a line, so the bill's money is exactly that of a bill rung up with the new line.
  */
+/** Price an existing line under the same owner limits and batch cost floors as a new line. */
+export async function discountBillLine(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: SaleLineChangeRequest & {
+    discount: BillDiscountRequest;
+    approve: () => Promise<{ approvedByUserId: string; approvalPolicy: string }>;
+  }
+) {
+  const request = { saleLineId: input.saleLineId, discount: input.discount };
+  const eventId =
+    'discount_' +
+    createHash('sha256')
+      .update(
+        canonicalJson([
+          scope.organizationId,
+          scope.branchId,
+          scope.actorId,
+          input.saleId,
+          input.idempotencyKey,
+        ])
+      )
+      .digest('hex');
+  await lockSaleLineKey(db, scope, eventId);
+  const prior = await db.pharmacySaleEvent.findFirst({
+    where: {
+      id: eventId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      saleId: input.saleId,
+      kind: 'LINE_DISCOUNT',
+    },
+  });
+  if (prior) {
+    const payload = prior.payload as { request?: unknown; discountMinor?: number };
+    if (
+      canonicalJson(payload.request) !== canonicalJson(request) ||
+      typeof payload.discountMinor !== 'number'
+    )
+      throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+    return { discountMinor: payload.discountMinor };
+  }
+  const { line } = await lockLineForChange(db, scope, input, 'LINE_CHANGED');
+  if (
+    line.billDiscountMinor ||
+    line.promotionId ||
+    line.voucherId ||
+    line.discountKind ||
+    line.tierName
+  )
+    throw new PharmacySaleError('LINE_CHANGE_NEEDS_READD');
+  const allocations = await db.pharmacySaleLineAllocation.findMany({
+    where: { organizationId: scope.organizationId, branchId: scope.branchId, saleLineId: line.id },
+    include: { lot: { select: { unitCostMinor: true } } },
+    orderBy: { id: 'asc' },
+  });
+  const limits = await readDiscountLimits(db, scope);
+  let plan;
+  try {
+    plan = planBillDiscount([{ ...line, allocations }], input.discount, limits);
+  } catch (e) {
+    if (!(e instanceof BillDiscountRefused)) throw e;
+    if (e.reason === 'DISCOUNT_ABOVE_MAXIMUM')
+      throw new PharmacySaleError('DISCOUNT_ABOVE_MAXIMUM');
+    if (line.medicine.rx || line.medicine.restricted || line.medicine.controlled)
+      throw new PharmacySaleError('REGULATED_DISCOUNT_REFUSED');
+    throw new PharmacySaleError('MARGIN_GUARDRAIL');
+  }
+  const share = plan.shares[0];
+  if (!share || share.discountMinor <= 0) throw new PharmacySaleError('INVALID_QUANTITY');
+  const approval = await input.approve();
+  validateDiscount({
+    regulated: line.medicine.rx || line.medicine.restricted || line.medicine.controlled,
+    discountMinor: share.discountMinor,
+    grossMinor: line.grossMinor,
+    costMinor: allocations.reduce((s, a) => s + a.canonicalUnits * a.lot.unitCostMinor, 0),
+    ...limits,
+    approvedByUserId: approval.approvedByUserId,
+    approvalPolicy: approval.approvalPolicy,
+  });
+  await db.pharmacySaleLine.update({
+    where: { id: line.id },
+    data: {
+      lineAllocationDiscounts: share.allocations,
+      discountMinor: share.discountMinor,
+      discountKind: 'DISCOUNT',
+      approvedByUserId: approval.approvedByUserId,
+      approvalPolicy: approval.approvalPolicy,
+    },
+  });
+  await db.pharmacySaleEvent.create({
+    data: {
+      id: eventId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      saleId: input.saleId,
+      actorId: scope.actorId,
+      kind: 'LINE_DISCOUNT',
+      payload: {
+        request,
+        discountMinor: share.discountMinor,
+        allocations: share.allocations,
+        approvedByUserId: approval.approvedByUserId,
+        approvalPolicy: approval.approvalPolicy,
+      },
+    },
+  });
+  return { discountMinor: share.discountMinor };
+}
+
 export async function changeSaleLine(
   db: ScopedDb,
   scope: LedgerScope,

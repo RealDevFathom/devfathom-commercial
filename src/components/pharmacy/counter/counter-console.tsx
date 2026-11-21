@@ -4354,7 +4354,7 @@ function ScopedPharmacyCounterConsole({
           />
         ) : null}
         <CounterPackCheck
-          key={saleId ?? branchId}
+          key={`pack:${branchId}:${saleId}`}
           branchId={branchId}
           saleId={saleId ?? ''}
           lines={cart?.lines ?? []}
@@ -5356,6 +5356,30 @@ function ScopedPharmacyCounterConsole({
                     held={heldDiscount}
                     disabled={busy || !branchAuthorized || !online || Boolean(heldVoucher)}
                     returnFocus={searchRef}
+                    key={`discount:${branchId}:${cart?.saleId}`}
+                    billLines={
+                      currentBill && cart && cart.status === 'OPEN' && !cart.totals.tenderedMinor
+                        ? {
+                            lines: cart.lines,
+                            apply: async (saleLineId, discount, requestId, discountApproval) => {
+                              await utils.client.pharmacySales.discountBillLine.mutate({
+                                branchId,
+                                saleId: cart.saleId,
+                                saleLineId,
+                                discount,
+                                requestId,
+                                deviceId: currentCounterDeviceId(),
+                                discountApproval,
+                              });
+                              await refreshCart();
+                              setNotice({
+                                tone: 'success',
+                                message: 'Discount recorded against the selected bill line.',
+                              });
+                            },
+                          }
+                        : undefined
+                    }
                     wholeBill={sheetWholeBill}
                     approvers={sheetApprovers}
                     onOpenChange={setDiscountSheetOpen}

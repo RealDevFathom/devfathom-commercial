@@ -1112,6 +1112,7 @@ enum PharmacySaleStatus {
 
 enum PharmacySaleEventKind {
   PACK_CHECK
+  LINE_DISCOUNT
   CREATED
   LINE_ADDED
   HELD
@@ -2168,6 +2169,7 @@ model PharmacyPromotion {
 }
 
 model PharmacySaleLine {
+  lineAllocationDiscounts Json?
   packCheckBlocked Boolean @default(false)
   tierAllocationDiscounts Json?
   tierDiscountMinor Int @default(0)

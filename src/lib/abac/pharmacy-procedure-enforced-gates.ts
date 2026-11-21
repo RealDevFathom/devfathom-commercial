@@ -422,6 +422,7 @@ export const PHARMACY_PROCEDURE_ENFORCED_GATES: Readonly<Record<string, readonly
   'pharmacySales.acknowledgeDuplicateSalt': ['signed-in'],
   'pharmacySales.addLine': ['signed-in'],
   'pharmacySales.addRestockInterest': ['signed-in'],
+  'pharmacySales.discountBillLine': ['signed-in'],
   'pharmacySales.applyBillDiscount': ['signed-in'],
   'pharmacySales.checkBillLinePack': ['signed-in'],
   'pharmacySales.authenticatePack': ['signed-in'],
